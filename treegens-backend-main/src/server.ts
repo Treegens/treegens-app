@@ -26,7 +26,16 @@ const app = express()
 app.set('trust proxy', 1)
 
 app.use(helmet())
-app.use(cors())
+
+// This API serves several front ends (treegens.app, world.treegens.app).
+// CORS_ORIGINS is a comma-separated allowlist; leave it unset to keep the
+// previous behaviour of accepting any origin.
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
+app.use(cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : {}))
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 

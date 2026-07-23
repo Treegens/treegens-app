@@ -4,9 +4,12 @@ import { runMigrations } from './migrations'
 
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect(env.MONGODB_URI as string, {})
+    const conn = await mongoose.connect(
+      env.MONGODB_URI as string,
+      env.MONGODB_DB_NAME ? { dbName: env.MONGODB_DB_NAME } : {}
+    )
 
-    console.log(`MongoDB Connected: ${conn.connection.host}`)
+    console.log(`MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`)
 
     await runMigrations()
   } catch (error) {

@@ -53,6 +53,9 @@ services:
           property: connectionString
       - key: MONGODB_URI
         sync: false
+      # Shared Atlas cluster, own database — see src/config/database.ts.
+      - key: MONGODB_DB_NAME
+        value: treegens-app
       - key: JWT_SECRET
         sync: false
       - key: PINATA_JWT
@@ -100,6 +103,9 @@ services:
           property: connectionString
       - key: MONGODB_URI
         sync: false
+      # Shared Atlas cluster, own database — see src/config/database.ts.
+      - key: MONGODB_DB_NAME
+        value: treegens-app
       - key: MGRO_MINTER_PRIVATE_KEY
         sync: false
 
@@ -133,5 +139,8 @@ services:
           property: connectionString
       - key: MONGODB_URI
         sync: false
+      # Shared Atlas cluster, own database — see src/config/database.ts.
+      - key: MONGODB_DB_NAME
+        value: treegens-app
       - key: TGN_VAULT_SLASHER_PRIVATE_KEY
         sync: false

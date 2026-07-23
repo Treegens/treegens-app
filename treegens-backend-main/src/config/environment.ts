@@ -25,6 +25,13 @@ class EnvironmentConfig {
     return process.env.MONGODB_URI
   }
 
+  // Optional. The Atlas cluster is shared with the other Treegens backends,
+  // which have different schemas — set this to keep our collections in their
+  // own database instead of whichever one the URI path happens to name.
+  get MONGODB_DB_NAME() {
+    return process.env.MONGODB_DB_NAME || ''
+  }
+
   get PINATA_JWT() {
     return process.env.PINATA_JWT || ''
   }
