@@ -62,9 +62,11 @@ class EnvironmentConfig {
   }
 
   get TGN_VAULT_ADDRESS() {
+    // TGNVault on Base mainnet (deployed 2026-07-23; treasury() points at the
+    // 2-of-4 Safe 0x64b05503…584C, which is NOT itself stake/slash-capable).
     return (
       process.env.TGN_VAULT_ADDRESS ||
-      '0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C'
+      '0x82a54F550131140Cc08Cf2b10Aa3a44fFDDa582C'
     )
   }
 

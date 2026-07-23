@@ -41,6 +41,9 @@ services:
         value: https://mainnet.base.org
       - key: TGN_TOKEN_ADDRESS
         value: "0xD75dfa972C6136f1c594Fec1945302f885E1ab29"
+      # TGNVault (staking/slash) on Base mainnet — verifier stake checks.
+      - key: TGN_VAULT_ADDRESS
+        value: "0x82a54F550131140Cc08Cf2b10Aa3a44fFDDa582C"
       - key: MGRO_TOKEN_ADDRESS
         value: "0xe84613C7220F2cD92fD1551256f74c21e49e2283"
       # Workers run as their own services — never in the API process.
@@ -135,8 +138,9 @@ services:
         value: production
       - key: BASE_RPC_URL
         value: https://mainnet.base.org
+      # TGNVault (staking/slash) on Base mainnet — treasury() = the 2-of-4 Safe.
       - key: TGN_VAULT_ADDRESS
-        value: "0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C"
+        value: "0x82a54F550131140Cc08Cf2b10Aa3a44fFDDa582C"
       # Stay false everywhere: these only start workers INSIDE the API process.
       - key: ENABLE_REWARD_CLAIM_WORKER
         value: "false"
