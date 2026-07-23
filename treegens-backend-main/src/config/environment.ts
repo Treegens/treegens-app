@@ -32,12 +32,13 @@ class EnvironmentConfig {
     return process.env.MONGODB_DB_NAME || ''
   }
 
-  get PINATA_JWT() {
-    return process.env.PINATA_JWT || ''
+  // Google Cloud Storage is the sole media backend (replaces Pinata/IPFS).
+  get GCS_BUCKET() {
+    return process.env.GCS_BUCKET || ''
   }
 
-  get PINATA_GATEWAY_BASE_URL() {
-    return process.env.PINATA_GATEWAY_BASE_URL || ''
+  get GCS_SERVICE_ACCOUNT_JSON() {
+    return process.env.GCS_SERVICE_ACCOUNT_JSON || ''
   }
 
   get isDevelopment() {
@@ -659,7 +660,10 @@ class EnvironmentConfig {
   }
 
   validateRequired() {
-    const required = ['MONGODB_URI', 'PINATA_JWT']
+    // Storage (GCS) is intentionally NOT hard-required: it is validated at
+    // upload time and surfaced in /health, so a missing bucket never blocks
+    // boot or the workers (which never upload). Only MongoDB is fatal.
+    const required = ['MONGODB_URI']
     const missing = required.filter(key => !process.env[key])
 
     if (missing.length > 0) {

@@ -1,48 +1,48 @@
 import mongoose from 'mongoose'
-import { testPinataConnection } from '../config/pinata'
+import { testStorageConnection } from '../config/gcs'
 
-type PinataStatus = {
+type StorageStatus = {
   status: 'unknown' | 'healthy' | 'unhealthy'
   lastChecked: string | null
   message: string
 }
 
 class HealthService {
-  private pinataStatus: PinataStatus
+  private storageStatus: StorageStatus
   constructor() {
-    this.pinataStatus = {
+    this.storageStatus = {
       status: 'unknown',
       lastChecked: null,
       message: 'Not yet tested',
     }
-    this.initializePinataStatus()
+    this.initializeStorageStatus()
   }
 
-  async initializePinataStatus() {
-    await this.testPinataConnectivity()
+  async initializeStorageStatus() {
+    await this.testStorageConnectivity()
   }
 
-  async testPinataConnectivity() {
+  async testStorageConnectivity() {
     try {
-      const result = await testPinataConnection()
-      this.pinataStatus = {
+      const result = await testStorageConnection()
+      this.storageStatus = {
         status: result.connected ? 'healthy' : 'unhealthy',
         lastChecked: new Date().toISOString(),
         message: result.message,
       }
       console.log(
         result.connected
-          ? '✅ Pinata connectivity verified'
-          : '❌ Pinata connectivity test failed',
+          ? '✅ Google Cloud Storage connectivity verified'
+          : '❌ Google Cloud Storage connectivity test failed',
         result.message,
       )
     } catch (error: any) {
-      this.pinataStatus = {
+      this.storageStatus = {
         status: 'unhealthy',
         lastChecked: new Date().toISOString(),
         message: error.message,
       }
-      console.log('❌ Pinata connectivity test failed:', error.message)
+      console.log('❌ Google Cloud Storage connectivity test failed:', error.message)
     }
   }
 
@@ -59,36 +59,32 @@ class HealthService {
     }
   }
 
-  getPinataHealth() {
+  getStorageHealth() {
     return {
-      status: this.pinataStatus.status,
-      lastChecked: this.pinataStatus.lastChecked,
-      message: this.pinataStatus.message,
+      status: this.storageStatus.status,
+      lastChecked: this.storageStatus.lastChecked,
+      message: this.storageStatus.message,
     }
   }
 
   async getOverallHealth() {
     const mongoStatus = await this.checkMongoDBHealth()
-    const pinataHealth = this.getPinataHealth()
+    const storageHealth = this.getStorageHealth()
 
     const healthStatus = {
       status: 'OK',
       timestamp: new Date().toISOString(),
       services: {
         mongodb: mongoStatus,
-        pinata: pinataHealth,
+        storage: storageHealth,
       },
     }
 
+    // MongoDB is the only liveness-critical dependency: the liveness probe
+    // (Render healthCheckPath) must stay 200 while Mongo is up. Storage health
+    // is reported for humans but never flips the probe — a missing bucket
+    // should not take the API down.
     if (mongoStatus === 'unhealthy') {
-      healthStatus.status = 'DEGRADED'
-    }
-
-    if (pinataHealth.status === 'unhealthy') {
-      healthStatus.status = 'DEGRADED'
-    }
-
-    if (mongoStatus === 'unhealthy' && pinataHealth.status === 'unhealthy') {
       healthStatus.status = 'UNHEALTHY'
     }
 

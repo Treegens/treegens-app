@@ -63,10 +63,7 @@ services:
         value: treegens-app
       - key: JWT_SECRET
         sync: false
-      - key: PINATA_JWT
-        sync: false
-      - key: PINATA_GATEWAY_BASE_URL
-        sync: false
+      # Google Cloud Storage is the sole media backend (Pinata/IPFS removed).
       - key: GCS_BUCKET
         sync: false
       - key: GCS_SERVICE_ACCOUNT_JSON
@@ -113,10 +110,6 @@ services:
       # Shared Atlas cluster, own database — see src/config/database.ts.
       - key: MONGODB_DB_NAME
         value: treegens-app
-      # Required by config/environment.ts validateRequired() in every
-      # process, including workers that never touch IPFS.
-      - key: PINATA_JWT
-        sync: false
       - key: MGRO_MINTER_PRIVATE_KEY
         sync: false
 
@@ -156,9 +149,5 @@ services:
       # Shared Atlas cluster, own database — see src/config/database.ts.
       - key: MONGODB_DB_NAME
         value: treegens-app
-      # Required by config/environment.ts validateRequired() in every
-      # process, including workers that never touch IPFS.
-      - key: PINATA_JWT
-        sync: false
       - key: TGN_VAULT_SLASHER_PRIVATE_KEY
         sync: false

@@ -146,8 +146,8 @@ router.get(
  */
 router.post(
   '/claim',
-  rewardClaimLimiter,
   authenticate,
+  rewardClaimLimiter,
   async (req: Request, res: Response) => {
     try {
       const submissionId = req.body?.submissionId

@@ -122,8 +122,8 @@ router.get(
 
 router.post(
   '/upload',
-  submissionUploadLimiter,
   authenticate,
+  submissionUploadLimiter,
   upload.single('video'),
   validateSubmissionUpload,
   async (req: Request, res: Response) => {
@@ -312,8 +312,8 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
 
 router.post(
   '/:submissionId/health-checks',
-  submissionUploadLimiter,
   authenticate,
+  submissionUploadLimiter,
   upload.single('video'),
   validateHealthCheckUpload,
   async (req: Request, res: Response) => {
@@ -404,8 +404,8 @@ router.get(
 
 router.post(
   '/:submissionId/health-checks/:healthCheckId/vote',
-  submissionVoteLimiter,
   authenticate,
+  submissionVoteLimiter,
   requireVerifier,
   validateHealthCheckVote,
   async (req: Request, res: Response) => {
@@ -590,8 +590,8 @@ router.get(
 
 router.post(
   '/:submissionId/vote',
-  submissionVoteLimiter,
   authenticate,
+  submissionVoteLimiter,
   requireVerifier,
   async (req: Request, res: Response) => {
     try {

@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import env from '../config/environment'
-import { uploadToPinata } from '../config/pinata'
+import { uploadToStorage } from '../config/gcs'
 import { generateUniqueFileName } from '../middleware/upload'
 import HealthCheck from '../models/HealthCheck'
 import RewardAllocation from '../models/RewardAllocation'
@@ -204,7 +204,7 @@ export class HealthCheckService {
     const mimeType = input.file.mimetype.startsWith('video/')
       ? input.file.mimetype
       : 'video/mp4'
-    const uploadResult = await uploadToPinata(
+    const uploadResult = await uploadToStorage(
       input.file.buffer,
       uniqueFileName,
       mimeType,

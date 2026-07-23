@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express'
-import { testPinataConnection } from '../config/pinata'
+import { testStorageConnection } from '../config/gcs'
 import HealthService from '../services/healthService'
 import { sendError } from '../utils/responseHelpers'
 
@@ -124,16 +124,17 @@ router.get('/', async (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/pinata-test', async (req: Request, res: Response) => {
+// Kept the legacy path as an alias so existing monitors don't 404.
+router.get(['/storage-test', '/pinata-test'], async (req: Request, res: Response) => {
   try {
-    const connectionResult = await testPinataConnection()
+    const connectionResult = await testStorageConnection()
     res.json({
-      pinataConnected: connectionResult.connected,
+      storageConnected: connectionResult.connected,
       message: connectionResult.message,
       timestamp: new Date().toISOString(),
     })
   } catch {
-    return sendError(res, 'Pinata connection test failed')
+    return sendError(res, 'Storage connection test failed')
   }
 })
 

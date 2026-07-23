@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import env from '../config/environment'
-import { uploadToPinata } from '../config/pinata'
+import { uploadToStorage } from '../config/gcs'
 import { generateUniqueFileName } from '../middleware/upload'
 import Submission from '../models/Submission'
 import User from '../models/User'
@@ -145,7 +145,7 @@ class SubmissionService {
     const mimeType = file.mimetype.startsWith('video/')
       ? file.mimetype
       : 'video/mp4'
-    const uploadResult = await uploadToPinata(
+    const uploadResult = await uploadToStorage(
       file.buffer,
       uniqueFileName,
       mimeType,
