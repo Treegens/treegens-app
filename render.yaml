@@ -1,0 +1,137 @@
+# Render blueprint — Treegens backend on Base MAINNET.
+#
+# Serves both treegens.app and world.treegens.app from one API, with the
+# reward-claim and slash workers running as separate Background Workers so a
+# long-running job can never block or crash the API.
+#
+#   treegens-api            web service   ENABLE_*_WORKER = false
+#   treegens-redis          key value     BullMQ queues
+#   treegens-reward-worker  worker        npm run start:worker
+#   treegens-slash-worker   worker        npm run start:slash-worker
+#
+# Secrets (sync: false) are set in the Render dashboard, never committed.
+
+services:
+  # ---------------------------------------------------------------- API ----
+  - type: web
+    name: treegens-api
+    runtime: node
+    plan: starter
+    region: frankfurt
+    rootDir: treegens-backend-main
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BASE_RPC_URL
+        value: https://mainnet.base.org
+      - key: TGN_TOKEN_ADDRESS
+        value: "0xD75dfa972C6136f1c594Fec1945302f885E1ab29"
+      - key: MGRO_TOKEN_ADDRESS
+        value: "0xe84613C7220F2cD92fD1551256f74c21e49e2283"
+      # Workers run as their own services — never in the API process.
+      - key: ENABLE_REWARD_CLAIM_WORKER
+        value: "false"
+      - key: ENABLE_SLASH_WORKER
+        value: "false"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: treegens-redis
+          property: connectionString
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: PINATA_JWT
+        sync: false
+      - key: PINATA_GATEWAY_BASE_URL
+        sync: false
+      - key: GCS_BUCKET
+        sync: false
+      - key: GCS_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: THIRDWEB_SECRET_KEY
+        sync: false
+      - key: MGRO_MINTER_PRIVATE_KEY
+        sync: false
+      - key: DISTRIBUTOR_API_KEY
+        sync: false
+
+  # ------------------------------------------------- reward claim worker ----
+  - type: worker
+    name: treegens-reward-worker
+    runtime: node
+    plan: starter
+    region: frankfurt
+    rootDir: treegens-backend-main
+    buildCommand: npm ci && npm run build
+    # Standalone worker entrypoint (dist/workers/rewardClaimWorker.js) — the
+    # script sets RUN_REWARD_CLAIM_WORKER itself. No HTTP server is started.
+    startCommand: npm run start:worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BASE_RPC_URL
+        value: https://mainnet.base.org
+      - key: MGRO_TOKEN_ADDRESS
+        value: "0xe84613C7220F2cD92fD1551256f74c21e49e2283"
+      # Stay false everywhere: these only start workers INSIDE the API process.
+      - key: ENABLE_REWARD_CLAIM_WORKER
+        value: "false"
+      - key: ENABLE_SLASH_WORKER
+        value: "false"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: treegens-redis
+          property: connectionString
+      - key: MONGODB_URI
+        sync: false
+      - key: MGRO_MINTER_PRIVATE_KEY
+        sync: false
+
+  # -------------------------------------------------------- slash worker ----
+  - type: worker
+    name: treegens-slash-worker
+    runtime: node
+    plan: starter
+    region: frankfurt
+    rootDir: treegens-backend-main
+    buildCommand: npm ci && npm run build
+    # Standalone worker entrypoint (dist/workers/slashWorker.js) — the script
+    # sets RUN_SLASH_WORKER itself. No HTTP server is started.
+    startCommand: npm run start:slash-worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BASE_RPC_URL
+        value: https://mainnet.base.org
+      - key: TGN_VAULT_ADDRESS
+        value: "0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C"
+      # Stay false everywhere: these only start workers INSIDE the API process.
+      - key: ENABLE_REWARD_CLAIM_WORKER
+        value: "false"
+      - key: ENABLE_SLASH_WORKER
+        value: "false"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: treegens-redis
+          property: connectionString
+      - key: MONGODB_URI
+        sync: false
+      - key: TGN_VAULT_SLASHER_PRIVATE_KEY
+        sync: false
+
+databases: []
+
+# ------------------------------------------------------------- Redis ----
+keyValues:
+  - name: treegens-redis
+    plan: starter
+    region: frankfurt
+    maxmemoryPolicy: noeviction # BullMQ requires jobs are never evicted
+    ipAllowList: [] # internal-only: reachable from Render services, not the internet

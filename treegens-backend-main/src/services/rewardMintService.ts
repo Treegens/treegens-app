@@ -79,7 +79,11 @@ class RewardMintService {
         if (attempt > 1) {
           this.nonceManager?.reset()
         }
-        const tx = await contract.mintTokens(toAddress, amountWei)
+        // Base mainnet MGRO exposes mint(); older deployments used
+        // mintTokens(). Prefer mint and fall back if the token lacks it.
+        const tx = typeof contract.mint === 'function'
+          ? await contract.mint(toAddress, amountWei)
+          : await contract.mintTokens(toAddress, amountWei)
         const receipt = await tx.wait()
         if (!receipt) {
           throw new Error('MGRO mint transaction was not mined')

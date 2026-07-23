@@ -78,7 +78,7 @@ class EnvironmentConfig {
   get MGRO_TOKEN_ADDRESS() {
     return (
       process.env.MGRO_TOKEN_ADDRESS ||
-      '0xE2507198a1C2cC0Fc6559159e2D86604a25bBE79'
+      '0xe84613C7220F2cD92fD1551256f74c21e49e2283' // Base mainnet $MGRO
     )
   }
 
