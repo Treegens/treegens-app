@@ -1,0 +1,13 @@
+# Netlify deployment for the treegens.app web frontend.
+#
+# Deployed as project "treegens-app-web" (https://treegens-app-web.netlify.app)
+# on the Treegens-owned Netlify account. Build-time NEXT_PUBLIC_* values are
+# set as Netlify environment variables — nothing secret lives here; the
+# thirdweb client ID and API URL are public by design.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
