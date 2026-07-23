@@ -12,6 +12,7 @@ import conversationsRoutes from './routes/conversations'
 import healthRoutes from './routes/health'
 import notificationsRoutes from './routes/notifications'
 import pushRoutes from './routes/push'
+import distributionsRoutes from './routes/distributions'
 import rewardsRoutes from './routes/rewards'
 import submissionsRoutes from './routes/submissions'
 import userRoutes from './routes/users'
@@ -40,6 +41,7 @@ app.use(
 
 app.use('/api/submissions', submissionsRoutes)
 app.use('/api/rewards', rewardsRoutes)
+app.use('/api/distributions', distributionsRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/push', pushRoutes)
