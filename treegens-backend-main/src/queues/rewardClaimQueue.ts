@@ -37,7 +37,7 @@ export function getRewardClaimRedisConnection(): IORedis {
   if (!rewardClaimRedisConnection) {
     rewardClaimRedisConnection =
       typeof redisOptions === 'string'
-        ? new IORedis(redisOptions)
+        ? new IORedis(redisOptions, { maxRetriesPerRequest: null })
         : new IORedis(redisOptions)
     rewardClaimRedisConnection.on('error', err => {
       console.error('[RewardClaimQueue] Redis error', { message: err?.message })

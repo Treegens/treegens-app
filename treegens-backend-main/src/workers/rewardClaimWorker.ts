@@ -89,7 +89,7 @@ export function startRewardClaimWorker() {
   const redisOptions = getRewardClaimRedisOptions()
   const connection =
     typeof redisOptions === 'string'
-      ? new IORedis(redisOptions)
+      ? new IORedis(redisOptions, { maxRetriesPerRequest: null })
       : new IORedis(redisOptions)
   connection.on('error', err => {
     console.error('[RewardClaimWorker] Redis error', { message: err?.message })

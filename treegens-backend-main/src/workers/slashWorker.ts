@@ -92,7 +92,7 @@ export function startSlashWorker() {
   const redisOptions = getSlashRedisOptions()
   const connection =
     typeof redisOptions === 'string'
-      ? new IORedis(redisOptions)
+      ? new IORedis(redisOptions, { maxRetriesPerRequest: null })
       : new IORedis(redisOptions)
   connection.on('error', err => {
     console.error('[SlashWorker] Redis error', { message: err?.message })

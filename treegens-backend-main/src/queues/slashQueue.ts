@@ -35,7 +35,7 @@ export function getSlashRedisConnection(): IORedis {
   if (!slashRedisConnection) {
     slashRedisConnection =
       typeof redisOptions === 'string'
-        ? new IORedis(redisOptions)
+        ? new IORedis(redisOptions, { maxRetriesPerRequest: null })
         : new IORedis(redisOptions)
     slashRedisConnection.on('error', err => {
       console.error('[SlashQueue] Redis error', { message: err?.message })
