@@ -29,7 +29,9 @@ services:
     plan: starter
     region: frankfurt
     rootDir: treegens-backend-main
-    buildCommand: npm ci && npm run build
+    # --include=dev is required: NODE_ENV=production makes npm ci skip
+    # devDependencies, and typescript/@types/node live there.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
@@ -80,7 +82,9 @@ services:
     plan: starter
     region: frankfurt
     rootDir: treegens-backend-main
-    buildCommand: npm ci && npm run build
+    # --include=dev is required: NODE_ENV=production makes npm ci skip
+    # devDependencies, and typescript/@types/node live there.
+    buildCommand: npm ci --include=dev && npm run build
     # Standalone worker entrypoint (dist/workers/rewardClaimWorker.js) — the
     # script sets RUN_REWARD_CLAIM_WORKER itself. No HTTP server is started.
     startCommand: npm run start:worker
@@ -116,7 +120,9 @@ services:
     plan: starter
     region: frankfurt
     rootDir: treegens-backend-main
-    buildCommand: npm ci && npm run build
+    # --include=dev is required: NODE_ENV=production makes npm ci skip
+    # devDependencies, and typescript/@types/node live there.
+    buildCommand: npm ci --include=dev && npm run build
     # Standalone worker entrypoint (dist/workers/slashWorker.js) — the script
     # sets RUN_SLASH_WORKER itself. No HTTP server is started.
     startCommand: npm run start:slash-worker
