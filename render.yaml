@@ -12,6 +12,16 @@
 # Secrets (sync: false) are set in the Render dashboard, never committed.
 
 services:
+  # -------------------------------------------------------------- Redis ----
+  # Declared first so the services below can resolve its connection string.
+  # Key Value instances live in `services`, not a top-level key.
+  - type: keyvalue
+    name: treegens-redis
+    plan: starter
+    region: frankfurt
+    maxmemoryPolicy: noeviction # BullMQ requires jobs are never evicted
+    ipAllowList: [] # internal-only: reachable from Render services, not the internet
+
   # ---------------------------------------------------------------- API ----
   - type: web
     name: treegens-api
@@ -125,13 +135,3 @@ services:
         sync: false
       - key: TGN_VAULT_SLASHER_PRIVATE_KEY
         sync: false
-
-databases: []
-
-# ------------------------------------------------------------- Redis ----
-keyValues:
-  - name: treegens-redis
-    plan: starter
-    region: frankfurt
-    maxmemoryPolicy: noeviction # BullMQ requires jobs are never evicted
-    ipAllowList: [] # internal-only: reachable from Render services, not the internet
