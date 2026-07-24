@@ -50,10 +50,19 @@ router.get('/pending', requireDistributorKey, async (req: Request, res: Response
     const excludeMangrove = req.query.excludeMangrove === '1'
     const onlyMangrove = req.query.onlyMangrove === '1'
 
-    const distributedIds = await TgnDistribution.distinct('submissionId')
+    // A video is unavailable if it is already sold (planterTx set) OR currently
+    // held in someone's checkout (a live, unexpired reservation). Expired
+    // holds from abandoned checkouts are ignored, so the video reappears.
+    const now = new Date()
+    const blockedIds = await TgnDistribution.find({
+      $or: [
+        { planterTx: { $nin: ['', null] } },
+        { holdExpiresAt: { $gt: now } },
+      ],
+    }).distinct('submissionId')
     const filter: Record<string, any> = {
       status: 'approved',
-      _id: { $nin: distributedIds },
+      _id: { $nin: blockedIds },
     }
     // The MGRO rail burns tokens and does not pay a planter, so it does not
     // require a planter wallet on the submission; the TGN rail does.
@@ -153,16 +162,39 @@ router.post('/:submissionId/reserve', requireDistributorKey, async (req: Request
     if (!validObjectId(submissionId)) return sendError(res, 'Invalid submission id', 400)
     if (!paymentRef) return sendError(res, 'Missing paymentRef', 400)
 
-    const existing = await TgnDistribution.findOne({ submissionId }).lean()
+    const now = new Date()
+    // Hold window (flight-booking style). Card checkout ~30 min, direct-MGRO
+    // voucher shorter; clamp to a sane range. Default 15 min.
+    const holdSeconds = Math.min(3600, Math.max(60, Number(req.body?.holdSeconds) || 900))
+    const holdExpiresAt = new Date(now.getTime() + holdSeconds * 1000)
+
+    const existing = await TgnDistribution.findOne({ submissionId })
     if (existing) {
-      // Same payment retrying → let it resume; a different payment → refuse.
+      // Same payment retrying → resume and refresh its hold window.
       if (existing.paymentRef === paymentRef) {
+        if (!existing.planterTx) {
+          existing.holdExpiresAt = holdExpiresAt
+          await existing.save()
+        }
         return sendSuccess(res, 'Reservation resumed', {
           resumed: true,
           completed: !!existing.planterTx,
         })
       }
-      return sendError(res, 'Already reserved by another payment', 409)
+      // A different payment. Refuse only if the video is sold or actively held;
+      // a stale hold from an abandoned checkout can be taken over.
+      const completed = !!existing.planterTx
+      const liveHold = !!existing.holdExpiresAt && existing.holdExpiresAt > now
+      if (completed || liveHold) {
+        return sendError(res, 'Already reserved by another payment', 409)
+      }
+      existing.paymentRef = paymentRef
+      existing.grossUsd = Number(req.body?.grossUsd) || 0
+      existing.planterWallet = String(req.body?.planterWallet || '').toLowerCase()
+      existing.holdExpiresAt = holdExpiresAt
+      existing.rail = String(req.body?.rail || '')
+      await existing.save()
+      return sendSuccess(res, 'Reserved', { reserved: true, tookOverStaleHold: true })
     }
 
     await TgnDistribution.create({
@@ -172,6 +204,8 @@ router.post('/:submissionId/reserve', requireDistributorKey, async (req: Request
       planterWallet: String(req.body?.planterWallet || '').toLowerCase(),
       planterTgnWei: '0',
       planterTx: '', // filled in by /mark once the transfer confirms
+      holdExpiresAt,
+      rail: String(req.body?.rail || ''),
     })
     return sendSuccess(res, 'Reserved', { reserved: true })
   } catch (error: any) {
@@ -222,6 +256,7 @@ router.post('/:submissionId/mark', requireDistributorKey, async (req: Request, r
           planterTx,
           verifiers: Array.isArray(verifiers) ? verifiers : [],
           distributedAt: new Date(),
+          holdExpiresAt: null, // completed → permanent, no longer a timed hold
         },
       },
       { new: true, upsert: true, setDefaultsOnInsert: true },

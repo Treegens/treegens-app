@@ -23,6 +23,16 @@ const tgnDistributionSchema = new mongoose.Schema(
     planterWallet: { type: String, default: '', lowercase: true },
     planterTgnWei: { type: String, default: '0' },
     planterTx: { type: String, default: '' }, // '' while reserved, set on completion
+    /**
+     * Flight-booking hold. A record with planterTx === '' is a RESERVATION,
+     * not a completed distribution. It only blocks other buyers while
+     * holdExpiresAt is in the future — so an abandoned checkout frees the video
+     * automatically instead of locking it forever. Completed records
+     * (planterTx set) are permanent regardless of this field.
+     */
+    holdExpiresAt: { type: Date, default: null },
+    /** Which rail placed the hold: 'card' (fiat) or 'mgro' (direct MGRO burn). */
+    rail: { type: String, default: '' },
     verifiers: {
       type: [
         new mongoose.Schema(
