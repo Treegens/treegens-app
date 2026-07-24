@@ -23,6 +23,14 @@ If you believe the mainnet web app is ready to serve `treegens.app`:
 watchdog table in `~/.claude/guards/treegens-domain-guard.mjs`, or your
 change will be automatically undone within 10 minutes.
 
+## 🪙 Canonical $MGRO (Jimi's decision, 2026-07-24)
+
+**The mainnet MGRO token is `0x46e564D039d0d7Ec4C88d517fD32a03d15e88568`.**
+The deployment at `0xe846…2283` is NOT the token — do not mint against it,
+do not point envs at it. If your minter wallet's MINTER_ROLE / gas / key
+setup was done against 0xe846…2283, it must be redone on 0x46e5…8568 by
+Jimi's admin wallet before any real payout.
+
 ## Repo context
 
 - `treegens-backend-main/` and `treegens-web-main/` are snapshots from the

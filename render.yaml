@@ -45,7 +45,7 @@ services:
       - key: TGN_VAULT_ADDRESS
         value: "0x82a54F550131140Cc08Cf2b10Aa3a44fFDDa582C"
       - key: MGRO_TOKEN_ADDRESS
-        value: "0xe84613C7220F2cD92fD1551256f74c21e49e2283"
+        value: "0x46e564D039d0d7Ec4C88d517fD32a03d15e88568"
       # Workers run as their own services — never in the API process.
       - key: ENABLE_REWARD_CLAIM_WORKER
         value: "false"
@@ -94,7 +94,7 @@ services:
       - key: BASE_RPC_URL
         value: https://mainnet.base.org
       - key: MGRO_TOKEN_ADDRESS
-        value: "0xe84613C7220F2cD92fD1551256f74c21e49e2283"
+        value: "0x46e564D039d0d7Ec4C88d517fD32a03d15e88568"
       # Stay false everywhere: these only start workers INSIDE the API process.
       - key: ENABLE_REWARD_CLAIM_WORKER
         value: "false"
