@@ -13,6 +13,8 @@ const verifierClaimSchema = new mongoose.Schema(
     },
     txHash: { type: String, required: false },
     lastError: { type: String, required: false },
+    /** VerifierMinter proposal id when the mint awaits verifier approval. */
+    proposalId: { type: Number, required: false },
     updatedAt: { type: Date, default: Date.now },
   },
   { _id: false },
@@ -30,6 +32,8 @@ const trancheSchema = new mongoose.Schema(
     },
     txHash: { type: String, required: false },
     lastError: { type: String, required: false },
+    /** VerifierMinter proposal id when the mint awaits verifier approval. */
+    proposalId: { type: Number, required: false },
     updatedAt: { type: Date, default: Date.now },
   },
   { _id: false },

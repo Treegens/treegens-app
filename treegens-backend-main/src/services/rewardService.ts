@@ -5,7 +5,9 @@ import RewardAllocation from '../models/RewardAllocation'
 import Submission from '../models/Submission'
 import User from '../models/User'
 import RewardClaimQueueService from './rewardClaimQueueService'
-import RewardMintService from './rewardMintService'
+import RewardMintService, {
+  PendingVerifierApprovalError,
+} from './rewardMintService'
 
 function normalizeWallet(w: string): string {
   return String(w).toLowerCase()
@@ -192,12 +194,14 @@ type RewardAllocationLike = {
     amountWei: string
     unlockAt: Date
     status: string
+    proposalId?: number
   }>
   verifierClaims?: Array<{
     wallet: string
     status: string
     txHash?: string
     lastError?: string
+    proposalId?: number
   }>
 }
 
@@ -1023,7 +1027,11 @@ export class RewardService {
     }
 
     try {
-      const result = await this.mintService.mintTo(w, amountStr)
+      const priorRow = findVerifierClaimRow(alloc, w)
+      const result = await this.mintService.mintTo(w, amountStr, {
+        evidenceURI: `treegens://submission/${String(alloc.submissionId)}/verifier/${w}`,
+        existingProposalId: priorRow?.proposalId,
+      })
       await RewardAllocation.updateOne(
         { _id: id },
         {
@@ -1040,6 +1048,8 @@ export class RewardService {
       return { ok: true, txHash: result.txHash }
     } catch (err: any) {
       const msg = err?.message || String(err)
+      const pendingProposalId =
+        err instanceof PendingVerifierApprovalError ? err.proposalId : undefined
       await RewardAllocation.updateOne(
         { _id: id },
         {
@@ -1047,10 +1057,17 @@ export class RewardService {
             'verifierClaims.$[v].status': 'failed',
             'verifierClaims.$[v].lastError': msg,
             'verifierClaims.$[v].updatedAt': new Date(),
+            ...(pendingProposalId !== undefined
+              ? { 'verifierClaims.$[v].proposalId': pendingProposalId }
+              : {}),
           },
         },
         { arrayFilters: [{ 'v.wallet': w, 'v.status': 'processing' }] },
       )
+      if (pendingProposalId !== undefined) {
+        // Not a failure: the mint is on-chain awaiting verifier approvals.
+        return { ok: false, reason: msg }
+      }
       throw err
     }
   }
@@ -1070,7 +1087,12 @@ export class RewardService {
     allocationId: mongoose.Types.ObjectId,
     planterWallet: string,
     onlyDue = true,
-  ): Promise<{ txHashes: string[]; amountsWei: string[] }> {
+  ): Promise<{
+    txHashes: string[]
+    amountsWei: string[]
+    /** Set when a tranche is on-chain awaiting verifier approvals. */
+    pendingVerifierProposalId?: number
+  }> {
     const pw = normalizeWallet(planterWallet)
     let allocation = await this.reloadAllocation(allocationId)
     if (allocation.planterWallet !== pw) {
@@ -1174,7 +1196,10 @@ export class RewardService {
 
       try {
         if (payNow > 0n) {
-          const result = await this.mintService.mintTo(pw, amountStr)
+          const result = await this.mintService.mintTo(pw, amountStr, {
+            evidenceURI: `treegens://submission/${String(allocation.submissionId)}/planter/tranche/${t.index}`,
+            existingProposalId: (t as { proposalId?: number }).proposalId,
+          })
           cumulative += payNow
           await RewardAllocation.updateOne(
             { _id: allocationId },
@@ -1225,6 +1250,10 @@ export class RewardService {
         }
       } catch (err: any) {
         const msg = err?.message || String(err)
+        const pendingProposalId =
+          err instanceof PendingVerifierApprovalError
+            ? err.proposalId
+            : undefined
         await RewardAllocation.updateOne(
           { _id: allocationId },
           {
@@ -1232,12 +1261,24 @@ export class RewardService {
               'tranches.$[tr].status': 'failed',
               'tranches.$[tr].lastError': msg,
               'tranches.$[tr].updatedAt': new Date(),
+              ...(pendingProposalId !== undefined
+                ? { 'tranches.$[tr].proposalId': pendingProposalId }
+                : {}),
             },
           },
           {
             arrayFilters: [{ 'tr.index': t.index, 'tr.status': 'processing' }],
           },
         )
+        if (pendingProposalId !== undefined) {
+          // The mint is proposed on-chain and waits for verifier approvals.
+          // Stop here so one claim never opens several parallel proposals.
+          return {
+            txHashes,
+            amountsWei,
+            pendingVerifierProposalId: pendingProposalId,
+          }
+        }
         throw err
       }
     }
@@ -1257,6 +1298,8 @@ export class RewardService {
     allocation: any
     nothingToClaim: boolean
     status: RewardStatusProjection
+    /** Set when a mint is proposed on-chain awaiting verifier approvals. */
+    pendingVerifierProposalId?: number
   }> {
     if (!this.mintService.isConfigured()) {
       throw new Error(
@@ -1285,6 +1328,7 @@ export class RewardService {
       allocation: any
       nothingToClaim: boolean
       status: RewardStatusProjection
+      pendingVerifierProposalId?: number
     } = {
       nothingToClaim: true,
       allocation,
@@ -1335,6 +1379,10 @@ export class RewardService {
       if (planterResult.txHashes.length > 0) {
         result.planter = planterResult
         result.nothingToClaim = false
+      }
+      if (planterResult.pendingVerifierProposalId !== undefined) {
+        result.pendingVerifierProposalId =
+          planterResult.pendingVerifierProposalId
       }
     }
 

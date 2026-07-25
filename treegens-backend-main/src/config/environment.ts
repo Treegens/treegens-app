@@ -97,6 +97,42 @@ class EnvironmentConfig {
     return process.env.MGRO_MINTER_PRIVATE_KEY || ''
   }
 
+  /** TGN delegation registry backing the verifier system (Base mainnet). */
+  get TGN_DELEGATION_REGISTRY_ADDRESS() {
+    return (
+      process.env.TGN_DELEGATION_REGISTRY_ADDRESS ||
+      '0x9f122be6c32fdabe344e195d854a497353f3d162'
+    )
+  }
+
+  /** VerifierMinter — since 2026-07-25 the ONLY address with MINTER_ROLE on MGRO. */
+  get VERIFIER_MINTER_ADDRESS() {
+    return (
+      process.env.VERIFIER_MINTER_ADDRESS ||
+      '0x9BB2C6786C69Bb075b36E2B92f1a7c15D539508c'
+    )
+  }
+
+  /**
+   * How reward MGRO is minted:
+   *  - 'verifier' (default): the minter wallet proposes through VerifierMinter
+   *    and the mint lands once a majority of live verifier stake approves.
+   *  - 'direct': legacy direct token mint. Requires MINTER_ROLE, which was
+   *    revoked from the hot wallet on 2026-07-25 — only for emergencies.
+   */
+  get MGRO_MINT_MODE(): 'verifier' | 'direct' {
+    return process.env.MGRO_MINT_MODE === 'direct' ? 'direct' : 'verifier'
+  }
+
+  /**
+   * Slash everyone delegating to a slashed verifier (default on).
+   * Jimi's ruling 2026-07-25: delegated stake is skin-in-the-game — a
+   * delegator's own TGN is on the line for their verifier's conduct.
+   */
+  get SLASH_DELEGATORS() {
+    return process.env.SLASH_DELEGATORS !== 'false'
+  }
+
   /** Private key for wallet allowed to call TGNVault.slash. */
   get TGN_VAULT_SLASHER_PRIVATE_KEY() {
     return process.env.TGN_VAULT_SLASHER_PRIVATE_KEY || ''
