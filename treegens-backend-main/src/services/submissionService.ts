@@ -645,6 +645,17 @@ class SubmissionService {
     const submission = await Submission.findById(submissionId)
     if (!submission) throw new Error('Submission not found')
 
+    // A planter must never vote on their own submission — a self yes-vote both
+    // biases the majority AND lands the planter wallet in the verifier reward
+    // pool (they'd collect the 95% planter reward and a slice of the 5%
+    // verifier fee for approving their own work).
+    if (
+      String(submission.userWalletAddress || '').toLowerCase() ===
+      String(voterWalletAddress || '').toLowerCase()
+    ) {
+      throw new Error('You cannot vote on your own submission')
+    }
+
     if (submission.status === 'approved' || submission.status === 'rejected') {
       throw new Error('Voting closed for this submission')
     }
@@ -739,10 +750,20 @@ class SubmissionService {
       })
     }
 
-    const majorityVote = determineMajorityVote(
-      submission.votes as SubmissionVote[],
-      totalVerifiers,
+    // Count only votes from wallets that are STILL verifiers. Otherwise a
+    // planter could vote yes from several verifier wallets, then unstake them
+    // so refreshVerifiers shrinks totalVerifiers while their old yes-votes
+    // persist — forcing `yesCount*2 > totalVerifiers` to pass and approving
+    // their own fraudulent planting.
+    const activeVerifierWallets = new Set(
+      (await User.find({ isVerifier: true }).select({ walletAddress: 1 }).lean())
+        .map(u => String(u.walletAddress || '').toLowerCase()),
     )
+    const eligibleVotes = (submission.votes as SubmissionVote[]).filter(v =>
+      activeVerifierWallets.has(String(v.voterWalletAddress || '').toLowerCase()),
+    )
+
+    const majorityVote = determineMajorityVote(eligibleVotes, totalVerifiers)
     if (!majorityVote) {
       return this.buildResolveResult(submission, totalVerifiers)
     }

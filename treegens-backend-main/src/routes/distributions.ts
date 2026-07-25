@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import express, { NextFunction, Request, Response } from 'express'
 import mongoose from 'mongoose'
 import Submission from '../models/Submission'
@@ -30,7 +31,11 @@ const router = express.Router()
 function requireDistributorKey(req: Request, res: Response, next: NextFunction) {
   const configured = process.env.DISTRIBUTOR_API_KEY
   if (!configured) return sendError(res, 'Distributions API not enabled', 503)
-  if (req.header('x-distributor-key') !== configured) {
+  // Constant-time compare (byte-length guarded so timingSafeEqual can't throw
+  // on a differently-sized header) — this secret gates money movement.
+  const given = Buffer.from(req.header('x-distributor-key') || '', 'utf8')
+  const want = Buffer.from(configured, 'utf8')
+  if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) {
     return sendError(res, 'Unauthorized', 401)
   }
   return next()
@@ -247,9 +252,15 @@ router.post('/:submissionId/mark', requireDistributorKey, async (req: Request, r
       return sendError(res, 'Missing paymentRef/planterWallet/planterTx', 400)
     }
 
+    // Only complete an UNCOMPLETED reservation, or re-record the SAME payment
+    // (idempotent). A record already completed by a DIFFERENT payment must not
+    // be overwritten — that would silently discard the first payout's audit
+    // trail. When the filter matches nothing, the upsert falls to an INSERT
+    // that the unique submissionId index rejects (11000 → 409 below).
     const record = await TgnDistribution.findOneAndUpdate(
-      { submissionId },
+      { submissionId, $or: [{ planterTx: { $in: ['', null] } }, { paymentRef }] },
       {
+        $setOnInsert: { submissionId },
         $set: {
           paymentRef,
           grossUsd: Number(grossUsd) || 0,

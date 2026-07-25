@@ -759,9 +759,11 @@ export class RewardService {
     const yesWallets = (submission.votes || [])
       .filter(v => v.vote === 'yes')
       .map(v => normalizeWallet(v.voterWalletAddress))
-    const uniqueYes = [...new Set(yesWallets)].sort((a, b) =>
-      a.localeCompare(b),
-    )
+    // Defense in depth: the planter can never be paid from the verifier pool
+    // for their own submission, even if a self-vote somehow slipped through.
+    const uniqueYes = [...new Set(yesWallets)]
+      .filter(w => w !== planterWallet)
+      .sort((a, b) => a.localeCompare(b))
 
     const totalMgroWei = computeTotalMgroWei(trees)
     const verifierPoolWei = (totalMgroWei * 5n) / 100n

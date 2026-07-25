@@ -15,8 +15,13 @@ class AuthService {
   private jwtExpiresIn: string
   private challengeExpiry: number
   constructor() {
-    this.jwtSecret =
-      env.JWT_SECRET || 'your-secret-key-change-in-production'
+    // Never fall back to a public constant — a known JWT secret lets anyone
+    // mint tokens for any wallet. validateRequired() also makes this fatal at
+    // boot; this is the second line of defence in case that is ever relaxed.
+    this.jwtSecret = env.JWT_SECRET
+    if (!this.jwtSecret || this.jwtSecret.length < 16) {
+      throw new Error('JWT_SECRET is required and must be at least 16 chars')
+    }
     this.jwtExpiresIn = env.JWT_EXPIRES_IN || '7d'
     this.challengeExpiry = 10 * 60 * 1000 // 10 minutes
   }

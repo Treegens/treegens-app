@@ -271,6 +271,15 @@ export class HealthCheckService {
       throw new Error('Voting is only available for mangrove submissions')
     }
 
+    // The planter cannot confirm their own trees' survival — that would let
+    // them unlock survival-vesting reward tranches without independent review.
+    if (
+      String(submission.userWalletAddress || '').toLowerCase() ===
+      String(input.voterWalletAddress || '').toLowerCase()
+    ) {
+      throw new Error('You cannot vote on your own health check')
+    }
+
     if (hc.status !== 'pending_review') {
       throw new Error('Voting closed for this health check')
     }

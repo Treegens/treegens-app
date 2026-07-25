@@ -699,6 +699,11 @@ class EnvironmentConfig {
     // Storage (GCS) is intentionally NOT hard-required: it is validated at
     // upload time and surfaced in /health, so a missing bucket never blocks
     // boot or the workers (which never upload). Only MongoDB is fatal.
+    // Only MongoDB is fatal here because this runs in EVERY process, including
+    // the reward/slash workers (which have no JWT_SECRET and never issue auth
+    // tokens). JWT_SECRET is enforced instead in AuthService's constructor, so
+    // the API — the only process that mints/verifies JWTs — fails fast without
+    // a default, while the workers still boot.
     const required = ['MONGODB_URI']
     const missing = required.filter(key => !process.env[key])
 
