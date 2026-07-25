@@ -168,46 +168,48 @@ router.post('/:submissionId/reserve', requireDistributorKey, async (req: Request
     const holdSeconds = Math.min(3600, Math.max(60, Number(req.body?.holdSeconds) || 900))
     const holdExpiresAt = new Date(now.getTime() + holdSeconds * 1000)
 
-    const existing = await TgnDistribution.findOne({ submissionId })
-    if (existing) {
-      // Same payment retrying → resume and refresh its hold window.
-      if (existing.paymentRef === paymentRef) {
-        if (!existing.planterTx) {
-          existing.holdExpiresAt = holdExpiresAt
-          await existing.save()
-        }
-        return sendSuccess(res, 'Reservation resumed', {
-          resumed: true,
-          completed: !!existing.planterTx,
-        })
-      }
-      // A different payment. Refuse only if the video is sold or actively held;
-      // a stale hold from an abandoned checkout can be taken over.
-      const completed = !!existing.planterTx
-      const liveHold = !!existing.holdExpiresAt && existing.holdExpiresAt > now
-      if (completed || liveHold) {
-        return sendError(res, 'Already reserved by another payment', 409)
-      }
-      existing.paymentRef = paymentRef
-      existing.grossUsd = Number(req.body?.grossUsd) || 0
-      existing.planterWallet = String(req.body?.planterWallet || '').toLowerCase()
-      existing.holdExpiresAt = holdExpiresAt
-      existing.rail = String(req.body?.rail || '')
-      await existing.save()
-      return sendSuccess(res, 'Reserved', { reserved: true, tookOverStaleHold: true })
+    // Fast path: already completed by THIS payment → idempotent success (a
+    // fulfillment re-run must not be told the video is "already reserved").
+    const done = await TgnDistribution.findOne(
+      { submissionId, paymentRef, planterTx: { $nin: ['', null] } },
+    ).lean()
+    if (done) {
+      return sendSuccess(res, 'Reservation resumed', { resumed: true, completed: true })
     }
 
-    await TgnDistribution.create({
+    // Everything else in ONE atomic conditional upsert — no read-modify-write,
+    // so two buyers racing a just-expired video can never both "win". The
+    // filter matches only when the slot is free to (re)take:
+    //   • our own uncompleted reservation (resume + refresh the hold), OR
+    //   • an uncompleted reservation whose hold has expired (steal a stale one).
+    // A live hold by another payment, or a completed sale, does NOT match, so
+    // the upsert falls through to an INSERT that the unique submissionId index
+    // rejects (11000) → 409. MongoDB evaluates the filter atomically per doc,
+    // so of N concurrent callers exactly one updates/inserts and the rest 409.
+    const acquirable = {
       submissionId,
-      paymentRef,
-      grossUsd: Number(req.body?.grossUsd) || 0,
-      planterWallet: String(req.body?.planterWallet || '').toLowerCase(),
-      planterTgnWei: '0',
-      planterTx: '', // filled in by /mark once the transfer confirms
-      holdExpiresAt,
-      rail: String(req.body?.rail || ''),
-    })
-    return sendSuccess(res, 'Reserved', { reserved: true })
+      planterTx: { $in: ['', null] },
+      $or: [
+        { paymentRef },
+        { holdExpiresAt: { $lte: now } },
+        { holdExpiresAt: null },
+      ],
+    }
+    const acquired = await TgnDistribution.findOneAndUpdate(
+      acquirable,
+      {
+        $set: {
+          paymentRef,
+          grossUsd: Number(req.body?.grossUsd) || 0,
+          planterWallet: String(req.body?.planterWallet || '').toLowerCase(),
+          holdExpiresAt,
+          rail: String(req.body?.rail || ''),
+        },
+        $setOnInsert: { submissionId, planterTgnWei: '0', planterTx: '' },
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    )
+    return sendSuccess(res, 'Reserved', { reserved: true, completed: !!acquired?.planterTx })
   } catch (error: any) {
     if (error?.code === 11000) return sendError(res, 'Already reserved', 409)
     console.error('Distribution reserve error:', error)
