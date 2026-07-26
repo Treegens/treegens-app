@@ -114,7 +114,7 @@ class EnvironmentConfig {
   get VERIFIER_MINTER_ADDRESS() {
     return (
       process.env.VERIFIER_MINTER_ADDRESS ||
-      '0xe73941B1AE8f630b6Ab2FDd73041bC92b13E397E'
+      '0xE73941B1Ae8f630b6Ab2FDd73041bc92B13e397E'
     )
   }
 
