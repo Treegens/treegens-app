@@ -110,12 +110,30 @@ class EnvironmentConfig {
    * Redeployed 2026-07-26 to raise MAX_VERIFIERS 100 -> 1000; the previous
    * minter 0x9BB2...508c had its role revoked in the same swap. Identical
    * rules otherwise: 2000 TGN floor, 3 verifiers minimum, 500k MGRO/day.
+   *
+   * Minters whose MINTER_ROLE has been revoked on-chain. Pointing at one of
+   * these cannot work — every proposal would revert — so an env var naming a
+   * dead minter is treated as stale config and ignored rather than obeyed.
+   * That keeps a forgotten dashboard variable from silently killing rewards.
    */
+  private static readonly REVOKED_VERIFIER_MINTERS = [
+    '0x9bb2c6786c69bb075b36e2b92f1a7c15d539508c', // cap-100 minter, revoked 2026-07-26
+  ]
+
   get VERIFIER_MINTER_ADDRESS() {
-    return (
-      process.env.VERIFIER_MINTER_ADDRESS ||
-      '0xE73941B1Ae8f630b6Ab2FDd73041bc92B13e397E'
-    )
+    const CURRENT = '0xE73941B1Ae8f630b6Ab2FDd73041bc92B13e397E'
+    const configured = process.env.VERIFIER_MINTER_ADDRESS?.trim()
+    if (!configured) return CURRENT
+
+    if (EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(configured.toLowerCase())) {
+      console.error(
+        `[config] VERIFIER_MINTER_ADDRESS=${configured} is a REVOKED minter and ` +
+          `would fail every mint. Ignoring it and using ${CURRENT}. ` +
+          `Remove the stale env var.`
+      )
+      return CURRENT
+    }
+    return configured
   }
 
   /**
