@@ -439,6 +439,62 @@ export async function stitchVerifiedVideo(
   }
 }
 
+export type StitchReadiness = {
+  ready: boolean
+  ffmpeg: boolean
+  /** drawtext needs libfreetype; a build without it renders no labels at all. */
+  drawtext: boolean
+  font: string | null
+  logo: boolean
+  problems: string[]
+}
+
+/**
+ * Can this container actually render a stitched clip?
+ *
+ * Worth an endpoint because the three things that can be missing are all
+ * host-specific and all invisible until a real approval fails: the ffmpeg
+ * binary, a drawtext filter compiled against libfreetype, and the bundled
+ * font and logo surviving the build's asset copy. A local test cannot prove
+ * any of them about Render's container.
+ */
+export async function checkStitchReadiness(): Promise<StitchReadiness> {
+  const problems: string[] = []
+  const hasFfmpeg = Boolean(ffmpegPath)
+  if (!hasFfmpeg) problems.push('ffmpeg-static binary missing')
+
+  let drawtext = false
+  if (hasFfmpeg) {
+    try {
+      const out = await run(ffmpegPath as string, ['-h', 'filter=drawtext'], 15_000)
+      drawtext = /libfreetype/i.test(out)
+      if (!drawtext) problems.push('ffmpeg has no drawtext filter')
+    } catch (error) {
+      problems.push(`drawtext probe failed: ${(error as Error).message}`)
+    }
+  }
+
+  let font: string | null = null
+  try {
+    font = path.basename(fontFile())
+  } catch {
+    problems.push('bundled font not resolvable')
+  }
+
+  const { existsSync } = await import('fs')
+  const logo = existsSync(logoFile())
+  if (!logo) problems.push(`logo missing at ${logoFile()}`)
+
+  return {
+    ready: problems.length === 0,
+    ffmpeg: hasFfmpeg,
+    drawtext,
+    font,
+    logo,
+    problems,
+  }
+}
+
 let sweeping = false
 
 /**

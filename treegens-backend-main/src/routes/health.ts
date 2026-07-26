@@ -3,6 +3,8 @@ import { testStorageConnection } from '../config/gcs'
 import HealthService from '../services/healthService'
 import { sendError } from '../utils/responseHelpers'
 import env from '../config/environment'
+import { checkStitchReadiness } from '../services/verifiedVideoStitchService'
+import { TREE_BATCH_SIZE, batchEnforcementEnabled } from '../utils/treeBatch'
 
 const router = express.Router()
 const healthService = new HealthService()
@@ -161,6 +163,35 @@ router.get('/contracts', (_req: Request, res: Response) => {
     delegationRegistry: env.TGN_DELEGATION_REGISTRY_ADDRESS,
     tgnVault: env.TGN_VAULT_ADDRESS,
     mintMode: env.MGRO_MINT_MODE,
+    timestamp: new Date().toISOString(),
+  })
+})
+
+/**
+ * @swagger
+ * /health/pipeline:
+ *   get:
+ *     summary: Can this instance render the verified-video NFT animation
+ *     description: >
+ *       The stitcher depends on three host-specific things — the ffmpeg binary,
+ *       a drawtext filter built against libfreetype, and the bundled font and
+ *       logo surviving the build's asset copy. All three are invisible from
+ *       outside until a real approval fails, so they are probed here. Also
+ *       reports whether the 100-tree batch rule is being enforced.
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: Stitch and batch-rule readiness
+ */
+router.get('/pipeline', async (_req: Request, res: Response) => {
+  const stitch = await checkStitchReadiness()
+  res.json({
+    stitch,
+    batches: {
+      size: TREE_BATCH_SIZE,
+      enforced: batchEnforcementEnabled(),
+    },
+    retrier: process.env.ENABLE_STITCH_RETRIER !== 'false',
     timestamp: new Date().toISOString(),
   })
 })
