@@ -105,11 +105,16 @@ class EnvironmentConfig {
     )
   }
 
-  /** VerifierMinter — since 2026-07-25 the ONLY address with MINTER_ROLE on MGRO. */
+  /**
+   * VerifierMinter — the ONLY address with MINTER_ROLE on MGRO.
+   * Redeployed 2026-07-26 to raise MAX_VERIFIERS 100 -> 1000; the previous
+   * minter 0x9BB2...508c had its role revoked in the same swap. Identical
+   * rules otherwise: 2000 TGN floor, 3 verifiers minimum, 500k MGRO/day.
+   */
   get VERIFIER_MINTER_ADDRESS() {
     return (
       process.env.VERIFIER_MINTER_ADDRESS ||
-      '0x9BB2C6786C69Bb075b36E2B92f1a7c15D539508c'
+      '0xe73941B1AE8f630b6Ab2FDd73041bC92b13E397E'
     )
   }
 
