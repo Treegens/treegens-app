@@ -62,13 +62,34 @@ class EnvironmentConfig {
     )
   }
 
+  /**
+   * Addresses that look like a vault in config but cannot be one on-chain —
+   * getStakedBalance()/slash() revert on both, so verifier stake checks and
+   * slashing silently die against them. Verified on Base 2026-07-26: only
+   * 0x82a54F…582C implements the vault interface, and it is what the
+   * delegation registry's vault() returns.
+   */
+  private static readonly KNOWN_BAD_VAULTS = [
+    '0x64b05503c6f2233d279e6b8b8f2da6936ded584c', // 2-of-4 treasury SAFE
+    '0xf56f635d5e5160f625c05fcbd9e6774334d74c53', // stale pre-mainnet default
+  ]
+
   get TGN_VAULT_ADDRESS() {
     // TGNVault on Base mainnet (deployed 2026-07-23; treasury() points at the
     // 2-of-4 Safe 0x64b05503…584C, which is NOT itself stake/slash-capable).
-    return (
-      process.env.TGN_VAULT_ADDRESS ||
-      '0x82a54F550131140Cc08Cf2b10Aa3a44fFDDa582C'
-    )
+    const CURRENT = '0x82a54F550131140Cc08Cf2b10Aa3a44fFDDa582C'
+    const configured = process.env.TGN_VAULT_ADDRESS?.trim()
+    if (!configured) return CURRENT
+
+    if (EnvironmentConfig.KNOWN_BAD_VAULTS.includes(configured.toLowerCase())) {
+      console.error(
+        `[config] TGN_VAULT_ADDRESS=${configured} is not a vault (stake/slash ` +
+          `calls revert on it). Ignoring it and using ${CURRENT}. ` +
+          `Remove or fix the stale env var.`
+      )
+      return CURRENT
+    }
+    return configured
   }
 
   get TGN_TOKEN_ADDRESS() {
