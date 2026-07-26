@@ -4,7 +4,13 @@ import { uploadToStorage } from '../config/gcs'
 import { generateUniqueFileName } from '../middleware/upload'
 import Submission from '../models/Submission'
 import User from '../models/User'
+import {
+  approvedTreeCount,
+  batchEnforcementEnabled,
+  batchRejectionReason,
+} from '../utils/treeBatch'
 import { determineMajorityVote } from '../utils/verifierMajority'
+import { stitchVerifiedVideo } from './verifiedVideoStitchService'
 import type { AiMangroveVerifyFailure } from './aiMangroveVerificationService'
 import {
   stringifyAiRawForStorage,
@@ -33,11 +39,27 @@ type ResolveSubmissionResult = {
   votes: SubmissionVote[]
   majorityVote?: 'yes' | 'no'
   finalizationBlockedByVerifierThreshold?: boolean
+  /** Verifiers said yes, but the count is not a whole 100-tree batch. */
+  finalizationBlockedByTreeBatch?: string
 }
 
 export type UploadSlot = 'land' | 'plant'
 
 const MANGROVE_TREE_TYPE = 'mangrove'
+
+/**
+ * Approval has two consequences beyond flipping a status: it decides what the
+ * NFT rail will serve as the token's animation, and it creates fundable
+ * inventory. Both are enforced here so every approval path shares them.
+ */
+function batchGate(submission: {
+  treeType?: string | null
+  treesPlanted?: number | null
+  aiVerification?: { countedMangroves?: number | null } | null
+}): string | null {
+  if (!batchEnforcementEnabled()) return null
+  return batchRejectionReason(approvedTreeCount(submission))
+}
 
 class SubmissionService {
   private normalizeTreeType(value: string): string {
@@ -82,6 +104,14 @@ class SubmissionService {
   }
 
   private async applyApprovalSideEffects(submission: any) {
+    // The NFT rail serves plant.publicUrl as the token's animation, so an
+    // approved planting has to carry its own proof: before + after-with-count
+    // + the branded end card. Detached on purpose — a transcode takes tens of
+    // seconds and must never hold up the verifier's HTTP response or block
+    // the reward queueing below. Failures are recorded on the submission and
+    // retried by startStitchRetrier.
+    void stitchVerifiedVideo(String(submission._id)).catch(() => {})
+
     const planterWallet = String(
       submission.userWalletAddress || '',
     ).toLowerCase()
@@ -334,11 +364,23 @@ class SubmissionService {
           decision: routing.decision,
         } as any
 
-        if (shouldAutoApprove) {
+        // Same 100-tree batch rule as the verifier path: an AI count the
+        // funding rails will refuse must not be auto-approved into dead
+        // inventory. It falls back to human review instead.
+        const batchBlock = shouldAutoApprove ? batchGate(submission) : null
+        if (shouldAutoApprove && !batchBlock) {
           submission.status = routing.submissionStatus
           submission.reviewedAt = new Date()
         } else {
-          submission.status = routing.submissionStatus
+          if (batchBlock) {
+            console.warn(
+              '[SubmissionService] auto-approval held: not a full batch',
+              { submissionId: String(submissionOid), reason: batchBlock },
+            )
+          }
+          submission.status = batchBlock
+            ? 'pending_review'
+            : routing.submissionStatus
         }
       } else {
         const failure = aiResult as AiMangroveVerifyFailure
@@ -766,6 +808,24 @@ class SubmissionService {
     const majorityVote = determineMajorityVote(eligibleVotes, totalVerifiers)
     if (!majorityVote) {
       return this.buildResolveResult(submission, totalVerifiers)
+    }
+
+    // Jimi's ruling: inventory only in whole 100-tree batches. Approving a
+    // count the voucher rail and burn page will refuse creates a verified
+    // planting that can never be funded, so hold it in review rather than
+    // manufacture dead inventory. Not a rejection — the planting is real and
+    // the yes-voters were right; only the batch size is wrong.
+    if (majorityVote === 'yes') {
+      const blocked = batchGate(submission)
+      if (blocked) {
+        console.warn('[SubmissionService] approval held: not a full batch', {
+          submissionId: String(submission._id),
+          reason: blocked,
+        })
+        return this.buildResolveResult(submission, totalVerifiers, {
+          finalizationBlockedByTreeBatch: blocked,
+        })
+      }
     }
 
     submission.status = majorityVote === 'yes' ? 'approved' : 'rejected'

@@ -18,6 +18,7 @@ import submissionsRoutes from './routes/submissions'
 import userRoutes from './routes/users'
 import BurnIndexerService from './services/burnIndexerService'
 import VerifierService from './services/verifierService'
+import { startStitchRetrier } from './services/verifiedVideoStitchService'
 import { startRewardClaimWorker } from './workers/rewardClaimWorker'
 import { startSlashWorker } from './workers/slashWorker'
 
@@ -163,4 +164,12 @@ if (env.ENABLE_CRONJOBS === 'true') {
       'VerifierService not initialized. Set BASE_RPC_URL to enable cron.',
     )
   }
+}
+
+// Re-renders the branded verified clip for approved plantings whose stitch was
+// interrupted (a deploy mid-transcode, a source URL briefly unreachable).
+// Deliberately not tied to ENABLE_CRONJOBS: without it such a submission would
+// serve the raw phone clip as its NFT animation forever.
+if (process.env.ENABLE_STITCH_RETRIER !== 'false') {
+  startStitchRetrier()
 }

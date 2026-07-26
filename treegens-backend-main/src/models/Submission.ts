@@ -20,6 +20,22 @@ const clipSchema = new mongoose.Schema(
     reverseGeocode: { type: String, required: false },
     uploadedAt: { type: Date, required: false },
     version: { type: Number, default: 1, min: 1 },
+    /** The clip as filmed. At approval `publicUrl` is replaced by the branded
+     * stitched clip the NFT rail serves, so the untouched original is kept
+     * here — otherwise the source of the stitch would be unrecoverable and it
+     * could never be re-rendered. */
+    rawPublicUrl: { type: String, required: false },
+    rawVideoCID: { type: String, required: false },
+    /** Same URL as `publicUrl` once stitched; kept separately so it is obvious
+     * which one the token is pointing at. */
+    stitchedPublicUrl: { type: String, required: false },
+    stitchedAt: { type: Date, required: false },
+    stitchStatus: {
+      type: String,
+      enum: ['processing', 'done', 'failed'],
+      required: false,
+    },
+    stitchError: { type: String, required: false },
   },
   { _id: false },
 )
@@ -128,5 +144,11 @@ submissionSchema.index({ 'votes.voterWalletAddress': 1 })
 submissionSchema.index({ 'land.videoCID': 1 }, { unique: true, sparse: true })
 submissionSchema.index({ 'plant.videoCID': 1 }, { unique: true, sparse: true })
 submissionSchema.index({ 'aiVerification.status': 1 }, { sparse: true })
+// The stitch retrier scans only approved submissions whose branded clip never
+// finished rendering; a partial index keeps that sweep near-free.
+submissionSchema.index(
+  { 'plant.stitchStatus': 1, reviewedAt: 1 },
+  { partialFilterExpression: { 'plant.stitchStatus': { $exists: true } } },
+)
 
 export default mongoose.model('Submission', submissionSchema)
