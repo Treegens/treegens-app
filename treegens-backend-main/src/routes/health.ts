@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express'
 import { testStorageConnection } from '../config/gcs'
 import HealthService from '../services/healthService'
 import { sendError } from '../utils/responseHelpers'
+import env from '../config/environment'
 
 const router = express.Router()
 const healthService = new HealthService()
@@ -136,6 +137,32 @@ router.get(['/storage-test', '/pinata-test'], async (req: Request, res: Response
   } catch {
     return sendError(res, 'Storage connection test failed')
   }
+})
+
+/**
+ * @swagger
+ * /health/contracts:
+ *   get:
+ *     summary: On-chain addresses this instance is configured to use
+ *     description: >
+ *       Every address here is public on-chain data. Exposed because a stale
+ *       VERIFIER_MINTER_ADDRESS silently pointing at a revoked minter is
+ *       otherwise invisible from outside until a mint fails.
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: Configured contract addresses
+ */
+router.get('/contracts', (_req: Request, res: Response) => {
+  res.json({
+    chain: 'base-mainnet',
+    mgro: env.MGRO_TOKEN_ADDRESS,
+    verifierMinter: env.VERIFIER_MINTER_ADDRESS,
+    delegationRegistry: env.TGN_DELEGATION_REGISTRY_ADDRESS,
+    tgnVault: env.TGN_VAULT_ADDRESS,
+    mintMode: env.MGRO_MINT_MODE,
+    timestamp: new Date().toISOString(),
+  })
 })
 
 export default router
