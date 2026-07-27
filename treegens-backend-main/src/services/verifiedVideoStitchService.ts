@@ -19,18 +19,20 @@
  *
  * Ported from the `video-stitch/` reference tool and treegens-backend's
  * shareVideoService, with two deliberate changes:
- *  - Labels are drawn by ffmpeg's `drawtext` rather than pre-rendered Pillow
- *    PNGs. The reference tool needed PNGs only because Homebrew's ffmpeg has
- *    no drawtext; the `ffmpeg-static` binary we ship is built
- *    --enable-libfreetype, so text is drawn directly. The font travels with
- *    us as an npm dependency because a Linux container has no system fonts.
+ *  - Labels are rasterised in-process by pureimage and composited with
+ *    `overlay`, the same shape as the reference tool's Pillow PNGs. Do NOT
+ *    "simplify" this to ffmpeg's `drawtext`: the LINUX ffmpeg-static build
+ *    has no such filter (proven live on Render — `No such filter:
+ *    'drawtext'`) even though the macOS build of the same package does. The
+ *    font travels as an npm dependency because a container has no system
+ *    fonts.
  *  - Sources are letterboxed onto the brand green instead of being stretched
  *    to 960x540. Planting clips are portrait; the reference tool's plain
  *    `scale=960:540` squashed them.
  */
 import { spawn } from 'child_process'
 import { createWriteStream } from 'fs'
-import { mkdtemp, rm, stat, writeFile } from 'fs/promises'
+import { mkdtemp, rm, stat } from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { pipeline } from 'stream/promises'
@@ -39,13 +41,11 @@ import { path as ffprobePath } from 'ffprobe-static'
 import Submission from '../models/Submission'
 import { uploadToStorage } from '../config/gcs'
 import { approvedTreeCount } from '../utils/treeBatch'
+import { renderLabels } from './verifiedVideoLabels'
 
-/** treegens.org palette, same values as video-stitch/make_labels.py. */
-const LEAF = '0xD1ED6E'
-const OLIVE = '0x9FB857'
+/** Brand evergreen, for the letterbox fill. Label colours live in
+ * verifiedVideoLabels, which does all the text rendering. */
 const EVERGREEN = '0x1D472A'
-/** Label bars: evergreen at the reference tool's 200/255 alpha. */
-const BOX_ALPHA = '0.78'
 
 const WIDTH = 960
 const HEIGHT = 540
@@ -144,42 +144,6 @@ async function download(url: string, dest: string): Promise<void> {
 }
 
 /**
- * Label text goes through a file, not the filter string. Text can contain
- * colons, quotes and backslashes — all of which are filtergraph syntax — and
- * the plot label is derived from user-supplied location data.
- */
-type Label = { file: string; text: string }
-
-async function writeLabel(dir: string, name: string, text: string): Promise<Label> {
-  const file = path.join(dir, `${name}.txt`)
-  await writeFile(file, text, 'utf8')
-  return { file, text }
-}
-
-function drawtext(
-  label: Label,
-  opts: { size: number; x: string; y: string; color?: string; box?: boolean },
-): string {
-  const parts = [
-    `fontfile=${escapePath(fontFile())}`,
-    `textfile=${escapePath(label.file)}`,
-    `fontsize=${opts.size}`,
-    `fontcolor=${opts.color ?? LEAF}`,
-    `x=${opts.x}`,
-    `y=${opts.y}`,
-  ]
-  if (opts.box !== false) {
-    parts.push('box=1', `boxcolor=${EVERGREEN}@${BOX_ALPHA}`, 'boxborderw=14')
-  }
-  return `drawtext=${parts.join(':')}`
-}
-
-/** Filtergraph paths need `\` before the characters ffmpeg parses. */
-function escapePath(p: string): string {
-  return p.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'")
-}
-
-/**
  * Fit a portrait phone clip into the 960x540 frame without stretching it, and
  * fill the sides with a darkened blur of the clip itself rather than flat
  * colour. Planting clips are portrait, so a plain letterbox leaves two thirds
@@ -232,43 +196,31 @@ export async function renderStitchedVideo(
       ? `AFTER — AI COUNT: ${sources.treeCount} TREES VERIFIED`
       : 'AFTER — AI TREE COUNTING'
 
-  const badge = await writeLabel(workDir, 'badge', sources.plotLabel)
-  const beforeLabel = await writeLabel(
+  const labels = await renderLabels({
     workDir,
-    'before',
-    'BEFORE — RAW PLOT FOOTAGE',
-  )
-  const afterLabel = await writeLabel(workDir, 'after', afterText)
-  const cardLine = await writeLabel(
-    workDir,
-    'card',
-    'VERIFIED BY AI · FUNDED BY $MGRO',
-  )
-  const cardSite = await writeLabel(workDir, 'site', 'treegens.org')
+    plotLabel: sources.plotLabel,
+    afterText,
+    logoPath: logoFile(),
+    width: WIDTH,
+    height: HEIGHT,
+  })
 
   // xfade consumes `duration` seconds from the END of the left input, so each
   // offset is where the outgoing clip starts fading, not where it ends.
   const firstFade = Math.max(0.1, beforeDur - XFADE)
   const secondFade = Math.max(0.2, beforeDur - XFADE + afterDur - XFADE)
 
-  const bottom = `y=h-th-28`
-  const centre = `x=(w-tw)/2`
-
+  // Inputs: 0 before, 1 after, 2 end card, 3 badge, 4 before bar, 5 after bar.
   const filter = [
-    // BEFORE: badge top-left, so it never sits over an AI counter overlay.
     fitToFrame(0),
-    `[s0base]${drawtext(badge, { size: 22, x: '24', y: '24' })},` +
-      `${drawtext(beforeLabel, { size: 26, x: centre.slice(2), y: bottom.slice(2) })}[v0]`,
-    // AFTER: badge top-RIGHT, so it stays clear of a top-left counter.
+    // Badge top-LEFT on the before clip.
+    `[s0base][3:v]overlay=24:24[b0]`,
+    `[b0][4:v]overlay=(W-w)/2:H-h-28[v0]`,
     fitToFrame(1),
-    `[s1base]${drawtext(badge, { size: 22, x: 'w-tw-24', y: '24' })},` +
-      `${drawtext(afterLabel, { size: 26, x: centre.slice(2), y: bottom.slice(2) })}[v1]`,
-    // End card: brand green, logo, then the two lines of copy.
-    `[2:v]format=yuv420p,setsar=1[card0]`,
-    `[card0][3:v]overlay=(W-w)/2:150:format=auto[card1]`,
-    `[card1]` +
-      `${drawtext(cardLine, { size: 30, x: centre.slice(2), y: '330', box: false })},` +
-      `${drawtext(cardSite, { size: 22, x: centre.slice(2), y: '390', color: OLIVE, box: false })}[card]`,
+    // Badge top-RIGHT on the after clip, clear of any AI counter overlay.
+    `[s1base][3:v]overlay=W-w-24:24[b1]`,
+    `[b1][5:v]overlay=(W-w)/2:H-h-28[v1]`,
+    `[2:v]fps=${FPS},format=yuv420p,setsar=1[card]`,
     `[v0][v1]xfade=transition=fade:duration=${XFADE}:offset=${firstFade.toFixed(3)}[ba]`,
     `[ba][card]xfade=transition=fade:duration=${XFADE}:offset=${secondFade.toFixed(3)}[v]`,
   ].join(';')
@@ -279,12 +231,20 @@ export async function renderStitchedVideo(
     before,
     '-i',
     after,
-    '-f',
-    'lavfi',
+    '-loop',
+    '1',
+    '-t',
+    String(CARD_SECONDS),
+    '-framerate',
+    String(FPS),
     '-i',
-    `color=c=${EVERGREEN}:s=${WIDTH}x${HEIGHT}:r=${FPS}:d=${CARD_SECONDS}`,
+    labels.endCard,
     '-i',
-    logoFile(),
+    labels.badge,
+    '-i',
+    labels.before,
+    '-i',
+    labels.after,
     '-filter_complex',
     filter,
     '-map',
@@ -442,8 +402,8 @@ export async function stitchVerifiedVideo(
 export type StitchReadiness = {
   ready: boolean
   ffmpeg: boolean
-  /** drawtext needs libfreetype; a build without it renders no labels at all. */
-  drawtext: boolean
+  /** Can pureimage rasterise the label bars and end card on this host? */
+  labels: boolean
   font: string | null
   logo: boolean
   problems: string[]
@@ -463,15 +423,26 @@ export async function checkStitchReadiness(): Promise<StitchReadiness> {
   const hasFfmpeg = Boolean(ffmpegPath)
   if (!hasFfmpeg) problems.push('ffmpeg-static binary missing')
 
-  let drawtext = false
-  if (hasFfmpeg) {
+  // The text path is pureimage, not ffmpeg, so prove IT works — including
+  // that the bundled font parses.
+  let labels = false
+  try {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'treegens-labels-'))
     try {
-      const out = await run(ffmpegPath as string, ['-h', 'filter=drawtext'], 15_000)
-      drawtext = /libfreetype/i.test(out)
-      if (!drawtext) problems.push('ffmpeg has no drawtext filter')
-    } catch (error) {
-      problems.push(`drawtext probe failed: ${(error as Error).message}`)
+      await renderLabels({
+        workDir: dir,
+        plotLabel: 'READINESS',
+        afterText: 'AFTER — AI COUNT: 100 TREES VERIFIED',
+        logoPath: logoFile(),
+        width: WIDTH,
+        height: HEIGHT,
+      })
+      labels = true
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
+  } catch (error) {
+    problems.push(`label render failed: ${(error as Error).message.slice(0, 200)}`)
   }
 
   let font: string | null = null
@@ -485,14 +456,7 @@ export async function checkStitchReadiness(): Promise<StitchReadiness> {
   const logo = existsSync(logoFile())
   if (!logo) problems.push(`logo missing at ${logoFile()}`)
 
-  return {
-    ready: problems.length === 0,
-    ffmpeg: hasFfmpeg,
-    drawtext,
-    font,
-    logo,
-    problems,
-  }
+  return { ready: problems.length === 0, ffmpeg: hasFfmpeg, labels, font, logo, problems }
 }
 
 let sweeping = false
