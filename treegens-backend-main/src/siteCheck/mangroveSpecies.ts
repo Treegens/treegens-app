@@ -231,7 +231,6 @@ const COUNTRIES: Record<MangroveRegion, string[]> = {
     'TV',
     'NR',
     'WF',
-    'PF',
   ],
   atlantic_east_pacific: [
     'US',
@@ -275,6 +274,18 @@ const COUNTRIES: Record<MangroveRegion, string[]> = {
 }
 for (const [region, codes] of Object.entries(COUNTRIES)) {
   for (const code of codes) REGION_BY_COUNTRY[code] = region as MangroveRegion
+}
+
+/**
+ * Places where mangroves are not native: people brought them in, and they
+ * spread (the manual: "introduced to Hawaii and possibly to Tahiti").
+ * Hawaii is not listed: country code 'US' alone cannot tell it apart.
+ */
+const NOT_NATIVE = new Set(['PF'])
+
+/** False where mangroves are not native, so none should be planted. */
+export function mangrovesNative(countryCode?: string | null): boolean {
+  return !countryCode || !NOT_NATIVE.has(countryCode.trim().toUpperCase())
 }
 
 /** Region for an ISO 3166-1 alpha-2 country code, or null when unknown. */

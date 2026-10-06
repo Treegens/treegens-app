@@ -15,6 +15,7 @@ import {
 import User from '../models/User'
 import * as conversationService from '../services/conversationService'
 import HealthCheckService from '../services/healthCheckService'
+import { SiteCheckRefusal } from '../services/siteGate'
 import SubmissionService from '../services/submissionService'
 import {
   sendBadRequest,
@@ -122,7 +123,10 @@ router.get(
  *                     data:
  *                       $ref: '#/components/schemas/SubmissionUploadResponse'
  *       400:
- *         description: Validation error
+ *         description: |
+ *           Validation error, or a Site Check refusal sent before the video is stored:
+ *           `Site not found`, a land clip filmed outside the site it links (enforce), or a
+ *           mangrove planting the site gate blocks (enforce). The body is `{ error: <message> }`.
  *       401:
  *         description: Unauthorized
  *       500:
@@ -174,6 +178,10 @@ router.post(
         uploadData,
       )
     } catch (error: any) {
+      // The planter can act on these, so they are not server faults.
+      if (error instanceof SiteCheckRefusal) {
+        return sendBadRequest(res, error.message)
+      }
       console.error('Submission upload error:', error)
       return sendError(res, `Failed to upload to IPFS: ${error.message}`, 500)
     }

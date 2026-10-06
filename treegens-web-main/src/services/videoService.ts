@@ -1,7 +1,7 @@
 import { isValidSubmissionObjectId } from '@/services/submissionApiMappers'
 import { axiosInstance } from './axiosInstance'
 import type { ReverseGeocodeResult } from './geocodingService'
-import type { ISubmissionAiVerification } from '@/types'
+import type { ISubmissionAiVerification, ISubmissionSiteCheck } from '@/types'
 import type {
   CompressionProgress,
   CompressionResult,
@@ -27,6 +27,8 @@ export interface VideoUploadResponse {
     treeType?: string
     reverseGeocode?: string
     aiVerification?: ISubmissionAiVerification
+    /** Where the clip was filmed relative to its linked Site Check */
+    siteCheck?: ISubmissionSiteCheck
   }
 }
 

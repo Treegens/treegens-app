@@ -34,13 +34,9 @@ const upload = multer({
   },
 })
 
-const IMAGE_MIME_TYPES = [
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-]
+// No HEIC: most browsers cannot show it to verifiers, so the app converts
+// every other format to JPEG before upload.
+const IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
 const imageFileFilter: multer.Options['fileFilter'] = (req, file, cb) => {
   if (IMAGE_MIME_TYPES.includes(file.mimetype)) {

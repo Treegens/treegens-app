@@ -97,6 +97,27 @@ async function uploadToStorage(
   }
 }
 
+/**
+ * Best effort: removes a stored object (a replaced or deleted site photo).
+ * A missing object is fine and any other error is only logged, so callers
+ * never fail because of cleanup.
+ */
+async function deleteFromStorage(objectName: string): Promise<void> {
+  if (!objectName) return
+  try {
+    const { storage, bucketName } = getStorage()
+    await storage
+      .bucket(bucketName)
+      .file(objectName)
+      .delete({ ignoreNotFound: true })
+  } catch (error) {
+    console.error('GCS delete failed:', {
+      object: objectName,
+      message: (error as { message?: string }).message,
+    })
+  }
+}
+
 async function testStorageConnection() {
   const bucketName = env.GCS_BUCKET?.trim()
   if (!bucketName) {
@@ -113,4 +134,9 @@ async function testStorageConnection() {
   }
 }
 
-export { buildPublicUrl, testStorageConnection, uploadToStorage }
+export {
+  buildPublicUrl,
+  deleteFromStorage,
+  testStorageConnection,
+  uploadToStorage,
+}

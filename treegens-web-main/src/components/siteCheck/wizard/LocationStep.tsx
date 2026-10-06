@@ -10,6 +10,7 @@ import {
   appendWalkPoint,
   locationProblem,
   type SiteForm,
+  trimWalkOvershoot,
 } from '@/modules/siteCheck/siteForm'
 import type { SiteBoundaryMethod } from '@/types'
 import { CirclePanel } from './CirclePanel'
@@ -118,7 +119,10 @@ export function LocationStep({ form, setForm, onNext }: Props) {
 
   const finishWalk = () => {
     walk.stop()
-    toast.success(`Boundary saved with ${form.ring.length} points`)
+    // Walking a little past the start makes the path cross itself.
+    const ring = trimWalkOvershoot(form.ring)
+    if (ring !== form.ring) setForm(f => ({ ...f, ring }))
+    toast.success(`Boundary saved with ${ring.length} points`)
   }
 
   const problem = locationProblem(form)

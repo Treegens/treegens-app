@@ -3,8 +3,9 @@
 import { type Dispatch, type SetStateAction, useEffect } from 'react'
 import { HiArrowPath } from 'react-icons/hi2'
 import { ChoiceChip } from '@/components/siteCheck/ChoiceChip'
-import { useGeolocation } from '@/hooks/useGeolocation'
+import { useBoundaryWalk } from '@/hooks/useBoundaryWalk'
 import {
+  CIRCLE_MAX_ACCURACY_M,
   formAreaM2,
   RADIUS_CHOICES_M,
   type SiteForm,
@@ -18,33 +19,43 @@ type Props = {
   setForm: Dispatch<SetStateAction<SiteForm>>
 }
 
+function positionText(
+  center: SiteForm['center'],
+  watching: boolean,
+  accuracy: number | null,
+) {
+  if (center) {
+    return `${center.latitude.toFixed(5)}, ${center.longitude.toFixed(5)}`
+  }
+  if (!watching) return 'No position yet'
+  if (accuracy != null && accuracy > CIRCLE_MAX_ACCURACY_M) {
+    return `Waiting for a better GPS fix (±${Math.round(accuracy)} m)…`
+  }
+  return 'Getting your position…'
+}
+
 /** Marks the site as a circle around the planter's current position. */
 export function CirclePanel({ form, setForm }: Props) {
-  const {
-    latitude,
-    longitude,
-    accuracy,
-    loading,
-    error,
-    getCurrentPosition,
-    isSupported,
-  } = useGeolocation({
-    enableHighAccuracy: true,
-    timeout: 15000,
-    maximumAge: 0,
+  // Keeps listening until a fix is good enough: a first, coarse fix can
+  // be hundreds of metres off and would put the circle somewhere else.
+  const gps = useBoundaryWalk(fix => {
+    if (fix.accuracy > CIRCLE_MAX_ACCURACY_M) return
+    setForm(f => ({
+      ...f,
+      center: { latitude: fix.latitude, longitude: fix.longitude },
+    }))
+    gps.stop()
   })
+  const { watching, lastFix, error, start } = gps
+  const accuracy = lastFix?.accuracy ?? null
 
   // A resumed draft keeps its saved centre until the planter asks again.
   useEffect(() => {
-    if (isSupported && !form.center) getCurrentPosition()
-  }, [isSupported])
-
-  useEffect(() => {
-    if (latitude === null || longitude === null) return
-    setForm(f => ({ ...f, center: { latitude, longitude } }))
-  }, [latitude, longitude, setForm])
+    if (!form.center) start()
+  }, [])
 
   const center = form.center
+  const weak = watching && accuracy != null && accuracy > CIRCLE_MAX_ACCURACY_M
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4">
       <p className="text-sm text-gray-700">
@@ -54,25 +65,27 @@ export function CirclePanel({ form, setForm }: Props) {
         <div className="min-w-0 flex-1">
           <p className="text-xs text-gray-500">Middle of the site</p>
           <p className="text-sm font-medium text-gray-900">
-            {center
-              ? `${center.latitude.toFixed(5)}, ${center.longitude.toFixed(5)}`
-              : loading
-                ? 'Getting your position…'
-                : 'No position yet'}
+            {positionText(center, watching, accuracy)}
           </p>
         </div>
         <GpsAccuracy accuracy={accuracy} />
         <button
           type="button"
-          onClick={getCurrentPosition}
+          onClick={start}
           className="shrink-0 rounded-full bg-gray-100 p-3 text-tree-green-2 hover:bg-gray-200"
           aria-label="Use my position now"
         >
           <HiArrowPath
-            className={loading ? 'h-5 w-5 animate-spin' : 'h-5 w-5'}
+            className={watching ? 'h-5 w-5 animate-spin' : 'h-5 w-5'}
           />
         </button>
       </div>
+      {weak ? (
+        <p className="text-xs text-amber-800">
+          Weak GPS. Stand still in the open for a moment, away from trees and
+          buildings.
+        </p>
+      ) : null}
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       <p className="text-sm font-semibold text-gray-800">
         How far is it from you to the edge?

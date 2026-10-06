@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   circleRing,
   closeRing,
+  crossesAntimeridian,
   distanceToRingM,
   haversineMeters,
   isValidRing,
@@ -10,6 +11,7 @@ import {
   pointInRing,
   ringAreaM2,
   ringCentroid,
+  wrapLon,
 } from './geo'
 
 test('haversineMeters is ~0 for same point', () => {
@@ -136,4 +138,57 @@ test('isValidRing rejects junk, lines and crossing boundaries', () => {
   // A boundary that passes through the same corner twice.
   const pinched: LonLat[] = [...square, square[1], [LON + 2 * DEG_LON, LAT]]
   assert.equal(isValidRing(pinched), false)
+})
+
+test('wrapLon folds longitudes into [-180, 180)', () => {
+  assert.equal(wrapLon(39.5), 39.5)
+  assert.equal(wrapLon(-179.5), -179.5)
+  assert.ok(Math.abs(wrapLon(180.25) - -179.75) < 1e-9)
+  assert.ok(Math.abs(wrapLon(-180.25) - 179.75) < 1e-9)
+  assert.ok(Math.abs(wrapLon(540.5) - -179.5) < 1e-9)
+})
+
+test('circleRing never goes past the 180th meridian', () => {
+  // Fiji: a 300 m circle 100 m west of the meridian.
+  const ring = circleRing(-16.5, 179.999, 300)
+  for (const [lon] of ring) assert.ok(Math.abs(lon) <= 180, `lon ${lon}`)
+  assert.equal(crossesAntimeridian(ring), true)
+  assert.equal(crossesAntimeridian(circleRing(-16.5, 179.99, 300)), false)
+})
+
+test('crossesAntimeridian spots an edge over the 180th meridian only', () => {
+  const fiji: LonLat[] = [
+    [179.999, -16.5],
+    [-179.999, -16.5],
+    [-179.999, -16.502],
+    [179.999, -16.502],
+  ]
+  assert.equal(crossesAntimeridian(fiji), true)
+  assert.equal(crossesAntimeridian(closeRing(fiji)), true)
+  assert.equal(crossesAntimeridian(square), false)
+  assert.equal(crossesAntimeridian(closeRing(square)), false)
+  assert.equal(crossesAntimeridian('not a ring'), false)
+  assert.equal(
+    crossesAntimeridian([
+      [200, 0],
+      [-200, 0],
+      [0, 1],
+    ]),
+    false,
+  )
+})
+
+test('area and centroid stay right for a ring over the 180th meridian', () => {
+  // About 214 m by 222 m around the meridian.
+  const ring: LonLat[] = [
+    [179.999, -16.5],
+    [-179.999, -16.5],
+    [-179.999, -16.502],
+    [179.999, -16.502],
+  ]
+  const area = ringAreaM2(ring)
+  assert.ok(Math.abs(area - 213.3 * 222.4) < 600, `area ${area}`)
+  const c = ringCentroid(ring)
+  assert.ok(Math.abs(Math.abs(c.longitude) - 180) < 1e-6, `lon ${c.longitude}`)
+  assert.ok(Math.abs(c.latitude - -16.501) < 1e-6)
 })

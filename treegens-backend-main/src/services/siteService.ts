@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import env from '../config/environment'
-import { uploadToStorage } from '../config/gcs'
+import { deleteFromStorage, uploadToStorage } from '../config/gcs'
 import { toHydrologySummary } from '../hydrology'
 import { generateUniqueFileName } from '../middleware/upload'
 import Site, { SiteHydrology } from '../models/Site'
@@ -68,6 +68,19 @@ function sameRing(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+/** Tries at saving a draft change while the site keeps changing under it. */
+const DRAFT_SAVE_TRIES = 3
+
+/** Deletes stored site photos; only ever objects under sites/. */
+async function deleteSitePhotoObjects(paths: (string | undefined)[]) {
+  await Promise.all(
+    paths
+      .filter((p): p is string => typeof p === 'string')
+      .filter(p => p.startsWith('sites/'))
+      .map(p => deleteFromStorage(p)),
+  )
+}
+
 class SiteService {
   private async findSite(siteId: string) {
     if (!mongoose.Types.ObjectId.isValid(siteId)) {
@@ -100,6 +113,51 @@ class SiteService {
     return Boolean(user?.isVerifier)
   }
 
+  /** Lowercased wallets of everyone who is a verifier right now. */
+  private async activeVerifierWallets(): Promise<string[]> {
+    const active = await User.find({ isVerifier: true })
+      .select({ walletAddress: 1 })
+      .lean()
+    return active.map(u => String(u.walletAddress || '').toLowerCase())
+  }
+
+  /**
+   * Loads the owner's draft, applies `change` and saves it, but only while
+   * it is still a draft and its satellite check has not moved on since it
+   * was read (the verdict is computed from that state). A submit or a
+   * finished satellite run in between makes it read the site again and redo
+   * the change, so neither a submitted site nor a newer verdict is
+   * overwritten.
+   */
+  private async saveDraftChange(
+    wallet: string,
+    siteId: string,
+    change: (site: any) => void,
+  ) {
+    for (let tries = 1; ; tries++) {
+      const site = await this.findOwnedDraft(wallet, siteId)
+      const seen = {
+        status: site.hydrology?.status ?? null,
+        completedAt: site.hydrology?.completedAt ?? null,
+      }
+      change(site)
+      site.$where = {
+        status: 'draft',
+        'hydrology.status': seen.status,
+        'hydrology.completedAt': seen.completedAt,
+      }
+      try {
+        await site.save()
+        return site
+      } catch (error) {
+        const raced =
+          error instanceof mongoose.Error.DocumentNotFoundError ||
+          error instanceof mongoose.Error.VersionError
+        if (!raced || tries >= DRAFT_SAVE_TRIES) throw error
+      }
+    }
+  }
+
   /** Queues the satellite check, then returns the site as stored. */
   private async withHydrologyQueued(siteId: string) {
     await triggerSiteHydrology(siteId)
@@ -116,6 +174,15 @@ class SiteService {
       },
       env.SITE_MAX_AREA_M2,
     )
+    // Each new site queues a satellite run; unfinished ones are capped so
+    // one wallet cannot keep piling them up.
+    const drafts = await Site.countDocuments({
+      userWalletAddress: wallet.toLowerCase(),
+      status: 'draft',
+    })
+    if (drafts >= env.SITE_MAX_DRAFTS_PER_WALLET) {
+      throw new Error(SITE_ERRORS.tooManyDrafts)
+    }
     const fields = {
       userWalletAddress: wallet.toLowerCase(),
       name: String(input.name ?? '').trim(),
@@ -157,27 +224,36 @@ class SiteService {
   }
 
   async updateSite(wallet: string, siteId: string, patch: SiteInput) {
-    const site = await this.findOwnedDraft(wallet, siteId)
-    const geometry = this.patchedGeometry(site, patch)
-    // Clients may resend an unchanged boundary; only a moved one needs a
-    // new satellite run.
-    const moved =
-      geometry &&
-      !sameRing(geometry.boundary.coordinates, site.boundary?.coordinates)
-    if (patch.name !== undefined) site.name = String(patch.name).trim()
-    if (patch.answers !== undefined) {
-      site.answers = sanitizeSiteAnswers(patch.answers)
-    }
-    if (patch.countryCode !== undefined) {
-      site.countryCode = normalizeCountryCode(patch.countryCode)
-    }
-    if (patch.reverseGeocode !== undefined) {
-      site.reverseGeocode = patch.reverseGeocode?.trim() || undefined
-    }
-    if (geometry) site.set({ ...geometry, radiusM: geometry.radiusM })
-    if (moved) site.hydrology = { status: 'not_started', attempts: 0 }
-    refreshVerdict(site)
-    await site.save()
+    let moved = false
+    const site = await this.saveDraftChange(wallet, siteId, site => {
+      const geometry = this.patchedGeometry(site, patch)
+      // Clients may resend an unchanged boundary; only a moved one needs a
+      // new satellite run.
+      moved = Boolean(
+        geometry &&
+          !sameRing(geometry.boundary.coordinates, site.boundary?.coordinates),
+      )
+      if (patch.name !== undefined) site.name = String(patch.name).trim()
+      if (patch.answers !== undefined) {
+        site.answers = sanitizeSiteAnswers(patch.answers)
+      }
+      if (patch.countryCode !== undefined) {
+        site.countryCode = normalizeCountryCode(patch.countryCode)
+      }
+      if (patch.reverseGeocode !== undefined) {
+        site.reverseGeocode = patch.reverseGeocode?.trim() || undefined
+      }
+      if (geometry) site.set({ ...geometry, radiusM: geometry.radiusM })
+      // The run count is kept: moving the boundary must not become a way
+      // around SITE_HYDROLOGY_MAX_ATTEMPTS. Only a recheck resets it.
+      if (moved) {
+        site.hydrology = {
+          status: 'not_started',
+          attempts: site.hydrology?.attempts ?? 0,
+        }
+      }
+      refreshVerdict(site)
+    })
     if (moved) return this.withHydrologyQueued(String(site._id))
     return site.toObject()
   }
@@ -216,25 +292,60 @@ class SiteService {
       ...(hasGps ? { gpsCoordinates: { latitude: lat, longitude: lng } } : {}),
       uploadedAt: new Date(),
     }
-    // One photo per kind: a new one replaces the old.
-    site.photos = [...site.photos.filter(p => p.kind !== kind), photo]
-    await site.save()
-    return site.toObject()
+    // One photo per kind: a new one replaces the old. A single update that
+    // only matches a draft, so a photo cannot land on a site submitted
+    // during the upload, and an upload of another kind is not lost.
+    const before = await Site.findOneAndUpdate(
+      {
+        _id: site._id,
+        userWalletAddress: site.userWalletAddress,
+        status: 'draft',
+      },
+      [
+        {
+          $set: {
+            photos: {
+              $concatArrays: [
+                {
+                  $filter: {
+                    input: { $ifNull: ['$photos', []] },
+                    cond: { $ne: ['$$this.kind', kind] },
+                  },
+                },
+                { $literal: [photo] },
+              ],
+            },
+          },
+        },
+      ],
+      { new: false, projection: { photos: 1 } },
+    ).lean()
+    if (!before) {
+      await deleteSitePhotoObjects([photo.objectPath])
+      throw new Error(SITE_ERRORS.locked)
+    }
+    // The replaced photo's file is public; do not leave it behind.
+    void deleteSitePhotoObjects(
+      (before.photos ?? [])
+        .filter(p => p.kind === kind && p.objectPath !== photo.objectPath)
+        .map(p => p.objectPath),
+    )
+    return Site.findById(site._id).lean()
   }
 
   async submitSite(wallet: string, siteId: string) {
-    const site = await this.findOwnedDraft(wallet, siteId)
-    const missing = missingAnswers(sanitizeSiteAnswers(site.answers))
-    if (missing.length) {
-      throw new Error(`${SITE_ERRORS.missingAnswers}: ${missing.join(', ')}`)
-    }
-    if (missingSitePhotos(site.photos).length) {
-      throw new Error(SITE_ERRORS.missingPhotos)
-    }
-    site.status = 'pending_review'
-    site.submittedAt = new Date()
-    refreshVerdict(site)
-    await site.save()
+    const site = await this.saveDraftChange(wallet, siteId, site => {
+      const missing = missingAnswers(sanitizeSiteAnswers(site.answers))
+      if (missing.length) {
+        throw new Error(`${SITE_ERRORS.missingAnswers}: ${missing.join(', ')}`)
+      }
+      if (missingSitePhotos(site.photos).length) {
+        throw new Error(SITE_ERRORS.missingPhotos)
+      }
+      site.status = 'pending_review'
+      site.submittedAt = new Date()
+      refreshVerdict(site)
+    })
     return site.toObject()
   }
 
@@ -291,7 +402,13 @@ class SiteService {
 
     const totalVerifiers = await User.countDocuments({ isVerifier: true })
     if (totalVerifiers === 0) throw new Error(SITE_ERRORS.noVerifiers)
-    if (site.votes.length >= totalVerifiers) {
+    const active = await this.activeVerifierWallets()
+    // Votes of wallets that stopped verifying no longer count, so they must
+    // not use up the turns of the verifiers who are left either.
+    const counted = new Set(
+      site.votes.map(v => v.voterWalletAddress).filter(w => active.includes(w)),
+    )
+    if (counted.size >= totalVerifiers) {
       throw new Error(SITE_ERRORS.allVoted)
     }
     if (site.votes.some(v => v.voterWalletAddress === voter)) {
@@ -301,7 +418,7 @@ class SiteService {
     const delegators = await User.find({ verifierDelegate: voter })
       .select({ walletAddress: 1 })
       .lean()
-    site.votes.push({
+    const row = {
       voterWalletAddress: voter,
       vote,
       reasons: (Array.isArray(reasons) ? reasons : [])
@@ -311,9 +428,28 @@ class SiteService {
       delegatedFor: delegators.map(d =>
         String(d.walletAddress || '').toLowerCase(),
       ),
-    })
-    await site.save()
-    return this.attemptResolveSite(String(site._id), totalVerifiers)
+      createdAt: new Date(),
+    }
+    // The checks above only pick the right message. This conditional push is
+    // what stops a double tap or parallel requests from storing one
+    // verifier's vote twice (and so counting it twice).
+    const pushed = await Site.updateOne(
+      {
+        _id: site._id,
+        status: 'pending_review',
+        userWalletAddress: { $ne: voter },
+        'votes.voterWalletAddress': { $ne: voter },
+      },
+      { $push: { votes: row } },
+    )
+    if (pushed.matchedCount === 0) {
+      const fresh = await this.findSite(siteId)
+      if (fresh.status !== 'pending_review') {
+        throw new Error(SITE_ERRORS.notOpen)
+      }
+      throw new Error(SITE_ERRORS.alreadyVoted)
+    }
+    return this.attemptResolveSite(String(site._id), totalVerifiers, active)
   }
 
   /**
@@ -322,14 +458,16 @@ class SiteService {
    * keyed to submissions and their reward pools, and a site review pays out
    * nothing to be wrong about.
    */
-  private async attemptResolveSite(siteId: string, totalVerifiers: number) {
+  private async attemptResolveSite(
+    siteId: string,
+    totalVerifiers: number,
+    activeWallets?: string[],
+  ) {
     const site = await this.findSite(siteId)
-    const active = await User.find({ isVerifier: true })
-      .select({ walletAddress: 1 })
-      .lean()
     const resolution = resolveSiteReview({
       votes: site.votes,
-      activeVerifierWallets: active.map(u => String(u.walletAddress || '')),
+      activeVerifierWallets:
+        activeWallets ?? (await this.activeVerifierWallets()),
       totalVerifiers,
       minimumActiveVerifiers: env.MINIMUM_ACTIVE_VERIFIERS,
     })
@@ -345,6 +483,43 @@ class SiteService {
     ).lean()
     if (settled) this.notifyOwner(settled)
     return this.buildVoteResult(settled ?? site, totalVerifiers, resolution)
+  }
+
+  /**
+   * Recounts every pending site after the verifier pool changed (someone
+   * became a verifier or lost their stake). A majority can then exist with
+   * nobody left to cast the vote that would settle it; mirrors
+   * SubmissionService.attemptResolvePendingSubmissions.
+   */
+  async attemptResolvePendingSites() {
+    const totalVerifiers = await User.countDocuments({ isVerifier: true })
+    if (totalVerifiers < env.MINIMUM_ACTIVE_VERIFIERS) {
+      return { processed: 0, resolved: 0, totalVerifiers }
+    }
+    const active = await this.activeVerifierWallets()
+    const pending = await Site.find(
+      { status: 'pending_review' },
+      { _id: 1 },
+    ).lean()
+    let resolved = 0
+    for (const p of pending) {
+      try {
+        const result = await this.attemptResolveSite(
+          String(p._id),
+          totalVerifiers,
+          active,
+        )
+        if (result.status === 'approved' || result.status === 'rejected') {
+          resolved += 1
+        }
+      } catch (error: any) {
+        console.error(
+          `[SiteService] could not resolve site ${String(p._id)}`,
+          error?.message,
+        )
+      }
+    }
+    return { processed: pending.length, resolved, totalVerifiers }
   }
 
   private notifyOwner(site: any) {
@@ -410,7 +585,14 @@ class SiteService {
     if (await Submission.exists({ siteId: site._id })) {
       throw new Error(SITE_ERRORS.linked)
     }
-    await Site.deleteOne({ _id: site._id })
+    // Conditional on draft, so a submit that lands in between wins.
+    const deleted = await Site.findOneAndDelete({
+      _id: site._id,
+      status: 'draft',
+    }).lean()
+    if (!deleted) throw new Error(SITE_ERRORS.locked)
+    // Photo files are public; deleting the site removes them too.
+    await deleteSitePhotoObjects((deleted.photos ?? []).map(p => p.objectPath))
     return { siteId: String(site._id), deleted: true }
   }
 }

@@ -143,6 +143,71 @@ test('buildSiteGeometry refuses bad, tiny and huge boundaries', () => {
   assert.ok(ringAreaM2(pin(50).boundary.coordinates[0]) < 20_000)
 })
 
+test('buildSiteGeometry refuses a thin sliver that runs for kilometres', () => {
+  // Under 0.2 ha, but 333 km long: within 50 m of it would count as inside.
+  const sliver: LonLat[] = [
+    [39.6, -4.6],
+    [39.6000001, -3.1],
+    [39.6, -1.6],
+  ]
+  assert.ok(ringAreaM2(closeRing(sliver)) < 2_000)
+  assert.throws(
+    () =>
+      buildSiteGeometry({ boundaryMethod: 'walked', ring: sliver }, 500_000),
+    { message: SITE_ERRORS.tooLarge },
+  )
+  // A long, narrow real site (1.4 km by 100 m) is still fine.
+  const strip: LonLat[] = [
+    [LON, LAT],
+    [LON + 1400 * M_LON, LAT],
+    [LON + 1400 * M_LON, LAT + 100 * M_LAT],
+    [LON, LAT + 100 * M_LAT],
+  ]
+  const g = buildSiteGeometry(
+    { boundaryMethod: 'walked', ring: strip },
+    500_000,
+  )
+  assert.ok(Math.abs(g.areaM2 - 140_000) < 1_000)
+})
+
+test('buildSiteGeometry refuses sites over the 180th meridian', () => {
+  const crossing = { message: SITE_ERRORS.crossesAntimeridian }
+  // A pin near the meridian in Fiji: its circle would cross it.
+  assert.throws(
+    () =>
+      buildSiteGeometry(
+        {
+          boundaryMethod: 'pin_radius',
+          center: { latitude: -16.5, longitude: 179.999 },
+          radiusM: 300,
+        },
+        500_000,
+      ),
+    crossing,
+  )
+  const walked: LonLat[] = [
+    [179.999, -16.5],
+    [-179.999, -16.5],
+    [-179.999, -16.502],
+    [179.999, -16.502],
+  ]
+  assert.throws(
+    () =>
+      buildSiteGeometry({ boundaryMethod: 'walked', ring: walked }, 500_000),
+    crossing,
+  )
+  // Close to the meridian but not over it is fine, and stays in range.
+  const g = buildSiteGeometry(
+    {
+      boundaryMethod: 'pin_radius',
+      center: { latitude: -16.5, longitude: 179.99 },
+      radiusM: 300,
+    },
+    500_000,
+  )
+  for (const [lon] of g.boundary.coordinates[0]) assert.ok(lon <= 180)
+})
+
 const yes = (w: string) => ({ voterWalletAddress: w, vote: 'yes' as const })
 const no = (w: string) => ({ voterWalletAddress: w, vote: 'no' as const })
 const verifiers = ['0xa', '0xb', '0xc', '0xd', '0xe']
@@ -184,6 +249,18 @@ test('resolveSiteReview needs a strict majority of the whole pool', () => {
     votes: [no('0xa'), no('0xB'), no('0xc'), yes('0xd')],
   })
   assert.equal(rejected.outcome, 'rejected')
+})
+
+test('resolveSiteReview counts one vote per wallet', () => {
+  // Two stored rows from one double tap must not count as two verifiers.
+  const r = resolveSiteReview({
+    votes: [yes('0xa'), yes('0xA'), yes('0xb')],
+    activeVerifierWallets: verifiers,
+    totalVerifiers: 5,
+    minimumActiveVerifiers: 5,
+  })
+  assert.equal(r.outcome, null)
+  assert.equal(r.majorityVote, null)
 })
 
 test('resolveSiteReview ignores votes from wallets that stopped verifying', () => {

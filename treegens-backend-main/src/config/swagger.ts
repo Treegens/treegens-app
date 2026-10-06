@@ -283,8 +283,24 @@ const swaggerOptions = {
                   description: 'Within SITE_GPS_TOLERANCE_M of the boundary',
                 },
                 distanceToSiteM: { type: 'number', minimum: 0 },
+                plantInsideSite: {
+                  type: 'boolean',
+                  description: 'Same as insideSite, for the plant clip GPS',
+                },
+                plantDistanceToSiteM: { type: 'number', minimum: 0 },
                 checkedAt: { type: 'string', format: 'date-time' },
               },
+            },
+            siteGateFlag: {
+              type: 'string',
+              enum: [
+                'no_site',
+                'site_not_approved',
+                'verdict_not_plant',
+                'outside_site',
+              ],
+              description:
+                'Why a mangrove planting fell short of the Site Check gate, recorded in every SITE_CHECK_ENFORCEMENT mode; absent when it passed',
             },
             species: {
               type: 'array',
@@ -521,6 +537,24 @@ const swaggerOptions = {
                 'Present after plant upload; required on plant upload. Normalized to lowercase.',
             },
             reverseGeocode: { type: 'string' },
+            siteCheck: {
+              type: 'object',
+              description:
+                'Land uploads that link a site: where the land clip was filmed relative to it',
+              properties: {
+                insideSite: { type: 'boolean' },
+                distanceToSiteM: { type: 'number', minimum: 0 },
+                siteStatus: {
+                  type: 'string',
+                  enum: ['draft', 'pending_review', 'approved', 'rejected'],
+                },
+                verdictCode: {
+                  type: 'string',
+                  enum: ['plant', 'fix_first', 'let_regrow', 'not_suitable'],
+                  nullable: true,
+                },
+              },
+            },
             aiVerification: {
               $ref: '#/components/schemas/AiVerificationSnapshot',
             },

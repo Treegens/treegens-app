@@ -1,7 +1,16 @@
 const MAX_EDGE_PX = 1600
 const JPEG_QUALITY = 0.8
-/** Photos under this size go up as they are. */
+/** Photos under this size go up as they are, when every browser shows them. */
 const SKIP_BELOW_BYTES = 600 * 1024
+/**
+ * Types the API stores that every browser can show. Anything else (HEIC,
+ * GIF, AVIF, BMP...) is turned into a JPEG first: the API refuses most of
+ * them, and HEIC only displays in Safari.
+ */
+const PASS_THROUGH_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+
+const UNREADABLE_PHOTO_MESSAGE =
+  'This photo format cannot be used. Take the photo with the camera, or choose a JPEG or PNG.'
 
 function toJpegName(name: string) {
   const base = name.replace(/\.[^.]+$/, '') || 'photo'
@@ -41,20 +50,31 @@ async function downscale(file: File): Promise<Blob | null> {
 
 /**
  * Shrinks a camera photo to at most 1600 px on its long edge as a JPEG
- * (quality 0.8). Returns the original file when it is already small, when
- * the browser cannot decode it (e.g. HEIC outside Safari), or on any error.
+ * (quality 0.8). A small JPEG, PNG or WebP goes up as it is, and so does a
+ * bigger one when shrinking fails or does not help. Any other type must be
+ * converted: when the browser cannot read it, this throws an Error with
+ * UNREADABLE_PHOTO_MESSAGE instead of returning a file the API would refuse
+ * or verifiers could not see.
  */
 export async function compressImage(file: File): Promise<File> {
-  if (file.size < SKIP_BELOW_BYTES || !canDecodeImages()) return file
-  try {
-    const blob = await downscale(file)
-    if (!blob || blob.size >= file.size) return file
-    return new File([blob], toJpegName(file.name), {
-      type: 'image/jpeg',
-      lastModified: Date.now(),
-    })
-  } catch (e) {
-    console.warn('Photo compression failed, uploading the original', e)
-    return file
+  const passThrough = PASS_THROUGH_TYPES.includes(file.type)
+  if (passThrough && file.size < SKIP_BELOW_BYTES) return file
+  if (!canDecodeImages()) {
+    if (passThrough) return file
+    throw new Error(UNREADABLE_PHOTO_MESSAGE)
   }
+  let blob: Blob | null = null
+  try {
+    blob = await downscale(file)
+  } catch (e) {
+    console.warn('Photo compression failed', e)
+  }
+  if (!blob || (passThrough && blob.size >= file.size)) {
+    if (passThrough) return file
+    throw new Error(UNREADABLE_PHOTO_MESSAGE)
+  }
+  return new File([blob], toJpegName(file.name), {
+    type: 'image/jpeg',
+    lastModified: Date.now(),
+  })
 }

@@ -23,6 +23,8 @@ import {
 import {
   circleRing,
   closeRing,
+  crossesAntimeridian,
+  haversineMeters,
   isValidRing,
   LonLat,
   ringAreaM2,
@@ -38,6 +40,10 @@ export const SITE_ERRORS = {
   tooLarge: 'Site boundary is too large',
   tooSmall: 'Site boundary is too small',
   invalidBoundary: 'Invalid site boundary',
+  crossesAntimeridian:
+    'Sites that cross the 180th meridian are not supported yet.',
+  tooManyDrafts:
+    'You have too many unfinished sites. Finish or delete some first.',
   missingAnswers: 'Answer all site questions first',
   missingPhotos: 'Add the low-tide and ground photos first',
   invalidPhotoKind: 'Invalid photo kind',
@@ -262,6 +268,12 @@ export const SITE_GEOMETRY_LIMITS = {
   minAreaM2: 50,
   minRadiusM: 5,
   maxRadiusM: 300,
+  /**
+   * Farthest a boundary vertex may be from the centre. The area cap alone
+   * would let a thin sliver run for hundreds of km; a 50 ha disc has a
+   * radius of about 400 m, so this still fits long, narrow real sites.
+   */
+  maxExtentM: 1500,
 }
 
 function isLatLng(p: unknown): p is { latitude: number; longitude: number } {
@@ -281,17 +293,33 @@ function pinCircle(input: SiteBoundaryInput) {
     throw new Error(SITE_ERRORS.invalidBoundary)
   }
   const { latitude, longitude } = center
-  return {
-    ring: circleRing(latitude, longitude, radiusM),
-    center: { latitude, longitude },
-    radiusM,
+  const ring = circleRing(latitude, longitude, radiusM)
+  if (crossesAntimeridian(ring)) {
+    throw new Error(SITE_ERRORS.crossesAntimeridian)
   }
+  if (!isValidRing(ring)) throw new Error(SITE_ERRORS.invalidBoundary)
+  return { ring, center: { latitude, longitude }, radiusM }
 }
 
 function walkedRing(input: SiteBoundaryInput) {
+  if (crossesAntimeridian(input.ring)) {
+    throw new Error(SITE_ERRORS.crossesAntimeridian)
+  }
   if (!isValidRing(input.ring)) throw new Error(SITE_ERRORS.invalidBoundary)
   const ring = closeRing(input.ring)
   return { ring, center: ringCentroid(ring), radiusM: undefined }
+}
+
+/** Metres from the centre to the farthest vertex of the ring. */
+function ringExtentM(
+  ring: LonLat[],
+  center: { latitude: number; longitude: number },
+): number {
+  return Math.max(
+    ...ring.map(([lon, lat]) =>
+      haversineMeters(center.latitude, center.longitude, lat, lon),
+    ),
+  )
 }
 
 /**
@@ -309,6 +337,9 @@ export function buildSiteGeometry(
     throw new Error(SITE_ERRORS.tooSmall)
   }
   if (areaM2 > maxAreaM2) throw new Error(SITE_ERRORS.tooLarge)
+  if (ringExtentM(ring, center) > SITE_GEOMETRY_LIMITS.maxExtentM) {
+    throw new Error(SITE_ERRORS.tooLarge)
+  }
   return {
     boundaryMethod: input.boundaryMethod,
     boundary: { type: 'Polygon', coordinates: [ring] },
@@ -335,7 +366,8 @@ export interface SiteReviewResolution {
 
 /**
  * Same rule as submissions: a strict majority of the whole verifier pool,
- * counting only votes from wallets that are still verifiers.
+ * counting only votes from wallets that are still verifiers, and only the
+ * first vote of each wallet (a backstop against a duplicated vote row).
  */
 export function resolveSiteReview(
   input: SiteReviewInput,
@@ -350,9 +382,13 @@ export function resolveSiteReview(
   const active = new Set(
     [...input.activeVerifierWallets].map(w => w.toLowerCase()),
   )
-  const eligible = input.votes.filter(v =>
-    active.has(String(v.voterWalletAddress || '').toLowerCase()),
-  )
+  const seen = new Set<string>()
+  const eligible = input.votes.filter(v => {
+    const wallet = String(v.voterWalletAddress || '').toLowerCase()
+    if (!active.has(wallet) || seen.has(wallet)) return false
+    seen.add(wallet)
+    return true
+  })
   const majorityVote = determineMajorityVote(eligible, input.totalVerifiers)
   const outcome =
     majorityVote === 'yes'

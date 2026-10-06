@@ -3,11 +3,16 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
+import { Spinner } from '@/components/ui/Spinner'
+import { VOTE_NOTE_MAX_LENGTH } from './ApproveSiteModal'
 
 type Props = {
   isOpen: boolean
   onClose: () => void
-  onReject: (payload: { reasons: string[] }) => void
+  /** Resolves true when the vote was recorded */
+  onReject: (payload: { reasons: string[] }) => Promise<boolean>
+  /** A vote is being sent */
+  submitting?: boolean
 }
 
 const REJECT_SITE_LIST = [
@@ -18,7 +23,12 @@ const REJECT_SITE_LIST = [
   { id: 5, title: 'Another reason (noted below)' },
 ]
 
-export function RejectSiteModal({ isOpen, onClose, onReject }: Props) {
+export function RejectSiteModal({
+  isOpen,
+  onClose,
+  onReject,
+  submitting = false,
+}: Props) {
   const [selectedReasonIds, setSelectedReasonIds] = useState<number[]>([])
   const [note, setNote] = useState('')
 
@@ -31,14 +41,18 @@ export function RejectSiteModal({ isOpen, onClose, onReject }: Props) {
   const noteTrim = note.trim()
   const canSubmit = selectedReasonIds.length > 0 || noteTrim.length > 0
 
-  const handleReject = () => {
-    if (!canSubmit) return
+  const handleReject = async () => {
+    if (!canSubmit || submitting) return
     const selected = REJECT_SITE_LIST.filter(item =>
       selectedReasonIds.includes(item.id),
     ).map(item => item.title)
-    onReject({ reasons: noteTrim ? [...selected, noteTrim] : selected })
-    setSelectedReasonIds([])
-    setNote('')
+    // Keep the choices when the vote fails, so they can be sent again.
+    if (
+      await onReject({ reasons: noteTrim ? [...selected, noteTrim] : selected })
+    ) {
+      setSelectedReasonIds([])
+      setNote('')
+    }
   }
 
   return (
@@ -70,16 +84,18 @@ export function RejectSiteModal({ isOpen, onClose, onReject }: Props) {
         <textarea
           placeholder="Add a note"
           rows={4}
+          maxLength={VOTE_NOTE_MAX_LENGTH}
           className="rounded-lg border border-gray-300 bg-gray-50 p-2 text-sm text-gray-900 placeholder:text-gray-500"
           value={note}
           onChange={e => setNote(e.target.value)}
         />
         <Button
-          onClick={handleReject}
+          onClick={() => void handleReject()}
           outline
           color="red"
-          disabled={!canSubmit}
+          disabled={!canSubmit || submitting}
         >
+          {submitting ? <Spinner size="sm" /> : null}
           Reject
         </Button>
       </div>

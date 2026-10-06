@@ -105,7 +105,10 @@ const aiVerificationSchema = new mongoose.Schema(
   { _id: false },
 )
 
-/** The submission's view of its Site Check, taken from the land clip GPS. */
+/**
+ * The submission's view of its Site Check: insideSite and distanceToSiteM
+ * from the land clip GPS, the plant* fields from the plant clip GPS.
+ */
 const siteCheckSchema = new mongoose.Schema(
   {
     siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Site' },
@@ -113,6 +116,8 @@ const siteCheckSchema = new mongoose.Schema(
     verdictCode: { type: String, required: false },
     insideSite: { type: Boolean, required: false },
     distanceToSiteM: { type: Number, min: 0, required: false },
+    plantInsideSite: { type: Boolean, required: false },
+    plantDistanceToSiteM: { type: Number, min: 0, required: false },
     checkedAt: { type: Date, required: false },
   },
   { _id: false },
@@ -153,6 +158,12 @@ const submissionSchema = new mongoose.Schema(
       required: false,
     },
     siteCheck: { type: siteCheckSchema, required: false },
+    /**
+     * Why a mangrove planting fell short of the Site Check gate (no_site,
+     * site_not_approved, verdict_not_plant, outside_site; see siteGate.ts).
+     * Recorded in every SITE_CHECK_ENFORCEMENT mode; unset when it passed.
+     */
+    siteGateFlag: { type: String, required: false },
     /** Mangrove species ids (mangroveSpecies.ts) the planter says went in. */
     species: { type: [String], default: [] },
   },

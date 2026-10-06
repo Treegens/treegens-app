@@ -1,6 +1,7 @@
 import { ethers } from 'ethers'
 import env from '../config/environment'
 import User from '../models/User'
+import SiteService from './siteService'
 import SubmissionService from './submissionService'
 
 // Minimal ABI with only the function we need
@@ -21,6 +22,7 @@ class VerifierService {
   private eligibilityThresholdTokens: bigint
   private contract: ethers.Contract | null
   private submissionService: SubmissionService
+  private siteService: SiteService
   private isEnabled: boolean
   constructor() {
     const rpcUrl = env.BASE_RPC_URL
@@ -42,6 +44,7 @@ class VerifierService {
         ? new ethers.Contract(this.vaultAddress, TGN_VAULT_ABI, this.provider)
         : null
     this.submissionService = new SubmissionService()
+    this.siteService = new SiteService()
   }
 
   private ensureEnabled() {
@@ -64,6 +67,22 @@ class VerifierService {
       })
     } catch (error: any) {
       console.error('[VerifierService] Pending submission resolution failed', {
+        reason,
+        message: error?.message,
+      })
+    }
+    // Site Check reviews settle on the same majority, so a changed verifier
+    // pool can settle them too (or leave them stuck if nobody recounts).
+    try {
+      const result = await this.siteService.attemptResolvePendingSites()
+      console.log('[VerifierService] Pending site resolution complete', {
+        reason,
+        processed: result.processed,
+        resolved: result.resolved,
+        totalVerifiers: result.totalVerifiers,
+      })
+    } catch (error: any) {
+      console.error('[VerifierService] Pending site resolution failed', {
         reason,
         message: error?.message,
       })

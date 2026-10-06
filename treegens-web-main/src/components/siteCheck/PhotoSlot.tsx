@@ -38,10 +38,26 @@ function Preview({
   onPick,
   onRemove,
 }: Pick<Props, 'onPick' | 'onRemove'> & { url: string }) {
+  // Contain, not cover: the 360 photo is a wide panorama.
+  const image = (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={url} alt="" className="h-full w-full object-contain" />
+  )
   return (
     <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl bg-gray-100 shadow-md">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={url} alt="" className="h-full w-full object-cover" />
+      {onPick || onRemove ? (
+        image
+      ) : (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open the full photo"
+          className="block h-full w-full"
+        >
+          {image}
+        </a>
+      )}
       {onRemove ? (
         <button
           type="button"

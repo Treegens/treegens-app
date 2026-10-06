@@ -5,6 +5,7 @@ import test from 'node:test'
 import {
   findSpecies,
   MANGROVE_SPECIES,
+  mangrovesNative,
   regionForCountry,
   speciesFor,
 } from './mangroveSpecies'
@@ -189,6 +190,33 @@ test('above the tide is a blocker unless a blocked flow explains it', () => {
   assert.equal(codes(blocked).includes('flow_blocked'), false)
 })
 
+test('a spot kept underwater by a blocked flow is "fix_first", not a blocker', () => {
+  const pond: SiteAnswers = {
+    ...GOOD,
+    previousUse: 'pond_or_salt_pan',
+    tideReach: 'always_underwater',
+    flowBlocked: 'yes_not_fixed',
+  }
+  const v = verdict(pond)
+  assert.equal(v.code, 'fix_first')
+  assert.equal(reason(v, 'water_trapped')?.severity, 'fix')
+  assert.equal(codes(v).includes('always_underwater'), false)
+  // The blocked flow is reported once, as the tide reason.
+  assert.equal(codes(v).includes('flow_blocked'), false)
+  // A satellite reading of the trapped water asks for a recheck only.
+  for (const cls of ['permanently_wet', 'too_low'] as const) {
+    const wet = verdict(pond, sat(cls, 'high'))
+    assert.equal(wet.code, 'fix_first', cls)
+    const r = reason(wet, `sat_${cls}`)
+    assert.equal(r?.severity, 'check', cls)
+    assert.match(r!.message, /blocked flow/)
+  }
+  // Without the blocked flow, standing water is still not a mangrove site.
+  const open = verdict({ ...pond, flowBlocked: 'no' }, sat('permanently_wet'))
+  assert.equal(open.code, 'not_suitable')
+  assert.equal(reason(open, 'sat_permanently_wet')?.severity, 'blocker')
+})
+
 test('an active cause of loss must stop first, and its name is in the message', () => {
   for (const causeStillActive of ['yes', 'partly'] as const) {
     const v = verdict({
@@ -205,10 +233,29 @@ test('an active cause of loss must stop first, and its name is in the message', 
   assert.equal(reason(unsure, 'cause_unknown')?.severity, 'check')
   const onlyUnknown = verdict({
     ...GOOD,
+    previousUse: 'pond_or_salt_pan',
     lossCauses: ['unknown'],
     causeStillActive: 'yes',
   })
   assert.equal(codes(onlyUnknown).includes('cause_active'), false)
+})
+
+test('"Mangroves, now cut" counts as cutting even with no cause chosen', () => {
+  for (const lossCauses of [undefined, ['unknown' as const]]) {
+    const v = verdict({ ...GOOD, lossCauses, causeStillActive: 'yes' })
+    assert.equal(v.code, 'fix_first')
+    assert.match(reason(v, 'cause_active')!.message, /\(tree cutting\)/)
+  }
+  // Cutting is named once, after the planter's own causes.
+  const both = verdict({
+    ...GOOD,
+    lossCauses: ['grazing', 'cutting'],
+    causeStillActive: 'partly',
+  })
+  assert.match(
+    reason(both, 'cause_active')!.message,
+    /\(animals grazing or digging, tree cutting\)/,
+  )
 })
 
 test('exposed and eroding shores', () => {
@@ -224,6 +271,26 @@ test('exposed and eroding shores', () => {
   assert.equal(reason(exposed, 'exposed')?.severity, 'fix')
   const scarps = verdict({ ...GOOD, erosionScarps: true })
   assert.equal(reason(scarps, 'erosion')?.severity, 'check')
+})
+
+test('"Not sure" about waves or wild seedlings asks for a check', () => {
+  for (const [answers, code] of [
+    [{ ...GOOD, shoreExposure: 'unsure' }, 'exposure_unknown'],
+    [{ ...GOOD, naturalRecruitment: 'unsure' }, 'regrowth_unknown'],
+  ] as const) {
+    const v = verdict(answers, sat('in_range'))
+    assert.equal(v.code, 'fix_first', code)
+    assert.equal(reason(v, code)?.severity, 'check', code)
+    assert.equal(v.needsFieldCheck, true, code)
+  }
+  // Unsure waves do not hide the erosion check.
+  const both = verdict({
+    ...GOOD,
+    shoreExposure: 'unsure',
+    erosionScarps: true,
+  })
+  assert.ok(codes(both).includes('exposure_unknown'))
+  assert.ok(codes(both).includes('erosion'))
 })
 
 test('sand, salt crust and no nearby mangroves each ask for a check', () => {
@@ -250,9 +317,25 @@ test('notes that do not change the verdict', () => {
   for (const code of ['former_pond', 'some_regrowth', 'nearby_impacted']) {
     assert.equal(reason(v, code)?.severity, 'info', code)
   }
-  const unknownHistory = verdict({ ...GOOD, previousUse: 'unknown' })
-  assert.equal(reason(unknownHistory, 'history_unknown')?.severity, 'info')
-  assert.equal(unknownHistory.code, 'plant')
+  const unknownInForest = verdict({
+    ...GOOD,
+    previousUse: 'unknown',
+    currentCover: 'degraded_mangrove',
+  })
+  assert.equal(reason(unknownInForest, 'history_unknown')?.severity, 'info')
+  assert.equal(unknownInForest.code, 'plant')
+})
+
+test('unknown history on open ground asks for a check, like "Never" would block', () => {
+  for (const currentCover of ['bare_mud', 'sand', 'grass_or_shrub'] as const) {
+    const v = verdict(
+      { ...GOOD, previousUse: 'unknown', currentCover },
+      sat('insufficient_data', 'low', null, null),
+    )
+    assert.equal(v.code, 'fix_first', currentCover)
+    assert.equal(reason(v, 'history_unknown')?.severity, 'check')
+    assert.equal(v.needsFieldCheck, true)
+  }
 })
 
 // --- Satellite rules ---
@@ -275,6 +358,19 @@ test('a low-confidence satellite result only asks for a check', () => {
     assert.equal(r?.severity, 'check')
     assert.equal(r?.source, 'satellite')
     assert.equal(v.needsFieldCheck, true)
+  }
+})
+
+test('a low-confidence "too low" or "always wet" result points to seaward species', () => {
+  for (const cls of ['too_low', 'permanently_wet'] as const) {
+    const v = verdict(GOOD, sat(cls, 'low', 0.8, 0.36))
+    assert.equal(v.code, 'fix_first', cls)
+    assert.equal(v.recommendedZone, 'seaward', cls)
+    assert.deepEqual(v.recommendedSpeciesIds, [
+      'sonneratia_alba',
+      'avicennia_marina',
+      'rhizophora_mucronata',
+    ])
   }
 })
 
@@ -310,9 +406,29 @@ test('mapped forest: protect it, unless the planter says it was cleared', () => 
   )
   assert.equal(unanswered.code, 'let_regrow')
   assert.equal(reason(unanswered, 'sat_existing_forest')?.severity, 'protect')
+  // Cut since the 2021 map, or damaged: the old map does not hold it back.
   const cleared = verdict(GOOD, sat('existing_mangrove'))
-  assert.equal(cleared.code, 'fix_first')
-  assert.equal(reason(cleared, 'sat_forest_mismatch')?.severity, 'check')
+  assert.equal(cleared.code, 'plant')
+  const note = reason(cleared, 'sat_forest_mismatch')
+  assert.equal(note?.severity, 'info')
+  assert.match(note!.message, /2021/)
+  const damaged = verdict(
+    {
+      ...GOOD,
+      previousUse: 'pond_or_salt_pan',
+      currentCover: 'degraded_mangrove',
+    },
+    sat('existing_mangrove'),
+  )
+  assert.equal(reason(damaged, 'sat_forest_mismatch')?.severity, 'info')
+  assert.equal(damaged.code, 'plant')
+  // Open ground with no word of cutting: the conflict needs a check.
+  const conflict = verdict(
+    { ...GOOD, previousUse: 'pond_or_salt_pan' },
+    sat('existing_mangrove'),
+  )
+  assert.equal(conflict.code, 'fix_first')
+  assert.equal(reason(conflict, 'sat_forest_mismatch')?.severity, 'check')
 })
 
 test('too little imagery is noted but not counted as a satellite result', () => {
@@ -393,6 +509,18 @@ test('species are limited to the country region', () => {
   ])
 })
 
+test('where mangroves are not native, nothing is planted', () => {
+  const v = verdict(GOOD, sat('in_range', 'high', 0.4, 0.36), 'pf')
+  assert.equal(v.code, 'not_suitable')
+  assert.equal(reason(v, 'not_native')?.severity, 'blocker')
+  assert.deepEqual(v.recommendedSpeciesIds, [])
+  assert.equal(regionForCountry('PF'), null)
+  assert.equal(mangrovesNative(' pf '), false)
+  assert.equal(mangrovesNative('KE'), true)
+  assert.equal(mangrovesNative(null), true)
+  assert.equal(codes(verdict(GOOD)).includes('not_native'), false)
+})
+
 test('an unknown country gets every species for the zone', () => {
   const v = verdict(GOOD, sat('in_range', 'high', 0.4, 0.36), null)
   const seaward = MANGROVE_SPECIES.filter(s => s.zones.includes('seaward'))
@@ -437,11 +565,21 @@ test('missingAnswers lists every required answer for an empty form', () => {
 test('missingAnswers asks whether a named cause is still active', () => {
   const rest = { ...GOOD, causeStillActive: undefined }
   assert.deepEqual(missingAnswers(rest), ['causeStillActive'])
-  assert.deepEqual(missingAnswers({ ...rest, lossCauses: ['unknown'] }), [])
-  assert.deepEqual(missingAnswers({ ...rest, lossCauses: [] }), [])
+  const pond = { ...rest, previousUse: 'pond_or_salt_pan' as const }
+  assert.deepEqual(missingAnswers({ ...pond, lossCauses: ['unknown'] }), [])
+  assert.deepEqual(missingAnswers({ ...pond, lossCauses: [] }), [])
   assert.deepEqual(missingAnswers({ ...GOOD, tideReach: undefined }), [
     'tideReach',
   ])
+})
+
+test('missingAnswers: "Mangroves, now cut" always asks if cutting goes on', () => {
+  const rest = { ...GOOD, causeStillActive: undefined }
+  for (const lossCauses of [undefined, [], ['unknown' as const]]) {
+    assert.deepEqual(missingAnswers({ ...rest, lossCauses }), [
+      'causeStillActive',
+    ])
+  }
 })
 
 // --- Mirror into the web app ---

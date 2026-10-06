@@ -400,13 +400,18 @@ export interface IHealthCheckDoc {
   updatedAt?: string
 }
 
-/** The submission's snapshot of its Site Check, measured from the land clip GPS. */
+/**
+ * The submission's snapshot of its Site Check: insideSite and
+ * distanceToSiteM from the land clip GPS, plant* from the plant clip GPS.
+ */
 export interface ISubmissionSiteCheck {
   siteId?: string
   siteStatus?: SiteStatus
   verdictCode?: VerdictCode | null
   insideSite?: boolean
   distanceToSiteM?: number
+  plantInsideSite?: boolean
+  plantDistanceToSiteM?: number
   checkedAt?: string
 }
 

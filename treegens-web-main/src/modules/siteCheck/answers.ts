@@ -1,5 +1,6 @@
 import { SITE_QUESTIONS, type SiteQuestion } from './questions'
 import {
+  hasKnownCause,
   missingAnswers,
   REQUIRED_ANSWERS,
   type SiteAnswers,
@@ -10,21 +11,21 @@ export type AnswerOptionValue = string | number | boolean
 
 export const QUESTIONS: readonly SiteQuestion[] = SITE_QUESTIONS
 
-const hasKnownLossCause = (answers: SiteAnswers) =>
-  (answers.lossCauses ?? []).some(c => c !== 'unknown')
-
-/** "Is this still happening?" only makes sense once a cause is named. */
+/**
+ * "Is this still happening?" only makes sense once a cause is known: one is
+ * chosen, or "Mangroves, now cut" names cutting (same rule as the verdict).
+ */
 export function isQuestionShown(key: AnswerKey, answers: SiteAnswers) {
-  return key !== 'causeStillActive' || hasKnownLossCause(answers)
+  return key !== 'causeStillActive' || hasKnownCause(answers)
 }
 
 export function isQuestionRequired(key: AnswerKey, answers: SiteAnswers) {
-  if (key === 'causeStillActive') return hasKnownLossCause(answers)
+  if (key === 'causeStillActive') return hasKnownCause(answers)
   return REQUIRED_ANSWERS.includes(key)
 }
 
 export function requiredProgress(answers: SiteAnswers) {
-  const total = REQUIRED_ANSWERS.length + (hasKnownLossCause(answers) ? 1 : 0)
+  const total = REQUIRED_ANSWERS.length + (hasKnownCause(answers) ? 1 : 0)
   return { done: total - missingAnswers(answers).length, total }
 }
 
@@ -37,7 +38,8 @@ export function withAnswer(
   const next = { ...answers } as Record<string, unknown>
   if (!isAnswered(value)) delete next[key]
   else next[key] = value
-  if (key === 'lossCauses' && !hasKnownLossCause(next as SiteAnswers)) {
+  const causeKey = key === 'lossCauses' || key === 'previousUse'
+  if (causeKey && !hasKnownCause(next as SiteAnswers)) {
     delete next.causeStillActive
   }
   return next as SiteAnswers

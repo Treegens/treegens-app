@@ -3,11 +3,18 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
+import { Spinner } from '@/components/ui/Spinner'
+
+/** Same limit as the API for each reason. */
+export const VOTE_NOTE_MAX_LENGTH = 500
 
 type Props = {
   isOpen: boolean
   onClose: () => void
-  onApprove: (payload: { reasons: string[] }) => void
+  /** Resolves true when the vote was recorded */
+  onApprove: (payload: { reasons: string[] }) => Promise<boolean>
+  /** A vote is being sent */
+  submitting?: boolean
 }
 
 const APPROVE_INSTRUCTIONS = [
@@ -15,12 +22,20 @@ const APPROVE_INSTRUCTIONS = [
   { id: 2, title: 'Tide answers fit the photos and the satellite result' },
 ]
 
-export function ApproveSiteModal({ isOpen, onClose, onApprove }: Props) {
+export function ApproveSiteModal({
+  isOpen,
+  onClose,
+  onApprove,
+  submitting = false,
+}: Props) {
   const [note, setNote] = useState('')
 
-  const handleApprove = () => {
-    onApprove({ reasons: note.trim() ? [note.trim()] : [] })
-    setNote('')
+  const handleApprove = async () => {
+    if (submitting) return
+    // Keep the note when the vote fails, so it can be sent again.
+    if (await onApprove({ reasons: note.trim() ? [note.trim()] : [] })) {
+      setNote('')
+    }
   }
 
   return (
@@ -44,11 +59,18 @@ export function ApproveSiteModal({ isOpen, onClose, onApprove }: Props) {
         <textarea
           placeholder="Add an optional note"
           rows={4}
+          maxLength={VOTE_NOTE_MAX_LENGTH}
           className="rounded-lg border border-gray-300 bg-gray-50 p-2 text-sm text-gray-900 placeholder:text-gray-500"
           value={note}
           onChange={e => setNote(e.target.value)}
         />
-        <Button onClick={handleApprove} outline color="green">
+        <Button
+          onClick={() => void handleApprove()}
+          outline
+          color="green"
+          disabled={submitting}
+        >
+          {submitting ? <Spinner size="sm" /> : null}
           Approve
         </Button>
       </div>

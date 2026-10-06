@@ -10,12 +10,14 @@ import type {
   ISiteHydrology,
   SiteBoundaryMethod,
 } from '@/types'
-import { distanceM, type LonLat, ringAreaM2 } from '@/utils/geo'
+import { distanceM, isValidRing, type LonLat, ringAreaM2 } from '@/utils/geo'
 import type { SiteDraft } from '@/utils/siteDraftStore'
 import type { HydrologySummary, SiteAnswers } from './siteVerdict'
 
 /** Fixes worse than this are ignored while walking the boundary. */
 export const WALK_MAX_ACCURACY_M = 20
+/** The middle of a circle site waits for a GPS fix at least this good. */
+export const CIRCLE_MAX_ACCURACY_M = WALK_MAX_ACCURACY_M
 /** A new boundary point is kept only this far from the last one. */
 export const WALK_MIN_SPACING_M = 5
 export const MIN_WALK_POINTS = 3
@@ -24,6 +26,11 @@ export const MAX_RING_POINTS = 500
 export const RADIUS_CHOICES_M = [10, 25, 50, 100] as const
 export const MIN_SITE_AREA_M2 = 50
 export const MAX_SITE_AREA_M2 = 500_000
+/** finishWalk drops at most this many points walked past the start. */
+const MAX_OVERSHOOT_POINTS = 4
+
+export const CROSSING_PATH_PROBLEM =
+  'Your path crosses itself. Tap "Undo last point" until this message goes away, or tap "Start again".'
 
 export interface SiteForm {
   name: string
@@ -75,6 +82,45 @@ export function formAnchor(form: SiteForm): IGpsCoordinates | null {
   return first ? { latitude: first[1], longitude: first[0] } : null
 }
 
+/** Keeps every n-th point of a long walk so it fits the API limit. */
+export function thinRing(ring: LonLat[]): LonLat[] {
+  if (ring.length <= MAX_RING_POINTS) return ring
+  const step = Math.ceil(ring.length / MAX_RING_POINTS)
+  return ring.filter((_, i) => i % step === 0)
+}
+
+/** What is wrong with a walked boundary, in plain words, or null. */
+export function walkedRingProblem(ring: LonLat[]): string | null {
+  if (ring.length < MIN_WALK_POINTS) {
+    return 'Walk around the site until at least 3 points are saved.'
+  }
+  const area = ringAreaM2(ring)
+  if (area < MIN_SITE_AREA_M2) {
+    return 'The area is too small. Walk around the whole site.'
+  }
+  if (area > MAX_SITE_AREA_M2) {
+    return 'The area is too big. Check at most 50 hectares at a time.'
+  }
+  // The same test the API runs on the points it is sent.
+  if (!isValidRing(thinRing(ring))) return CROSSING_PATH_PROBLEM
+  return null
+}
+
+/**
+ * Drops the last few points when that turns a crossing walk into a good
+ * boundary: walking a few metres past the start makes the last edge cross
+ * the first one. Returns the ring unchanged when trimming does not help.
+ */
+export function trimWalkOvershoot(ring: LonLat[]): LonLat[] {
+  if (walkedRingProblem(ring) !== CROSSING_PATH_PROBLEM) return ring
+  for (let drop = 1; drop <= MAX_OVERSHOOT_POINTS; drop++) {
+    const trimmed = ring.slice(0, -drop)
+    if (trimmed.length < MIN_WALK_POINTS) break
+    if (!walkedRingProblem(trimmed)) return trimmed
+  }
+  return ring
+}
+
 /** What still blocks the location step, in plain words, or null. */
 export function locationProblem(form: SiteForm): string | null {
   if (!form.boundaryMethod) return 'Choose how to mark the site.'
@@ -82,26 +128,11 @@ export function locationProblem(form: SiteForm): string | null {
     return 'Waiting for your GPS position.'
   }
   if (form.boundaryMethod === 'walked') {
-    if (form.ring.length < MIN_WALK_POINTS) {
-      return 'Walk around the site until at least 3 points are saved.'
-    }
-    const area = ringAreaM2(form.ring)
-    if (area < MIN_SITE_AREA_M2) {
-      return 'The area is too small. Walk around the whole site.'
-    }
-    if (area > MAX_SITE_AREA_M2) {
-      return 'The area is too big. Check at most 50 hectares at a time.'
-    }
+    const problem = walkedRingProblem(form.ring)
+    if (problem) return problem
   }
   if (!form.name.trim()) return 'Give the site a name.'
   return null
-}
-
-/** Keeps every n-th point of a long walk so it fits the API limit. */
-function thinRing(ring: LonLat[]): LonLat[] {
-  if (ring.length <= MAX_RING_POINTS) return ring
-  const step = Math.ceil(ring.length / MAX_RING_POINTS)
-  return ring.filter((_, i) => i % step === 0)
 }
 
 function boundaryInput(form: SiteForm): Partial<SiteInput> {

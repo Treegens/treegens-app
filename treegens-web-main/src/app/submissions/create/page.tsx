@@ -14,22 +14,30 @@ import UploadProgressModal from '@/components/Modals/UploadProgressModal'
 import VideoSavedSuccessModal from '@/components/Modals/VideoSavedSuccessModal'
 import { TwoVideoProofSteps } from '@/components/submission/TwoVideoProofSteps'
 import { SubmissionCompleteCelebration } from '@/components/submission/SubmissionCompleteCelebration'
+import { MangroveSiteFields } from '@/components/siteCheck/MangroveSiteFields'
 import { PlantingSiteCard } from '@/components/siteCheck/PlantingSiteCard'
+import { UNSENT_VIDEO_LEAVE_WARNING } from '@/components/siteCheck/SitePicker'
 import { useConnectivity } from '@/contexts/ConnectivityProvider'
 import { useUser } from '@/contexts/UserProvider'
 import { getMySubmissions } from '@/services/app'
 import { useGeolocation } from '@/hooks/useGeolocation'
+import {
+  outsideSiteWarning,
+  siteGateReason,
+} from '@/modules/siteCheck/siteGateMessage'
 import type { ReverseGeocodeResult } from '@/services/geocodingService'
 import { reverseGeocode } from '@/services/geocodingService'
 import { offlineVideoService } from '@/services/offlineVideoService'
+import { getSite } from '@/services/siteService'
 import { CompressionProgress } from '@/services/videoCompressionService'
 import { isValidSubmissionObjectId } from '@/services/submissionApiMappers'
 import {
+  type SiteLinkFields,
   videoService,
   VideoType,
   VideoUploadResponse,
 } from '@/services/videoService'
-import type { ISubmissionAiVerification } from '@/types'
+import type { ISiteDoc, ISubmissionAiVerification } from '@/types'
 import { VIDEO_CONFIG } from '@/utils/constants'
 import { validateVideoFile } from '@/utils/videoValidation'
 
@@ -90,6 +98,28 @@ export default function NewPlant() {
   /** Site Check linked to the land clip; `?siteId=` preselects one. */
   const searchParams = useSearchParams()
   const [siteId, setSiteId] = useState(() => searchParams.get('siteId') ?? '')
+  /** Plant step on this page: the site sent with the land clip, if any. */
+  const [landSiteId, setLandSiteId] = useState('')
+  const [landSiteWarning, setLandSiteWarning] = useState('')
+  /** Plant step on this page, mangroves: a site picked now, and species. */
+  const [pickedSiteId, setPickedSiteId] = useState('')
+  const [plantSiteDoc, setPlantSiteDoc] = useState<ISiteDoc | null>(null)
+  const [species, setSpecies] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!landSiteId) return
+    getSite(landSiteId)
+      .then(res => setPlantSiteDoc(res.data.data))
+      .catch(e => console.warn('Could not load the linked site', e))
+  }, [landSiteId])
+
+  const resetPlantSite = () => {
+    setLandSiteId('')
+    setLandSiteWarning('')
+    setPickedSiteId('')
+    setPlantSiteDoc(null)
+    setSpecies([])
+  }
 
   const dismissSubmissionCelebrate = useCallback(() => {
     setShowSubmissionCelebrate(false)
@@ -365,6 +395,8 @@ export default function NewPlant() {
     type: VideoType,
     /** Required for plant clip; use the id returned from a land upload in the same session */
     plantSubmissionId?: string,
+    /** Plant clip only: site picked at plant time and mangrove species */
+    plantSiteLink?: SiteLinkFields,
   ): Promise<VideoUploadResponse> => {
     if (!hasValidLocation()) {
       throw new Error('Location data is required for video upload')
@@ -411,7 +443,7 @@ export default function NewPlant() {
             })
           },
           onUploadProgress: p => setUploadProgress(p),
-          siteId: type === VideoType.LAND ? siteId : undefined,
+          ...(type === VideoType.LAND ? { siteId } : plantSiteLink),
         },
       )
 
@@ -468,6 +500,10 @@ export default function NewPlant() {
         }
         setServerSubmissionId(sid)
         setHasUploadedLandVideo(true)
+        setLandSiteId(siteId)
+        const warning = outsideSiteWarning(landRes.data.siteCheck)
+        setLandSiteWarning(warning)
+        if (warning) toast.error(warning, { duration: 10000 })
         handleRemoveVideo(VideoType.LAND)
         await refetchVideos()
         toast.success('Before video saved.')
@@ -512,11 +548,12 @@ export default function NewPlant() {
     } catch (error) {
       console.error('Land upload error:', error)
       const errorMessage =
-        error instanceof Error
+        siteGateReason(error) ??
+        (error instanceof Error
           ? error.message
           : isUserOnline
             ? 'Failed to upload land video. Please try again.'
-            : 'Failed to queue land video. Please try again.'
+            : 'Failed to queue land video. Please try again.')
       setUploadError(errorMessage)
     } finally {
       setIsUploading(false)
@@ -555,6 +592,9 @@ export default function NewPlant() {
     setValidationError('')
 
     const isMangrove = resolvedTreeType.toLowerCase() === 'mangrove'
+    const siteLink = isMangrove
+      ? { siteId: landSiteId ? undefined : pickedSiteId, species }
+      : undefined
 
     try {
       if (isUserOnline) {
@@ -565,6 +605,7 @@ export default function NewPlant() {
           plantFile,
           VideoType.PLANT,
           submissionIdForPlant,
+          siteLink,
         )
         const ai = plantRes?.data?.aiVerification
         setPlantAiAfterUpload(ai ?? null)
@@ -575,6 +616,7 @@ export default function NewPlant() {
         setTreesPlantedInput('1')
         setHasUploadedLandVideo(false)
         setServerSubmissionId(null)
+        resetPlantSite()
         await refetchVideos()
 
         if (isMangrove) {
@@ -632,6 +674,7 @@ export default function NewPlant() {
               durationMs: r.durationMs,
             })
           },
+          siteLink,
         )
 
         const status = await offlineVideoService.getQueueStatus()
@@ -643,6 +686,7 @@ export default function NewPlant() {
         setTreesPlantedInput('1')
         setHasUploadedLandVideo(false)
         setServerSubmissionId(null)
+        resetPlantSite()
 
         setShowUploadModal(false)
         setPlantAiAfterUpload(null)
@@ -658,11 +702,12 @@ export default function NewPlant() {
       setMangroveUploadAwaitingContinue(false)
       setPlantAiAfterUpload(null)
       const errorMessage =
-        error instanceof Error
+        siteGateReason(error) ??
+        (error instanceof Error
           ? error.message
           : isUserOnline
             ? 'Failed to upload plant video. Please try again.'
-            : 'Failed to queue plant video. Please try again.'
+            : 'Failed to queue plant video. Please try again.')
       setUploadError(errorMessage)
     } finally {
       setIsUploading(false)
@@ -752,7 +797,14 @@ export default function NewPlant() {
             value={siteId}
             onChange={id => setSiteId(id)}
             className="mb-6"
+            leaveWarning={landFile ? UNSENT_VIDEO_LEAVE_WARNING : undefined}
           />
+        ) : null}
+
+        {isPlantStep && landSiteWarning ? (
+          <p className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            {landSiteWarning}
+          </p>
         ) : null}
 
         {validationError ? (
@@ -967,6 +1019,22 @@ export default function NewPlant() {
                   className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-base text-gray-900 placeholder:text-gray-400"
                 />
               </>
+            ) : null}
+            {mangroveAnswer === 'yes' ? (
+              <MangroveSiteFields
+                linked={!!landSiteId}
+                site={plantSiteDoc}
+                pickedSiteId={pickedSiteId}
+                onPickSite={(id, picked) => {
+                  setPickedSiteId(id)
+                  setPlantSiteDoc(picked)
+                }}
+                species={species}
+                onSpeciesChange={setSpecies}
+                leaveWarning={
+                  plantFile ? UNSENT_VIDEO_LEAVE_WARNING : undefined
+                }
+              />
             ) : null}
           </section>
         ) : null}

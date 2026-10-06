@@ -194,6 +194,16 @@ local reference still varies (at Gazi Bay its p50 ranged from 0.27 to 0.44
 depending on where the 1.5 km window sits), so the thresholds are a starting
 point for expert tuning, not final values.
 
+### Choosing the satellite tile
+
+Sentinel-2 tiles overlap, and their names do not always match the grid
+square a point falls in. Near latitude-band and zone edges the "obvious"
+tile may not exist. The engine therefore tries a few candidate tiles around
+the site and keeps the ones that exist. It then picks the one whose image
+covers the whole search area. For example, the Rufiji delta in Tanzania
+falls in square 37LEM, but its images live under 37MEM. If no tile covers
+the site, the run fails and is retried, instead of reporting "no data".
+
 ### Data sources
 
 All are open data, with no keys and no accounts:
@@ -216,8 +226,10 @@ The check runs inside the Node API, off the request path:
 3. A sweeper every 5 minutes retries failures, up to
    `SITE_HYDROLOGY_MAX_ATTEMPTS`, and recovers stuck jobs.
 
-A run takes about 40 to 110 seconds, depending on the network. Its memory
-peaks at about 200 to 260 MB. If no imagery can be fetched at all, the run is
+Image tiles are decoded in a worker thread, so the API stays responsive.
+Measured at Gazi Bay, the longest event-loop stall fell from 330 ms to under
+100 ms. With the defaults (4 parallel reads, 1 decoder worker), a run takes
+about a minute, and peak memory for the whole process is about 200 MB. If no imagery can be fetched at all, the run is
 stored as failed and retried, instead of being saved as "no data".
 
 It needs no Redis, no Python service and no new Render service. The Python
@@ -329,7 +341,8 @@ Swagger at `/docs` has the full shapes.
 | `SITE_HYDROLOGY_YEARS` | `2` | Years of imagery, 1 to 5 |
 | `SITE_HYDROLOGY_REFERENCE_RADIUS_M` | `1500` | Search radius for nearby mangroves |
 | `SITE_HYDROLOGY_MAX_CLOUD_PCT` | `80` | Tile cloud filter |
-| `SITE_HYDROLOGY_SCENE_CONCURRENCY` | `8` | Parallel image reads |
+| `SITE_HYDROLOGY_SCENE_CONCURRENCY` | `4` | Parallel image reads (8 is about 40% faster but peaks near 270 MB) |
+| `SITE_HYDROLOGY_DECODER_WORKERS` | `1` | Worker threads that decode image tiles off the API event loop (0 = main thread) |
 | `SITE_HYDROLOGY_TIMEOUT_MS` | `300000` | Time budget per site |
 | `SITE_HYDROLOGY_MAX_ATTEMPTS` | `3` | Retries before giving up |
 | `SITE_HYDROLOGY_S2_BUCKET_URL` | AWS `sentinel-cogs` | Sentinel-2 source |

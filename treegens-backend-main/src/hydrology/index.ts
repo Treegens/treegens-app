@@ -4,13 +4,14 @@
  * wet, and compares the site with the fringe where nearby mapped mangroves
  * stop growing. math.ts holds the rules, imagery.ts the data access.
  */
+import type { Pool } from 'geotiff'
 import { HydrologySummary } from '../siteCheck/siteVerdict'
 import {
   fetchSceneItems,
+  findSiteTile,
   forEachLimit,
   listScenePrefixes,
   MgrsTile,
-  mgrsTileFor,
   monthPrefixes,
   readBandAt,
   readRasterGeometry,
@@ -20,6 +21,7 @@ import {
   tileEpsg,
   UtmProjection,
   utmProjection,
+  withDecoderPool,
 } from './imagery'
 import {
   accumulateScene,
@@ -36,6 +38,7 @@ import {
   openRing,
   pixelCentres,
   pixelIndexAt,
+  plural,
   PointSet,
   rasterizeRing,
   Ring,
@@ -44,6 +47,7 @@ import {
   sceneMasks,
   siteWindow,
   WindowAnalysis,
+  windowCoverage,
 } from './math'
 import { HYDROLOGY_VERSION, HydrologyInput, HydrologyResult } from './types'
 
@@ -59,6 +63,7 @@ export const HYDROLOGY_DEFAULTS = {
   referenceRadiusM: 1500,
   maxCloudPct: 80,
   concurrency: 8,
+  decoderWorkers: 2,
   timeoutMs: 300_000,
   s2BucketUrl: 'https://sentinel-cogs.s3.us-west-2.amazonaws.com',
   worldCoverUrl: 'https://esa-worldcover.s3.eu-central-1.amazonaws.com',
@@ -81,6 +86,8 @@ interface SiteFrame {
   centres: PointSet
   site: Int32Array
   centreIdx: number
+  /** Share of the wanted window on the tile (1 when nothing is cut off). */
+  coverage: number
 }
 
 interface SceneTally {
@@ -107,6 +114,9 @@ function withDefaults(input: HydrologyInput): Options {
     referenceRadiusM: pick(input.referenceRadiusM, d.referenceRadiusM, 0, 5000),
     maxCloudPct: pick(input.maxCloudPct, d.maxCloudPct, 0, 100),
     concurrency: Math.round(pick(input.concurrency, d.concurrency, 1, 16)),
+    decoderWorkers: Math.round(
+      pick(input.decoderWorkers, d.decoderWorkers, 0, 8),
+    ),
     timeoutMs: pick(input.timeoutMs, d.timeoutMs, 1000, 3_600_000),
     s2BucketUrl: trim(input.s2BucketUrl, d.s2BucketUrl),
     worldCoverUrl: trim(input.worldCoverUrl, d.worldCoverUrl),
@@ -114,12 +124,26 @@ function withDefaults(input: HydrologyInput): Options {
   }
 }
 
-async function findScenes(opts: Options, tile: MgrsTile): Promise<SceneSearch> {
+/**
+ * Lists the tile's scenes in the period and picks the ones to read. Throws
+ * when most scene items could not be fetched: that is an outage, and the
+ * run should be retried rather than stored as "no clear images".
+ */
+async function findScenes(
+  opts: Options,
+  tile: MgrsTile,
+  siteLonLat: [number, number],
+): Promise<SceneSearch> {
   const months = monthPrefixes(tile, opts.asOf, opts.years)
   const bucket = opts.s2BucketUrl
   const prefixes = await listScenePrefixes(bucket, months, opts.concurrency)
   const fetched = await fetchSceneItems(bucket, prefixes, opts.concurrency * 2)
-  const selected = selectScenes(fetched.items, opts.maxCloudPct)
+  if (fetched.failed > prefixes.length / 2) {
+    throw new Error(
+      `Could not fetch ${fetched.failed} of ${prefixes.length} Sentinel-2 scene items`,
+    )
+  }
+  const selected = selectScenes(fetched.items, opts.maxCloudPct, siteLonLat)
   const scenes = selected.filter(s => s.epsg === selected[0].epsg)
   opts.log(
     `${tile.id}: ${prefixes.length} scenes listed, ${scenes.length} at or under ${opts.maxCloudPct}% cloud`,
@@ -152,6 +176,12 @@ async function buildFrame(
     centres: pixelCentres(grid),
     site: rasterizeRing(grid, ring),
     centreIdx: pixelIndexAt(grid, cx, cy),
+    coverage: windowCoverage(
+      raster,
+      ring,
+      opts.referenceRadiusM,
+      MAX_WINDOW_PX,
+    ),
   }
 }
 
@@ -159,6 +189,7 @@ async function readLandcover(
   opts: Options,
   siteLonLat: [number, number],
   frame: SiteFrame,
+  pool: Pool | undefined,
 ): Promise<Uint16Array | null> {
   const landcover = await readWorldCover(
     opts.worldCoverUrl,
@@ -166,6 +197,7 @@ async function readLandcover(
     gridExtent(frame.grid),
     frame.centres,
     frame.projection,
+    pool,
   )
   const centre = landcover ? `class ${landcover[frame.centreIdx]}` : 'no map'
   opts.log(`WorldCover at the site centre: ${centre}`)
@@ -175,11 +207,12 @@ async function readLandcover(
 async function readSceneMasks(
   scene: SceneItem,
   frame: SiteFrame,
+  pool: Pool | undefined,
 ): Promise<SceneMasks> {
   const extent = gridExtent(frame.grid)
   const [green, nir, scl] = await Promise.all(
     [scene.green, scene.nir, scene.scl].map(band =>
-      readBandAt(band.href, extent, frame.centres),
+      readBandAt(band.href, extent, frame.centres, 0, pool),
     ),
   )
   return sceneMasks({
@@ -191,12 +224,16 @@ async function readSceneMasks(
   })
 }
 
-/** Reads scenes in parallel until done or out of time, adding up counts. */
+/**
+ * Reads scenes in parallel until done or out of time, adding up counts.
+ * Throws when no scene could be read, or none was started in time.
+ */
 async function readScenes(
   opts: Options,
   frame: SiteFrame,
   scenes: SceneItem[],
   deadline: number,
+  pool: Pool | undefined,
 ): Promise<SceneTally> {
   const tally: SceneTally = {
     counts: emptyCounts(frame.centres.xs.length),
@@ -208,7 +245,7 @@ async function readScenes(
   const readOne = async (scene: SceneItem) => {
     tally.started++
     try {
-      const masks = await readSceneMasks(scene, frame)
+      const masks = await readSceneMasks(scene, frame, pool)
       if (clearShare(masks.valid, frame.site) >= MIN_SCENE_CLEAR_SHARE) {
         accumulateScene(tally.counts, masks)
         tally.dates.push(scene.date)
@@ -224,6 +261,9 @@ async function readScenes(
   await forEachLimit(scenes, opts.concurrency, readOne, () => {
     return Date.now() >= deadline
   })
+  if (scenes.length && !tally.started) {
+    throw new Error('Ran out of time before any Sentinel-2 scene was read')
+  }
   if (tally.started && tally.failed === tally.started) {
     throw new Error(`No Sentinel-2 scene could be read: ${tally.lastError}`)
   }
@@ -245,10 +285,11 @@ async function measureSite(
   ring: Ring,
   search: SceneSearch,
   deadline: number,
+  pool: Pool | undefined,
 ): Promise<Outcome> {
   const frame = await buildFrame(opts, ring, search.scenes[0])
-  const landcover = await readLandcover(opts, ringCentroid(ring), frame)
-  const tally = await readScenes(opts, frame, search.scenes, deadline)
+  const landcover = await readLandcover(opts, ringCentroid(ring), frame, pool)
+  const tally = await readScenes(opts, frame, search.scenes, deadline, pool)
   const analysis = analyseWindow({
     grid: frame.grid,
     site: frame.site,
@@ -263,6 +304,7 @@ async function measureSite(
     scenesUsed: tally.dates.length,
     scenesFailed: search.itemsFailed + tally.failed,
     scenesNotRead: search.scenes.length - tally.started,
+    windowCoverage: frame.coverage,
   })
   const { grid, projection } = frame
   return {
@@ -288,6 +330,9 @@ function noScenes(opts: Options, search: SceneSearch): Outcome {
   const notes = [
     `No Sentinel-2 images with at most ${opts.maxCloudPct}% cloud were found for this site.`,
   ]
+  if (search.itemsFailed) {
+    notes.push(`${plural(search.itemsFailed, 'image')} could not be read.`)
+  }
   const epsg = tileEpsg(search.tile)
   return { analysis, notes, epsg, windowPx: [0, 0], dates: [], failed: 0 }
 }
@@ -333,9 +378,11 @@ function assemble(
 
 /**
  * Runs the check for one site. Throws when the imagery cannot be reached
- * at all (listing, the first COG header or every scene failing), so the
- * caller can retry later. Partial failures and the time budget only
- * lower the confidence and show up in the notes.
+ * (no tile holds the site, listing fails, most scene items or the first
+ * COG header cannot be fetched, every scene read fails, or time runs out
+ * before any is read), so the caller can retry later. Other partial
+ * failures and the time budget only lower the confidence and show up in
+ * the notes.
  */
 export async function runSiteHydrology(
   input: HydrologyInput,
@@ -343,9 +390,19 @@ export async function runSiteHydrology(
   const startedAt = Date.now()
   const opts = withDefaults(input)
   const ring = openRing(opts.ring)
-  const search = await findScenes(opts, mgrsTileFor(...ringCentroid(ring)))
+  const tile = await findSiteTile(
+    opts.s2BucketUrl,
+    ring,
+    opts.referenceRadiusM,
+    MAX_WINDOW_PX,
+    opts.concurrency,
+  )
+  const search = await findScenes(opts, tile, ringCentroid(ring))
+  const deadline = startedAt + opts.timeoutMs
   const outcome = search.scenes.length
-    ? await measureSite(opts, ring, search, startedAt + opts.timeoutMs)
+    ? await withDecoderPool(opts.decoderWorkers, pool =>
+        measureSite(opts, ring, search, deadline, pool),
+      )
     : noScenes(opts, search)
   opts.log(`Done: ${outcome.analysis.hydrologyClass}`)
   return assemble(opts, search, outcome, startedAt)

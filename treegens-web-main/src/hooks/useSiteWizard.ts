@@ -96,6 +96,42 @@ export function useSiteDraftSync(
   return { offer, dismiss, discard }
 }
 
+/** How long sending a site waits for a missing country code. */
+const COUNTRY_LOOKUP_WAIT_MS = 3000
+
+/**
+ * The form with its country filled in from the GPS, when the background
+ * lookup (useSiteGeocode) has not done it yet. Species advice depends on
+ * the country. Gives up quietly after a few seconds or on any failure.
+ */
+export async function withCountryCode(form: SiteForm): Promise<SiteForm> {
+  const anchor = formAnchor(form)
+  if (form.countryCode || !anchor) return form
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), COUNTRY_LOOKUP_WAIT_MS)
+  })
+  try {
+    const result = await Promise.race([
+      reverseGeocode(anchor.latitude, anchor.longitude, {
+        zoom: 16,
+        language: 'en',
+      }),
+      timeout,
+    ])
+    if (!result?.success || !result.countryCode) return form
+    return {
+      ...form,
+      countryCode: result.countryCode,
+      reverseGeocode: form.reverseGeocode || (result.address ?? ''),
+    }
+  } catch {
+    return form
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Fills the place name, country and default site name from the GPS. */
 export function useSiteGeocode(
   form: SiteForm,

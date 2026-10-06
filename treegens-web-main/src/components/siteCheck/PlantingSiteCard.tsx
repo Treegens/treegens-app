@@ -8,10 +8,17 @@ type Props = {
   value: string
   onChange: (siteId: string, site: ISiteDoc | null) => void
   className?: string
+  /** See SitePicker */
+  leaveWarning?: string
 }
 
 /** "Planting site" section for the submission flow. */
-export function PlantingSiteCard({ value, onChange, className }: Props) {
+export function PlantingSiteCard({
+  value,
+  onChange,
+  className,
+  leaveWarning,
+}: Props) {
   return (
     <section
       className={cn(
@@ -25,7 +32,11 @@ export function PlantingSiteCard({ value, onChange, className }: Props) {
       <p className="mb-3 text-sm text-gray-500">
         Planting mangroves? Choose the site you checked.
       </p>
-      <SitePicker value={value} onChange={onChange} />
+      <SitePicker
+        value={value}
+        onChange={onChange}
+        leaveWarning={leaveWarning}
+      />
     </section>
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useParams } from 'next/navigation'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { ApproveSiteModal } from '@/components/siteCheck/ApproveSiteModal'
 import { RejectSiteModal } from '@/components/siteCheck/RejectSiteModal'
@@ -41,6 +41,9 @@ export default function ReviewSitePage() {
   const [rechecking, setRechecking] = useState(false)
   const [isApproveOpen, setIsApproveOpen] = useState(false)
   const [isRejectOpen, setIsRejectOpen] = useState(false)
+  const [voting, setVoting] = useState(false)
+  /** Blocks a second tap before React re-renders with `voting` */
+  const votingRef = useRef(false)
 
   const refresh = async () => {
     setRefreshing(true)
@@ -61,16 +64,25 @@ export default function ReviewSitePage() {
     }
   }
 
+  /** Sends one vote at a time; true when it was recorded. */
   const vote = async (choice: 'yes' | 'no', reasons: string[]) => {
+    if (votingRef.current) return false
+    votingRef.current = true
+    setVoting(true)
     try {
       await voteOnSite(siteId, choice, reasons)
       toast.success('Vote submitted')
       setIsApproveOpen(false)
       setIsRejectOpen(false)
       await reload()
+      return true
     } catch (e) {
       console.error(e)
       notifyError(apiErrorMessage(e, 'Vote failed'))
+      return false
+    } finally {
+      votingRef.current = false
+      setVoting(false)
     }
   }
 
@@ -140,18 +152,20 @@ export default function ReviewSitePage() {
       <ApproveSiteModal
         isOpen={isApproveOpen}
         onClose={() => setIsApproveOpen(false)}
-        onApprove={({ reasons }) => void vote('yes', reasons)}
+        submitting={voting}
+        onApprove={({ reasons }) => vote('yes', reasons)}
       />
       <RejectSiteModal
         isOpen={isRejectOpen}
         onClose={() => setIsRejectOpen(false)}
-        onReject={({ reasons }) => {
+        submitting={voting}
+        onReject={async ({ reasons }) => {
           const cleaned = reasons.map(r => r.trim()).filter(Boolean)
           if (!cleaned.length) {
             notifyError('Add a rejection reason')
-            return
+            return false
           }
-          void vote('no', cleaned)
+          return vote('no', cleaned)
         }}
       />
     </div>

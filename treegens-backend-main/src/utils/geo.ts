@@ -60,17 +60,31 @@ export function closeRing(ring: LonLat[]): LonLat[] {
 function projector(originLat: number, originLon: number) {
   const cosLat = Math.cos(toRad(originLat))
   return ([lon, lat]: LonLat): Xy => {
-    const dLon = ((((lon - originLon) % 360) + 540) % 360) - 180
+    const dLon = lonDelta(originLon, lon)
     return { x: dLon * cosLat * M_PER_DEG, y: (lat - originLat) * M_PER_DEG }
   }
 }
 
+/** Longitude folded into [-180, 180). */
+export function wrapLon(lon: number): number {
+  return ((((lon + 180) % 360) + 360) % 360) - 180
+}
+
+/** Shortest signed step from `from` to `to`, in degrees of longitude. */
+function lonDelta(from: number, to: number): number {
+  return ((((to - from) % 360) + 540) % 360) - 180
+}
+
+/** Mean vertex, measured from the first vertex so a ring near 180 stays put. */
 function vertexMean(ring: LonLat[]): { latitude: number; longitude: number } {
   const open = openRing(ring)
   const n = open.length || 1
+  const ref = open[0]?.[0] ?? 0
   return {
     latitude: open.reduce((s, p) => s + p[1], 0) / n,
-    longitude: open.reduce((s, p) => s + p[0], 0) / n,
+    longitude: wrapLon(
+      ref + open.reduce((s, p) => s + lonDelta(ref, p[0]), 0) / n,
+    ),
   }
 }
 
@@ -117,7 +131,7 @@ export function ringCentroid(ring: LonLat[]): {
   const cosLat = Math.cos(toRad(origin[1]))
   return {
     latitude: origin[1] + cy / (3 * twiceArea) / M_PER_DEG,
-    longitude: origin[0] + cx / (3 * twiceArea) / (cosLat * M_PER_DEG),
+    longitude: wrapLon(origin[0] + cx / (3 * twiceArea) / (cosLat * M_PER_DEG)),
   }
 }
 
@@ -161,7 +175,11 @@ export function distanceToRingM(
   return best
 }
 
-/** Closed ring approximating a circle of `radiusM` around a point. */
+/**
+ * Closed ring approximating a circle of `radiusM` around a point. Longitudes
+ * are wrapped, so a circle over the 180th meridian crosses it (see
+ * crossesAntimeridian) instead of going past 180.
+ */
 export function circleRing(
   lat: number,
   lon: number,
@@ -173,11 +191,24 @@ export function circleRing(
   for (let i = 0; i < segments; i++) {
     const angle = (2 * Math.PI * i) / segments
     ring.push([
-      lon + (radiusM * Math.sin(angle)) / (cosLat * M_PER_DEG),
+      wrapLon(lon + (radiusM * Math.sin(angle)) / (cosLat * M_PER_DEG)),
       lat + (radiusM * Math.cos(angle)) / M_PER_DEG,
     ])
   }
   return closeRing(ring)
+}
+
+/**
+ * True when an edge of the ring is shorter going over the 180th meridian
+ * than around the world the other way, i.e. the ring crosses it. Junk input
+ * is not a crossing (isValidRing rejects it).
+ */
+export function crossesAntimeridian(ring: unknown): boolean {
+  if (!Array.isArray(ring) || !ring.every(isLonLat)) return false
+  return ring.some((p, i) => {
+    const next = ring[(i + 1) % ring.length]
+    return Math.abs(next[0] - p[0]) > 180
+  })
 }
 
 function orientation(p: Xy, q: Xy, r: Xy): number {

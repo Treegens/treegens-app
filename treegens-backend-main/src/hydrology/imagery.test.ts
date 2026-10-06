@@ -1,24 +1,34 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import * as mgrs from 'mgrs'
 import {
   bandAsset,
+  candidateTiles,
+  findSiteTile,
+  footprintCovers,
   forEachLimit,
   listUrl,
   mapLimit,
   mgrsTileFor,
   monthPrefixes,
+  parseFootprint,
   parseListing,
   parseMgrsTile,
   parseSceneItem,
+  pickTile,
   SceneItem,
   sceneItemUrl,
   selectScenes,
+  squareId,
+  TileRaster,
   tileEpsg,
   utmDefinition,
   utmProjection,
+  withDecoderPool,
   withRetry,
   worldCoverTileUrl,
 } from './imagery'
+import { Ring } from './math'
 
 const BUCKET = 'https://sentinel-cogs.s3.us-west-2.amazonaws.com'
 
@@ -43,9 +53,51 @@ function stacItem(overrides: Record<string, any> = {}) {
   }
 }
 
-function scene(date: string, cloudPct: number, id = date): SceneItem {
+function scene(
+  date: string,
+  cloudPct: number,
+  id = date,
+  footprint: Ring[][] | null = null,
+): SceneItem {
   const band = { href: id, scale: 1, offset: 0 }
-  return { id, date, cloudPct, epsg: 32737, green: band, nir: band, scl: band }
+  const bands = { green: band, nir: band, scl: band }
+  return { id, date, cloudPct, epsg: 32737, ...bands, footprint }
+}
+
+/** A 30 m circle of [lon, lat] points around a site. */
+function circle(lat: number, lon: number, radiusM = 30): Ring {
+  const dLat = (radiusM / 6_371_000) * (180 / Math.PI)
+  const dLon = dLat / Math.cos((lat * Math.PI) / 180)
+  return Array.from({ length: 32 }, (_, i) => {
+    const a = (2 * Math.PI * i) / 32
+    return [lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]
+  })
+}
+
+/** Grids of real Sentinel-2 tiles, read from their green band headers. */
+function s2Raster(id: string, originX: number, originY: number): TileRaster {
+  const geometry = { originX, originY, res: 10, width: 10980, height: 10980 }
+  return { tile: parseMgrsTile(id), epsg: 32737, geometry }
+}
+
+const listingXml = (prefixes: string[]) =>
+  `<ListBucketResult><IsTruncated>false</IsTruncated>${prefixes
+    .map(p => `<CommonPrefixes><Prefix>${p}</Prefix></CommonPrefixes>`)
+    .join('')}</ListBucketResult>`
+
+/** Replaces global fetch for one test; returns the URLs it was asked for. */
+function stubFetch(
+  t: { after: (fn: () => void) => void },
+  reply: (url: URL) => Response,
+): string[] {
+  const original = globalThis.fetch
+  const seen: string[] = []
+  globalThis.fetch = (async (input: string | URL) => {
+    seen.push(String(input))
+    return reply(new URL(String(input)))
+  }) as typeof fetch
+  t.after(() => (globalThis.fetch = original))
+  return seen
 }
 
 test('parseMgrsTile splits zone, band and square', () => {
@@ -61,6 +113,73 @@ test('parseMgrsTile splits zone, band and square', () => {
 
 test('mgrsTileFor finds the Gazi Bay tile', () => {
   assert.equal(mgrsTileFor(39.507, -4.423).id, '37MER')
+})
+
+test('squareId names the same 100 km squares as the mgrs library', () => {
+  for (let lat = -59.5; lat < 56; lat += 3.7) {
+    for (let lon = -179.5; lon < 180; lon += 4.9) {
+      const [zone, band, square] = /^(\d+)([A-Z])([A-Z]{2})$/
+        .exec(mgrs.forward([lon, lat], 0))
+        .slice(1)
+      const epsg = (band >= 'N' ? 32600 : 32700) + Number(zone)
+      const [x, y] = utmProjection(epsg).toUtm([lon, lat])
+      assert.equal(squareId(Number(zone), x, y), square, `${lat}, ${lon}`)
+    }
+  }
+  assert.equal(squareId(37, 50_000, 9_500_000), null)
+})
+
+test('candidateTiles adds the band and zone neighbours that hold real tiles', () => {
+  const ids = (lon: number, lat: number) =>
+    candidateTiles(lon, lat, 4000).map(t => t.id)
+  // Gazi Bay is far from every edge: only its own square.
+  assert.deepEqual(ids(39.514, -4.4347), ['37MER'])
+  // Rufiji delta: 37LEM does not exist, 37MEM (across -8) holds the site.
+  assert.deepEqual(ids(39.3, -8.05), ['37LEM', '37MEM'])
+  // Niger Delta: zone 32 has no J column; zone 31 tiles cover the sliver.
+  assert.deepEqual(ids(6.2, 4.5), ['32NJK', '32NJL', '31NHE', '31NHF'])
+  // Kilifi, just south-east of a square corner: north and west squares too.
+  assert.deepEqual(ids(39.905, -3.62), ['37MFR', '37MFS', '37MER', '37MES'])
+})
+
+test('pickTile prefers a tile holding the whole window over the own square', () => {
+  // Real grids: 37MFR starts right at the Kilifi site, 37MES holds it all.
+  const kilifi = circle(-3.62, 39.905)
+  const fr = s2Raster('37MFR', 600_000, 9_600_040)
+  const fs = s2Raster('37MFS', 600_000, 9_700_000)
+  const er = s2Raster('37MER', 499_980, 9_600_040)
+  const es = s2Raster('37MES', 499_980, 9_700_000)
+  assert.equal(pickTile([fr, fs, er, es], kilifi, 1500, 700).id, '37MES')
+  // Without it: the tile holding the site with the largest window (37MFS
+  // cuts 103 columns off, 37MER 132 rows, 37MFR both).
+  assert.equal(pickTile([fr, er, fs], kilifi, 1500, 700).id, '37MFS')
+  // The first whole fit wins, so a site's own tile stays first.
+  const gazi = circle(-4.4347, 39.514)
+  assert.equal(pickTile([er, es], gazi, 1500, 700).id, '37MER')
+  assert.equal(pickTile([fs], gazi, 1500, 700), null)
+})
+
+test('findSiteTile skips tiles missing from the bucket and caches lookups', async t => {
+  const bucket = 'https://bucket.test/rufiji'
+  const seen = stubFetch(t, url => {
+    const prefix = url.searchParams.get('prefix')
+    const years = prefix?.endsWith('/37/M/EM/') ? [`${prefix}2025/`] : []
+    return new Response(listingXml(years))
+  })
+  const rufiji = circle(-8.05, 39.3)
+  const tile = await findSiteTile(bucket, rufiji, 1500, 700, 4)
+  assert.equal(tile.id, '37MEM')
+  assert.equal(seen.length, 2)
+  await findSiteTile(bucket, rufiji, 1500, 700, 4)
+  assert.equal(seen.length, 2)
+})
+
+test('findSiteTile throws when no tile holds the site', async t => {
+  stubFetch(t, () => new Response(listingXml([])))
+  await assert.rejects(
+    findSiteTile('https://bucket.test/none', circle(4.5, 6.2), 1500, 700, 4),
+    /No Sentinel-2 tile holds this site \(tried 32NJK, 32NJL, 31NHE, 31NHF\)/,
+  )
 })
 
 test('tileEpsg picks the UTM hemisphere from the latitude band', () => {
@@ -140,6 +259,46 @@ test('parseSceneItem keeps the fields the check needs', () => {
   assert.ok(item.nir.href.endsWith('/B08.tif'))
 })
 
+test('parseSceneItem keeps the footprint polygon', () => {
+  const polygon = [
+    [
+      [39, -4],
+      [40, -4],
+      [40, -5],
+      [39, -4],
+    ],
+  ]
+  const item = parseSceneItem({
+    ...stacItem(),
+    geometry: { type: 'Polygon', coordinates: polygon },
+  })
+  assert.deepEqual(item.footprint, [polygon])
+  assert.equal(parseSceneItem(stacItem()).footprint, null)
+})
+
+test('footprintCovers handles polygons, holes, multipolygons and unknowns', () => {
+  const square = (x0: number, y0: number, size: number): Ring => [
+    [x0, y0],
+    [x0 + size, y0],
+    [x0 + size, y0 + size],
+    [x0, y0 + size],
+  ]
+  const holed = parseFootprint({
+    type: 'Polygon',
+    coordinates: [square(0, 0, 10), square(4, 4, 2)],
+  })
+  assert.equal(footprintCovers(holed, [1, 1]), true)
+  assert.equal(footprintCovers(holed, [5, 5]), false)
+  assert.equal(footprintCovers(holed, [11, 1]), false)
+  const multi = parseFootprint({
+    type: 'MultiPolygon',
+    coordinates: [[square(0, 0, 1)], [square(5, 5, 1)]],
+  })
+  assert.equal(footprintCovers(multi, [5.5, 5.5]), true)
+  assert.equal(parseFootprint({ type: 'Point', coordinates: [0, 0] }), null)
+  assert.equal(footprintCovers(null, [0, 0]), true)
+})
+
 test('parseSceneItem handles proj:code, missing cloud and missing bands', () => {
   const base = stacItem()
   const coded = parseSceneItem({
@@ -169,6 +328,47 @@ test('selectScenes filters cloud, keeps the clearest per date, clearest first', 
   assert.deepEqual(
     picked.map(s => s.id),
     ['c', 'a1', 'd'],
+  )
+})
+
+test('selectScenes keeps the same-date granule that covers the site', () => {
+  // Real footprints of the two 37MER granules of 2025-10-21: _1 is clearer
+  // but has no data at Gazi Bay, _0 does.
+  const granule0: Ring[][] = [
+    [
+      [
+        [39.98910131612672, -4.1643587671670055],
+        [38.999828852153826, -3.9294024016809868],
+        [38.99982870087146, -4.611849694663838],
+        [39.98968945272844, -4.611160076907257],
+        [39.98910131612672, -4.1643587671670055],
+      ],
+    ],
+  ]
+  const granule1: Ring[][] = [
+    [
+      [
+        [38.99982891299001, -3.618524361526298],
+        [38.99982881562906, -4.1046690695225685],
+        [39.98932885465214, -4.34272660079622],
+        [39.988464170273744, -3.617983709421384],
+        [38.99982891299001, -3.618524361526298],
+      ],
+    ],
+  ]
+  const items = [
+    scene('2025-10-21', 21.2, '_0', granule0),
+    scene('2025-10-21', 19.8, '_1', granule1),
+  ]
+  const at = (lon: number, lat: number) =>
+    selectScenes(items, 80, [lon, lat]).map(s => s.id)
+  assert.deepEqual(at(39.53, -4.43), ['_0'])
+  // Both cover a site further north: the clearer one wins.
+  assert.deepEqual(at(39.53, -4.0), ['_1'])
+  // Without a site, or with unknown footprints, cloud decides.
+  assert.deepEqual(
+    selectScenes(items, 80).map(s => s.id),
+    ['_1'],
   )
 })
 
@@ -246,6 +446,17 @@ test('forEachLimit bounds concurrency and stops when asked', async () => {
     () => started.length >= 2,
   )
   assert.deepEqual(started, [1, 2])
+})
+
+test('withDecoderPool shares one pool and shuts it down when idle', async () => {
+  let first: unknown
+  await withDecoderPool(1, async outer => {
+    first = outer
+    assert.ok(outer)
+    await withDecoderPool(1, async inner => assert.equal(inner, outer))
+  })
+  await withDecoderPool(1, async next => assert.notEqual(next, first))
+  await withDecoderPool(0, async none => assert.equal(none, undefined))
 })
 
 test('mapLimit keeps the input order', async () => {

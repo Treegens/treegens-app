@@ -17,7 +17,7 @@
  * treegens-web-main/src/modules/siteCheck/siteVerdict.ts so the app can
  * show a verdict offline. Edit both together (siteVerdict.test.ts checks).
  */
-import { PlantingZone, speciesFor } from './mangroveSpecies'
+import { mangrovesNative, PlantingZone, speciesFor } from './mangroveSpecies'
 
 export const SITE_RULES_VERSION = 'site-rules-v1'
 
@@ -189,8 +189,16 @@ const CAUSE_LABELS: Record<LossCause, string> = {
   unknown: 'an unknown cause',
 }
 
-function hasKnownCause(a: SiteAnswers): boolean {
-  return (a.lossCauses ?? []).some(c => c !== 'unknown')
+/** Named causes of loss. "Mangroves, now cut" already names cutting. */
+function knownCauses(a: SiteAnswers): LossCause[] {
+  const causes = (a.lossCauses ?? []).filter(c => c !== 'unknown')
+  if (a.previousUse === 'mangrove_cut') causes.push('cutting')
+  return [...new Set(causes)]
+}
+
+/** True when "Is this still happening?" must be answered. */
+export function hasKnownCause(a: SiteAnswers): boolean {
+  return knownCauses(a).length > 0
 }
 
 type Push = (
@@ -241,9 +249,10 @@ function coverAndHistoryRules(a: SiteAnswers, push: Push): void {
     )
   }
   if (a.previousUse === 'unknown') {
+    // On open ground "I do not know" must not beat an honest "Never".
     push(
       'history_unknown',
-      'info',
+      openGround ? 'check' : 'info',
       'Ask older community members whether mangroves grew here before. It is the best sign the site can work.',
     )
   }
@@ -252,11 +261,19 @@ function coverAndHistoryRules(a: SiteAnswers, push: Push): void {
 function tideRules(a: SiteAnswers, push: Push): void {
   switch (a.tideReach) {
     case 'always_underwater':
-      push(
-        'always_underwater',
-        'blocker',
-        'This spot stays underwater. Mangroves need to dry out between tides.',
-      )
+      if (a.flowBlocked === 'yes_not_fixed') {
+        push(
+          'water_trapped',
+          'fix',
+          'Walls or a blocked channel are trapping water here. Open the flow, then check again.',
+        )
+      } else {
+        push(
+          'always_underwater',
+          'blocker',
+          'This spot stays underwater. Mangroves need to dry out between tides.',
+        )
+      }
       break
     case 'never':
       if (a.flowBlocked === 'yes_not_fixed') {
@@ -306,7 +323,10 @@ function tideRules(a: SiteAnswers, push: Push): void {
 }
 
 function flowAndCauseRules(a: SiteAnswers, push: Push): void {
-  if (a.flowBlocked === 'yes_not_fixed' && a.tideReach !== 'never') {
+  // With the tide never reaching, or water trapped, tideRules reports it.
+  const toldByTide =
+    a.tideReach === 'never' || a.tideReach === 'always_underwater'
+  if (a.flowBlocked === 'yes_not_fixed' && !toldByTide) {
     push(
       'flow_blocked',
       'fix',
@@ -320,8 +340,7 @@ function flowAndCauseRules(a: SiteAnswers, push: Push): void {
     )
   }
   if (!hasKnownCause(a)) return
-  const causes = (a.lossCauses ?? [])
-    .filter(c => c !== 'unknown')
+  const causes = knownCauses(a)
     .map(c => CAUSE_LABELS[c])
     .join(', ')
   if (a.causeStillActive === 'yes' || a.causeStillActive === 'partly') {
@@ -358,6 +377,12 @@ function regrowthRules(a: SiteAnswers, push: Push): void {
       'good',
       'No wild seedlings are arriving, so planting can help here.',
     )
+  } else if (a.naturalRecruitment === 'unsure') {
+    push(
+      'regrowth_unknown',
+      'check',
+      'Look for young wild mangroves that nobody planted. If many are coming, nature is already replanting.',
+    )
   }
 }
 
@@ -379,6 +404,13 @@ function shoreAndGroundRules(a: SiteAnswers, push: Push): void {
       'erosion',
       'check',
       'Small mud cliffs at the edge mean erosion. Find out why before planting.',
+    )
+  }
+  if (a.shoreExposure === 'unsure') {
+    push(
+      'exposure_unknown',
+      'check',
+      'Visit on a windy day or at high tide and look for waves breaking on the site. Mangroves need calm water.',
     )
   }
   if (a.substrate === 'sand') {
@@ -425,20 +457,28 @@ function hydrologyRules(
     )
     return
   }
-  const confident = h.confidence !== 'low'
+  // A blocked flow can hold water in, so the satellite sees the site as it
+  // is now, not as it will be once the flow is open: ask for a recheck.
+  const trapped = a.flowBlocked === 'yes_not_fixed'
+  const tooWet: ReasonSeverity =
+    h.confidence !== 'low' && !trapped ? 'blocker' : 'check'
+  const unlessTrapped = (claim: string) =>
+    trapped
+      ? 'The blocked flow may be holding the water in. Check again once it is open.'
+      : claim
   switch (h.hydrologyClass) {
     case 'permanently_wet':
       sat(
         'sat_permanently_wet',
-        confident ? 'blocker' : 'check',
-        'Satellite images show this spot under water almost every time. It is too low for mangroves.',
+        tooWet,
+        `Satellite images show this spot under water almost every time. ${unlessTrapped('It is too low for mangroves.')}`,
       )
       break
     case 'too_low':
       sat(
         'sat_too_low',
-        confident ? 'blocker' : 'check',
-        'Satellite images show this spot wet more often than the edge where nearby mangroves stop growing. It is likely too low.',
+        tooWet,
+        `Satellite images show this spot wet more often than the edge where nearby mangroves stop growing. ${unlessTrapped('It is likely too low.')}`,
       )
       break
     case 'borderline_low':
@@ -469,11 +509,22 @@ function hydrologyRules(
           'protect',
           'Satellite land-cover maps show mangrove forest here already.',
         )
+      } else if (
+        a.previousUse === 'mangrove_cut' ||
+        a.currentCover === 'degraded_mangrove'
+      ) {
+        // The planter already says the trees were cut or damaged; the map
+        // is older than that, so it is no reason to hold the site back.
+        sat(
+          'sat_forest_mismatch',
+          'info',
+          'Maps from 2021 still show mangrove forest here. Verifiers will compare with your photos.',
+        )
       } else {
         sat(
           'sat_forest_mismatch',
           'check',
-          'Land-cover maps from 2021 show mangrove forest here. If it was cleared since, say so in the notes. Verifiers will compare with your photos.',
+          'Maps from 2021 show mangrove forest here, but your answers do not. Check your answers. Verifiers will compare with your photos.',
         )
       }
       break
@@ -493,11 +544,18 @@ function pickZone(
 ): PlantingZone | null {
   if (a.tideReach === 'spring_tides_only' || a.depthVsReference === 'shallower')
     return 'landward'
-  if (h?.hydrologyClass === 'rarely_wet') return 'landward'
-  if (h?.hydrologyClass === 'borderline_low') return 'seaward'
+  const cls = h?.hydrologyClass
+  if (cls === 'rarely_wet') return 'landward'
+  // Wetter than where nearby mangroves grow: only seaward pioneers cope.
+  if (
+    cls === 'borderline_low' ||
+    cls === 'too_low' ||
+    cls === 'permanently_wet'
+  )
+    return 'seaward'
   const wf = h?.medianWetFraction
   const ref = h?.referenceP50
-  if (h?.hydrologyClass === 'in_range' && wf != null && ref != null) {
+  if (cls === 'in_range' && wf != null && ref != null) {
     return wf >= ref ? 'seaward' : 'middle'
   }
   if (a.tideReach === 'daily') return 'middle'
@@ -520,6 +578,13 @@ export function computeSiteVerdict(input: VerdictInput): SiteVerdict {
   const push: Push = (code, severity, message, source = 'field') =>
     reasons.push({ code, severity, source, message })
 
+  if (!mangrovesNative(countryCode)) {
+    push(
+      'not_native',
+      'blocker',
+      'Mangroves are not native here. People brought them in, and they can harm local nature.',
+    )
+  }
   coverAndHistoryRules(a, push)
   tideRules(a, push)
   flowAndCauseRules(a, push)

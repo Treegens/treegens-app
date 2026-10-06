@@ -19,8 +19,13 @@ export const MANGROVE_CLASS = 95
 export const CLEAR_SCL_CLASSES = [2, 4, 5, 6, 7]
 /** A scene only counts when at least this share of the site is clear. */
 export const MIN_SCENE_CLEAR_SHARE = 0.5
-/** Fringe wet fractions from Gazi Bay, Mida Creek and Kipini (Kenya). */
-export const DEFAULT_REFERENCE = { p25: 0.2, p50: 0.35, p75: 0.48, p90: 0.6 }
+/**
+ * Used when a site has no local fringe: the mean of the fringe percentiles
+ * this engine measured at three Kenyan sites over 2024-01 to 2025-12, Gazi
+ * Bay (0.254 / 0.398 / 0.522 / 0.662), Mida Creek (0.158 / 0.269 / 0.396 /
+ * 0.600) and Kipini, Tana delta (0.219 / 0.442 / 0.590 / 0.641).
+ */
+export const DEFAULT_REFERENCE = { p25: 0.21, p50: 0.37, p75: 0.5, p90: 0.63 }
 
 const MIN_LOCAL_FRINGE_PX = 50
 const HIGH_CONFIDENCE_FRINGE_PX = 200
@@ -228,6 +233,22 @@ export function windowCovering(r: RasterGeometry, e: Extent): GridWindow {
   )
 }
 
+/** Columns and rows the analysis window wants, before clamping. */
+function siteSpans(
+  r: RasterGeometry,
+  ring: Ring,
+  radiusM: number,
+  maxPx: number,
+): [[number, number], [number, number]] {
+  const e = extentOf(ring)
+  const grown = growExtent(e, radiusM)
+  const [col, row] = pixelOf(r, (e.minX + e.maxX) / 2, (e.minY + e.maxY) / 2)
+  return [
+    capSpan(colSpan(r, grown), col, maxPx),
+    capSpan(rowSpan(r, grown), row, maxPx),
+  ]
+}
+
 /**
  * The analysis window: the site's bounding box grown by radiusM on every
  * side, snapped outward to the raster grid, capped at maxPx around the
@@ -239,12 +260,24 @@ export function siteWindow(
   radiusM: number,
   maxPx: number,
 ): GridWindow {
-  const e = extentOf(ring)
-  const grown = growExtent(e, radiusM)
-  const [col, row] = pixelOf(r, (e.minX + e.maxX) / 2, (e.minY + e.maxY) / 2)
-  const cols = capSpan(colSpan(r, grown), col, maxPx)
-  const rows = capSpan(rowSpan(r, grown), row, maxPx)
+  const [cols, rows] = siteSpans(r, ring, radiusM, maxPx)
   return makeWindow(r, clampSpan(cols, r.width), clampSpan(rows, r.height))
+}
+
+/**
+ * Share of the wanted analysis window that lies on the raster: 1 when the
+ * raster's edges cut nothing off, 0 when the window misses it.
+ */
+export function windowCoverage(
+  r: RasterGeometry,
+  ring: Ring,
+  radiusM: number,
+  maxPx: number,
+): number {
+  const [[c0, c1], [r0, r1]] = siteSpans(r, ring, radiusM, maxPx)
+  const win = siteWindow(r, ring, radiusM, maxPx)
+  const wanted = (c1 - c0) * (r1 - r0)
+  return wanted > 0 ? (win.width * win.height) / wanted : 0
 }
 
 export function gridExtent(g: RasterGeometry): Extent {
@@ -652,9 +685,11 @@ export interface NoteFacts extends WindowAnalysis {
   scenesFailed: number
   /** Scenes left unread because the time budget ran out. */
   scenesNotRead: number
+  /** Share of the search area on the satellite tile (see windowCoverage). */
+  windowCoverage?: number
 }
 
-function plural(n: number, noun: string): string {
+export function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`
 }
 
@@ -669,15 +704,24 @@ function classNote(f: NoteFacts): string {
   if (f.hydrologyClass === 'existing_mangrove') {
     return `${percent(f.site.mangroveCoverShare)} of the site is mapped as mangrove forest.`
   }
-  const fringe =
-    f.reference.source === 'local'
-      ? 'the fringe of nearby mangroves'
-      : 'a typical mangrove fringe'
-  return `The site is wet in ${percent(f.site.medianWetFraction)} of clear images, ${fringe} in about ${percent(f.reference.p50)}.`
+  // p75 is where mangroves stop (the in_range limit), as on the web card;
+  // p50 is a typical fringe spot, which picks the planting zone.
+  const ref = f.reference
+  const stop = `stop at about ${percent(ref.p75)}`
+  const typical = `is wet in about ${percent(ref.p50)}`
+  const reference =
+    ref.source === 'local'
+      ? `Nearby mangroves ${stop}, and a typical spot on their fringe ${typical}.`
+      : `Mangroves usually ${stop}, and a typical spot on a mangrove fringe ${typical}.`
+  return `The site is wet in ${percent(f.site.medianWetFraction)} of clear images. ${reference}`
+}
+
+function radiusLabel(f: NoteFacts): string {
+  return `${Number((f.referenceRadiusM / 1000).toFixed(1))} km`
 }
 
 function referenceNote(f: NoteFacts): string {
-  const km = `${Number((f.referenceRadiusM / 1000).toFixed(1))} km`
+  const km = radiusLabel(f)
   const n = f.reference.edgePixelCount
   if (f.reference.source === 'local') {
     return `Compared with ${plural(n, 'fringe pixel')} next to mapped mangroves within ${km}.`
@@ -698,6 +742,12 @@ function referenceNote(f: NoteFacts): string {
 /** Short plain-English notes on how the result was reached. */
 export function hydrologyNotes(f: NoteFacts): string[] {
   const notes = [classNote(f), referenceNote(f)]
+  if (f.windowCoverage < 1) {
+    const share = `${Math.floor(f.windowCoverage * 100)}%`
+    notes.push(
+      `The satellite tile ends near this site, so only ${share} of the area within ${radiusLabel(f)} was searched.`,
+    )
+  }
   if (f.scenesUsed < 20) {
     notes.push(`Only ${plural(f.scenesUsed, 'clear image')} over the site.`)
   }

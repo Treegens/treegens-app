@@ -47,7 +47,21 @@ export function canRecheckHydrology(hydrology?: ISiteHydrology | null) {
   )
 }
 
-/** 0 to 100% wet: a band for the edge of nearby mangroves, a pin for the site. */
+/** What the reference band stands for: local mangroves or the default. */
+function referenceText(reference: IHydrologyResult['reference']) {
+  const local = reference.source === 'local'
+  return {
+    band: local ? 'Edge of nearby mangroves' : 'Typical mangrove edge',
+    stops: local ? 'Nearby mangroves stop' : 'A typical mangrove edge stops',
+    comparedWith: local
+      ? `${reference.edgePixelCount.toLocaleString()} spots next to nearby mangroves`
+      : reference.nearestMangroveM == null
+        ? 'A standard Kenyan reference (no mapped mangroves nearby)'
+        : 'A standard Kenyan reference (too little wet edge next to the mapped mangroves)',
+  }
+}
+
+/** 0 to 100% wet: a band for the reference mangrove edge, a pin for the site. */
 function WetnessBar({ result }: { result: IHydrologyResult }) {
   const { p25, p90 } = result.reference
   const site = result.site.medianWetFraction
@@ -72,7 +86,7 @@ function WetnessBar({ result }: { result: IHydrologyResult }) {
       <div className="mt-1 flex flex-row flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-600">
         <span className="inline-flex items-center gap-1">
           <span className="h-2.5 w-4 rounded-full bg-green-500/60" />
-          Edge of nearby mangroves
+          {referenceText(result.reference).band}
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="h-3 w-1.5 rounded-full bg-gray-900" />
@@ -96,6 +110,7 @@ function ResultView({ result }: { result: IHydrologyResult }) {
   const style = HYDROLOGY_CLASS_STYLES[result.hydrologyClass]
   const wet = result.site.medianWetFraction
   const { reference, imagery } = result
+  const text = referenceText(reference)
   return (
     <div className="mt-3">
       <span
@@ -108,20 +123,13 @@ function ResultView({ result }: { result: IHydrologyResult }) {
       </span>
       {wet != null ? (
         <p className="mt-2 text-sm text-gray-800">
-          Wet in {pct(wet)} of clear images. Nearby mangroves stop at about{' '}
+          Wet in {pct(wet)} of clear images. {text.stops} at about{' '}
           {pct(reference.p75)}.
         </p>
       ) : null}
       <WetnessBar result={result} />
       <dl className="mt-3">
-        <Fact
-          label="Compared with"
-          value={
-            reference.source === 'local'
-              ? `${reference.edgePixelCount.toLocaleString()} spots next to nearby mangroves`
-              : 'A standard Kenyan reference (no mapped mangroves nearby)'
-          }
-        />
+        <Fact label="Compared with" value={text.comparedWith} />
         <Fact
           label="Images used"
           value={`${imagery.scenesUsed} clear images, ${monthLabel(imagery.firstSceneDate)} to ${monthLabel(imagery.lastSceneDate)}`}

@@ -16,14 +16,41 @@ type Props = {
   className?: string
 }
 
-function placeText(siteCheck: ISubmissionSiteCheck) {
-  const distance = siteCheck.distanceToSiteM ?? 0
-  if (siteCheck.insideSite) {
-    return distance > 0
-      ? `Inside the site (${formatDistance(distance)} from the edge)`
-      : 'Inside the site'
+/**
+ * The API measures 0 m for a clip filmed inside the boundary, else the
+ * distance to its edge; `insideSite` also allows a GPS tolerance, so a
+ * positive distance always means the clip was filmed outside the boundary.
+ */
+function place(insideSite: boolean, distanceM = 0) {
+  if (distanceM <= 0) {
+    return { text: 'inside the site', className: 'text-green-800' }
   }
-  return `${formatDistance(distance)} outside the site`
+  if (insideSite) {
+    return {
+      text: `${formatDistance(distanceM)} outside the edge (within GPS tolerance)`,
+      className: 'text-amber-800',
+    }
+  }
+  return {
+    text: `${formatDistance(distanceM)} outside the site`,
+    className: 'text-red-700',
+  }
+}
+
+/** Where each clip was filmed, for the clips the snapshot measured. */
+function clipPlaces(siteCheck?: ISubmissionSiteCheck) {
+  if (!siteCheck) return []
+  const clips: [string, boolean | undefined, number | undefined][] = [
+    ['Before video', siteCheck.insideSite, siteCheck.distanceToSiteM],
+    [
+      'Planting video',
+      siteCheck.plantInsideSite,
+      siteCheck.plantDistanceToSiteM,
+    ],
+  ]
+  return clips.flatMap(([label, inside, distanceM]) =>
+    inside == null ? [] : [{ label, ...place(inside, distanceM) }],
+  )
 }
 
 /** Compact Site Check chip and species names for a submission review. */
@@ -46,16 +73,14 @@ export function SubmissionSiteInfo({
             Site Check
           </span>
           <VerdictChip code={siteCheck?.verdictCode} />
-          {siteCheck?.insideSite != null ? (
+          {clipPlaces(siteCheck).map(clip => (
             <span
-              className={cn(
-                'text-xs font-medium',
-                siteCheck.insideSite ? 'text-green-800' : 'text-red-700',
-              )}
+              key={clip.label}
+              className={cn('text-xs font-medium', clip.className)}
             >
-              {placeText(siteCheck)}
+              {clip.label}: {clip.text}
             </span>
-          ) : null}
+          ))}
           <HiChevronRight
             className="ml-auto h-5 w-5 text-[#4d341e]"
             aria-hidden

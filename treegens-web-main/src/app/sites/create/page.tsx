@@ -20,6 +20,7 @@ import {
   usePendingPhotos,
   useSiteDraftSync,
   useSiteGeocode,
+  withCountryCode,
 } from '@/hooks/useSiteWizard'
 import {
   missingPhotoKinds,
@@ -42,7 +43,8 @@ import {
 } from '@/modules/siteCheck/siteVerdict'
 import { getSite, submitSite } from '@/services/siteService'
 import type { ISiteDoc, SitePhotoKind } from '@/types'
-import { apiErrorMessage } from '@/utils/apiErrorMessage'
+import { apiErrorMessage, notifyError } from '@/utils/apiErrorMessage'
+import { compressImage } from '@/utils/imageCompression'
 import { clearSiteDraft } from '@/utils/siteDraftStore'
 
 /** Loads the draft named by ?siteId= into the form. */
@@ -111,6 +113,7 @@ export default function CreateSitePage() {
 
   const goTo = (next: number) => {
     setStep(next)
+    if (next !== 4) setSendError('')
     topRef.current?.scrollIntoView({ block: 'start' })
     if (next === 3) gps.getCurrentPosition()
   }
@@ -123,12 +126,17 @@ export default function CreateSitePage() {
     setStep(locationProblem(resumed) ? 1 : 2)
   }
 
-  const pickPhoto = (kind: SitePhotoKind, file: File) => {
+  const pickPhoto = async (kind: SitePhotoKind, file: File) => {
     const here =
       gps.latitude !== null && gps.longitude !== null
         ? { latitude: gps.latitude, longitude: gps.longitude }
         : formAnchor(form)
-    photos.pick(kind, file, here)
+    try {
+      // Converted now, so the preview shows what verifiers will see.
+      photos.pick(kind, await compressImage(file), here)
+    } catch (e) {
+      notifyError(apiErrorMessage(e, 'This photo cannot be used.'))
+    }
   }
 
   const send = async (forReview: boolean) => {
@@ -137,9 +145,12 @@ export default function CreateSitePage() {
     setSendError('')
     try {
       setStage('Saving the site…')
-      const site = await saveSite(form, savedSite)
+      const ready = await withCountryCode(form)
+      if (ready !== form) setForm(ready)
+      const site = await saveSite(ready, savedSite)
       setSavedSite(site)
-      if (!editSiteId) clearSiteDraft(wallet)
+      // Never drop an older draft the planter has not resumed or discarded.
+      if (!editSiteId && !draft.offer) clearSiteDraft(wallet)
       await uploadPendingPhotos(site._id, photos.pending, {
         onProgress: (kind, percent) =>
           setStage(`Sending photo: ${photoTitle(kind)} (${percent}%)`),
@@ -188,15 +199,19 @@ export default function CreateSitePage() {
         </div>
       )
     }
+    // Choose first: nothing is saved on the phone while the older draft
+    // is on offer, so the wizard waits for Resume or Start over.
+    if (draft.offer) {
+      return (
+        <ResumeDraftBanner
+          draft={draft.offer}
+          onResume={resumeDraft}
+          onDiscard={draft.discard}
+        />
+      )
+    }
     return (
       <>
-        {draft.offer ? (
-          <ResumeDraftBanner
-            draft={draft.offer}
-            onResume={resumeDraft}
-            onDiscard={draft.discard}
-          />
-        ) : null}
         <WizardProgress step={step} />
         {step === 1 ? (
           <LocationStep form={form} setForm={setForm} onNext={() => goTo(2)} />
@@ -215,7 +230,7 @@ export default function CreateSitePage() {
           <PhotosStep
             pending={photos.pending}
             saved={savedSite?.photos ?? []}
-            onPick={pickPhoto}
+            onPick={(kind, file) => void pickPhoto(kind, file)}
             onRemove={photos.remove}
             onBack={() => goTo(2)}
             onNext={() => goTo(4)}

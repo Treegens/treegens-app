@@ -3,7 +3,14 @@
  * no Redis here: the status lives on the site document, jobs run one at a
  * time per process from a small in-memory FIFO, and a sweeper picks up work
  * a restart or a failure left behind (same idea as the stitch retrier).
+ *
+ * The FIFO is bounded: one wallet may have only a few runs queued or running
+ * (SITE_HYDROLOGY_MAX_PER_WALLET) and the FIFO itself has a maximum length
+ * (SITE_HYDROLOGY_MAX_QUEUE). A site over either limit stays 'queued' in the
+ * database and the sweeper starts it later, one site per wallet per sweep,
+ * so nobody can fill the queue and make everyone else wait for hours.
  */
+import mongoose from 'mongoose'
 import env from '../config/environment'
 import {
   HydrologyInput,
@@ -20,7 +27,13 @@ type HydrologyRunner = (input: HydrologyInput) => Promise<HydrologyResult>
 const LOG = '[SiteHydrology]'
 /** A run older than this was killed (deploy, crash) and is retried. */
 const STALE_PROCESSING_MS = 20 * 60_000
+/** A site still 'not_started' this long after its last write lost its trigger. */
+const LOST_TRIGGER_MS = 2 * 60_000
 const MAX_ERROR_CHARS = 500
+/** Tries at saving a result while the site keeps changing under it. */
+const STORE_TRIES = 3
+const OUT_OF_ATTEMPTS_ERROR =
+  'The satellite check has run as many times as it may for this site. Use Retry to run it again.'
 
 let runHydrology: HydrologyRunner = runSiteHydrology
 
@@ -63,6 +76,7 @@ export function buildHydrologyInput(
     referenceRadiusM: env.SITE_HYDROLOGY_REFERENCE_RADIUS_M,
     maxCloudPct: env.SITE_HYDROLOGY_MAX_CLOUD_PCT,
     concurrency: env.SITE_HYDROLOGY_SCENE_CONCURRENCY,
+    decoderWorkers: env.SITE_HYDROLOGY_DECODER_WORKERS,
     timeoutMs: env.SITE_HYDROLOGY_TIMEOUT_MS,
     s2BucketUrl: env.SITE_HYDROLOGY_S2_BUCKET_URL,
     worldCoverUrl: env.SITE_HYDROLOGY_WORLDCOVER_URL,
@@ -71,8 +85,26 @@ export function buildHydrologyInput(
 }
 
 /**
+ * Room in the FIFO for this site: the FIFO is not full and the owner does
+ * not already have their share of runs queued or running.
+ */
+async function hasQueueRoom(siteId: string, owner: string): Promise<boolean> {
+  if (queuedIds.size >= env.SITE_HYDROLOGY_MAX_QUEUE) return false
+  const busy = await Site.countDocuments({
+    userWalletAddress: owner,
+    _id: { $ne: siteId },
+    'hydrology.status': { $in: ['queued', 'processing'] },
+    'hydrology.attempts': { $lt: env.SITE_HYDROLOGY_MAX_ATTEMPTS },
+  })
+  return busy < env.SITE_HYDROLOGY_MAX_PER_WALLET
+}
+
+/**
  * Marks the site queued (or skipped when the check is switched off) and
- * schedules it. Never throws: a site without a satellite result still works.
+ * schedules it when there is room (otherwise the sweeper starts it later).
+ * A site whose runs are used up (a moved boundary keeps the count) is marked
+ * failed, so the app offers Retry. Never throws: a site without a satellite
+ * result still works.
  */
 export async function triggerSiteHydrology(siteId: string): Promise<void> {
   try {
@@ -88,14 +120,38 @@ export async function triggerSiteHydrology(siteId: string): Promise<void> {
       )
       return
     }
-    await Site.updateOne(
-      { _id: siteId, 'hydrology.status': { $ne: 'processing' } },
+    const site = await Site.findOneAndUpdate(
+      {
+        _id: siteId,
+        'hydrology.status': { $ne: 'processing' },
+        'hydrology.attempts': { $lt: env.SITE_HYDROLOGY_MAX_ATTEMPTS },
+      },
       {
         $set: { 'hydrology.status': 'queued' },
         $unset: { 'hydrology.skipReason': '' },
       },
-    )
-    void enqueue(siteId)
+      { new: true, projection: { userWalletAddress: 1 } },
+    ).lean()
+    if (!site) {
+      await Site.updateOne(
+        {
+          _id: siteId,
+          'hydrology.status': { $nin: ['processing', 'failed'] },
+          'hydrology.attempts': { $gte: env.SITE_HYDROLOGY_MAX_ATTEMPTS },
+        },
+        {
+          $set: {
+            'hydrology.status': 'failed',
+            'hydrology.lastError': OUT_OF_ATTEMPTS_ERROR,
+          },
+          $unset: { 'hydrology.skipReason': '' },
+        },
+      )
+      return
+    }
+    if (await hasQueueRoom(siteId, String(site.userWalletAddress))) {
+      void enqueue(siteId)
+    }
   } catch (error: any) {
     console.error(`${LOG} ${siteId} could not be queued`, error?.message)
   }
@@ -134,20 +190,31 @@ async function storeResult(
   startedAt: Date,
   result: HydrologyResult,
 ) {
-  // Re-read so answers edited during the run are not overwritten.
-  const site = await Site.findOne(ownedBy(siteId, startedAt)).lean()
-  if (!site) return
-  const now = new Date()
-  await Site.updateOne(ownedBy(siteId, startedAt), {
-    $set: {
-      'hydrology.status': 'completed',
-      'hydrology.result': result,
-      'hydrology.completedAt': now,
-      verdict: siteVerdictFor(site, toHydrologySummary(result)),
-      verdictComputedAt: now,
-    },
-    $unset: { 'hydrology.lastError': '' },
-  })
+  // The verdict also depends on the answers, so it is computed from a fresh
+  // read and written only if the site has not changed since (an answers
+  // edit in between means reading it again).
+  for (let tries = 0; tries < STORE_TRIES; tries++) {
+    const site = await Site.findOne(ownedBy(siteId, startedAt)).lean()
+    if (!site) return
+    const now = new Date()
+    const written = await Site.updateOne(
+      { ...ownedBy(siteId, startedAt), updatedAt: site.updatedAt ?? null },
+      {
+        $set: {
+          'hydrology.status': 'completed',
+          'hydrology.result': result,
+          'hydrology.completedAt': now,
+          verdict: siteVerdictFor(site, toHydrologySummary(result)),
+          verdictComputedAt: now,
+        },
+        $unset: { 'hydrology.lastError': '' },
+      },
+    )
+    if (written.matchedCount > 0) return
+  }
+  throw new Error(
+    'The site kept changing while the satellite result was saved.',
+  )
 }
 
 async function storeFailure(siteId: string, startedAt: Date, error: any) {
@@ -205,21 +272,106 @@ async function failStaleRuns(now: number) {
   )
 }
 
-/** Picks up queued and retryable sites, oldest first, one at a time. */
-export async function sweepSiteHydrology(limit = 3): Promise<number> {
-  if (!env.SITE_HYDROLOGY_ENABLED) return 0
-  await failStaleRuns(Date.now())
-  const due = await Site.find(
+/**
+ * A site left waiting with its runs used up (the limit was lowered, or a
+ * moved boundary lost its trigger) would never be picked up again; it is
+ * marked failed so the app offers Retry.
+ */
+async function failExhaustedWaits(now: number) {
+  await Site.updateMany(
     {
-      'hydrology.status': { $in: ['queued', 'failed'] },
-      'hydrology.attempts': { $lt: env.SITE_HYDROLOGY_MAX_ATTEMPTS },
+      $or: [
+        { 'hydrology.status': 'queued' },
+        {
+          'hydrology.status': 'not_started',
+          updatedAt: { $lt: new Date(now - LOST_TRIGGER_MS) },
+        },
+      ],
+      'hydrology.attempts': { $gte: env.SITE_HYDROLOGY_MAX_ATTEMPTS },
     },
-    { _id: 1 },
+    {
+      $set: {
+        'hydrology.status': 'failed',
+        'hydrology.lastError': OUT_OF_ATTEMPTS_ERROR,
+      },
+    },
   )
-    .sort({ updatedAt: 1 })
-    .limit(limit)
-    .lean()
-  for (const doc of due) await enqueue(String(doc._id))
+}
+
+/**
+ * With the check switched off, work left waiting (the in-memory queue died
+ * with the restart that applied the change) or killed mid-run is marked
+ * skipped, so the app stops showing a spinner and offers a recheck.
+ */
+async function skipOrphanedRuns(now: number) {
+  await Site.updateMany(
+    {
+      $or: [
+        { 'hydrology.status': { $in: ['queued', 'not_started'] } },
+        {
+          'hydrology.status': 'processing',
+          'hydrology.startedAt': { $lt: new Date(now - STALE_PROCESSING_MS) },
+        },
+      ],
+    },
+    {
+      $set: {
+        'hydrology.status': 'skipped',
+        'hydrology.skipReason': 'disabled',
+      },
+    },
+  )
+}
+
+/** Ids waiting in this process's FIFO, as ObjectIds for an aggregation. */
+function idsInQueue(): mongoose.Types.ObjectId[] {
+  return [...queuedIds]
+    .filter(id => mongoose.Types.ObjectId.isValid(id))
+    .map(id => new mongoose.Types.ObjectId(id))
+}
+
+/**
+ * Picks up queued, retryable and lost ('not_started' for a while) sites and
+ * runs them one at a time: at most one site per wallet per sweep, the
+ * wallets whose oldest waiting site is oldest first, so one wallet's
+ * backlog cannot crowd out everyone else's.
+ */
+export async function sweepSiteHydrology(limit = 3): Promise<number> {
+  const now = Date.now()
+  if (!env.SITE_HYDROLOGY_ENABLED) {
+    await skipOrphanedRuns(now)
+    return 0
+  }
+  await failStaleRuns(now)
+  await failExhaustedWaits(now)
+  const room = Math.min(limit, env.SITE_HYDROLOGY_MAX_QUEUE - queuedIds.size)
+  if (room <= 0) return 0
+  const due = await Site.aggregate<{ siteId: unknown }>([
+    {
+      $match: {
+        $or: [
+          { 'hydrology.status': { $in: ['queued', 'failed'] } },
+          {
+            'hydrology.status': 'not_started',
+            updatedAt: { $lt: new Date(now - LOST_TRIGGER_MS) },
+          },
+        ],
+        'hydrology.attempts': { $lt: env.SITE_HYDROLOGY_MAX_ATTEMPTS },
+        _id: { $nin: idsInQueue() },
+      },
+    },
+    { $sort: { updatedAt: 1 } },
+    {
+      $group: {
+        _id: '$userWalletAddress',
+        siteId: { $first: '$_id' },
+        updatedAt: { $first: '$updatedAt' },
+      },
+    },
+    { $sort: { updatedAt: 1 } },
+    { $limit: room },
+  ])
+  for (const doc of due) await enqueue(String(doc.siteId))
   return due.length
 }
 

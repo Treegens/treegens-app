@@ -117,7 +117,11 @@ function pageOf(req: Request) {
  *                     data:
  *                       $ref: '#/components/schemas/Site'
  *       400:
- *         description: Validation error, or the boundary is invalid, too small or too large
+ *         description: |
+ *           Validation error; the boundary is invalid, too small, too large
+ *           (area, or more than 1.5 km from its centre) or crosses the 180th
+ *           meridian; or the wallet already has SITE_MAX_DRAFTS_PER_WALLET
+ *           unfinished sites
  *       401:
  *         description: Unauthorized
  */
@@ -305,7 +309,7 @@ router.patch(
  * /api/sites/{siteId}/photos:
  *   post:
  *     summary: Add a photo to a draft site
- *     description: One photo per kind; a new one replaces the old. JPEG, PNG, WebP or HEIC, up to 15 MB.
+ *     description: One photo per kind; a new one replaces the old. JPEG, PNG or WebP, up to 15 MB.
  *     tags: [Sites]
  *     security:
  *       - bearerAuth: []

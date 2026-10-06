@@ -20,6 +20,11 @@ export function SpeciesPicker({ site, value, onChange }: Props) {
   const others = speciesFor(null, site?.countryCode)
     .map(s => s.id)
     .filter(id => !recommended.includes(id))
+  // Chosen before the site (and so its region) was known: still shown, so
+  // they can be seen and removed rather than sent unseen.
+  const outside = value.filter(
+    id => !recommended.includes(id) && !others.includes(id),
+  )
   const full = value.length >= MAX_SPECIES
 
   const toggle = (id: string) =>
@@ -56,6 +61,7 @@ export function SpeciesPicker({ site, value, onChange }: Props) {
       </div>
       {group('Recommended for this site', recommended)}
       {group(recommended.length ? 'Other species' : 'Species', others)}
+      {group('Chosen, but not from this region', outside)}
     </div>
   )
 }

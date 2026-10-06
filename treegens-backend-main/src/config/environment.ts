@@ -768,8 +768,17 @@ class EnvironmentConfig {
     return boundedInt('SITE_HYDROLOGY_MAX_CLOUD_PCT', 80, 10, 100)
   }
 
+  /**
+   * Images read in parallel per site. 4 keeps a run near 200 MB peak on a
+   * 512 MB instance (8 is about 40% faster but peaks near 270 MB).
+   */
   get SITE_HYDROLOGY_SCENE_CONCURRENCY() {
-    return boundedInt('SITE_HYDROLOGY_SCENE_CONCURRENCY', 8, 1, 16)
+    return boundedInt('SITE_HYDROLOGY_SCENE_CONCURRENCY', 4, 1, 16)
+  }
+
+  /** Worker threads decoding image tiles off the event loop (0 = none). */
+  get SITE_HYDROLOGY_DECODER_WORKERS() {
+    return boundedInt('SITE_HYDROLOGY_DECODER_WORKERS', 1, 0, 8)
   }
 
   get SITE_HYDROLOGY_TIMEOUT_MS() {
@@ -779,6 +788,19 @@ class EnvironmentConfig {
   /** Runs per site before the sweeper gives up (a recheck resets it). */
   get SITE_HYDROLOGY_MAX_ATTEMPTS() {
     return boundedInt('SITE_HYDROLOGY_MAX_ATTEMPTS', 3, 1, 10)
+  }
+
+  /**
+   * Satellite runs one wallet may have queued or running before its next
+   * sites wait for the sweeper instead of joining the in-process queue.
+   */
+  get SITE_HYDROLOGY_MAX_PER_WALLET() {
+    return boundedInt('SITE_HYDROLOGY_MAX_PER_WALLET', 2, 1, 50)
+  }
+
+  /** Longest the in-process queue gets; more sites wait for the sweeper. */
+  get SITE_HYDROLOGY_MAX_QUEUE() {
+    return boundedInt('SITE_HYDROLOGY_MAX_QUEUE', 50, 1, 10_000)
   }
 
   get SITE_HYDROLOGY_S2_BUCKET_URL() {
@@ -813,6 +835,11 @@ class EnvironmentConfig {
   /** A land clip filmed this close to a site boundary still counts as inside. */
   get SITE_GPS_TOLERANCE_M() {
     return boundedInt('SITE_GPS_TOLERANCE_M', 50, 0, 10_000)
+  }
+
+  /** Unsubmitted (draft) sites one wallet may keep at a time. */
+  get SITE_MAX_DRAFTS_PER_WALLET() {
+    return boundedInt('SITE_MAX_DRAFTS_PER_WALLET', 20, 1, 1000)
   }
 
   validateRequired() {

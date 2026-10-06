@@ -86,6 +86,31 @@ function MissingList({
   )
 }
 
+/** The API's answer when it cannot store the walked boundary. */
+const INVALID_BOUNDARY_ERROR = 'Invalid site boundary'
+
+function SendError({ error, onGoTo }: Pick<Props, 'error' | 'onGoTo'>) {
+  if (error !== INVALID_BOUNDARY_ERROR) {
+    return <p className="text-sm text-red-600">{error}</p>
+  }
+  return (
+    <section className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+      <p>
+        The server could not use this boundary. Most often the walked path
+        crosses itself. Go back to the location step and tap &quot;Undo last
+        point&quot; or &quot;Start again&quot;.
+      </p>
+      <button
+        type="button"
+        onClick={() => onGoTo(1)}
+        className="mt-1 min-h-11 font-semibold underline underline-offset-2"
+      >
+        Fix the boundary
+      </button>
+    </section>
+  )
+}
+
 function OfflineNote() {
   return (
     <section className="flex flex-row gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
@@ -114,7 +139,7 @@ export function ReviewStep(props: Props) {
       <SiteSummary form={props.form} onGoTo={props.onGoTo} />
       <MissingList {...props} />
       {!online ? <OfflineNote /> : null}
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {error ? <SendError error={error} onGoTo={props.onGoTo} /> : null}
       {sending ? (
         <div className="flex flex-row items-center gap-3 rounded-xl bg-gray-50 px-4 py-3">
           <Spinner size="sm" />

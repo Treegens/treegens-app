@@ -27,6 +27,7 @@ import {
   SiteStats,
   siteWindow,
   wetFractions,
+  windowCoverage,
   windowCovering,
 } from './math'
 
@@ -163,6 +164,28 @@ test('siteWindow grows the site, caps around its centre and clamps', () => {
   )
   assert.equal(nearEdge.col0, 0)
   assert.equal(nearEdge.width, 62)
+})
+
+test('windowCoverage is the share of the wanted window on the raster', () => {
+  const raster = {
+    originX: 0,
+    originY: 10000,
+    res: 10,
+    width: 1000,
+    height: 1000,
+  }
+  const square: [number, number][] = [
+    [4980, 4980],
+    [5020, 4980],
+    [5020, 5020],
+    [4980, 5020],
+  ]
+  assert.equal(windowCoverage(raster, square, 100, 700), 1)
+  const nearEdge = square.map(([x, y]) => [x - 4900, y] as [number, number])
+  // 62 of the wanted 104 columns are on the raster.
+  assert.equal(windowCoverage(raster, nearEdge, 500, 700), 62 / 104)
+  const outside = square.map(([x, y]) => [x - 9000, y] as [number, number])
+  assert.equal(windowCoverage(raster, outside, 100, 700), 0)
 })
 
 test('pixelCentres and pixelIndexAt agree', () => {
@@ -357,6 +380,18 @@ test('analyseWindow uses the local fringe and classifies the site', () => {
   assert.equal(result.confidence, 'medium')
 })
 
+test('the default reference is the mean of the three Kenyan sites', () => {
+  const gazi = [0.254, 0.398, 0.522, 0.662]
+  const mida = [0.158, 0.269, 0.396, 0.6]
+  const kipini = [0.219, 0.442, 0.59, 0.641]
+  const mean = gazi.map((g, i) => {
+    const m = (g + mida[i] + kipini[i]) / 3
+    return Math.round(m * 100) / 100
+  })
+  const { p25, p50, p75, p90 } = DEFAULT_REFERENCE
+  assert.deepEqual([p25, p50, p75, p90], mean)
+})
+
 test('analyseWindow falls back to the default reference without mangroves', () => {
   const bay = syntheticBay(11)
   const result = analyseWindow({
@@ -390,7 +425,7 @@ test('hydrologyNotes are plain and explain the reference', () => {
     scenesNotRead: 3,
   })
   assert.deepEqual(notes, [
-    'The site is wet in 40% of clear images, a typical mangrove fringe in about 35%.',
+    'The site is wet in 40% of clear images. Mangroves usually stop at about 50%, and a typical spot on a mangrove fringe is wet in about 37%.',
     'No mapped mangroves within 1.5 km, so a default Kenyan reference was used.',
     'Only 12 clear images over the site.',
     '1 image could not be read.',
@@ -398,4 +433,30 @@ test('hydrologyNotes are plain and explain the reference', () => {
   ])
   const emDash = String.fromCharCode(0x2014)
   assert.ok(notes.every(n => !n.includes(emDash)))
+})
+
+test('hydrologyNotes name p75 as where local mangroves stop', () => {
+  const bay = syntheticBay(20)
+  const analysis = analyseWindow({
+    grid: bay.g,
+    site: bay.site,
+    centreIdx: bay.site[0],
+    counts: bay.counts,
+    landcover: bay.landcover,
+  })
+  const notes = hydrologyNotes({
+    ...analysis,
+    reference: { ...analysis.reference, p50: 0.36, p75: 0.48 },
+    referenceRadiusM: 1500,
+    landcoverAvailable: true,
+    scenesUsed: 40,
+    scenesFailed: 0,
+    scenesNotRead: 0,
+    windowCoverage: 0.379,
+  })
+  assert.deepEqual(notes, [
+    'The site is wet in 96% of clear images. Nearby mangroves stop at about 48%, and a typical spot on their fringe is wet in about 36%.',
+    'Compared with 60 fringe pixels next to mapped mangroves within 1.5 km.',
+    'The satellite tile ends near this site, so only 37% of the area within 1.5 km was searched.',
+  ])
 })

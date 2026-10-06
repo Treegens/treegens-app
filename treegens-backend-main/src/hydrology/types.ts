@@ -16,6 +16,11 @@ export interface HydrologyInput {
   maxCloudPct: number
   /** Scenes read in parallel. */
   concurrency: number
+  /**
+   * Worker threads that decode image tiles off the event loop, 0 to 8
+   * (default 2). 0 decodes on the main thread.
+   */
+  decoderWorkers?: number
   /** Overall time budget. Reading stops when it runs out. */
   timeoutMs: number
   s2BucketUrl: string

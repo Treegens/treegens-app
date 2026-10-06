@@ -3,7 +3,7 @@
  * Handles offline video upload queue and background sync
  */
 
-const SW_VERSION = 'v1.274'
+const SW_VERSION = 'v1.275'
 const STATIC_CACHE = `treegens-static-${SW_VERSION}` // bump to refresh HTML/images
 const RUNTIME_CACHE = `treegens-runtime-${SW_VERSION}` // keep stable for Next build assets
 const FF_CACHE = 'treegens-ffmpeg-core' // dedicated, never-versioned cache for ffmpeg core
@@ -87,6 +87,61 @@ const STATIC_ASSETS = [
   '/img/leaderboard-icon.svg',
 ]
 
+// Pages used in the field without signal. Precached best-effort with the
+// /_next/static files their HTML loads, so they open (and run) offline.
+// Kept out of STATIC_ASSETS: addAll there is all-or-nothing.
+const OFFLINE_PAGES = ['/sites', '/sites/create']
+const OFFLINE_PAGE_ASSETS_FROM = [...OFFLINE_PAGES, '/submissions/create']
+
+// Upload refusals the API repeats on every retry (Site Check gate, unknown
+// site); same list as src/modules/siteCheck/siteGateMessage.ts.
+const PERMANENT_UPLOAD_ERRORS = [
+  'Mangrove planting needs an approved Site Check',
+  'This site has not been approved yet',
+  'This site was rejected in review',
+  'The Site Check verdict for this site is',
+  'Your before video was filmed',
+  'Your planting video was filmed',
+  'This video was filmed',
+  'Site not found',
+]
+// A failed upload is re-queued until it has failed this many cycles
+const MAX_FAIL_CYCLES = 3
+
+/**
+ * Best-effort: caches each offline page and the build files its HTML
+ * references. Never throws, so it cannot break install.
+ */
+async function precacheOfflinePages(staticCache) {
+  try {
+    await Promise.all(
+      OFFLINE_PAGES.map(path =>
+        staticCache.add(path).catch(e => {
+          console.warn('[SW] Could not precache page', path, e)
+        })
+      )
+    )
+    const assets = new Set()
+    for (const path of OFFLINE_PAGE_ASSETS_FROM) {
+      const page = await staticCache.match(path)
+      if (!page) continue
+      const html = await page.text()
+      const found = html.match(/\/_next\/static\/[^"'\s)\\]+/g) || []
+      found.forEach(url => assets.add(url))
+    }
+    const runtime = await caches.open(RUNTIME_CACHE)
+    await Promise.all(
+      [...assets].map(async url => {
+        if (await runtime.match(url)) return
+        await runtime.add(url).catch(() => {})
+      })
+    )
+    console.log(`[SW] Warmed ${assets.size} build files for offline pages`)
+  } catch (e) {
+    console.warn('[SW] Offline page precache failed', e)
+  }
+}
+
 // Install event - cache static assets
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing TreeGens Service Worker')
@@ -97,6 +152,7 @@ self.addEventListener('install', (event) => {
         const cache = await caches.open(STATIC_CACHE)
         console.log('[SW] Caching static assets')
         await cache.addAll(STATIC_ASSETS)
+        await precacheOfflinePages(cache)
         // Precache ffmpeg core files in dedicated cache (best-effort, only if not already cached)
         try {
           const ff = await caches.open(FF_CACHE)
@@ -437,7 +493,16 @@ async function syncPendingUploads() {
         // Increment retry count
         const newRetryCount = item.retryCount + 1
 
-        if (newRetryCount >= item.maxRetries) {
+        if (error && error.permanent) {
+          // Sending it again would only get the same answer
+          await markUploadFailed(item.id, { permanent: true, error: error.message })
+          console.error(`💀 Upload refused: ${error.message}`)
+          await notifyClients('UPLOAD_FAILED', {
+            uploadId: item.id,
+            error: error.message,
+            permanent: true
+          })
+        } else if (newRetryCount >= item.maxRetries) {
           await markUploadFailed(item.id)
           console.error(`💀 Upload failed after ${item.maxRetries} retries (cycle incremented)`)
           await notifyClients('UPLOAD_FAILED', {
@@ -511,10 +576,22 @@ async function uploadVideo(uploadItem) {
   })
 
   if (!response.ok) {
+    // A 400 carrying a Site Check refusal will not change on retry
+    const body = response.status === 400 ? await response.json().catch(() => null) : null
+    const serverError = body && typeof body.error === 'string' ? body.error.trim() : ''
+    if (isPermanentUploadError(serverError)) {
+      const error = new Error(serverError)
+      error.permanent = true
+      throw error
+    }
     throw new Error(`Upload failed with status: ${response.status}`)
   }
 
   return await response.json()
+}
+
+function isPermanentUploadError(message) {
+  return Boolean(message) && PERMANENT_UPLOAD_ERRORS.some(start => message.startsWith(start))
 }
 
 // --- Reverse geocoding helpers (Service Worker context) ---
@@ -661,9 +738,10 @@ async function updateUploadRetryCount(uploadId, retryCount) {
 }
 
 /**
- * Mark upload as failed and increment failure cycles
+ * Mark upload as failed and increment failure cycles. A permanent failure
+ * uses up every cycle, so it is never re-queued.
  */
-async function markUploadFailed(uploadId) {
+async function markUploadFailed(uploadId, options = {}) {
   const db = await openDB()
   const tx = db.transaction([UPLOAD_STORE], 'readwrite')
   const store = tx.objectStore(UPLOAD_STORE)
@@ -676,9 +754,10 @@ async function markUploadFailed(uploadId) {
 
   if (item) {
     item.status = 'failed'
-    item.failCycles = (item.failCycles || 0) + 1
+    item.failCycles = options.permanent ? MAX_FAIL_CYCLES : (item.failCycles || 0) + 1
     item.retryCount = 0
     item.failedAt = Date.now()
+    if (options.error) item.lastError = options.error
     await new Promise((resolve, reject) => {
       const request = store.put(item)
       request.onsuccess = () => resolve()
@@ -708,7 +787,7 @@ async function getQueueStatus() {
     for (const item of items) {
       if (item.status === 'failed') {
         const failCycles = item.failCycles || 0
-        if (failCycles >= 3) {
+        if (failCycles >= MAX_FAIL_CYCLES) {
           // Delete permanently after third failure cycle
           await new Promise((resolve, reject) => {
             const del = store.delete(item.id)
@@ -877,7 +956,9 @@ async function notifyClients(type, data) {
     })
   } else if (type === 'UPLOAD_FAILED') {
     await showNotification('TreeGens - Upload Failed', {
-      body: `Upload failed: ${data.error}. We'll retry automatically.`,
+      body: data.permanent
+        ? `Upload refused: ${data.error}`
+        : `Upload failed: ${data.error}. We'll retry automatically.`,
       tag: 'upload-failed',
       requireInteraction: true
     })

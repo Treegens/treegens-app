@@ -15,9 +15,18 @@ import { siteLocationText } from './SiteCard'
 import { SiteStatusPill } from './SiteStatusPill'
 import { VerdictChip } from './VerdictChip'
 
+/** leaveWarning for a page holding a recorded video that is not sent yet */
+export const UNSENT_VIDEO_LEAVE_WARNING =
+  'Leave this page? The video you recorded is not sent yet and will be lost.'
+
 type Props = {
   value: string
   onChange: (siteId: string, site: ISiteDoc | null) => void
+  /**
+   * Asked before "Check a new site" leaves the page, when leaving would
+   * lose unsaved work (a recorded video lives only in memory).
+   */
+  leaveWarning?: string
 }
 
 /** Approved "plant here" sites first, then approved, in review, drafts. */
@@ -74,7 +83,7 @@ function SiteOption({
 }
 
 /** Lets a planter link a planting to one of their checked sites. */
-export function SitePicker({ value, onChange }: Props) {
+export function SitePicker({ value, onChange, leaveWarning }: Props) {
   const { isUserOnline } = useConnectivity()
   const [sites, setSites] = useState<ISiteDoc[]>([])
   const [loading, setLoading] = useState(true)
@@ -132,6 +141,9 @@ export function SitePicker({ value, onChange }: Props) {
       </ChoiceChip>
       <Link
         href={routes.NewSite}
+        onClick={e => {
+          if (leaveWarning && !window.confirm(leaveWarning)) e.preventDefault()
+        }}
         className="mt-1 inline-flex min-h-11 items-center gap-1.5 self-start rounded-full px-1 text-sm font-semibold text-tree-green-2"
       >
         <HiPlus className="h-5 w-5" aria-hidden />

@@ -3,7 +3,11 @@
 import UploadProgressModal from '@/components/Modals/UploadProgressModal'
 import { SubmissionCompleteCelebration } from '@/components/submission/SubmissionCompleteCelebration'
 import { MangroveSiteFields } from '@/components/siteCheck/MangroveSiteFields'
-import { siteGateReason } from '@/modules/siteCheck/siteGateMessage'
+import { UNSENT_VIDEO_LEAVE_WARNING } from '@/components/siteCheck/SitePicker'
+import {
+  outsideSiteWarning,
+  siteGateReason,
+} from '@/modules/siteCheck/siteGateMessage'
 import { TwoVideoProofSteps } from '@/components/submission/TwoVideoProofSteps'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
@@ -65,6 +69,7 @@ export default function CompleteSubmissionPage() {
   const [pickedSiteId, setPickedSiteId] = useState('')
   const [siteDoc, setSiteDoc] = useState<ISiteDoc | null>(null)
   const [species, setSpecies] = useState<string[]>([])
+  const [landSiteWarning, setLandSiteWarning] = useState('')
 
   const [isUploading, setIsUploading] = useState(false)
   const [isQueueing, setIsQueueing] = useState(false)
@@ -185,6 +190,7 @@ export default function CompleteSubmissionPage() {
         setLocationText(land.reverseGeocode || fallback)
         setReverseGeocodeText(land.reverseGeocode || '')
         setLinkedSiteId(doc.siteId || doc.siteCheck?.siteId || '')
+        setLandSiteWarning(outsideSiteWarning(doc.siteCheck))
       } catch (e) {
         console.error('Failed to load draft submission', e)
         setError('Failed to load submission')
@@ -522,6 +528,11 @@ export default function CompleteSubmissionPage() {
               {locationText ? (
                 <p className="mt-2 text-sm text-gray-600">{locationText}</p>
               ) : null}
+              {landSiteWarning ? (
+                <p className="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                  {landSiteWarning}
+                </p>
+              ) : null}
             </section>
 
             <section>
@@ -669,6 +680,9 @@ export default function CompleteSubmissionPage() {
                   }}
                   species={species}
                   onSpeciesChange={setSpecies}
+                  leaveWarning={
+                    plantFile ? UNSENT_VIDEO_LEAVE_WARNING : undefined
+                  }
                 />
               ) : null}
             </section>

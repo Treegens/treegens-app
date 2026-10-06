@@ -1,7 +1,7 @@
 'use client'
 
 import cn from 'classnames'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { HiInformationCircle } from 'react-icons/hi2'
 import { ChoiceChip } from '@/components/siteCheck/ChoiceChip'
 import {
@@ -79,6 +79,15 @@ function NumberAnswer({ question, answers, onChange }: Props) {
     const n = Number(raw)
     return raw.trim() !== '' && Number.isFinite(n) && n >= min && n <= max
   }
+  // Follow the stored answer when it changes from outside (a resumed draft),
+  // but keep the planter's own text while it means the stored number, or
+  // while it is out of range (stored as no answer).
+  useEffect(() => {
+    setText(t => {
+      if (stored == null) return t.trim() && !inRange(t) ? t : ''
+      return inRange(t) && Number(t) === stored ? t : String(stored)
+    })
+  }, [stored])
   const update = (raw: string) => {
     setText(raw)
     onChange(
