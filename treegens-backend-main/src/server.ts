@@ -14,9 +14,11 @@ import notificationsRoutes from './routes/notifications'
 import pushRoutes from './routes/push'
 import distributionsRoutes from './routes/distributions'
 import rewardsRoutes from './routes/rewards'
+import sitesRoutes from './routes/sites'
 import submissionsRoutes from './routes/submissions'
 import userRoutes from './routes/users'
 import BurnIndexerService from './services/burnIndexerService'
+import { startSiteHydrologySweeper } from './services/siteHydrologyJobService'
 import VerifierService from './services/verifierService'
 import { startStitchRetrier } from './services/verifiedVideoStitchService'
 import { startRewardClaimWorker } from './workers/rewardClaimWorker'
@@ -56,6 +58,7 @@ app.use('/api/users', userRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/push', pushRoutes)
 app.use('/api/conversations', conversationsRoutes)
+app.use('/api/sites', sitesRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/health', healthRoutes)
 
@@ -172,4 +175,10 @@ if (env.ENABLE_CRONJOBS === 'true') {
 // serve the raw phone clip as its NFT animation forever.
 if (process.env.ENABLE_STITCH_RETRIER !== 'false') {
   startStitchRetrier()
+}
+
+// Picks up Site Check satellite runs a restart interrupted or a failure left
+// retryable. New sites are queued directly; this is only the safety net.
+if (process.env.ENABLE_SITE_HYDROLOGY_SWEEPER !== 'false') {
+  startSiteHydrologySweeper()
 }

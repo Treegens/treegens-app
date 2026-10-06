@@ -30,6 +30,24 @@ export interface VideoUploadResponse {
   }
 }
 
+/** Optional Site Check link sent with a clip (species only with plant). */
+export interface SiteLinkFields {
+  siteId?: string
+  /** Mangrove species ids, sent as a JSON array string */
+  species?: string[]
+}
+
+function appendSiteLinkFields(
+  formData: FormData,
+  apiType: 'land' | 'plant',
+  link?: SiteLinkFields,
+) {
+  if (link?.siteId?.trim()) formData.append('siteId', link.siteId.trim())
+  if (apiType === 'plant' && link?.species?.length) {
+    formData.append('species', JSON.stringify(link.species))
+  }
+}
+
 export const videoService = {
   // Upload video to IPFS with GPS coordinates
   async uploadVideo(
@@ -41,7 +59,7 @@ export const videoService = {
     treesPlanted?: number,
     treetype?: string,
     reverseGeocode?: ReverseGeocodeResult,
-    options?: {
+    options?: SiteLinkFields & {
       onCompressionProgress?: (p: CompressionProgress) => void
       onUploadProgress?: (percent: number) => void
       onCompressionDone?: (
@@ -98,6 +116,7 @@ export const videoService = {
         formData.append('treetype', treetype)
       }
     }
+    appendSiteLinkFields(formData, apiType, options)
 
     const response = await axiosInstance.post(
       '/api/submissions/upload',

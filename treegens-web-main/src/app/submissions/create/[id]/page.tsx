@@ -2,6 +2,8 @@
 
 import UploadProgressModal from '@/components/Modals/UploadProgressModal'
 import { SubmissionCompleteCelebration } from '@/components/submission/SubmissionCompleteCelebration'
+import { MangroveSiteFields } from '@/components/siteCheck/MangroveSiteFields'
+import { siteGateReason } from '@/modules/siteCheck/siteGateMessage'
 import { TwoVideoProofSteps } from '@/components/submission/TwoVideoProofSteps'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
@@ -9,9 +11,14 @@ import { useConnectivity } from '@/contexts/ConnectivityProvider'
 import { getSubmissionById } from '@/services/app'
 import { type ReverseGeocodeResult } from '@/services/geocodingService'
 import { offlineVideoService } from '@/services/offlineVideoService'
+import { getSite } from '@/services/siteService'
 import { isValidSubmissionObjectId } from '@/services/submissionApiMappers'
 import { videoService, VideoType } from '@/services/videoService'
-import type { ISubmissionAiVerification, ISubmissionDoc } from '@/types'
+import type {
+  ISiteDoc,
+  ISubmissionAiVerification,
+  ISubmissionDoc,
+} from '@/types'
 import { submissionDocToPlanterGroup } from '@/utils/submissionPlanterGroup'
 import { VIDEO_CONFIG } from '@/utils/constants'
 import { validateVideoFile } from '@/utils/videoValidation'
@@ -53,6 +60,11 @@ export default function CompleteSubmissionPage() {
     null,
   )
   const [validationError, setValidationError] = useState('')
+  /** Site Check from the land clip; else one picked here for mangroves. */
+  const [linkedSiteId, setLinkedSiteId] = useState('')
+  const [pickedSiteId, setPickedSiteId] = useState('')
+  const [siteDoc, setSiteDoc] = useState<ISiteDoc | null>(null)
+  const [species, setSpecies] = useState<string[]>([])
 
   const [isUploading, setIsUploading] = useState(false)
   const [isQueueing, setIsQueueing] = useState(false)
@@ -172,6 +184,7 @@ export default function CompleteSubmissionPage() {
         const fallback = `${land.gpsCoordinates.latitude.toFixed(4)}, ${land.gpsCoordinates.longitude.toFixed(4)}`
         setLocationText(land.reverseGeocode || fallback)
         setReverseGeocodeText(land.reverseGeocode || '')
+        setLinkedSiteId(doc.siteId || doc.siteCheck?.siteId || '')
       } catch (e) {
         console.error('Failed to load draft submission', e)
         setError('Failed to load submission')
@@ -188,6 +201,13 @@ export default function CompleteSubmissionPage() {
       if (plantFileUrl) URL.revokeObjectURL(plantFileUrl)
     }
   }, [plantFileUrl])
+
+  useEffect(() => {
+    if (!linkedSiteId) return
+    getSite(linkedSiteId)
+      .then(res => setSiteDoc(res.data.data))
+      .catch(e => console.warn('Could not load the linked site', e))
+  }, [linkedSiteId])
 
   const onPickPlantVideo = async (file: File | null) => {
     if (!file) return
@@ -243,6 +263,9 @@ export default function CompleteSubmissionPage() {
 
     const submissionDetailHref = `/submissions/${encodeURIComponent(submissionId)}`
     const isMangrove = resolvedTreeType.toLowerCase() === 'mangrove'
+    const siteLink = isMangrove
+      ? { siteId: linkedSiteId ? undefined : pickedSiteId, species }
+      : undefined
     let uploadedPlantAi: ISubmissionAiVerification | null = null
 
     try {
@@ -275,6 +298,7 @@ export default function CompleteSubmissionPage() {
               setCompressionMessage('Compression complete')
             },
             onUploadProgress: percent => setUploadProgress(percent),
+            ...siteLink,
           },
         )
         uploadedPlantAi = uploadRes?.data?.aiVerification ?? null
@@ -303,6 +327,7 @@ export default function CompleteSubmissionPage() {
             setCompressionProgress(100)
             setCompressionMessage('Compression complete')
           },
+          siteLink,
         )
       }
 
@@ -371,7 +396,8 @@ export default function CompleteSubmissionPage() {
       router.refresh()
     } catch (e) {
       const msg = isUserOnline
-        ? 'Failed to upload plant video. Please try again.'
+        ? (siteGateReason(e) ??
+          'Failed to upload plant video. Please try again.')
         : 'Failed to queue plant video. Please try again.'
       setUploadError(msg)
       toast.error(msg)
@@ -630,6 +656,20 @@ export default function CompleteSubmissionPage() {
                     className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-base text-gray-900 outline-none focus:border-green-600"
                   />
                 </>
+              ) : null}
+
+              {mangroveAnswer === 'yes' ? (
+                <MangroveSiteFields
+                  linked={!!linkedSiteId}
+                  site={siteDoc}
+                  pickedSiteId={pickedSiteId}
+                  onPickSite={(id, picked) => {
+                    setPickedSiteId(id)
+                    setSiteDoc(picked)
+                  }}
+                  species={species}
+                  onSpeciesChange={setSpecies}
+                />
               ) : null}
             </section>
 

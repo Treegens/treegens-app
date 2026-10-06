@@ -8,6 +8,13 @@ const DEFAULT_MGRO_CLAIM_INTERVAL = Math.round((AVG_YEAR_SEC / 12) * 6)
 const DEFAULT_MGRO_CLAIM_COUNT = 6
 const DEFAULT_MGRO_BURN_START_BLOCK = 38440170
 
+/** Whole-number env var kept within [min, max]; unset or unparsable gives `def`. */
+function boundedInt(name: string, def: number, min: number, max: number) {
+  const raw = process.env[name]
+  const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : def
+  return Number.isNaN(n) ? def : Math.min(max, Math.max(min, n))
+}
+
 class EnvironmentConfig {
   constructor() {
     this.validateRequired()
@@ -737,6 +744,75 @@ class EnvironmentConfig {
   /** Dev/demo: return seeded leaderboard rows when DB has no entries (never in production). */
   get LEADERBOARD_DEMO_FALLBACK() {
     return process.env.LEADERBOARD_DEMO_FALLBACK === 'true'
+  }
+
+  // --- Site Check (satellite hydrology + planting gate) ---
+
+  /** Run the Sentinel-2 hydrology check for new sites (default on). */
+  get SITE_HYDROLOGY_ENABLED() {
+    return process.env.SITE_HYDROLOGY_ENABLED !== 'false'
+  }
+
+  /** Years of imagery read per site, 1 to 5. */
+  get SITE_HYDROLOGY_YEARS() {
+    return boundedInt('SITE_HYDROLOGY_YEARS', 2, 1, 5)
+  }
+
+  /** How far around the site to look for natural mangroves, in metres. */
+  get SITE_HYDROLOGY_REFERENCE_RADIUS_M() {
+    return boundedInt('SITE_HYDROLOGY_REFERENCE_RADIUS_M', 1500, 500, 5000)
+  }
+
+  /** Skip Sentinel-2 tiles cloudier than this, in percent. */
+  get SITE_HYDROLOGY_MAX_CLOUD_PCT() {
+    return boundedInt('SITE_HYDROLOGY_MAX_CLOUD_PCT', 80, 10, 100)
+  }
+
+  get SITE_HYDROLOGY_SCENE_CONCURRENCY() {
+    return boundedInt('SITE_HYDROLOGY_SCENE_CONCURRENCY', 8, 1, 16)
+  }
+
+  get SITE_HYDROLOGY_TIMEOUT_MS() {
+    return boundedInt('SITE_HYDROLOGY_TIMEOUT_MS', 300_000, 30_000, 900_000)
+  }
+
+  /** Runs per site before the sweeper gives up (a recheck resets it). */
+  get SITE_HYDROLOGY_MAX_ATTEMPTS() {
+    return boundedInt('SITE_HYDROLOGY_MAX_ATTEMPTS', 3, 1, 10)
+  }
+
+  get SITE_HYDROLOGY_S2_BUCKET_URL() {
+    const raw =
+      process.env.SITE_HYDROLOGY_S2_BUCKET_URL ||
+      'https://sentinel-cogs.s3.us-west-2.amazonaws.com'
+    return String(raw).trim().replace(/\/+$/, '')
+  }
+
+  get SITE_HYDROLOGY_WORLDCOVER_URL() {
+    const raw =
+      process.env.SITE_HYDROLOGY_WORLDCOVER_URL ||
+      'https://esa-worldcover.s3.eu-central-1.amazonaws.com'
+    return String(raw).trim().replace(/\/+$/, '')
+  }
+
+  /**
+   * What a missing or unfavourable Site Check does to a mangrove planting:
+   * `off` only records it, `warn` sends it to verifiers instead of
+   * auto-approval, `enforce` refuses the upload.
+   */
+  get SITE_CHECK_ENFORCEMENT(): 'off' | 'warn' | 'enforce' {
+    const v = (process.env.SITE_CHECK_ENFORCEMENT || '').trim().toLowerCase()
+    return v === 'warn' || v === 'enforce' ? v : 'off'
+  }
+
+  /** Largest site a planter may register, in square metres (50 ha). */
+  get SITE_MAX_AREA_M2() {
+    return boundedInt('SITE_MAX_AREA_M2', 500_000, 50, Number.MAX_SAFE_INTEGER)
+  }
+
+  /** A land clip filmed this close to a site boundary still counts as inside. */
+  get SITE_GPS_TOLERANCE_M() {
+    return boundedInt('SITE_GPS_TOLERANCE_M', 50, 0, 10_000)
   }
 
   validateRequired() {

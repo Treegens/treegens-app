@@ -260,6 +260,188 @@ const swaggerOptions = {
             aiVerification: {
               $ref: '#/components/schemas/AiVerificationSnapshot',
             },
+            siteId: {
+              type: 'string',
+              description: 'Site Check this planting is linked to, if any',
+            },
+            siteCheck: {
+              type: 'object',
+              description:
+                'Snapshot of the linked site, measured from the land clip GPS',
+              properties: {
+                siteId: { type: 'string' },
+                siteStatus: {
+                  type: 'string',
+                  enum: ['draft', 'pending_review', 'approved', 'rejected'],
+                },
+                verdictCode: {
+                  type: 'string',
+                  enum: ['plant', 'fix_first', 'let_regrow', 'not_suitable'],
+                },
+                insideSite: {
+                  type: 'boolean',
+                  description: 'Within SITE_GPS_TOLERANCE_M of the boundary',
+                },
+                distanceToSiteM: { type: 'number', minimum: 0 },
+                checkedAt: { type: 'string', format: 'date-time' },
+              },
+            },
+            species: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Mangrove species ids planted (plant clip)',
+            },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+
+        SiteVerdict: {
+          type: 'object',
+          description:
+            'Plain-language Site Check outcome from the field answers and, once run, the satellite check',
+          properties: {
+            code: {
+              type: 'string',
+              enum: ['plant', 'fix_first', 'let_regrow', 'not_suitable'],
+            },
+            headline: { type: 'string', example: 'Plant here' },
+            reasons: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  code: { type: 'string' },
+                  severity: {
+                    type: 'string',
+                    enum: [
+                      'protect',
+                      'blocker',
+                      'regrow',
+                      'fix',
+                      'check',
+                      'good',
+                      'info',
+                    ],
+                  },
+                  source: { type: 'string', enum: ['field', 'satellite'] },
+                  message: { type: 'string' },
+                },
+              },
+            },
+            needsFieldCheck: { type: 'boolean' },
+            recommendedZone: {
+              type: 'string',
+              enum: ['seaward', 'middle', 'landward'],
+              nullable: true,
+            },
+            recommendedSpeciesIds: { type: 'array', items: { type: 'string' } },
+            hydrologyConsidered: { type: 'boolean' },
+            rulesVersion: { type: 'string', example: 'site-rules-v1' },
+          },
+        },
+        SiteHydrology: {
+          type: 'object',
+          description:
+            'Background Sentinel-2 check of how often the site is wet, compared with the fringe of nearby natural mangroves',
+          properties: {
+            status: {
+              type: 'string',
+              enum: [
+                'not_started',
+                'queued',
+                'processing',
+                'completed',
+                'failed',
+                'skipped',
+              ],
+            },
+            attempts: { type: 'number' },
+            lastError: { type: 'string' },
+            skipReason: { type: 'string' },
+            startedAt: { type: 'string', format: 'date-time' },
+            completedAt: { type: 'string', format: 'date-time' },
+            result: {
+              type: 'object',
+              description:
+                'HydrologyResult: hydrologyClass, confidence, notes, site, reference and imagery figures',
+            },
+          },
+        },
+        Site: {
+          type: 'object',
+          properties: {
+            _id: { type: 'string' },
+            userWalletAddress: { type: 'string' },
+            name: { type: 'string' },
+            boundary: {
+              type: 'object',
+              description: 'GeoJSON Polygon, one closed ring of [lon, lat]',
+              properties: {
+                type: { type: 'string', enum: ['Polygon'] },
+                coordinates: {
+                  type: 'array',
+                  items: {
+                    type: 'array',
+                    items: { type: 'array', items: { type: 'number' } },
+                  },
+                },
+              },
+            },
+            boundaryMethod: { type: 'string', enum: ['walked', 'pin_radius'] },
+            radiusM: { type: 'number' },
+            center: {
+              type: 'object',
+              properties: {
+                latitude: { type: 'number' },
+                longitude: { type: 'number' },
+              },
+            },
+            areaM2: { type: 'number' },
+            countryCode: { type: 'string', example: 'KE' },
+            reverseGeocode: { type: 'string' },
+            answers: {
+              type: 'object',
+              description:
+                'Field questionnaire (SiteAnswers in siteVerdict.ts)',
+            },
+            photos: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  kind: {
+                    type: 'string',
+                    enum: ['low_tide_360', 'ground', 'tide_mark', 'high_tide'],
+                  },
+                  objectPath: { type: 'string' },
+                  publicUrl: { type: 'string' },
+                  mimeType: { type: 'string' },
+                  sizeBytes: { type: 'number' },
+                  gpsCoordinates: {
+                    type: 'object',
+                    properties: {
+                      latitude: { type: 'number' },
+                      longitude: { type: 'number' },
+                    },
+                  },
+                  uploadedAt: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+            hydrology: { $ref: '#/components/schemas/SiteHydrology' },
+            verdict: { $ref: '#/components/schemas/SiteVerdict' },
+            verdictComputedAt: { type: 'string', format: 'date-time' },
+            status: {
+              type: 'string',
+              enum: ['draft', 'pending_review', 'approved', 'rejected'],
+            },
+            submittedAt: { type: 'string', format: 'date-time' },
+            reviewedAt: { type: 'string', format: 'date-time' },
+            votes: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/SubmissionVote' },
+            },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
           },

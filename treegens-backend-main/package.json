@@ -19,6 +19,7 @@
     "test": "MONGODB_URI=mongodb://127.0.0.1:27017/treegens-test PINATA_JWT=test-pinata-jwt tsx --test src/**/*.test.ts",
     "roboflow:smoke": "MONGODB_URI=mongodb://127.0.0.1:27017/roboflow-smoke PINATA_JWT=roboflow-smoke tsx src/scripts/roboflowMangroveSmoke.ts",
     "ai:plant-smoke": "tsx src/scripts/aiPlantUltralyticsSmoke.ts",
+    "site:hydrology-smoke": "tsx src/scripts/siteHydrologySmoke.ts",
     "start:worker": "RUN_REWARD_CLAIM_WORKER=true node dist/workers/rewardClaimWorker.js",
     "start:slash-worker": "RUN_SLASH_WORKER=true node dist/workers/slashWorker.js"
   },

@@ -2,6 +2,8 @@ export interface ReverseGeocodeResult {
   success: boolean
   address?: string
   shortAddress?: string
+  /** ISO 3166-1 alpha-2, upper case, when Nominatim returns address details */
+  countryCode?: string
   error?: string
 }
 
@@ -87,6 +89,7 @@ class GeocodingService {
         success: true,
         address: data.display_name,
         shortAddress: this.extractShortAddress(data.display_name),
+        countryCode: this.extractCountryCode(data),
       }
 
       // Cache the result
@@ -203,6 +206,15 @@ class GeocodingService {
     })
 
     return `${this.baseUrl}/reverse?${params.toString()}`
+  }
+
+  private extractCountryCode(data: {
+    address?: { country_code?: unknown }
+  }): string | undefined {
+    const code = data.address?.country_code
+    return typeof code === 'string' && /^[a-z]{2}$/i.test(code)
+      ? code.toUpperCase()
+      : undefined
   }
 
   extractShortAddress(fullAddress: string): string {

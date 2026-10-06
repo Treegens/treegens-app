@@ -1,7 +1,7 @@
 'use client'
 
 import { Button } from '@/components/ui/Button'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import cn from 'classnames'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
@@ -14,6 +14,7 @@ import UploadProgressModal from '@/components/Modals/UploadProgressModal'
 import VideoSavedSuccessModal from '@/components/Modals/VideoSavedSuccessModal'
 import { TwoVideoProofSteps } from '@/components/submission/TwoVideoProofSteps'
 import { SubmissionCompleteCelebration } from '@/components/submission/SubmissionCompleteCelebration'
+import { PlantingSiteCard } from '@/components/siteCheck/PlantingSiteCard'
 import { useConnectivity } from '@/contexts/ConnectivityProvider'
 import { useUser } from '@/contexts/UserProvider'
 import { getMySubmissions } from '@/services/app'
@@ -86,6 +87,9 @@ export default function NewPlant() {
   )
 
   const router = useRouter()
+  /** Site Check linked to the land clip; `?siteId=` preselects one. */
+  const searchParams = useSearchParams()
+  const [siteId, setSiteId] = useState(() => searchParams.get('siteId') ?? '')
 
   const dismissSubmissionCelebrate = useCallback(() => {
     setShowSubmissionCelebrate(false)
@@ -407,6 +411,7 @@ export default function NewPlant() {
             })
           },
           onUploadProgress: p => setUploadProgress(p),
+          siteId: type === VideoType.LAND ? siteId : undefined,
         },
       )
 
@@ -491,6 +496,7 @@ export default function NewPlant() {
               durationMs: r.durationMs,
             })
           },
+          { siteId },
         )
 
         const status = await offlineVideoService.getQueueStatus()
@@ -740,6 +746,14 @@ export default function NewPlant() {
             <HiArrowPath className="h-[18px] w-[18px]" />
           </button>
         </div>
+
+        {isLandStep ? (
+          <PlantingSiteCard
+            value={siteId}
+            onChange={id => setSiteId(id)}
+            className="mb-6"
+          />
+        ) : null}
 
         {validationError ? (
           <p className="mb-4 text-sm text-red-600">{validationError}</p>

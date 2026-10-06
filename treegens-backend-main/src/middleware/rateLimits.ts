@@ -86,3 +86,12 @@ export const pushSubscribeLimiter = userLimiter(30)
 
 /** POST /api/submissions/:id/conversation/messages */
 export const conversationMessageLimiter = userLimiter(60)
+
+/** POST/PATCH/DELETE /api/sites*, including photo uploads. */
+export const siteWriteLimiter = userLimiter(30)
+
+/** POST /api/sites/:id/vote, verifier votes. */
+export const siteVoteLimiter = userLimiter(60)
+
+/** POST /api/sites/:id/hydrology/recheck: each run reads 2 years of imagery. */
+export const siteRecheckLimiter = userLimiter(5)

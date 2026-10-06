@@ -1091,6 +1091,53 @@ const migrations = [
       }
     },
   },
+  {
+    version: '2.10.0',
+    description:
+      'Site Check: sites collection indexes (incl. 2dsphere boundary) and sparse submissions.siteId index',
+    up: async () => {
+      const db = mongoose.connection.db
+      const sites = db.collection('sites')
+
+      const ensureIndex = async (
+        coll: ReturnType<typeof db.collection>,
+        key: Record<string, 1 | -1 | '2dsphere'>,
+        options?: Record<string, unknown>,
+      ) => {
+        try {
+          await coll.createIndex(key, options)
+        } catch (e: any) {
+          console.log(`${coll.collectionName} index skipped:`, e?.message || e)
+        }
+      }
+
+      await ensureIndex(sites, { userWalletAddress: 1 })
+      await ensureIndex(sites, { status: 1 })
+      await ensureIndex(sites, { userWalletAddress: 1, createdAt: -1 })
+      await ensureIndex(sites, { status: 1, updatedAt: -1 })
+      await ensureIndex(sites, { 'votes.voterWalletAddress': 1 })
+      await ensureIndex(sites, { boundary: '2dsphere' })
+      await ensureIndex(sites, { 'hydrology.status': 1, updatedAt: 1 })
+      console.log('sites collection indexes ensured')
+
+      await ensureIndex(
+        db.collection('submissions'),
+        { siteId: 1 },
+        { sparse: true },
+      )
+      console.log('submissions siteId index ensured')
+    },
+    down: async () => {
+      // Sites hold planters' field work, so a rollback keeps the collection.
+      const db = mongoose.connection.db
+      try {
+        await db.collection('submissions').dropIndex('siteId_1')
+        console.log('submissions siteId index dropped')
+      } catch {
+        console.log('submissions siteId index drop skipped')
+      }
+    },
+  },
 ]
 
 // Run migrations with distributed locking

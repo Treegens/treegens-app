@@ -3,7 +3,7 @@
  * Handles offline video upload queue and background sync
  */
 
-const SW_VERSION = 'v1.273'
+const SW_VERSION = 'v1.274'
 const STATIC_CACHE = `treegens-static-${SW_VERSION}` // bump to refresh HTML/images
 const RUNTIME_CACHE = `treegens-runtime-${SW_VERSION}` // keep stable for Next build assets
 const FF_CACHE = 'treegens-ffmpeg-core' // dedicated, never-versioned cache for ffmpeg core
@@ -461,7 +461,7 @@ async function syncPendingUploads() {
  * Upload a single video to the backend
  */
 async function uploadVideo(uploadItem) {
-  const { videoFile, type, latitude, longitude, submissionId, treesPlanted, treetype, token: queuedToken } = uploadItem
+  const { videoFile, type, latitude, longitude, submissionId, treesPlanted, treetype, siteId, species, token: queuedToken } = uploadItem
 
   // Convert base64 back to File if needed
   const file = await base64ToFile(videoFile.data, videoFile.name, videoFile.type)
@@ -489,6 +489,12 @@ async function uploadVideo(uploadItem) {
     if (treetype) {
       formData.append('treetype', treetype)
     }
+    if (Array.isArray(species) && species.length) {
+      formData.append('species', JSON.stringify(species))
+    }
+  }
+  if (siteId) {
+    formData.append('siteId', siteId)
   }
 
   const effectiveToken = await getEffectiveAuthToken(queuedToken)

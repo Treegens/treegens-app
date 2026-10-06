@@ -29,6 +29,11 @@ export const routes = {
   RejectionFeedback: '/submissions/[id]/rejection-feedback',
   /** Dynamic — public planter stats + burns */
   PublicProfile: '/u/[walletAddress]',
+  /** Site Check: my registered planting sites */
+  Sites: '/sites',
+  NewSite: '/sites/create',
+  /** Verifier queue of sites to review */
+  SitesReview: '/sites/review',
 }
 
 export function buildPublicProfilePath(walletAddress: string) {
@@ -44,6 +49,19 @@ export function buildReviewSubmissionPath(
   submissionId: string,
 ) {
   return `/submissions/review/${encodeURIComponent(userWalletAddress)}/${encodeURIComponent(submissionId)}`
+}
+
+export function buildSitePath(siteId: string) {
+  return `${routes.Sites}/${encodeURIComponent(siteId)}`
+}
+
+/** Opens the Site Check wizard on an existing draft. */
+export function buildEditSitePath(siteId: string) {
+  return `${routes.NewSite}?siteId=${encodeURIComponent(siteId)}`
+}
+
+export function buildSiteReviewPath(siteId: string) {
+  return `${routes.SitesReview}/${encodeURIComponent(siteId)}`
 }
 
 /**
@@ -88,6 +106,11 @@ const dynamicTitleRoutesMap: Record<string, string> = {
   '/health-checks/[healthCheckId]': 'Health check',
   '/submissions/review/health-checks/[healthCheckId]': 'Review health check',
   [routes.PublicProfile]: 'Profile',
+  [routes.Sites]: 'My sites',
+  [routes.NewSite]: 'Check a site',
+  [routes.SitesReview]: 'Review sites',
+  '/sites/[id]': 'Site Check',
+  '/sites/review/[id]': 'Review site',
 }
 
 const dynamicTitleRoutes = Object.keys(dynamicTitleRoutesMap)

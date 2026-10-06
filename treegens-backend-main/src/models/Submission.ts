@@ -105,6 +105,19 @@ const aiVerificationSchema = new mongoose.Schema(
   { _id: false },
 )
 
+/** The submission's view of its Site Check, taken from the land clip GPS. */
+const siteCheckSchema = new mongoose.Schema(
+  {
+    siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Site' },
+    siteStatus: { type: String, required: false },
+    verdictCode: { type: String, required: false },
+    insideSite: { type: Boolean, required: false },
+    distanceToSiteM: { type: Number, min: 0, required: false },
+    checkedAt: { type: Date, required: false },
+  },
+  { _id: false },
+)
+
 const submissionSchema = new mongoose.Schema(
   {
     userWalletAddress: {
@@ -134,6 +147,14 @@ const submissionSchema = new mongoose.Schema(
     treeType: { type: String, required: false },
     votes: { type: [voteSchema], default: [] },
     aiVerification: { type: aiVerificationSchema, required: false },
+    siteId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Site',
+      required: false,
+    },
+    siteCheck: { type: siteCheckSchema, required: false },
+    /** Mangrove species ids (mangroveSpecies.ts) the planter says went in. */
+    species: { type: [String], default: [] },
   },
   { timestamps: true },
 )
@@ -144,6 +165,7 @@ submissionSchema.index({ 'votes.voterWalletAddress': 1 })
 submissionSchema.index({ 'land.videoCID': 1 }, { unique: true, sparse: true })
 submissionSchema.index({ 'plant.videoCID': 1 }, { unique: true, sparse: true })
 submissionSchema.index({ 'aiVerification.status': 1 }, { sparse: true })
+submissionSchema.index({ siteId: 1 }, { sparse: true })
 // The stitch retrier scans only approved submissions whose branded clip never
 // finished rendering; a partial index keeps that sweep near-free.
 submissionSchema.index(

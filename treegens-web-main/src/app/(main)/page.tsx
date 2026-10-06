@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { FaChevronRight } from 'react-icons/fa'
 import { AppHeader } from '@/components/Layout/AppHeader'
 import SubmissionCard from '@/components/SubmissionCard'
+import { SiteCheckPromoCard } from '@/components/siteCheck/SiteCheckPromoCard'
+import { SitesToReviewSection } from '@/components/siteCheck/SitesToReviewSection'
 import { VerifierHealthCheckCard } from '@/components/VerifierHealthCheckCard'
 import { SubmissionReviewCard } from '@/components/SubmissionReviewCard'
 import { appConfig } from '@/config/appConfig'
@@ -204,6 +206,8 @@ export default function HomePage() {
           </div>
         </section>
 
+        <SiteCheckPromoCard />
+
         <div className="mb-4 flex flex-col gap-2.5 rounded-[20px] bg-warm-grey p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]">
           <h3 className="text-2xl font-bold">Overview</h3>
 
@@ -342,6 +346,8 @@ export default function HomePage() {
             )}
           </div>
         )}
+
+        {isVerifier && <SitesToReviewSection />}
 
         <div className="flex flex-col gap-4 p-6 bg-warm-grey rounded-3xl">
           <div className="flex justify-between items-center">
