@@ -67,7 +67,7 @@ they can also pick the species they planted.
 | Verdict | Shown as | Typical reasons |
 |---|---|---|
 | `plant` | Plant here | Former mangrove, tide reaches it, nothing blocking, no natural regrowth |
-| `fix_first` | Fix first | Tidal flow blocked; the cause of loss is still active; tide reach unknown; exposed shore; salt crust; no natural mangroves nearby to compare with |
+| `fix_first` | Fix first | Tidal flow blocked, including a pond that stays flooded behind its walls; the cause of loss is still active (cut mangroves always ask whether cutting continues); tide reach, history on open ground, wave exposure or wild seedlings unknown; exposed shore; salt crust; no natural mangroves nearby to compare with |
 | `let_regrow` | Protect it and let it regrow | Healthy forest already here, or wild seedlings arriving |
 | `not_suitable` | Not a mangrove site | Seagrass; always underwater; tide never reaches it; floods much deeper than nearby natural mangroves; rock or rubble; open ground that never held mangroves; exposed and eroding |
 
@@ -88,7 +88,8 @@ For `plant` and `fix_first`, the verdict also recommends:
 - a zone: seaward, middle or landward
 - species for that zone, filtered by the country's region (East Africa,
   Indo-West Pacific, Pacific islands, Atlantic and East Pacific)
-- a nudge to plant at least three species
+- for `plant` only, when the zone has at least three suitable species, a
+  nudge to plant a mix of at least three
 
 The rules live in one pure module, so the phone and the server compute the
 same verdict:
@@ -106,8 +107,15 @@ nearby mangroves stop growing?**
 
 ### Method
 
-Sentinel-2 passes every coastline about every 5 days, at random points in the
-tide cycle. Over 2 years that is 100 to 300 usable images per site.
+Sentinel-2 passes every coastline about every 5 days, always at about 10:30
+local solar time. Because the main lunar tide drifts against that fixed
+time, the passes catch many different tide stages. Over 2 years that is 100
+to 300 usable images per site.
+
+The sampling is not truly random, though. The solar part of the tide is
+locked to the overpass time, so at some places the biggest spring highs or
+lows may never be imaged (tidal aliasing). Comparing each site with its own
+local fringe, imaged on the same dates, cancels much of this bias.
 
 For every 10 m pixel around the site:
 
@@ -118,9 +126,14 @@ For every 10 m pixel around the site:
    least 15 clear observations to count.
 
 Mangrove canopy hides the water under it, so mangrove pixels themselves read
-as dry. The useful reference is the **fringe**: non-mangrove pixels within
-20 m of mapped mangroves (ESA WorldCover 2021, class 95) that do get wet. The
-wet fraction there marks the lowest elevation the local mangroves tolerate.
+as dry. The useful reference is the **fringe**: non-mangrove pixels that sit
+within two pixel steps of mapped mangroves (ESA WorldCover 2021, class 95)
+and do get wet. A step is up, down, left or right; diagonal neighbours are
+not counted, which matches how the calibration was measured. The wet fraction
+there marks the lowest elevation the local mangroves tolerate.
+
+Only images where at least half the site is clear are used. The site and its
+fringe are always measured on the same images.
 
 The site's median wet fraction is then classified:
 
@@ -147,22 +160,39 @@ reference from the Kenyan calibration below is used.
 
 ### Calibration (2 years of imagery, 2024 to 2025)
 
-Wet fraction of the fringe next to mapped mangroves:
+Wet fraction of the fringe next to mapped mangroves, measured by the backend
+engine with a 2 to 2.5 km search area:
 
 | Site | Type | p25 | p50 | p75 | p90 |
 |---|---|---|---|---|---|
-| Gazi Bay, Kenya | lagoon bay | 0.22 | 0.36 | 0.48 | 0.61 |
-| Mida Creek, Kenya | tidal creek | 0.17 | 0.30 | 0.46 | 0.63 |
-| Kipini, Tana delta, Kenya | river mouth | 0.20 | 0.38 | 0.51 | 0.56 |
-| **Default reference** | | 0.20 | 0.35 | 0.48 | 0.60 |
+| Gazi Bay, Kenya | lagoon bay | 0.25 | 0.40 | 0.52 | 0.66 |
+| Mida Creek, Kenya | tidal creek | 0.16 | 0.27 | 0.40 | 0.60 |
+| Kipini, Tana delta, Kenya | river mouth | 0.22 | 0.44 | 0.59 | 0.64 |
+| **Default reference** (mean) | | 0.21 | 0.37 | 0.50 | 0.63 |
+
+A separate Python prototype gave the same per-pixel wet fractions at Gazi
+Bay. Its fringe numbers were slightly lower (p50 0.30 to 0.38) because it
+used every image, not only those clear over the site.
 
 At all three sites:
 
 - mangrove canopy and dry land read about 0
 - open water and flats had a median of 0.84 to 0.93
 
-Three very different coastlines agreeing this closely is the reason a
-neighbour-relative rule should travel well.
+Live checks at Gazi Bay with a 30 m site:
+
+| Point (lat, lon) | Land cover | Result |
+|---|---|---|
+| -4.4347, 39.5140 | open water | `permanently_wet` (0.98) |
+| -4.4300, 39.5300 | intertidal flat | `borderline_low` (0.35) |
+| -4.4249, 39.5114 | mangrove forest | `existing_mangrove` |
+| -4.4150, 39.4950 | dry land, 1.4 km inland | `rarely_wet` |
+
+Three different coastlines put the mangrove edge in a similar band, which is
+why a rule relative to each site's own neighbours should travel well. The
+local reference still varies (at Gazi Bay its p50 ranged from 0.27 to 0.44
+depending on where the 1.5 km window sits), so the thresholds are a starting
+point for expert tuning, not final values.
 
 ### Data sources
 
@@ -180,9 +210,15 @@ requests via geotiff.js), so no STAC API or Earth Engine licence is needed.
 The check runs inside the Node API, off the request path:
 
 1. A Site is created or its boundary changes.
-2. The check is queued in-process, one site at a time.
+2. The check is queued in-process, one site at a time. Each wallet can have
+   only a few checks waiting, and the in-memory queue has a cap. Anything
+   over the limits waits in the database for the sweeper.
 3. A sweeper every 5 minutes retries failures, up to
    `SITE_HYDROLOGY_MAX_ATTEMPTS`, and recovers stuck jobs.
+
+A run takes about 40 to 110 seconds, depending on the network. Its memory
+peaks at about 200 to 260 MB. If no imagery can be fetched at all, the run is
+stored as failed and retried, instead of being saved as "no data".
 
 It needs no Redis, no Python service and no new Render service. The Python
 ML service was considered, but its VPS has been unreachable and the Render
@@ -200,7 +236,9 @@ API is not configured to call it.
   global tide model (FES or TPXO) would turn the wet fraction into a rough
   elevation (future work).
 - WorldCover is from 2021, so forest cleared since then still shows as
-  mangrove. The verdict flags this conflict instead of trusting the map.
+  mangrove. When the planter reports the mangroves were cut or are degraded,
+  the verdict notes the conflict and leaves it to the verifiers' photo check.
+  It does not block the site.
 
 ## Linking plantings and enforcement
 
@@ -208,24 +246,40 @@ A planting can carry a `siteId`, on the land video or on the plant video if
 none was set yet. The submission keeps a snapshot:
 
 - the site's status and verdict
-- whether the land video was filmed inside the site, allowing a
-  `SITE_GPS_TOLERANCE_M` margin
+- whether the videos were filmed inside the site. The farther of the before
+  and planting videos counts, and a `SITE_GPS_TOLERANCE_M` margin is allowed.
 - the distance from the site
+
+After a land upload, the app warns the planter straight away if the before
+video was filmed outside the linked site. At that point it can still be
+filmed again.
+
+A site passes the planting gate when all of these hold:
+
+- it is approved
+- the planting is inside it
+- its verdict is `plant`, or `fix_first` only because of satellite doubts
+
+The second case exists because satellite doubts are things verifier approval
+settles: for example, the 2021 map still showing forest, or a borderline wet
+fraction that the high-tide photo answers.
 
 For mangrove plantings, `SITE_CHECK_ENFORCEMENT` decides what happens:
 
 | Mode | Effect |
 |---|---|
 | `off` (default) | Record only. Nothing changes for planters. |
-| `warn` | No auto-approval unless the planting is inside an approved site whose verdict is `plant`. Such plantings go to verifiers instead. |
-| `enforce` | The plant upload is refused, before the video is stored, unless it is inside an approved `plant` site. The message says why. |
+| `warn` | No auto-approval unless the planting passes the gate. Held plantings go to verifiers, with `aiVerification.decision` set to `pending_verifier` and the reason in `siteGateFlag`. |
+| `enforce` | The upload is refused with HTTP 400, before the video is stored, unless the planting passes the gate. A before video filmed outside a linked site is refused at land upload. The message says why. |
 
 Suggested rollout:
 
-1. Run `off` for a season to collect data and let the workshop experts tune
+1. **Deploy the backend before the web app.** The old upload validator
+   rejects the new `siteId` and `species` fields.
+2. Run `off` for a season to collect data and let the workshop experts tune
    the thresholds.
-2. Move to `warn`.
-3. Move to `enforce` once enough sites are approved.
+3. Move to `warn`.
+4. Move to `enforce` once enough sites are approved.
 
 ## Verifier review
 
@@ -237,7 +291,10 @@ voted on). For each site they see:
 - the satellite summary
 - the verdict
 
-They vote yes or no, with a checklist of reject reasons.
+They vote yes or no, with a checklist of reject reasons. A vote is
+recorded atomically, so one verifier can only ever count once. Pending sites
+are re-checked whenever the verifier pool changes, the same way pending
+submissions are.
 
 The majority rule is the same as for submissions: a strict majority of all
 verifiers, with the `MINIMUM_ACTIVE_VERIFIERS` floor. Site votes carry
@@ -278,14 +335,17 @@ Swagger at `/docs` has the full shapes.
 | `SITE_HYDROLOGY_S2_BUCKET_URL` | AWS `sentinel-cogs` | Sentinel-2 source |
 | `SITE_HYDROLOGY_WORLDCOVER_URL` | AWS `esa-worldcover` | Land cover source |
 | `SITE_CHECK_ENFORCEMENT` | `off` | `off`, `warn` or `enforce` |
-| `SITE_MAX_AREA_M2` | `500000` | Largest site (50 ha) |
+| `SITE_HYDROLOGY_MAX_PER_WALLET` | `2` | Checks one wallet can have in the in-memory queue; the rest wait for the sweeper |
+| `SITE_HYDROLOGY_MAX_QUEUE` | `50` | Cap on the in-memory queue |
+| `SITE_MAX_DRAFTS_PER_WALLET` | `20` | Unfinished sites one wallet can hold |
+| `SITE_MAX_AREA_M2` | `500000` | Largest site (50 ha); no point may be more than 1.5 km from the centre |
 | `SITE_GPS_TOLERANCE_M` | `50` | Allowed distance outside the site |
 
 Try the satellite check on any point:
 
 ```bash
 cd treegens-backend-main
-npm run site:hydrology-smoke -- -4.4230 39.5070 30 2   # lat lon radiusM years
+npm run site:hydrology-smoke -- -4.4347 39.5140 30 2   # lat lon radiusM years
 ```
 
 ## Needs sign-off from a mangrove specialist
