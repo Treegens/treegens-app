@@ -6,8 +6,11 @@ export interface GpsFix {
   accuracy: number
 }
 
+/** GeolocationPositionError.PERMISSION_DENIED */
+const PERMISSION_DENIED = 1
+
 const GEO_ERRORS: Record<number, string> = {
-  1: 'Location access denied by user',
+  [PERMISSION_DENIED]: 'Location access denied by user',
   2: 'Location information unavailable',
   3: 'Location request timed out',
 }
@@ -42,7 +45,7 @@ export function useBoundaryWalk(onFix: (fix: GpsFix) => void) {
     }
     if (watchIdRef.current !== null) return
     setError(null)
-    watchIdRef.current = navigator.geolocation.watchPosition(
+    const id = navigator.geolocation.watchPosition(
       pos => {
         const fix = {
           latitude: pos.coords.latitude,
@@ -53,11 +56,16 @@ export function useBoundaryWalk(onFix: (fix: GpsFix) => void) {
         setLastFix(fix)
         onFixRef.current(fix)
       },
-      err => setError(GEO_ERRORS[err.code] ?? 'Could not read your location'),
+      err => {
+        setError(GEO_ERRORS[err.code] ?? 'Could not read your location')
+        // A refusal ends the watch for good; drop it so start() asks again.
+        if (err.code === PERMISSION_DENIED && watchIdRef.current === id) stop()
+      },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
     )
+    watchIdRef.current = id
     setWatching(true)
-  }, [])
+  }, [stop])
 
   useEffect(() => stop, [stop])
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
 import { Storage } from '@google-cloud/storage'
+import { uploadToStorage } from '../config/gcs'
 import Notification from '../models/Notification'
 import Site from '../models/Site'
 import Submission from '../models/Submission'
@@ -8,6 +9,7 @@ import User from '../models/User'
 import { circleRing } from '../utils/geo'
 import { SITE_ERRORS } from './siteRules'
 import SiteService from './siteService'
+import VerifierService from './verifierService'
 
 const SITE_ID = '64b7f0c2a1b2c3d4e5f60718'
 const OWNER = '0xowner'
@@ -23,7 +25,12 @@ const original = {
     countDocuments: Site.countDocuments,
     create: Site.create,
   },
-  user: { find: User.find, countDocuments: User.countDocuments },
+  user: {
+    find: User.find,
+    findOne: User.findOne,
+    findOneAndUpdate: User.findOneAndUpdate,
+    countDocuments: User.countDocuments,
+  },
   collectionUpdateOne: Site.collection.updateOne,
   notificationCreate: Notification.create,
   submissionExists: Submission.exists,
@@ -123,6 +130,8 @@ let saves: SaveCall[]
 let beforeSave: ((call: number) => void) | null
 let deletedObjects: string[]
 let savedObjects: string[]
+/** Cache-Control header each saved object was stored with. */
+let savedCacheControl: string[]
 
 /** Stubs what `doc.save()` sends: matches `where` like Mongo would. */
 function stubSave() {
@@ -164,14 +173,16 @@ beforeEach(() => {
   beforeSave = null
   deletedObjects = []
   savedObjects = []
+  savedCacheControl = []
   ;(Site.findById as any) = () => siteQuery()
   ;(Notification.create as any) = async () => {
     throw new Error('notifications are not under test')
   }
   ;(Storage.prototype as any).bucket = () => ({
     file: (name: string) => ({
-      save: async () => {
+      save: async (_data: Buffer, options: any) => {
         savedObjects.push(name)
+        savedCacheControl.push(options?.metadata?.cacheControl)
       },
       delete: async () => {
         deletedObjects.push(name)
@@ -280,6 +291,78 @@ test('pending sites are recounted when the verifier pool changes', async () => {
   assert.deepEqual(result, { processed: 1, resolved: 1, totalVerifiers: 5 })
   assert.equal(settles[0].filter.status, 'pending_review')
   assert.equal(settles[0].update.$set.status, 'approved')
+})
+
+/** A VerifierService whose stake check and submission recount are stubbed. */
+function verifierServiceFor(wasVerifier: boolean, eligible: boolean) {
+  const service = new VerifierService()
+  ;(service as any).isEligibleByWallet = async () => ({
+    eligible,
+    balanceWei: 0n,
+  })
+  ;(service as any).submissionService = {
+    attemptResolvePendingSubmissions: async () => ({
+      processed: 0,
+      resolved: 0,
+      totalVerifiers: 0,
+    }),
+  }
+  ;(User.findOne as any) = () => ({
+    select: async () => ({ isVerifier: wasVerifier }),
+  })
+  return service
+}
+
+test('a verifier demoted through requestVerifier makes pending sites recount', async () => {
+  process.env.MINIMUM_ACTIVE_VERIFIERS = '5'
+  stored.status = 'pending_review'
+  // 3 yes of 6 is no majority, and 0xf has not voted yet.
+  stored.votes = [
+    ['0xa', 'yes'],
+    ['0xb', 'yes'],
+    ['0xc', 'yes'],
+    ['0xd', 'no'],
+    ['0xe', 'no'],
+  ].map(([w, vote]) => ({
+    voterWalletAddress: w,
+    vote,
+    reasons: [],
+    delegatedFor: [],
+  }))
+  stubVerifiers([...VERIFIERS, '0xf'])
+  const service = verifierServiceFor(true, false)
+  ;(User.findOneAndUpdate as any) = async (_filter: any, update: any) => {
+    // 0xf unstaked: the pool shrinks to the five who all voted.
+    assert.equal(update.$set.isVerifier, false)
+    stubVerifiers(VERIFIERS)
+  }
+  ;(Site.find as any) = () => ({ lean: async () => [{ _id: SITE_ID }] })
+  const settles: any[] = []
+  ;(Site.findOneAndUpdate as any) = (filter: any, update: any) => {
+    settles.push({ filter, update })
+    return { lean: async () => ({ ...stored, ...update.$set }) }
+  }
+  await service.requestVerifier('0xF')
+  assert.equal(settles.length, 1)
+  assert.equal(settles[0].update.$set.status, 'approved')
+})
+
+test('requestVerifier recounts only when the verifier flag changes', async () => {
+  process.env.MINIMUM_ACTIVE_VERIFIERS = '1'
+  stubVerifiers(VERIFIERS)
+  ;(User.findOneAndUpdate as any) = async () => null
+  let recounts = 0
+  ;(Site.find as any) = () => {
+    recounts += 1
+    return { lean: async () => [] }
+  }
+  await verifierServiceFor(false, false).requestVerifier('0x1')
+  await verifierServiceFor(true, true).requestVerifier('0x1')
+  assert.equal(recounts, 0)
+  await verifierServiceFor(false, true).requestVerifier('0x1')
+  assert.equal(recounts, 1)
+  await verifierServiceFor(true, false).requestVerifier('0x1')
+  assert.equal(recounts, 2)
 })
 
 test('no pending site is recounted while there are too few verifiers', async () => {
@@ -409,6 +492,19 @@ test('a replaced photo is swapped in one draft-only update and its old file dele
   const ground = site.photos.filter((p: any) => p.kind === 'ground')
   assert.equal(ground.length, 1)
   assert.equal(ground[0].objectPath, savedObjects[0])
+})
+
+test('site photos get a short cache so a deleted one stops being served', async () => {
+  ;(Site.findOneAndUpdate as any) = () => ({
+    lean: async () => structuredClone(stored),
+  })
+  await new SiteService().addPhoto(OWNER, SITE_ID, upload(), 'ground')
+  await settle()
+  assert.deepEqual(savedCacheControl, ['public, max-age=300'])
+  // Submission media is never replaced, so it keeps the year-long cache.
+  await uploadToStorage(Buffer.from('mp4'), 'clip.mp4', 'video/mp4')
+  assert.ok(savedObjects[1].startsWith('submissions/'))
+  assert.equal(savedCacheControl[1], 'public, max-age=31536000, immutable')
 })
 
 test('a photo for a site submitted during the upload is refused and removed', async () => {

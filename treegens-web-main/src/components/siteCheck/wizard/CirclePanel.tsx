@@ -46,8 +46,13 @@ export function CirclePanel({ form, setForm }: Props) {
     }))
     gps.stop()
   })
-  const { watching, lastFix, error, start } = gps
+  const { watching, lastFix, error, start, stop } = gps
   const accuracy = lastFix?.accuracy ?? null
+  // A fresh watch, so a tap retries after a GPS error.
+  const restart = () => {
+    stop()
+    start()
+  }
 
   // A resumed draft keeps its saved centre until the planter asks again.
   useEffect(() => {
@@ -71,7 +76,7 @@ export function CirclePanel({ form, setForm }: Props) {
         <GpsAccuracy accuracy={accuracy} />
         <button
           type="button"
-          onClick={start}
+          onClick={restart}
           className="shrink-0 rounded-full bg-gray-100 p-3 text-tree-green-2 hover:bg-gray-200"
           aria-label="Use my position now"
         >

@@ -1,6 +1,10 @@
 import mongoose from 'mongoose'
 import env from '../config/environment'
-import { deleteFromStorage, uploadToStorage } from '../config/gcs'
+import {
+  deleteFromStorage,
+  SITE_PHOTO_CACHE_CONTROL,
+  uploadToStorage,
+} from '../config/gcs'
 import { toHydrologySummary } from '../hydrology'
 import { generateUniqueFileName } from '../middleware/upload'
 import Site, { SiteHydrology } from '../models/Site'
@@ -273,11 +277,13 @@ class SiteService {
       throw new Error(SITE_ERRORS.imageOnly)
     }
     const site = await this.findOwnedDraft(wallet, siteId)
+    // Short cache: a replaced or deleted photo must stop being served soon.
     const uploaded = await uploadToStorage(
       file.buffer,
       generateUniqueFileName(file.originalname),
       file.mimetype,
       'sites',
+      SITE_PHOTO_CACHE_CONTROL,
     )
     const lat = parseFloat(String(latitude))
     const lng = parseFloat(String(longitude))

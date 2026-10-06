@@ -10,7 +10,13 @@ import type {
   ISiteHydrology,
   SiteBoundaryMethod,
 } from '@/types'
-import { distanceM, isValidRing, type LonLat, ringAreaM2 } from '@/utils/geo'
+import {
+  distanceM,
+  isValidRing,
+  type LonLat,
+  ringAreaM2,
+  ringExtentM,
+} from '@/utils/geo'
 import type { SiteDraft } from '@/utils/siteDraftStore'
 import type { HydrologySummary, SiteAnswers } from './siteVerdict'
 
@@ -26,11 +32,18 @@ export const MAX_RING_POINTS = 500
 export const RADIUS_CHOICES_M = [10, 25, 50, 100] as const
 export const MIN_SITE_AREA_M2 = 50
 export const MAX_SITE_AREA_M2 = 500_000
+/**
+ * Farthest a boundary point may be from the site's centre (the backend's
+ * SITE_GEOMETRY_LIMITS.maxExtentM); keep the two in step.
+ */
+export const MAX_SITE_EXTENT_M = 1500
 /** finishWalk drops at most this many points walked past the start. */
 const MAX_OVERSHOOT_POINTS = 4
 
 export const CROSSING_PATH_PROBLEM =
   'Your path crosses itself. Tap "Undo last point" until this message goes away, or tap "Start again".'
+export const TOO_LONG_PROBLEM =
+  'The site is too long. Keep every point within 1.5 km of the middle, or split it into two sites.'
 
 export interface SiteForm {
   name: string
@@ -89,6 +102,14 @@ export function thinRing(ring: LonLat[]): LonLat[] {
   return ring.filter((_, i) => i % step === 0)
 }
 
+/**
+ * True when a point of the boundary the API is sent lies farther from its
+ * centre than the API allows.
+ */
+export function ringTooLong(ring: LonLat[]): boolean {
+  return ringExtentM(thinRing(ring)) > MAX_SITE_EXTENT_M
+}
+
 /** What is wrong with a walked boundary, in plain words, or null. */
 export function walkedRingProblem(ring: LonLat[]): string | null {
   if (ring.length < MIN_WALK_POINTS) {
@@ -103,6 +124,7 @@ export function walkedRingProblem(ring: LonLat[]): string | null {
   }
   // The same test the API runs on the points it is sent.
   if (!isValidRing(thinRing(ring))) return CROSSING_PATH_PROBLEM
+  if (ringTooLong(ring)) return TOO_LONG_PROBLEM
   return null
 }
 

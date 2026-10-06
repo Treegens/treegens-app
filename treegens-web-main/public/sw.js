@@ -3,7 +3,7 @@
  * Handles offline video upload queue and background sync
  */
 
-const SW_VERSION = 'v1.275'
+const SW_VERSION = 'v1.276'
 const STATIC_CACHE = `treegens-static-${SW_VERSION}` // bump to refresh HTML/images
 const RUNTIME_CACHE = `treegens-runtime-${SW_VERSION}` // keep stable for Next build assets
 const FF_CACHE = 'treegens-ffmpeg-core' // dedicated, never-versioned cache for ffmpeg core
@@ -94,10 +94,10 @@ const OFFLINE_PAGES = ['/sites', '/sites/create']
 const OFFLINE_PAGE_ASSETS_FROM = [...OFFLINE_PAGES, '/submissions/create']
 
 // Upload refusals the API repeats on every retry (Site Check gate, unknown
-// site); same list as src/modules/siteCheck/siteGateMessage.ts.
+// site); the list in src/modules/siteCheck/siteGateMessage.ts, less the
+// refusals in WAITING_UPLOAD_ERRORS.
 const PERMANENT_UPLOAD_ERRORS = [
   'Mangrove planting needs an approved Site Check',
-  'This site has not been approved yet',
   'This site was rejected in review',
   'The Site Check verdict for this site is',
   'Your before video was filmed',
@@ -105,6 +105,9 @@ const PERMANENT_UPLOAD_ERRORS = [
   'This video was filmed',
   'Site not found',
 ]
+// Refusals that end once verifiers approve the site: the clip stays queued
+// and is sent again on every sync, without using up its fail cycles.
+const WAITING_UPLOAD_ERRORS = ['This site has not been approved yet']
 // A failed upload is re-queued until it has failed this many cycles
 const MAX_FAIL_CYCLES = 3
 
@@ -502,6 +505,18 @@ async function syncPendingUploads() {
             error: error.message,
             permanent: true
           })
+        } else if (error && error.waiting) {
+          // The site is still in review: keep the clip, try again next sync
+          await markUploadWaiting(item.id, error.message)
+          console.warn(`⏳ Upload waiting: ${error.message}`)
+          if (item.lastError !== error.message) {
+            // Told once per reason, not on every sync
+            await notifyClients('UPLOAD_FAILED', {
+              uploadId: item.id,
+              error: `${withStop(error.message)} Your video is kept and will be sent once the site is approved.`,
+              waiting: true
+            })
+          }
         } else if (newRetryCount >= item.maxRetries) {
           await markUploadFailed(item.id)
           console.error(`💀 Upload failed after ${item.maxRetries} retries (cycle incremented)`)
@@ -584,6 +599,11 @@ async function uploadVideo(uploadItem) {
       error.permanent = true
       throw error
     }
+    if (startsWithAny(serverError, WAITING_UPLOAD_ERRORS)) {
+      const error = new Error(serverError)
+      error.waiting = true
+      throw error
+    }
     throw new Error(`Upload failed with status: ${response.status}`)
   }
 
@@ -591,7 +611,16 @@ async function uploadVideo(uploadItem) {
 }
 
 function isPermanentUploadError(message) {
-  return Boolean(message) && PERMANENT_UPLOAD_ERRORS.some(start => message.startsWith(start))
+  return startsWithAny(message, PERMANENT_UPLOAD_ERRORS)
+}
+
+function startsWithAny(message, starts) {
+  return Boolean(message) && starts.some(start => message.startsWith(start))
+}
+
+/** The message ending in a full stop, ready for another sentence. */
+function withStop(message) {
+  return /[.!?]$/.test(message) ? message : `${message}.`
 }
 
 // --- Reverse geocoding helpers (Service Worker context) ---
@@ -758,6 +787,33 @@ async function markUploadFailed(uploadId, options = {}) {
     item.retryCount = 0
     item.failedAt = Date.now()
     if (options.error) item.lastError = options.error
+    await new Promise((resolve, reject) => {
+      const request = store.put(item)
+      request.onsuccess = () => resolve()
+      request.onerror = (event) => reject(new Error(event.target.error))
+    })
+  }
+}
+
+/**
+ * Keeps an upload queued after a refusal that will clear on its own (site
+ * still in review): no fail cycle is used, so it is never deleted for it.
+ */
+async function markUploadWaiting(uploadId, message) {
+  const db = await openDB()
+  const tx = db.transaction([UPLOAD_STORE], 'readwrite')
+  const store = tx.objectStore(UPLOAD_STORE)
+
+  const item = await new Promise((resolve, reject) => {
+    const request = store.get(uploadId)
+    request.onsuccess = (event) => resolve(event.target.result)
+    request.onerror = (event) => reject(new Error(event.target.error))
+  })
+
+  if (item) {
+    item.status = 'pending'
+    item.retryCount = 0
+    item.lastError = message
     await new Promise((resolve, reject) => {
       const request = store.put(item)
       request.onsuccess = () => resolve()
@@ -955,10 +1011,12 @@ async function notifyClients(type, data) {
       ]
     })
   } else if (type === 'UPLOAD_FAILED') {
-    await showNotification('TreeGens - Upload Failed', {
+    await showNotification(data.waiting ? 'TreeGens - Upload Waiting' : 'TreeGens - Upload Failed', {
       body: data.permanent
-        ? `Upload refused: ${data.error}`
-        : `Upload failed: ${data.error}. We'll retry automatically.`,
+        ? `Upload refused: ${withStop(data.error)} This video will not be sent.`
+        : data.waiting
+          ? `Not uploaded yet: ${data.error}`
+          : `Upload failed: ${data.error}. We'll retry automatically.`,
       tag: 'upload-failed',
       requireInteraction: true
     })

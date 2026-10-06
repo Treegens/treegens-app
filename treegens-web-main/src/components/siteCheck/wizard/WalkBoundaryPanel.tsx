@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/Button'
 import type { useBoundaryWalk } from '@/hooks/useBoundaryWalk'
 import {
   MIN_WALK_POINTS,
+  ringTooLong,
+  TOO_LONG_PROBLEM,
   WALK_MAX_ACCURACY_M,
 } from '@/modules/siteCheck/siteForm'
 import { formatArea, type LonLat, ringAreaM2 } from '@/utils/geo'
@@ -115,6 +117,10 @@ export function WalkBoundaryPanel(props: Props) {
         <p className="text-xs text-amber-800">
           Weak GPS. Wait a moment, or move away from trees and buildings.
         </p>
+      ) : null}
+      {/* Said while walking, so a long strip is not walked to the end. */}
+      {walk.watching && ringTooLong(ring) ? (
+        <p className="text-xs text-amber-800">{TOO_LONG_PROBLEM}</p>
       ) : null}
       {walk.error ? <p className="text-sm text-red-600">{walk.error}</p> : null}
       <BoundarySketch ring={ring} />

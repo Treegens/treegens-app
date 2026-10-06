@@ -62,8 +62,9 @@ export const HYDROLOGY_DEFAULTS = {
   years: 2,
   referenceRadiusM: 1500,
   maxCloudPct: 80,
-  concurrency: 8,
-  decoderWorkers: 2,
+  // As SITE_HYDROLOGY_SCENE_CONCURRENCY and SITE_HYDROLOGY_DECODER_WORKERS.
+  concurrency: 4,
+  decoderWorkers: 1,
   timeoutMs: 300_000,
   s2BucketUrl: 'https://sentinel-cogs.s3.us-west-2.amazonaws.com',
   worldCoverUrl: 'https://esa-worldcover.s3.eu-central-1.amazonaws.com',
@@ -396,6 +397,7 @@ export async function runSiteHydrology(
     opts.referenceRadiusM,
     MAX_WINDOW_PX,
     opts.concurrency,
+    opts.log,
   )
   const search = await findScenes(opts, tile, ringCentroid(ring))
   const deadline = startedAt + opts.timeoutMs

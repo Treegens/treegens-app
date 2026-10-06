@@ -279,13 +279,27 @@ for (const [region, codes] of Object.entries(COUNTRIES)) {
 /**
  * Places where mangroves are not native: people brought them in, and they
  * spread (the manual: "introduced to Hawaii and possibly to Tahiti").
- * Hawaii is not listed: country code 'US' alone cannot tell it apart.
  */
 const NOT_NATIVE = new Set(['PF'])
 
-/** False where mangroves are not native, so none should be planted. */
-export function mangrovesNative(countryCode?: string | null): boolean {
-  return !countryCode || !NOT_NATIVE.has(countryCode.trim().toUpperCase())
+/**
+ * Hawaii shares 'US' with Florida, so it is told apart by longitude: no US
+ * coast west of 150 W has native mangroves (Hawaii lies west of 154 W).
+ */
+const US_PACIFIC_WEST_OF = -150
+
+/**
+ * False where mangroves are not native, so none should be planted. Pass the
+ * site's longitude so Hawaii is caught too.
+ */
+export function mangrovesNative(
+  countryCode?: string | null,
+  longitude?: number | null,
+): boolean {
+  const code = countryCode?.trim().toUpperCase()
+  if (!code) return true
+  if (NOT_NATIVE.has(code)) return false
+  return !(code === 'US' && longitude != null && longitude < US_PACIFIC_WEST_OF)
 }
 
 /** Region for an ISO 3166-1 alpha-2 country code, or null when unknown. */
@@ -298,12 +312,15 @@ export function regionForCountry(
 
 /**
  * Species suited to a zone, limited to the country's region when it is
- * known. With no zone, every species of the region is returned.
+ * known. With no zone, every species of the region is returned. None where
+ * mangroves are not native (see mangrovesNative).
  */
 export function speciesFor(
   zone: PlantingZone | null,
   countryCode?: string | null,
+  longitude?: number | null,
 ): MangroveSpecies[] {
+  if (!mangrovesNative(countryCode, longitude)) return []
   const region = regionForCountry(countryCode)
   return MANGROVE_SPECIES.filter(
     s =>

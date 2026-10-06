@@ -84,6 +84,65 @@ function selfIntersects(points: Xy[]): boolean {
   return false
 }
 
+const M_PER_DEG = toRad(1) * EARTH_RADIUS_M
+
+/** Shortest signed step from `from` to `to`, in degrees of longitude. */
+function lonDelta(from: number, to: number): number {
+  return ((((to - from) % 360) + 540) % 360) - 180
+}
+
+/** Longitude folded into [-180, 180). */
+function wrapLon(lon: number): number {
+  return ((((lon + 180) % 360) + 360) % 360) - 180
+}
+
+/** Mean point, measured from the first one so a ring near 180 stays put. */
+function vertexMean(open: LonLat[]): LonLat {
+  const n = open.length || 1
+  const ref = open[0]?.[0] ?? 0
+  const dLon = open.reduce((s, p) => s + lonDelta(ref, p[0]), 0)
+  return [wrapLon(ref + dLon / n), open.reduce((s, p) => s + p[1], 0) / n]
+}
+
+/**
+ * Area-weighted centroid, or the mean point when the ring has no area. The
+ * same maths as the backend's ringCentroid, which sets a walked site's
+ * centre.
+ */
+export function ringCentroid(ring: LonLat[]): LonLat {
+  const open = dedupeRing(ring)
+  const [lon0, lat0] = vertexMean(open)
+  const kx = Math.cos(toRad(lat0)) * M_PER_DEG
+  const points = open.map(
+    ([lon, lat]): Xy => [lonDelta(lon0, lon) * kx, (lat - lat0) * M_PER_DEG],
+  )
+  let twiceArea = 0
+  let cx = 0
+  let cy = 0
+  for (let i = 0; i < points.length; i++) {
+    const [x1, y1] = points[i]
+    const [x2, y2] = points[(i + 1) % points.length]
+    const cross = x1 * y2 - x2 * y1
+    twiceArea += cross
+    cx += (x1 + x2) * cross
+    cy += (y1 + y2) * cross
+  }
+  if (Math.abs(twiceArea) < 1e-9) return vertexMean(open)
+  return [
+    wrapLon(lon0 + cx / (3 * twiceArea) / kx),
+    lat0 + cy / (3 * twiceArea) / M_PER_DEG,
+  ]
+}
+
+/**
+ * Metres from the ring's centroid to its farthest point: the API refuses a
+ * site whose boundary reaches too far from its centre.
+ */
+export function ringExtentM(ring: LonLat[]): number {
+  const center = ringCentroid(ring)
+  return ring.reduce((max, p) => Math.max(max, distanceM(center, p)), 0)
+}
+
 /**
  * The API's boundary test (backend utils/geo.ts isValidRing): at least three
  * distinct points, all real coordinates, some area, no point visited twice

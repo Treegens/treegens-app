@@ -562,7 +562,11 @@ export function readTileRaster(
 
 /**
  * The Sentinel-2 tile to read for a site (see candidateTiles and pickTile).
- * Throws when no tile in the bucket holds the site.
+ * The site's own tile is read first and used when it holds the whole
+ * window, so no neighbour is read then. A tile whose header cannot be read
+ * is left out (some tiles across 180 degrees list only s3:// JP2 files).
+ * Throws when no tile that could be read holds the site: with the last
+ * read error if a read failed, so an outage is retried.
  */
 export async function findSiteTile(
   bucket: string,
@@ -570,6 +574,7 @@ export async function findSiteTile(
   radiusM: number,
   maxPx: number,
   concurrency: number,
+  log: (msg: string) => void = () => {},
 ): Promise<MgrsTile> {
   const reachM = (maxPx * S2_PIXEL_M) / 2 + REACH_MARGIN_M
   const candidates = candidateTiles(...ringCentroid(ringLonLat), reachM)
@@ -578,15 +583,28 @@ export async function findSiteTile(
   )
   const tiles = candidates.filter((_, i) => years[i].length)
   if (tiles.length === 1) return tiles[0]
-  const rasters = await mapLimit(tiles, concurrency, t =>
-    readTileRaster(bucket, t),
+  const failures: unknown[] = []
+  const read = (tile: MgrsTile) =>
+    readTileRaster(bucket, tile).catch(err => {
+      failures.push(err)
+      const reason = err instanceof Error ? err.message : String(err)
+      log(`Could not read tile ${tile.id}, skipping it: ${reason}`)
+      return null
+    })
+  const ownTile = years[0].length ? candidates[0] : null
+  const own = ownTile && (await read(ownTile))
+  if (own && tileFit(own, ringLonLat, radiusM, maxPx).whole) return own.tile
+  const others = await mapLimit(
+    tiles.filter(t => t !== ownTile),
+    concurrency,
+    read,
   )
+  const rasters = [own, ...others].filter((r): r is TileRaster => !!r)
   const tile = pickTile(rasters, ringLonLat, radiusM, maxPx)
-  if (!tile) {
-    const tried = candidates.map(t => t.id).join(', ')
-    throw new Error(`No Sentinel-2 tile holds this site (tried ${tried})`)
-  }
-  return tile
+  if (tile) return tile
+  if (failures.length) throw failures[failures.length - 1]
+  const tried = candidates.map(t => t.id).join(', ')
+  throw new Error(`No Sentinel-2 tile holds this site (tried ${tried})`)
 }
 
 /** L2A scene folders for the given months. */

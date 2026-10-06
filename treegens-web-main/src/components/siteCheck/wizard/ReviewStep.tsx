@@ -86,20 +86,35 @@ function MissingList({
   )
 }
 
-/** The API's answer when it cannot store the walked boundary. */
-const INVALID_BOUNDARY_ERROR = 'Invalid site boundary'
+/**
+ * The API's answers when it cannot store the boundary (the backend's
+ * SITE_ERRORS), each with what the planter can do about it.
+ */
+const BOUNDARY_ERRORS: { start: string; help: string }[] = [
+  {
+    start: 'Invalid site boundary',
+    help: 'The server could not use this boundary. Most often the walked path crosses itself. Go back to the location step and tap "Undo last point" or "Start again".',
+  },
+  {
+    start: 'Site boundary is too spread out',
+    help: 'The site is too long. Every point must be within 1.5 km of the middle. Go back to the location step and mark a shorter part, or split it into two sites.',
+  },
+  {
+    start: 'Site boundary is too large',
+    help: 'The site is too big to check at once. Go back to the location step and mark at most 50 hectares.',
+  },
+  {
+    start: 'Site boundary is too small',
+    help: 'The site is too small. Go back to the location step and walk around the whole site, or choose a bigger circle.',
+  },
+]
 
 function SendError({ error, onGoTo }: Pick<Props, 'error' | 'onGoTo'>) {
-  if (error !== INVALID_BOUNDARY_ERROR) {
-    return <p className="text-sm text-red-600">{error}</p>
-  }
+  const boundary = BOUNDARY_ERRORS.find(({ start }) => error.startsWith(start))
+  if (!boundary) return <p className="text-sm text-red-600">{error}</p>
   return (
     <section className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-      <p>
-        The server could not use this boundary. Most often the walked path
-        crosses itself. Go back to the location step and tap &quot;Undo last
-        point&quot; or &quot;Start again&quot;.
-      </p>
+      <p>{boundary.help}</p>
       <button
         type="button"
         onClick={() => onGoTo(1)}

@@ -167,6 +167,8 @@ export interface VerdictInput {
   answers: SiteAnswers
   hydrology?: HydrologySummary | null
   countryCode?: string | null
+  /** Of the site centre; tells Hawaii apart from the rest of the US. */
+  longitude?: number | null
 }
 
 const HEADLINES: Record<VerdictCode, string> = {
@@ -459,26 +461,33 @@ function hydrologyRules(
   }
   // A blocked flow can hold water in, so the satellite sees the site as it
   // is now, not as it will be once the flow is open: ask for a recheck.
+  // Once it is open, most of the 2 years of images are from before.
   const trapped = a.flowBlocked === 'yes_not_fixed'
+  const reopened = a.flowBlocked === 'yes_fixed'
   const tooWet: ReasonSeverity =
-    h.confidence !== 'low' && !trapped ? 'blocker' : 'check'
-  const unlessTrapped = (claim: string) =>
-    trapped
-      ? 'The blocked flow may be holding the water in. Check again once it is open.'
-      : claim
+    h.confidence !== 'low' && !trapped && !reopened ? 'blocker' : 'check'
+  const unlessFlowChanged = (claim: string) => {
+    if (trapped) {
+      return 'The blocked flow may be holding the water in. Check again once it is open.'
+    }
+    if (reopened) {
+      return 'The images cover the last 2 years and may be from before the flow was opened. A high-tide and a low-tide photo will tell.'
+    }
+    return claim
+  }
   switch (h.hydrologyClass) {
     case 'permanently_wet':
       sat(
         'sat_permanently_wet',
         tooWet,
-        `Satellite images show this spot under water almost every time. ${unlessTrapped('It is too low for mangroves.')}`,
+        `Satellite images show this spot under water almost every time. ${unlessFlowChanged('It is too low for mangroves.')}`,
       )
       break
     case 'too_low':
       sat(
         'sat_too_low',
         tooWet,
-        `Satellite images show this spot wet more often than the edge where nearby mangroves stop growing. ${unlessTrapped('It is likely too low.')}`,
+        `Satellite images show this spot wet more often than the edge where nearby mangroves stop growing. ${unlessFlowChanged('It is likely too low.')}`,
       )
       break
     case 'borderline_low':
@@ -573,28 +582,33 @@ function decide(reasons: VerdictReason[]): VerdictCode {
 
 /** Pure: same input, same verdict, on the server and on the phone. */
 export function computeSiteVerdict(input: VerdictInput): SiteVerdict {
-  const { answers: a, hydrology: h, countryCode } = input
+  const { answers: a, hydrology: h, countryCode, longitude } = input
   const reasons: VerdictReason[] = []
   const push: Push = (code, severity, message, source = 'field') =>
     reasons.push({ code, severity, source, message })
 
-  if (!mangrovesNative(countryCode)) {
+  if (!mangrovesNative(countryCode, longitude)) {
+    // The only reason: advice to protect or plant introduced mangroves,
+    // which can spread, would contradict it.
     push(
       'not_native',
       'blocker',
       'Mangroves are not native here. People brought them in, and they can harm local nature.',
     )
+  } else {
+    coverAndHistoryRules(a, push)
+    tideRules(a, push)
+    flowAndCauseRules(a, push)
+    regrowthRules(a, push)
+    shoreAndGroundRules(a, push)
+    hydrologyRules(a, h, push)
   }
-  coverAndHistoryRules(a, push)
-  tideRules(a, push)
-  flowAndCauseRules(a, push)
-  regrowthRules(a, push)
-  shoreAndGroundRules(a, push)
-  hydrologyRules(a, h, push)
 
   const code = decide(reasons)
   const zone = code === 'plant' || code === 'fix_first' ? pickZone(a, h) : null
-  const species = zone ? speciesFor(zone, countryCode).map(s => s.id) : []
+  const species = zone
+    ? speciesFor(zone, countryCode, longitude).map(s => s.id)
+    : []
   if (code === 'plant' && species.length >= 3) {
     push(
       'mix_species',

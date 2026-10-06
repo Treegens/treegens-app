@@ -178,7 +178,9 @@ if (process.env.ENABLE_STITCH_RETRIER !== 'false') {
 }
 
 // Picks up Site Check satellite runs a restart interrupted or a failure left
-// retryable. New sites are queued directly; this is only the safety net.
+// retryable, and starts sites left waiting over SITE_HYDROLOGY_MAX_PER_WALLET
+// or SITE_HYDROLOGY_MAX_QUEUE. With it off those limits are not applied:
+// every new site is queued directly, since nothing would start one left over.
 if (process.env.ENABLE_SITE_HYDROLOGY_SWEEPER !== 'false') {
   startSiteHydrologySweeper()
 }

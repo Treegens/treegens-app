@@ -3,8 +3,8 @@
  *
  * Usage (from treegens-backend-main):
  *   yarn site:hydrology-smoke <lat> <lon> [radiusM=30] [years=2]
- *     [--reference-radius=1500] [--as-of=YYYY-MM] [--concurrency=8]
- *     [--decoder-workers=2]
+ *     [--reference-radius=1500] [--as-of=YYYY-MM] [--concurrency=4]
+ *     [--decoder-workers=1]
  *
  * Example (Gazi Bay mangroves, Kenya):
  *   yarn site:hydrology-smoke -4.423 39.507
@@ -14,7 +14,9 @@
  * proxy has its own CA). Progress goes to stderr, the result JSON to stdout.
  * The run's wall time, peak memory and longest event-loop stall (how long
  * an API sharing the process would have been unable to answer) go to
- * stderr at the end.
+ * stderr at the end. The default reads and decoder workers are the API's
+ * (SITE_HYDROLOGY_SCENE_CONCURRENCY and SITE_HYDROLOGY_DECODER_WORKERS),
+ * so a run without flags measures what the API runs.
  */
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { HYDROLOGY_DEFAULTS, runSiteHydrology } from '../hydrology'
@@ -55,7 +57,7 @@ const [lat, lon, radiusM = 30, years = 2] = process.argv
 
 if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
   console.error(
-    'Usage: yarn site:hydrology-smoke <lat> <lon> [radiusM=30] [years=2] [--reference-radius=1500] [--as-of=YYYY-MM] [--concurrency=8] [--decoder-workers=2]',
+    'Usage: yarn site:hydrology-smoke <lat> <lon> [radiusM=30] [years=2] [--reference-radius=1500] [--as-of=YYYY-MM] [--concurrency=4] [--decoder-workers=1]',
   )
   process.exit(1)
 }

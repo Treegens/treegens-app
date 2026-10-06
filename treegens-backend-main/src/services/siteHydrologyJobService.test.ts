@@ -7,6 +7,8 @@ import {
   processSiteHydrology,
   setSiteHydrologyRunner,
   siteHydrologyQueueIdle,
+  startSiteHydrologySweeper,
+  stopSiteHydrologySweeper,
   sweepSiteHydrology,
   triggerSiteHydrology,
 } from './siteHydrologyJobService'
@@ -168,6 +170,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  stopSiteHydrologySweeper()
   Object.assign(Site, original)
   setSiteHydrologyRunner()
   for (const [k, v] of savedEnv) {
@@ -295,7 +298,11 @@ test('trigger never throws, even when the database does', async () => {
   await assert.doesNotReject(triggerSiteHydrology('site-1'))
 })
 
+/** Runs the sweeper with an interval long enough never to fire in a test. */
+const startIdleSweeper = () => startSiteHydrologySweeper(60 * 60_000)
+
 test('a wallet with its share of runs waiting is left for the sweeper', async () => {
+  startIdleSweeper()
   process.env.SITE_HYDROLOGY_MAX_PER_WALLET = '2'
   busyRuns = 2
   await triggerSiteHydrology('site-1')
@@ -318,6 +325,7 @@ test('a wallet with its share of runs waiting is left for the sweeper', async ()
 })
 
 test('the in-process queue stops growing at its maximum length', async () => {
+  startIdleSweeper()
   process.env.SITE_HYDROLOGY_MAX_QUEUE = '1'
   let release!: () => void
   const blocked = new Promise<void>(resolve => {
@@ -339,6 +347,46 @@ test('the in-process queue stops growing at its maximum length', async () => {
     claims.map(c => c.filter._id),
     ['site-1', 'site-2'],
   )
+})
+
+test('without a running sweeper every site is run, whatever the limits', async () => {
+  process.env.SITE_HYDROLOGY_MAX_PER_WALLET = '2'
+  process.env.SITE_HYDROLOGY_MAX_QUEUE = '1'
+  busyRuns = 5
+  let release!: () => void
+  const blocked = new Promise<void>(resolve => {
+    release = resolve
+  })
+  setSiteHydrologyRunner(async () => {
+    await blocked
+    return fakeResult()
+  })
+  await triggerSiteHydrology('site-1')
+  await new Promise(resolve => setImmediate(resolve))
+  await triggerSiteHydrology('site-2')
+  await triggerSiteHydrology('site-3')
+  release()
+  await siteHydrologyQueueIdle()
+  // Nothing else would ever start a site left 'queued', so none is.
+  assert.equal(counts.length, 0)
+  assert.deepEqual(
+    claims.map(c => c.filter._id),
+    ['site-1', 'site-2', 'site-3'],
+  )
+
+  // Once the sweeper runs, the limits apply again.
+  startIdleSweeper()
+  claimable.add('site-1')
+  await triggerSiteHydrology('site-1')
+  await siteHydrologyQueueIdle()
+  assert.equal(counts.length, 1)
+  assert.equal(claims.length, 3)
+
+  // And stop applying when it is stopped.
+  stopSiteHydrologySweeper()
+  await triggerSiteHydrology('site-1')
+  await siteHydrologyQueueIdle()
+  assert.equal(claims.length, 4)
 })
 
 test('a site with its runs used up is marked failed instead of queued', async () => {

@@ -131,7 +131,10 @@ class VerifierService {
       { new: true },
     )
 
-    if (eligible && !existingUser?.isVerifier) {
+    // The pool changed either way: losing a verifier can leave a majority
+    // that nobody is left to cast the settling vote for, so recount then too.
+    const wasVerifier = Boolean(existingUser?.isVerifier)
+    if (wasVerifier !== eligible) {
       await this.triggerPendingSubmissionResolution('requestVerifier')
     }
 

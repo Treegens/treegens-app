@@ -8,7 +8,9 @@
  * (SITE_HYDROLOGY_MAX_PER_WALLET) and the FIFO itself has a maximum length
  * (SITE_HYDROLOGY_MAX_QUEUE). A site over either limit stays 'queued' in the
  * database and the sweeper starts it later, one site per wallet per sweep,
- * so nobody can fill the queue and make everyone else wait for hours.
+ * so nobody can fill the queue and make everyone else wait for hours. The
+ * limits only apply while this process runs the sweeper: without it nothing
+ * would ever start a site left waiting, so every site is queued directly.
  */
 import mongoose from 'mongoose'
 import env from '../config/environment'
@@ -99,9 +101,14 @@ async function hasQueueRoom(siteId: string, owner: string): Promise<boolean> {
   return busy < env.SITE_HYDROLOGY_MAX_PER_WALLET
 }
 
+/** Set while this process runs the sweeper (startSiteHydrologySweeper). */
+let sweeperTimer: NodeJS.Timeout | null = null
+
 /**
  * Marks the site queued (or skipped when the check is switched off) and
  * schedules it when there is room (otherwise the sweeper starts it later).
+ * Without a running sweeper it is always scheduled, as nothing else would
+ * start it.
  * A site whose runs are used up (a moved boundary keeps the count) is marked
  * failed, so the app offers Retry. Never throws: a site without a satellite
  * result still works.
@@ -149,7 +156,10 @@ export async function triggerSiteHydrology(siteId: string): Promise<void> {
       )
       return
     }
-    if (await hasQueueRoom(siteId, String(site.userWalletAddress))) {
+    if (
+      !sweeperTimer ||
+      (await hasQueueRoom(siteId, String(site.userWalletAddress)))
+    ) {
       void enqueue(siteId)
     }
   } catch (error: any) {
@@ -377,9 +387,14 @@ export async function sweepSiteHydrology(limit = 3): Promise<number> {
 
 let sweeping = false
 
+/**
+ * Sweeps every `intervalMs`. While it runs, sites over the queue limits are
+ * left for it instead of being run directly.
+ */
 export function startSiteHydrologySweeper(
   intervalMs = 5 * 60_000,
 ): NodeJS.Timeout {
+  stopSiteHydrologySweeper()
   const timer = setInterval(() => {
     if (sweeping) return
     sweeping = true
@@ -390,5 +405,12 @@ export function startSiteHydrologySweeper(
       })
   }, intervalMs)
   timer.unref()
+  sweeperTimer = timer
   return timer
+}
+
+/** Stops the sweeper; new sites are then always queued directly. */
+export function stopSiteHydrologySweeper(): void {
+  if (sweeperTimer) clearInterval(sweeperTimer)
+  sweeperTimer = null
 }

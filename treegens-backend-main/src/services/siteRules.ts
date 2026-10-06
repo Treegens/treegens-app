@@ -38,6 +38,8 @@ export const SITE_ERRORS = {
   accessDenied: 'Access denied',
   locked: 'Site is locked after submission',
   tooLarge: 'Site boundary is too large',
+  tooSpread:
+    'Site boundary is too spread out. Keep every point within 1.5 km of the middle.',
   tooSmall: 'Site boundary is too small',
   invalidBoundary: 'Invalid site boundary',
   crossesAntimeridian:
@@ -208,13 +210,18 @@ export function sanitizeSiteAnswers(raw: unknown): SiteAnswers {
 
 /** Verdict for a stored site, with the satellite summary when there is one. */
 export function siteVerdictFor(
-  site: { answers?: unknown; countryCode?: string | null },
+  site: {
+    answers?: unknown
+    countryCode?: string | null
+    center?: { longitude?: number | null } | null
+  },
   hydrology: HydrologySummary | null,
 ): SiteVerdict {
   return computeSiteVerdict({
     answers: sanitizeSiteAnswers(site.answers),
     hydrology,
     countryCode: site.countryCode,
+    longitude: site.center?.longitude,
   })
 }
 
@@ -338,7 +345,7 @@ export function buildSiteGeometry(
   }
   if (areaM2 > maxAreaM2) throw new Error(SITE_ERRORS.tooLarge)
   if (ringExtentM(ring, center) > SITE_GEOMETRY_LIMITS.maxExtentM) {
-    throw new Error(SITE_ERRORS.tooLarge)
+    throw new Error(SITE_ERRORS.tooSpread)
   }
   return {
     boundaryMethod: input.boundaryMethod,

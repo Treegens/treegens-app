@@ -217,6 +217,44 @@ test('a spot kept underwater by a blocked flow is "fix_first", not a blocker', (
   assert.equal(reason(open, 'sat_permanently_wet')?.severity, 'blocker')
 })
 
+test('opening a blocked pond does not turn the old satellite result into a blocker', () => {
+  const blocked: SiteAnswers = {
+    ...GOOD,
+    previousUse: 'pond_or_salt_pan',
+    tideReach: 'always_underwater',
+    flowBlocked: 'yes_not_fixed',
+    lossCauses: ['blocked_flow'],
+    causeStillActive: 'yes',
+  }
+  const opened: SiteAnswers = {
+    ...blocked,
+    tideReach: 'daily',
+    flowBlocked: 'yes_fixed',
+    causeStillActive: 'no',
+  }
+  for (const cls of ['permanently_wet', 'too_low'] as const) {
+    for (const confidence of ['medium', 'high'] as const) {
+      const label = `${cls} ${confidence}`
+      const wet = sat(cls, confidence, 0.97, 0.36)
+      assert.equal(verdict(blocked, wet).code, 'fix_first', label)
+      const v = verdict(opened, wet)
+      assert.equal(v.code, 'fix_first', label)
+      const r = reason(v, `sat_${cls}`)
+      assert.equal(r?.severity, 'check', label)
+      assert.match(r!.message, /before the flow was opened/, label)
+      assert.doesNotMatch(r!.message, /too low/, label)
+      // Satellite doubts only, so verifiers can clear it from the photos.
+      assert.deepEqual(
+        v.reasons
+          .filter(x => !['good', 'info'].includes(x.severity))
+          .map(x => `${x.source}:${x.severity}`),
+        ['satellite:check'],
+        label,
+      )
+    }
+  }
+})
+
 test('an active cause of loss must stop first, and its name is in the message', () => {
   for (const causeStillActive of ['yes', 'partly'] as const) {
     const v = verdict({
@@ -519,6 +557,53 @@ test('where mangroves are not native, nothing is planted', () => {
   assert.equal(mangrovesNative('KE'), true)
   assert.equal(mangrovesNative(null), true)
   assert.equal(codes(verdict(GOOD)).includes('not_native'), false)
+  assert.deepEqual(speciesFor(null, 'PF'), [])
+  assert.deepEqual(speciesFor('seaward', 'pf'), [])
+})
+
+test('where mangroves are not native, existing forest is not "protect it"', () => {
+  for (const [answers, hydrology] of [
+    [{ ...GOOD, currentCover: 'healthy_mangrove' }, null],
+    [{ ...GOOD, currentCover: undefined }, sat('existing_mangrove')],
+    [{ ...GOOD, naturalRecruitment: 'many' }, null],
+  ] as const) {
+    const v = verdict(answers, hydrology, 'PF')
+    assert.equal(v.code, 'not_suitable')
+    assert.equal(v.headline, 'Not a mangrove site')
+    // No advice to protect or plant contradicts the not-native reason.
+    assert.deepEqual(codes(v), ['not_native'])
+    assert.equal(v.recommendedZone, null)
+    assert.deepEqual(v.recommendedSpeciesIds, [])
+    assert.equal(v.needsFieldCheck, false)
+  }
+})
+
+test('Hawaii is told apart from the rest of the US by longitude', () => {
+  const inRange = sat('in_range', 'high', 0.4, 0.36)
+  const at = (longitude: number | null) =>
+    computeSiteVerdict({
+      answers: GOOD,
+      hydrology: inRange,
+      countryCode: 'US',
+      longitude,
+    })
+  const molokai = at(-157)
+  assert.equal(molokai.code, 'not_suitable')
+  assert.equal(reason(molokai, 'not_native')?.severity, 'blocker')
+  assert.deepEqual(molokai.recommendedSpeciesIds, [])
+  for (const longitude of [-81, null]) {
+    const florida = at(longitude)
+    assert.equal(florida.code, 'plant', String(longitude))
+    assert.deepEqual(florida.recommendedSpeciesIds, ['rhizophora_mangle'])
+    assert.equal(codes(florida).includes('not_native'), false)
+  }
+  assert.equal(mangrovesNative('us', -155.5), false)
+  assert.equal(mangrovesNative('US', -81), true)
+  assert.equal(mangrovesNative('US'), true)
+  // Longitude alone marks only the US: Fiji lies west of 150 W too.
+  assert.equal(mangrovesNative('FJ', -178), true)
+  assert.deepEqual(speciesFor(null, 'US', -157), [])
+  assert.equal(speciesFor(null, 'US', -81).length, 3)
 })
 
 test('an unknown country gets every species for the zone', () => {

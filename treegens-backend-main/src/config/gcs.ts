@@ -60,11 +60,21 @@ function buildPublicUrl(bucketName: string, objectName: string) {
   return `https://storage.googleapis.com/${bucketName}/${encodeURI(objectName)}`
 }
 
+/** Objects that are never replaced or deleted: cache them for a year. */
+const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+
+/**
+ * Site photos can be replaced or deleted (and may carry EXIF location), so
+ * caches must stop serving one soon after its object is deleted.
+ */
+const SITE_PHOTO_CACHE_CONTROL = 'public, max-age=300'
+
 async function uploadToStorage(
   fileBuffer: Buffer,
   fileName: string,
   mimeType: string,
   prefix = 'submissions',
+  cacheControl = IMMUTABLE_CACHE_CONTROL,
 ): Promise<StorageUploadResult> {
   const { storage, bucketName } = getStorage()
   // Namespace uploads under a folder; fileName is already made unique upstream.
@@ -76,7 +86,7 @@ async function uploadToStorage(
       contentType: mimeType,
       resumable: false,
       metadata: {
-        cacheControl: 'public, max-age=31536000, immutable',
+        cacheControl,
         metadata: { 'uploaded-by': 'treegens-backend' },
       },
     })
@@ -137,6 +147,7 @@ async function testStorageConnection() {
 export {
   buildPublicUrl,
   deleteFromStorage,
+  SITE_PHOTO_CACHE_CONTROL,
   testStorageConnection,
   uploadToStorage,
 }

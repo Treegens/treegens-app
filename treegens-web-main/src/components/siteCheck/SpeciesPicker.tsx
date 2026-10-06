@@ -1,6 +1,9 @@
 'use client'
 
-import { speciesFor } from '@/modules/siteCheck/mangroveSpecies'
+import {
+  mangrovesNative,
+  speciesFor,
+} from '@/modules/siteCheck/mangroveSpecies'
 import { speciesLabel } from '@/modules/siteCheck/speciesLabels'
 import type { ISiteDoc } from '@/types'
 import { ChoiceChip } from './ChoiceChip'
@@ -16,8 +19,12 @@ type Props = {
 
 /** Species chips: the site's recommended ones first, then its region's. */
 export function SpeciesPicker({ site, value, onChange }: Props) {
-  const recommended = site?.verdict?.recommendedSpeciesIds ?? []
-  const others = speciesFor(null, site?.countryCode)
+  const longitude = site?.center?.longitude
+  // Where mangroves were brought in, none are offered, even by a verdict
+  // stored before that was known.
+  const native = mangrovesNative(site?.countryCode, longitude)
+  const recommended = native ? (site?.verdict?.recommendedSpeciesIds ?? []) : []
+  const others = speciesFor(null, site?.countryCode, longitude)
     .map(s => s.id)
     .filter(id => !recommended.includes(id))
   // Chosen before the site (and so its region) was known: still shown, so
@@ -59,6 +66,11 @@ export function SpeciesPicker({ site, value, onChange }: Props) {
           Optional. Choose up to {MAX_SPECIES}.
         </p>
       </div>
+      {native ? null : (
+        <p className="text-sm text-gray-600">
+          Mangroves are not native here, so none are listed.
+        </p>
+      )}
       {group('Recommended for this site', recommended)}
       {group(recommended.length ? 'Other species' : 'Species', others)}
       {group('Chosen, but not from this region', outside)}

@@ -9,6 +9,7 @@ import {
   resolveSiteReview,
   sanitizeSiteAnswers,
   SITE_ERRORS,
+  SITE_GEOMETRY_LIMITS,
   siteVerdictFor,
 } from './siteRules'
 
@@ -154,7 +155,7 @@ test('buildSiteGeometry refuses a thin sliver that runs for kilometres', () => {
   assert.throws(
     () =>
       buildSiteGeometry({ boundaryMethod: 'walked', ring: sliver }, 500_000),
-    { message: SITE_ERRORS.tooLarge },
+    { message: SITE_ERRORS.tooSpread },
   )
   // A long, narrow real site (1.4 km by 100 m) is still fine.
   const strip: LonLat[] = [
@@ -168,6 +169,26 @@ test('buildSiteGeometry refuses a thin sliver that runs for kilometres', () => {
     500_000,
   )
   assert.ok(Math.abs(g.areaM2 - 140_000) < 1_000)
+})
+
+test('a long strip under the area cap gets its own too-spread-out error', () => {
+  // A 3.2 km by 100 m creek-bank strip: 32 ha fits the 50 ha area cap, but
+  // its ends are 1.6 km from the middle. The error must not say "too large".
+  const strip: LonLat[] = [
+    [LON, LAT],
+    [LON + 3200 * M_LON, LAT],
+    [LON + 3200 * M_LON, LAT + 100 * M_LAT],
+    [LON, LAT + 100 * M_LAT],
+  ]
+  assert.ok(ringAreaM2(closeRing(strip)) < 500_000)
+  assert.throws(
+    () => buildSiteGeometry({ boundaryMethod: 'walked', ring: strip }, 500_000),
+    { message: SITE_ERRORS.tooSpread },
+  )
+  assert.notEqual(SITE_ERRORS.tooSpread, SITE_ERRORS.tooLarge)
+  // The message names the limit the API actually applies.
+  const km = SITE_GEOMETRY_LIMITS.maxExtentM / 1000
+  assert.ok(SITE_ERRORS.tooSpread.includes(`${km} km`))
 })
 
 test('buildSiteGeometry refuses sites over the 180th meridian', () => {

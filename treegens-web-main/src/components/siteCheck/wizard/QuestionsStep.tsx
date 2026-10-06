@@ -22,6 +22,8 @@ import { StepNav } from './StepNav'
 type Props = {
   answers: SiteAnswers
   countryCode: string
+  /** Of the site, so the verdict can tell Hawaii from the rest of the US */
+  longitude: number | null
   /** A finished satellite result, when editing a saved site */
   hydrology: HydrologySummary | null
   onChange: (next: SiteAnswers) => void
@@ -33,6 +35,7 @@ type Props = {
 export function QuestionsStep({
   answers,
   countryCode,
+  longitude,
   hydrology,
   onChange,
   onBack,
@@ -40,8 +43,8 @@ export function QuestionsStep({
 }: Props) {
   const progress = requiredProgress(answers)
   const verdict = useMemo(
-    () => computeSiteVerdict({ answers, hydrology, countryCode }),
-    [answers, hydrology, countryCode],
+    () => computeSiteVerdict({ answers, hydrology, countryCode, longitude }),
+    [answers, hydrology, countryCode, longitude],
   )
   const shown = QUESTIONS.filter(q => isQuestionShown(q.key, answers))
 

@@ -101,14 +101,17 @@ export default function CreateSitePage() {
     () => hydrologySummaryOf(savedSite?.hydrology),
     [savedSite],
   )
+  // The point the country code was looked up from; within 1.5 km of the centre.
+  const longitude = formAnchor(form)?.longitude ?? null
   const verdict = useMemo(
     () =>
       computeSiteVerdict({
         answers: form.answers,
         hydrology,
         countryCode: form.countryCode,
+        longitude,
       }),
-    [form.answers, form.countryCode, hydrology],
+    [form.answers, form.countryCode, longitude, hydrology],
   )
 
   const goTo = (next: number) => {
@@ -220,6 +223,7 @@ export default function CreateSitePage() {
           <QuestionsStep
             answers={form.answers}
             countryCode={form.countryCode}
+            longitude={longitude}
             hydrology={hydrology}
             onChange={answers => setForm(f => ({ ...f, answers }))}
             onBack={() => goTo(1)}

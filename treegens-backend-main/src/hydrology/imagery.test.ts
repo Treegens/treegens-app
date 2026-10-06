@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { writeArrayBuffer } from 'geotiff'
 import * as mgrs from 'mgrs'
 import {
   bandAsset,
@@ -88,16 +89,92 @@ const listingXml = (prefixes: string[]) =>
 /** Replaces global fetch for one test; returns the URLs it was asked for. */
 function stubFetch(
   t: { after: (fn: () => void) => void },
-  reply: (url: URL) => Response,
+  reply: (url: URL, init?: RequestInit) => Response,
 ): string[] {
   const original = globalThis.fetch
   const seen: string[] = []
-  globalThis.fetch = (async (input: string | URL) => {
+  globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
     seen.push(String(input))
-    return reply(new URL(String(input)))
+    return reply(new URL(String(input)), init)
   }) as typeof fetch
   t.after(() => (globalThis.fetch = original))
   return seen
+}
+
+/** A header-only GeoTIFF with a Sentinel-2 tile's grid. */
+function cogHeader(epsg: number, originX: number, originY: number) {
+  return writeArrayBuffer(new Uint16Array(1), {
+    width: 10980,
+    height: 10980,
+    ModelPixelScale: [10, 10, 0],
+    ModelTiepoint: [0, 0, 0, originX, originY, 0],
+    ProjectedCSTypeGeoKey: epsg,
+  })
+}
+
+/** Serves the requested byte range of `data`, as S3 does. */
+function rangeReply(data: ArrayBuffer, init?: RequestInit): Response {
+  const range = new Headers(init?.headers).get('range') ?? ''
+  const [start, end] = (/^bytes=(\d+)-(\d+)$/.exec(range) ?? [])
+    .slice(1)
+    .map(Number)
+  const last = Math.min(end ?? Infinity, data.byteLength - 1)
+  return new Response(data.slice(start ?? 0, last + 1), {
+    status: 206,
+    headers: {
+      'content-range': `bytes ${start ?? 0}-${last}/${data.byteLength}`,
+    },
+  })
+}
+
+type TileStub = { epsg: number; origin: [number, number] } | { href: string }
+
+/**
+ * A bucket with one scene in September 2026 for each tile in `tiles`: its
+ * green band is a COG with the given grid, or the given href. A tile mapped
+ * to null has a year folder but no scenes.
+ */
+function stubTileBucket(
+  t: { after: (fn: () => void) => void },
+  bucket: string,
+  tiles: Record<string, TileStub | null>,
+): string[] {
+  const tileOf = (path: string) => {
+    const [zone, band, square] = /cogs\/(\d+)\/([A-Z])\/([A-Z]{2})\//
+      .exec(path)
+      .slice(1)
+    return tiles[`${zone}${band}${square}`]
+  }
+  return stubFetch(t, (url, init) => {
+    if (url.protocol !== 'https:') throw new TypeError('fetch failed')
+    const prefix = url.searchParams.get('prefix')
+    if (prefix) {
+      // Years, months, then scenes; a null tile lists no months.
+      const tile = tileOf(prefix)
+      const level = prefix.split('/').filter(Boolean).length - 4
+      const child = ['2026/', '9/', 'S2A_20260901_0_L2A/'][level]
+      const empty = tile === undefined || (tile === null && level > 0)
+      return new Response(listingXml(empty ? [] : [`${prefix}${child}`]))
+    }
+    const tile = tileOf(url.pathname)
+    const scene = url.href.replace(/[^/]*$/, '')
+    if (url.pathname.endsWith('.json') && tile) {
+      const href = 'href' in tile ? tile.href : `${scene}B03.tif`
+      const epsg = 'epsg' in tile ? tile.epsg : 32701
+      const green = { href }
+      const assets = { green, nir: green, scl: green }
+      return Response.json(
+        stacItem({
+          assets,
+          properties: { ...stacItem().properties, 'proj:epsg': epsg },
+        }),
+      )
+    }
+    if (url.pathname.endsWith('B03.tif') && tile && 'origin' in tile) {
+      return rangeReply(cogHeader(tile.epsg, ...tile.origin), init)
+    }
+    return new Response('', { status: 404 })
+  })
 }
 
 test('parseMgrsTile splits zone, band and square', () => {
@@ -179,6 +256,72 @@ test('findSiteTile throws when no tile holds the site', async t => {
   await assert.rejects(
     findSiteTile('https://bucket.test/none', circle(4.5, 6.2), 1500, 700, 4),
     /No Sentinel-2 tile holds this site \(tried 32NJK, 32NJL, 31NHE, 31NHF\)/,
+  )
+})
+
+/** Fiji, by 180 degrees: 1KAB's items list only s3:// JP2 files. */
+const FIJI_TILES = {
+  '1KBB': { epsg: 32701, origin: [199_980, 8_200_000] as [number, number] },
+  '1KAB': { href: 's3://sentinel-s2-l2a/tiles/1/K/AB/B03.jp2' },
+}
+
+test('findSiteTile reads no neighbour when the own tile holds the window', async t => {
+  const bucket = 'https://bucket.test/fiji-east'
+  const logged: string[] = []
+  const seen = stubTileBucket(t, bucket, FIJI_TILES)
+  const site = circle(-16.77, -179.78)
+  const tile = await findSiteTile(bucket, site, 1500, 700, 4, msg =>
+    logged.push(msg),
+  )
+  assert.equal(tile.id, '1KBB')
+  const urls = seen.map(decodeURIComponent)
+  assert.ok(urls.some(url => url.includes('/1/K/AB/')))
+  assert.ok(!urls.some(url => url.includes('/1/K/AB/2026/')))
+  assert.deepEqual(logged, [])
+})
+
+test('findSiteTile skips a neighbour fetch cannot read', async t => {
+  // 1KBB cuts 2 columns off this window, so 1KAB is tried too.
+  const bucket = 'https://bucket.test/fiji'
+  const logged: string[] = []
+  stubTileBucket(t, bucket, FIJI_TILES)
+  const site = circle(-16.77, -179.8)
+  const tile = await findSiteTile(bucket, site, 1500, 700, 4, msg =>
+    logged.push(msg),
+  )
+  assert.equal(tile.id, '1KBB')
+  assert.deepEqual(logged, [
+    'Could not read tile 1KAB, skipping it: fetch failed',
+  ])
+})
+
+test('findSiteTile uses the best tile left when one cannot be read', async t => {
+  // Kilifi: 37MES would hold the whole window, but it has no readable
+  // scene, so the best of the other tiles is used (see pickTile).
+  const bucket = 'https://bucket.test/kilifi'
+  const logged: string[] = []
+  stubTileBucket(t, bucket, {
+    '37MFR': { epsg: 32737, origin: [600_000, 9_600_040] },
+    '37MFS': { epsg: 32737, origin: [600_000, 9_700_000] },
+    '37MER': { epsg: 32737, origin: [499_980, 9_600_040] },
+    '37MES': null,
+  })
+  const kilifi = circle(-3.62, 39.905)
+  const tile = await findSiteTile(bucket, kilifi, 1500, 700, 4, msg =>
+    logged.push(msg),
+  )
+  assert.equal(tile.id, '37MFS')
+  assert.deepEqual(logged, [
+    'Could not read tile 37MES, skipping it: No Sentinel-2 scene found in tile 37MES',
+  ])
+})
+
+test('findSiteTile rethrows a read error when no tile could be read', async t => {
+  const bucket = 'https://bucket.test/kilifi-down'
+  stubTileBucket(t, bucket, { '37MFR': null, '37MES': null })
+  await assert.rejects(
+    findSiteTile(bucket, circle(-3.62, 39.905), 1500, 700, 4),
+    /No Sentinel-2 scene found in tile 37M(FR|ES)/,
   )
 })
 

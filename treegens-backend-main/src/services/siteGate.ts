@@ -40,6 +40,10 @@ export interface GateSite {
     headline?: string
     reasons?: { severity?: string; source?: string }[]
   } | null
+  /** When verifiers settled the review. */
+  reviewedAt?: Date | string | null
+  /** When the satellite result the verdict was computed from was stored. */
+  hydrology?: { completedAt?: Date | string | null } | null
 }
 
 /**
@@ -129,11 +133,26 @@ export interface SiteGateResult {
 /** Reason severities that never hold a verdict back from 'plant'. */
 const PASSIVE_SEVERITIES = new Set(['good', 'info'])
 
+function timeOf(value: Date | string | null | undefined): number {
+  return value ? new Date(value).getTime() : NaN
+}
+
 /**
- * 'plant', or 'fix_first' only because the satellite raised 'check' doubts:
- * verifiers compared those with the photos when they approved the site.
+ * The satellite result was stored no later than the review was settled. A
+ * result stored after it (a run that finished late, a recheck) rewrites the
+ * verdict, and no verifier has compared its doubts with the photos.
  */
-function verdictAllowsPlanting(verdict: GateSite['verdict']): boolean {
+function satelliteResultPredatesReview(site: GateSite): boolean {
+  return timeOf(site.hydrology?.completedAt) <= timeOf(site.reviewedAt)
+}
+
+/**
+ * 'plant', or 'fix_first' only because the satellite raised 'check' doubts
+ * that were already there when verifiers approved the site, so they
+ * compared those with the photos.
+ */
+function verdictAllowsPlanting(site: GateSite): boolean {
+  const { verdict } = site
   if (verdict?.code === 'plant') return true
   if (verdict?.code !== 'fix_first') return false
   const doubts = (verdict.reasons ?? []).filter(
@@ -141,7 +160,8 @@ function verdictAllowsPlanting(verdict: GateSite['verdict']): boolean {
   )
   return (
     doubts.length > 0 &&
-    doubts.every(r => r.source === 'satellite' && r.severity === 'check')
+    doubts.every(r => r.source === 'satellite' && r.severity === 'check') &&
+    satelliteResultPredatesReview(site)
   )
 }
 
@@ -186,7 +206,7 @@ function gateProblem(
       message: 'This site has not been approved yet.',
     }
   }
-  if (!verdictAllowsPlanting(site.verdict)) {
+  if (!verdictAllowsPlanting(site)) {
     const headline = site.verdict?.headline ?? 'unknown'
     return {
       flag: 'verdict_not_plant',

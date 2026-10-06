@@ -365,14 +365,23 @@ const satelliteDoubt = {
   source: 'satellite',
 }
 
+const SATELLITE_DONE = new Date('2026-10-01T08:00:00Z')
+const REVIEWED = new Date('2026-10-02T08:00:00Z')
+
+/** By default its satellite result was stored before verifiers approved it. */
 function fixFirstSite(
   reasons: { code: string; severity: string; source: string }[],
   status = 'approved',
+  dates: Pick<GateSite, 'reviewedAt' | 'hydrology'> = {
+    reviewedAt: REVIEWED,
+    hydrology: { completedAt: SATELLITE_DONE },
+  },
 ): GateSite {
   return {
     ...approvedSite,
     status,
     verdict: { code: 'fix_first', headline: 'Fix first', reasons },
+    ...dates,
   }
 }
 
@@ -428,6 +437,55 @@ test('fix_first stays blocked when a field reason or a satellite fix holds it ba
       'The Site Check verdict for this site is Fix first, so planting is not rewarded here.',
     )
   }
+})
+
+test('satellite doubts that arrived after the approval keep fix_first blocked', () => {
+  const doubts = [
+    { code: 'sat_too_low', severity: 'check', source: 'satellite' },
+    { code: 'tide_daily', severity: 'good', source: 'field' },
+  ]
+  const late = new Date(REVIEWED.getTime() + 60_000)
+  const unseen = [
+    // The run finished, or a recheck stored a new result, after the review.
+    fixFirstSite(doubts, 'approved', {
+      reviewedAt: REVIEWED,
+      hydrology: { completedAt: late },
+    }),
+    fixFirstSite(doubts, 'approved', {
+      reviewedAt: REVIEWED.toISOString(),
+      hydrology: { completedAt: late.toISOString() },
+    }),
+    // Without both dates nobody can tell, so it is not taken on trust.
+    fixFirstSite(doubts, 'approved', { reviewedAt: REVIEWED }),
+    fixFirstSite(doubts, 'approved', {
+      hydrology: { completedAt: SATELLITE_DONE },
+    }),
+    fixFirstSite(doubts, 'approved', {
+      reviewedAt: REVIEWED,
+      hydrology: null,
+    }),
+  ]
+  for (const site of unseen) {
+    assert.equal(enforce({ siteCheck: inside, site }).flag, 'verdict_not_plant')
+    assert.deepEqual(
+      evaluateSiteGate({ enforcement: 'warn', siteCheck: inside, site }),
+      { blockReason: null, allowAutoApprove: false, flag: 'verdict_not_plant' },
+    )
+  }
+  // A result stored at the very moment of the review counts as seen.
+  const sameTime = fixFirstSite(doubts, 'approved', {
+    reviewedAt: REVIEWED,
+    hydrology: { completedAt: REVIEWED.toISOString() },
+  })
+  assert.equal(enforce({ siteCheck: inside, site: sameTime }).flag, null)
+  // A 'plant' verdict does not depend on when the satellite result came.
+  assert.equal(
+    enforce({
+      siteCheck: inside,
+      site: { ...approvedSite, hydrology: { completedAt: late } },
+    }).flag,
+    null,
+  )
 })
 
 test('satellite doubts do not let an unapproved or non-fix_first site through', () => {

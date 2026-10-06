@@ -30,6 +30,7 @@ export function verdictOfSite(site: ISiteDoc) {
       answers: site.answers ?? {},
       hydrology: hydrologySummaryOf(site.hydrology),
       countryCode: site.countryCode,
+      longitude: site.center?.longitude,
     })
   )
 }

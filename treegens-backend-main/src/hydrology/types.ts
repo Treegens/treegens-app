@@ -18,7 +18,7 @@ export interface HydrologyInput {
   concurrency: number
   /**
    * Worker threads that decode image tiles off the event loop, 0 to 8
-   * (default 2). 0 decodes on the main thread.
+   * (default 1). 0 decodes on the main thread.
    */
   decoderWorkers?: number
   /** Overall time budget. Reading stops when it runs out. */
