@@ -69,7 +69,7 @@ they can also pick the species they planted.
 | `plant` | Plant here | Former mangrove, tide reaches it, nothing blocking, no natural regrowth |
 | `fix_first` | Fix first | Tidal flow blocked, including a pond that stays flooded behind its walls; the cause of loss is still active (cut mangroves always ask whether cutting continues); tide reach, history on open ground, wave exposure or wild seedlings unknown; exposed shore; salt crust; no natural mangroves nearby to compare with |
 | `let_regrow` | Protect it and let it regrow | Healthy forest already here, or wild seedlings arriving |
-| `not_suitable` | Not a mangrove site | Seagrass; always underwater; tide never reaches it; floods much deeper than nearby natural mangroves; rock or rubble; open ground that never held mangroves; exposed and eroding |
+| `not_suitable` | Not a mangrove site | Seagrass; always underwater; tide never reaches it; floods much deeper than nearby natural mangroves; rock or rubble; open ground that never held mangroves; exposed and eroding; mangroves not native here (French Polynesia, Hawaii) |
 
 Precedence:
 
@@ -87,7 +87,8 @@ For `plant` and `fix_first`, the verdict also recommends:
 
 - a zone: seaward, middle or landward
 - species for that zone, filtered by the country's region (East Africa,
-  Indo-West Pacific, Pacific islands, Atlantic and East Pacific)
+  Indo-West Pacific, Pacific islands, Atlantic and East Pacific). None are
+  recommended where mangroves are not native.
 - for `plant` only, when the zone has at least three suitable species, a
   nudge to plant a mix of at least three
 
@@ -140,9 +141,9 @@ The site's median wet fraction is then classified:
 | Class | Rule (checked in order) | Feeds the verdict as |
 |---|---|---|
 | `insufficient_data` | under half the site has 15+ clear observations | info only |
-| `existing_mangrove` | half or more of the site is mapped mangrove | protect, or "check" if the planter says it was cleared |
-| `permanently_wet` | median 0.9 or more | blocker (a "check" if confidence is low) |
-| `too_low` | above the fringe's 90th percentile + 0.05 | blocker (a "check" if confidence is low) |
+| `existing_mangrove` | half or more of the site is mapped mangrove | protect if the cover is healthy or unanswered; info if the planter says it was cut or is degraded; otherwise check |
+| `permanently_wet` | median 0.9 or more | blocker (a "check" if confidence is low, or if the planter reports blocked flow, opened or not, since two years of images may predate the fix) |
+| `too_low` | above the fringe's 90th percentile + 0.05 | same as `permanently_wet` |
 | `borderline_low` | above the fringe's 75th percentile | check; recommends the seaward zone |
 | `in_range` | 0.02 or more | good |
 | `rarely_wet` | under 0.02 | a "check" if the planter says the tide comes daily; otherwise info, landward zone |
@@ -260,6 +261,9 @@ none was set yet. The submission keeps a snapshot:
 - the site's status and verdict
 - whether the videos were filmed inside the site. The farther of the before
   and planting videos counts, and a `SITE_GPS_TOLERANCE_M` margin is allowed.
+  Note: the current app sends the before video's GPS with the planting
+  video too, as it always has (health checks are anchored to it, within
+  5 m), so in practice the before video decides.
 - the distance from the site
 
 After a land upload, the app warns the planter straight away if the before
@@ -271,6 +275,7 @@ A site passes the planting gate when all of these hold:
 - it is approved
 - the planting is inside it
 - its verdict is `plant`, or `fix_first` only because of satellite doubts
+  that were already known when the verifiers approved it
 
 The second case exists because satellite doubts are things verifier approval
 settles: for example, the 2021 map still showing forest, or a borderline wet
@@ -337,7 +342,7 @@ Swagger at `/docs` has the full shapes.
 | Variable | Default | Meaning |
 |---|---|---|
 | `SITE_HYDROLOGY_ENABLED` | `true` | Run the satellite check |
-| `ENABLE_SITE_HYDROLOGY_SWEEPER` | on (set `false` to disable) | Retry sweeper in the API process |
+| `ENABLE_SITE_HYDROLOGY_SWEEPER` | on (set `false` to disable) | Sweeper in the API process: retries failures and starts sites waiting over the queue caps. With it off, every site joins the in-memory queue directly. |
 | `SITE_HYDROLOGY_YEARS` | `2` | Years of imagery, 1 to 5 |
 | `SITE_HYDROLOGY_REFERENCE_RADIUS_M` | `1500` | Search radius for nearby mangroves |
 | `SITE_HYDROLOGY_MAX_CLOUD_PCT` | `80` | Tile cloud filter |
