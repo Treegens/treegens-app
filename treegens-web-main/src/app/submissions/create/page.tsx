@@ -7,8 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { GrLocation } from 'react-icons/gr'
 import { HiArrowLeft, HiArrowPath } from 'react-icons/hi2'
-import { IoVideocamOutline } from 'react-icons/io5'
 import { MdClose } from 'react-icons/md'
+import { RecordVideoCue } from '@/components/ui/PulseRings'
 import { guidelines } from '@/modules/createSubmission/guidelines'
 import UploadProgressModal from '@/components/Modals/UploadProgressModal'
 import VideoSavedSuccessModal from '@/components/Modals/VideoSavedSuccessModal'
@@ -788,11 +788,8 @@ export default function NewPlant() {
                   </button>
                 </div>
               ) : (
-                <label className="relative flex aspect-[2/1] w-full cursor-pointer items-center justify-center rounded-xl bg-[#f7fbf3] shadow-md">
-                  <IoVideocamOutline
-                    className="pointer-events-none h-10 w-10 text-[#435f24]"
-                    aria-hidden
-                  />
+                <label className="relative flex aspect-[2/1] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-[#b6bf56] bg-[#f7fbf3] shadow-md">
+                  <RecordVideoCue label="Tap to record the land" />
                   <input
                     className="absolute inset-0 cursor-pointer opacity-0"
                     ref={inputRef}
@@ -823,11 +820,8 @@ export default function NewPlant() {
                 </button>
               </div>
             ) : (
-              <label className="relative flex aspect-[2/1] w-full cursor-pointer items-center justify-center rounded-xl bg-[#f7fbf3] shadow-md">
-                <IoVideocamOutline
-                  className="pointer-events-none h-10 w-10 text-[#435f24]"
-                  aria-hidden
-                />
+              <label className="relative flex aspect-[2/1] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-[#b6bf56] bg-[#f7fbf3] shadow-md">
+                <RecordVideoCue label="Tap to record the planting" />
                 <input
                   className="absolute inset-0 cursor-pointer opacity-0"
                   ref={inputRef2}

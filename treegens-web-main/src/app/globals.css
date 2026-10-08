@@ -272,3 +272,69 @@
     transform: scale(0.99);
   }
 }
+
+/*
+ * "Tap here" motion for the two places a planter starts: the tree button in
+ * the tab bar and the empty land/plant video slots. The button breathes and
+ * rings ripple out from it like waves on water. Rings never take a tap.
+ */
+@keyframes tg-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+@keyframes tg-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  55% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.75);
+    opacity: 0;
+  }
+}
+
+.tg-breathe {
+  animation: tg-breathe 2.4s ease-in-out infinite;
+}
+
+.tg-ripple {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  border: 3px solid #9ea74e;
+  background-color: rgb(211 225 101 / 0.3);
+  animation: tg-ripple 2.4s cubic-bezier(0.25, 0.6, 0.35, 1) infinite;
+}
+
+.tg-ripple-2 {
+  animation-delay: 0.8s;
+}
+
+.tg-ripple-3 {
+  animation-delay: 1.6s;
+}
+
+/* Still visibly a target, just not moving. */
+@media (prefers-reduced-motion: reduce) {
+  .tg-breathe {
+    animation: none;
+  }
+  .tg-ripple {
+    animation: none;
+    opacity: 0.6;
+    transform: scale(1.18);
+  }
+  .tg-ripple-2,
+  .tg-ripple-3 {
+    display: none;
+  }
+}

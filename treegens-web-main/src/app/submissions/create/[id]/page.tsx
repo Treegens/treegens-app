@@ -4,6 +4,7 @@ import UploadProgressModal from '@/components/Modals/UploadProgressModal'
 import { SubmissionCompleteCelebration } from '@/components/submission/SubmissionCompleteCelebration'
 import { TwoVideoProofSteps } from '@/components/submission/TwoVideoProofSteps'
 import { Button } from '@/components/ui/Button'
+import { RecordVideoCue } from '@/components/ui/PulseRings'
 import { Spinner } from '@/components/ui/Spinner'
 import { useConnectivity } from '@/contexts/ConnectivityProvider'
 import { getSubmissionById } from '@/services/app'
@@ -547,16 +548,13 @@ export default function CompleteSubmissionPage() {
                     setIsDragOverPlant(false)
                   }}
                   onDrop={e => void onPlantDrop(e)}
-                  className={`relative flex aspect-[2/1] w-full cursor-pointer items-center justify-center rounded-xl shadow-md ${
+                  className={`relative flex aspect-[2/1] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-[#b6bf56] shadow-md ${
                     isDragOverPlant
                       ? 'bg-[#e8f7ed] ring-2 ring-tree-green-2'
                       : 'bg-[#f7fbf3]'
                   }`}
                 >
-                  <IoVideocamOutline
-                    className="pointer-events-none h-10 w-10 text-[#435f24]"
-                    aria-hidden
-                  />
+                  <RecordVideoCue label="Tap to record the planting" />
                   <input
                     type="file"
                     accept="video/*"
