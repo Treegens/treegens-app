@@ -1,0 +1,13 @@
+{
+  "name": "canopy",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Draft, approve and send replies to people who already DM'd you on X.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0"
+  }
+}

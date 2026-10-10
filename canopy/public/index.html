@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canopy</title>
+  <meta name="description" content="Draft, approve and send replies to people who already DM'd you on X.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/leaf.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="/leaf.svg" alt="" width="22" height="22">
+      <span>Canopy</span>
+    </div>
+    <div id="account" class="account"></div>
+  </header>
+
+  <main>
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <section id="setup" class="panel setup" hidden>
+      <h1>Connect your X account</h1>
+      <p class="muted">Canopy reads your DM inbox through the X API and only replies to people who already messaged you. Reads and sends are billed to your own X developer app.</p>
+      <div id="setup-oauth"></div>
+      <details class="manual">
+        <summary>Paste a user access token instead</summary>
+        <p class="muted small">Use this if you minted a token yourself. It needs <code>dm.read</code>, <code>dm.write</code>, <code>tweet.read</code> and <code>users.read</code>. An app-only Bearer Token won't work for DMs.</p>
+        <form id="manual-form" class="row">
+          <input id="manual-token" type="password" autocomplete="off" spellcheck="false" placeholder="User access token" aria-label="User access token">
+          <button type="submit" class="btn">Save token</button>
+        </form>
+      </details>
+    </section>
+
+    <section class="panel voice">
+      <details id="voice-box">
+        <summary>
+          <span>How replies should sound</span>
+          <span id="voice-summary" class="muted small"></span>
+        </summary>
+        <label for="voice">About you and how you write</label>
+        <textarea id="voice" rows="3" placeholder="e.g. I'm Jimi, founder of Treegens. Warm, direct, short. First names. Point planters to the app, partners to a call."></textarea>
+        <label for="goal">Goal for this round <span class="muted">(optional)</span></label>
+        <textarea id="goal" rows="2" placeholder="e.g. Let everyone know the new app is live and ask if they want early access."></textarea>
+      </details>
+    </section>
+
+    <section class="toolbar" aria-label="Inbox controls">
+      <div class="row wrap">
+        <button id="load" class="btn">Load inbox</button>
+        <button id="older" class="btn ghost" disabled>Load older</button>
+        <button id="all" class="btn ghost" disabled>Load all 30 days</button>
+        <span id="load-status" class="muted small"></span>
+      </div>
+      <div class="row wrap between">
+        <div class="seg" role="tablist" aria-label="Filter">
+          <button id="f-waiting" role="tab" aria-selected="true">Waiting on you <b id="c-waiting">0</b></button>
+          <button id="f-all" role="tab" aria-selected="false">Everyone who DM'd you <b id="c-all">0</b></button>
+        </div>
+        <div class="row wrap">
+          <button id="suggest" class="btn ghost">Suggest next 12</button>
+          <button id="approve-all" class="btn ghost">Approve drafted <b id="c-drafted">0</b></button>
+          <button id="send" class="btn primary">Send approved <b id="c-approved">0</b></button>
+        </div>
+      </div>
+    </section>
+
+    <div id="sample-banner" class="banner" hidden>
+      These are sample conversations so you can see how it works. They can't be sent. Connect X and load your inbox to see the real people who messaged you.
+    </div>
+
+    <section id="list" class="list" aria-label="Conversations"></section>
+    <p id="empty" class="empty muted" hidden></p>
+  </main>
+
+  <div id="sendbar" class="sendbar" hidden>
+    <div class="sendbar-inner">
+      <div>
+        <div id="send-label">Sending…</div>
+        <div class="bar"><span id="send-progress"></span></div>
+      </div>
+      <button id="send-stop" class="btn">Stop</button>
+    </div>
+  </div>
+
+  <dialog id="confirm">
+    <form method="dialog">
+      <h2 id="confirm-title">Send?</h2>
+      <p id="confirm-body" class="muted"></p>
+      <ul id="confirm-list" class="confirm-list"></ul>
+      <div class="row end">
+        <button value="cancel" class="btn ghost">Cancel</button>
+        <button value="ok" class="btn primary" id="confirm-ok">Send</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

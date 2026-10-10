@@ -1,0 +1,21 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# X sends the OAuth redirect here; the single page handles it.
+[[redirects]]
+  from = "/callback"
+  to = "/index.html"
+  status = 200
+
+# The X token lives in this page's localStorage, so lock scripts down to our own.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://pbs.twimg.com https://abs.twimg.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    Referrer-Policy = "no-referrer"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
