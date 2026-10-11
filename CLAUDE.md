@@ -23,6 +23,18 @@ If you believe the mainnet web app is ready to serve `treegens.app`:
 watchdog table in `~/.claude/guards/treegens-domain-guard.mjs`, or your
 change will be automatically undone within 10 minutes.
 
+## 🙋 Do it yourself (Jimi's standing preference, 2026-10-11)
+
+**Jimi would always rather Claude do it than hand him steps to do by hand.**
+That covers deploys, publishing a Netlify draft, pushes and similar actions
+Claude has the access for. Don't end with "click X in the dashboard" when
+you can do X. If a permission check blocks an action, say so plainly and ask
+Jimi in chat for an explicit go-ahead (or a permission rule) so you can do it
+yourself, rather than handing him the manual steps.
+
+This does not override the rules above: the domain and $MGRO rules still
+stand, and "Jimi explicitly says so" still means exactly that.
+
 ## 🪙 Canonical $MGRO (Jimi's decision, 2026-07-24)
 
 **The mainnet MGRO token is `0x46e564D039d0d7Ec4C88d517fD32a03d15e88568`.**
