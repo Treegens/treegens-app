@@ -150,6 +150,12 @@ textarea { resize: vertical; }
 .voice summary { cursor: pointer; font-weight: 600; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .voice label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
 
+.archive { padding: 12px 16px; }
+.archive summary { cursor: pointer; font-weight: 600; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.archive .steps { margin: 8px 0 12px; padding-left: 20px; }
+.archive .steps li { margin: 4px 0; }
+.archive a { color: var(--accent); }
+
 .toolbar {
   position: sticky;
   top: 49px;
@@ -267,7 +273,7 @@ textarea { resize: vertical; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 
-.empty { text-align: center; padding: 40px 0; }
+p.empty { text-align: center; padding: 40px 0; }
 
 .sendbar {
   position: fixed;

@@ -12,6 +12,14 @@
   const MAX_RATE_WAIT_MS = 16 * 60 * 1000;
   const LOAD_ALL_MAX_PAGES = 50;
   const DM_MAX_CHARS = 10000;
+  const USERS_LOOKUP_BATCH = 100;
+  const DRAFT_ALL_CONFIRM_OVER = 20;
+  const DRAFT_RATE_PAUSE_MS = 15_000;
+  const SEND_403_STOP_AFTER = 3;
+  // What's kept of an imported archive across reloads. localStorage holds about
+  // 5 MB, and a draft only needs the recent end of each thread.
+  const ARCHIVE_KEEP_PER_THREAD = 10;
+  const ARCHIVE_KEEP_CHARS = 500;
 
   // ---------- small helpers ----------
 
@@ -104,7 +112,7 @@
     let hint = "";
     if (status === 402 || /credit|payment|billing/i.test(detail)) {
       hint = " Add API credits to your app in console.x.com.";
-    } else if (status === 403 && !data?.code) {
+    } else if (status === 403 && !data?.code && !/permitted|not allowed|cannot send|can't send|recipient|blocked/i.test(detail)) {
       hint = " Check the app has Read, write and Direct message permissions and the token has dm.read and dm.write.";
     } else if (status === 401 && !data?.code) {
       hint = " Your X token was rejected. Reconnect X.";
@@ -123,6 +131,7 @@
     session: store.get("canopy.session"), // { token, exp }
     me: store.get("canopy.me"), // { id, name, username, profile_image_url }
     drafts: store.get("canopy.drafts", {}), // convId -> { text, status, basedOn }
+    archive: store.get("canopy.archive"), // { owner, events, users, gone } from an imported X archive
     skipped: store.get("canopy.skipped", {}), // convId -> lastInboundId when skipped
     voice: store.get("canopy.voice", ""),
     goal: store.get("canopy.goal", ""),
@@ -131,10 +140,16 @@
     users: new Map(),
     nextToken: null,
     loaded: false,
+    imported: false,
+    importing: false,
+    gone: new Set(), // accounts X says are deleted or suspended
     loading: false,
     loadingAll: false,
     stopLoadAll: false,
+    draftingAll: false,
+    stopDraftAll: false,
     hiddenCold: 0,
+    hiddenGone: 0,
     threads: [],
     busy: new Set(),
     errors: new Map(),
@@ -360,7 +375,9 @@
     saveMe(null);
     S.events.clear();
     S.users.clear();
+    S.gone.clear();
     S.loaded = false;
+    S.imported = false;
     S.nextToken = null;
     if (auth?.source === "oauth") {
       for (const [token, hint] of [[auth.access_token, "access_token"], [auth.refresh_token, "refresh_token"]]) {
@@ -467,15 +484,22 @@
     }
   }
 
+  const hasRealData = () => S.loaded || S.imported;
+
+  // The other person in a one-to-one conversation ("lowId-highId"), or null for
+  // group conversations, notes to self and conversations you're not in.
+  function otherIdOf(convId) {
+    const m = /^(\d+)-(\d+)$/.exec(convId || "");
+    if (!m || m[1] === m[2] || !S.me) return null;
+    return m[1] === S.me.id ? m[2] : m[2] === S.me.id ? m[1] : null;
+  }
+
   function buildThreads() {
-    if (!S.loaded || !S.me) return connected() ? [] : sampleThreads();
-    const myId = S.me.id;
+    if (!hasRealData() || !S.me) return connected() ? [] : sampleThreads();
     const byConv = new Map();
     for (const e of S.events.values()) {
       if (e.event_type !== "MessageCreate") continue;
-      const m = /^(\d+)-(\d+)$/.exec(e.dm_conversation_id || "");
-      if (!m || m[1] === m[2]) continue; // group conversation or a note to self
-      const otherId = m[1] === myId ? m[2] : m[2] === myId ? m[1] : null;
+      const otherId = otherIdOf(e.dm_conversation_id);
       if (!otherId) continue;
       if (!byConv.has(e.dm_conversation_id)) byConv.set(e.dm_conversation_id, { otherId, events: [] });
       byConv.get(e.dm_conversation_id).events.push(e);
@@ -483,6 +507,7 @@
 
     const threads = [];
     let cold = 0;
+    let gone = 0;
     for (const [id, { otherId, events }] of byConv) {
       events.sort((a, b) => cmpId(a.id, b.id));
       const messages = events.map((e) => ({
@@ -498,6 +523,11 @@
         cold += 1;
         continue;
       }
+      // Deleted or suspended accounts can't receive DMs.
+      if (S.gone.has(otherId)) {
+        gone += 1;
+        continue;
+      }
       const last = messages[messages.length - 1];
       const u = S.users.get(otherId) || {};
       threads.push({
@@ -509,11 +539,215 @@
         lastAt: last.at,
         waiting: last.from === "them",
         sample: false,
+        archived: events.some((e) => e.archived),
       });
     }
     threads.sort((a, b) => cmpId(b.lastInboundId, a.lastInboundId));
     S.hiddenCold = cold;
+    S.hiddenGone = gone;
     return threads;
+  }
+
+  // ---------- archive import ----------
+
+  // X only serves the last 30 days of DMs. The X data archive has all of them,
+  // in data/direct-messages.js (split into -partN files when big):
+  //   window.YTD.direct_messages.part0 = [ { "dmConversation": {
+  //     "conversationId": "12-34", "messages": [ { "messageCreate": {
+  //       "id", "senderId", "recipientId", "text", "createdAt", "mediaUrls" } } ] } } ]
+  // Event and conversation IDs are the same ones the API uses, so archived and
+  // freshly loaded messages merge without duplicates.
+
+  const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+  const unescapeText = (s) => String(s ?? "").replace(/&(amp|lt|gt|quot|#39);/g, (m) => ENTITIES[m]);
+
+  function parseArchiveFile(text) {
+    const start = text.indexOf("[");
+    if (start < 0) throw new Error("no conversations in it");
+    const rows = JSON.parse(text.slice(start));
+    if (!Array.isArray(rows)) throw new Error("no conversations in it");
+    const events = [];
+    for (const row of rows) {
+      const conv = row?.dmConversation;
+      if (!conv?.conversationId || !Array.isArray(conv.messages)) continue;
+      for (const item of conv.messages) {
+        const mc = item?.messageCreate;
+        if (!mc?.id || !mc.senderId) continue;
+        const media = Array.isArray(mc.mediaUrls) && mc.mediaUrls.length > 0;
+        events.push({
+          id: String(mc.id),
+          event_type: "MessageCreate",
+          text: unescapeText(mc.text) || (media ? "(media)" : ""),
+          sender_id: String(mc.senderId),
+          dm_conversation_id: String(conv.conversationId),
+          created_at: mc.createdAt,
+          attachments: media || undefined,
+          archived: true,
+        });
+      }
+    }
+    return events;
+  }
+
+  async function importArchive(files) {
+    if (S.importing || S.sending || files.length === 0) return;
+    if (!connected() || !S.me) {
+      notify("Connect X first, so Canopy knows which side of each conversation is you.", "warn");
+      return;
+    }
+    S.importing = true;
+    renderArchive();
+    try {
+      const events = [];
+      for (const file of files) {
+        try {
+          events.push(...parseArchiveFile(await file.text()));
+        } catch (err) {
+          throw new Error(`${file.name} isn't an X DM archive file (${err.message}). Pick data/direct-messages.js from the unzipped archive.`);
+        }
+      }
+      const oneToOne = events.filter((e) => /^\d+-\d+$/.test(e.dm_conversation_id));
+      const mine = oneToOne.filter((e) => otherIdOf(e.dm_conversation_id));
+      if (oneToOne.length === 0) {
+        throw new Error("No one-to-one DMs in those files. Pick direct-messages.js, not direct-messages-group.js.");
+      }
+      if (mine.length === 0) {
+        throw new Error(`That archive is from a different X account. You're connected as @${S.me.username}.`);
+      }
+      let added = 0;
+      for (const e of mine) {
+        if (S.events.has(e.id)) continue;
+        S.events.set(e.id, e);
+        added += 1;
+      }
+      S.imported = true;
+      rebuild();
+      saveArchive();
+      await lookupUsers();
+      const saved = saveArchive();
+      rebuild();
+      const people = S.threads.filter((t) => t.archived).length;
+      const parts = [`Imported ${added.toLocaleString()} messages. ${people.toLocaleString()} ${people === 1 ? "person" : "people"} from your archive DM'd you.`];
+      if (S.hiddenGone) parts.push(`${S.hiddenGone} deleted or suspended ${S.hiddenGone === 1 ? "account is" : "accounts are"} hidden.`);
+      if (!saved) parts.push("It's too big to keep after a reload, so import it again next time.");
+      notify(parts.join(" "), saved ? undefined : "warn");
+      if (S.filter !== "all") {
+        S.filter = "all";
+        store.set("canopy.filter", "all");
+        renderList();
+      }
+    } catch (err) {
+      notify(err.message, "error");
+    } finally {
+      S.importing = false;
+      renderArchive();
+      renderToolbar();
+    }
+  }
+
+  // GET with a wait when X rate limits us, for reads that can't be skipped.
+  async function xGetPatiently(path, label) {
+    for (;;) {
+      const res = await xFetch(path);
+      if (res.status !== 429) return res;
+      const reset = Number(res.headers.get("x-rate-limit-reset"));
+      const wait = Math.max(reset ? reset * 1000 - Date.now() + 1000 : 60_000, 5000);
+      if (wait > MAX_RATE_WAIT_MS) return res;
+      const until = Date.now() + wait;
+      while (Date.now() < until) {
+        notify(`${label} X rate limit, resuming in ${Math.ceil((until - Date.now()) / 1000)}s…`);
+        await sleep(1000);
+      }
+    }
+  }
+
+  // The archive only has account IDs. Look up names and handles, 100 per call.
+  // IDs X doesn't return are deleted or suspended accounts.
+  async function lookupUsers() {
+    const ids = [...new Set(S.threads.filter((t) => !t.sample).map((t) => t.otherId))].filter(
+      (id) => !S.users.has(id) && !S.gone.has(id),
+    );
+    for (let i = 0; i < ids.length; i += USERS_LOOKUP_BATCH) {
+      const batch = ids.slice(i, i + USERS_LOOKUP_BATCH);
+      const label = `Looking up names on X: ${Math.min(i + batch.length, ids.length).toLocaleString()} of ${ids.length.toLocaleString()}.`;
+      notify(label);
+      const res = await xGetPatiently(`2/users?ids=${batch.join(",")}&user.fields=name,username,profile_image_url`, label);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = xError(res.status, data);
+        err.message += " Import the file again to finish looking up names.";
+        throw err;
+      }
+      const found = new Set();
+      for (const u of data.data || []) {
+        S.users.set(u.id, u);
+        found.add(u.id);
+      }
+      for (const id of batch) if (!found.has(id)) S.gone.add(id);
+    }
+  }
+
+  // Remembers the recent end of each archived thread so a reload doesn't need
+  // a re-import. Returns false when it doesn't fit in localStorage.
+  function saveArchive() {
+    if (!S.imported || !S.me) return false;
+    const byConv = new Map();
+    for (const e of S.events.values()) {
+      if (!e.archived) continue;
+      if (!byConv.has(e.dm_conversation_id)) byConv.set(e.dm_conversation_id, []);
+      byConv.get(e.dm_conversation_id).push(e);
+    }
+    const events = [];
+    const users = {};
+    for (const [conv, list] of byConv) {
+      list.sort((a, b) => cmpId(a.id, b.id));
+      for (const e of list.slice(-ARCHIVE_KEEP_PER_THREAD)) {
+        events.push([e.id, e.sender_id, conv, e.created_at, String(e.text).slice(0, ARCHIVE_KEEP_CHARS)]);
+      }
+      const u = S.users.get(otherIdOf(conv));
+      if (u) users[u.id] = [u.name, u.username, u.profile_image_url || null];
+    }
+    const archive = { owner: S.me.id, events, users, gone: [...S.gone] };
+    try {
+      localStorage.setItem("canopy.archive", JSON.stringify(archive));
+      S.archive = archive;
+      return true;
+    } catch {
+      try {
+        localStorage.removeItem("canopy.archive");
+      } catch {
+        // Storage is off entirely.
+      }
+      S.archive = null;
+      return false;
+    }
+  }
+
+  function restoreArchive() {
+    const a = S.archive;
+    if (S.imported || !a || !connected() || a.owner !== S.me?.id) return;
+    for (const [id, sender_id, dm_conversation_id, created_at, text] of a.events || []) {
+      if (S.events.has(id)) continue;
+      S.events.set(id, { id, event_type: "MessageCreate", text, sender_id, dm_conversation_id, created_at, archived: true });
+    }
+    for (const [id, [name, username, profile_image_url]] of Object.entries(a.users || {})) {
+      if (!S.users.has(id)) S.users.set(id, { id, name, username, profile_image_url });
+    }
+    for (const id of a.gone || []) S.gone.add(id);
+    S.imported = true;
+  }
+
+  async function forgetArchive() {
+    if (S.sending || S.importing || S.draftingAll) return;
+    for (const [id, e] of S.events) if (e.archived) S.events.delete(id);
+    S.archive = null;
+    store.set("canopy.archive", null);
+    S.imported = false;
+    S.gone.clear();
+    rebuild();
+    // Bring back the last 30 days so the list isn't left empty.
+    if (!S.loaded && connected()) await loadInbox();
+    if ($("notice").hidden) notify("Forgot the imported archive.");
   }
 
   // ---------- drafts ----------
@@ -562,7 +796,10 @@
     return connected() && S.config?.drafting !== false;
   }
 
+  // Returns 0 when a draft was written, otherwise the HTTP status (-1 if the
+  // request never got an answer).
   async function draftFor(t, retried = false) {
+    let failed = 0;
     S.busy.add(t.id);
     S.errors.delete(t.id);
     updateCard(t);
@@ -588,34 +825,116 @@
         await refreshSession();
         return await draftFor(t, true);
       }
-      if (!res.ok) throw new Error(data.error || `Drafting failed (${res.status}).`);
+      if (!res.ok) {
+        failed = res.status;
+        throw new Error(data.error || `Drafting failed (${res.status}).`);
+      }
       setDraft(t.id, { text: data.draft, status: "drafted", basedOn: t.lastInboundId });
     } catch (err) {
+      failed ||= -1;
       S.errors.set(t.id, err.message);
     } finally {
       S.busy.delete(t.id);
       updateCard(t);
       renderToolbar();
     }
+    return failed;
   }
 
+  // Drafts the given threads a few at a time. Pauses on Claude rate limits and
+  // gives up when the server can't draft at all (no key, rejected key).
+  async function runDrafts(picks, { stopped = () => false, progress } = {}) {
+    const queue = [...picks];
+    let attempted = 0;
+    let done = 0;
+    let rateHits = 0;
+    let fatal = null;
+    const worker = async () => {
+      while (queue.length && !stopped() && !fatal) {
+        const t = queue.shift();
+        const failed = await draftFor(t);
+        if (failed === 429 && rateHits < 20) {
+          rateHits += 1;
+          queue.push(t);
+          await sleep(DRAFT_RATE_PAUSE_MS);
+          continue;
+        }
+        if (failed === 503) {
+          fatal = S.errors.get(t.id);
+          break;
+        }
+        attempted += 1;
+        if (!failed) done += 1;
+        progress?.(attempted, picks.length);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(DRAFT_CONCURRENCY, picks.length) }, worker));
+    if (fatal) notify(fatal, "error");
+    return { done, fatal };
+  }
+
+  function canDraft() {
+    if (draftingEnabled()) return true;
+    notify(connected() ? "Drafting is off until ANTHROPIC_API_KEY is set on Netlify." : "Connect X first. Drafting is locked to your account.", "warn");
+    return false;
+  }
+
+  const undrafted = () => visibleThreads().filter((t) => statusOf(t) === "empty");
+
   async function suggestNext() {
-    if (!draftingEnabled()) {
-      notify(connected() ? "Drafting is off until ANTHROPIC_API_KEY is set on Netlify." : "Connect X first. Drafting is locked to your account.", "warn");
-      return;
-    }
-    const picks = visibleThreads()
-      .filter((t) => statusOf(t) === "empty")
-      .slice(0, SUGGEST_BATCH);
+    if (S.draftingAll || !canDraft()) return;
+    const picks = undrafted().slice(0, SUGGEST_BATCH);
     if (picks.length === 0) {
       notify("Every conversation in this view already has a draft.");
       return;
     }
-    const queue = [...picks];
-    const worker = async () => {
-      while (queue.length) await draftFor(queue.shift());
-    };
-    await Promise.all(Array.from({ length: Math.min(DRAFT_CONCURRENCY, picks.length) }, worker));
+    await runDrafts(picks);
+  }
+
+  // One click to draft everyone in the current view, for replying to (or
+  // announcing something to) everybody who ever DM'd you. Click again to stop.
+  async function draftAll() {
+    if (S.draftingAll) {
+      S.stopDraftAll = true;
+      renderToolbar();
+      return;
+    }
+    if (!canDraft()) return;
+    const picks = undrafted();
+    if (picks.length === 0) {
+      notify("Every conversation in this view already has a draft.");
+      return;
+    }
+    if (
+      picks.length > DRAFT_ALL_CONFIRM_OVER &&
+      !(await ask({
+        title: `Draft ${picks.length.toLocaleString()} replies?`,
+        body: "Each draft is one Claude call, billed to the Anthropic key on the server. You can stop at any time, and nothing goes out until you approve and send.",
+        ok: `Draft ${picks.length.toLocaleString()}`,
+      }))
+    ) {
+      return;
+    }
+    S.draftingAll = true;
+    S.stopDraftAll = false;
+    renderToolbar();
+    try {
+      const { done, fatal } = await runDrafts(picks, {
+        stopped: () => S.stopDraftAll,
+        progress: (n, total) => notify(`Drafted ${n.toLocaleString()} of ${total.toLocaleString()}. Click Stop drafting to pause.`),
+      });
+      if (!fatal) {
+        const failed = picks.filter((t) => S.errors.has(t.id)).length;
+        const parts = [S.stopDraftAll ? `Stopped after ${done.toLocaleString()} drafts.` : `Drafted ${done.toLocaleString()}.`];
+        if (failed) parts.push(`${failed} failed, see the red notes.`);
+        parts.push("Read them over, then Approve drafted and Send approved.");
+        notify(parts.join(" "), failed ? "warn" : undefined);
+      }
+    } finally {
+      S.draftingAll = false;
+      S.stopDraftAll = false;
+      renderToolbar();
+    }
   }
 
   function approveAll() {
@@ -644,21 +963,29 @@
     );
   }
 
-  function confirmSend(list) {
+  function ask({ title, body, items = [], ok }) {
     return new Promise((resolve) => {
       const dlg = $("confirm");
-      $("confirm-title").textContent = `Send ${list.length} ${list.length === 1 ? "DM" : "DMs"}?`;
-      $("confirm-body").textContent =
-        "Each reply goes into your existing conversation with that person, as written in its box. This can't be undone.";
+      $("confirm-title").textContent = title;
+      $("confirm-body").textContent = body;
       const ul = $("confirm-list");
-      ul.replaceChildren(
-        ...list.slice(0, 12).map((t) => el("li", { text: `${t.user.name} (@${t.user.username})` })),
-        list.length > 12 ? el("li", { text: `and ${list.length - 12} more` }) : null,
-      );
-      $("confirm-ok").textContent = `Send ${list.length}`;
+      ul.replaceChildren(...items.map((text) => el("li", { text })));
+      ul.hidden = items.length === 0;
+      $("confirm-ok").textContent = ok;
       dlg.addEventListener("close", () => resolve(dlg.returnValue === "ok"), { once: true });
       dlg.returnValue = "";
       dlg.showModal();
+    });
+  }
+
+  function confirmSend(list) {
+    const items = list.slice(0, 12).map((t) => `${t.user.name} (@${t.user.username})`);
+    if (list.length > 12) items.push(`and ${(list.length - 12).toLocaleString()} more`);
+    return ask({
+      title: `Send ${list.length.toLocaleString()} ${list.length === 1 ? "DM" : "DMs"}?`,
+      body: "Each reply goes into your existing conversation with that person, as written in its box. This can't be undone.",
+      items,
+      ok: `Send ${list.length.toLocaleString()}`,
     });
   }
 
@@ -672,7 +999,7 @@
     }
     if (!(await confirmSend(list))) return;
 
-    S.sending = { total: list.length, done: 0, failed: 0, stop: false, current: null };
+    S.sending = { total: list.length, done: 0, failed: 0, stop: false, current: null, lastStatus: 0, refusals: 0, reason: "" };
     showSendbar();
     try {
       for (const t of list) {
@@ -686,6 +1013,14 @@
         S.sending.current = null;
         if (ok) S.sending.done += 1;
         else S.sending.failed += 1;
+        // A few people may have closed their DMs, but if the very first sends
+        // are all refused, the app or token can't send at all. Don't burn
+        // through the whole list.
+        S.sending.refusals = !ok && S.sending.lastStatus === 403 ? S.sending.refusals + 1 : 0;
+        if (S.sending.done === 0 && S.sending.refusals >= SEND_403_STOP_AFTER) {
+          S.sending.stop = true;
+          S.sending.reason = `X refused the first ${SEND_403_STOP_AFTER} sends, so Canopy stopped. ${S.errors.get(t.id) || ""}`.trim();
+        }
         updateCard(t);
         renderToolbar();
         setSendProgress();
@@ -693,20 +1028,22 @@
         await sleep(SEND_GAP_MS);
       }
     } finally {
-      const { done, failed, stop, total } = S.sending;
+      const { done, failed, stop, total, reason } = S.sending;
       S.sending = null;
       hideSendbar();
       rebuild();
       const skipped = total - done - failed;
-      const parts = [`Sent ${done} of ${total}.`];
+      const parts = [`Sent ${done.toLocaleString()} of ${total.toLocaleString()}.`];
       if (failed) parts.push(`${failed} failed, see the red notes.`);
-      if (stop && skipped > 0) parts.push(`Stopped before the last ${skipped}.`);
+      if (stop && skipped > 0) parts.push(`Stopped before the last ${skipped.toLocaleString()}.`);
+      if (reason) parts.push(reason);
       notify(parts.join(" "), failed ? "warn" : undefined);
     }
   }
 
   async function sendOne(t) {
     const text = draftOf(t).text.trim();
+    S.sending.lastStatus = 0;
     for (;;) {
       let res;
       try {
@@ -749,6 +1086,7 @@
         continue;
       }
       S.errors.set(t.id, xError(res.status, data).message);
+      S.sending.lastStatus = res.status;
       if (res.status === 401 || res.status === 402) S.sending.stop = true;
       return false;
     }
@@ -894,6 +1232,13 @@
     const sendingAny = Boolean(S.sending);
 
     card.className = `card ${status}`;
+    // Names arrive late for imported threads (looked up after the cards exist).
+    const who = `${t.user.name}|${t.user.avatar || ""}`;
+    if (card._who !== who) {
+      card._who = who;
+      card.querySelector(".name").textContent = t.user.name;
+      card.querySelector(".card-head").firstElementChild.replaceWith(avatar(t.user));
+    }
     card.querySelector(".meta").textContent = `@${t.user.username} · ${t.waiting ? "waiting on you" : "you replied last"} · ${ago(t.lastAt)}`;
     const pill = card.querySelector(".pill");
     pill.textContent = PILL_TEXT[status] || "";
@@ -992,10 +1337,10 @@
     const empty = $("empty");
     if (visible.length === 0) {
       empty.hidden = false;
-      empty.textContent = !S.loaded
+      empty.textContent = !hasRealData()
         ? "Load your inbox to see who messaged you."
         : S.threads.length === 0
-          ? "Nobody has DM'd you in the loaded history. Try Load older."
+          ? "Nobody has DM'd you in the loaded history. Try Load older, or import your X archive."
           : "You're caught up. Nobody in this view is waiting on you.";
     } else {
       empty.hidden = true;
@@ -1005,7 +1350,7 @@
   }
 
   function renderToolbar() {
-    const real = S.loaded;
+    const real = hasRealData();
     const waiting = S.threads.filter((t) => t.waiting && !isSkipped(t)).length;
     $("c-waiting").textContent = waiting;
     $("c-all").textContent = S.threads.length;
@@ -1020,20 +1365,42 @@
     $("older").disabled = busy || !S.nextToken;
     $("all").disabled = Boolean(S.sending) || (!S.loadingAll && (S.loading || !S.nextToken));
     $("all").textContent = S.loadingAll ? "Stop loading" : "Load all 30 days";
-    $("suggest").disabled = Boolean(S.sending) || !draftingEnabled();
+    $("suggest").disabled = Boolean(S.sending) || S.draftingAll || !draftingEnabled();
+    const draftAllBtn = $("suggest-all");
+    draftAllBtn.disabled = Boolean(S.sending) || S.importing || (!S.draftingAll && !draftingEnabled());
+    draftAllBtn.replaceChildren(...(S.draftingAll ? ["Stop drafting"] : ["Draft all ", countEmpty]));
+    countEmpty.textContent = undrafted().length.toLocaleString();
     $("approve-all").disabled = Boolean(S.sending);
-    $("send").disabled = Boolean(S.sending) || !connected();
+    $("send").disabled = Boolean(S.sending) || S.draftingAll || S.importing || !connected();
 
     if (real) {
       const times = [...S.events.values()].map((e) => e.created_at).filter(Boolean).sort();
-      const since = times.length ? new Date(times[0]).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : null;
-      const bits = [`${S.threads.length} ${S.threads.length === 1 ? "person" : "people"} DM'd you`];
+      const first = times.length ? new Date(times[0]) : null;
+      const since = first?.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: first.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+      });
+      const bits = [`${S.threads.length.toLocaleString()} ${S.threads.length === 1 ? "person" : "people"} DM'd you`];
       if (since) bits.push(`since ${since}`);
       if (S.hiddenCold) bits.push(`${S.hiddenCold} cold thread${S.hiddenCold === 1 ? "" : "s"} hidden`);
+      if (S.hiddenGone) bits.push(`${S.hiddenGone} deleted or suspended`);
       $("load-status").textContent = bits.join(" · ");
     } else {
       $("load-status").textContent = "";
     }
+  }
+
+  function renderArchive() {
+    const people = S.threads.filter((t) => t.archived).length;
+    $("archive-summary").textContent = S.imported
+      ? `${people.toLocaleString()} ${people === 1 ? "person" : "people"} imported`
+      : "the X API only covers 30 days";
+    const pick = $("archive-pick");
+    pick.disabled = !connected() || S.importing || Boolean(S.sending);
+    pick.title = connected() ? "" : "Connect X first";
+    pick.textContent = S.importing ? "Importing…" : S.imported ? "Import more files" : "Choose direct-messages.js";
+    $("archive-clear").hidden = !S.imported || S.importing;
   }
 
   function renderAccount() {
@@ -1104,6 +1471,7 @@
   }
 
   function rebuild() {
+    restoreArchive();
     S.threads = buildThreads();
     if (!draftingEnabled()) {
       // Seed example drafts on the samples so edit and approve can be tried
@@ -1114,16 +1482,29 @@
     }
     renderAccount();
     renderSetup();
+    renderArchive();
     renderList();
   }
 
   // ---------- wiring ----------
+
+  let countEmpty; // the count badge inside "Draft all", kept across relabels
 
   function wire() {
     $("load").addEventListener("click", loadInbox);
     $("older").addEventListener("click", loadOlder);
     $("all").addEventListener("click", loadAll);
     $("suggest").addEventListener("click", suggestNext);
+    countEmpty = $("c-empty");
+    $("suggest-all").addEventListener("click", draftAll);
+    const file = $("archive-file");
+    $("archive-pick").addEventListener("click", () => file.click());
+    file.addEventListener("change", async () => {
+      const files = [...file.files];
+      file.value = "";
+      await importArchive(files);
+    });
+    $("archive-clear").addEventListener("click", forgetArchive);
     $("approve-all").addEventListener("click", approveAll);
     $("send").addEventListener("click", sendApproved);
     $("send-stop").addEventListener("click", () => {

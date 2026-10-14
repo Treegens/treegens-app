@@ -49,6 +49,26 @@
       </details>
     </section>
 
+    <section class="panel archive">
+      <details id="archive-box">
+        <summary>
+          <span>Reach everyone, not just the last 30 days</span>
+          <span id="archive-summary" class="muted small"></span>
+        </summary>
+        <p class="muted small">X's API only returns DMs from the last 30 days. Your X data archive has all of them, so importing it brings back everyone who ever messaged you.</p>
+        <ol class="small steps">
+          <li>On X, open <a href="https://x.com/settings/download_your_data" target="_blank" rel="noopener noreferrer">Settings → Your account → Download an archive of your data</a> and request it. X emails you when it's ready, usually within a day or two.</li>
+          <li>Unzip it. In its <code>data</code> folder, find <code>direct-messages.js</code>. Big archives split it into <code>direct-messages-part1.js</code> and so on, so pick all of them.</li>
+          <li>Choose the files below. They're read in this browser and not uploaded anywhere. Canopy then looks up each person's name and handle on X, which is billed to your X app.</li>
+        </ol>
+        <div class="row wrap">
+          <button id="archive-pick" class="btn" type="button">Choose direct-messages.js</button>
+          <input id="archive-file" type="file" accept=".js,.json" multiple hidden>
+          <button id="archive-clear" class="btn ghost small" type="button" hidden>Forget imported history</button>
+        </div>
+      </details>
+    </section>
+
     <section class="toolbar" aria-label="Inbox controls">
       <div class="row wrap">
         <button id="load" class="btn">Load inbox</button>
@@ -63,6 +83,7 @@
         </div>
         <div class="row wrap">
           <button id="suggest" class="btn ghost">Suggest next 12</button>
+          <button id="suggest-all" class="btn ghost">Draft all <b id="c-empty">0</b></button>
           <button id="approve-all" class="btn ghost">Approve drafted <b id="c-drafted">0</b></button>
           <button id="send" class="btn primary">Send approved <b id="c-approved">0</b></button>
         </div>

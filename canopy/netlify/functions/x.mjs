@@ -10,6 +10,8 @@ const ID = "\\d{1,25}";
 
 const ROUTES = [
   { method: "GET", re: /^2\/users\/me$/, open: true },
+  // Names for people found in an imported archive, which only has their IDs.
+  { method: "GET", re: /^2\/users$/ },
   { method: "GET", re: /^2\/dm_events$/ },
   { method: "GET", re: new RegExp(`^2/dm_conversations/with/${ID}/dm_events$`) },
   { method: "POST", re: new RegExp(`^2/dm_conversations/with/${ID}/messages$`) },
