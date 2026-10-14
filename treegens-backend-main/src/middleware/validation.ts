@@ -229,6 +229,45 @@ const validateHealthCheckVote = (
   next()
 }
 
+const submissionVoteSchema = Joi.object({
+  vote: Joi.string().required().valid('yes', 'no'),
+  reasons: Joi.array().items(Joi.string().trim().min(1).max(500)).max(10),
+})
+  .custom((value, helpers) => {
+    if (value.vote === 'no') {
+      const hasReason =
+        Array.isArray(value.reasons) &&
+        value.reasons.some((r: unknown) => String(r ?? '').trim().length > 0)
+      if (!hasReason) {
+        return helpers.error('custom.rejectReasonRequired')
+      }
+    }
+    return value
+  })
+  .messages({
+    'custom.rejectReasonRequired':
+      'At least one reason is required when rejecting a submission',
+  })
+
+/**
+ * A "no" vote must say why. The planter is shown the reasons verbatim, so a
+ * silent rejection would leave them with nothing to fix next time.
+ */
+const validateSubmissionVote = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  const { error } = submissionVoteSchema.validate(req.body)
+  if (error) {
+    return res.status(400).json({
+      error: 'Validation error',
+      details: error.details.map(detail => detail.message),
+    })
+  }
+  next()
+}
+
 export {
   validateChallengeRequest,
   validateCoordinates,
@@ -238,5 +277,6 @@ export {
   validateUpdateProfile,
   validateThirdwebSignIn,
   validateSubmissionUpload,
+  validateSubmissionVote,
   validateWalletSignIn,
 }

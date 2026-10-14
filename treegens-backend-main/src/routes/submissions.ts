@@ -11,11 +11,13 @@ import {
   validateHealthCheckUpload,
   validateHealthCheckVote,
   validateSubmissionUpload,
+  validateSubmissionVote,
 } from '../middleware/validation'
 import User from '../models/User'
 import * as conversationService from '../services/conversationService'
 import HealthCheckService from '../services/healthCheckService'
 import SubmissionService from '../services/submissionService'
+import { withRejectionSummary } from '../utils/rejectionSummary'
 import {
   sendBadRequest,
   sendCreated,
@@ -173,6 +175,9 @@ router.post(
  * /api/submissions/my-submissions:
  *   get:
  *     summary: List current user's submissions
+ *     description: |
+ *       Rejected submissions include a `rejection` summary (distinct verifier reasons, vote counts, rejectedAt).
+ *       `statusCounts` counts every submission of the wallet by status regardless of the `status` filter or page.
  *     tags: [Submissions]
  *     security:
  *       - bearerAuth: []
@@ -183,9 +188,15 @@ router.post(
  *       - in: query
  *         name: limit
  *         schema: { type: integer, minimum: 1, default: 10 }
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [draft, awaiting_plant, pending_review, approved, rejected]
+ *         description: Only return submissions in this status (e.g. rejected)
  *     responses:
  *       200:
- *         description: Paginated submissions with hasLandClip / hasPlantClip flags
+ *         description: Paginated submissions with statusCounts and hasLandClip / hasPlantClip flags
  *       401:
  *         description: Unauthorized
  */
@@ -195,12 +206,13 @@ router.get(
   authenticate,
   async (req: Request, res: Response) => {
     try {
-      const { page = 1, limit = 10 } = req.query
+      const { page = 1, limit = 10, status } = req.query
       const walletAddress = req.user?.walletAddress as string
       const data = await submissionService.getSubmissionsByUser(
         walletAddress,
         Number(page),
         Number(limit),
+        typeof status === 'string' ? status : undefined,
       )
       return sendSuccess(res, 'User submissions retrieved successfully', data)
     } catch (error: any) {
@@ -246,6 +258,7 @@ router.get(
  *       - in: query
  *         name: status
  *         schema: { type: string }
+ *         description: moderation scope accepts pending/approved/rejected; default scope accepts any submission status
  *     responses:
  *       200:
  *         description: Submissions list
@@ -298,10 +311,12 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
       return sendSuccess(res, 'Verifier inbox retrieved', result)
     }
 
+    const ownStatus = req.query.status
     const data = await submissionService.getSubmissionsByUser(
       wallet,
       page,
       limit,
+      typeof ownStatus === 'string' ? ownStatus : undefined,
     )
     return sendSuccess(res, 'Submissions retrieved successfully', data)
   } catch (error: any) {
@@ -449,7 +464,7 @@ router.post(
  *         schema: { type: string }
  *     responses:
  *       200:
- *         description: Submission document (land + plant)
+ *         description: Submission document (land + plant). Rejected submissions carry a `rejection` summary.
  *         content:
  *           application/json:
  *             schema:
@@ -536,13 +551,14 @@ router.get(
       if (!doc) {
         return sendNotFound(res, 'Submission')
       }
+      const payload = withRejectionSummary(doc.toObject())
       const owner = String(doc.userWalletAddress || '').toLowerCase()
       if (owner && owner === wallet) {
-        return sendSuccess(res, 'Submission retrieved successfully', doc)
+        return sendSuccess(res, 'Submission retrieved successfully', payload)
       }
       const user = await User.findOne({ walletAddress: wallet }).lean()
       if (user?.isVerifier) {
-        return sendSuccess(res, 'Submission retrieved successfully', doc)
+        return sendSuccess(res, 'Submission retrieved successfully', payload)
       }
       return sendError(res, 'Access denied', 403)
     } catch {
@@ -556,7 +572,9 @@ router.get(
  * /api/submissions/{submissionId}/vote:
  *   post:
  *     summary: Cast verifier vote
- *     description: Only allowed for submissions in pending_review with treeType mangrove (case-insensitive).
+ *     description: |
+ *       Only allowed for submissions in pending_review with treeType mangrove (case-insensitive).
+ *       A `no` vote must include at least one non-empty reason (max 10, 500 chars each); the planter is shown these reasons.
  *     tags: [Submissions]
  *     security:
  *       - bearerAuth: []
@@ -579,11 +597,12 @@ router.get(
  *               reasons:
  *                 type: array
  *                 items: { type: string }
+ *                 description: Required (non-empty) when vote is no
  *     responses:
  *       200:
  *         description: Vote recorded; may include approval transition
  *       400:
- *         description: Invalid request
+ *         description: Invalid request (including a no vote without a reason)
  *       403:
  *         description: Not a verifier
  */
@@ -593,6 +612,7 @@ router.post(
   authenticate,
   submissionVoteLimiter,
   requireVerifier,
+  validateSubmissionVote,
   async (req: Request, res: Response) => {
     try {
       const { submissionId } = req.params
