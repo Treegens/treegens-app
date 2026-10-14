@@ -10,6 +10,10 @@ import { getRewardStatus } from '@/services/rewardService'
 import { VideoType } from '@/services/videoService'
 import type { ISubmissionDoc, SubmissionStatus } from '@/types'
 import { getPlanterSubmissionBadge } from '@/utils/planterSubmissionBadge'
+import {
+  getRejectionDetails,
+  rejectionHeadline,
+} from '@/utils/rejectionFeedback'
 import { rewardScheduleFullyClaimed } from '@/utils/rewardScheduleClaimed'
 import {
   submissionDocToPlanterGroup,
@@ -17,10 +21,11 @@ import {
 } from '@/utils/submissionPlanterGroup'
 import axios from 'axios'
 import Image from 'next/image'
-import { useRouter } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { HiArrowLeft, HiArrowPath } from 'react-icons/hi2'
+import { HiArrowLeft, HiArrowPath, HiChevronRight } from 'react-icons/hi2'
+import { IoCloseCircle } from 'react-icons/io5'
 import { MdOutlineInfo } from 'react-icons/md'
 
 type MyPlantsFilter =
@@ -39,6 +44,12 @@ const FILTER_OPTIONS: { key: MyPlantsFilter; label: string }[] = [
   { key: 'claimed', label: 'Claimed' },
   { key: 'rejected', label: 'Rejected' },
 ]
+
+/** `?filter=rejected` deep links (home banner, notifications) land on that tab. */
+function parseFilter(raw: string | null): MyPlantsFilter {
+  const match = FILTER_OPTIONS.find(opt => opt.key === raw)
+  return match ? match.key : 'all'
+}
 
 function matchesFilter(
   group: PlanterSubmissionGroup,
@@ -85,22 +96,29 @@ function primaryClipForSubmission(sub: ISubmissionDoc) {
   return clips.find(v => v.type === VideoType.PLANT) ?? clips[0] ?? null
 }
 
-export default function MySubmissionsPage() {
+function MySubmissionsContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { user, isLoading: userLoading, fetchUser } = useUser()
   const [rows, setRows] = useState<ISubmissionDoc[]>([])
+  const [statusCounts, setStatusCounts] = useState<
+    Partial<Record<SubmissionStatus, number>>
+  >({})
   const [rewardClaimedById, setRewardClaimedById] = useState<
     Record<string, boolean | null>
   >({})
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [filter, setFilter] = useState<MyPlantsFilter>('all')
+  const [filter, setFilter] = useState<MyPlantsFilter>(() =>
+    parseFilter(searchParams.get('filter')),
+  )
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true)
     try {
       const { data } = await getMySubmissions({ page: 1, limit: 100 })
       setRows(data.data.submissions || [])
+      setStatusCounts(data.data.statusCounts || {})
     } catch (e) {
       console.error(e)
       if (!opts?.silent) toast.error('Failed to fetch your submissions')
@@ -177,6 +195,12 @@ export default function MySubmissionsPage() {
     [groupedSubmissions, filter, rewardClaimedById],
   )
 
+  // The API count covers every submission of the wallet; the local count is
+  // the fallback for older API responses that do not send statusCounts.
+  const rejectedCount =
+    statusCounts.rejected ??
+    groupedSubmissions.filter(g => g.submissionStatus === 'rejected').length
+
   const base = appConfig.routes.MySubmissions
   const treesPlanted = user?.treesPlanted ?? 0
   const treesCountLoading = userLoading && user === null
@@ -238,23 +262,65 @@ export default function MySubmissionsPage() {
         </div>
       </div>
 
+      {!loading && rejectedCount > 0 && filter !== 'rejected' ? (
+        <button
+          type="button"
+          onClick={() => setFilter('rejected')}
+          className="mx-[15px] mt-3 flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left shadow-sm"
+        >
+          <IoCloseCircle
+            className="h-6 w-6 shrink-0 text-red-600"
+            aria-hidden
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold text-red-900">
+              {rejectedCount === 1
+                ? '1 submission was rejected'
+                : `${rejectedCount} submissions were rejected`}
+            </span>
+            <span className="block text-xs text-red-800/90">
+              See the verifiers&apos; reasons and what to do next
+            </span>
+          </span>
+          <HiChevronRight
+            className="h-5 w-5 shrink-0 text-red-700"
+            aria-hidden
+          />
+        </button>
+      ) : null}
+
       {!loading ? (
         <div className="overflow-x-auto pb-3 pt-3">
           <div className="flex w-max flex-row items-center gap-2.5 px-4">
             {FILTER_OPTIONS.map(opt => {
               const selected = filter === opt.key
+              const showRejectedCount =
+                opt.key === 'rejected' && rejectedCount > 0
               return (
                 <button
                   key={opt.key}
                   type="button"
                   onClick={() => setFilter(opt.key)}
-                  className={`shrink-0 rounded-full border px-4 py-2.5 text-sm font-semibold transition-colors ${
+                  className={`flex shrink-0 items-center gap-1.5 rounded-full border px-4 py-2.5 text-sm font-semibold transition-colors ${
                     selected
                       ? 'border-lime-green-2 bg-lime-green-2 text-white shadow-md shadow-lime-green-2/20'
-                      : 'border-neutral-200/90 bg-white text-neutral-700 shadow-sm'
+                      : showRejectedCount
+                        ? 'border-red-200 bg-white text-red-800 shadow-sm'
+                        : 'border-neutral-200/90 bg-white text-neutral-700 shadow-sm'
                   }`}
                 >
                   {opt.label}
+                  {showRejectedCount ? (
+                    <span
+                      className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-bold tabular-nums ${
+                        selected
+                          ? 'bg-white/90 text-red-700'
+                          : 'bg-red-600 text-white'
+                      }`}
+                    >
+                      {rejectedCount}
+                    </span>
+                  ) : null}
                 </button>
               )
             })}
@@ -286,6 +352,9 @@ export default function MySubmissionsPage() {
                       statusMeta={getPlanterSubmissionBadge(g)}
                       aiVerification={g.aiVerification}
                       treeSpecies={g.submissionTreeSpecies}
+                      rejectionReason={rejectionHeadline(
+                        getRejectionDetails(g),
+                      )}
                       awaitingPlantClip={awaitingPlant && !!g.landVideo}
                       completePlantHref={
                         awaitingPlant
@@ -335,5 +404,20 @@ export default function MySubmissionsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function MySubmissionsPage() {
+  // useSearchParams needs a Suspense boundary for static rendering.
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-white">
+          <Spinner size="lg" />
+        </div>
+      }
+    >
+      <MySubmissionsContent />
+    </Suspense>
   )
 }

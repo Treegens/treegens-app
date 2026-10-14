@@ -17,11 +17,17 @@ import { HiBell, HiChatBubbleLeftRight } from 'react-icons/hi2'
 
 type NotifRow = {
   _id: string
+  kind?: string
   title: string
   body: string
   link?: string
+  payload?: { status?: string } | null
   isRead?: boolean
   createdAt?: string
+}
+
+function isRejectionAlert(n: NotifRow): boolean {
+  return n.kind === 'submission_outcome' && n.payload?.status === 'rejected'
 }
 
 export default function InboxPage() {
@@ -187,9 +193,18 @@ export default function InboxPage() {
                 className={cn(
                   'tg-card w-full border px-4 py-3 text-left transition-transform active:scale-[0.99]',
                   n.isRead ? 'opacity-75' : 'border-[#dfea8a]/80 bg-white',
+                  isRejectionAlert(n) &&
+                    'border-l-4 border-l-red-500 bg-red-50/60',
                 )}
               >
-                <p className="font-semibold text-[#111827]">{n.title}</p>
+                <p
+                  className={cn(
+                    'font-semibold',
+                    isRejectionAlert(n) ? 'text-red-900' : 'text-[#111827]',
+                  )}
+                >
+                  {n.title}
+                </p>
                 <p className="mt-1 text-sm text-[#4b5563]">{n.body}</p>
                 {n.createdAt ? (
                   <p className="mt-2 text-[11px] text-[#9ca3af]">

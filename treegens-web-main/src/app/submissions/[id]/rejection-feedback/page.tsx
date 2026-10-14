@@ -1,18 +1,25 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { HiArrowLeft } from 'react-icons/hi'
 import { useParams, useRouter } from 'next/navigation'
-
+import { RejectionReasonsCard } from '@/components/submission-detail/RejectionReasonsCard'
+import { useUser } from '@/contexts/UserProvider'
 import { getSubmissionById } from '@/services/app'
-import { buildRejectionParagraphs } from '@/utils/rejectionFeedback'
+import type { ISubmissionDoc } from '@/types'
+import { getRejectionDetails } from '@/utils/rejectionFeedback'
+import {
+  submissionDocToPlanterGroup,
+  type PlanterSubmissionGroup,
+} from '@/utils/submissionPlanterGroup'
 
 export default function RejectionFeedbackPage() {
   const router = useRouter()
   const params = useParams()
+  const { user } = useUser()
   const id = typeof params.id === 'string' ? params.id : ''
   const [loading, setLoading] = useState(true)
-  const [paragraphs, setParagraphs] = useState<string[]>([])
+  const [group, setGroup] = useState<PlanterSubmissionGroup | null>(null)
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
@@ -25,10 +32,8 @@ export default function RejectionFeedbackPage() {
     setError('')
     try {
       const response = await getSubmissionById(id)
-      const { paragraphs: built } = buildRejectionParagraphs(
-        response.data?.data?.votes,
-      )
-      setParagraphs(built)
+      const doc = response.data.data as ISubmissionDoc & Record<string, unknown>
+      setGroup(submissionDocToPlanterGroup(doc))
     } catch (e) {
       console.error('Failed to load rejection feedback', e)
       setError('Failed to load feedback')
@@ -40,6 +45,12 @@ export default function RejectionFeedbackPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const details = useMemo(() => getRejectionDetails(group), [group])
+  const isOwner =
+    !!group &&
+    !!user?.walletAddress &&
+    group.userWalletAddress.toLowerCase() === user.walletAddress.toLowerCase()
 
   return (
     <div className="mx-auto mb-24 max-w-3xl px-4 pb-8 pt-4">
@@ -64,28 +75,13 @@ export default function RejectionFeedbackPage() {
         <div className="flex min-h-[40vh] items-center justify-center px-6">
           <p className="text-center text-red-700">{error}</p>
         </div>
+      ) : details ? (
+        <RejectionReasonsCard details={details} showNextSteps={isOwner} />
       ) : (
-        <div className="space-y-4 pt-1">
-          {paragraphs.length === 0 ? (
-            <p className="text-base leading-7 text-neutral-600">
-              No verifier feedback is available for this submission.
-            </p>
-          ) : (
-            paragraphs.map((text, index) => (
-              <section
-                key={`${index}-${text.slice(0, 24)}`}
-                className="space-y-1.5 rounded-xl border border-neutral-200 bg-white p-4"
-              >
-                {paragraphs.length > 1 ? (
-                  <p className="text-sm font-semibold text-neutral-500">
-                    Feedback {index + 1}
-                  </p>
-                ) : null}
-                <p className="text-base leading-7 text-neutral-800">{text}</p>
-              </section>
-            ))
-          )}
-        </div>
+        <p className="pt-1 text-base leading-7 text-neutral-600">
+          This submission has not been rejected, so there is no verifier
+          feedback to show.
+        </p>
       )}
     </div>
   )

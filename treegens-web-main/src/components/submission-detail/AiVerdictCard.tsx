@@ -38,7 +38,11 @@ function decisionUi(decision?: string) {
         className: 'bg-amber-100 text-amber-950 ring-amber-300/60',
       }
     case 'ai_failed':
-      return { label: 'Rejected', className: 'bg-red-100 text-red-900 ring-red-300/60' }
+      // The AI run failed, so the clip goes to human review. It is not a verdict.
+      return {
+        label: 'Needs verifier review',
+        className: 'bg-amber-100 text-amber-950 ring-amber-300/60',
+      }
     case 'skipped':
       return { label: 'Skipped', className: 'bg-gray-100 text-gray-800 ring-gray-300/60' }
     default:
