@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { FaChevronRight } from 'react-icons/fa'
+import { IoCloseCircle } from 'react-icons/io5'
 import { AppHeader } from '@/components/Layout/AppHeader'
 import SubmissionCard from '@/components/SubmissionCard'
 import { VerifierHealthCheckCard } from '@/components/VerifierHealthCheckCard'
@@ -17,6 +18,10 @@ import { getRewardStatus } from '@/services/rewardService'
 import type { IHealthCheckDoc, ISubmissionDoc, ISubmissionGroup } from '@/types'
 import { formatMgroCollectedDisplay } from '@/utils/formatMgro'
 import { getPlanterSubmissionBadge } from '@/utils/planterSubmissionBadge'
+import {
+  getRejectionDetails,
+  rejectionHeadline,
+} from '@/utils/rejectionFeedback'
 import { rewardScheduleFullyClaimed } from '@/utils/rewardScheduleClaimed'
 import {
   submissionDocToPlanterGroup,
@@ -56,6 +61,10 @@ export default function HomePage() {
   /** One card per submission (land + plant are one group), like mobile `MyPlants` `latestSubmissions.slice(0, 2)`. */
   const latestSubmissions = useMemo(
     () => myPlantGroups.slice(0, 2),
+    [myPlantGroups],
+  )
+  const rejectedCount = useMemo(
+    () => myPlantGroups.filter(g => g.submissionStatus === 'rejected').length,
     [myPlantGroups],
   )
   const isVerifier = Boolean(user?.isVerifier)
@@ -343,6 +352,29 @@ export default function HomePage() {
           </div>
         )}
 
+        {rejectedCount > 0 ? (
+          <Link
+            href={`${appConfig.routes.MySubmissions}?filter=rejected`}
+            className="flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5 shadow-sm active:scale-[0.99]"
+          >
+            <IoCloseCircle
+              className="h-7 w-7 shrink-0 text-red-600"
+              aria-hidden
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-bold text-red-900">
+                {rejectedCount === 1
+                  ? '1 submission was rejected by verifiers'
+                  : `${rejectedCount} submissions were rejected by verifiers`}
+              </span>
+              <span className="block text-xs text-red-800/90">
+                See their reasons and what to do next
+              </span>
+            </span>
+            <FaChevronRight className="h-3.5 w-3.5 shrink-0 text-red-700" />
+          </Link>
+        ) : null}
+
         <div className="flex flex-col gap-4 p-6 bg-warm-grey rounded-3xl">
           <div className="flex justify-between items-center">
             <h3 className="font-bold text-2xl">My Plants</h3>
@@ -378,6 +410,9 @@ export default function HomePage() {
                     statusMeta={getPlanterSubmissionBadge(group)}
                     aiVerification={group.aiVerification}
                     treeSpecies={group.submissionTreeSpecies}
+                    rejectionReason={rejectionHeadline(
+                      getRejectionDetails(group),
+                    )}
                     awaitingPlantClip={awaitingPlant && !!group.landVideo}
                     completePlantHref={
                       awaitingPlant

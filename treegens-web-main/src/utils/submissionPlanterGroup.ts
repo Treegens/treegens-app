@@ -3,6 +3,7 @@ import { VideoType } from '@/services/videoService'
 import type {
   ISubmissionAiVerification,
   ISubmissionDoc,
+  ISubmissionRejection,
   IVideo,
   SubmissionStatus,
   Vote,
@@ -17,7 +18,11 @@ export type PlanterSubmissionGroup = {
   landVideo?: IVideo
   plantVideo?: IVideo
   submissionStatus: SubmissionStatus
+  /** When verifiers reached a verdict (approved or rejected). */
+  reviewedAt?: string
   votes: Vote[]
+  /** API summary of the verifier no votes; only on rejected submissions. */
+  rejection?: ISubmissionRejection
   aiVerification?: ISubmissionAiVerification
   /** Mirrors Submission document — fallback if clip mapper missed fields */
   submissionTreesPlanted?: number
@@ -60,7 +65,12 @@ export function submissionDocToPlanterGroup(
     landVideo,
     plantVideo,
     submissionStatus: doc.status,
+    reviewedAt: typeof doc.reviewedAt === 'string' ? doc.reviewedAt : undefined,
     votes: doc.votes ?? [],
+    rejection:
+      typeof doc.rejection === 'object' && doc.rejection != null
+        ? doc.rejection
+        : undefined,
     submissionTreesPlanted,
     submissionTreeSpecies,
     aiVerification:

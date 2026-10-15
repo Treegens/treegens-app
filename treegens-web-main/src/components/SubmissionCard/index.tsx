@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Tooltip } from '@/components/ui/Tooltip'
 import { useState } from 'react'
 import { HiPlay } from 'react-icons/hi2'
+import { IoCloseCircle } from 'react-icons/io5'
 import VideoModal from '@/components/Modals/VideoModal'
 import { ClipStatusPill } from '@/components/ClipStatusPill'
 import { SubmissionStatusBadges } from '@/components/submission-detail/SubmissionStatusBadges'
@@ -29,6 +30,8 @@ export interface SubmissionCardProps {
   awaitingPlantClip?: boolean
   /** Link to finish step 2 (plant video) */
   completePlantHref?: string
+  /** First verifier reason on a rejected submission; shown on the card itself. */
+  rejectionReason?: string | null
 }
 
 function formatTreeCount(n: number): string {
@@ -48,6 +51,7 @@ export default function SubmissionCard({
   treeSpecies,
   awaitingPlantClip = false,
   completePlantHref,
+  rejectionReason = null,
 }: SubmissionCardProps) {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isVideoLoading, setIsVideoLoading] = useState(false)
@@ -236,6 +240,26 @@ export default function SubmissionCard({
           )}
         </div>
       </div>
+
+      {rejectionReason ? (
+        <div className="mt-2.5 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5">
+          <IoCloseCircle
+            className="mt-px h-4 w-4 shrink-0 text-red-600"
+            aria-hidden
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-red-900">
+              Rejected by verifiers
+            </p>
+            <p className="line-clamp-2 text-xs leading-5 text-red-900/90">
+              {rejectionReason}
+            </p>
+            <p className="mt-0.5 text-[11px] font-semibold text-red-800 underline">
+              See why and what to do next
+            </p>
+          </div>
+        </div>
+      ) : null}
     </>
   )
 

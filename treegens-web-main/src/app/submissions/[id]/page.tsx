@@ -3,8 +3,8 @@
 import { ClaimCard } from '@/components/submission-detail/ClaimCard'
 import { LandVideoSection } from '@/components/submission-detail/LandVideoSection'
 import { PlantVideoSection } from '@/components/submission-detail/PlantVideoSection'
+import { RejectionReasonsCard } from '@/components/submission-detail/RejectionReasonsCard'
 import { SubmissionDmThread } from '@/components/submission-detail/SubmissionDmThread'
-import { RejectionFeedbackFooter } from '@/components/submission-detail/RejectionFeedbackFooter'
 import { SubmissionStatusBadges } from '@/components/submission-detail/SubmissionStatusBadges'
 import { TwoVideoProofSteps } from '@/components/submission/TwoVideoProofSteps'
 import { Spinner } from '@/components/ui/Spinner'
@@ -15,6 +15,7 @@ import type { ISubmissionDoc } from '@/types'
 import { planterClaimFooterState } from '@/utils/claimUiState'
 import { formatWeiToMgro } from '@/utils/formatWeiToMgro'
 import { getPlanterSubmissionBadge } from '@/utils/planterSubmissionBadge'
+import { getRejectionDetails } from '@/utils/rejectionFeedback'
 import { rewardScheduleFullyClaimed } from '@/utils/rewardScheduleClaimed'
 import {
   getSubmissionDetailVideoUrl,
@@ -129,6 +130,8 @@ export default function SubmissionDetailPage() {
     () => (group ? getPlanterSubmissionBadge(group) : null),
     [group],
   )
+
+  const rejectionDetails = useMemo(() => getRejectionDetails(group), [group])
 
   const rewardClaimDisplay = useMemo((): boolean | null => {
     if (group?.submissionStatus !== 'approved' || !rewardStatus) return null
@@ -304,6 +307,10 @@ export default function SubmissionDetailPage() {
               statusMeta={statusMeta}
             />
 
+            {rejectionDetails ? (
+              <RejectionReasonsCard details={rejectionDetails} />
+            ) : null}
+
             {!plantVideo && group.submissionStatus === 'awaiting_plant' ? (
               <Link
                 href={`/submissions/create/${encodeURIComponent(id)}`}
@@ -377,10 +384,6 @@ export default function SubmissionDetailPage() {
           </div>
         )}
       </div>
-
-      {group?.submissionStatus === 'rejected' && id ? (
-        <RejectionFeedbackFooter submissionId={id} />
-      ) : null}
     </div>
   )
 }

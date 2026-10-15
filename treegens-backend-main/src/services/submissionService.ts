@@ -5,6 +5,15 @@ import { generateUniqueFileName } from '../middleware/upload'
 import Submission from '../models/Submission'
 import User from '../models/User'
 import {
+  hideVoterIdentities,
+  hideVoterIdentitiesOnOwnRows,
+} from '../utils/planterSubmissionView'
+import {
+  buildRejectionNotification,
+  buildRejectionSummary,
+  withRejectionSummary,
+} from '../utils/rejectionSummary'
+import {
   approvedTreeCount,
   batchEnforcementEnabled,
   batchRejectionReason,
@@ -46,6 +55,15 @@ type ResolveSubmissionResult = {
 export type UploadSlot = 'land' | 'plant'
 
 const MANGROVE_TREE_TYPE = 'mangrove'
+
+/** Mirrors the Submission schema enum; anything else is ignored as a filter. */
+const SUBMISSION_STATUSES = new Set([
+  'draft',
+  'awaiting_plant',
+  'pending_review',
+  'approved',
+  'rejected',
+])
 
 /**
  * Approval has two consequences beyond flipping a status: it decides what the
@@ -462,29 +480,57 @@ class SubmissionService {
     return Submission.findById(submissionId)
   }
 
+  /**
+   * The planter's own list. `status` narrows the page to one status so a
+   * client can show "my rejected submissions" without paging through
+   * everything, and `statusCounts` always covers the whole wallet so the UI
+   * can flag rejections even when they are not on the current page.
+   */
   async getSubmissionsByUser(
     userWalletAddress: string,
     page: number = 1,
     limit: number = 10,
+    status?: string,
   ) {
     const normalizedWallet = String(userWalletAddress).toLowerCase()
-    const submissions = await Submission.find({
+    const filter: Record<string, unknown> = {
       userWalletAddress: normalizedWallet,
-    })
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .exec()
+    }
+    if (status && SUBMISSION_STATUSES.has(status)) {
+      filter.status = status
+    }
 
-    const total = await Submission.countDocuments({
-      userWalletAddress: normalizedWallet,
-    })
+    const [docs, total, countRows] = await Promise.all([
+      Submission.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .exec(),
+      Submission.countDocuments(filter),
+      Submission.aggregate<{ _id: string; count: number }>([
+        { $match: { userWalletAddress: normalizedWallet } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+    ])
+
+    const statusCounts: Record<string, number> = {}
+    for (const row of countRows) {
+      statusCounts[String(row._id)] = Number(row.count) || 0
+    }
+
+    // Rejected submissions carry a planter-facing `rejection` summary so the
+    // reasons are readable without digging through verifier votes, and the
+    // votes themselves never say which verifier cast them.
+    const submissions = docs.map(doc =>
+      hideVoterIdentities(withRejectionSummary(doc.toObject())),
+    )
 
     return {
       submissions,
       totalPages: Math.ceil(total / limit),
       currentPage: page,
       totalSubmissions: total,
+      statusCounts,
       hasLandClip: submissions.some(s => s.land?.uploaded),
       hasPlantClip: submissions.some(s => s.plant?.uploaded),
     }
@@ -497,6 +543,7 @@ class SubmissionService {
     status,
     page = 1,
     limit = 10,
+    viewerWalletAddress,
   }: {
     minYes?: number
     minNo?: number
@@ -504,6 +551,8 @@ class SubmissionService {
     status?: string
     page?: number
     limit?: number
+    /** A verifier who also plants must not see who voted on their own rows. */
+    viewerWalletAddress?: string
   }) {
     const match: Record<string, unknown> = {}
     if (status) {
@@ -568,7 +617,9 @@ class SubmissionService {
 
     const total = countArr[0]?.total || 0
     return {
-      submissions: items,
+      submissions: viewerWalletAddress
+        ? hideVoterIdentitiesOnOwnRows(items, viewerWalletAddress)
+        : items,
       pagination: {
         page: parseInt(String(page)),
         limit: parseInt(String(limit)),
@@ -730,7 +781,15 @@ class SubmissionService {
     if (Array.isArray(reasons)) {
       reasonsArr = reasons
         .filter(r => typeof r === 'string' && r.trim().length > 0)
+        .map(r => r.trim())
         .slice(0, 10)
+    }
+    // The planter is told these reasons word for word, so a rejection
+    // without one would leave them guessing what to fix.
+    if (vote === 'no' && reasonsArr.length === 0) {
+      throw new Error(
+        'At least one reason is required when rejecting a submission',
+      )
     }
 
     const voterNorm = voterWalletAddress.toLowerCase()
@@ -834,20 +893,29 @@ class SubmissionService {
 
     const planter = String(submission.userWalletAddress || '').toLowerCase()
     if (planter) {
+      const submissionId = String(submission._id)
+      // A rejection names the verifiers' reasons in the notification itself:
+      // "reviewed" told the planter nothing about what happened or why.
+      const outcome =
+        majorityVote === 'yes'
+          ? {
+              title: 'Submission approved',
+              body: 'Verifier consensus approved your planting submission.',
+              link: `/submissions/${submissionId}`,
+              payload: { submissionId, status: submission.status },
+            }
+          : buildRejectionNotification(
+              submissionId,
+              buildRejectionSummary(submission) ?? {
+                reasons: [],
+                noVotes: 0,
+                totalVotes: 0,
+              },
+            )
       void enqueueNotification({
         recipientWalletAddress: planter,
         kind: 'submission_outcome',
-        title:
-          majorityVote === 'yes' ? 'Submission approved' : 'Submission reviewed',
-        body:
-          majorityVote === 'yes'
-            ? 'Verifier consensus approved your planting submission.'
-            : 'Your submission was reviewed by verifiers.',
-        link: `/submissions/${String(submission._id)}`,
-        payload: {
-          submissionId: String(submission._id),
-          status: submission.status,
-        },
+        ...outcome,
       }).catch(() => {})
     }
 

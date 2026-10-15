@@ -171,11 +171,36 @@ const swaggerOptions = {
         },
         SubmissionVote: {
           type: 'object',
+          description:
+            'voterWalletAddress and delegatedFor are omitted when the caller is the submission planter',
           properties: {
             voterWalletAddress: { type: 'string' },
             vote: { type: 'string', enum: ['yes', 'no'] },
             reasons: { type: 'array', items: { type: 'string' } },
             createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        SubmissionRejection: {
+          type: 'object',
+          description:
+            'Present only when status is rejected: planter-facing summary of the verifier no votes',
+          properties: {
+            rejectedAt: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+              description:
+                'When the verifier majority rejected it (reviewedAt)',
+            },
+            reasons: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Distinct reasons given by the verifiers who voted no, in vote order',
+            },
+            noVotes: { type: 'number' },
+            yesVotes: { type: 'number' },
+            totalVotes: { type: 'number' },
           },
         },
         AiVerificationSnapshot: {
@@ -259,6 +284,9 @@ const swaggerOptions = {
             },
             aiVerification: {
               $ref: '#/components/schemas/AiVerificationSnapshot',
+            },
+            rejection: {
+              $ref: '#/components/schemas/SubmissionRejection',
             },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },

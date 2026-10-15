@@ -174,7 +174,8 @@ export interface IGpsCoordinates {
 }
 
 export interface Vote {
-  voterWalletAddress: string
+  /** Omitted by the API when the viewer is the submission's planter. */
+  voterWalletAddress?: string
   vote: 'yes' | 'no'
   reasons: string[]
   createdAt: string
@@ -338,6 +339,16 @@ export interface ISubmissionAiVerification {
   }
 }
 
+/** Planter-facing summary the API attaches to rejected submissions. */
+export interface ISubmissionRejection {
+  rejectedAt?: string | null
+  /** Distinct reasons given by the verifiers who voted no, in vote order. */
+  reasons: string[]
+  noVotes: number
+  yesVotes: number
+  totalVotes: number
+}
+
 export interface ISubmissionDoc {
   _id: string
   userWalletAddress: string
@@ -352,6 +363,8 @@ export interface ISubmissionDoc {
   votes?: Vote[]
   /** Mangrove plant AI count / routing (present after plant upload for mangrove) */
   aiVerification?: ISubmissionAiVerification
+  /** Only present when status is rejected. */
+  rejection?: ISubmissionRejection
   createdAt: string
   updatedAt: string
 }
@@ -363,6 +376,8 @@ export interface IMySubmissionsResponse {
     totalPages: number
     currentPage: number
     totalSubmissions: number
+    /** Every submission of the wallet counted by status, independent of paging. */
+    statusCounts?: Partial<Record<SubmissionStatus, number>>
     hasLandClip?: boolean
     hasPlantClip?: boolean
   }

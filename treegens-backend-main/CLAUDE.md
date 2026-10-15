@@ -241,6 +241,27 @@ Response:
 
 (Rest of the file remains the same...)
 
+## Rejection feedback for planters (October 2026)
+
+- Verifier `no` votes on `POST /api/submissions/:id/vote` **must** carry at least
+  one non-empty reason (`validateSubmissionVote`, max 10 reasons of 500 chars).
+  The planter is shown these reasons word for word.
+- Rejected submissions returned by `GET /api/submissions/:id`,
+  `GET /api/submissions/my-submissions` and the default `GET /api/submissions`
+  scope carry a `rejection` object: `{ rejectedAt, reasons[], noVotes, yesVotes,
+  totalVotes }` (built by `src/utils/rejectionSummary.ts` from the votes; the
+  "Another reason (noted below)" checklist label is dropped when the same vote
+  has a note).
+- `my-submissions` accepts `?status=` and always returns `statusCounts` for the
+  whole wallet so the UI can flag rejections without paging.
+- The rejection notification (`kind: submission_outcome`) is titled
+  "Submission rejected" and its body lists the reasons; the payload carries
+  `status: 'rejected'`, `reasons`, `noVotes`, `totalVotes`.
+- A planter never learns which verifier cast a vote on their own submission:
+  owner reads of `GET /api/submissions/:id`, `my-submissions`, the default
+  list scope, and the viewer's own rows in the moderation scope return votes
+  as `{ vote, reasons, createdAt }` only (`src/utils/planterSubmissionView.ts`).
+
 ## Recent Updates & Fixes (July 22, 2025)
 
 ### ✅ Schema Enhancement for Video Types & Content Moderation
