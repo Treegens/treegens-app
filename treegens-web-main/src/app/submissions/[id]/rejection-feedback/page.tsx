@@ -1,8 +1,8 @@
 'use client'
 
+import { useParams, useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { HiArrowLeft } from 'react-icons/hi'
-import { useParams, useRouter } from 'next/navigation'
 import { RejectionReasonsCard } from '@/components/submission-detail/RejectionReasonsCard'
 import { useUser } from '@/contexts/UserProvider'
 import { getSubmissionById } from '@/services/app'

@@ -1,7 +1,6 @@
 import { FlatCompat } from '@eslint/eslintrc'
 import js from '@eslint/js'
-import typescript from '@typescript-eslint/eslint-plugin'
-import typescriptParser from '@typescript-eslint/parser'
+import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
 import importPlugin from 'eslint-plugin-import'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -15,11 +14,11 @@ const compat = new FlatCompat({
 })
 
 export default [
-  ...compat.extends(
-    'plugin:prettier/recommended',
-    'next/core-web-vitals',
-    'plugin:@typescript-eslint/recommended',
-  ),
+  ...compat.extends('plugin:prettier/recommended'),
+  // eslint-config-next 16 ships flat configs (parser, typescript-eslint,
+  // react, import and next rules included). Loading it through FlatCompat
+  // crashed ESLint on the preset's circular plugin references.
+  ...nextCoreWebVitals,
   js.configs.recommended,
   {
     ignores: [
@@ -32,7 +31,6 @@ export default [
   {
     files: ['**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
-      parser: typescriptParser,
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
@@ -47,7 +45,6 @@ export default [
       },
     },
     plugins: {
-      '@typescript-eslint': typescript,
       import: importPlugin,
     },
     rules: {
