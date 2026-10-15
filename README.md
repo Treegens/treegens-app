@@ -52,6 +52,14 @@ Point the frontend API base URL at your running backend instance.
 
 More detail: [treegens-web-main/README.md](treegens-web-main/README.md).
 
+## Site Check
+
+Before planting mangroves, planters check the site: a GPS boundary, a short
+field questionnaire on tides and history, photos, and a satellite check of how
+often the tide covers the spot. They get a verdict: plant here, fix first,
+protect and let it regrow, or not a mangrove site. See
+[docs/site-check.md](docs/site-check.md).
+
 ## CI and tests
 
 Backend tests:

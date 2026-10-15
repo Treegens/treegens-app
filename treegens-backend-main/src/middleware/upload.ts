@@ -34,10 +34,31 @@ const upload = multer({
   },
 })
 
+// No HEIC: most browsers cannot show it to verifiers, so the app converts
+// every other format to JPEG before upload.
+const IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+
+const imageFileFilter: multer.Options['fileFilter'] = (req, file, cb) => {
+  if (IMAGE_MIME_TYPES.includes(file.mimetype)) {
+    cb(null, true)
+  } else {
+    cb(new Error('Only image files are allowed') as any, false)
+  }
+}
+
+/** Site Check photos (one per request, already downscaled by the app). */
+const imageUpload = multer({
+  storage: storage,
+  fileFilter: imageFileFilter,
+  limits: {
+    fileSize: 15 * 1024 * 1024,
+  },
+})
+
 const generateUniqueFileName = (originalName: string) => {
   const extension = originalName.split('.').pop()
   const uniqueName = `${uuidv4()}.${extension}`
   return uniqueName
 }
 
-export { upload, generateUniqueFileName }
+export { generateUniqueFileName, imageUpload, upload }

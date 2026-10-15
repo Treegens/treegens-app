@@ -10,7 +10,7 @@ import {
   CompressionResult,
   videoCompressionService,
 } from './videoCompressionService'
-import { VideoType } from './videoService'
+import { type SiteLinkFields, VideoType } from './videoService'
 
 // Extend ServiceWorkerRegistration to include Background Sync API
 declare global {
@@ -34,6 +34,8 @@ interface PendingUploadData {
   submissionId: string
   treesPlanted?: number
   treetype?: string
+  siteId?: string
+  species?: string[]
   token: string
 }
 
@@ -248,6 +250,7 @@ export class OfflineVideoService {
     onCompressionDone?: (
       result: CompressionResult & { durationMs: number },
     ) => void,
+    siteLink?: SiteLinkFields,
   ): Promise<string> {
     try {
       // Compress before queuing for offline upload (smaller storage, faster upload later)
@@ -294,6 +297,8 @@ export class OfflineVideoService {
         submissionId,
         treesPlanted,
         treetype,
+        siteId: siteLink?.siteId?.trim() || undefined,
+        species: type === VideoType.PLANT ? siteLink?.species : undefined,
         token,
       }
 

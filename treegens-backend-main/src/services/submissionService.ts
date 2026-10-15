@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import env from '../config/environment'
 import { uploadToStorage } from '../config/gcs'
 import { generateUniqueFileName } from '../middleware/upload'
+import Site from '../models/Site'
 import Submission from '../models/Submission'
 import User from '../models/User'
 import {
@@ -18,6 +19,17 @@ import {
 } from './aiMangroveVerificationService'
 import { enqueueNotification } from './notificationService'
 import RewardService from './rewardService'
+import {
+  buildSiteCheck,
+  evaluateSiteGate,
+  GateSite,
+  landLinkBlockReason,
+  MAX_SPECIES_PER_PLANTING,
+  measureClip,
+  parseSpeciesIds,
+  SiteCheckRefusal,
+  SiteCheckSnapshot,
+} from './siteGate'
 import { applyMinorityPenaltiesForVotes } from './verifierPenaltyService'
 import { evaluateMangroveAiRouting } from './submissionAiRouting'
 
@@ -45,7 +57,20 @@ type ResolveSubmissionResult = {
 
 export type UploadSlot = 'land' | 'plant'
 
+/** Optional Site Check link sent with a clip (species only with plant). */
+export type SiteLinkInput = {
+  siteId?: string | null
+  species?: unknown
+}
+
 const MANGROVE_TREE_TYPE = 'mangrove'
+
+type ClipGps = { latitude: number; longitude: number }
+
+function isFiniteGps(gps: unknown): gps is ClipGps {
+  const { latitude, longitude } = (gps ?? {}) as Record<string, unknown>
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+}
 
 /**
  * Approval has two consequences beyond flipping a status: it decides what the
@@ -169,8 +194,24 @@ class SubmissionService {
     treesPlanted?: number | string | null,
     treeType?: string,
     reverseGeocode?: string,
+    siteLink: SiteLinkInput = {},
   ) {
     const w = String(userWalletAddress).toLowerCase()
+    const gps = {
+      latitude: parseFloat(String(latitude)),
+      longitude: parseFloat(String(longitude)),
+    }
+    // Site problems surface before anything is written to storage.
+    const landSite =
+      type === 'land' ? await this.findLinkableSite(w, siteLink.siteId) : null
+    if (landSite) {
+      const land = measureClip(landSite, gps, env.SITE_GPS_TOLERANCE_M)
+      const reason = landLinkBlockReason(env.SITE_CHECK_ENFORCEMENT, land)
+      if (reason) throw new SiteCheckRefusal(reason)
+    }
+    if (type === 'plant') {
+      await this.assertPlantSiteGate(submissionId, w, treeType, siteLink, gps)
+    }
     const uniqueFileName = generateUniqueFileName(file.originalname)
     const mimeType = file.mimetype.startsWith('video/')
       ? file.mimetype
@@ -188,10 +229,7 @@ class SubmissionService {
       mimeType,
       videoCID: uploadResult.videoCID,
       publicUrl: uploadResult.publicUrl,
-      gpsCoordinates: {
-        latitude: parseFloat(String(latitude)),
-        longitude: parseFloat(String(longitude)),
-      },
+      gpsCoordinates: gps,
       uploadedAt: new Date(),
       version: 1,
     }
@@ -204,7 +242,7 @@ class SubmissionService {
       if (submissionId) {
         throw new Error('submissionId must not be set when uploading land')
       }
-      return this.createSubmissionWithLand(w, clipData)
+      return this.createSubmissionWithLand(w, clipData, landSite)
     }
 
     if (!submissionId) {
@@ -224,13 +262,102 @@ class SubmissionService {
         originalname: file.originalname,
         mimetype: mimeType,
       },
+      siteLink,
     )
+  }
+
+  /** A site the uploader owns, or null when none was chosen. */
+  private async findLinkableSite(wallet: string, siteId?: string | null) {
+    const id = String(siteId ?? '').trim()
+    if (!id) return null
+    const site = mongoose.Types.ObjectId.isValid(id)
+      ? await Site.findById(id).lean()
+      : null
+    if (!site || site.userWalletAddress !== wallet) {
+      throw new SiteCheckRefusal('Site not found')
+    }
+    return site
+  }
+
+  /**
+   * The site a plant clip is judged against (the one linked at land upload,
+   * else the one sent now) and a fresh snapshot measured from the land GPS,
+   * plus the plant clip's own position when its GPS is known.
+   */
+  private async resolvePlantSite(
+    submission: any,
+    wallet: string,
+    requestedSiteId: string | null | undefined,
+    plantGps: unknown,
+  ): Promise<{ site: GateSite | null; siteCheck: SiteCheckSnapshot | null }> {
+    const site = submission.siteId
+      ? await Site.findById(submission.siteId).lean()
+      : await this.findLinkableSite(wallet, requestedSiteId)
+    const landGps = submission.land?.gpsCoordinates
+    if (!site || !landGps) return { site: null, siteCheck: null }
+    const tolerance = env.SITE_GPS_TOLERANCE_M
+    const siteCheck = buildSiteCheck(site, landGps, tolerance)
+    if (isFiniteGps(plantGps)) {
+      const plant = measureClip(site, plantGps, tolerance)
+      siteCheck.plantInsideSite = plant.insideSite
+      siteCheck.plantDistanceToSiteM = plant.distanceToSiteM
+    }
+    return { site, siteCheck }
+  }
+
+  /**
+   * Refuses a plant upload before its video is stored when the site it asks
+   * to link cannot be linked, and under SITE_CHECK_ENFORCEMENT=enforce when
+   * the site gate blocks a mangrove planting. Anything else wrong with the
+   * request is left to attachPlantToSubmission, as before.
+   */
+  private async assertPlantSiteGate(
+    submissionId: string | null | undefined,
+    wallet: string,
+    treeType: string | undefined,
+    siteLink: SiteLinkInput,
+    plantGps: ClipGps,
+  ) {
+    const enforce =
+      env.SITE_CHECK_ENFORCEMENT === 'enforce' &&
+      this.normalizeTreeType(treeType ?? '') === MANGROVE_TREE_TYPE
+    const requestedSiteId = String(siteLink.siteId ?? '').trim()
+    if (!enforce && !requestedSiteId) return
+    if (!submissionId || !mongoose.Types.ObjectId.isValid(submissionId)) return
+    const submission = await Submission.findById(submissionId).lean()
+    if (!submission || submission.userWalletAddress !== wallet) return
+    if (!enforce) {
+      // Only checked when it would be used: no site was linked at land.
+      if (!submission.siteId) {
+        await this.findLinkableSite(wallet, requestedSiteId)
+      }
+      return
+    }
+    const { site, siteCheck } = await this.resolvePlantSite(
+      submission,
+      wallet,
+      requestedSiteId,
+      plantGps,
+    )
+    const gate = evaluateSiteGate({ enforcement: 'enforce', siteCheck, site })
+    if (gate.blockReason) throw new SiteCheckRefusal(gate.blockReason)
   }
 
   private async createSubmissionWithLand(
     userWalletAddress: string,
     landClip: Record<string, unknown>,
+    site: GateSite | null = null,
   ) {
+    const gps = landClip.gpsCoordinates as {
+      latitude: number
+      longitude: number
+    }
+    const siteFields = site
+      ? {
+          siteId: site._id,
+          siteCheck: buildSiteCheck(site, gps, env.SITE_GPS_TOLERANCE_M),
+        }
+      : {}
     try {
       const doc = await Submission.create({
         userWalletAddress,
@@ -238,6 +365,7 @@ class SubmissionService {
         land: landClip,
         plant: { uploaded: false },
         votes: [],
+        ...siteFields,
       })
       return this.formatUploadResponse(doc, 'land')
     } catch (err: any) {
@@ -267,6 +395,7 @@ class SubmissionService {
       originalname: string
       mimetype: string
     },
+    siteLink: SiteLinkInput = {},
   ) {
     const submission = await Submission.findById(submissionOid)
     if (!submission) throw new Error('Submission not found')
@@ -288,6 +417,40 @@ class SubmissionService {
     const normalizedTreeType = this.normalizeTreeType(treeType ?? '')
     if (!normalizedTreeType) {
       throw new Error('treeType is required when uploading plant')
+    }
+
+    const { site, siteCheck } = await this.resolvePlantSite(
+      submission,
+      userWalletAddress,
+      siteLink.siteId,
+      plantClip.gpsCoordinates,
+    )
+    if (site) {
+      submission.siteId = site._id as mongoose.Types.ObjectId
+      submission.siteCheck = siteCheck as any
+    }
+    if (siteLink.species !== undefined) {
+      submission.species = parseSpeciesIds(siteLink.species).ids.slice(
+        0,
+        MAX_SPECIES_PER_PLANTING,
+      )
+    }
+    const siteGate =
+      normalizedTreeType === MANGROVE_TREE_TYPE
+        ? evaluateSiteGate({
+            enforcement: env.SITE_CHECK_ENFORCEMENT,
+            siteCheck,
+            site,
+          })
+        : null
+    if (siteGate?.blockReason) throw new SiteCheckRefusal(siteGate.blockReason)
+    if (siteGate?.flag) {
+      submission.set('siteGateFlag', siteGate.flag)
+      console.log('[SubmissionService] site check flag', {
+        submissionId: String(submissionOid),
+        flag: siteGate.flag,
+        enforcement: env.SITE_CHECK_ENFORCEMENT,
+      })
     }
 
     submission.plant = plantClip as any
@@ -354,6 +517,10 @@ class SubmissionService {
           minConfidence: env.AI_AUTO_APPROVE_MIN_CONFIDENCE,
         })
         const shouldAutoApprove = routing.shouldAutoApprove
+        // SITE_CHECK_ENFORCEMENT=warn: no approved, matching Site Check means
+        // a human looks first, so the AI decision must not read auto-approved.
+        const siteHold =
+          shouldAutoApprove && siteGate?.allowAutoApprove === false
 
         submission.aiVerification = {
           status: 'completed',
@@ -361,14 +528,14 @@ class SubmissionService {
           countedMangroves: counted,
           ...(typeof conf === 'number' ? { confidence: conf } : {}),
           rawResponse: stringifyAiRawForStorage(aiResult.raw),
-          decision: routing.decision,
+          decision: siteHold ? 'pending_verifier' : routing.decision,
         } as any
 
         // Same 100-tree batch rule as the verifier path: an AI count the
         // funding rails will refuse must not be auto-approved into dead
         // inventory. It falls back to human review instead.
         const batchBlock = shouldAutoApprove ? batchGate(submission) : null
-        if (shouldAutoApprove && !batchBlock) {
+        if (shouldAutoApprove && !batchBlock && !siteHold) {
           submission.status = routing.submissionStatus
           submission.reviewedAt = new Date()
         } else {
@@ -378,9 +545,14 @@ class SubmissionService {
               { submissionId: String(submissionOid), reason: batchBlock },
             )
           }
-          submission.status = batchBlock
-            ? 'pending_review'
-            : routing.submissionStatus
+          if (siteHold) {
+            console.warn('[SubmissionService] auto-approval held: site check', {
+              submissionId: String(submissionOid),
+              flag: siteGate.flag,
+            })
+          }
+          submission.status =
+            batchBlock || siteHold ? 'pending_review' : routing.submissionStatus
         }
       } else {
         const failure = aiResult as AiMangroveVerifyFailure
@@ -452,6 +624,17 @@ class SubmissionService {
       treesPlanted: submission.treesPlanted,
       treeType: submission.treeType,
       reverseGeocode: clip.reverseGeocode,
+      // Lets the app warn while the before video can still be filmed again.
+      ...(uploadedType === 'land' && plain.siteCheck
+        ? {
+            siteCheck: {
+              insideSite: plain.siteCheck.insideSite,
+              distanceToSiteM: plain.siteCheck.distanceToSiteM,
+              siteStatus: plain.siteCheck.siteStatus,
+              verdictCode: plain.siteCheck.verdictCode,
+            },
+          }
+        : {}),
       ...(uploadedType === 'plant' && plain.aiVerification
         ? { aiVerification: plain.aiVerification }
         : {}),

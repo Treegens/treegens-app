@@ -6,6 +6,7 @@ import { AiVerdictCard } from '@/components/submission-detail/AiVerdictCard'
 import { PlantingCountCard } from '@/components/submission-detail/PlantingCountCard'
 import { RewardClaimStatusPill } from '@/components/submission-detail/RewardClaimStatusPill'
 import { SubmissionDmThread } from '@/components/submission-detail/SubmissionDmThread'
+import { SubmissionSiteInfo } from '@/components/siteCheck/SubmissionSiteInfo'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
 import { useUser } from '@/contexts/UserProvider'
@@ -158,6 +159,9 @@ export default function ReviewSubmission() {
   const [verifierReward, setVerifierReward] =
     useState<RewardStatusProjection | null>(null)
   const [claimingVerifier, setClaimingVerifier] = useState(false)
+  const [siteInfo, setSiteInfo] = useState<
+    Pick<ISubmissionDoc, 'siteId' | 'siteCheck' | 'species'>
+  >({})
 
   const submissionId =
     typeof params.submissionId === 'string' ? params.submissionId : ''
@@ -200,6 +204,11 @@ export default function ReviewSubmission() {
         const doc = response.data.data as ISubmissionDoc &
           Record<string, unknown>
         setSubmissionGroup(submissionDocToPlanterGroup(doc))
+        setSiteInfo({
+          siteId: doc.siteId,
+          siteCheck: doc.siteCheck,
+          species: doc.species,
+        })
         setWarningBanner(warningResponse?.data?.data || null)
       } catch (e) {
         console.error('Failed to load submission', e)
@@ -412,6 +421,8 @@ export default function ReviewSubmission() {
             )}
           </div>
         </div>
+
+        <SubmissionSiteInfo {...siteInfo} className="mt-3" />
 
         <section className="mt-4 space-y-2.5">
           <h2 className="text-lg font-bold tracking-wide text-[#4d341e]">
