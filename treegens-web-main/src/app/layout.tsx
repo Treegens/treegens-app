@@ -15,7 +15,11 @@ import { NotificationProvider } from '@/contexts/NotificationProvider'
 import { UserProvider } from '@/contexts/UserProvider'
 import './globals.css'
 
-const inter = Inter({ subsets: ['latin'] })
+// Inter is latin-only. Amharic (the planting rules, the species guide) falls
+// back to the self-hosted Noto Sans Ethiopic declared in globals.css; many
+// field Androids have no Ethiopic font of their own and show it blank. Set
+// here because next/font puts the whole font-family on the body's class.
+const inter = Inter({ subsets: ['latin'], fallback: ['Noto Sans Ethiopic'] })
 
 const googleVerify = process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION?.trim()
 
