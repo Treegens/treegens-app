@@ -174,7 +174,8 @@ export interface IGpsCoordinates {
 }
 
 export interface Vote {
-  voterWalletAddress: string
+  /** Omitted by the API when the viewer is the submission's planter. */
+  voterWalletAddress?: string
   vote: 'yes' | 'no'
   reasons: string[]
   createdAt: string

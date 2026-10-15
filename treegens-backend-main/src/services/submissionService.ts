@@ -5,6 +5,10 @@ import { generateUniqueFileName } from '../middleware/upload'
 import Submission from '../models/Submission'
 import User from '../models/User'
 import {
+  hideVoterIdentities,
+  hideVoterIdentitiesOnOwnRows,
+} from '../utils/planterSubmissionView'
+import {
   buildRejectionNotification,
   buildRejectionSummary,
   withRejectionSummary,
@@ -515,8 +519,11 @@ class SubmissionService {
     }
 
     // Rejected submissions carry a planter-facing `rejection` summary so the
-    // reasons are readable without digging through verifier votes.
-    const submissions = docs.map(doc => withRejectionSummary(doc.toObject()))
+    // reasons are readable without digging through verifier votes, and the
+    // votes themselves never say which verifier cast them.
+    const submissions = docs.map(doc =>
+      hideVoterIdentities(withRejectionSummary(doc.toObject())),
+    )
 
     return {
       submissions,
@@ -536,6 +543,7 @@ class SubmissionService {
     status,
     page = 1,
     limit = 10,
+    viewerWalletAddress,
   }: {
     minYes?: number
     minNo?: number
@@ -543,6 +551,8 @@ class SubmissionService {
     status?: string
     page?: number
     limit?: number
+    /** A verifier who also plants must not see who voted on their own rows. */
+    viewerWalletAddress?: string
   }) {
     const match: Record<string, unknown> = {}
     if (status) {
@@ -607,7 +617,9 @@ class SubmissionService {
 
     const total = countArr[0]?.total || 0
     return {
-      submissions: items,
+      submissions: viewerWalletAddress
+        ? hideVoterIdentitiesOnOwnRows(items, viewerWalletAddress)
+        : items,
       pagination: {
         page: parseInt(String(page)),
         limit: parseInt(String(limit)),

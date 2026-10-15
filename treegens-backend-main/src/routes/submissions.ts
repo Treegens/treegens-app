@@ -17,6 +17,7 @@ import User from '../models/User'
 import * as conversationService from '../services/conversationService'
 import HealthCheckService from '../services/healthCheckService'
 import SubmissionService from '../services/submissionService'
+import { hideVoterIdentities } from '../utils/planterSubmissionView'
 import { withRejectionSummary } from '../utils/rejectionSummary'
 import {
   sendBadRequest,
@@ -298,6 +299,7 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
         status: status as string | undefined,
         page,
         limit,
+        viewerWalletAddress: wallet,
       })
       return sendSuccess(res, 'Submissions retrieved', result)
     }
@@ -464,7 +466,9 @@ router.post(
  *         schema: { type: string }
  *     responses:
  *       200:
- *         description: Submission document (land + plant). Rejected submissions carry a `rejection` summary.
+ *         description: |
+ *           Submission document (land + plant). Rejected submissions carry a `rejection` summary.
+ *           When the caller is the submission's planter, each vote carries only `vote`, `reasons` and `createdAt`; verifier wallets are never shown to the planter.
  *         content:
  *           application/json:
  *             schema:
@@ -554,7 +558,12 @@ router.get(
       const payload = withRejectionSummary(doc.toObject())
       const owner = String(doc.userWalletAddress || '').toLowerCase()
       if (owner && owner === wallet) {
-        return sendSuccess(res, 'Submission retrieved successfully', payload)
+        // The planter gets every vote and its reasons, never who cast it.
+        return sendSuccess(
+          res,
+          'Submission retrieved successfully',
+          hideVoterIdentities(payload),
+        )
       }
       const user = await User.findOne({ walletAddress: wallet }).lean()
       if (user?.isVerifier) {

@@ -257,6 +257,10 @@ Response:
 - The rejection notification (`kind: submission_outcome`) is titled
   "Submission rejected" and its body lists the reasons; the payload carries
   `status: 'rejected'`, `reasons`, `noVotes`, `totalVotes`.
+- A planter never learns which verifier cast a vote on their own submission:
+  owner reads of `GET /api/submissions/:id`, `my-submissions`, the default
+  list scope, and the viewer's own rows in the moderation scope return votes
+  as `{ vote, reasons, createdAt }` only (`src/utils/planterSubmissionView.ts`).
 
 ## Recent Updates & Fixes (July 22, 2025)
 

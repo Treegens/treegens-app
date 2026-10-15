@@ -171,6 +171,8 @@ const swaggerOptions = {
         },
         SubmissionVote: {
           type: 'object',
+          description:
+            'voterWalletAddress and delegatedFor are omitted when the caller is the submission planter',
           properties: {
             voterWalletAddress: { type: 'string' },
             vote: { type: 'string', enum: ['yes', 'no'] },
