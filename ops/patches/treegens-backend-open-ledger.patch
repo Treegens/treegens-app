@@ -1,0 +1,4232 @@
+From 958a626fdb5e83fd52f5436cf8ae4f5805402aee Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 18 Oct 2026 12:34:59 +0000
+Subject: [PATCH] feat(ledger): public /api/transparency open ledger + on-chain
+ indexer
+
+Public, read-only, cached endpoints (overview, flows, plantings, planting detail, map, onchain, contracts, status) behind CORS * and their own rate limit; the origin allowlist exempts the path. A ledger indexer reads Base under a Mongo lease and writes one OnchainEvent per MGRO mint/burn (0x0 and 0xdEaD), minter proposal/execution/verifier share (V4, V6, AutoMinterV7 and the revoked minters), MangrovesRetired certificate and ERC-20 payout leg from completed distribution receipts. Mints are linked to plantings from the proposal's evidenceURI first, then from RewardAllocation/Submission/HealthCheck mint hashes. Tree counts use the verifier-corrected effective count; OTC buyers are labelled. DonationFlow model and donation totals for the foundation pipeline (data model only; see docs/TREASURY_PIPELINE.md). DISABLE_LEDGER_INDEXER turns the indexer off.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+Claude-Session: https://claude.ai/code/session_01QRDgg33yuY5qETYVwQPAZi
+---
+ docs/TREASURY_PIPELINE.md                  |  141 ++
+ src/config/environment.ts                  |  128 +-
+ src/middleware/rateLimits.ts               |   11 +
+ src/models/DonationFlow.ts                 |  140 ++
+ src/models/OnchainEvent.ts                 |   78 +
+ src/models/OnchainIndexerState.ts          |   18 +
+ src/models/OnchainTxIngest.ts              |   28 +
+ src/routes/transparency.ts                 |  299 ++++
+ src/server.ts                              |   57 +-
+ src/services/transparencyIndexerService.ts |  859 ++++++++++
+ src/services/transparencyService.ts        | 1664 ++++++++++++++++++++
+ src/utils/transparencyFormat.test.ts       |  222 +++
+ src/utils/transparencyFormat.ts            |  382 +++++
+ 13 files changed, 4011 insertions(+), 16 deletions(-)
+ create mode 100644 docs/TREASURY_PIPELINE.md
+ create mode 100644 src/models/DonationFlow.ts
+ create mode 100644 src/models/OnchainEvent.ts
+ create mode 100644 src/models/OnchainIndexerState.ts
+ create mode 100644 src/models/OnchainTxIngest.ts
+ create mode 100644 src/routes/transparency.ts
+ create mode 100644 src/services/transparencyIndexerService.ts
+ create mode 100644 src/services/transparencyService.ts
+ create mode 100644 src/utils/transparencyFormat.test.ts
+ create mode 100644 src/utils/transparencyFormat.ts
+
+diff --git a/docs/TREASURY_PIPELINE.md b/docs/TREASURY_PIPELINE.md
+new file mode 100644
+index 0000000..d384367
+--- /dev/null
++++ b/docs/TREASURY_PIPELINE.md
+@@ -0,0 +1,141 @@
++# Donation pipeline: treegensfoundation.org → Mercury → Stripe (USDC) → $MGRO
++
++Status: **design + data model only.** The `DonationFlow` model and the public
++ledger's donation totals exist (`/api/transparency/overview` → `totals.donations`,
++`/flows?kinds=donation`). The code that moves money has not been written: an
++automation that debits a bank account, converts to stablecoin and trades needs
++an explicit, deliberate go-ahead from the account owner, and the harness that
++produced this branch refuses to author it without one. This document is the
++complete specification so that go-ahead can be given with eyes open, and the
++implementation can follow it line by line.
++
++## What already works today (world.treegens.app, proven in production)
++
++`world-treegens-app/netlify/functions/treasury-cron.js` and
++`fulfill-background.js` already run the same three legs for card purchases:
++
++| Leg | Mechanism | Where |
++|---|---|---|
++| USD balance → USDC | Stripe Money Management: a USD **financial account**, an outbound payment to a **crypto-wallet payout method** (`cwa_…`, the relayer wallet on Base), API version `2025-11-17.preview` | `treasury-cron.js` (`TREASURY_AUTO_FORWARD=1`) |
++| USDC → $MGRO | OpenOcean aggregator quote + swap from the relayer wallet, 3% slippage, forward-quoted for the real size | `fulfill-background.js` → `acquireMgro()` |
++| $MGRO → retired | `MangroveRetirement.retire(beneficiary, amount, metadataURI, sourceRef)`: MGRO to `0x…dEaD`, soulbound proof NFT | `fulfill-background.js` (rail `mgro`) |
++
++The only new leg for donations is **Mercury → Stripe**.
++
++## Target flow
++
++```
++donor ──► Mercury (foundation account)
++            │  1. detect: incoming credit ≥ TREASURY_MIN_DONATION_USD
++            │  2. sweep:  Mercury API payment (ACH) to the Stripe financial
++            │             account's bank details (a saved Mercury recipient)
++            ▼
++          Stripe financial account (USD)
++            │  3. on-ramp: outbound payment  from {financial_account, usd}
++            │             to {payout_method cwa_…, usdc}  → USDC lands on Base
++            ▼
++          Treasury hot wallet (Base)
++            │  4. buy:    OpenOcean swap USDC → $MGRO (canonical
++            │             0x46e564D039d0d7Ec4C88d517fD32a03d15e88568),
++            │             slippage and size caps
++            ▼
++          2-of-4 Safe 0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C
++               5. settle: forward $MGRO to the Safe, or (opt-in) retire it
++                          through MangroveRetirement with the Safe as beneficiary
++```
++
++Every stage writes to the donation's `DonationFlow` row; the public ledger
++shows amount, dates and the three transaction hashes. Never the donor.
++
++## Stage by stage
++
++### 1. Detect (read-only)
++`GET {MERCURY_API_BASE}/account/{MERCURY_ACCOUNT_ID}/transactions?start=<lookback>&limit=500`
++with `Authorization: Bearer MERCURY_API_TOKEN`. A donation is a transaction
++with a positive `amount`, `status` `sent`/`posted`, and `kind` in
++`TREASURY_DONATION_KINDS`. One `DonationFlow` per Mercury transaction id
++(unique index). The counterparty is stored only as a SHA-256 hash.
++
++### 2. Sweep (Mercury → Stripe)
++`POST /account/{id}/transactions`
++`{ recipientId: MERCURY_STRIPE_RECIPIENT_ID, amount, paymentMethod: 'ach', idempotencyKey: <flow id>, note: 'Treegens donation <flow id>' }`.
++The recipient is created **once, by a human in Mercury**, from the bank
++details Stripe shows for the financial account ("Add funds by bank
++transfer"). Amount = donation × (1 − `TREASURY_SWEEP_RESERVE_PCT`), capped by
++`TREASURY_MAX_SWEEP_USD` per run. Mercury may hold API payments for in-app
++approval depending on account settings; the stage polls the created
++transaction until `sent`.
++
++### 3. On-ramp (Stripe USD → USDC on Base)
++When the financial account's available USD covers the flow:
++`POST /v2/money_management/outbound_payments` with
++`{ from: { financial_account: STRIPE_FINANCIAL_ACCOUNT_ID, currency: 'usd' }, to: { payout_method: STRIPE_CRYPTO_PAYOUT_METHOD_ID, currency: 'usdc' }, amount: { value: <cents>, currency: 'usd' }, description: 'Treegens donation <flow id>' }`,
++headers `Stripe-Version: 2025-11-17.preview`, `Idempotency-Key: <flow id>`.
++The payout method is the existing crypto-wallet method (the site already has
++`STRIPE_TGN_PAYOUT_METHOD_ID=cwa_…`; a second one for the treasury wallet is
++registered once in the Stripe Dashboard). Arrival is confirmed on-chain: a
++USDC `Transfer` to the treasury wallet matching the amount, recorded with its
++tx hash.
++
++### 4. Buy $MGRO
++Flows whose USDC has arrived are swapped **together** (one transaction per
++tick, pro-rata attribution): OpenOcean `/v4/base/quote` then `/swap` from the
++treasury wallet, `TREASURY_SWAP_SLIPPAGE_PCT` (default 3), at most
++`TREASURY_MAX_SWAP_USDC` per transaction, nothing below
++`TREASURY_MIN_SWAP_USDC`. The swap is refused when the quoted output is zero
++(no liquidity) and the flows wait in `onramped`. `MGRO` is the canonical token;
++the world site's constants still name the retired `0xe846…2283` deployment and
++must not be copied.
++
++### 5. Settle
++`transfer()` the bought $MGRO to `TREASURY_FORWARD_TO` (the Safe), or with
++`TREASURY_RETIRE=true` call `MangroveRetirement.retire(safe, amount, uri, 0x0)`
++after reading `retirement.mgro()` and refusing unless it equals the canonical
++$MGRO. The hot wallet therefore never holds value longer than one tick.
++
++## Safety model
++
++- `TREASURY_PIPELINE_MODE` defaults to `dry_run`: every stage records the
++  exact request it would send under `DonationFlow.<stage>.dryRun` and moves
++  nothing. Only the literal `live` moves money, and only for stages whose keys
++  are present.
++- `TREASURY_REQUIRE_APPROVAL=true` parks each new donation as `held` until an
++  admin releases it (`POST /api/admin/treasury/flows/:id/release`, bearer
++  `ADMIN_API_TOKEN`).
++- Per-run caps (`TREASURY_MAX_SWEEP_USD`, `TREASURY_MAX_ONRAMP_USD`,
++  `TREASURY_MAX_SWAP_USDC`), per-stage idempotency keys, bounded retries, and
++  a Mongo lease so one process runs the pipeline.
++- The hot wallet key must derive to `TREASURY_WALLET_ADDRESS`; otherwise the
++  sender stands down (same rule as the server-mint keeper).
++- Nothing about a donor is stored in clear or published.
++
++## What Jimi has to do before any of this can run
++
++1. Mercury: create an API token with read + send-money permission for the
++   foundation account; note the account id. Create the Stripe financial
++   account as a saved recipient (its ACH routing/account numbers come from the
++   Stripe Dashboard → Balances → the financial account → "Add funds").
++2. Stripe: confirm Money Management / stablecoin financial accounts are active
++   (they are for the world site: `treasury-cron.js` already lists them), note
++   `fa_…`; register the treasury hot wallet as a Base USDC crypto-wallet payout
++   method and note `cwa_…`.
++3. Create the treasury hot wallet (fresh key, a little ETH on Base for gas),
++   and decide the destination (`TREASURY_FORWARD_TO`, default the Safe) and
++   whether to retire (`TREASURY_RETIRE`).
++4. Set the env vars on the Render service, run one cycle in `dry_run`, read
++   the recorded requests, then flip to `live` with `TREASURY_REQUIRE_APPROVAL=true`
++   for the first weeks.
++
++## Env vars (reserved names)
++
++```
++DISABLE_TREASURY_PIPELINE, TREASURY_PIPELINE_MODE (dry_run|live), TREASURY_POLL_MS,
++TREASURY_REQUIRE_APPROVAL, TREASURY_LOOKBACK_DAYS, TREASURY_MIN_DONATION_USD,
++TREASURY_DONATION_KINDS, TREASURY_SWEEP_RESERVE_PCT, TREASURY_MAX_SWEEP_USD,
++MERCURY_API_BASE, MERCURY_API_TOKEN, MERCURY_ACCOUNT_ID, MERCURY_STRIPE_RECIPIENT_ID,
++STRIPE_TREASURY_SECRET_KEY, STRIPE_FINANCIAL_ACCOUNT_ID, STRIPE_CRYPTO_PAYOUT_METHOD_ID,
++STRIPE_MONEY_MANAGEMENT_VERSION, TREASURY_ONRAMP_FROM_CURRENCY, TREASURY_MAX_ONRAMP_USD,
++TREASURY_WALLET_PRIVATE_KEY, TREASURY_WALLET_ADDRESS, TREASURY_FORWARD_TO,
++TREASURY_MAX_SWAP_USDC, TREASURY_MIN_SWAP_USDC, TREASURY_SWAP_SLIPPAGE_PCT,
++TREASURY_KEEP_USDC, TREASURY_RETIRE, TREASURY_RETIREMENT_ADDRESS, OPENOCEAN_API_BASE
++```
+diff --git a/src/config/environment.ts b/src/config/environment.ts
+index 640989f..e16d632 100644
+--- a/src/config/environment.ts
++++ b/src/config/environment.ts
+@@ -81,7 +81,7 @@ class EnvironmentConfig {
+       console.error(
+         `[config] TGN_VAULT_ADDRESS=${configured} is not a vault (stake/slash ` +
+           `calls revert on it). Ignoring it and using ${CURRENT}. ` +
+-          `Remove or fix the stale env var.`
++          `Remove or fix the stale env var.`,
+       )
+       return CURRENT
+     }
+@@ -170,7 +170,9 @@ class EnvironmentConfig {
+    * which contract is authoritative.
+    */
+   get VERIFIER_WEIGHT_SOURCE_ADDRESS() {
+-    return this.TGN_DELEGATION_REGISTRY_ADDRESS?.trim() || this.TGN_VAULT_ADDRESS
++    return (
++      this.TGN_DELEGATION_REGISTRY_ADDRESS?.trim() || this.TGN_VAULT_ADDRESS
++    )
+   }
+ 
+   /** VerifierMinter — since 2026-07-25 the ONLY address with MINTER_ROLE on MGRO. */
+@@ -193,11 +195,15 @@ class EnvironmentConfig {
+     const configured = process.env.VERIFIER_MINTER_ADDRESS?.trim()
+     if (!configured) return CURRENT
+ 
+-    if (EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(configured.toLowerCase())) {
++    if (
++      EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(
++        configured.toLowerCase(),
++      )
++    ) {
+       console.error(
+         `[config] VERIFIER_MINTER_ADDRESS=${configured} is a REVOKED minter and ` +
+           `would fail every mint. Ignoring it and using ${CURRENT}. ` +
+-          `Remove the stale env var.`
++          `Remove the stale env var.`,
+       )
+       return CURRENT
+     }
+@@ -651,6 +657,120 @@ class EnvironmentConfig {
+     return process.env.DISABLE_OTC === 'true'
+   }
+ 
++  // --- Public open ledger (routes/transparency.ts, transparencyIndexerService) ---
++
++  /**
++   * The ledger indexer reads Base and writes OnchainEvent rows for the public
++   * transparency site (treegens-transparency). It never signs anything.
++   * DISABLE_*, like the sweeps: a stale value on the deploy env cannot keep
++   * the public ledger dark by accident.
++   */
++  get DISABLE_LEDGER_INDEXER() {
++    return process.env.DISABLE_LEDGER_INDEXER === 'true'
++  }
++
++  get LEDGER_INDEXER_POLL_MS() {
++    const raw = process.env.LEDGER_INDEXER_POLL_MS
++    const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : 60000
++    return Number.isNaN(n) || n < 5000 ? 60000 : n
++  }
++
++  /** First block to scan; defaults to the MGRO burn indexer's start block. */
++  get LEDGER_INDEXER_START_BLOCK() {
++    const raw = process.env.LEDGER_INDEXER_START_BLOCK
++    const n =
++      raw !== undefined && raw !== ''
++        ? parseInt(raw, 10)
++        : this.MGRO_BURN_START_BLOCK
++    return Number.isNaN(n) || n < 0 ? this.MGRO_BURN_START_BLOCK : n
++  }
++
++  get LEDGER_INDEXER_CHUNK_SIZE() {
++    const raw = process.env.LEDGER_INDEXER_CHUNK_SIZE
++    const n =
++      raw !== undefined && raw !== ''
++        ? parseInt(raw, 10)
++        : this.BURN_INDEXER_CHUNK_SIZE
++    return Number.isNaN(n) || n <= 0 ? this.BURN_INDEXER_CHUNK_SIZE : n
++  }
++
++  get LEDGER_INDEXER_CONFIRMATIONS() {
++    const raw = process.env.LEDGER_INDEXER_CONFIRMATIONS
++    const n =
++      raw !== undefined && raw !== ''
++        ? parseInt(raw, 10)
++        : this.BURN_INDEXER_CONFIRMATIONS
++    return Number.isNaN(n) || n < 0 ? this.BURN_INDEXER_CONFIRMATIONS : n
++  }
++
++  private static dedupeAddresses(raw: unknown[]): string[] {
++    const seen = new Set<string>()
++    const out: string[] = []
++    for (const value of raw) {
++      const a = String(value || '').trim()
++      if (!/^0x[a-fA-F0-9]{40}$/.test(a)) continue
++      const key = a.toLowerCase()
++      if (seen.has(key)) continue
++      seen.add(key)
++      out.push(a)
++    }
++    return out
++  }
++
++  /**
++   * Every minter whose MintProposed / MintExecuted / VerifierRewardPaid logs
++   * belong in the public ledger: the current one, V4, AutoMinterV7 and the
++   * ones they replaced, so historic reward mints keep their on-chain
++   * evidence. Extra addresses via TRANSPARENCY_EXTRA_MINTERS (comma list).
++   */
++  get TRANSPARENCY_MINTER_ADDRESSES(): string[] {
++    return EnvironmentConfig.dedupeAddresses([
++      this.VERIFIER_MINTER_ADDRESS,
++      this.VERIFIER_MINTER_V4_ADDRESS,
++      this.AUTO_MINTER_ADDRESS,
++      '0x9BB2C6786c69BB075B36E2B92f1a7c15D539508c', // cap-100 minter, revoked 2026-07-26
++      '0xE73941B1Ae8f630b6Ab2FDd73041bc92B13e397E', // v2, revoked 2026-08-16
++      '0x4D4C9670b07f1e7460451D5bDD6fC21AE3cb0b02', // v3, revoked 2026-08-16
++      ...(process.env.TRANSPARENCY_EXTRA_MINTERS || '').split(','),
++    ])
++  }
++
++  /**
++   * MangroveRetirement contracts (world.treegens.app rail 1): MangrovesRetired
++   * logs name the planting a funder retired $MGRO for. The one the site uses
++   * (RETIREMENT_ADDR) plus the known deployments.
++   */
++  get TRANSPARENCY_RETIREMENT_ADDRESSES(): string[] {
++    return EnvironmentConfig.dedupeAddresses([
++      process.env.RETIREMENT_ADDR,
++      '0x9B862953a0b07A8672452E273B0C135eBB9f407d', // world.treegens.app RETIREMENT_ADDR
++      '0x645A665FC0fff79A197A1D95337364d4dc28C1eA', // deployments.json 2026-07-23
++      ...(process.env.TRANSPARENCY_EXTRA_RETIREMENTS || '').split(','),
++    ])
++  }
++
++  /** 2-of-4 Treegens treasury Safe on Base (TGNVault.treasury()). */
++  get TREASURY_SAFE_ADDRESS() {
++    return (
++      process.env.TREASURY_SAFE_ADDRESS ||
++      '0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C'
++    )
++  }
++
++  /** Block explorer the public ledger links every tx and address to. */
++  get EXPLORER_BASE_URL() {
++    return String(process.env.EXPLORER_BASE_URL || 'https://basescan.org')
++      .trim()
++      .replace(/\/+$/, '')
++  }
++
++  /** In-memory cache TTL for the public transparency endpoints. */
++  get TRANSPARENCY_CACHE_TTL_MS() {
++    const raw = process.env.TRANSPARENCY_CACHE_TTL_MS
++    const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : 30000
++    return Number.isNaN(n) || n < 1000 ? 30000 : n
++  }
++
+   validateRequired() {
+     const required = ['MONGODB_URI', 'PINATA_JWT', 'JWT_SECRET']
+     const missing = required.filter(key => !process.env[key])
+diff --git a/src/middleware/rateLimits.ts b/src/middleware/rateLimits.ts
+index 8ababac..687ee85 100644
+--- a/src/middleware/rateLimits.ts
++++ b/src/middleware/rateLimits.ts
+@@ -157,3 +157,14 @@ export const submissionShareLimiter = rateLimit({
+   max: 30,
+   keyGenerator: walletOrIpKey,
+ })
++
++/**
++ * GET /api/transparency/* — the public open ledger: cached, read-only, no
++ * auth, so IP-keyed. Generous: a busy public page polls a handful of
++ * endpoints every 45 s, and a shared network is many readers.
++ */
++export const transparencyLimiter = rateLimit({
++  ...defaults,
++  windowMs: 60 * 1000,
++  max: 240,
++})
+diff --git a/src/models/DonationFlow.ts b/src/models/DonationFlow.ts
+new file mode 100644
+index 0000000..b6196df
+--- /dev/null
++++ b/src/models/DonationFlow.ts
+@@ -0,0 +1,140 @@
++import mongoose from 'mongoose'
++
++/**
++ * One donation on its way from the foundation's bank account to $MGRO.
++ *
++ *   detected   a credit on the Mercury donations account (treegensfoundation.org)
++ *   held       waiting for an admin release (TREASURY_REQUIRE_APPROVAL, or a hold)
++ *   swept      Mercury sent the USD to the Stripe financial account (ACH)
++ *   onramped   Stripe paid the USD out as USDC to the treasury wallet on Base
++ *   bought     the treasury wallet swapped that USDC for $MGRO
++ *   settled    the $MGRO reached the Safe (or was retired through MangroveRetirement)
++ *   failed     a stage errored past its retries; an admin re-releases it
++ *
++ * Each stage keeps what it sent and what came back, so the public ledger can
++ * show the donation as a chain: $ in → USDC tx → swap tx → settle tx. Nothing
++ * about the donor is ever exposed: the counterparty is stored only as a hash,
++ * for de-duplication and support.
++ *
++ * ⛔ Amounts are integers (cents, USDC micro-units, MGRO wei as strings).
++ * Never a float on the way to a payment.
++ */
++export const DONATION_FLOW_STATUSES = [
++  'detected',
++  'held',
++  'swept',
++  'onramped',
++  'bought',
++  'settled',
++  'failed',
++] as const
++export type DonationFlowStatus = (typeof DONATION_FLOW_STATUSES)[number]
++
++export const STAGE_STATUSES = [
++  'pending',
++  'sent',
++  'settled',
++  'failed',
++  'skipped',
++] as const
++export type StageStatus = (typeof STAGE_STATUSES)[number]
++
++const stageBase = {
++  status: { type: String, enum: STAGE_STATUSES, default: 'pending' },
++  sentAt: { type: Date, required: false },
++  settledAt: { type: Date, required: false },
++  attempts: { type: Number, default: 0 },
++  error: { type: String, default: '' },
++  /** What a dry run WOULD have sent, verbatim, so an operator can check it. */
++  dryRun: { type: mongoose.Schema.Types.Mixed, required: false },
++}
++
++const donationFlowSchema = new mongoose.Schema(
++  {
++    status: {
++      type: String,
++      enum: DONATION_FLOW_STATUSES,
++      default: 'detected',
++      index: true,
++    },
++    mode: { type: String, enum: ['dry_run', 'live'], required: true },
++    amountCents: { type: Number, required: true, min: 1 },
++    currency: { type: String, default: 'usd' },
++    holdReason: { type: String, default: '' },
++    mercury: {
++      txId: { type: String, required: true },
++      accountId: { type: String, required: true },
++      kind: { type: String, default: '' },
++      postedAt: { type: Date, required: false },
++      /** sha256 of the counterparty name; never the name itself. */
++      counterpartyHash: { type: String, default: '' },
++      memo: { type: String, default: '' },
++    },
++    sweep: new mongoose.Schema(
++      {
++        ...stageBase,
++        mercuryPaymentId: { type: String, default: '' },
++        amountCents: { type: Number, default: 0 },
++        idempotencyKey: { type: String, default: '' },
++      },
++      { _id: false },
++    ),
++    onramp: new mongoose.Schema(
++      {
++        ...stageBase,
++        stripeOutboundPaymentId: { type: String, default: '' },
++        amountCents: { type: Number, default: 0 },
++        /** USDC base units (6 decimals) that reached the wallet. */
++        usdcMicro: { type: String, default: '0' },
++        txHash: { type: String, default: '' },
++        idempotencyKey: { type: String, default: '' },
++      },
++      { _id: false },
++    ),
++    swap: new mongoose.Schema(
++      {
++        ...stageBase,
++        usdcMicro: { type: String, default: '0' },
++        mgroWei: { type: String, default: '0' },
++        txHash: { type: String, default: '' },
++        route: { type: String, default: '' },
++        /** Flows swapped together in one transaction share a batch id. */
++        batchId: { type: String, default: '' },
++      },
++      { _id: false },
++    ),
++    settle: new mongoose.Schema(
++      {
++        ...stageBase,
++        mgroWei: { type: String, default: '0' },
++        to: { type: String, default: '' },
++        txHash: { type: String, default: '' },
++        retired: { type: Boolean, default: false },
++        tokenId: { type: Number, required: false },
++        batchId: { type: String, default: '' },
++      },
++      { _id: false },
++    ),
++    /** Bounded audit trail; the newest entries win. */
++    events: {
++      type: [
++        new mongoose.Schema(
++          {
++            at: { type: Date, default: Date.now },
++            stage: { type: String, default: '' },
++            message: { type: String, default: '' },
++          },
++          { _id: false },
++        ),
++      ],
++      default: [],
++    },
++  },
++  { timestamps: true },
++)
++
++donationFlowSchema.index({ 'mercury.txId': 1 }, { unique: true })
++donationFlowSchema.index({ status: 1, updatedAt: 1 })
++donationFlowSchema.index({ createdAt: -1 })
++
++export default mongoose.model('DonationFlow', donationFlowSchema)
+diff --git a/src/models/OnchainEvent.ts b/src/models/OnchainEvent.ts
+new file mode 100644
+index 0000000..458b9d6
+--- /dev/null
++++ b/src/models/OnchainEvent.ts
+@@ -0,0 +1,78 @@
++import mongoose from 'mongoose'
++
++/**
++ * One row per on-chain event the public transparency ledger shows.
++ *
++ * Every amount on the open ledger traces back to one of these rows, and every
++ * row carries the transaction hash a reader can open on Basescan. The
++ * indexer writes them from Base logs and receipts; nothing here is typed in
++ * by hand.
++ */
++export const ONCHAIN_EVENT_KINDS = [
++  /** $MGRO Transfer from 0x0 — a reward minted to a planter, buyer or verifier. */
++  'mgro_mint',
++  /** $MGRO Transfer to 0x0 or 0x…dEaD — tokens retired for ever. */
++  'mgro_burn',
++  /** MintProposed on a minter — carries the evidenceURI naming the planting. */
++  'mint_proposed',
++  /** MintExecuted on a minter — the mint was released. */
++  'mint_executed',
++  /** VerifierRewardPaid on a minter — a verifier's 5% share inside a mint. */
++  'verifier_reward_paid',
++  /** MangrovesRetired on a retirement contract — a funder retired trees. */
++  'mgro_retired',
++  /** ERC-20 transfer inside a distribution tx — planter (95%) or verifier (5%) payout. */
++  'tgn_payout',
++] as const
++
++export type OnchainEventKind = (typeof ONCHAIN_EVENT_KINDS)[number]
++
++export type OnchainEventMeta = {
++  /** Submission the event pays for, when the chain or the ledger names one. */
++  submissionId?: string
++  /** 'planter' | 'buyer' | 'verifier' | 'funder' | 'other' */
++  role?: string
++  /** Planter reward tranche index (0-based) for vested MGRO mints. */
++  trancheIndex?: number
++  /** Minter proposal id. */
++  proposalId?: number
++  /** Minter evidence URI, e.g. treegens://submission/<id>/tranche/0 */
++  evidenceURI?: string
++  /** Approving count or weight recorded by MintExecuted. */
++  approvals?: string
++  /** USD the funder paid, copied from the distribution record. */
++  grossUsd?: number
++  /** Retirement: soulbound token id, beneficiary and metadata URI. */
++  tokenId?: number
++  beneficiary?: string
++  metadataURI?: string
++  sourceRef?: string
++}
++
++const onchainEventSchema = new mongoose.Schema(
++  {
++    chainId: { type: Number, required: true, default: 8453 },
++    txHash: { type: String, required: true, lowercase: true, trim: true },
++    logIndex: { type: Number, required: true, min: 0 },
++    blockNumber: { type: Number, required: true, min: 0, index: true },
++    blockTime: { type: Date, required: true, index: true },
++    /** Emitting contract (lowercase). */
++    contract: { type: String, required: true, lowercase: true, trim: true },
++    kind: { type: String, enum: ONCHAIN_EVENT_KINDS, required: true },
++    token: { type: String, enum: ['MGRO', 'TGN', 'ERC20', ''], default: '' },
++    from: { type: String, default: '', lowercase: true, trim: true },
++    to: { type: String, default: '', lowercase: true, trim: true, index: true },
++    /** Decimal wei string — never a float. */
++    amountWei: { type: String, required: true, default: '0' },
++    meta: { type: mongoose.Schema.Types.Mixed, default: {} },
++  },
++  { timestamps: true },
++)
++
++onchainEventSchema.index({ txHash: 1, logIndex: 1 }, { unique: true })
++onchainEventSchema.index({ kind: 1, blockTime: -1 })
++onchainEventSchema.index({ blockTime: -1, logIndex: -1 })
++onchainEventSchema.index({ 'meta.submissionId': 1 }, { sparse: true })
++onchainEventSchema.index({ 'meta.proposalId': 1 }, { sparse: true })
++
++export default mongoose.model('OnchainEvent', onchainEventSchema)
+diff --git a/src/models/OnchainIndexerState.ts b/src/models/OnchainIndexerState.ts
+new file mode 100644
+index 0000000..b57682f
+--- /dev/null
++++ b/src/models/OnchainIndexerState.ts
+@@ -0,0 +1,18 @@
++import mongoose from 'mongoose'
++
++/**
++ * Cursor for each ledger indexer stream (log scan per contract set, payout
++ * receipt ingestion). Separate from BurnIndexerState so the two indexers can
++ * run and be reset independently.
++ */
++const onchainIndexerStateSchema = new mongoose.Schema(
++  {
++    key: { type: String, required: true, unique: true, trim: true },
++    lastProcessedBlock: { type: Number, required: true, min: 0, default: 0 },
++    /** Free-form progress info surfaced on /api/transparency/status. */
++    meta: { type: mongoose.Schema.Types.Mixed, default: {} },
++  },
++  { timestamps: true },
++)
++
++export default mongoose.model('OnchainIndexerState', onchainIndexerStateSchema)
+diff --git a/src/models/OnchainTxIngest.ts b/src/models/OnchainTxIngest.ts
+new file mode 100644
+index 0000000..3a017e6
+--- /dev/null
++++ b/src/models/OnchainTxIngest.ts
+@@ -0,0 +1,28 @@
++import mongoose from 'mongoose'
++
++/**
++ * Tracks which payout transactions (from TgnDistribution records) have had
++ * their receipts read into OnchainEvent rows. Keeps receipt fetching
++ * idempotent and lets a missing or failed receipt be retried a bounded
++ * number of times instead of forever.
++ */
++const onchainTxIngestSchema = new mongoose.Schema(
++  {
++    txHash: { type: String, required: true, unique: true, lowercase: true },
++    source: { type: String, required: true, default: 'tgn_distribution' },
++    submissionId: { type: String, default: '' },
++    status: {
++      type: String,
++      enum: ['ingested', 'not_found', 'failed', 'invalid'],
++      required: true,
++    },
++    attempts: { type: Number, default: 0 },
++    eventsWritten: { type: Number, default: 0 },
++    lastError: { type: String, default: '' },
++  },
++  { timestamps: true },
++)
++
++onchainTxIngestSchema.index({ status: 1, updatedAt: 1 })
++
++export default mongoose.model('OnchainTxIngest', onchainTxIngestSchema)
+diff --git a/src/routes/transparency.ts b/src/routes/transparency.ts
+new file mode 100644
+index 0000000..3028fac
+--- /dev/null
++++ b/src/routes/transparency.ts
+@@ -0,0 +1,299 @@
++import cors from 'cors'
++import express, { NextFunction, Request, Response } from 'express'
++import env from '../config/environment'
++import { transparencyLimiter } from '../middleware/rateLimits'
++import type TransparencyIndexerService from '../services/transparencyIndexerService'
++import transparencyService from '../services/transparencyService'
++import { sendError, sendNotFound, sendSuccess } from '../utils/responseHelpers'
++import { clampInt, decodeCursor, parseKinds } from '../utils/transparencyFormat'
++
++/**
++ * Public, read-only open ledger (the data behind treegens-transparency).
++ *
++ *   GET /api/transparency/overview            totals + contract addresses
++ *   GET /api/transparency/flows               newest-first money + impact feed
++ *   GET /api/transparency/plantings           verified plantings with videos
++ *   GET /api/transparency/plantings/:id       one planting's full timeline
++ *   GET /api/transparency/map                 GPS points for every planting
++ *   GET /api/transparency/onchain             live supply/balances from Base
++ *   GET /api/transparency/contracts           what each address is
++ *   GET /api/transparency/status              indexer progress
++ *
++ * No auth: everything here is already public (approved plantings are served
++ * as NFT metadata, every amount is an on-chain event). Responses are cached
++ * in memory for TRANSPARENCY_CACHE_TTL_MS and served with CORS `*` so the
++ * ledger site can live on any origin (server.ts exempts this path from the
++ * origin allowlist).
++ */
++const router = express.Router()
++
++/** Set by server.ts when the ledger indexer runs in this process. */
++let indexer: TransparencyIndexerService | null = null
++export function attachLedgerIndexer(
++  instance: TransparencyIndexerService | null,
++) {
++  indexer = instance
++}
++
++const cache = new Map<string, { at: number; status: number; body: unknown }>()
++
++/** Tiny TTL cache: public data, identical for every caller. */
++function cached(ttlMs = env.TRANSPARENCY_CACHE_TTL_MS) {
++  return (req: Request, res: Response, next: NextFunction) => {
++    const key = req.originalUrl
++    const hit = cache.get(key)
++    if (hit && Date.now() - hit.at < ttlMs) {
++      res.setHeader('X-Cache', 'HIT')
++      res.setHeader(
++        'Cache-Control',
++        `public, max-age=${Math.floor(ttlMs / 1000)}`,
++      )
++      return res.status(hit.status).json(hit.body)
++    }
++    const original = res.json.bind(res)
++    res.json = (body: unknown) => {
++      if (res.statusCode === 200) {
++        cache.set(key, { at: Date.now(), status: res.statusCode, body })
++        if (cache.size > 500) {
++          const oldest = [...cache.entries()].sort(
++            (a, b) => a[1].at - b[1].at,
++          )[0]
++          if (oldest) cache.delete(oldest[0])
++        }
++      }
++      res.setHeader('X-Cache', 'MISS')
++      res.setHeader(
++        'Cache-Control',
++        `public, max-age=${Math.floor(ttlMs / 1000)}`,
++      )
++      return original(body)
++    }
++    return next()
++  }
++}
++
++router.use(cors({ origin: '*', methods: ['GET', 'OPTIONS'] }))
++router.use(transparencyLimiter)
++
++/**
++ * @swagger
++ * tags:
++ *   name: Transparency
++ *   description: Public open-ledger data behind the Treegens transparency site
++ */
++
++/**
++ * @swagger
++ * /api/transparency/overview:
++ *   get:
++ *     summary: Totals for funding in, rewards out, trees verified and growth updates
++ *     tags: [Transparency]
++ *     responses:
++ *       200:
++ *         description: Aggregates plus contract addresses and ledger status
++ */
++router.get('/overview', cached(), async (_req: Request, res: Response) => {
++  try {
++    return sendSuccess(
++      res,
++      'Transparency overview',
++      await transparencyService.overview(),
++    )
++  } catch (error: any) {
++    console.error('Transparency overview error:', error)
++    return sendError(res, 'Failed to build overview')
++  }
++})
++
++/**
++ * @swagger
++ * /api/transparency/flows:
++ *   get:
++ *     summary: Newest-first feed of funding, payouts, reward mints, retirements, verifications and growth updates
++ *     tags: [Transparency]
++ *     parameters:
++ *       - in: query
++ *         name: limit
++ *         schema: { type: integer, default: 40, maximum: 100 }
++ *       - in: query
++ *         name: cursor
++ *         schema: { type: string }
++ *         description: nextCursor from the previous page
++ *       - in: query
++ *         name: kinds
++ *         schema: { type: string }
++ *         description: Comma list of funding,payout,reward,retire,verified,update,proposal,donation
++ *     responses:
++ *       200:
++ *         description: items + nextCursor
++ */
++router.get('/flows', cached(), async (req: Request, res: Response) => {
++  try {
++    const limit = clampInt(req.query.limit, 40, 1, 100)
++    const cursor = decodeCursor(
++      typeof req.query.cursor === 'string' ? req.query.cursor : null,
++    )
++    if (req.query.cursor && !cursor)
++      return sendError(res, 'Invalid cursor', 400)
++    const kinds = parseKinds(req.query.kinds)
++    return sendSuccess(
++      res,
++      'Transparency flows',
++      await transparencyService.flows({ limit, cursor, kinds }),
++    )
++  } catch (error: any) {
++    console.error('Transparency flows error:', error)
++    return sendError(res, 'Failed to load flows')
++  }
++})
++
++/**
++ * @swagger
++ * /api/transparency/plantings:
++ *   get:
++ *     summary: Verified plantings with video, funding, reward and growth-update status
++ *     tags: [Transparency]
++ *     parameters:
++ *       - in: query
++ *         name: page
++ *         schema: { type: integer, default: 1 }
++ *       - in: query
++ *         name: limit
++ *         schema: { type: integer, default: 24, maximum: 60 }
++ *       - in: query
++ *         name: sort
++ *         schema: { type: string, enum: [recent, trees, funded], default: recent }
++ *     responses:
++ *       200:
++ *         description: Paginated plantings
++ */
++router.get('/plantings', cached(), async (req: Request, res: Response) => {
++  try {
++    const page = clampInt(req.query.page, 1, 1, 10000)
++    const limit = clampInt(req.query.limit, 24, 1, 60)
++    const sortRaw = String(req.query.sort || 'recent')
++    const sort =
++      sortRaw === 'trees' || sortRaw === 'funded' ? sortRaw : 'recent'
++    return sendSuccess(
++      res,
++      'Verified plantings',
++      await transparencyService.plantings({ page, limit, sort }),
++    )
++  } catch (error: any) {
++    console.error('Transparency plantings error:', error)
++    return sendError(res, 'Failed to load plantings')
++  }
++})
++
++/**
++ * @swagger
++ * /api/transparency/plantings/{id}:
++ *   get:
++ *     summary: One planting's full chain of custody — videos, verifiers, funding, mints, growth updates
++ *     tags: [Transparency]
++ *     parameters:
++ *       - in: path
++ *         name: id
++ *         required: true
++ *         schema: { type: string }
++ *     responses:
++ *       200:
++ *         description: Planting detail with timeline
++ *       404:
++ *         description: Not an approved planting
++ */
++router.get('/plantings/:id', cached(), async (req: Request, res: Response) => {
++  try {
++    const detail = await transparencyService.planting(
++      String(req.params.id || ''),
++    )
++    if (!detail) return sendNotFound(res, 'Planting')
++    return sendSuccess(res, 'Planting detail', detail)
++  } catch (error: any) {
++    console.error('Transparency planting error:', error)
++    return sendError(res, 'Failed to load planting')
++  }
++})
++
++/**
++ * @swagger
++ * /api/transparency/map:
++ *   get:
++ *     summary: GPS point for every verified planting
++ *     tags: [Transparency]
++ *     responses:
++ *       200:
++ *         description: points
++ */
++router.get('/map', cached(), async (_req: Request, res: Response) => {
++  try {
++    return sendSuccess(res, 'Planting map', await transparencyService.map())
++  } catch (error: any) {
++    console.error('Transparency map error:', error)
++    return sendError(res, 'Failed to load map')
++  }
++})
++
++/**
++ * @swagger
++ * /api/transparency/onchain:
++ *   get:
++ *     summary: Live token supply and treasury balances read from Base
++ *     tags: [Transparency]
++ *     responses:
++ *       200:
++ *         description: available=false when the RPC is unreachable
++ */
++router.get('/onchain', async (_req: Request, res: Response) => {
++  try {
++    res.setHeader('Cache-Control', 'public, max-age=15')
++    return sendSuccess(
++      res,
++      'Live on-chain reads',
++      await transparencyService.onchain(),
++    )
++  } catch (error: any) {
++    console.error('Transparency onchain error:', error)
++    return sendError(res, 'Failed to read chain')
++  }
++})
++
++/**
++ * @swagger
++ * /api/transparency/contracts:
++ *   get:
++ *     summary: Every contract and treasury address the protocol uses, with explorer links
++ *     tags: [Transparency]
++ *     responses:
++ *       200:
++ *         description: Contract directory
++ */
++router.get('/contracts', cached(), (_req: Request, res: Response) => {
++  return sendSuccess(res, 'Protocol contracts', transparencyService.contracts())
++})
++
++/**
++ * @swagger
++ * /api/transparency/status:
++ *   get:
++ *     summary: Ledger indexer progress and event counts
++ *     tags: [Transparency]
++ *     responses:
++ *       200:
++ *         description: Indexer status
++ */
++router.get('/status', async (_req: Request, res: Response) => {
++  try {
++    const indexerStatus = indexer ? await indexer.getStatus() : null
++    return sendSuccess(
++      res,
++      'Ledger status',
++      await transparencyService.status(indexerStatus),
++    )
++  } catch (error: any) {
++    console.error('Transparency status error:', error)
++    return sendError(res, 'Failed to load status')
++  }
++})
++
++export default router
+diff --git a/src/server.ts b/src/server.ts
+index 68048b8..437f3cf 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -12,40 +12,42 @@ import errorHandler from './middleware/errorHandler'
+ import { globalApiLimiter } from './middleware/rateLimits'
+ import adminRoutes from './routes/admin'
+ import authRoutes from './routes/auth'
++import distributionsRoutes from './routes/distributions'
+ import healthRoutes from './routes/health'
++import otcRoutes from './routes/otc'
+ import rewardsRoutes from './routes/rewards'
+ import submissionsRoutes from './routes/submissions'
+-import distributionsRoutes from './routes/distributions'
+-import otcRoutes from './routes/otc'
++import transparencyRoutes, { attachLedgerIndexer } from './routes/transparency'
+ import { isUploadChunkRequest } from './routes/uploadSessions'
+ import userRoutes from './routes/users'
+-import BurnIndexerService from './services/burnIndexerService'
+-import VerifierService from './services/verifierService'
+ import { startAiCountRetrier } from './services/aiCountRetryService'
+ import { startAiModelWatch } from './services/aiModelWatchService'
+ import { startAiRecountSweep } from './services/aiRecountService'
+ import { startAnnotatedClipBackfill } from './services/annotatedClipBackfillService'
+ import { startAnnotatedVideoMirrorSweep } from './services/annotatedVideoMirrorService'
+-import { startLandVideoMirrorSweep } from './services/landVideoMirrorService'
+-import { startContentHashBackfill } from './services/contentHashBackfillService'
+-import { startNearbySceneComparisonSweep } from './services/nearbySceneComparisonService'
+-import { startMintProposalKeeper } from './services/mintProposalService'
+-import SubmissionService from './services/submissionService'
+-import { startScheduledBroadcastRunner } from './services/scheduledBroadcastService'
+-import { startHealthCheckReminders } from './services/healthCheckReminderService'
+ import { startAudienceSnapshots } from './services/audienceSnapshotService'
++import BurnIndexerService from './services/burnIndexerService'
++import { startContentHashBackfill } from './services/contentHashBackfillService'
+ import { startCorrectedClipSweep } from './services/correctedClipService'
++import { startHealthCheckReminders } from './services/healthCheckReminderService'
++import { startLandVideoMirrorSweep } from './services/landVideoMirrorService'
++import { startMintProposalKeeper } from './services/mintProposalService'
++import { startNearbySceneComparisonSweep } from './services/nearbySceneComparisonService'
+ import { startOtcSweep } from './services/otcService'
+-import { startVerifierPrizePayouts } from './services/verifierPrizeService'
++import { startScheduledBroadcastRunner } from './services/scheduledBroadcastService'
+ import { startServerMintKeeper } from './services/serverMintKeeper'
+ import { startLatchReader } from './services/serverMintLatch'
+ import { startServerMintPreview } from './services/serverMintPreview'
++import SubmissionService from './services/submissionService'
++import TransparencyIndexerService from './services/transparencyIndexerService'
+ import { startUploadSessionSweeper } from './services/uploadSessionService'
+ import { startV6Keeper } from './services/v6KeeperService'
+ import { startStitchRetrier } from './services/verifiedVideoStitchService'
+ import verifierApplications from './services/verifierApplicationService'
+ import { isServerMint, isV6 } from './services/verifierMinterService'
++import { startVerifierPrizePayouts } from './services/verifierPrizeService'
+ import { startVerifierRegistrar } from './services/verifierRegistrarService'
++import VerifierService from './services/verifierService'
+ import { MongoLease, runUnderLease } from './utils/mongoLease'
+ import { registerProcessErrorHandlers } from './utils/processErrorHandlers'
+ import { registerWorkerGracefulShutdown } from './utils/workerGracefulShutdown'
+@@ -87,6 +89,11 @@ const defaultAllowedOrigins = [
+   'https://treegens-web.netlify.app',
+   'https://treegens-english.netlify.app',
+   'https://treegens-oromo.netlify.app',
++  // The public open ledger (treegens-transparency). Its data routes are
++  // exempt from the allowlist below anyway; this covers /health reads.
++  'https://treegens-ledger.netlify.app',
++  'https://ledger.treegens.org',
++  'https://transparency.treegens.org',
+   'https://greenlegacy.app',
+   'https://www.greenlegacy.app',
+   'https://ashaaraamagariisaa.com',
+@@ -147,7 +154,12 @@ app.use(
+  * browser was always going to discard. Refusing here costs nothing and does no
+  * work on behalf of a caller we have already declined.
+  */
++/** Public, read-only data any site may embed; the router answers CORS `*`. */
++const isPublicLedgerPath = (path: string) =>
++  path.startsWith('/api/transparency')
++
+ app.use((req, res, next) => {
++  if (isPublicLedgerPath(req.path)) return next()
+   if (isAllowedOrigin(req.headers.origin)) return next()
+   return res.status(403).json({ error: 'Origin not allowed' })
+ })
+@@ -183,6 +195,8 @@ app.use('/api/distributions', distributionsRoutes)
+ app.use('/api/users', userRoutes)
+ app.use('/api/auth', authRoutes)
+ app.use('/api/admin', adminRoutes)
++// Public open ledger: read-only, cached, CORS * (see routes/transparency.ts).
++app.use('/api/transparency', transparencyRoutes)
+ app.use('/health', healthRoutes)
+ 
+ /**
+@@ -294,6 +308,25 @@ if (env.ENABLE_BURN_INDEXER === 'true') {
+   }
+ }
+ 
++// Public open ledger: indexes $MGRO mints/burns, minter proposals,
++// retirements and payout receipts into OnchainEvent rows for the
++// transparency site. Reads the chain, writes its own collections, signs
++// nothing, and runs under a Mongo lease so one instance does the work.
++// DISABLE_*, like the sweeps below: a stale value on the deploy env cannot
++// keep the public ledger dark by accident.
++if (process.env.DISABLE_LEDGER_INDEXER !== 'true') {
++  try {
++    const ledgerIndexer = new TransparencyIndexerService()
++    ledgerIndexer.start()
++    attachLedgerIndexer(ledgerIndexer)
++    console.log('[LedgerIndexer] Started in API process')
++  } catch (error: any) {
++    console.error('[LedgerIndexer] Failed to start', {
++      message: error?.message || String(error),
++    })
++  }
++}
++
+ // Daily cron to refresh verifiers at 02:13 UTC. Every instance fires the
+ // timer; the lease lets exactly one of them do the work.
+ if (env.ENABLE_CRONJOBS === 'true') {
+diff --git a/src/services/transparencyIndexerService.ts b/src/services/transparencyIndexerService.ts
+new file mode 100644
+index 0000000..ebf25c4
+--- /dev/null
++++ b/src/services/transparencyIndexerService.ts
+@@ -0,0 +1,859 @@
++import { ethers } from 'ethers'
++import env from '../config/environment'
++import HealthCheck from '../models/HealthCheck'
++import OnchainEvent, { type OnchainEventMeta } from '../models/OnchainEvent'
++import OnchainIndexerState from '../models/OnchainIndexerState'
++import OnchainTxIngest from '../models/OnchainTxIngest'
++import RewardAllocation from '../models/RewardAllocation'
++import Submission from '../models/Submission'
++import TgnDistribution from '../models/TgnDistribution'
++import { MongoLease, runUnderLease } from '../utils/mongoLease'
++import {
++  classifyMgroTransfer,
++  isRangeTooLargeError,
++  parseEvidenceURI,
++  parseSubmissionIdFromUrl,
++  payoutRoleFor,
++  ZERO_ADDRESS,
++} from '../utils/transparencyFormat'
++import { jsonRpcProvider } from './verifierMinterService'
++
++/**
++ * Public-ledger indexer.
++ *
++ * Reads Base once and writes one OnchainEvent per fact the transparency site
++ * shows, so every figure on it is a sum over rows that each carry a tx hash:
++ *
++ *   • $MGRO Transfer from 0x0            → `mgro_mint`  (reward to planter/buyer/verifier)
++ *   • $MGRO Transfer to 0x0 or 0x…dEaD   → `mgro_burn`  (retired for ever)
++ *   • MintProposed / MintExecuted / VerifierRewardPaid on every minter
++ *     (V4, V6, AutoMinterV7 and the revoked ones). The proposal's evidenceURI
++ *     (`treegens://submission/<id>/tranche/<n>` …) is how the chain itself
++ *     names the planting a mint pays for, so mints are linked to plantings
++ *     from on-chain data first and from our ledger only as a fallback.
++ *   • MangrovesRetired on the MangroveRetirement contracts → `mgro_retired`,
++ *     naming the planting a funder retired $MGRO for (world.treegens.app).
++ *   • ERC-20 Transfer logs inside each completed TgnDistribution's payout
++ *     receipts → `tgn_payout` (planter 95% / verifier 5%). Amounts come from
++ *     the receipt, not from what the relayer told us it sent.
++ *
++ * Read-only on the chain. Idempotent: rows are upserted on (txHash, logIndex);
++ * receipts are tracked in OnchainTxIngest so a missing one is retried a
++ * bounded number of times. One process indexes at a time (Mongo lease).
++ */
++
++const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)')
++const ZERO_TOPIC = ethers.zeroPadValue(ethers.ZeroAddress, 32)
++const DEAD_TOPIC = ethers.zeroPadValue(
++  '0x000000000000000000000000000000000000dEaD',
++  32,
++)
++
++const ERC20_TRANSFER_ABI = [
++  'event Transfer(address indexed from, address indexed to, uint256 value)',
++]
++const MINTER_EVENTS_ABI = [
++  'event MintProposed(uint256 indexed proposalId, address indexed proposer, address indexed to, uint256 amount, string evidenceURI)',
++  'event MintExecuted(uint256 indexed proposalId, address indexed to, uint256 amount, uint256 approvals)',
++  'event VerifierRewardPaid(uint256 indexed proposalId, address indexed verifier, uint256 amount)',
++]
++const RETIREMENT_EVENTS_ABI = [
++  'event MangrovesRetired(uint256 indexed tokenId, address indexed beneficiary, uint256 mgroAmount, string metadataURI, bytes32 indexed sourceRef)',
++]
++
++const erc20Iface = new ethers.Interface(ERC20_TRANSFER_ABI)
++const minterIface = new ethers.Interface(MINTER_EVENTS_ABI)
++const retirementIface = new ethers.Interface(RETIREMENT_EVENTS_ABI)
++const MINT_PROPOSED_TOPIC = minterIface.getEvent('MintProposed')!.topicHash
++const MINT_EXECUTED_TOPIC = minterIface.getEvent('MintExecuted')!.topicHash
++const VERIFIER_PAID_TOPIC =
++  minterIface.getEvent('VerifierRewardPaid')!.topicHash
++const RETIRED_TOPIC = retirementIface.getEvent('MangrovesRetired')!.topicHash
++
++/** The $TGN the world site pays in, whatever this deploy's TGN default says. */
++const KNOWN_TGN = ['0xd75dfa972c6136f1c594fec1945302f885e1ab29']
++
++const MAX_RECEIPT_ATTEMPTS = 6
++const MIN_CHUNK = 100
++const LEASE_TTL_MS = 10 * 60_000
++
++async function mapLimit<T, R>(
++  items: T[],
++  limit: number,
++  fn: (item: T) => Promise<R>,
++): Promise<R[]> {
++  const out: R[] = new Array(items.length)
++  let next = 0
++  const workers = Array.from(
++    { length: Math.min(limit, items.length) },
++    async () => {
++      while (next < items.length) {
++        const i = next++
++        out[i] = await fn(items[i])
++      }
++    },
++  )
++  await Promise.all(workers)
++  return out
++}
++
++type EventRow = {
++  chainId: number
++  txHash: string
++  logIndex: number
++  blockNumber: number
++  blockTime: Date
++  contract: string
++  kind: string
++  token: 'MGRO' | 'TGN' | 'ERC20' | ''
++  from: string
++  to: string
++  amountWei: string
++  meta: OnchainEventMeta
++}
++
++export default class TransparencyIndexerService {
++  private provider: ethers.JsonRpcProvider
++
++  private readonly mgro: string
++
++  private readonly tgnAddresses: Set<string>
++
++  private readonly minters: string[]
++
++  private readonly retirements: string[]
++
++  private readonly chainId = 8453
++
++  private readonly confirmations: number
++
++  private chunkSize: number
++
++  private readonly pollMs: number
++
++  private readonly startBlock: number
++
++  private readonly cursorKey: string
++
++  private readonly lease = new MongoLease('ledger-indexer', LEASE_TTL_MS)
++
++  private timer: NodeJS.Timeout | null = null
++
++  private syncInProgress = false
++
++  private lastSyncAt: Date | null = null
++
++  private lastError = ''
++
++  private lastHead = 0
++
++  private readonly blockTimes = new Map<number, Date>()
++
++  constructor() {
++    const rpcUrl = env.BASE_RPC_URL || env.BASE_SEPOLIA_RPC_URL
++    if (!rpcUrl) {
++      throw new Error('BASE_RPC_URL is required for the ledger indexer')
++    }
++    this.provider = jsonRpcProvider(rpcUrl)
++    this.mgro = env.MGRO_TOKEN_ADDRESS.toLowerCase()
++    this.tgnAddresses = new Set([
++      env.TGN_TOKEN_ADDRESS.toLowerCase(),
++      ...KNOWN_TGN,
++    ])
++    this.minters = env.TRANSPARENCY_MINTER_ADDRESSES.map(a => a.toLowerCase())
++    this.retirements = env.TRANSPARENCY_RETIREMENT_ADDRESSES.map(a =>
++      a.toLowerCase(),
++    )
++    this.confirmations = env.LEDGER_INDEXER_CONFIRMATIONS
++    this.chunkSize = env.LEDGER_INDEXER_CHUNK_SIZE
++    this.pollMs = env.LEDGER_INDEXER_POLL_MS
++    this.startBlock = env.LEDGER_INDEXER_START_BLOCK
++    this.cursorKey = `ledger:${this.chainId}:${this.mgro}`
++  }
++
++  start() {
++    if (this.timer) return
++    const tick = async () => {
++      try {
++        const run = await runUnderLease(this.lease, () => this.syncOnce())
++        if (!run.ran) this.lastError = ''
++      } catch (error: any) {
++        this.lastError = error?.message || String(error)
++        console.error('[LedgerIndexer] tick failed', {
++          message: this.lastError,
++        })
++      } finally {
++        this.timer = setTimeout(tick, this.pollMs)
++        this.timer.unref()
++      }
++    }
++    // After the connection and the first health probe, not racing them.
++    this.timer = setTimeout(tick, 20_000)
++    this.timer.unref()
++  }
++
++  stop() {
++    if (!this.timer) return
++    clearTimeout(this.timer)
++    this.timer = null
++  }
++
++  /** One full pass: log scan to the confirmed head, then payout receipts. */
++  async syncOnce() {
++    if (this.syncInProgress) return
++    this.syncInProgress = true
++    try {
++      await this.syncLogs()
++      await this.syncPayoutReceipts()
++      await this.linkFromLedger()
++      this.lastSyncAt = new Date()
++      this.lastError = ''
++    } catch (error: any) {
++      this.lastError = error?.message || String(error)
++      throw error
++    } finally {
++      this.syncInProgress = false
++    }
++  }
++
++  async getStatus() {
++    const state = await OnchainIndexerState.findOne({
++      key: this.cursorKey,
++    }).lean()
++    const lastProcessedBlock = Number(state?.lastProcessedBlock || 0)
++    return {
++      enabled: true,
++      cursorKey: this.cursorKey,
++      startBlock: this.startBlock,
++      lastProcessedBlock,
++      head: this.lastHead,
++      lagBlocks: this.lastHead
++        ? Math.max(0, this.lastHead - lastProcessedBlock)
++        : null,
++      lastSyncAt: this.lastSyncAt,
++      lastError: this.lastError || null,
++      contracts: {
++        mgro: this.mgro,
++        tgn: [...this.tgnAddresses],
++        minters: this.minters,
++        retirements: this.retirements,
++      },
++    }
++  }
++
++  // ------------------------------------------------------------ log scan --
++
++  private async syncLogs() {
++    const head = await this.provider.getBlockNumber()
++    this.lastHead = head
++    const confirmedHead = Math.max(0, head - this.confirmations)
++    let current = await this.nextFromBlock()
++    while (current <= confirmedHead) {
++      const toBlock = Math.min(confirmedHead, current + this.chunkSize - 1)
++      try {
++        await this.processRange(current, toBlock)
++      } catch (error) {
++        if (isRangeTooLargeError(error) && this.chunkSize > MIN_CHUNK) {
++          this.chunkSize = Math.max(MIN_CHUNK, Math.floor(this.chunkSize / 2))
++          console.warn('[LedgerIndexer] shrinking chunk size', {
++            chunkSize: this.chunkSize,
++          })
++          continue
++        }
++        throw error
++      }
++      current = toBlock + 1
++    }
++  }
++
++  private async nextFromBlock() {
++    const state = await OnchainIndexerState.findOne({
++      key: this.cursorKey,
++    }).lean()
++    if (!state) return this.startBlock
++    return Math.max(this.startBlock, Number(state.lastProcessedBlock || 0) + 1)
++  }
++
++  private async processRange(fromBlock: number, toBlock: number) {
++    const logsOf = (address: string | string[], topics: any[]) =>
++      this.provider.getLogs({ address, fromBlock, toBlock, topics })
++    // Mints and burns only: filtering on the zero / dEaD topics keeps a busy
++    // token's ordinary transfers out of the response entirely.
++    const [mintLogs, burn0Logs, burnDeadLogs, minterLogs, retirementLogs] =
++      await Promise.all([
++        logsOf(this.mgro, [TRANSFER_TOPIC, ZERO_TOPIC]),
++        logsOf(this.mgro, [TRANSFER_TOPIC, null, ZERO_TOPIC]),
++        logsOf(this.mgro, [TRANSFER_TOPIC, null, DEAD_TOPIC]),
++        this.minters.length
++          ? logsOf(this.minters, [
++              [MINT_PROPOSED_TOPIC, MINT_EXECUTED_TOPIC, VERIFIER_PAID_TOPIC],
++            ])
++          : Promise.resolve([] as ethers.Log[]),
++        this.retirements.length
++          ? logsOf(this.retirements, [RETIRED_TOPIC])
++          : Promise.resolve([] as ethers.Log[]),
++      ])
++
++    const rows: EventRow[] = []
++    const blocks = new Set<number>()
++    const base = (log: ethers.Log) => ({
++      chainId: this.chainId,
++      txHash: log.transactionHash.toLowerCase(),
++      logIndex: log.index,
++      blockNumber: log.blockNumber,
++      blockTime: new Date(0),
++      contract: String(log.address).toLowerCase(),
++    })
++
++    for (const log of [...mintLogs, ...burn0Logs, ...burnDeadLogs]) {
++      const parsed = this.safeParse(erc20Iface, log)
++      if (!parsed) continue
++      const from = String(parsed.args.from).toLowerCase()
++      const to = String(parsed.args.to).toLowerCase()
++      const kind = classifyMgroTransfer(from, to)
++      if (!kind) continue
++      const value = BigInt(parsed.args.value.toString())
++      if (value <= 0n) continue
++      blocks.add(log.blockNumber)
++      rows.push({
++        ...base(log),
++        kind,
++        token: 'MGRO',
++        from,
++        to,
++        amountWei: value.toString(),
++        meta: kind === 'mgro_burn' ? { role: 'funder' } : {},
++      })
++    }
++
++    for (const log of minterLogs) {
++      const parsed = this.safeParse(minterIface, log)
++      if (!parsed) continue
++      blocks.add(log.blockNumber)
++      if (parsed.name === 'MintProposed') {
++        const evidenceURI = String(parsed.args.evidenceURI || '')
++        const ref = parseEvidenceURI(evidenceURI)
++        rows.push({
++          ...base(log),
++          kind: 'mint_proposed',
++          token: '',
++          from: String(parsed.args.proposer).toLowerCase(),
++          to: String(parsed.args.to).toLowerCase(),
++          amountWei: BigInt(parsed.args.amount.toString()).toString(),
++          meta: {
++            proposalId: Number(parsed.args.proposalId),
++            evidenceURI,
++            ...(ref?.submissionId ? { submissionId: ref.submissionId } : {}),
++            ...(ref ? { role: ref.role } : {}),
++            ...(ref?.trancheIndex !== undefined
++              ? { trancheIndex: ref.trancheIndex }
++              : {}),
++          },
++        })
++      } else if (parsed.name === 'MintExecuted') {
++        rows.push({
++          ...base(log),
++          kind: 'mint_executed',
++          token: '',
++          from: '',
++          to: String(parsed.args.to).toLowerCase(),
++          amountWei: BigInt(parsed.args.amount.toString()).toString(),
++          meta: {
++            proposalId: Number(parsed.args.proposalId),
++            approvals: BigInt(parsed.args.approvals.toString()).toString(),
++          },
++        })
++      } else if (parsed.name === 'VerifierRewardPaid') {
++        rows.push({
++          ...base(log),
++          kind: 'verifier_reward_paid',
++          token: 'MGRO',
++          from: '',
++          to: String(parsed.args.verifier).toLowerCase(),
++          amountWei: BigInt(parsed.args.amount.toString()).toString(),
++          meta: {
++            proposalId: Number(parsed.args.proposalId),
++            role: 'verifier',
++          },
++        })
++      }
++    }
++
++    for (const log of retirementLogs) {
++      const parsed = this.safeParse(retirementIface, log)
++      if (!parsed) continue
++      blocks.add(log.blockNumber)
++      const metadataURI = String(parsed.args.metadataURI || '')
++      const submissionId = parseSubmissionIdFromUrl(metadataURI)
++      rows.push({
++        ...base(log),
++        kind: 'mgro_retired',
++        token: 'MGRO',
++        from: '',
++        to: String(parsed.args.beneficiary).toLowerCase(),
++        amountWei: BigInt(parsed.args.mgroAmount.toString()).toString(),
++        meta: {
++          tokenId: Number(parsed.args.tokenId),
++          beneficiary: String(parsed.args.beneficiary).toLowerCase(),
++          metadataURI,
++          sourceRef: String(parsed.args.sourceRef),
++          role: 'funder',
++          ...(submissionId ? { submissionId } : {}),
++        },
++      })
++    }
++
++    if (rows.length) {
++      await this.fillBlockTimes(blocks)
++      for (const row of rows) {
++        row.blockTime = this.blockTimes.get(row.blockNumber) || new Date(0)
++      }
++      await this.upsertRows(rows)
++      await this.linkFromChain([...new Set(rows.map(r => r.txHash))])
++    }
++
++    await OnchainIndexerState.updateOne(
++      { key: this.cursorKey },
++      {
++        $set: {
++          key: this.cursorKey,
++          lastProcessedBlock: toBlock,
++          'meta.lastRangeRows': rows.length,
++          'meta.lastRangeAt': new Date(),
++        },
++      },
++      { upsert: true },
++    )
++  }
++
++  private safeParse(iface: ethers.Interface, log: ethers.Log) {
++    try {
++      return iface.parseLog({ topics: [...log.topics], data: log.data })
++    } catch {
++      return null
++    }
++  }
++
++  private async fillBlockTimes(blocks: Set<number>) {
++    const missing = [...blocks].filter(b => !this.blockTimes.has(b))
++    await mapLimit(missing, 4, async blockNumber => {
++      const block = await this.provider.getBlock(blockNumber)
++      if (block) {
++        this.blockTimes.set(
++          blockNumber,
++          new Date(Number(block.timestamp) * 1000),
++        )
++      }
++    })
++    if (this.blockTimes.size > 5000) {
++      const keys = [...this.blockTimes.keys()].sort((a, b) => a - b)
++      for (const k of keys.slice(0, keys.length - 2000))
++        this.blockTimes.delete(k)
++    }
++  }
++
++  private async upsertRows(rows: EventRow[]) {
++    if (!rows.length) return
++    await OnchainEvent.bulkWrite(
++      rows.map(row => ({
++        updateOne: {
++          filter: { txHash: row.txHash, logIndex: row.logIndex },
++          update: { $setOnInsert: row },
++          upsert: true,
++        },
++      })),
++      { ordered: false },
++    )
++  }
++
++  // ------------------------------------------------------------- linking --
++
++  /**
++   * Give each `mgro_mint` / `mgro_burn` in these transactions the planting it
++   * belongs to, from on-chain facts in the same transaction:
++   *   mint  ← MintExecuted (same tx, same recipient) ← its MintProposed's
++   *           evidenceURI; VerifierRewardPaid (same tx, same recipient) makes
++   *           it a verifier share of that proposal.
++   *   burn  ← MangrovesRetired in the same tx (the metadata URI names the
++   *           planting).
++   */
++  async linkFromChain(txHashes: string[]) {
++    if (!txHashes.length) return
++    const events = await OnchainEvent.find({ txHash: { $in: txHashes } }).lean()
++    const byTx = new Map<string, any[]>()
++    for (const e of events) {
++      const list = byTx.get(e.txHash) || []
++      list.push(e)
++      byTx.set(e.txHash, list)
++    }
++
++    const proposalIds = [
++      ...new Set(
++        events
++          .filter(
++            e =>
++              e.kind === 'mint_executed' || e.kind === 'verifier_reward_paid',
++          )
++          .map(e => Number(e.meta?.proposalId))
++          .filter(n => Number.isFinite(n)),
++      ),
++    ]
++    const proposals = proposalIds.length
++      ? await OnchainEvent.find({
++          kind: 'mint_proposed',
++          'meta.proposalId': { $in: proposalIds },
++        }).lean()
++      : []
++    const proposalMeta = new Map<string, OnchainEventMeta>()
++    for (const p of proposals) {
++      proposalMeta.set(`${p.contract}:${p.meta?.proposalId}`, p.meta || {})
++    }
++
++    const ops: any[] = []
++    for (const [, list] of byTx) {
++      const mints = list.filter(
++        e => e.kind === 'mgro_mint' && !e.meta?.submissionId,
++      )
++      const burns = list.filter(
++        e => e.kind === 'mgro_burn' && !e.meta?.submissionId,
++      )
++      if (!mints.length && !burns.length) continue
++      const executed = list.filter(e => e.kind === 'mint_executed')
++      const paid = list.filter(e => e.kind === 'verifier_reward_paid')
++      const retired = list.find(e => e.kind === 'mgro_retired')
++
++      for (const mint of mints) {
++        const to = String(mint.to).toLowerCase()
++        const share = paid.find(p => String(p.to).toLowerCase() === to)
++        const exec =
++          executed.find(e => String(e.to).toLowerCase() === to) ||
++          (share
++            ? executed.find(
++                e =>
++                  Number(e.meta?.proposalId) === Number(share.meta?.proposalId),
++              )
++            : undefined) ||
++          (executed.length === 1 ? executed[0] : undefined)
++        const key = exec ? `${exec.contract}:${exec.meta?.proposalId}` : null
++        const prop = key ? proposalMeta.get(key) : undefined
++        const set: Record<string, unknown> = {}
++        if (prop?.submissionId) set['meta.submissionId'] = prop.submissionId
++        if (prop?.evidenceURI) set['meta.evidenceURI'] = prop.evidenceURI
++        if (exec?.meta?.proposalId !== undefined)
++          set['meta.proposalId'] = exec.meta.proposalId
++        if (exec?.meta?.approvals) set['meta.approvals'] = exec.meta.approvals
++        if (share) {
++          set['meta.role'] = 'verifier'
++        } else if (prop?.role && prop.role !== 'unknown') {
++          set['meta.role'] = prop.role
++          if (prop.trancheIndex !== undefined)
++            set['meta.trancheIndex'] = prop.trancheIndex
++        } else if (exec) {
++          set['meta.role'] = 'planter'
++        }
++        if (Object.keys(set).length) {
++          ops.push({
++            updateOne: { filter: { _id: mint._id }, update: { $set: set } },
++          })
++        }
++      }
++
++      if (retired) {
++        for (const burn of burns) {
++          const set: Record<string, unknown> = {
++            'meta.role': 'funder',
++            'meta.tokenId': retired.meta?.tokenId,
++            'meta.beneficiary': retired.meta?.beneficiary,
++          }
++          if (retired.meta?.submissionId)
++            set['meta.submissionId'] = retired.meta.submissionId
++          ops.push({
++            updateOne: { filter: { _id: burn._id }, update: { $set: set } },
++          })
++        }
++      }
++    }
++    if (ops.length) await OnchainEvent.bulkWrite(ops, { ordered: false })
++  }
++
++  /**
++   * Fallback for mints the chain did not explain (legacy direct mints, a
++   * proposal from before the start block): our own ledger's transaction
++   * hashes on RewardAllocation tranches / verifier claims, Submission and
++   * HealthCheck mint fields. Bounded per tick.
++   */
++  async linkFromLedger(limit = 200) {
++    const mints = await OnchainEvent.find({
++      kind: 'mgro_mint',
++      'meta.submissionId': { $exists: false },
++      'meta.ledgerChecked': { $ne: true },
++    })
++      .sort({ blockNumber: -1 })
++      .limit(limit)
++      .lean()
++    if (!mints.length) return
++    const hashes = [...new Set(mints.map(m => m.txHash))]
++    const [allocations, submissions, healthChecks] = await Promise.all([
++      RewardAllocation.find(
++        {
++          $or: [
++            { 'tranches.txHash': { $in: hashes } },
++            { 'verifierClaims.txHash': { $in: hashes } },
++          ],
++        },
++        { submissionId: 1, tranches: 1, verifierClaims: 1 },
++      ).lean(),
++      Submission.find(
++        {
++          $or: [
++            { mintProposalTxHash: { $in: hashes } },
++            { mintExecuteTxHash: { $in: hashes } },
++          ],
++        },
++        { mintProposalTxHash: 1, mintExecuteTxHash: 1 },
++      ).lean(),
++      HealthCheck.find(
++        {
++          $or: [
++            { mintProposalTxHash: { $in: hashes } },
++            { mintExecuteTxHash: { $in: hashes } },
++          ],
++        },
++        {
++          submissionId: 1,
++          mintProposalTxHash: 1,
++          mintExecuteTxHash: 1,
++          mintTrancheIndex: 1,
++        },
++      ).lean(),
++    ])
++    const lower = (v: unknown) => String(v || '').toLowerCase()
++    const ops: any[] = []
++    for (const mint of mints) {
++      const set: Record<string, unknown> = { 'meta.ledgerChecked': true }
++      for (const alloc of allocations as any[]) {
++        const tranche = (alloc.tranches || []).find(
++          (t: any) => lower(t.txHash) === mint.txHash,
++        )
++        const claim = (alloc.verifierClaims || []).find(
++          (c: any) => lower(c.txHash) === mint.txHash,
++        )
++        if (!tranche && !claim) continue
++        set['meta.submissionId'] = String(alloc.submissionId)
++        set['meta.role'] = tranche ? 'planter' : 'verifier'
++        if (tranche) set['meta.trancheIndex'] = tranche.index
++        break
++      }
++      if (!set['meta.submissionId']) {
++        const sub = (submissions as any[]).find(
++          s =>
++            lower(s.mintProposalTxHash) === mint.txHash ||
++            lower(s.mintExecuteTxHash) === mint.txHash,
++        )
++        if (sub) {
++          set['meta.submissionId'] = String(sub._id)
++          set['meta.role'] = 'planter'
++          set['meta.trancheIndex'] = 0
++        }
++      }
++      if (!set['meta.submissionId']) {
++        const hc = (healthChecks as any[]).find(
++          h =>
++            lower(h.mintProposalTxHash) === mint.txHash ||
++            lower(h.mintExecuteTxHash) === mint.txHash,
++        )
++        if (hc) {
++          set['meta.submissionId'] = String(hc.submissionId)
++          set['meta.role'] = 'planter'
++          if (typeof hc.mintTrancheIndex === 'number')
++            set['meta.trancheIndex'] = hc.mintTrancheIndex
++        }
++      }
++      ops.push({
++        updateOne: { filter: { _id: mint._id }, update: { $set: set } },
++      })
++    }
++    if (ops.length) await OnchainEvent.bulkWrite(ops, { ordered: false })
++  }
++
++  // ------------------------------------------------------- payout receipts --
++
++  /**
++   * Read the receipts of completed TgnDistribution payouts and record the
++   * token legs that reached the planter and the verifiers. Also stamps the
++   * funder's `mgro_burn` row (MGRO rail) with the planting it retired.
++   */
++  async syncPayoutReceipts(limit = 40) {
++    const completed = await TgnDistribution.find(
++      { planterTx: { $nin: ['', null] } },
++      {
++        submissionId: 1,
++        grossUsd: 1,
++        planterWallet: 1,
++        planterTx: 1,
++        verifiers: 1,
++      },
++    )
++      .sort({ distributedAt: -1 })
++      .limit(500)
++      .lean()
++    if (!completed.length) return
++
++    const byTx = new Map<string, (typeof completed)[number]>()
++    for (const d of completed) {
++      const hashes = [d.planterTx, ...(d.verifiers || []).map(v => v.tx)]
++      for (const raw of hashes) {
++        const h = String(raw || '')
++          .trim()
++          .toLowerCase()
++        if (/^0x[a-f0-9]{64}$/.test(h) && !byTx.has(h)) byTx.set(h, d)
++      }
++    }
++    if (!byTx.size) return
++
++    const done = await OnchainTxIngest.find(
++      {
++        txHash: { $in: [...byTx.keys()] },
++        $or: [
++          { status: { $in: ['ingested', 'invalid'] } },
++          { attempts: { $gte: MAX_RECEIPT_ATTEMPTS } },
++        ],
++      },
++      { txHash: 1 },
++    ).lean()
++    const skip = new Set(done.map(d => d.txHash))
++    const pending = [...byTx.keys()].filter(h => !skip.has(h)).slice(0, limit)
++
++    await mapLimit(pending, 3, async txHash => {
++      const distribution = byTx.get(txHash)!
++      try {
++        const receipt = await this.provider.getTransactionReceipt(txHash)
++        if (!receipt) {
++          await this.markIngest(
++            txHash,
++            distribution,
++            'not_found',
++            0,
++            'receipt not found',
++          )
++          return
++        }
++        const written = await this.ingestPayoutReceipt(receipt, distribution)
++        await this.markIngest(txHash, distribution, 'ingested', written, '')
++      } catch (error: any) {
++        await this.markIngest(
++          txHash,
++          distribution,
++          'failed',
++          0,
++          error?.message || String(error),
++        )
++      }
++    })
++  }
++
++  private async markIngest(
++    txHash: string,
++    distribution: { submissionId: unknown },
++    status: 'ingested' | 'not_found' | 'failed' | 'invalid',
++    eventsWritten: number,
++    lastError: string,
++  ) {
++    await OnchainTxIngest.updateOne(
++      { txHash },
++      {
++        $set: {
++          txHash,
++          source: 'tgn_distribution',
++          submissionId: String(distribution.submissionId),
++          status,
++          eventsWritten,
++          lastError: lastError.slice(0, 500),
++        },
++        $inc: { attempts: 1 },
++      },
++      { upsert: true },
++    )
++  }
++
++  private async ingestPayoutReceipt(
++    receipt: ethers.TransactionReceipt,
++    distribution: {
++      submissionId: unknown
++      grossUsd?: number
++      planterWallet?: string
++      verifiers?: { wallet: string }[]
++    },
++  ): Promise<number> {
++    if (receipt.status !== 1) return 0
++    await this.fillBlockTimes(new Set([receipt.blockNumber]))
++    const blockTime = this.blockTimes.get(receipt.blockNumber) || new Date(0)
++    const submissionId = String(distribution.submissionId)
++    const rows: EventRow[] = []
++    const burnStamps: any[] = []
++
++    for (const log of receipt.logs) {
++      const address = String(log.address).toLowerCase()
++      if (log.topics[0] !== TRANSFER_TOPIC) continue
++      const parsed = this.safeParse(erc20Iface, log as unknown as ethers.Log)
++      if (!parsed) continue
++      const from = String(parsed.args.from).toLowerCase()
++      const to = String(parsed.args.to).toLowerCase()
++      const value = BigInt(parsed.args.value.toString())
++      if (value <= 0n) continue
++
++      if (
++        address === this.mgro &&
++        to !== ZERO_ADDRESS &&
++        classifyMgroTransfer(from, to) === 'mgro_burn'
++      ) {
++        // MGRO rail: the funder's burn is the payment. The log scan stores
++        // the burn row; here we only attach the planting it retired.
++        burnStamps.push({
++          updateOne: {
++            filter: { txHash: receipt.hash.toLowerCase(), logIndex: log.index },
++            update: {
++              $set: {
++                'meta.submissionId': submissionId,
++                'meta.role': 'funder',
++                ...(typeof distribution.grossUsd === 'number'
++                  ? { 'meta.grossUsd': distribution.grossUsd }
++                  : {}),
++              },
++            },
++          },
++        })
++        continue
++      }
++      if (address === this.mgro) continue
++      const role = payoutRoleFor(to, distribution)
++      if (!role) continue
++      rows.push({
++        chainId: this.chainId,
++        txHash: receipt.hash.toLowerCase(),
++        logIndex: log.index,
++        blockNumber: receipt.blockNumber,
++        blockTime,
++        contract: address,
++        kind: 'tgn_payout',
++        token: this.tgnAddresses.has(address) ? 'TGN' : 'ERC20',
++        from,
++        to,
++        amountWei: value.toString(),
++        meta: {
++          submissionId,
++          role,
++          ...(typeof distribution.grossUsd === 'number'
++            ? { grossUsd: distribution.grossUsd }
++            : {}),
++        },
++      })
++    }
++
++    await this.upsertRows(rows)
++    if (burnStamps.length) {
++      await OnchainEvent.bulkWrite(burnStamps, { ordered: false })
++    }
++    return rows.length
++  }
++}
+diff --git a/src/services/transparencyService.ts b/src/services/transparencyService.ts
+new file mode 100644
+index 0000000..2f70e60
+--- /dev/null
++++ b/src/services/transparencyService.ts
+@@ -0,0 +1,1664 @@
++import { Contract, JsonRpcProvider } from 'ethers'
++import mongoose from 'mongoose'
++import env from '../config/environment'
++import DonationFlow from '../models/DonationFlow'
++import HealthCheck from '../models/HealthCheck'
++import OnchainEvent from '../models/OnchainEvent'
++import OnchainIndexerState from '../models/OnchainIndexerState'
++import RewardAllocation from '../models/RewardAllocation'
++import Submission from '../models/Submission'
++import TgnDistribution from '../models/TgnDistribution'
++import User from '../models/User'
++import {
++  correctedCountOf,
++  effectiveInitialTrees,
++  effectiveTreeTypeLabel,
++  isEffectivelyMangrove,
++} from '../utils/effectiveTreeCount'
++import { boundRecipientOf } from '../utils/mintRecipient'
++import { rawClipUrl } from '../utils/rawPlantClip'
++import {
++  afterCursor,
++  compareFlowDesc,
++  DEAD_ADDRESS,
++  decimalToWeiString,
++  encodeCursor,
++  explorerAddressUrl,
++  explorerTokenUrl,
++  explorerTxUrl,
++  isTxHash,
++  labelAddress,
++  publicGps,
++  sumWei,
++  ZERO_ADDRESS,
++  type Cursor,
++  type FlowItem,
++  type FlowKind,
++  type KnownAddresses,
++} from '../utils/transparencyFormat'
++import { getClaimScheduleConfig } from './rewardService'
++import { jsonRpcProvider } from './verifierMinterService'
++
++/**
++ * Read model for the public open ledger.
++ *
++ * Everything here is public-by-design data: approved plantings and their
++ * videos (already served as NFT metadata by world.treegens.app), on-chain
++ * events, the payout records that reference them, and the donation flows
++ * of the treasury pipeline (amounts and transactions only; never a donor).
++ * No auth, no PII beyond wallet addresses and the display names planters
++ * chose for the leaderboard.
++ */
++
++const DEFAULT_FLOW_KINDS: FlowKind[] = [
++  'funding',
++  'payout',
++  'reward',
++  'retire',
++  'verified',
++  'update',
++  'donation',
++]
++
++const ERC20_READ_ABI = [
++  'function totalSupply() view returns (uint256)',
++  'function balanceOf(address owner) view returns (uint256)',
++]
++
++type SubmissionLean = {
++  _id: mongoose.Types.ObjectId
++  userWalletAddress?: string
++  mintRecipient?: string | null
++  status?: string
++  reviewedAt?: Date
++  createdAt?: Date
++  treesPlanted?: number
++  aiTreeCount?: number
++  aiConfidence?: number
++  aiCountCorrection?: {
++    correctedCount?: number | null
++    notMangrove?: boolean | null
++    actualSpecies?: string | null
++  } | null
++  treeType?: string
++  votes?: { voterWalletAddress: string; vote: string; createdAt?: Date }[]
++  land?: {
++    publicUrl?: string
++    webPublicUrl?: string
++    uploadedAt?: Date
++    recordedAt?: Date
++    reverseGeocode?: string
++  }
++  plant?: {
++    publicUrl?: string
++    rawPublicUrl?: string
++    stitchedPublicUrl?: string
++    webPublicUrl?: string
++    stitchStatus?: string
++    uploadedAt?: Date
++    recordedAt?: Date
++    gpsCoordinates?: { latitude: number; longitude: number }
++    reverseGeocode?: string
++  }
++  mintProposalTxHash?: string
++  mintExecuteTxHash?: string
++}
++
++const SUBMISSION_PROJECTION = {
++  userWalletAddress: 1,
++  mintRecipient: 1,
++  status: 1,
++  reviewedAt: 1,
++  createdAt: 1,
++  treesPlanted: 1,
++  aiTreeCount: 1,
++  aiConfidence: 1,
++  'aiCountCorrection.correctedCount': 1,
++  'aiCountCorrection.notMangrove': 1,
++  'aiCountCorrection.actualSpecies': 1,
++  treeType: 1,
++  'votes.voterWalletAddress': 1,
++  'votes.vote': 1,
++  'votes.createdAt': 1,
++  'land.publicUrl': 1,
++  'land.webPublicUrl': 1,
++  'land.uploadedAt': 1,
++  'land.recordedAt': 1,
++  'land.reverseGeocode': 1,
++  'plant.publicUrl': 1,
++  'plant.rawPublicUrl': 1,
++  'plant.stitchedPublicUrl': 1,
++  'plant.webPublicUrl': 1,
++  'plant.stitchStatus': 1,
++  'plant.uploadedAt': 1,
++  'plant.recordedAt': 1,
++  'plant.gpsCoordinates': 1,
++  'plant.reverseGeocode': 1,
++  mintProposalTxHash: 1,
++  mintExecuteTxHash: 1,
++} as const
++
++/** `$toDecimal` throws on a malformed string; only ever feed it digits. */
++function safeDecimal(field: string) {
++  return {
++    $toDecimal: {
++      $cond: [
++        {
++          $regexMatch: {
++            input: { $toString: { $ifNull: [field, '0'] } },
++            regex: /^[0-9]+$/,
++          },
++        },
++        { $toString: { $ifNull: [field, '0'] } },
++        '0',
++      ],
++    },
++  }
++}
++
++function yesVoters(sub: SubmissionLean): string[] {
++  return [
++    ...new Set(
++      (sub.votes || [])
++        .filter(v => v.vote === 'yes' && v.voterWalletAddress)
++        .map(v => String(v.voterWalletAddress).toLowerCase()),
++    ),
++  ]
++}
++
++function countryOf(location: string): string {
++  const parts = String(location || '')
++    .split(',')
++    .map(s => s.trim())
++    .filter(Boolean)
++  return parts.length ? parts[parts.length - 1] : ''
++}
++
++function isoOrNull(d: unknown): string | null {
++  if (!d) return null
++  const date = d instanceof Date ? d : new Date(String(d))
++  return Number.isNaN(date.getTime()) ? null : date.toISOString()
++}
++
++/** The branded verified clip when it exists, else what the planter filmed. */
++function plantingVideoUrl(sub: SubmissionLean): string | null {
++  return sub.plant?.stitchedPublicUrl || sub.plant?.publicUrl || null
++}
++
++/** The land (before) clip: the streaming-sized copy first. */
++function landVideoUrl(sub: SubmissionLean): string | null {
++  return sub.land?.webPublicUrl || sub.land?.publicUrl || null
++}
++
++function locationOf(sub: SubmissionLean): string {
++  return sub.plant?.reverseGeocode || sub.land?.reverseGeocode || ''
++}
++
++function plantingSnippet(sub: SubmissionLean | undefined) {
++  if (!sub) return undefined
++  return {
++    trees: effectiveInitialTrees(sub),
++    species: effectiveTreeTypeLabel(sub),
++    location: locationOf(sub),
++    videoUrl: plantingVideoUrl(sub),
++  }
++}
++
++/** Trees a growth check counted alive: what it paid for, else the AI count, else the planter's figure. */
++function treesAliveOf(h: any): number {
++  const candidates = [h?.payableCount, h?.aiTreeCount, h?.treesAlive]
++  for (const c of candidates) {
++    const n = Number(c)
++    if (Number.isFinite(n) && n >= 0) return Math.floor(n)
++  }
++  return 0
++}
++
++type Roles = {
++  planters: Set<string>
++  verifiers: Set<string>
++  funders: Set<string>
++  buyers: Set<string>
++}
++
++export class TransparencyService {
++  private provider: JsonRpcProvider | null = null
++
++  private onchainCache: { at: number; value: unknown } | null = null
++
++  get known(): KnownAddresses {
++    return {
++      mgro: env.MGRO_TOKEN_ADDRESS,
++      tgn: env.TGN_TOKEN_ADDRESS,
++      tgnVault: env.TGN_VAULT_ADDRESS,
++      verifierMinter: env.VERIFIER_MINTER_ADDRESS,
++      delegationRegistry: env.TGN_DELEGATION_REGISTRY_ADDRESS,
++      treasurySafe: env.TREASURY_SAFE_ADDRESS,
++      minters: env.TRANSPARENCY_MINTER_ADDRESSES,
++      retirements: env.TRANSPARENCY_RETIREMENT_ADDRESSES,
++    }
++  }
++
++  get explorer(): string {
++    return env.EXPLORER_BASE_URL
++  }
++
++  contracts() {
++    const k = this.known
++    const explorer = this.explorer
++    const entry = (
++      key: string,
++      address: string,
++      label: string,
++      role: string,
++      kind: 'token' | 'contract' | 'safe',
++    ) => ({
++      key,
++      address,
++      label,
++      role,
++      kind,
++      explorerUrl:
++        kind === 'token'
++          ? explorerTokenUrl(explorer, address)
++          : explorerAddressUrl(explorer, address),
++    })
++    const items = [
++      entry(
++        'mgro',
++        k.mgro,
++        '$MGRO',
++        'Reward token. Minted 1 per verified tree (95% planter, 5% verifiers) and burned to retire trees.',
++        'token',
++      ),
++      entry(
++        'tgn',
++        k.tgn,
++        '$TGN',
++        'Governance and staking token. Fiat purchases are swapped to TGN and paid out 95/5 to planters and verifiers.',
++        'token',
++      ),
++      entry(
++        'verifierMinter',
++        k.verifierMinter,
++        'VerifierMinter',
++        'Mints $MGRO only when the staked verifiers who checked a planting have voted it through.',
++        'contract',
++      ),
++      ...(env.AUTO_MINTER_ADDRESS &&
++      env.AUTO_MINTER_ADDRESS.toLowerCase() !== k.verifierMinter.toLowerCase()
++        ? [
++            entry(
++              'autoMinter',
++              env.AUTO_MINTER_ADDRESS,
++              'AutoMinter',
++              'Pays verifier-approved rewards in one transaction, planter and verifier shares together.',
++              'contract',
++            ),
++          ]
++        : []),
++      entry(
++        'tgnVault',
++        k.tgnVault,
++        'TGN vault',
++        'Where verifiers stake TGN. Dishonest verifiers are slashed here.',
++        'contract',
++      ),
++      entry(
++        'delegationRegistry',
++        k.delegationRegistry,
++        'Delegation registry',
++        'Lets TGN holders delegate verification weight to a verifier.',
++        'contract',
++      ),
++      entry(
++        'treasurySafe',
++        k.treasurySafe,
++        'Treegens treasury',
++        '2-of-4 multisig Safe that receives slashed stake and holds protocol funds.',
++        'safe',
++      ),
++      ...(k.retirements.length
++        ? [
++            entry(
++              'retirement',
++              k.retirements[0],
++              'Mangrove retirement',
++              'Burns $MGRO to 0x…dEaD and mints a soulbound proof NFT to the funder (world.treegens.app).',
++              'contract',
++            ),
++          ]
++        : []),
++    ]
++    return {
++      chain: { id: 8453, name: 'Base', explorer },
++      items,
++      historicMinters: k.minters
++        .filter(m => m.toLowerCase() !== k.verifierMinter.toLowerCase())
++        .map(address => ({
++          address,
++          explorerUrl: explorerAddressUrl(explorer, address),
++        })),
++    }
++  }
++
++  // --------------------------------------------------------------- overview --
++
++  async overview() {
++    const [
++      approvedSubs,
++      pendingReview,
++      distributions,
++      eventAgg,
++      allocationAgg,
++      hcAgg,
++      ledgerState,
++      eventCount,
++      proposalStats,
++      donations,
++    ] = await Promise.all([
++      Submission.find({ status: 'approved' }, SUBMISSION_PROJECTION).lean<
++        SubmissionLean[]
++      >(),
++      Submission.countDocuments({ status: 'pending_review' }),
++      TgnDistribution.find(
++        { planterTx: { $nin: ['', null] } },
++        { grossUsd: 1, planterTgnWei: 1, verifiers: 1, planterWallet: 1 },
++      ).lean(),
++      OnchainEvent.aggregate([
++        {
++          $match: {
++            kind: {
++              $in: ['mgro_mint', 'mgro_burn', 'tgn_payout', 'mgro_retired'],
++            },
++          },
++        },
++        {
++          $group: {
++            _id: {
++              kind: '$kind',
++              role: { $ifNull: ['$meta.role', 'unknown'] },
++            },
++            count: { $sum: 1 },
++            wei: { $sum: safeDecimal('$amountWei') },
++            wallets: {
++              $addToSet: {
++                $cond: [{ $eq: ['$kind', 'mgro_burn'] }, '$from', '$to'],
++              },
++            },
++          },
++        },
++      ]),
++      RewardAllocation.aggregate([
++        {
++          $group: {
++            _id: null,
++            count: { $sum: 1 },
++            allocatedWei: { $sum: safeDecimal('$totalMgroWei') },
++            planterPaidWei: { $sum: safeDecimal('$planterCumulativePaidWei') },
++            tranchesPaid: {
++              $sum: {
++                $size: {
++                  $filter: {
++                    input: { $ifNull: ['$tranches', []] },
++                    as: 't',
++                    cond: { $eq: ['$$t.status', 'paid'] },
++                  },
++                },
++              },
++            },
++            tranchesTotal: { $sum: { $size: { $ifNull: ['$tranches', []] } } },
++          },
++        },
++      ]),
++      HealthCheck.aggregate([
++        {
++          $group: {
++            _id: '$status',
++            count: { $sum: 1 },
++            treesAlive: {
++              $sum: {
++                $ifNull: [
++                  '$payableCount',
++                  {
++                    $ifNull: ['$aiTreeCount', { $ifNull: ['$treesAlive', 0] }],
++                  },
++                ],
++              },
++            },
++            withVideo: {
++              $sum: {
++                $cond: [
++                  { $gt: [{ $strLenCP: { $ifNull: ['$publicUrl', ''] } }, 0] },
++                  1,
++                  0,
++                ],
++              },
++            },
++          },
++        },
++      ]),
++      OnchainIndexerState.findOne({ key: /^ledger:8453:/ }).lean(),
++      OnchainEvent.estimatedDocumentCount(),
++      this.proposalStats(),
++      this.donationTotals(),
++    ])
++
++    const planters = new Set<string>()
++    const verifiers = new Set<string>()
++    const locations = new Set<string>()
++    const countries = new Set<string>()
++    let trees = 0
++    let mangroveTrees = 0
++    let plantVideos = 0
++    let landVideos = 0
++    let withGps = 0
++    for (const sub of approvedSubs) {
++      const n = effectiveInitialTrees(sub)
++      trees += n
++      if (isEffectivelyMangrove(sub)) mangroveTrees += n
++      if (sub.userWalletAddress)
++        planters.add(sub.userWalletAddress.toLowerCase())
++      for (const v of yesVoters(sub)) verifiers.add(v)
++      const loc = locationOf(sub)
++      if (loc) {
++        locations.add(loc)
++        const c = countryOf(loc)
++        if (c) countries.add(c)
++      }
++      if (plantingVideoUrl(sub)) plantVideos += 1
++      if (landVideoUrl(sub)) landVideos += 1
++      if (sub.plant?.gpsCoordinates) withGps += 1
++    }
++
++    const byKindRole = new Map<
++      string,
++      { count: number; wei: string; wallets: string[] }
++    >()
++    for (const row of eventAgg as any[]) {
++      byKindRole.set(`${row._id.kind}:${row._id.role}`, {
++        count: row.count,
++        wei: decimalToWeiString(row.wei),
++        wallets: row.wallets || [],
++      })
++    }
++    const kindTotal = (kind: string) => {
++      let count = 0
++      const weis: string[] = []
++      const wallets = new Set<string>()
++      for (const [key, v] of byKindRole) {
++        if (!key.startsWith(`${kind}:`)) continue
++        count += v.count
++        weis.push(v.wei)
++        for (const w of v.wallets) wallets.add(String(w).toLowerCase())
++      }
++      return { count, wei: sumWei(weis), wallets: wallets.size }
++    }
++    const roleWei = (kind: string, role: string) =>
++      byKindRole.get(`${kind}:${role}`)?.wei || '0'
++
++    const mints = kindTotal('mgro_mint')
++    const burns = kindTotal('mgro_burn')
++    const payouts = kindTotal('tgn_payout')
++    const retired = kindTotal('mgro_retired')
++
++    let grossUsd = 0
++    const planterTgnWei: string[] = []
++    const verifierTgnWei: string[] = []
++    for (const d of distributions as any[]) {
++      grossUsd += Number(d.grossUsd) || 0
++      planterTgnWei.push(d.planterTgnWei)
++      for (const v of d.verifiers || []) verifierTgnWei.push(v.tgnWei)
++    }
++
++    const alloc = (allocationAgg as any[])[0] || {}
++    const hc: Record<
++      string,
++      { count: number; treesAlive: number; withVideo: number }
++    > = {}
++    for (const row of hcAgg as any[]) {
++      hc[row._id] = {
++        count: row.count,
++        treesAlive: row.treesAlive,
++        withVideo: row.withVideo,
++      }
++    }
++    const schedule = getClaimScheduleConfig()
++
++    return {
++      generatedAt: new Date().toISOString(),
++      chain: { id: 8453, name: 'Base', explorer: this.explorer },
++      contracts: this.known,
++      totals: {
++        plantings: {
++          approved: approvedSubs.length,
++          pendingReview,
++          trees,
++          mangroveTrees,
++          planters: planters.size,
++          verifiers: verifiers.size,
++          locations: locations.size,
++          countries: countries.size,
++          withGps,
++        },
++        funding: {
++          count: distributions.length,
++          activeHolds: 0,
++          grossUsd: Math.round(grossUsd * 100) / 100,
++          byRail: { card: distributions.length },
++          /** What the relayer recorded it sent (ledger-side). */
++          recordedTgnToPlantersWei: sumWei(planterTgnWei),
++          recordedTgnToVerifiersWei: sumWei(verifierTgnWei),
++          /** What the chain says actually arrived (receipt-side). */
++          onchainTgnToPlantersWei: roleWei('tgn_payout', 'planter'),
++          onchainTgnToVerifiersWei: roleWei('tgn_payout', 'verifier'),
++          onchainPayoutCount: payouts.count,
++          planterShareBps: 9500,
++          verifierShareBps: 500,
++        },
++        rewards: {
++          mintCount: mints.count,
++          mgroMintedWei: mints.wei,
++          toPlantersWei: sumWei([
++            roleWei('mgro_mint', 'planter'),
++            roleWei('mgro_mint', 'buyer'),
++          ]),
++          toVerifiersWei: roleWei('mgro_mint', 'verifier'),
++          unattributedWei: roleWei('mgro_mint', 'unknown'),
++          recipients: mints.wallets,
++          allocatedWei: decimalToWeiString(alloc.allocatedWei),
++          allocations: alloc.count || 0,
++          planterPaidRecordedWei: decimalToWeiString(alloc.planterPaidWei),
++          tranchesPaid: alloc.tranchesPaid || 0,
++          tranchesTotal: alloc.tranchesTotal || 0,
++          proposals: proposalStats,
++          mgroPerTree: '1',
++          schedule: {
++            tranches: schedule.totalTranches,
++            intervalSeconds: schedule.intervalSeconds,
++            durationSeconds: schedule.durationSeconds,
++          },
++        },
++        retired: {
++          burnCount: burns.count,
++          mgroBurnedWei: burns.wei,
++          funders: burns.wallets,
++          linkedToPlantings: byKindRole.get('mgro_burn:funder')?.count || 0,
++          retirementNfts: retired.count,
++        },
++        donations,
++        updates: {
++          healthChecksApproved: hc.approved?.count || 0,
++          healthChecksPending: hc.pending_review?.count || 0,
++          healthChecksRejected: hc.rejected?.count || 0,
++          treesAliveReported: hc.approved?.treesAlive || 0,
++          videos: {
++            plantings: plantVideos,
++            land: landVideos,
++            healthChecks: hc.approved?.withVideo || 0,
++            total: plantVideos + landVideos + (hc.approved?.withVideo || 0),
++          },
++        },
++      },
++      ledger: {
++        indexerEnabled: !env.DISABLE_LEDGER_INDEXER,
++        lastProcessedBlock: ledgerState
++          ? Number(ledgerState.lastProcessedBlock || 0)
++          : null,
++        lastSyncAt: isoOrNull((ledgerState as any)?.updatedAt),
++        startBlock: env.LEDGER_INDEXER_START_BLOCK,
++        eventCount,
++      },
++    }
++  }
++
++  private async proposalStats() {
++    const rows = await OnchainEvent.aggregate([
++      { $match: { kind: { $in: ['mint_proposed', 'mint_executed'] } } },
++      {
++        $group: {
++          _id: { contract: '$contract', proposalId: '$meta.proposalId' },
++          proposed: {
++            $sum: { $cond: [{ $eq: ['$kind', 'mint_proposed'] }, 1, 0] },
++          },
++          executed: {
++            $sum: { $cond: [{ $eq: ['$kind', 'mint_executed'] }, 1, 0] },
++          },
++        },
++      },
++    ])
++    let total = 0
++    let executed = 0
++    for (const r of rows as any[]) {
++      if (r.proposed > 0) total += 1
++      if (r.executed > 0) executed += 1
++    }
++    return { total, executed, pending: Math.max(0, total - executed) }
++  }
++
++  /** Aggregates of the treasury pipeline's donation flows (amounts only). */
++  private async donationTotals() {
++    const rows = await DonationFlow.aggregate([
++      { $match: { mode: 'live' } },
++      {
++        $group: {
++          _id: '$status',
++          count: { $sum: 1 },
++          cents: { $sum: '$amountCents' },
++          usdcMicro: { $sum: safeDecimal('$onramp.usdcMicro') },
++          mgroBoughtWei: { $sum: safeDecimal('$swap.mgroWei') },
++          mgroSettledWei: { $sum: safeDecimal('$settle.mgroWei') },
++        },
++      },
++    ])
++    const byStatus: Record<string, any> = {}
++    let count = 0
++    let cents = 0
++    const usdc: string[] = []
++    const bought: string[] = []
++    const settled: string[] = []
++    for (const r of rows as any[]) {
++      byStatus[r._id] = { count: r.count, usd: Math.round(r.cents) / 100 }
++      count += r.count
++      cents += r.cents
++      usdc.push(decimalToWeiString(r.usdcMicro))
++      bought.push(decimalToWeiString(r.mgroBoughtWei))
++      settled.push(decimalToWeiString(r.mgroSettledWei))
++    }
++    return {
++      count,
++      usd: Math.round(cents) / 100,
++      usdcMicro: sumWei(usdc),
++      mgroBoughtWei: sumWei(bought),
++      mgroSettledWei: sumWei(settled),
++      byStatus,
++    }
++  }
++
++  // ------------------------------------------------------------------ flows --
++
++  async flows(opts: {
++    limit: number
++    cursor: Cursor | null
++    kinds: FlowKind[] | null
++    submissionId?: string
++  }) {
++    const kinds = opts.kinds || DEFAULT_FLOW_KINDS
++    const wanted = new Set(kinds)
++    const limit = opts.limit
++    const fetchN = limit + 1
++    const cursorDate = opts.cursor ? new Date(opts.cursor.at) : null
++    const sid = opts.submissionId
++    const sidFilter = sid ? new mongoose.Types.ObjectId(sid) : null
++
++    const eventKinds: string[] = []
++    if (wanted.has('reward')) eventKinds.push('mgro_mint')
++    if (wanted.has('retire')) eventKinds.push('mgro_burn', 'mgro_retired')
++    if (wanted.has('payout')) eventKinds.push('tgn_payout')
++    if (wanted.has('proposal')) eventKinds.push('mint_proposed')
++
++    const [events, distributions, approved, updates, donations] =
++      await Promise.all([
++        eventKinds.length
++          ? OnchainEvent.find({
++              kind: { $in: eventKinds },
++              ...(cursorDate ? { blockTime: { $lte: cursorDate } } : {}),
++              ...(sid ? { 'meta.submissionId': sid } : {}),
++            })
++              .sort({ blockTime: -1, logIndex: -1 })
++              .limit(fetchN)
++              .lean()
++          : Promise.resolve([] as any[]),
++        wanted.has('funding')
++          ? TgnDistribution.find({
++              planterTx: { $nin: ['', null] },
++              ...(cursorDate ? { distributedAt: { $lte: cursorDate } } : {}),
++              ...(sidFilter ? { submissionId: sidFilter } : {}),
++            })
++              .sort({ distributedAt: -1 })
++              .limit(fetchN)
++              .lean()
++          : Promise.resolve([] as any[]),
++        wanted.has('verified')
++          ? Submission.find(
++              {
++                status: 'approved',
++                reviewedAt: {
++                  $ne: null,
++                  ...(cursorDate ? { $lte: cursorDate } : {}),
++                },
++                ...(sidFilter ? { _id: sidFilter } : {}),
++              },
++              SUBMISSION_PROJECTION,
++            )
++              .sort({ reviewedAt: -1 })
++              .limit(fetchN)
++              .lean<SubmissionLean[]>()
++          : Promise.resolve([] as SubmissionLean[]),
++        wanted.has('update')
++          ? HealthCheck.find({
++              status: 'approved',
++              reviewedAt: {
++                $ne: null,
++                ...(cursorDate ? { $lte: cursorDate } : {}),
++              },
++              ...(sidFilter ? { submissionId: sidFilter } : {}),
++            })
++              .sort({ reviewedAt: -1 })
++              .limit(fetchN)
++              .lean()
++          : Promise.resolve([] as any[]),
++        wanted.has('donation') && !sid
++          ? DonationFlow.find({
++              mode: 'live',
++              ...(cursorDate ? { updatedAt: { $lte: cursorDate } } : {}),
++            })
++              .sort({ updatedAt: -1 })
++              .limit(fetchN)
++              .lean()
++          : Promise.resolve([] as any[]),
++      ])
++
++    const submissionIds = new Set<string>()
++    for (const e of events)
++      if (e.meta?.submissionId) submissionIds.add(String(e.meta.submissionId))
++    for (const d of distributions) submissionIds.add(String(d.submissionId))
++    for (const h of updates) submissionIds.add(String(h.submissionId))
++    for (const s of approved) submissionIds.add(String(s._id))
++    const subs = await this.loadSubmissions([...submissionIds])
++    const roles = this.rolesFrom([...subs.values()], events)
++
++    const items: FlowItem[] = []
++    for (const e of events) {
++      const item = this.eventToFlow(e, subs, roles)
++      if (item) items.push(item)
++    }
++    for (const d of distributions)
++      items.push(this.distributionToFlow(d, subs, roles))
++    for (const s of approved) items.push(this.approvalToFlow(s, roles))
++    for (const h of updates) items.push(this.healthCheckToFlow(h, subs))
++    for (const f of donations) items.push(this.donationToFlow(f))
++
++    items.sort(compareFlowDesc)
++    const page = afterCursor(items, opts.cursor).slice(0, limit)
++    const exhausted =
++      events.length < fetchN &&
++      distributions.length < fetchN &&
++      approved.length < fetchN &&
++      updates.length < fetchN &&
++      donations.length < fetchN &&
++      afterCursor(items, opts.cursor).length <= limit
++    const last = page[page.length - 1]
++    return {
++      items: page,
++      nextCursor: !exhausted && last ? encodeCursor(last) : null,
++      kinds,
++    }
++  }
++
++  private async loadSubmissions(
++    ids: string[],
++  ): Promise<Map<string, SubmissionLean>> {
++    const valid = ids.filter(id => mongoose.Types.ObjectId.isValid(id))
++    if (!valid.length) return new Map()
++    const docs = await Submission.find(
++      { _id: { $in: valid.map(id => new mongoose.Types.ObjectId(id)) } },
++      SUBMISSION_PROJECTION,
++    ).lean<SubmissionLean[]>()
++    return new Map(docs.map(d => [String(d._id), d]))
++  }
++
++  private rolesFrom(subs: SubmissionLean[], events: any[]): Roles {
++    const planters = new Set<string>()
++    const verifiers = new Set<string>()
++    const funders = new Set<string>()
++    const buyers = new Set<string>()
++    for (const s of subs) {
++      if (s.userWalletAddress) planters.add(s.userWalletAddress.toLowerCase())
++      const buyer = boundRecipientOf(s)
++      if (buyer) buyers.add(buyer)
++      for (const v of yesVoters(s)) verifiers.add(v)
++    }
++    for (const e of events) {
++      if ((e.kind === 'mgro_burn' || e.kind === 'mgro_retired') && e.from)
++        funders.add(String(e.from).toLowerCase())
++      if (e.kind === 'mgro_retired' && e.meta?.beneficiary)
++        funders.add(String(e.meta.beneficiary).toLowerCase())
++      if (e.meta?.role === 'planter' && e.to)
++        planters.add(String(e.to).toLowerCase())
++      if (e.meta?.role === 'verifier' && e.to)
++        verifiers.add(String(e.to).toLowerCase())
++    }
++    return { planters, verifiers, funders, buyers }
++  }
++
++  private party(address: string | undefined, roles: Roles) {
++    if (!address) return undefined
++    const a = String(address).toLowerCase()
++    return { address: a, label: labelAddress(a, this.known, roles) }
++  }
++
++  private eventToFlow(
++    e: any,
++    subs: Map<string, SubmissionLean>,
++    roles: Roles,
++  ): FlowItem | null {
++    const sub = e.meta?.submissionId
++      ? subs.get(String(e.meta.submissionId))
++      : undefined
++    const base = {
++      at: new Date(e.blockTime).toISOString(),
++      txHash: e.txHash,
++      explorerUrl: explorerTxUrl(this.explorer, e.txHash),
++      verified: true,
++      submissionId: e.meta?.submissionId
++        ? String(e.meta.submissionId)
++        : undefined,
++      planting: plantingSnippet(sub),
++    }
++    const id = `${e.kind}:${e.txHash}:${e.logIndex}`
++    switch (e.kind) {
++      case 'mgro_mint': {
++        const to = String(e.to).toLowerCase()
++        const role =
++          e.meta?.role === 'planter' && roles.buyers.has(to)
++            ? 'buyer'
++            : e.meta?.role
++        const tranche =
++          typeof e.meta?.trancheIndex === 'number'
++            ? e.meta.trancheIndex
++            : undefined
++        return {
++          ...base,
++          id,
++          kind: 'reward',
++          title:
++            role === 'planter'
++              ? `$MGRO reward minted to planter${tranche !== undefined ? ` · tranche ${tranche + 1}` : ''}`
++              : role === 'buyer'
++                ? `$MGRO minted to the planting's OTC buyer${tranche !== undefined ? ` · tranche ${tranche + 1}` : ''}`
++                : role === 'verifier'
++                  ? '$MGRO reward minted to verifier'
++                  : '$MGRO minted',
++          detail:
++            e.meta?.proposalId !== undefined
++              ? `Released by minter proposal #${e.meta.proposalId}`
++              : undefined,
++          amount: { token: 'MGRO', wei: e.amountWei },
++          from: {
++            address: ZERO_ADDRESS,
++            label: 'Minted by the minter contract',
++          },
++          to: this.party(e.to, roles),
++          meta: {
++            role,
++            trancheIndex: tranche,
++            proposalId: e.meta?.proposalId,
++            approvals: e.meta?.approvals,
++          },
++        }
++      }
++      case 'mgro_burn':
++        return {
++          ...base,
++          id,
++          kind: 'retire',
++          title: sub
++            ? `$MGRO retired against ${effectiveInitialTrees(sub)} verified trees`
++            : '$MGRO burned to retire trees',
++          amount: { token: 'MGRO', wei: e.amountWei },
++          from: this.party(e.from, roles),
++          to: {
++            address: String(e.to).toLowerCase(),
++            label:
++              String(e.to).toLowerCase() === DEAD_ADDRESS
++                ? 'Burned (0x…dEaD)'
++                : 'Burned (0x0)',
++          },
++          meta:
++            typeof e.meta?.grossUsd === 'number'
++              ? { grossUsd: e.meta.grossUsd }
++              : undefined,
++        }
++      case 'mgro_retired':
++        return {
++          ...base,
++          id,
++          kind: 'retire',
++          title: sub
++            ? `Retirement certificate minted for ${effectiveInitialTrees(sub)} mangroves`
++            : 'Retirement certificate minted',
++          detail: 'Soulbound proof NFT from the Mangrove retirement contract',
++          amount: { token: 'MGRO', wei: e.amountWei },
++          to: this.party(e.to, roles),
++          meta: { tokenId: e.meta?.tokenId },
++        }
++      case 'tgn_payout':
++        return {
++          ...base,
++          id,
++          kind: 'payout',
++          title:
++            e.meta?.role === 'planter'
++              ? `$${e.token === 'TGN' ? 'TGN' : 'token'} paid to planter (95% share)`
++              : `$${e.token === 'TGN' ? 'TGN' : 'token'} paid to verifier (5% pool)`,
++          amount: { token: 'TGN', wei: e.amountWei },
++          from: this.party(e.from, roles),
++          to: this.party(e.to, roles),
++          meta: {
++            role: e.meta?.role,
++            grossUsd: e.meta?.grossUsd,
++            token: e.contract,
++          },
++        }
++      case 'mint_proposed':
++        return {
++          ...base,
++          id,
++          kind: 'proposal',
++          title: `Reward mint proposed to verifiers · proposal #${e.meta?.proposalId}`,
++          detail: e.meta?.evidenceURI,
++          amount: { token: 'MGRO', wei: e.amountWei },
++          to: this.party(e.to, roles),
++          meta: { proposalId: e.meta?.proposalId, role: e.meta?.role },
++        }
++      default:
++        return null
++    }
++  }
++
++  private distributionToFlow(
++    d: any,
++    subs: Map<string, SubmissionLean>,
++    roles: Roles,
++  ): FlowItem {
++    const sub = subs.get(String(d.submissionId))
++    const trees = sub ? effectiveInitialTrees(sub) : undefined
++    const isBurnRail =
++      String(d.planterWallet || '').toLowerCase() === DEAD_ADDRESS
++    return {
++      id: `funding:${String(d._id)}`,
++      kind: 'funding',
++      at: new Date(d.distributedAt || d.updatedAt || d.createdAt).toISOString(),
++      title: trees
++        ? `${trees} verified trees funded${d.grossUsd ? ` for $${Number(d.grossUsd).toFixed(2)}` : ''}`
++        : `Planting funded${d.grossUsd ? ` for $${Number(d.grossUsd).toFixed(2)}` : ''}`,
++      detail: isBurnRail
++        ? 'Paid by card on world.treegens.app · $MGRO bought and retired for ever'
++        : `Paid by card on world.treegens.app · 95% to the planter, 5% to ${(d.verifiers || []).length || 'the'} verifiers`,
++      amount: d.grossUsd
++        ? { token: 'USD', value: Number(d.grossUsd) }
++        : undefined,
++      to: isBurnRail ? undefined : this.party(d.planterWallet, roles),
++      txHash: isTxHash(d.planterTx) ? d.planterTx : undefined,
++      explorerUrl: explorerTxUrl(this.explorer, d.planterTx),
++      verified: false,
++      submissionId: String(d.submissionId),
++      planting: plantingSnippet(sub),
++      meta: {
++        rail: isBurnRail ? 'mgro' : 'card',
++        recordedPlanterTgnWei: d.planterTgnWei,
++        recordedVerifierTgnWei: sumWei(
++          (d.verifiers || []).map((v: any) => v.tgnWei),
++        ),
++        verifierCount: (d.verifiers || []).length,
++      },
++    }
++  }
++
++  private approvalToFlow(s: SubmissionLean, roles: Roles): FlowItem {
++    const trees = effectiveInitialTrees(s)
++    const voters = yesVoters(s)
++    const location = locationOf(s)
++    const video = plantingVideoUrl(s)
++    const corrected = correctedCountOf(s)
++    return {
++      id: `verified:${String(s._id)}`,
++      kind: 'verified',
++      at: new Date(s.reviewedAt as Date).toISOString(),
++      title: `${trees} ${isEffectivelyMangrove(s) ? 'mangroves' : 'trees'} verified${location ? ` in ${location}` : ''}`,
++      detail:
++        typeof s.aiTreeCount === 'number'
++          ? `AI counted ${s.aiTreeCount} seedlings${typeof s.aiConfidence === 'number' ? ` at ${Math.round(s.aiConfidence * 100)}% confidence` : ''}${corrected !== null && corrected !== s.aiTreeCount ? ` · verifiers corrected to ${corrected}` : ''}${voters.length ? ` · approved by ${voters.length} staked verifier${voters.length === 1 ? '' : 's'}` : ''}`
++          : voters.length
++            ? `Approved by ${voters.length} staked verifier${voters.length === 1 ? '' : 's'}`
++            : undefined,
++      from: this.party(s.userWalletAddress, roles),
++      verified: false,
++      submissionId: String(s._id),
++      planting: plantingSnippet(s),
++      video: video ? { url: video, kind: 'plant' } : undefined,
++      meta: {
++        verifiers: voters.length,
++        species: effectiveTreeTypeLabel(s),
++        gps: publicGps(s.plant?.gpsCoordinates),
++      },
++    }
++  }
++
++  private healthCheckToFlow(
++    h: any,
++    subs: Map<string, SubmissionLean>,
++  ): FlowItem {
++    const sub = subs.get(String(h.submissionId))
++    const voters = [
++      ...new Set(
++        (h.votes || [])
++          .filter((v: any) => v.vote === 'yes')
++          .map((v: any) => String(v.voterWalletAddress).toLowerCase()),
++      ),
++    ]
++    const alive = treesAliveOf(h)
++    const distance =
++      typeof h.distanceMeters === 'number' ? Math.round(h.distanceMeters) : null
++    return {
++      id: `update:${String(h._id)}`,
++      kind: 'update',
++      at: new Date(h.reviewedAt || h.updatedAt).toISOString(),
++      title: `Growth update · checkpoint ${h.checkpointIndex}: ${alive} trees alive`,
++      detail:
++        [
++          voters.length
++            ? `Verified by ${voters.length} verifier${voters.length === 1 ? '' : 's'}`
++            : '',
++          distance !== null ? `filmed ${distance} m from the planting` : '',
++        ]
++          .filter(Boolean)
++          .join(' · ') || undefined,
++      verified: false,
++      submissionId: String(h.submissionId),
++      planting: plantingSnippet(sub),
++      video: h.publicUrl
++        ? { url: h.publicUrl, kind: 'health_check' }
++        : undefined,
++      txHash: isTxHash(h.mintExecuteTxHash) ? h.mintExecuteTxHash : undefined,
++      explorerUrl: isTxHash(h.mintExecuteTxHash)
++        ? explorerTxUrl(this.explorer, h.mintExecuteTxHash)
++        : undefined,
++      meta: {
++        checkpointIndex: h.checkpointIndex,
++        treesAlive: alive,
++        gps: publicGps(h.gpsCoordinates),
++      },
++    }
++  }
++
++  /** A donation's journey, amounts and transactions only: never the donor. */
++  private donationToFlow(f: any): FlowItem {
++    const usd = Math.round(Number(f.amountCents) || 0) / 100
++    const stage =
++      f.status === 'settled'
++        ? f.settle?.retired
++          ? 'retired as $MGRO'
++          : '$MGRO delivered to the treasury Safe'
++        : f.status === 'bought'
++          ? '$MGRO bought on Base'
++          : f.status === 'onramped'
++            ? 'converted to USDC on Base'
++            : f.status === 'swept'
++              ? 'on its way from the bank to Stripe'
++              : f.status === 'held'
++                ? 'waiting for release'
++                : f.status === 'failed'
++                  ? 'needs attention'
++                  : 'received at the bank'
++    const tx = isTxHash(f.settle?.txHash)
++      ? f.settle.txHash
++      : isTxHash(f.swap?.txHash)
++        ? f.swap.txHash
++        : isTxHash(f.onramp?.txHash)
++          ? f.onramp.txHash
++          : undefined
++    return {
++      id: `donation:${String(f._id)}`,
++      kind: 'donation',
++      at: new Date(f.updatedAt || f.createdAt).toISOString(),
++      title: `$${usd.toFixed(2)} donation · ${stage}`,
++      detail:
++        'treegensfoundation.org → Mercury → Stripe (USDC) → $MGRO on Base',
++      amount: { token: 'USD', value: usd },
++      verified: Boolean(tx),
++      txHash: tx,
++      explorerUrl: tx ? explorerTxUrl(this.explorer, tx) : undefined,
++      meta: {
++        status: f.status,
++        usdcMicro: f.onramp?.usdcMicro || '0',
++        mgroWei: f.swap?.mgroWei || '0',
++        onrampTx: isTxHash(f.onramp?.txHash) ? f.onramp.txHash : null,
++        swapTx: isTxHash(f.swap?.txHash) ? f.swap.txHash : null,
++        settleTx: isTxHash(f.settle?.txHash) ? f.settle.txHash : null,
++        retired: Boolean(f.settle?.retired),
++      },
++    }
++  }
++
++  // -------------------------------------------------------------- plantings --
++
++  async plantings(opts: {
++    page: number
++    limit: number
++    sort: 'recent' | 'trees' | 'funded'
++  }) {
++    const sort: Record<string, 1 | -1> =
++      opts.sort === 'trees'
++        ? { aiTreeCount: -1, treesPlanted: -1, reviewedAt: -1 }
++        : { reviewedAt: -1, _id: -1 }
++    const filter = { status: 'approved' }
++    const [total, subs] = await Promise.all([
++      Submission.countDocuments(filter),
++      Submission.find(filter, SUBMISSION_PROJECTION)
++        .sort(sort)
++        .skip((opts.page - 1) * opts.limit)
++        .limit(opts.limit)
++        .lean<SubmissionLean[]>(),
++    ])
++    const items = await this.decoratePlantings(subs)
++    if (opts.sort === 'funded') {
++      items.sort(
++        (a, b) =>
++          Number(b.funding.status === 'funded') -
++          Number(a.funding.status === 'funded'),
++      )
++    }
++    return { items, page: opts.page, limit: opts.limit, total }
++  }
++
++  async planting(id: string) {
++    if (!mongoose.Types.ObjectId.isValid(id)) return null
++    const sub = await Submission.findOne(
++      { _id: id, status: 'approved' },
++      SUBMISSION_PROJECTION,
++    ).lean<SubmissionLean | null>()
++    if (!sub) return null
++    const [summary] = await this.decoratePlantings([sub])
++    const [allocation, healthChecks, timeline, planterUser] = await Promise.all(
++      [
++        RewardAllocation.findOne({ submissionId: sub._id }).lean(),
++        HealthCheck.find({ submissionId: sub._id })
++          .sort({ checkpointIndex: 1, createdAt: -1 })
++          .lean(),
++        this.flows({
++          limit: 200,
++          cursor: null,
++          kinds: [
++            'funding',
++            'payout',
++            'reward',
++            'retire',
++            'verified',
++            'update',
++            'proposal',
++          ],
++          submissionId: String(sub._id),
++        }),
++        sub.userWalletAddress
++          ? User.findOne(
++              { walletAddress: sub.userWalletAddress.toLowerCase() },
++              { name: 1 },
++            ).lean()
++          : null,
++      ],
++    )
++    const votes = (sub.votes || []).map(v => ({
++      wallet: String(v.voterWalletAddress).toLowerCase(),
++      vote: v.vote,
++      at: isoOrNull(v.createdAt),
++      explorerUrl: explorerAddressUrl(
++        this.explorer,
++        String(v.voterWalletAddress).toLowerCase(),
++      ),
++    }))
++    const corrected = correctedCountOf(sub)
++    return {
++      ...summary,
++      planter: {
++        ...summary.planter,
++        name: (planterUser as any)?.name || undefined,
++      },
++      votes,
++      ai:
++        typeof sub.aiTreeCount === 'number'
++          ? {
++              status: 'completed',
++              counted: sub.aiTreeCount,
++              confidence: sub.aiConfidence ?? null,
++              corrected,
++              decision:
++                corrected !== null ? 'verifier_corrected' : 'ai_counted',
++              at: null,
++            }
++          : null,
++      videos: {
++        land: landVideoUrl(sub),
++        plant: plantingVideoUrl(sub),
++        plantRaw: rawClipUrl(sub.plant),
++        stitched: Boolean(sub.plant?.stitchedPublicUrl),
++      },
++      tranches: ((allocation as any)?.tranches || [])
++        .slice()
++        .sort((a: any, b: any) => a.index - b.index)
++        .map((t: any) => ({
++          index: t.index,
++          unlockAt: isoOrNull(t.unlockAt),
++          status: t.status,
++          amountWei: t.amountWei,
++          txHash: isTxHash(t.txHash) ? t.txHash : null,
++          explorerUrl: isTxHash(t.txHash)
++            ? explorerTxUrl(this.explorer, t.txHash)
++            : undefined,
++          proposalId: typeof t.proposalId === 'number' ? t.proposalId : null,
++          requiresHealthCheck: t.index > 0,
++        })),
++      verifierClaims: ((allocation as any)?.verifierClaims || []).map(
++        (c: any) => ({
++          wallet: c.wallet,
++          status: c.status,
++          amountWei: c.amountWei || null,
++          txHash: isTxHash(c.txHash) ? c.txHash : null,
++          explorerUrl: isTxHash(c.txHash)
++            ? explorerTxUrl(this.explorer, c.txHash)
++            : undefined,
++          proposalId: typeof c.proposalId === 'number' ? c.proposalId : null,
++        }),
++      ),
++      healthChecks: (healthChecks as any[]).map(h => ({
++        id: String(h._id),
++        checkpointIndex: h.checkpointIndex,
++        status: h.status,
++        treesAlive: treesAliveOf(h),
++        aiTreeCount: typeof h.aiTreeCount === 'number' ? h.aiTreeCount : null,
++        distanceMeters:
++          typeof h.distanceMeters === 'number' ? h.distanceMeters : null,
++        videoUrl: h.status === 'approved' ? h.publicUrl || null : null,
++        location: h.reverseGeocode || '',
++        gps: publicGps(h.gpsCoordinates),
++        submittedAt: isoOrNull(h.createdAt),
++        reviewedAt: isoOrNull(h.reviewedAt),
++        votes: {
++          yes: (h.votes || []).filter((v: any) => v.vote === 'yes').length,
++          no: (h.votes || []).filter((v: any) => v.vote === 'no').length,
++        },
++        mintTxHash: isTxHash(h.mintExecuteTxHash) ? h.mintExecuteTxHash : null,
++        mintExplorerUrl: isTxHash(h.mintExecuteTxHash)
++          ? explorerTxUrl(this.explorer, h.mintExecuteTxHash)
++          : undefined,
++      })),
++      timeline: timeline.items.slice().reverse(),
++      submittedAt: isoOrNull(sub.createdAt),
++      landFilmedAt: isoOrNull(sub.land?.recordedAt || sub.land?.uploadedAt),
++      plantFilmedAt: isoOrNull(sub.plant?.recordedAt || sub.plant?.uploadedAt),
++    }
++  }
++
++  private async decoratePlantings(subs: SubmissionLean[]) {
++    const ids = subs.map(s => s._id)
++    const idStrings = ids.map(String)
++    const [distributions, allocations, hcAgg, eventAgg] = await Promise.all([
++      TgnDistribution.find({ submissionId: { $in: ids } }).lean(),
++      RewardAllocation.find(
++        { submissionId: { $in: ids } },
++        {
++          submissionId: 1,
++          totalMgroWei: 1,
++          planterTotalWei: 1,
++          verifierPoolWei: 1,
++          planterCumulativePaidWei: 1,
++          tranches: 1,
++          verifierClaims: 1,
++          mintRecipient: 1,
++        },
++      ).lean(),
++      HealthCheck.aggregate([
++        { $match: { submissionId: { $in: ids } } },
++        { $sort: { reviewedAt: -1, createdAt: -1 } },
++        {
++          $group: {
++            _id: '$submissionId',
++            approved: {
++              $sum: { $cond: [{ $eq: ['$status', 'approved'] }, 1, 0] },
++            },
++            pending: {
++              $sum: { $cond: [{ $eq: ['$status', 'pending_review'] }, 1, 0] },
++            },
++            latestApproved: {
++              $push: {
++                $cond: [
++                  { $eq: ['$status', 'approved'] },
++                  {
++                    checkpointIndex: '$checkpointIndex',
++                    payableCount: '$payableCount',
++                    aiTreeCount: '$aiTreeCount',
++                    treesAlive: '$treesAlive',
++                    at: '$reviewedAt',
++                    videoUrl: '$publicUrl',
++                  },
++                  '$$REMOVE',
++                ],
++              },
++            },
++          },
++        },
++      ]),
++      OnchainEvent.aggregate([
++        {
++          $match: {
++            'meta.submissionId': { $in: idStrings },
++            kind: { $in: ['mgro_mint', 'tgn_payout', 'mgro_burn'] },
++          },
++        },
++        {
++          $group: {
++            _id: {
++              submissionId: '$meta.submissionId',
++              kind: '$kind',
++              role: { $ifNull: ['$meta.role', 'unknown'] },
++            },
++            count: { $sum: 1 },
++            wei: { $sum: safeDecimal('$amountWei') },
++          },
++        },
++      ]),
++    ])
++    const distBySub = new Map<string, any>()
++    for (const d of distributions as any[])
++      distBySub.set(String(d.submissionId), d)
++    const allocBySub = new Map<string, any>()
++    for (const a of allocations as any[])
++      allocBySub.set(String(a.submissionId), a)
++    const hcBySub = new Map<string, any>()
++    for (const h of hcAgg as any[]) hcBySub.set(String(h._id), h)
++    const chainBySub = new Map<
++      string,
++      Record<string, { count: number; wei: string }>
++    >()
++    for (const row of eventAgg as any[]) {
++      const key = String(row._id.submissionId)
++      const m = chainBySub.get(key) || {}
++      m[`${row._id.kind}:${row._id.role}`] = {
++        count: row.count,
++        wei: decimalToWeiString(row.wei),
++      }
++      chainBySub.set(key, m)
++    }
++    const roles = this.rolesFrom(subs, [])
++
++    return subs.map(sub => {
++      const id = String(sub._id)
++      const d = distBySub.get(id)
++      const a = allocBySub.get(id)
++      const h = hcBySub.get(id)
++      const chain = chainBySub.get(id) || {}
++      const trees = effectiveInitialTrees(sub)
++      const voters = yesVoters(sub)
++      const planter = String(sub.userWalletAddress || '').toLowerCase()
++      const buyer = boundRecipientOf(sub)
++      const completed = Boolean(d && d.planterTx)
++      const isBurnRail =
++        completed &&
++        String(d.planterWallet || '').toLowerCase() === DEAD_ADDRESS
++      const tranches: any[] = (a?.tranches || [])
++        .slice()
++        .sort((x: any, y: any) => x.index - y.index)
++      const nextTranche = tranches.find(t => t.status !== 'paid')
++      const pendingProposals = tranches.filter(
++        t => t.status !== 'paid' && typeof t.proposalId === 'number',
++      ).length
++      const latestUpdate = h?.latestApproved?.[0] || null
++      const planterMinted = sumWei([
++        chain['mgro_mint:planter']?.wei,
++        chain['mgro_mint:buyer']?.wei,
++      ])
++      return {
++        id,
++        approvedAt: isoOrNull(sub.reviewedAt),
++        submittedAt: isoOrNull(sub.createdAt),
++        trees,
++        declaredTrees: sub.treesPlanted ?? null,
++        species: effectiveTreeTypeLabel(sub),
++        isMangrove: isEffectivelyMangrove(sub),
++        location: locationOf(sub),
++        country: countryOf(locationOf(sub)),
++        gps: publicGps(sub.plant?.gpsCoordinates),
++        planter: {
++          address: planter,
++          label: labelAddress(planter, this.known, roles),
++          explorerUrl: planter
++            ? explorerAddressUrl(this.explorer, planter)
++            : undefined,
++        },
++        ...(buyer
++          ? {
++              buyer: {
++                address: buyer,
++                label: 'Buyer (OTC)',
++                explorerUrl: explorerAddressUrl(this.explorer, buyer),
++              },
++            }
++          : {}),
++        verifiers: { count: voters.length, addresses: voters },
++        ai:
++          typeof sub.aiTreeCount === 'number'
++            ? {
++                counted: sub.aiTreeCount,
++                confidence: sub.aiConfidence ?? null,
++                decision:
++                  correctedCountOf(sub) !== null
++                    ? 'verifier_corrected'
++                    : 'ai_counted',
++              }
++            : null,
++        video: {
++          url: plantingVideoUrl(sub),
++          landUrl: landVideoUrl(sub),
++          stitched: Boolean(sub.plant?.stitchedPublicUrl),
++        },
++        funding: completed
++          ? {
++              status: 'funded' as const,
++              grossUsd: Number(d.grossUsd) || 0,
++              rail: isBurnRail ? 'mgro' : 'card',
++              distributedAt: isoOrNull(d.distributedAt),
++              planterTx: isTxHash(d.planterTx) ? d.planterTx : null,
++              planterTxUrl: explorerTxUrl(this.explorer, d.planterTx),
++              verifierPayouts: (d.verifiers || []).map((v: any) => ({
++                wallet: v.wallet,
++                tgnWei: v.tgnWei,
++                txHash: isTxHash(v.tx) ? v.tx : null,
++                explorerUrl: explorerTxUrl(this.explorer, v.tx),
++              })),
++              recordedPlanterTgnWei: isBurnRail ? '0' : d.planterTgnWei || '0',
++              recordedVerifierTgnWei: sumWei(
++                (d.verifiers || []).map((v: any) => v.tgnWei),
++              ),
++              onchainPlanterTgnWei: chain['tgn_payout:planter']?.wei || '0',
++              onchainVerifierTgnWei: chain['tgn_payout:verifier']?.wei || '0',
++              onchainVerified: Boolean(
++                chain['tgn_payout:planter'] ||
++                  chain['tgn_payout:verifier'] ||
++                  chain['mgro_burn:funder'],
++              ),
++              mgroBurnedWei: chain['mgro_burn:funder']?.wei || '0',
++            }
++          : { status: 'open' as const },
++        rewards: a
++          ? {
++              allocatedWei: a.totalMgroWei,
++              planterTotalWei: a.planterTotalWei,
++              verifierPoolWei: a.verifierPoolWei,
++              planterPaidRecordedWei: a.planterCumulativePaidWei || '0',
++              onchainPlanterMintedWei: planterMinted,
++              onchainVerifierMintedWei: chain['mgro_mint:verifier']?.wei || '0',
++              onchainMintCount:
++                (chain['mgro_mint:planter']?.count || 0) +
++                (chain['mgro_mint:buyer']?.count || 0) +
++                (chain['mgro_mint:verifier']?.count || 0) +
++                (chain['mgro_mint:unknown']?.count || 0),
++              tranchesPaid: tranches.filter(t => t.status === 'paid').length,
++              tranchesTotal: tranches.length,
++              nextUnlockAt: nextTranche
++                ? isoOrNull(nextTranche.unlockAt)
++                : null,
++              nextTrancheIndex: nextTranche ? nextTranche.index : null,
++              pendingProposals,
++              verifierClaimsPaid: (a.verifierClaims || []).filter(
++                (c: any) => c.status === 'paid',
++              ).length,
++            }
++          : null,
++        updates: {
++          approved: h?.approved || 0,
++          pending: h?.pending || 0,
++          latest: latestUpdate
++            ? {
++                checkpointIndex: latestUpdate.checkpointIndex,
++                treesAlive: treesAliveOf(latestUpdate),
++                at: isoOrNull(latestUpdate.at),
++                videoUrl: latestUpdate.videoUrl || null,
++              }
++            : null,
++        },
++      }
++    })
++  }
++
++  // -------------------------------------------------------------------- map --
++
++  async map(limit = 5000) {
++    const subs = await Submission.find(
++      { status: 'approved', 'plant.gpsCoordinates': { $exists: true } },
++      SUBMISSION_PROJECTION,
++    )
++      .sort({ reviewedAt: -1 })
++      .limit(limit)
++      .lean<SubmissionLean[]>()
++    const funded = new Set(
++      (
++        await TgnDistribution.find(
++          {
++            submissionId: { $in: subs.map(s => s._id) },
++            planterTx: { $nin: ['', null] },
++          },
++          { submissionId: 1 },
++        ).lean()
++      ).map((d: any) => String(d.submissionId)),
++    )
++    const points = subs
++      .map(s => {
++        const gps = publicGps(s.plant?.gpsCoordinates)
++        if (!gps) return null
++        return {
++          id: String(s._id),
++          lat: gps.lat,
++          lng: gps.lng,
++          trees: effectiveInitialTrees(s),
++          species: effectiveTreeTypeLabel(s),
++          location: locationOf(s),
++          approvedAt: isoOrNull(s.reviewedAt),
++          funded: funded.has(String(s._id)),
++          videoUrl: plantingVideoUrl(s),
++        }
++      })
++      .filter(Boolean)
++    return { points, total: points.length }
++  }
++
++  // ---------------------------------------------------------------- onchain --
++
++  /** Live reads straight from Base, cached briefly. Null fields when RPC is off. */
++  async onchain() {
++    const ttl = Math.max(15000, env.TRANSPARENCY_CACHE_TTL_MS)
++    if (this.onchainCache && Date.now() - this.onchainCache.at < ttl) {
++      return this.onchainCache.value
++    }
++    const rpcUrl = env.BASE_RPC_URL || env.BASE_SEPOLIA_RPC_URL
++    if (!rpcUrl) {
++      const value = { available: false, reason: 'RPC not configured' }
++      this.onchainCache = { at: Date.now(), value }
++      return value
++    }
++    if (!this.provider) this.provider = jsonRpcProvider(rpcUrl)
++    const k = this.known
++    const mgro = new Contract(k.mgro, ERC20_READ_ABI, this.provider)
++    const tgn = new Contract(k.tgn, ERC20_READ_ABI, this.provider)
++    const withTimeout = <T>(p: Promise<T>, ms = 8000): Promise<T> =>
++      Promise.race([
++        p,
++        new Promise<T>((_, reject) =>
++          setTimeout(() => reject(new Error('rpc timeout')), ms),
++        ),
++      ])
++    try {
++      const [
++        blockNumber,
++        mgroSupply,
++        tgnSupply,
++        treasuryTgn,
++        vaultTgn,
++        treasuryEth,
++      ] = await withTimeout(
++        Promise.all([
++          this.provider.getBlockNumber(),
++          mgro.totalSupply(),
++          tgn.totalSupply(),
++          tgn.balanceOf(k.treasurySafe),
++          tgn.balanceOf(k.tgnVault),
++          this.provider.getBalance(k.treasurySafe),
++        ]),
++      )
++      const value = {
++        available: true,
++        fetchedAt: new Date().toISOString(),
++        blockNumber,
++        mgro: { totalSupplyWei: mgroSupply.toString() },
++        tgn: {
++          totalSupplyWei: tgnSupply.toString(),
++          treasuryBalanceWei: treasuryTgn.toString(),
++          vaultStakedWei: vaultTgn.toString(),
++        },
++        treasury: { address: k.treasurySafe, ethWei: treasuryEth.toString() },
++      }
++      this.onchainCache = { at: Date.now(), value }
++      return value
++    } catch (error: any) {
++      const value = {
++        available: false,
++        reason: error?.message || String(error),
++      }
++      this.onchainCache = { at: Date.now(), value }
++      return value
++    }
++  }
++
++  // ----------------------------------------------------------------- status --
++
++  async status(indexerStatus: unknown) {
++    const [counts, state] = await Promise.all([
++      OnchainEvent.aggregate([
++        {
++          $group: {
++            _id: '$kind',
++            count: { $sum: 1 },
++            latest: { $max: '$blockTime' },
++          },
++        },
++      ]),
++      OnchainIndexerState.find().lean(),
++    ])
++    return {
++      indexer: indexerStatus || { enabled: !env.DISABLE_LEDGER_INDEXER },
++      cursors: (state as any[]).map(s => ({
++        key: s.key,
++        lastProcessedBlock: s.lastProcessedBlock,
++        updatedAt: isoOrNull(s.updatedAt),
++      })),
++      events: Object.fromEntries(
++        (counts as any[]).map(c => [
++          c._id,
++          { count: c.count, latest: isoOrNull(c.latest) },
++        ]),
++      ),
++    }
++  }
++}
++
++export default new TransparencyService()
+diff --git a/src/utils/transparencyFormat.test.ts b/src/utils/transparencyFormat.test.ts
+new file mode 100644
+index 0000000..4265129
+--- /dev/null
++++ b/src/utils/transparencyFormat.test.ts
+@@ -0,0 +1,222 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import {
++  afterCursor,
++  clampInt,
++  classifyMgroTransfer,
++  compareFlowDesc,
++  DEAD_ADDRESS,
++  decimalToWeiString,
++  decodeCursor,
++  encodeCursor,
++  explorerTxUrl,
++  isBurnAddress,
++  isMangrove,
++  isRangeTooLargeError,
++  labelAddress,
++  parseEvidenceURI,
++  parseKinds,
++  parseSubmissionIdFromUrl,
++  payoutRoleFor,
++  publicGps,
++  shortAddress,
++  sumWei,
++  ZERO_ADDRESS,
++} from './transparencyFormat'
++
++const known = {
++  mgro: '0x46e564D039d0d7Ec4C88d517fD32a03d15e88568',
++  tgn: '0xD75dfa972C6136f1c594Fec1945302f885E1ab29',
++  tgnVault: '0x82a54F550131140Cc08Cf2b10Aa3a44fFDDa582C',
++  verifierMinter: '0x670aC2e2f6fB209b4BCcc9bEb8347286D167515B',
++  delegationRegistry: '0x9f122be6c32fdabe344e195d854a497353f3d162',
++  treasurySafe: '0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C',
++  minters: ['0x670aC2e2f6fB209b4BCcc9bEb8347286D167515B'],
++  retirements: ['0x9B862953a0b07A8672452E273B0C135eBB9f407d'],
++}
++const A = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
++const B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
++const SID = '66a1b2c3d4e5f60718293a4b'
++
++test('compareFlowDesc orders newest first and breaks ties by id', () => {
++  const a = { at: '2026-01-01T00:00:00.000Z', id: 'reward:a' }
++  const b = { at: '2026-01-02T00:00:00.000Z', id: 'reward:b' }
++  const c = { at: '2026-01-01T00:00:00.000Z', id: 'reward:c' }
++  assert.deepEqual(
++    [a, b, c].sort(compareFlowDesc).map(x => x.id),
++    ['reward:b', 'reward:c', 'reward:a'],
++  )
++})
++
++test('cursor round-trips and afterCursor skips everything up to the cursor item', () => {
++  const items = [
++    { at: '2026-01-03T00:00:00.000Z', id: 'x:3' },
++    { at: '2026-01-02T00:00:00.000Z', id: 'x:2b' },
++    { at: '2026-01-02T00:00:00.000Z', id: 'x:2a' },
++    { at: '2026-01-01T00:00:00.000Z', id: 'x:1' },
++  ]
++  const cursor = decodeCursor(encodeCursor(items[1]))
++  assert.ok(cursor)
++  assert.deepEqual(
++    afterCursor(items, cursor).map(i => i.id),
++    ['x:2a', 'x:1'],
++  )
++  assert.equal(decodeCursor('not-a-cursor'), null)
++  assert.equal(decodeCursor(''), null)
++})
++
++test('parseKinds keeps only known kinds and dedupes', () => {
++  assert.deepEqual(parseKinds('funding,reward,reward,bogus,donation'), [
++    'funding',
++    'reward',
++    'donation',
++  ])
++  assert.equal(parseKinds(''), null)
++  assert.equal(parseKinds('bogus'), null)
++})
++
++test('clampInt and sumWei are defensive', () => {
++  assert.equal(clampInt('500', 50, 1, 200), 200)
++  assert.equal(clampInt('abc', 50, 1, 200), 50)
++  assert.equal(clampInt('0', 50, 1, 200), 1)
++  assert.equal(sumWei(['1', '2', null, 'x', '3']), '6')
++  assert.equal(sumWei([]), '0')
++})
++
++test('address and tx helpers', () => {
++  assert.equal(shortAddress(known.mgro), '0x46e5…8568')
++  assert.equal(shortAddress('nope'), 'nope')
++  assert.equal(
++    explorerTxUrl('https://basescan.org', '0x' + 'ab'.repeat(32)),
++    'https://basescan.org/tx/0x' + 'ab'.repeat(32),
++  )
++  assert.equal(
++    explorerTxUrl('https://basescan.org', 'verifier-proposal-3'),
++    undefined,
++  )
++  assert.equal(isBurnAddress(ZERO_ADDRESS), true)
++  assert.equal(
++    isBurnAddress('0x000000000000000000000000000000000000dEaD'),
++    true,
++  )
++  assert.equal(isBurnAddress(A), false)
++})
++
++test('labelAddress names system contracts and wallet roles', () => {
++  assert.equal(labelAddress(known.mgro.toLowerCase(), known), '$MGRO token')
++  assert.equal(
++    labelAddress(known.treasurySafe, known),
++    'Treegens treasury (Safe 2-of-4)',
++  )
++  assert.equal(labelAddress(known.verifierMinter, known), 'Minter contract')
++  assert.equal(
++    labelAddress(known.retirements[0], known),
++    'Mangrove retirement contract',
++  )
++  assert.equal(labelAddress(DEAD_ADDRESS, known), 'Burn address (0x…dEaD)')
++  assert.equal(labelAddress(A, known, { planters: new Set([A]) }), 'Planter')
++  assert.equal(labelAddress(A, known, { buyers: new Set([A]) }), 'Buyer (OTC)')
++  assert.equal(labelAddress(A, known, { verifiers: new Set([A]) }), 'Verifier')
++  assert.equal(labelAddress(A, known), 'Wallet')
++})
++
++test('isMangrove accepts both spellings and publicGps rounds', () => {
++  assert.equal(isMangrove('Mangrove'), true)
++  assert.equal(isMangrove('mangroves'), true)
++  assert.equal(isMangrove('acacia'), false)
++  assert.deepEqual(
++    publicGps({ latitude: -4.123456789, longitude: 39.98765432 }),
++    { lat: -4.1235, lng: 39.9877 },
++  )
++  assert.equal(publicGps(null), null)
++})
++
++test('decimalToWeiString handles plain, scientific and Decimal128-like values', () => {
++  assert.equal(decimalToWeiString('123'), '123')
++  assert.equal(decimalToWeiString('1.5E+21'), '1500000000000000000000')
++  assert.equal(decimalToWeiString('1E+21'), '1000000000000000000000')
++  assert.equal(
++    decimalToWeiString({ toString: () => '95000000000000000000' }),
++    '95000000000000000000',
++  )
++  assert.equal(decimalToWeiString('0.5'), '0')
++  assert.equal(decimalToWeiString(null), '0')
++  assert.equal(decimalToWeiString('garbage'), '0')
++})
++
++test('parseEvidenceURI reads every evidence form the minters have carried', () => {
++  assert.deepEqual(parseEvidenceURI(`treegens://submission/${SID}/tranche/2`), {
++    submissionId: SID,
++    role: 'planter',
++    trancheIndex: 2,
++  })
++  assert.deepEqual(
++    parseEvidenceURI(
++      `treegens://submission/${SID.toUpperCase()}/planter/tranche/0`,
++    ),
++    { submissionId: SID, role: 'planter', trancheIndex: 0 },
++  )
++  assert.deepEqual(
++    parseEvidenceURI(`treegens://submission/${SID}/verifier/${A}`),
++    {
++      submissionId: SID,
++      role: 'verifier',
++      wallet: A,
++    },
++  )
++  assert.deepEqual(parseEvidenceURI(`treegens://submission/${SID}`), {
++    submissionId: SID,
++    role: 'planter',
++  })
++  assert.deepEqual(parseEvidenceURI(`treegens://verifier-payout/${A}/abcdef`), {
++    role: 'verifier',
++    wallet: A,
++  })
++  assert.deepEqual(
++    parseEvidenceURI(
++      `https://world.treegens.app/.netlify/functions/video-meta?src=treegensapp&id=${SID}`,
++    ),
++    { submissionId: SID, role: 'unknown' },
++  )
++  assert.equal(parseEvidenceURI('treegens://reward/0xabc/1000'), null)
++  assert.equal(parseEvidenceURI(''), null)
++})
++
++test('parseSubmissionIdFromUrl finds ids in query strings, stitched names and path segments', () => {
++  assert.equal(parseSubmissionIdFromUrl(`https://x/y?src=a&id=${SID}`), SID)
++  assert.equal(
++    parseSubmissionIdFromUrl(
++      `https://storage.googleapis.com/b/verified-${SID}-1700000000.mp4`,
++    ),
++    SID,
++  )
++  assert.equal(parseSubmissionIdFromUrl(`https://x/${SID}/plant.mp4`), SID)
++  assert.equal(parseSubmissionIdFromUrl('https://x/nothing-here.mp4'), null)
++})
++
++test('classifyMgroTransfer separates mints, burns (0x0 and dEaD) and plain transfers', () => {
++  assert.equal(classifyMgroTransfer(ZERO_ADDRESS, A), 'mgro_mint')
++  assert.equal(classifyMgroTransfer(A, ZERO_ADDRESS), 'mgro_burn')
++  assert.equal(classifyMgroTransfer(A, DEAD_ADDRESS), 'mgro_burn')
++  assert.equal(classifyMgroTransfer(A, B), null)
++  assert.equal(classifyMgroTransfer(ZERO_ADDRESS, DEAD_ADDRESS), null)
++})
++
++test('payoutRoleFor and isRangeTooLargeError', () => {
++  const d = { planterWallet: A, verifiers: [{ wallet: B.toUpperCase() }] }
++  assert.equal(payoutRoleFor(A.toUpperCase(), d), 'planter')
++  assert.equal(payoutRoleFor(B, d), 'verifier')
++  assert.equal(
++    payoutRoleFor('0xcccccccccccccccccccccccccccccccccccccccc', d),
++    null,
++  )
++  assert.equal(
++    isRangeTooLargeError(new Error('query returned more than 10000 results')),
++    true,
++  )
++  assert.equal(
++    isRangeTooLargeError({ message: 'block range is too wide' }),
++    true,
++  )
++  assert.equal(isRangeTooLargeError(new Error('execution reverted')), false)
++})
+diff --git a/src/utils/transparencyFormat.ts b/src/utils/transparencyFormat.ts
+new file mode 100644
+index 0000000..1dc1924
+--- /dev/null
++++ b/src/utils/transparencyFormat.ts
+@@ -0,0 +1,382 @@
++import { isMangroveTreeType } from './effectiveTreeCount'
++
++/**
++ * Pure helpers for the public transparency ledger — no I/O, unit-tested.
++ */
++
++export type FlowKind =
++  | 'funding'
++  | 'payout'
++  | 'reward'
++  | 'retire'
++  | 'verified'
++  | 'update'
++  | 'proposal'
++  | 'donation'
++
++export const FLOW_KINDS: FlowKind[] = [
++  'funding',
++  'payout',
++  'reward',
++  'retire',
++  'verified',
++  'update',
++  'proposal',
++  'donation',
++]
++
++export type FlowParty = { address: string; label: string; name?: string }
++
++export type FlowItem = {
++  /** Stable, unique across sources: `<kind>:<source id>`. */
++  id: string
++  kind: FlowKind
++  at: string
++  title: string
++  detail?: string
++  amount?: {
++    token: 'USD' | 'TGN' | 'MGRO' | 'USDC'
++    wei?: string
++    value?: number
++  }
++  from?: FlowParty
++  to?: FlowParty
++  txHash?: string
++  explorerUrl?: string
++  /** True when the amount was read from the chain (log or receipt). */
++  verified: boolean
++  submissionId?: string
++  planting?: {
++    trees: number
++    species: string
++    location: string
++    videoUrl: string | null
++  }
++  video?: { url: string; kind: 'plant' | 'land' | 'health_check' }
++  meta?: Record<string, unknown>
++}
++
++export type Cursor = { at: number; id: string }
++
++export function encodeCursor(item: Pick<FlowItem, 'at' | 'id'>): string {
++  return Buffer.from(
++    JSON.stringify({ at: new Date(item.at).getTime(), id: item.id }),
++    'utf8',
++  ).toString('base64url')
++}
++
++export function decodeCursor(raw: string | undefined | null): Cursor | null {
++  if (!raw) return null
++  try {
++    const parsed = JSON.parse(
++      Buffer.from(String(raw), 'base64url').toString('utf8'),
++    )
++    const at = Number(parsed?.at)
++    const id = String(parsed?.id || '')
++    if (!Number.isFinite(at) || !id) return null
++    return { at, id }
++  } catch {
++    return null
++  }
++}
++
++/** Newest first; ties broken by id so pagination is total and stable. */
++export function compareFlowDesc(
++  a: Pick<FlowItem, 'at' | 'id'>,
++  b: Pick<FlowItem, 'at' | 'id'>,
++): number {
++  const ta = new Date(a.at).getTime()
++  const tb = new Date(b.at).getTime()
++  if (ta !== tb) return tb - ta
++  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0
++}
++
++/** Items strictly after the cursor in the newest-first order. */
++export function afterCursor<T extends Pick<FlowItem, 'at' | 'id'>>(
++  items: T[],
++  cursor: Cursor | null,
++): T[] {
++  if (!cursor) return items
++  const probe = { at: new Date(cursor.at).toISOString(), id: cursor.id }
++  return items.filter(item => compareFlowDesc(item, probe) > 0)
++}
++
++export function parseKinds(raw: unknown): FlowKind[] | null {
++  if (typeof raw !== 'string' || !raw.trim()) return null
++  const wanted = raw
++    .split(',')
++    .map(s => s.trim().toLowerCase())
++    .filter((s): s is FlowKind => (FLOW_KINDS as string[]).includes(s))
++  return wanted.length ? [...new Set(wanted)] : null
++}
++
++export function clampInt(
++  raw: unknown,
++  fallback: number,
++  min: number,
++  max: number,
++): number {
++  const n = parseInt(String(raw ?? ''), 10)
++  if (Number.isNaN(n)) return fallback
++  return Math.min(max, Math.max(min, n))
++}
++
++export function sumWei(values: Array<string | null | undefined>): string {
++  let total = 0n
++  for (const v of values) {
++    const s = String(v ?? '0').trim()
++    if (/^\d+$/.test(s)) total += BigInt(s)
++  }
++  return total.toString()
++}
++
++export function shortAddress(address: string): string {
++  const a = String(address || '')
++  if (!/^0x[a-fA-F0-9]{40}$/.test(a)) return a
++  return `${a.slice(0, 6)}…${a.slice(-4)}`
++}
++
++export function isTxHash(value: unknown): boolean {
++  return typeof value === 'string' && /^0x[a-fA-F0-9]{64}$/.test(value)
++}
++
++export function explorerTxUrl(
++  base: string,
++  txHash: string,
++): string | undefined {
++  return isTxHash(txHash) ? `${base}/tx/${txHash}` : undefined
++}
++
++export function explorerAddressUrl(base: string, address: string): string {
++  return `${base}/address/${address}`
++}
++
++export function explorerTokenUrl(base: string, address: string): string {
++  return `${base}/token/${address}`
++}
++
++/** Mangrove plantings are counted by the AI, everything else by the planter. */
++export function isMangrove(treeType: unknown): boolean {
++  return isMangroveTreeType(typeof treeType === 'string' ? treeType : '')
++}
++
++export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
++export const DEAD_ADDRESS = '0x000000000000000000000000000000000000dead'
++
++/** Both places $MGRO goes to die: the zero address and 0x…dEaD. */
++export function isBurnAddress(address: unknown): boolean {
++  const a = String(address || '').toLowerCase()
++  return a === ZERO_ADDRESS || a === DEAD_ADDRESS
++}
++
++export type KnownAddresses = {
++  mgro: string
++  tgn: string
++  tgnVault: string
++  verifierMinter: string
++  delegationRegistry: string
++  treasurySafe: string
++  minters: string[]
++  retirements: string[]
++}
++
++/**
++ * Human label for an address. System contracts get their name; wallets get
++ * their role from the sets the caller assembled for the current response.
++ */
++export function labelAddress(
++  address: string,
++  known: KnownAddresses,
++  roles: {
++    planters?: Set<string>
++    verifiers?: Set<string>
++    funders?: Set<string>
++    buyers?: Set<string>
++  } = {},
++): string {
++  const a = String(address || '').toLowerCase()
++  if (!a) return ''
++  if (a === ZERO_ADDRESS) return 'Mint / burn (0x0)'
++  if (a === DEAD_ADDRESS) return 'Burn address (0x…dEaD)'
++  if (a === known.mgro.toLowerCase()) return '$MGRO token'
++  if (a === known.tgn.toLowerCase()) return '$TGN token'
++  if (a === known.tgnVault.toLowerCase()) return 'TGN vault (staking)'
++  if (a === known.treasurySafe.toLowerCase())
++    return 'Treegens treasury (Safe 2-of-4)'
++  if (a === known.delegationRegistry.toLowerCase()) return 'Delegation registry'
++  if (known.minters.some(m => m.toLowerCase() === a)) return 'Minter contract'
++  if (known.retirements.some(m => m.toLowerCase() === a))
++    return 'Mangrove retirement contract'
++  if (roles.planters?.has(a)) return 'Planter'
++  if (roles.buyers?.has(a)) return 'Buyer (OTC)'
++  if (roles.verifiers?.has(a)) return 'Verifier'
++  if (roles.funders?.has(a)) return 'Funder'
++  return 'Wallet'
++}
++
++/** Public GPS: 4 decimals (~11 m) is plenty to find a planting site. */
++export function publicGps(
++  gps: { latitude?: number; longitude?: number } | null | undefined,
++): { lat: number; lng: number } | null {
++  if (!gps) return null
++  const lat = Number(gps.latitude)
++  const lng = Number(gps.longitude)
++  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
++  return {
++    lat: Math.round(lat * 1e4) / 1e4,
++    lng: Math.round(lng * 1e4) / 1e4,
++  }
++}
++
++/**
++ * Mongo `$sum: { $toDecimal }` returns a Decimal128 whose string form may be
++ * scientific ("1.5E+21"). Turn any such value into an integer wei string.
++ */
++export function decimalToWeiString(value: unknown): string {
++  if (value === null || value === undefined) return '0'
++  const raw = String(
++    typeof value === 'object' && value && 'toString' in value
++      ? (value as { toString(): string }).toString()
++      : value,
++  ).trim()
++  const m = raw.match(/^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/)
++  if (!m) return /^-?\d+$/.test(raw) ? raw : '0'
++  const sign = m[1] === '-' ? '-' : ''
++  const intPart = m[2]
++  const frac = m[3] || ''
++  const exp = Number(m[4] || 0)
++  let digits = intPart + frac
++  const pointPos = intPart.length + exp
++  if (pointPos <= 0) return '0'
++  if (pointPos > digits.length)
++    digits = digits + '0'.repeat(pointPos - digits.length)
++  const integer = digits.slice(0, pointPos).replace(/^0+(?=\d)/, '')
++  return integer === '' || integer === '0' ? '0' : sign + integer
++}
++
++// ---------------------------------------------------------- evidence URIs --
++
++export type EvidenceRef = {
++  submissionId?: string
++  role: 'planter' | 'verifier' | 'unknown'
++  trancheIndex?: number
++  wallet?: string
++}
++
++/**
++ * Read the planting a minter's evidenceURI names. Every form the backend has
++ * ever written (and the two the world site uses as metadata) is accepted:
++ *   treegens://submission/<id>/tranche/<n>            V6 / AutoMinterV7
++ *   treegens://submission/<id>/planter/tranche/<n>    V4 reward service
++ *   treegens://submission/<id>/verifier/<wallet>      verifier shares
++ *   treegens://submission/<id>                        bare reference
++ *   treegens://verifier-payout/<wallet>/<digest>      pooled legacy payout
++ *   https://…/video-meta?src=treegensapp&id=<id>      NFT metadata URL
++ *   https://…/<id>/… or ?…id=<id>                      any URL carrying the id
++ */
++export function parseEvidenceURI(
++  uri: string | null | undefined,
++): EvidenceRef | null {
++  if (!uri) return null
++  const text = String(uri).trim()
++  const sub = text.match(
++    /^treegens:\/\/submission\/([a-fA-F0-9]{24})(?:\/(.*))?$/,
++  )
++  if (sub) {
++    const submissionId = sub[1].toLowerCase()
++    const rest = (sub[2] || '').trim()
++    const tranche = rest.match(/^(?:planter\/)?tranche\/(\d+)$/)
++    if (tranche) {
++      return {
++        submissionId,
++        role: 'planter',
++        trancheIndex: Number(tranche[1]),
++      }
++    }
++    const verifier = rest.match(/^verifier\/(0x[a-fA-F0-9]{40})$/)
++    if (verifier) {
++      return {
++        submissionId,
++        role: 'verifier',
++        wallet: verifier[1].toLowerCase(),
++      }
++    }
++    return { submissionId, role: rest ? 'unknown' : 'planter' }
++  }
++  const pooled = text.match(
++    /^treegens:\/\/verifier-payout\/(0x[a-fA-F0-9]{40})\//,
++  )
++  if (pooled) return { role: 'verifier', wallet: pooled[1].toLowerCase() }
++  const fromUrl = parseSubmissionIdFromUrl(text)
++  if (fromUrl) return { submissionId: fromUrl, role: 'unknown' }
++  return null
++}
++
++/** A 24-hex submission id carried by a URL (`?id=`, `/<id>/`, `/<id>.mp4`, `verified-<id>-…`). */
++export function parseSubmissionIdFromUrl(
++  url: string | null | undefined,
++): string | null {
++  if (!url) return null
++  const text = String(url)
++  const q = text.match(/[?&]id=([a-fA-F0-9]{24})(?:&|$)/)
++  if (q) return q[1].toLowerCase()
++  const stitched = text.match(/verified-([a-fA-F0-9]{24})-\d+\.mp4/i)
++  if (stitched) return stitched[1].toLowerCase()
++  const seg = text.match(/\/([a-fA-F0-9]{24})(?:[/._?-]|$)/)
++  if (seg) return seg[1].toLowerCase()
++  return null
++}
++
++/** Mint, burn, or a plain transfer the ledger does not keep. */
++export function classifyMgroTransfer(
++  from: string,
++  to: string,
++): 'mgro_mint' | 'mgro_burn' | null {
++  const f = String(from).toLowerCase()
++  const t = String(to).toLowerCase()
++  if (f === ZERO_ADDRESS && !isBurnAddress(t)) return 'mgro_mint'
++  if (isBurnAddress(t) && f !== ZERO_ADDRESS) return 'mgro_burn'
++  return null
++}
++
++/** True when an RPC error means "ask for a smaller block range". */
++export function isRangeTooLargeError(error: unknown): boolean {
++  const msg = String(
++    (error as { message?: string })?.message || error || '',
++  ).toLowerCase()
++  return (
++    msg.includes('more than') ||
++    msg.includes('too many') ||
++    msg.includes('block range') ||
++    msg.includes('limit exceeded') ||
++    msg.includes('query returned') ||
++    msg.includes('response size') ||
++    msg.includes('timeout')
++  )
++}
++
++/**
++ * Which role an ERC-20 transfer inside a payout tx plays, judged against the
++ * distribution record it belongs to. `null` = an intermediate leg (swap
++ * output to the relayer, fees) the ledger does not show.
++ */
++export function payoutRoleFor(
++  to: string,
++  distribution: { planterWallet?: string; verifiers?: { wallet: string }[] },
++): 'planter' | 'verifier' | null {
++  const t = String(to).toLowerCase()
++  if (
++    distribution.planterWallet &&
++    t === distribution.planterWallet.toLowerCase()
++  ) {
++    return 'planter'
++  }
++  if (
++    (distribution.verifiers || []).some(
++      v => String(v.wallet).toLowerCase() === t,
++    )
++  ) {
++    return 'verifier'
++  }
++  return null
++}
+-- 
+2.43.0
+
