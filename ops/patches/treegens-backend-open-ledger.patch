@@ -1,8 +1,8 @@
 From 958a626fdb5e83fd52f5436cf8ae4f5805402aee Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sun, 18 Oct 2026 12:34:59 +0000
-Subject: [PATCH] feat(ledger): public /api/transparency open ledger + on-chain
- indexer
+Subject: [PATCH 1/2] feat(ledger): public /api/transparency open ledger +
+ on-chain indexer
 
 Public, read-only, cached endpoints (overview, flows, plantings, planting detail, map, onchain, contracts, status) behind CORS * and their own rate limit; the origin allowlist exempts the path. A ledger indexer reads Base under a Mongo lease and writes one OnchainEvent per MGRO mint/burn (0x0 and 0xdEaD), minter proposal/execution/verifier share (V4, V6, AutoMinterV7 and the revoked minters), MangrovesRetired certificate and ERC-20 payout leg from completed distribution receipts. Mints are linked to plantings from the proposal's evidenceURI first, then from RewardAllocation/Submission/HealthCheck mint hashes. Tree counts use the verifier-corrected effective count; OTC buyers are labelled. DonationFlow model and donation totals for the foundation pipeline (data model only; see docs/TREASURY_PIPELINE.md). DISABLE_LEDGER_INDEXER turns the indexer off.
 
@@ -4227,6 +4227,4588 @@ index 0000000..1dc1924
 +  }
 +  return null
 +}
+-- 
+2.43.0
+
+
+From 9e169f37a5d897d0eb2e8abac740381124313fda Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 18 Oct 2026 18:09:12 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?feat(treasury):=20donations=20=E2=86=92=20S?=
+ =?UTF-8?q?tripe=20=E2=86=92=20USDC=20=E2=86=92=20$MGRO,=20locked=20for=20?=
+ =?UTF-8?q?good?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Mercury credits on the foundation account become DonationFlow rows and move
+through five idempotent stages under a Mongo lease: one ACH per tick to the
+Stripe financial account, a Stripe outbound payment that lands USDC in the
+treasury wallet on Base (matched on-chain), a swap for canonical $MGRO
+(Uniswap V3 USDC→WETH→MGRO when a pool exists, else OpenOcean), and a lock
+(burn address by default; retire / burn / forward as options).
+
+dry_run is the default and records every request verbatim; only
+TREASURY_PIPELINE_MODE=live moves money. Per-payment, per-payout, per-swap
+and per-tick caps; idempotency keys everywhere; the wallet key must sign as
+the pinned address and the Stripe payout method must pay that address; the
+retired 0xe846 MGRO deployment is a fatal config error. Chain sends record
+their hash before waiting on the receipt so a crash can never double-spend.
+
+Admin console at /api/admin/treasury/* (status, flows, release, hold, tick,
+Stripe and Mercury overviews). The public ledger already shows live flows.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QRDgg33yuY5qETYVwQPAZi
+---
+ .env.example                                  |   44 +
+ docs/TREASURY_PIPELINE.md                     |  272 +--
+ package.json                                  |    2 +-
+ src/models/DonationFlow.ts                    |    8 +
+ src/routes/adminTreasury.ts                   |  160 ++
+ src/server.ts                                 |   24 +
+ src/services/transparencyService.ts           |    2 +-
+ src/services/treasury/lockService.ts          |  226 +++
+ src/services/treasury/mercuryClient.test.ts   |  148 ++
+ src/services/treasury/mercuryClient.ts        |  186 +++
+ .../treasury/stripeMoneyClient.test.ts        |  159 ++
+ src/services/treasury/stripeMoneyClient.ts    |  221 +++
+ src/services/treasury/swapService.ts          |  317 ++++
+ src/services/treasury/treasuryConfig.test.ts  |  171 ++
+ src/services/treasury/treasuryConfig.ts       |  330 ++++
+ src/services/treasury/treasuryMath.test.ts    |  232 +++
+ src/services/treasury/treasuryMath.ts         |  333 ++++
+ .../treasury/treasuryPipelineService.ts       | 1480 +++++++++++++++++
+ 18 files changed, 4202 insertions(+), 113 deletions(-)
+ create mode 100644 src/routes/adminTreasury.ts
+ create mode 100644 src/services/treasury/lockService.ts
+ create mode 100644 src/services/treasury/mercuryClient.test.ts
+ create mode 100644 src/services/treasury/mercuryClient.ts
+ create mode 100644 src/services/treasury/stripeMoneyClient.test.ts
+ create mode 100644 src/services/treasury/stripeMoneyClient.ts
+ create mode 100644 src/services/treasury/swapService.ts
+ create mode 100644 src/services/treasury/treasuryConfig.test.ts
+ create mode 100644 src/services/treasury/treasuryConfig.ts
+ create mode 100644 src/services/treasury/treasuryMath.test.ts
+ create mode 100644 src/services/treasury/treasuryMath.ts
+ create mode 100644 src/services/treasury/treasuryPipelineService.ts
+
+diff --git a/.env.example b/.env.example
+index 99edbf8..04aa239 100644
+--- a/.env.example
++++ b/.env.example
+@@ -163,3 +163,47 @@ GEMINI_SCENE_SWEEP_MS=120000
+ # Gemini's 100MB inline request ceiling.
+ GEMINI_SCENE_MAX_INLINE_MB=68
+ DISABLE_NEARBY_SCENE_COMPARISON=false
++
++# --- Donation pipeline: treegensfoundation.org → Mercury → Stripe → USDC → $MGRO → locked ---
++# docs/TREASURY_PIPELINE.md is the runbook. Nothing moves until every key for a
++# stage exists AND TREASURY_PIPELINE_MODE=live; dry_run records what would be sent.
++# Console: GET/POST /api/admin/treasury/* (bearer ADMIN_API_TOKEN).
++DISABLE_TREASURY_PIPELINE=false
++TREASURY_PIPELINE_MODE=dry_run
++# TREASURY_POLL_MS=300000
++# TREASURY_REQUIRE_APPROVAL=false        # true: every new donation waits for a release
++# TREASURY_LOOKBACK_DAYS=30
++# TREASURY_MIN_DONATION_USD=1
++# TREASURY_DONATION_KINDS=externalTransfer,incomingDomesticWire,incomingInternationalWire,checkDeposit
++# TREASURY_SWEEP_RESERVE_PCT=0           # share of each donation that stays at the bank
++# TREASURY_MAX_SWEEP_USD=10000           # most USD one Mercury payment moves
++# TREASURY_MAX_ONRAMP_USD=10000          # most USD one Stripe payout moves
++# TREASURY_MAX_TICK_USD=25000            # most new USD one tick puts in motion; the rest is held
++# TREASURY_MAX_SWAP_USDC=10000
++# TREASURY_MIN_SWAP_USDC=1
++# TREASURY_SWAP_SLIPPAGE_PCT=3
++# TREASURY_SWAP_ROUTE=auto               # auto | uniswap_v3 | openocean
++# TREASURY_LOCK_METHOD=dead              # dead | retire | burn | forward
++# TREASURY_FORWARD_TO=                   # for forward; defaults to the treasury Safe
++# TREASURY_RETIREMENT_ADDRESS=           # for retire; must retire the canonical $MGRO
++# TREASURY_MAX_ATTEMPTS=24
++# TREASURY_ARRIVAL_WAIT_TICKS=24
++# Mercury (foundation account). Token with read + send-money permission.
++# MERCURY_API_BASE=https://api.mercury.com/api/v1
++MERCURY_API_TOKEN=
++MERCURY_ACCOUNT_ID=
++# The Stripe financial account saved as a Mercury recipient (its bank details
++# come from GET /api/admin/treasury/stripe → financialAddresses).
++MERCURY_STRIPE_RECIPIENT_ID=
++# MERCURY_SEND_MODE=direct               # direct | request (queue for in-app approval)
++# Stripe Money Management (same account as world.treegens.app). Falls back to STRIPE_SECRET_KEY.
++STRIPE_TREASURY_SECRET_KEY=
++STRIPE_FINANCIAL_ACCOUNT_ID=             # fa_…
++STRIPE_CRYPTO_PAYOUT_METHOD_ID=          # cwa_… that pays USDC on Base to TREASURY_WALLET_ADDRESS
++# STRIPE_MONEY_MANAGEMENT_VERSION=2025-11-17.preview
++# Treasury hot wallet on Base: a fresh key, a little ETH for gas. The address
++# is pinned so a wrong key can never sign.
++TREASURY_WALLET_PRIVATE_KEY=
++TREASURY_WALLET_ADDRESS=
++# TREASURY_RPC_URL=                      # defaults to BASE_RPC_URL
++# OPENOCEAN_API_BASE=https://open-api.openocean.finance/v4/base
+diff --git a/docs/TREASURY_PIPELINE.md b/docs/TREASURY_PIPELINE.md
+index d384367..68e9552 100644
+--- a/docs/TREASURY_PIPELINE.md
++++ b/docs/TREASURY_PIPELINE.md
+@@ -1,141 +1,191 @@
+-# Donation pipeline: treegensfoundation.org → Mercury → Stripe (USDC) → $MGRO
++# Donation pipeline: treegensfoundation.org → Mercury → Stripe → USDC → $MGRO → locked
+ 
+-Status: **design + data model only.** The `DonationFlow` model and the public
+-ledger's donation totals exist (`/api/transparency/overview` → `totals.donations`,
+-`/flows?kinds=donation`). The code that moves money has not been written: an
+-automation that debits a bank account, converts to stablecoin and trades needs
+-an explicit, deliberate go-ahead from the account owner, and the harness that
+-produced this branch refuses to author it without one. This document is the
+-complete specification so that go-ahead can be given with eyes open, and the
+-implementation can follow it line by line.
++Status: **implemented** (`src/services/treasury/`, console at
++`/api/admin/treasury/*`). Jimi's decision, 2026-10-18: *take the USD, on-ramp
++it to USDC, buy $MGRO and permanently lock it.*
+ 
+-## What already works today (world.treegens.app, proven in production)
++Nothing moves until the keys for a stage exist **and**
++`TREASURY_PIPELINE_MODE=live`. The default mode is `dry_run`: the pipeline
++detects real donations and writes down, verbatim, the request each stage
++would have sent, so the whole chain can be checked before a cent moves.
+ 
+-`world-treegens-app/netlify/functions/treasury-cron.js` and
+-`fulfill-background.js` already run the same three legs for card purchases:
++## What already worked (world.treegens.app, in production)
+ 
+-| Leg | Mechanism | Where |
++| Leg | Mechanism | Reused from |
+ |---|---|---|
+-| USD balance → USDC | Stripe Money Management: a USD **financial account**, an outbound payment to a **crypto-wallet payout method** (`cwa_…`, the relayer wallet on Base), API version `2025-11-17.preview` | `treasury-cron.js` (`TREASURY_AUTO_FORWARD=1`) |
+-| USDC → $MGRO | OpenOcean aggregator quote + swap from the relayer wallet, 3% slippage, forward-quoted for the real size | `fulfill-background.js` → `acquireMgro()` |
+-| $MGRO → retired | `MangroveRetirement.retire(beneficiary, amount, metadataURI, sourceRef)`: MGRO to `0x…dEaD`, soulbound proof NFT | `fulfill-background.js` (rail `mgro`) |
++| USD → USDC | Stripe Money Management: a financial account, an outbound payment to a **crypto-wallet payout method** (`cwa_…`), API version `2025-11-17.preview` | `netlify/functions/treasury-cron.js` |
++| USDC → $MGRO | OpenOcean aggregator quote + swap (Uniswap V2/V3/V4, Aerodrome) | `fulfill-background.js` → `acquireMgro()` |
++| $MGRO → gone | `MangroveRetirement.retire()` sends to `0x…dEaD` | `contracts/src/MangroveRetirement.sol` |
+ 
+-The only new leg for donations is **Mercury → Stripe**.
++The only new leg is **Mercury → Stripe**, an ACH to a saved recipient.
+ 
+-## Target flow
++## The flow
+ 
+ ```
+ donor ──► Mercury (foundation account)
+-            │  1. detect: incoming credit ≥ TREASURY_MIN_DONATION_USD
+-            │  2. sweep:  Mercury API payment (ACH) to the Stripe financial
+-            │             account's bank details (a saved Mercury recipient)
+-            ▼
++            │  detect   credit ≥ TREASURY_MIN_DONATION_USD, of a donation kind,
++            │           not an ACH return from Stripe → DonationFlow (status detected)
++            │  sweep    ONE ACH per tick for every detected flow that fits
++            │           TREASURY_MAX_SWEEP_USD → the Stripe financial account
++            ▼           (Mercury recipient MERCURY_STRIPE_RECIPIENT_ID)
+           Stripe financial account (USD)
+-            │  3. on-ramp: outbound payment  from {financial_account, usd}
+-            │             to {payout_method cwa_…, usdc}  → USDC lands on Base
+-            ▼
++            │  onramp   per flow, FIFO within the available USD balance:
++            │           outbound payment  from {fa, usd}  to {cwa_, usdc}
++            │           → USDC lands in the treasury wallet on Base; the
++            ▼           transfer is matched on-chain (trace id or size)
+           Treasury hot wallet (Base)
+-            │  4. buy:    OpenOcean swap USDC → $MGRO (canonical
+-            │             0x46e564D039d0d7Ec4C88d517fD32a03d15e88568),
+-            │             slippage and size caps
++            │  swap     USDC → canonical $MGRO 0x46e564D039d0d7Ec4C88d517fD32a03d15e88568
++            │           Uniswap V3 (USDC→WETH→MGRO, best fee tiers) when such a
++            │           pool exists, else OpenOcean (also routes Uniswap V4)
+             ▼
+-          2-of-4 Safe 0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C
+-               5. settle: forward $MGRO to the Safe, or (opt-in) retire it
+-                          through MangroveRetirement with the Safe as beneficiary
++          locked        settle: transfer to 0x…dEaD (default), or retire /
++                        burn / forward — see TREASURY_LOCK_METHOD
+ ```
+ 
+-Every stage writes to the donation's `DonationFlow` row; the public ledger
+-shows amount, dates and the three transaction hashes. Never the donor.
++Every stage writes to the donation's `DonationFlow` row. The public ledger
++(`/api/transparency/overview` → `totals.donations`, `/flows?kinds=donation`)
++shows the amount and the three transaction hashes of every **live** flow.
++Never the donor: the counterparty is stored only as a SHA-256 hash, and the
++bank memo is not stored at all.
+ 
+ ## Stage by stage
+ 
+-### 1. Detect (read-only)
+-`GET {MERCURY_API_BASE}/account/{MERCURY_ACCOUNT_ID}/transactions?start=<lookback>&limit=500`
+-with `Authorization: Bearer MERCURY_API_TOKEN`. A donation is a transaction
+-with a positive `amount`, `status` `sent`/`posted`, and `kind` in
+-`TREASURY_DONATION_KINDS`. One `DonationFlow` per Mercury transaction id
+-(unique index). The counterparty is stored only as a SHA-256 hash.
+-
+-### 2. Sweep (Mercury → Stripe)
+-`POST /account/{id}/transactions`
+-`{ recipientId: MERCURY_STRIPE_RECIPIENT_ID, amount, paymentMethod: 'ach', idempotencyKey: <flow id>, note: 'Treegens donation <flow id>' }`.
+-The recipient is created **once, by a human in Mercury**, from the bank
+-details Stripe shows for the financial account ("Add funds by bank
+-transfer"). Amount = donation × (1 − `TREASURY_SWEEP_RESERVE_PCT`), capped by
+-`TREASURY_MAX_SWEEP_USD` per run. Mercury may hold API payments for in-app
+-approval depending on account settings; the stage polls the created
+-transaction until `sent`.
+-
+-### 3. On-ramp (Stripe USD → USDC on Base)
+-When the financial account's available USD covers the flow:
+-`POST /v2/money_management/outbound_payments` with
+-`{ from: { financial_account: STRIPE_FINANCIAL_ACCOUNT_ID, currency: 'usd' }, to: { payout_method: STRIPE_CRYPTO_PAYOUT_METHOD_ID, currency: 'usdc' }, amount: { value: <cents>, currency: 'usd' }, description: 'Treegens donation <flow id>' }`,
+-headers `Stripe-Version: 2025-11-17.preview`, `Idempotency-Key: <flow id>`.
+-The payout method is the existing crypto-wallet method (the site already has
+-`STRIPE_TGN_PAYOUT_METHOD_ID=cwa_…`; a second one for the treasury wallet is
+-registered once in the Stripe Dashboard). Arrival is confirmed on-chain: a
+-USDC `Transfer` to the treasury wallet matching the amount, recorded with its
+-tx hash.
+-
+-### 4. Buy $MGRO
+-Flows whose USDC has arrived are swapped **together** (one transaction per
+-tick, pro-rata attribution): OpenOcean `/v4/base/quote` then `/swap` from the
+-treasury wallet, `TREASURY_SWAP_SLIPPAGE_PCT` (default 3), at most
+-`TREASURY_MAX_SWAP_USDC` per transaction, nothing below
+-`TREASURY_MIN_SWAP_USDC`. The swap is refused when the quoted output is zero
+-(no liquidity) and the flows wait in `onramped`. `MGRO` is the canonical token;
+-the world site's constants still name the retired `0xe846…2283` deployment and
+-must not be copied.
+-
+-### 5. Settle
+-`transfer()` the bought $MGRO to `TREASURY_FORWARD_TO` (the Safe), or with
+-`TREASURY_RETIRE=true` call `MangroveRetirement.retire(safe, amount, uri, 0x0)`
+-after reading `retirement.mgro()` and refusing unless it equals the canonical
+-$MGRO. The hot wallet therefore never holds value longer than one tick.
++**detect** `GET /account/{MERCURY_ACCOUNT_ID}/transactions?status=sent&start=<lookback>`.
++A credit counts when `amount > 0`, `kind ∈ TREASURY_DONATION_KINDS`, the
++amount is at least the minimum, and the counterparty is not the Stripe
++recipient (so a returned sweep never reads as a donation). One flow per
++Mercury transaction id (unique index); detection is an insert-only upsert.
++`TREASURY_REQUIRE_APPROVAL=true` parks each new flow as `held`; new money
++above `TREASURY_MAX_TICK_USD` in one tick is held too.
++
++**sweep** `POST /account/{id}/transactions` (or `/request-send-money` with
++`MERCURY_SEND_MODE=request`) `{ recipientId, amount, paymentMethod: 'ach',
++idempotencyKey }`. The flows swept together share a `batchId`; the key is a
++hash of the members, so a retry of an unacknowledged batch cannot create a
++second payment. The payment is polled until Mercury says `sent`; `failed` or
++`cancelled` fails the flows (an admin release starts them over with a fresh key).
++
++**onramp** `GET /v2/money_management/financial_accounts/{fa}` for the
++available USD, then per flow `POST /v2/money_management/outbound_payments`
++`{ from: { financial_account, currency: 'usd' }, to: { payout_method: cwa_,
++currency: 'usdc' }, amount: { value: cents, currency: 'usd' } }` with
++`Idempotency-Key: tg-donation-<flow>-onramp`. If Stripe asks for a quote
++(`outbound_payment_quotes`) one is created and the payment retried with it.
++Before the first payout the payout method is read back and must pay exactly
++`TREASURY_WALLET_ADDRESS` on Base. When the payment is `posted`, the USDC
++`Transfer` to the wallet is found on-chain (Stripe's trace id when it is a
++tx hash, otherwise by size within 90–102 % of the amount, oldest unclaimed
++first) and recorded with its hash.
++
++**swap** per flow, `min ≤ amount ≤ max`: quote every Uniswap V3 path with
++liquidity (direct and via WETH, all fee tiers) and take the best; with no
++V3 pool, OpenOcean. `amountOutMinimum` = quote × (1 − slippage). The USDC
++approval is for the exact amount. The transaction hash is saved **before**
++the receipt is awaited; the $MGRO received is read from the receipt's
++Transfer logs, so a crash between the two can never swap twice.
++
++**settle** the lock. `dead` transfers to `0x…dEaD` (needs nothing, always
++permanent). `retire` calls `MangroveRetirement.retire(safe, amount,
++treegens://donation/<flow>, keccak(donation:<flow>))` after checking that
++`retirement.mgro()` is the canonical token and the wallet holds
++`RETIRER_ROLE`. `burn` calls ERC20Burnable `burn()` after a `staticCall`
++probe. `forward` is a plain transfer to the Safe (not a lock). Same two-phase
++send/confirm as the swap.
+ 
+ ## Safety model
+ 
+-- `TREASURY_PIPELINE_MODE` defaults to `dry_run`: every stage records the
+-  exact request it would send under `DonationFlow.<stage>.dryRun` and moves
+-  nothing. Only the literal `live` moves money, and only for stages whose keys
+-  are present.
+-- `TREASURY_REQUIRE_APPROVAL=true` parks each new donation as `held` until an
+-  admin releases it (`POST /api/admin/treasury/flows/:id/release`, bearer
+-  `ADMIN_API_TOKEN`).
+-- Per-run caps (`TREASURY_MAX_SWEEP_USD`, `TREASURY_MAX_ONRAMP_USD`,
+-  `TREASURY_MAX_SWAP_USDC`), per-stage idempotency keys, bounded retries, and
+-  a Mongo lease so one process runs the pipeline.
+-- The hot wallet key must derive to `TREASURY_WALLET_ADDRESS`; otherwise the
+-  sender stands down (same rule as the server-mint keeper).
++- `dry_run` by default; `live` is the only value that moves money.
++- Caps: per Mercury payment, per Stripe payout, per swap, per tick. Over the
++  swap cap a flow is **held** (not split) until the cap is raised and it is
++  released.
++- Idempotency keys on every payment; `releases` counter makes a restarted
++  stage's key new, while a stage whose payment is merely unconfirmed keeps
++  its ids and is polled.
++- The hot wallet key must sign as `TREASURY_WALLET_ADDRESS`, else no
++  on-chain stage runs; the Stripe payout method must pay that same address.
++- The retired `0xe846…2283` deployment as MGRO is a fatal config error.
++- One process at a time (Mongo lease `treasury-pipeline`); `assertHeld()`
++  right before every payment and transaction.
+ - Nothing about a donor is stored in clear or published.
+ 
+-## What Jimi has to do before any of this can run
+-
+-1. Mercury: create an API token with read + send-money permission for the
+-   foundation account; note the account id. Create the Stripe financial
+-   account as a saved recipient (its ACH routing/account numbers come from the
+-   Stripe Dashboard → Balances → the financial account → "Add funds").
+-2. Stripe: confirm Money Management / stablecoin financial accounts are active
+-   (they are for the world site: `treasury-cron.js` already lists them), note
+-   `fa_…`; register the treasury hot wallet as a Base USDC crypto-wallet payout
+-   method and note `cwa_…`.
+-3. Create the treasury hot wallet (fresh key, a little ETH on Base for gas),
+-   and decide the destination (`TREASURY_FORWARD_TO`, default the Safe) and
+-   whether to retire (`TREASURY_RETIRE`).
+-4. Set the env vars on the Render service, run one cycle in `dry_run`, read
+-   the recorded requests, then flip to `live` with `TREASURY_REQUIRE_APPROVAL=true`
+-   for the first weeks.
+-
+-## Env vars (reserved names)
++## Runbook (what Jimi does once)
++
++1. **Mercury.** Settings → API tokens: a token with *read* and *send money*
++   permission for the foundation account. Note the account id
++   (`GET /api/admin/treasury/mercury` lists them once the token is set).
++2. **Stripe.** `GET /api/admin/treasury/stripe` lists the financial accounts
++   (`fa_…`), their bank details (`financialAddresses` → routing + account
++   number) and the payout methods. In the Stripe Dashboard register the
++   treasury wallet as a **Base USDC crypto-wallet payout method**; note its
++   `cwa_…` id. If the financial account has no US bank address yet, create
++   one in the Dashboard (Balances → the account → Add funds).
++3. **Mercury recipient.** Save the financial account's bank details as a
++   recipient (ACH, business checking). Note the recipient id
++   (`/api/admin/treasury/mercury` → `recipients`).
++4. **Treasury wallet.** A fresh key, ~0.005 ETH on Base for gas. Set
++   `TREASURY_WALLET_PRIVATE_KEY` **and** `TREASURY_WALLET_ADDRESS`.
++5. **Render env** (`.env.example` has the list). Leave
++   `TREASURY_PIPELINE_MODE=dry_run`. Let a tick run (or `POST
++   /api/admin/treasury/tick`), read `GET /api/admin/treasury/flows` and the
++   `dryRun` payload on each stage.
++6. Flip `TREASURY_PIPELINE_MODE=live`. Donations detected during the dry run
++   stay dry-run records (the ledger ignores them); release the ones that
++   should really be processed with `POST /flows/:id/release`, which moves
++   them into live mode from the start. For the first weeks consider
++   `TREASURY_REQUIRE_APPROVAL=true` and `MERCURY_SEND_MODE=request`.
++7. Optional: `TREASURY_LOCK_METHOD=retire` with a MangroveRetirement that
++   retires the canonical $MGRO (the 2026-07-23 deployment at `0x645A…` points
++   at the old token and is refused) after granting the wallet `RETIRER_ROLE`.
++
++## Console
++
++```
++GET  /api/admin/treasury/status            mode, problems, caps, balances, last tick
++GET  /api/admin/treasury/flows?status=&mode=&limit=
++GET  /api/admin/treasury/flows/:id
++POST /api/admin/treasury/flows/:id/release
++POST /api/admin/treasury/flows/:id/hold     { "reason": "…" }
++POST /api/admin/treasury/tick
++GET  /api/admin/treasury/stripe
++GET  /api/admin/treasury/mercury
++```
++
++All bearer `ADMIN_API_TOKEN`. A flow's `events` array is the audit trail:
++what each tick saw, sent, waited on or refused, newest last.
++
++## Env vars
+ 
+ ```
+ DISABLE_TREASURY_PIPELINE, TREASURY_PIPELINE_MODE (dry_run|live), TREASURY_POLL_MS,
+ TREASURY_REQUIRE_APPROVAL, TREASURY_LOOKBACK_DAYS, TREASURY_MIN_DONATION_USD,
+ TREASURY_DONATION_KINDS, TREASURY_SWEEP_RESERVE_PCT, TREASURY_MAX_SWEEP_USD,
++TREASURY_MAX_ONRAMP_USD, TREASURY_MAX_TICK_USD, TREASURY_MAX_SWAP_USDC,
++TREASURY_MIN_SWAP_USDC, TREASURY_SWAP_SLIPPAGE_PCT, TREASURY_SWAP_ROUTE,
++TREASURY_LOCK_METHOD, TREASURY_FORWARD_TO, TREASURY_RETIREMENT_ADDRESS,
++TREASURY_MAX_ATTEMPTS, TREASURY_ARRIVAL_WAIT_TICKS,
+ MERCURY_API_BASE, MERCURY_API_TOKEN, MERCURY_ACCOUNT_ID, MERCURY_STRIPE_RECIPIENT_ID,
+-STRIPE_TREASURY_SECRET_KEY, STRIPE_FINANCIAL_ACCOUNT_ID, STRIPE_CRYPTO_PAYOUT_METHOD_ID,
+-STRIPE_MONEY_MANAGEMENT_VERSION, TREASURY_ONRAMP_FROM_CURRENCY, TREASURY_MAX_ONRAMP_USD,
+-TREASURY_WALLET_PRIVATE_KEY, TREASURY_WALLET_ADDRESS, TREASURY_FORWARD_TO,
+-TREASURY_MAX_SWAP_USDC, TREASURY_MIN_SWAP_USDC, TREASURY_SWAP_SLIPPAGE_PCT,
+-TREASURY_KEEP_USDC, TREASURY_RETIRE, TREASURY_RETIREMENT_ADDRESS, OPENOCEAN_API_BASE
++MERCURY_SEND_MODE, STRIPE_TREASURY_SECRET_KEY (falls back to STRIPE_SECRET_KEY),
++STRIPE_FINANCIAL_ACCOUNT_ID, STRIPE_CRYPTO_PAYOUT_METHOD_ID, STRIPE_MONEY_MANAGEMENT_VERSION,
++TREASURY_WALLET_PRIVATE_KEY, TREASURY_WALLET_ADDRESS, TREASURY_RPC_URL (defaults to BASE_RPC_URL),
++TREASURY_MGRO_ADDRESS (defaults to MGRO_TOKEN_ADDRESS), TREASURY_USDC_ADDRESS, TREASURY_WETH_ADDRESS,
++TREASURY_UNISWAP_V3_FACTORY / _QUOTER / _ROUTER, OPENOCEAN_API_BASE
+ ```
++
++## Notes
++
++- **"It's an ETH pool."** Uniswap V3 routes USDC → WETH → MGRO in one
++  transaction; the quoter picks the fee tiers. If the pool was created as
++  Uniswap **V4** (the default for new pools in the Uniswap app), no V3 pool
++  will be found and the swap goes through OpenOcean, which routes V4 on Base.
++  `TREASURY_SWAP_ROUTE=openocean` forces that path; `uniswap_v3` forbids it.
++- **Mercury API payments** may need in-app approval depending on account
++  settings, and the direct endpoint is limited to allow-listed IPs on some
++  accounts. `MERCURY_SEND_MODE=request` uses the approval queue instead.
++  Mercury also rejects a second payment with the same recipient and amount
++  within 24 hours; the batch key makes retries idempotent rather than
++  duplicates.
++- **Stripe cross-currency** sends (USD balance → USDC payout) may require an
++  outbound payment quote; the client handles that automatically.
++- A flow whose Stripe payout is `posted` but whose USDC cannot be matched
++  on-chain after `TREASURY_ARRIVAL_WAIT_TICKS` is credited with the Stripe
++  amount; the swap still spends only what the wallet actually holds.
+diff --git a/package.json b/package.json
+index c32cf40..05eb3c9 100644
+--- a/package.json
++++ b/package.json
+@@ -16,7 +16,7 @@
+     "migrate": "node dist/scripts/migrate.js up",
+     "migrate:down": "node dist/scripts/migrate.js down",
+     "migrate:status": "node dist/scripts/migrate.js status",
+-    "test": "MONGODB_URI=mongodb://localhost:27017/treegens-test PINATA_JWT=test-pinata-jwt JWT_SECRET=test-jwt-secret-at-least-32-characters-long tsx --import ./src/testing/latchKnownOff.ts --test src/**/*.test.ts src/services/correctedClip/*.test.ts",
++    "test": "MONGODB_URI=mongodb://localhost:27017/treegens-test PINATA_JWT=test-pinata-jwt JWT_SECRET=test-jwt-secret-at-least-32-characters-long tsx --import ./src/testing/latchKnownOff.ts --test src/**/*.test.ts src/services/correctedClip/*.test.ts src/services/treasury/*.test.ts",
+     "start:worker": "RUN_REWARD_CLAIM_WORKER=true node dist/workers/rewardClaimWorker.js",
+     "start:slash-worker": "RUN_SLASH_WORKER=true node dist/workers/slashWorker.js"
+   },
+diff --git a/src/models/DonationFlow.ts b/src/models/DonationFlow.ts
+index b6196df..3a53da8 100644
+--- a/src/models/DonationFlow.ts
++++ b/src/models/DonationFlow.ts
+@@ -61,6 +61,8 @@ const donationFlowSchema = new mongoose.Schema(
+     amountCents: { type: Number, required: true, min: 1 },
+     currency: { type: String, default: 'usd' },
+     holdReason: { type: String, default: '' },
++    /** Times an admin restarted a stage; makes the next idempotency key new. */
++    releases: { type: Number, default: 0 },
+     mercury: {
+       txId: { type: String, required: true },
+       accountId: { type: String, required: true },
+@@ -76,6 +78,8 @@ const donationFlowSchema = new mongoose.Schema(
+         mercuryPaymentId: { type: String, default: '' },
+         amountCents: { type: Number, default: 0 },
+         idempotencyKey: { type: String, default: '' },
++        /** Flows swept in the same Mercury payment share a batch id. */
++        batchId: { type: String, default: '' },
+       },
+       { _id: false },
+     ),
+@@ -96,6 +100,8 @@ const donationFlowSchema = new mongoose.Schema(
+         ...stageBase,
+         usdcMicro: { type: String, default: '0' },
+         mgroWei: { type: String, default: '0' },
++        /** What the route quoted before the send; mgroWei is what arrived. */
++        quoteMgroWei: { type: String, default: '0' },
+         txHash: { type: String, default: '' },
+         route: { type: String, default: '' },
+         /** Flows swapped together in one transaction share a batch id. */
+@@ -109,6 +115,8 @@ const donationFlowSchema = new mongoose.Schema(
+         mgroWei: { type: String, default: '0' },
+         to: { type: String, default: '' },
+         txHash: { type: String, default: '' },
++        /** dead | retire | burn | forward (see TREASURY_LOCK_METHOD). */
++        method: { type: String, default: '' },
+         retired: { type: Boolean, default: false },
+         tokenId: { type: Number, required: false },
+         batchId: { type: String, default: '' },
+diff --git a/src/routes/adminTreasury.ts b/src/routes/adminTreasury.ts
+new file mode 100644
+index 0000000..ffbef54
+--- /dev/null
++++ b/src/routes/adminTreasury.ts
+@@ -0,0 +1,160 @@
++import express, { Request, Response } from 'express'
++import mongoose from 'mongoose'
++import adminAuth from '../middleware/adminAuth'
++import DonationFlow, { DONATION_FLOW_STATUSES } from '../models/DonationFlow'
++import type { TreasuryPipelineService } from '../services/treasury/treasuryPipelineService'
++import {
++  sendBadRequest,
++  sendError,
++  sendNotFound,
++  sendSuccess,
++} from '../utils/responseHelpers'
++
++/**
++ * Operator console for the donation pipeline (bearer ADMIN_API_TOKEN).
++ *
++ *   GET  /api/admin/treasury/status            mode, problems, caps, balances, last tick
++ *   GET  /api/admin/treasury/flows             newest flows (?status=&mode=&limit=)
++ *   GET  /api/admin/treasury/flows/:id         one flow with its full event trail
++ *   POST /api/admin/treasury/flows/:id/release let a held / failed / dry-run flow go
++ *   POST /api/admin/treasury/flows/:id/hold    park a moving flow ({ reason })
++ *   POST /api/admin/treasury/tick              run one pass now
++ *   GET  /api/admin/treasury/stripe            financial accounts, bank details, payout methods
++ *   GET  /api/admin/treasury/mercury           accounts and saved recipients
++ *
++ * Everything that moves money lives in the pipeline service; these routes
++ * only read, release or hold. Donor identity is never stored, so there is
++ * nothing here to leak beyond amounts and ids.
++ */
++let pipeline: TreasuryPipelineService | null = null
++
++/** Set by server.ts when the pipeline runs in this process. */
++export function attachTreasuryPipeline(
++  instance: TreasuryPipelineService | null,
++) {
++  pipeline = instance
++}
++
++const router = express.Router()
++
++router.use(adminAuth)
++
++const notStarted = (res: Response) =>
++  res.status(503).json({
++    error: 'Treasury pipeline is not running in this process',
++    code: 'TREASURY_NOT_STARTED',
++  })
++
++router.get('/status', async (_req: Request, res: Response) => {
++  if (!pipeline) return notStarted(res)
++  try {
++    return sendSuccess(res, 'Treasury status', await pipeline.status())
++  } catch (error: any) {
++    return sendError(res, 'Failed to read treasury status', 500, error)
++  }
++})
++
++router.get('/flows', async (req: Request, res: Response) => {
++  try {
++    const filter: Record<string, unknown> = {}
++    const status = String(req.query.status || '')
++    if (status) {
++      if (!(DONATION_FLOW_STATUSES as readonly string[]).includes(status))
++        return sendBadRequest(res, `Unknown status "${status}"`)
++      filter.status = status
++    }
++    const mode = String(req.query.mode || '')
++    if (mode) {
++      if (mode !== 'dry_run' && mode !== 'live')
++        return sendBadRequest(res, 'mode must be dry_run or live')
++      filter.mode = mode
++    }
++    const limit = Math.min(
++      200,
++      Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50),
++    )
++    const flows = await DonationFlow.find(filter)
++      .sort({ createdAt: -1 })
++      .limit(limit)
++      .lean()
++    return sendSuccess(res, 'Donation flows', { flows })
++  } catch (error: any) {
++    return sendError(res, 'Failed to list donation flows', 500, error)
++  }
++})
++
++router.get('/flows/:id', async (req: Request, res: Response) => {
++  if (!mongoose.isValidObjectId(req.params.id))
++    return sendBadRequest(res, 'Invalid flow id')
++  try {
++    const flow = await DonationFlow.findById(req.params.id).lean()
++    if (!flow) return sendNotFound(res, 'Donation flow')
++    return sendSuccess(res, 'Donation flow', { flow })
++  } catch (error: any) {
++    return sendError(res, 'Failed to load donation flow', 500, error)
++  }
++})
++
++router.post('/flows/:id/release', async (req: Request, res: Response) => {
++  if (!pipeline) return notStarted(res)
++  if (!mongoose.isValidObjectId(req.params.id))
++    return sendBadRequest(res, 'Invalid flow id')
++  try {
++    const flow = await pipeline.release(req.params.id)
++    if (!flow) return sendNotFound(res, 'Donation flow')
++    return sendSuccess(res, 'Donation flow released', {
++      flow: flow.toObject ? flow.toObject() : flow,
++    })
++  } catch (error: any) {
++    return sendError(res, 'Failed to release donation flow', 500, error)
++  }
++})
++
++router.post('/flows/:id/hold', async (req: Request, res: Response) => {
++  if (!pipeline) return notStarted(res)
++  if (!mongoose.isValidObjectId(req.params.id))
++    return sendBadRequest(res, 'Invalid flow id')
++  try {
++    const reason = String(req.body?.reason || '').slice(0, 200)
++    const flow = await pipeline.hold(req.params.id, reason)
++    if (!flow) return sendNotFound(res, 'Donation flow')
++    return sendSuccess(res, 'Donation flow held', {
++      flow: flow.toObject ? flow.toObject() : flow,
++    })
++  } catch (error: any) {
++    return sendError(res, 'Failed to hold donation flow', 500, error)
++  }
++})
++
++router.post('/tick', async (_req: Request, res: Response) => {
++  if (!pipeline) return notStarted(res)
++  try {
++    return sendSuccess(res, 'Treasury tick', await pipeline.tick())
++  } catch (error: any) {
++    return sendError(res, 'Treasury tick failed', 500, error)
++  }
++})
++
++router.get('/stripe', async (_req: Request, res: Response) => {
++  if (!pipeline) return notStarted(res)
++  try {
++    return sendSuccess(res, 'Stripe overview', await pipeline.stripeOverview())
++  } catch (error: any) {
++    return sendError(res, 'Failed to read Stripe', 500, error)
++  }
++})
++
++router.get('/mercury', async (_req: Request, res: Response) => {
++  if (!pipeline) return notStarted(res)
++  try {
++    return sendSuccess(
++      res,
++      'Mercury overview',
++      await pipeline.mercuryOverview(),
++    )
++  } catch (error: any) {
++    return sendError(res, 'Failed to read Mercury', 500, error)
++  }
++})
++
++export default router
+diff --git a/src/server.ts b/src/server.ts
+index 437f3cf..2b237d0 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -11,6 +11,9 @@ import { swaggerSpec, swaggerUi, swaggerUiOptions } from './config/swagger'
+ import errorHandler from './middleware/errorHandler'
+ import { globalApiLimiter } from './middleware/rateLimits'
+ import adminRoutes from './routes/admin'
++import adminTreasuryRoutes, {
++  attachTreasuryPipeline,
++} from './routes/adminTreasury'
+ import authRoutes from './routes/auth'
+ import distributionsRoutes from './routes/distributions'
+ import healthRoutes from './routes/health'
+@@ -40,6 +43,7 @@ import { startLatchReader } from './services/serverMintLatch'
+ import { startServerMintPreview } from './services/serverMintPreview'
+ import SubmissionService from './services/submissionService'
+ import TransparencyIndexerService from './services/transparencyIndexerService'
++import { TreasuryPipelineService } from './services/treasury/treasuryPipelineService'
+ import { startUploadSessionSweeper } from './services/uploadSessionService'
+ import { startV6Keeper } from './services/v6KeeperService'
+ import { startStitchRetrier } from './services/verifiedVideoStitchService'
+@@ -194,6 +198,8 @@ app.use('/api/otc', otcRoutes)
+ app.use('/api/distributions', distributionsRoutes)
+ app.use('/api/users', userRoutes)
+ app.use('/api/auth', authRoutes)
++// Donation pipeline console; mounted before /api/admin so its paths win.
++app.use('/api/admin/treasury', adminTreasuryRoutes)
+ app.use('/api/admin', adminRoutes)
+ // Public open ledger: read-only, cached, CORS * (see routes/transparency.ts).
+ app.use('/api/transparency', transparencyRoutes)
+@@ -327,6 +333,24 @@ if (process.env.DISABLE_LEDGER_INDEXER !== 'true') {
+   }
+ }
+ 
++// Donations → $MGRO, locked for good: Mercury credits are swept to the
++// Stripe financial account, paid out as USDC to the treasury wallet on Base,
++// swapped for canonical $MGRO and sent to the burn address. Dry run unless
++// TREASURY_PIPELINE_MODE=live; idle until the Mercury / Stripe / wallet
++// settings exist; one process at a time under a Mongo lease. The console at
++// /api/admin/treasury/* shows every flow and what it is waiting on.
++if (process.env.DISABLE_TREASURY_PIPELINE !== 'true') {
++  try {
++    const treasury = new TreasuryPipelineService()
++    treasury.start()
++    attachTreasuryPipeline(treasury)
++  } catch (error: any) {
++    console.error('[Treasury] Failed to start', {
++      message: error?.message || String(error),
++    })
++  }
++}
++
+ // Daily cron to refresh verifiers at 02:13 UTC. Every instance fires the
+ // timer; the lease lets exactly one of them do the work.
+ if (env.ENABLE_CRONJOBS === 'true') {
+diff --git a/src/services/transparencyService.ts b/src/services/transparencyService.ts
+index 2f70e60..69e3aa5 100644
+--- a/src/services/transparencyService.ts
++++ b/src/services/transparencyService.ts
+@@ -1089,7 +1089,7 @@ export class TransparencyService {
+     const stage =
+       f.status === 'settled'
+         ? f.settle?.retired
+-          ? 'retired as $MGRO'
++          ? '$MGRO bought and locked for good'
+           : '$MGRO delivered to the treasury Safe'
+         : f.status === 'bought'
+           ? '$MGRO bought on Base'
+diff --git a/src/services/treasury/lockService.ts b/src/services/treasury/lockService.ts
+new file mode 100644
+index 0000000..3648f16
+--- /dev/null
++++ b/src/services/treasury/lockService.ts
+@@ -0,0 +1,226 @@
++import { ethers } from 'ethers'
++import {
++  DEAD_ADDRESS,
++  isAddress,
++  LockMethod,
++  sameAddress,
++  why,
++} from './treasuryMath'
++
++const MGRO_ABI = [
++  'function transfer(address,uint256) returns (bool)',
++  'function approve(address,uint256) returns (bool)',
++  'function allowance(address,address) view returns (uint256)',
++  'function balanceOf(address) view returns (uint256)',
++  'function burn(uint256)',
++]
++const RETIREMENT_ABI = [
++  'function mgro() view returns (address)',
++  'function hasRole(bytes32,address) view returns (bool)',
++  'function retire(address,uint256,string,bytes32) returns (uint256)',
++  'event MangrovesRetired(uint256 indexed tokenId, address indexed beneficiary, uint256 mgroAmount, string metadataURI, bytes32 indexed sourceRef)',
++]
++export const RETIRER_ROLE = ethers.id('RETIRER_ROLE')
++
++export interface LockDeps {
++  provider: ethers.Provider
++  wallet: ethers.Wallet | null
++  mgro: string
++  method: LockMethod
++  /** Destination for `forward`. */
++  forwardTo: string
++  /** MangroveRetirement for `retire`. */
++  retirementAddress: string
++  /** Who the soulbound retirement proof is minted to (the Safe). */
++  beneficiary: string
++}
++
++export type LockConfirmation =
++  | { state: 'pending' }
++  | { state: 'reverted'; hash: string }
++  | { state: 'success'; hash: string; blockNumber: number; tokenId?: number }
++
++/**
++ * Takes the bought $MGRO out of circulation (see LockMethod). Like the swap,
++ * `send()` returns the hash at broadcast and `confirm()` reads the receipt,
++ * so a crash in between can never lock the same flow twice.
++ */
++export class LockService {
++  constructor(private readonly d: LockDeps) {}
++
++  get method(): LockMethod {
++    return this.d.method
++  }
++
++  /** Where the tokens go, for dry-run records and the status page. */
++  describe(): { method: LockMethod; to: string; retired: boolean } {
++    switch (this.d.method) {
++      case 'forward':
++        return { method: 'forward', to: this.d.forwardTo, retired: false }
++      case 'retire':
++        return {
++          method: 'retire',
++          to: this.d.retirementAddress,
++          retired: true,
++        }
++      case 'burn':
++        return { method: 'burn', to: ethers.ZeroAddress, retired: true }
++      default:
++        return { method: 'dead', to: DEAD_ADDRESS, retired: true }
++    }
++  }
++
++  /** Everything that must hold before a live lock is sent; empty when it may go. */
++  async preflight(): Promise<string[]> {
++    const problems: string[] = []
++    const wallet = this.d.wallet
++    if (!isAddress(this.d.mgro)) problems.push('MGRO address is invalid')
++    switch (this.d.method) {
++      case 'forward':
++        if (
++          !isAddress(this.d.forwardTo) ||
++          this.d.forwardTo === ethers.ZeroAddress
++        )
++          problems.push('TREASURY_FORWARD_TO is not a usable address')
++        else if (wallet && sameAddress(this.d.forwardTo, wallet.address))
++          problems.push('TREASURY_FORWARD_TO is the hot wallet itself')
++        break
++      case 'retire': {
++        if (!isAddress(this.d.retirementAddress)) {
++          problems.push('TREASURY_RETIREMENT_ADDRESS is not an address')
++          break
++        }
++        if (!isAddress(this.d.beneficiary))
++          problems.push('retirement beneficiary (the Safe) is not an address')
++        try {
++          const code = await this.d.provider.getCode(this.d.retirementAddress)
++          if (!code || code === '0x') {
++            problems.push('no contract at TREASURY_RETIREMENT_ADDRESS')
++            break
++          }
++          const retirement = new ethers.Contract(
++            this.d.retirementAddress,
++            RETIREMENT_ABI,
++            this.d.provider,
++          )
++          const token: string = await retirement.mgro()
++          if (!sameAddress(token, this.d.mgro)) {
++            problems.push(
++              `MangroveRetirement retires ${token}, not the canonical $MGRO; refusing`,
++            )
++          }
++          if (wallet) {
++            const ok: boolean = await retirement.hasRole(
++              RETIRER_ROLE,
++              wallet.address,
++            )
++            if (!ok)
++              problems.push(
++                `treasury wallet ${wallet.address} lacks RETIRER_ROLE on the retirement contract`,
++              )
++          }
++        } catch (error) {
++          problems.push(`retirement preflight failed: ${why(error)}`)
++        }
++        break
++      }
++      case 'burn':
++        if (wallet) {
++          try {
++            // burn(0) is a no-op on an ERC20Burnable token and reverts on one without burn().
++            await new ethers.Contract(
++              this.d.mgro,
++              MGRO_ABI,
++              wallet,
++            ).burn.staticCall(0n)
++          } catch (error) {
++            problems.push(
++              `$MGRO does not expose burn(): ${why(error)}; use TREASURY_LOCK_METHOD=dead`,
++            )
++          }
++        }
++        break
++      default:
++        break
++    }
++    return problems
++  }
++
++  /** Broadcast the lock transaction for `amountWei`; `ref` names the donation on-chain. */
++  async send(
++    amountWei: bigint,
++    ref: string,
++  ): Promise<{ hash: string; to: string; method: LockMethod }> {
++    const wallet = this.d.wallet
++    if (!wallet) throw new Error('lock: no treasury wallet')
++    if (amountWei <= 0n) throw new Error('lock: nothing to lock')
++    const mgro = new ethers.Contract(this.d.mgro, MGRO_ABI, wallet)
++    switch (this.d.method) {
++      case 'forward': {
++        const tx = await mgro.transfer(this.d.forwardTo, amountWei)
++        return { hash: tx.hash, to: this.d.forwardTo, method: 'forward' }
++      }
++      case 'burn': {
++        const tx = await mgro.burn(amountWei)
++        return { hash: tx.hash, to: ethers.ZeroAddress, method: 'burn' }
++      }
++      case 'retire': {
++        const allowance: bigint = await mgro.allowance(
++          wallet.address,
++          this.d.retirementAddress,
++        )
++        if (allowance < amountWei) {
++          const approval = await mgro.approve(
++            this.d.retirementAddress,
++            amountWei,
++          )
++          const receipt = await approval.wait()
++          if (!receipt || receipt.status !== 1)
++            throw new Error(`$MGRO approve failed (${approval.hash})`)
++        }
++        const retirement = new ethers.Contract(
++          this.d.retirementAddress,
++          RETIREMENT_ABI,
++          wallet,
++        )
++        const tx = await retirement.retire(
++          this.d.beneficiary,
++          amountWei,
++          `treegens://donation/${ref}`,
++          ethers.id(`donation:${ref}`),
++        )
++        return { hash: tx.hash, to: this.d.retirementAddress, method: 'retire' }
++      }
++      default: {
++        const tx = await mgro.transfer(DEAD_ADDRESS, amountWei)
++        return { hash: tx.hash, to: DEAD_ADDRESS, method: 'dead' }
++      }
++    }
++  }
++
++  async confirm(hash: string): Promise<LockConfirmation> {
++    const receipt = await this.d.provider.getTransactionReceipt(hash)
++    if (!receipt) return { state: 'pending' }
++    if (receipt.status !== 1) return { state: 'reverted', hash }
++    let tokenId: number | undefined
++    if (this.d.method === 'retire') {
++      const iface = new ethers.Interface(RETIREMENT_ABI)
++      for (const log of receipt.logs) {
++        if (!sameAddress(log.address, this.d.retirementAddress)) continue
++        try {
++          const parsed = iface.parseLog({
++            topics: [...log.topics],
++            data: log.data,
++          })
++          if (parsed?.name === 'MangrovesRetired') {
++            tokenId = Number(parsed.args.tokenId)
++            break
++          }
++        } catch {
++          // another event of the contract
++        }
++      }
++    }
++    return { state: 'success', hash, blockNumber: receipt.blockNumber, tokenId }
++  }
++}
+diff --git a/src/services/treasury/mercuryClient.test.ts b/src/services/treasury/mercuryClient.test.ts
+new file mode 100644
+index 0000000..1459f35
+--- /dev/null
++++ b/src/services/treasury/mercuryClient.test.ts
+@@ -0,0 +1,148 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import { MercuryApiError, MercuryClient } from './mercuryClient'
++
++type Call = { url: string; init?: RequestInit }
++
++function fakeFetch(
++  handler: (
++    url: string,
++    init?: RequestInit,
++  ) => { status?: number; body?: unknown },
++) {
++  const calls: Call[] = []
++  const fetchImpl = async (url: string, init?: RequestInit) => {
++    calls.push({ url, init })
++    const r = handler(url, init)
++    return new Response(JSON.stringify(r.body ?? {}), {
++      status: r.status ?? 200,
++      headers: { 'content-type': 'application/json' },
++    })
++  }
++  return { calls, fetchImpl }
++}
++
++const headerOf = (init: RequestInit | undefined, name: string) =>
++  (init?.headers as Record<string, string>)[name]
++
++test('listTransactions builds the query and sends the bearer token', async () => {
++  const { calls, fetchImpl } = fakeFetch(() => ({
++    body: { total: 1, transactions: [{ id: 't1', amount: 5, status: 'sent' }] },
++  }))
++  const client = new MercuryClient({
++    apiBase: 'https://api.mercury.com/api/v1/',
++    token: 'secret-token',
++    fetchImpl,
++  })
++  assert.equal(client.configured, true)
++  const r = await client.listTransactions('acct_1', {
++    start: '2026-09-18',
++    status: 'sent',
++    limit: 9999,
++  })
++  assert.equal(r.transactions[0].id, 't1')
++  assert.equal(calls.length, 1)
++  const url = new URL(calls[0].url)
++  assert.equal(url.pathname, '/api/v1/account/acct_1/transactions')
++  assert.equal(url.searchParams.get('limit'), '500')
++  assert.equal(url.searchParams.get('offset'), '0')
++  assert.equal(url.searchParams.get('start'), '2026-09-18')
++  assert.equal(url.searchParams.get('status'), 'sent')
++  assert.equal(headerOf(calls[0].init, 'Authorization'), 'Bearer secret-token')
++  assert.equal(calls[0].init?.method, 'GET')
++})
++
++test('listAllTransactions pages until a short page', async () => {
++  const page = (n: number, from: number) =>
++    Array.from({ length: n }, (_, i) => ({
++      id: `t${from + i}`,
++      amount: 1,
++      status: 'sent',
++    }))
++  const { calls, fetchImpl } = fakeFetch(url => {
++    const offset = Number(new URL(url).searchParams.get('offset'))
++    return {
++      body: {
++        total: 502,
++        transactions: offset === 0 ? page(500, 0) : page(2, 500),
++      },
++    }
++  })
++  const client = new MercuryClient({
++    apiBase: 'https://api.mercury.com/api/v1',
++    token: 't',
++    fetchImpl,
++  })
++  const rows = await client.listAllTransactions('acct_1', { status: 'sent' })
++  assert.equal(rows.length, 502)
++  assert.equal(calls.length, 2)
++  assert.equal(new URL(calls[1].url).searchParams.get('offset'), '500')
++})
++
++test('sendMoney posts an ACH to the recipient with the idempotency key, direct or for approval', async () => {
++  const { calls, fetchImpl } = fakeFetch(() => ({
++    body: { id: 'pay_1', status: 'pending', amount: -250 },
++  }))
++  const client = new MercuryClient({
++    apiBase: 'https://api.mercury.com/api/v1',
++    token: 't',
++    fetchImpl,
++  })
++  const tx = await client.sendMoney('acct_1', {
++    recipientId: 'recp_stripe',
++    amount: 250,
++    idempotencyKey: 'tg-sweep-abc',
++    note: 'Treegens donations',
++  })
++  assert.equal(tx.id, 'pay_1')
++  assert.equal(
++    new URL(calls[0].url).pathname,
++    '/api/v1/account/acct_1/transactions',
++  )
++  assert.equal(calls[0].init?.method, 'POST')
++  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
++    paymentMethod: 'ach',
++    recipientId: 'recp_stripe',
++    amount: 250,
++    idempotencyKey: 'tg-sweep-abc',
++    note: 'Treegens donations',
++  })
++  assert.equal(headerOf(calls[0].init, 'Content-Type'), 'application/json')
++
++  await client.sendMoney(
++    'acct_1',
++    { recipientId: 'r', amount: 1, idempotencyKey: 'k' },
++    'request',
++  )
++  assert.equal(
++    new URL(calls[1].url).pathname,
++    '/api/v1/account/acct_1/request-send-money',
++  )
++})
++
++test('errors carry the status and Mercury message, never the token', async () => {
++  const { fetchImpl } = fakeFetch(() => ({
++    status: 400,
++    body: { errors: { message: 'Duplicate payment within 24 hours' } },
++  }))
++  const client = new MercuryClient({
++    apiBase: 'https://api.mercury.com/api/v1',
++    token: 'super-secret',
++    fetchImpl,
++  })
++  await assert.rejects(
++    client.getTransaction('acct_1', 'pay_1'),
++    (error: unknown) => {
++      assert.ok(error instanceof MercuryApiError)
++      assert.equal(error.status, 400)
++      assert.match(error.message, /Duplicate payment within 24 hours/)
++      assert.doesNotMatch(error.message, /super-secret/)
++      return true
++    },
++  )
++})
++
++test('an unconfigured client says so', () => {
++  const client = new MercuryClient({ apiBase: 'https://x', token: '' })
++  assert.equal(client.configured, false)
++})
+diff --git a/src/services/treasury/mercuryClient.ts b/src/services/treasury/mercuryClient.ts
+new file mode 100644
+index 0000000..0be8062
+--- /dev/null
++++ b/src/services/treasury/mercuryClient.ts
+@@ -0,0 +1,186 @@
++import type { MercurySendMode } from './treasuryMath'
++
++/** Injected in tests; defaults to the global fetch (Node ≥ 18). */
++export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
++
++export interface MercuryTransaction {
++  id: string
++  /** Dollars; positive for credits, negative for debits. */
++  amount: number
++  status: 'pending' | 'sent' | 'cancelled' | 'failed' | string
++  kind?: string
++  counterpartyId?: string | null
++  counterpartyName?: string | null
++  createdAt?: string
++  postedAt?: string | null
++  estimatedDeliveryDate?: string | null
++  failedAt?: string | null
++  reasonForFailure?: string | null
++  note?: string | null
++  externalMemo?: string | null
++  bankDescription?: string | null
++  dashboardLink?: string
++}
++
++export interface MercurySendMoneyInput {
++  recipientId: string
++  /** Dollars with at most two decimals. */
++  amount: number
++  paymentMethod?: 'ach'
++  idempotencyKey: string
++  note?: string
++  externalMemo?: string
++}
++
++export class MercuryApiError extends Error {
++  constructor(
++    readonly status: number,
++    message: string,
++    readonly body?: unknown,
++  ) {
++    super(message)
++  }
++}
++
++const encode = (s: string) => encodeURIComponent(String(s))
++
++/**
++ * Mercury (mercury.com) REST API, the parts the pipeline needs:
++ * read an account's transactions, read one back, list recipients, and send
++ * an ACH payment to a saved recipient.
++ *
++ * The token never appears in an error message or a log line.
++ */
++export class MercuryClient {
++  private readonly fetchImpl: FetchLike
++
++  constructor(
++    private readonly opts: {
++      apiBase: string
++      token: string
++      fetchImpl?: FetchLike
++      timeoutMs?: number
++    },
++  ) {
++    this.fetchImpl = opts.fetchImpl || ((input, init) => fetch(input, init))
++  }
++
++  get configured(): boolean {
++    return Boolean(this.opts.token && this.opts.apiBase)
++  }
++
++  listAccounts(): Promise<{ accounts: any[] }> {
++    return this.request('GET', '/accounts')
++  }
++
++  listRecipients(): Promise<{ recipients: any[] }> {
++    return this.request('GET', '/recipients')
++  }
++
++  listTransactions(
++    accountId: string,
++    q: {
++      start?: string
++      end?: string
++      status?: string
++      limit?: number
++      offset?: number
++    } = {},
++  ): Promise<{ total: number; transactions: MercuryTransaction[] }> {
++    const params = new URLSearchParams()
++    params.set('limit', String(Math.min(500, Math.max(1, q.limit ?? 500))))
++    params.set('offset', String(Math.max(0, q.offset ?? 0)))
++    if (q.start) params.set('start', q.start)
++    if (q.end) params.set('end', q.end)
++    if (q.status) params.set('status', q.status)
++    return this.request(
++      'GET',
++      `/account/${encode(accountId)}/transactions?${params.toString()}`,
++    )
++  }
++
++  /** Every page, oldest page first as Mercury returns them; bounded by `maxPages`. */
++  async listAllTransactions(
++    accountId: string,
++    q: { start?: string; end?: string; status?: string } = {},
++    maxPages = 20,
++  ): Promise<MercuryTransaction[]> {
++    const out: MercuryTransaction[] = []
++    const limit = 500
++    let offset = 0
++    for (let page = 0; page < maxPages; page++) {
++      const r = await this.listTransactions(accountId, { ...q, limit, offset })
++      const rows = r?.transactions || []
++      out.push(...rows)
++      if (rows.length < limit) break
++      offset += rows.length
++    }
++    return out
++  }
++
++  getTransaction(accountId: string, txId: string): Promise<MercuryTransaction> {
++    return this.request(
++      'GET',
++      `/account/${encode(accountId)}/transaction/${encode(txId)}`,
++    )
++  }
++
++  /**
++   * Send USD to a saved recipient.
++   *   direct   POST /account/{id}/transactions (needs a token allowed to
++   *            send money; Mercury may still require in-app approval)
++   *   request  POST /account/{id}/request-send-money (queues it for approval
++   *            in the Mercury dashboard)
++   */
++  sendMoney(
++    accountId: string,
++    input: MercurySendMoneyInput,
++    mode: MercurySendMode = 'direct',
++  ): Promise<MercuryTransaction> {
++    const path =
++      mode === 'request'
++        ? `/account/${encode(accountId)}/request-send-money`
++        : `/account/${encode(accountId)}/transactions`
++    return this.request('POST', path, { paymentMethod: 'ach', ...input })
++  }
++
++  private async request<T = any>(
++    method: 'GET' | 'POST',
++    path: string,
++    body?: unknown,
++  ): Promise<T> {
++    const url = this.opts.apiBase.replace(/\/+$/, '') + path
++    const headers: Record<string, string> = {
++      Authorization: `Bearer ${this.opts.token}`,
++      Accept: 'application/json',
++    }
++    if (body !== undefined) headers['Content-Type'] = 'application/json'
++    const res = await this.fetchImpl(url, {
++      method,
++      headers,
++      body: body === undefined ? undefined : JSON.stringify(body),
++      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000),
++    })
++    const text = await res.text()
++    let json: any = null
++    try {
++      json = text ? JSON.parse(text) : null
++    } catch {
++      json = null
++    }
++    if (!res.ok) {
++      const detail =
++        json?.errors?.message ||
++        json?.message ||
++        json?.error ||
++        text.slice(0, 200) ||
++        `HTTP ${res.status}`
++      throw new MercuryApiError(
++        res.status,
++        `Mercury ${method} ${path.split('?')[0]} → ${res.status}: ${detail}`,
++        json ?? text,
++      )
++    }
++    return json as T
++  }
++}
+diff --git a/src/services/treasury/stripeMoneyClient.test.ts b/src/services/treasury/stripeMoneyClient.test.ts
+new file mode 100644
+index 0000000..b3c9c64
+--- /dev/null
++++ b/src/services/treasury/stripeMoneyClient.test.ts
+@@ -0,0 +1,159 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import { StripeApiError, StripeMoneyClient } from './stripeMoneyClient'
++
++type Call = { url: string; init?: RequestInit }
++
++function fakeFetch(
++  handler: (
++    url: string,
++    init: RequestInit | undefined,
++    n: number,
++  ) => { status?: number; body?: unknown },
++) {
++  const calls: Call[] = []
++  const fetchImpl = async (url: string, init?: RequestInit) => {
++    calls.push({ url, init })
++    const r = handler(url, init, calls.length)
++    return new Response(JSON.stringify(r.body ?? {}), {
++      status: r.status ?? 200,
++      headers: { 'content-type': 'application/json' },
++    })
++  }
++  return { calls, fetchImpl }
++}
++
++const headerOf = (init: RequestInit | undefined, name: string) =>
++  (init?.headers as Record<string, string>)[name]
++
++const input = {
++  financialAccount: 'fa_1',
++  fromCurrency: 'usd',
++  payoutMethod: 'cwa_1',
++  toCurrency: 'usdc',
++  amountMinor: 25_000,
++  amountCurrency: 'usd',
++  description: 'Treegens donation x',
++  idempotencyKey: 'tg-donation-x-onramp',
++}
++
++test('requests carry basic auth, the preview version and the idempotency key', async () => {
++  const { calls, fetchImpl } = fakeFetch(() => ({
++    body: { id: 'obp_1', status: 'processing' },
++  }))
++  const client = new StripeMoneyClient({ secretKey: 'sk_test_abc', fetchImpl })
++  const op = await client.createOutboundPayment(input)
++  assert.equal(op.id, 'obp_1')
++  assert.equal(calls.length, 1)
++  assert.equal(
++    calls[0].url,
++    'https://api.stripe.com/v2/money_management/outbound_payments',
++  )
++  assert.equal(
++    headerOf(calls[0].init, 'Authorization'),
++    'Basic ' + Buffer.from('sk_test_abc:').toString('base64'),
++  )
++  assert.equal(headerOf(calls[0].init, 'Stripe-Version'), '2025-11-17.preview')
++  assert.equal(
++    headerOf(calls[0].init, 'Idempotency-Key'),
++    'tg-donation-x-onramp',
++  )
++  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
++    from: { financial_account: 'fa_1', currency: 'usd' },
++    to: { payout_method: 'cwa_1', currency: 'usdc' },
++    amount: { value: 25_000, currency: 'usd' },
++    description: 'Treegens donation x',
++  })
++})
++
++test('a cross-currency send that needs a quote gets one and is retried with it', async () => {
++  const { calls, fetchImpl } = fakeFetch((url, _init, n) => {
++    if (n === 1)
++      return {
++        status: 400,
++        body: {
++          error: {
++            type: 'invalid_request_error',
++            code: 'outbound_payment_quote_required',
++            message:
++              'An OutboundPaymentQuote is required for this currency pair',
++          },
++        },
++      }
++    if (url.endsWith('/outbound_payment_quotes'))
++      return { body: { id: 'opq_9', to_amount: { value: 24_900 } } }
++    return { body: { id: 'obp_2', status: 'processing' } }
++  })
++  const client = new StripeMoneyClient({ secretKey: 'sk', fetchImpl })
++  const op = await client.createOutboundPayment(input)
++  assert.equal(op.id, 'obp_2')
++  assert.equal(calls.length, 3)
++  assert.match(calls[1].url, /outbound_payment_quotes$/)
++  assert.equal(
++    headerOf(calls[1].init, 'Idempotency-Key'),
++    'tg-donation-x-onramp-quote',
++  )
++  const retry = JSON.parse(String(calls[2].init?.body))
++  assert.equal(retry.outbound_payment_quote, 'opq_9')
++  assert.equal(
++    headerOf(calls[2].init, 'Idempotency-Key'),
++    'tg-donation-x-onramp-q',
++  )
++})
++
++test('other errors surface as StripeApiError with code and status', async () => {
++  const { fetchImpl } = fakeFetch(() => ({
++    status: 402,
++    body: {
++      error: { code: 'insufficient_funds', message: 'Not enough USD' },
++    },
++  }))
++  const client = new StripeMoneyClient({ secretKey: 'sk', fetchImpl })
++  await assert.rejects(
++    client.createOutboundPayment(input),
++    (error: unknown) => {
++      assert.ok(error instanceof StripeApiError)
++      assert.equal(error.status, 402)
++      assert.equal(error.code, 'insufficient_funds')
++      assert.match(error.message, /Not enough USD/)
++      return true
++    },
++  )
++})
++
++test('balances and payout-method wallets are read from whichever shape the API uses', () => {
++  const fa = {
++    balance: { available: { usd: { value: 12_345, currency: 'usd' } } },
++  }
++  assert.equal(StripeMoneyClient.availableMinor(fa, 'usd'), 12_345)
++  assert.equal(StripeMoneyClient.availableMinor(fa, 'usdc'), 0)
++  assert.equal(StripeMoneyClient.availableMinor(null, 'usd'), 0)
++  assert.deepEqual(
++    StripeMoneyClient.cryptoWalletOf({
++      crypto_wallet: { address: '0xabc', network: 'Base' },
++    }),
++    { address: '0xabc', network: 'base' },
++  )
++  assert.deepEqual(
++    StripeMoneyClient.cryptoWalletOf({
++      usd_crypto_wallet: { address: '0xdef' },
++    }),
++    { address: '0xdef', network: 'base' },
++  )
++  assert.equal(StripeMoneyClient.cryptoWalletOf({ bank_account: {} }), null)
++})
++
++test('financial addresses ask for the account and routing numbers of the configured account', async () => {
++  const { calls, fetchImpl } = fakeFetch(() => ({ body: { data: [] } }))
++  const client = new StripeMoneyClient({ secretKey: 'sk', fetchImpl })
++  await client.listFinancialAddresses('fa_1')
++  const url = new URL(calls[0].url)
++  assert.equal(url.pathname, '/v2/money_management/financial_addresses')
++  assert.equal(url.searchParams.get('financial_account'), 'fa_1')
++  assert.deepEqual(url.searchParams.getAll('include'), [
++    'credentials.us_bank_account.account_number',
++    'credentials.us_bank_account.routing_number',
++  ])
++  assert.equal(calls[0].init?.method, 'GET')
++  assert.equal(headerOf(calls[0].init, 'Idempotency-Key'), undefined)
++})
+diff --git a/src/services/treasury/stripeMoneyClient.ts b/src/services/treasury/stripeMoneyClient.ts
+new file mode 100644
+index 0000000..0c5689e
+--- /dev/null
++++ b/src/services/treasury/stripeMoneyClient.ts
+@@ -0,0 +1,221 @@
++import type { FetchLike } from './mercuryClient'
++
++export const STRIPE_API_BASE = 'https://api.stripe.com'
++/** The preview version world.treegens.app's treasury cron already runs on. */
++export const STRIPE_MONEY_MANAGEMENT_VERSION = '2025-11-17.preview'
++
++export class StripeApiError extends Error {
++  constructor(
++    readonly status: number,
++    message: string,
++    readonly code: string,
++    readonly body?: unknown,
++  ) {
++    super(message)
++  }
++}
++
++export interface OutboundPaymentInput {
++  financialAccount: string
++  /** Balance currency the money leaves in, e.g. 'usd'. */
++  fromCurrency: string
++  /** A crypto-wallet payout method (`cwa_…`) registered in the Stripe Dashboard. */
++  payoutMethod: string
++  /** What the recipient receives, e.g. 'usdc'. */
++  toCurrency: string
++  /** Minor units of `amountCurrency` (cents). */
++  amountMinor: number
++  amountCurrency: string
++  description: string
++  idempotencyKey: string
++  /** Set when Stripe asked for a quote first (cross-currency sends). */
++  quoteId?: string
++}
++
++/**
++ * Stripe Money Management (v2): the USD financial account and outbound
++ * payments to a crypto-wallet payout method, which is how USD becomes USDC
++ * on Base. Same calls and API version as world.treegens.app's treasury cron.
++ */
++export class StripeMoneyClient {
++  private readonly fetchImpl: FetchLike
++  private readonly apiBase: string
++  private readonly apiVersion: string
++
++  constructor(
++    private readonly opts: {
++      secretKey: string
++      apiVersion?: string
++      apiBase?: string
++      fetchImpl?: FetchLike
++      timeoutMs?: number
++    },
++  ) {
++    this.fetchImpl = opts.fetchImpl || ((input, init) => fetch(input, init))
++    this.apiBase = (opts.apiBase || STRIPE_API_BASE).replace(/\/+$/, '')
++    this.apiVersion = opts.apiVersion || STRIPE_MONEY_MANAGEMENT_VERSION
++  }
++
++  get configured(): boolean {
++    return Boolean(this.opts.secretKey)
++  }
++
++  getFinancialAccount(id: string): Promise<any> {
++    return this.request(
++      'GET',
++      `/v2/money_management/financial_accounts/${encodeURIComponent(id)}`,
++    )
++  }
++
++  listFinancialAccounts(): Promise<{ data: any[] }> {
++    return this.request('GET', '/v2/money_management/financial_accounts')
++  }
++
++  /** The bank details (routing + account number) a Mercury recipient is saved from. */
++  listFinancialAddresses(financialAccount: string): Promise<{ data: any[] }> {
++    const params = new URLSearchParams()
++    params.set('financial_account', financialAccount)
++    params.append('include', 'credentials.us_bank_account.account_number')
++    params.append('include', 'credentials.us_bank_account.routing_number')
++    return this.request(
++      'GET',
++      `/v2/money_management/financial_addresses?${params.toString()}`,
++    )
++  }
++
++  listPayoutMethods(): Promise<{ data: any[] }> {
++    return this.request('GET', '/v2/money_management/payout_methods')
++  }
++
++  getPayoutMethod(id: string): Promise<any> {
++    return this.request(
++      'GET',
++      `/v2/money_management/payout_methods/${encodeURIComponent(id)}`,
++    )
++  }
++
++  createOutboundPaymentQuote(input: OutboundPaymentInput): Promise<any> {
++    return this.request(
++      'POST',
++      '/v2/money_management/outbound_payment_quotes',
++      StripeMoneyClient.paymentBody(input),
++      `${input.idempotencyKey}-quote`,
++    )
++  }
++
++  /**
++   * USD out of the financial account, USDC into the treasury wallet.
++   * If Stripe answers that a cross-currency send needs a quote, one is
++   * created and the payment is retried with it (a new idempotency key: the
++   * body changed).
++   */
++  async createOutboundPayment(input: OutboundPaymentInput): Promise<any> {
++    try {
++      return await this.request(
++        'POST',
++        '/v2/money_management/outbound_payments',
++        StripeMoneyClient.paymentBody(input),
++        input.idempotencyKey,
++      )
++    } catch (error) {
++      if (
++        error instanceof StripeApiError &&
++        !input.quoteId &&
++        /quote/i.test(`${error.code} ${error.message}`)
++      ) {
++        const quote = await this.createOutboundPaymentQuote(input)
++        if (!quote?.id) throw error
++        return this.createOutboundPayment({
++          ...input,
++          quoteId: quote.id,
++          idempotencyKey: `${input.idempotencyKey}-q`,
++        })
++      }
++      throw error
++    }
++  }
++
++  getOutboundPayment(id: string): Promise<any> {
++    return this.request(
++      'GET',
++      `/v2/money_management/outbound_payments/${encodeURIComponent(id)}`,
++    )
++  }
++
++  static paymentBody(input: OutboundPaymentInput) {
++    return {
++      from: {
++        financial_account: input.financialAccount,
++        currency: input.fromCurrency,
++      },
++      to: { payout_method: input.payoutMethod, currency: input.toCurrency },
++      amount: { value: input.amountMinor, currency: input.amountCurrency },
++      description: input.description,
++      ...(input.quoteId ? { outbound_payment_quote: input.quoteId } : {}),
++    }
++  }
++
++  /** Available balance of a financial account in minor units of `currency`. */
++  static availableMinor(financialAccount: any, currency: string): number {
++    const v = financialAccount?.balance?.available?.[currency]?.value
++    const n = Number(v ?? 0)
++    return Number.isFinite(n) ? n : 0
++  }
++
++  /** The wallet a crypto payout method pays, whichever field the API version uses. */
++  static cryptoWalletOf(
++    payoutMethod: any,
++  ): { address: string; network: string } | null {
++    const w =
++      payoutMethod?.crypto_wallet ||
++      payoutMethod?.usd_crypto_wallet ||
++      payoutMethod?.usdc_crypto_wallet ||
++      null
++    if (!w?.address) return null
++    return {
++      address: String(w.address),
++      network: String(w.network || 'base').toLowerCase(),
++    }
++  }
++
++  private async request<T = any>(
++    method: 'GET' | 'POST',
++    path: string,
++    body?: unknown,
++    idempotencyKey?: string,
++  ): Promise<T> {
++    const headers: Record<string, string> = {
++      Authorization:
++        'Basic ' + Buffer.from(`${this.opts.secretKey}:`).toString('base64'),
++      'Stripe-Version': this.apiVersion,
++      Accept: 'application/json',
++    }
++    if (body !== undefined) headers['Content-Type'] = 'application/json'
++    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
++    const res = await this.fetchImpl(this.apiBase + path, {
++      method,
++      headers,
++      body: body === undefined ? undefined : JSON.stringify(body),
++      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000),
++    })
++    const text = await res.text()
++    let json: any = null
++    try {
++      json = text ? JSON.parse(text) : null
++    } catch {
++      json = null
++    }
++    if (!res.ok) {
++      const err = json?.error || {}
++      const code = String(err.code || err.type || '')
++      const detail = err.message || text.slice(0, 200) || `HTTP ${res.status}`
++      throw new StripeApiError(
++        res.status,
++        `Stripe ${method} ${path.split('?')[0]} → ${res.status}: ${detail}`,
++        code,
++        json ?? text,
++      )
++    }
++    return json as T
++  }
++}
+diff --git a/src/services/treasury/swapService.ts b/src/services/treasury/swapService.ts
+new file mode 100644
+index 0000000..ce987d7
+--- /dev/null
++++ b/src/services/treasury/swapService.ts
+@@ -0,0 +1,317 @@
++import { ethers } from 'ethers'
++import type { FetchLike } from './mercuryClient'
++import {
++  applySlippage,
++  describePath,
++  encodeV3Path,
++  sameAddress,
++  SwapRoute,
++  why,
++} from './treasuryMath'
++
++/** Uniswap V3 on Base mainnet (developers.uniswap.org → Base deployments). */
++export const BASE_UNISWAP_V3 = {
++  factory: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
++  quoterV2: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
++  swapRouter02: '0x2626664c2603336E57B271c5C0b26F421741e481',
++}
++export const BASE_WETH = '0x4200000000000000000000000000000000000006'
++export const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
++/** Keyless aggregator world.treegens.app already buys through; routes Uniswap V2/V3/V4 and Aerodrome. */
++export const OPENOCEAN_BASE = 'https://open-api.openocean.finance/v4/base'
++
++const V3_FEE_TIERS = [100, 500, 3000, 10000]
++const PATH_CACHE_MS = 10 * 60_000
++const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)')
++
++const ERC20_ABI = [
++  'function balanceOf(address) view returns (uint256)',
++  'function allowance(address,address) view returns (uint256)',
++  'function approve(address,uint256) returns (bool)',
++]
++const FACTORY_ABI = [
++  'function getPool(address,address,uint24) view returns (address)',
++]
++const POOL_ABI = ['function liquidity() view returns (uint128)']
++const QUOTER_ABI = [
++  'function quoteExactInput(bytes path, uint256 amountIn) returns (uint256 amountOut, uint160[] sqrtPriceX96AfterList, uint32[] initializedTicksCrossedList, uint256 gasEstimate)',
++]
++const ROUTER_ABI = [
++  'function exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum)) payable returns (uint256 amountOut)',
++]
++
++export interface SwapQuote {
++  kind: 'uniswap_v3' | 'openocean'
++  /** Human-readable route, stored on the flow: `uniswap_v3:USDC-500-WETH-10000-MGRO`. */
++  route: string
++  amountIn: bigint
++  amountOut: bigint
++  minOut: bigint
++  path?: string
++}
++
++export type SwapConfirmation =
++  | { state: 'pending' }
++  | { state: 'reverted'; hash: string }
++  | { state: 'success'; hash: string; amountOut: bigint; blockNumber: number }
++
++export interface SwapServiceDeps {
++  provider: ethers.Provider
++  /** Null for quote-only use (dry runs, status). */
++  wallet: ethers.Wallet | null
++  usdc: string
++  weth: string
++  mgro: string
++  factory?: string
++  quoter?: string
++  router?: string
++  openOceanBase?: string
++  route: SwapRoute
++  slippagePct: number
++  fetchImpl?: FetchLike
++}
++
++/**
++ * USDC → $MGRO on Base.
++ *
++ * Jimi's note: $MGRO trades against ETH on Uniswap, so the direct route is a
++ * two-hop Uniswap V3 path USDC → WETH → MGRO (every fee tier with liquidity
++ * is quoted and the best wins). When no V3 pool exists (the pool is V4, or
++ * elsewhere) the OpenOcean aggregator finds the route; it is the same code
++ * path the world site's mangrove rail already uses in production.
++ *
++ * Sends are two-phase: `send()` returns the hash the moment the transaction
++ * is broadcast so the caller can record it, and `confirm()` reads the
++ * receipt and measures the $MGRO that actually arrived from its Transfer
++ * logs. A process that dies between the two never swaps twice.
++ */
++export class SwapService {
++  private v3Paths: { path: string; label: string }[] | null = null
++  private v3PathsAt = 0
++  private readonly fetchImpl: FetchLike
++
++  constructor(private readonly d: SwapServiceDeps) {
++    this.fetchImpl = d.fetchImpl || ((input, init) => fetch(input, init))
++  }
++
++  get walletAddress(): string | null {
++    return this.d.wallet?.address ?? null
++  }
++
++  /** Every Uniswap V3 route from USDC to $MGRO with liquidity: direct, and via WETH. */
++  async discoverV3Paths(
++    force = false,
++  ): Promise<{ path: string; label: string }[]> {
++    if (!force && this.v3Paths && Date.now() - this.v3PathsAt < PATH_CACHE_MS) {
++      return this.v3Paths
++    }
++    const factory = new ethers.Contract(
++      this.d.factory || BASE_UNISWAP_V3.factory,
++      FACTORY_ABI,
++      this.d.provider,
++    )
++    const hasLiquidity = async (a: string, b: string, fee: number) => {
++      const pool: string = await factory.getPool(a, b, fee)
++      if (!pool || pool === ethers.ZeroAddress) return false
++      const liq: bigint = await new ethers.Contract(
++        pool,
++        POOL_ABI,
++        this.d.provider,
++      ).liquidity()
++      return liq > 0n
++    }
++    const { usdc, weth, mgro } = this.d
++    const paths: { path: string; label: string }[] = []
++    for (const fee of V3_FEE_TIERS) {
++      if (await hasLiquidity(usdc, mgro, fee)) {
++        paths.push({
++          path: encodeV3Path([usdc, mgro], [fee]),
++          label: describePath(['USDC', 'MGRO'], [fee]),
++        })
++      }
++    }
++    const usdcWeth: number[] = []
++    for (const fee of V3_FEE_TIERS)
++      if (await hasLiquidity(usdc, weth, fee)) usdcWeth.push(fee)
++    const wethMgro: number[] = []
++    for (const fee of V3_FEE_TIERS)
++      if (await hasLiquidity(weth, mgro, fee)) wethMgro.push(fee)
++    for (const f1 of usdcWeth) {
++      for (const f2 of wethMgro) {
++        paths.push({
++          path: encodeV3Path([usdc, weth, mgro], [f1, f2]),
++          label: describePath(['USDC', 'WETH', 'MGRO'], [f1, f2]),
++        })
++      }
++    }
++    this.v3Paths = paths
++    this.v3PathsAt = Date.now()
++    return paths
++  }
++
++  async quoteV3(amountIn: bigint): Promise<SwapQuote | null> {
++    const paths = await this.discoverV3Paths()
++    if (!paths.length) return null
++    const quoter = new ethers.Contract(
++      this.d.quoter || BASE_UNISWAP_V3.quoterV2,
++      QUOTER_ABI,
++      this.d.provider,
++    )
++    let best: SwapQuote | null = null
++    for (const p of paths) {
++      try {
++        const r = await quoter.quoteExactInput.staticCall(p.path, amountIn)
++        const out = BigInt(r[0] ?? r.amountOut ?? 0)
++        if (out > 0n && (!best || out > best.amountOut)) {
++          best = {
++            kind: 'uniswap_v3',
++            route: `uniswap_v3:${p.label}`,
++            amountIn,
++            amountOut: out,
++            minOut: applySlippage(out, this.d.slippagePct),
++            path: p.path,
++          }
++        }
++      } catch {
++        // No route through this path at this size; the others may still quote.
++      }
++    }
++    return best
++  }
++
++  async quoteOpenOcean(amountIn: bigint): Promise<SwapQuote | null> {
++    const url =
++      `${this.openOcean()}/quote?inTokenAddress=${this.d.usdc}` +
++      `&outTokenAddress=${this.d.mgro}&amountDecimals=${amountIn.toString()}` +
++      `&slippage=${this.d.slippagePct}&gasPriceDecimals=10000000`
++    const json = await this.getJson(url)
++    const data = json?.data ?? json
++    const out = BigInt(String(data?.outAmount ?? '0').split('.')[0] || '0')
++    if (out <= 0n) return null
++    return {
++      kind: 'openocean',
++      route: 'openocean',
++      amountIn,
++      amountOut: out,
++      minOut: applySlippage(out, this.d.slippagePct),
++    }
++  }
++
++  /** Best quote under the configured route policy; null when nothing has liquidity. */
++  async quote(amountIn: bigint): Promise<SwapQuote | null> {
++    if (this.d.route === 'uniswap_v3') return this.quoteV3(amountIn)
++    if (this.d.route === 'openocean') return this.quoteOpenOcean(amountIn)
++    let v3: SwapQuote | null = null
++    try {
++      v3 = await this.quoteV3(amountIn)
++    } catch (error) {
++      console.warn(`[Treasury] Uniswap V3 quote failed: ${why(error)}`)
++    }
++    if (v3) return v3
++    return this.quoteOpenOcean(amountIn)
++  }
++
++  /** Broadcast the swap. Returns as soon as the hash is known. */
++  async send(q: SwapQuote): Promise<{ hash: string; to: string }> {
++    const wallet = this.d.wallet
++    if (!wallet) throw new Error('swap: no treasury wallet')
++    if (q.kind === 'uniswap_v3') {
++      if (!q.path) throw new Error('swap: V3 quote without a path')
++      const router = this.d.router || BASE_UNISWAP_V3.swapRouter02
++      await this.ensureAllowance(router, q.amountIn)
++      const contract = new ethers.Contract(router, ROUTER_ABI, wallet)
++      const tx = await contract.exactInput({
++        path: q.path,
++        recipient: wallet.address,
++        amountIn: q.amountIn,
++        amountOutMinimum: q.minOut,
++      })
++      return { hash: tx.hash, to: router }
++    }
++    const url =
++      `${this.openOcean()}/swap?inTokenAddress=${this.d.usdc}` +
++      `&outTokenAddress=${this.d.mgro}&amountDecimals=${q.amountIn.toString()}` +
++      `&slippage=${this.d.slippagePct}&account=${wallet.address}` +
++      `&gasPriceDecimals=10000000`
++    const json = await this.getJson(url)
++    const data = json?.data ?? json
++    if (!data?.to || !data?.data) {
++      throw new Error(
++        'OpenOcean swap route failed: ' + JSON.stringify(json).slice(0, 200),
++      )
++    }
++    await this.ensureAllowance(String(data.to), q.amountIn)
++    const tx = await wallet.sendTransaction({
++      to: String(data.to),
++      data: String(data.data),
++      value: BigInt(data.value || 0),
++    })
++    return { hash: tx.hash, to: String(data.to) }
++  }
++
++  /** Read the receipt; the $MGRO received is the sum of its Transfer logs to the wallet. */
++  async confirm(hash: string): Promise<SwapConfirmation> {
++    const receipt = await this.d.provider.getTransactionReceipt(hash)
++    if (!receipt) return { state: 'pending' }
++    if (receipt.status !== 1) return { state: 'reverted', hash }
++    const to = this.walletAddress
++    let amountOut = 0n
++    for (const log of receipt.logs) {
++      if (!sameAddress(log.address, this.d.mgro)) continue
++      if (log.topics[0] !== TRANSFER_TOPIC || log.topics.length < 3) continue
++      const recipient = ethers.dataSlice(log.topics[2], 12)
++      if (to && sameAddress(recipient, to)) amountOut += BigInt(log.data)
++    }
++    return {
++      state: 'success',
++      hash,
++      amountOut,
++      blockNumber: receipt.blockNumber,
++    }
++  }
++
++  async usdcBalance(address: string): Promise<bigint> {
++    return new ethers.Contract(
++      this.d.usdc,
++      ERC20_ABI,
++      this.d.provider,
++    ).balanceOf(address)
++  }
++
++  async mgroBalance(address: string): Promise<bigint> {
++    return new ethers.Contract(
++      this.d.mgro,
++      ERC20_ABI,
++      this.d.provider,
++    ).balanceOf(address)
++  }
++
++  /** Exact-amount approvals: the hot wallet never grants more than one flow's worth. */
++  private async ensureAllowance(spender: string, amount: bigint) {
++    const wallet = this.d.wallet
++    if (!wallet) throw new Error('swap: no treasury wallet')
++    const usdc = new ethers.Contract(this.d.usdc, ERC20_ABI, wallet)
++    const current: bigint = await usdc.allowance(wallet.address, spender)
++    if (current >= amount) return
++    const tx = await usdc.approve(spender, amount)
++    const receipt = await tx.wait()
++    if (!receipt || receipt.status !== 1) {
++      throw new Error(`USDC approve to ${spender} failed (${tx.hash})`)
++    }
++  }
++
++  private openOcean(): string {
++    return (this.d.openOceanBase || OPENOCEAN_BASE).replace(/\/+$/, '')
++  }
++
++  private async getJson(url: string): Promise<any> {
++    const res = await this.fetchImpl(url, {
++      headers: { Accept: 'application/json' },
++      signal: AbortSignal.timeout(20_000),
++    })
++    if (!res.ok) {
++      throw new Error(`HTTP ${res.status} from ${url.split('?')[0]}`)
++    }
++    return res.json()
++  }
++}
+diff --git a/src/services/treasury/treasuryConfig.test.ts b/src/services/treasury/treasuryConfig.test.ts
+new file mode 100644
+index 0000000..e50b72f
+--- /dev/null
++++ b/src/services/treasury/treasuryConfig.test.ts
+@@ -0,0 +1,171 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import { ethers } from 'ethers'
++import {
++  configProblems,
++  DEFAULT_DONATION_KINDS,
++  loadTreasuryConfig,
++  redactedConfig,
++  RETIRED_MGRO,
++  walletAddressOf,
++} from './treasuryConfig'
++
++const MGRO = '0x46e564D039d0d7Ec4C88d517fD32a03d15e88568'
++const SAFE = '0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C'
++const defaults = {
++  mgro: MGRO,
++  rpcUrl: 'https://mainnet.base.org',
++  safe: SAFE,
++  retirementAddress: '',
++}
++
++test('an empty environment is a dry run with conservative caps', () => {
++  const cfg = loadTreasuryConfig({}, defaults)
++  assert.equal(cfg.mode, 'dry_run')
++  assert.equal(cfg.disabled, false)
++  assert.equal(cfg.pollMs, 300_000)
++  assert.equal(cfg.requireApproval, false)
++  assert.equal(cfg.lookbackDays, 30)
++  assert.equal(cfg.minDonationCents, 100)
++  assert.deepEqual(cfg.donationKinds, DEFAULT_DONATION_KINDS)
++  assert.equal(cfg.maxSweepCents, 1_000_000)
++  assert.equal(cfg.maxOnrampCents, 1_000_000)
++  assert.equal(cfg.maxTickCents, 2_500_000)
++  assert.equal(cfg.maxSwapMicro, 10_000_000_000n)
++  assert.equal(cfg.minSwapMicro, 1_000_000n)
++  assert.equal(cfg.slippagePct, 3)
++  assert.equal(cfg.swapRoute, 'auto')
++  assert.equal(cfg.lockMethod, 'dead')
++  assert.equal(cfg.forwardTo, SAFE)
++  assert.equal(cfg.safe, SAFE)
++  assert.equal(cfg.chain.mgro, MGRO)
++  assert.equal(cfg.chain.rpcUrl, 'https://mainnet.base.org')
++  assert.equal(cfg.mercury.apiBase, 'https://api.mercury.com/api/v1')
++  assert.equal(cfg.mercury.sendMode, 'direct')
++  assert.equal(cfg.stripe.apiVersion, '2025-11-17.preview')
++})
++
++test('values are parsed, clamped and fall back on nonsense', () => {
++  const cfg = loadTreasuryConfig(
++    {
++      TREASURY_PIPELINE_MODE: 'LIVE',
++      TREASURY_POLL_MS: '1000',
++      TREASURY_MAX_SWAP_USDC: '250.5',
++      TREASURY_SWAP_SLIPPAGE_PCT: '45',
++      TREASURY_SWAP_ROUTE: 'openocean',
++      TREASURY_LOCK_METHOD: 'nonsense',
++      TREASURY_DONATION_KINDS: 'checkDeposit, other',
++      TREASURY_REQUIRE_APPROVAL: 'true',
++      MERCURY_SEND_MODE: 'request',
++      STRIPE_SECRET_KEY: 'sk_live_fallback',
++      TREASURY_FORWARD_TO: '0x000000000000000000000000000000000000dEaD',
++    },
++    defaults,
++  )
++  assert.equal(cfg.mode, 'live')
++  assert.equal(cfg.pollMs, 60_000)
++  assert.equal(cfg.maxSwapMicro, 250_500_000n)
++  assert.equal(cfg.slippagePct, 10)
++  assert.equal(cfg.swapRoute, 'openocean')
++  assert.equal(cfg.lockMethod, 'dead')
++  assert.deepEqual(cfg.donationKinds, ['checkDeposit', 'other'])
++  assert.equal(cfg.requireApproval, true)
++  assert.equal(cfg.mercury.sendMode, 'request')
++  assert.equal(cfg.stripe.secretKey, 'sk_live_fallback')
++  assert.equal(cfg.forwardTo, '0x000000000000000000000000000000000000dEaD')
++})
++
++test('the retired MGRO deployment is fatal; a missing stage is just a problem', () => {
++  const retired = loadTreasuryConfig({}, { ...defaults, mgro: RETIRED_MGRO })
++  const fatal = configProblems(retired).find(p => p.fatal)
++  assert.ok(fatal)
++  assert.match(fatal.problem, /retired/)
++
++  const problems = configProblems(loadTreasuryConfig({}, defaults))
++  assert.equal(
++    problems.some(p => p.fatal),
++    false,
++  )
++  const stages = new Set(problems.map(p => p.stage))
++  assert.ok(stages.has('detect'))
++  assert.ok(stages.has('sweep'))
++  assert.ok(stages.has('onramp'))
++  assert.ok(stages.has('swap'))
++  assert.equal(stages.has('settle'), false)
++})
++
++test('the wallet key must sign as the pinned address', () => {
++  const wallet = ethers.Wallet.createRandom()
++  const other = ethers.Wallet.createRandom()
++  assert.equal(walletAddressOf(wallet.privateKey), wallet.address)
++  assert.equal(walletAddressOf('not-a-key'), null)
++  assert.equal(walletAddressOf(''), null)
++
++  const mismatch = configProblems(
++    loadTreasuryConfig(
++      {
++        TREASURY_WALLET_PRIVATE_KEY: wallet.privateKey,
++        TREASURY_WALLET_ADDRESS: other.address,
++      },
++      defaults,
++    ),
++  )
++  assert.ok(mismatch.some(p => /different address/.test(p.problem)))
++
++  const unpinned = configProblems(
++    loadTreasuryConfig(
++      { TREASURY_WALLET_PRIVATE_KEY: wallet.privateKey },
++      defaults,
++    ),
++  )
++  assert.ok(unpinned.some(p => /TREASURY_WALLET_ADDRESS unset/.test(p.problem)))
++
++  const matching = configProblems(
++    loadTreasuryConfig(
++      {
++        TREASURY_WALLET_PRIVATE_KEY: wallet.privateKey,
++        TREASURY_WALLET_ADDRESS: wallet.address.toLowerCase(),
++      },
++      defaults,
++    ),
++  )
++  assert.equal(
++    matching.some(p => p.stage === 'swap' && /WALLET/.test(p.problem)),
++    false,
++  )
++})
++
++test('lock methods that need an address complain when it is missing', () => {
++  const retire = configProblems(
++    loadTreasuryConfig({ TREASURY_LOCK_METHOD: 'retire' }, defaults),
++  )
++  assert.ok(retire.some(p => /TREASURY_RETIREMENT_ADDRESS/.test(p.problem)))
++  const forward = configProblems(
++    loadTreasuryConfig(
++      { TREASURY_LOCK_METHOD: 'forward', TREASURY_FORWARD_TO: 'nope' },
++      defaults,
++    ),
++  )
++  assert.ok(forward.some(p => /TREASURY_FORWARD_TO/.test(p.problem)))
++})
++
++test('the redacted config never contains a secret', () => {
++  const wallet = ethers.Wallet.createRandom()
++  const cfg = loadTreasuryConfig(
++    {
++      MERCURY_API_TOKEN: 'mercury-secret',
++      STRIPE_TREASURY_SECRET_KEY: 'sk_live_secret',
++      TREASURY_WALLET_PRIVATE_KEY: wallet.privateKey,
++      TREASURY_WALLET_ADDRESS: wallet.address,
++    },
++    defaults,
++  )
++  const text = JSON.stringify(redactedConfig(cfg))
++  assert.doesNotMatch(text, /mercury-secret/)
++  assert.doesNotMatch(text, /sk_live_secret/)
++  assert.doesNotMatch(text, new RegExp(wallet.privateKey.slice(2, 20)))
++  assert.match(text, /"tokenSet":true/)
++  assert.match(text, /"secretKeySet":true/)
++  assert.match(text, /"walletKeySet":true/)
++  assert.match(text, new RegExp(wallet.address))
++})
+diff --git a/src/services/treasury/treasuryConfig.ts b/src/services/treasury/treasuryConfig.ts
+new file mode 100644
+index 0000000..938f8f4
+--- /dev/null
++++ b/src/services/treasury/treasuryConfig.ts
+@@ -0,0 +1,330 @@
++import { ethers } from 'ethers'
++import env from '../../config/environment'
++import { BASE_USDC, BASE_WETH, OPENOCEAN_BASE } from './swapService'
++import {
++  boolFromEnv,
++  isAddress,
++  listFromEnv,
++  LOCK_METHODS,
++  LockMethod,
++  MERCURY_SEND_MODES,
++  MercurySendMode,
++  numberFromEnv,
++  parseEnum,
++  PIPELINE_MODES,
++  PipelineMode,
++  sameAddress,
++  SWAP_ROUTES,
++  SwapRoute,
++  usdToCents,
++} from './treasuryMath'
++
++/** NOT the token (CLAUDE.md, Jimi 2026-07-24). The pipeline refuses to run against it. */
++export const RETIRED_MGRO = '0xe84613C7220F2cD92fD1551256f74c21e49e2283'
++
++export const DEFAULT_DONATION_KINDS = [
++  'externalTransfer',
++  'incomingDomesticWire',
++  'incomingInternationalWire',
++  'checkDeposit',
++]
++
++export interface TreasuryConfig {
++  disabled: boolean
++  /** dry_run records what every stage would send and moves nothing. */
++  mode: PipelineMode
++  pollMs: number
++  /** New donations wait as `held` until an admin releases them. */
++  requireApproval: boolean
++  lookbackDays: number
++  minDonationCents: number
++  donationKinds: string[]
++  sweepReservePct: number
++  /** Most USD one Mercury payment may move (also the per-tick sweep total). */
++  maxSweepCents: number
++  /** Most USD one Stripe outbound payment may move. */
++  maxOnrampCents: number
++  /** Most new USD one tick may set in motion; the rest is held for release. */
++  maxTickCents: number
++  maxSwapMicro: bigint
++  minSwapMicro: bigint
++  slippagePct: number
++  swapRoute: SwapRoute
++  lockMethod: LockMethod
++  forwardTo: string
++  retirementAddress: string
++  safe: string
++  /** Retries per stage before a flow is parked as failed. */
++  maxAttempts: number
++  /** Ticks to wait for Stripe's USDC to show on-chain before the Stripe amount is trusted. */
++  arrivalWaitTicks: number
++  mercury: {
++    apiBase: string
++    token: string
++    accountId: string
++    stripeRecipientId: string
++    sendMode: MercurySendMode
++  }
++  stripe: {
++    secretKey: string
++    financialAccountId: string
++    payoutMethodId: string
++    apiVersion: string
++  }
++  chain: {
++    rpcUrl: string
++    mgro: string
++    usdc: string
++    weth: string
++    walletKey: string
++    walletAddress: string
++    openOceanBase: string
++    uniswap: { factory?: string; quoter?: string; router?: string }
++  }
++}
++
++export interface ConfigDefaults {
++  mgro: string
++  rpcUrl: string
++  safe: string
++  retirementAddress: string
++}
++
++/**
++ * Reads the TREASURY_* / MERCURY_* / STRIPE_* variables (documented in
++ * .env.example and docs/TREASURY_PIPELINE.md). Pure given `source`, so the
++ * parsing is testable; the app-level defaults come from the shared env.
++ */
++export function loadTreasuryConfig(
++  source: Record<string, string | undefined> = process.env,
++  defaults: Partial<ConfigDefaults> = {},
++): TreasuryConfig {
++  const d: ConfigDefaults = {
++    mgro: env.MGRO_TOKEN_ADDRESS,
++    rpcUrl: env.BASE_RPC_URL || env.BASE_SEPOLIA_RPC_URL || '',
++    safe: env.TREASURY_SAFE_ADDRESS,
++    retirementAddress: source.RETIREMENT_ADDR || '',
++    ...defaults,
++  }
++  const safe = (source.TREASURY_SAFE_ADDRESS || d.safe || '').trim()
++  const str = (key: string, fallback = '') => (source[key] ?? fallback).trim()
++  const usdCents = (key: string, fallbackUsd: number) =>
++    usdToCents(numberFromEnv(source[key], fallbackUsd))
++  const usdcMicro = (key: string, fallbackUsdc: number) =>
++    BigInt(Math.round(numberFromEnv(source[key], fallbackUsdc) * 1e6))
++
++  return {
++    disabled: boolFromEnv(source.DISABLE_TREASURY_PIPELINE, false),
++    mode: parseEnum(source.TREASURY_PIPELINE_MODE, PIPELINE_MODES, 'dry_run'),
++    pollMs: Math.max(60_000, numberFromEnv(source.TREASURY_POLL_MS, 300_000)),
++    requireApproval: boolFromEnv(source.TREASURY_REQUIRE_APPROVAL, false),
++    lookbackDays: numberFromEnv(source.TREASURY_LOOKBACK_DAYS, 30, 1),
++    minDonationCents: usdCents('TREASURY_MIN_DONATION_USD', 1),
++    donationKinds: listFromEnv(
++      source.TREASURY_DONATION_KINDS,
++      DEFAULT_DONATION_KINDS,
++    ),
++    sweepReservePct: numberFromEnv(source.TREASURY_SWEEP_RESERVE_PCT, 0),
++    maxSweepCents: usdCents('TREASURY_MAX_SWEEP_USD', 10_000),
++    maxOnrampCents: usdCents('TREASURY_MAX_ONRAMP_USD', 10_000),
++    maxTickCents: usdCents('TREASURY_MAX_TICK_USD', 25_000),
++    maxSwapMicro: usdcMicro('TREASURY_MAX_SWAP_USDC', 10_000),
++    minSwapMicro: usdcMicro('TREASURY_MIN_SWAP_USDC', 1),
++    slippagePct: Math.min(
++      10,
++      numberFromEnv(source.TREASURY_SWAP_SLIPPAGE_PCT, 3),
++    ),
++    swapRoute: parseEnum(source.TREASURY_SWAP_ROUTE, SWAP_ROUTES, 'auto'),
++    lockMethod: parseEnum(source.TREASURY_LOCK_METHOD, LOCK_METHODS, 'dead'),
++    forwardTo: str('TREASURY_FORWARD_TO', safe),
++    retirementAddress: str('TREASURY_RETIREMENT_ADDRESS', d.retirementAddress),
++    safe,
++    maxAttempts: numberFromEnv(source.TREASURY_MAX_ATTEMPTS, 24, 1),
++    arrivalWaitTicks: numberFromEnv(source.TREASURY_ARRIVAL_WAIT_TICKS, 24, 1),
++    mercury: {
++      apiBase: str('MERCURY_API_BASE', 'https://api.mercury.com/api/v1'),
++      token: str('MERCURY_API_TOKEN'),
++      accountId: str('MERCURY_ACCOUNT_ID'),
++      stripeRecipientId: str('MERCURY_STRIPE_RECIPIENT_ID'),
++      sendMode: parseEnum(
++        source.MERCURY_SEND_MODE,
++        MERCURY_SEND_MODES,
++        'direct',
++      ),
++    },
++    stripe: {
++      secretKey: str('STRIPE_TREASURY_SECRET_KEY') || str('STRIPE_SECRET_KEY'),
++      financialAccountId: str('STRIPE_FINANCIAL_ACCOUNT_ID'),
++      payoutMethodId: str('STRIPE_CRYPTO_PAYOUT_METHOD_ID'),
++      apiVersion: str('STRIPE_MONEY_MANAGEMENT_VERSION', '2025-11-17.preview'),
++    },
++    chain: {
++      rpcUrl: str('TREASURY_RPC_URL', d.rpcUrl),
++      mgro: str('TREASURY_MGRO_ADDRESS', d.mgro),
++      usdc: str('TREASURY_USDC_ADDRESS', BASE_USDC),
++      weth: str('TREASURY_WETH_ADDRESS', BASE_WETH),
++      walletKey: str('TREASURY_WALLET_PRIVATE_KEY'),
++      walletAddress: str('TREASURY_WALLET_ADDRESS'),
++      openOceanBase: str('OPENOCEAN_API_BASE', OPENOCEAN_BASE),
++      uniswap: {
++        factory: str('TREASURY_UNISWAP_V3_FACTORY') || undefined,
++        quoter: str('TREASURY_UNISWAP_V3_QUOTER') || undefined,
++        router: str('TREASURY_UNISWAP_V3_ROUTER') || undefined,
++      },
++    },
++  }
++}
++
++/** The address a private key signs as, or null when it is not a key. */
++export function walletAddressOf(privateKey: string): string | null {
++  try {
++    return privateKey ? new ethers.Wallet(privateKey).address : null
++  } catch {
++    return null
++  }
++}
++
++export interface ConfigProblem {
++  stage: 'all' | 'detect' | 'sweep' | 'onramp' | 'swap' | 'settle'
++  problem: string
++  fatal?: boolean
++}
++
++/**
++ * What this configuration cannot do. A fatal problem stops the pipeline;
++ * the others leave their stage waiting (flows queue up in front of it) and
++ * are shown on the admin status page.
++ */
++export function configProblems(cfg: TreasuryConfig): ConfigProblem[] {
++  const out: ConfigProblem[] = []
++  if (sameAddress(cfg.chain.mgro, RETIRED_MGRO)) {
++    out.push({
++      stage: 'all',
++      fatal: true,
++      problem:
++        'MGRO address is the retired 0xe846…2283 deployment, not the token (see CLAUDE.md); refusing every stage',
++    })
++  } else if (!isAddress(cfg.chain.mgro)) {
++    out.push({
++      stage: 'all',
++      fatal: true,
++      problem: 'MGRO token address is not an address',
++    })
++  }
++  if (!cfg.mercury.token)
++    out.push({
++      stage: 'detect',
++      problem: 'MERCURY_API_TOKEN unset: nothing is detected',
++    })
++  if (!cfg.mercury.accountId)
++    out.push({
++      stage: 'detect',
++      problem: 'MERCURY_ACCOUNT_ID unset: nothing is detected',
++    })
++  if (!cfg.mercury.stripeRecipientId)
++    out.push({
++      stage: 'sweep',
++      problem:
++        'MERCURY_STRIPE_RECIPIENT_ID unset: sweeps to Stripe cannot be sent',
++    })
++  if (!cfg.stripe.secretKey)
++    out.push({ stage: 'onramp', problem: 'STRIPE_TREASURY_SECRET_KEY unset' })
++  if (!cfg.stripe.financialAccountId)
++    out.push({ stage: 'onramp', problem: 'STRIPE_FINANCIAL_ACCOUNT_ID unset' })
++  if (!cfg.stripe.payoutMethodId)
++    out.push({
++      stage: 'onramp',
++      problem: 'STRIPE_CRYPTO_PAYOUT_METHOD_ID unset: USD cannot become USDC',
++    })
++  if (!cfg.chain.rpcUrl)
++    out.push({ stage: 'swap', problem: 'BASE_RPC_URL unset: no chain access' })
++  if (!cfg.chain.walletKey) {
++    out.push({
++      stage: 'swap',
++      problem:
++        'TREASURY_WALLET_PRIVATE_KEY unset: swaps and locks cannot be signed',
++    })
++  } else {
++    const derived = walletAddressOf(cfg.chain.walletKey)
++    if (!derived)
++      out.push({
++        stage: 'swap',
++        problem: 'TREASURY_WALLET_PRIVATE_KEY is not a valid key',
++      })
++    else if (!cfg.chain.walletAddress)
++      out.push({
++        stage: 'swap',
++        problem:
++          'TREASURY_WALLET_ADDRESS unset: refusing to sign until the key is pinned to an address',
++      })
++    else if (!sameAddress(derived, cfg.chain.walletAddress))
++      out.push({
++        stage: 'swap',
++        problem:
++          'TREASURY_WALLET_PRIVATE_KEY signs as a different address than TREASURY_WALLET_ADDRESS; standing down',
++      })
++  }
++  if (cfg.lockMethod === 'forward' && !isAddress(cfg.forwardTo))
++    out.push({
++      stage: 'settle',
++      problem: 'TREASURY_FORWARD_TO is not an address',
++    })
++  if (cfg.lockMethod === 'retire' && !isAddress(cfg.retirementAddress))
++    out.push({
++      stage: 'settle',
++      problem: 'TREASURY_RETIREMENT_ADDRESS is not an address',
++    })
++  return out
++}
++
++/** The config with every secret replaced by whether it is set. */
++export function redactedConfig(cfg: TreasuryConfig) {
++  return {
++    disabled: cfg.disabled,
++    mode: cfg.mode,
++    pollMs: cfg.pollMs,
++    requireApproval: cfg.requireApproval,
++    lookbackDays: cfg.lookbackDays,
++    minDonationUsd: cfg.minDonationCents / 100,
++    donationKinds: cfg.donationKinds,
++    sweepReservePct: cfg.sweepReservePct,
++    caps: {
++      maxSweepUsd: cfg.maxSweepCents / 100,
++      maxOnrampUsd: cfg.maxOnrampCents / 100,
++      maxTickUsd: cfg.maxTickCents / 100,
++      maxSwapUsdc: Number(cfg.maxSwapMicro) / 1e6,
++      minSwapUsdc: Number(cfg.minSwapMicro) / 1e6,
++      slippagePct: cfg.slippagePct,
++      maxAttempts: cfg.maxAttempts,
++      arrivalWaitTicks: cfg.arrivalWaitTicks,
++    },
++    swapRoute: cfg.swapRoute,
++    lockMethod: cfg.lockMethod,
++    forwardTo: cfg.forwardTo,
++    retirementAddress: cfg.retirementAddress,
++    safe: cfg.safe,
++    mercury: {
++      apiBase: cfg.mercury.apiBase,
++      tokenSet: Boolean(cfg.mercury.token),
++      accountId: cfg.mercury.accountId,
++      stripeRecipientId: cfg.mercury.stripeRecipientId,
++      sendMode: cfg.mercury.sendMode,
++    },
++    stripe: {
++      secretKeySet: Boolean(cfg.stripe.secretKey),
++      financialAccountId: cfg.stripe.financialAccountId,
++      payoutMethodId: cfg.stripe.payoutMethodId,
++      apiVersion: cfg.stripe.apiVersion,
++    },
++    chain: {
++      rpcUrlSet: Boolean(cfg.chain.rpcUrl),
++      mgro: cfg.chain.mgro,
++      usdc: cfg.chain.usdc,
++      weth: cfg.chain.weth,
++      walletKeySet: Boolean(cfg.chain.walletKey),
++      walletAddress: cfg.chain.walletAddress,
++      openOceanBase: cfg.chain.openOceanBase,
++      uniswap: cfg.chain.uniswap,
++    },
++  }
++}
+diff --git a/src/services/treasury/treasuryMath.test.ts b/src/services/treasury/treasuryMath.test.ts
+new file mode 100644
+index 0000000..16c9a2c
+--- /dev/null
++++ b/src/services/treasury/treasuryMath.test.ts
+@@ -0,0 +1,232 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import {
++  applySlippage,
++  batchKey,
++  boolFromEnv,
++  centsToDollars,
++  centsToUsdcMicro,
++  DEAD_ADDRESS,
++  describePath,
++  encodeV3Path,
++  idempotencyKey,
++  isDonationCredit,
++  isTxHash,
++  listFromEnv,
++  matchUsdcArrival,
++  numberFromEnv,
++  parseEnum,
++  pickWithinCap,
++  postedTime,
++  releaseTargetStatus,
++  sameAddress,
++  stageForStatus,
++  stageFromHoldReason,
++  stripeMinorToUsdcMicro,
++  sweepAmountCents,
++  usdcMicroToCents,
++  usdToCents,
++  why,
++} from './treasuryMath'
++
++const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
++const WETH = '0x4200000000000000000000000000000000000006'
++const MGRO = '0x46e564D039d0d7Ec4C88d517fD32a03d15e88568'
++
++test('amounts convert between cents, dollars and USDC base units without floats', () => {
++  assert.equal(usdToCents(19.99), 1999)
++  assert.equal(usdToCents(0.1 + 0.2), 30)
++  assert.equal(centsToDollars(1999), 19.99)
++  assert.equal(centsToUsdcMicro(12345), 123_450_000n)
++  assert.equal(usdcMicroToCents(123_456_789n), 12345)
++  assert.equal(stripeMinorToUsdcMicro(250), 2_500_000n)
++})
++
++test('slippage is applied in basis points and clamped to a sane range', () => {
++  assert.equal(applySlippage(1_000_000n, 3), 970_000n)
++  assert.equal(applySlippage(1_000_000n, 0.5), 995_000n)
++  assert.equal(applySlippage(1_000_000n, -5), 1_000_000n)
++  assert.equal(applySlippage(1_000_000n, 80), 500_000n)
++})
++
++test('sweep amount keeps the reserve at the bank and respects the cap', () => {
++  assert.equal(sweepAmountCents(10_000, 0, 1_000_000), 10_000)
++  assert.equal(sweepAmountCents(10_000, 10, 1_000_000), 9_000)
++  assert.equal(sweepAmountCents(10_000, 0, 2_500), 2_500)
++  assert.equal(sweepAmountCents(999, 33, 1_000_000), 669)
++  assert.equal(sweepAmountCents(100, 100, 1_000_000), 0)
++})
++
++test('donation credits: posted, positive, of a donation kind, not our own money coming back', () => {
++  const filter = {
++    kinds: new Set(['externalTransfer', 'incomingDomesticWire']),
++    minCents: 100,
++    excludeCounterpartyIds: new Set(['recp_stripe']),
++  }
++  const ok = {
++    id: 't1',
++    amount: 250,
++    status: 'sent',
++    kind: 'externalTransfer',
++    counterpartyId: 'recp_donor',
++  }
++  assert.equal(isDonationCredit(ok, filter), true)
++  assert.equal(isDonationCredit({ ...ok, amount: -250 }, filter), false)
++  assert.equal(isDonationCredit({ ...ok, status: 'pending' }, filter), false)
++  assert.equal(
++    isDonationCredit({ ...ok, kind: 'internalTransfer' }, filter),
++    false,
++  )
++  assert.equal(isDonationCredit({ ...ok, amount: 0.5 }, filter), false)
++  assert.equal(
++    isDonationCredit({ ...ok, counterpartyId: 'recp_stripe' }, filter),
++    false,
++  )
++  assert.equal(
++    isDonationCredit(
++      { ...ok, kind: 'other' },
++      { ...filter, kinds: new Set<string>() },
++    ),
++    true,
++  )
++})
++
++test('postedTime prefers postedAt and tolerates garbage', () => {
++  assert.equal(
++    postedTime({
++      id: 'a',
++      amount: 1,
++      postedAt: '2026-10-01T00:00:00.000Z',
++      createdAt: '2026-09-01T00:00:00.000Z',
++    }),
++    Date.parse('2026-10-01T00:00:00.000Z'),
++  )
++  assert.equal(
++    postedTime({ id: 'a', amount: 1, createdAt: '2026-09-01T00:00:00.000Z' }),
++    Date.parse('2026-09-01T00:00:00.000Z'),
++  )
++  assert.equal(postedTime({ id: 'a', amount: 1, postedAt: 'nope' }), 0)
++})
++
++test('idempotency keys are stable, and the batch key ignores member order', () => {
++  assert.equal(idempotencyKey('abc', 'onramp'), 'tg-donation-abc-onramp')
++  const a = batchKey(['f1:0', 'f2:0', 'f3:1'])
++  const b = batchKey(['f3:1', 'f1:0', 'f2:0'])
++  assert.equal(a, b)
++  assert.match(a, /^tg-sweep-[0-9a-f]{24}$/)
++  assert.notEqual(a, batchKey(['f1:0', 'f2:0', 'f3:2']))
++})
++
++test('pickWithinCap takes what fits, first come first served, and defers zero amounts', () => {
++  const items = [
++    { id: 'a', cents: 600 },
++    { id: 'b', cents: 500 },
++    { id: 'c', cents: 300 },
++    { id: 'd', cents: 0 },
++  ]
++  const { picked, deferred } = pickWithinCap(items, i => i.cents, 1000)
++  assert.deepEqual(
++    picked.map(i => i.id),
++    ['a', 'c'],
++  )
++  assert.deepEqual(
++    deferred.map(i => i.id),
++    ['b', 'd'],
++  )
++})
++
++test('stage bookkeeping maps statuses, hold reasons and release targets', () => {
++  assert.equal(stageForStatus('detected'), 'sweep')
++  assert.equal(stageForStatus('swept'), 'onramp')
++  assert.equal(stageForStatus('onramped'), 'swap')
++  assert.equal(stageForStatus('bought'), 'settle')
++  assert.equal(stageForStatus('settled'), null)
++  assert.equal(stageForStatus('held'), null)
++  assert.equal(releaseTargetStatus('sweep'), 'detected')
++  assert.equal(releaseTargetStatus('onramp'), 'swept')
++  assert.equal(releaseTargetStatus('swap'), 'onramped')
++  assert.equal(releaseTargetStatus('settle'), 'bought')
++  assert.equal(releaseTargetStatus('anything else'), 'detected')
++  assert.equal(stageFromHoldReason('swap: no liquidity'), 'swap')
++  assert.equal(stageFromHoldReason('settle: admin hold: x'), 'settle')
++  assert.equal(stageFromHoldReason('admin: x'), null)
++  assert.equal(stageFromHoldReason(''), null)
++})
++
++test('matchUsdcArrival picks the earliest unclaimed transfer inside the fee window', () => {
++  const expected = 100_000_000n // 100 USDC
++  const candidates = [
++    { txHash: '0xaa', value: 99_000_000n, blockNumber: 50 },
++    { txHash: '0xbb', value: 98_500_000n, blockNumber: 40 },
++    { txHash: '0xcc', value: 150_000_000n, blockNumber: 30 },
++    { txHash: '0xdd', value: 80_000_000n, blockNumber: 20 },
++  ]
++  assert.equal(
++    matchUsdcArrival(expected, candidates, new Set())?.txHash,
++    '0xbb',
++  )
++  assert.equal(
++    matchUsdcArrival(expected, candidates, new Set(['0xbb']))?.txHash,
++    '0xaa',
++  )
++  assert.equal(matchUsdcArrival(expected, [], new Set()), null)
++  assert.equal(matchUsdcArrival(0n, candidates, new Set()), null)
++  // 102% is the ceiling: a slightly larger transfer still matches, a much larger one never does
++  assert.equal(
++    matchUsdcArrival(
++      expected,
++      [{ txHash: '0xee', value: 101_000_000n, blockNumber: 1 }],
++      new Set(),
++    )?.txHash,
++    '0xee',
++  )
++})
++
++test('encodeV3Path packs address/uint24 pairs the way the router reads them', () => {
++  const single = encodeV3Path([USDC, MGRO], [500])
++  assert.equal(single.length, 2 + (20 + 3 + 20) * 2)
++  assert.equal(single.slice(2, 42).toLowerCase(), USDC.slice(2).toLowerCase())
++  assert.equal(single.slice(42, 48), '0001f4')
++  const double = encodeV3Path([USDC, WETH, MGRO], [500, 10000])
++  assert.equal(double.length, 2 + (20 + 3 + 20 + 3 + 20) * 2)
++  assert.equal(double.slice(88, 94), '002710')
++  assert.throws(() => encodeV3Path([USDC, MGRO], [500, 3000]))
++  assert.equal(
++    describePath(['USDC', 'WETH', 'MGRO'], [500, 10000]),
++    'USDC-500-WETH-10000-MGRO',
++  )
++})
++
++test('env parsing helpers fall back safely', () => {
++  assert.equal(
++    parseEnum('LIVE', ['dry_run', 'live'] as const, 'dry_run'),
++    'live',
++  )
++  assert.equal(
++    parseEnum('yolo', ['dry_run', 'live'] as const, 'dry_run'),
++    'dry_run',
++  )
++  assert.equal(parseEnum(undefined, ['a', 'b'] as const, 'b'), 'b')
++  assert.equal(numberFromEnv('', 7), 7)
++  assert.equal(numberFromEnv('12.5', 7), 12.5)
++  assert.equal(numberFromEnv('-1', 7, 0), 7)
++  assert.equal(numberFromEnv('abc', 7), 7)
++  assert.equal(boolFromEnv('true'), true)
++  assert.equal(boolFromEnv('1'), true)
++  assert.equal(boolFromEnv('no'), false)
++  assert.equal(boolFromEnv(undefined, true), true)
++  assert.deepEqual(listFromEnv(' a, b ,,c ', ['x']), ['a', 'b', 'c'])
++  assert.deepEqual(listFromEnv('', ['x']), ['x'])
++})
++
++test('address and hash helpers', () => {
++  assert.equal(sameAddress(MGRO, MGRO.toLowerCase()), true)
++  assert.equal(sameAddress(MGRO, USDC), false)
++  assert.equal(sameAddress('nope', MGRO), false)
++  assert.equal(DEAD_ADDRESS, '0x000000000000000000000000000000000000dEaD')
++  assert.equal(isTxHash('0x' + 'ab'.repeat(32)), true)
++  assert.equal(isTxHash('0x1234'), false)
++  assert.equal(why(new Error('boom')), 'boom')
++  assert.equal(why('plain'), 'plain')
++  assert.equal(why({ a: 1 }), '{"a":1}')
++})
+diff --git a/src/services/treasury/treasuryMath.ts b/src/services/treasury/treasuryMath.ts
+new file mode 100644
+index 0000000..daadbb2
+--- /dev/null
++++ b/src/services/treasury/treasuryMath.ts
+@@ -0,0 +1,333 @@
++import { createHash } from 'crypto'
++import { ethers } from 'ethers'
++
++/**
++ * Pure helpers for the donation pipeline
++ * (Mercury → Stripe → USDC on Base → $MGRO → locked for good).
++ *
++ * Everything that decides an amount lives here, in integers, so it can be
++ * unit-tested without a bank, a card network or a chain.
++ *
++ * Units: USD in cents (number), USDC in base units of 6 decimals (bigint,
++ * "micro"), $MGRO in wei (bigint, 18 decimals). Never a float on the way to
++ * a payment; floats appear only in log lines and dashboards.
++ */
++
++export const USDC_DECIMALS = 6
++export const MGRO_DECIMALS = 18
++export const DEAD_ADDRESS = '0x000000000000000000000000000000000000dEaD'
++
++export const PIPELINE_MODES = ['dry_run', 'live'] as const
++export type PipelineMode = (typeof PIPELINE_MODES)[number]
++
++export const SWAP_ROUTES = ['auto', 'uniswap_v3', 'openocean'] as const
++export type SwapRoute = (typeof SWAP_ROUTES)[number]
++
++/**
++ * How the bought $MGRO is taken out of circulation.
++ *   dead     transfer to 0x…dEaD: irrecoverable, needs no role (default)
++ *   retire   MangroveRetirement.retire(): the same burn address plus a
++ *            soulbound proof NFT to the Safe. The wallet needs RETIRER_ROLE
++ *            and the contract must retire the canonical $MGRO.
++ *   burn     ERC20Burnable burn(): lowers totalSupply; only if the token has it
++ *   forward  plain transfer to TREASURY_FORWARD_TO (the Safe). Not a lock.
++ */
++export const LOCK_METHODS = ['dead', 'retire', 'burn', 'forward'] as const
++export type LockMethod = (typeof LOCK_METHODS)[number]
++
++export const MERCURY_SEND_MODES = ['direct', 'request'] as const
++export type MercurySendMode = (typeof MERCURY_SEND_MODES)[number]
++
++export function parseEnum<T extends string>(
++  raw: unknown,
++  allowed: readonly T[],
++  fallback: T,
++): T {
++  const s = String(raw ?? '')
++    .trim()
++    .toLowerCase()
++  return (allowed as readonly string[]).includes(s) ? (s as T) : fallback
++}
++
++export function numberFromEnv(raw: unknown, fallback: number, min = 0): number {
++  const s = String(raw ?? '').trim()
++  if (s === '') return fallback
++  const n = Number(s)
++  return Number.isFinite(n) && n >= min ? n : fallback
++}
++
++export function boolFromEnv(raw: unknown, fallback = false): boolean {
++  const s = String(raw ?? '')
++    .trim()
++    .toLowerCase()
++  if (s === '') return fallback
++  return s === 'true' || s === '1' || s === 'yes'
++}
++
++export function listFromEnv(raw: unknown, fallback: string[]): string[] {
++  const s = String(raw ?? '').trim()
++  if (s === '') return fallback
++  return s
++    .split(',')
++    .map(x => x.trim())
++    .filter(Boolean)
++}
++
++// ------------------------------------------------------------------ amounts --
++
++export function usdToCents(usd: number): number {
++  return Math.round((Number(usd) || 0) * 100)
++}
++
++export function centsToDollars(cents: number): number {
++  return Math.round(cents) / 100
++}
++
++/** $1.00 = 100 cents = 1_000_000 USDC base units. */
++export function centsToUsdcMicro(cents: number): bigint {
++  return BigInt(Math.round(cents)) * 10_000n
++}
++
++export function usdcMicroToCents(micro: bigint): number {
++  return Number(micro / 10_000n)
++}
++
++/** Stripe expresses USDC amounts in minor units of two decimals, like USD. */
++export function stripeMinorToUsdcMicro(minor: number): bigint {
++  return BigInt(Math.round(minor)) * 10_000n
++}
++
++export function applySlippage(amount: bigint, slippagePct: number): bigint {
++  const pct = Math.min(50, Math.max(0, Number(slippagePct) || 0))
++  const bps = BigInt(Math.round(pct * 100))
++  return (amount * (10_000n - bps)) / 10_000n
++}
++
++/**
++ * How much of a donation leaves Mercury: the donation less the reserve kept
++ * at the bank, never more than one payment may move.
++ */
++export function sweepAmountCents(
++  amountCents: number,
++  reservePct: number,
++  maxSweepCents: number,
++): number {
++  const pct = Math.min(100, Math.max(0, Number(reservePct) || 0))
++  const kept = Math.floor((Math.round(amountCents) * (100 - pct)) / 100)
++  return Math.max(0, Math.min(kept, Math.round(maxSweepCents)))
++}
++
++export function formatUnitsFixed(
++  amount: bigint,
++  decimals: number,
++  places = 4,
++): string {
++  return Number(ethers.formatUnits(amount, decimals)).toFixed(places)
++}
++
++// ---------------------------------------------------------------- detection --
++
++export interface MercuryCreditLike {
++  id: string
++  amount: number
++  status?: string
++  kind?: string
++  counterpartyId?: string | null
++  counterpartyName?: string | null
++  postedAt?: string | null
++  createdAt?: string | null
++}
++
++export interface DonationFilter {
++  /** Mercury transaction kinds that count; empty means any kind. */
++  kinds: Set<string>
++  minCents: number
++  /** Counterparties whose credits are never donations (the Stripe recipient: an ACH return). */
++  excludeCounterpartyIds: Set<string>
++}
++
++/** A posted credit of a donation kind, large enough, not our own money coming back. */
++export function isDonationCredit(
++  tx: MercuryCreditLike,
++  f: DonationFilter,
++): boolean {
++  const cents = usdToCents(Number(tx.amount) || 0)
++  if (cents <= 0 || cents < f.minCents) return false
++  if (String(tx.status || '').toLowerCase() !== 'sent') return false
++  if (f.kinds.size > 0 && !f.kinds.has(String(tx.kind || ''))) return false
++  if (tx.counterpartyId && f.excludeCounterpartyIds.has(tx.counterpartyId))
++    return false
++  return true
++}
++
++export function postedTime(tx: MercuryCreditLike): number {
++  const t = Date.parse(String(tx.postedAt || tx.createdAt || ''))
++  return Number.isNaN(t) ? 0 : t
++}
++
++export function sha256Hex(s: string): string {
++  return createHash('sha256').update(s, 'utf8').digest('hex')
++}
++
++/** One key per flow and stage: a retry can never create a second payment. */
++export function idempotencyKey(flowId: string, stage: string): string {
++  return `tg-donation-${flowId}-${stage}`
++}
++
++/** The batch key is a function of its members, so a re-formed batch of the same flows reuses it. */
++export function batchKey(flowIds: string[]): string {
++  return `tg-sweep-${sha256Hex([...flowIds].sort().join(',')).slice(0, 24)}`
++}
++
++/** FIFO within a per-run cap: the items that fit go, the rest wait for the next run. */
++export function pickWithinCap<T>(
++  items: T[],
++  amountOf: (item: T) => number,
++  capCents: number,
++): { picked: T[]; deferred: T[] } {
++  const picked: T[] = []
++  const deferred: T[] = []
++  let used = 0
++  for (const item of items) {
++    const a = amountOf(item)
++    if (a > 0 && used + a <= capCents) {
++      picked.push(item)
++      used += a
++    } else {
++      deferred.push(item)
++    }
++  }
++  return { picked, deferred }
++}
++
++// ------------------------------------------------------------------ stages --
++
++export const STAGES = ['sweep', 'onramp', 'swap', 'settle'] as const
++export type StageName = (typeof STAGES)[number]
++
++/** The stage a flow in `status` is waiting on; null when it is done or parked. */
++export function stageForStatus(status: string): StageName | null {
++  switch (status) {
++    case 'detected':
++      return 'sweep'
++    case 'swept':
++      return 'onramp'
++    case 'onramped':
++      return 'swap'
++    case 'bought':
++      return 'settle'
++    default:
++      return null
++  }
++}
++
++/** Where a released flow re-enters, from the stage that parked it. */
++export function releaseTargetStatus(
++  stage: string,
++): 'detected' | 'swept' | 'onramped' | 'bought' {
++  switch (stage) {
++    case 'onramp':
++      return 'swept'
++    case 'swap':
++      return 'onramped'
++    case 'settle':
++      return 'bought'
++    default:
++      return 'detected'
++  }
++}
++
++/** `holdReason` is written as "<stage>: <why>"; this reads the stage back. */
++export function stageFromHoldReason(reason: string): StageName | null {
++  const m = /^(sweep|onramp|swap|settle):/.exec(String(reason || ''))
++  return m ? (m[1] as StageName) : null
++}
++
++// ------------------------------------------------------------------- chain --
++
++export interface UsdcArrival {
++  txHash: string
++  value: bigint
++  blockNumber: number
++  logIndex?: number
++}
++
++/**
++ * The earliest unclaimed USDC transfer whose size matches what Stripe sent.
++ * Fees may shave a little off, so the window is asymmetric around the amount.
++ */
++export function matchUsdcArrival(
++  expectedMicro: bigint,
++  candidates: UsdcArrival[],
++  claimedTxHashes: Set<string>,
++  lowPct = 90,
++  highPct = 102,
++): UsdcArrival | null {
++  if (expectedMicro <= 0n) return null
++  const low = (expectedMicro * BigInt(lowPct)) / 100n
++  const high = (expectedMicro * BigInt(highPct)) / 100n
++  const fits = candidates.filter(
++    c =>
++      !claimedTxHashes.has(c.txHash.toLowerCase()) &&
++      c.value >= low &&
++      c.value <= high,
++  )
++  fits.sort(
++    (a, b) =>
++      a.blockNumber - b.blockNumber || (a.logIndex ?? 0) - (b.logIndex ?? 0),
++  )
++  return fits[0] || null
++}
++
++/** Uniswap V3 path: token, fee (uint24), token, fee, token … packed. */
++export function encodeV3Path(tokens: string[], fees: number[]): string {
++  if (tokens.length < 2 || fees.length !== tokens.length - 1) {
++    throw new Error('encodeV3Path: need n tokens and n-1 fees')
++  }
++  const types: string[] = []
++  const values: (string | number)[] = []
++  tokens.forEach((token, i) => {
++    types.push('address')
++    values.push(token)
++    if (i < fees.length) {
++      types.push('uint24')
++      values.push(fees[i])
++    }
++  })
++  return ethers.solidityPacked(types, values)
++}
++
++export function describePath(symbols: string[], fees: number[]): string {
++  const parts: string[] = []
++  symbols.forEach((s, i) => {
++    parts.push(s)
++    if (i < fees.length) parts.push(String(fees[i]))
++  })
++  return parts.join('-')
++}
++
++export function isAddress(a: unknown): boolean {
++  return typeof a === 'string' && ethers.isAddress(a)
++}
++
++export function sameAddress(a: unknown, b: unknown): boolean {
++  return (
++    isAddress(a) &&
++    isAddress(b) &&
++    String(a).toLowerCase() === String(b).toLowerCase()
++  )
++}
++
++export function isTxHash(s: unknown): boolean {
++  return typeof s === 'string' && /^0x[0-9a-fA-F]{64}$/.test(s)
++}
++
++export function why(error: unknown): string {
++  const msg =
++    error instanceof Error
++      ? error.message
++      : typeof error === 'string'
++        ? error
++        : JSON.stringify(error)
++  return String(msg || 'unknown error').slice(0, 300)
++}
+diff --git a/src/services/treasury/treasuryPipelineService.ts b/src/services/treasury/treasuryPipelineService.ts
+new file mode 100644
+index 0000000..759e244
+--- /dev/null
++++ b/src/services/treasury/treasuryPipelineService.ts
+@@ -0,0 +1,1480 @@
++import { ethers } from 'ethers'
++import DonationFlow from '../../models/DonationFlow'
++import { MongoLease, runUnderLease } from '../../utils/mongoLease'
++import { jsonRpcProvider } from '../verifierMinterService'
++import { LockService } from './lockService'
++import { MercuryClient } from './mercuryClient'
++import { StripeMoneyClient } from './stripeMoneyClient'
++import { SwapService } from './swapService'
++import {
++  ConfigProblem,
++  configProblems,
++  loadTreasuryConfig,
++  redactedConfig,
++  TreasuryConfig,
++  walletAddressOf,
++} from './treasuryConfig'
++import {
++  batchKey,
++  centsToDollars,
++  centsToUsdcMicro,
++  formatUnitsFixed,
++  idempotencyKey,
++  isDonationCredit,
++  isTxHash,
++  matchUsdcArrival,
++  MGRO_DECIMALS,
++  pickWithinCap,
++  PipelineMode,
++  postedTime,
++  releaseTargetStatus,
++  sameAddress,
++  sha256Hex,
++  stageForStatus,
++  stageFromHoldReason,
++  StageName,
++  stripeMinorToUsdcMicro,
++  sweepAmountCents,
++  USDC_DECIMALS,
++  UsdcArrival,
++  usdToCents,
++  why,
++} from './treasuryMath'
++
++const LEASE_TTL_MS = 10 * 60_000
++const FIRST_TICK_MS = 30_000
++const MAX_EVENTS = 60
++const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)')
++const LOG_CHUNK = 10_000
++/** ~2.3 days of Base blocks: how far back a posted payout's USDC is looked for. */
++const MAX_LOG_SPAN = 100_000
++/** How long a send waits for its receipt before leaving confirmation to the next tick. */
++const RECEIPT_WAIT_MS = 90_000
++
++export interface TickSummary {
++  at: string
++  mode: PipelineMode
++  ranUnderLease: boolean
++  detected: number
++  held: number
++  swept: number
++  onramped: number
++  bought: number
++  settled: number
++  failed: number
++  errors: string[]
++  durationMs: number
++}
++
++type Flow = any
++
++export interface PipelineDeps {
++  mercury?: MercuryClient
++  stripe?: StripeMoneyClient
++  provider?: ethers.JsonRpcProvider
++  swap?: SwapService
++  lock?: LockService
++}
++
++const usd = (cents: number) => `$${centsToDollars(cents).toFixed(2)}`
++
++/**
++ * Donations → $MGRO, locked for good.
++ *
++ *   detect   credits on the foundation's Mercury account become DonationFlow rows
++ *   sweep    one ACH per tick moves them to the Stripe financial account
++ *   onramp   Stripe pays the USD out as USDC to the treasury wallet on Base
++ *   swap     the wallet buys canonical $MGRO (Uniswap V3 direct, else OpenOcean)
++ *   settle   the $MGRO is locked (TREASURY_LOCK_METHOD; dead address by default)
++ *
++ * One tick runs the stages in order, under a Mongo lease so a deploy overlap
++ * can never sign twice. Every stage is idempotent: payments carry a key
++ * derived from the flow, chain sends record their hash before anything
++ * waits on them, and a stage that cannot proceed simply leaves its flows
++ * where they are and says why on the status page.
++ *
++ * `dry_run` (the default mode) records the exact request each stage would
++ * send and moves nothing; the public ledger shows only `live` flows.
++ */
++export class TreasuryPipelineService {
++  readonly cfg: TreasuryConfig
++  readonly problems: ConfigProblem[]
++  private readonly mercury: MercuryClient
++  private readonly stripe: StripeMoneyClient
++  private readonly provider: ethers.JsonRpcProvider | null
++  private readonly wallet: ethers.Wallet | null
++  private readonly swap: SwapService | null
++  private readonly lock: LockService | null
++  private readonly lease = new MongoLease('treasury-pipeline', LEASE_TTL_MS)
++  private timer: NodeJS.Timeout | null = null
++  private running = false
++  private payoutMethodOk = false
++  lastTick: TickSummary | null = null
++  startedAt: Date | null = null
++
++  constructor(
++    cfg: TreasuryConfig = loadTreasuryConfig(),
++    deps: PipelineDeps = {},
++  ) {
++    this.cfg = cfg
++    this.problems = configProblems(cfg)
++    this.mercury =
++      deps.mercury ||
++      new MercuryClient({
++        apiBase: cfg.mercury.apiBase,
++        token: cfg.mercury.token,
++      })
++    this.stripe =
++      deps.stripe ||
++      new StripeMoneyClient({
++        secretKey: cfg.stripe.secretKey,
++        apiVersion: cfg.stripe.apiVersion,
++      })
++    this.provider =
++      deps.provider ||
++      (cfg.chain.rpcUrl ? jsonRpcProvider(cfg.chain.rpcUrl) : null)
++    const derived = walletAddressOf(cfg.chain.walletKey)
++    this.wallet =
++      this.provider && derived && sameAddress(derived, cfg.chain.walletAddress)
++        ? new ethers.Wallet(cfg.chain.walletKey, this.provider)
++        : null
++    this.swap =
++      deps.swap ||
++      (this.provider
++        ? new SwapService({
++            provider: this.provider,
++            wallet: this.wallet,
++            usdc: cfg.chain.usdc,
++            weth: cfg.chain.weth,
++            mgro: cfg.chain.mgro,
++            factory: cfg.chain.uniswap.factory,
++            quoter: cfg.chain.uniswap.quoter,
++            router: cfg.chain.uniswap.router,
++            openOceanBase: cfg.chain.openOceanBase,
++            route: cfg.swapRoute,
++            slippagePct: cfg.slippagePct,
++          })
++        : null)
++    this.lock =
++      deps.lock ||
++      (this.provider
++        ? new LockService({
++            provider: this.provider,
++            wallet: this.wallet,
++            mgro: cfg.chain.mgro,
++            method: cfg.lockMethod,
++            forwardTo: cfg.forwardTo,
++            retirementAddress: cfg.retirementAddress,
++            beneficiary: cfg.safe,
++          })
++        : null)
++  }
++
++  get fatal(): ConfigProblem | null {
++    return this.problems.find(p => p.fatal) || null
++  }
++
++  get dryRun(): boolean {
++    return this.cfg.mode !== 'live'
++  }
++
++  /** At least one stage this deployment can run. */
++  get configured(): boolean {
++    return (
++      this.mercury.configured ||
++      this.stripe.configured ||
++      Boolean(this.provider)
++    )
++  }
++
++  get walletAddress(): string {
++    return this.wallet?.address || this.cfg.chain.walletAddress || ''
++  }
++
++  start(): void {
++    if (this.timer) return
++    if (this.cfg.disabled) {
++      console.log('[Treasury] DISABLE_TREASURY_PIPELINE=true; pipeline off')
++      return
++    }
++    if (this.fatal) {
++      console.error(`[Treasury] refusing to start: ${this.fatal.problem}`)
++      return
++    }
++    if (!this.configured) {
++      console.log(
++        '[Treasury] no Mercury, Stripe or chain settings; pipeline idle',
++      )
++      return
++    }
++    for (const p of this.problems)
++      console.warn(`[Treasury] ${p.stage}: ${p.problem}`)
++    const loop = async () => {
++      try {
++        await this.tick()
++      } catch (error) {
++        console.error(`[Treasury] tick failed: ${why(error)}`)
++      } finally {
++        this.timer = setTimeout(loop, this.cfg.pollMs)
++        this.timer.unref()
++      }
++    }
++    this.timer = setTimeout(loop, FIRST_TICK_MS)
++    this.timer.unref()
++    this.startedAt = new Date()
++    console.log(
++      `[Treasury] started: mode=${this.cfg.mode} route=${this.cfg.swapRoute} lock=${this.cfg.lockMethod} every ${this.cfg.pollMs}ms`,
++    )
++  }
++
++  stop(): void {
++    if (this.timer) clearTimeout(this.timer)
++    this.timer = null
++  }
++
++  /** One pass over every stage, in order, in the process that holds the lease. */
++  async tick(): Promise<TickSummary> {
++    const summary: TickSummary = {
++      at: new Date().toISOString(),
++      mode: this.cfg.mode,
++      ranUnderLease: false,
++      detected: 0,
++      held: 0,
++      swept: 0,
++      onramped: 0,
++      bought: 0,
++      settled: 0,
++      failed: 0,
++      errors: [],
++      durationMs: 0,
++    }
++    if (this.running) {
++      summary.errors.push('a tick is already running in this process')
++      return summary
++    }
++    if (this.fatal) {
++      summary.errors.push(this.fatal.problem)
++      return summary
++    }
++    this.running = true
++    const started = Date.now()
++    try {
++      const ran = await runUnderLease(this.lease, async () => {
++        await this.step('detect', summary, () => this.detect(summary))
++        await this.step('sweep', summary, () => this.sweepStage(summary))
++        await this.step('onramp', summary, () => this.onrampStage(summary))
++        await this.step('swap', summary, () => this.swapStage(summary))
++        await this.step('settle', summary, () => this.settleStage(summary))
++      })
++      summary.ranUnderLease = ran.ran
++      if (!ran.ran)
++        summary.errors.push('another process holds the treasury lease')
++    } finally {
++      summary.durationMs = Date.now() - started
++      this.lastTick = summary
++      this.running = false
++    }
++    return summary
++  }
++
++  private async step(
++    name: string,
++    s: TickSummary,
++    fn: () => Promise<void>,
++  ): Promise<void> {
++    try {
++      await fn()
++    } catch (error) {
++      const message = `${name}: ${why(error)}`
++      s.errors.push(message)
++      console.error(`[Treasury] ${message}`)
++    }
++  }
++
++  // ---------------------------------------------------------------- detect --
++
++  /** New credits on the Mercury account become flows; the ledger never learns who sent them. */
++  private async detect(s: TickSummary): Promise<void> {
++    const m = this.cfg.mercury
++    if (!this.mercury.configured || !m.accountId) return
++    const start = new Date(Date.now() - this.cfg.lookbackDays * 86_400_000)
++      .toISOString()
++      .slice(0, 10)
++    const rows = await this.mercury.listAllTransactions(m.accountId, {
++      start,
++      status: 'sent',
++    })
++    const filter = {
++      kinds: new Set(this.cfg.donationKinds),
++      minCents: this.cfg.minDonationCents,
++      excludeCounterpartyIds: new Set(
++        m.stripeRecipientId ? [m.stripeRecipientId] : [],
++      ),
++    }
++    const credits = rows
++      .filter(tx => isDonationCredit(tx, filter))
++      .sort((a, b) => postedTime(a) - postedTime(b))
++    let tickCents = 0
++    for (const tx of credits) {
++      const cents = usdToCents(tx.amount)
++      let status: 'detected' | 'held' = this.cfg.requireApproval
++        ? 'held'
++        : 'detected'
++      let holdReason = this.cfg.requireApproval
++        ? 'sweep: waiting for an admin release (TREASURY_REQUIRE_APPROVAL)'
++        : ''
++      if (status === 'detected' && tickCents + cents > this.cfg.maxTickCents) {
++        status = 'held'
++        holdReason =
++          'sweep: over the per-tick cap (TREASURY_MAX_TICK_USD); release by hand'
++      }
++      const mercury: Record<string, unknown> = {
++        txId: tx.id,
++        accountId: m.accountId,
++        kind: tx.kind || '',
++        counterpartyHash: tx.counterpartyName
++          ? sha256Hex(tx.counterpartyName)
++          : '',
++        memo: '',
++      }
++      if (postedTime(tx)) mercury.postedAt = new Date(postedTime(tx))
++      const result = await DonationFlow.updateOne(
++        { 'mercury.txId': tx.id },
++        {
++          $setOnInsert: {
++            status,
++            mode: this.cfg.mode,
++            amountCents: cents,
++            currency: 'usd',
++            holdReason,
++            mercury,
++            events: [
++              {
++                at: new Date(),
++                stage: 'detect',
++                message: `${usd(cents)} credit (${tx.kind || 'unknown kind'}) seen on Mercury${status === 'held' ? '; held' : ''}`,
++              },
++            ],
++          },
++        },
++        { upsert: true },
++      )
++      if (result.upsertedCount) {
++        s.detected += 1
++        if (status === 'held') s.held += 1
++        else tickCents += cents
++      }
++    }
++  }
++
++  // ----------------------------------------------------------------- sweep --
++
++  /** Mercury → Stripe financial account, one ACH per tick for every flow that fits the cap. */
++  private async sweepStage(s: TickSummary): Promise<void> {
++    const flows: Flow[] = await DonationFlow.find({
++      mode: this.cfg.mode,
++      status: 'detected',
++    })
++      .sort({ createdAt: 1 })
++      .limit(200)
++      .exec()
++    if (!flows.length) return
++    const m = this.cfg.mercury
++    const isSent = (f: Flow) =>
++      f.sweep?.status === 'sent' && Boolean(f.sweep?.mercuryPaymentId)
++
++    // 1. Payments already requested: how are they doing?
++    const byPayment = new Map<string, Flow[]>()
++    for (const f of flows.filter(isSent)) {
++      const id = String(f.sweep.mercuryPaymentId)
++      byPayment.set(id, [...(byPayment.get(id) || []), f])
++    }
++    for (const [paymentId, group] of byPayment) {
++      if (!this.mercury.configured) break
++      try {
++        const tx = await this.mercury.getTransaction(m.accountId, paymentId)
++        const state = String(tx.status || '').toLowerCase()
++        if (state === 'sent') {
++          for (const f of group) {
++            f.sweep.status = 'settled'
++            f.sweep.settledAt = new Date()
++            f.status = 'swept'
++            this.event(
++              f,
++              'sweep',
++              `Mercury payment ${paymentId} sent to Stripe`,
++            )
++            await f.save()
++            s.swept += 1
++          }
++        } else if (state === 'failed' || state === 'cancelled') {
++          for (const f of group) {
++            await this.fail(
++              f,
++              'sweep',
++              `Mercury payment ${paymentId} ${state}${tx.reasonForFailure ? `: ${tx.reasonForFailure}` : ''}`,
++              s,
++              true,
++            )
++          }
++        }
++      } catch (error) {
++        for (const f of group) await this.recordError(f, 'sweep', error, s)
++      }
++    }
++
++    const fresh = flows.filter(f => !isSent(f))
++    if (!fresh.length) return
++    const amountOf = (f: Flow) =>
++      sweepAmountCents(
++        f.amountCents,
++        this.cfg.sweepReservePct,
++        this.cfg.maxSweepCents,
++      )
++
++    // 2. Dry run: show exactly what would be sent, then move on.
++    if (this.dryRun) {
++      for (const f of fresh) {
++        const cents = amountOf(f)
++        const key = idempotencyKey(String(f._id), 'sweep')
++        this.setStage(f, 'sweep', {
++          status: 'skipped',
++          amountCents: cents,
++          idempotencyKey: key,
++          dryRun: {
++            method: 'POST',
++            path: `/account/${m.accountId || '<MERCURY_ACCOUNT_ID>'}/${m.sendMode === 'request' ? 'request-send-money' : 'transactions'}`,
++            body: {
++              recipientId:
++                m.stripeRecipientId || '<MERCURY_STRIPE_RECIPIENT_ID>',
++              amount: centsToDollars(cents),
++              paymentMethod: 'ach',
++              idempotencyKey: key,
++              note: `Treegens donation ${f._id}`,
++            },
++          },
++        })
++        f.status = 'swept'
++        this.event(
++          f,
++          'sweep',
++          `dry run: would send ${usd(cents)} to the Stripe recipient by ACH`,
++        )
++        await f.save()
++        s.swept += 1
++      }
++      return
++    }
++    if (!this.mercury.configured || !m.accountId || !m.stripeRecipientId) return
++
++    // 3. Live. A batch formed earlier but never acknowledged by Mercury is
++    //    retried as-is (same key, same members); otherwise one new batch.
++    const formed = new Map<string, Flow[]>()
++    const unformed: Flow[] = []
++    for (const f of fresh) {
++      if (f.sweep?.batchId)
++        formed.set(f.sweep.batchId, [...(formed.get(f.sweep.batchId) || []), f])
++      else unformed.push(f)
++    }
++    if (formed.size === 0 && unformed.length) {
++      const { picked } = pickWithinCap(
++        unformed,
++        amountOf,
++        this.cfg.maxSweepCents,
++      )
++      if (picked.length) {
++        const batchId = batchKey(picked.map(f => `${f._id}:${f.releases || 0}`))
++        for (const f of picked) {
++          this.setStage(f, 'sweep', {
++            status: 'pending',
++            amountCents: amountOf(f),
++            idempotencyKey: batchId,
++            batchId,
++          })
++          await f.save()
++        }
++        formed.set(batchId, picked)
++      }
++    }
++    for (const [batchId, group] of formed) {
++      const total = group.reduce(
++        (sum, f) => sum + (f.sweep?.amountCents || 0),
++        0,
++      )
++      if (total <= 0) continue
++      try {
++        await this.lease.assertHeld()
++        const tx = await this.mercury.sendMoney(
++          m.accountId,
++          {
++            recipientId: m.stripeRecipientId,
++            amount: centsToDollars(total),
++            paymentMethod: 'ach',
++            idempotencyKey: batchId,
++            note: `Treegens donations ${batchId}`,
++          },
++          m.sendMode,
++        )
++        for (const f of group) {
++          f.sweep.status = 'sent'
++          f.sweep.sentAt = new Date()
++          f.sweep.mercuryPaymentId = String(tx?.id || '')
++          f.sweep.attempts = (f.sweep.attempts || 0) + 1
++          this.event(
++            f,
++            'sweep',
++            `ACH of ${usd(total)} requested from Mercury (${tx?.id || 'no id'}, ${tx?.status || 'unknown'})`,
++          )
++          await f.save()
++        }
++      } catch (error) {
++        for (const f of group) await this.recordError(f, 'sweep', error, s)
++      }
++    }
++  }
++
++  // ---------------------------------------------------------------- onramp --
++
++  /** Stripe USD → USDC on Base, one outbound payment per flow, FIFO within the balance. */
++  private async onrampStage(s: TickSummary): Promise<void> {
++    const flows: Flow[] = await DonationFlow.find({
++      mode: this.cfg.mode,
++      status: 'swept',
++    })
++      .sort({ createdAt: 1 })
++      .limit(200)
++      .exec()
++    if (!flows.length) return
++    const st = this.cfg.stripe
++    const isSent = (f: Flow) =>
++      f.onramp?.status === 'sent' && Boolean(f.onramp?.stripeOutboundPaymentId)
++
++    for (const f of flows.filter(isSent)) {
++      if (!this.stripe.configured) break
++      try {
++        await this.trackOnramp(f, s)
++      } catch (error) {
++        await this.recordError(f, 'onramp', error, s)
++      }
++    }
++    const fresh = flows.filter(f => !isSent(f))
++    if (!fresh.length) return
++    const centsOf = (f: Flow) =>
++      Math.min(f.sweep?.amountCents || f.amountCents, this.cfg.maxOnrampCents)
++
++    if (this.dryRun) {
++      for (const f of fresh) {
++        const cents = centsOf(f)
++        const key = idempotencyKey(String(f._id), 'onramp')
++        this.setStage(f, 'onramp', {
++          status: 'skipped',
++          amountCents: cents,
++          usdcMicro: centsToUsdcMicro(cents).toString(),
++          idempotencyKey: key,
++          dryRun: {
++            method: 'POST',
++            path: '/v2/money_management/outbound_payments',
++            headers: {
++              'Stripe-Version': st.apiVersion,
++              'Idempotency-Key': key,
++            },
++            body: StripeMoneyClient.paymentBody({
++              financialAccount:
++                st.financialAccountId || '<STRIPE_FINANCIAL_ACCOUNT_ID>',
++              fromCurrency: 'usd',
++              payoutMethod:
++                st.payoutMethodId || '<STRIPE_CRYPTO_PAYOUT_METHOD_ID>',
++              toCurrency: 'usdc',
++              amountMinor: cents,
++              amountCurrency: 'usd',
++              description: `Treegens donation ${f._id}`,
++              idempotencyKey: key,
++            }),
++          },
++        })
++        f.status = 'onramped'
++        this.event(
++          f,
++          'onramp',
++          `dry run: would pay out ${usd(cents)} as USDC to the treasury wallet`,
++        )
++        await f.save()
++        s.onramped += 1
++      }
++      return
++    }
++    if (!this.stripe.configured || !st.financialAccountId || !st.payoutMethodId)
++      return
++
++    const pm = await this.checkPayoutMethod()
++    if (!pm.ok) {
++      for (const f of fresh) {
++        this.event(f, 'onramp', pm.reason, true)
++        await f.save()
++      }
++      return
++    }
++    const fa = await this.stripe.getFinancialAccount(st.financialAccountId)
++    let available = StripeMoneyClient.availableMinor(fa, 'usd')
++    for (const f of fresh) {
++      const cents = centsOf(f)
++      if (cents <= 0) {
++        await this.fail(f, 'onramp', 'nothing was swept for this flow', s)
++        continue
++      }
++      if (cents > available) {
++        this.event(
++          f,
++          'onramp',
++          `waiting for ${usd(cents)} to land in the Stripe financial account (available ${usd(available)})`,
++          true,
++        )
++        await f.save()
++        break
++      }
++      const key =
++        f.onramp?.idempotencyKey ||
++        idempotencyKey(String(f._id), 'onramp') +
++          (f.releases ? `-r${f.releases}` : '')
++      this.setStage(f, 'onramp', {
++        status: 'pending',
++        amountCents: cents,
++        idempotencyKey: key,
++      })
++      await f.save()
++      try {
++        await this.lease.assertHeld()
++        const op = await this.stripe.createOutboundPayment({
++          financialAccount: st.financialAccountId,
++          fromCurrency: 'usd',
++          payoutMethod: st.payoutMethodId,
++          toCurrency: 'usdc',
++          amountMinor: cents,
++          amountCurrency: 'usd',
++          description: `Treegens donation ${f._id}`,
++          idempotencyKey: key,
++        })
++        f.onramp.status = 'sent'
++        f.onramp.sentAt = new Date()
++        f.onramp.stripeOutboundPaymentId = String(op?.id || '')
++        f.onramp.attempts = 0
++        available -= cents
++        this.event(
++          f,
++          'onramp',
++          `Stripe outbound payment ${op?.id || 'no id'} created (${op?.status || 'unknown'}): ${usd(cents)} → USDC`,
++        )
++        await f.save()
++      } catch (error) {
++        await this.recordError(f, 'onramp', error, s)
++      }
++    }
++  }
++
++  private async trackOnramp(f: Flow, s: TickSummary): Promise<void> {
++    const op = await this.stripe.getOutboundPayment(
++      f.onramp.stripeOutboundPaymentId,
++    )
++    const status = String(op?.status || '').toLowerCase()
++    if (['failed', 'returned', 'canceled', 'cancelled'].includes(status)) {
++      const detail =
++        op?.status_details?.failed?.reason ||
++        op?.status_details?.returned?.reason ||
++        ''
++      await this.fail(
++        f,
++        'onramp',
++        `Stripe outbound payment ${op.id} ${status}${detail ? `: ${detail}` : ''}`,
++        s,
++        true,
++      )
++      return
++    }
++    if (status !== 'posted') return
++    f.onramp.attempts = (f.onramp.attempts || 0) + 1
++    const expected = centsToUsdcMicro(f.onramp.amountCents || f.amountCents)
++    const arrival = await this.findUsdcArrival(f, op, expected)
++    if (arrival) {
++      f.onramp.usdcMicro = arrival.value.toString()
++      f.onramp.txHash = arrival.txHash
++      f.onramp.status = 'settled'
++      f.onramp.settledAt = new Date()
++      f.status = 'onramped'
++      this.event(
++        f,
++        'onramp',
++        `${formatUnitsFixed(arrival.value, USDC_DECIMALS, 2)} USDC arrived on Base (${arrival.txHash})`,
++      )
++      s.onramped += 1
++    } else if (f.onramp.attempts >= this.cfg.arrivalWaitTicks) {
++      const minor = Number(op?.amount?.value ?? f.onramp.amountCents)
++      f.onramp.usdcMicro = stripeMinorToUsdcMicro(
++        Number.isFinite(minor) && minor > 0 ? minor : f.onramp.amountCents,
++      ).toString()
++      f.onramp.status = 'settled'
++      f.onramp.settledAt = new Date()
++      f.status = 'onramped'
++      this.event(
++        f,
++        'onramp',
++        `Stripe reports the payout posted; no matching USDC transfer was found on Base after ${f.onramp.attempts} checks, so the Stripe amount is used`,
++      )
++      s.onramped += 1
++    } else {
++      this.event(
++        f,
++        'onramp',
++        'posted at Stripe; waiting for the USDC transfer to appear on Base',
++        true,
++      )
++    }
++    await f.save()
++  }
++
++  /** The USDC transfer on Base that belongs to this payout: by Stripe's trace id when it is a tx hash, else by size. */
++  private async findUsdcArrival(
++    f: Flow,
++    op: any,
++    expected: bigint,
++  ): Promise<UsdcArrival | null> {
++    const wallet = this.walletAddress
++    if (!this.provider || !wallet) return null
++    const claimed = new Set<string>(
++      ((await DonationFlow.distinct('onramp.txHash')) as unknown[])
++        .filter(Boolean)
++        .map(h => String(h).toLowerCase()),
++    )
++    const trace = String(op?.trace_id?.value || '')
++    if (isTxHash(trace) && !claimed.has(trace.toLowerCase())) {
++      const receipt = await this.provider.getTransactionReceipt(trace)
++      if (receipt) {
++        const hits = this.usdcTransfersTo(receipt.logs, wallet)
++        if (hits.length) return hits[0]
++      }
++    }
++    const latest = await this.provider.getBlockNumber()
++    const sinceMs = Math.max(
++      0,
++      Date.now() - new Date(f.onramp?.sentAt || f.updatedAt || 0).getTime(),
++    )
++    const span = Math.min(MAX_LOG_SPAN, Math.ceil(sinceMs / 2000) + 3000)
++    const candidates: UsdcArrival[] = []
++    for (
++      let from = Math.max(0, latest - span);
++      from <= latest;
++      from += LOG_CHUNK
++    ) {
++      const logs = await this.provider.getLogs({
++        address: this.cfg.chain.usdc,
++        fromBlock: from,
++        toBlock: Math.min(latest, from + LOG_CHUNK - 1),
++        topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(wallet, 32)],
++      })
++      for (const log of logs) {
++        candidates.push({
++          txHash: log.transactionHash,
++          value: BigInt(log.data),
++          blockNumber: log.blockNumber,
++          logIndex: log.index,
++        })
++      }
++    }
++    return matchUsdcArrival(expected, candidates, claimed)
++  }
++
++  private usdcTransfersTo(
++    logs: readonly ethers.Log[],
++    wallet: string,
++  ): UsdcArrival[] {
++    const out: UsdcArrival[] = []
++    for (const log of logs) {
++      if (!sameAddress(log.address, this.cfg.chain.usdc)) continue
++      if (log.topics[0] !== TRANSFER_TOPIC || log.topics.length < 3) continue
++      if (!sameAddress(ethers.dataSlice(log.topics[2], 12), wallet)) continue
++      out.push({
++        txHash: log.transactionHash,
++        value: BigInt(log.data),
++        blockNumber: log.blockNumber,
++        logIndex: log.index,
++      })
++    }
++    return out
++  }
++
++  /** The Stripe payout method must pay exactly the treasury wallet, on Base. Checked once per process. */
++  private async checkPayoutMethod(): Promise<{ ok: boolean; reason: string }> {
++    if (this.payoutMethodOk) return { ok: true, reason: '' }
++    const expected = this.cfg.chain.walletAddress
++    if (!expected) {
++      return {
++        ok: false,
++        reason:
++          'TREASURY_WALLET_ADDRESS unset: refusing to pay USDC out to an unverified wallet',
++      }
++    }
++    try {
++      const pm = await this.stripe.getPayoutMethod(
++        this.cfg.stripe.payoutMethodId,
++      )
++      const w = StripeMoneyClient.cryptoWalletOf(pm)
++      if (!w) {
++        return {
++          ok: false,
++          reason: `Stripe payout method ${this.cfg.stripe.payoutMethodId} is not a crypto wallet`,
++        }
++      }
++      if (!sameAddress(w.address, expected)) {
++        return {
++          ok: false,
++          reason: `Stripe payout method pays ${w.address}, not the treasury wallet ${expected}; refusing`,
++        }
++      }
++      if (w.network && !w.network.includes('base')) {
++        return {
++          ok: false,
++          reason: `Stripe payout method is on "${w.network}", not Base; refusing`,
++        }
++      }
++      this.payoutMethodOk = true
++      return { ok: true, reason: '' }
++    } catch (error) {
++      return {
++        ok: false,
++        reason: `could not read the Stripe payout method: ${why(error)}`,
++      }
++    }
++  }
++
++  // ------------------------------------------------------------------ swap --
++
++  /** USDC → canonical $MGRO, one swap per flow. */
++  private async swapStage(s: TickSummary): Promise<void> {
++    const flows: Flow[] = await DonationFlow.find({
++      mode: this.cfg.mode,
++      status: 'onramped',
++    })
++      .sort({ createdAt: 1 })
++      .limit(50)
++      .exec()
++    if (!flows.length || !this.swap) return
++    for (const f of flows) {
++      const want = BigInt(f.onramp?.usdcMicro || '0')
++      if (want <= 0n) {
++        await this.fail(f, 'swap', 'no USDC amount recorded for this flow', s)
++        continue
++      }
++      if (f.swap?.status === 'sent' && isTxHash(f.swap.txHash)) {
++        await this.confirmSwap(f, s)
++        continue
++      }
++      if (want < this.cfg.minSwapMicro) {
++        await this.park(
++          f,
++          'swap',
++          `${formatUnitsFixed(want, USDC_DECIMALS, 2)} USDC is below TREASURY_MIN_SWAP_USDC`,
++          s,
++        )
++        continue
++      }
++      if (want > this.cfg.maxSwapMicro) {
++        await this.park(
++          f,
++          'swap',
++          `${formatUnitsFixed(want, USDC_DECIMALS, 2)} USDC is above TREASURY_MAX_SWAP_USDC; raise the cap and release`,
++          s,
++        )
++        continue
++      }
++
++      if (this.dryRun) {
++        let quote = null
++        try {
++          quote = await this.swap.quote(want)
++        } catch (error) {
++          this.event(f, 'swap', `dry run: quote failed: ${why(error)}`)
++        }
++        const out = quote?.amountOut ?? 0n
++        this.setStage(f, 'swap', {
++          status: 'skipped',
++          usdcMicro: want.toString(),
++          mgroWei: out.toString(),
++          quoteMgroWei: out.toString(),
++          route: quote?.route || '',
++          dryRun: {
++            route: quote?.route || 'no route with liquidity yet',
++            amountIn: want.toString(),
++            quotedOut: out.toString(),
++            minOut: (quote?.minOut ?? 0n).toString(),
++            slippagePct: this.cfg.slippagePct,
++          },
++        })
++        f.status = 'bought'
++        this.event(
++          f,
++          'swap',
++          quote
++            ? `dry run: ${formatUnitsFixed(want, USDC_DECIMALS, 2)} USDC would buy about ${formatUnitsFixed(out, MGRO_DECIMALS, 2)} $MGRO via ${quote.route}`
++            : 'dry run: no route with liquidity for USDC → $MGRO yet',
++        )
++        await f.save()
++        s.bought += 1
++        continue
++      }
++      if (!this.wallet) {
++        this.event(
++          f,
++          'swap',
++          'treasury wallet is not configured (or its key does not match TREASURY_WALLET_ADDRESS); waiting',
++          true,
++        )
++        await f.save()
++        continue
++      }
++      const balance = await this.swap.usdcBalance(this.wallet.address)
++      if (balance < want) {
++        await this.waitOrPark(
++          f,
++          'swap',
++          `wallet holds ${formatUnitsFixed(balance, USDC_DECIMALS, 2)} USDC, below this flow's ${formatUnitsFixed(want, USDC_DECIMALS, 2)}`,
++          s,
++        )
++        continue
++      }
++      const quote = await this.swap.quote(want)
++      if (!quote) {
++        await this.waitOrPark(
++          f,
++          'swap',
++          'no route with liquidity for USDC → $MGRO',
++          s,
++        )
++        continue
++      }
++      try {
++        await this.lease.assertHeld()
++        const sent = await this.swap.send(quote)
++        this.setStage(f, 'swap', {
++          status: 'sent',
++          sentAt: new Date(),
++          usdcMicro: want.toString(),
++          quoteMgroWei: quote.amountOut.toString(),
++          route: quote.route,
++          txHash: sent.hash,
++        })
++        this.event(f, 'swap', `swap sent via ${quote.route}: ${sent.hash}`)
++        await f.save()
++        await this.waitBriefly(sent.hash)
++        await this.confirmSwap(f, s)
++      } catch (error) {
++        await this.recordError(f, 'swap', error, s)
++      }
++    }
++  }
++
++  private async confirmSwap(f: Flow, s: TickSummary): Promise<void> {
++    if (!this.swap) return
++    const result = await this.swap.confirm(f.swap.txHash)
++    if (result.state === 'pending') {
++      this.event(f, 'swap', `waiting for ${f.swap.txHash} to be mined`, true)
++      await f.save()
++      return
++    }
++    if (result.state === 'reverted') {
++      f.swap.status = 'pending'
++      f.swap.txHash = ''
++      await this.recordError(
++        f,
++        'swap',
++        new Error(`swap ${result.hash} reverted`),
++        s,
++      )
++      return
++    }
++    if (result.amountOut <= 0n) {
++      await this.park(
++        f,
++        'swap',
++        `swap ${result.hash} was mined but no $MGRO reached the wallet; check the route`,
++        s,
++      )
++      return
++    }
++    f.swap.status = 'settled'
++    f.swap.settledAt = new Date()
++    f.swap.mgroWei = result.amountOut.toString()
++    f.status = 'bought'
++    this.event(
++      f,
++      'swap',
++      `bought ${formatUnitsFixed(result.amountOut, MGRO_DECIMALS, 4)} $MGRO (${result.hash})`,
++    )
++    await f.save()
++    s.bought += 1
++  }
++
++  // ---------------------------------------------------------------- settle --
++
++  /** The bought $MGRO leaves circulation. */
++  private async settleStage(s: TickSummary): Promise<void> {
++    const flows: Flow[] = await DonationFlow.find({
++      mode: this.cfg.mode,
++      status: 'bought',
++    })
++      .sort({ createdAt: 1 })
++      .limit(50)
++      .exec()
++    if (!flows.length || !this.lock || !this.swap) return
++    const described = this.lock.describe()
++    for (const f of flows) {
++      const amount = BigInt(f.swap?.mgroWei || '0')
++      if (amount <= 0n) {
++        await this.fail(f, 'settle', 'no $MGRO recorded from the swap', s)
++        continue
++      }
++      if (f.settle?.status === 'sent' && isTxHash(f.settle.txHash)) {
++        await this.confirmSettle(f, s)
++        continue
++      }
++      if (this.dryRun) {
++        this.setStage(f, 'settle', {
++          status: 'skipped',
++          mgroWei: amount.toString(),
++          to: described.to,
++          method: described.method,
++          retired: described.retired,
++          dryRun: {
++            method: described.method,
++            to: described.to,
++            amountWei: amount.toString(),
++            beneficiary: this.cfg.safe,
++          },
++        })
++        f.status = 'settled'
++        this.event(
++          f,
++          'settle',
++          `dry run: would lock ${formatUnitsFixed(amount, MGRO_DECIMALS, 4)} $MGRO (${described.method} → ${described.to})`,
++        )
++        await f.save()
++        s.settled += 1
++        continue
++      }
++      if (!this.wallet) {
++        this.event(
++          f,
++          'settle',
++          'treasury wallet is not configured; waiting',
++          true,
++        )
++        await f.save()
++        continue
++      }
++      const problems = await this.lock.preflight()
++      if (problems.length) {
++        await this.park(f, 'settle', problems.join('; '), s)
++        continue
++      }
++      const balance = await this.swap.mgroBalance(this.wallet.address)
++      if (balance < amount) {
++        await this.waitOrPark(
++          f,
++          'settle',
++          `wallet holds ${formatUnitsFixed(balance, MGRO_DECIMALS, 4)} $MGRO, below this flow's ${formatUnitsFixed(amount, MGRO_DECIMALS, 4)}`,
++          s,
++        )
++        continue
++      }
++      try {
++        await this.lease.assertHeld()
++        const sent = await this.lock.send(amount, String(f._id))
++        this.setStage(f, 'settle', {
++          status: 'sent',
++          sentAt: new Date(),
++          mgroWei: amount.toString(),
++          to: sent.to,
++          method: sent.method,
++          txHash: sent.hash,
++          retired: sent.method !== 'forward',
++        })
++        this.event(f, 'settle', `lock sent (${sent.method}): ${sent.hash}`)
++        await f.save()
++        await this.waitBriefly(sent.hash)
++        await this.confirmSettle(f, s)
++      } catch (error) {
++        await this.recordError(f, 'settle', error, s)
++      }
++    }
++  }
++
++  private async confirmSettle(f: Flow, s: TickSummary): Promise<void> {
++    if (!this.lock) return
++    const result = await this.lock.confirm(f.settle.txHash)
++    if (result.state === 'pending') {
++      this.event(
++        f,
++        'settle',
++        `waiting for ${f.settle.txHash} to be mined`,
++        true,
++      )
++      await f.save()
++      return
++    }
++    if (result.state === 'reverted') {
++      f.settle.status = 'pending'
++      f.settle.txHash = ''
++      await this.recordError(
++        f,
++        'settle',
++        new Error(`lock ${result.hash} reverted`),
++        s,
++      )
++      return
++    }
++    f.settle.status = 'settled'
++    f.settle.settledAt = new Date()
++    if (result.tokenId !== undefined) f.settle.tokenId = result.tokenId
++    f.status = 'settled'
++    this.event(
++      f,
++      'settle',
++      `${formatUnitsFixed(BigInt(f.settle.mgroWei || '0'), MGRO_DECIMALS, 4)} $MGRO locked for good (${f.settle.method}, ${result.hash})`,
++    )
++    await f.save()
++    s.settled += 1
++  }
++
++  // ----------------------------------------------------------------- admin --
++
++  async status() {
++    const counts = await DonationFlow.aggregate([
++      {
++        $group: {
++          _id: { mode: '$mode', status: '$status' },
++          count: { $sum: 1 },
++          cents: { $sum: '$amountCents' },
++        },
++      },
++    ])
++    const flows: Record<
++      string,
++      Record<string, { count: number; usd: number }>
++    > = {}
++    for (const r of counts as any[]) {
++      const mode = String(r._id?.mode || 'unknown')
++      flows[mode] = flows[mode] || {}
++      flows[mode][String(r._id?.status)] = {
++        count: r.count,
++        usd: Math.round(r.cents || 0) / 100,
++      }
++    }
++    const [wallet, stripe] = await Promise.all([
++      this.walletBalances(),
++      this.stripeBalances(),
++    ])
++    return {
++      running: Boolean(this.timer),
++      startedAt: this.startedAt?.toISOString() || null,
++      mode: this.cfg.mode,
++      dryRun: this.dryRun,
++      problems: this.problems,
++      config: redactedConfig(this.cfg),
++      lastTick: this.lastTick,
++      flows,
++      wallet,
++      stripe,
++      lockDestination: this.lock?.describe() || null,
++    }
++  }
++
++  private async walletBalances() {
++    const address = this.walletAddress
++    if (!this.provider || !address || !this.swap) return null
++    try {
++      const [eth, usdc, mgro] = await Promise.all([
++        this.provider.getBalance(address),
++        this.swap.usdcBalance(address),
++        this.swap.mgroBalance(address),
++      ])
++      return {
++        address,
++        signerLoaded: Boolean(this.wallet),
++        eth: Number(ethers.formatEther(eth)).toFixed(5),
++        usdc: formatUnitsFixed(usdc, USDC_DECIMALS, 2),
++        mgro: formatUnitsFixed(mgro, MGRO_DECIMALS, 4),
++      }
++    } catch (error) {
++      return { address, signerLoaded: Boolean(this.wallet), error: why(error) }
++    }
++  }
++
++  private async stripeBalances() {
++    const id = this.cfg.stripe.financialAccountId
++    if (!this.stripe.configured || !id) return null
++    try {
++      const fa = await this.stripe.getFinancialAccount(id)
++      return {
++        financialAccountId: id,
++        status: fa?.status || null,
++        usdAvailable: StripeMoneyClient.availableMinor(fa, 'usd') / 100,
++        usdcAvailable: StripeMoneyClient.availableMinor(fa, 'usdc') / 100,
++      }
++    } catch (error) {
++      return { financialAccountId: id, error: why(error) }
++    }
++  }
++
++  /** What the operator needs from Stripe: financial accounts, their bank details, payout methods. */
++  async stripeOverview() {
++    if (!this.stripe.configured) return { configured: false }
++    const accounts = await this.stripe.listFinancialAccounts()
++    const faId = this.cfg.stripe.financialAccountId
++    let addresses: unknown = null
++    if (faId) {
++      try {
++        addresses = await this.stripe.listFinancialAddresses(faId)
++      } catch (error) {
++        addresses = { error: why(error) }
++      }
++    }
++    let payoutMethods: unknown = null
++    try {
++      const pms = await this.stripe.listPayoutMethods()
++      payoutMethods = (pms?.data || []).map((pm: any) => ({
++        id: pm.id,
++        type: pm.type,
++        status: pm.status ?? pm.usage_status ?? null,
++        wallet: StripeMoneyClient.cryptoWalletOf(pm),
++        isConfigured: pm.id === this.cfg.stripe.payoutMethodId,
++      }))
++    } catch (error) {
++      payoutMethods = { error: why(error) }
++    }
++    return {
++      configured: true,
++      financialAccounts: (accounts?.data || []).map((fa: any) => ({
++        id: fa.id,
++        status: fa.status,
++        isConfigured: fa.id === faId,
++        usdAvailable: StripeMoneyClient.availableMinor(fa, 'usd') / 100,
++        usdcAvailable: StripeMoneyClient.availableMinor(fa, 'usdc') / 100,
++      })),
++      financialAddresses: addresses,
++      payoutMethods,
++    }
++  }
++
++  /** What the operator needs from Mercury: the accounts and the saved recipients. */
++  async mercuryOverview() {
++    if (!this.mercury.configured) return { configured: false }
++    const [accounts, recipients] = await Promise.all([
++      this.mercury.listAccounts().catch(error => ({ error: why(error) })),
++      this.mercury.listRecipients().catch(error => ({ error: why(error) })),
++    ])
++    return {
++      configured: true,
++      accounts: Array.isArray((accounts as any)?.accounts)
++        ? (accounts as any).accounts.map((a: any) => ({
++            id: a.id,
++            name: a.name,
++            kind: a.kind,
++            status: a.status,
++            isConfigured: a.id === this.cfg.mercury.accountId,
++          }))
++        : accounts,
++      recipients: Array.isArray((recipients as any)?.recipients)
++        ? (recipients as any).recipients.map((r: any) => ({
++            id: r.id,
++            name: r.name,
++            status: r.status,
++            paymentMethod: r.paymentMethod ?? r.defaultPaymentMethod ?? null,
++            isConfigured: r.id === this.cfg.mercury.stripeRecipientId,
++          }))
++        : recipients,
++    }
++  }
++
++  /**
++   * Let a held, failed or dry-run flow go (again). A stage whose payment or
++   * transaction is still out there keeps its ids and is polled; one the
++   * provider rejected starts over with a fresh idempotency key.
++   */
++  async release(id: string): Promise<Flow | null> {
++    const f: Flow = await DonationFlow.findById(id)
++    if (!f) return null
++    if (f.mode !== this.cfg.mode) {
++      const from = f.mode
++      f.mode = this.cfg.mode
++      f.status = 'detected'
++      f.sweep = undefined
++      f.onramp = undefined
++      f.swap = undefined
++      f.settle = undefined
++      f.holdReason = ''
++      this.event(
++        f,
++        'admin',
++        `released into ${this.cfg.mode} mode from a ${from} record`,
++      )
++      await f.save()
++      return f
++    }
++    if (f.status !== 'held' && f.status !== 'failed') return f
++    const stage: StageName =
++      stageFromHoldReason(f.holdReason) || stageForStatus(f.status) || 'sweep'
++    const st = this.stageDoc(f, stage)
++    if (st.status === 'sent') {
++      // The payment or transaction exists; keep polling it.
++    } else {
++      st.status = 'pending'
++      st.mercuryPaymentId = ''
++      st.batchId = ''
++      st.stripeOutboundPaymentId = ''
++      st.txHash = ''
++      st.idempotencyKey = ''
++      f.releases = (f.releases || 0) + 1
++    }
++    st.error = ''
++    st.attempts = 0
++    f.status = releaseTargetStatus(stage)
++    f.holdReason = ''
++    this.event(f, 'admin', `released at ${stage}; now ${f.status}`)
++    await f.save()
++    return f
++  }
++
++  /** Park a flow that is still moving; it remembers the stage it was at. */
++  async hold(id: string, reason: string): Promise<Flow | null> {
++    const f: Flow = await DonationFlow.findById(id)
++    if (!f) return null
++    const stage = stageForStatus(f.status)
++    if (!stage) return f
++    f.status = 'held'
++    f.holdReason = `${stage}: admin hold: ${reason || 'no reason given'}`
++    this.event(f, 'admin', `held at ${stage}: ${reason || 'no reason given'}`)
++    await f.save()
++    return f
++  }
++
++  // --------------------------------------------------------------- helpers --
++
++  private stageDoc(f: Flow, stage: StageName): any {
++    if (!f[stage]) f[stage] = {}
++    return f[stage]
++  }
++
++  private setStage(f: Flow, stage: StageName, patch: Record<string, unknown>) {
++    const current = f[stage]
++    const base =
++      current && typeof current.toObject === 'function'
++        ? current.toObject()
++        : current || {}
++    f[stage] = { ...base, ...patch }
++  }
++
++  private event(f: Flow, stage: string, message: string, dedupe = false) {
++    if (!Array.isArray(f.events)) f.events = []
++    const last = f.events[f.events.length - 1]
++    if (dedupe && last && last.stage === stage && last.message === message) {
++      last.at = new Date()
++      return
++    }
++    f.events.push({ at: new Date(), stage, message })
++    if (f.events.length > MAX_EVENTS)
++      f.events.splice(0, f.events.length - MAX_EVENTS)
++  }
++
++  private async recordError(
++    f: Flow,
++    stage: StageName,
++    error: unknown,
++    s: TickSummary,
++  ) {
++    const st = this.stageDoc(f, stage)
++    st.attempts = (st.attempts || 0) + 1
++    st.error = why(error)
++    this.event(f, stage, `attempt ${st.attempts} failed: ${st.error}`)
++    console.error(`[Treasury] flow ${f._id} ${stage}: ${st.error}`)
++    if (st.attempts >= this.cfg.maxAttempts) {
++      await this.fail(
++        f,
++        stage,
++        `gave up after ${st.attempts} attempts: ${st.error}`,
++        s,
++      )
++      return
++    }
++    await f.save()
++  }
++
++  /** Not an error, but the flow cannot move yet; after enough checks it is parked so the queue shows it. */
++  private async waitOrPark(
++    f: Flow,
++    stage: StageName,
++    reason: string,
++    s: TickSummary,
++  ) {
++    const st = this.stageDoc(f, stage)
++    st.attempts = (st.attempts || 0) + 1
++    if (st.attempts >= this.cfg.maxAttempts) {
++      await this.park(f, stage, `${reason} (after ${st.attempts} checks)`, s)
++      return
++    }
++    this.event(f, stage, `${reason}; waiting`, true)
++    await f.save()
++  }
++
++  private async park(
++    f: Flow,
++    stage: StageName,
++    reason: string,
++    s: TickSummary,
++  ) {
++    f.status = 'held'
++    f.holdReason = `${stage}: ${reason}`
++    this.stageDoc(f, stage).error = reason
++    this.event(f, stage, `held: ${reason}`)
++    console.warn(`[Treasury] flow ${f._id} held at ${stage}: ${reason}`)
++    s.held += 1
++    await f.save()
++  }
++
++  /**
++   * `terminal` means the provider itself declared the payment dead, so its
++   * ids are dropped and a release starts the stage over with a fresh key.
++   * Otherwise the ids stay: a release resumes polling what was sent.
++   */
++  private async fail(
++    f: Flow,
++    stage: StageName,
++    reason: string,
++    s: TickSummary,
++    terminal = false,
++  ) {
++    const st = this.stageDoc(f, stage)
++    if (terminal) {
++      st.status = 'failed'
++      st.mercuryPaymentId = ''
++      st.batchId = ''
++      st.stripeOutboundPaymentId = ''
++      st.txHash = ''
++    }
++    st.error = reason
++    f.status = 'failed'
++    f.holdReason = `${stage}: ${reason}`
++    this.event(f, stage, `failed: ${reason}`)
++    console.error(`[Treasury] flow ${f._id} failed at ${stage}: ${reason}`)
++    s.failed += 1
++    await f.save()
++  }
++
++  private async waitBriefly(hash: string): Promise<void> {
++    if (!this.provider) return
++    try {
++      await this.provider.waitForTransaction(hash, 1, RECEIPT_WAIT_MS)
++    } catch {
++      // Not mined yet: confirm() picks it up on the next tick.
++    }
++  }
++}
++
++export default TreasuryPipelineService
 -- 
 2.43.0
 

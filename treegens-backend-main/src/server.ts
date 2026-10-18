@@ -7,6 +7,9 @@ import env from './config/environment'
 import { swaggerSpec, swaggerUi, swaggerUiOptions } from './config/swagger'
 import errorHandler from './middleware/errorHandler'
 import { globalApiLimiter } from './middleware/rateLimits'
+import adminTreasuryRoutes, {
+  attachTreasuryPipeline,
+} from './routes/adminTreasury'
 import authRoutes from './routes/auth'
 import conversationsRoutes from './routes/conversations'
 import distributionsRoutes from './routes/distributions'
@@ -19,6 +22,7 @@ import transparencyRoutes, { attachLedgerIndexer } from './routes/transparency'
 import userRoutes from './routes/users'
 import BurnIndexerService from './services/burnIndexerService'
 import TransparencyIndexerService from './services/transparencyIndexerService'
+import { TreasuryPipelineService } from './services/treasury/treasuryPipelineService'
 import { startStitchRetrier } from './services/verifiedVideoStitchService'
 import VerifierService from './services/verifierService'
 import { startRewardClaimWorker } from './workers/rewardClaimWorker'
@@ -61,6 +65,8 @@ app.use('/api/notifications', notificationsRoutes)
 app.use('/api/push', pushRoutes)
 app.use('/api/conversations', conversationsRoutes)
 app.use('/api/auth', authRoutes)
+// Donation pipeline console (bearer ADMIN_API_TOKEN).
+app.use('/api/admin/treasury', adminTreasuryRoutes)
 // Public open ledger (transparency.treegens.org). Read-only, cached, CORS *.
 app.use('/api/transparency', transparencyRoutes)
 app.use('/health', healthRoutes)
@@ -159,6 +165,24 @@ if (env.ENABLE_LEDGER_INDEXER === 'true') {
     console.log('[LedgerIndexer] Started in API process')
   } catch (error: any) {
     console.error('[LedgerIndexer] Failed to start', {
+      message: error?.message || String(error),
+    })
+  }
+}
+
+// Donations → $MGRO, locked for good: Mercury credits are swept to the
+// Stripe financial account, paid out as USDC to the treasury wallet on Base,
+// swapped for canonical $MGRO and sent to the burn address. Dry run unless
+// TREASURY_PIPELINE_MODE=live; idle until the Mercury / Stripe / wallet
+// settings exist; one process at a time under a Mongo lease. The console at
+// /api/admin/treasury/* shows every flow and what it is waiting on.
+if (env.ENABLE_TREASURY_PIPELINE === 'true') {
+  try {
+    const treasury = new TreasuryPipelineService()
+    treasury.start()
+    attachTreasuryPipeline(treasury)
+  } catch (error: any) {
+    console.error('[Treasury] Failed to start', {
       message: error?.message || String(error),
     })
   }

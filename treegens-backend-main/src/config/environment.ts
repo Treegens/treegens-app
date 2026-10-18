@@ -753,6 +753,20 @@ class EnvironmentConfig {
     return process.env.ENABLE_LEDGER_INDEXER || 'false'
   }
 
+  /**
+   * Donation pipeline (Mercury → Stripe → USDC → $MGRO → locked). Off unless
+   * 'true'; even then it moves nothing until TREASURY_PIPELINE_MODE=live and
+   * the Mercury / Stripe / wallet settings exist. See docs/TREASURY_PIPELINE.md.
+   */
+  get ENABLE_TREASURY_PIPELINE() {
+    return process.env.ENABLE_TREASURY_PIPELINE || 'false'
+  }
+
+  /** Shared bearer token for /api/admin/*; unset keeps those routes closed. */
+  get ADMIN_API_TOKEN() {
+    return process.env.ADMIN_API_TOKEN || ''
+  }
+
   get LEDGER_INDEXER_POLL_MS() {
     const raw = process.env.LEDGER_INDEXER_POLL_MS
     const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : 60000

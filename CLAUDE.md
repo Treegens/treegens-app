@@ -58,3 +58,19 @@ Jimi's admin wallet before any real payout.
   `NEXT_PUBLIC_API_URL`). The same transparency API + indexer was ported there
   on branch `claude/open-ledger-api`; the site probes that origin first and
   falls back to `treegens-api.onrender.com`.
+
+## 💸 Donation pipeline (Jimi's go-ahead, 2026-10-18)
+
+- Jimi: *take the USD, on-ramp it to USDC, buy $MGRO and permanently lock it.*
+  Code: `treegens-backend-main/src/services/treasury/` (same files carried to
+  the live backend in `ops/patches/`). Runbook:
+  `treegens-backend-main/docs/TREASURY_PIPELINE.md`.
+- Stages: Mercury credit → ACH to the Stripe financial account → Stripe
+  outbound payment as USDC to the treasury wallet on Base → swap for the
+  **canonical** $MGRO (Uniswap V3 USDC→WETH→MGRO, else OpenOcean) → lock
+  (`TREASURY_LOCK_METHOD`, default transfer to `0x…dEaD`).
+- Safety that must stay: `dry_run` default, caps, idempotency keys, the
+  wallet key pinned to `TREASURY_WALLET_ADDRESS`, the Stripe payout method
+  checked against that address, the `0xe846…2283` MGRO deployment refused.
+- Console: `/api/admin/treasury/*` (bearer `ADMIN_API_TOKEN`). The public
+  ledger shows live flows as `donation` items (amounts + hashes, never a donor).

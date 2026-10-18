@@ -1,6 +1,7 @@
 import { Contract, JsonRpcProvider } from 'ethers'
 import mongoose from 'mongoose'
 import env from '../config/environment'
+import DonationFlow from '../models/DonationFlow'
 import HealthCheck from '../models/HealthCheck'
 import OnchainEvent from '../models/OnchainEvent'
 import OnchainIndexerState from '../models/OnchainIndexerState'
@@ -46,6 +47,7 @@ const DEFAULT_FLOW_KINDS: FlowKind[] = [
   'retire',
   'verified',
   'update',
+  'donation',
 ]
 
 const ERC20_READ_ABI = [
@@ -440,12 +442,15 @@ export class TransparencyService {
       }
     }
     const schedule = getClaimScheduleConfig()
+    const donations = await this.donationTotals()
 
     return {
       generatedAt: new Date().toISOString(),
       chain: { id: 8453, name: 'Base', explorer: this.explorer },
       contracts: this.known,
       totals: {
+        /** treegensfoundation.org donations on their way to locked $MGRO. */
+        donations,
         plantings: {
           approved: approvedSubs.length,
           pendingReview,
@@ -569,57 +574,67 @@ export class TransparencyService {
     if (wanted.has('payout')) eventKinds.push('tgn_payout')
     if (wanted.has('proposal')) eventKinds.push('mint_proposed')
 
-    const [events, distributions, approved, updates] = await Promise.all([
-      eventKinds.length
-        ? OnchainEvent.find({
-            kind: { $in: eventKinds },
-            ...(cursorDate ? { blockTime: { $lte: cursorDate } } : {}),
-            ...(sid ? { 'meta.submissionId': sid } : {}),
-          })
-            .sort({ blockTime: -1, logIndex: -1 })
-            .limit(fetchN)
-            .lean()
-        : Promise.resolve([] as any[]),
-      wanted.has('funding')
-        ? TgnDistribution.find({
-            planterTx: { $nin: ['', null] },
-            ...(cursorDate ? { distributedAt: { $lte: cursorDate } } : {}),
-            ...(sidFilter ? { submissionId: sidFilter } : {}),
-          })
-            .sort({ distributedAt: -1 })
-            .limit(fetchN)
-            .lean()
-        : Promise.resolve([] as any[]),
-      wanted.has('verified')
-        ? Submission.find(
-            {
+    const [events, distributions, approved, updates, donations] =
+      await Promise.all([
+        eventKinds.length
+          ? OnchainEvent.find({
+              kind: { $in: eventKinds },
+              ...(cursorDate ? { blockTime: { $lte: cursorDate } } : {}),
+              ...(sid ? { 'meta.submissionId': sid } : {}),
+            })
+              .sort({ blockTime: -1, logIndex: -1 })
+              .limit(fetchN)
+              .lean()
+          : Promise.resolve([] as any[]),
+        wanted.has('funding')
+          ? TgnDistribution.find({
+              planterTx: { $nin: ['', null] },
+              ...(cursorDate ? { distributedAt: { $lte: cursorDate } } : {}),
+              ...(sidFilter ? { submissionId: sidFilter } : {}),
+            })
+              .sort({ distributedAt: -1 })
+              .limit(fetchN)
+              .lean()
+          : Promise.resolve([] as any[]),
+        wanted.has('verified')
+          ? Submission.find(
+              {
+                status: 'approved',
+                reviewedAt: {
+                  $ne: null,
+                  ...(cursorDate ? { $lte: cursorDate } : {}),
+                },
+                ...(sidFilter ? { _id: sidFilter } : {}),
+              },
+              SUBMISSION_PROJECTION,
+            )
+              .sort({ reviewedAt: -1 })
+              .limit(fetchN)
+              .lean<SubmissionLean[]>()
+          : Promise.resolve([] as SubmissionLean[]),
+        wanted.has('update')
+          ? HealthCheck.find({
               status: 'approved',
               reviewedAt: {
                 $ne: null,
                 ...(cursorDate ? { $lte: cursorDate } : {}),
               },
-              ...(sidFilter ? { _id: sidFilter } : {}),
-            },
-            SUBMISSION_PROJECTION,
-          )
-            .sort({ reviewedAt: -1 })
-            .limit(fetchN)
-            .lean<SubmissionLean[]>()
-        : Promise.resolve([] as SubmissionLean[]),
-      wanted.has('update')
-        ? HealthCheck.find({
-            status: 'approved',
-            reviewedAt: {
-              $ne: null,
-              ...(cursorDate ? { $lte: cursorDate } : {}),
-            },
-            ...(sidFilter ? { submissionId: sidFilter } : {}),
-          })
-            .sort({ reviewedAt: -1 })
-            .limit(fetchN)
-            .lean()
-        : Promise.resolve([] as any[]),
-    ])
+              ...(sidFilter ? { submissionId: sidFilter } : {}),
+            })
+              .sort({ reviewedAt: -1 })
+              .limit(fetchN)
+              .lean()
+          : Promise.resolve([] as any[]),
+        wanted.has('donation') && !sid
+          ? DonationFlow.find({
+              mode: 'live',
+              ...(cursorDate ? { updatedAt: { $lte: cursorDate } } : {}),
+            })
+              .sort({ updatedAt: -1 })
+              .limit(fetchN)
+              .lean()
+          : Promise.resolve([] as any[]),
+      ])
 
     const submissionIds = new Set<string>()
     for (const e of events)
@@ -636,6 +651,7 @@ export class TransparencyService {
       items.push(this.distributionToFlow(d, subs, roles))
     for (const s of approved) items.push(this.approvalToFlow(s, roles))
     for (const h of updates) items.push(this.healthCheckToFlow(h, subs))
+    for (const f of donations) items.push(this.donationToFlow(f))
 
     items.sort(compareFlowDesc)
     const page = afterCursor(items, opts.cursor).slice(0, limit)
@@ -644,12 +660,102 @@ export class TransparencyService {
       distributions.length < fetchN &&
       approved.length < fetchN &&
       updates.length < fetchN &&
+      donations.length < fetchN &&
       afterCursor(items, opts.cursor).length <= limit
     const last = page[page.length - 1]
     return {
       items: page,
       nextCursor: !exhausted && last ? encodeCursor(last) : null,
       kinds,
+    }
+  }
+
+  /** Aggregates of the treasury pipeline's donation flows (amounts only, live mode). */
+  private async donationTotals() {
+    const rows = await DonationFlow.aggregate([
+      { $match: { mode: 'live' } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          cents: { $sum: '$amountCents' },
+          usdcMicro: { $sum: safeDecimal('$onramp.usdcMicro') },
+          mgroBoughtWei: { $sum: safeDecimal('$swap.mgroWei') },
+          mgroSettledWei: { $sum: safeDecimal('$settle.mgroWei') },
+        },
+      },
+    ])
+    const byStatus: Record<string, any> = {}
+    let count = 0
+    let cents = 0
+    const usdc: string[] = []
+    const bought: string[] = []
+    const settled: string[] = []
+    for (const r of rows as any[]) {
+      byStatus[r._id] = { count: r.count, usd: Math.round(r.cents) / 100 }
+      count += r.count
+      cents += r.cents
+      usdc.push(decimalToWeiString(r.usdcMicro))
+      bought.push(decimalToWeiString(r.mgroBoughtWei))
+      settled.push(decimalToWeiString(r.mgroSettledWei))
+    }
+    return {
+      count,
+      usd: Math.round(cents) / 100,
+      usdcMicro: sumWei(usdc),
+      mgroBoughtWei: sumWei(bought),
+      mgroSettledWei: sumWei(settled),
+      byStatus,
+    }
+  }
+
+  /** A donation's journey, amounts and transactions only: never the donor. */
+  private donationToFlow(f: any): FlowItem {
+    const usd = Math.round(Number(f.amountCents) || 0) / 100
+    const stage =
+      f.status === 'settled'
+        ? f.settle?.retired
+          ? '$MGRO bought and locked for good'
+          : '$MGRO delivered to the treasury Safe'
+        : f.status === 'bought'
+          ? '$MGRO bought on Base'
+          : f.status === 'onramped'
+            ? 'converted to USDC on Base'
+            : f.status === 'swept'
+              ? 'on its way from the bank to Stripe'
+              : f.status === 'held'
+                ? 'waiting for release'
+                : f.status === 'failed'
+                  ? 'needs attention'
+                  : 'received at the bank'
+    const tx = isTxHash(f.settle?.txHash)
+      ? f.settle.txHash
+      : isTxHash(f.swap?.txHash)
+        ? f.swap.txHash
+        : isTxHash(f.onramp?.txHash)
+          ? f.onramp.txHash
+          : undefined
+    return {
+      id: `donation:${String(f._id)}`,
+      kind: 'donation',
+      at: new Date(f.updatedAt || f.createdAt).toISOString(),
+      title: `$${usd.toFixed(2)} donation · ${stage}`,
+      detail:
+        'treegensfoundation.org → Mercury → Stripe (USDC) → $MGRO on Base',
+      amount: { token: 'USD', value: usd },
+      verified: Boolean(tx),
+      txHash: tx,
+      explorerUrl: tx ? explorerTxUrl(this.explorer, tx) : undefined,
+      meta: {
+        status: f.status,
+        usdcMicro: f.onramp?.usdcMicro || '0',
+        mgroWei: f.swap?.mgroWei || '0',
+        onrampTx: isTxHash(f.onramp?.txHash) ? f.onramp.txHash : null,
+        swapTx: isTxHash(f.swap?.txHash) ? f.swap.txHash : null,
+        settleTx: isTxHash(f.settle?.txHash) ? f.settle.txHash : null,
+        retired: Boolean(f.settle?.retired),
+        lock: f.settle?.method || null,
+      },
     }
   }
 

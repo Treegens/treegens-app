@@ -10,6 +10,7 @@ export type FlowKind =
   | 'verified'
   | 'update'
   | 'proposal'
+  | 'donation'
 
 export const FLOW_KINDS: FlowKind[] = [
   'funding',
@@ -19,6 +20,7 @@ export const FLOW_KINDS: FlowKind[] = [
   'verified',
   'update',
   'proposal',
+  'donation',
 ]
 
 export type FlowParty = { address: string; label: string; name?: string }
@@ -30,7 +32,11 @@ export type FlowItem = {
   at: string
   title: string
   detail?: string
-  amount?: { token: 'USD' | 'TGN' | 'MGRO'; wei?: string; value?: number }
+  amount?: {
+    token: 'USD' | 'TGN' | 'MGRO' | 'USDC'
+    wei?: string
+    value?: number
+  }
   from?: FlowParty
   to?: FlowParty
   txHash?: string

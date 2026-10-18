@@ -13,8 +13,14 @@ const sendSuccess = (
   return res.status(statusCode).json(response)
 }
 
-const sendError = (res: Response, error: any, statusCode: number = 500) => {
-  console.error(`Error ${statusCode}:`, error)
+const sendError = (
+  res: Response,
+  error: any,
+  statusCode: number = 500,
+  /** The original exception, when the message shown is a safe generic string. */
+  cause?: unknown,
+) => {
+  console.error(`Error ${statusCode}:`, cause ?? error)
   return res.status(statusCode).json({
     error:
       typeof error === 'string'

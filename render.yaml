@@ -60,6 +60,17 @@ services:
         value: "60000"
       - key: EXPLORER_BASE_URL
         value: https://basescan.org
+      # Donation pipeline (Mercury → Stripe → USDC → $MGRO → locked), see
+      # treegens-backend-main/docs/TREASURY_PIPELINE.md. Flip to "true" once
+      # the dashboard holds ADMIN_API_TOKEN, MERCURY_API_TOKEN,
+      # MERCURY_ACCOUNT_ID, MERCURY_STRIPE_RECIPIENT_ID,
+      # STRIPE_TREASURY_SECRET_KEY, STRIPE_FINANCIAL_ACCOUNT_ID,
+      # STRIPE_CRYPTO_PAYOUT_METHOD_ID, TREASURY_WALLET_PRIVATE_KEY and
+      # TREASURY_WALLET_ADDRESS. Stays a dry run until the mode is "live".
+      - key: ENABLE_TREASURY_PIPELINE
+        value: "false"
+      - key: TREASURY_PIPELINE_MODE
+        value: dry_run
       - key: REDIS_URL
         fromService:
           type: keyvalue
