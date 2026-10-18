@@ -39,3 +39,12 @@ Jimi's admin wallet before any real payout.
   `Treegens/treegens-backend` on Render (`treegens-backend-1eyq`).
 - The Render Blueprint here (`render.yaml`) deploys the Base-mainnet API and
   workers (`treegens-api`, `treegens-redis`, reward/slash workers).
+- **world.treegens.app** is the Netlify site `treegens-earth`
+  (id `042309f3-736f-4e21-bf44-ca642bddcd8b`), deployed by hand from Jimi's
+  local `treegens-earth` folder with `./deploy.sh`. Its source repo is
+  `Treegens/world-treegens-app`; the repo lags the live deploy (the live build
+  has functions the repo does not: `settlement-webhook`, `tgn-checkout`,
+  `tgn-fulfill`, `voucher`, `quiz-lead`, `receipt-preview`, `offset-retry-cron`,
+  `track`, `ai-counts`, `count-clip-background`). Never deploy that repo to the
+  site from a session: it would drop those functions. Static files in
+  `public/` can be pulled from `https://treegens-earth.netlify.app/<path>`.
