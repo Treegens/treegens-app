@@ -9,6 +9,23 @@
 
 @import 'tailwindcss';
 
+/*
+ * Self-hosted Noto Sans Ethiopic (SIL OFL 1.1, public/fonts/OFL.txt).
+ * Inter is latin-only; without this the Amharic tutorial (አማርኛ and the
+ * body copy) renders as a blank pill on many Kenya/Ethiopia Androids.
+ * Ported from Treegens/treegens-web (lang-en) PR #15; keep in step. Snapshot:
+ * it is added to the page's fonts as the Inter fallback in app/layout.tsx,
+ * not by an `html, body` rule here (the body's next/font class wins over one).
+ */
+@font-face {
+  font-family: 'Noto Sans Ethiopic';
+  src: url('/fonts/NotoSansEthiopic-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+1200-1399, U+2D80-2DDE, U+AB00-AB2E, U+1E7E0-1E7FE;
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

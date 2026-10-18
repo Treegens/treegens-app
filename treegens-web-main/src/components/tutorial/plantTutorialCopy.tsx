@@ -1,6 +1,32 @@
 /** Shared copy for /tutorial and /tutorial/verify (mirrors mobile tutorial screens). */
 import type { ReactNode } from 'react'
 
+/**
+ * Languages offered in the tutorial selector, in display order.
+ *
+ * Ported from Treegens/treegens-web (lang-en) PR #15, with the live values:
+ * the planting rules, the wild-seedling check and the species guide
+ * (plantingRulesCopy.ts, mangroveSpeciesCopy.ts) are byte-identical copies of
+ * the live files and are typed by these. The tutorial copy below still exists
+ * in English and Swahili only.
+ */
+export const tutorialLanguages = [
+  'English',
+  'Swahili',
+  'Amharic',
+  'Oromo',
+] as const
+export type TutorialLang = (typeof tutorialLanguages)[number]
+
+/** Short label shown on the selector for each language (endonym). */
+export const tutorialLanguageLabel: Record<TutorialLang, string> = {
+  English: 'English',
+  Swahili: 'Kiswahili',
+  // Endonym. Readable because Noto Sans Ethiopic is self-hosted in globals.css.
+  Amharic: 'አማርኛ',
+  Oromo: 'Afaan Oromoo',
+}
+
 export const plantTitle = {
   English: 'How to Plant Mangroves',
   Swahili: 'Jinsi ya Kupanda Mikoko',
@@ -163,8 +189,8 @@ export const verifyInstructions: Record<'English' | 'Swahili', ReactNode> = {
           <strong>one continual direction only</strong>—either left to right{' '}
           <em>or</em> right to left for the whole clip (not both, and don’t scan
           back and forth). The same idea applies vertically (e.g. only upward or
-          only downward). For example, do not pan left‑to‑right and then reverse.
-          If a mangrove propagule goes out of the screen & then back
+          only downward). For example, do not pan left‑to‑right and then
+          reverse. If a mangrove propagule goes out of the screen & then back
           in, it will be counted twice & you will need to film the trees again.
         </h3>
       </div>
@@ -192,11 +218,10 @@ export const verifyInstructions: Record<'English' | 'Swahili', ReactNode> = {
         <h3>
           <span className="font-bold">Hatua ya 2{')'}</span> Baada ya kupanda,
           chukua video yako ya <strong>baada</strong> kwa mwelekeo mmoja, mfano
-          kutoka
-          kushoto kwenda kulia au kutoka juu kwenda chini. Kwa mfano, usirudi
-          kushoto, kisha kulia na kisha kushoto tena. Ikiwa mbegu ya mikoko
-          itatoka nje ya skrini na kisha kurudi, itahesabiwa mara mbili na
-          utahitaji kupiga video ya miti tena.
+          kutoka kushoto kwenda kulia au kutoka juu kwenda chini. Kwa mfano,
+          usirudi kushoto, kisha kulia na kisha kushoto tena. Ikiwa mbegu ya
+          mikoko itatoka nje ya skrini na kisha kurudi, itahesabiwa mara mbili
+          na utahitaji kupiga video ya miti tena.
         </h3>
       </div>
       <div className="flex flex-col gap-2">

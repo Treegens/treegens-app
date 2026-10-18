@@ -5,6 +5,19 @@ import { SubmissionCompleteCelebration } from '@/components/submission/Submissio
 import { MangroveSiteFields } from '@/components/siteCheck/MangroveSiteFields'
 import { UNSENT_VIDEO_LEAVE_WARNING } from '@/components/siteCheck/SitePicker'
 import {
+  forgetPlantingChecks,
+  recallPlantingChecks,
+  savePlantingChecks,
+} from '@/components/planting/plantingChecks'
+import { PlantingRulesCard } from '@/components/planting/PlantingRulesCard'
+import { useTutorialLang } from '@/components/planting/useTutorialLang'
+import { WildSeedlingCheck } from '@/components/planting/WildSeedlingCheck'
+import {
+  plantingRules,
+  seedlingCheck,
+  type SeedlingAnswer,
+} from '@/components/tutorial/plantingRulesCopy'
+import {
   outsideSiteWarning,
   siteGateReason,
 } from '@/modules/siteCheck/siteGateMessage'
@@ -32,6 +45,7 @@ import {
   type DragEvent,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -70,6 +84,47 @@ export default function CompleteSubmissionPage() {
   const [siteDoc, setSiteDoc] = useState<ISiteDoc | null>(null)
   const [species, setSpecies] = useState<string[]>([])
   const [landSiteWarning, setLandSiteWarning] = useState('')
+  // The planting rules confirm (Jimi 2026-10-14; see
+  // tutorial/plantingRulesCopy.ts), ported from Treegens/treegens-web
+  // (lang-en) PR #15. Submit waits for it on mangroves, the record tap never
+  // does. Snapshot: also read back from the phone's record for this
+  // submission. A reload of the create screen's plant step lands here (its
+  // draft redirect), so a confirm tapped there must survive it, as it does on
+  // live's create screen.
+  const [rulesConfirmed, setRulesConfirmed] = useState(false)
+  // The land step's wild-seedling answer, when this tab filmed that land.
+  // undefined while the phone is still being asked.
+  const [landSeedlings, setLandSeedlings] = useState<
+    SeedlingAnswer | null | undefined
+  >(undefined)
+  // Rule 4 asked here when the phone has no land-step answer: a land filmed
+  // before this release, queued offline (it had no submission id to keep the
+  // answer with), in an earlier session (sessionStorage ends with the app)
+  // or on another device. React state only, never uploaded.
+  const [seedlingAnswer, setSeedlingAnswer] = useState<SeedlingAnswer | null>(
+    null,
+  )
+  const seedlings = landSeedlings ?? seedlingAnswer
+  const [planterLang] = useTutorialLang()
+  const submitWaitId = useId()
+  useEffect(() => {
+    // Snapshot: the answers are kept under this submission's own id, so they
+    // are read straight from the phone (live first asks the upload queue which
+    // land group this submission is). After mount: the server has no storage.
+    const checks = recallPlantingChecks(submissionId)
+    setLandSeedlings(checks?.seedlings ?? null)
+    setRulesConfirmed(checks?.rulesConfirmed ?? false)
+  }, [submissionId])
+  /**
+   * The one-tap rules confirm. Snapshot: kept in the phone's record when that
+   * record is this submission's (so a reload shows the same answer), never
+   * written as a new one: the one slot may hold another land's answers.
+   */
+  const handleRulesConfirm = (confirmed: boolean) => {
+    setRulesConfirmed(confirmed)
+    const checks = recallPlantingChecks(submissionId)
+    if (checks) savePlantingChecks({ ...checks, rulesConfirmed: confirmed })
+  }
 
   const [isUploading, setIsUploading] = useState(false)
   const [isQueueing, setIsQueueing] = useState(false)
@@ -118,12 +173,17 @@ export default function CompleteSubmissionPage() {
     return Number.isFinite(parsed) ? parsed : 0
   }, [treesPlantedInput])
 
+  const isMangrove = resolvedTreeType.toLowerCase() === 'mangrove'
+
   const canSubmit = useMemo(() => {
     if (!plantFile) return false
     if (!isValidSubmissionObjectId(submissionId)) return false
     if (latitude == null || longitude == null) return false
     if (mangroveAnswer == null) return false
     if (!resolvedTreeType) return false
+    // Mangroves only, like the confirm: the question is about mangrove
+    // seedlings, and here the planter has already said what they plant.
+    if (isMangrove && (!rulesConfirmed || seedlings === null)) return false
     return treesPlanted >= 1
   }, [
     plantFile,
@@ -132,8 +192,14 @@ export default function CompleteSubmissionPage() {
     longitude,
     mangroveAnswer,
     resolvedTreeType,
+    isMangrove,
     treesPlanted,
+    seedlings,
+    rulesConfirmed,
   ])
+  // Submit is ready but for a planting-rules answer (the lines below it).
+  const waitsForSeedlings = !!plantFile && isMangrove && seedlings === null
+  const waitsForConfirm = !!plantFile && isMangrove && !rulesConfirmed
 
   const dismissSubmissionCelebrate = useCallback(() => {
     setShowSubmissionCelebrate(false)
@@ -268,7 +334,6 @@ export default function CompleteSubmissionPage() {
       : undefined
 
     const submissionDetailHref = `/submissions/${encodeURIComponent(submissionId)}`
-    const isMangrove = resolvedTreeType.toLowerCase() === 'mangrove'
     const siteLink = isMangrove
       ? { siteId: linkedSiteId ? undefined : pickedSiteId, species }
       : undefined
@@ -340,6 +405,10 @@ export default function CompleteSubmissionPage() {
       setUploadProgress(100)
       setUploadSuccess(true)
       clearPlantVideo()
+      // The planting has ended: its answers end with it, but only when they
+      // are this submission's (snapshot: the record is tagged with the
+      // land's submission id; live ends the create screen's link here).
+      forgetPlantingChecks(submissionId)
 
       if (isUserOnline && isMangrove) {
         const counted = uploadedPlantAi?.countedMangroves
@@ -535,6 +604,30 @@ export default function CompleteSubmissionPage() {
               ) : null}
             </section>
 
+            {/* Rule 4, when the land step's answer is not on this phone.
+                Before the rules card: looking comes before planting. */}
+            {landSeedlings === null ? (
+              <WildSeedlingCheck
+                value={seedlingAnswer}
+                onChange={setSeedlingAnswer}
+                disabled={isUploading || isQueueing}
+                filmLine={false}
+              />
+            ) : null}
+
+            {/* Before the plant video, as on the create screen: the rules to
+                plant by, and the confirm that Submit needs for mangroves.
+                Both are held still while Submit uploads or queues the clip:
+                it read them when it was tapped. The reminder is for the land
+                step's answer; one given here shows its advice above. */}
+            <PlantingRulesCard
+              variant="plant"
+              confirmed={rulesConfirmed}
+              onConfirm={handleRulesConfirm}
+              seedlingAnswer={landSeedlings ?? null}
+              disabled={isUploading || isQueueing}
+            />
+
             <section>
               <h2 className="mb-2 text-base font-semibold text-gray-800">
                 After video (planted area)
@@ -696,9 +789,27 @@ export default function CompleteSubmissionPage() {
               disabled={!canSubmit || isUploading || isQueueing}
               color="green"
               className="w-full"
+              aria-describedby={
+                waitsForSeedlings || waitsForConfirm ? submitWaitId : undefined
+              }
             >
               {isUploading || isQueueing ? 'Submitting…' : 'Submit'}
             </Button>
+            {/* orange-800: 7:1 on white; orange-600 is too faint for the
+                only reason the button is grey. */}
+            {waitsForSeedlings || waitsForConfirm ? (
+              <div
+                id={submitWaitId}
+                className="-mt-3 flex flex-col gap-1 text-center text-sm text-orange-800"
+              >
+                {waitsForSeedlings ? (
+                  <p>{seedlingCheck[planterLang].required}</p>
+                ) : null}
+                {waitsForConfirm ? (
+                  <p>{plantingRules[planterLang].confirmMissing}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         )}
       </div>

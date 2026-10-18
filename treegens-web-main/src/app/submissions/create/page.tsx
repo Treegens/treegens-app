@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/Button'
 import { useRouter, useSearchParams } from 'next/navigation'
 import cn from 'classnames'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { GrLocation } from 'react-icons/gr'
 import { HiArrowLeft, HiArrowPath } from 'react-icons/hi2'
@@ -17,6 +17,18 @@ import { SubmissionCompleteCelebration } from '@/components/submission/Submissio
 import { MangroveSiteFields } from '@/components/siteCheck/MangroveSiteFields'
 import { PlantingSiteCard } from '@/components/siteCheck/PlantingSiteCard'
 import { UNSENT_VIDEO_LEAVE_WARNING } from '@/components/siteCheck/SitePicker'
+import {
+  forgetPlantingChecks,
+  savePlantingChecks,
+} from '@/components/planting/plantingChecks'
+import { PlantingRulesCard } from '@/components/planting/PlantingRulesCard'
+import { useTutorialLang } from '@/components/planting/useTutorialLang'
+import { WildSeedlingCheck } from '@/components/planting/WildSeedlingCheck'
+import {
+  plantingRules,
+  seedlingCheck,
+  type SeedlingAnswer,
+} from '@/components/tutorial/plantingRulesCopy'
 import { useConnectivity } from '@/contexts/ConnectivityProvider'
 import { useUser } from '@/contexts/UserProvider'
 import { getMySubmissions } from '@/services/app'
@@ -113,6 +125,25 @@ export default function NewPlant() {
       .catch(e => console.warn('Could not load the linked site', e))
   }, [landSiteId])
 
+  // The planting rules (Jimi 2026-10-14; tutorial/plantingRulesCopy.ts),
+  // ported from Treegens/treegens-web (lang-en) PR #15. "Did you look for
+  // wild seedlings here?" is answered on the land step and the land Submit
+  // waits for it; the plant Submit for mangroves waits for the one-tap rules
+  // confirm. Neither ever holds back a record tap, and neither is sent
+  // anywhere: both stay on the phone, tagged with the land's submission id
+  // (this snapshot's land link), so create/[id] still has the seedling
+  // answer after "Continue to after video" or a reload
+  // (components/planting/plantingChecks.ts).
+  const [seedlingAnswer, setSeedlingAnswer] = useState<SeedlingAnswer | null>(
+    null,
+  )
+  const [rulesConfirmed, setRulesConfirmed] = useState(false)
+  // The language the planter reads the rules in, for the lines below Submit.
+  const [planterLang] = useTutorialLang()
+  // The line that says why Submit is waiting for one of them; the button
+  // points to it, so a screen reader hears the reason with the button.
+  const submitWaitId = useId()
+
   const resetPlantSite = () => {
     setLandSiteId('')
     setLandSiteWarning('')
@@ -176,9 +207,7 @@ export default function NewPlant() {
           plant?: { uploaded?: boolean }
         }>
         const draft = docs.find(
-          d =>
-            d.status === 'awaiting_plant' &&
-            d.plant?.uploaded !== true,
+          d => d.status === 'awaiting_plant' && d.plant?.uploaded !== true,
         )
         if (!cancelled && draft?._id) {
           sessionStorage.setItem('tg_resume_step2', '1')
@@ -256,6 +285,26 @@ export default function NewPlant() {
   const isOfflineLandQueued =
     isPlantStep && !isValidSubmissionObjectId(serverSubmissionId || '')
   const isFullySubmitted = false
+  // The planting rules are about living mangrove trees: the plant Submit
+  // waits for the confirm on mangroves only (same test as the site link).
+  const isMangrove = resolvedTreeType.toLowerCase() === 'mangrove'
+  const plantDetailsComplete =
+    mangroveAnswer !== null && !!resolvedTreeType.trim() && treesPlanted >= 1
+
+  // Submit is ready but for a planting-rules answer (the line below it).
+  const waitsForSeedlings = isLandStep && !!landFile && seedlingAnswer === null
+  const waitsForConfirm =
+    isPlantStep &&
+    !!plantFile &&
+    isValidSubmissionObjectId(serverSubmissionId || '') &&
+    plantDetailsComplete &&
+    isMangrove &&
+    !rulesConfirmed
+  // Both handlers read the answers as Submit is tapped, then upload or queue
+  // the clip (live: wait for a GPS fix). Held still until that is done, so
+  // what the planter sees is what was submitted (and saved for the plant
+  // step).
+  const answersLocked = isUploading || isQueueing
 
   useEffect(() => {
     console.log('location error', locationError)
@@ -473,6 +522,11 @@ export default function NewPlant() {
 
   const handleLandSubmit = async () => {
     if (!landFile) return
+    // Submit is disabled until this is answered; this is the backstop.
+    if (seedlingAnswer === null) {
+      toast.error(seedlingCheck[planterLang].required)
+      return
+    }
 
     if (!hasValidLocation()) {
       setUploadError(
@@ -501,6 +555,15 @@ export default function NewPlant() {
         setServerSubmissionId(sid)
         setHasUploadedLandVideo(true)
         setLandSiteId(siteId)
+        // The land link is made here (its submission id), so the seedling
+        // answer is kept with it now: the plant step's reminder, and
+        // create/[id] after "Continue to after video" or a reload, read it.
+        savePlantingChecks({
+          groupId: sid,
+          seedlings: seedlingAnswer,
+          rulesConfirmed: false,
+        })
+        setRulesConfirmed(false)
         const warning = outsideSiteWarning(landRes.data.siteCheck)
         setLandSiteWarning(warning)
         if (warning) toast.error(warning, { duration: 10000 })
@@ -540,6 +603,9 @@ export default function NewPlant() {
 
         setHasUploadedLandVideo(true)
         setServerSubmissionId(null)
+        // A queued land has no submission id yet, so its seedling answer has
+        // nothing to be kept with: create/[id] asks again once it has landed.
+        setRulesConfirmed(false)
         handleRemoveVideo(VideoType.LAND)
         toast.success(
           'Land video queued. It will upload automatically when you are back online.',
@@ -586,12 +652,18 @@ export default function NewPlant() {
       return
     }
 
+    // Mangroves only: the rules are about living mangrove trees. Submit is
+    // disabled without it; this is the backstop.
+    if (isMangrove && !rulesConfirmed) {
+      toast.error(plantingRules[planterLang].confirmMissing)
+      return
+    }
+
     setIsUploading(isUserOnline)
     setIsQueueing(!isUserOnline)
     setUploadError('')
     setValidationError('')
 
-    const isMangrove = resolvedTreeType.toLowerCase() === 'mangrove'
     const siteLink = isMangrove
       ? { siteId: landSiteId ? undefined : pickedSiteId, species }
       : undefined
@@ -617,6 +689,10 @@ export default function NewPlant() {
         setHasUploadedLandVideo(false)
         setServerSubmissionId(null)
         resetPlantSite()
+        // A new planting starts: it is asked again and confirmed again.
+        setSeedlingAnswer(null)
+        setRulesConfirmed(false)
+        forgetPlantingChecks()
         await refetchVideos()
 
         if (isMangrove) {
@@ -687,6 +763,10 @@ export default function NewPlant() {
         setHasUploadedLandVideo(false)
         setServerSubmissionId(null)
         resetPlantSite()
+        // A new planting starts: it is asked again and confirmed again.
+        setSeedlingAnswer(null)
+        setRulesConfirmed(false)
+        forgetPlantingChecks()
 
         setShowUploadModal(false)
         setPlantAiAfterUpload(null)
@@ -712,6 +792,21 @@ export default function NewPlant() {
     } finally {
       setIsUploading(false)
       setIsQueueing(false)
+    }
+  }
+
+  /** The plant step's one-tap rules confirm, kept with this land's answers. */
+  const handleRulesConfirm = (confirmed: boolean) => {
+    setRulesConfirmed(confirmed)
+    // Snapshot: the land link is the land's submission id (live: its
+    // localGroupId). A plant step on this page always has one.
+    const groupId = serverSubmissionId
+    if (groupId && isValidSubmissionObjectId(groupId)) {
+      savePlantingChecks({
+        groupId,
+        seedlings: seedlingAnswer,
+        rulesConfirmed: confirmed,
+      })
     }
   }
 
@@ -764,10 +859,7 @@ export default function NewPlant() {
           </div>
         </div>
 
-        <TwoVideoProofSteps
-          activeStep={isLandStep ? 1 : 3}
-          className="mb-6"
-        />
+        <TwoVideoProofSteps activeStep={isLandStep ? 1 : 3} className="mb-6" />
 
         <div className="mb-6 flex flex-row items-center justify-between gap-2">
           <div className="flex min-h-0 min-w-0 flex-1 flex-row items-center gap-2">
@@ -801,6 +893,25 @@ export default function NewPlant() {
           />
         ) : null}
 
+        {/* The four planting rules, after the site check and before the land
+            video, while the trip can still be planned around them. Jimi
+            2026-10-14: within 2 m of a living tree of the same species, only
+            beside its own kind, know the species, look for wild seedlings
+            first. The seedling question is the one the land Submit waits
+            for: the planter must say they looked. No answer blocks or flags
+            the planting; "A few" and "Many" only bring advice. */}
+        {!isFullySubmitted && isLandStep ? (
+          <>
+            <PlantingRulesCard variant="land" className="mb-6" />
+            <WildSeedlingCheck
+              value={seedlingAnswer}
+              onChange={setSeedlingAnswer}
+              disabled={answersLocked}
+              className="mb-6"
+            />
+          </>
+        ) : null}
+
         {isPlantStep && landSiteWarning ? (
           <p className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
             {landSiteWarning}
@@ -823,10 +934,28 @@ export default function NewPlant() {
           </section>
         ) : null}
 
-        {!isFullySubmitted && (isLandStep || isPlantStep) && !isOfflineLandQueued ? (
+        {/* Above the after-video input: this is the screen the planter reads
+            before walking off to plant. The confirm is for Submit only; the
+            record tap stays a direct tap on the camera input. */}
+        {isPlantStep && !isFullySubmitted && !isOfflineLandQueued ? (
+          <PlantingRulesCard
+            variant="plant"
+            confirmed={rulesConfirmed}
+            onConfirm={handleRulesConfirm}
+            seedlingAnswer={seedlingAnswer}
+            disabled={answersLocked}
+            className="mb-6"
+          />
+        ) : null}
+
+        {!isFullySubmitted &&
+        (isLandStep || isPlantStep) &&
+        !isOfflineLandQueued ? (
           <section className="mb-6">
             <h2 className="mb-2 text-base font-semibold text-gray-800">
-              {isLandStep ? 'Before video (land)' : 'After video (planted area)'}
+              {isLandStep
+                ? 'Before video (land)'
+                : 'After video (planted area)'}
             </h2>
             <p className="mb-3 text-sm text-gray-500">
               {isLandStep
@@ -1050,20 +1179,37 @@ export default function NewPlant() {
                 isQueueing ||
                 !hasValidLocation() ||
                 !!validationError ||
-                (isLandStep && !landFile) ||
+                (isLandStep && (!landFile || seedlingAnswer === null)) ||
                 (isPlantStep &&
                   (!plantFile ||
                     !isValidSubmissionObjectId(serverSubmissionId || '') ||
                     mangroveAnswer === null ||
                     !resolvedTreeType.trim() ||
-                    treesPlanted < 1))
+                    treesPlanted < 1 ||
+                    (isMangrove && !rulesConfirmed)))
               }
               pill
               color="success"
               className="w-full"
+              aria-describedby={
+                waitsForSeedlings || waitsForConfirm ? submitWaitId : undefined
+              }
             >
               {isUploading || isQueueing ? 'Submitting…' : 'Submit'}
             </Button>
+            {/* Why Submit is waiting, in the language the rules are in.
+                orange-800: 7:1 on white (orange-600 is 3.6:1, too faint for
+                the only reason the button is grey). */}
+            {waitsForSeedlings || waitsForConfirm ? (
+              <p
+                id={submitWaitId}
+                className="mt-3 text-center text-sm text-orange-800"
+              >
+                {waitsForSeedlings
+                  ? seedlingCheck[planterLang].required
+                  : plantingRules[planterLang].confirmMissing}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
