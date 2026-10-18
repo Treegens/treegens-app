@@ -2,6 +2,8 @@ export interface ReverseGeocodeResult {
   success: boolean
   address?: string
   shortAddress?: string
+  /** ISO 3166-1 alpha-2, upper case, when Nominatim returns address details */
+  countryCode?: string
   error?: string
 }
 
@@ -12,8 +14,13 @@ export interface GeocodeOptions {
   format?: 'json' | 'xml'
 }
 
+/** A failed lookup (network, rate limit) is retried after this long. */
+const FAILURE_RETRY_MS = 60_000
+
 class GeocodingService {
   private cache = new Map<string, ReverseGeocodeResult>()
+  /** When each failed lookup may be tried again */
+  private failedUntil = new Map<string, number>()
   private readonly baseUrl = 'https://nominatim.openstreetmap.org'
 
   /**
@@ -41,8 +48,13 @@ class GeocodingService {
 
     // Check cache first
     if (this.cache.has(cacheKey)) {
-      console.log('🗂️ Using cached geocoding result')
-      return this.cache.get(cacheKey)!
+      const retryAt = this.failedUntil.get(cacheKey)
+      if (retryAt === undefined || Date.now() < retryAt) {
+        console.log('🗂️ Using cached geocoding result')
+        return this.cache.get(cacheKey)!
+      }
+      this.cache.delete(cacheKey)
+      this.failedUntil.delete(cacheKey)
     }
 
     const defaultOptions: GeocodeOptions = {
@@ -87,6 +99,7 @@ class GeocodingService {
         success: true,
         address: data.display_name,
         shortAddress: this.extractShortAddress(data.display_name),
+        countryCode: this.extractCountryCode(data),
       }
 
       // Cache the result
@@ -105,6 +118,7 @@ class GeocodingService {
 
       // Cache failed results for a short time to avoid repeated requests
       this.cache.set(cacheKey, result)
+      this.failedUntil.set(cacheKey, Date.now() + FAILURE_RETRY_MS)
       return result
     }
   }
@@ -162,6 +176,7 @@ class GeocodingService {
    */
   clearCache(): void {
     this.cache.clear()
+    this.failedUntil.clear()
     console.log('🗑️ Geocoding cache cleared')
   }
 
@@ -203,6 +218,15 @@ class GeocodingService {
     })
 
     return `${this.baseUrl}/reverse?${params.toString()}`
+  }
+
+  private extractCountryCode(data: {
+    address?: { country_code?: unknown }
+  }): string | undefined {
+    const code = data.address?.country_code
+    return typeof code === 'string' && /^[a-z]{2}$/i.test(code)
+      ? code.toUpperCase()
+      : undefined
   }
 
   extractShortAddress(fullAddress: string): string {

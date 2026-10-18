@@ -15,6 +15,7 @@ import {
 import User from '../models/User'
 import * as conversationService from '../services/conversationService'
 import HealthCheckService from '../services/healthCheckService'
+import { SiteCheckRefusal } from '../services/siteGate'
 import SubmissionService from '../services/submissionService'
 import {
   sendBadRequest,
@@ -100,6 +101,15 @@ router.get(
  *                 description: Alternate field name for treeType when type=plant
  *               reverseGeocode:
  *                 type: string
+ *               siteId:
+ *                 type: string
+ *                 description: |
+ *                   Optional Site Check to link (must be the uploader's). On land it is stored with an
+ *                   inside/outside snapshot from the land GPS; on plant it is used only when the
+ *                   submission has no site yet.
+ *               species:
+ *                 type: string
+ *                 description: Plant only. Mangrove species ids as a JSON array string or comma-separated (max 8).
  *     responses:
  *       201:
  *         description: Clip uploaded
@@ -113,7 +123,10 @@ router.get(
  *                     data:
  *                       $ref: '#/components/schemas/SubmissionUploadResponse'
  *       400:
- *         description: Validation error
+ *         description: |
+ *           Validation error, or a Site Check refusal sent before the video is stored:
+ *           `Site not found`, a land clip filmed outside the site it links (enforce), or a
+ *           mangrove planting the site gate blocks (enforce). The body is `{ error: <message> }`.
  *       401:
  *         description: Unauthorized
  *       500:
@@ -137,6 +150,8 @@ router.post(
         treeType,
         treetype,
         reverseGeocode,
+        siteId,
+        species,
       } = req.body
       const file = req.file
       const userWalletAddress = req.user?.walletAddress as string
@@ -155,6 +170,7 @@ router.post(
         treesPlanted,
         treeType || treetype,
         reverseGeocode,
+        { siteId: siteId || undefined, species },
       )
       return sendCreated(
         res,
@@ -162,6 +178,10 @@ router.post(
         uploadData,
       )
     } catch (error: any) {
+      // The planter can act on these, so they are not server faults.
+      if (error instanceof SiteCheckRefusal) {
+        return sendBadRequest(res, error.message)
+      }
       console.error('Submission upload error:', error)
       return sendError(res, `Failed to upload to IPFS: ${error.message}`, 500)
     }
