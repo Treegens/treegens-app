@@ -206,6 +206,33 @@ for (let i = 0; i < 6; i++) {
   events.push({ kind: 'retire', at: daysAgo(2 + i * 9 + rand() * 5), txHash: txHash(), from: FUNDERS[i % FUNDERS.length], to: ZERO, role: 'funder', wei: wei(pick([100, 100, 200, 500])), submissionId: null })
 }
 
+// Donations (treegensfoundation.org → Mercury → Stripe USDC → $MGRO), amounts only
+const DONATIONS = [
+  { cents: 25000, status: 'settled', daysAgo: 21, usdc: 24850, mgro: 49700 },
+  { cents: 10000, status: 'settled', daysAgo: 14, usdc: 9940, mgro: 19600 },
+  { cents: 5000, status: 'bought', daysAgo: 6, usdc: 4970, mgro: 9800 },
+  { cents: 12000, status: 'onramped', daysAgo: 3, usdc: 11928, mgro: 0 },
+  { cents: 2500, status: 'swept', daysAgo: 1, usdc: 0, mgro: 0 },
+  { cents: 7500, status: 'detected', daysAgo: 0.2, usdc: 0, mgro: 0 },
+].map(d => {
+  const at = daysAgo(d.daysAgo)
+  const onrampTx = d.usdc ? txHash() : null
+  const swapTx = d.mgro ? txHash() : null
+  const settleTx = d.status === 'settled' ? txHash() : null
+  return { _id: oid(), ...d, updatedAt: iso(at), createdAt: iso(daysAgo(d.daysAgo + 1)), onrampTx, swapTx, settleTx }
+})
+function donationToFlow(f) {
+  const usd = f.cents / 100
+  const stage = f.status === 'settled' ? '$MGRO delivered to the treasury Safe' : f.status === 'bought' ? '$MGRO bought on Base' : f.status === 'onramped' ? 'converted to USDC on Base' : f.status === 'swept' ? 'on its way from the bank to Stripe' : 'received at the bank'
+  const tx = f.settleTx || f.swapTx || f.onrampTx || undefined
+  return { id: `donation:${f._id}`, kind: 'donation', at: f.updatedAt, title: `$${usd.toFixed(2)} donation · ${stage}`, detail: 'treegensfoundation.org → Mercury → Stripe (USDC) → $MGRO on Base', amount: { token: 'USD', value: usd }, verified: Boolean(tx), txHash: tx, explorerUrl: tx ? `${EXPLORER}/tx/${tx}` : undefined, meta: { status: f.status, usdcMicro: String(f.usdc * 10000), mgroWei: wei(f.mgro / 100), onrampTx: f.onrampTx, swapTx: f.swapTx, settleTx: f.settleTx, retired: false } }
+}
+function donationTotals() {
+  const byStatus = {}
+  for (const d of DONATIONS) { byStatus[d.status] = byStatus[d.status] || { count: 0, usd: 0 }; byStatus[d.status].count += 1; byStatus[d.status].usd += d.cents / 100 }
+  return { count: DONATIONS.length, usd: DONATIONS.reduce((a, d) => a + d.cents, 0) / 100, usdcMicro: String(DONATIONS.reduce((a, d) => a + d.usdc * 10000, 0)), mgroBoughtWei: wei(DONATIONS.reduce((a, d) => a + d.mgro, 0) / 100), mgroSettledWei: wei(DONATIONS.filter(d => d.status === 'settled').reduce((a, d) => a + d.mgro, 0) / 100), byStatus, pipeline: 'live' }
+}
+
 const byId = new Map(plantings.map(p => [p.id, p]))
 const snippet = id => { const p = byId.get(id); return p ? { trees: p.trees, species: p.species, location: p.location, videoUrl: p.video.url } : undefined }
 
@@ -225,6 +252,7 @@ function allFlows(submissionId) {
     items.push({ id: `verified:${p.id}`, kind: 'verified', at: p.approvedAt, title: `${p.trees} ${p.isMangrove ? 'mangroves' : 'trees'} verified in ${p.location}`, detail: p.ai?.decision === 'auto_approved' ? `AI counted ${p.ai.counted} seedlings at ${Math.round(p.ai.confidence * 100)}% confidence` : `Approved by ${p.verifiers.count} staked verifiers`, from: { address: p.planter.address, label: 'Planter' }, verified: false, submissionId: p.id, planting: snippet(p.id), video: p.video.url ? { url: p.video.url, kind: 'plant' } : undefined, meta: { verifiers: p.verifiers.count, species: p.species, gps: p.gps } })
     for (const u of p._updates) if (u.status === 'approved') items.push({ id: `update:${u.id}`, kind: 'update', at: u.reviewedAt, title: `Growth update · checkpoint ${u.checkpointIndex}: ${u.treesAlive} trees alive`, detail: `Verified by 3 verifiers · filmed ${u.distanceMeters} m from the planting`, verified: false, submissionId: p.id, planting: snippet(p.id), video: u.videoUrl ? { url: u.videoUrl, kind: 'health_check' } : undefined, meta: { checkpointIndex: u.checkpointIndex, treesAlive: u.treesAlive } })
   }
+  if (!submissionId) for (const f of DONATIONS) items.push(donationToFlow(f))
   items.sort((a, b) => new Date(b.at) - new Date(a.at) || (a.id < b.id ? 1 : -1))
   return items
 }
@@ -245,6 +273,7 @@ function overview() {
       funding: { count: funded.length, activeHolds: 1, grossUsd: Math.round(funded.reduce((a, p) => a + p.funding.grossUsd, 0) * 100) / 100, byRail: { card: funded.filter(p => p.funding.rail === 'card').length, mgro: funded.filter(p => p.funding.rail === 'mgro').length }, recordedTgnToPlantersWei: sum(funded.map(p => p.funding.recordedPlanterTgnWei)), recordedTgnToVerifiersWei: sum(funded.map(p => p.funding.recordedVerifierTgnWei)), onchainTgnToPlantersWei: sum(payouts.filter(e => e.role === 'planter').map(e => e.wei)), onchainTgnToVerifiersWei: sum(payouts.filter(e => e.role === 'verifier').map(e => e.wei)), onchainPayoutCount: payouts.length, planterShareBps: 9500, verifierShareBps: 500 },
       rewards: { mintCount: mints.length, mgroMintedWei: sum(mints.map(e => e.wei)), toPlantersWei: sum(mints.filter(e => e.role === 'planter').map(e => e.wei)), toVerifiersWei: sum(mints.filter(e => e.role === 'verifier').map(e => e.wei)), unattributedWei: '0', recipients: new Set(mints.map(e => e.to)).size, allocatedWei: sum(plantings.map(p => p.rewards.allocatedWei)), allocations: plantings.length, planterPaidRecordedWei: sum(plantings.map(p => p.rewards.planterPaidRecordedWei)), tranchesPaid: plantings.reduce((a, p) => a + p.rewards.tranchesPaid, 0), tranchesTotal: plantings.length * 6, proposals: { total: mints.length + 4, executed: mints.length, pending: 4 }, mgroPerTree: '1', schedule: { tranches: 6, intervalSeconds: 15778800, durationSeconds: 94672800 } },
       retired: { burnCount: burns.length, mgroBurnedWei: sum(burns.map(e => e.wei)), funders: new Set(burns.map(e => e.from)).size, linkedToPlantings: burns.filter(e => e.submissionId).length },
+      donations: donationTotals(),
       updates: { healthChecksApproved: approvedUpdates.length, healthChecksPending: plantings.flatMap(p => p._updates).filter(u => u.status === 'pending_review').length, healthChecksRejected: 0, treesAliveReported: approvedUpdates.reduce((a, u) => a + u.treesAlive, 0), videos: { plantings: plantings.filter(p => p.video.url).length, land: plantings.filter(p => p.video.landUrl).length, healthChecks: approvedUpdates.filter(u => u.videoUrl).length, total: plantings.filter(p => p.video.url).length + plantings.filter(p => p.video.landUrl).length + approvedUpdates.filter(u => u.videoUrl).length } },
     },
     ledger: { indexerEnabled: true, lastProcessedBlock: 41236510, lastSyncAt: new Date(Date.now() - 42000).toISOString(), startBlock: 38440170, eventCount: events.length },
@@ -321,7 +350,7 @@ createServer((req, res) => {
   if (p === '/api/transparency/overview') return ok(res, 'Transparency overview', overview())
   if (p === '/api/transparency/flows') {
     const limit = Math.min(100, Number(url.searchParams.get('limit')) || 40)
-    const kinds = (url.searchParams.get('kinds') || 'funding,payout,reward,retire,verified,update').split(',')
+    const kinds = (url.searchParams.get('kinds') || 'funding,payout,reward,retire,verified,update,donation').split(',')
     const cursor = url.searchParams.get('cursor')
     let items = allFlows().filter(i => kinds.includes(i.kind))
     if (cursor) { const idx = items.findIndex(i => i.id === cursor); items = idx >= 0 ? items.slice(idx + 1) : items }

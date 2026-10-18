@@ -59,6 +59,7 @@ function layout(o: Overview | null) {
   const verifierMints = mints - planterMints
   const burns = t?.retired.burnCount ?? 0
   const updates = (t?.plantings.approved ?? 0) + (t?.updates.healthChecksApproved ?? 0)
+  const donations = t?.donations && t.donations.count > 0 ? t.donations : null
 
   const src = { x: 40, w: 230 }
   const core = { x: 470, w: 260, y: 80, h: 400 }
@@ -87,7 +88,12 @@ function layout(o: Overview | null) {
       h: 84,
       title: SITES.foundation.label,
       href: SITES.foundation.url,
-      lines: ['Donations & grants → treasury Safe', 'Live balance in Contracts below'],
+      lines: donations
+        ? [
+            `${formatUsd(donations.usd)} · ${formatInt(donations.count)} donation${donations.count === 1 ? '' : 's'}`,
+            'Bank → Stripe (USDC) → $MGRO on Base',
+          ]
+        : ['Donations & grants → treasury Safe', 'Live balance in Contracts below'],
     },
     {
       key: 'holders',
@@ -181,14 +187,16 @@ function layout(o: Overview | null) {
     },
     {
       key: 'donations',
-      kind: 'funding',
+      kind: 'donation',
       from: right('foundation'),
       to: left('core', 0),
-      count: 0,
-      label: 'Donations & grants',
-      amount: 'treasury Safe',
-      blurb: 'Donations through treegensfoundation.org land in the Treegens treasury Safe. Its live balance is read from Base in the Contracts section.',
-      dashed: true,
+      count: donations ? donations.count : 0,
+      label: 'Donations',
+      amount: donations ? formatUsd(donations.usd) : 'treasury Safe',
+      blurb: donations
+        ? `Gifts to treegensfoundation.org: ${formatInt(donations.count)} received at the bank, ${formatWei(donations.mgroBoughtWei)} MGRO bought so far. Each one is swept to Stripe, paid out as USDC on Base and swapped for $MGRO.`
+        : 'Donations through treegensfoundation.org land in the Treegens treasury Safe. Its live balance is read from Base in the Contracts section.',
+      dashed: !donations,
     },
     {
       key: 'burn-in',
@@ -327,6 +335,7 @@ export function FlowRiver({
         if (item.kind === 'reward') return item.meta?.role === 'verifier' ? r.key === 'reward-verifiers' : r.key === 'reward-planters'
         if (item.kind === 'retire') return r.key === 'retire'
         if (item.kind === 'funding') return r.key === 'funding'
+        if (item.kind === 'donation') return r.key === 'donations'
         if (item.kind === 'verified' || item.kind === 'update') return r.key === 'proof'
         return false
       })

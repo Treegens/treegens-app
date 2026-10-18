@@ -59,6 +59,14 @@ export const KINDS: Record<FlowKind, KindMeta> = {
     icon: 'camera',
     blurb: 'A follow-up video filmed at the planting site, counting the trees still alive. It unlocks the next reward tranche.',
   },
+  donation: {
+    key: 'donation',
+    label: 'Donations',
+    short: 'Donation',
+    color: 'var(--s-funding)',
+    icon: 'in',
+    blurb: 'A gift to treegensfoundation.org on its way from the bank, through Stripe as USDC, to $MGRO on Base.',
+  },
   proposal: {
     key: 'proposal',
     label: 'Mint proposal',
@@ -72,6 +80,7 @@ export const KINDS: Record<FlowKind, KindMeta> = {
 export const LEDGER_FILTERS: { key: 'all' | FlowKind; label: string }[] = [
   { key: 'all', label: 'Everything' },
   { key: 'funding', label: 'Funding in' },
+  { key: 'donation', label: 'Donations' },
   { key: 'payout', label: '$TGN payouts' },
   { key: 'reward', label: '$MGRO rewards' },
   { key: 'retire', label: 'Retired' },

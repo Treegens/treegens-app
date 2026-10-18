@@ -53,18 +53,33 @@ loads, so a deployed site can be re-pointed without a rebuild:
 
 ```js
 window.TREEGENS_LEDGER_CONFIG = {
-  apiBaseUrl: 'https://treegens-api.onrender.com', // backend serving /api/transparency/*
-  rpcUrl: 'https://mainnet.base.org',             // public Base RPC for the live cross-check
+  apiBaseUrl: 'https://treegens-backend-1eyq.onrender.com', // live API (what treegens.app uses)
+  apiCandidates: ['https://treegens-api.onrender.com'],      // tried next, in order
+  rpcUrl: 'https://mainnet.base.org',                        // public Base RPC for the live cross-check
   explorerBaseUrl: 'https://basescan.org',
   refreshMs: 45000,
+  demoDataUrl: '',      // '/demo/data.json' after `npm run demo-bundle`
+  demoFallback: false,  // true = demo only while no API answers (banner shown)
 }
 ```
 
-Build-time fallbacks: `VITE_API_BASE_URL`, `VITE_RPC_URL`, `VITE_EXPLORER_BASE_URL`.
+The page probes `apiBaseUrl` and then each candidate for
+`/api/transparency/contracts` and uses the first that answers, so the same
+build works before and after a backend gains the endpoints. Build-time
+fallbacks: `VITE_API_BASE_URL`, `VITE_API_CANDIDATES`, `VITE_RPC_URL`,
+`VITE_EXPLORER_BASE_URL`, `VITE_DEMO_DATA_URL`, `VITE_DEMO_FALLBACK`.
 
 ## Backend requirements
 
-The API side ships in `treegens-backend-main`:
+The API side exists in two places:
+
+1. **`Treegens/treegens-backend`** (the live API on Render,
+   `treegens-backend-1eyq.onrender.com`) — branch `claude/open-ledger-api`,
+   adapted to that repo's models (verifier-corrected tree counts, OTC buyers,
+   AutoMinter V7, retirement contracts). Merge it and Render deploys the
+   endpoints; the indexer starts by itself (`DISABLE_LEDGER_INDEXER=true`
+   turns it off).
+2. **`treegens-backend-main`** in this repo (the Base-mainnet stack):
 
 - Routes: `src/routes/transparency.ts` (public, cached, rate-limited, CORS `*`).
 - Read model: `src/services/transparencyService.ts`.

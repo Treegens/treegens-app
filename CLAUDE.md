@@ -51,4 +51,10 @@ Jimi's admin wallet before any real payout.
   `treegens-api` in `render.yaml`). The indexer only reads the chain and writes
   `OnchainEvent` rows; it never signs anything.
 - Deploy the site as its **own** Netlify project. The domain rules above
-  apply; a hostname like `ledger.treegens.org` is Jimi's call.
+  apply; a hostname like `ledger.treegens.org` is Jimi's call. Preview:
+  https://treegens-ledger.netlify.app (Netlify site `treegens-ledger`).
+- The **live** API is `https://treegens-backend-1eyq.onrender.com`
+  (repo `Treegens/treegens-backend`, confirmed from treegens.app's
+  `NEXT_PUBLIC_API_URL`). The same transparency API + indexer was ported there
+  on branch `claude/open-ledger-api`; the site probes that origin first and
+  falls back to `treegens-api.onrender.com`.

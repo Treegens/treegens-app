@@ -9,9 +9,9 @@ import { Ledger, type LedgerFilter } from './components/Ledger'
 import { PlantingDrawer } from './components/PlantingDrawer'
 import { PlantingsGrid } from './components/PlantingsGrid'
 import { Section } from './components/ui/Bits'
-import { config, isDemo } from './config'
+import { config, isDemoOnly } from './config'
 import { useHashRoute, usePolling } from './hooks/usePolling'
-import { api, type FlowKind } from './lib/api'
+import { api, onSourceChange, type FlowKind } from './lib/api'
 import { readChainSnapshot } from './lib/chain'
 import { formatInt } from './lib/format'
 
@@ -44,7 +44,10 @@ export default function App() {
   const overview = usePolling(api.overview, config.refreshMs)
   const feed = usePolling(signal => api.flows({ limit: 40 }, signal), config.refreshMs)
   const onchain = usePolling(api.onchain, config.refreshMs)
-  const chain = usePolling(signal => (isDemo ? Promise.reject(new Error('demo')) : readChainSnapshot(signal)), config.refreshMs)
+  const [source, setSource] = useState<{ kind: 'api'; baseUrl: string } | { kind: 'demo' } | null>(null)
+  useEffect(() => onSourceChange(setSource), [])
+  const demo = source?.kind === 'demo' || isDemoOnly
+  const chain = usePolling(signal => (demo ? Promise.reject(new Error('demo')) : readChainSnapshot(signal)), config.refreshMs, [demo])
   const map = usePolling(api.map, config.refreshMs * 2)
   const { route, navigate } = useHashRoute()
   const [filter, setFilter] = useState<LedgerFilter>('all')
@@ -70,7 +73,7 @@ export default function App() {
         onCycleTheme={cycleTheme}
         live={{
           ok: liveOk,
-          label: block ? `Base block #${formatInt(block)}` : apiDown ? 'Ledger API unreachable' : 'Connecting to the ledger',
+          label: source?.kind === 'api' ? `API: ${source.baseUrl}${block ? ` · Base block #${formatInt(block)}` : ''}` : apiDown ? 'Ledger API unreachable' : demo ? 'Demo data' : 'Connecting to the ledger',
         }}
       />
       <main>
@@ -124,7 +127,7 @@ export default function App() {
         </Section>
       </main>
       <Footer />
-      {isDemo ? (
+      {demo ? (
         <div className="fixed inset-x-0 bottom-0 z-30 flex justify-center px-3 pb-3" role="status">
           <p className="tg-card flex items-center gap-2 px-4 py-2 text-xs font-semibold text-ink shadow-lg" style={{ borderColor: 'var(--warning)' }}>
             <span className="h-2 w-2 rounded-full" style={{ background: 'var(--warning)' }} aria-hidden="true" />

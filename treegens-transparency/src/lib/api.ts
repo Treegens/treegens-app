@@ -2,7 +2,7 @@ import { config } from '../config'
 
 /** Shapes mirror treegens-backend-main/src/services/transparencyService.ts. */
 
-export type FlowKind = 'funding' | 'payout' | 'reward' | 'retire' | 'verified' | 'update' | 'proposal'
+export type FlowKind = 'funding' | 'payout' | 'reward' | 'retire' | 'verified' | 'update' | 'proposal' | 'donation'
 
 export type FlowParty = { address: string; label: string; name?: string }
 
@@ -12,7 +12,7 @@ export type FlowItem = {
   at: string
   title: string
   detail?: string
-  amount?: { token: 'USD' | 'TGN' | 'MGRO'; wei?: string; value?: number }
+  amount?: { token: 'USD' | 'TGN' | 'MGRO' | 'USDC'; wei?: string; value?: number }
   from?: FlowParty
   to?: FlowParty
   txHash?: string
@@ -77,7 +77,16 @@ export type Overview = {
       mgroPerTree: string
       schedule: { tranches: number; intervalSeconds: number; durationSeconds: number }
     }
-    retired: { burnCount: number; mgroBurnedWei: string; funders: number; linkedToPlantings: number }
+    retired: { burnCount: number; mgroBurnedWei: string; funders: number; linkedToPlantings: number; retirementNfts?: number }
+    donations?: {
+      count: number
+      usd: number
+      usdcMicro: string
+      mgroBoughtWei: string
+      mgroSettledWei: string
+      byStatus: Record<string, { count: number; usd: number }>
+      pipeline?: 'off' | 'dry_run' | 'live'
+    }
     updates: {
       healthChecksApproved: number
       healthChecksPending: number
@@ -236,8 +245,94 @@ export class ApiError extends Error {
   }
 }
 
+type Source = { kind: 'api'; baseUrl: string } | { kind: 'demo' }
+
+let resolvedSource: Promise<Source> | null = null
+let activeSource: Source | null = null
+const listeners = new Set<(s: Source) => void>()
+
+/** Which backend the page is reading right now (for the header chip). */
+export function currentSource(): Source | null {
+  return activeSource
+}
+export function onSourceChange(fn: (s: Source) => void): () => void {
+  listeners.add(fn)
+  if (activeSource) fn(activeSource)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+function setSource(s: Source) {
+  activeSource = s
+  for (const fn of listeners) fn(s)
+}
+
+async function probe(baseUrl: string): Promise<boolean> {
+  try {
+    const ctl = new AbortController()
+    const t = window.setTimeout(() => ctl.abort(), 7000)
+    const res = await fetch(`${baseUrl}/api/transparency/contracts`, {
+      signal: ctl.signal,
+      headers: { accept: 'application/json' },
+    })
+    window.clearTimeout(t)
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Find the first API origin that serves /api/transparency. The answer is
+ * remembered for the session; a demo bundle is used only when configured as
+ * a fallback and nothing answers (never once a real API has answered).
+ */
+function resolveSource(): Promise<Source> {
+  if (resolvedSource) return resolvedSource
+  resolvedSource = (async () => {
+    if (config.demoDataUrl && !config.demoFallback) {
+      const s: Source = { kind: 'demo' }
+      setSource(s)
+      return s
+    }
+    let remembered: string | null = null
+    try {
+      remembered = sessionStorage.getItem('tg-ledger-api')
+    } catch {
+      /* private mode */
+    }
+    const order = remembered
+      ? [remembered, ...config.apiCandidates.filter(c => c !== remembered)]
+      : config.apiCandidates
+    for (const baseUrl of order) {
+      if (await probe(baseUrl)) {
+        try {
+          sessionStorage.setItem('tg-ledger-api', baseUrl)
+        } catch {
+          /* ignore */
+        }
+        const s: Source = { kind: 'api', baseUrl }
+        setSource(s)
+        return s
+      }
+    }
+    if (config.demoDataUrl && config.demoFallback) {
+      const s: Source = { kind: 'demo' }
+      setSource(s)
+      return s
+    }
+    // Nothing answers: fall back to the preferred origin so errors are honest.
+    const s: Source = { kind: 'api', baseUrl: config.apiBaseUrl }
+    setSource(s)
+    return s
+  })()
+  return resolvedSource
+}
+
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`${config.apiBaseUrl}${path}`, {
+  const source = await resolveSource()
+  if (source.kind === 'demo') throw new ApiError('demo source', 0)
+  const res = await fetch(`${source.baseUrl}${path}`, {
     signal,
     headers: { accept: 'application/json' },
   })
@@ -267,7 +362,7 @@ function loadDemo(): Promise<DemoBundle> {
   return demoBundle
 }
 
-const DEFAULT_KINDS: FlowKind[] = ['funding', 'payout', 'reward', 'retire', 'verified', 'update']
+const DEFAULT_KINDS: FlowKind[] = ['funding', 'payout', 'reward', 'retire', 'verified', 'update', 'donation']
 
 /** Same surface as `liveApi`, served from a static JSON bundle (previews, demos). */
 const demoApi: typeof liveApi = {
@@ -333,4 +428,21 @@ const liveApi = {
   contracts: (signal?: AbortSignal) => get<ContractDirectory>('/api/transparency/contracts', signal),
 }
 
-export const api: typeof liveApi = config.demoDataUrl ? demoApi : liveApi
+/** Each call picks the live API or the demo bundle by the resolved source. */
+function routed<K extends keyof typeof liveApi>(key: K): (typeof liveApi)[K] {
+  return (async (...args: unknown[]) => {
+    const source = await resolveSource()
+    const impl = source.kind === 'demo' ? demoApi : liveApi
+    return (impl[key] as (...a: unknown[]) => unknown)(...args)
+  }) as (typeof liveApi)[K]
+}
+
+export const api: typeof liveApi = {
+  overview: routed('overview'),
+  flows: routed('flows'),
+  plantings: routed('plantings'),
+  planting: routed('planting'),
+  map: routed('map'),
+  onchain: routed('onchain'),
+  contracts: routed('contracts'),
+}
