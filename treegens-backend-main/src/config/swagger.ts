@@ -353,7 +353,7 @@ const swaggerOptions = {
             },
             recommendedSpeciesIds: { type: 'array', items: { type: 'string' } },
             hydrologyConsidered: { type: 'boolean' },
-            rulesVersion: { type: 'string', example: 'site-rules-v1' },
+            rulesVersion: { type: 'string', example: 'site-rules-v2' },
           },
         },
         SiteHydrology: {
