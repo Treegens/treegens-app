@@ -58,14 +58,15 @@ export function Hero({
     <section id="top" className="mx-auto w-full max-w-7xl px-4 pb-6 pt-12 sm:px-6 md:pt-20">
       <div className="grid gap-10 lg:grid-cols-[1.1fr_1fr] lg:items-end">
         <div>
-          <p className="tg-kicker">Public ledger · Base mainnet</p>
+          <p className="tg-kicker">Treegens transparency · open ledger on Base</p>
           <h1 className="mt-4 text-[2.6rem] font-extrabold leading-[0.98] tracking-tight sm:text-6xl md:text-7xl">
             Every dollar in.
             <br />
             <span className="text-accent">Every tree out.</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg leading-relaxed text-ink-2">
-            Money that funds trees on <strong className="font-semibold text-ink">world.treegens.app</strong> and{' '}
+            Money that funds trees through <strong className="font-semibold text-ink">treegens.org</strong>,{' '}
+            <strong className="font-semibold text-ink">world.treegens.app</strong> and{' '}
             <strong className="font-semibold text-ink">treegensfoundation.org</strong> flows to the people who plant and
             verify them, then growth videos flow back. All of it on Base, one click from the open ledger.
           </p>

@@ -96,10 +96,28 @@ copy those files across; they depend only on the shared Mongoose models.
 ## Deploy (Netlify)
 
 `netlify.toml` is included (base `treegens-transparency`, publish `dist`, SPA
-redirect). Deploy it as **its own Netlify project**. Per the repo's `CLAUDE.md`,
-never attach `treegens.app`, `www.treegens.app`, `world.treegens.app`,
-`greenlegacy.app` or `ashaaraamagariisaa.com` to it. A dedicated hostname such
-as `ledger.treegens.org` is Jimi's decision.
+redirect). It is deployed as **its own Netlify project** (`treegens-ledger`)
+with the custom domain **transparency.treegens.app** (Jimi, 2026-10-18).
+treegens.app's DNS is managed outside Netlify, so the hostname needs one
+record at the DNS provider:
+
+```
+CNAME  transparency.treegens.app  →  treegens-ledger.netlify.app
+```
+
+Netlify provisions the certificate once the record resolves. Per the repo's
+`CLAUDE.md`, never attach `treegens.app`, `www.treegens.app`,
+`world.treegens.app`, `greenlegacy.app` or `ashaaraamagariisaa.com` to it.
+
+## Brand
+
+The page uses the Treegens identity shared by treegens.org and treegens.app:
+the circular mark and wordmark (`public/brand/`, ink version on paper, lime
+version at night), Inter, warm grey `#f7f8f3` paper, the lime `#d3e165 →
+#989c46` gradient on primary actions, tree greens `#6b8c3b / #435f24 / #303e1a`
+and brown ink `#634c2c / #4d341e / #1e0f08`. Series colours are separate from
+the brand colours on purpose (see Design notes) and were re-validated against
+the brand surfaces.
 
 ## Design notes
 

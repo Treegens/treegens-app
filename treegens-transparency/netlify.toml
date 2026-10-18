@@ -1,9 +1,12 @@
-# Treegens Open Ledger — static site.
+# Treegens Transparency — static site.
 #
-# Deploy as its own Netlify project (e.g. "treegens-ledger"). Do NOT attach
-# treegens.app / world.treegens.app / greenlegacy.app / ashaaraamagariisaa.com
-# here — see the repo's CLAUDE.md. A subdomain such as ledger.treegens.org is
-# Jimi's call.
+# Deployed as its own Netlify project ("treegens-ledger", id 3e4640f8-…) with
+# the custom domain transparency.treegens.app (Jimi's decision, 2026-10-18).
+# treegens.app's DNS is not on Netlify, so the hostname needs a CNAME
+# `transparency` → treegens-ledger.netlify.app at the DNS provider; Netlify
+# then issues the certificate by itself. Do NOT attach treegens.app /
+# www.treegens.app / world.treegens.app / greenlegacy.app /
+# ashaaraamagariisaa.com here — see the repo's CLAUDE.md.
 #
 # Runtime config lives in public/config.js (API base URL, RPC, explorer), so
 # the same build can be pointed at another API without rebuilding.

@@ -1,30 +1,36 @@
 @import 'tailwindcss';
 
 /*
- * Treegens Open Ledger — theme tokens.
+ * Treegens Transparency — theme tokens.
+ * Brand: treegens.org / treegens.app (warm grey #f7f8f3, lime #d3e165 → #989c46,
+ * tree greens #6b8c3b / #435f24 / #303e1a, browns #634c2c / #4d341e / #1e0f08, Inter).
  * Data (series) colors were validated with the dataviz six-checks validator:
  *   light: #6e8210,#43c3c3,#e79c27,#873b28,#2d6ac1  (adjacent + all-pairs pass on #f7f8f3)
- *   dark : #6d8e1c,#139cb6,#8d5406,#cd7670,#455bb2  (adjacent + all-pairs pass on #0c1a12)
+ *   dark : #6d8e1c,#139cb6,#8d5406,#cd7670,#455bb2  (adjacent + all-pairs pass on #141c0d)
  * Identity never rides on color alone: every ribbon, badge and legend carries a label + icon.
  */
 :root {
   color-scheme: light;
-  --page: #f3f6ee;
-  --surface: #fbfcf8;
-  --surface-2: #f1f5ea;
-  --surface-3: #e7eedd;
+  /* Treegens brand (treegens.org / treegens.app): warm grey paper, lime + tree greens, brown ink. */
+  --page: #f7f8f3; /* warm-grey */
+  --surface: #ffffff;
+  --surface-2: #f1f3e8;
+  --surface-3: #e8ebd3; /* warm-grey-200 */
   --chart-surface: #f7f8f3;
-  --hairline: rgba(29, 71, 42, 0.12);
-  --hairline-strong: rgba(29, 71, 42, 0.24);
-  --ink: #0f1a12;
-  --ink-2: #425042;
-  --ink-3: #6f7f6d;
-  --accent: #1d472a;
-  --accent-ink: #f3f8e6;
-  --leaf: #d1ed6e;
-  --leaf-soft: rgba(209, 237, 110, 0.35);
-  --olive: #9fb857;
-  --glow: rgba(29, 71, 42, 0.18);
+  --hairline: rgba(48, 62, 26, 0.12); /* tree-green-3 */
+  --hairline-strong: rgba(48, 62, 26, 0.26);
+  --ink: #1e0f08; /* brown-3 */
+  --ink-2: #4d341e; /* brown-2 */
+  --ink-3: #634c2c; /* brown-1 */
+  --accent: #435f24; /* tree-green-2: brand green that reads on paper */
+  --accent-ink: #f7f8f3;
+  --leaf: #d3e165; /* lime-green-2 */
+  --leaf-soft: rgba(211, 225, 101, 0.42);
+  --olive: #9ea74e; /* lime-green-3 */
+  --glow: rgba(158, 167, 78, 0.3);
+  --btn-grad: linear-gradient(90deg, #b8cf56 0%, #6b8c3b 100%);
+  --btn-ink: #16210c;
+  --btn-shadow: 0 8px 28px rgba(67, 95, 36, 0.28);
   --s-funding: #6e8210;
   --s-payout: #43c3c3;
   --s-reward: #e79c27;
@@ -34,28 +40,31 @@
   --warning: #fab219;
   --serious: #ec835a;
   --critical: #d03b3b;
-  --shadow: 0 18px 50px rgba(20, 40, 24, 0.12), 0 2px 8px rgba(20, 40, 24, 0.06);
+  --shadow: 0 4px 20px rgba(158, 167, 78, 0.22), 0 1px 2px rgba(48, 62, 26, 0.06);
   --radius: 1.25rem;
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --page: #071009;
-  --surface: #0c1a12;
-  --surface-2: #112418;
-  --surface-3: #17301f;
-  --chart-surface: #0c1a12;
-  --hairline: rgba(209, 237, 110, 0.12);
-  --hairline-strong: rgba(209, 237, 110, 0.26);
-  --ink: #eef4e6;
-  --ink-2: #b7c4ad;
-  --ink-3: #7d8f74;
-  --accent: #d1ed6e;
-  --accent-ink: #0b1a0f;
-  --leaf: #d1ed6e;
-  --leaf-soft: rgba(209, 237, 110, 0.18);
-  --olive: #9fb857;
-  --glow: rgba(209, 237, 110, 0.22);
+  --page: #0f150a;
+  --surface: #141c0d;
+  --surface-2: #1b2512;
+  --surface-3: #243018;
+  --chart-surface: #141c0d;
+  --hairline: rgba(211, 225, 101, 0.12);
+  --hairline-strong: rgba(211, 225, 101, 0.26);
+  --ink: #f7f8f3;
+  --ink-2: #cfd6be;
+  --ink-3: #a9a29d; /* warm-grey-400 */
+  --accent: #d3e165;
+  --accent-ink: #16210c;
+  --leaf: #d3e165;
+  --leaf-soft: rgba(211, 225, 101, 0.18);
+  --olive: #9ea74e;
+  --glow: rgba(211, 225, 101, 0.22);
+  --btn-grad: linear-gradient(90deg, #d3e165 0%, #989c46 100%);
+  --btn-ink: #16210c;
+  --btn-shadow: 0 8px 28px rgba(211, 225, 101, 0.18);
   --s-funding: #6d8e1c;
   --s-payout: #139cb6;
   --s-reward: #8d5406;
@@ -67,28 +76,50 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
-    --page: #071009;
-    --surface: #0c1a12;
-    --surface-2: #112418;
-    --surface-3: #17301f;
-    --chart-surface: #0c1a12;
-    --hairline: rgba(209, 237, 110, 0.12);
-    --hairline-strong: rgba(209, 237, 110, 0.26);
-    --ink: #eef4e6;
-    --ink-2: #b7c4ad;
-    --ink-3: #7d8f74;
-    --accent: #d1ed6e;
-    --accent-ink: #0b1a0f;
-    --leaf: #d1ed6e;
-    --leaf-soft: rgba(209, 237, 110, 0.18);
-    --olive: #9fb857;
-    --glow: rgba(209, 237, 110, 0.22);
+    --page: #0f150a;
+    --surface: #141c0d;
+    --surface-2: #1b2512;
+    --surface-3: #243018;
+    --chart-surface: #141c0d;
+    --hairline: rgba(211, 225, 101, 0.12);
+    --hairline-strong: rgba(211, 225, 101, 0.26);
+    --ink: #f7f8f3;
+    --ink-2: #cfd6be;
+    --ink-3: #a9a29d;
+    --accent: #d3e165;
+    --accent-ink: #16210c;
+    --leaf: #d3e165;
+    --leaf-soft: rgba(211, 225, 101, 0.18);
+    --olive: #9ea74e;
+    --glow: rgba(211, 225, 101, 0.22);
+    --btn-grad: linear-gradient(90deg, #d3e165 0%, #989c46 100%);
+    --btn-ink: #16210c;
+    --btn-shadow: 0 8px 28px rgba(211, 225, 101, 0.18);
     --s-funding: #6d8e1c;
     --s-payout: #139cb6;
     --s-reward: #8d5406;
     --s-retire: #cd7670;
     --s-update: #455bb2;
     --shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 2px 10px rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Brand assets come in an ink version (paper) and a lime version (night). */
+.tg-dark-only {
+  display: none;
+}
+:root[data-theme='dark'] .tg-dark-only {
+  display: inline-block;
+}
+:root[data-theme='dark'] .tg-light-only {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .tg-dark-only {
+    display: inline-block;
+  }
+  :root:not([data-theme='light']) .tg-light-only {
+    display: none;
   }
 }
 
@@ -110,7 +141,7 @@
   --color-s-reward: var(--s-reward);
   --color-s-retire: var(--s-retire);
   --color-s-update: var(--s-update);
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 html {
@@ -130,7 +161,7 @@ body {
 
 ::selection {
   background: var(--leaf);
-  color: #0b1a0f;
+  color: #16210c;
 }
 
 /* Night-canopy backdrop: soft radial washes, no images. */
@@ -141,23 +172,23 @@ body {
   pointer-events: none;
   background:
     radial-gradient(ellipse 70% 40% at 20% -10%, var(--leaf-soft), transparent 60%),
-    radial-gradient(ellipse 60% 50% at 100% 10%, rgba(19, 156, 182, 0.14), transparent 60%),
-    radial-gradient(ellipse 80% 60% at 50% 110%, rgba(29, 71, 42, 0.35), transparent 60%);
+    radial-gradient(ellipse 60% 50% at 100% 10%, rgba(158, 167, 78, 0.16), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 50% 110%, rgba(67, 95, 36, 0.35), transparent 60%);
 }
 
 :root[data-theme='light'] .tg-backdrop,
 :root:not([data-theme='dark']) .tg-backdrop {
   background:
-    radial-gradient(ellipse 70% 40% at 20% -10%, rgba(209, 237, 110, 0.45), transparent 60%),
-    radial-gradient(ellipse 60% 50% at 100% 10%, rgba(67, 195, 195, 0.18), transparent 60%);
+    radial-gradient(ellipse 70% 40% at 20% -10%, rgba(211, 225, 101, 0.5), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 100% 10%, rgba(158, 167, 78, 0.2), transparent 60%);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .tg-backdrop {
     background:
       radial-gradient(ellipse 70% 40% at 20% -10%, var(--leaf-soft), transparent 60%),
-      radial-gradient(ellipse 60% 50% at 100% 10%, rgba(19, 156, 182, 0.14), transparent 60%),
-      radial-gradient(ellipse 80% 60% at 50% 110%, rgba(29, 71, 42, 0.35), transparent 60%);
+      radial-gradient(ellipse 60% 50% at 100% 10%, rgba(158, 167, 78, 0.16), transparent 60%),
+      radial-gradient(ellipse 80% 60% at 50% 110%, rgba(67, 95, 36, 0.35), transparent 60%);
   }
 }
 
@@ -230,9 +261,10 @@ section[id] {
 }
 
 .tg-btn-primary {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--btn-grad);
+  color: var(--btn-ink);
   border-color: transparent;
+  box-shadow: var(--btn-shadow);
 }
 
 .tg-btn-primary:hover {

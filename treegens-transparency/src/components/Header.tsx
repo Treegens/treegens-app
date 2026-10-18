@@ -22,13 +22,13 @@ export function Header({
   return (
     <header className="sticky top-0 z-40 border-b border-hairline bg-page/80 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
-        <a href="#top" className="flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-ink">
-            <Icon name="leaf" size={18} strokeWidth={2.2} />
-          </span>
-          <span className="leading-tight">
-            <span className="block text-sm font-extrabold tracking-tight">Treegens</span>
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.2em] text-ink-3">Open ledger</span>
+        <a href="#top" className="flex items-center gap-2.5" aria-label="Treegens Transparency, back to top">
+          {/* The Treegens mark and wordmark, as on treegens.org and treegens.app. */}
+          <img src="/brand/mark.svg" alt="" width={36} height={36} className="h-9 w-9 shrink-0" />
+          <span className="flex flex-col items-start leading-none">
+            <img src="/brand/wordmark-ink.svg" alt="Treegens" className="tg-light-only h-[1.15rem] w-auto" />
+            <img src="/brand/wordmark-lime.svg" alt="Treegens" className="tg-dark-only h-[1.15rem] w-auto" />
+            <span className="mt-1 text-[10.5px] font-bold uppercase tracking-[0.22em] text-ink-3">Transparency</span>
           </span>
         </a>
         <nav className="hidden items-center gap-1 md:flex" aria-label="Sections">

@@ -76,6 +76,7 @@ export const CONTRACTS = {
 } as const
 
 export const SITES = {
+  org: { label: 'treegens.org', url: 'https://treegens.org' },
   foundation: { label: 'treegensfoundation.org', url: 'https://treegensfoundation.org' },
   world: { label: 'world.treegens.app', url: 'https://world.treegens.app' },
   burn: { label: 'burn.treegens.app', url: 'https://burn.treegens.app' },

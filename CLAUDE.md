@@ -50,9 +50,14 @@ Jimi's admin wallet before any real payout.
   `transparencyIndexerService` ledger indexer (`ENABLE_LEDGER_INDEXER=true` on
   `treegens-api` in `render.yaml`). The indexer only reads the chain and writes
   `OnchainEvent` rows; it never signs anything.
-- Deploy the site as its **own** Netlify project. The domain rules above
-  apply; a hostname like `ledger.treegens.org` is Jimi's call. Preview:
-  https://treegens-ledger.netlify.app (Netlify site `treegens-ledger`).
+- Deployed as its **own** Netlify project `treegens-ledger`
+  (id `3e4640f8-a6f6-4bb9-9f70-2e5116c4334f`), https://treegens-ledger.netlify.app.
+  **Hostname: `transparency.treegens.app`** (Jimi's decision, 2026-10-18), set
+  as the site's custom domain. treegens.app has no Netlify DNS zone, so the
+  record `CNAME transparency → treegens-ledger.netlify.app` must exist at the
+  DNS provider before it resolves; the five protected hostnames above stay
+  untouched. Brand = treegens.org / treegens.app (mark + wordmark in
+  `treegens-transparency/public/brand/`, Inter, lime/tree-green/brown tokens).
 - The **live** API is `https://treegens-backend-1eyq.onrender.com`
   (repo `Treegens/treegens-backend`, confirmed from treegens.app's
   `NEXT_PUBLIC_API_URL`). The same transparency API + indexer was ported there
