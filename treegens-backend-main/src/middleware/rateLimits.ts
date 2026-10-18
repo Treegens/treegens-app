@@ -1,5 +1,5 @@
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import type { Request } from 'express'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 
 const defaults = {
   standardHeaders: true,
@@ -86,3 +86,13 @@ export const pushSubscribeLimiter = userLimiter(30)
 
 /** POST /api/submissions/:id/conversation/messages */
 export const conversationMessageLimiter = userLimiter(60)
+
+/**
+ * GET /api/transparency/* — public, cached, read-only. Keyed by IP (no auth)
+ * and generous: a busy public page polls a handful of endpoints.
+ */
+export const transparencyLimiter = rateLimit({
+  ...defaults,
+  windowMs: 60 * 1000,
+  max: scaled(240),
+})

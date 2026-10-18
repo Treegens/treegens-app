@@ -1,0 +1,10 @@
+node_modules
+dist
+.netlify
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+scratch/
+public/demo/

@@ -39,3 +39,16 @@ Jimi's admin wallet before any real payout.
   `Treegens/treegens-backend` on Render (`treegens-backend-1eyq`).
 - The Render Blueprint here (`render.yaml`) deploys the Base-mainnet API and
   workers (`treegens-api`, `treegens-redis`, reward/slash workers).
+
+## 🔎 Public transparency ledger (added 2026-10-18)
+
+- `treegens-transparency/` is the public "Open Ledger" site (every dollar in,
+  every tree out, Basescan links everywhere). Static Vite build, runtime config
+  in `public/config.js`.
+- Its data comes from `GET /api/transparency/*` in `treegens-backend-main`
+  (`routes/transparency.ts`, `services/transparencyService.ts`) and the
+  `transparencyIndexerService` ledger indexer (`ENABLE_LEDGER_INDEXER=true` on
+  `treegens-api` in `render.yaml`). The indexer only reads the chain and writes
+  `OnchainEvent` rows; it never signs anything.
+- Deploy the site as its **own** Netlify project. The domain rules above
+  apply; a hostname like `ledger.treegens.org` is Jimi's call.

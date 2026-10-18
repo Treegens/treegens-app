@@ -85,7 +85,7 @@ class EnvironmentConfig {
       console.error(
         `[config] TGN_VAULT_ADDRESS=${configured} is not a vault (stake/slash ` +
           `calls revert on it). Ignoring it and using ${CURRENT}. ` +
-          `Remove or fix the stale env var.`
+          `Remove or fix the stale env var.`,
       )
       return CURRENT
     }
@@ -146,11 +146,15 @@ class EnvironmentConfig {
     const configured = process.env.VERIFIER_MINTER_ADDRESS?.trim()
     if (!configured) return CURRENT
 
-    if (EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(configured.toLowerCase())) {
+    if (
+      EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(
+        configured.toLowerCase(),
+      )
+    ) {
       console.error(
         `[config] VERIFIER_MINTER_ADDRESS=${configured} is a REVOKED minter and ` +
           `would fail every mint. Ignoring it and using ${CURRENT}. ` +
-          `Remove the stale env var.`
+          `Remove the stale env var.`,
       )
       return CURRENT
     }
@@ -313,10 +317,7 @@ class EnvironmentConfig {
    * `ultralytics` — multipart Bearer call to `AI_API_PREDICT_URL` or base + path.
    * `roboflow_workflow` — Roboflow Serverless (`ROBOFLOW_*` settings).
    */
-  get AI_PROVIDER():
-    | 'treegens_ml'
-    | 'ultralytics'
-    | 'roboflow_workflow' {
+  get AI_PROVIDER(): 'treegens_ml' | 'ultralytics' | 'roboflow_workflow' {
     const v = (process.env.AI_PROVIDER || 'treegens_ml').trim().toLowerCase()
     if (v === 'roboflow_workflow' || v === 'roboflow')
       return 'roboflow_workflow'
@@ -349,7 +350,9 @@ class EnvironmentConfig {
    * planting API times out or returns 5xx.
    */
   get AI_FAILOVER_TO_ULTRALYTICS() {
-    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '').trim().toLowerCase()
+    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '')
+      .trim()
+      .toLowerCase()
     return v === '1' || v === 'true' || v === 'yes'
   }
 
@@ -737,6 +740,99 @@ class EnvironmentConfig {
   /** Dev/demo: return seeded leaderboard rows when DB has no entries (never in production). */
   get LEADERBOARD_DEMO_FALLBACK() {
     return process.env.LEADERBOARD_DEMO_FALLBACK === 'true'
+  }
+
+  // --- Public transparency ledger (routes/transparency.ts, transparencyIndexerService) ---
+
+  /**
+   * Indexes MGRO mints/burns, VerifierMinter proposals and TGN payout receipts
+   * into OnchainEvent rows for the public ledger. Runs inside the API process
+   * (one light poll, like the burn indexer); set to 'true' on the API service.
+   */
+  get ENABLE_LEDGER_INDEXER() {
+    return process.env.ENABLE_LEDGER_INDEXER || 'false'
+  }
+
+  get LEDGER_INDEXER_POLL_MS() {
+    const raw = process.env.LEDGER_INDEXER_POLL_MS
+    const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : 60000
+    return Number.isNaN(n) || n < 5000 ? 60000 : n
+  }
+
+  /** First block to scan; defaults to the MGRO burn indexer's start block. */
+  get LEDGER_INDEXER_START_BLOCK() {
+    const raw = process.env.LEDGER_INDEXER_START_BLOCK
+    const n =
+      raw !== undefined && raw !== ''
+        ? parseInt(raw, 10)
+        : this.MGRO_BURN_START_BLOCK
+    return Number.isNaN(n) || n < 0 ? this.MGRO_BURN_START_BLOCK : n
+  }
+
+  get LEDGER_INDEXER_CHUNK_SIZE() {
+    const raw = process.env.LEDGER_INDEXER_CHUNK_SIZE
+    const n =
+      raw !== undefined && raw !== ''
+        ? parseInt(raw, 10)
+        : this.BURN_INDEXER_CHUNK_SIZE
+    return Number.isNaN(n) || n <= 0 ? this.BURN_INDEXER_CHUNK_SIZE : n
+  }
+
+  get LEDGER_INDEXER_CONFIRMATIONS() {
+    const raw = process.env.LEDGER_INDEXER_CONFIRMATIONS
+    const n =
+      raw !== undefined && raw !== ''
+        ? parseInt(raw, 10)
+        : this.BURN_INDEXER_CONFIRMATIONS
+    return Number.isNaN(n) || n < 0 ? this.BURN_INDEXER_CONFIRMATIONS : n
+  }
+
+  /**
+   * Every VerifierMinter whose MintProposed/MintExecuted logs belong in the
+   * ledger: the current minter plus the ones it replaced, so historic reward
+   * mints keep their on-chain evidence. Extra addresses via
+   * TRANSPARENCY_EXTRA_MINTERS (comma-separated).
+   */
+  get TRANSPARENCY_MINTER_ADDRESSES(): string[] {
+    const known = [
+      this.VERIFIER_MINTER_ADDRESS,
+      '0x9BB2C6786c69BB075B36E2B92f1a7c15D539508c', // cap-100 minter, revoked 2026-07-26
+      '0x670aC2e2f6fB209b4BCcc9bEb8347286D167515B', // minter reported by the live backend
+      ...(process.env.TRANSPARENCY_EXTRA_MINTERS || '').split(','),
+    ]
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const raw of known) {
+      const a = String(raw || '').trim()
+      if (!/^0x[a-fA-F0-9]{40}$/.test(a)) continue
+      const key = a.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(a)
+    }
+    return out
+  }
+
+  /** 2-of-4 Treegens treasury Safe on Base (TGNVault.treasury()). */
+  get TREASURY_SAFE_ADDRESS() {
+    return (
+      process.env.TREASURY_SAFE_ADDRESS ||
+      '0x64b05503c6F2233d279E6B8B8f2Da6936dEd584C'
+    )
+  }
+
+  /** Block explorer the public ledger links every tx and address to. */
+  get EXPLORER_BASE_URL() {
+    return String(process.env.EXPLORER_BASE_URL || 'https://basescan.org')
+      .trim()
+      .replace(/\/+$/, '')
+  }
+
+  /** In-memory cache TTL for the public transparency endpoints. */
+  get TRANSPARENCY_CACHE_TTL_MS() {
+    const raw = process.env.TRANSPARENCY_CACHE_TTL_MS
+    const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : 30000
+    return Number.isNaN(n) || n < 1000 ? 30000 : n
   }
 
   validateRequired() {

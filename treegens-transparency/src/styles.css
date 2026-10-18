@@ -1,0 +1,491 @@
+@import 'tailwindcss';
+
+/*
+ * Treegens Open Ledger — theme tokens.
+ * Data (series) colors were validated with the dataviz six-checks validator:
+ *   light: #6e8210,#43c3c3,#e79c27,#873b28,#2d6ac1  (adjacent + all-pairs pass on #f7f8f3)
+ *   dark : #6d8e1c,#139cb6,#8d5406,#cd7670,#455bb2  (adjacent + all-pairs pass on #0c1a12)
+ * Identity never rides on color alone: every ribbon, badge and legend carries a label + icon.
+ */
+:root {
+  color-scheme: light;
+  --page: #f3f6ee;
+  --surface: #fbfcf8;
+  --surface-2: #f1f5ea;
+  --surface-3: #e7eedd;
+  --chart-surface: #f7f8f3;
+  --hairline: rgba(29, 71, 42, 0.12);
+  --hairline-strong: rgba(29, 71, 42, 0.24);
+  --ink: #0f1a12;
+  --ink-2: #425042;
+  --ink-3: #6f7f6d;
+  --accent: #1d472a;
+  --accent-ink: #f3f8e6;
+  --leaf: #d1ed6e;
+  --leaf-soft: rgba(209, 237, 110, 0.35);
+  --olive: #9fb857;
+  --glow: rgba(29, 71, 42, 0.18);
+  --s-funding: #6e8210;
+  --s-payout: #43c3c3;
+  --s-reward: #e79c27;
+  --s-retire: #873b28;
+  --s-update: #2d6ac1;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --shadow: 0 18px 50px rgba(20, 40, 24, 0.12), 0 2px 8px rgba(20, 40, 24, 0.06);
+  --radius: 1.25rem;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --page: #071009;
+  --surface: #0c1a12;
+  --surface-2: #112418;
+  --surface-3: #17301f;
+  --chart-surface: #0c1a12;
+  --hairline: rgba(209, 237, 110, 0.12);
+  --hairline-strong: rgba(209, 237, 110, 0.26);
+  --ink: #eef4e6;
+  --ink-2: #b7c4ad;
+  --ink-3: #7d8f74;
+  --accent: #d1ed6e;
+  --accent-ink: #0b1a0f;
+  --leaf: #d1ed6e;
+  --leaf-soft: rgba(209, 237, 110, 0.18);
+  --olive: #9fb857;
+  --glow: rgba(209, 237, 110, 0.22);
+  --s-funding: #6d8e1c;
+  --s-payout: #139cb6;
+  --s-reward: #8d5406;
+  --s-retire: #cd7670;
+  --s-update: #455bb2;
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --page: #071009;
+    --surface: #0c1a12;
+    --surface-2: #112418;
+    --surface-3: #17301f;
+    --chart-surface: #0c1a12;
+    --hairline: rgba(209, 237, 110, 0.12);
+    --hairline-strong: rgba(209, 237, 110, 0.26);
+    --ink: #eef4e6;
+    --ink-2: #b7c4ad;
+    --ink-3: #7d8f74;
+    --accent: #d1ed6e;
+    --accent-ink: #0b1a0f;
+    --leaf: #d1ed6e;
+    --leaf-soft: rgba(209, 237, 110, 0.18);
+    --olive: #9fb857;
+    --glow: rgba(209, 237, 110, 0.22);
+    --s-funding: #6d8e1c;
+    --s-payout: #139cb6;
+    --s-reward: #8d5406;
+    --s-retire: #cd7670;
+    --s-update: #455bb2;
+    --shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 2px 10px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-leaf: var(--leaf);
+  --color-olive: var(--olive);
+  --color-hairline: var(--hairline);
+  --color-s-funding: var(--s-funding);
+  --color-s-payout: var(--s-payout);
+  --color-s-reward: var(--s-reward);
+  --color-s-retire: var(--s-retire);
+  --color-s-update: var(--s-update);
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+html {
+  background: var(--page);
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--leaf);
+  color: #0b1a0f;
+}
+
+/* Night-canopy backdrop: soft radial washes, no images. */
+.tg-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 70% 40% at 20% -10%, var(--leaf-soft), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 100% 10%, rgba(19, 156, 182, 0.14), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 50% 110%, rgba(29, 71, 42, 0.35), transparent 60%);
+}
+
+:root[data-theme='light'] .tg-backdrop,
+:root:not([data-theme='dark']) .tg-backdrop {
+  background:
+    radial-gradient(ellipse 70% 40% at 20% -10%, rgba(209, 237, 110, 0.45), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 100% 10%, rgba(67, 195, 195, 0.18), transparent 60%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .tg-backdrop {
+    background:
+      radial-gradient(ellipse 70% 40% at 20% -10%, var(--leaf-soft), transparent 60%),
+      radial-gradient(ellipse 60% 50% at 100% 10%, rgba(19, 156, 182, 0.14), transparent 60%),
+      radial-gradient(ellipse 80% 60% at 50% 110%, rgba(29, 71, 42, 0.35), transparent 60%);
+  }
+}
+
+.tg-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.tg-card-2 {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: 1rem;
+}
+
+.tg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.tg-chip[data-active='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+.tg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  padding: 0.55rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  text-decoration: none;
+}
+
+.tg-btn:hover {
+  border-color: var(--accent);
+}
+
+.tg-btn:active {
+  transform: scale(0.98);
+}
+
+section[id] {
+  scroll-margin-top: 84px;
+}
+
+.tg-btn-sm {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.75rem;
+  gap: 0.35rem;
+}
+
+.tg-btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+.tg-btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.tg-kicker {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.tg-hero-figure {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+  font-variant-numeric: proportional-nums;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.tg-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78em;
+}
+
+.tg-hairline {
+  border-color: var(--hairline);
+}
+
+/* Live pulse dot */
+.tg-pulse {
+  position: relative;
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--good);
+}
+
+.tg-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 2px solid var(--good);
+  opacity: 0.6;
+  animation: tg-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes tg-ping {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+/* Map point pulse */
+.tg-map-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tg-map-ping 2.6s ease-out infinite;
+}
+
+@keyframes tg-map-ping {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* Ledger row entering */
+@keyframes tg-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    background: var(--leaf-soft);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    background: transparent;
+  }
+}
+
+.tg-row-in {
+  animation: tg-row-in 0.9s ease-out both;
+}
+
+/* Drawer */
+@keyframes tg-drawer-in {
+  from {
+    transform: translateX(40px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.tg-drawer {
+  animation: tg-drawer-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.tg-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tg-pulse::after,
+  .tg-map-pulse,
+  .tg-row-in,
+  .tg-drawer {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* Ribbon hover */
+.tg-ribbon {
+  transition: opacity 0.2s ease, filter 0.2s ease;
+  cursor: pointer;
+}
+
+.tg-ribbon-dim {
+  opacity: 0.25;
+}
+
+.tg-river-label {
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+.tg-river-sub {
+  font-size: 10.5px;
+  font-weight: 500;
+  fill: var(--ink-2);
+}
+
+.tg-river-muted {
+  font-size: 10px;
+  fill: var(--ink-3);
+}
+
+/* Video */
+.tg-video {
+  background: #000;
+  border-radius: 1rem;
+  overflow: hidden;
+  aspect-ratio: 9 / 16;
+  width: 100%;
+}
+
+.tg-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tg-video-landscape {
+  aspect-ratio: 16 / 9;
+}
+
+/* Focus ring for keyboard users */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+a {
+  color: inherit;
+}
+
+.tg-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+.tg-link:hover {
+  text-decoration-color: var(--accent);
+}
+
+.tg-skeleton {
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
+  background-size: 200% 100%;
+  animation: tg-shimmer 1.4s linear infinite;
+  border-radius: 0.6rem;
+}
+
+@keyframes tg-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.tg-section-title {
+  font-size: clamp(1.5rem, 2.6vw, 2.1rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.tg-progress {
+  display: grid;
+  gap: 4px;
+}
+
+.tg-progress > span {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+}
+
+.tg-progress > span[data-paid='true'] {
+  background: var(--s-reward);
+}
+
+.tg-tooltip {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  max-width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 0.8rem;
+  padding: 0.6rem 0.75rem;
+  box-shadow: var(--shadow);
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.tg-tooltip strong {
+  color: var(--ink);
+  font-size: 0.9rem;
+}

@@ -9,16 +9,18 @@ import errorHandler from './middleware/errorHandler'
 import { globalApiLimiter } from './middleware/rateLimits'
 import authRoutes from './routes/auth'
 import conversationsRoutes from './routes/conversations'
+import distributionsRoutes from './routes/distributions'
 import healthRoutes from './routes/health'
 import notificationsRoutes from './routes/notifications'
 import pushRoutes from './routes/push'
-import distributionsRoutes from './routes/distributions'
 import rewardsRoutes from './routes/rewards'
 import submissionsRoutes from './routes/submissions'
+import transparencyRoutes, { attachLedgerIndexer } from './routes/transparency'
 import userRoutes from './routes/users'
 import BurnIndexerService from './services/burnIndexerService'
-import VerifierService from './services/verifierService'
+import TransparencyIndexerService from './services/transparencyIndexerService'
 import { startStitchRetrier } from './services/verifiedVideoStitchService'
+import VerifierService from './services/verifierService'
 import { startRewardClaimWorker } from './workers/rewardClaimWorker'
 import { startSlashWorker } from './workers/slashWorker'
 
@@ -33,10 +35,12 @@ app.use(helmet())
 // previous behaviour of accepting any origin.
 const corsOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
-  .map((o) => o.trim())
+  .map(o => o.trim())
   .filter(Boolean)
 
-app.use(cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : {}))
+app.use(
+  cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : {}),
+)
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 
@@ -57,6 +61,8 @@ app.use('/api/notifications', notificationsRoutes)
 app.use('/api/push', pushRoutes)
 app.use('/api/conversations', conversationsRoutes)
 app.use('/api/auth', authRoutes)
+// Public open ledger (transparency.treegens.org). Read-only, cached, CORS *.
+app.use('/api/transparency', transparencyRoutes)
 app.use('/health', healthRoutes)
 
 /**
@@ -106,7 +112,9 @@ async function start() {
   try {
     await connectDB()
   } catch {
-    console.error('Refusing to start API without MongoDB. Fix MONGODB_URI and retry.')
+    console.error(
+      'Refusing to start API without MongoDB. Fix MONGODB_URI and retry.',
+    )
     process.exit(1)
     return
   }
@@ -135,6 +143,22 @@ if (env.ENABLE_BURN_INDEXER === 'true') {
     console.log('[BurnIndexer] Started in API process')
   } catch (error: any) {
     console.error('[BurnIndexer] Failed to start', {
+      message: error?.message || String(error),
+    })
+  }
+}
+
+// Public transparency ledger: indexes MGRO mints/burns, VerifierMinter
+// proposals and TGN payout receipts into OnchainEvent rows. One light poll in
+// the API process, same shape as the burn indexer above.
+if (env.ENABLE_LEDGER_INDEXER === 'true') {
+  try {
+    const ledgerIndexer = new TransparencyIndexerService()
+    ledgerIndexer.start()
+    attachLedgerIndexer(ledgerIndexer)
+    console.log('[LedgerIndexer] Started in API process')
+  } catch (error: any) {
+    console.error('[LedgerIndexer] Failed to start', {
       message: error?.message || String(error),
     })
   }

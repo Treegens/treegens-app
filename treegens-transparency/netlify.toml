@@ -1,0 +1,29 @@
+# Treegens Open Ledger — static site.
+#
+# Deploy as its own Netlify project (e.g. "treegens-ledger"). Do NOT attach
+# treegens.app / world.treegens.app / greenlegacy.app / ashaaraamagariisaa.com
+# here — see the repo's CLAUDE.md. A subdomain such as ledger.treegens.org is
+# Jimi's call.
+#
+# Runtime config lives in public/config.js (API base URL, RPC, explorer), so
+# the same build can be pointed at another API without rebuilding.
+
+[build]
+  base = "treegens-transparency"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/config.js"
+  [headers.values]
+    Cache-Control = "public, max-age=60"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

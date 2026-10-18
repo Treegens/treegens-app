@@ -8,6 +8,7 @@ This repository contains the **Treegens** web application and **Node.js backend*
 |------|--------------|
 | [`treegens-web-main/`](treegens-web-main/) | Next.js frontend (App Router, Thirdweb auth, Tailwind). |
 | [`treegens-backend-main/`](treegens-backend-main/) | Express API, MongoDB, Pinata/IPFS uploads, rewards and submission logic. |
+| [`treegens-transparency/`](treegens-transparency/) | **Treegens Open Ledger** — public transparency site (Vite + React) fed by `GET /api/transparency/*`; see its README. |
 
 Each package has its own `package.json`, lockfile, and `.gitignore`. **Do not commit** `.env` files — they are excluded from Git.
 

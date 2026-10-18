@@ -51,6 +51,15 @@ services:
         value: "false"
       - key: ENABLE_SLASH_WORKER
         value: "false"
+      # Public transparency ledger (/api/transparency/*): one light poll that
+      # indexes MGRO mints/burns, VerifierMinter proposals and TGN payout
+      # receipts into OnchainEvent rows. Read-only; safe in the API process.
+      - key: ENABLE_LEDGER_INDEXER
+        value: "true"
+      - key: LEDGER_INDEXER_POLL_MS
+        value: "60000"
+      - key: EXPLORER_BASE_URL
+        value: https://basescan.org
       - key: REDIS_URL
         fromService:
           type: keyvalue
