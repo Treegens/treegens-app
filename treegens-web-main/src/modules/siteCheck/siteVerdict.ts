@@ -19,7 +19,7 @@
  */
 import { mangrovesNative, PlantingZone, speciesFor } from './mangroveSpecies'
 
-export const SITE_RULES_VERSION = 'site-rules-v1'
+export const SITE_RULES_VERSION = 'site-rules-v2'
 
 export type PreviousUse =
   | 'mangrove_cut'
@@ -609,11 +609,17 @@ export function computeSiteVerdict(input: VerdictInput): SiteVerdict {
   const species = zone
     ? speciesFor(zone, countryCode, longitude).map(s => s.id)
     : []
+  // Jimi 2026-10-14: plant every propagule within 2 m of a living tree of
+  // the same species, and only beside its own kind (several species in one
+  // planting is fine). The old "plant a mix of at least three" read against
+  // that, so v2 keeps the nudge towards diversity but says how to get it:
+  // each species beside its own kind. The code stays 'mix_species' so stored
+  // verdicts and the app keep matching it.
   if (code === 'plant' && species.length >= 3) {
     push(
       'mix_species',
       'info',
-      'Plant a mix of at least three of the recommended species. Single-species stands are weaker.',
+      'Plant each propagule beside a living tree of its own species. Where several species grow here, your planting can include all of them.',
     )
   }
   return {

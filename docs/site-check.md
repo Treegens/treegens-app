@@ -90,7 +90,10 @@ For `plant` and `fix_first`, the verdict also recommends:
   Indo-West Pacific, Pacific islands, Atlantic and East Pacific). None are
   recommended where mangroves are not native.
 - for `plant` only, when the zone has at least three suitable species, a
-  nudge to plant a mix of at least three
+  reminder to plant each propagule beside a living tree of its own species,
+  and that one planting can include every species growing there (rules v2,
+  matching the planting rules of 2026-10-14; v1 asked for "a mix of at least
+  three", which read against "only beside its own kind")
 
 The rules live in one pure module, so the phone and the server compute the
 same verdict:
