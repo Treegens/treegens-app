@@ -6,11 +6,15 @@ import { EmailSignInForm } from '@/components/auth/EmailSignInForm'
 import { useAuth } from '@/contexts/AuthProvider'
 import { offlineVideoService } from '@/services/offlineVideoService'
 import Image from 'next/image'
-import { useRouter } from 'next/navigation'
-import { useEffect, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useActiveAccount, useConnectModal } from 'thirdweb/react'
 import toast from 'react-hot-toast'
-import { peekPostAuthRedirect } from '@/utils/postAuthRedirect'
+import {
+  isSafeRedirectPath,
+  peekPostAuthRedirect,
+  setPostAuthRedirect,
+} from '@/utils/postAuthRedirect'
 
 /** Forest canopy fallback when no env URL and `/public/img/treegens-bg.png` is missing. */
 const DEFAULT_AUTH_BG_REMOTE =
@@ -45,10 +49,37 @@ function AuthBackdrop() {
 }
 
 /**
+ * `/auth?next=/otc/join/<code>`: the invite page passes its path in the URL as
+ * well as storing it, because a magic link or OAuth return on Android often
+ * opens a fresh tab. Refreshing the stored value here (with its 1-hour TTL)
+ * makes whichever tab finishes sign-in land on the invite.
+ * `useSearchParams` needs a Suspense boundary for the static build.
+ */
+function NextParamCapture() {
+  const searchParams = useSearchParams()
+  const next = searchParams.get('next')
+  useEffect(() => {
+    if (next && isSafeRedirectPath(next)) setPostAuthRedirect(next)
+  }, [next])
+  return null
+}
+
+/**
  * Matches `mobile/app/auth.tsx`: one black “Sign in” opens the wallet flow,
  * then we show a loader while the JWT challenge/sign-in runs, then navigate home.
  */
 export default function AuthPage() {
+  return (
+    <>
+      <Suspense fallback={null}>
+        <NextParamCapture />
+      </Suspense>
+      <AuthPageBody />
+    </>
+  )
+}
+
+function AuthPageBody() {
   const router = useRouter()
   const { connect: openConnectModal, isConnecting: isWalletConnecting } =
     useConnectModal()

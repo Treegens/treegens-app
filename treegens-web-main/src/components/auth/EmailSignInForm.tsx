@@ -4,7 +4,7 @@ import { client } from '@/config/thirdwebConfig'
 import { defaultChain } from '@/config/thirdwebChain'
 import { getTreegensInAppWallet } from '@/config/treegensInAppWallet'
 import { useAuth } from '@/contexts/AuthProvider'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useConnect } from 'thirdweb/react'
@@ -14,8 +14,14 @@ import { peekPostAuthRedirect } from '@/utils/postAuthRedirect'
 
 type Step = 'email' | 'code'
 
-export function EmailSignInForm() {
+type Props = {
+  /** Called after the JWT sign-in succeeds (before any navigation). */
+  onSignedIn?: (email: string) => void
+}
+
+export function EmailSignInForm({ onSignedIn }: Props = {}) {
   const router = useRouter()
+  const pathname = usePathname()
   const { authenticate } = useAuth()
   const { connect } = useConnect()
 
@@ -87,7 +93,11 @@ export function EmailSignInForm() {
         wallet: connectedWallet ?? null,
       })
       if (ok) {
-        router.replace(peekPostAuthRedirect() ?? '/')
+        onSignedIn?.(normalizedEmail)
+        // Stored in localStorage with a TTL: survives a magic link opening a
+        // new tab. No-op when we are already on the destination page.
+        const target = peekPostAuthRedirect() ?? '/'
+        if (target !== pathname) router.replace(target)
       } else {
         toast.error('Wallet connected but sign-in failed. Try again.')
       }

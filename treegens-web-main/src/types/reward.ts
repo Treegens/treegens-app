@@ -39,6 +39,8 @@ export type RewardStatusProjection = {
   pendingHealthCheckpointIndex?: number | null
   /** OTC: planter MGRO is held until the planter confirms the M-Pesa payment. */
   otcHold?: boolean
+  /** OTC: the planter confirmed the M-Pesa payment; the MGRO now goes to the buyer. */
+  otcReleased?: boolean
   /** OTC deal bound to this allocation (set whether or not it is still held). */
   otcDealId?: string
 }

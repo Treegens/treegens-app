@@ -23,8 +23,14 @@ export const AuthGuard = ({ children }: { children: React.ReactNode }) => {
 
   // Once signed in and off the login page, the stored destination has served
   // its purpose (or was skipped); drop it so it cannot hijack a later sign-in.
+  // Exception: an unfinished invite (`/otc/join/<code>`) is kept (it expires
+  // on its own after an hour) so Home can show "Finish joining the M-Pesa
+  // program"; it is cleared as soon as the planter reaches that page.
   useEffect(() => {
-    if (!authLoading && isAuthenticated && !isLoginPage) {
+    if (authLoading || !isAuthenticated || isLoginPage) return
+    const stored = peekPostAuthRedirect()
+    if (!stored) return
+    if (stored === pathname || !isOtcJoinPage(stored)) {
       clearPostAuthRedirect()
     }
   }, [authLoading, isAuthenticated, isLoginPage, pathname])

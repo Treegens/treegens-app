@@ -2,6 +2,7 @@ import { isValidSubmissionObjectId } from '@/services/submissionApiMappers'
 import { axiosInstance } from './axiosInstance'
 import type { ReverseGeocodeResult } from './geocodingService'
 import type { ISubmissionAiVerification } from '@/types'
+import type { OtcDealUploadSummary } from '@/types/otc'
 import type {
   CompressionProgress,
   CompressionResult,
@@ -27,6 +28,8 @@ export interface VideoUploadResponse {
     treeType?: string
     reverseGeocode?: string
     aiVerification?: ISubmissionAiVerification
+    /** Plant upload by an OTC-enrolled planter: the M-Pesa deal just created. */
+    otcDeal?: OtcDealUploadSummary
   }
 }
 

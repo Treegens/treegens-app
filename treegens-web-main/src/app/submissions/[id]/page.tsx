@@ -1,5 +1,6 @@
 'use client'
 
+import { OtcPayoutCard } from '@/components/otc/OtcPayoutCard'
 import { ClaimCard } from '@/components/submission-detail/ClaimCard'
 import { LandVideoSection } from '@/components/submission-detail/LandVideoSection'
 import { PlantVideoSection } from '@/components/submission-detail/PlantVideoSection'
@@ -8,8 +9,11 @@ import { RejectionFeedbackFooter } from '@/components/submission-detail/Rejectio
 import { SubmissionStatusBadges } from '@/components/submission-detail/SubmissionStatusBadges'
 import { TwoVideoProofSteps } from '@/components/submission/TwoVideoProofSteps'
 import { Spinner } from '@/components/ui/Spinner'
+import { useUser } from '@/contexts/UserProvider'
 import { getSubmissionById } from '@/services/app'
+import { getOtcDealBySubmission } from '@/services/otcService'
 import { claimReward, getRewardStatus } from '@/services/rewardService'
+import type { OtcDealDetail } from '@/types/otc'
 import type { RewardStatusProjection } from '@/types/reward'
 import type { ISubmissionDoc } from '@/types'
 import { planterClaimFooterState } from '@/utils/claimUiState'
@@ -38,12 +42,15 @@ export default function SubmissionDetailPage() {
   const params = useParams()
   const id = typeof params.id === 'string' ? params.id : ''
   const router = useRouter()
+  const { user } = useUser()
 
   const [loading, setLoading] = useState(true)
   const [group, setGroup] = useState<PlanterSubmissionGroup | null>(null)
   const [error, setError] = useState('')
   const [rewardStatus, setRewardStatus] =
     useState<RewardStatusProjection | null>(null)
+  /** OTC (M-Pesa) deal for this planting, when the planter is enrolled. */
+  const [otcDeal, setOtcDeal] = useState<OtcDealDetail | null>(null)
   const [statusLoadedAt, setStatusLoadedAt] = useState(() => Date.now())
   const [claiming, setClaiming] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -71,13 +78,32 @@ export default function SubmissionDetailPage() {
           setRewardStatus(rs.data.data)
           setStatusLoadedAt(Date.now())
         } catch (rewardErr: unknown) {
+          // 404: no allocation yet. 403: not the planter nor a yes-voter
+          // (e.g. the OTC buyer viewing). Either way there is nothing to claim.
           if (
             axios.isAxiosError(rewardErr) &&
-            rewardErr.response?.status === 404
+            (rewardErr.response?.status === 404 ||
+              rewardErr.response?.status === 403)
           ) {
             setRewardStatus(null)
           } else {
             console.error('Failed to load reward status', rewardErr)
+          }
+        }
+
+        try {
+          const od = await getOtcDealBySubmission(id)
+          setOtcDeal(od.data.data ?? null)
+        } catch (otcErr: unknown) {
+          setOtcDeal(null)
+          if (
+            !(
+              axios.isAxiosError(otcErr) &&
+              (otcErr.response?.status === 404 ||
+                otcErr.response?.status === 403)
+            )
+          ) {
+            console.error('Failed to load OTC deal', otcErr)
           }
         }
       } catch (e) {
@@ -137,6 +163,9 @@ export default function SubmissionDetailPage() {
 
   const claimed = formatWeiToMgro(rewardStatus?.claimedAmountWei)
   const isClaimCompleted = rewardStatus?.displayState === 'COMPLETED'
+  /** MGRO for this planting is (or was) part of an M-Pesa deal: no Claim UI. */
+  const hideClaimCard =
+    !!otcDeal || !!rewardStatus?.otcHold || !!rewardStatus?.otcReleased
 
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
@@ -344,7 +373,19 @@ export default function SubmissionDetailPage() {
 
             <SubmissionDmThread submissionId={id} />
 
-            {group.submissionStatus === 'approved' ? (
+            {otcDeal ? (
+              <OtcPayoutCard
+                deal={otcDeal}
+                viewerWallet={user?.walletAddress}
+                otcHold={!!rewardStatus?.otcHold}
+              />
+            ) : rewardStatus?.otcHold ? (
+              <p className="text-center text-xs text-[#6b6560]">
+                MGRO held for your M-Pesa deal
+              </p>
+            ) : null}
+
+            {hideClaimCard ? null : group.submissionStatus === 'approved' ? (
               isClaimCompleted ? (
                 <div className="mt-0.5 flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-lime-green-1/50 p-3.5">
                   <p className="text-base text-tree-green-2">

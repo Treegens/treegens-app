@@ -13,8 +13,10 @@ import { appConfig } from '@/config/appConfig'
 import { useUser } from '@/contexts/UserProvider'
 import { getMySubmissions } from '@/services/app'
 import { listHealthCheckModeration } from '@/services/healthCheckService'
+import { formatKes, getOtcSummary } from '@/services/otcService'
 import { getRewardStatus } from '@/services/rewardService'
 import type { IHealthCheckDoc, ISubmissionDoc, ISubmissionGroup } from '@/types'
+import type { OtcSummary } from '@/types/otc'
 import { formatMgroCollectedDisplay } from '@/utils/formatMgro'
 import { getPlanterSubmissionBadge } from '@/utils/planterSubmissionBadge'
 import { rewardScheduleFullyClaimed } from '@/utils/rewardScheduleClaimed'
@@ -26,6 +28,10 @@ import {
   loadVerifierSubmissionRows,
   type VerifierSubmissionRow,
 } from '@/utils/verifierModeration'
+import {
+  clearPostAuthRedirect,
+  peekPostAuthRedirect,
+} from '@/utils/postAuthRedirect'
 import axios from 'axios'
 
 function primaryVideoFromGroup(group: ISubmissionGroup) {
@@ -64,6 +70,36 @@ export default function HomePage() {
   const [modLoading, setModLoading] = useState<boolean>(false)
   const [hcPreview, setHcPreview] = useState<IHealthCheckDoc[]>([])
   const [hcLoading, setHcLoading] = useState(false)
+  const isOtcBuyer = Boolean(user?.isOtcBuyer)
+  const [otcSummary, setOtcSummary] = useState<OtcSummary | null>(null)
+  /** D12: an invite link the user opened but has not finished joining yet. */
+  const [pendingJoinPath, setPendingJoinPath] = useState<string | null>(null)
+
+  useEffect(() => {
+    const stored = peekPostAuthRedirect()
+    setPendingJoinPath(
+      stored && stored.startsWith('/otc/join/') ? stored : null,
+    )
+  }, [])
+
+  useEffect(() => {
+    if (!user?._id || !isOtcBuyer) {
+      setOtcSummary(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await getOtcSummary()
+        if (!cancelled) setOtcSummary(res.data.data)
+      } catch {
+        /* the desk itself reports errors; the home card is best-effort */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [user?._id, isOtcBuyer])
 
   useEffect(() => {
     const loadMySubmissions = async () => {
@@ -171,6 +207,52 @@ export default function HomePage() {
     <>
       <AppHeader />
       <div className="mb-30 flex flex-col gap-6 p-6">
+        {pendingJoinPath ? (
+          <div className="flex items-center gap-2 rounded-2xl border border-[#435F24]/20 bg-[#eef6e4] px-4 py-2.5">
+            <Link
+              href={pendingJoinPath}
+              className="min-h-10 flex-1 py-2 text-sm font-semibold text-[#303E1A]"
+            >
+              Finish joining the M-Pesa program →
+            </Link>
+            <button
+              type="button"
+              onClick={() => {
+                clearPostAuthRedirect()
+                setPendingJoinPath(null)
+              }}
+              className="min-h-10 shrink-0 rounded-lg px-2 text-xs font-semibold text-[#6b6560]"
+              aria-label="Dismiss"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        {isOtcBuyer ? (
+          <Link
+            href={appConfig.routes.OtcDesk}
+            className="tg-card flex items-center justify-between gap-3 border px-5 py-4"
+          >
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#435F24]">
+                OTC desk
+              </p>
+              <p className="mt-1 text-base font-bold text-[#1a2610]">
+                {otcSummary
+                  ? `${formatKes(otcSummary.kesToPay)} to pay across ${otcSummary.counts?.awaiting_payment ?? 0} planting${(otcSummary.counts?.awaiting_payment ?? 0) === 1 ? '' : 's'}`
+                  : 'Pay planters by M-Pesa'}
+              </p>
+              {otcSummary && (otcSummary.counts?.payment_sent ?? 0) > 0 ? (
+                <p className="mt-0.5 text-xs text-[#5c534a]">
+                  {otcSummary.counts.payment_sent} awaiting planter confirmation
+                </p>
+              ) : null}
+            </div>
+            <FaChevronRight className="h-4 w-4 shrink-0 text-brown-2" />
+          </Link>
+        ) : null}
+
         <section className="relative overflow-hidden rounded-3xl border border-white/60 bg-gradient-to-br from-white via-[#f9fcf6] to-[#e8f2dc]/95 p-6 shadow-[0_24px_60px_rgba(48,62,26,0.14)]">
           <div className="pointer-events-none absolute -right-16 top-0 h-44 w-44 rounded-full bg-[#DFEA8A]/45 blur-3xl" />
           <div className="pointer-events-none absolute -bottom-12 -left-10 h-40 w-40 rounded-full bg-[#6B8C3B]/22 blur-3xl" />
