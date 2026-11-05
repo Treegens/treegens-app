@@ -92,7 +92,10 @@ export interface OtcDealPayment {
   screenshotUrl?: string
   screenshotPath?: string
   mimeType?: string
+  /** Full code for the buyer; masked (`••••••••K1`) when the planter is viewing. */
   mpesaRef?: string
+  /** Last 2 characters of the code; only present on planter-facing responses. */
+  mpesaRefHint?: string
   amountKes?: number
   /** Buyer ticked "partial payment" because amountKes differs from the deal. */
   partial?: boolean

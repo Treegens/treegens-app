@@ -15,15 +15,21 @@ import {
 import { OtcNotificationInput } from './otcNotifications'
 import {
   __setNotifierForTests,
+  __setStorageForTests,
   confirmDeal,
   createDealForSubmission,
   csvCell,
   ensureDealForSubmission,
+  getMe,
   joinWithInvite,
   listEligibleSubmissionsForPlanter,
+  listPlanterDeals,
+  onSubmissionApproved,
   onSubmissionRejected,
   OtcError,
   patchDealCount,
+  recordPayment,
+  toDealDetail,
 } from './otcService'
 import { RewardService } from './rewardService'
 
@@ -88,6 +94,7 @@ afterEach(() => {
     if (r) r()
   }
   __setNotifierForTests(null)
+  __setStorageForTests(null)
   for (const k of ENV_KEYS) {
     if (envSnapshot[k] === undefined) delete process.env[k]
     else process.env[k] = envSnapshot[k]
@@ -1235,4 +1242,213 @@ test('csvCell: formula-leading values are neutralised and quoted', () => {
   assert.equal(csvCell('+254712345678'), `"'+254712345678"`)
   assert.equal(csvCell('@SUM(1)'), `"'@SUM(1)"`)
   assert.equal(csvCell('\tx'), `"'\tx"`)
+})
+
+// ------------------------------------------- planters never see the full code
+
+const MASKED_REF = `${'•'.repeat(8)}PL`
+
+function stubHydrateLookups() {
+  stub(Submission, 'find', () => chain([]))
+  stub(User, 'find', () => chain([]))
+  stub(OtcEnrollment, 'find', () => chain([]))
+  stub(RewardAllocation, 'find', () => chain([]))
+}
+
+function makePaidDeal() {
+  return makeDeal({
+    status: 'payment_sent',
+    payment: { mpesaRef: REF, amountKes: 2000, sentAt: new Date() },
+    events: [
+      { type: 'created', by: 'system', at: new Date() },
+      {
+        type: 'payment_uploaded',
+        by: BUYER,
+        at: new Date(),
+        note: `KES 2,000 · ${REF}`,
+      },
+    ],
+  })
+}
+
+test('toDealDetail: the planter gets a masked M-Pesa code plus a 2-char hint', async () => {
+  stubHydrateLookups()
+  const deal = makePaidDeal()
+
+  const detail = await toDealDetail(
+    deal,
+    PLANTER.toUpperCase().replace('0X', '0x'),
+  )
+
+  assert.equal(detail.payment.mpesaRef, MASKED_REF)
+  assert.equal(detail.payment.mpesaRefHint, 'PL')
+  assert.equal(detail.payment.amountKes, 2000)
+  const uploaded = detail.events.find((e: any) => e.type === 'payment_uploaded')
+  assert.doesNotMatch(uploaded.note, new RegExp(REF))
+  assert.match(uploaded.note, /KES 2,000 · •+PL$/)
+  assert.doesNotMatch(JSON.stringify(detail), new RegExp(REF))
+  // The stored deal is untouched: confirmDeal still compares the full code.
+  assert.equal(deal.payment.mpesaRef, REF)
+  assert.equal(deal.events[1].note, `KES 2,000 · ${REF}`)
+})
+
+test('toDealDetail: a superseded code from an earlier payment upload is masked too', async () => {
+  stubHydrateLookups()
+  const OLD_REF = 'RBA3N7V1QZ'
+  const deal = makePaidDeal()
+  deal.events.splice(1, 0, {
+    type: 'payment_uploaded',
+    by: BUYER,
+    at: new Date(),
+    note: `KES 1,500 (partial) · ${OLD_REF}`,
+  })
+
+  const detail = await toDealDetail(deal, PLANTER)
+
+  const uploads = detail.events.filter(
+    (e: any) => e.type === 'payment_uploaded',
+  )
+  assert.equal(uploads.length, 2)
+  assert.match(uploads[0].note, /^KES 1,500 \(partial\) · •{8}QZ$/)
+  assert.match(uploads[1].note, /^KES 2,000 · •{8}PL$/)
+  const json = JSON.stringify(detail)
+  assert.doesNotMatch(json, new RegExp(OLD_REF))
+  assert.doesNotMatch(json, new RegExp(REF))
+  // Stored notes untouched.
+  assert.equal(deal.events[1].note, `KES 1,500 (partial) · ${OLD_REF}`)
+})
+
+test('toDealDetail: the buyer (and an unspecified viewer) keep the full code', async () => {
+  stubHydrateLookups()
+  const deal = makePaidDeal()
+
+  const forBuyer = await toDealDetail(deal, BUYER)
+  assert.equal(forBuyer.payment.mpesaRef, REF)
+  assert.equal(forBuyer.payment.mpesaRefHint, undefined)
+  assert.equal(forBuyer.events[1].note, `KES 2,000 · ${REF}`)
+
+  const noViewer = await toDealDetail(deal)
+  assert.equal(noViewer.payment.mpesaRef, REF)
+  assert.equal(noViewer.payment.mpesaRefHint, undefined)
+})
+
+test('listPlanterDeals / getMe: planter-facing deal lists are masked too', async () => {
+  const deal = makePaidDeal()
+  stub(OtcDeal, 'find', () => chain([deal]))
+  stub(OtcEnrollment, 'findOne', () => chain(makeEnrollment()))
+
+  const list = await listPlanterDeals(PLANTER)
+  assert.equal(list[0].payment.mpesaRef, MASKED_REF)
+  assert.equal(list[0].payment.mpesaRefHint, 'PL')
+
+  const me = await getMe(PLANTER)
+  assert.equal(me.deals[0].payment.mpesaRef, MASKED_REF)
+  assert.equal(me.deals[0].payment.mpesaRefHint, 'PL')
+  assert.doesNotMatch(JSON.stringify(me.deals), new RegExp(REF))
+  assert.equal(deal.payment.mpesaRef, REF)
+})
+
+test('recordPayment: the planter notification says how the code ends, never the code', async () => {
+  const deal = makeDeal({ status: 'awaiting_payment' })
+  const store = useDealStore(deal)
+  __setStorageForTests({
+    upload: async () => ({
+      publicUrl: 'https://storage.test/otc/shot.png',
+      videoCID: 'otc/shot.png',
+    }),
+    remove: async () => true,
+  })
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.alloc(16),
+  ])
+
+  const updated = await recordPayment(BUYER, String(deal._id), {
+    file: { buffer: png },
+    mpesaRef: ` ${REF.toLowerCase()} `,
+  })
+
+  assert.equal(updated.status, 'payment_sent')
+  assert.equal(store.doc.payment.mpesaRef, REF) // full code stored
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].kind, 'otc_payment_sent')
+  assert.equal(sent[0].recipientWalletAddress, PLANTER)
+  assert.doesNotMatch(`${sent[0].title} ${sent[0].body}`, new RegExp(REF))
+  assert.match(sent[0].body, /M-Pesa code ending in PL\)/)
+  assert.equal(sent[0].payload?.mpesaRef, undefined)
+  assert.equal(sent[0].payload?.mpesaRefHint, 'PL')
+})
+
+// ----------------------------------------- buyer-typed counts are capped (D2)
+
+test('patchDealCount: above the declared count -> 400 COUNT_ABOVE_DECLARED, no transition', async () => {
+  const deal = makeDeal({ status: 'awaiting_count', trees: 0 })
+  const store = useDealStore(deal)
+  stub(RewardAllocation, 'findOne', () => chain(null))
+  stub(Submission, 'findById', () =>
+    chain({ status: 'pending_review', treesPlanted: 200 }),
+  )
+
+  await assert.rejects(
+    () => patchDealCount(BUYER, String(deal._id), 300),
+    (e: any) => {
+      assert.ok(e instanceof OtcError)
+      assert.equal(e.code, 'COUNT_ABOVE_DECLARED')
+      assert.equal(e.status, 400)
+      assert.match(e.message, /200/)
+      assert.deepEqual(e.extra, { declared: 200 })
+      return true
+    },
+  )
+  assert.equal(store.transitions.length, 0)
+  assert.equal(store.doc.trees, 0)
+
+  // Exactly the declared count is fine.
+  const result = await patchDealCount(BUYER, String(deal._id), 200)
+  assert.equal(result.trees, 200)
+  assert.equal(store.transitions.length, 1)
+})
+
+test('onSubmissionApproved: no approved count -> deal count clamped to the declared count', async () => {
+  const deal = makeDeal({
+    status: 'awaiting_payment',
+    trees: 300,
+    countSource: 'manual',
+    amountKes: 3000,
+  })
+  const store = useDealStore(deal)
+  const submission = makeSubmission({
+    _id: deal.submissionId,
+    status: 'approved',
+    treesPlanted: 200,
+    aiVerification: { status: 'failed', error: 'no clip' },
+  })
+
+  const result = await onSubmissionApproved(submission)
+
+  assert.equal(store.transitions.length, 1)
+  assert.equal(result.trees, 200)
+  assert.equal(result.amountKes, computeDealAmountKes(200, 10))
+  assert.equal(result.expectedMgroWei, expectedPlanterMgroWei(200))
+  assert.equal(result.countSource, 'manual')
+  assert.equal(result.verified, true)
+  assert.equal(result.status, 'awaiting_payment')
+  const change = result.events.find((e: any) => e.type === 'count_updated')
+  assert.match(change.note, /300 -> 200/)
+})
+
+test('onSubmissionApproved: no declared count -> the deal count stands', async () => {
+  const deal = makeDeal({ status: 'awaiting_payment', trees: 300 })
+  useDealStore(deal)
+  const submission = makeSubmission({
+    _id: deal.submissionId,
+    status: 'approved',
+    treesPlanted: 0,
+    aiVerification: { status: 'failed' },
+  })
+
+  const result = await onSubmissionApproved(submission)
+
+  assert.equal(result.trees, 300)
+  assert.ok(!result.events.some((e: any) => e.type === 'count_updated'))
 })

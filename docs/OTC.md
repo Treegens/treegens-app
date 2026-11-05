@@ -256,7 +256,10 @@ on every `GET /deals/:id` read.
 once 30 seconds after boot and then every 5 minutes, with an in-flight guard:
 
 - (a) reconcile `confirmed`/`cancelled` deals whose `release.status` is still `held` or `n/a`
-  (updated in the last 30 days, up to 200 per pass);
+  (updated in the last 30 days, up to 200 per pass), and open deals whose `release.status`
+  is still `n/a` although a `RewardAllocation` already exists for the submission (up to 500
+  per pass), so the hold is taken even when the allocation was created outside the approval
+  path;
 - (b) cancel `awaiting_count`/`awaiting_payment` deals older than `OTC_DEAL_EXPIRY_DAYS`
   with reason `expired`; both parties are told ("TreeGens did not pay within 14 days");
 - (c) apply D4 to open deals whose submission is now `rejected`;
@@ -330,7 +333,7 @@ paginated `{ items, total, page, limit }`.
 | `GET /deals/export.csv?status=&q=&from=&to=` | buyer | CSV, max 5000 rows: createdAt, status, mpesaName, mpesaNumber, trees, countSource, verified, amountKes, paidKes, mpesaRef, paymentSentAt, confirmedAt, submissionId, submissionStatus, releaseStatus, expectedMgroWei. |
 | `POST /deals` | buyer | `{ submissionId }`. 404 `SUBMISSION_NOT_FOUND`; 409 `NOT_ENROLLED`, `ENROLLMENT_PAUSED`, `NOT_MANGROVE`, `NO_PLANT_CLIP`, `SUBMISSION_REJECTED`, `DEAL_EXISTS`, `PLANTER_ALREADY_PAID`. When the planter's MGRO allocation already exists, the deal is priced from the allocation's tree count (not the AI count) so KES paid and MGRO received match. |
 | `POST /deals/:dealId/payment` | buyer | multipart: `screenshot` file, `mpesaRef` (required), `amountKes?`, `partial?`, `note?`. 400 `NO_FILE`, `INVALID_IMAGE`, `INVALID_MPESA_REF`, `PARTIAL_FLAG_REQUIRED`. |
-| `PATCH /deals/:dealId/count` | buyer | `{ trees }`; `countSource = manual`. 409 `ALLOCATION_EXISTS` once the MGRO allocation exists (its count is fixed), 409 `INVALID_TRANSITION` after payment proof. |
+| `PATCH /deals/:dealId/count` | buyer | `{ trees }`; `countSource = manual`. 400 `COUNT_ABOVE_DECLARED` when `trees` exceeds the count the planter declared (`{ declared }`), 409 `ALLOCATION_EXISTS` once the MGRO allocation exists (its count is fixed), 409 `INVALID_TRANSITION` after payment proof. |
 | `POST /deals/:dealId/cancel` | buyer | `{ reason? }`; reason required from `payment_sent` or `disputed`. Never from `confirmed`. |
 | `POST /deals/:dealId/resolve` | buyer | `{ outcome: release_to_buyer / return_to_planter, evidence }` from `disputed` only. |
 

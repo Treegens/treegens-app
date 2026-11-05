@@ -85,11 +85,30 @@ function notify(input: OtcNotificationInput): Promise<void> {
   })
 }
 
+type DealStorage = {
+  upload: typeof uploadToStorage
+  remove: typeof deleteFromStorage
+}
+let storage: DealStorage = {
+  upload: uploadToStorage,
+  remove: deleteFromStorage,
+}
+
+/** Tests swap the screenshot storage so no bucket is touched. */
+export function __setStorageForTests(fns: Partial<DealStorage> | null): void {
+  storage = {
+    upload: fns?.upload || uploadToStorage,
+    remove: fns?.remove || deleteFromStorage,
+  }
+}
+
 const rewardService = new RewardService()
 
 const MANGROVE = /^mangrove$/i
 const SYSTEM = 'system'
 const EXPIRY_SWEEP_LOOKBACK_DAYS = 30
+const UNHELD_SWEEP_PAGE_SIZE = 500
+const UNHELD_SWEEP_MAX_PAGES = 20
 const REMINDER_AFTER_MS = 2 * 60 * 60 * 1000
 const RECONCILER_INTERVAL_MS = 5 * 60_000
 
@@ -128,6 +147,60 @@ function maskPhone(phone: string): string {
   const p = String(phone || '')
   if (p.length <= 7) return '•••'
   return `${p.slice(0, 4)}•••••${p.slice(-3)}`
+}
+
+const MPESA_REF_HINT_CHARS = 2
+
+/** `••••••••K1` plus the hint `K1`: enough to recognise the SMS, not to type. */
+function maskMpesaRef(ref: string): { masked: string; hint: string } {
+  const r = String(ref || '')
+  const hint = r.slice(-MPESA_REF_HINT_CHARS)
+  return { masked: `${'•'.repeat(r.length - hint.length)}${hint}`, hint }
+}
+
+/**
+ * The planter must type the M-Pesa code from their own SMS (that is what
+ * proves receipt), so a planter never sees the full code: not on the deal,
+ * not in the event notes. The buyer keeps the full code.
+ */
+function isPlanterViewer(deal: AnyDeal, viewerWallet?: string): boolean {
+  const w = normalizeWallet(viewerWallet || '')
+  return (
+    Boolean(w) &&
+    w === normalizeWallet(deal?.planterWallet) &&
+    w !== normalizeWallet(deal?.buyerWallet)
+  )
+}
+
+/** Any 10-char code in a payment note, not just the current one (re-uploads). */
+const MPESA_CODE_IN_NOTE = /\b[A-Z0-9]{10}\b/g
+
+function maskEventNote(e: any, ref: string, masked: string): any {
+  if (typeof e?.note !== 'string') return e
+  let note: string = e.note
+  if (e.type === 'payment_uploaded') {
+    note = note.replace(MPESA_CODE_IN_NOTE, code => maskMpesaRef(code).masked)
+  }
+  if (note.includes(ref)) note = note.split(ref).join(masked)
+  return note === e.note ? e : { ...e, note }
+}
+
+function maskDealForPlanter(deal: AnyDeal): AnyDeal {
+  const ref = deal?.payment?.mpesaRef
+  if (!ref) return deal
+  const { masked, hint } = maskMpesaRef(String(ref))
+  const events = Array.isArray(deal.events)
+    ? deal.events.map((e: any) => maskEventNote(e, String(ref), masked))
+    : deal.events
+  return {
+    ...deal,
+    payment: { ...deal.payment, mpesaRef: masked, mpesaRefHint: hint },
+    events,
+  }
+}
+
+function maskForViewer(deal: AnyDeal, viewerWallet?: string): AnyDeal {
+  return isPlanterViewer(deal, viewerWallet) ? maskDealForPlanter(deal) : deal
 }
 
 function escapeRegex(s: string): string {
@@ -1014,12 +1087,17 @@ export async function onSubmissionApproved(
   if (!deal || isTerminalStatus(deal.status)) return deal
   const now = new Date()
   const c = approvedTreeCount(submission)
+  const declared = Math.floor(Number(submission.treesPlanted || 0))
+  // Without an approved count the deal count stands, but never above the
+  // count the planter declared (the buyer may have typed it by hand).
   const trees =
     c > 0
       ? c
       : Number(deal.trees) > 0
-        ? Number(deal.trees)
-        : Math.floor(Number(submission.treesPlanted || 0))
+        ? declared > 0
+          ? Math.min(Number(deal.trees), declared)
+          : Number(deal.trees)
+        : declared
 
   if (trees <= 0) {
     const updated = await OtcDeal.findOneAndUpdate(
@@ -1282,8 +1360,17 @@ export async function patchDealCount(
     )
   }
   const submission = await Submission.findById(deal.submissionId)
-    .select('status')
+    .select('status treesPlanted')
     .lean()
+  const declared = Math.floor(Number(submission?.treesPlanted || 0))
+  if (declared > 0 && trees > declared) {
+    throw new OtcError(
+      'COUNT_ABOVE_DECLARED',
+      400,
+      `The planter declared ${declared} trees; the count cannot be higher`,
+      { declared },
+    )
+  }
   const approved = (submission?.status ?? deal.submissionStatus) === 'approved'
   const fundable = isFundableCount(trees)
   const payable = fundable.ok && (env.OTC_PAY_ON === 'ai_count' || approved)
@@ -1388,7 +1475,7 @@ export async function recordPayment(
     )
   }
 
-  const uploaded = await uploadToStorage(
+  const uploaded = await storage.upload(
     input.file.buffer,
     `${uuidv4()}${sniffed.ext}`,
     sniffed.contentType,
@@ -1420,11 +1507,11 @@ export async function recordPayment(
       },
     )
   } catch (error) {
-    void deleteFromStorage(uploaded.videoCID)
+    void storage.remove(uploaded.videoCID)
     throw error
   }
   if (previousPath && previousPath !== uploaded.videoCID) {
-    void deleteFromStorage(previousPath)
+    void storage.remove(previousPath)
   }
 
   void notify({
@@ -1436,9 +1523,13 @@ export async function recordPayment(
       (differs
         ? ` (partial payment; deal is ${formatKes(deal.amountKes)})`
         : '') +
-      ` (M-Pesa code ${ref}). Check your M-Pesa SMS and confirm in the app.`,
+      ` (M-Pesa code ending in ${maskMpesaRef(ref).hint}). Check your M-Pesa SMS and confirm in the app.`,
     link: dealLink(updated),
-    payload: { dealId: String(updated._id), mpesaRef: ref, amountKes: amount },
+    payload: {
+      dealId: String(updated._id),
+      mpesaRefHint: maskMpesaRef(ref).hint,
+      amountKes: amount,
+    },
   })
   return updated
 }
@@ -1839,6 +1930,44 @@ async function sweepOtc(): Promise<void> {
     .limit(200)
     .lean()
   for (const d of stale) await reconcileDealAllocation(String(d._id))
+  // Open deals whose allocation appeared without taking the hold (D2). Paged
+  // by _id so the cap cannot starve newer deals; deals already found
+  // unholdable (minted/proposed, or bound to another deal) are skipped so the
+  // same deals are not reconciled on every pass.
+  let after: mongoose.Types.ObjectId | undefined
+  for (let page = 0; page < UNHELD_SWEEP_MAX_PAGES; page++) {
+    const unheld = await OtcDeal.find({
+      status: { $in: OPEN_STATUSES },
+      'release.status': 'n/a',
+      'events.type': { $ne: 'allocation_already_paid' },
+      ...(after ? { _id: { $gt: after } } : {}),
+    })
+      .sort({ _id: 1 })
+      .select('submissionId')
+      .limit(UNHELD_SWEEP_PAGE_SIZE)
+      .lean()
+    if (!unheld.length) break
+    const allocated = await RewardAllocation.find({
+      submissionId: { $in: unheld.map(d => d.submissionId) },
+    })
+      .select('submissionId otc.dealId')
+      .lean()
+    const boundTo = new Map(
+      allocated.map(a => [
+        String(a.submissionId),
+        a.otc?.dealId ? String(a.otc.dealId) : null,
+      ]),
+    )
+    for (const d of unheld) {
+      const sid = String(d.submissionId)
+      if (!boundTo.has(sid)) continue
+      const bound = boundTo.get(sid)
+      if (bound && bound !== String(d._id)) continue
+      await reconcileDealAllocation(String(d._id))
+    }
+    if (unheld.length < UNHELD_SWEEP_PAGE_SIZE) break
+    after = unheld[unheld.length - 1]._id
+  }
 
   // (b) unpaid deals past expiry.
   const expiryCutoff = new Date(
@@ -1991,10 +2120,16 @@ function buildDealQuery(
 }
 
 /** Batch-hydrate deals into the detail shape the web app renders. */
-async function hydrateDeals(deals: AnyDeal[]): Promise<any[]> {
+async function hydrateDeals(
+  deals: AnyDeal[],
+  viewerWallet?: string,
+): Promise<any[]> {
   if (deals.length === 0) return []
   const plain = deals.map(d =>
-    typeof d.toObject === 'function' ? d.toObject() : { ...d },
+    maskForViewer(
+      typeof d.toObject === 'function' ? d.toObject() : { ...d },
+      viewerWallet,
+    ),
   )
   const sids = plain.map(d => d.submissionId)
   const planters = [
@@ -2111,8 +2246,9 @@ async function hydrateDeals(deals: AnyDeal[]): Promise<any[]> {
   })
 }
 
-export async function toDealDetail(deal: AnyDeal) {
-  const [detail] = await hydrateDeals([deal])
+/** `viewerWallet` is the caller: a planter gets the M-Pesa code masked. */
+export async function toDealDetail(deal: AnyDeal, viewerWallet?: string) {
+  const [detail] = await hydrateDeals([deal], viewerWallet)
   return detail
 }
 
@@ -2288,11 +2424,15 @@ export async function listEligibleSubmissionsForPlanter(
   return { items }
 }
 
-export async function listPlanterDeals(planterWallet: string) {
-  return OtcDeal.find({ planterWallet: normalizeWallet(planterWallet) })
+export async function listPlanterDeals(
+  planterWallet: string,
+): Promise<AnyDeal[]> {
+  const planter = normalizeWallet(planterWallet)
+  const deals = await OtcDeal.find({ planterWallet: planter })
     .sort({ createdAt: -1 })
     .limit(200)
     .lean()
+  return deals.map(d => maskForViewer(d, planter))
 }
 
 function assertParty(deal: AnyDeal, callerWallet: string) {
@@ -2310,7 +2450,7 @@ export async function getDeal(dealId: string, callerWallet: string) {
   assertParty(deal, callerWallet)
   await reconcileDealAllocation(String(deal._id))
   const fresh = (await OtcDeal.findById(deal._id).lean()) || deal
-  return toDealDetail(fresh)
+  return toDealDetail(fresh, callerWallet)
 }
 
 export async function getDealBySubmission(
@@ -2325,17 +2465,18 @@ export async function getDealBySubmission(
   assertParty(deal, callerWallet)
   await reconcileDealAllocation(String(deal._id))
   const fresh = (await OtcDeal.findById(deal._id).lean()) || deal
-  return toDealDetail(fresh)
+  return toDealDetail(fresh, callerWallet)
 }
 
 /** GET /api/otc/me */
 export async function getMe(wallet: string) {
   const w = normalizeWallet(wallet)
   const enrollment = await getMyEnrollment(w)
-  const [deals, label] = await Promise.all([
+  const [planterDeals, label] = await Promise.all([
     listPlanterDeals(w),
     buyerLabelForEnrollment(enrollment),
   ])
+  const deals = planterDeals.map(d => maskForViewer(d, w))
   return {
     isBuyer: isBuyerActive(w),
     enrollment,

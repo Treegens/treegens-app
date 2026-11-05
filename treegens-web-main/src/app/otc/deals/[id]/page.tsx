@@ -1041,6 +1041,9 @@ function PlanterActions({
   const sent = paidKes(deal)
   const partial = !!deal.payment?.partial && sent !== deal.amountKes
   const requiresRef = deal.confirmRequiresRef !== false
+  // The API masks the code for planters; they type it from their own SMS.
+  const refHint =
+    deal.payment?.mpesaRefHint || deal.payment?.mpesaRef?.slice(-2) || ''
 
   const [ref, setRef] = useState('')
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -1121,13 +1124,11 @@ function PlanterActions({
             <span className="font-semibold tabular-nums">
               {formatPhoneForDisplay(deal.mpesaNumber)}
             </span>
-            {deal.payment?.mpesaRef ? (
+            {refHint ? (
               <>
                 {' '}
-                with M-Pesa code{' '}
-                <span className="font-mono font-semibold">
-                  {deal.payment.mpesaRef}
-                </span>
+                with an M-Pesa code ending in{' '}
+                <span className="font-mono font-semibold">..{refHint}</span>
               </>
             ) : null}
             . Check your M-Pesa SMS.

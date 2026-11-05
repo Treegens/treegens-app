@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express'
+import env from '../config/environment'
 import { authenticate, optionalAuth } from '../middleware/auth'
 import { requireOtcBuyer } from '../middleware/otcAuth'
 import {
@@ -48,7 +49,18 @@ function handleOtcError(res: Response, error: any) {
       ...(error.extra || {}),
     })
   }
-  return sendError(res, error?.message || error, 500)
+  // Same contract as middleware/errorHandler: log everything, never leak
+  // internals in production.
+  const message = error?.message || String(error)
+  console.error('[OTC] unhandled error', {
+    path: res.req?.originalUrl || res.req?.path,
+    message,
+  })
+  return sendError(
+    res,
+    env.isProduction ? 'Something went wrong' : message,
+    500,
+  )
 }
 
 // ------------------------------------------------------------ public ----
@@ -707,7 +719,7 @@ router.post(
       return sendSuccess(
         res,
         'Payment confirmed',
-        await otcService.toDealDetail(deal),
+        await otcService.toDealDetail(deal, wallet(req)),
       )
     } catch (error) {
       return handleOtcError(res, error)
@@ -750,7 +762,7 @@ router.post(
       return sendSuccess(
         res,
         'Dispute recorded',
-        await otcService.toDealDetail(deal),
+        await otcService.toDealDetail(deal, wallet(req)),
       )
     } catch (error) {
       return handleOtcError(res, error)
