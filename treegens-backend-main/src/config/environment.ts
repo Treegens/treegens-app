@@ -85,7 +85,7 @@ class EnvironmentConfig {
       console.error(
         `[config] TGN_VAULT_ADDRESS=${configured} is not a vault (stake/slash ` +
           `calls revert on it). Ignoring it and using ${CURRENT}. ` +
-          `Remove or fix the stale env var.`
+          `Remove or fix the stale env var.`,
       )
       return CURRENT
     }
@@ -146,11 +146,15 @@ class EnvironmentConfig {
     const configured = process.env.VERIFIER_MINTER_ADDRESS?.trim()
     if (!configured) return CURRENT
 
-    if (EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(configured.toLowerCase())) {
+    if (
+      EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(
+        configured.toLowerCase(),
+      )
+    ) {
       console.error(
         `[config] VERIFIER_MINTER_ADDRESS=${configured} is a REVOKED minter and ` +
           `would fail every mint. Ignoring it and using ${CURRENT}. ` +
-          `Remove the stale env var.`
+          `Remove the stale env var.`,
       )
       return CURRENT
     }
@@ -313,10 +317,7 @@ class EnvironmentConfig {
    * `ultralytics` — multipart Bearer call to `AI_API_PREDICT_URL` or base + path.
    * `roboflow_workflow` — Roboflow Serverless (`ROBOFLOW_*` settings).
    */
-  get AI_PROVIDER():
-    | 'treegens_ml'
-    | 'ultralytics'
-    | 'roboflow_workflow' {
+  get AI_PROVIDER(): 'treegens_ml' | 'ultralytics' | 'roboflow_workflow' {
     const v = (process.env.AI_PROVIDER || 'treegens_ml').trim().toLowerCase()
     if (v === 'roboflow_workflow' || v === 'roboflow')
       return 'roboflow_workflow'
@@ -349,7 +350,9 @@ class EnvironmentConfig {
    * planting API times out or returns 5xx.
    */
   get AI_FAILOVER_TO_ULTRALYTICS() {
-    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '').trim().toLowerCase()
+    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '')
+      .trim()
+      .toLowerCase()
     return v === '1' || v === 'true' || v === 'yes'
   }
 
@@ -755,7 +758,9 @@ class EnvironmentConfig {
   /** Optional Telegram bot for buyer alerts; falls back to TELEGRAM_BOT_TOKEN. */
   get OTC_TELEGRAM_BOT_TOKEN() {
     return String(
-      process.env.OTC_TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '',
+      process.env.OTC_TELEGRAM_BOT_TOKEN ||
+        process.env.TELEGRAM_BOT_TOKEN ||
+        '',
     ).trim()
   }
 

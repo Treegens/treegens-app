@@ -14,10 +14,34 @@ const paymentSchema = new mongoose.Schema(
     screenshotUrl: { type: String, required: false },
     screenshotPath: { type: String, required: false },
     mimeType: { type: String, required: false },
-    mpesaRef: { type: String, required: false, trim: true, maxlength: 40 },
+    /** M-Pesa transaction code, stored upper-case; the planter must type it to confirm. */
+    mpesaRef: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+      maxlength: 40,
+    },
     amountKes: { type: Number, required: false, min: 0 },
+    /** Buyer sent a different amount than the deal and said so explicitly (D10). */
+    partial: { type: Boolean, required: false },
     note: { type: String, required: false, trim: true, maxlength: 500 },
     sentAt: { type: Date, required: false },
+  },
+  { _id: false },
+)
+
+const resolutionSchema = new mongoose.Schema(
+  {
+    outcome: {
+      type: String,
+      enum: ['release_to_buyer', 'return_to_planter'],
+      required: true,
+    },
+    /** The buyer's written evidence; shown on the deal timeline. */
+    evidence: { type: String, required: true, trim: true, maxlength: 1000 },
+    by: { type: String, required: true, lowercase: true, trim: true },
+    at: { type: Date, required: true, default: Date.now },
   },
   { _id: false },
 )
@@ -29,10 +53,11 @@ const releaseSchema = new mongoose.Schema(
      * released  allocation reassigned to the buyer
      * returned  hold lifted back to the planter (deal cancelled)
      * n/a       no allocation exists yet (submission not approved)
+     * unfundable submission rejected after KES went out: no MGRO will mint
      */
     status: {
       type: String,
-      enum: ['held', 'released', 'returned', 'n/a'],
+      enum: ['held', 'released', 'returned', 'n/a', 'unfundable'],
       default: 'n/a',
     },
     allocationId: {
@@ -94,6 +119,12 @@ const otcDealSchema = new mongoose.Schema(
       enum: ['ai', 'approved', 'manual', 'none'],
       default: 'none',
     },
+    /** Why the deal is not payable yet (batch reason, AI failure, awaiting approval). */
+    countNote: { type: String, required: false, trim: true, maxlength: 300 },
+    /** Submission approved, or AI decision auto_approved. */
+    verified: { type: Boolean, required: true, default: false },
+    /** Denormalised Submission.status, refreshed on every read/transition. */
+    submissionStatus: { type: String, required: false, trim: true },
     ratePerTreeKes: { type: Number, required: true, min: 0 },
     /** Whole shillings. */
     amountKes: { type: Number, required: true, min: 0, default: 0 },
@@ -118,6 +149,10 @@ const otcDealSchema = new mongoose.Schema(
     cancelledAt: { type: Date, required: false },
     cancelReason: { type: String, required: false, trim: true, maxlength: 500 },
     cancelledBy: { type: String, required: false, lowercase: true, trim: true },
+    cancelledFromStatus: { type: String, required: false, trim: true },
+    resolution: { type: resolutionSchema, required: false },
+    /** Planter re-nudge for payment_sent deals (once, after 2h). */
+    reminderSentAt: { type: Date, required: false },
     release: { type: releaseSchema, default: () => ({ status: 'n/a' }) },
     events: { type: [eventSchema], default: [] },
   },

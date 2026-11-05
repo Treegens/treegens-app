@@ -6,9 +6,9 @@ import HealthCheck from '../models/HealthCheck'
 import RewardAllocation from '../models/RewardAllocation'
 import Submission from '../models/Submission'
 import User from '../models/User'
-import { enqueueNotification } from './notificationService'
 import { haversineMeters } from '../utils/geo'
 import { determineMajorityVote } from '../utils/verifierMajority'
+import { enqueueNotification } from './notificationService'
 import {
   computeLatestDueCheckpointOneBased,
   getClaimScheduleConfig,
@@ -114,6 +114,23 @@ export class HealthCheckService {
     return { k }
   }
 
+  /**
+   * OTC (M-Pesa) in `vesting` release mode: the buyer became the allocation's
+   * planterWallet and must be able to file and read the health checks that
+   * gate the remaining tranches. In `full` mode nothing changes.
+   */
+  private async isOtcVestingRecipient(
+    sid: mongoose.Types.ObjectId,
+    wallet: string,
+  ): Promise<boolean> {
+    if (env.OTC_RELEASE_MODE !== 'vesting') return false
+    const allocation = await RewardAllocation.findOne({ submissionId: sid })
+      .select('planterWallet otc')
+      .lean()
+    if (!allocation?.otc?.releasedToBuyerAt) return false
+    return String(allocation.planterWallet || '').toLowerCase() === wallet
+  }
+
   async createHealthCheckUpload(input: {
     submissionId: string
     planterWallet: string
@@ -133,7 +150,10 @@ export class HealthCheckService {
 
     const submission = await Submission.findById(sid)
     if (!submission) throw new Error('Submission not found')
-    if (submission.userWalletAddress !== w) {
+    if (
+      submission.userWalletAddress !== w &&
+      !(await this.isOtcVestingRecipient(sid, w))
+    ) {
       throw new Error('Not allowed to modify this submission')
     }
     if (submission.status !== 'approved') {
@@ -453,7 +473,11 @@ export class HealthCheckService {
     if (!submission) throw new Error('Submission not found')
     const owner = String(submission.userWalletAddress || '').toLowerCase()
     const w = requesterWallet.toLowerCase()
-    if (owner !== w && !isVerifier) {
+    if (
+      owner !== w &&
+      !isVerifier &&
+      !(await this.isOtcVestingRecipient(sid, w))
+    ) {
       throw new Error('Access denied')
     }
     const doc = await HealthCheck.findOne({
@@ -474,7 +498,11 @@ export class HealthCheckService {
     if (!submission) throw new Error('Submission not found')
     const owner = String(submission.userWalletAddress || '').toLowerCase()
     const w = requesterWallet.toLowerCase()
-    if (owner !== w && !isVerifier) {
+    if (
+      owner !== w &&
+      !isVerifier &&
+      !(await this.isOtcVestingRecipient(sid, w))
+    ) {
       throw new Error('Access denied')
     }
 

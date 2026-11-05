@@ -9,16 +9,18 @@ import errorHandler from './middleware/errorHandler'
 import { globalApiLimiter } from './middleware/rateLimits'
 import authRoutes from './routes/auth'
 import conversationsRoutes from './routes/conversations'
+import distributionsRoutes from './routes/distributions'
 import healthRoutes from './routes/health'
 import notificationsRoutes from './routes/notifications'
+import otcRoutes from './routes/otc'
 import pushRoutes from './routes/push'
-import distributionsRoutes from './routes/distributions'
 import rewardsRoutes from './routes/rewards'
 import submissionsRoutes from './routes/submissions'
 import userRoutes from './routes/users'
 import BurnIndexerService from './services/burnIndexerService'
-import VerifierService from './services/verifierService'
+import { startOtcReconciler } from './services/otcService'
 import { startStitchRetrier } from './services/verifiedVideoStitchService'
+import VerifierService from './services/verifierService'
 import { startRewardClaimWorker } from './workers/rewardClaimWorker'
 import { startSlashWorker } from './workers/slashWorker'
 
@@ -33,10 +35,12 @@ app.use(helmet())
 // previous behaviour of accepting any origin.
 const corsOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
-  .map((o) => o.trim())
+  .map(o => o.trim())
   .filter(Boolean)
 
-app.use(cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : {}))
+app.use(
+  cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : {}),
+)
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 
@@ -56,6 +60,7 @@ app.use('/api/users', userRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/push', pushRoutes)
 app.use('/api/conversations', conversationsRoutes)
+app.use('/api/otc', otcRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/health', healthRoutes)
 
@@ -106,7 +111,9 @@ async function start() {
   try {
     await connectDB()
   } catch {
-    console.error('Refusing to start API without MongoDB. Fix MONGODB_URI and retry.')
+    console.error(
+      'Refusing to start API without MongoDB. Fix MONGODB_URI and retry.',
+    )
     process.exit(1)
     return
   }
@@ -172,4 +179,12 @@ if (env.ENABLE_CRONJOBS === 'true') {
 // serve the raw phone clip as its NFT animation forever.
 if (process.env.ENABLE_STITCH_RETRIER !== 'false') {
   startStitchRetrier()
+}
+
+// OTC (M-Pesa) desk: every 5 minutes reconcile held MGRO against confirmed or
+// cancelled deals, expire unpaid deals, flag rejected plantings and remind
+// planters to confirm. API process only; the workers never run it.
+if (env.ENABLE_OTC_RECONCILER) {
+  startOtcReconciler()
+  console.log('[OTC] Reconciler started in API process')
 }

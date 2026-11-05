@@ -1,5 +1,5 @@
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import type { Request } from 'express'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 
 const defaults = {
   standardHeaders: true,
@@ -101,11 +101,13 @@ export const otcUploadLimiter = userLimiter(30)
 
 /**
  * GET /api/otc/invites/:code/preview is reachable before sign-in, so it keys
- * by IP. Codes are 10 chars from a 32-symbol alphabet; this keeps brute force
- * far below one guess per billion years.
+ * by IP. A field meeting puts 40 phones behind one carrier NAT address, each
+ * polling the page a few times, hence the generous budget. Codes are 10
+ * chars from a 32-symbol alphabet; 600/min still keeps brute force far below
+ * one guess per billion years.
  */
 export const otcPreviewLimiter = rateLimit({
   ...defaults,
   windowMs: 60 * 1000,
-  max: scaled(60),
+  max: scaled(600),
 })

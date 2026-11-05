@@ -10,16 +10,17 @@ import {
   batchRejectionReason,
 } from '../utils/treeBatch'
 import { determineMajorityVote } from '../utils/verifierMajority'
-import { stitchVerifiedVideo } from './verifiedVideoStitchService'
 import type { AiMangroveVerifyFailure } from './aiMangroveVerificationService'
 import {
   stringifyAiRawForStorage,
   verifyMangrovePlantVideo,
 } from './aiMangroveVerificationService'
 import { enqueueNotification } from './notificationService'
+import * as otcService from './otcService'
 import RewardService from './rewardService'
-import { applyMinorityPenaltiesForVotes } from './verifierPenaltyService'
 import { evaluateMangroveAiRouting } from './submissionAiRouting'
+import { stitchVerifiedVideo } from './verifiedVideoStitchService'
+import { applyMinorityPenaltiesForVotes } from './verifierPenaltyService'
 
 const rewardService = new RewardService()
 
@@ -122,6 +123,15 @@ class SubmissionService {
         { $inc: { treesPlanted: treesToCredit } },
       )
     }
+    // OTC (M-Pesa): refresh the deal's count from the approved submission
+    // BEFORE the allocation is created, so the allocation pays the same
+    // number of trees the buyer paid KES for (D2).
+    await otcService.onSubmissionApproved(submission).catch((e: any) => {
+      console.error('[OTC] onSubmissionApproved failed', {
+        submissionId: String(submission._id),
+        message: e?.message || String(e),
+      })
+    })
     try {
       const rewardResult =
         await rewardService.handleSubmissionApproved(submission)
@@ -399,7 +409,27 @@ class SubmissionService {
 
     try {
       await submission.save()
-      if (normalizedTreeType === MANGROVE_TREE_TYPE && submission.aiVerification) {
+      // OTC (M-Pesa): an enrolled planter's mangrove clip becomes a deal the
+      // moment it is counted. DB only; the alerts go out below without
+      // holding up the upload response.
+      const otcDeal = await otcService
+        .ensureDealForSubmission(submission)
+        .catch((e: any) => {
+          console.error('[OTC] ensureDeal failed', {
+            submissionId: String(submissionOid),
+            message: e?.message || String(e),
+          })
+          return null
+        })
+      if (otcDeal?.created) {
+        void otcService
+          .notifyDealCreated(otcDeal.deal, submission)
+          .catch(() => {})
+      }
+      if (
+        normalizedTreeType === MANGROVE_TREE_TYPE &&
+        submission.aiVerification
+      ) {
         void enqueueNotification({
           recipientWalletAddress: userWalletAddress,
           kind: 'ai_verification',
@@ -420,7 +450,7 @@ class SubmissionService {
           await this.applyApprovalSideEffects(submission)
         }
       }
-      return this.formatUploadResponse(submission, 'plant')
+      return this.formatUploadResponse(submission, 'plant', otcDeal?.deal)
     } catch (err: any) {
       if (err?.code === 11000) {
         const existing = await this.findSubmissionByClipIdentifiers(
@@ -434,7 +464,11 @@ class SubmissionService {
     }
   }
 
-  private formatUploadResponse(submission: any, uploadedType: UploadSlot) {
+  private formatUploadResponse(
+    submission: any,
+    uploadedType: UploadSlot,
+    otcDeal?: any,
+  ) {
     const land = submission.land || {}
     const plant = submission.plant || {}
     const clip = uploadedType === 'land' ? land : plant
@@ -454,6 +488,17 @@ class SubmissionService {
       reverseGeocode: clip.reverseGeocode,
       ...(uploadedType === 'plant' && plain.aiVerification
         ? { aiVerification: plain.aiVerification }
+        : {}),
+      // OTC (M-Pesa): lets the upload celebration say "You'll be paid KES X".
+      ...(uploadedType === 'plant' && otcDeal
+        ? {
+            otcDeal: {
+              id: String(otcDeal._id),
+              status: otcDeal.status,
+              amountKes: Number(otcDeal.amountKes || 0),
+              trees: Number(otcDeal.trees || 0),
+            },
+          }
         : {}),
     }
   }
@@ -798,11 +843,16 @@ class SubmissionService {
     // persist — forcing `yesCount*2 > totalVerifiers` to pass and approving
     // their own fraudulent planting.
     const activeVerifierWallets = new Set(
-      (await User.find({ isVerifier: true }).select({ walletAddress: 1 }).lean())
-        .map(u => String(u.walletAddress || '').toLowerCase()),
+      (
+        await User.find({ isVerifier: true })
+          .select({ walletAddress: 1 })
+          .lean()
+      ).map(u => String(u.walletAddress || '').toLowerCase()),
     )
     const eligibleVotes = (submission.votes as SubmissionVote[]).filter(v =>
-      activeVerifierWallets.has(String(v.voterWalletAddress || '').toLowerCase()),
+      activeVerifierWallets.has(
+        String(v.voterWalletAddress || '').toLowerCase(),
+      ),
     )
 
     const majorityVote = determineMajorityVote(eligibleVotes, totalVerifiers)
@@ -838,7 +888,9 @@ class SubmissionService {
         recipientWalletAddress: planter,
         kind: 'submission_outcome',
         title:
-          majorityVote === 'yes' ? 'Submission approved' : 'Submission reviewed',
+          majorityVote === 'yes'
+            ? 'Submission approved'
+            : 'Submission reviewed',
         body:
           majorityVote === 'yes'
             ? 'Verifier consensus approved your planting submission.'
@@ -855,6 +907,9 @@ class SubmissionService {
 
     if (majorityVote === 'yes') {
       await this.applyApprovalSideEffects(submission)
+    } else {
+      // OTC (M-Pesa): cancel unpaid deals, flag paid ones as unfundable (D4).
+      void otcService.onSubmissionRejected(submission).catch(() => {})
     }
 
     return this.buildResolveResult(submission, totalVerifiers, {

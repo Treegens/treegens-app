@@ -180,6 +180,35 @@ router.post(
         allocationPre,
         w,
       )
+      // OTC (M-Pesa): explain the hold / release to the planter before the
+      // generic 403 below can win. A caller who is also an eligible verifier
+      // falls through to the verifier-only claim.
+      const otc = allocationPre.otc
+      if (otc && !verifier) {
+        const recipient = String(
+          allocationPre.planterWallet || '',
+        ).toLowerCase()
+        const dealId = otc.dealId ? String(otc.dealId) : undefined
+        if (recipient === w && otc.hold) {
+          return res.status(409).json({
+            error:
+              'Your MGRO for this planting is held until you confirm the M-Pesa payment',
+            code: 'OTC_HOLD',
+            dealId,
+          })
+        }
+        if (
+          String(otc.originalPlanterWallet || '').toLowerCase() === w &&
+          recipient !== w
+        ) {
+          return res.status(409).json({
+            error:
+              'The MGRO for this planting was released to the M-Pesa buyer',
+            code: 'OTC_RELEASED',
+            dealId,
+          })
+        }
+      }
       if (!planter && !verifier) {
         return sendError(
           res,

@@ -1,9 +1,11 @@
 import mongoose from 'mongoose'
 import env from '../config/environment'
 import HealthCheck from '../models/HealthCheck'
+import OtcDeal from '../models/OtcDeal'
 import RewardAllocation from '../models/RewardAllocation'
 import Submission from '../models/Submission'
 import User from '../models/User'
+import type { OtcDealStatus } from './otcDealRules'
 import RewardClaimQueueService from './rewardClaimQueueService'
 import RewardMintService, {
   PendingVerifierApprovalError,
@@ -176,6 +178,23 @@ export type RewardStatusProjection = {
   nextPlanterAction?: 'claim' | 'health_check' | 'wait'
   /** 1-based checkpoint index when health_check is required, else null. */
   pendingHealthCheckpointIndex?: number | null
+  /** OTC (M-Pesa): planter MGRO is held until the planter confirms the payment. */
+  otcHold?: boolean
+  /** OTC: the planter share was released to the buyer. */
+  otcReleased?: boolean
+  /** OTC: deal id when the allocation is bound to a deal. */
+  otcDealId?: string
+}
+
+/**
+ * OTC (M-Pesa) context for an allocation: the deal that holds (or already
+ * took) the planter's MGRO and the tree count the KES was paid for.
+ */
+export type OtcAllocationContext = {
+  dealId: mongoose.Types.ObjectId | string
+  buyerWallet: string
+  status: OtcDealStatus
+  trees: number
 }
 
 type RewardAllocationLike = {
@@ -203,6 +222,13 @@ type RewardAllocationLike = {
     lastError?: string
     proposalId?: number
   }>
+  otc?: {
+    dealId: any
+    hold: boolean
+    originalPlanterWallet: string
+    releasedToBuyerAt?: Date | string | null
+    returnedToPlanterAt?: Date | string | null
+  } | null
 }
 
 export type HealthCheckLean = {
@@ -642,8 +668,91 @@ export function calculateRewardStatusProjection(
     }
   }
 
+  const otc = allocation.otc || null
+  const otcDealId = otc?.dealId ? String(otc.dealId) : undefined
+  const otcReleased = Boolean(otc?.releasedToBuyerAt)
+
   if (allocation.planterWallet === w) {
-    return planterProjection()
+    const p = planterProjection()
+    if (otcDealId) p.otcDealId = otcDealId
+    if (otc?.hold) {
+      // The planter is being paid in KES; nothing is claimable until the
+      // deal is confirmed (release to buyer) or cancelled (hold returned).
+      p.otcHold = true
+      p.canClaim = false
+      p.pendingClaimAmountWei = '0'
+      p.nextClaimAmountWei = p.nextClaimAmountWei === null ? null : '0'
+      p.isOverdue = false
+      p.nextPlanterAction = 'wait'
+      p.healthCheckRequiredForNextClaim = false
+      p.pendingHealthCheckpointIndex = null
+      if (p.displayState === 'PENDING_CLAIM') p.displayState = 'NONE'
+      return p
+    }
+    if (otcReleased) {
+      p.otcReleased = true
+      if (env.OTC_RELEASE_MODE === 'full') {
+        // D1: the whole planter share goes to the buyer in one mint. The
+        // buyer must never be asked for a health check.
+        const total = BigInt(String(allocation.planterTotalWei || '0'))
+        const claimed = BigInt(p.claimedAmountWei || '0')
+        const pending = total > claimed ? total - claimed : 0n
+        p.pendingClaimAmountWei = pending.toString()
+        p.nextClaimAmountWei = pending > 0n ? pending.toString() : null
+        p.nextClaimAt = null
+        p.remainingMs = null
+        p.canClaim = pending > 0n
+        p.isOverdue = pending > 0n
+        p.displayState = pending > 0n ? 'PENDING_CLAIM' : 'COMPLETED'
+        p.nextPlanterAction = pending > 0n ? 'claim' : 'wait'
+        p.healthCheckRequiredForNextClaim = false
+        p.pendingHealthCheckpointIndex = null
+        if (pending === 0n) p.scheduleCompleted = true
+      }
+    }
+    return p
+  }
+
+  // The original planter after the release: their MGRO went to the buyer.
+  // Planter-shaped so the app can explain it instead of failing with 403.
+  if (
+    otc &&
+    otc.originalPlanterWallet === w &&
+    allocation.planterWallet !== w
+  ) {
+    let verifierSlice: VerifierRewardSlice | undefined
+    if (
+      submission &&
+      isYesVoterForSubmission(submission, w) &&
+      verifierPoolActive
+    ) {
+      const v = buildVerifierSlice(allocation, w, sortedYes, now)
+      if (v) verifierSlice = v
+    }
+    return {
+      submissionId: String(allocation.submissionId),
+      allocationId: String(allocation._id),
+      walletAddress: w,
+      role: 'planter',
+      totalRewardWei: String(allocation.planterTotalWei || '0'),
+      claimedAmountWei: '0',
+      pendingClaimAmountWei: '0',
+      nextClaimAmountWei: null,
+      nextClaimAt: null,
+      remainingMs: null,
+      isOverdue: false,
+      scheduleCompleted: false,
+      canClaim: false,
+      displayState: 'NONE',
+      approvedAt: new Date(allocation.approvedAt).toISOString(),
+      intervalsMissed: 0,
+      verifier: verifierSlice,
+      healthCheckRequiredForNextClaim: false,
+      nextPlanterAction: 'wait',
+      pendingHealthCheckpointIndex: null,
+      otcReleased: true,
+      otcDealId,
+    }
   }
 
   if (!submission) {
@@ -673,6 +782,7 @@ export function calculateRewardStatusProjection(
     displayState: v.displayState,
     approvedAt: new Date(allocation.approvedAt).toISOString(),
     intervalsMissed: v.pendingClaimAmountWei !== '0' ? 1 : 0,
+    ...(otcDealId ? { otcDealId } : {}),
   }
 }
 
@@ -714,11 +824,14 @@ export class RewardService {
       planterWallet: string
       yesVoterCount: number
       verifierPoolWei: string
+      otc?: { hold?: boolean } | null
     },
     walletAddress: string,
   ): { planter: boolean; verifier: boolean } {
     const w = normalizeWallet(walletAddress)
-    const planter = allocation.planterWallet === w
+    // OTC hold: the planter is paid in KES; nobody may claim the planter
+    // share until the deal is confirmed or cancelled.
+    const planter = allocation.planterWallet === w && !allocation.otc?.hold
     let verifier = false
     if (
       submission.status === 'approved' &&
@@ -733,37 +846,70 @@ export class RewardService {
 
   /**
    * Build allocation document fields from an approved submission. Returns null if no rewards apply.
+   *
+   * With an OTC deal (D2) the tree count comes from the deal so the KES paid
+   * and the MGRO received are computed from the same number; a confirmed deal
+   * makes the buyer the recipient, any other open deal puts the share on hold.
    */
-  buildAllocationFields(submission: {
-    _id: mongoose.Types.ObjectId
-    userWalletAddress?: string | null
-    treesPlanted?: number | null
-    votes?: {
-      voterWalletAddress: string
-      vote: string
-    }[]
-  }): Record<string, unknown> | null {
-    const trees = Math.floor(Number(submission.treesPlanted ?? 0))
+  buildAllocationFields(
+    submission: {
+      _id: mongoose.Types.ObjectId
+      userWalletAddress?: string | null
+      treesPlanted?: number | null
+      votes?: {
+        voterWalletAddress: string
+        vote: string
+      }[]
+    },
+    otc?: OtcAllocationContext | null,
+  ): Record<string, unknown> | null {
+    const trees = otc
+      ? Math.floor(Number(otc.trees ?? 0))
+      : Math.floor(Number(submission.treesPlanted ?? 0))
     if (!trees || trees <= 0) {
       return null
     }
-    const planter = submission.userWalletAddress
-    if (!planter || !planter.trim()) {
+    const planterRaw = submission.userWalletAddress
+    if (!planterRaw || !planterRaw.trim()) {
       console.warn(
         '[RewardService] Skipping allocation: missing userWalletAddress',
         { submissionId: submission._id },
       )
       return null
     }
-    const planterWallet = normalizeWallet(planter)
+    // The ORIGINAL planter. The yes-voter filter below must use this wallet,
+    // never the (possibly reassigned) recipient: a buyer who also voted yes
+    // keeps their verifier slice.
+    const planter = normalizeWallet(planterRaw)
     const yesWallets = (submission.votes || [])
       .filter(v => v.vote === 'yes')
       .map(v => normalizeWallet(v.voterWalletAddress))
     // Defense in depth: the planter can never be paid from the verifier pool
     // for their own submission, even if a self-vote somehow slipped through.
     const uniqueYes = [...new Set(yesWallets)]
-      .filter(w => w !== planterWallet)
+      .filter(w => w !== planter)
       .sort((a, b) => a.localeCompare(b))
+
+    let planterWallet = planter
+    let otcFields: Record<string, unknown> | undefined
+    if (otc && otc.status !== 'cancelled') {
+      const buyer = normalizeWallet(otc.buyerWallet)
+      if (otc.status === 'confirmed') {
+        planterWallet = buyer
+        otcFields = {
+          dealId: otc.dealId,
+          hold: false,
+          originalPlanterWallet: planter,
+          releasedToBuyerAt: new Date(),
+        }
+      } else {
+        otcFields = {
+          dealId: otc.dealId,
+          hold: true,
+          originalPlanterWallet: planter,
+        }
+      }
+    }
 
     const totalMgroWei = computeTotalMgroWei(trees)
     const verifierPoolWei = (totalMgroWei * 5n) / 100n
@@ -794,6 +940,7 @@ export class RewardService {
       verifierRewardWei,
       verifierClaims: [],
       tranches,
+      ...(otcFields ? { otc: otcFields } : {}),
     }
   }
 
@@ -850,13 +997,41 @@ export class RewardService {
       return { created: false, allocationId: String(existing._id) }
     }
 
-    const fields = this.buildAllocationFields(submission)
+    // OTC (M-Pesa): an open or confirmed deal decides the recipient, the
+    // hold and the tree count (D2). A cancelled deal is ignored.
+    let otcCtx: OtcAllocationContext | null = null
+    const deal = await OtcDeal.findOne({
+      submissionId: submission._id,
+      status: { $ne: 'cancelled' },
+    }).lean()
+    if (deal) {
+      otcCtx = {
+        dealId: deal._id,
+        buyerWallet: String(deal.buyerWallet || ''),
+        status: deal.status as OtcDealStatus,
+        trees: Number(deal.trees || 0),
+      }
+    }
+
+    const fields = this.buildAllocationFields(submission, otcCtx)
     if (!fields) {
       return { created: false }
     }
 
     try {
       const doc = await RewardAllocation.create(fields as any)
+      if (deal) {
+        // Re-read the deal and fix any race (confirmed/cancelled meanwhile).
+        try {
+          const otcService = await import('./otcService.js')
+          await otcService.reconcileDealAllocation(String(deal._id))
+        } catch (err: any) {
+          console.warn(
+            '[RewardService] OTC reconcile after allocation create failed',
+            { dealId: String(deal._id), message: err?.message || String(err) },
+          )
+        }
+      }
       return { created: true, allocationId: String(doc._id) }
     } catch (e: any) {
       if (e?.code === 11000) {
@@ -906,6 +1081,16 @@ export class RewardService {
     if (!created) {
       return {
         allocationCreated: false,
+        allocationId: String(allocation._id),
+        claimJobEnqueued: false,
+      }
+    }
+
+    if (allocation.otc?.hold) {
+      // OTC: the planter is paid in KES. The claim job is enqueued when the
+      // deal is confirmed (to the buyer) or cancelled (to the planter).
+      return {
+        allocationCreated: true,
         allocationId: String(allocation._id),
         claimJobEnqueued: false,
       }
@@ -1100,10 +1285,20 @@ export class RewardService {
     if (allocation.planterWallet !== pw) {
       throw new Error('Planter wallet mismatch')
     }
+    if (allocation.otc?.hold) {
+      throw new Error('Planter MGRO is held pending OTC confirmation')
+    }
 
     const now = new Date()
     const txHashes: string[] = []
     const amountsWei: string[] = []
+
+    // OTC: once the share is released to the buyer, Submission.planterRewardClaimedWei
+    // ("minted to the planter") must stay untouched.
+    const otcReleased = Boolean(allocation.otc?.releasedToBuyerAt)
+    if (otcReleased && env.OTC_RELEASE_MODE === 'full') {
+      return this.mintFullOtcRelease(allocationId, pw)
+    }
 
     const { totalTranches: N } = getClaimScheduleConfig()
     const maxHealthCheckDistance = env.HEALTH_CHECK_MAX_DISTANCE_METERS
@@ -1144,6 +1339,8 @@ export class RewardService {
       const k = t.index + 1
 
       allocation = await this.reloadAllocation(allocationId)
+      // A hold that landed mid-loop (deal created after approval) stops here.
+      if (allocation.otc?.hold) break
       let cumulative = BigInt(
         String(allocation.planterCumulativePaidWei || '0'),
       )
@@ -1177,23 +1374,7 @@ export class RewardService {
 
       const amountStr = payNow.toString()
 
-      const locked = await RewardAllocation.updateOne(
-        { _id: allocationId },
-        {
-          $set: {
-            'tranches.$[tr].status': 'processing',
-            'tranches.$[tr].updatedAt': new Date(),
-          },
-        },
-        {
-          arrayFilters: [
-            {
-              'tr.index': t.index,
-              'tr.status': { $in: ['pending', 'failed'] },
-            },
-          ],
-        },
-      )
+      const locked = await this.lockTranche(allocationId, t.index)
       if (locked.modifiedCount === 0) continue
 
       try {
@@ -1222,33 +1403,22 @@ export class RewardService {
             },
           )
           await this.addClaimedTokensForWallet(pw, amountStr)
-          await this.syncSubmissionPlanterRewardClaimed(
-            allocation.submissionId as mongoose.Types.ObjectId,
-            cumulative,
-          )
+          if (!otcReleased) {
+            await this.syncSubmissionPlanterRewardClaimed(
+              allocation.submissionId as mongoose.Types.ObjectId,
+              cumulative,
+            )
+          }
           txHashes.push(result.txHash)
           amountsWei.push(amountStr)
         } else {
-          await RewardAllocation.updateOne(
-            { _id: allocationId },
-            {
-              $set: {
-                'tranches.$[tr].status': 'paid',
-                'tranches.$[tr].amountWei': '0',
-                'tranches.$[tr].lastError': undefined,
-                'tranches.$[tr].updatedAt': new Date(),
-              },
-            },
-            {
-              arrayFilters: [
-                { 'tr.index': t.index, 'tr.status': 'processing' },
-              ],
-            },
-          )
-          await this.syncSubmissionPlanterRewardClaimed(
-            allocation.submissionId as mongoose.Types.ObjectId,
-            cumulative,
-          )
+          await this.markTranchePaidZero(allocationId, t.index)
+          if (!otcReleased) {
+            await this.syncSubmissionPlanterRewardClaimed(
+              allocation.submissionId as mongoose.Types.ObjectId,
+              cumulative,
+            )
+          }
         }
       } catch (err: any) {
         const msg = err?.message || String(err)
@@ -1286,6 +1456,341 @@ export class RewardService {
     }
 
     return { txHashes, amountsWei }
+  }
+
+  /** Lock one tranche for minting. Refuses when an OTC hold is in place. */
+  private lockTranche(allocationId: mongoose.Types.ObjectId, index: number) {
+    return RewardAllocation.updateOne(
+      { _id: allocationId, 'otc.hold': { $ne: true } },
+      {
+        $set: {
+          'tranches.$[tr].status': 'processing',
+          'tranches.$[tr].updatedAt': new Date(),
+        },
+      },
+      {
+        arrayFilters: [
+          {
+            'tr.index': index,
+            'tr.status': { $in: ['pending', 'failed'] },
+          },
+        ],
+      },
+    )
+  }
+
+  private markTranchePaidZero(
+    allocationId: mongoose.Types.ObjectId,
+    index: number,
+  ) {
+    return RewardAllocation.updateOne(
+      { _id: allocationId },
+      {
+        $set: {
+          'tranches.$[tr].status': 'paid',
+          'tranches.$[tr].amountWei': '0',
+          'tranches.$[tr].lastError': undefined,
+          'tranches.$[tr].updatedAt': new Date(),
+        },
+      },
+      {
+        arrayFilters: [{ 'tr.index': index, 'tr.status': 'processing' }],
+      },
+    )
+  }
+
+  /**
+   * OTC full release (D1): the whole remaining planter share goes to the buyer
+   * in ONE mint, ignoring unlock times and health checks. The first unpaid
+   * tranche carries the amount; every other unpaid tranche is closed with 0
+   * so the schedule reads as completed.
+   */
+  private async mintFullOtcRelease(
+    allocationId: mongoose.Types.ObjectId,
+    buyerWallet: string,
+  ): Promise<{
+    txHashes: string[]
+    amountsWei: string[]
+    pendingVerifierProposalId?: number
+  }> {
+    const txHashes: string[] = []
+    const amountsWei: string[] = []
+    const allocation = await this.reloadAllocation(allocationId)
+    if (allocation.planterWallet !== buyerWallet) {
+      throw new Error('Planter wallet mismatch')
+    }
+    const dealId = String(allocation.otc?.dealId || '')
+    const planterTotal = BigInt(String(allocation.planterTotalWei || '0'))
+    const cumulative = BigInt(
+      String(allocation.planterCumulativePaidWei || '0'),
+    )
+    const tranches = [...(allocation.tranches || [])].sort(
+      (a, b) => a.index - b.index,
+    )
+    const unpaid = tranches.filter(t => t.status !== 'paid')
+    if (unpaid.length === 0) return { txHashes, amountsWei }
+
+    const [first, ...rest] = unpaid
+    const payNow = planterTotal > cumulative ? planterTotal - cumulative : 0n
+    const amountStr = payNow.toString()
+
+    const locked = await this.lockTranche(allocationId, first.index)
+    if (locked.modifiedCount === 0) {
+      // In flight elsewhere (or a hold landed); nothing to do this round.
+      return { txHashes, amountsWei }
+    }
+
+    try {
+      if (payNow > 0n) {
+        const result = await this.mintService.mintTo(buyerWallet, amountStr, {
+          evidenceURI: `treegens://submission/${String(allocation.submissionId)}/otc/${dealId}/full`,
+          existingProposalId: (first as { proposalId?: number }).proposalId,
+        })
+        await RewardAllocation.updateOne(
+          { _id: allocationId },
+          {
+            $set: {
+              planterCumulativePaidWei: (cumulative + payNow).toString(),
+              'tranches.$[tr].status': 'paid',
+              'tranches.$[tr].amountWei': amountStr,
+              'tranches.$[tr].txHash': result.txHash,
+              'tranches.$[tr].lastError': undefined,
+              'tranches.$[tr].updatedAt': new Date(),
+            },
+          },
+          {
+            arrayFilters: [
+              { 'tr.index': first.index, 'tr.status': 'processing' },
+            ],
+          },
+        )
+        await this.addClaimedTokensForWallet(buyerWallet, amountStr)
+        txHashes.push(result.txHash)
+        amountsWei.push(amountStr)
+      } else {
+        await this.markTranchePaidZero(allocationId, first.index)
+      }
+    } catch (err: any) {
+      const msg = err?.message || String(err)
+      const pendingProposalId =
+        err instanceof PendingVerifierApprovalError ? err.proposalId : undefined
+      await RewardAllocation.updateOne(
+        { _id: allocationId },
+        {
+          $set: {
+            'tranches.$[tr].status': 'failed',
+            'tranches.$[tr].lastError': msg,
+            'tranches.$[tr].updatedAt': new Date(),
+            ...(pendingProposalId !== undefined
+              ? { 'tranches.$[tr].proposalId': pendingProposalId }
+              : {}),
+          },
+        },
+        {
+          arrayFilters: [
+            { 'tr.index': first.index, 'tr.status': 'processing' },
+          ],
+        },
+      )
+      if (pendingProposalId !== undefined) {
+        return {
+          txHashes,
+          amountsWei,
+          pendingVerifierProposalId: pendingProposalId,
+        }
+      }
+      throw err
+    }
+
+    // Close the remaining tranches: the full share is already out.
+    for (const t of rest) {
+      const l = await this.lockTranche(allocationId, t.index)
+      if (l.modifiedCount === 0) continue
+      await this.markTranchePaidZero(allocationId, t.index)
+    }
+
+    return { txHashes, amountsWei }
+  }
+
+  /**
+   * OTC: deal confirmed. Reassign the planter share to the buyer, clear the
+   * hold and drop any planter-targeted VerifierMinter proposal ids (a pending
+   * proposal must never be executed for the buyer). Safe to call twice.
+   */
+  async releaseAllocationToBuyer(
+    submissionId: mongoose.Types.ObjectId | string,
+    dealId: mongoose.Types.ObjectId | string,
+    buyerWallet: string,
+  ): Promise<{
+    released: boolean
+    allocationId?: string
+    claimJobId?: string
+    reason?: 'no_allocation' | 'already_released'
+  }> {
+    const buyer = normalizeWallet(buyerWallet)
+    const sid = new mongoose.Types.ObjectId(String(submissionId))
+    const did = new mongoose.Types.ObjectId(String(dealId))
+    const updated = await RewardAllocation.findOneAndUpdate(
+      {
+        submissionId: sid,
+        'otc.dealId': did,
+        $or: [{ 'otc.hold': true }, { planterWallet: { $ne: buyer } }],
+      },
+      {
+        $set: {
+          planterWallet: buyer,
+          'otc.hold': false,
+          'otc.releasedToBuyerAt': new Date(),
+        },
+        $unset: { 'tranches.$[].proposalId': 1 },
+      },
+      { new: true },
+    )
+    if (!updated) {
+      const existing = await RewardAllocation.findOne({
+        submissionId: sid,
+        'otc.dealId': did,
+      })
+        .select('_id')
+        .lean()
+      return existing
+        ? {
+            released: false,
+            allocationId: String(existing._id),
+            reason: 'already_released',
+          }
+        : { released: false, reason: 'no_allocation' }
+    }
+    let claimJobId: string | undefined
+    try {
+      const { job } = await this.rewardClaimQueueService.enqueueOrReuseClaimJob(
+        {
+          submissionId: String(sid),
+          walletAddress: buyer,
+          claimType: 'planter',
+        },
+      )
+      claimJobId = String(job.jobId)
+    } catch (e: any) {
+      console.warn(
+        '[RewardService] enqueue buyer claim after OTC release failed:',
+        e?.message || e,
+      )
+    }
+    return { released: true, allocationId: String(updated._id), claimJobId }
+  }
+
+  /** OTC: deal cancelled. Lift the hold; the planter keeps the schedule. */
+  async returnAllocationToPlanter(
+    submissionId: mongoose.Types.ObjectId | string,
+    dealId: mongoose.Types.ObjectId | string,
+  ): Promise<{
+    returned: boolean
+    allocationId?: string
+    claimJobId?: string
+    reason?: 'no_allocation' | 'not_held'
+  }> {
+    const sid = new mongoose.Types.ObjectId(String(submissionId))
+    const did = new mongoose.Types.ObjectId(String(dealId))
+    const updated = await RewardAllocation.findOneAndUpdate(
+      { submissionId: sid, 'otc.dealId': did, 'otc.hold': true },
+      {
+        $set: {
+          'otc.hold': false,
+          'otc.returnedToPlanterAt': new Date(),
+        },
+      },
+      { new: true },
+    )
+    if (!updated) {
+      const existing = await RewardAllocation.findOne({
+        submissionId: sid,
+        'otc.dealId': did,
+      })
+        .select('_id')
+        .lean()
+      return existing
+        ? {
+            returned: false,
+            allocationId: String(existing._id),
+            reason: 'not_held',
+          }
+        : { returned: false, reason: 'no_allocation' }
+    }
+    let claimJobId: string | undefined
+    try {
+      const { job } = await this.rewardClaimQueueService.enqueueOrReuseClaimJob(
+        {
+          submissionId: String(sid),
+          walletAddress: normalizeWallet(String(updated.planterWallet)),
+          claimType: 'planter',
+        },
+      )
+      claimJobId = String(job.jobId)
+    } catch (e: any) {
+      console.warn(
+        '[RewardService] enqueue planter claim after OTC return failed:',
+        e?.message || e,
+      )
+    }
+    return { returned: true, allocationId: String(updated._id), claimJobId }
+  }
+
+  /**
+   * OTC: bind an existing allocation to a deal and hold the planter share.
+   * Only when nothing has been minted, is in flight or proposed on-chain:
+   * once any planter MGRO went out, the deal cannot take it back.
+   * `exists` lets callers tell "no allocation yet" from "already paid".
+   */
+  async holdAllocationForDeal(
+    submissionId: mongoose.Types.ObjectId | string,
+    dealId: mongoose.Types.ObjectId | string,
+    originalPlanterWallet: string,
+  ): Promise<{ held: boolean; exists: boolean; allocationId?: string }> {
+    const sid = new mongoose.Types.ObjectId(String(submissionId))
+    const did = new mongoose.Types.ObjectId(String(dealId))
+    const updated = await RewardAllocation.findOneAndUpdate(
+      {
+        submissionId: sid,
+        otc: { $exists: false },
+        planterCumulativePaidWei: '0',
+        tranches: {
+          $not: {
+            $elemMatch: {
+              $or: [
+                { status: { $in: ['paid', 'processing'] } },
+                { proposalId: { $exists: true } },
+              ],
+            },
+          },
+        },
+      },
+      {
+        $set: {
+          otc: {
+            dealId: did,
+            hold: true,
+            originalPlanterWallet: normalizeWallet(originalPlanterWallet),
+          },
+        },
+      },
+      { new: true },
+    )
+    if (updated) {
+      return { held: true, exists: true, allocationId: String(updated._id) }
+    }
+    const existing = await RewardAllocation.findOne({ submissionId: sid })
+      .select('_id otc')
+      .lean()
+    if (!existing) return { held: false, exists: false }
+    // Already bound to this very deal (idempotent re-run) counts as held.
+    const boundToThisDeal =
+      existing.otc?.dealId && String(existing.otc.dealId) === String(did)
+    return {
+      held: Boolean(boundToThisDeal && existing.otc?.hold),
+      exists: true,
+      allocationId: String(existing._id),
+    }
   }
 
   /**
