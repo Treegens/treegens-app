@@ -74,8 +74,10 @@ const schemas = {
   cancel: Joi.object({
     reason: reason.allow(''),
   }),
+  // Loose on purpose: the service answers a wrong code with the friendlier
+  // MPESA_REF_MISMATCH instead of a generic validation error.
   confirm: Joi.object({
-    mpesaRef: mpesaRef.allow(''),
+    mpesaRef: Joi.string().trim().allow('').max(40),
   }),
   resolve: Joi.object({
     outcome: Joi.string()
