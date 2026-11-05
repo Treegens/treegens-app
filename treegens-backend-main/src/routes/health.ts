@@ -1,11 +1,11 @@
 import express, { Request, Response } from 'express'
+import env from '../config/environment'
 import { testStorageConnection } from '../config/gcs'
 import HealthService from '../services/healthService'
-import { sendError } from '../utils/responseHelpers'
-import env from '../config/environment'
-import { checkStitchReadiness } from '../services/verifiedVideoStitchService'
-import { TREE_BATCH_SIZE, batchEnforcementEnabled } from '../utils/treeBatch'
 import { telegramConfigured } from '../services/otcNotifications'
+import { checkStitchReadiness } from '../services/verifiedVideoStitchService'
+import { sendError } from '../utils/responseHelpers'
+import { TREE_BATCH_SIZE, batchEnforcementEnabled } from '../utils/treeBatch'
 
 const router = express.Router()
 const healthService = new HealthService()
@@ -129,18 +129,21 @@ router.get('/', async (req: Request, res: Response) => {
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 // Kept the legacy path as an alias so existing monitors don't 404.
-router.get(['/storage-test', '/pinata-test'], async (req: Request, res: Response) => {
-  try {
-    const connectionResult = await testStorageConnection()
-    res.json({
-      storageConnected: connectionResult.connected,
-      message: connectionResult.message,
-      timestamp: new Date().toISOString(),
-    })
-  } catch {
-    return sendError(res, 'Storage connection test failed')
-  }
-})
+router.get(
+  ['/storage-test', '/pinata-test'],
+  async (req: Request, res: Response) => {
+    try {
+      const connectionResult = await testStorageConnection()
+      res.json({
+        storageConnected: connectionResult.connected,
+        message: connectionResult.message,
+        timestamp: new Date().toISOString(),
+      })
+    } catch {
+      return sendError(res, 'Storage connection test failed')
+    }
+  },
+)
 
 /**
  * @swagger
