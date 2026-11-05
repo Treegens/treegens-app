@@ -25,12 +25,7 @@ import {
 import { imageUpload } from '../middleware/upload'
 import * as otcService from '../services/otcService'
 import { OtcError } from '../services/otcService'
-import {
-  sendBadRequest,
-  sendCreated,
-  sendError,
-  sendSuccess,
-} from '../utils/responseHelpers'
+import { sendCreated, sendError, sendSuccess } from '../utils/responseHelpers'
 
 const router = express.Router()
 
@@ -531,7 +526,11 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       if (!req.file) {
-        return sendBadRequest(res, 'Attach the M-Pesa screenshot (screenshot)')
+        throw new OtcError(
+          'NO_FILE',
+          400,
+          'Attach the M-Pesa screenshot (screenshot)',
+        )
       }
       const { mpesaRef, amountKes, partial, note } = req.body
       const deal = await otcService.recordPayment(

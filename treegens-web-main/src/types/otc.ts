@@ -188,7 +188,10 @@ export interface OtcDealDetail extends OtcDeal {
     ratePerTreeKes: number
     status: 'active' | 'paused'
   } | null
+  /** Desk-only invite label (D9); never show it to the planter. */
   buyer: { walletAddress: string; label: string } | null
+  /** Planter-facing buyer name (`OTC_BUYER_DISPLAY_NAME`, default TreeGens). */
+  buyerLabel?: string
   allocation: {
     exists: boolean
     hold: boolean
@@ -250,7 +253,12 @@ export interface OtcDealUploadSummary {
 export interface OtcMeResponse {
   isBuyer: boolean
   enrollment: OtcEnrollment | null
-  buyer: { walletAddress: string; label: string } | null
+  /** `label` is the desk-only invite label; planters see `displayName` (D9). */
+  buyer: {
+    walletAddress: string
+    label: string
+    displayName?: string
+  } | null
   deals: OtcDeal[]
 }
 

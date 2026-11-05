@@ -904,12 +904,15 @@ test('holdAllocationForDeal: only an untouched allocation can be held; exists te
   let captured: any = null
   stub(RewardAllocation, 'findOneAndUpdate', (filter: any, update: any) => {
     captured = { filter, update }
-    return chain({ _id: 'alloc-5' })
+    return chain({ _id: 'alloc-5', treesPlanted: 120, planterTotalWei: '777' })
   })
+  // The bound allocation's count comes back so the deal is priced from it (D2).
   assert.deepEqual(await service.holdAllocationForDeal(sid, dealId, PLANTER), {
     held: true,
     exists: true,
     allocationId: 'alloc-5',
+    treesPlanted: 120,
+    planterTotalWei: '777',
   })
   assert.deepEqual(captured.filter.otc, { $exists: false })
   assert.equal(captured.filter.planterCumulativePaidWei, '0')

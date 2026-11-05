@@ -11,10 +11,23 @@
  * sessionStorage is empty. The auth page also receives the target as `?next=`
  * so the stored value is refreshed from whichever tab finishes sign-in.
  */
+import { routes } from '@/config/appConfig'
+
 const KEY = 'tg_post_auth_redirect'
 const TTL_MS = 60 * 60 * 1000
 
 type Stored = { path: string; expiresAt: number }
+
+/** The login page itself must never be a post-login target (it would loop). */
+function isLoginPath(path: string): boolean {
+  const login = routes.Login
+  return (
+    path === login ||
+    path.startsWith(`${login}?`) ||
+    path.startsWith(`${login}/`) ||
+    path.startsWith(`${login}#`)
+  )
+}
 
 export function isSafeRedirectPath(path: unknown): path is string {
   return (
@@ -22,7 +35,8 @@ export function isSafeRedirectPath(path: unknown): path is string {
     path.startsWith('/') &&
     !path.startsWith('//') &&
     !/[\s\\]/.test(path) &&
-    path.length < 512
+    path.length < 512 &&
+    !isLoginPath(path)
   )
 }
 

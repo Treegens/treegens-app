@@ -765,7 +765,7 @@ async function createDealWithHold(
   const buyer = normalizeWallet(enrollment.buyerWallet)
   const dealId = new mongoose.Types.ObjectId()
 
-  let held: { held: boolean; exists: boolean; allocationId?: string } = {
+  let held: Awaited<ReturnType<typeof rewardService.holdAllocationForDeal>> = {
     held: false,
     exists: false,
   }
@@ -784,8 +784,26 @@ async function createDealWithHold(
     }
   }
 
-  const count = computeDealCount(submission, { manual: opts.manual })
+  let count = computeDealCount(submission, { manual: opts.manual })
   const rate = Number(enrollment.ratePerTreeKes)
+  let expectedMgroWei: string | undefined
+  if (held.held && held.treesPlanted && held.treesPlanted > 0) {
+    // D2: the bound allocation already fixes the MGRO count (it may have been
+    // built from the declared count, before any deal existed). Price the deal
+    // from the trees the buyer will actually receive, never from the AI count.
+    const ai = approvedTreeCount(submission)
+    count = {
+      trees: held.treesPlanted,
+      countSource: 'approved',
+      verified: true,
+      status: 'awaiting_payment',
+      countNote:
+        ai !== held.treesPlanted
+          ? `MGRO allocation holds ${held.treesPlanted} trees (${ai > 0 ? `AI counted ${ai}` : 'no AI count'})`
+          : undefined,
+    }
+    expectedMgroWei = held.planterTotalWei
+  }
   try {
     const deal = await OtcDeal.create({
       _id: dealId,
@@ -796,6 +814,7 @@ async function createDealWithHold(
       mpesaNumber: enrollment.mpesaNumber,
       mpesaName: enrollment.mpesaName,
       ...moneyFields(count.trees, rate),
+      ...(expectedMgroWei ? { expectedMgroWei } : {}),
       countSource: count.countSource,
       ratePerTreeKes: rate,
       status: count.status,
@@ -1172,6 +1191,14 @@ export async function createDealForSubmission(
       'This planter is not enrolled with you',
     )
   }
+  if (enrollment.status !== 'active') {
+    // D6: paused -> no new deals, including from the desk.
+    throw new OtcError(
+      'ENROLLMENT_PAUSED',
+      409,
+      'This planter paused M-Pesa payouts',
+    )
+  }
   if (!isMangrove(submission)) {
     throw new OtcError(
       'NOT_MANGROVE',
@@ -1237,6 +1264,21 @@ export async function patchDealCount(
       409,
       'The count can only change before payment',
       { status: deal.status },
+    )
+  }
+  // D2: once the MGRO allocation exists its count is fixed; a different deal
+  // count would make KES paid and MGRO received disagree.
+  const alloc = await RewardAllocation.findOne({
+    submissionId: deal.submissionId,
+  })
+    .select('treesPlanted planterTotalWei')
+    .lean()
+  if (alloc) {
+    throw new OtcError(
+      'ALLOCATION_EXISTS',
+      409,
+      `MGRO for this planting is already allocated for ${alloc.treesPlanted} trees; the count cannot change`,
+      { trees: alloc.treesPlanted },
     )
   }
   const submission = await Submission.findById(deal.submissionId)
@@ -1512,13 +1554,16 @@ async function cancelDealInternal(
   await reconcileDealAllocation(String(updated._id))
 
   const humanReason = opts.reason.replace(/_/g, ' ')
+  // A rejected submission never gets an allocation: do not promise MGRO.
+  const mgroSuffix =
+    opts.reason === 'submission_rejected'
+      ? ''
+      : ' Your MGRO for this planting will be paid to your wallet as usual.'
   void notify({
     recipientWalletAddress: updated.planterWallet,
     kind: 'otc_deal_cancelled',
     title: 'M-Pesa deal cancelled',
-    body:
-      (opts.planterBody || `${humanReason}.`) +
-      ' Your MGRO for this planting will be paid to your wallet as usual.',
+    body: (opts.planterBody || `${humanReason}.`) + mgroSuffix,
     link: `/submissions/${String(updated.submissionId)}`,
     payload: { dealId: String(updated._id), reason: opts.reason },
   })
@@ -2087,10 +2132,14 @@ export async function listDeals(buyerWallet: string, filters: DealFilters) {
   return { items: await hydrateDeals(rows), total, page, limit }
 }
 
-function csvCell(value: unknown): string {
+export function csvCell(value: unknown): string {
   if (value === null || value === undefined) return ''
-  const s = value instanceof Date ? value.toISOString() : String(value)
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  let s = value instanceof Date ? value.toISOString() : String(value)
+  // Formula-injection guard: a planter-typed name such as `=HYPERLINK(...)`
+  // or a `+2547...` phone number must open as text in Excel/LibreOffice.
+  const prefixed = /^[=+\-@\t\r]/.test(s)
+  if (prefixed) s = `'${s}`
+  return prefixed || /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 export async function exportDealsCsv(
@@ -2156,15 +2205,24 @@ export async function listEligibleSubmissionsForPlanter(
 ) {
   const buyer = normalizeWallet(buyerWallet)
   const planter = normalizeWallet(planterWallet)
-  const enrollment = await OtcEnrollment.exists({
+  const enrollment = await OtcEnrollment.findOne({
     planterWallet: planter,
     buyerWallet: buyer,
   })
+    .select('status')
+    .lean()
   if (!enrollment) {
     throw new OtcError(
       'NOT_ENROLLED',
       404,
       'This planter is not enrolled with you',
+    )
+  }
+  if (enrollment.status !== 'active') {
+    throw new OtcError(
+      'ENROLLMENT_PAUSED',
+      409,
+      'This planter paused M-Pesa payouts',
     )
   }
   const submissions = await Submission.find({

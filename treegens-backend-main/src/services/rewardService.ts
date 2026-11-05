@@ -15,6 +15,23 @@ function normalizeWallet(w: string): string {
   return String(w).toLowerCase()
 }
 
+/**
+ * `treesPlanted` / `planterTotalWei` of an allocation, only when present, so
+ * an OTC deal bound to it can price the trees the buyer will actually receive.
+ */
+function allocationCountFields(alloc: {
+  treesPlanted?: unknown
+  planterTotalWei?: unknown
+}): { treesPlanted?: number; planterTotalWei?: string } {
+  const out: { treesPlanted?: number; planterTotalWei?: string } = {}
+  const trees = Number(alloc.treesPlanted)
+  if (alloc.treesPlanted !== undefined && Number.isFinite(trees) && trees > 0)
+    out.treesPlanted = Math.floor(trees)
+  if (alloc.planterTotalWei !== undefined && alloc.planterTotalWei !== null)
+    out.planterTotalWei = String(alloc.planterTotalWei)
+  return out
+}
+
 function addSeconds(base: Date, seconds: number): Date {
   return new Date(base.getTime() + seconds * 1000)
 }
@@ -1746,7 +1763,14 @@ export class RewardService {
     submissionId: mongoose.Types.ObjectId | string,
     dealId: mongoose.Types.ObjectId | string,
     originalPlanterWallet: string,
-  ): Promise<{ held: boolean; exists: boolean; allocationId?: string }> {
+  ): Promise<{
+    held: boolean
+    exists: boolean
+    allocationId?: string
+    /** Count the bound allocation pays for (so the deal can price the same number). */
+    treesPlanted?: number
+    planterTotalWei?: string
+  }> {
     const sid = new mongoose.Types.ObjectId(String(submissionId))
     const did = new mongoose.Types.ObjectId(String(dealId))
     const updated = await RewardAllocation.findOneAndUpdate(
@@ -1777,10 +1801,15 @@ export class RewardService {
       { new: true },
     )
     if (updated) {
-      return { held: true, exists: true, allocationId: String(updated._id) }
+      return {
+        held: true,
+        exists: true,
+        allocationId: String(updated._id),
+        ...allocationCountFields(updated),
+      }
     }
     const existing = await RewardAllocation.findOne({ submissionId: sid })
-      .select('_id otc')
+      .select('_id otc treesPlanted planterTotalWei')
       .lean()
     if (!existing) return { held: false, exists: false }
     // Already bound to this very deal (idempotent re-run) counts as held.
@@ -1790,6 +1819,7 @@ export class RewardService {
       held: Boolean(boundToThisDeal && existing.otc?.hold),
       exists: true,
       allocationId: String(existing._id),
+      ...allocationCountFields(existing),
     }
   }
 

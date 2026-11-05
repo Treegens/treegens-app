@@ -5,7 +5,12 @@ import { OtcDealRow } from '@/components/otc/OtcDealRow'
 import { Spinner } from '@/components/ui/Spinner'
 import { routes } from '@/config/appConfig'
 import { useUser } from '@/contexts/UserProvider'
-import { formatKes, getOtcMe, patchOtcMe } from '@/services/otcService'
+import {
+  formatKes,
+  formatKesRate,
+  getOtcMe,
+  patchOtcMe,
+} from '@/services/otcService'
 import type { OtcMeResponse } from '@/types/otc'
 import { apiErrorMessage } from '@/utils/apiErrorMessage'
 import { formatPhoneForDisplay, normalizeKenyanPhone } from '@/utils/mpesaPhone'
@@ -49,7 +54,8 @@ export default function OtcMePage() {
   }, [load])
 
   const enrollment = data?.enrollment ?? null
-  const buyerLabel = data?.buyer?.label || 'the buyer'
+  // D9: planters see the buyer display name, never the desk invite label.
+  const buyerLabel = data?.buyer?.displayName || 'TreeGens'
 
   const startEdit = () => {
     if (!enrollment) return
@@ -292,7 +298,7 @@ export default function OtcMePage() {
                 </dd>
                 <dt className="text-[#6b6560]">Rate</dt>
                 <dd className="font-semibold text-[#1a2610]">
-                  {formatKes(enrollment.ratePerTreeKes)} per tree
+                  {formatKesRate(enrollment.ratePerTreeKes)} per tree
                 </dd>
                 <dt className="text-[#6b6560]">Paid by</dt>
                 <dd className="font-semibold text-[#1a2610]">{buyerLabel}</dd>

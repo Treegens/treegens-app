@@ -26,7 +26,8 @@ export function OtcPayoutCard({ deal, viewerWallet, otcHold }: Props) {
   const me = viewerWallet?.toLowerCase() ?? ''
   const isPlanter = !!me && deal.planterWallet.toLowerCase() === me
   const isBuyer = !!me && deal.buyerWallet.toLowerCase() === me
-  const buyerLabel = deal.buyer?.label || 'the buyer'
+  // D9: planters see the buyer display name, never the desk invite label.
+  const buyerLabel = deal.buyerLabel || 'TreeGens'
   const sent = paidKes(deal)
   const href = buildOtcDealPath(deal._id)
 

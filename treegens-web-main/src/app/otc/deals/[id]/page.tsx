@@ -18,6 +18,7 @@ import {
   confirmOtcDeal,
   disputeOtcDeal,
   formatKes,
+  formatKesRate,
   getOtcDeal,
   otcErrorCode,
   otcEventLabel,
@@ -212,11 +213,15 @@ function DealHeader({ deal }: { deal: OtcDealDetail }) {
               <span className="inline-flex items-center gap-1 text-green-700">
                 <HiCheckBadge className="h-4 w-4" aria-hidden /> Verified
               </span>
-            ) : (
+            ) : deal.status !== 'cancelled' && deal.countSource === 'ai' ? (
               <span className="text-orange-800">
                 AI count not yet verified by verifiers
               </span>
-            )}
+            ) : deal.status !== 'cancelled' && deal.countSource === 'manual' ? (
+              <span className="text-orange-800">
+                Count set by buyer, not verified
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="shrink-0 text-right">
@@ -224,7 +229,7 @@ function DealHeader({ deal }: { deal: OtcDealDetail }) {
             {formatKes(deal.amountKes)}
           </p>
           <p className="text-xs text-gray-500">
-            {formatKes(deal.ratePerTreeKes)} / tree
+            {formatKesRate(deal.ratePerTreeKes)} / tree
           </p>
         </div>
       </div>
@@ -431,7 +436,8 @@ function BuyerActions({
       !deal.allocation.hold &&
       deal.allocation.planterWallet?.toLowerCase() === me ? (
         <BuyerMgroCard deal={deal} />
-      ) : deal.status === 'confirmed' ? (
+      ) : deal.status === 'confirmed' &&
+        deal.release?.status !== 'unfundable' ? (
         <section className="rounded-2xl border border-gray-200 bg-[#faf9f6] p-4 text-sm text-[#374151]">
           {deal.allocation?.exists
             ? 'MGRO is being moved to your wallet. Refresh in a moment.'
@@ -727,7 +733,7 @@ function SetCountForm({
       <p className="mt-1 text-xs text-[#5c534a]">
         Use this when AI could not count the clip or the count must be
         corrected. The KES amount is recomputed at{' '}
-        {formatKes(deal.ratePerTreeKes)} per tree.
+        {formatKesRate(deal.ratePerTreeKes)} per tree.
       </p>
       <div className="mt-3 flex gap-2">
         <input
@@ -1030,7 +1036,8 @@ function PlanterActions({
   onChanged: (d: OtcDealDetail) => void
 }) {
   const router = useRouter()
-  const buyerLabel = deal.buyer?.label || 'the buyer'
+  // D9: planters see the buyer display name, never the desk invite label.
+  const buyerLabel = deal.buyerLabel || 'TreeGens'
   const sent = paidKes(deal)
   const partial = !!deal.payment?.partial && sent !== deal.amountKes
   const requiresRef = deal.confirmRequiresRef !== false

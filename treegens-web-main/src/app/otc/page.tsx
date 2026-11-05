@@ -11,6 +11,7 @@ import {
   createOtcInvite,
   downloadOtcDealsCsv,
   formatKes,
+  formatKesRate,
   getOtcSummary,
   listOtcDeals,
   listOtcEligibleSubmissions,
@@ -624,7 +625,7 @@ function InvitesSection({ defaultRate }: { defaultRate: number | null }) {
                   </p>
                   <p className="text-xs text-[#6b7280]">
                     <span className="font-mono">{inv.code}</span> ·{' '}
-                    {formatKes(inv.ratePerTreeKes)}/tree · {inv.uses}
+                    {formatKesRate(inv.ratePerTreeKes)}/tree · {inv.uses}
                     {inv.maxUses != null ? `/${inv.maxUses}` : ''} used
                     {inv.expiresAt
                       ? ` · expires ${formatTimeAgo(inv.expiresAt)}`
@@ -865,7 +866,7 @@ function PlantersSection({
                       }}
                       className="min-h-11 rounded-xl border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-800"
                     >
-                      {formatKes(row.ratePerTreeKes)}/tree · Edit
+                      {formatKesRate(row.ratePerTreeKes)}/tree · Edit
                     </button>
                     <button
                       type="button"
@@ -900,6 +901,15 @@ function PlantersSection({
       />
     </section>
   )
+}
+
+/** Plain-English reasons for the picker's `ineligibleReason` codes. */
+const REASON_LABEL: Record<string, string> = {
+  planter_already_paid: 'Planter already claimed MGRO',
+  not_reviewable: 'Not reviewable yet',
+  bound_to_other_deal: 'MGRO already tied to another deal',
+  rejected: 'Rejected by verifiers',
+  deal_exists: 'Already on the desk',
 }
 
 function SubmissionPicker({
@@ -1024,7 +1034,9 @@ function SubmissionPicker({
                       <p className="text-xs text-amber-800">
                         {s.hasDeal
                           ? 'Already on the desk'
-                          : s.ineligibleReason || 'Not eligible'}
+                          : (s.ineligibleReason &&
+                              REASON_LABEL[s.ineligibleReason]) ||
+                            'Not eligible'}
                       </p>
                     ) : null}
                   </div>

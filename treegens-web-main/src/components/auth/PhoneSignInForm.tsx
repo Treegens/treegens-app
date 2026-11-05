@@ -16,6 +16,8 @@ import { preAuthenticate } from 'thirdweb/wallets/in-app'
 type Step = 'phone' | 'code'
 
 type Props = {
+  /** Called when the planter submits the SMS code (sign-in is now in flight). */
+  onSignInStart?: () => void
   /** Called after the JWT sign-in succeeds, with the verified E.164 number. */
   onSignedIn?: (phoneE164: string) => void
   /** Shown when SMS sign-in fails, e.g. a "Use email instead" button. */
@@ -33,6 +35,7 @@ type Props = {
  * Requires phone auth to be enabled for this client in the thirdweb dashboard.
  */
 export function PhoneSignInForm({
+  onSignInStart,
   onSignedIn,
   fallback,
   title = 'Sign in with your M-Pesa phone number',
@@ -99,6 +102,7 @@ export function PhoneSignInForm({
       return
     }
     setIsSigningIn(true)
+    onSignInStart?.()
     try {
       let connectedWallet: Wallet | undefined
       let connectedAccount: Account | undefined

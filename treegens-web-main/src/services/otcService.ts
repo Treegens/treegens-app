@@ -286,6 +286,14 @@ export function formatKes(amount?: number | null): string {
   return `KES ${Math.round(n).toLocaleString('en-KE')}`
 }
 
+/** Per-tree rate: up to 2 decimals (`KES 12.5`); whole numbers as `KES 13`. */
+export function formatKesRate(rate?: number | null): string {
+  const n = Number(rate)
+  if (!Number.isFinite(n)) return 'KES 0'
+  if (Number.isInteger(n)) return formatKes(n)
+  return `KES ${n.toLocaleString('en-KE', { maximumFractionDigits: 2 })}`
+}
+
 /** Deal amount vs amount the buyer actually sent (D10 partial payments). */
 export function paidKes(deal: Pick<OtcDeal, 'amountKes' | 'payment'>): number {
   const sent = deal.payment?.amountKes
@@ -335,14 +343,15 @@ export const OTC_EVENT_LABEL: Record<string, string> = {
   confirmed: 'Planter confirmed payment',
   disputed: 'Planter reported a problem',
   cancelled: 'Deal cancelled',
-  resolved: 'Dispute resolved by buyer',
-  released: 'MGRO released to buyer',
-  returned: 'MGRO returned to planter',
+  count_approved: 'Count approved by verifiers',
+  approved_without_count: 'Approved, count needed',
+  mgro_released: 'MGRO released to buyer',
+  mgro_returned: 'MGRO returned to planter',
+  resolved_release_to_buyer: 'Dispute resolved: MGRO to buyer',
+  resolved_return_to_planter: 'Dispute resolved: MGRO stays with planter',
   allocation_already_paid: 'MGRO was already paid to the planter',
   planter_phone_changed: 'Planter changed their M-Pesa number',
-  expired: 'Deal expired',
   submission_rejected: 'Planting rejected by verifiers',
-  unfundable: 'No MGRO will mint for this planting',
 }
 
 export function otcEventLabel(type: string): string {

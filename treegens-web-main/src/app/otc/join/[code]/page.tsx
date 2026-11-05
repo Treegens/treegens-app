@@ -6,7 +6,7 @@ import { routes } from '@/config/appConfig'
 import { useAuth } from '@/contexts/AuthProvider'
 import { useUser } from '@/contexts/UserProvider'
 import {
-  formatKes,
+  formatKesRate,
   joinOtc,
   otcErrorCode,
   previewOtcInvite,
@@ -52,6 +52,12 @@ export default function OtcJoinPage() {
   const [loading, setLoading] = useState(true)
 
   const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null)
+  /**
+   * Once the planter taps "Verify & sign in" the provider flips `isLoading`;
+   * keep PhoneSignInForm mounted so a failed JWT step still shows its error
+   * and the email fallback (D12) instead of a spinner that swallows them.
+   */
+  const [signInStarted, setSignInStarted] = useState(false)
   const [mpesaNumber, setMpesaNumber] = useState('')
   const [mpesaName, setMpesaName] = useState('')
   const [consent, setConsent] = useState(false)
@@ -233,7 +239,7 @@ export default function OtcJoinPage() {
                 </p>
               ) : null}
               <p className="mt-3 text-3xl font-black tabular-nums text-[#1a2610]">
-                {formatKes(preview.ratePerTreeKes)}
+                {formatKesRate(preview.ratePerTreeKes)}
                 <span className="ml-1 text-sm font-semibold text-[#5c534a]">
                   per counted tree
                 </span>
@@ -320,7 +326,7 @@ export default function OtcJoinPage() {
                   View my payouts
                 </Link>
               </section>
-            ) : authLoading ? (
+            ) : authLoading && !signInStarted ? (
               <div className="flex justify-center py-6">
                 <Spinner size="md" />
               </div>
@@ -328,6 +334,7 @@ export default function OtcJoinPage() {
               <section className="flex flex-col gap-3">
                 <PhoneSignInForm
                   tone="light"
+                  onSignInStart={() => setSignInStarted(true)}
                   onSignedIn={phone => setVerifiedPhone(phone)}
                   fallback={
                     <button

@@ -203,8 +203,9 @@ Telegram failures are logged and never fail the action that caused them.
 The invite page signs planters in with the thirdweb in-app wallet `phone` strategy (SMS
 code). This only works when **Phone** is enabled for the web app's client id in the thirdweb
 dashboard: **Project > In-App Wallets (or Connect) > Authentication > enable Phone**. Until
-then `preAuthenticate` rejects the request, the form shows "Could not send the SMS code.
-Try again or use email." and the planter can fall back to email sign-in. `'phone'` is also
+then `preAuthenticate` rejects the request; the form shows thirdweb's error message (or
+"Could not send the SMS code. Try again or use email." when thirdweb gives none) together
+with a "Use email instead" button, so the planter can fall back to email sign-in. `'phone'` is also
 listed in `TREEGENS_IN_APP_AUTH_OPTIONS` (`treegens-web-main/src/config/treegensInAppWallet.ts`)
 so the regular connect modal offers it too. Kenyan numbers typed as `07XX XXX XXX` are
 normalized to `+2547XX...` on both web and backend.
@@ -324,12 +325,12 @@ paginated `{ items, total, page, limit }`.
 | `GET /summary` | buyer | Counts per status, `kesToPay`, `kesAwaitingConfirmation`, `kesConfirmed`, `kesSent`, `treesConfirmed`, `expectedMgroWeiConfirmed`, `releasedCount`, `unfundableCount`, `enrollmentCount`, `defaults`, `telegram`, `releaseMode`, `payOn`. |
 | `POST /invites` / `GET /invites` / `PATCH /invites/:code` | buyer | Create (`{ label, ratePerTreeKes, maxUses?, expiresAt? }` -> `{ invite, url }`), list, update (label, rate, active, max uses). |
 | `GET /enrollments` / `PATCH /enrollments/:planterWallet` | buyer | List planters with `planterName` and `dealCounts`; change `ratePerTreeKes` or `status`. |
-| `GET /enrollments/:planterWallet/submissions` | buyer | Picker rows: `submissionId, status, treesPlanted, aiCount, uploadedAt, location, hasDeal, eligible, ineligibleReason`. |
+| `GET /enrollments/:planterWallet/submissions` | buyer | Picker rows: `submissionId, status, treesPlanted, aiCount, uploadedAt, location, hasDeal, eligible, ineligibleReason`. 404 `NOT_ENROLLED`, 409 `ENROLLMENT_PAUSED`. |
 | `GET /deals?status=&q=&from=&to=&page=&limit=` | buyer | Filtered deal list. `q` matches name, phone, M-Pesa code, or a 24-hex submission id. |
 | `GET /deals/export.csv?status=&q=&from=&to=` | buyer | CSV, max 5000 rows: createdAt, status, mpesaName, mpesaNumber, trees, countSource, verified, amountKes, paidKes, mpesaRef, paymentSentAt, confirmedAt, submissionId, submissionStatus, releaseStatus, expectedMgroWei. |
-| `POST /deals` | buyer | `{ submissionId }`. 409 `NOT_ENROLLED`, `DEAL_EXISTS`, `PLANTER_ALREADY_PAID`, `SUBMISSION_REJECTED`. |
+| `POST /deals` | buyer | `{ submissionId }`. 404 `SUBMISSION_NOT_FOUND`; 409 `NOT_ENROLLED`, `ENROLLMENT_PAUSED`, `NOT_MANGROVE`, `NO_PLANT_CLIP`, `SUBMISSION_REJECTED`, `DEAL_EXISTS`, `PLANTER_ALREADY_PAID`. When the planter's MGRO allocation already exists, the deal is priced from the allocation's tree count (not the AI count) so KES paid and MGRO received match. |
 | `POST /deals/:dealId/payment` | buyer | multipart: `screenshot` file, `mpesaRef` (required), `amountKes?`, `partial?`, `note?`. 400 `NO_FILE`, `INVALID_IMAGE`, `INVALID_MPESA_REF`, `PARTIAL_FLAG_REQUIRED`. |
-| `PATCH /deals/:dealId/count` | buyer | `{ trees }`; `countSource = manual`. |
+| `PATCH /deals/:dealId/count` | buyer | `{ trees }`; `countSource = manual`. 409 `ALLOCATION_EXISTS` once the MGRO allocation exists (its count is fixed), 409 `INVALID_TRANSITION` after payment proof. |
 | `POST /deals/:dealId/cancel` | buyer | `{ reason? }`; reason required from `payment_sent` or `disputed`. Never from `confirmed`. |
 | `POST /deals/:dealId/resolve` | buyer | `{ outcome: release_to_buyer / return_to_planter, evidence }` from `disputed` only. |
 

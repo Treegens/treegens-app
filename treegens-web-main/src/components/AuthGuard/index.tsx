@@ -43,7 +43,8 @@ export const AuthGuard = ({ children }: { children: React.ReactNode }) => {
         if (isAuthenticated) {
           // peek, not consume: the auth page computes the same target in its
           // own effect; whichever runs second must not fall back to Home.
-          replace(peekPostAuthRedirect() ?? routes.Home)
+          const stored = peekPostAuthRedirect()
+          replace(stored && stored !== routes.Login ? stored : routes.Home)
         }
         return
       }

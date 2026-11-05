@@ -163,9 +163,15 @@ export default function SubmissionDetailPage() {
 
   const claimed = formatWeiToMgro(rewardStatus?.claimedAmountWei)
   const isClaimCompleted = rewardStatus?.displayState === 'COMPLETED'
-  /** MGRO for this planting is (or was) part of an M-Pesa deal: no Claim UI. */
+  /**
+   * MGRO for this planting is (or was) part of a live/confirmed M-Pesa deal:
+   * no Claim UI. A cancelled deal returned the hold, so the planter claims as
+   * usual (the OtcPayoutCard above still explains the cancellation).
+   */
   const hideClaimCard =
-    !!otcDeal || !!rewardStatus?.otcHold || !!rewardStatus?.otcReleased
+    (!!otcDeal && otcDeal.status !== 'cancelled') ||
+    !!rewardStatus?.otcHold ||
+    !!rewardStatus?.otcReleased
 
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
