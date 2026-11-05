@@ -85,6 +85,21 @@ services:
         sync: false
       - key: OTC_TELEGRAM_CHAT_ID
         sync: false
+      # Whole planter share to the buyer in one mint on confirmation (D1).
+      - key: OTC_RELEASE_MODE
+        value: full
+      # Deals payable as soon as the AI counted a fundable batch (D3).
+      - key: OTC_PAY_ON
+        value: ai_count
+      - key: OTC_CONFIRM_REQUIRES_REF
+        value: "true"
+      - key: OTC_DEAL_EXPIRY_DAYS
+        value: "14"
+      - key: OTC_BUYER_DISPLAY_NAME
+        value: TreeGens
+      # The 5-minute OTC sweep runs here, in the API process only.
+      - key: ENABLE_OTC_RECONCILER
+        value: "true"
 
   # ------------------------------------------------- reward claim worker ----
   - type: worker

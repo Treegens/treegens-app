@@ -1,5 +1,9 @@
 import crypto from 'crypto'
 import env from '../config/environment'
+import {
+  batchEnforcementEnabled,
+  batchRejectionReason,
+} from '../utils/treeBatch'
 
 /**
  * Pure rules for the OTC (M-Pesa) desk. No database access here so every
@@ -27,7 +31,9 @@ const TRANSITIONS: Record<OtcDealStatus, readonly OtcDealStatus[]> = {
   awaiting_payment: ['payment_sent', 'cancelled'],
   // Re-uploading proof keeps the deal in payment_sent.
   payment_sent: ['payment_sent', 'confirmed', 'disputed', 'cancelled'],
-  disputed: ['payment_sent', 'cancelled'],
+  // `confirmed` from disputed is the buyer's `resolve` (release_to_buyer),
+  // recorded with written evidence.
+  disputed: ['payment_sent', 'confirmed', 'cancelled'],
   confirmed: [],
   cancelled: [],
 }
@@ -182,4 +188,33 @@ export function buildInviteUrl(code: string): string {
 export function formatKes(amount: number): string {
   const n = Math.round(Number(amount) || 0)
   return `KES ${n.toLocaleString('en-KE')}`
+}
+
+/**
+ * Whether a count can ever mint. Paying KES for a count the 100-tree batch
+ * gate will refuse buys MGRO that never exists, so such a deal must stay in
+ * `awaiting_count` with the batch reason as its note.
+ */
+export function isFundableCount(count: number): {
+  ok: boolean
+  reason: string | null
+} {
+  const n = Math.floor(Number(count) || 0)
+  if (n <= 0) return { ok: false, reason: 'No trees counted yet' }
+  if (!batchEnforcementEnabled()) return { ok: true, reason: null }
+  const reason = batchRejectionReason(n)
+  return { ok: reason === null, reason }
+}
+
+/** M-Pesa transaction codes are 10 upper-case alphanumerics (e.g. QHX7K2M9PL). */
+export function normalizeMpesaRef(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const ref = raw.trim().toUpperCase()
+  return /^[A-Z0-9]{10}$/.test(ref) ? ref : null
+}
+
+export function mpesaRefMatches(a: unknown, b: unknown): boolean {
+  const x = normalizeMpesaRef(a)
+  const y = normalizeMpesaRef(b)
+  return x !== null && y !== null && x === y
 }

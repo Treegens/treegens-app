@@ -771,6 +771,48 @@ class EnvironmentConfig {
   }
 
   /**
+   * How the planter's MGRO reaches the buyer once a deal is confirmed.
+   *  - 'full' (default): the whole planter share is minted to the buyer in
+   *    one go. The schedule's health checks can only be filed by the planter,
+   *    who has already been paid in cash and has no reason to film them.
+   *  - 'vesting': keep the 6-tranche survival schedule; the buyer (now the
+   *    allocation's planterWallet) may file the health checks.
+   */
+  get OTC_RELEASE_MODE(): 'full' | 'vesting' {
+    return process.env.OTC_RELEASE_MODE === 'vesting' ? 'vesting' : 'full'
+  }
+
+  /**
+   * When a deal becomes payable: 'ai_count' (default, as soon as the AI has
+   * counted a fundable batch) or 'approval' (only once verifiers approved).
+   */
+  get OTC_PAY_ON(): 'ai_count' | 'approval' {
+    return process.env.OTC_PAY_ON === 'approval' ? 'approval' : 'ai_count'
+  }
+
+  /** Planter confirmation must carry the M-Pesa code from the SMS (default on). */
+  get OTC_CONFIRM_REQUIRES_REF() {
+    return process.env.OTC_CONFIRM_REQUIRES_REF !== 'false'
+  }
+
+  /** Unpaid deals (awaiting_count / awaiting_payment) auto-cancel after this many days. */
+  get OTC_DEAL_EXPIRY_DAYS() {
+    const raw = process.env.OTC_DEAL_EXPIRY_DAYS
+    const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : 14
+    return Number.isNaN(n) || n < 1 ? 14 : n
+  }
+
+  /** 5-minute OTC sweep (reconcile, expire, remind). API process only. */
+  get ENABLE_OTC_RECONCILER() {
+    return process.env.ENABLE_OTC_RECONCILER !== 'false'
+  }
+
+  /** How planters see the buyer in alerts and on deal pages. */
+  get OTC_BUYER_DISPLAY_NAME() {
+    return String(process.env.OTC_BUYER_DISPLAY_NAME || '').trim() || 'TreeGens'
+  }
+
+  /**
    * When true, POST /api/users/me/delegate requires min on-chain staked TGN (same bar as verifiers).
    * Default false so off-chain delegation works without RPC/vault reads (common in dev / wallets without stake).
    */

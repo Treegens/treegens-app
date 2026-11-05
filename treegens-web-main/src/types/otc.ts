@@ -10,7 +10,24 @@ export type OtcDealStatus =
 
 export type OtcCountSource = 'ai' | 'approved' | 'manual' | 'none'
 
-export type OtcReleaseStatus = 'held' | 'released' | 'returned' | 'n/a'
+export type OtcReleaseStatus =
+  | 'held'
+  | 'released'
+  | 'returned'
+  | 'n/a'
+  | 'unfundable'
+
+export type OtcReleaseMode = 'full' | 'vesting'
+
+export type OtcPayOn = 'ai_count' | 'approval'
+
+export type OtcDisputeReasonCode =
+  | 'nothing_arrived'
+  | 'wrong_amount'
+  | 'wrong_number'
+  | 'other'
+
+export type OtcResolutionOutcome = 'release_to_buyer' | 'return_to_planter'
 
 export interface OtcInvite {
   _id: string
@@ -39,6 +56,8 @@ export interface OtcInvitePreview {
   exhausted: boolean
   acceptable: boolean
   reason?: 'inactive' | 'expired' | 'exhausted' | null
+  /** How the planter's MGRO is released to the buyer (D1). */
+  releaseMode?: OtcReleaseMode
 }
 
 export interface OtcEnrollment {
@@ -75,8 +94,17 @@ export interface OtcDealPayment {
   mimeType?: string
   mpesaRef?: string
   amountKes?: number
+  /** Buyer ticked "partial payment" because amountKes differs from the deal. */
+  partial?: boolean
   note?: string
   sentAt?: string
+}
+
+export interface OtcDealResolution {
+  outcome: OtcResolutionOutcome
+  evidence: string
+  by: string
+  at: string
 }
 
 export interface OtcDealEvent {
@@ -100,7 +128,16 @@ export interface OtcDeal {
   amountKes: number
   expectedMgroWei: string
   status: OtcDealStatus
+  /** Why the deal is not payable yet (batch rule, AI failure, awaiting approval). */
+  countNote?: string
+  /** True when the submission is approved or the AI auto-approved it. */
+  verified?: boolean
+  /** Denormalised snapshot of the submission status. */
+  submissionStatus?: string
   payment?: OtcDealPayment
+  resolution?: OtcDealResolution
+  cancelledFromStatus?: string
+  reminderSentAt?: string
   confirmedAt?: string
   disputedAt?: string
   disputeReason?: string
@@ -166,6 +203,8 @@ export interface OtcDealDetail extends OtcDeal {
       unlockAt?: string
     }>
   }
+  releaseMode?: OtcReleaseMode
+  confirmRequiresRef?: boolean
 }
 
 export interface OtcSummary {
@@ -173,12 +212,39 @@ export interface OtcSummary {
   kesToPay: number
   kesAwaitingConfirmation: number
   kesConfirmed: number
+  /** Sum of every payment uploaded, any status. */
+  kesSent?: number
   treesConfirmed: number
   expectedMgroWeiConfirmed: string
   releasedCount: number
+  unfundableCount?: number
   enrollmentCount: number
   defaults: { ratePerTreeKes: number | null }
   telegram: boolean
+  releaseMode?: OtcReleaseMode
+  payOn?: OtcPayOn
+}
+
+/** Row of GET /api/otc/enrollments/:planterWallet/submissions (desk picker). */
+export interface OtcEligibleSubmission {
+  submissionId: string
+  status: string
+  treesPlanted?: number
+  aiCount?: number | null
+  treeType?: string
+  uploadedAt?: string
+  location?: string
+  hasDeal: boolean
+  eligible: boolean
+  ineligibleReason?: string | null
+}
+
+/** Summary attached to the plant-clip upload response when a deal was created. */
+export interface OtcDealUploadSummary {
+  id: string
+  status: OtcDealStatus
+  amountKes: number
+  trees: number
 }
 
 export interface OtcMeResponse {

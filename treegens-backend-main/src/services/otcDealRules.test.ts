@@ -7,10 +7,13 @@ import {
   expectedPlanterMgroWei,
   generateInviteCode,
   INVITE_CODE_LENGTH,
+  isFundableCount,
   isOtcBuyerWallet,
   isTerminalStatus,
   isValidInviteCode,
+  mpesaRefMatches,
   normalizeMpesaNumber,
+  normalizeMpesaRef,
   OTC_DEAL_STATUSES,
   totalMgroWeiForTrees,
 } from './otcDealRules'
@@ -97,6 +100,7 @@ test('transition matrix: only the documented moves are legal', () => {
     ['payment_sent', 'disputed'],
     ['payment_sent', 'cancelled'],
     ['disputed', 'payment_sent'],
+    ['disputed', 'confirmed'], // buyer resolve: release_to_buyer
     ['disputed', 'cancelled'],
   ]
   const legalSet = new Set(legal.map(([a, b]) => `${a}>${b}`))
@@ -175,4 +179,46 @@ test('dealTreeCountFromAi only trusts a completed AI count', () => {
     null,
   )
   assert.equal(dealTreeCountFromAi({ treeType: 'baobab' }), null)
+})
+
+test('isFundableCount follows the 100-tree batch gate', () => {
+  const prev = process.env.ENFORCE_TREE_BATCHES
+  try {
+    delete process.env.ENFORCE_TREE_BATCHES
+    assert.deepEqual(isFundableCount(100), { ok: true, reason: null })
+    assert.deepEqual(isFundableCount(300), { ok: true, reason: null })
+    const r143 = isFundableCount(143)
+    assert.equal(r143.ok, false)
+    assert.match(String(r143.reason), /143 trees/)
+    const r50 = isFundableCount(50)
+    assert.equal(r50.ok, false)
+    assert.match(String(r50.reason), /batch minimum/)
+    assert.equal(isFundableCount(0).ok, false)
+    assert.equal(isFundableCount(NaN).ok, false)
+
+    process.env.ENFORCE_TREE_BATCHES = 'false'
+    assert.deepEqual(isFundableCount(143), { ok: true, reason: null })
+    assert.equal(isFundableCount(0).ok, false)
+  } finally {
+    if (prev === undefined) delete process.env.ENFORCE_TREE_BATCHES
+    else process.env.ENFORCE_TREE_BATCHES = prev
+  }
+})
+
+test('normalizeMpesaRef accepts only 10 upper-case alphanumerics', () => {
+  assert.equal(normalizeMpesaRef('qhx7k2m9pl'), 'QHX7K2M9PL')
+  assert.equal(normalizeMpesaRef('  QHX7K2M9PL '), 'QHX7K2M9PL')
+  assert.equal(normalizeMpesaRef('QHX7K2M9P'), null)
+  assert.equal(normalizeMpesaRef('QHX7K2M9PLX'), null)
+  assert.equal(normalizeMpesaRef('QHX7-K2M9P'), null)
+  assert.equal(normalizeMpesaRef(''), null)
+  assert.equal(normalizeMpesaRef(undefined), null)
+  assert.equal(normalizeMpesaRef(1234567890), null)
+})
+
+test('mpesaRefMatches is case-insensitive and rejects invalid codes', () => {
+  assert.equal(mpesaRefMatches('qhx7k2m9pl', 'QHX7K2M9PL'), true)
+  assert.equal(mpesaRefMatches('QHX7K2M9PL', 'QHX7K2M9PX'), false)
+  assert.equal(mpesaRefMatches('', ''), false)
+  assert.equal(mpesaRefMatches(undefined, 'QHX7K2M9PL'), false)
 })
