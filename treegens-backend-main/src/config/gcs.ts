@@ -64,10 +64,12 @@ async function uploadToStorage(
   fileBuffer: Buffer,
   fileName: string,
   mimeType: string,
+  folder: 'submissions' | 'otc' = 'submissions',
 ): Promise<StorageUploadResult> {
   const { storage, bucketName } = getStorage()
   // Namespace uploads under a folder; fileName is already made unique upstream.
-  const objectName = `submissions/${fileName}`
+  // `otc/` holds M-Pesa payment screenshots, `submissions/` the clips.
+  const objectName = `${folder}/${fileName}`
   const fileRef = storage.bucket(bucketName).file(objectName)
 
   try {

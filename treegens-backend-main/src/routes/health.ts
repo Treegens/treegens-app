@@ -5,6 +5,7 @@ import { sendError } from '../utils/responseHelpers'
 import env from '../config/environment'
 import { checkStitchReadiness } from '../services/verifiedVideoStitchService'
 import { TREE_BATCH_SIZE, batchEnforcementEnabled } from '../utils/treeBatch'
+import { telegramConfigured } from '../services/otcNotifications'
 
 const router = express.Router()
 const healthService = new HealthService()
@@ -192,6 +193,31 @@ router.get('/pipeline', async (_req: Request, res: Response) => {
       enforced: batchEnforcementEnabled(),
     },
     retrier: process.env.ENABLE_STITCH_RETRIER !== 'false',
+    timestamp: new Date().toISOString(),
+  })
+})
+
+/**
+ * @swagger
+ * /health/otc:
+ *   get:
+ *     summary: OTC (M-Pesa) desk configuration
+ *     description: >
+ *       Whether the desk is enabled (at least one buyer wallet), whether
+ *       Telegram alerts are wired, and the public app origin used in invite
+ *       links. Wallet addresses are not listed.
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: OTC readiness
+ */
+router.get('/otc', (_req: Request, res: Response) => {
+  res.json({
+    enabled: env.OTC_BUYER_WALLETS.length > 0,
+    buyers: env.OTC_BUYER_WALLETS.length,
+    telegram: telegramConfigured(),
+    publicAppUrl: env.OTC_PUBLIC_APP_URL,
+    defaultRateKes: env.OTC_DEFAULT_RATE_KES || null,
     timestamp: new Date().toISOString(),
   })
 })

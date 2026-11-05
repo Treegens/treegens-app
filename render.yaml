@@ -74,6 +74,17 @@ services:
         sync: false
       - key: DISTRIBUTOR_API_KEY
         sync: false
+      # OTC desk (pay planters by M-Pesa, buyer keeps the MGRO). Buyer wallets
+      # and Telegram credentials are set in the dashboard; the public app URL
+      # is this repo's Netlify deploy, never treegens.app.
+      - key: OTC_BUYER_WALLETS
+        sync: false
+      - key: OTC_PUBLIC_APP_URL
+        value: https://treegens-app-web.netlify.app
+      - key: OTC_TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OTC_TELEGRAM_CHAT_ID
+        sync: false
 
   # ------------------------------------------------- reward claim worker ----
   - type: worker

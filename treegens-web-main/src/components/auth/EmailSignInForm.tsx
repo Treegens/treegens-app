@@ -10,6 +10,7 @@ import toast from 'react-hot-toast'
 import { useConnect } from 'thirdweb/react'
 import type { Account, Wallet } from 'thirdweb/wallets'
 import { preAuthenticate } from 'thirdweb/wallets/in-app'
+import { peekPostAuthRedirect } from '@/utils/postAuthRedirect'
 
 type Step = 'email' | 'code'
 
@@ -86,7 +87,7 @@ export function EmailSignInForm() {
         wallet: connectedWallet ?? null,
       })
       if (ok) {
-        router.replace('/')
+        router.replace(peekPostAuthRedirect() ?? '/')
       } else {
         toast.error('Wallet connected but sign-in failed. Try again.')
       }

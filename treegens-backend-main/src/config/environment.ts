@@ -726,6 +726,50 @@ class EnvironmentConfig {
     )
   }
 
+  // --- OTC (M-Pesa) desk -------------------------------------------------
+
+  /**
+   * Wallets allowed to run the OTC desk: create invite links, see planters'
+   * M-Pesa numbers, upload payment proof, cancel deals. Comma-separated,
+   * compared lowercase. Empty disables every buyer endpoint (403).
+   */
+  get OTC_BUYER_WALLETS(): string[] {
+    return String(process.env.OTC_BUYER_WALLETS || '')
+      .split(',')
+      .map(w => w.trim().toLowerCase())
+      .filter(w => /^0x[0-9a-f]{40}$/.test(w))
+  }
+
+  /**
+   * Public origin of the web app that serves /otc/join/<code> and
+   * /otc/deals/<id>. Used for invite links and Telegram messages. Defaults to
+   * this repo's Netlify deploy. It must never default to treegens.app: that
+   * domain is served by another site (see repo CLAUDE.md).
+   */
+  get OTC_PUBLIC_APP_URL() {
+    const raw =
+      process.env.OTC_PUBLIC_APP_URL || 'https://treegens-app-web.netlify.app'
+    return String(raw).trim().replace(/\/+$/, '')
+  }
+
+  /** Optional Telegram bot for buyer alerts; falls back to TELEGRAM_BOT_TOKEN. */
+  get OTC_TELEGRAM_BOT_TOKEN() {
+    return String(
+      process.env.OTC_TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '',
+    ).trim()
+  }
+
+  /** Telegram chat (user or group) that receives buyer alerts. */
+  get OTC_TELEGRAM_CHAT_ID() {
+    return String(process.env.OTC_TELEGRAM_CHAT_ID || '').trim()
+  }
+
+  /** Form default for new invite links (KES per tree). 0 = no default. */
+  get OTC_DEFAULT_RATE_KES() {
+    const n = parseFloat(process.env.OTC_DEFAULT_RATE_KES || '0')
+    return Number.isFinite(n) && n > 0 ? n : 0
+  }
+
   /**
    * When true, POST /api/users/me/delegate requires min on-chain staked TGN (same bar as verifiers).
    * Default false so off-chain delegation works without RPC/vault reads (common in dev / wallets without stake).

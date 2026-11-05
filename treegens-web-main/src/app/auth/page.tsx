@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { useActiveAccount, useConnectModal } from 'thirdweb/react'
 import toast from 'react-hot-toast'
+import { peekPostAuthRedirect } from '@/utils/postAuthRedirect'
 
 /** Forest canopy fallback when no env URL and `/public/img/treegens-bg.png` is missing. */
 const DEFAULT_AUTH_BG_REMOTE =
@@ -17,9 +18,7 @@ const DEFAULT_AUTH_BG_REMOTE =
 
 function AuthBackdrop() {
   const envSrc = process.env.NEXT_PUBLIC_AUTH_BG_URL?.trim()
-  const [src, setSrc] = useState(
-    () => envSrc || '/img/treegens-bg.png',
-  )
+  const [src, setSrc] = useState(() => envSrc || '/img/treegens-bg.png')
 
   return (
     <div className="absolute inset-0 -z-10">
@@ -93,7 +92,7 @@ export default function AuthPage() {
   useEffect(() => {
     if (authContextLoading) return
     if (isAuthenticated && token) {
-      router.replace(routes.Home)
+      router.replace(peekPostAuthRedirect() ?? routes.Home)
     }
   }, [authContextLoading, isAuthenticated, token, router])
 
@@ -114,7 +113,7 @@ export default function AuthPage() {
       try {
         const ok = await authenticate(true)
         if (ok) {
-          router.replace(routes.Home)
+          router.replace(peekPostAuthRedirect() ?? routes.Home)
         }
       } finally {
         setIsAuthenticating(false)
@@ -145,7 +144,7 @@ export default function AuthPage() {
       try {
         const ok = await authenticate(true)
         if (ok) {
-          router.replace(routes.Home)
+          router.replace(peekPostAuthRedirect() ?? routes.Home)
         } else {
           toast.error('Sign in failed. Please try again.')
         }
@@ -178,12 +177,7 @@ export default function AuthPage() {
     }, 2000)
 
     return () => window.clearTimeout(timer)
-  }, [
-    pendingSignIn,
-    isAuthenticating,
-    account?.address,
-    isWalletConnecting,
-  ])
+  }, [pendingSignIn, isAuthenticating, account?.address, isWalletConnecting])
 
   const handleSignInPress = () => {
     if (pendingSignIn || isAuthenticating || isWalletConnecting) return

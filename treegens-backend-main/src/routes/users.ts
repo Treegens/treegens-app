@@ -10,6 +10,7 @@ import {
   validateUpdateProfile,
 } from '../middleware/validation'
 import env from '../config/environment'
+import { isOtcBuyer } from '../middleware/otcAuth'
 import UserService from '../services/userService'
 import VerifierService from '../services/verifierService'
 import {
@@ -81,7 +82,15 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
       return sendNotFound(res, 'User')
     }
 
-    return sendSuccess(res, 'User retrieved successfully', user)
+    // Computed, never persisted: who may run the OTC (M-Pesa) desk.
+    const plain =
+      typeof (user as any).toObject === 'function'
+        ? (user as any).toObject()
+        : user
+    return sendSuccess(res, 'User retrieved successfully', {
+      ...plain,
+      isOtcBuyer: isOtcBuyer(walletAddress),
+    })
   } catch (error: any) {
     console.error('Error in get current user endpoint:', error)
     return sendError(res, 'Failed to retrieve user')

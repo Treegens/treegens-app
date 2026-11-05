@@ -38,7 +38,8 @@ const errorHandler = (
   ) {
     return res.status(413).json({
       error: 'File too large',
-      details: 'Video file size must be less than 100MB',
+      details:
+        'File too large for this upload (videos up to 100MB, images up to 10MB)',
     })
   }
 
@@ -53,6 +54,13 @@ const errorHandler = (
     return res.status(400).json({
       error: 'Invalid file type',
       details: 'Only video files are allowed',
+    })
+  }
+
+  if ((err as any).message === 'Only image files are allowed') {
+    return res.status(400).json({
+      error: 'Invalid file type',
+      details: 'Only image files are allowed',
     })
   }
 

@@ -39,6 +39,21 @@ const trancheSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const otcSchema = new mongoose.Schema(
+  {
+    dealId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'OtcDeal',
+      required: true,
+    },
+    hold: { type: Boolean, required: true, default: true },
+    originalPlanterWallet: { type: String, required: true, lowercase: true },
+    releasedToBuyerAt: { type: Date, required: false },
+    returnedToPlanterAt: { type: Date, required: false },
+  },
+  { _id: false },
+)
+
 const rewardAllocationSchema = new mongoose.Schema(
   {
     submissionId: {
@@ -71,6 +86,17 @@ const rewardAllocationSchema = new mongoose.Schema(
     tranches: {
       type: [trancheSchema],
       default: [],
+    },
+    /**
+     * OTC (M-Pesa) desk. While `hold` is true the planter share must not be
+     * minted or claimed: the planter is being paid in KES instead and the
+     * MGRO belongs to the buyer once they confirm. On confirmation
+     * `planterWallet` is reassigned to the buyer and `hold` cleared; the
+     * original planter is kept here for the audit trail.
+     */
+    otc: {
+      type: otcSchema,
+      required: false,
     },
   },
   { timestamps: true },

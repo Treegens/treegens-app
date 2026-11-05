@@ -37,6 +37,10 @@ export type RewardStatusProjection = {
   healthCheckRequiredForNextClaim?: boolean
   nextPlanterAction?: 'claim' | 'health_check' | 'wait'
   pendingHealthCheckpointIndex?: number | null
+  /** OTC: planter MGRO is held until the planter confirms the M-Pesa payment. */
+  otcHold?: boolean
+  /** OTC deal bound to this allocation (set whether or not it is still held). */
+  otcDealId?: string
 }
 
 export type RewardStatusResponse = {
