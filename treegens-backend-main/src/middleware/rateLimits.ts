@@ -86,3 +86,22 @@ export const pushSubscribeLimiter = userLimiter(30)
 
 /** POST /api/submissions/:id/conversation/messages */
 export const conversationMessageLimiter = userLimiter(60)
+
+/**
+ * GWR record clips (treegens.app/gwr) — no login, so these can only key by IP.
+ * Everyone at the record site shares the event wifi / carrier NAT, hence the
+ * generous ceilings; RATE_LIMIT_MULTIPLIER scales them like everything else.
+ */
+/** POST /api/gwr/videos — one clip per request. */
+export const gwrUploadLimiter = rateLimit({
+  ...defaults,
+  windowMs: 15 * 60 * 1000,
+  max: scaled(300),
+})
+
+/** GET /api/gwr/* — gallery listing, manifest, config. */
+export const gwrReadLimiter = rateLimit({
+  ...defaults,
+  windowMs: 60 * 1000,
+  max: scaled(240),
+})

@@ -1,15 +1,14 @@
 'use client'
 import { usePathname, useRouter } from 'next/navigation'
 import React, { useEffect } from 'react'
-import { routes } from '@/config/appConfig'
+import { isPublicPath, routes } from '@/config/appConfig'
 import { useAuth } from '@/contexts/AuthProvider'
 
 export const AuthGuard = ({ children }: { children: React.ReactNode }) => {
   const { replace } = useRouter()
   const pathname = usePathname()
   const isLoginPage = pathname === routes.Login
-  const isStakePage = pathname === routes.Stake
-  const isPublicPage = isLoginPage || isStakePage
+  const isPublicPage = isPublicPath(pathname)
   const { isLoading: authLoading, isAuthenticated } = useAuth()
 
   useEffect(() => {

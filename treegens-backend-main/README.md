@@ -226,6 +226,30 @@ GET /health/s3-test
 GET /
 ```
 
+## 🏆 GWR record clips (`/api/gwr`)
+
+A separate, public collection for the Guinness World Record attempt: everyone on
+site films the planted trees and hands the clip in at **treegens.app/gwr**; all
+clips are downloadable at **treegens.app/gwr-vids**. No login, no before clip, no
+verifiers, no MGRO — these never touch `submissions` or rewards.
+
+| Method | Path                              | Notes                                                                   |
+| ------ | --------------------------------- | ----------------------------------------------------------------------- |
+| GET    | `/api/gwr/config`                 | `{ uploadCodeRequired, adminEnabled, maxFileSizeMB, maxDurationSeconds }` |
+| POST   | `/api/gwr/videos`                 | multipart `video` + optional `latitude`, `longitude`, `accuracyMeters`, `reverseGeocode`, `uploaderName`, `note`, `recordedAt`, `uploadCode` |
+| GET    | `/api/gwr/videos?page=&limit=`    | Newest first; `limit` max 200                                           |
+| GET    | `/api/gwr/videos/manifest.csv`    | One row per clip: filename, time, uploader, GPS, size, URL              |
+| GET    | `/api/gwr/videos/urls.txt`        | One download URL per line — `wget -i treegens-gwr-urls.txt`             |
+| DELETE | `/api/gwr/videos/:id`             | Header `x-gwr-admin-key: $GWR_ADMIN_KEY`; removes bucket object + record |
+
+Clips are stored in the GCS bucket under `gwr/` with
+`Content-Disposition: attachment; filename="treegens-gwr-<utc stamp>-<name>-<id>.<ext>"`,
+so the public URL downloads under a readable, chronologically sortable name
+while still playing inline in the gallery.
+
+Env (both optional): `GWR_UPLOAD_CODE` gates uploads behind a shared code;
+`GWR_ADMIN_KEY` enables deletion. See `.env.example`.
+
 ## 🏗 Project Structure
 
 ```

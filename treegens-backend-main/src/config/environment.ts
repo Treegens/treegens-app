@@ -41,6 +41,21 @@ class EnvironmentConfig {
     return process.env.GCS_SERVICE_ACCOUNT_JSON || ''
   }
 
+  /**
+   * GWR record clip collection (treegens.app/gwr). Both optional.
+   * GWR_UPLOAD_CODE: when set, uploaders must type this code — a cheap gate
+   *   against drive-by uploads to a page that needs no login.
+   * GWR_ADMIN_KEY: when set, enables DELETE /api/gwr/videos/:id with the key
+   *   in `x-gwr-admin-key`, so junk clips can be pulled from the gallery.
+   */
+  get GWR_UPLOAD_CODE() {
+    return (process.env.GWR_UPLOAD_CODE || '').trim()
+  }
+
+  get GWR_ADMIN_KEY() {
+    return (process.env.GWR_ADMIN_KEY || '').trim()
+  }
+
   get isDevelopment() {
     return this.NODE_ENV === 'development'
   }

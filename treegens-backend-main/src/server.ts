@@ -9,10 +9,12 @@ import errorHandler from './middleware/errorHandler'
 import { globalApiLimiter } from './middleware/rateLimits'
 import authRoutes from './routes/auth'
 import conversationsRoutes from './routes/conversations'
+import distributionsRoutes from './routes/distributions'
+import gwrRoutes from './routes/gwr'
 import healthRoutes from './routes/health'
 import notificationsRoutes from './routes/notifications'
 import pushRoutes from './routes/push'
-import distributionsRoutes from './routes/distributions'
+import gwrRoutes from './routes/gwr'
 import rewardsRoutes from './routes/rewards'
 import submissionsRoutes from './routes/submissions'
 import userRoutes from './routes/users'
@@ -57,6 +59,8 @@ app.use('/api/notifications', notificationsRoutes)
 app.use('/api/push', pushRoutes)
 app.use('/api/conversations', conversationsRoutes)
 app.use('/api/auth', authRoutes)
+// GWR record after-clips: public upload + gallery (treegens.app/gwr, /gwr-vids).
+app.use('/api/gwr', gwrRoutes)
 app.use('/health', healthRoutes)
 
 /**

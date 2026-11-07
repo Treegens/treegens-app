@@ -96,6 +96,60 @@ async function uploadToStorage(
   }
 }
 
+/**
+ * GWR record clips live under their own prefix and are stored with
+ * `Content-Disposition: attachment`, so the public URL downloads the file under
+ * a readable name instead of playing it in a tab. Media elements ignore that
+ * header, so the same URL still plays inline in the gallery.
+ */
+async function uploadGwrClipToStorage(
+  fileBuffer: Buffer,
+  objectName: string,
+  mimeType: string,
+  downloadFilename: string,
+): Promise<StorageUploadResult> {
+  const { storage, bucketName } = getStorage()
+  const fileRef = storage.bucket(bucketName).file(objectName)
+  const safeName = downloadFilename.replace(/["\\\r\n]/g, '')
+
+  try {
+    await fileRef.save(fileBuffer, {
+      contentType: mimeType,
+      resumable: false,
+      metadata: {
+        cacheControl: 'public, max-age=31536000, immutable',
+        contentDisposition: `attachment; filename="${safeName}"`,
+        metadata: { 'uploaded-by': 'treegens-backend', collection: 'gwr' },
+      },
+    })
+  } catch (error) {
+    const e = error as { message?: string; code?: number }
+    console.error('GCS GWR upload error details:', {
+      message: e.message,
+      code: e.code,
+      bucket: bucketName,
+      object: objectName,
+    })
+    throw new Error(e.message || 'Failed to upload to Google Cloud Storage')
+  }
+
+  return {
+    videoCID: objectName,
+    publicUrl: buildPublicUrl(bucketName, objectName),
+  }
+}
+
+/** Best-effort delete; a missing object is not an error. */
+async function deleteFromStorage(objectName: string): Promise<void> {
+  const { storage, bucketName } = getStorage()
+  try {
+    await storage.bucket(bucketName).file(objectName).delete({ ignoreNotFound: true })
+  } catch (error) {
+    const e = error as { message?: string }
+    throw new Error(e.message || 'Failed to delete from Google Cloud Storage')
+  }
+}
+
 async function testStorageConnection() {
   const bucketName = env.GCS_BUCKET?.trim()
   if (!bucketName) {
@@ -112,4 +166,10 @@ async function testStorageConnection() {
   }
 }
 
-export { buildPublicUrl, testStorageConnection, uploadToStorage }
+export {
+  buildPublicUrl,
+  deleteFromStorage,
+  testStorageConnection,
+  uploadGwrClipToStorage,
+  uploadToStorage,
+}

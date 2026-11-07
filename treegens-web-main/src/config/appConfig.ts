@@ -29,6 +29,27 @@ export const routes = {
   RejectionFeedback: '/submissions/[id]/rejection-feedback',
   /** Dynamic — public planter stats + burns */
   PublicProfile: '/u/[walletAddress]',
+  /** GWR record attempt: public after-clip upload, no login / before / verifiers / MGRO. */
+  Gwr: '/gwr',
+  /** GWR record attempt: every uploaded clip, downloadable. Public. */
+  GwrVids: '/gwr-vids',
+}
+
+/** Pages that render without a signed-in wallet. */
+export const publicPaths: readonly string[] = [
+  routes.Login,
+  routes.Stake,
+  routes.Gwr,
+  routes.GwrVids,
+]
+
+export function isPublicPath(pathname: string | null): boolean {
+  return !!pathname && publicPaths.includes(pathname)
+}
+
+/** The GWR pages are a standalone flow: no app chrome, no bottom dock. */
+export function isGwrPath(pathname: string | null): boolean {
+  return pathname === routes.Gwr || pathname === routes.GwrVids
 }
 
 export function buildPublicProfilePath(walletAddress: string) {
@@ -68,6 +89,7 @@ export const tabShellPaths: string[] = [...bottomNavVisiblePaths]
 /** Bottom dock visible on every authenticated area except the login screen. */
 export function shouldShowBottomNav(pathname: string | null): boolean {
   if (!pathname) return false
+  if (isGwrPath(pathname)) return false
   return pathname !== routes.Login
 }
 
@@ -88,6 +110,8 @@ const dynamicTitleRoutesMap: Record<string, string> = {
   '/health-checks/[healthCheckId]': 'Health check',
   '/submissions/review/health-checks/[healthCheckId]': 'Review health check',
   [routes.PublicProfile]: 'Profile',
+  [routes.Gwr]: 'GWR after video',
+  [routes.GwrVids]: 'GWR videos',
 }
 
 const dynamicTitleRoutes = Object.keys(dynamicTitleRoutesMap)
