@@ -177,6 +177,22 @@ Nothing is required for the desk itself. Optional:
 
 The same keys go in `treegens-backend-main/.env` for local runs; `.env.example` documents them.
 
+### Deploying the web app (Netlify site treegens-app-web)
+
+The site is not linked to the repository; it is deployed from a laptop. From a machine
+that is logged in to Netlify (`netlify login` once):
+
+```bash
+cd treegens-web-main
+netlify link --id 03de1bac-b485-4c37-9229-6480e5e5ca59   # once per checkout
+NEXT_PUBLIC_API_URL=https://treegens-api.onrender.com \
+NEXT_PUBLIC_THIRDWEB_CLIENT_ID=4854d732c59a7444a276c61ff0f8be70 \
+netlify deploy --prod --build
+```
+
+Both values are public and are the ones the live site was built with. Never attach
+`treegens.app` or the other production domains to this site (repo CLAUDE.md).
+
 ## 5. Telegram bot setup
 
 Buyer alerts (new planter, deal ready to pay, confirmed, disputed, unfundable, system
