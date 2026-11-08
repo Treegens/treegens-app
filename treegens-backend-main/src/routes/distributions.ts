@@ -1,8 +1,10 @@
 import crypto from 'crypto'
 import express, { NextFunction, Request, Response } from 'express'
 import mongoose from 'mongoose'
+import RewardAllocation from '../models/RewardAllocation'
 import Submission from '../models/Submission'
 import TgnDistribution from '../models/TgnDistribution'
+import OtcPurchaseService from '../services/otcPurchaseService'
 import { sendError, sendSuccess } from '../utils/responseHelpers'
 
 /**
@@ -25,8 +27,22 @@ import { sendError, sendSuccess } from '../utils/responseHelpers'
  *          the same payment returns 200 so a retry can safely resume.
  *   POST /api/distributions/:submissionId/mark
  *        → fills in the completed payout (tx hashes / amounts).
+ *
+ *   OTC desk (pre-paid $MGRO, fulfilled by future approved plantings):
+ *   POST /api/distributions/otc
+ *        → record a paid OTC purchase { buyerWallet, trees, paymentRef,
+ *          grossUsd?, planterWallet?, note? }. Idempotent on paymentRef.
+ *          From then on each approved planting routes the planter MGRO of up
+ *          to `trees` trees to the buyer (minted automatically); the planter
+ *          never gets a claim on that slice.
+ *   GET  /api/distributions/otc[?buyerWallet=&status=&limit=]
+ *   GET  /api/distributions/otc/:purchaseId
+ *        → purchase + the per-planting payouts (mint status / tx) it funded.
+ *   POST /api/distributions/otc/:purchaseId/cancel
+ *        → stop funding further plantings (already matched trees stay).
  */
 const router = express.Router()
+const otcPurchaseService = new OtcPurchaseService()
 
 function requireDistributorKey(req: Request, res: Response, next: NextFunction) {
   const configured = process.env.DISTRIBUTOR_API_KEY
@@ -144,6 +160,95 @@ router.get('/submission/:submissionId', requireDistributorKey, async (req: Reque
   } catch (error: any) {
     console.error('Submission metadata error:', error)
     return sendError(res, 'Failed to load submission')
+  }
+})
+
+// ------------------------------------------------------------- OTC desk ----
+// Declared before the `/:submissionId` routes so "otc" is never parsed as an id.
+
+router.post('/otc', requireDistributorKey, async (req: Request, res: Response) => {
+  try {
+    const { buyerWallet, trees, paymentRef, grossUsd, planterWallet, note } =
+      req.body || {}
+    const { purchase, created } = await otcPurchaseService.createPurchase({
+      buyerWallet: String(buyerWallet || ''),
+      paymentRef: String(paymentRef || ''),
+      trees: Number(trees),
+      grossUsd: Number(grossUsd) || 0,
+      planterWallet: planterWallet ? String(planterWallet) : null,
+      note: note ? String(note) : '',
+    })
+    return sendSuccess(
+      res,
+      created ? 'OTC purchase recorded' : 'OTC purchase already recorded',
+      { purchase, created },
+      created ? 201 : 200,
+    )
+  } catch (error: any) {
+    const msg = String(error?.message || '')
+    if (/must be|required|positive integer/.test(msg)) return sendError(res, msg, 400)
+    console.error('OTC purchase create error:', error)
+    return sendError(res, 'Failed to record OTC purchase')
+  }
+})
+
+router.get('/otc', requireDistributorKey, async (req: Request, res: Response) => {
+  try {
+    const purchases = await otcPurchaseService.listPurchases({
+      buyerWallet: req.query.buyerWallet ? String(req.query.buyerWallet) : undefined,
+      status: req.query.status ? String(req.query.status) : undefined,
+      limit: Number(req.query.limit) || 50,
+    })
+    return sendSuccess(res, 'OTC purchases', { purchases })
+  } catch (error: any) {
+    console.error('OTC purchase list error:', error)
+    return sendError(res, 'Failed to list OTC purchases')
+  }
+})
+
+router.get('/otc/:purchaseId', requireDistributorKey, async (req: Request, res: Response) => {
+  try {
+    const { purchaseId } = req.params
+    if (!validObjectId(purchaseId)) return sendError(res, 'Invalid purchase id', 400)
+    const purchase = await otcPurchaseService.getPurchase(purchaseId)
+    if (!purchase) return sendError(res, 'Not found', 404)
+    const allocations = await RewardAllocation.find(
+      { 'otcPayouts.purchaseId': purchase._id },
+      { submissionId: 1, approvedAt: 1, treesPlanted: 1, otcPayouts: 1 },
+    ).lean()
+    const payouts = allocations.flatMap((a: any) =>
+      (a.otcPayouts || [])
+        .filter((p: any) => String(p.purchaseId) === String(purchase._id))
+        .map((p: any) => ({
+          submissionId: String(a.submissionId),
+          approvedAt: a.approvedAt,
+          treesPlanted: a.treesPlanted,
+          trees: p.trees,
+          amountWei: p.amountWei,
+          status: p.status,
+          txHash: p.txHash || null,
+          proposalId: p.proposalId ?? null,
+          lastError: p.lastError || null,
+          updatedAt: p.updatedAt,
+        })),
+    )
+    return sendSuccess(res, 'OTC purchase', { purchase, payouts })
+  } catch (error: any) {
+    console.error('OTC purchase lookup error:', error)
+    return sendError(res, 'Failed to look up OTC purchase')
+  }
+})
+
+router.post('/otc/:purchaseId/cancel', requireDistributorKey, async (req: Request, res: Response) => {
+  try {
+    const { purchaseId } = req.params
+    if (!validObjectId(purchaseId)) return sendError(res, 'Invalid purchase id', 400)
+    const purchase = await otcPurchaseService.cancelPurchase(purchaseId)
+    if (!purchase) return sendError(res, 'No open purchase with this id', 404)
+    return sendSuccess(res, 'OTC purchase cancelled', { purchase })
+  } catch (error: any) {
+    console.error('OTC purchase cancel error:', error)
+    return sendError(res, 'Failed to cancel OTC purchase')
   }
 })
 

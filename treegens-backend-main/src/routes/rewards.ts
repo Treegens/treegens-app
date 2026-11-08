@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express'
 import mongoose from 'mongoose'
 import { authenticate } from '../middleware/auth'
 import { rewardClaimLimiter } from '../middleware/rateLimits'
+import OtcPurchase from '../models/OtcPurchase'
 import RewardAllocation from '../models/RewardAllocation'
 import Submission from '../models/Submission'
 import RewardClaimQueueService from '../services/rewardClaimQueueService'
@@ -30,7 +31,10 @@ const rewardClaimQueueService = new RewardClaimQueueService()
  *     summary: Get reward status projection for authenticated wallet
  *     description: |
  *       Returns frontend-ready reward state for the caller and submission.
- *       For planters this includes pending claim amount, next claim amount and countdown.
+ *       For planters this includes pending claim amount, next claim amount and countdown,
+ *       plus **otc** (trees / MGRO of this planting pre-sold to OTC buyers — that slice is
+ *       never claimable by the planter). An OTC buyer gets `role: otc_buyer`; any wallet with
+ *       an OTC payout also gets an **otcBuyer** slice.
  *       Response `data` includes **activeClaimJob** (boolean): `true` if at least one
  *       RewardClaimJob exists for this wallet and submission with `status` not `completed`
  *       (`queued`, `processing`, or `failed`); `false` when none or all completed. Poll after POST /claim.
@@ -113,8 +117,10 @@ router.get(
  *   post:
  *     summary: Claim MGRO rewards for an approved submission
  *     description: |
- *       Mints verifier MGRO for yes-voters (manual only; sparse ledger) and/or due planter tranches.
- *       Planter and verifier paths both run when the wallet qualifies for both.
+ *       Mints verifier MGRO for yes-voters (manual only; sparse ledger) and/or due planter tranches,
+ *       and/or the OTC buyer payout the wallet pre-paid for (normally minted automatically at
+ *       approval; this is the retry path, e.g. once verifiers approved the mint proposal).
+ *       All paths the wallet qualifies for run in one job.
  *     tags: [Rewards]
  *     security:
  *       - bearerAuth: []
@@ -175,12 +181,12 @@ router.post(
       if (!submissionPre || submissionPre.status !== 'approved') {
         return sendError(res, 'Submission not found or not approved', 400)
       }
-      const { planter, verifier } = rewardService.getClaimEligibility(
+      const { planter, verifier, otc } = rewardService.getClaimEligibility(
         submissionPre,
         allocationPre,
         w,
       )
-      if (!planter && !verifier) {
+      if (!planter && !verifier && !otc) {
         return sendError(
           res,
           'This wallet has no reward allocation for this submission',
@@ -197,16 +203,21 @@ router.post(
         status.role === 'verifier'
           ? status.canClaim
           : Boolean(status.verifier?.canClaim)
-      if (!planterCanClaim && !verifierCanClaim) {
+      const otcCanClaim = Boolean(status.otcBuyer?.canClaim)
+      if (!planterCanClaim && !verifierCanClaim && !otcCanClaim) {
         return sendError(res, 'No claimable rewards at this time', 409)
       }
 
+      // claimType only shapes the idempotency key; the job itself runs every
+      // path the wallet is eligible for.
       const claimType =
         planterCanClaim && verifierCanClaim
           ? 'both'
           : planterCanClaim
             ? 'planter'
-            : 'verifier'
+            : verifierCanClaim
+              ? 'verifier'
+              : 'otc'
       const { job, created } =
         await rewardClaimQueueService.enqueueOrReuseClaimJob({
           submissionId,
@@ -235,5 +246,85 @@ router.post(
     }
   },
 )
+
+/**
+ * @swagger
+ * /api/rewards/otc/mine:
+ *   get:
+ *     summary: OTC purchases and automatic MGRO payouts for the authenticated wallet
+ *     description: |
+ *       Lists the caller's OTC pre-purchases (trees bought / already matched to approved
+ *       plantings) and every per-planting payout routed to them, with mint status and tx hash.
+ *       Payouts are minted automatically when the planting is approved; a `failed` payout with
+ *       a `proposalId` is waiting for verifier approval and is retried automatically.
+ *     tags: [Rewards]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Object with purchases (array) and payouts (array)
+ *       401:
+ *         description: Unauthorized
+ */
+router.get('/otc/mine', authenticate, async (req: Request, res: Response) => {
+  try {
+    const wallet = req.user?.walletAddress
+    if (!wallet) {
+      return sendError(res, 'Wallet address missing from token', 403)
+    }
+    const w = wallet.toLowerCase()
+    const [purchases, allocations] = await Promise.all([
+      OtcPurchase.find({ buyerWallet: w })
+        .sort({ createdAt: -1 })
+        .select(
+          'paymentRef treesPurchased treesAllocated grossUsd planterWallet status createdAt allocations',
+        )
+        .lean(),
+      RewardAllocation.find({ 'otcPayouts.buyerWallet': w })
+        .sort({ approvedAt: -1 })
+        .select('submissionId approvedAt treesPlanted otcPayouts')
+        .lean(),
+    ])
+    const payouts = allocations.flatMap((a: any) =>
+      (a.otcPayouts || [])
+        .filter((p: any) => p.buyerWallet === w)
+        .map((p: any) => ({
+          submissionId: String(a.submissionId),
+          purchaseId: String(p.purchaseId),
+          approvedAt: a.approvedAt,
+          treesPlanted: a.treesPlanted,
+          trees: p.trees,
+          amountWei: p.amountWei,
+          status: p.status,
+          txHash: p.txHash || null,
+          proposalId: p.proposalId ?? null,
+          lastError: p.status === 'failed' ? p.lastError || null : null,
+          updatedAt: p.updatedAt,
+        })),
+    )
+    return sendSuccess(res, 'OTC purchases retrieved successfully', {
+      walletAddress: w,
+      purchases: purchases.map((p: any) => ({
+        purchaseId: String(p._id),
+        paymentRef: p.paymentRef,
+        treesPurchased: p.treesPurchased,
+        treesAllocated: p.treesAllocated,
+        treesRemaining: Math.max(0, p.treesPurchased - p.treesAllocated),
+        grossUsd: p.grossUsd,
+        planterWallet: p.planterWallet || null,
+        status: p.status,
+        createdAt: p.createdAt,
+        allocations: (p.allocations || []).map((x: any) => ({
+          submissionId: String(x.submissionId),
+          trees: x.trees,
+          createdAt: x.createdAt,
+        })),
+      })),
+      payouts,
+    })
+  } catch (e: any) {
+    return sendError(res, e?.message || e, 500)
+  }
+})
 
 export default router

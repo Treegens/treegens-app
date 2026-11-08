@@ -24,7 +24,7 @@ const rewardClaimJobSchema = new mongoose.Schema(
     },
     claimType: {
       type: String,
-      enum: ['planter', 'verifier', 'both'],
+      enum: ['planter', 'verifier', 'both', 'otc'],
       required: true,
     },
     status: {

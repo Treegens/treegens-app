@@ -4,6 +4,10 @@ import HealthCheck from '../models/HealthCheck'
 import RewardAllocation from '../models/RewardAllocation'
 import Submission from '../models/Submission'
 import User from '../models/User'
+import OtcPurchaseService, {
+  OtcCoverage,
+  splitPlanterPoolForOtc,
+} from './otcPurchaseService'
 import RewardClaimQueueService from './rewardClaimQueueService'
 import RewardMintService, {
   PendingVerifierApprovalError,
@@ -149,11 +153,41 @@ export type VerifierRewardSlice = {
   scheduleCompleted: boolean
 }
 
+/**
+ * MGRO an OTC buyer pre-paid for on this planting. Minted in full at approval
+ * (no survival vesting) — the buyer already paid, the planter was paid from the
+ * OTC proceeds and has no claim on this slice.
+ */
+export type OtcBuyerSlice = {
+  purchaseIds: string[]
+  trees: number
+  totalRewardWei: string
+  claimedAmountWei: string
+  pendingClaimAmountWei: string
+  canClaim: boolean
+  displayState: RewardDisplayState
+  scheduleCompleted: boolean
+  txHashes: string[]
+}
+
+/** Planter-facing summary of how much of their planting was pre-sold OTC. */
+export type OtcCoverageSummary = {
+  treesCovered: number
+  amountWei: string
+  payouts: Array<{
+    buyerWallet: string
+    trees: number
+    amountWei: string
+    status: string
+    txHash?: string
+  }>
+}
+
 export type RewardStatusProjection = {
   submissionId: string
   allocationId: string
   walletAddress: string
-  role: 'planter' | 'verifier'
+  role: 'planter' | 'verifier' | 'otc_buyer'
   totalRewardWei: string
   claimedAmountWei: string
   pendingClaimAmountWei: string
@@ -168,6 +202,10 @@ export type RewardStatusProjection = {
   intervalsMissed: number
   /** When the wallet is also a yes-voter, verifier MGRO state (planter primary role). */
   verifier?: VerifierRewardSlice
+  /** When the wallet pre-bought MGRO of this planting OTC (any primary role). */
+  otcBuyer?: OtcBuyerSlice
+  /** Planter role: trees/MGRO of this planting routed to OTC buyers instead of the planter. */
+  otc?: OtcCoverageSummary
   /** Set on GET /api/rewards/status/:submissionId — true if a claim job exists for this wallet and is not completed. */
   activeClaimJob?: boolean
   /** Planter: true when the next due tranche requires an approved health check before claiming. */
@@ -198,6 +236,18 @@ type RewardAllocationLike = {
   }>
   verifierClaims?: Array<{
     wallet: string
+    status: string
+    txHash?: string
+    lastError?: string
+    proposalId?: number
+  }>
+  otcTreesCovered?: number
+  otcTotalWei?: string
+  otcPayouts?: Array<{
+    purchaseId: any
+    buyerWallet: string
+    trees: number
+    amountWei: string
     status: string
     txHash?: string
     lastError?: string
@@ -327,6 +377,74 @@ function buildVerifierSlice(
   }
 }
 
+function otcPayoutsForWallet(allocation: RewardAllocationLike, wallet: string) {
+  const w = normalizeWallet(wallet)
+  return (allocation.otcPayouts || []).filter(p => p.buyerWallet === w)
+}
+
+export function hasOtcPayoutForWallet(
+  allocation: RewardAllocationLike,
+  wallet: string,
+): boolean {
+  return otcPayoutsForWallet(allocation, wallet).length > 0
+}
+
+function buildOtcBuyerSlice(
+  allocation: RewardAllocationLike,
+  wallet: string,
+): OtcBuyerSlice | null {
+  const rows = otcPayoutsForWallet(allocation, wallet)
+  if (rows.length === 0) return null
+  const total = sumBigints(rows.map(r => r.amountWei))
+  const claimed = sumBigints(
+    rows.filter(r => r.status === 'paid').map(r => r.amountWei),
+  )
+  const pending = total - claimed
+  const inFlight = rows.some(r => r.status === 'processing')
+  const allPaid = rows.every(r => r.status === 'paid')
+  const canClaim = pending > 0n && !inFlight
+  let displayState: RewardDisplayState = 'NONE'
+  if (allPaid) displayState = 'COMPLETED'
+  else if (pending > 0n) displayState = 'PENDING_CLAIM'
+  return {
+    purchaseIds: rows.map(r => String(r.purchaseId)),
+    trees: rows.reduce((n, r) => n + Number(r.trees || 0), 0),
+    totalRewardWei: total.toString(),
+    claimedAmountWei: claimed.toString(),
+    pendingClaimAmountWei: pending.toString(),
+    canClaim,
+    displayState,
+    scheduleCompleted: allPaid,
+    txHashes: rows.map(r => r.txHash || '').filter(Boolean),
+  }
+}
+
+function buildOtcCoverageSummary(
+  allocation: RewardAllocationLike,
+): OtcCoverageSummary | undefined {
+  const rows = allocation.otcPayouts || []
+  if (rows.length === 0) return undefined
+  return {
+    treesCovered: Number(allocation.otcTreesCovered || 0),
+    amountWei: String(allocation.otcTotalWei || '0'),
+    payouts: rows.map(r => ({
+      buyerWallet: r.buyerWallet,
+      trees: Number(r.trees || 0),
+      amountWei: String(r.amountWei || '0'),
+      status: r.status,
+      txHash: r.txHash,
+    })),
+  }
+}
+
+/** True when every tree was pre-sold OTC: the planter has no MGRO schedule at all. */
+function isFullyOtcFunded(allocation: RewardAllocationLike): boolean {
+  return (
+    (allocation.otcPayouts || []).length > 0 &&
+    BigInt(String(allocation.planterTotalWei || '0')) === 0n
+  )
+}
+
 export function calculateRewardStatusProjection(
   allocation: RewardAllocationLike,
   walletAddress: string,
@@ -337,6 +455,9 @@ export function calculateRewardStatusProjection(
   const w = normalizeWallet(walletAddress)
   const verifierPoolActive = hasVerifierPool(allocation)
   const sortedYes = submission ? getSortedYesWallets(submission) : []
+  const otcBuyerSlice = buildOtcBuyerSlice(allocation, w) || undefined
+  const otcSummary = buildOtcCoverageSummary(allocation)
+  const fullyOtcFunded = isFullyOtcFunded(allocation)
 
   const planterProjection = (): RewardStatusProjection => {
     if (healthChecks === undefined) {
@@ -385,8 +506,11 @@ export function calculateRewardStatusProjection(
     let dueUnpaidCount = 0
 
     const firstIncomplete = tranches.find(t => t.status !== 'paid')
+    // Fully pre-sold OTC → nothing is ever owed to the planter on-chain, so
+    // the (empty) schedule counts as complete instead of looking stuck.
     const scheduleCompleted =
-      tranches.length > 0 && tranches.every(t => t.status === 'paid')
+      fullyOtcFunded ||
+      (tranches.length > 0 && tranches.every(t => t.status === 'paid'))
     const approvedAt = new Date(allocation.approvedAt)
     const latestDueCheckpoint = computeLatestDueCheckpointOneBased({
       approvedAt,
@@ -557,6 +681,8 @@ export function calculateRewardStatusProjection(
       approvedAt: new Date(allocation.approvedAt).toISOString(),
       intervalsMissed: dueUnpaidCount,
       verifier: verifierSlice,
+      otcBuyer: otcBuyerSlice,
+      otc: otcSummary,
       healthCheckRequiredForNextClaim,
       nextPlanterAction,
       pendingHealthCheckpointIndex,
@@ -598,7 +724,8 @@ export function calculateRewardStatusProjection(
         : null
 
     const scheduleCompleted =
-      tranches.length > 0 && tranches.every(t => t.status === 'paid')
+      fullyOtcFunded ||
+      (tranches.length > 0 && tranches.every(t => t.status === 'paid'))
     const isOverdue = pendingClaim > 0n
     const canClaim = pendingClaim > 0n
 
@@ -639,6 +766,8 @@ export function calculateRewardStatusProjection(
       approvedAt: new Date(allocation.approvedAt).toISOString(),
       intervalsMissed: dueUnpaid.length,
       verifier: verifierSlice,
+      otcBuyer: otcBuyerSlice,
+      otc: otcSummary,
     }
   }
 
@@ -646,14 +775,37 @@ export function calculateRewardStatusProjection(
     return planterProjection()
   }
 
-  if (!submission) {
-    throw new Error('Submission context required for verifier reward status')
-  }
-  if (!isYesVoterForSubmission(submission, w)) {
-    throw new Error('This wallet has no reward allocation for this submission')
-  }
-  const v = buildVerifierSlice(allocation, w, sortedYes, now)
+  const isVerifier = submission ? isYesVoterForSubmission(submission, w) : false
+  const v = isVerifier
+    ? buildVerifierSlice(allocation, w, sortedYes, now)
+    : null
+
   if (!v) {
+    // Not the planter, not a paid verifier — an OTC buyer of this planting?
+    if (otcBuyerSlice) {
+      return {
+        submissionId: String(allocation.submissionId),
+        allocationId: String(allocation._id),
+        walletAddress: w,
+        role: 'otc_buyer',
+        totalRewardWei: otcBuyerSlice.totalRewardWei,
+        claimedAmountWei: otcBuyerSlice.claimedAmountWei,
+        pendingClaimAmountWei: otcBuyerSlice.pendingClaimAmountWei,
+        nextClaimAmountWei: null,
+        nextClaimAt: null,
+        remainingMs: null,
+        isOverdue: otcBuyerSlice.pendingClaimAmountWei !== '0',
+        scheduleCompleted: otcBuyerSlice.scheduleCompleted,
+        canClaim: otcBuyerSlice.canClaim,
+        displayState: otcBuyerSlice.displayState,
+        approvedAt: new Date(allocation.approvedAt).toISOString(),
+        intervalsMissed: 0,
+        otcBuyer: otcBuyerSlice,
+      }
+    }
+    if (!submission) {
+      throw new Error('Submission context required for verifier reward status')
+    }
     throw new Error('This wallet has no reward allocation for this submission')
   }
   return {
@@ -673,12 +825,14 @@ export function calculateRewardStatusProjection(
     displayState: v.displayState,
     approvedAt: new Date(allocation.approvedAt).toISOString(),
     intervalsMissed: v.pendingClaimAmountWei !== '0' ? 1 : 0,
+    otcBuyer: otcBuyerSlice,
   }
 }
 
 export class RewardService {
   private mintService = new RewardMintService()
   private rewardClaimQueueService = new RewardClaimQueueService()
+  private otcPurchaseService = new OtcPurchaseService()
 
   private async addClaimedTokensForWallet(
     walletAddress: string,
@@ -714,11 +868,16 @@ export class RewardService {
       planterWallet: string
       yesVoterCount: number
       verifierPoolWei: string
+      otcPayouts?: RewardAllocationLike['otcPayouts']
     },
     walletAddress: string,
-  ): { planter: boolean; verifier: boolean } {
+  ): { planter: boolean; verifier: boolean; otc: boolean } {
     const w = normalizeWallet(walletAddress)
     const planter = allocation.planterWallet === w
+    const otc = hasOtcPayoutForWallet(
+      allocation as unknown as RewardAllocationLike,
+      w,
+    )
     let verifier = false
     if (
       submission.status === 'approved' &&
@@ -728,21 +887,29 @@ export class RewardService {
         Number(allocation.yesVoterCount) > 0 &&
         BigInt(allocation.verifierPoolWei || '0') > 0n
     }
-    return { planter, verifier }
+    return { planter, verifier, otc }
   }
 
   /**
    * Build allocation document fields from an approved submission. Returns null if no rewards apply.
+   *
+   * `otcCoverages` are the trees of this planting that OTC buyers pre-paid for
+   * (see OtcPurchaseService.reserveTreesForPlanting). Their share of the
+   * planter pool is routed to the buyers (minted in full at approval); only the
+   * uncovered remainder goes to the planter under the survival schedule.
    */
-  buildAllocationFields(submission: {
-    _id: mongoose.Types.ObjectId
-    userWalletAddress?: string | null
-    treesPlanted?: number | null
-    votes?: {
-      voterWalletAddress: string
-      vote: string
-    }[]
-  }): Record<string, unknown> | null {
+  buildAllocationFields(
+    submission: {
+      _id: mongoose.Types.ObjectId
+      userWalletAddress?: string | null
+      treesPlanted?: number | null
+      votes?: {
+        voterWalletAddress: string
+        vote: string
+      }[]
+    },
+    otcCoverages: OtcCoverage[] = [],
+  ): Record<string, unknown> | null {
     const trees = Math.floor(Number(submission.treesPlanted ?? 0))
     if (!trees || trees <= 0) {
       return null
@@ -767,19 +934,32 @@ export class RewardService {
 
     const totalMgroWei = computeTotalMgroWei(trees)
     const verifierPoolWei = (totalMgroWei * 5n) / 100n
-    const planterTotalWei = totalMgroWei - verifierPoolWei
+    const planterPoolWei = totalMgroWei - verifierPoolWei
     const n = uniqueYes.length
     const verifierRewardWei =
       n > 0 ? (verifierPoolWei / BigInt(n)).toString() : '0'
 
+    const otc = splitPlanterPoolForOtc({
+      planterPoolWei,
+      treesPlanted: trees,
+      coverages: otcCoverages,
+    })
+    const planterTotalWei = otc.planterWei
+
     const approvedAt = new Date()
     const { intervalSeconds, totalTranches } = getClaimScheduleConfig()
-    const tranches = Array.from({ length: totalTranches }, (_, index) => ({
-      index,
-      amountWei: '0',
-      unlockAt: addSeconds(approvedAt, intervalSeconds * index),
-      status: 'pending' as const,
-    }))
+    // No planter schedule at all when every tree was pre-sold OTC: an empty
+    // schedule would otherwise sit forever behind health checks that unlock
+    // nothing.
+    const tranches =
+      planterTotalWei === 0n && otc.payouts.length > 0
+        ? []
+        : Array.from({ length: totalTranches }, (_, index) => ({
+            index,
+            amountWei: '0',
+            unlockAt: addSeconds(approvedAt, intervalSeconds * index),
+            status: 'pending' as const,
+          }))
 
     return {
       submissionId: submission._id,
@@ -794,6 +974,18 @@ export class RewardService {
       verifierRewardWei,
       verifierClaims: [],
       tranches,
+      otcTreesCovered: otc.treesCovered,
+      otcTotalWei: otc.payouts
+        .reduce((acc, p) => acc + p.amountWei, 0n)
+        .toString(),
+      otcPayouts: otc.payouts.map(p => ({
+        purchaseId: p.purchaseId,
+        buyerWallet: p.buyerWallet,
+        trees: p.trees,
+        amountWei: p.amountWei.toString(),
+        status: 'pending' as const,
+        updatedAt: approvedAt,
+      })),
     }
   }
 
@@ -850,8 +1042,27 @@ export class RewardService {
       return { created: false, allocationId: String(existing._id) }
     }
 
-    const fields = this.buildAllocationFields(submission)
+    // Pre-flight with no coverage: bail out early (no trees / no planter)
+    // before touching any OTC purchase.
+    if (!this.buildAllocationFields(submission)) {
+      return { created: false }
+    }
+
+    // Match the planting's trees against open OTC purchases. Done BEFORE the
+    // insert so the allocation is born with its OTC routing — the planter
+    // claim job enqueued right after must never see an un-split allocation.
+    const coverages = await this.otcPurchaseService.reserveTreesForPlanting({
+      submissionId: submission._id,
+      planterWallet: String(submission.userWalletAddress || ''),
+      trees: Math.floor(Number(submission.treesPlanted ?? 0)),
+    })
+
+    const fields = this.buildAllocationFields(submission, coverages)
     if (!fields) {
+      await this.otcPurchaseService.releaseReservation(
+        submission._id,
+        coverages,
+      )
       return { created: false }
     }
 
@@ -859,6 +1070,15 @@ export class RewardService {
       const doc = await RewardAllocation.create(fields as any)
       return { created: true, allocationId: String(doc._id) }
     } catch (e: any) {
+      // The allocation was not written → give the trees back to the purchases.
+      await this.otcPurchaseService
+        .releaseReservation(submission._id, coverages)
+        .catch(err =>
+          console.error('[RewardService] OTC release after failed insert', {
+            submissionId: submission._id,
+            message: err?.message,
+          }),
+        )
       if (e?.code === 11000) {
         const again = await RewardAllocation.findOne({
           submissionId: submission._id,
@@ -872,7 +1092,9 @@ export class RewardService {
   }
 
   /**
-   * After approval: create allocation if needed and enqueue planter claim processing.
+   * After approval: create allocation if needed and enqueue planter claim
+   * processing, plus one claim job per OTC buyer whose pre-paid MGRO this
+   * planting fulfils — the buyer gets their tokens without lifting a finger.
    * Verifier MGRO remains manual via POST /claim.
    */
   async handleSubmissionApproved(
@@ -888,6 +1110,8 @@ export class RewardService {
     allocationId?: string
     claimJobEnqueued: boolean
     claimJobId?: string
+    /** Claim jobs queued for OTC buyers of this planting (one per buyer). */
+    otcClaimJobIds?: string[]
   }> {
     const { created } =
       await this.ensureAllocationFromApprovedSubmission(submission)
@@ -911,6 +1135,22 @@ export class RewardService {
       }
     }
 
+    const otcClaimJobIds = await this.enqueueOtcBuyerClaims(
+      String(submission._id),
+      allocation as unknown as RewardAllocationLike,
+    )
+
+    // Every tree pre-sold OTC → the planter has nothing to claim; don't queue
+    // a job that would only mark an empty schedule.
+    if (BigInt(String(allocation.planterTotalWei ?? '1')) === 0n) {
+      return {
+        allocationCreated: true,
+        allocationId: String(allocation._id),
+        claimJobEnqueued: false,
+        otcClaimJobIds,
+      }
+    }
+
     const pw = normalizeWallet(String(allocation.planterWallet || ''))
     try {
       const { job } = await this.rewardClaimQueueService.enqueueOrReuseClaimJob(
@@ -925,6 +1165,7 @@ export class RewardService {
         allocationId: String(allocation._id),
         claimJobEnqueued: true,
         claimJobId: String(job.jobId),
+        otcClaimJobIds,
       }
     } catch (e: any) {
       console.warn('enqueue planter claim after approval:', e?.message || e)
@@ -932,8 +1173,42 @@ export class RewardService {
         allocationCreated: true,
         allocationId: String(allocation._id),
         claimJobEnqueued: false,
+        otcClaimJobIds,
       }
     }
+  }
+
+  /**
+   * Queue the automatic mint for each OTC buyer with an unpaid payout on the
+   * allocation. Idempotent per (submission, buyer) via the claim queue, so the
+   * retrier can call it again until the mint lands.
+   */
+  async enqueueOtcBuyerClaims(
+    submissionId: string,
+    allocation: RewardAllocationLike,
+  ): Promise<string[]> {
+    const buyers = [
+      ...new Set(
+        (allocation.otcPayouts || [])
+          .filter(p => p.status !== 'paid')
+          .map(p => normalizeWallet(p.buyerWallet)),
+      ),
+    ]
+    const jobIds: string[] = []
+    for (const buyer of buyers) {
+      try {
+        const { job } =
+          await this.rewardClaimQueueService.enqueueOrReuseClaimJob({
+            submissionId,
+            walletAddress: buyer,
+            claimType: 'otc',
+          })
+        jobIds.push(String(job.jobId))
+      } catch (e: any) {
+        console.warn('enqueue OTC buyer claim after approval:', e?.message || e)
+      }
+    }
+    return jobIds
   }
 
   private async reloadAllocation(allocationId: mongoose.Types.ObjectId) {
@@ -1071,6 +1346,133 @@ export class RewardService {
         return { ok: false, reason: msg }
       }
       throw err
+    }
+  }
+
+  /**
+   * Mint the MGRO an OTC buyer pre-paid for on this planting: the full amount
+   * at once (no survival vesting — the buyer already paid). Ledger lives in
+   * otcPayouts; the planter's tranches and the verifier pool are untouched.
+   */
+  async tryMintOtcPayout(
+    allocationId: mongoose.Types.ObjectId,
+    buyerWallet: string,
+  ): Promise<{
+    ok: boolean
+    txHashes: string[]
+    amountWei: string
+    reason?: string
+    pendingVerifierProposalId?: number
+  }> {
+    const w = normalizeWallet(buyerWallet)
+    const allocation = await this.reloadAllocation(allocationId)
+    const alloc = allocation.toObject() as unknown as RewardAllocationLike
+    const rows = otcPayoutsForWallet(alloc, w)
+    if (rows.length === 0) {
+      return {
+        ok: false,
+        txHashes: [],
+        amountWei: '0',
+        reason: 'No OTC payout for this wallet',
+      }
+    }
+
+    const txHashes: string[] = []
+    let minted = 0n
+    for (const row of rows) {
+      if (row.status === 'paid') continue
+      const pid = String(row.purchaseId)
+      const amount = BigInt(String(row.amountWei || '0'))
+      if (amount <= 0n) continue
+
+      // Lock pending|failed → processing for exactly this (buyer, purchase) row.
+      const locked = await RewardAllocation.updateOne(
+        { _id: allocationId },
+        {
+          $set: {
+            'otcPayouts.$[p].status': 'processing',
+            'otcPayouts.$[p].updatedAt': new Date(),
+          },
+        },
+        {
+          arrayFilters: [
+            {
+              'p.buyerWallet': w,
+              'p.purchaseId': row.purchaseId,
+              'p.status': { $in: ['pending', 'failed'] },
+            },
+          ],
+        },
+      )
+      if (locked.modifiedCount === 0) continue
+
+      const rowFilter = [
+        {
+          'p.buyerWallet': w,
+          'p.purchaseId': row.purchaseId,
+          'p.status': 'processing',
+        },
+      ]
+      try {
+        const result = await this.mintService.mintTo(w, amount.toString(), {
+          evidenceURI: `treegens://submission/${String(alloc.submissionId)}/otc/${pid}`,
+          existingProposalId: row.proposalId,
+        })
+        await RewardAllocation.updateOne(
+          { _id: allocationId },
+          {
+            $set: {
+              'otcPayouts.$[p].status': 'paid',
+              'otcPayouts.$[p].txHash': result.txHash,
+              'otcPayouts.$[p].lastError': undefined,
+              'otcPayouts.$[p].updatedAt': new Date(),
+            },
+          },
+          { arrayFilters: rowFilter },
+        )
+        await this.addClaimedTokensForWallet(w, amount.toString())
+        txHashes.push(result.txHash)
+        minted += amount
+      } catch (err: any) {
+        const msg = err?.message || String(err)
+        const pendingProposalId =
+          err instanceof PendingVerifierApprovalError
+            ? err.proposalId
+            : undefined
+        await RewardAllocation.updateOne(
+          { _id: allocationId },
+          {
+            $set: {
+              'otcPayouts.$[p].status': 'failed',
+              'otcPayouts.$[p].lastError': msg,
+              'otcPayouts.$[p].updatedAt': new Date(),
+              ...(pendingProposalId !== undefined
+                ? { 'otcPayouts.$[p].proposalId': pendingProposalId }
+                : {}),
+            },
+          },
+          { arrayFilters: rowFilter },
+        )
+        if (pendingProposalId !== undefined) {
+          // Proposed on-chain, waiting for verifier stake — not a failure.
+          // Stop so one claim never opens several parallel proposals.
+          return {
+            ok: txHashes.length > 0,
+            txHashes,
+            amountWei: minted.toString(),
+            reason: msg,
+            pendingVerifierProposalId: pendingProposalId,
+          }
+        }
+        throw err
+      }
+    }
+
+    return {
+      ok: txHashes.length > 0,
+      txHashes,
+      amountWei: minted.toString(),
+      reason: txHashes.length > 0 ? undefined : 'Already paid or in progress',
     }
   }
 
@@ -1289,7 +1691,8 @@ export class RewardService {
   }
 
   /**
-   * Claim all eligible rewards for JWT wallet: verifier (if yes-voter) then planter tranches.
+   * Claim all eligible rewards for a wallet: verifier (if yes-voter), planter
+   * tranches, and any OTC buyer payout the wallet pre-paid for.
    */
   async claimForWallet(
     submissionId: string,
@@ -1297,6 +1700,7 @@ export class RewardService {
   ): Promise<{
     verifier?: { txHash?: string; amountWei?: string; skippedReason?: string }
     planter?: { txHashes: string[]; amountsWei: string[] }
+    otc?: { txHashes: string[]; amountWei: string; skippedReason?: string }
     allocation: any
     nothingToClaim: boolean
     status: RewardStatusProjection
@@ -1321,12 +1725,16 @@ export class RewardService {
       throw new Error('No reward allocation for this submission')
     }
 
-    const { planter: eligiblePlanter, verifier: eligibleVerifier } =
-      this.getClaimEligibility(submission, allocation, w)
+    const {
+      planter: eligiblePlanter,
+      verifier: eligibleVerifier,
+      otc: eligibleOtc,
+    } = this.getClaimEligibility(submission, allocation, w)
 
     const result: {
       verifier?: { txHash?: string; amountWei?: string; skippedReason?: string }
       planter?: { txHashes: string[]; amountsWei: string[] }
+      otc?: { txHashes: string[]; amountWei: string; skippedReason?: string }
       allocation: any
       nothingToClaim: boolean
       status: RewardStatusProjection
@@ -1385,6 +1793,19 @@ export class RewardService {
       if (planterResult.pendingVerifierProposalId !== undefined) {
         result.pendingVerifierProposalId =
           planterResult.pendingVerifierProposalId
+      }
+    }
+
+    if (eligibleOtc) {
+      const otcResult = await this.tryMintOtcPayout(allocation._id, w)
+      result.otc = {
+        txHashes: otcResult.txHashes,
+        amountWei: otcResult.amountWei,
+        skippedReason: otcResult.ok ? undefined : otcResult.reason,
+      }
+      if (otcResult.ok) result.nothingToClaim = false
+      if (otcResult.pendingVerifierProposalId !== undefined) {
+        result.pendingVerifierProposalId = otcResult.pendingVerifierProposalId
       }
     }
 

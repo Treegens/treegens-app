@@ -19,7 +19,10 @@ import userRoutes from './routes/users'
 import BurnIndexerService from './services/burnIndexerService'
 import VerifierService from './services/verifierService'
 import { startStitchRetrier } from './services/verifiedVideoStitchService'
-import { startRewardClaimWorker } from './workers/rewardClaimWorker'
+import {
+  startOtcPayoutRetrier,
+  startRewardClaimWorker,
+} from './workers/rewardClaimWorker'
 import { startSlashWorker } from './workers/slashWorker'
 
 const app = express()
@@ -33,10 +36,12 @@ app.use(helmet())
 // previous behaviour of accepting any origin.
 const corsOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
-  .map((o) => o.trim())
+  .map(o => o.trim())
   .filter(Boolean)
 
-app.use(cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : {}))
+app.use(
+  cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : {}),
+)
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 
@@ -106,7 +111,9 @@ async function start() {
   try {
     await connectDB()
   } catch {
-    console.error('Refusing to start API without MongoDB. Fix MONGODB_URI and retry.')
+    console.error(
+      'Refusing to start API without MongoDB. Fix MONGODB_URI and retry.',
+    )
     process.exit(1)
     return
   }
@@ -120,6 +127,7 @@ void start()
 
 if (env.ENABLE_REWARD_CLAIM_WORKER === 'true') {
   startRewardClaimWorker()
+  startOtcPayoutRetrier()
   console.log('[RewardClaimWorker] Started in API process')
 }
 

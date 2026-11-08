@@ -2,7 +2,8 @@ import { Queue, QueueEvents } from 'bullmq'
 import IORedis, { RedisOptions } from 'ioredis'
 import env from '../config/environment'
 
-export type RewardClaimType = 'planter' | 'verifier' | 'both'
+/** 'otc' = mint the MGRO an OTC buyer pre-paid for (see models/OtcPurchase). */
+export type RewardClaimType = 'planter' | 'verifier' | 'both' | 'otc'
 
 export type RewardClaimJobPayload = {
   jobId: string

@@ -100,3 +100,104 @@ test('handleSubmissionApproved is non-blocking when enqueue fails', async () => 
     ;(RewardAllocation as any).findOne = originalFindOne
   }
 })
+
+test('handleSubmissionApproved queues the OTC buyer mint next to the planter claim', async () => {
+  const service = new RewardService() as any
+  const submission = makeSubmission()
+
+  service.ensureAllocationFromApprovedSubmission = async () => ({
+    created: true,
+  })
+  const calls: Array<{ walletAddress: string; claimType: string }> = []
+  service.rewardClaimQueueService = {
+    enqueueOrReuseClaimJob: async (input: any) => {
+      calls.push({
+        walletAddress: input.walletAddress,
+        claimType: input.claimType,
+      })
+      return { job: { jobId: `job-${calls.length}` } }
+    },
+  }
+
+  const originalFindOne = RewardAllocation.findOne
+  ;(RewardAllocation as any).findOne = async () => ({
+    _id: 'alloc-1',
+    planterWallet: '0xplanter',
+    planterTotalWei: '570',
+    otcPayouts: [
+      {
+        purchaseId: 'p1',
+        buyerWallet: '0xBuyer',
+        trees: 4,
+        amountWei: '380',
+        status: 'pending',
+      },
+    ],
+  })
+
+  try {
+    const result = await service.handleSubmissionApproved(submission)
+    assert.equal(result.claimJobEnqueued, true)
+    assert.deepEqual(result.otcClaimJobIds, ['job-1'])
+    assert.deepEqual(calls, [
+      { walletAddress: '0xbuyer', claimType: 'otc' },
+      { walletAddress: '0xplanter', claimType: 'planter' },
+    ])
+  } finally {
+    ;(RewardAllocation as any).findOne = originalFindOne
+  }
+})
+
+test('handleSubmissionApproved queues no planter claim when every tree was pre-sold OTC', async () => {
+  const service = new RewardService() as any
+  const submission = makeSubmission()
+
+  service.ensureAllocationFromApprovedSubmission = async () => ({
+    created: true,
+  })
+  const calls: Array<{ walletAddress: string; claimType: string }> = []
+  service.rewardClaimQueueService = {
+    enqueueOrReuseClaimJob: async (input: any) => {
+      calls.push({
+        walletAddress: input.walletAddress,
+        claimType: input.claimType,
+      })
+      return { job: { jobId: `job-${calls.length}` } }
+    },
+  }
+
+  const originalFindOne = RewardAllocation.findOne
+  ;(RewardAllocation as any).findOne = async () => ({
+    _id: 'alloc-1',
+    planterWallet: '0xplanter',
+    planterTotalWei: '0',
+    tranches: [],
+    otcPayouts: [
+      {
+        purchaseId: 'p1',
+        buyerWallet: '0xa',
+        trees: 3,
+        amountWei: '285',
+        status: 'pending',
+      },
+      {
+        purchaseId: 'p2',
+        buyerWallet: '0xb',
+        trees: 7,
+        amountWei: '665',
+        status: 'paid',
+      },
+    ],
+  })
+
+  try {
+    const result = await service.handleSubmissionApproved(submission)
+    assert.equal(result.allocationCreated, true)
+    assert.equal(result.claimJobEnqueued, false)
+    assert.deepEqual(result.otcClaimJobIds, ['job-1'])
+    // only the unpaid buyer is queued; the planter never is
+    assert.deepEqual(calls, [{ walletAddress: '0xa', claimType: 'otc' }])
+  } finally {
+    ;(RewardAllocation as any).findOne = originalFindOne
+  }
+})

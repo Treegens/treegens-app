@@ -165,6 +165,55 @@ http://localhost:5000
 
 User accounts are created when signing in via **`POST /api/auth/signin`** (see Authentication in `/docs`). There is no public HTTP API to create/update arbitrary profile fields or delete users by wallet.
 
+### OTC $MGRO pre-purchases (`/api/distributions/otc`, `/api/rewards/otc/mine`)
+
+An **OTC (over-the-counter) purchase** is MGRO bought up front for trees that are
+not planted yet. MGRO is only ever minted for verified plantings, so the purchase
+is fulfilled over time: every time a planting is approved, the planter share of
+its MGRO is routed to the buyer instead of the planter, tree by tree, until the
+purchased trees are used up. The planter was already paid for those trees from
+the OTC proceeds and **never gets a claim on that MGRO**; verifiers keep their 5%.
+
+How it works at approval time:
+
+1. `RewardService.ensureAllocationFromApprovedSubmission` asks
+   `OtcPurchaseService.reserveTreesForPlanting` for open purchases. Purchases
+   pinned to this planter (`planterWallet`) are drawn first, then unpinned ones,
+   oldest first. Each draw is an atomic compare-and-set on `treesAllocated`.
+2. The allocation's planter pool (95% of the trees' MGRO) is split per tree:
+   covered trees go to `otcPayouts[]` (one row per buyer), the rest stays in
+   `planterTotalWei` under the normal survival schedule. When every tree is
+   covered the planter gets no schedule at all (`tranches: []`).
+3. One `otc` claim job per buyer is queued **automatically** next to the planter
+   job. The buyer's MGRO is minted in full (no vesting). With
+   `MGRO_MINT_MODE=verifier` the mint is proposed on VerifierMinter and lands
+   once verifiers approve; the reward worker re-queues unpaid OTC payouts every
+   10 minutes until the mint is on-chain, so nobody has to click anything.
+
+Service-to-service (header `x-distributor-key`, same as the other
+`/api/distributions/*` routes; disabled while `DISTRIBUTOR_API_KEY` is unset):
+
+- **`POST /api/distributions/otc`** — Body
+  `{ buyerWallet, trees, paymentRef, grossUsd?, planterWallet?, note? }`.
+  Records a paid purchase. Idempotent on `paymentRef` (201 on create, 200 on
+  replay). `planterWallet` pins the purchase to one planter's plantings.
+- **`GET /api/distributions/otc?buyerWallet=&status=&limit=`** — List purchases.
+- **`GET /api/distributions/otc/:purchaseId`** — Purchase plus the per-planting
+  payouts it funded (`status`, `txHash`, `proposalId`).
+- **`POST /api/distributions/otc/:purchaseId/cancel`** — Stop an open purchase
+  from funding further plantings; trees already matched stay with the buyer.
+
+Buyer-facing (Bearer JWT):
+
+- **`GET /api/rewards/otc/mine`** — The caller's purchases and every payout
+  routed to them, with mint status and tx hash.
+- **`GET /api/rewards/status/:submissionId`** — A buyer gets `role: "otc_buyer"`;
+  any wallet with an OTC payout also gets an `otcBuyer` slice. Planters see an
+  `otc` block (`treesCovered`, `amountWei`, `payouts`) showing which part of their
+  planting was pre-sold, and `totalRewardWei` excludes it.
+- **`POST /api/rewards/claim`** — Also serves as the manual retry for a buyer's
+  payout (claim type `otc`).
+
 ### Video Management Endpoints
 
 #### Upload Video
