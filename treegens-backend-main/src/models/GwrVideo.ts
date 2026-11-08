@@ -22,6 +22,14 @@ const gwrVideoSchema = new mongoose.Schema(
   {
     /** Object path in the GCS bucket (`gwr/<uuid>.<ext>`). */
     objectName: { type: String, required: true, unique: true, index: true },
+    /** The phone's own id for this upload (`x-gwr-upload-id`). A retry after
+     * a lost response finds the first copy instead of storing a second. */
+    clientUploadId: {
+      type: String,
+      required: false,
+      unique: true,
+      sparse: true,
+    },
     /** Public https URL of the object. Serves with Content-Disposition:
      * attachment, so opening it in a browser downloads the file. */
     publicUrl: { type: String, required: true },

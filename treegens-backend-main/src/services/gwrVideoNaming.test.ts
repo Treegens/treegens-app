@@ -5,6 +5,7 @@ import {
   buildGwrManifestCsv,
   csvCell,
   gwrFileExtension,
+  gwrMimeForExtension,
   slugify,
   utcStamp,
 } from './gwrVideoNaming'
@@ -16,6 +17,19 @@ test('extension comes from the filename first, then the mime type', () => {
   assert.equal(gwrFileExtension('', 'application/octet-stream'), 'mp4')
   // iOS sometimes hands over `.tmp`; never store a clip under that.
   assert.equal(gwrFileExtension('upload.tmp', 'video/mp4'), 'mp4')
+})
+
+test('only known video extensions are honoured; the rest come from the MIME type', () => {
+  // The public URL is fed to bulk downloaders, so a renamed executable with
+  // a video/* part type must not be saved to anyone's disk as `.exe`.
+  assert.equal(gwrFileExtension('payload.exe', 'video/mp4'), 'mp4')
+  assert.equal(gwrFileExtension('payload.hta', 'video/quicktime'), 'mov')
+  assert.equal(gwrFileExtension('x.MP4', 'application/octet-stream'), 'mp4')
+  assert.equal(gwrFileExtension('clip.3gp', 'video/3gpp'), '3gp')
+  assert.equal(gwrFileExtension('clip.avi', 'video/x-msvideo'), 'mp4')
+  assert.equal(gwrFileExtension(undefined, 'video/webm; codecs=vp9'), 'webm')
+  assert.equal(gwrMimeForExtension('mov'), 'video/quicktime')
+  assert.equal(gwrMimeForExtension('nope'), 'video/mp4')
 })
 
 test('slugify keeps names filesystem-safe', () => {
@@ -60,6 +74,20 @@ test('csv cells are escaped so a note with commas cannot break a row', () => {
   assert.equal(csvCell('say "hi"'), '"say ""hi"""')
   assert.equal(csvCell(null), '')
   assert.equal(csvCell(12.5), '12.5')
+})
+
+test('a cell that would run as a spreadsheet formula is shown as text', () => {
+  // The manifest is made to be opened in Excel / Sheets, and the uploader
+  // name and note come from an open form.
+  assert.equal(
+    csvCell('=HYPERLINK("http://evil")'),
+    '"\'=HYPERLINK(""http://evil"")"',
+  )
+  assert.equal(csvCell('+1 555'), "'+1 555")
+  assert.equal(csvCell('-not a number'), "'-not a number")
+  assert.equal(csvCell('@jimi'), "'@jimi")
+  // A number is a number: a negative latitude stays one in the sheet.
+  assert.equal(csvCell(-4.05), '-4.05')
 })
 
 test('manifest has a header row and one line per clip', () => {

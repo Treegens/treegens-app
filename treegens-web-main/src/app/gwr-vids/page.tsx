@@ -8,11 +8,11 @@ import toast from 'react-hot-toast'
 import { HiArrowDownTray, HiArrowPath, HiTrash } from 'react-icons/hi2'
 import { routes } from '@/config/appConfig'
 import {
+  gwrErrorMessage,
   gwrService,
   type GwrConfig,
   type GwrVideo,
 } from '@/services/gwrService'
-import { apiErrorMessage } from '@/utils/apiErrorMessage'
 import { formatTimeAgo } from '@/utils/timeAgo'
 
 const PAGE_SIZE = 50
@@ -38,6 +38,8 @@ function formatWhen(iso: string) {
 /**
  * treegens.app/gwr-vids — every after-clip from the record attempt, with a
  * download link per clip and whole-collection exports. Public: no login.
+ * Renders wide on a computer (MobileGate): this is where the set gets pulled
+ * down for the record evidence.
  */
 export default function GwrVideosPage() {
   const [config, setConfig] = useState<GwrConfig | null>(null)
@@ -57,12 +59,18 @@ export default function GwrVideosPage() {
     try {
       const res = await gwrService.listVideos(nextPage, PAGE_SIZE)
       const { videos: batch, pagination } = res.data
-      setVideos(prev => (replace ? batch : [...prev, ...batch]))
+      // A clip uploaded between two pages shifts the next page by one; keep
+      // each clip once.
+      setVideos(prev => {
+        if (replace) return batch
+        const seen = new Set(prev.map(v => v.id))
+        return [...prev, ...batch.filter(v => !seen.has(v.id))]
+      })
       setTotal(pagination.total)
       setPage(pagination.page)
       setHasMore(pagination.page < pagination.totalPages)
     } catch (err) {
-      setError(apiErrorMessage(err, 'Could not load the videos.'))
+      setError(gwrErrorMessage(err, 'Could not load the videos.'))
     } finally {
       setLoading(false)
     }
@@ -78,12 +86,23 @@ export default function GwrVideosPage() {
     }
   }, [load])
 
-  const enterAdmin = () => {
-    const key = window.prompt('GWR admin key')
+  const enterAdmin = async () => {
+    const key = window.prompt('GWR admin key')?.trim()
     if (!key) return
-    setAdminKey(key.trim())
+    // Checked first, so a wrong key never shows delete buttons that fail.
     try {
-      window.sessionStorage.setItem(ADMIN_KEY_STORAGE, key.trim())
+      const ok = await gwrService.checkAdminKey(key)
+      if (!ok) {
+        toast.error('That admin key is not right.')
+        return
+      }
+    } catch (err) {
+      toast.error(gwrErrorMessage(err, 'Could not check the key.'))
+      return
+    }
+    setAdminKey(key)
+    try {
+      window.sessionStorage.setItem(ADMIN_KEY_STORAGE, key)
     } catch {
       /* ignore */
     }
@@ -111,15 +130,15 @@ export default function GwrVideosPage() {
       setTotal(t => Math.max(0, t - 1))
       toast.success('Clip removed')
     } catch (err) {
-      toast.error(apiErrorMessage(err, 'Could not remove the clip.'))
+      toast.error(gwrErrorMessage(err, 'Could not remove the clip.'))
     } finally {
       setDeletingId(null)
     }
   }
 
   /**
-   * Fires one download per clip, staggered so the browser queues them instead
-   * of dropping some. Chrome asks once to allow multiple downloads.
+   * Fires one download per loaded clip, staggered so the browser queues them
+   * instead of dropping some. Chrome asks once to allow multiple downloads.
    */
   const downloadAllLoaded = async () => {
     if (!videos.length || downloadingAll) return
@@ -163,7 +182,7 @@ export default function GwrVideosPage() {
           <p className="text-[11px] font-semibold uppercase tracking-wide text-tree-green-1">
             Guinness World Record attempt
           </p>
-          <h1 className="truncate text-lg font-bold text-[#111]">
+          <h1 className="truncate text-lg font-bold text-gray-900">
             After videos{total ? ` · ${total}` : ''}
           </h1>
         </div>
@@ -175,7 +194,7 @@ export default function GwrVideosPage() {
         </Link>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pb-12 pt-4 md:px-6">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pb-28 pt-4 md:px-6">
         <section className="mb-5 flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -229,7 +248,7 @@ export default function GwrVideosPage() {
           , so a folder of them sorts in filming order. For the whole set from a
           terminal:{' '}
           <code className="rounded bg-gray-100 px-1 py-0.5">
-            wget -i treegens-gwr-urls.txt
+            wget --content-disposition -i treegens-gwr-urls.txt
           </code>
         </p>
 
@@ -290,7 +309,7 @@ export default function GwrVideosPage() {
                 </p>
                 {v.reverseGeocode || v.gpsCoordinates ? (
                   <p
-                    className="truncate text-xs text-gray-600"
+                    className="truncate text-xs text-gray-700"
                     title={v.reverseGeocode}
                   >
                     {v.reverseGeocode ||
@@ -300,12 +319,12 @@ export default function GwrVideosPage() {
                       : ''}
                   </p>
                 ) : (
-                  <p className="text-xs text-gray-400">No location</p>
+                  <p className="text-xs text-gray-500">No location</p>
                 )}
                 {v.note ? (
                   <p className="text-xs text-gray-700">“{v.note}”</p>
                 ) : null}
-                <p className="mt-1 break-all font-mono text-[11px] text-gray-400">
+                <p className="mt-1 break-all font-mono text-[11px] text-gray-500">
                   {v.downloadFilename}
                   {v.sizeBytes ? ` · ${formatBytes(v.sizeBytes)}` : ''}
                 </p>

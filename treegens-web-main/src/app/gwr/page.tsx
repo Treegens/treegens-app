@@ -14,21 +14,31 @@ import { useGeolocation } from '@/hooks/useGeolocation'
 import type { ReverseGeocodeResult } from '@/services/geocodingService'
 import { reverseGeocode } from '@/services/geocodingService'
 import {
+  gwrErrorMessage,
   gwrService,
+  isUploadCodeRefusal,
   type GwrConfig,
   type GwrVideo,
 } from '@/services/gwrService'
-import { videoCompressionService } from '@/services/videoCompressionService'
-import { apiErrorMessage } from '@/utils/apiErrorMessage'
 import { getVideoDuration } from '@/utils/videoValidation'
 
 const NAME_STORAGE_KEY = 'tg_gwr_uploader_name'
 
 type Phase =
   | { kind: 'idle' }
-  | { kind: 'compressing'; progress: number; message: string }
   | { kind: 'uploading'; progress: number }
   | { kind: 'done'; video: GwrVideo }
+
+/** A picked clip and the id every attempt to send it will carry. */
+type Picked = { file: File; uploadId: string; previewUrl: string }
+
+const newUploadId = () => {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  }
+}
 
 /**
  * treegens.app/gwr — the "after" upload, and only that.
@@ -36,13 +46,18 @@ type Phase =
  * Built for the Guinness World Record attempt: anyone on site films the trees
  * once they are in the ground and hands the clip in here. No wallet, no before
  * clip, no verifiers, no MGRO. Clips land in /gwr-vids for download.
+ *
+ * ⚠️ Deliberately NOT a planting-evidence screen, so the record-only rule
+ * (utils/recordOnly.ts, utils/verifierDesktop.ts) does not apply here: a
+ * GWR clip is not verified and earns nothing, and the record's footage,
+ * drone shots included, is mostly filmed before this page is opened. So this
+ * video input may open the gallery and renders on a computer. It must never
+ * be wired into submissions.
  */
 export default function GwrAfterUploadPage() {
   const [config, setConfig] = useState<GwrConfig | null>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [previewUrl, setPreviewUrl] = useState('')
+  const [picked, setPicked] = useState<Picked | null>(null)
   const [durationSec, setDurationSec] = useState<number | null>(null)
-  const [validationError, setValidationError] = useState('')
   const [uploaderName, setUploaderName] = useState('')
   const [note, setNote] = useState('')
   const [uploadCode, setUploadCode] = useState('')
@@ -67,15 +82,21 @@ export default function GwrAfterUploadPage() {
   const [geocode, setGeocode] = useState<ReverseGeocodeResult | null>(null)
   const triedLocation = useRef(false)
 
+  const loadConfig = useCallback(async () => {
+    const c = await gwrService.getConfig()
+    if (c) setConfig(c)
+    return c
+  }, [])
+
   useEffect(() => {
-    void gwrService.getConfig().then(setConfig)
+    void loadConfig()
     try {
       const saved = window.localStorage.getItem(NAME_STORAGE_KEY)
       if (saved) setUploaderName(saved)
     } catch {
       /* private mode: nothing to restore */
     }
-  }, [])
+  }, [loadConfig])
 
   useEffect(() => {
     if (geoSupported && !triedLocation.current) {
@@ -99,16 +120,29 @@ export default function GwrAfterUploadPage() {
     }
   }, [latitude, longitude])
 
+  // The preview URL follows the picked clip; let go of the old one.
   useEffect(() => {
+    const url = picked?.previewUrl
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      if (url) URL.revokeObjectURL(url)
     }
-  }, [previewUrl])
+  }, [picked])
 
-  const maxDuration = config?.maxDurationSeconds ?? 60
-  const maxSizeMB = config?.maxFileSizeMB ?? 100
+  const busy = phase.kind === 'uploading'
+
+  // While a clip is in flight the browser asks before a close or reload: a
+  // navigation kills the request.
+  useEffect(() => {
+    if (!busy) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [busy])
+
   const hasLocation = latitude !== null && longitude !== null && !locationError
-  const busy = phase.kind === 'compressing' || phase.kind === 'uploading'
 
   const locationLabel = useMemo(() => {
     if (locationLoading) return 'Getting location…'
@@ -122,44 +156,37 @@ export default function GwrAfterUploadPage() {
   }, [locationLoading, locationError, latitude, longitude, geocode])
 
   const clearFile = useCallback(() => {
-    setFile(null)
+    setPicked(null)
     setDurationSec(null)
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-    setPreviewUrl('')
     if (inputRef.current) inputRef.current.value = ''
-  }, [previewUrl])
+  }, [])
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = e.target.files?.[0]
-    if (!picked) return
-    setValidationError('')
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
     setUploadError('')
     if (phase.kind === 'done') setPhase({ kind: 'idle' })
-
-    let duration: number | null = null
-    try {
-      duration = await getVideoDuration(picked)
-    } catch {
-      // Some phones hand over a container the browser cannot probe; let the
-      // backend's size cap be the only hard limit then.
+    // Show the clip at once; the length is filled in when the browser has
+    // read the header, which on some phones takes seconds or never happens.
+    const next: Picked = {
+      file,
+      uploadId: newUploadId(),
+      previewUrl: URL.createObjectURL(file),
     }
-    if (duration !== null && duration > maxDuration + 0.5) {
-      setValidationError(
-        `That clip is ${Math.round(duration)}s. Keep it under ${maxDuration} seconds so it stays uploadable on event wifi.`,
-      )
-      if (inputRef.current) inputRef.current.value = ''
-      return
-    }
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-    setFile(picked)
-    setDurationSec(duration)
-    setPreviewUrl(URL.createObjectURL(picked))
+    setPicked(next)
+    setDurationSec(null)
+    getVideoDuration(file)
+      .then(d => {
+        setDurationSec(prev => (Number.isFinite(d) ? d : prev))
+      })
+      .catch(() => {
+        // Nothing is refused for it: the clip is what it is.
+      })
   }
 
   const handleUpload = async () => {
-    if (!file || busy) return
+    if (!picked || busy) return
     setUploadError('')
-    setValidationError('')
 
     try {
       window.localStorage.setItem(NAME_STORAGE_KEY, uploaderName.trim())
@@ -167,50 +194,30 @@ export default function GwrAfterUploadPage() {
       /* ignore */
     }
 
-    let toSend = file
-    const sizeMB = file.size / (1024 * 1024)
-    try {
-      // Originals are what the record needs, so only compress when the clip
-      // would otherwise be refused by the 100MB cap.
-      if (sizeMB > maxSizeMB) {
-        setPhase({
-          kind: 'compressing',
-          progress: 0,
-          message: `Clip is ${sizeMB.toFixed(0)}MB — shrinking it to fit the ${maxSizeMB}MB limit…`,
-        })
-        const result = await videoCompressionService.compressVideo(file, p =>
-          setPhase({
-            kind: 'compressing',
-            progress: p.progress,
-            message: p.message,
-          }),
-        )
-        if (!result.success || !result.compressedFile) {
-          throw new Error(
-            result.error ||
-              `Could not shrink the clip under ${maxSizeMB}MB. Try a shorter clip or lower camera resolution.`,
-          )
-        }
-        toSend = result.compressedFile
-        if (toSend.size / (1024 * 1024) > maxSizeMB) {
-          throw new Error(
-            `Still ${(toSend.size / (1024 * 1024)).toFixed(0)}MB after compression. Try a shorter clip.`,
-          )
-        }
-      }
+    // Never assume "no code needed" just because the config fetch failed
+    // earlier: ask once more now, and send whatever code was typed anyway.
+    const cfg = config ?? (await loadConfig())
+    if (cfg?.uploadCodeRequired && !uploadCode.trim()) {
+      setUploadError('Enter the upload code you were given at the record.')
+      return
+    }
 
+    try {
       setPhase({ kind: 'uploading', progress: 0 })
       const video = await gwrService.uploadClip(
-        toSend,
+        picked.file,
         {
+          uploadId: picked.uploadId,
           latitude: hasLocation ? latitude : null,
           longitude: hasLocation ? longitude : null,
           accuracyMeters: hasLocation ? accuracy : null,
           reverseGeocode: geocode?.success ? geocode.address : undefined,
           uploaderName,
           note,
-          recordedAt: file.lastModified ? new Date(file.lastModified) : null,
-          uploadCode: config?.uploadCodeRequired ? uploadCode : undefined,
+          recordedAt: picked.file.lastModified
+            ? new Date(picked.file.lastModified)
+            : null,
+          uploadCode,
         },
         percent => setPhase({ kind: 'uploading', progress: percent }),
       )
@@ -221,12 +228,29 @@ export default function GwrAfterUploadPage() {
       toast.success('Clip saved. Thank you!')
     } catch (err) {
       setPhase({ kind: 'idle' })
-      setUploadError(apiErrorMessage(err, 'Upload failed. Please try again.'))
+      if (isUploadCodeRefusal(err)) {
+        // The API wants a code whatever the config said: show the field.
+        setConfig(c => ({
+          uploadCodeRequired: true,
+          adminEnabled: c?.adminEnabled ?? false,
+          maxFileSizeMB: c?.maxFileSizeMB ?? null,
+          maxDurationSeconds: c?.maxDurationSeconds ?? null,
+        }))
+        setUploadError(
+          uploadCode.trim()
+            ? 'That upload code is not right. Check it and tap Upload again.'
+            : 'This upload needs the code given out at the record. Enter it below and tap Upload again.',
+        )
+        return
+      }
+      setUploadError(gwrErrorMessage(err, 'Upload failed. Please try again.'))
     }
   }
 
-  const canUpload =
-    !!file && !busy && !(config?.uploadCodeRequired && !uploadCode.trim())
+  // Code field: shown when the API asks for one, and also while the API has
+  // not answered yet, so a volunteer who was given a code can type it.
+  const showCodeField = config === null || config.uploadCodeRequired
+  const canUpload = !!picked && !busy
 
   return (
     <div className="relative flex min-h-screen flex-col bg-white">
@@ -245,20 +269,26 @@ export default function GwrAfterUploadPage() {
           <p className="text-[11px] font-semibold uppercase tracking-wide text-tree-green-1">
             Guinness World Record attempt
           </p>
-          <h1 className="truncate text-lg font-bold text-[#111]">
+          <h1 className="truncate text-lg font-bold text-gray-900">
             After video
           </h1>
         </div>
-        <Link
-          href={routes.GwrVids}
-          className="shrink-0 rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-tree-green-2 hover:bg-gray-50"
-        >
-          All videos
-        </Link>
+        {busy ? (
+          <span className="shrink-0 rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-400">
+            All videos
+          </span>
+        ) : (
+          <Link
+            href={routes.GwrVids}
+            className="shrink-0 rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-tree-green-2 hover:bg-gray-50"
+          >
+            All videos
+          </Link>
+        )}
       </header>
 
-      <main className="mx-auto flex w-full max-w-xl flex-1 flex-col px-5 pb-12 pt-4">
-        <p className="mb-5 text-sm text-gray-600">
+      <main className="mx-auto flex w-full max-w-xl flex-1 flex-col px-5 pb-28 pt-4">
+        <p className="mb-5 text-sm text-gray-700">
           Film the trees you planted at the record, then upload the clip here.
           No account needed. Nothing else to do.
         </p>
@@ -272,7 +302,7 @@ export default function GwrAfterUploadPage() {
                 locationError && 'text-amber-600',
               )}
             />
-            <p className="min-w-0 flex-1 truncate text-sm text-gray-600">
+            <p className="min-w-0 flex-1 truncate text-sm text-gray-700">
               {locationLabel}
             </p>
           </div>
@@ -294,10 +324,10 @@ export default function GwrAfterUploadPage() {
                 <p className="text-sm font-bold text-green-900">
                   Clip {uploadCount} saved
                 </p>
-                <p className="mt-1 break-all text-xs text-green-900/80">
+                <p className="mt-1 break-all text-xs text-green-800">
                   {phase.video.downloadFilename}
                 </p>
-                <p className="mt-2 text-sm text-green-900/90">
+                <p className="mt-2 text-sm text-green-900">
                   Got another angle? Pick the next clip below.{' '}
                   <Link
                     href={routes.GwrVids}
@@ -315,20 +345,20 @@ export default function GwrAfterUploadPage() {
           <h2 className="mb-1 text-base font-semibold text-gray-800">
             After video (planted trees)
           </h2>
-          <p className="mb-3 text-sm text-gray-500">
-            Up to {maxDuration} seconds. Original quality is kept; clips over{' '}
-            {maxSizeMB}MB are shrunk on your phone first.
+          <p className="mb-3 text-sm text-gray-700">
+            Record now or pick a clip you already filmed. Any length, original
+            quality, straight from your phone or a drone.
           </p>
 
-          {file ? (
+          {picked ? (
             <div className="relative aspect-[2/1] w-full overflow-hidden rounded-xl bg-black shadow-md">
               <video
-                key={previewUrl}
+                key={picked.previewUrl}
                 preload="metadata"
                 className="h-full w-full object-contain"
                 controls
                 playsInline
-                src={previewUrl}
+                src={picked.previewUrl}
               />
               {!busy ? (
                 <button
@@ -344,33 +374,31 @@ export default function GwrAfterUploadPage() {
           ) : (
             <label className="relative flex aspect-[2/1] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-xl bg-[#f7fbf3] shadow-md">
               <IoVideocamOutline
-                className="pointer-events-none h-10 w-10 text-[#435f24]"
+                className="pointer-events-none h-10 w-10 text-tree-green-2"
                 aria-hidden
               />
-              <span className="pointer-events-none text-sm font-medium text-[#435f24]">
+              <span className="pointer-events-none text-sm font-medium text-tree-green-2">
                 Record or choose a clip
               </span>
+              {/* No capture="environment" on purpose: see the note at the top
+                  of this file, and the matching exception in scripts/verify.mjs. */}
               <input
                 ref={inputRef}
                 className="absolute inset-0 cursor-pointer opacity-0"
                 type="file"
                 accept="video/*"
-                capture="environment"
                 onChange={handleFileChange}
                 disabled={busy}
               />
             </label>
           )}
 
-          {file ? (
-            <p className="mt-2 text-xs text-gray-500">
-              {(file.size / (1024 * 1024)).toFixed(1)} MB
+          {picked ? (
+            <p className="mt-2 text-xs text-gray-700">
+              {(picked.file.size / (1024 * 1024)).toFixed(1)} MB
               {durationSec !== null ? ` · ${Math.round(durationSec)}s` : ''}
-              {file.name ? ` · ${file.name}` : ''}
+              {picked.file.name ? ` · ${picked.file.name}` : ''}
             </p>
-          ) : null}
-          {validationError ? (
-            <p className="mt-2 text-sm text-red-600">{validationError}</p>
           ) : null}
         </section>
 
@@ -378,7 +406,7 @@ export default function GwrAfterUploadPage() {
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-gray-700">
               Your name{' '}
-              <span className="font-normal text-gray-400">(optional)</span>
+              <span className="font-normal text-gray-500">(optional)</span>
             </span>
             <input
               type="text"
@@ -388,12 +416,12 @@ export default function GwrAfterUploadPage() {
               autoComplete="name"
               placeholder="So we know who filmed it"
               disabled={busy}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none focus:border-tree-green-2"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none focus:border-tree-green-2"
             />
           </label>
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-gray-700">
-              Note <span className="font-normal text-gray-400">(optional)</span>
+              Note <span className="font-normal text-gray-500">(optional)</span>
             </span>
             <input
               type="text"
@@ -402,13 +430,18 @@ export default function GwrAfterUploadPage() {
               maxLength={500}
               placeholder="Row, section, anything useful"
               disabled={busy}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none focus:border-tree-green-2"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none focus:border-tree-green-2"
             />
           </label>
-          {config?.uploadCodeRequired ? (
+          {showCodeField ? (
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-gray-700">
-                Upload code
+                Upload code{' '}
+                {config === null ? (
+                  <span className="font-normal text-gray-500">
+                    (if you were given one)
+                  </span>
+                ) : null}
               </span>
               <input
                 type="text"
@@ -419,38 +452,33 @@ export default function GwrAfterUploadPage() {
                 autoCorrect="off"
                 placeholder="Given out at the record site"
                 disabled={busy}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none focus:border-tree-green-2"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none focus:border-tree-green-2"
               />
             </label>
           ) : null}
         </section>
 
-        {phase.kind === 'compressing' || phase.kind === 'uploading' ? (
+        {phase.kind === 'uploading' ? (
           <section className="mb-4 rounded-xl border border-gray-200 bg-white px-4 py-3">
             <div className="mb-1 flex items-center justify-between text-xs text-gray-700">
               <span className="font-medium">
-                {phase.kind === 'compressing' ? 'Shrinking clip' : 'Uploading'}
+                {phase.progress >= 100 ? 'Saving on the server…' : 'Uploading'}
               </span>
               <span>{Math.min(100, Math.max(0, phase.progress))}%</span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
               <div
-                className={cn(
-                  'h-2 rounded-full transition-[width] duration-200',
-                  phase.kind === 'compressing' ? 'bg-blue-600' : 'bg-green-600',
-                )}
+                className="h-2 rounded-full bg-green-600 transition-[width] duration-200"
                 style={{
                   width: `${Math.min(100, Math.max(0, phase.progress))}%`,
                 }}
               />
             </div>
-            {phase.kind === 'compressing' ? (
-              <p className="mt-1 text-xs text-gray-600">{phase.message}</p>
-            ) : (
-              <p className="mt-1 text-xs text-gray-600">
-                Keep this page open until it reaches 100%.
-              </p>
-            )}
+            <p className="mt-1 text-xs text-gray-700">
+              Keep the screen on and this page open until you see “Clip saved”.
+              A big clip on event wifi can take a few minutes, and the server
+              needs a moment after 100%.
+            </p>
           </section>
         ) : null}
 
@@ -471,7 +499,11 @@ export default function GwrAfterUploadPage() {
               : 'cursor-not-allowed bg-gray-300',
           )}
         >
-          {busy ? 'Please wait…' : 'Upload after video'}
+          {busy
+            ? 'Uploading…'
+            : uploadError && picked
+              ? 'Try the upload again'
+              : 'Upload after video'}
         </button>
 
         {!hasLocation && !locationLoading ? (

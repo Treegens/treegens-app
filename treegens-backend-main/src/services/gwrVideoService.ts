@@ -6,9 +6,13 @@ import {
   buildGwrDownloadFilename,
   buildGwrManifestCsv,
   gwrFileExtension,
+  gwrMimeForExtension,
 } from './gwrVideoNaming'
 
 export interface GwrUploadFields {
+  /** The phone's own id for this upload; a retry with the same id gets the
+   * first copy back instead of storing a second. */
+  clientUploadId?: string
   latitude?: number
   longitude?: number
   accuracyMeters?: number
@@ -82,6 +86,15 @@ class GwrVideoService {
     file: Express.Multer.File,
     fields: GwrUploadFields,
   ): Promise<GwrVideoView> {
+    // A lost response after the last byte makes the phone send the clip
+    // again. Same id, same clip: answer with what is already stored.
+    if (fields.clientUploadId) {
+      const existing: any = await GwrVideo.findOne({
+        clientUploadId: fields.clientUploadId,
+      }).lean()
+      if (existing) return toGwrVideoView(existing)
+    }
+
     const uploadedAt = new Date()
     const id = uuidv4()
     const extension = gwrFileExtension(file.originalname, file.mimetype)
@@ -92,9 +105,8 @@ class GwrVideoService {
       uniqueId: id,
       extension,
     })
-    const mimeType = file.mimetype?.startsWith('video/')
-      ? file.mimetype
-      : `video/${extension === 'mov' ? 'quicktime' : extension}`
+    // Served under OUR extension's type, never the part's declared one.
+    const mimeType = gwrMimeForExtension(extension)
 
     const stored = await uploadGwrClipToStorage(
       file.buffer,
@@ -109,6 +121,7 @@ class GwrVideoService {
 
     try {
       const doc = await GwrVideo.create({
+        clientUploadId: fields.clientUploadId || undefined,
         objectName: stored.videoCID,
         publicUrl: stored.publicUrl,
         downloadFilename,
@@ -134,6 +147,16 @@ class GwrVideoService {
     } catch (error) {
       // Never leave an orphan in the bucket that the gallery cannot see.
       await deleteFromStorage(objectName).catch(() => undefined)
+      // Two copies of the same retry raced: the other one won, serve it.
+      if (
+        fields.clientUploadId &&
+        (error as { code?: number })?.code === 11000
+      ) {
+        const winner: any = await GwrVideo.findOne({
+          clientUploadId: fields.clientUploadId,
+        }).lean()
+        if (winner) return toGwrVideoView(winner)
+      }
       throw error
     }
   }

@@ -105,3 +105,14 @@ export const gwrReadLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: scaled(240),
 })
+
+/**
+ * DELETE /api/gwr/videos/:id and the key check. The key is typed on a
+ * phone, so it is short-ish by nature; ten tries a minute per IP makes
+ * guessing it a matter of years, not minutes, and every miss is logged.
+ */
+export const gwrAdminLimiter = rateLimit({
+  ...defaults,
+  windowMs: 60 * 1000,
+  max: 10,
+})

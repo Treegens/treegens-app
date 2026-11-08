@@ -40,4 +40,4 @@ const generateUniqueFileName = (originalName: string) => {
   return uniqueName
 }
 
-export { upload, generateUniqueFileName }
+export { upload, generateUniqueFileName, fileFilter }

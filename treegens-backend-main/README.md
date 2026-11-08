@@ -236,19 +236,28 @@ verifiers, no MGRO — these never touch `submissions` or rewards.
 | Method | Path                              | Notes                                                                   |
 | ------ | --------------------------------- | ----------------------------------------------------------------------- |
 | GET    | `/api/gwr/config`                 | `{ uploadCodeRequired, adminEnabled, maxFileSizeMB, maxDurationSeconds }` |
-| POST   | `/api/gwr/videos`                 | multipart `video` + optional `latitude`, `longitude`, `accuracyMeters`, `reverseGeocode`, `uploaderName`, `note`, `recordedAt`, `uploadCode` |
+| POST   | `/api/gwr/videos`                 | multipart `video` + optional `latitude`, `longitude`, `accuracyMeters`, `reverseGeocode`, `uploaderName`, `note`, `recordedAt`. Headers: `x-gwr-upload-code`, `x-gwr-upload-id` |
 | GET    | `/api/gwr/videos?page=&limit=`    | Newest first; `limit` max 200                                           |
-| GET    | `/api/gwr/videos/manifest.csv`    | One row per clip: filename, time, uploader, GPS, size, URL              |
-| GET    | `/api/gwr/videos/urls.txt`        | One download URL per line — `wget -i treegens-gwr-urls.txt`             |
-| DELETE | `/api/gwr/videos/:id`             | Header `x-gwr-admin-key: $GWR_ADMIN_KEY`; removes bucket object + record |
+| GET    | `/api/gwr/videos/manifest.csv`    | One row per clip: filename, time, uploader, GPS, size, URL (formula-safe) |
+| GET    | `/api/gwr/videos/urls.txt`        | One download URL per line — `wget --content-disposition -i treegens-gwr-urls.txt` |
+| GET    | `/api/gwr/admin/check`            | 204 when `x-gwr-admin-key` is right; the gallery asks before showing delete buttons |
+| DELETE | `/api/gwr/videos/:id`             | Header `x-gwr-admin-key: $GWR_ADMIN_KEY`; removes bucket object + record (10/min per IP) |
 
-Clips are stored in the GCS bucket under `gwr/` with
+Nobody signs in here, so the body is guarded before it is read: the upload
+code (header, when `GWR_UPLOAD_CODE` is set) and an in-flight cap per address
+and overall (429 `TOO_MANY_UPLOADS`) run ahead of multer, which then takes one
+clip of at most 100MB and a handful of short text fields. A retry that repeats
+its `x-gwr-upload-id` after a lost response gets the first copy back.
+
+Clips are stored in the GCS bucket under `gwr/` as `<uuid>.<ext>` with the
+extension from an allowlist (mp4, m4v, mov, webm, mkv, 3gp, 3g2) and served
+under that extension's MIME type, with
 `Content-Disposition: attachment; filename="treegens-gwr-<utc stamp>-<name>-<id>.<ext>"`,
 so the public URL downloads under a readable, chronologically sortable name
 while still playing inline in the gallery.
 
-Env (both optional): `GWR_UPLOAD_CODE` gates uploads behind a shared code;
-`GWR_ADMIN_KEY` enables deletion. See `.env.example`.
+Env (all optional): `GWR_UPLOAD_CODE`, `GWR_ADMIN_KEY` (12+ characters),
+`GWR_MAX_INFLIGHT_PER_IP`, `GWR_MAX_INFLIGHT`. See `.env.example`.
 
 ## 🏗 Project Structure
 

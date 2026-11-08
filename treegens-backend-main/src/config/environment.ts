@@ -52,8 +52,32 @@ class EnvironmentConfig {
     return (process.env.GWR_UPLOAD_CODE || '').trim()
   }
 
+  /** A key this short is guessable at the DELETE limiter's pace; treated as
+   * unset (deletion stays closed) rather than obeyed. */
+  private static readonly GWR_ADMIN_KEY_MIN_LENGTH = 12
+
   get GWR_ADMIN_KEY() {
-    return (process.env.GWR_ADMIN_KEY || '').trim()
+    const key = (process.env.GWR_ADMIN_KEY || '').trim()
+    if (key && key.length < EnvironmentConfig.GWR_ADMIN_KEY_MIN_LENGTH) {
+      console.error(
+        `[config] GWR_ADMIN_KEY is shorter than ${EnvironmentConfig.GWR_ADMIN_KEY_MIN_LENGTH} characters; ` +
+          'GWR deletion stays disabled until a longer key is set.',
+      )
+      return ''
+    }
+    return key
+  }
+
+  /** In-flight caps on the public GWR upload, which has no sign-in to count
+   * by: per address (default 8) and overall (default 32). */
+  get GWR_MAX_INFLIGHT_PER_IP() {
+    const n = Number(process.env.GWR_MAX_INFLIGHT_PER_IP)
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 8
+  }
+
+  get GWR_MAX_INFLIGHT() {
+    const n = Number(process.env.GWR_MAX_INFLIGHT)
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 32
   }
 
   get isDevelopment() {
@@ -100,7 +124,7 @@ class EnvironmentConfig {
       console.error(
         `[config] TGN_VAULT_ADDRESS=${configured} is not a vault (stake/slash ` +
           `calls revert on it). Ignoring it and using ${CURRENT}. ` +
-          `Remove or fix the stale env var.`
+          `Remove or fix the stale env var.`,
       )
       return CURRENT
     }
@@ -161,11 +185,15 @@ class EnvironmentConfig {
     const configured = process.env.VERIFIER_MINTER_ADDRESS?.trim()
     if (!configured) return CURRENT
 
-    if (EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(configured.toLowerCase())) {
+    if (
+      EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(
+        configured.toLowerCase(),
+      )
+    ) {
       console.error(
         `[config] VERIFIER_MINTER_ADDRESS=${configured} is a REVOKED minter and ` +
           `would fail every mint. Ignoring it and using ${CURRENT}. ` +
-          `Remove the stale env var.`
+          `Remove the stale env var.`,
       )
       return CURRENT
     }
@@ -328,10 +356,7 @@ class EnvironmentConfig {
    * `ultralytics` — multipart Bearer call to `AI_API_PREDICT_URL` or base + path.
    * `roboflow_workflow` — Roboflow Serverless (`ROBOFLOW_*` settings).
    */
-  get AI_PROVIDER():
-    | 'treegens_ml'
-    | 'ultralytics'
-    | 'roboflow_workflow' {
+  get AI_PROVIDER(): 'treegens_ml' | 'ultralytics' | 'roboflow_workflow' {
     const v = (process.env.AI_PROVIDER || 'treegens_ml').trim().toLowerCase()
     if (v === 'roboflow_workflow' || v === 'roboflow')
       return 'roboflow_workflow'
@@ -364,7 +389,9 @@ class EnvironmentConfig {
    * planting API times out or returns 5xx.
    */
   get AI_FAILOVER_TO_ULTRALYTICS() {
-    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '').trim().toLowerCase()
+    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '')
+      .trim()
+      .toLowerCase()
     return v === '1' || v === 'true' || v === 'yes'
   }
 

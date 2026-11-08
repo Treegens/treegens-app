@@ -117,7 +117,10 @@ async function uploadGwrClipToStorage(
       contentType: mimeType,
       resumable: false,
       metadata: {
-        cacheControl: 'public, max-age=31536000, immutable',
+        // Not a year, not immutable: a GWR clip can be deleted from the
+        // gallery, and Google serves a cached public object until its
+        // max-age runs out even after the delete.
+        cacheControl: 'public, max-age=3600',
         contentDisposition: `attachment; filename="${safeName}"`,
         metadata: { 'uploaded-by': 'treegens-backend', collection: 'gwr' },
       },
