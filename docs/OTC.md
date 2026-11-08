@@ -154,21 +154,26 @@ when the variable is missing or empty.
 | `ENABLE_OTC_RECONCILER` | `true` | `false` disables the 5-minute sweep. API process only; never set in the workers. |
 | `OTC_BUYER_DISPLAY_NAME` | `TreeGens` | How planters see the buyer in alerts and on pages (D9). |
 
-`render.yaml` already carries the literal defaults for `treegens-api`
-(`OTC_RELEASE_MODE=full`, `OTC_PAY_ON=ai_count`, `OTC_CONFIRM_REQUIRES_REF="true"`,
-`OTC_DEAL_EXPIRY_DAYS="14"`, `OTC_BUYER_DISPLAY_NAME=TreeGens`, `ENABLE_OTC_RECONCILER="true"`,
-`OTC_PUBLIC_APP_URL`). The three secrets are marked `sync: false` and must be entered by hand.
+`render.yaml` carries everything the desk needs for `treegens-api`: the buyer wallet
+(`OTC_BUYER_WALLETS`, a public address, so it ships with the Blueprint), `OTC_PUBLIC_APP_URL`,
+and the literal defaults (`OTC_RELEASE_MODE=full`, `OTC_PAY_ON=ai_count`,
+`OTC_CONFIRM_REQUIRES_REF="true"`, `OTC_DEAL_EXPIRY_DAYS="14"`, `OTC_BUYER_DISPLAY_NAME=TreeGens`,
+`ENABLE_OTC_RECONCILER="true"`). When the branch lands on `main`, the Blueprint sync applies
+them and redeploys the API and workers with no dashboard input. The Telegram variables are
+deliberately NOT in the Blueprint (a `sync: false` entry would make the sync wait for a value).
 
 ### Render dashboard steps
 
-1. Open the Render dashboard, service **treegens-api**, tab **Environment**.
-2. Add `OTC_BUYER_WALLETS` with Jimi's wallet address (several addresses separated by commas).
-3. Add `OTC_TELEGRAM_BOT_TOKEN` and `OTC_TELEGRAM_CHAT_ID` (section 5). Leave them empty to run
-   without Telegram; in-app and web push alerts still work.
-4. Optionally set `OTC_DEFAULT_RATE_KES`, or change any default from the table.
-5. Save. Render redeploys the service.
-6. Check `GET https://<api host>/health/otc`. It returns `enabled: true`, the number of buyer
-   wallets, `telegram: true/false` and the public app URL. No wallet addresses are listed.
+Nothing is required for the desk itself. Optional:
+
+1. To turn on Telegram alerts, open the Render dashboard, service **treegens-api**, tab
+   **Environment**, and add `OTC_TELEGRAM_BOT_TOKEN` and `OTC_TELEGRAM_CHAT_ID` (section 5).
+   Without them, in-app and web push alerts still work.
+2. To add a second buyer, edit `OTC_BUYER_WALLETS` in `render.yaml` (comma-separated) and merge.
+3. Optionally set `OTC_DEFAULT_RATE_KES`, or change any default from the table.
+4. Check `GET https://treegens-api.onrender.com/health/otc`. It returns `enabled: true`, the
+   number of buyer wallets, `telegram: true/false` and the public app URL. No wallet addresses
+   are listed.
 
 The same keys go in `treegens-backend-main/.env` for local runs; `.env.example` documents them.
 

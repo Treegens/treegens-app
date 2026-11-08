@@ -74,17 +74,16 @@ services:
         sync: false
       - key: DISTRIBUTOR_API_KEY
         sync: false
-      # OTC desk (pay planters by M-Pesa, buyer keeps the MGRO). Buyer wallets
-      # and Telegram credentials are set in the dashboard; the public app URL
-      # is this repo's Netlify deploy, never treegens.app.
+      # OTC desk (pay planters by M-Pesa, buyer keeps the MGRO). The buyer
+      # wallet is a public address, so it lives here and ships with the
+      # Blueprint. Telegram alerts are optional: add OTC_TELEGRAM_BOT_TOKEN and
+      # OTC_TELEGRAM_CHAT_ID in the dashboard to turn them on (kept out of
+      # the Blueprint so a sync never waits for input). The public app URL is
+      # this repo's Netlify deploy, never treegens.app.
       - key: OTC_BUYER_WALLETS
-        sync: false
+        value: "0xce97a429b00ed6b99a1fc839404ec6cc5f40cc39"
       - key: OTC_PUBLIC_APP_URL
         value: https://treegens-app-web.netlify.app
-      - key: OTC_TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: OTC_TELEGRAM_CHAT_ID
-        sync: false
       # Whole planter share to the buyer in one mint on confirmation (D1).
       - key: OTC_RELEASE_MODE
         value: full
