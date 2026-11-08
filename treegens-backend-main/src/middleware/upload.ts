@@ -34,10 +34,36 @@ const upload = multer({
   },
 })
 
+/**
+ * Image-only upload for OTC M-Pesa screenshots. Phones export PNG/JPEG/WebP
+ * and iPhones HEIC; a screenshot is never more than a few MB.
+ */
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif']
+const IMAGE_MIME = /^image\/(png|jpe?g|webp|heic|heif)$/i
+
+const imageFileFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
+  const name = String(file.originalname || '').toLowerCase()
+  const dot = name.lastIndexOf('.')
+  const ext = dot >= 0 ? name.substring(dot) : ''
+  if (IMAGE_MIME.test(file.mimetype) || IMAGE_EXTENSIONS.includes(ext)) {
+    cb(null, true)
+  } else {
+    cb(new Error('Only image files are allowed') as any, false)
+  }
+}
+
+const imageUpload = multer({
+  storage: storage,
+  fileFilter: imageFileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+})
+
 const generateUniqueFileName = (originalName: string) => {
   const extension = originalName.split('.').pop()
   const uniqueName = `${uuidv4()}.${extension}`
   return uniqueName
 }
 
-export { upload, generateUniqueFileName }
+export { upload, imageUpload, generateUniqueFileName }

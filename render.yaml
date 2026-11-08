@@ -74,6 +74,31 @@ services:
         sync: false
       - key: DISTRIBUTOR_API_KEY
         sync: false
+      # OTC desk (pay planters by M-Pesa, buyer keeps the MGRO). The buyer
+      # wallet is a public address, so it lives here and ships with the
+      # Blueprint. Telegram alerts are optional: add OTC_TELEGRAM_BOT_TOKEN and
+      # OTC_TELEGRAM_CHAT_ID in the dashboard to turn them on (kept out of
+      # the Blueprint so a sync never waits for input). The public app URL is
+      # this repo's Netlify deploy, never treegens.app.
+      - key: OTC_BUYER_WALLETS
+        value: "0xce97a429b00ed6b99a1fc839404ec6cc5f40cc39"
+      - key: OTC_PUBLIC_APP_URL
+        value: https://treegens-app-web.netlify.app
+      # Whole planter share to the buyer in one mint on confirmation (D1).
+      - key: OTC_RELEASE_MODE
+        value: full
+      # Deals payable as soon as the AI counted a fundable batch (D3).
+      - key: OTC_PAY_ON
+        value: ai_count
+      - key: OTC_CONFIRM_REQUIRES_REF
+        value: "true"
+      - key: OTC_DEAL_EXPIRY_DAYS
+        value: "14"
+      - key: OTC_BUYER_DISPLAY_NAME
+        value: TreeGens
+      # The 5-minute OTC sweep runs here, in the API process only.
+      - key: ENABLE_OTC_RECONCILER
+        value: "true"
 
   # ------------------------------------------------- reward claim worker ----
   - type: worker

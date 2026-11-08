@@ -12,6 +12,7 @@ import { offlineVideoService } from '@/services/offlineVideoService'
 import { isValidSubmissionObjectId } from '@/services/submissionApiMappers'
 import { videoService, VideoType } from '@/services/videoService'
 import type { ISubmissionAiVerification, ISubmissionDoc } from '@/types'
+import type { OtcDealUploadSummary } from '@/types/otc'
 import { submissionDocToPlanterGroup } from '@/utils/submissionPlanterGroup'
 import { VIDEO_CONFIG } from '@/utils/constants'
 import { validateVideoFile } from '@/utils/videoValidation'
@@ -71,6 +72,9 @@ export default function CompleteSubmissionPage() {
 
   const [plantAiAfterUpload, setPlantAiAfterUpload] =
     useState<ISubmissionAiVerification | null>(null)
+  /** OTC (M-Pesa) deal created by the plant upload, shown in the celebration. */
+  const [otcDealAfterUpload, setOtcDealAfterUpload] =
+    useState<OtcDealUploadSummary | null>(null)
   const [mangroveUploadAwaitingContinue, setMangroveUploadAwaitingContinue] =
     useState(false)
   const [showSubmissionCelebrate, setShowSubmissionCelebrate] = useState(false)
@@ -249,6 +253,7 @@ export default function CompleteSubmissionPage() {
       if (isUserOnline) {
         setIsUploading(true)
         setPlantAiAfterUpload(null)
+        setOtcDealAfterUpload(null)
         setMangroveUploadAwaitingContinue(false)
         const uploadRes = await videoService.uploadVideo(
           plantFile,
@@ -279,6 +284,7 @@ export default function CompleteSubmissionPage() {
         )
         uploadedPlantAi = uploadRes?.data?.aiVerification ?? null
         setPlantAiAfterUpload(uploadedPlantAi)
+        setOtcDealAfterUpload(uploadRes?.data?.otcDeal ?? null)
       } else {
         setIsQueueing(true)
         await offlineVideoService.queueVideoUpload(
@@ -419,6 +425,7 @@ export default function CompleteSubmissionPage() {
         variant={celebrationVariant}
         mangrovePlantAi={plantAiAfterUpload}
         queuedOfflineMangrove={celebrationOfflineMangrove}
+        otcDeal={otcDealAfterUpload}
       />
 
       <header className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white px-4 py-2">

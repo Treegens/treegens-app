@@ -11,7 +11,11 @@ import {
   IoPersonOutline,
 } from 'react-icons/io5'
 import Link from 'next/link'
-import { HiArrowLeft, HiClipboardDocumentCheck, HiSparkles } from 'react-icons/hi2'
+import {
+  HiArrowLeft,
+  HiClipboardDocumentCheck,
+  HiSparkles,
+} from 'react-icons/hi2'
 import { defaultChain } from '@/config/thirdwebChain'
 import { client } from '@/config/thirdwebConfig'
 import { getTreegensConnectModalProps } from '@/config/thirdwebConnect'
@@ -271,7 +275,8 @@ export default function Profile() {
                 {(user?.socialPointsTotal ?? 0).toLocaleString()}
               </p>
               <p className="mt-2 text-[10px] leading-snug text-[#5c534a]">
-                ~{POINTS_PER_TGN_HINT} pts ≈ 1 TGN (guide rate). Earn more on Tasks.
+                ~{POINTS_PER_TGN_HINT} pts ≈ 1 TGN (guide rate). Earn more on
+                Tasks.
               </p>
               <Link
                 href={routes.Earn}
@@ -389,11 +394,27 @@ export default function Profile() {
             ) : null}
           </div>
 
-          <div className="mb-4 mt-2 flex w-full justify-end">
+          <div className="mb-4 mt-2 flex w-full flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => router.push(routes.OtcMe)}
+              className="min-h-10 rounded-full bg-[#ececec] px-4 py-2 text-[14px] text-[#374151] transition-opacity hover:opacity-90 active:opacity-90"
+            >
+              M-Pesa payouts
+            </button>
+            {user?.isOtcBuyer ? (
+              <button
+                type="button"
+                onClick={() => router.push(routes.OtcDesk)}
+                className="min-h-10 rounded-full bg-[#435F24] px-4 py-2 text-[14px] font-semibold text-white transition-opacity hover:opacity-90 active:opacity-90"
+              >
+                OTC desk
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => router.push(routes.Stake)}
-              className="rounded-full bg-[#ececec] px-4 py-2 text-[14px] text-[#374151] transition-opacity hover:opacity-90 active:opacity-90"
+              className="min-h-10 rounded-full bg-[#ececec] px-4 py-2 text-[14px] text-[#374151] transition-opacity hover:opacity-90 active:opacity-90"
             >
               {user?.isVerifier ? 'Stake / Unstake TGN' : 'Become a verifier'}
             </button>

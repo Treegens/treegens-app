@@ -1,9 +1,10 @@
 import express, { Request, Response } from 'express'
+import env from '../config/environment'
 import { testStorageConnection } from '../config/gcs'
 import HealthService from '../services/healthService'
-import { sendError } from '../utils/responseHelpers'
-import env from '../config/environment'
+import { telegramConfigured } from '../services/otcNotifications'
 import { checkStitchReadiness } from '../services/verifiedVideoStitchService'
+import { sendError } from '../utils/responseHelpers'
 import { TREE_BATCH_SIZE, batchEnforcementEnabled } from '../utils/treeBatch'
 
 const router = express.Router()
@@ -128,18 +129,21 @@ router.get('/', async (req: Request, res: Response) => {
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 // Kept the legacy path as an alias so existing monitors don't 404.
-router.get(['/storage-test', '/pinata-test'], async (req: Request, res: Response) => {
-  try {
-    const connectionResult = await testStorageConnection()
-    res.json({
-      storageConnected: connectionResult.connected,
-      message: connectionResult.message,
-      timestamp: new Date().toISOString(),
-    })
-  } catch {
-    return sendError(res, 'Storage connection test failed')
-  }
-})
+router.get(
+  ['/storage-test', '/pinata-test'],
+  async (req: Request, res: Response) => {
+    try {
+      const connectionResult = await testStorageConnection()
+      res.json({
+        storageConnected: connectionResult.connected,
+        message: connectionResult.message,
+        timestamp: new Date().toISOString(),
+      })
+    } catch {
+      return sendError(res, 'Storage connection test failed')
+    }
+  },
+)
 
 /**
  * @swagger
@@ -192,6 +196,31 @@ router.get('/pipeline', async (_req: Request, res: Response) => {
       enforced: batchEnforcementEnabled(),
     },
     retrier: process.env.ENABLE_STITCH_RETRIER !== 'false',
+    timestamp: new Date().toISOString(),
+  })
+})
+
+/**
+ * @swagger
+ * /health/otc:
+ *   get:
+ *     summary: OTC (M-Pesa) desk configuration
+ *     description: >
+ *       Whether the desk is enabled (at least one buyer wallet), whether
+ *       Telegram alerts are wired, and the public app origin used in invite
+ *       links. Wallet addresses are not listed.
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: OTC readiness
+ */
+router.get('/otc', (_req: Request, res: Response) => {
+  res.json({
+    enabled: env.OTC_BUYER_WALLETS.length > 0,
+    buyers: env.OTC_BUYER_WALLETS.length,
+    telegram: telegramConfigured(),
+    publicAppUrl: env.OTC_PUBLIC_APP_URL,
+    defaultRateKes: env.OTC_DEFAULT_RATE_KES || null,
     timestamp: new Date().toISOString(),
   })
 })

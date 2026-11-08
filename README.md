@@ -8,6 +8,7 @@ This repository contains the **Treegens** web application and **Node.js backend*
 |------|--------------|
 | [`treegens-web-main/`](treegens-web-main/) | Next.js frontend (App Router, Thirdweb auth, Tailwind). |
 | [`treegens-backend-main/`](treegens-backend-main/) | Express API, MongoDB, Pinata/IPFS uploads, rewards and submission logic. |
+| [`docs/OTC.md`](docs/OTC.md) | OTC desk: paying planters by M-Pesa while the buyer keeps the MGRO (flow, env vars, Telegram, troubleshooting). |
 
 Each package has its own `package.json`, lockfile, and `.gitignore`. **Do not commit** `.env` files — they are excluded from Git.
 

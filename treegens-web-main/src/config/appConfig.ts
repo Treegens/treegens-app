@@ -29,6 +29,22 @@ export const routes = {
   RejectionFeedback: '/submissions/[id]/rejection-feedback',
   /** Dynamic — public planter stats + burns */
   PublicProfile: '/u/[walletAddress]',
+  /** OTC desk: buyer pays planters by M-Pesa and keeps the MGRO */
+  OtcDesk: '/otc',
+  /** Planter's own M-Pesa enrollment + payouts */
+  OtcMe: '/otc/me',
+  /** Dynamic — invite landing, use buildOtcJoinPath */
+  OtcJoin: '/otc/join/[code]',
+  /** Dynamic — one M-Pesa deal, use buildOtcDealPath */
+  OtcDeal: '/otc/deals/[id]',
+}
+
+export function buildOtcJoinPath(code: string) {
+  return `/otc/join/${encodeURIComponent(code.trim())}`
+}
+
+export function buildOtcDealPath(dealId: string) {
+  return `/otc/deals/${encodeURIComponent(dealId.trim())}`
 }
 
 export function buildPublicProfilePath(walletAddress: string) {
@@ -88,6 +104,10 @@ const dynamicTitleRoutesMap: Record<string, string> = {
   '/health-checks/[healthCheckId]': 'Health check',
   '/submissions/review/health-checks/[healthCheckId]': 'Review health check',
   [routes.PublicProfile]: 'Profile',
+  [routes.OtcDesk]: 'OTC desk',
+  [routes.OtcMe]: 'M-Pesa payouts',
+  [routes.OtcJoin]: 'Join M-Pesa payouts',
+  [routes.OtcDeal]: 'M-Pesa payout',
 }
 
 const dynamicTitleRoutes = Object.keys(dynamicTitleRoutesMap)

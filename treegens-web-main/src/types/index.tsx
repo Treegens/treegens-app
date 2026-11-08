@@ -125,6 +125,8 @@ export interface IUserProfile {
   /** Off-chain vote proxy — wallet address of verifier receiving delegated credit */
   verifierDelegate?: string | null
   verifierDelegateSetAt?: string | null
+  /** Computed by the API from OTC_BUYER_WALLETS: may run the OTC (M-Pesa) desk */
+  isOtcBuyer?: boolean
   createdAt: string
   updatedAt: string
 }

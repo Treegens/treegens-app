@@ -1,5 +1,5 @@
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import type { Request } from 'express'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 
 const defaults = {
   standardHeaders: true,
@@ -86,3 +86,28 @@ export const pushSubscribeLimiter = userLimiter(30)
 
 /** POST /api/submissions/:id/conversation/messages */
 export const conversationMessageLimiter = userLimiter(60)
+
+/** OTC desk (buyer): lists, invites, cancels. */
+export const otcBuyerLimiter = userLimiter(120)
+
+/** OTC planter actions: confirm / dispute / profile edits. */
+export const otcPlanterLimiter = userLimiter(60)
+
+/** POST /api/otc/join: one planter should never need more than a few tries. */
+export const otcJoinLimiter = userLimiter(10)
+
+/** POST /api/otc/deals/:id/payment: multipart screenshot upload. */
+export const otcUploadLimiter = userLimiter(30)
+
+/**
+ * GET /api/otc/invites/:code/preview is reachable before sign-in, so it keys
+ * by IP. A field meeting puts 40 phones behind one carrier NAT address, each
+ * polling the page a few times, hence the generous budget. Codes are 10
+ * chars from a 32-symbol alphabet; 600/min still keeps brute force far below
+ * one guess per billion years.
+ */
+export const otcPreviewLimiter = rateLimit({
+  ...defaults,
+  windowMs: 60 * 1000,
+  max: scaled(600),
+})

@@ -1,15 +1,16 @@
 import express, { Request, Response } from 'express'
+import env from '../config/environment'
+import { isSocialTaskKey } from '../constants/socialRewardsCatalog'
 import { authenticate } from '../middleware/auth'
+import { isOtcBuyer } from '../middleware/otcAuth'
 import {
   socialTaskCompleteLimiter,
   verifierPublicLimiter,
 } from '../middleware/rateLimits'
-import { isSocialTaskKey } from '../constants/socialRewardsCatalog'
 import {
   validateChallengeRequest,
   validateUpdateProfile,
 } from '../middleware/validation'
-import env from '../config/environment'
 import UserService from '../services/userService'
 import VerifierService from '../services/verifierService'
 import {
@@ -81,7 +82,15 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
       return sendNotFound(res, 'User')
     }
 
-    return sendSuccess(res, 'User retrieved successfully', user)
+    // Computed, never persisted: who may run the OTC (M-Pesa) desk.
+    const plain =
+      typeof (user as any).toObject === 'function'
+        ? (user as any).toObject()
+        : user
+    return sendSuccess(res, 'User retrieved successfully', {
+      ...plain,
+      isOtcBuyer: isOtcBuyer(walletAddress),
+    })
   } catch (error: any) {
     console.error('Error in get current user endpoint:', error)
     return sendError(res, 'Failed to retrieve user')
@@ -168,19 +177,23 @@ router.get(
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 // GET /api/users/me/social-rewards — points + catalog + completions
-router.get('/me/social-rewards', authenticate, async (req: Request, res: Response) => {
-  try {
-    const walletAddress = req.user.walletAddress
-    const summary = await userService.getSocialRewardsSummary(walletAddress, {
-      userId: req.user.userId?.toString?.() ?? String(req.user.userId ?? ''),
-    })
-    if (!summary) return sendNotFound(res, 'User')
-    return sendSuccess(res, 'Social rewards retrieved', summary)
-  } catch (error: unknown) {
-    console.error('Error in social-rewards:', error)
-    return sendError(res, 'Failed to load social rewards')
-  }
-})
+router.get(
+  '/me/social-rewards',
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      const walletAddress = req.user.walletAddress
+      const summary = await userService.getSocialRewardsSummary(walletAddress, {
+        userId: req.user.userId?.toString?.() ?? String(req.user.userId ?? ''),
+      })
+      if (!summary) return sendNotFound(res, 'User')
+      return sendSuccess(res, 'Social rewards retrieved', summary)
+    } catch (error: unknown) {
+      console.error('Error in social-rewards:', error)
+      return sendError(res, 'Failed to load social rewards')
+    }
+  },
+)
 
 // POST /api/users/me/social-rewards/tasks/:taskKey/complete
 router.post(
@@ -200,15 +213,19 @@ router.post(
       )
       if (!result) return sendNotFound(res, 'User')
 
-      return sendSuccess(res, result.newlyCompleted ? 'Points awarded' : 'Already completed', {
-        newlyCompleted: result.newlyCompleted,
-        pointsEarned: result.pointsEarned,
-        pointsTotal:
-          typeof (result.user as { socialPointsTotal?: number }).socialPointsTotal ===
-          'number'
-            ? (result.user as { socialPointsTotal: number }).socialPointsTotal
-            : 0,
-      })
+      return sendSuccess(
+        res,
+        result.newlyCompleted ? 'Points awarded' : 'Already completed',
+        {
+          newlyCompleted: result.newlyCompleted,
+          pointsEarned: result.pointsEarned,
+          pointsTotal:
+            typeof (result.user as { socialPointsTotal?: number })
+              .socialPointsTotal === 'number'
+              ? (result.user as { socialPointsTotal: number }).socialPointsTotal
+              : 0,
+        },
+      )
     } catch (error: unknown) {
       if (error instanceof Error && error.message === 'INVALID_TASK') {
         return sendBadRequest(res, 'Invalid task')
@@ -265,26 +282,38 @@ router.post(
   },
 )
 
-router.delete('/me/delegate', authenticate, async (req: Request, res: Response) => {
-  try {
-    await userService.clearVerifierDelegate(req.user.walletAddress)
-    const user = await userService.getUserByWalletAddress(req.user.walletAddress)
-    return sendSuccess(res, 'Delegation cleared', user)
-  } catch (error: unknown) {
-    console.error('delegate clear error:', error)
-    return sendError(res, 'Failed to clear delegate')
-  }
-})
+router.delete(
+  '/me/delegate',
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      await userService.clearVerifierDelegate(req.user.walletAddress)
+      const user = await userService.getUserByWalletAddress(
+        req.user.walletAddress,
+      )
+      return sendSuccess(res, 'Delegation cleared', user)
+    } catch (error: unknown) {
+      console.error('delegate clear error:', error)
+      return sendError(res, 'Failed to clear delegate')
+    }
+  },
+)
 
-router.get('/me/delegators', authenticate, async (req: Request, res: Response) => {
-  try {
-    const rows = await userService.listDelegatorsForVerifier(req.user.walletAddress)
-    return sendSuccess(res, 'Delegators', { delegators: rows })
-  } catch (error: unknown) {
-    console.error('delegators list error:', error)
-    return sendError(res, 'Failed to load delegators')
-  }
-})
+router.get(
+  '/me/delegators',
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      const rows = await userService.listDelegatorsForVerifier(
+        req.user.walletAddress,
+      )
+      return sendSuccess(res, 'Delegators', { delegators: rows })
+    } catch (error: unknown) {
+      console.error('delegators list error:', error)
+      return sendError(res, 'Failed to load delegators')
+    }
+  },
+)
 
 router.patch(
   '/me',
@@ -463,23 +492,20 @@ router.get('/leaderboard/trees-funded', async (req: Request, res: Response) => {
 })
 
 // GET /api/users/:walletAddress/public — public profile (no auth)
-router.get(
-  '/:walletAddress/public',
-  async (req: Request, res: Response) => {
-    try {
-      const raw = String(req.params.walletAddress || '').trim()
-      if (!/^0x[a-fA-F0-9]{40}$/.test(raw)) {
-        return sendBadRequest(res, 'Invalid wallet address')
-      }
-      const profile = await userService.getPublicProfile(raw)
-      if (!profile) return sendNotFound(res, 'User')
-      return sendSuccess(res, 'Public profile', profile)
-    } catch (error: unknown) {
-      console.error('public profile error:', error)
-      return sendError(res, 'Failed to load public profile')
+router.get('/:walletAddress/public', async (req: Request, res: Response) => {
+  try {
+    const raw = String(req.params.walletAddress || '').trim()
+    if (!/^0x[a-fA-F0-9]{40}$/.test(raw)) {
+      return sendBadRequest(res, 'Invalid wallet address')
     }
-  },
-)
+    const profile = await userService.getPublicProfile(raw)
+    if (!profile) return sendNotFound(res, 'User')
+    return sendSuccess(res, 'Public profile', profile)
+  } catch (error: unknown) {
+    console.error('public profile error:', error)
+    return sendError(res, 'Failed to load public profile')
+  }
+})
 
 /**
  * @swagger

@@ -12,6 +12,7 @@ import {
   validateHealthCheckVote,
   validateSubmissionUpload,
 } from '../middleware/validation'
+import OtcDeal from '../models/OtcDeal'
 import User from '../models/User'
 import * as conversationService from '../services/conversationService'
 import HealthCheckService from '../services/healthCheckService'
@@ -542,6 +543,14 @@ router.get(
       }
       const user = await User.findOne({ walletAddress: wallet }).lean()
       if (user?.isVerifier) {
+        return sendSuccess(res, 'Submission retrieved successfully', doc)
+      }
+      // OTC (M-Pesa): the buyer paying for this planting may review it.
+      const otcBuyer = await OtcDeal.exists({
+        submissionId: doc._id,
+        buyerWallet: wallet,
+      })
+      if (otcBuyer) {
         return sendSuccess(res, 'Submission retrieved successfully', doc)
       }
       return sendError(res, 'Access denied', 403)

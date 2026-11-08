@@ -1,7 +1,9 @@
 'use client'
 
 import { PlantAiResultSummary } from '@/components/submission/PlantAiResultSummary'
+import { formatKes } from '@/services/otcService'
 import type { ISubmissionAiVerification } from '@/types'
+import type { OtcDealUploadSummary } from '@/types/otc'
 import { useEffect } from 'react'
 import { HiCheck } from 'react-icons/hi2'
 
@@ -13,6 +15,8 @@ type Props = {
   /** When set, show mangrove AI headline (count or offline message) */
   mangrovePlantAi?: ISubmissionAiVerification | null
   queuedOfflineMangrove?: boolean
+  /** OTC: the planter is paid in KES by M-Pesa for this planting. */
+  otcDeal?: OtcDealUploadSummary | null
 }
 
 const DISPLAY_MS_DEFAULT = 3800
@@ -27,6 +31,7 @@ export function SubmissionCompleteCelebration({
   variant = 'submitted',
   mangrovePlantAi,
   queuedOfflineMangrove,
+  otcDeal,
 }: Props) {
   const showAiBlock =
     queuedOfflineMangrove ||
@@ -66,17 +71,24 @@ export function SubmissionCompleteCelebration({
           <p className="text-xl font-semibold text-gray-900">
             Submission complete!
           </p>
-          <p className="mt-2 text-sm leading-relaxed text-gray-600">{subtitle}</p>
+          <p className="mt-2 text-sm leading-relaxed text-gray-600">
+            {subtitle}
+          </p>
           {showAiBlock ? (
             <div className="mt-5 w-full">
               <PlantAiResultSummary
                 variant="hero"
                 ai={mangrovePlantAi ?? null}
-                queuedOffline={
-                  variant === 'queued' && !!queuedOfflineMangrove
-                }
+                queuedOffline={variant === 'queued' && !!queuedOfflineMangrove}
               />
             </div>
+          ) : null}
+          {otcDeal ? (
+            <p className="mt-4 w-full rounded-xl border border-[#435F24]/15 bg-[#eef6e4] px-3 py-2 text-sm font-semibold text-[#303E1A]">
+              {otcDeal.trees > 0
+                ? `You will be paid ${formatKes(otcDeal.amountKes)} by M-Pesa for ${otcDeal.trees} tree${otcDeal.trees === 1 ? '' : 's'}`
+                : 'M-Pesa payout: count pending'}
+            </p>
           ) : null}
         </div>
       </div>

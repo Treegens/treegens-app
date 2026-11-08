@@ -35,7 +35,9 @@ function parseServiceAccount(): Record<string, unknown> | null {
     try {
       return JSON.parse(Buffer.from(raw, 'base64').toString('utf8'))
     } catch {
-      throw new Error('GCS_SERVICE_ACCOUNT_JSON is not valid JSON (or base64 JSON)')
+      throw new Error(
+        'GCS_SERVICE_ACCOUNT_JSON is not valid JSON (or base64 JSON)',
+      )
     }
   }
 }
@@ -49,7 +51,10 @@ function getStorage(): { storage: Storage; bucketName: string } {
     // Fall back to Application Default Credentials when no explicit key is set
     // (e.g. running on GCP with a bound service account).
     cachedStorage = credentials
-      ? new Storage({ credentials, projectId: credentials.project_id as string })
+      ? new Storage({
+          credentials,
+          projectId: credentials.project_id as string,
+        })
       : new Storage()
     cachedBucketName = bucketName
   }
@@ -64,10 +69,12 @@ async function uploadToStorage(
   fileBuffer: Buffer,
   fileName: string,
   mimeType: string,
+  folder: 'submissions' | 'otc' = 'submissions',
 ): Promise<StorageUploadResult> {
   const { storage, bucketName } = getStorage()
   // Namespace uploads under a folder; fileName is already made unique upstream.
-  const objectName = `submissions/${fileName}`
+  // `otc/` holds M-Pesa payment screenshots, `submissions/` the clips.
+  const objectName = `${folder}/${fileName}`
   const fileRef = storage.bucket(bucketName).file(objectName)
 
   try {
@@ -75,7 +82,12 @@ async function uploadToStorage(
       contentType: mimeType,
       resumable: false,
       metadata: {
-        cacheControl: 'public, max-age=31536000, immutable',
+        // M-Pesa screenshots show the buyer's balance: never let a CDN or
+        // browser keep a copy. Clips are immutable and public.
+        cacheControl:
+          folder === 'otc'
+            ? 'private, max-age=0, no-store'
+            : 'public, max-age=31536000, immutable',
         metadata: { 'uploaded-by': 'treegens-backend' },
       },
     })
@@ -96,6 +108,26 @@ async function uploadToStorage(
   }
 }
 
+/**
+ * Best-effort delete (superseded OTC screenshots). A missing object is not an
+ * error; any other failure is logged and swallowed so the caller's action
+ * never fails because of cleanup.
+ */
+async function deleteFromStorage(objectPath: string): Promise<boolean> {
+  const path = String(objectPath || '').replace(/^\/+/, '')
+  if (!path) return false
+  try {
+    const { storage, bucketName } = getStorage()
+    await storage.bucket(bucketName).file(path).delete({ ignoreNotFound: true })
+    return true
+  } catch (error) {
+    const e = error as { message?: string; code?: number }
+    if (e.code === 404) return true
+    console.warn('GCS delete failed', { object: path, message: e.message })
+    return false
+  }
+}
+
 async function testStorageConnection() {
   const bucketName = env.GCS_BUCKET?.trim()
   if (!bucketName) {
@@ -105,11 +137,25 @@ async function testStorageConnection() {
     const { storage } = getStorage()
     const [exists] = await storage.bucket(bucketName).exists()
     return exists
-      ? { connected: true, message: `Google Cloud Storage bucket "${bucketName}" reachable` }
-      : { connected: false, message: `Bucket "${bucketName}" not found or not accessible` }
+      ? {
+          connected: true,
+          message: `Google Cloud Storage bucket "${bucketName}" reachable`,
+        }
+      : {
+          connected: false,
+          message: `Bucket "${bucketName}" not found or not accessible`,
+        }
   } catch (error) {
-    return { connected: false, message: (error as { message?: string }).message || 'GCS check failed' }
+    return {
+      connected: false,
+      message: (error as { message?: string }).message || 'GCS check failed',
+    }
   }
 }
 
-export { buildPublicUrl, testStorageConnection, uploadToStorage }
+export {
+  buildPublicUrl,
+  deleteFromStorage,
+  testStorageConnection,
+  uploadToStorage,
+}

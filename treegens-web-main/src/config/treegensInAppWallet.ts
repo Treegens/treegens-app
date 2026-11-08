@@ -1,9 +1,14 @@
 import { publicEnv } from '@/config/publicEnv'
 import { inAppWallet, type InAppWalletAuth } from 'thirdweb/wallets'
 
-/** Auth methods shown in Connect modal and email sign-in. */
+/**
+ * Auth methods shown in Connect modal, email sign-in and phone (SMS) sign-in.
+ * `phone` must also be enabled for this client in the thirdweb dashboard
+ * (In-App Wallets > Authentication) or `preAuthenticate` rejects the request.
+ */
 export const TREEGENS_IN_APP_AUTH_OPTIONS: InAppWalletAuth[] = [
   'email',
+  'phone',
   'google',
   'apple',
   'facebook',

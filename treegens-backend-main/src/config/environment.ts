@@ -85,7 +85,7 @@ class EnvironmentConfig {
       console.error(
         `[config] TGN_VAULT_ADDRESS=${configured} is not a vault (stake/slash ` +
           `calls revert on it). Ignoring it and using ${CURRENT}. ` +
-          `Remove or fix the stale env var.`
+          `Remove or fix the stale env var.`,
       )
       return CURRENT
     }
@@ -146,11 +146,15 @@ class EnvironmentConfig {
     const configured = process.env.VERIFIER_MINTER_ADDRESS?.trim()
     if (!configured) return CURRENT
 
-    if (EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(configured.toLowerCase())) {
+    if (
+      EnvironmentConfig.REVOKED_VERIFIER_MINTERS.includes(
+        configured.toLowerCase(),
+      )
+    ) {
       console.error(
         `[config] VERIFIER_MINTER_ADDRESS=${configured} is a REVOKED minter and ` +
           `would fail every mint. Ignoring it and using ${CURRENT}. ` +
-          `Remove the stale env var.`
+          `Remove the stale env var.`,
       )
       return CURRENT
     }
@@ -313,10 +317,7 @@ class EnvironmentConfig {
    * `ultralytics` — multipart Bearer call to `AI_API_PREDICT_URL` or base + path.
    * `roboflow_workflow` — Roboflow Serverless (`ROBOFLOW_*` settings).
    */
-  get AI_PROVIDER():
-    | 'treegens_ml'
-    | 'ultralytics'
-    | 'roboflow_workflow' {
+  get AI_PROVIDER(): 'treegens_ml' | 'ultralytics' | 'roboflow_workflow' {
     const v = (process.env.AI_PROVIDER || 'treegens_ml').trim().toLowerCase()
     if (v === 'roboflow_workflow' || v === 'roboflow')
       return 'roboflow_workflow'
@@ -349,7 +350,9 @@ class EnvironmentConfig {
    * planting API times out or returns 5xx.
    */
   get AI_FAILOVER_TO_ULTRALYTICS() {
-    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '').trim().toLowerCase()
+    const v = (process.env.AI_FAILOVER_TO_ULTRALYTICS || '')
+      .trim()
+      .toLowerCase()
     return v === '1' || v === 'true' || v === 'yes'
   }
 
@@ -724,6 +727,94 @@ class EnvironmentConfig {
       String(process.env.VAPID_CONTACT_EMAIL || '').trim() ||
       'mailto:team@treegens.app'
     )
+  }
+
+  // --- OTC (M-Pesa) desk -------------------------------------------------
+
+  /**
+   * Wallets allowed to run the OTC desk: create invite links, see planters'
+   * M-Pesa numbers, upload payment proof, cancel deals. Comma-separated,
+   * compared lowercase. Empty disables every buyer endpoint (403).
+   */
+  get OTC_BUYER_WALLETS(): string[] {
+    return String(process.env.OTC_BUYER_WALLETS || '')
+      .split(',')
+      .map(w => w.trim().toLowerCase())
+      .filter(w => /^0x[0-9a-f]{40}$/.test(w))
+  }
+
+  /**
+   * Public origin of the web app that serves /otc/join/<code> and
+   * /otc/deals/<id>. Used for invite links and Telegram messages. Defaults to
+   * this repo's Netlify deploy. It must never default to treegens.app: that
+   * domain is served by another site (see repo CLAUDE.md).
+   */
+  get OTC_PUBLIC_APP_URL() {
+    const raw =
+      process.env.OTC_PUBLIC_APP_URL || 'https://treegens-app-web.netlify.app'
+    return String(raw).trim().replace(/\/+$/, '')
+  }
+
+  /** Optional Telegram bot for buyer alerts; falls back to TELEGRAM_BOT_TOKEN. */
+  get OTC_TELEGRAM_BOT_TOKEN() {
+    return String(
+      process.env.OTC_TELEGRAM_BOT_TOKEN ||
+        process.env.TELEGRAM_BOT_TOKEN ||
+        '',
+    ).trim()
+  }
+
+  /** Telegram chat (user or group) that receives buyer alerts. */
+  get OTC_TELEGRAM_CHAT_ID() {
+    return String(process.env.OTC_TELEGRAM_CHAT_ID || '').trim()
+  }
+
+  /** Form default for new invite links (KES per tree). 0 = no default. */
+  get OTC_DEFAULT_RATE_KES() {
+    const n = parseFloat(process.env.OTC_DEFAULT_RATE_KES || '0')
+    return Number.isFinite(n) && n > 0 ? n : 0
+  }
+
+  /**
+   * How the planter's MGRO reaches the buyer once a deal is confirmed.
+   *  - 'full' (default): the whole planter share is minted to the buyer in
+   *    one go. The schedule's health checks can only be filed by the planter,
+   *    who has already been paid in cash and has no reason to film them.
+   *  - 'vesting': keep the 6-tranche survival schedule; the buyer (now the
+   *    allocation's planterWallet) may file the health checks.
+   */
+  get OTC_RELEASE_MODE(): 'full' | 'vesting' {
+    return process.env.OTC_RELEASE_MODE === 'vesting' ? 'vesting' : 'full'
+  }
+
+  /**
+   * When a deal becomes payable: 'ai_count' (default, as soon as the AI has
+   * counted a fundable batch) or 'approval' (only once verifiers approved).
+   */
+  get OTC_PAY_ON(): 'ai_count' | 'approval' {
+    return process.env.OTC_PAY_ON === 'approval' ? 'approval' : 'ai_count'
+  }
+
+  /** Planter confirmation must carry the M-Pesa code from the SMS (default on). */
+  get OTC_CONFIRM_REQUIRES_REF() {
+    return process.env.OTC_CONFIRM_REQUIRES_REF !== 'false'
+  }
+
+  /** Unpaid deals (awaiting_count / awaiting_payment) auto-cancel after this many days. */
+  get OTC_DEAL_EXPIRY_DAYS() {
+    const raw = process.env.OTC_DEAL_EXPIRY_DAYS
+    const n = raw !== undefined && raw !== '' ? parseInt(raw, 10) : 14
+    return Number.isNaN(n) || n < 1 ? 14 : n
+  }
+
+  /** 5-minute OTC sweep (reconcile, expire, remind). API process only. */
+  get ENABLE_OTC_RECONCILER() {
+    return process.env.ENABLE_OTC_RECONCILER !== 'false'
+  }
+
+  /** How planters see the buyer in alerts and on deal pages. */
+  get OTC_BUYER_DISPLAY_NAME() {
+    return String(process.env.OTC_BUYER_DISPLAY_NAME || '').trim() || 'TreeGens'
   }
 
   /**
