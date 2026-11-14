@@ -9,6 +9,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { ExternalLink } from 'lucide-react';
 import type { ThemeAssets } from '../../../../shared/theme';
 import type { PublicEventType, PublicSite, Theme } from '../../../../shared/types';
 import { ThemeScope } from '../../../lib/theme';
@@ -33,10 +34,12 @@ export interface PreviewStageProps {
   forceScheme?: 'light' | 'dark';
   /** address shown in the frame's bar, e.g. "jimicohen.com/meeting/intro" */
   address: string;
+  /** the real page, for the "open in a new tab" button in the bar */
+  openHref?: string;
   className?: string;
 }
 
-export function PreviewStage({ theme, assets, site, eventType, device, step, forceScheme, address, className }: PreviewStageProps) {
+export function PreviewStage({ theme, assets, site, eventType, device, step, forceScheme, address, openHref, className }: PreviewStageProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -70,25 +73,40 @@ export function PreviewStage({ theme, assets, site, eventType, device, step, for
   }, [device, step, eventType.id]);
 
   const width = DEVICE_WIDTH[device];
-  const margin = device === 'mobile' ? 20 : 0;
+  // On a phone the "phone" preview fills the frame: a bezel inside a real phone is just noise.
+  const bare = device === 'mobile' && box.w > 0 && box.w < 440;
+  const margin = device === 'mobile' && !bare ? 20 : 0;
   const ready = box.w > 0;
   const scale = ready ? Math.min(1, Math.max(0.2, (box.w - margin * 2) / width)) : 1;
-  const minHeight = device === 'mobile' ? PHONE_HEIGHT : Math.max(320, box.h / scale);
+  const minHeight = device === 'mobile' && !bare ? PHONE_HEIGHT : Math.max(320, box.h / scale);
   const sizer: CSSProperties = { width: Math.floor(width * scale), height: Math.ceil(Math.max(contentH, minHeight) * scale) };
   // Always transformed, even at 100%: a transformed box contains fixed-position children, so
   // nothing from the widget can escape the frame.
   const canvas: CSSProperties = { width, minHeight, transform: `scale(${scale})` };
 
   return (
-    <div className={cx('dx-frame', `dx-frame--${device}`, className)}>
-      <div className="dx-frame__bar" aria-hidden="true">
-        <span className="dx-frame__dots">
+    <div className={cx('dx-frame', `dx-frame--${device}`, bare && 'dx-frame--bare', className)}>
+      <div className="dx-frame__bar">
+        <span className="dx-frame__dots" aria-hidden="true">
           <span />
           <span />
           <span />
         </span>
-        <span className="dx-frame__url">{address}</span>
-        <span className="dx-frame__zoom">{scale < 0.995 ? `${Math.round(scale * 100)}%` : ''}</span>
+        <span className="dx-frame__url" aria-hidden="true">
+          {address}
+        </span>
+        <span className="dx-frame__end">
+          {scale < 0.995 ? (
+            <span className="dx-frame__zoom" aria-hidden="true">
+              {Math.round(scale * 100)}%
+            </span>
+          ) : null}
+          {openHref ? (
+            <a className="dx-frame__open" href={openHref} target="_blank" rel="noopener noreferrer" aria-label="Open the live page in a new tab" title="Open the live page in a new tab">
+              <ExternalLink size={14} aria-hidden="true" />
+            </a>
+          ) : null}
+        </span>
       </div>
       <div ref={stageRef} className="dx-stage" tabIndex={0} role="region" aria-label="Live preview of your booking page">
         {ready ? (

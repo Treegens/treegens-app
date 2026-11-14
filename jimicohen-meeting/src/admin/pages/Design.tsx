@@ -4,13 +4,13 @@
  * changes asks first.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, ExternalLink, Monitor, Moon, Redo2, Smartphone, Sun, Undo2 } from 'lucide-react';
+import { CircleAlert, Monitor, Moon, Redo2, Smartphone, Sun, Undo2 } from 'lucide-react';
 import { resolveTheme } from '../../../shared/theme';
 import type { ThemeAssets } from '../../../shared/theme';
 import type { Theme } from '../../../shared/types';
 import { assetUrl, errorMessage, saveSite } from '../../lib/api';
 import type { BookingWidgetStep } from '../../public/BookingWidget';
-import { Button, IconButton, SegmentedControl, Select, Tooltip, cx, useMediaQuery, useToast } from '../../ui';
+import { Button, IconButton, SegmentedControl, Select, cx, useMediaQuery, useToast } from '../../ui';
 import { ThemeControls } from '../components/ThemeControls';
 import type { ThemeChangeMeta } from '../components/ThemeControls';
 import { useUnsavedGuard } from '../components/UnsavedGuard';
@@ -51,15 +51,25 @@ export default function DesignPage() {
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
-  const [device, setDevice] = useState<PreviewDevice>('desktop');
+  const narrow = useMediaQuery('(max-width: 1179.98px)');
+  const phone = useMediaQuery('(max-width: 519.98px)');
+  const [device, setDevice] = useState<PreviewDevice>(() => (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 719.98px)').matches ? 'mobile' : 'desktop'));
   const [step, setStep] = useState<BookingWidgetStep>('pick');
   const [palette, setPalette] = useState<'light' | 'dark'>('light');
   const [eventId, setEventId] = useState<string | null>(null);
   const [pane, setPane] = useState<'edit' | 'preview'>('edit');
-  const narrow = useMediaQuery('(max-width: 1099.98px)');
 
   /** preview URLs of images uploaded in this session, by asset id */
   const [urls, setUrls] = useState<Record<string, string>>({});
+
+  // The saved theme changed underneath (a refresh, another tab): follow it unless there are edits.
+  const lastSaved = useRef(saved);
+  useEffect(() => {
+    const previous = lastSaved.current;
+    lastSaved.current = saved;
+    if (previous === saved) return;
+    setHistory((h) => (sameJson(h.present, previous) ? { ...h, present: saved } : h));
+  }, [saved]);
 
   const draft = history.present;
   const dirty = !sameJson(draft, saved);
@@ -68,11 +78,13 @@ export default function DesignPage() {
   const commit = useCallback((next: Theme, meta?: ThemeChangeMeta) => {
     const key = meta?.key ?? '';
     const now = Date.now();
+    const last = lastEdit.current;
+    // Decided out here so the state updater below stays pure.
+    const sameControl = !!key && last?.key === key && now - last.at < COALESCE_MS;
+    lastEdit.current = { key, at: now };
     setHistory((h) => {
       if (sameJson(next, h.present)) return h;
-      const merge = !!key && lastEdit.current?.key === key && now - lastEdit.current.at < COALESCE_MS && h.past.length > 0;
-      lastEdit.current = { key, at: now };
-      if (merge) return { past: h.past, present: next, future: [] };
+      if (sameControl && h.past.length > 0) return { past: h.past, present: next, future: [] };
       return { past: [...h.past, h.present].slice(-MAX_HISTORY), present: next, future: [] };
     });
     setProblem(null);
@@ -190,7 +202,7 @@ export default function DesignPage() {
             <IconButton label="Undo the last change" icon={<Undo2 size={17} />} disabled={!history.past.length} onClick={undo} />
             <IconButton label="Redo" icon={<Redo2 size={17} />} disabled={!history.future.length} onClick={redo} />
           </div>
-          <Button variant="ghost" disabled={!dirty || saving} onClick={discard}>
+          <Button variant="ghost" className="dx-head__discard" disabled={!dirty || saving} onClick={discard}>
             Discard
           </Button>
           <Button variant="primary" disabled={!dirty} loading={saving} loadingLabel="Saving" onClick={() => void save()}>
@@ -231,6 +243,7 @@ export default function DesignPage() {
             <SegmentedControl<PreviewDevice>
               aria-label="Preview size"
               size="sm"
+              iconOnly={phone}
               value={device}
               onChange={setDevice}
               options={[
@@ -241,6 +254,7 @@ export default function DesignPage() {
             <SegmentedControl<BookingWidgetStep>
               aria-label="Screen"
               size="sm"
+              className="dx-tools__step"
               value={step}
               onChange={setStep}
               options={[
@@ -265,14 +279,9 @@ export default function DesignPage() {
             {events.length > 1 ? (
               <Select aria-label="Event type to preview" size="sm" wrapperClassName="dx-tools__event" value={event.id} onChange={(e) => setEventId(e.target.value)} options={events.map((e) => ({ value: e.id, label: e.title }))} />
             ) : null}
-            <Tooltip content="Open the live page in a new tab" labelled>
-              <a className="ui-iconbtn ui-iconbtn--ghost dx-tools__open" href={`${data.publicUrl}/${event.slug}`} target="_blank" rel="noopener noreferrer" aria-label="Open the live page in a new tab">
-                <ExternalLink size={16} aria-hidden="true" />
-              </a>
-            </Tooltip>
           </div>
           {hasOwnLook ? <p className="dx-tools__note">{event.title} has its own colour, set on the event type. Pick another event above to see the site colours.</p> : null}
-          <PreviewStage theme={shown} assets={assets} site={site} eventType={event} device={device} step={step} forceScheme={auto ? palette : undefined} address={address} />
+          <PreviewStage theme={shown} assets={assets} site={site} eventType={event} device={device} step={step} forceScheme={auto ? palette : undefined} address={address} openHref={`${data.publicUrl}/${event.slug}`} />
         </div>
       </div>
     </div>

@@ -419,14 +419,14 @@ export default function TeamPage() {
         <div className="tm-host__top">
           <Avatar name={host.name} src={host.avatarUrl} size={48} decorative />
           <div className="tm-host__who">
-            <p className="tm-host__name">
+            <h2 className="tm-host__name">
               <span>{host.name}</span>
               {self ? (
                 <Badge size="sm" tone="primary">
                   You
                 </Badge>
               ) : null}
-            </p>
+            </h2>
             <p className="tm-host__sub">{[host.title, host.email].filter(Boolean).join(' · ') || 'No email yet'}</p>
           </div>
           {self ? null : <Menu label={`Actions for ${host.name}`} trigger={<IconButton label={`More actions for ${host.name}`} icon={<MoreHorizontal size={18} />} />} items={items} />}

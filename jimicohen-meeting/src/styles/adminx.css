@@ -532,10 +532,6 @@
   min-width: 140px;
 }
 
-.dx-tools__open {
-  margin-left: auto;
-  color: var(--a-muted);
-}
 
 .dx-tools__note {
   color: var(--a-muted);
@@ -559,7 +555,7 @@
 .dx-frame__bar {
   flex: none;
   display: grid;
-  grid-template-columns: 60px minmax(0, 1fr) 60px;
+  grid-template-columns: 72px minmax(0, 1fr) 72px;
   align-items: center;
   height: 36px;
   padding: 0 12px;
@@ -592,11 +588,44 @@
   white-space: nowrap;
 }
 
-.dx-frame__zoom {
+.dx-frame__end {
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dx-frame__zoom {
   color: var(--a-faint);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
+}
+
+.dx-frame__open {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-right: -6px;
+  border-radius: 7px;
+  color: var(--a-muted);
+}
+
+.dx-frame__open:hover {
+  background: var(--a-hover);
+  color: var(--a-text);
+}
+
+@media (pointer: coarse) {
+  .dx-frame__bar {
+    height: 46px;
+  }
+
+  .dx-frame__open {
+    width: 44px;
+    height: 44px;
+    margin-right: -10px;
+  }
 }
 
 .dx-stage {
@@ -620,6 +649,9 @@
   top: 0;
   left: 0;
   transform-origin: 0 0;
+  /* A "glass" card blurs what is behind it. Without this the blur also picks up the dashboard
+     around the frame and bleeds it in along the edges. clip-path makes the canvas the backdrop root. */
+  clip-path: inset(0);
 }
 
 .dx-stage__scope {
@@ -654,6 +686,18 @@
 
 .dx-frame--mobile .pp.dx-stage__page {
   padding: 16px 12px 32px;
+}
+
+/* phone preview on a phone: no bezel, edge to edge */
+.dx-frame--bare .dx-stage {
+  display: block;
+  padding: 0;
+  background-image: none;
+}
+
+.dx-frame--bare .dx-stage__sizer {
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* ── controls */
@@ -1454,7 +1498,7 @@
 
 /* ── narrow screens: one pane at a time */
 
-@media (max-width: 1099.98px) {
+@media (max-width: 1179.98px) {
   .dx-body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1465,9 +1509,6 @@
     min-height: 480px;
   }
 
-  .dx-tools__open {
-    margin-left: 0;
-  }
 }
 
 @media (max-width: 959.98px) {
@@ -1482,8 +1523,31 @@
   }
 }
 
+@media (max-width: 719.98px) {
+  /* row 1: device, event, open. row 2: the three screens, full width */
+  .dx-tools__event {
+    flex: 1 1 120px;
+    max-width: none;
+  }
+
+  .dx-tools__step {
+    order: 3;
+    flex: 1 1 100%;
+  }
+
+  .dx-tools__step .ui-seg__item {
+    flex: 1 1 0%;
+  }
+}
+
 @media (max-width: 519.98px) {
+  .dx-head {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
   .dx-head__text {
+    flex: 1 1 0%;
     flex-direction: column;
     align-items: flex-start;
     gap: 0;
@@ -1493,8 +1557,24 @@
     font-size: 1.375rem;
   }
 
-  .dx-head {
-    --dx-head-h: 56px;
+  .dx-head__status {
+    font-size: var(--a-text-xs);
+    white-space: nowrap;
+  }
+
+  .dx-head__actions {
+    flex: none;
+    flex-wrap: nowrap;
+    gap: 2px;
+  }
+
+  .dx-head__history {
+    margin-right: 2px;
+  }
+
+  /* Undo covers it, and leaving the page still asks first. */
+  .dx-head__discard {
+    display: none;
   }
 
   .dx-colors {
@@ -1601,14 +1681,13 @@
 }
 
 .ix-card__head {
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 4px 14px;
-  width: 100%;
   padding: 16px 16px 16px 18px;
   border-radius: calc(var(--a-radius-lg) - 1px);
-  text-align: left;
 }
 
 .ix-card__head:hover {
@@ -1619,8 +1698,34 @@
   border-radius: calc(var(--a-radius-lg) - 1px) calc(var(--a-radius-lg) - 1px) 0 0;
 }
 
-.ix-card__head:focus-visible {
+.ix-card__h {
+  margin: 0;
+  font: inherit;
+  letter-spacing: normal;
+}
+
+.ix-card__toggle {
+  color: var(--a-text);
+  font-family: var(--a-font);
+  font-size: var(--a-text-lg);
+  font-weight: 650;
+  line-height: 1.3;
+  text-align: left;
+  outline: none;
+}
+
+/* the whole header row is the hit area and carries the focus ring */
+.ix-card__toggle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.ix-card__toggle:focus-visible::after {
+  outline: 2px solid var(--a-focus);
   outline-offset: -2px;
+  border-radius: calc(var(--a-radius-lg) - 1px);
 }
 
 .ix-card__icon {
@@ -1638,12 +1743,6 @@
   flex-direction: column;
   gap: 1px;
   min-width: 0;
-}
-
-.ix-card__title {
-  font-size: var(--a-text-lg);
-  font-weight: 650;
-  line-height: 1.3;
 }
 
 .ix-card__desc {
@@ -2092,6 +2191,9 @@
 }
 
 .tm-host__name {
+  margin: 0;
+  font-family: var(--a-font);
+  letter-spacing: normal;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2971,5 +3073,34 @@
 
   .hp-save .ui-btn {
     flex: 1 1 auto;
+  }
+}
+
+/* ═════════════ touch: every custom target is at least 44px tall ═════════════ */
+
+@media (pointer: coarse) {
+  .ix-chip,
+  .ix-toggle,
+  .tm-joint__link,
+  .sp__more summary,
+  .hp-help summary {
+    min-height: 44px;
+  }
+
+  .sp__more summary,
+  .hp-help summary {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .x-secret__eye {
+    width: 44px;
+    height: 44px;
+    margin-right: -10px;
+  }
+
+  .dx-linkbtn,
+  .x-ext {
+    padding-block: 6px;
   }
 }

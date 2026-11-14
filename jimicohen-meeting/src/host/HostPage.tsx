@@ -212,10 +212,12 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
     setSavingHours(true);
     setHoursError(null);
     try {
+      // Lets the effect above adopt what the server stored once the host comes back.
       lastBase.current = hours;
       await update({ schedules: hours.schedules, defaultScheduleId: hours.defaultScheduleId });
       toast.success('Your hours are saved', 'New bookings follow them from now on.');
     } catch (e) {
+      lastBase.current = baseHours; // nothing was stored: the edits are still unsaved
       const failure = e instanceof ApiFailure ? e : null;
       setHoursError(failure?.fields ? Object.values(failure.fields)[0] : errorMessage(e, 'Your hours could not be saved.'));
     } finally {

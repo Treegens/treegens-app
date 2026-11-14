@@ -32,23 +32,28 @@ export function IntegrationCard({ id, icon, title, description, status, open, on
   const base = useId();
   return (
     <section className={cx('ix-card', open && 'is-open')} id={id} aria-labelledby={`${base}-title`}>
-      <button type="button" className="ix-card__head" aria-expanded={open} aria-controls={`${base}-body`} onClick={onToggle}>
+      {/* The button holds only the name (so the heading reads well); its ::after makes the whole row clickable. */}
+      <div className="ix-card__head">
         <span className="ix-card__icon" aria-hidden="true">
           {icon}
         </span>
-        <span className="ix-card__text">
-          <span className="ix-card__title" id={`${base}-title`}>
-            {title}
-          </span>
-          <span className="ix-card__desc">{description}</span>
-        </span>
-        <span className="ix-card__status">
+        <div className="ix-card__text">
+          <h2 className="ix-card__h">
+            <button type="button" className="ix-card__toggle" id={`${base}-title`} aria-expanded={open} aria-controls={`${base}-body`} aria-describedby={`${base}-desc ${base}-status`} onClick={onToggle}>
+              {title}
+            </button>
+          </h2>
+          <p className="ix-card__desc" id={`${base}-desc`}>
+            {description}
+          </p>
+        </div>
+        <span className="ix-card__status" id={`${base}-status`}>
           <Badge tone={status.tone} dot>
             {status.label}
           </Badge>
         </span>
         <ChevronDown size={18} aria-hidden="true" className="ix-card__chev" />
-      </button>
+      </div>
       {open ? (
         <div className="ix-card__body" id={`${base}-body`}>
           {children}

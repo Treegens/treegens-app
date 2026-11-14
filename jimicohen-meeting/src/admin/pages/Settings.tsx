@@ -319,7 +319,7 @@ export default function SettingsPage() {
             />
           </Field>
         </div>
-        <Field label="Voice" hint={showCustomVoice && voices.length ? 'Type the exact name of a Twilio voice, for example Polly.Joanna-Neural.' : undefined}>
+        <Field label="Voice" hint={showCustomVoice ? 'The exact name of a Twilio voice, for example Polly.Joanna-Neural.' : 'How your assistant sounds on the phone.'}>
           <div className="st-voice">
             {voices.length ? (
               <Select

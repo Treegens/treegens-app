@@ -150,7 +150,7 @@ function Group({ id, title, icon, summary, changed = 0, problems = 0, open, onTo
   const base = useId();
   return (
     <section className={cx('dx-group', open && 'is-open')} data-group={id}>
-      <h3 className="dx-group__h">
+      <h2 className="dx-group__h">
         <button type="button" className="dx-group__head" aria-expanded={open} aria-controls={`${base}-panel`} id={`${base}-head`} onClick={() => onToggle(id)}>
           <span className="dx-group__icon" aria-hidden="true">
             {icon}
@@ -171,7 +171,7 @@ function Group({ id, title, icon, summary, changed = 0, problems = 0, open, onTo
           {summary && !open ? <span className="dx-group__summary">{summary}</span> : null}
           <ChevronDown size={16} aria-hidden="true" className="dx-group__chev" />
         </button>
-      </h3>
+      </h2>
       {open ? (
         <div className="dx-group__body" id={`${base}-panel`} role="region" aria-labelledby={`${base}-head`}>
           {children}
