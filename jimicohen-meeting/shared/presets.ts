@@ -11,7 +11,7 @@ export interface FontDef {
   label: string;
   /** complete CSS font-family value, fallbacks included */
   stack: string;
-  /** family spec for the Google Fonts css2 API ("Inter:wght@400;500;600;700"), null for system stacks */
+  /** family spec for the Google Fonts css2 API ("Inter:wght@400..700"), null for system stacks */
   google: string | null;
   category: FontCategory;
   /** the weight headings look best at in this face */
@@ -42,19 +42,19 @@ function gf(
  */
 export const FONT_CATALOG: FontDef[] = [
   // Sans
-  gf('inter', 'Inter', 'sans', 'Inter:wght@400;500;600;700', 650, -0.022),
+  gf('inter', 'Inter', 'sans', 'Inter:wght@400..700', 650, -0.022),
   gf('dm-sans', 'DM Sans', 'sans', 'DM+Sans:opsz,wght@9..40,400..700', 650, -0.025),
-  gf('manrope', 'Manrope', 'sans', 'Manrope:wght@400;500;600;700;800', 700, -0.025),
-  gf('plus-jakarta-sans', 'Plus Jakarta Sans', 'sans', 'Plus+Jakarta+Sans:wght@400;500;600;700;800', 700, -0.028),
-  gf('figtree', 'Figtree', 'sans', 'Figtree:wght@400;500;600;700;800', 700, -0.022),
-  gf('outfit', 'Outfit', 'sans', 'Outfit:wght@400;500;600;700', 600, -0.02),
+  gf('manrope', 'Manrope', 'sans', 'Manrope:wght@400..800', 700, -0.025),
+  gf('plus-jakarta-sans', 'Plus Jakarta Sans', 'sans', 'Plus+Jakarta+Sans:wght@400..800', 700, -0.028),
+  gf('figtree', 'Figtree', 'sans', 'Figtree:wght@400..800', 700, -0.022),
+  gf('outfit', 'Outfit', 'sans', 'Outfit:wght@400..700', 600, -0.02),
   gf('ibm-plex-sans', 'IBM Plex Sans', 'sans', 'IBM+Plex+Sans:wght@400;500;600;700', 600, -0.018),
-  gf('nunito', 'Nunito', 'sans', 'Nunito:wght@400;500;600;700;800', 800, -0.015),
+  gf('nunito', 'Nunito', 'sans', 'Nunito:wght@400..800', 800, -0.015),
   gf('atkinson-hyperlegible', 'Atkinson Hyperlegible', 'sans', 'Atkinson+Hyperlegible:wght@400;700', 700, -0.01),
   // Display
-  gf('space-grotesk', 'Space Grotesk', 'display', 'Space+Grotesk:wght@400;500;600;700', 600, -0.03),
+  gf('space-grotesk', 'Space Grotesk', 'display', 'Space+Grotesk:wght@400..700', 600, -0.03),
   gf('bricolage-grotesque', 'Bricolage Grotesque', 'display', 'Bricolage+Grotesque:opsz,wght@12..96,400..800', 700, -0.03),
-  gf('archivo', 'Archivo', 'display', 'Archivo:wght@400;500;600;700;800;900', 800, -0.035),
+  gf('archivo', 'Archivo', 'display', 'Archivo:wght@400..900', 800, -0.035),
   // Serif
   gf('fraunces', 'Fraunces', 'serif', 'Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700', 500, -0.02),
   gf('playfair-display', 'Playfair Display', 'serif', 'Playfair+Display:ital,wght@0,400..800;1,400..800', 600, -0.012),
@@ -65,7 +65,7 @@ export const FONT_CATALOG: FontDef[] = [
   gf('dm-serif-display', 'DM Serif Display', 'serif', 'DM+Serif+Display:ital@0;1', 400, -0.008),
   gf('cormorant-garamond', 'Cormorant Garamond', 'serif', 'Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600', 600, -0.008),
   // Mono
-  gf('jetbrains-mono', 'JetBrains Mono', 'mono', 'JetBrains+Mono:wght@400;500;600;700', 600, -0.03),
+  gf('jetbrains-mono', 'JetBrains Mono', 'mono', 'JetBrains+Mono:wght@400..700', 600, -0.03),
   gf('space-mono', 'Space Mono', 'mono', 'Space+Mono:wght@400;700', 700, -0.035),
   // System stacks: nothing to download
   { key: 'system-sans', label: 'System sans', stack: SANS, google: null, category: 'system', headingWeight: 650, headingTracking: -0.02 },
@@ -223,7 +223,7 @@ export const THEME_PRESETS: ThemePreset[] = [
     label: 'Midnight',
     description: 'Ink blue glass with a cool glow. Quietly technical.',
     theme: make('midnight', {
-      colors: colors('#8fb0ff', '#f2c66d', '#080c19', '#111830', '#e9edf8', '#9ba7c4', '#242d4c'),
+      colors: colors('#8fb0ff', '#7fe0f2', '#080c19', '#111830', '#e9edf8', '#9ba7c4', '#242d4c'),
       background: { type: 'gradient', gradientFrom: '#080c19', gradientTo: '#16204a', gradientAngle: 200 },
       fontHeading: 'space-grotesk',
       fontBody: 'inter',

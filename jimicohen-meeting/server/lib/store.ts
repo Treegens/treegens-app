@@ -147,7 +147,8 @@ export function fileKV(dir: string): KV {
 
   const fileFor = (key: string, ext: string): string => {
     assertKey(key);
-    const name = encodeURIComponent(key).replace(/\*/g, '%2A');
+    // "*" is not valid in Windows file names; a leading "." would hide the file from list().
+    const name = encodeURIComponent(key).replace(/\*/g, '%2A').replace(/^\./, '%2E');
     if (Buffer.byteLength(name, 'utf8') > MAX_FILE_NAME_BYTES) throw new Error(`fileKV: key is too long for a file name: ${key}`);
     return path.join(root, name + ext);
   };
@@ -161,7 +162,11 @@ export function fileKV(dir: string): KV {
     }
   };
 
-  const tmpPath = (): string => path.join(root, `.${process.pid}-${++tmpCounter}.tmp`);
+  /** A fresh temp file path. Also re-creates the directory if someone removed it while the server runs. */
+  const tmpPath = (): string => {
+    mkdirSync(root, { recursive: true });
+    return path.join(root, `.${process.pid}-${++tmpCounter}.tmp`);
+  };
 
   const writeAtomic = (file: string, body: string | Uint8Array): void => {
     const tmp = tmpPath();
@@ -174,11 +179,19 @@ export function fileKV(dir: string): KV {
     const tmp = tmpPath();
     writeFileSync(tmp, body);
     try {
+      // A hard link either appears complete or fails because the name is taken.
       linkSync(tmp, file);
       return true;
     } catch (err) {
       if (isExisting(err)) return false;
-      throw err;
+      // File systems without hard links: exclusive create is still an atomic "does it exist" check.
+      try {
+        writeFileSync(file, body, { flag: 'wx' });
+        return true;
+      } catch (fallbackErr) {
+        if (isExisting(fallbackErr)) return false;
+        throw fallbackErr;
+      }
     } finally {
       rmSync(tmp, { force: true });
     }
@@ -213,7 +226,14 @@ export function fileKV(dir: string): KV {
     },
     async list(prefix: string): Promise<string[]> {
       const keys = new Set<string>();
-      for (const name of readdirSync(root)) {
+      let names: string[];
+      try {
+        names = readdirSync(root);
+      } catch (err) {
+        if (isMissing(err)) return [];
+        throw err;
+      }
+      for (const name of names) {
         const ext = name.endsWith(JSON_EXT) ? JSON_EXT : name.endsWith(BLOB_EXT) ? BLOB_EXT : null;
         if (!ext || name.startsWith('.')) continue;
         let key: string;
@@ -262,6 +282,14 @@ export interface BlobStoreLike {
   list(options: { prefix?: string; paginate: true }): AsyncIterable<{ blobs: { key: string }[] }>;
 }
 
+/**
+ * If-Match compares strongly, so a validator that an intermediary marked weak (W/"x") can never
+ * match as sent. Its opaque part is still the stored entry's validator, which is what we send back.
+ */
+function strongEtag(etag: string): string {
+  return etag.startsWith('W/') ? etag.slice(2) : etag;
+}
+
 function openNetlifyStore(name: string): BlobStoreLike {
   // Strong consistency: a read right after a write must see it, or the compare-and-swap loops are meaningless.
   return getStore({ name, consistency: 'strong' }) as unknown as BlobStoreLike;
@@ -288,8 +316,10 @@ export function blobsKV(storeName = 'meeting', storeFactory?: () => BlobStoreLik
       assertKey(key);
       const found = await store().getWithMetadata(key, { type: 'json' });
       if (!found || found.data === null || found.data === undefined) return null;
+      // Netlify's edge sends an ETag with every read. Without one a compare-and-swap cannot be trusted,
+      // so fail loudly (the local emulation in `netlify dev` is the known case: use scripts/dev-server.ts).
       if (!found.etag) throw new Error(`Blob store returned no etag for "${key}"`);
-      return { value: found.data as T, etag: found.etag };
+      return { value: found.data as T, etag: strongEtag(found.etag) };
     },
     async setJSON(key: string, value: unknown, opts?: KVSetOptions): Promise<{ modified: boolean; etag?: string }> {
       assertKey(key);
@@ -324,4 +354,57 @@ export function blobsKV(storeName = 'meeting', storeFactory?: () => BlobStoreLik
       await store().set(key, buffer, { metadata: cleanMetadata(metadata) });
     },
   };
+}
+
+// ───────────────────────── self test ─────────────────────────
+
+export interface KVSelfTestResult {
+  ok: boolean;
+  /** the first check that did not hold */
+  failed?: string;
+  /** the error thrown by the backend, if any (for logs, not for visitors) */
+  error?: string;
+}
+
+/**
+ * Exercises the guarantees the app relies on (create-only writes, compare-and-swap, reading your
+ * own writes, listing, deleting) against a scratch key. Booking safety depends on these, and the
+ * production backend cannot be unit tested, so this is run from the health route after a deploy.
+ */
+export async function kvSelfTest(kv: KV, runId: string): Promise<KVSelfTestResult> {
+  const key = `selftest/${runId}`;
+  let step = 'create';
+  try {
+    const created = await kv.setJSON(key, { n: 1 }, { onlyIfNew: true });
+    if (!created.modified) return { ok: false, failed: 'create-only write was refused for a new key' };
+
+    step = 'create again';
+    if ((await kv.setJSON(key, { n: 2 }, { onlyIfNew: true })).modified) return { ok: false, failed: 'create-only write replaced an existing key' };
+
+    step = 'read';
+    const read = await kv.getJSONWithEtag<{ n: number }>(key);
+    if (!read || read.value?.n !== 1) return { ok: false, failed: 'a write was not visible to the next read' };
+    if (!read.etag) return { ok: false, failed: 'reads carry no etag' };
+
+    step = 'swap';
+    if (!(await kv.setJSON(key, { n: 2 }, { onlyIfMatch: read.etag })).modified) return { ok: false, failed: 'compare-and-swap with the current etag was refused' };
+
+    step = 'stale swap';
+    if ((await kv.setJSON(key, { n: 3 }, { onlyIfMatch: read.etag })).modified) return { ok: false, failed: 'compare-and-swap with a stale etag went through' };
+
+    step = 'read back';
+    if ((await kv.getJSON<{ n: number }>(key))?.n !== 2) return { ok: false, failed: 'the stored value is not the last successful write' };
+
+    step = 'list';
+    if (!(await kv.list('selftest/')).includes(key)) return { ok: false, failed: 'the key is missing from the listing' };
+
+    step = 'delete';
+    await kv.delete(key);
+    if ((await kv.getJSON(key)) !== null) return { ok: false, failed: 'the key is still readable after delete' };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, failed: `${step} threw`, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    await kv.delete(key).catch(() => undefined);
+  }
 }

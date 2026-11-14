@@ -78,6 +78,13 @@ export function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/** Euclidean distance in sRGB, 0 .. 441. Small values mean two colours are hard to tell apart. */
+export function colorDistance(a: string, b: string): number {
+  const x = parseHex(a) ?? [0, 0, 0];
+  const y = parseHex(b) ?? [0, 0, 0];
+  return Math.sqrt((x[0] - y[0]) ** 2 + (x[1] - y[1]) ** 2 + (x[2] - y[2]) ** 2);
+}
+
 /** True when white text reads better on this colour than black text. */
 export function isDark(color: string): boolean {
   return luminance(color) < 0.179;
@@ -262,11 +269,12 @@ function pushLayer(l: Layers, image: string, size = 'auto', position = '0 0', re
 
 function leafTile(color: string, opacity: number): string {
   const svg =
-    `<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'>` +
+    `<svg xmlns='http://www.w3.org/2000/svg' width='148' height='148' viewBox='0 0 148 148'>` +
     `<g fill='none' stroke='${color}' stroke-opacity='${opacity}' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'>` +
-    `<path d='M16 40c0-13 9-22 23-23 1 14-8 23-23 23zm0 0 14-14'/>` +
-    `<path d='M60 86c-4-11 2-21 14-25 4 11-2 21-14 25zm0 0 9-15'/>` +
-    `<path d='M70 30c-7-5-9-13-5-21 8 5 10 13 5 21zm0 0-1-12'/>` +
+    `<path d='M14 44c0-15 10-25 26-26 1 16-9 26-26 26zm0 0 16-16'/>` +
+    `<path d='M92 132c-5-12 2-23 15-28 5 12-2 23-15 28zm0 0 10-17'/>` +
+    `<path d='M112 52c-8-6-10-15-6-24 9 6 11 15 6 24zm0 0-1-14'/>` +
+    `<path d='M40 112c-9 1-16-4-19-12 9-1 16 4 19 12zm0 0-11-7'/>` +
     `</g></svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
@@ -292,7 +300,7 @@ function patternLayers(l: Layers, pattern: ThemeBackground['pattern'], inkColor:
       break;
     case 'leaves':
       // The one pattern that is not a pure gradient: a tiny inline SVG tile (data: URL, allowed by the CSP).
-      pushLayer(l, leafTile(inkColor, darkUi ? 0.13 : 0.12), '96px 96px');
+      pushLayer(l, leafTile(inkColor, darkUi ? 0.13 : 0.12), '148px 148px');
       break;
     default:
       break;
@@ -475,6 +483,10 @@ export function themeToCssVars(theme: Theme, assets?: ThemeAssets | null, dark =
     '--m-border': c.border,
     '--m-border-strong': borderStrong,
     '--m-hairline': alpha(c.text, surfaceDark ? 0.1 : 0.08),
+    '--m-switch-off': mix(c.surface, c.text, surfaceDark ? 0.3 : 0.24),
+    '--m-link-underline': colorDistance(primaryText, c.text) < 70 ? alpha(c.text, 0.5) : 'transparent',
+    '--m-hover': alpha(c.text, surfaceDark ? 0.08 : 0.055),
+    '--m-pressed': alpha(c.text, surfaceDark ? 0.14 : 0.1),
     '--m-danger': dangerFill,
     '--m-on-danger': readableOn(dangerFill),
     '--m-danger-text': dangerText,

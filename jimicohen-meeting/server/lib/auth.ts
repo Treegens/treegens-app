@@ -43,6 +43,7 @@ export async function createAdminAuth(ctx: Ctx, password: string): Promise<Admin
 
 /** Stores a new password and bumps the version, invalidating every existing session. Returns null before setup. */
 export async function changeAdminPassword(ctx: Ctx, newPassword: string): Promise<AdminAuth | null> {
+  if (!(await getAdminAuth(ctx))) return null;
   const passwordHash = await hashPassword(newPassword);
   for (let attempt = 0; attempt < 8; attempt++) {
     const found = await ctx.kv.getJSONWithEtag<AdminAuth>(KEYS.adminAuth);

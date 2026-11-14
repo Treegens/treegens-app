@@ -273,7 +273,7 @@ describe('fonts href', () => {
   it('builds one stylesheet URL for both fonts and none for system stacks', () => {
     const href = googleFontsHref(DEFAULT_THEME)!;
     expect(href.startsWith('https://fonts.googleapis.com/css2?family=Fraunces')).toBe(true);
-    expect(href).toContain('&family=Inter:wght@400;500;600;700');
+    expect(href).toContain('&family=Inter:wght@400..700');
     expect(href.endsWith('&display=swap')).toBe(true);
     expect(googleFontsHref({ ...DEFAULT_THEME, fontHeading: 'system-serif', fontBody: 'system-sans' })).toBeNull();
     expect(googleFontsHrefFor(['inter', 'inter'])!.match(/family=/g)!.length).toBe(1);

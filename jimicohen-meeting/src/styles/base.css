@@ -1,0 +1,321 @@
+/*
+ * base.css: reset, global (un-themed) tokens and a few utilities. Loaded once from main.tsx.
+ *
+ * Colour never comes from this file. Public pages get `--m-*` tokens from <ThemeScope>,
+ * the dashboard gets `--a-*` tokens from ui.css, and UI kit components read the semantic
+ * `--c-*` aliases that both scopes define (see ui.css).
+ */
+
+/* ───────────── reset ───────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  tab-size: 4;
+  color-scheme: light dark;
+  /* Dashboard canvas by default; main.tsx flips data-surface for public pages before first paint. */
+  background: var(--a-bg, #f6f5f0);
+}
+
+html[data-surface='public'] {
+  background: var(--boot-bg, #0b1d14);
+  color-scheme: var(--boot-scheme, dark);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  line-height: 1.5;
+  font-family: var(--font-system);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-wrap: break-word;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  isolation: isolate;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd,
+pre {
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+:where(ul, ol)[role='list'],
+:where(menu) {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+img,
+picture,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+svg {
+  flex-shrink: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.18em;
+}
+
+button,
+input,
+select,
+textarea,
+optgroup {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  margin: 0;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+textarea {
+  resize: vertical;
+}
+
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+legend {
+  padding: 0;
+}
+
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--c-border, currentColor);
+  margin: 0;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-focus, #5ede8e);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+::selection {
+  background: var(--c-focus-soft, rgb(94 222 142 / 0.3));
+}
+
+/* ───────────── global tokens ───────────── */
+
+:root {
+  /* spacing, 4px grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+
+  /* layers */
+  --z-sticky: 100;
+  --z-nav: 200;
+  --z-overlay: 1000;
+  --z-popover: 1100;
+  --z-toast: 1200;
+  --z-tooltip: 1300;
+
+  /* minimum touch target */
+  --touch: 44px;
+
+  /* page gutters that respect notches */
+  --gutter: max(16px, env(safe-area-inset-left), env(safe-area-inset-right));
+
+  --font-system: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+/* ───────────── motion preference ───────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ───────────── utilities (prefix u-) ───────────── */
+
+/* Visually hidden, still read by screen readers */
+.u-vh {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.u-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap, var(--space-4));
+  min-width: 0;
+}
+
+.u-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gap, var(--space-3));
+  min-width: 0;
+}
+
+.u-row--wrap {
+  flex-wrap: wrap;
+}
+
+.u-row--top {
+  align-items: flex-start;
+}
+
+.u-spread {
+  justify-content: space-between;
+}
+
+.u-grow {
+  flex: 1 1 0%;
+  min-width: 0;
+}
+
+.u-shrink-0 {
+  flex-shrink: 0;
+}
+
+.u-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.u-clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.u-nowrap {
+  white-space: nowrap;
+}
+
+.u-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.u-balance {
+  text-wrap: balance;
+}
+
+.u-pretty {
+  text-wrap: pretty;
+}
+
+.u-muted {
+  color: var(--c-muted);
+}
+
+.u-mono {
+  font-family: var(--c-font-mono, var(--font-mono));
+  font-size: 0.92em;
+}
+
+.u-full {
+  width: 100%;
+}
+
+@media (max-width: 719.98px) {
+  .u-hide-mobile {
+    display: none !important;
+  }
+}
+
+@media (min-width: 720px) {
+  .u-hide-desktop {
+    display: none !important;
+  }
+}

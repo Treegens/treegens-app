@@ -5,6 +5,10 @@
   command = "npm run build"
   publish = "dist"
 
+# @netlify/blobs and @netlify/functions require Node 22.12 or newer (build and functions runtime).
+[build.environment]
+  NODE_VERSION = "22"
+
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"

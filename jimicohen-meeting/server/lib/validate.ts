@@ -31,7 +31,7 @@ export function isSlug(s: unknown): s is string {
 
 // C0 controls except TAB and LF, DEL, C1 controls, and the bidirectional overrides/isolates that
 // can make text read differently from what it is (spoofed names in emails and the dashboard).
-const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F‪-‮⁦-⁩﻿]/g;
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s; // code points never outnumber UTF-16 units
@@ -47,7 +47,7 @@ export function cleanText(s: unknown, max: number): string {
   if (typeof s !== 'string') return '';
   const normalized = s
     .normalize('NFC')
-    .replace(/\r\n?| | /g, '\n')
+    .replace(/\r\n?|\u2028|\u2029/g, '\n')
     .replace(CONTROL_CHARS, '')
     .trim();
   return truncate(normalized, max).trimEnd();
