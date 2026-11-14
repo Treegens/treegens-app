@@ -1,0 +1,48 @@
+# Scheduling app. Deployed as its own Netlify site and proxied into
+# https://jimicohen.com/meeting by a rewrite rule on the jimicohen site.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/"
+  to = "/meeting/"
+  status = 302
+
+# SPA fallback. Not forced, so real files (assets) and the API function win.
+[[redirects]]
+  from = "/meeting/*"
+  to = "/meeting/index.html"
+  status = 200
+
+[[headers]]
+  for = "/meeting/assets/*"
+  [headers.values]
+  Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/meeting/*"
+  [headers.values]
+  Content-Security-Policy = "default-src 'none'; base-uri 'self'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; script-src 'self'; manifest-src 'self'; upgrade-insecure-requests"
+  Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+  X-Content-Type-Options = "nosniff"
+  Referrer-Policy = "strict-origin-when-cross-origin"
+  Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+# The dashboard must never be framed. Public booking pages may be embedded.
+[[headers]]
+  for = "/meeting/admin/*"
+  [headers.values]
+  X-Frame-Options = "DENY"
+  Cache-Control = "no-store"
+
+[[headers]]
+  for = "/meeting/host/*"
+  [headers.values]
+  X-Frame-Options = "DENY"
+  Cache-Control = "no-store"

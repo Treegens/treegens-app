@@ -1,0 +1,7 @@
+node_modules
+dist
+.data
+.netlify
+*.log
+test-results
+tests/e2e/screenshots

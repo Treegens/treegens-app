@@ -1,0 +1,191 @@
+/**
+ * Admin session, CSRF defence, co-host token check and rate limiting.
+ *
+ * Session = signPayload(ctx, 'session', { v: passwordVersion }, 30 days) in an HttpOnly cookie.
+ * Changing the password bumps the version, which signs every older session out.
+ */
+import type { Host } from '../../shared/types';
+import { hashPassword, hmacHex, safeEqual, sha256Hex, signPayload, verifyPayload } from './crypto';
+import { BASE_PATH, type Ctx } from './ctx';
+import { HttpError } from './http';
+import { getHost, KEYS } from './repo';
+
+export const SESSION_COOKIE = 'mtg_session';
+export const SESSION_TTL_SEC = 30 * 24 * 60 * 60;
+const SESSION_PURPOSE = 'session';
+/** Sent by our own client on every request. A cross-site form cannot add it, and a cross-site fetch would need a CORS preflight we never answer. */
+export const CSRF_HEADER = 'x-requested-with';
+export const CSRF_HEADER_VALUE = 'meeting';
+
+// ───────────────────────── admin record ─────────────────────────
+
+/** Stored at `auth/admin`. Its existence means first-run setup is done. */
+export interface AdminAuth {
+  passwordHash: string;
+  passwordVersion: number;
+  setupUsedAt: string;
+}
+
+export async function getAdminAuth(ctx: Ctx): Promise<AdminAuth | null> {
+  return ctx.kv.getJSON<AdminAuth>(KEYS.adminAuth);
+}
+
+/**
+ * First-run setup: creates the admin record. Returns null when one already exists
+ * (create-only write, so two racing setup requests cannot both win).
+ */
+export async function createAdminAuth(ctx: Ctx, password: string): Promise<AdminAuth | null> {
+  if (await getAdminAuth(ctx)) return null;
+  const record: AdminAuth = { passwordHash: await hashPassword(password), passwordVersion: 1, setupUsedAt: ctx.now().toISOString() };
+  const written = await ctx.kv.setJSON(KEYS.adminAuth, record, { onlyIfNew: true });
+  return written.modified ? record : null;
+}
+
+/** Stores a new password and bumps the version, invalidating every existing session. Returns null before setup. */
+export async function changeAdminPassword(ctx: Ctx, newPassword: string): Promise<AdminAuth | null> {
+  const passwordHash = await hashPassword(newPassword);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const found = await ctx.kv.getJSONWithEtag<AdminAuth>(KEYS.adminAuth);
+    if (!found) return null;
+    const next: AdminAuth = { ...found.value, passwordHash, passwordVersion: found.value.passwordVersion + 1 };
+    const written = await ctx.kv.setJSON(KEYS.adminAuth, next, { onlyIfMatch: found.etag });
+    if (written.modified) return next;
+    await Promise.resolve();
+  }
+  throw new HttpError(503, 'busy', 'The server is busy right now. Please try again in a moment.');
+}
+
+// ───────────────────────── session cookie ─────────────────────────
+
+function isDev(ctx: Ctx): boolean {
+  return ctx.env.publicBaseUrl.startsWith('http://');
+}
+
+function cookieAttributes(secure: boolean): string {
+  return `Path=${BASE_PATH}; HttpOnly; ${secure ? 'Secure; ' : ''}SameSite=Lax`;
+}
+
+/** Set-Cookie value for a fresh 30 day session. `Secure` is dropped only on a plain-http dev origin. */
+export function sessionSetCookie(ctx: Ctx, passwordVersion: number): string {
+  const token = signPayload(ctx, SESSION_PURPOSE, { v: passwordVersion }, SESSION_TTL_SEC);
+  return `${SESSION_COOKIE}=${token}; ${cookieAttributes(!isDev(ctx))}; Max-Age=${SESSION_TTL_SEC}`;
+}
+
+/** Set-Cookie value that removes the session. Pass `ctx` so the attributes mirror the cookie that was set. */
+export function sessionClearCookie(ctx?: Ctx): string {
+  const secure = ctx ? !isDev(ctx) : true;
+  return `${SESSION_COOKIE}=; ${cookieAttributes(secure)}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+}
+
+/** Every value sent for `name` (a browser can hold several cookies with one name on different paths). */
+function cookieValues(req: Request, name: string): string[] {
+  const header = req.headers.get('cookie');
+  if (!header) return [];
+  const values: string[] = [];
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1 || part.slice(0, eq).trim() !== name) continue;
+    const value = part.slice(eq + 1).trim();
+    if (value) values.push(value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1) : value);
+  }
+  return values;
+}
+
+export async function isAdmin(ctx: Ctx, req: Request): Promise<boolean> {
+  const versions = cookieValues(req, SESSION_COOKIE)
+    .map((token) => verifyPayload<{ v?: unknown }>(ctx, SESSION_PURPOSE, token))
+    .filter((p): p is { v: number } => p !== null && typeof p.v === 'number');
+  if (versions.length === 0) return false;
+  const admin = await getAdminAuth(ctx);
+  return !!admin && versions.some((p) => p.v === admin.passwordVersion);
+}
+
+/** 401 when not signed in. State-changing methods must also pass the CSRF checks (403). */
+export async function requireAdmin(ctx: Ctx, req: Request): Promise<void> {
+  assertSameOrigin(ctx, req);
+  if (!(await isAdmin(ctx, req))) throw new HttpError(401, 'unauthorized', 'Please sign in.');
+}
+
+// ───────────────────────── CSRF ─────────────────────────
+
+function originOf(value: string | null): string | null {
+  if (!value || value === 'null') return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSafeMethod(method: string): boolean {
+  const m = method.toUpperCase();
+  return m === 'GET' || m === 'HEAD';
+}
+
+/**
+ * For state-changing requests (anything but GET/HEAD):
+ *  - the header `X-Requested-With: meeting` must be present, and
+ *  - the Origin header (Referer as a fallback) must be present and equal the public site origin
+ *    or the origin the request itself was addressed to (deploy previews, the local dev proxy).
+ * Throws HttpError(403, 'csrf'). Does nothing for GET/HEAD.
+ */
+export function assertSameOrigin(ctx: Ctx, req: Request): void {
+  if (isSafeMethod(req.method)) return;
+  const denied = new HttpError(403, 'csrf', 'This request could not be verified. Reload the page and try again.');
+  if ((req.headers.get(CSRF_HEADER) ?? '').trim().toLowerCase() !== CSRF_HEADER_VALUE) throw denied;
+  const source = originOf(req.headers.get('origin')) ?? originOf(req.headers.get('referer'));
+  if (!source) throw denied;
+  const trusted = [originOf(ctx.env.publicBaseUrl), originOf(req.url)];
+  if (!trusted.includes(source)) throw denied;
+}
+
+// ───────────────────────── co-host self-service ─────────────────────────
+
+/** The host when `token` is that host's current invite token, else null. Only the hash is stored. */
+export async function hostFromToken(ctx: Ctx, hostId: string, token: string | null): Promise<Host | null> {
+  if (typeof token !== 'string' || token.length < 16 || token.length > 512 || typeof hostId !== 'string') return null;
+  const host = await getHost(ctx, hostId);
+  if (!host || !host.inviteTokenHash) return null;
+  return safeEqual(sha256Hex(token), host.inviteTokenHash) ? host : null;
+}
+
+// ───────────────────────── rate limiting ─────────────────────────
+
+const RATE_LIMIT_ATTEMPTS = 8;
+
+/**
+ * Key of the fixed-window counter: `rl/<bucket>/<idHash>/<windowStartMs>`.
+ * The id (an IP address, an email) is stored only as a keyed SHA-256, so the raw value is
+ * neither in the key nor recoverable from it by guessing.
+ */
+export function rateLimitKey(ctx: Ctx, bucket: string, id: string, windowSec: number): { key: string; windowStartMs: number; windowMs: number } {
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(bucket)) throw new Error(`rateLimit: invalid bucket "${bucket}"`);
+  const windowMs = Math.max(1, Math.round(windowSec)) * 1000;
+  const windowStartMs = Math.floor(ctx.now().getTime() / windowMs) * windowMs;
+  return { key: `${KEYS.rateLimitPrefix}${bucket}/${hmacHex(ctx, 'rate-limit', id)}/${windowStartMs}`, windowStartMs, windowMs };
+}
+
+/**
+ * Counts one hit for `id` in `bucket` and throws HttpError(429) once more than `limit` hits
+ * landed in the current window of `windowSec` seconds. The counter is incremented with
+ * compare-and-swap, so parallel requests cannot slip past the limit.
+ */
+export async function rateLimit(ctx: Ctx, bucket: string, id: string, limit: number, windowSec: number): Promise<void> {
+  const { key, windowStartMs, windowMs } = rateLimitKey(ctx, bucket, id, windowSec);
+  const retryAfterSec = Math.max(1, Math.ceil((windowStartMs + windowMs - ctx.now().getTime()) / 1000));
+  const tooMany = new HttpError(429, 'rate_limited', 'Too many requests. Please wait a little and try again.', undefined, {
+    'Retry-After': String(retryAfterSec),
+  });
+
+  for (let attempt = 0; attempt < RATE_LIMIT_ATTEMPTS; attempt++) {
+    const found = await ctx.kv.getJSONWithEtag<{ n: number }>(key);
+    const n = found && Number.isFinite(found.value?.n) ? found.value.n : 0;
+    if (n >= limit) throw tooMany;
+    const written = await ctx.kv.setJSON(key, { n: n + 1 }, found ? { onlyIfMatch: found.etag } : { onlyIfNew: true });
+    if (written.modified) return;
+    await Promise.resolve();
+  }
+  // Only reachable when many requests for the same id collide at once, which is itself the thing being limited.
+  throw tooMany;
+}
