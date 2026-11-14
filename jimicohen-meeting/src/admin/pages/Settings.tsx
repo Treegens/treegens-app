@@ -63,6 +63,13 @@ function isWebUrl(url: string): boolean {
   }
 }
 
+/** "jimicohen.com" → "https://jimicohen.com": people rarely type the scheme. */
+function withScheme(url: string): string {
+  const u = url.trim();
+  if (!u || /^[a-z][a-z0-9+.-]*:/i.test(u)) return u;
+  return `https://${u.replace(/^\/+/, '')}`;
+}
+
 function hourLabel(hour: number): string {
   if (hour === 24) return 'Midnight';
   const d = new Date(Date.UTC(2026, 0, 1, hour, 0));
@@ -270,6 +277,7 @@ export default function SettingsPage() {
                     invalid={l.url.trim() !== '' && !isWebUrl(l.url.trim())}
                     wrapperClassName="st-link__url"
                     onChange={(e) => setLink(i, { url: e.target.value })}
+                    onBlur={() => l.url.trim() && withScheme(l.url) !== l.url && setLink(i, { url: withScheme(l.url) })}
                   />
                   <IconButton label={`Remove link ${i + 1}`} icon={<Trash2 size={16} />} onClick={() => set('profile', { links: links.filter((_, j) => j !== i) })} />
                 </li>
@@ -390,7 +398,15 @@ export default function SettingsPage() {
           <Textarea value={draft.booking.consentText} rows={3} maxLength={600} autoGrow onChange={(e) => set('booking', { consentText: e.target.value })} />
         </Field>
         <Field label="Privacy policy link" optional hint="Shown in the footer of your booking pages.">
-          <Input type="url" inputMode="url" value={draft.booking.privacyUrl} maxLength={300} placeholder="https://" onChange={(e) => set('booking', { privacyUrl: e.target.value })} />
+          <Input
+            type="url"
+            inputMode="url"
+            value={draft.booking.privacyUrl}
+            maxLength={300}
+            placeholder="https://"
+            onChange={(e) => set('booking', { privacyUrl: e.target.value })}
+            onBlur={() => draft.booking.privacyUrl.trim() && withScheme(draft.booking.privacyUrl) !== draft.booking.privacyUrl && set('booking', { privacyUrl: withScheme(draft.booking.privacyUrl) })}
+          />
         </Field>
       </Section>
 

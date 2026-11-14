@@ -39,6 +39,8 @@ export function envFromProcess(): Env {
     setupCodeHash: setupCodeHash && /^[0-9a-f]{64}$/.test(setupCodeHash) ? setupCodeHash : null,
     // URL is Netlify's own variable for the site's main address; PUBLIC_BASE_URL is needed when the app is proxied under another domain.
     publicBaseUrl: normalizeBaseUrl(readEnv('PUBLIC_BASE_URL')) || normalizeBaseUrl(readEnv('URL')),
+    // The app's own origin. Embeds on other websites must load from here because the proxying domain forbids framing.
+    embedBaseUrl: normalizeBaseUrl(readEnv('EMBED_BASE_URL')) || undefined,
     // Never taken from the environment: it would expose the dev-only routes (data reset, fake clock) in production.
     mockProviders: false,
     overrides: {

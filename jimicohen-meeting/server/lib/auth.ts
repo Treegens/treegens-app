@@ -127,8 +127,9 @@ function isSafeMethod(method: string): boolean {
 /**
  * For state-changing requests (anything but GET/HEAD):
  *  - the header `X-Requested-With: meeting` must be present, and
- *  - the Origin header (Referer as a fallback) must be present and equal the public site origin
- *    or the origin the request itself was addressed to (deploy previews, the local dev proxy).
+ *  - the Origin header (Referer as a fallback) must be present and equal the public site origin,
+ *    the app's own (embed) origin, or the origin the request itself was addressed to
+ *    (deploy previews, the local dev proxy).
  * Throws HttpError(403, 'csrf'). Does nothing for GET/HEAD.
  */
 export function assertSameOrigin(ctx: Ctx, req: Request): void {
@@ -137,7 +138,7 @@ export function assertSameOrigin(ctx: Ctx, req: Request): void {
   if ((req.headers.get(CSRF_HEADER) ?? '').trim().toLowerCase() !== CSRF_HEADER_VALUE) throw denied;
   const source = originOf(req.headers.get('origin')) ?? originOf(req.headers.get('referer'));
   if (!source) throw denied;
-  const trusted = [originOf(ctx.env.publicBaseUrl), originOf(req.url)];
+  const trusted = [originOf(ctx.env.publicBaseUrl), originOf(ctx.env.embedBaseUrl ?? null), originOf(req.url)];
   if (!trusted.includes(source)) throw denied;
 }
 

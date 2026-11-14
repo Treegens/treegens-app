@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { CalendarCheck, CalendarDays, CalendarPlus, Check, CircleCheck, Clock, Globe, LinkIcon, Lock, MonitorSmartphone, ShieldCheck, Trash2, TriangleAlert, Unlink } from 'lucide-react';
+import { CalendarCheck, CalendarDays, CalendarPlus, Check, CircleCheck, Clock, Globe, LinkIcon, Lock, MonitorSmartphone, ShieldCheck, Trash2, TriangleAlert, Unlink, UserRound } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DEFAULT_THEME } from '../../shared/defaults';
 import { NO_ASSETS } from '../../shared/theme';
@@ -562,7 +562,7 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
         </details>
       </Card>
 
-      <Card id="hp-details" icon={<Avatar name={host.name} src={host.avatarUrl} size={22} decorative />} title="Your details" description="How you appear on booking pages, and how we reach you.">
+      <Card id="hp-details" icon={<UserRound size={20} />} title="Your details" description="How you appear on booking pages, and how we reach you.">
         <form className="hp-details" onSubmit={saveDetails} noValidate>
           <div className="hp-grid2">
             <Field label="Name">

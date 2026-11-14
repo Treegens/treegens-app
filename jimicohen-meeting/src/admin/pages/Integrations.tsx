@@ -803,7 +803,7 @@ function AssistantCard({ open, onToggle }: CardProps) {
         </Step>
         <Step title="Choose the model">
           <div className="ix-form">
-            <Field label="Model" hint="The recommended model handles phone conversations best. You can change this any time.">
+            <Field label="Model" hideLabel hint="The recommended model handles phone conversations best. You can change this any time.">
               <Select value={model} onChange={(e) => setModel(e.target.value)} options={[...MODELS.map((m) => ({ value: m.id, label: m.label })), { value: 'custom', label: 'Another model' }]} />
             </Field>
             {model === 'custom' ? (
