@@ -54,7 +54,7 @@ import type {
 } from '../../shared/types';
 import { getAdminAuth, rateLimit } from './auth';
 import { forgetHostBusy, getBusyForHosts } from './busy';
-import { hmacHex, randomId, safeEqual, sha256Hex } from './crypto';
+import { hmacHex, randomId, randomToken, safeEqual, sha256Hex } from './crypto';
 import type { Ctx, KV } from './ctx';
 import { resolveEmailProvider } from './email';
 import { GoogleApiError, GoogleAuthError, googleCreateEvent, googleDeleteEvent, googleGetEventLinks, googleUpdateEvent, type CalendarEventInput } from './google';
@@ -1171,7 +1171,9 @@ function alreadyBooked(ctx: Ctx, booking: Booking): { booking: Booking; manageTo
 }
 
 function stillSaving(): HttpError {
-  return new HttpError(409, 'in_progress', 'Your booking is still being saved. Please wait a moment, then check your email for the confirmation.');
+  // Not "check your email": on a site that sends none, or for a first try that never finished, none comes.
+  // Trying again is safe and shows the booking once it is saved.
+  return new HttpError(409, 'in_progress', 'Your booking is still being saved. Please wait a moment, then try again to see it.');
 }
 
 // ───────────────────────── create ─────────────────────────
@@ -1277,10 +1279,20 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   // Step 4: take it. The check runs again inside the swap, on the index as it is at that instant.
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(endMs).toISOString();
+  // A retry of this form uses the same id, so the entry also carries a mark of this very request.
+  const mark = randomToken(16).slice(0, 12);
   let assigned: string[] = [];
   const taken = await mutateBookingIndex(ctx, (entries) => {
-    // The same request, a moment earlier (a double submit, a retry racing its first try).
-    if (entries.some((e) => e.id === id)) return { abort: 'duplicate' };
+    const present = entries.find((e) => e.id === id);
+    if (present) {
+      // Our own write: it went through, but its answer was lost and the index changed again since.
+      if (present.req === mark) {
+        assigned = [...present.hostIds];
+        return { abort: 'ours' };
+      }
+      // The same request, a moment earlier (a double submit, a retry racing its first try).
+      return { abort: 'duplicate' };
+    }
     if (upcomingForEmail(entries, input.email, nowMs) >= MAX_UPCOMING_PER_EMAIL) return { abort: 'booking_limit' };
     const again = checkSlot({ ...query, index: entries }, startMs);
     if (!again.ok) return { abort: again.reason };
@@ -1295,10 +1307,11 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
       inviteeName: input.name,
       inviteeEmail: input.email,
       eventTitle: eventType.title,
+      req: mark,
     };
     return [...entries, entry];
   });
-  if (!taken.ok) {
+  if (!taken.ok && taken.reason !== 'ours') {
     if (taken.reason === 'contention') throw new HttpError(503, 'busy', 'The server is busy right now. Please try again in a moment.');
     if (taken.reason === 'booking_limit') throw tooManyUpcoming();
     if (taken.reason === 'duplicate') {
@@ -1888,14 +1901,16 @@ function neutralWhere(location: BookingLocation): string {
 /**
  * The event's description. Google emails it to every attendee, from the organiser's own account.
  *
- * With guests, those are addresses the visitor chose, so the description holds facts nobody but the owner
- * wrote (the meeting, the hosts, where) and the dashboard link: no answers, no phone number, no manage link.
- * Without guests it says who booked, the phone number, the answers and the manage link, for the hosts and the
- * invitee, who are the only people Google writes to.
+ * `outsiders`: the invitee and any guests are on the event (googleInvite). Their addresses are whatever the
+ * visitor typed, so nothing long the visitor wrote may ride along. With guests the description holds facts
+ * nobody but the owner wrote (the meeting, the hosts, where) and the dashboard link: no answers, no phone
+ * number, no manage link. Without guests it says who booked, the phone number and the manage link, which go
+ * to the invitee's own address; the answers stay in the host emails and the dashboard. When only the hosts
+ * are on the event, it carries everything.
  */
-function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[]): string {
+function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[], outsiders: boolean): string {
   const dashboard = `Booking details in the dashboard: ${dashboardLink(ctx, booking.id)}`;
-  if (booking.guests.length > 0) {
+  if (outsiders && booking.guests.length > 0) {
     const hosts = joinNames(assigned.map((h) => h.name.trim()).filter(Boolean));
     const lines = [escapeForCalendar(hosts ? `${booking.eventTitle} with ${hosts}` : booking.eventTitle)];
     const where = booking.location.type === 'google_meet' && !booking.location.joinUrl ? '' : neutralWhere(booking.location);
@@ -1907,7 +1922,10 @@ function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[]): stri
   if (booking.invitee.phone) lines.push(`Phone: ${escapeForCalendar(booking.invitee.phone)}`);
   if (booking.guests.length > 0) lines.push(`Guests: ${escapeForCalendar(booking.guests.join(', '))}`);
   if (booking.location.type !== 'google_meet') lines.push(`Where: ${escapeForCalendar(whereLine(booking.location))}`);
-  const answers = booking.answers.filter((a) => a.value.trim() !== '');
+  // Answers are free text of any length. Google mails the description to the invitee's address too, which
+  // the visitor chose, so the answers only go in when nobody but the hosts is on the event. The hosts read
+  // them in their own email and in the dashboard.
+  const answers = outsiders ? [] : booking.answers.filter((a) => a.value.trim() !== '');
   if (answers.length > 0) {
     lines.push('');
     for (const a of answers) {
@@ -1937,7 +1955,7 @@ function calendarEventInput(ctx: Ctx, booking: Booking, eventType: EventType | n
   const people = joinNames(withGuests ? assigned.map((h) => h.name) : [booking.invitee.name, ...assigned.map((h) => h.name)]);
   const input: CalendarEventInput = {
     summary: people ? `${booking.eventTitle}: ${people}` : booking.eventTitle,
-    description: calendarDescription(ctx, booking, assigned),
+    description: calendarDescription(ctx, booking, assigned, eventType?.googleInvite !== false),
     startIso: booking.start,
     endIso: booking.end,
     timezone: isValidZone(organizer.timezone) ? organizer.timezone : 'UTC',

@@ -9,6 +9,7 @@ import {
   cacheGet,
   cacheSet,
   claim,
+  createBookingRecord,
   deleteAsset,
   deleteEventType,
   deleteHost,
@@ -438,6 +439,29 @@ describe('bookings', () => {
     );
     const timeline = (await getBooking(ctx, 'bkg_1'))!.timeline.map((t) => t.type).sort();
     expect(timeline).toEqual(Array.from({ length: 12 }, (_, i) => `event_${i}`).sort());
+  });
+
+  it('createBookingRecord writes once, hands back a record already on file, and knows its own write when the answer was lost', async () => {
+    const inner = memoryKV();
+    let lose = false;
+    const kv = wrapKV(inner, {
+      setJSON: async (key, value, opts) => {
+        const result = await inner.setJSON(key, value, opts);
+        if (lose && opts?.onlyIfNew && key.startsWith('bookings/') && result.modified) {
+          lose = false;
+          return { modified: false };
+        }
+        return result;
+      },
+    });
+    const ctx = makeTestCtx({ kv });
+    lose = true;
+    const mine = await createBookingRecord(ctx, makeBooking('bkg_1'));
+    expect(mine.created).toBe(true);
+    expect((await getBooking(ctx, 'bkg_1'))?.rev).toBe(mine.booking.rev);
+    // A second request for the same id finds the first one's record and gets it back, unchanged.
+    const twin = await createBookingRecord(ctx, makeBooking('bkg_1', { invitee: { name: 'Someone Else', email: 'else@example.com', timezone: 'UTC' } }));
+    expect(twin).toEqual({ created: false, booking: mine.booking });
   });
 
   it('updateBooking recognises its own write when the answer was lost, and does not apply the change twice', async () => {

@@ -520,6 +520,8 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
       onBooked?.(res);
     } catch (e) {
       if (isApiFailure(e) && e.code === 'move_limit') setPickNotice({ tone: 'warning', title: 'This meeting cannot be moved again right now', message: e.message });
+      // Another change of this booking is still being saved. The time picked may well be free, so it stays.
+      else if (isApiFailure(e) && e.code === 'changed') setPickNotice({ tone: 'warning', title: 'This booking was just changed', message: e.message });
       // The time may well be free: the calendar could not be asked. Keep it chosen so trying again is one tap.
       else if (isApiFailure(e) && e.code === 'calendar_unavailable')
         setPickNotice({ tone: 'warning', title: 'The calendar is not answering right now', message: 'Your meeting has not been moved. Please try again in a minute.' });

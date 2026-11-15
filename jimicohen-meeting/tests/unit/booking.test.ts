@@ -509,6 +509,7 @@ describe('createBooking: a solo event', () => {
         inviteeName: 'Ada Lovelace',
         inviteeEmail: 'Ada.L@example.com',
         eventTitle: 'Intro call',
+        req: expect.stringMatching(/^[A-Za-z0-9_-]{12}$/),
       },
     ]);
   });
@@ -1427,10 +1428,11 @@ describe('Google Calendar sync', () => {
     expect(body.conferenceData.createRequest).toMatchObject({ requestId: booking.id, conferenceSolutionKey: { type: 'hangoutsMeet' } });
     expect(body.location).toBeUndefined();
     expect(body.extendedProperties.private.meetingBookingId).toBe(booking.id);
-    // Without guests Google writes to the hosts and the invitee only: the full picture, as before.
+    // Without guests Google writes to the hosts and the invitee's own address: who booked and the manage link,
+    // but not the answers (free text sent to an address the visitor chose). Those are in the host email.
     expect(body.description).toContain('Booked by Ada &lt;i&gt;L (ada@example.com)');
     expect(body.description).toContain('Phone: +14155552671');
-    expect(body.description).toContain('What would you like to talk about? Trees &lt;b&gt;and&lt;/b&gt; more');
+    expect(body.description).not.toContain('Trees');
     expect(body.description).toContain(`Reschedule or cancel: https://jimicohen.com/meeting/booking/${booking.id}?t=${manageToken(ctx, booking.id)}`);
     expect(body.description).toContain(`Booking details in the dashboard: https://jimicohen.com/meeting/admin/bookings?b=${booking.id}`);
 
@@ -1483,6 +1485,34 @@ describe('Google Calendar sync', () => {
     for (const visitorText of ['Acme', 'invoice', 'evil.example', '+14155552671', manageToken(ctx, booking.id)]) expect(sent).not.toContain(visitorText);
     // The hosts still have everything, in the booking itself.
     expect(booking.answers[0].value).toContain('invoice');
+    await ctx.settle();
+  });
+
+  it('puts no answer into what Google sends to the address the visitor typed, also without guests', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    const calls = net(ctx);
+    // The same abuse with no guests at all: the "invitee" address is the stranger.
+    await createBooking(
+      ctx,
+      request({ name: 'Acme Billing Dept', email: 'victim1@example.org', answers: { q_topic: 'Your invoice is overdue. Pay now at https://evil.example/pay to avoid suspension.' } }),
+    );
+    const body = eventCalls(calls, 'POST')[0].json;
+    expect(body.attendees).toEqual([{ email: 'victim1@example.org', displayName: 'Acme Billing Dept', responseStatus: 'accepted' }]);
+    const sent = JSON.stringify(body);
+    for (const visitorText of ['invoice', 'evil.example']) expect(sent).not.toContain(visitorText);
+    await ctx.settle();
+  });
+
+  it('keeps the answers in the event when only the hosts are on it', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, googleInvite: false }));
+    const calls = net(ctx);
+    await createBooking(ctx, request({ answers: { q_topic: 'Trees <b>and</b> more' } }));
+    const body = eventCalls(calls, 'POST')[0].json;
+    expect(body.attendees).toEqual([]);
+    expect(body.description).toContain('What would you like to talk about? Trees &lt;b&gt;and&lt;/b&gt; more');
     await ctx.settle();
   });
 
@@ -2741,6 +2771,35 @@ describe('answers lost on the way back from storage', () => {
     expect(await jobsOf(ctx, (j) => j.kind === 'confirmation')).toHaveLength(1);
   });
 
+  it('a new booking whose index write went through without an answer is booked, also when another booking landed in between', async () => {
+    // The storage client waits 5 s before it sends the write again, so on a busy page another booking can land
+    // before the copy is refused. The index then no longer reads as this request wrote it.
+    const inner = memoryKV();
+    let armed = false;
+    const kv: KV = {
+      ...inner,
+      async setJSON(key, value, opts) {
+        const result = await inner.setJSON(key, value, opts);
+        if (armed && key === 'index/bookings' && result.modified && (opts?.onlyIfMatch || opts?.onlyIfNew)) {
+          armed = false;
+          await createBooking(ctx, request({ start: '2026-11-18T15:00:00.000Z', email: 'grace@example.com' }));
+          return { modified: false };
+        }
+        return result;
+      },
+    };
+    const ctx = await setup({ kv });
+    armed = true;
+    const key = 'form-key-' + 'Q7wE9rT2yU4iO6pA8sD0';
+    const { booking } = await createBooking(ctx, request({ requestKey: key }));
+    expect(booking.status).toBe('confirmed');
+    expect((await getBookingIndex(ctx)).map((e) => e.start).sort()).toEqual([WED_14, '2026-11-18T15:00:00.000Z']);
+    expect(await getBooking(ctx, booking.id)).toMatchObject({ start: WED_14, invitee: { email: 'ada@example.com' } });
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation' && j.bookingId === booking.id)).toHaveLength(1);
+    // A retry of the same form is handed that booking, and a twin request still is not mistaken for this one.
+    expect((await createBooking(ctx, request({ requestKey: key }))).booking.id).toBe(booking.id);
+  });
+
   it('a move whose save went through without an answer is counted once', async () => {
     const kv = lossyKV((key, value) => key.startsWith('bookings/') && (value as Booking).rescheduleCount === 1);
     const ctx = await setup({ kv });
@@ -2997,6 +3056,38 @@ describe('follow-up work after a change', () => {
     expect(calls.length).toBe(sent);
   });
 
+  it('finishes a cancellation whose host notice could not be queued without sending the invitee hers a second time', async () => {
+    const inner = memoryKV();
+    let failHostNotice = false;
+    const kv: KV = {
+      ...inner,
+      async setJSON(key, value, opts) {
+        const job = value as Partial<Job> | null;
+        if (failHostNotice && key.startsWith('jobs/') && job?.kind === 'cancelled' && job.audience === 'host') throw new Error('storage write failed');
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    const ctx = await setup({ kv, env: RESEND_ENV });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+    failHostNotice = true;
+    expect((await cancelBooking(ctx, booking.id, { by: 'invitee' })).followUp).toMatchObject({ kind: 'cancelled' });
+    failHostNotice = false;
+    await ctx.settle();
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
+    expect(emailsTo(calls, 'jimi@example.com')).toEqual([]);
+
+    ctx.clock.advance(60_000);
+    expect((await cancelBooking(ctx, booking.id, { by: 'invitee' })).followUp).toBeUndefined();
+    await ctx.settle();
+    await runDueJobs(ctx);
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
+    expect(emailsTo(calls, 'jimi@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^Cancelled/)]);
+  });
+
   it('finishes a cancellation that was cut off right after it was saved: time, calendar event and notices', async () => {
     const ctx = await setup({ env: { overrides: { ...GOOGLE_ENV.overrides, ...RESEND_ENV.overrides } } });
     await useResend(ctx);
@@ -3093,6 +3184,36 @@ describe('createBooking: a request sent again', () => {
     expect(await getBookingIndex(ctx)).toHaveLength(1);
     expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
     expect((await getBooking(ctx, a.booking.id))!.timeline.filter((t) => t.type === 'created')).toHaveLength(1);
+  });
+
+  it('asks a retry that arrives while its first try is still saving to try again, and then hands it the booking', async () => {
+    const inner = memoryKV();
+    let stall: Promise<void> | null = null;
+    let resume: () => void = () => undefined;
+    let armed = false;
+    const kv: KV = {
+      ...inner,
+      async setJSON(key, value, opts) {
+        if (armed && key.startsWith('bookings/') && opts?.onlyIfNew) {
+          armed = false;
+          stall = new Promise<void>((resolve) => (resume = resolve));
+          await stall;
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    const ctx = await setup({ kv });
+    armed = true;
+    const first = createBooking(ctx, request({ requestKey: KEY }));
+    while (!stall) await new Promise((resolve) => setTimeout(resolve, 1));
+    // The time is taken, the record is not written yet.
+    const retry = await failure(createBooking(ctx, request({ requestKey: KEY })));
+    expect(retry).toMatchObject({ status: 409, code: 'in_progress', message: 'Your booking is still being saved. Please wait a moment, then try again to see it.' });
+    resume();
+    const made = await first;
+    expect((await createBooking(ctx, request({ requestKey: KEY }))).booking.id).toBe(made.booking.id);
+    expect(await getBookingIndex(ctx)).toHaveLength(1);
+    await ctx.settle();
   });
 
   it('ignores a key that is too short to be random', async () => {

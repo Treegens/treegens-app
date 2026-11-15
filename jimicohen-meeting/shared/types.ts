@@ -311,6 +311,11 @@ export interface BookingIndexEntry {
   inviteeName: string;
   inviteeEmail: string;
   eventTitle: string;
+  /**
+   * Random mark of the booking request that took this time. That request recognises its own write by it
+   * when the storage client lost the answer and somebody else wrote to the index in between.
+   */
+  req?: string;
 }
 
 // ───────────────────────────── Jobs (outbound messages + sync) ─────────────────────────────

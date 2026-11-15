@@ -555,4 +555,39 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       s.expect((await s.bookings({ id: booking.id }))[0], 'the booking').toMatchObject({ start: '2026-11-18T10:00:00.000Z', rescheduleCount: 1 });
     });
   });
+
+  await t.scenario('a move that runs into another change of the same booking says so, and keeps the chosen time', { reset: true }, async (s) => {
+    await s.step('prepare', () => prepare(s));
+    const booking = await s.step('Ada books from New York', () => bookForAda(s));
+    const page = await s.newPage({ timezoneId: NEW_YORK, locale: 'en-US' });
+    await s.step('her move is refused because another change of the booking is still being saved', async () => {
+      s.allowConsoleErrors(/status of 409/);
+      await page.goto(s.url(`/booking/${booking.id}/reschedule?t=${booking.manageToken}`));
+      await page.getByRole('heading', { name: 'Pick a new time' }).waitFor();
+      await calendarReady(page);
+      await pickDay(page, '2026-11-19');
+      await pickSlot(page, NEW_START);
+      // What the server answers while record and index of the booking disagree (a move still being saved).
+      const message = 'This booking was just changed somewhere else. Please wait a few minutes, then reload the page to see where it stands.';
+      await page.route(
+        (url) => url.pathname === `/meeting/api/public/bookings/${booking.id}/reschedule`,
+        (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: { code: 'changed', message } }) }),
+        { times: 1 },
+      );
+      await s.linger(page);
+      await page.locator('.bw-confirmbar').getByRole('button', { name: 'Confirm new time' }).click();
+      const notice = page.getByRole('alert').filter({ hasText: 'This booking was just changed' });
+      await notice.waitFor();
+      s.expect((await notice.innerText()).replace(/\s+/g, ' '), 'notice').toBe(`This booking was just changed ${message}`);
+      s.expect(await page.getByText('That time was just taken').count(), 'told the time was taken').toBe(0);
+      s.expect(await page.locator('.bw-slot.is-selected').getAttribute('data-start'), 'the chosen time').toBe(String(Date.parse(NEW_START)));
+    });
+    await s.step('trying again moves the meeting', async () => {
+      await s.linger(page);
+      await page.locator('.bw-confirmbar').getByRole('button', { name: 'Confirm new time' }).click();
+      await page.getByText('Your meeting has moved').waitFor();
+      await s.settle();
+      s.expect((await s.bookings({ id: booking.id }))[0], 'the booking').toMatchObject({ start: NEW_START, rescheduleCount: 1 });
+    });
+  });
 });
