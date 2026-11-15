@@ -226,12 +226,17 @@ function RuleDialog({ editing, channels, hostCount, assistantName, variables, on
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const lastField = useRef<'subject' | 'body'>('body');
 
-  useEffect(() => {
-    if (!editing) return;
+  // Adopted while rendering, not in an effect: the dialog never shows the previous reminder for a frame.
+  const [shown, setShown] = useState(editing);
+  if (editing && editing !== shown) {
+    setShown(editing);
     setRule(editing.rule);
     setCustom(!!editing.rule.body?.trim() || !!editing.rule.subject?.trim());
     setAllVars(false);
-    lastField.current = 'body';
+  }
+
+  useEffect(() => {
+    if (editing) lastField.current = 'body';
   }, [editing]);
 
   if (!rule) return null;
@@ -330,7 +335,8 @@ function RuleDialog({ editing, channels, hostCount, assistantName, variables, on
 
         <div className="adm-grid2">
           <FieldGroup label="When" error={tooFar ? 'At most 30 days away from the meeting.' : undefined}>
-            <OffsetInput label="When" value={rule.offsetMinutes} maxMinutes={MAX_OFFSET} invalid={tooFar} onChange={(offsetMinutes) => patch({ offsetMinutes })} />
+            {/* Keyed by rule: each reminder opens in the unit that reads best for it ("2 hours", not the "120 minutes" left over from the last one). */}
+            <OffsetInput key={rule.id} label="When" value={rule.offsetMinutes} maxMinutes={MAX_OFFSET} invalid={tooFar} onChange={(offsetMinutes) => patch({ offsetMinutes })} />
           </FieldGroup>
           <Field label="Before or after">
             <Select

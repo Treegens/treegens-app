@@ -98,6 +98,22 @@ function ManageViews({ data, token, embed, view, onUpdated }: ViewProps) {
     }
   };
 
+  // The "I'll be there" link in a reminder email ends in &confirm=1: opening it is the answer, no second
+  // tap needed. The instruction is then taken out of the address, so a reload, a bookmark or a forwarded
+  // link does not repeat it. A meeting that is over or cancelled simply shows where it stands.
+  const wantsConfirm = useMemo(() => new URLSearchParams(routerLocation.search).get('confirm') === '1', [routerLocation.search]);
+  const confirmedFromLink = useRef(false);
+  useEffect(() => {
+    if (!wantsConfirm || view !== 'details' || confirmedFromLink.current) return;
+    confirmedFromLink.current = true;
+    const params = new URLSearchParams(routerLocation.search);
+    params.delete('confirm');
+    navigate({ pathname: routerLocation.pathname, search: `?${params.toString()}` }, { replace: true, state: routerLocation.state });
+    if (phase === 'upcoming' && !booking.attendanceConfirmed) void confirmAttendance();
+    // Runs once per page load: the ref guards against a second run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantsConfirm, view]);
+
   const doCancel = async () => {
     setCancelling(true);
     setProblem('');

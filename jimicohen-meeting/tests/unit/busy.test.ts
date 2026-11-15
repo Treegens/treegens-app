@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Host, HostGoogle } from '../../shared/types';
-import { getBusyForHosts, getHostBusy, syncHostTimezone } from '../../server/lib/busy';
+import { forgetHostBusy, getBusyForHosts, getHostBusy, syncHostTimezone } from '../../server/lib/busy';
 import { seal } from '../../server/lib/crypto';
 import { getHost, getSite, saveHost, saveSecrets, updateHost } from '../../server/lib/repo';
 import type { Interval } from '../../server/lib/time';
@@ -173,6 +173,38 @@ describe('getHostBusy', () => {
     ctx.clock.advance(61_000);
     await getHostBusy(ctx, host, WEEK);
     expect(calls).toHaveLength(4);
+  });
+
+  it('forgets every cached range of a host on request, and only of that host', async () => {
+    const host = await setHost(ctx, (h) => ({ ...h, icsFeeds: [feed(ctx, 'f1', 'Work', WORK_FEED)] }));
+    await saveHost(ctx, { ...host, id: 'host_other', role: 'member', icsFeeds: [feed(ctx, 'f2', 'Home', HOME_FEED)] });
+    const other = (await getHost(ctx, 'host_other')) as Host;
+    let block: [string, string] = ['20261117T100000Z', '20261117T110000Z'];
+    const calls = useFetch(ctx, () => icsResponse(ics(block)));
+    const longer: Interval = { start: WEEK.start, end: WEEK.end + 86_400_000 };
+
+    await getHostBusy(ctx, host, WEEK);
+    await getHostBusy(ctx, host, longer);
+    await getHostBusy(ctx, other, WEEK);
+    expect(calls).toHaveLength(3);
+
+    // The calendar changed, and a booking found out the hard way.
+    block = ['20261117T140000Z', '20261117T150000Z'];
+    await forgetHostBusy(ctx, [OWNER, OWNER, '']);
+    expect((await getHostBusy(ctx, host, WEEK)).busy).toEqual([iv('2026-11-17T14:00:00Z', '2026-11-17T15:00:00Z')]);
+    expect((await getHostBusy(ctx, host, longer)).busy).toEqual([iv('2026-11-17T14:00:00Z', '2026-11-17T15:00:00Z')]);
+    expect(calls).toHaveLength(5);
+    // The other host's remembered answer was left alone.
+    expect((await getHostBusy(ctx, other, WEEK)).busy).toEqual([iv('2026-11-17T10:00:00Z', '2026-11-17T11:00:00Z')]);
+    expect(calls).toHaveLength(5);
+  });
+
+  it('never throws when the remembered answers cannot be dropped', async () => {
+    const broken = makeTestCtx();
+    broken.kv.list = async () => {
+      throw new Error('storage down');
+    };
+    await expect(forgetHostBusy(broken, [OWNER])).resolves.toBeUndefined();
   });
 
   it('does not serve a cached answer after the calendar setup changed', async () => {

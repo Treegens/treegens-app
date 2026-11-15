@@ -1101,6 +1101,48 @@ describe('createBooking: calendars fail closed', () => {
     expect((await createBooking(ctx, request({ start: '2026-11-18T14:30:00.000Z' }))).booking.status).toBe('confirmed');
   });
 
+  it('drops the remembered calendar answer once a booking proved it wrong, so the refused time is not offered again', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    let busy: { start: string; end: string }[] = [];
+    const calls = net(ctx, (call) => (call.url === FREEBUSY_URL ? jsonResponse({ calendars: { primary: { busy } } }) : undefined));
+    const wednesday = { slug: 'intro', durationMin: 15, fromMs: Date.parse('2026-11-18T00:00:00Z'), toMs: Date.parse('2026-11-19T00:00:00Z') };
+    const offered = async (): Promise<string[]> => (await getSlots(ctx, wednesday)).slots.map((s) => s.start);
+
+    expect(await offered()).toContain(WED_14);
+    busy = [{ start: '2026-11-18T13:50:00Z', end: '2026-11-18T14:05:00Z' }];
+    // Nothing has shown the remembered answer to be wrong yet: the list is still the minute-old one.
+    expect(await offered()).toContain(WED_14);
+
+    expect(await failure(createBooking(ctx, request()))).toMatchObject({ status: 409, code: 'slot_taken' });
+    // The visitor is sent back to the list. It now comes from the calendar as it is.
+    expect(await offered()).not.toContain(WED_14);
+    expect(calls.filter((c) => c.url === FREEBUSY_URL)).toHaveLength(3);
+    // And is remembered again from there on.
+    await offered();
+    expect(calls.filter((c) => c.url === FREEBUSY_URL)).toHaveLength(3);
+  });
+
+  it('offers the time of a cancelled meeting again at once, although Google was asked while its event was still there', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    let busy: { start: string; end: string }[] = [];
+    net(ctx, (call) => (call.url === FREEBUSY_URL ? jsonResponse({ calendars: { primary: { busy } } }) : undefined));
+    const wednesday = { slug: 'intro', durationMin: 15, fromMs: Date.parse('2026-11-18T00:00:00Z'), toMs: Date.parse('2026-11-19T00:00:00Z') };
+    const offered = async (): Promise<string[]> => (await getSlots(ctx, wednesday)).slots.map((s) => s.start);
+
+    const { booking } = await createBooking(ctx, request());
+    expect(booking.google?.eventId).toBeTruthy();
+    // Google now reports our own event as busy time, and a visitor browsing makes us remember that.
+    busy = [{ start: WED_14, end: '2026-11-18T14:15:00.000Z' }];
+    expect(await offered()).not.toContain(WED_14);
+
+    await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    busy = [];
+    // No waiting for the remembered answer to expire: we removed the event ourselves.
+    expect(await offered()).toContain(WED_14);
+  });
+
   it('does not wait forever for a calendar: without an answer in time nothing is booked and nobody is alarmed', async () => {
     const ctx = await setup({ env: GOOGLE_ENV });
     await connectGoogle(ctx, OWNER);

@@ -570,6 +570,15 @@ export interface HostUpdate {
   removeIcsFeedId?: string;
 }
 
+/** PUT /admin/hosts/:id and PUT /host/:id answer with this */
+export interface HostUpdateResponse {
+  host: AdminHost;
+  /** the host's zone after the update */
+  timezone: IanaZone;
+  /** true when this update moved the host to another zone (a new device, a new Google Calendar zone) */
+  timezoneChanged: boolean;
+}
+
 export interface GoogleCalendarListItem {
   id: string;
   summary: string;
@@ -589,6 +598,16 @@ export interface IntegrationsStatus {
     resendConfigured: boolean;
     gmailAvailable: boolean;
     fromEmail: string;
+  };
+  /**
+   * Which credentials are set in the deployment's environment. Those win over anything saved in
+   * the dashboard, so the dashboard shows them as fixed instead of offering Replace and Remove.
+   */
+  environment?: {
+    google: { clientId: boolean; clientSecret: boolean };
+    twilio: { accountSid: boolean; authToken: boolean; fromNumber: boolean };
+    anthropic: { apiKey: boolean };
+    resend: { apiKey: boolean };
   };
 }
 
@@ -619,6 +638,8 @@ export interface AdminBooking extends Booking {
 export interface AdminBookingsResponse {
   bookings: AdminBooking[];
   total: number;
+  /** how many bookings each tab holds, whatever is being searched for */
+  counts?: { upcoming: number; past: number; cancelled: number };
 }
 
 export interface AdminOverview {

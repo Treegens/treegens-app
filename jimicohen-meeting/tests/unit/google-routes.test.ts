@@ -362,6 +362,28 @@ describe('GET /google/callback', () => {
     expect((await repo.getHost(w.ctx, 'host_owner'))!.google).toMatchObject({ email: 'jimi@example.com', busyCalendarIds: ['primary'], writeCalendarId: 'primary' });
   });
 
+  it('gives a host without an address the one of the account they connected, and never replaces a chosen one', async () => {
+    const w = await world();
+    // First-run setup asks for no email, so the owner has none: booking notices would go nowhere.
+    await repo.updateHost(w.ctx, 'host_owner', (h) => ({ ...h, email: '' }));
+    fakeGoogle(w.ctx, { email: 'jimi.calendar@example.com' });
+    await callback(w.ctx, { state: await begin(w.ctx, { cookie: w.cookie }), code: 'c1' });
+    expect((await repo.getHost(w.ctx, 'host_owner'))!.email).toBe('jimi.calendar@example.com');
+
+    // An address the person chose stays, whatever account they connect later.
+    await repo.updateHost(w.ctx, 'host_owner', (h) => ({ ...h, email: 'jimi@jimicohen.com' }));
+    fakeGoogle(w.ctx, { email: 'other.account@example.com' });
+    await callback(w.ctx, { state: await begin(w.ctx, { cookie: w.cookie }), code: 'c2' });
+    expect((await repo.getHost(w.ctx, 'host_owner'))!).toMatchObject({ email: 'jimi@jimicohen.com', google: { email: 'other.account@example.com' } });
+
+    // Two people never end up with the same address: one that a team mate already uses is not taken over.
+    const alex = (await repo.getHost(w.ctx, 'host_alex'))!;
+    await repo.updateHost(w.ctx, 'host_owner', (h) => ({ ...h, email: '' }));
+    fakeGoogle(w.ctx, { email: alex.email.toUpperCase() });
+    await callback(w.ctx, { state: await begin(w.ctx, { cookie: w.cookie }), code: 'c3' });
+    expect((await repo.getHost(w.ctx, 'host_owner'))!).toMatchObject({ email: '', google: { email: alex.email.toUpperCase(), status: 'ok' } });
+  });
+
   it('remembers that sending from Gmail was allowed', async () => {
     const w = await world();
     const state = await begin(w.ctx, { cookie: w.cookie, gmail: '1' });

@@ -15,7 +15,7 @@ import { NO_ASSETS } from '../../shared/theme';
 import type { ThemeAssets } from '../../shared/theme';
 import type { AdminHost, GoogleCalendarListItem, HostSelfResponse, HostUpdate, Schedule } from '../../shared/types';
 import { ScheduleEditor, scheduleProblem } from '../admin/components/ScheduleEditor';
-import { APP_BASE, ApiFailure, assetUrl, errorMessage, getHostSelf, getHostSelfCalendars, googleConnectUrl, updateHostSelf } from '../lib/api';
+import { APP_BASE, ApiFailure, assetUrl, errorMessage, getHostSelf, getHostSelfCalendars, googleConnectUrl, reportDeviceZoneSelf, updateHostSelf } from '../lib/api';
 import { ThemeScope, cachedTheme } from '../lib/theme';
 import { detectZone, formatOffset, formatTime, zoneLabel, zoneOffsetMinutes } from '../lib/tz';
 import { Avatar, Button, Checkbox, EmptyState, Field, IconButton, Input, RadioGroup, Select, Skeleton, Switch, TimezoneSelect, cx, useToast } from '../ui';
@@ -132,9 +132,11 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
     if (sentZone.current) return;
     sentZone.current = true;
     const before = host.timezone;
-    update({ deviceTimezone: deviceZone }).then(
-      (next) => {
-        if (next.timezone !== before) toast.info(`Your time zone is now ${zoneLabel(next.timezone)}`, 'It follows the device you are using.');
+    reportDeviceZoneSelf(id, token, deviceZone).then(
+      ({ host: next, timezoneChanged }) => {
+        onHost(next);
+        // The server says whether this visit moved the zone. That is surer than comparing with what the page loaded.
+        if (timezoneChanged ?? next.timezone !== before) toast.info(`Your time zone is now ${zoneLabel(next.timezone)}`, 'It follows the device you are using.');
       },
       () => undefined,
     );

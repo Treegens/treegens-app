@@ -5,7 +5,7 @@
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
-import { Check, CircleAlert, CircleCheck, Eye, EyeOff, ImagePlus, RotateCcw, Trash2 } from 'lucide-react';
+import { Check, CircleAlert, CircleCheck, Eye, EyeOff, ImagePlus, Lock, RotateCcw, Trash2 } from 'lucide-react';
 import { ApiFailure, errorMessage, uploadImageFile } from '../../../lib/api';
 import type { AssetPurpose } from '../../../lib/api';
 import { Button, CopyButton, IconButton, Input, Spinner, cx } from '../../../ui';
@@ -280,13 +280,18 @@ export interface SecretFieldProps {
   autoComplete?: string;
   /** show what is typed from the start (identifiers that are not really secret, like a client ID) */
   plain?: boolean;
+  /**
+   * The value comes from the deployment's environment, which wins over anything saved here.
+   * Shown as set, without Replace or Remove: changing it in the dashboard would do nothing.
+   */
+  fixed?: boolean;
 }
 
 /**
  * Password-style input for API keys. It is never pre-filled: when a key is already stored it
  * shows a "Saved" row with Replace, and only what the owner types is ever sent.
  */
-export function SecretField({ saved, masked, value, onChange, placeholder, onClear, id, invalid, autoComplete = 'off', plain = false }: SecretFieldProps) {
+export function SecretField({ saved, masked, value, onChange, placeholder, onClear, id, invalid, autoComplete = 'off', plain = false, fixed = false }: SecretFieldProps) {
   const [editing, setEditing] = useState(false);
   const [visible, setVisible] = useState(plain);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -303,6 +308,20 @@ export function SecretField({ saved, masked, value, onChange, placeholder, onCle
       inputRef.current?.focus();
     }
   }, [editing]);
+
+  if (fixed) {
+    return (
+      <div className="x-secret x-secret--saved">
+        <span className="x-secret__mask" aria-hidden="true">
+          {masked || '••••••••••••'}
+        </span>
+        <span className="x-secret__state">
+          <Lock size={14} aria-hidden="true" />
+          Set in your deployment
+        </span>
+      </div>
+    );
+  }
 
   if (saved && !editing) {
     return (

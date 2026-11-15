@@ -6,7 +6,7 @@ import type { ThemeAssets } from '../../../shared/theme';
 import { ThemeScope, cachedTheme } from '../../lib/theme';
 import { Button, ButtonLink, Skeleton, cx } from '../../ui';
 import '../../styles/public.css';
-import { useEmbedAutoHeight, withEmbed } from '../lib/embed';
+import { useEmbedAutoHeight, useEmbedEscape, withEmbed } from '../lib/embed';
 
 export interface PublicPageProps {
   /** the theme to render with. Leave out while loading: the theme seen on the last visit is used. */
@@ -24,6 +24,7 @@ export interface PublicPageProps {
 export function PublicPage({ theme, assets, embed = false, width = 'wide', className, children }: PublicPageProps) {
   const ref = useRef<HTMLElement>(null);
   useEmbedAutoHeight(embed, ref);
+  useEmbedEscape(embed);
   const boot = theme ? null : cachedTheme();
 
   // Embedded: browsers paint an opaque canvas behind an iframe whose root color scheme differs

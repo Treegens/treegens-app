@@ -373,6 +373,8 @@ a.pf__credit:hover {
   font-weight: var(--m-heading-weight);
   letter-spacing: var(--m-heading-tracking);
   line-height: 1.2;
+  /* a long title breaks into even lines instead of leaving one word alone on the second */
+  text-wrap: balance;
 }
 
 .pl-card__desc {
@@ -736,6 +738,7 @@ a.pf__credit:hover {
 .bw-meta__strong {
   font-weight: 600;
   line-height: 1.5;
+  text-wrap: balance;
 }
 
 .bw-meta__label {
@@ -1347,6 +1350,14 @@ a.pf__credit:hover {
   background: var(--m-hover);
 }
 
+/* The chosen day keeps its fill under the pointer (and after a tap, where hover sticks):
+   the hover tint above would otherwise leave light text on a light disc. */
+.m-scope[data-calendar='minimal'] .bw-day.is-selected .bw-day__face,
+.m-scope[data-calendar='minimal'] .bw-day.is-selected:hover .bw-day__face {
+  background: var(--m-selected-bg);
+  color: var(--m-selected-fg);
+}
+
 .m-scope[data-calendar='minimal'] .bw-day.is-selected .bw-day__face::before {
   background: currentColor;
 }
@@ -1674,15 +1685,28 @@ a.pf__credit:hover {
 
 /* reschedule: confirm bar under the times */
 .bw-confirmbar {
+  /* Stays at the bottom of the screen while the list of times is in view: on a phone a full day
+     is a long list, and the answer to tapping a time must not sit below it, out of sight. */
+  position: sticky;
+  bottom: 12px;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-top: var(--m-gap-sm);
   padding: 12px;
   border-radius: var(--m-radius-md);
-  background: var(--m-primary-softer);
-  box-shadow: inset 0 0 0 var(--m-border-width) var(--m-primary-soft);
+  /* the tint on a solid base, so the times it floats over do not show through */
+  background: linear-gradient(var(--m-primary-softer), var(--m-primary-softer)), var(--m-card-bg-solid);
+  box-shadow:
+    inset 0 0 0 var(--m-border-width) var(--m-primary-soft),
+    var(--m-shadow-sm);
   animation: bw-rise var(--m-dur) var(--m-ease) both;
+}
+
+/* room for the floating bar under a time that is scrolled into view (see pickSlot in BookingWidget) */
+.bw--reschedule .bw-slot {
+  scroll-margin-bottom: 150px;
 }
 
 .bw-confirmbar__text {
@@ -1875,6 +1899,8 @@ a.pf__credit:hover {
 
 .bw-recap__date {
   font-weight: 650;
+  /* "Thursday, November 19" breaks into two even lines, not "…November" with a lone "19" under it */
+  text-wrap: balance;
 }
 
 .bw-recap__time {

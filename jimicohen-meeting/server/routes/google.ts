@@ -17,7 +17,8 @@ import { syncHostTimezone } from '../lib/busy';
 import { BASE_PATH, type Ctx } from '../lib/ctx';
 import { buildGoogleAuthUrl, completeGoogleAuth } from '../lib/google';
 import { HttpError, json, redirect, route, type Route } from '../lib/http';
-import { getHost, getSite, isStorageId, updateHost } from '../lib/repo';
+import { getHost, getSite, isStorageId, listHosts, updateHost } from '../lib/repo';
+import { isEmail } from '../lib/validate';
 
 const ATTEMPTS_PER_VISITOR = 30;
 const WINDOW_SEC = 10 * 60;
@@ -79,14 +80,25 @@ async function finishConnection(ctx: Ctx, hostId: string, firstConnect: boolean)
   const noSelection = (host.google.busyCalendarIds ?? []).length === 0 || !host.google.writeCalendarId;
   // Someone who let their zone follow their device now has a better source: their calendar.
   const followGoogle = firstConnect && host.timezoneMode === 'device';
+  // The owner starts without an address of their own (first-run setup never asks for one), and
+  // booking notices and alerts go to the host's address. Until they choose another under Team,
+  // the account they just connected is where to reach them.
+  const account = host.google.email;
+  const adoptEmail =
+    !isEmail(host.email) && isEmail(account) && !(await listHosts(ctx)).some((h) => h.id !== hostId && h.email.toLowerCase() === account.toLowerCase());
   let current = host;
-  if (noSelection || followGoogle) {
+  if (noSelection || followGoogle || adoptEmail) {
     const saved = await updateHost(ctx, hostId, (h) => {
       if (!h.google) return h;
       const google = { ...h.google };
       if ((google.busyCalendarIds ?? []).length === 0) google.busyCalendarIds = ['primary'];
       if (!google.writeCalendarId) google.writeCalendarId = 'primary';
-      return { ...h, google, timezoneMode: followGoogle && h.timezoneMode === 'device' ? 'google' : h.timezoneMode };
+      return {
+        ...h,
+        google,
+        email: adoptEmail && !isEmail(h.email) ? account : h.email,
+        timezoneMode: followGoogle && h.timezoneMode === 'device' ? 'google' : h.timezoneMode,
+      };
     });
     if (saved) current = saved;
   }

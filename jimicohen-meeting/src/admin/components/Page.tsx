@@ -95,7 +95,12 @@ export function FieldGroup({ label, hint, error, action, optional, className, ch
       <div className="ui-field__top">
         <span className="ui-field__label" id={id}>
           {label}
-          {optional ? <span className="ui-field__optional">Optional</span> : null}
+          {optional ? (
+            <>
+              {' '}
+              <span className="ui-field__optional">Optional</span>
+            </>
+          ) : null}
         </span>
         {action ? <div className="ui-field__action">{action}</div> : null}
       </div>

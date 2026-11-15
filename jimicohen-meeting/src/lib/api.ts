@@ -315,6 +315,26 @@ export async function updateHost(id: string, update: HostUpdate): Promise<AdminH
   return unwrap(await request('PUT', `/admin/hosts/${enc(id)}`, { body: update }), 'host');
 }
 
+/** A host update together with what the server says about the time zone. */
+export interface HostZoneAnswer {
+  host: AdminHost;
+  /** true when this update moved the host to another zone. null when the answer does not say (the in-browser mock). */
+  timezoneChanged: boolean | null;
+}
+
+function zoneAnswer(res: unknown): HostZoneAnswer {
+  const changed = res && typeof res === 'object' ? (res as { timezoneChanged?: unknown }).timezoneChanged : undefined;
+  return { host: unwrap<AdminHost>(res, 'host'), timezoneChanged: typeof changed === 'boolean' ? changed : null };
+}
+
+/**
+ * PUT /admin/hosts/:id { deviceTimezone }: tells the server which zone this device is in. It only
+ * moves a host whose zone follows their device, and `timezoneChanged` says whether it did.
+ */
+export async function reportDeviceZone(id: string, deviceTimezone: string): Promise<HostZoneAnswer> {
+  return zoneAnswer(await request('PUT', `/admin/hosts/${enc(id)}`, { body: { deviceTimezone } }));
+}
+
 /** DELETE /admin/hosts/:id. 409 while an event type still uses the host. */
 export async function deleteHost(id: string): Promise<void> {
   await request('DELETE', `/admin/hosts/${enc(id)}`);
@@ -419,6 +439,11 @@ export function getHostSelf(id: string, token: string, opts?: CallOptions): Prom
 /** PUT /host/:id?t=: the co-host updates their own hours, zone, calendars or feeds. */
 export async function updateHostSelf(id: string, token: string, update: HostUpdate): Promise<AdminHost> {
   return unwrap(await request('PUT', `/host/${enc(id)}`, { query: { t: token }, body: update }), 'host');
+}
+
+/** PUT /host/:id?t= { deviceTimezone }: the co-host's page reports the zone of the device it is opened on. */
+export async function reportDeviceZoneSelf(id: string, token: string, deviceTimezone: string): Promise<HostZoneAnswer> {
+  return zoneAnswer(await request('PUT', `/host/${enc(id)}`, { query: { t: token }, body: { deviceTimezone } }));
 }
 
 /** GET /host/:id/calendars?t= */

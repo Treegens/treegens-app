@@ -81,7 +81,11 @@ function AddDialog({ open, onClose, onAdded }: AddDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  // Start clean while rendering, not in an effect: an effect runs a frame late, and for that
+  // frame the dialog would show (and could lose) what was typed the time before.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) {
       setName('');
       setEmail('');
@@ -89,7 +93,7 @@ function AddDialog({ open, onClose, onAdded }: AddDialogProps) {
       setError(null);
       setBusy(false);
     }
-  }, [open]);
+  }
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -228,7 +232,11 @@ function EditDialog({ host, onClose, onSaved }: EditDialogProps) {
   const [fields, setFields] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Adopt the person while rendering, not in an effect: an effect runs a frame late, and for
+  // that frame the dialog would open empty, or with the details of whoever was edited before.
+  const [shown, setShown] = useState<AdminHost | null>(null);
+  if (host !== shown) {
+    setShown(host);
     if (host) {
       setName(host.name);
       setTitle(host.title ?? '');
@@ -237,7 +245,7 @@ function EditDialog({ host, onClose, onSaved }: EditDialogProps) {
       setError(null);
       setBusy(false);
     }
-  }, [host]);
+  }
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();

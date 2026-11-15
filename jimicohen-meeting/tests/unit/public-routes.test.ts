@@ -157,7 +157,8 @@ describe('GET /public/slots', () => {
     const refused = [
       `reschedule=${booking.id}`,
       `reschedule=${booking.id}&t=`,
-      `reschedule=${booking.id}&t=${token.slice(0, -1)}0`,
+      // One character off. Not simply "ends in 0": one token in sixteen ends in 0 already.
+      `reschedule=${booking.id}&t=${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`,
       `reschedule=bkg_doesnotexist0000&t=${manageToken(ctx, 'bkg_doesnotexist0000')}`,
       `reschedule=${encodeURIComponent('../site')}&t=${token}`,
     ];

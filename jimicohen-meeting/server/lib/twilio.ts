@@ -24,15 +24,13 @@ export interface TwilioAccount {
   provider: 'twilio' | 'mock';
 }
 
-// Used only when ctx.env.mockProviders is on and nothing is configured, so the dev server can
-// exercise texts and calls end to end. The number is Twilio's documented test "from" number.
-const MOCK_ACCOUNT = {
-  accountSid: 'ACmock00000000000000000000000000',
-  authToken: 'mock-twilio-auth-token',
-  fromNumber: '+15005550006',
-};
-
-/** The credentials in force (environment overrides already applied by the repo), or null when Twilio is not set up. */
+/**
+ * The credentials in force (environment overrides already applied by the repo), or null when
+ * Twilio is not set up. That holds in local development too: with mocked providers the calls go
+ * to the in-process stand-in, but "not set up" still means not set up, so a fresh dev server
+ * looks and behaves like a fresh deployment. Start it with DEV_MOCK_CREDS=1 (or save any
+ * well-formed credentials in the dashboard) to try texts and calls locally.
+ */
 export async function getTwilioAccount(ctx: Ctx): Promise<TwilioAccount | null> {
   const stored = (await getSecrets(ctx)).twilio;
   const accountSid = stored?.accountSid?.trim() ?? '';
@@ -47,7 +45,7 @@ export async function getTwilioAccount(ctx: Ctx): Promise<TwilioAccount | null> 
       provider: ctx.env.mockProviders ? 'mock' : 'twilio',
     };
   }
-  return ctx.env.mockProviders ? { ...MOCK_ACCOUNT, provider: 'mock' } : null;
+  return null;
 }
 
 /** True when a text can be sent: credentials plus a sender (a number or a messaging service). */

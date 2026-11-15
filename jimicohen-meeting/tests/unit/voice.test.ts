@@ -751,7 +751,11 @@ describe('startReminderCall', () => {
 
   it('uses the mock provider in mock mode, where plain http is fine', async () => {
     const net = network();
-    const ctx = makeTestCtx({ now: NOW, fetch: net.impl, env: { mockProviders: true, publicBaseUrl: 'http://localhost:8788/meeting' } });
+    const ctx = makeTestCtx({
+      now: NOW,
+      fetch: net.impl,
+      env: { mockProviders: true, publicBaseUrl: 'http://localhost:8788/meeting', overrides: { twilioAccountSid: SID, twilioAuthToken: TOKEN, twilioFromNumber: '+15005550006' } },
+    });
     const booking = await saveBooking(ctx, makeBooking('bk_1'));
     const result = await startReminderCall(ctx, { booking, purpose: 'reminder' });
     expect(result).toMatchObject({ ok: true, provider: 'mock' });

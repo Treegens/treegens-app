@@ -7,6 +7,7 @@
  *   { type: 'meeting:height', height }                       whenever the content height changes
  *   { type: 'meeting:booked', bookingId, start, end, redirectUrl? }   after a booking is made
  *   { type: 'meeting:rescheduled' | 'meeting:cancelled', bookingId }
+ *   { type: 'meeting:escape' }                               Escape was pressed in here and nothing in here used it
  */
 import { useEffect } from 'react';
 import type { RefObject } from 'react';
@@ -32,6 +33,24 @@ export function postToParent(message: Record<string, unknown>): void {
   } catch {
     // ignore
   }
+}
+
+/**
+ * A key pressed inside the frame never reaches the page around it. A popup that "closes with
+ * Escape" would stop doing so the moment the visitor clicks into the calendar, so the key is
+ * passed on as a message. Not when something in here used it: the time zone dialog and menus
+ * stop the event before it gets this far.
+ */
+export function useEmbedEscape(enabled: boolean): void {
+  useEffect(() => {
+    if (!enabled) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.key !== 'Escape' && e.key !== 'Esc') || e.defaultPrevented || e.isComposing) return;
+      postToParent({ type: 'meeting:escape' });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [enabled]);
 }
 
 /** Reports the height of `ref` to the parent window while `enabled`. */

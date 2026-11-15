@@ -46,7 +46,10 @@ function ChoiceGroup({ label, required, error, children, id }: { label: string; 
             *
           </span>
         ) : (
-          <span className="ui-field__optional">Optional</span>
+          <>
+            {' '}
+            <span className="ui-field__optional">Optional</span>
+          </>
         )}
       </p>
       {children}

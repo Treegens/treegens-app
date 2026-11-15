@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { AuthState } from '../../shared/types';
-import { ApiFailure, errorMessage, getAuthState, logout, setUnauthorizedHandler, updateHost } from '../lib/api';
+import { ApiFailure, errorMessage, getAuthState, logout, reportDeviceZone, setUnauthorizedHandler } from '../lib/api';
 import { storageGet, storageSet } from '../lib/storage';
 import { AdminScope } from '../lib/theme';
 import { detectZone, zoneLabel } from '../lib/tz';
@@ -439,12 +439,13 @@ function DeviceZoneSync() {
     if (sent.current) return;
     sent.current = true;
     const before = ownerHost.timezone;
-    updateHost(ownerHost.id, { deviceTimezone: detectZone() })
-      .then((host) => {
+    reportDeviceZone(ownerHost.id, detectZone())
+      .then(({ host, timezoneChanged }) => {
         const now = latest.current;
         if (!host || typeof host.timezone !== 'string') return;
         now.setData({ ...now.data, hosts: now.data.hosts.map((h) => (h.id === host.id ? host : h)) });
-        if (host.timezone !== before) {
+        // The server compares with what was stored at that moment, which is surer than what this page loaded a moment ago.
+        if (timezoneChanged ?? host.timezone !== before) {
           now.toast.info(`Your time zone is now ${zoneLabel(host.timezone)}`, 'Your availability follows the device you are using. You can change that under Availability.');
         }
       })

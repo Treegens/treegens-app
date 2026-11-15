@@ -12,6 +12,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import type { ReactNode } from 'react';
 import { UNSAFE_NavigationContext, useLocation } from 'react-router-dom';
 import type { To } from 'react-router-dom';
+import { setPopStateInterceptor } from '../../lib/historyGuard';
 import { ConfirmDialog } from '../../ui';
 
 interface GuardApi {
@@ -111,8 +112,10 @@ export function UnsavedGuardProvider({ children }: { children: ReactNode }) {
     };
   }, [dirty, navigator]);
 
-  // Back and forward buttons. A capturing listener runs before the router's own, so the
-  // router never sees a navigation the person has not confirmed yet.
+  // Back and forward buttons. The interceptor from lib/historyGuard runs before the router's
+  // own listener, so the router never sees a navigation the person has not confirmed yet.
+  // (A listener added here would run after the router's: the page, and the draft on it, could
+  // be gone before the question is even asked.)
   useEffect(() => {
     if (!dirty) return;
     const onPopState = (e: PopStateEvent) => {
@@ -138,9 +141,9 @@ export function UnsavedGuardProvider({ children }: { children: ReactNode }) {
       });
     };
     popSkip.current = null;
-    window.addEventListener('popstate', onPopState, true);
+    const release = setPopStateInterceptor(onPopState);
     return () => {
-      window.removeEventListener('popstate', onPopState, true);
+      release();
       popSkip.current = null;
     };
   }, [dirty]);

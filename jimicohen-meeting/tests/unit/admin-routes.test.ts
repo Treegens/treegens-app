@@ -495,6 +495,24 @@ describe('PUT /admin/site', () => {
     expect((await repo.getHost(s.ctx, 'host_owner'))?.avatarAssetId).toBeNull();
   });
 
+  it("keeps the owner's name in step with the profile name, and nobody else's", async () => {
+    const s = await signIn();
+    const alex = await addCoHost(s);
+    expect((await repo.getHost(s.ctx, 'host_owner'))?.name).toBe('Jimi Cohen');
+
+    await ok(call(s, 'PUT', '/admin/site', { profile: { name: '  Jimi A. Cohen ' } }));
+    expect((await repo.getHost(s.ctx, 'host_owner'))?.name).toBe('Jimi A. Cohen');
+    expect((await repo.getHost(s.ctx, alex.host.id))?.name).toBe('Alex Rivera');
+    // The dashboard, event pages, emails and calls all read the host record, so they follow too.
+    const b = await ok<AdminBootstrap>(call(s, 'GET', '/admin/bootstrap'));
+    expect(b.hosts.map((h) => h.name)).toEqual(['Jimi A. Cohen', 'Alex Rivera']);
+
+    // A save that does not touch the name leaves the host alone.
+    const before = (await repo.getHost(s.ctx, 'host_owner'))?.updatedAt;
+    await ok(call(s, 'PUT', '/admin/site', { profile: { headline: 'Time with Jimi' } }));
+    expect((await repo.getHost(s.ctx, 'host_owner'))?.updatedAt).toBe(before);
+  });
+
   it('wants a JSON object', async () => {
     const s = await signIn();
     expect((await call(s, 'PUT', '/admin/site', '[1,2,3]')).status).toBe(400);

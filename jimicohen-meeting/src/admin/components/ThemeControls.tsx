@@ -227,9 +227,10 @@ export function ThemeControls({ theme, onChange, assets, onAssetsChange, baselin
   };
 
   // ── colours
-  const setColor = (field: keyof ThemeColors, value: string) => {
+  /** `step` names the undo step. Typing in one field is one step; a press of "Fix" is a step of its own. */
+  const setColor = (field: keyof ThemeColors, value: string, step = 'color') => {
     if (editingDark && theme.darkColors) {
-      set({ darkColors: { ...theme.darkColors, [field]: value } }, `dark:${field}`);
+      set({ darkColors: { ...theme.darkColors, [field]: value } }, `${step === 'color' ? 'dark' : `${step}:dark`}:${field}`);
       return;
     }
     const nextColors = { ...theme.colors, [field]: value };
@@ -246,7 +247,7 @@ export function ThemeControls({ theme, onChange, assets, onAssetsChange, baselin
         patch.background = follow;
       }
     }
-    set(patch, `color:${field}`);
+    set(patch, `${step}:${field}`);
   };
 
   const colorChanged = (field: keyof ThemeColors) => !!baseColors && normalizeHex(colors[field]) !== normalizeHex(baseColors[field]);
@@ -453,7 +454,7 @@ export function ThemeControls({ theme, onChange, assets, onAssetsChange, baselin
                   {formatRatio(c.ratio)}
                 </span>
                 {c.fixed ? (
-                  <Button size="sm" variant="secondary" onClick={() => setColor(c.field, c.fixed![c.field])} aria-label={`Fix: ${c.label}`}>
+                  <Button size="sm" variant="secondary" onClick={() => setColor(c.field, c.fixed![c.field], 'fix')} aria-label={`Fix: ${c.label}`}>
                     Fix
                   </Button>
                 ) : null}

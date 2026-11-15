@@ -11,7 +11,7 @@ import type { Ctx } from './ctx';
 import { GoogleApiError, GoogleAuthError, googleFreeBusy, googleGetTimezone } from './google';
 import { HttpError } from './http';
 import { IcsFeedError, fetchIcsBusy, mergeBusy } from './icsfeed';
-import { cacheGet, cacheSet, updateHost } from './repo';
+import { KEYS, cacheGet, cacheSet, updateHost } from './repo';
 import type { Interval } from './time';
 
 export interface HostBusy {
@@ -157,6 +157,24 @@ export async function getHostBusy(ctx: Ctx, host: Host, range: Interval, opts?: 
   } catch (err) {
     ctx.log('error', 'busy: unexpected failure', { hostId: host.id, error: err instanceof Error ? err.name : 'unknown' });
     return { hostId: host.id, busy: [], ok: false, error: 'Calendar could not be read.' };
+  }
+}
+
+/**
+ * Forgets what is remembered about these hosts' calendars, so the next question goes to the
+ * calendars themselves. For the moment a time that was offered turns out to be taken on a host's
+ * own calendar: the list it came from is out of date, and offering it again would only earn the
+ * next visitor (or the same one) the same refusal. Never throws.
+ */
+export async function forgetHostBusy(ctx: Ctx, hostIds: string[]): Promise<void> {
+  try {
+    for (const id of new Set(hostIds)) {
+      if (typeof id !== 'string' || id === '') continue;
+      const keys = await ctx.kv.list(`${KEYS.cachePrefix}busy-${id}-`);
+      await Promise.all(keys.map((key) => ctx.kv.delete(key)));
+    }
+  } catch (err) {
+    ctx.log('warn', 'busy: could not drop the remembered busy time', { error: err instanceof Error ? err.name : 'unknown' });
   }
 }
 

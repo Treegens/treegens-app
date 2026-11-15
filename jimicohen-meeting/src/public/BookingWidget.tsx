@@ -342,7 +342,17 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
   const pickSlot = (start: number) => {
     setSelectedStart(start);
     setPickNotice(null);
-    if (isReschedule) return;
+    if (isReschedule) {
+      // The bar with "Confirm new time" keeps to the bottom of the screen. A time tapped down there would end
+      // up underneath it: nudge it into the clear (the room it needs is the slot's scroll margin in the CSS).
+      // Two frames: the first paints the bar and the new line in the summary, which both move things.
+      window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() => {
+          rootRef.current?.querySelector<HTMLElement>(`.bw-slot[data-start="${start}"]`)?.scrollIntoView({ block: 'nearest', behavior: motion ? 'smooth' : 'auto' });
+        }),
+      );
+      return;
+    }
     if (formOpenedAt.current === null) formOpenedAt.current = Date.now();
     setFormNotice(null);
     setStep('details');

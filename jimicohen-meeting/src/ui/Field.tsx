@@ -68,7 +68,13 @@ export function Field({ label, hint, error, required = false, optional = false, 
               *
             </span>
           ) : null}
-          {optional && !required ? <span className="ui-field__optional">Optional</span> : null}
+          {/* The space keeps the accessible name readable: "Description Optional", not "DescriptionOptional". */}
+          {optional && !required ? (
+            <>
+              {' '}
+              <span className="ui-field__optional">Optional</span>
+            </>
+          ) : null}
         </label>
         {action ? <div className="ui-field__action">{action}</div> : null}
       </div>

@@ -11,10 +11,14 @@
  *   DIST_DIR          default dist/meeting
  *   DATA_DIR          default .data
  *   DEV_MOCK_CREDS=1  pretend every provider credential is set through the environment
+ *   EMBED_BASE_URL    where embed snippets load from (default: the app's own address). "{port}" stands
+ *                     for PORT, e.g. http://127.0.0.1:{port}/meeting: the same server under another
+ *                     origin, the way the Netlify address relates to jimicohen.com in production
  *   DEV_CRON_SECONDS  run the scheduled job runner on this interval (off by default, use POST /dev/run-jobs)
  *   LOG_LEVEL         info (default) | warn | error
  *
  * Time can be frozen through POST /meeting/api/dev/clock (see server/routes/dev.ts).
+ * POST /meeting/api/dev/settle answers once all background work (ctx.waitUntil) has finished.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -46,19 +50,22 @@ const PORT = (() => {
 const DIST_DIR = fromEnvPath('DIST_DIR', 'dist/meeting');
 const DATA_DIR = fromEnvPath('DATA_DIR', '.data');
 const PUBLIC_BASE_URL = `http://localhost:${PORT}${BASE_PATH}`;
+const EMBED_BASE_URL = (process.env.EMBED_BASE_URL ?? '').trim().replace('{port}', String(PORT)).replace(/\/+$/, '') || undefined;
 const SETUP_CODE = 'dev-setup-code';
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const LOG_RANK: Record<LogLevel, number> = { info: 0, warn: 1, error: 2 };
 const MIN_LOG_LEVEL: LogLevel = process.env.LOG_LEVEL === 'warn' || process.env.LOG_LEVEL === 'error' ? process.env.LOG_LEVEL : 'info';
 
 const kv = fileKV(DATA_DIR);
-configureMocks({ kv });
+// The mocks stamp what they record with the frozen dev clock when there is one, else with real time.
+configureMocks({ kv, now: () => new Date() });
 
 const env: Env = {
   // Fixed on purpose: sessions and sealed values in .data survive restarts. Never used outside local development.
   secretKey: createHash('sha256').update('meeting dev server secret').digest('base64'),
   setupCodeHash: sha256Hex(SETUP_CODE),
   publicBaseUrl: PUBLIC_BASE_URL,
+  ...(EMBED_BASE_URL ? { embedBaseUrl: EMBED_BASE_URL } : {}),
   mockProviders: true,
   overrides:
     process.env.DEV_MOCK_CREDS === '1'
@@ -336,6 +343,24 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: 
 
 // ───────────────────────── server ─────────────────────────
 
+/**
+ * POST /meeting/api/dev/settle answers once every background task (ctx.waitUntil) has finished,
+ * including tasks started meanwhile. Tests call it to know that "nothing more will be sent".
+ * It lives here and not in server/routes/dev.ts because only this process knows its own tasks.
+ */
+async function settleBackground(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if ((req.method ?? 'GET').toUpperCase() !== 'POST') return sendJsonError(res, 405, 'method_not_allowed', 'Use POST.');
+  req.resume();
+  let waited = 0;
+  while (background.size > 0) {
+    waited += background.size;
+    await Promise.all([...background]);
+  }
+  const body = Buffer.from(JSON.stringify({ ok: true, waited }), 'utf8');
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-length': String(body.length), 'cache-control': 'no-store' });
+  res.end(body);
+}
+
 async function onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   let pathname: string;
   try {
@@ -343,6 +368,7 @@ async function onRequest(req: IncomingMessage, res: ServerResponse): Promise<voi
   } catch {
     return sendText(res, 400, 'Bad request');
   }
+  if (pathname === `${API_PREFIX}/dev/settle`) return settleBackground(req, res);
   if (pathname === API_PREFIX || pathname.startsWith(`${API_PREFIX}/`)) return serveApi(req, res);
   if (pathname === '/' || pathname === BASE_PATH) {
     res.writeHead(302, { location: `${BASE_PATH}/`, 'cache-control': 'no-store', 'content-length': '0' });

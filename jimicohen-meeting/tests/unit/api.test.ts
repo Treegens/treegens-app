@@ -23,7 +23,31 @@ describe('handle()', () => {
     const prod = makeTestCtx();
     const dev = makeTestCtx({ env: { mockProviders: true } });
     const devPatterns = allRoutes(dev).map((r) => r.pattern).filter((p) => p.startsWith('/dev/'));
-    expect(devPatterns.sort()).toEqual(['/dev/clock', '/dev/clock', '/dev/outbox', '/dev/outbox', '/dev/reset', '/dev/run-jobs']);
+    expect(devPatterns.sort()).toEqual([
+      '/dev/bookings',
+      '/dev/calls',
+      '/dev/clock',
+      '/dev/clock',
+      '/dev/fail',
+      '/dev/fail',
+      '/dev/fail',
+      '/dev/google/account',
+      '/dev/google/accounts',
+      '/dev/google/busy',
+      '/dev/google/busy',
+      '/dev/google/busy',
+      '/dev/google/events',
+      '/dev/ics',
+      '/dev/ics',
+      '/dev/jobs',
+      '/dev/kv',
+      '/dev/llm-script',
+      '/dev/llm-script',
+      '/dev/outbox',
+      '/dev/outbox',
+      '/dev/reset',
+      '/dev/run-jobs',
+    ]);
     expect(allRoutes(prod).some((r) => r.pattern.startsWith('/dev/'))).toBe(false);
 
     for (const [method, path] of [['GET', '/dev/outbox'], ['POST', '/dev/reset'], ['POST', '/dev/clock'], ['POST', '/dev/run-jobs'], ['GET', '/dev/clock']]) {

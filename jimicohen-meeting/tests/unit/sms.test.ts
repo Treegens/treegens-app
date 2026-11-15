@@ -161,11 +161,18 @@ describe('sendSms', () => {
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
 
-  it('goes to the mock provider in mock mode without any credentials', async () => {
+  it('goes to the mock provider in mock mode, once credentials exist', async () => {
     const net = fakeTwilio();
-    const ctx = makeTestCtx({ fetch: net.impl, env: { mockProviders: true } });
+    const ctx = makeTestCtx({ fetch: net.impl, env: { mockProviders: true, overrides: { twilioAccountSid: SID, twilioAuthToken: TOKEN, twilioFromNumber: '+15005550006' } } });
     expect(await sendSms(ctx, { to: '+14155552671', body: 'Hi' })).toEqual({ ok: true, provider: 'mock', id: 'SM0001' });
     expect(net.calls[0].params.get('From')).toBe('+15005550006');
+  });
+
+  it('is not configured in mock mode without credentials, like a fresh deployment', async () => {
+    const net = fakeTwilio();
+    const ctx = makeTestCtx({ fetch: net.impl, env: { mockProviders: true } });
+    expect(await sendSms(ctx, { to: '+14155552671', body: 'Hi' })).toMatchObject({ ok: false, skipped: 'sms_not_configured' });
+    expect(net.calls).toHaveLength(0);
   });
 });
 

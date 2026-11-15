@@ -218,6 +218,12 @@ export const routes: Route[] = [
     if (avatar !== (current.profile.avatarAssetId ?? null)) {
       await updateHost(ctx, site.ownerHostId, (h) => ((h.avatarAssetId ?? null) === avatar ? h : { ...h, avatarAssetId: avatar }));
     }
+    // The same goes for the name: event pages, emails and the assistant on the phone name the
+    // host, and for the owner that is the name on the profile.
+    const name = site.profile.name.trim();
+    if (name !== '' && name !== current.profile.name.trim()) {
+      await updateHost(ctx, site.ownerHostId, (h) => (h.name === name ? h : { ...h, name }));
+    }
     return json({ site });
   }),
 

@@ -911,7 +911,8 @@
 }
 
 .ui-field__optional {
-  margin-inline-start: 8px;
+  /* A real space sits before it (for screen readers), so the margin only adds the rest of the gap. */
+  margin-inline-start: 4px;
   font-weight: 400;
   color: var(--c-muted);
 }

@@ -45,6 +45,31 @@ function googleReason(reason: string | null): string {
   return r.slice(0, 240);
 }
 
+/**
+ * Splits a refused save into messages for the fields on screen (keyed like the API's `fields`,
+ * for example "twilio.authToken") and, when nothing points at a field, one line for the notice.
+ */
+function refusal(e: unknown, known: string[], fallback: string): { fields: Record<string, string>; notice: string | null } {
+  const all = e instanceof ApiFailure && e.fields ? e.fields : {};
+  const fields = Object.fromEntries(Object.entries(all).filter(([key]) => known.includes(key)));
+  const other = Object.entries(all).find(([key]) => !known.includes(key));
+  if (Object.keys(fields).length) return { fields, notice: other ? other[1] : null };
+  return { fields: {}, notice: other ? other[1] : errorMessage(e, fallback) };
+}
+
+/** Drops the message of a field the owner is correcting. */
+function without(fields: Record<string, string>, key: string): Record<string, string> {
+  if (!(key in fields)) return fields;
+  const { [key]: _gone, ...rest } = fields;
+  void _gone;
+  return rest;
+}
+
+/** Said under a value that is set in the deployment's environment and therefore cannot be changed here. */
+function EnvNote({ names }: { names: string }) {
+  return <p className="ix-text">Set in your deployment settings ({names}), which win over anything saved here. Change it there and redeploy.</p>;
+}
+
 /** Shared helpers for the four cards. */
 function useApply() {
   const { data, setData } = useAdmin();
@@ -80,6 +105,9 @@ function GoogleCard({ open, onToggle }: CardProps) {
   const [clientSecret, setClientSecret] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const env = data.integrations.environment?.google;
+  const keysFixed = !!env?.clientId && !!env?.clientSecret;
   const [showSteps, setShowSteps] = useState(false);
   const [calendars, setCalendars] = useState<GoogleCalendarListItem[] | null>(null);
   const [calError, setCalError] = useState<string | null>(null);
@@ -117,6 +145,7 @@ function GoogleCard({ open, onToggle }: CardProps) {
     if (!canSaveKeys || saving) return;
     setSaving(true);
     setError(null);
+    setFields({});
     try {
       const update: IntegrationsUpdate = { google: {} };
       if (clientId.trim()) update.google!.clientId = clientId.trim();
@@ -126,7 +155,9 @@ function GoogleCard({ open, onToggle }: CardProps) {
       setClientSecret('');
       toast.success('Google keys saved', 'One step left: connect your calendar.');
     } catch (e) {
-      setError(errorMessage(e, 'The keys could not be saved. Please try again.'));
+      const refused = refusal(e, ['google.clientId', 'google.clientSecret'], 'The keys could not be saved. Please try again.');
+      setFields(refused.fields);
+      setError(refused.notice);
     } finally {
       setSaving(false);
     }
@@ -176,22 +207,50 @@ function GoogleCard({ open, onToggle }: CardProps) {
 
   const keyFields = (
     <div className="ix-form">
-      <Field label="Client ID" hint={idLooksOff ? undefined : 'Ends with .apps.googleusercontent.com'} error={idLooksOff ? 'This does not look like a client ID. It should end with .apps.googleusercontent.com' : undefined}>
-        <SecretField plain saved={g.configured} masked={g.clientIdMasked} value={clientId} onChange={setClientId} placeholder="1234567890-abc123.apps.googleusercontent.com" />
+      <Field
+        label="Client ID"
+        hint={idLooksOff || fields['google.clientId'] ? undefined : 'Ends with .apps.googleusercontent.com'}
+        error={idLooksOff ? 'This does not look like a client ID. It should end with .apps.googleusercontent.com' : fields['google.clientId']}
+      >
+        <SecretField
+          plain
+          fixed={env?.clientId}
+          saved={g.configured}
+          masked={g.clientIdMasked}
+          value={clientId}
+          onChange={(v) => {
+            setClientId(v);
+            setFields((f) => without(f, 'google.clientId'));
+          }}
+          placeholder="1234567890-abc123.apps.googleusercontent.com"
+        />
       </Field>
-      <Field label="Client secret">
-        <SecretField saved={g.configured} value={clientSecret} onChange={setClientSecret} placeholder="GOCSPX-..." onClear={g.configured ? () => setConfirmRemoveKeys(true) : undefined} />
+      <Field label="Client secret" error={fields['google.clientSecret']}>
+        <SecretField
+          fixed={env?.clientSecret}
+          saved={g.configured}
+          value={clientSecret}
+          onChange={(v) => {
+            setClientSecret(v);
+            setFields((f) => without(f, 'google.clientSecret'));
+          }}
+          placeholder="GOCSPX-..."
+          onClear={g.configured ? () => setConfirmRemoveKeys(true) : undefined}
+        />
       </Field>
+      {env?.clientId || env?.clientSecret ? <EnvNote names="GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET" /> : null}
       {error ? (
         <Notice tone="danger" title="The keys were not saved">
           {error}
         </Notice>
       ) : null}
-      <div className="ix-actions">
-        <Button variant={g.configured ? 'secondary' : 'primary'} disabled={!canSaveKeys || idLooksOff} loading={saving} loadingLabel="Saving" onClick={() => void saveKeys()}>
-          Save keys
-        </Button>
-      </div>
+      {keysFixed ? null : (
+        <div className="ix-actions">
+          <Button variant={g.configured ? 'secondary' : 'primary'} disabled={!canSaveKeys || idLooksOff} loading={saving} loadingLabel="Saving" onClick={() => void saveKeys()}>
+            Save keys
+          </Button>
+        </div>
+      )}
     </div>
   );
 
@@ -382,6 +441,8 @@ function EmailCard({ open, onToggle }: CardProps) {
   const [key, setKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const keyFixed = !!data.integrations.environment?.resend.apiKey;
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [to, setTo] = useState(ownerHost.email || site.email.replyTo || '');
   const [test, runTest] = useIntegrationTest();
@@ -409,6 +470,7 @@ function EmailCard({ open, onToggle }: CardProps) {
     if (!dirty || saving || fromInvalid) return;
     setSaving(true);
     setError(null);
+    setFields({});
     try {
       if (key.trim()) await saveIntegrations({ resend: { apiKey: key.trim() } });
       if (provider !== site.email.provider || fromEmail.trim() !== site.email.fromEmail) await saveSite({ email: { provider, fromEmail: fromEmail.trim() } });
@@ -416,8 +478,9 @@ function EmailCard({ open, onToggle }: CardProps) {
       await refresh();
       toast.success('Email settings saved');
     } catch (e) {
-      const failure = e instanceof ApiFailure ? e : null;
-      setError(failure?.fields ? Object.values(failure.fields)[0] : errorMessage(e, 'Your email settings could not be saved.'));
+      const refused = refusal(e, ['resend.apiKey', 'email.fromEmail'], 'Your email settings could not be saved.');
+      setFields(refused.fields);
+      setError(refused.notice);
     } finally {
       setSaving(false);
     }
@@ -493,13 +556,34 @@ function EmailCard({ open, onToggle }: CardProps) {
               <p>
                 Under <Ext href="https://resend.com/api-keys">API Keys</Ext> press Create. "Sending access" is all it needs.
               </p>
-              <Field label="Resend API key">
-                <SecretField saved={email.resendConfigured} value={key} onChange={setKey} placeholder="re_..." onClear={email.resendConfigured ? () => setConfirmRemove(true) : undefined} />
+              <Field label="Resend API key" error={fields['resend.apiKey']}>
+                <SecretField
+                  fixed={keyFixed}
+                  saved={email.resendConfigured}
+                  value={key}
+                  onChange={(v) => {
+                    setKey(v);
+                    setFields((f) => without(f, 'resend.apiKey'));
+                  }}
+                  placeholder="re_..."
+                  onClear={email.resendConfigured ? () => setConfirmRemove(true) : undefined}
+                />
               </Field>
+              {keyFixed ? <EnvNote names="RESEND_API_KEY" /> : null}
             </Step>
             <Step title="Choose the address emails come from" done={email.resendConfigured && !!site.email.fromEmail}>
-              <Field label="From address" hint="An address at the domain you verified, for example meetings@yourdomain.com." error={fromInvalid ? 'Please enter a full email address.' : undefined}>
-                <Input type="email" inputMode="email" autoComplete="off" value={fromEmail} placeholder="meetings@yourdomain.com" onChange={(e) => setFromEmail(e.target.value)} />
+              <Field label="From address" hint="An address at the domain you verified, for example meetings@yourdomain.com." error={fromInvalid ? 'Please enter a full email address.' : fields['email.fromEmail']}>
+                <Input
+                  type="email"
+                  inputMode="email"
+                  autoComplete="off"
+                  value={fromEmail}
+                  placeholder="meetings@yourdomain.com"
+                  onChange={(e) => {
+                    setFromEmail(e.target.value);
+                    setFields((f) => without(f, 'email.fromEmail'));
+                  }}
+                />
               </Field>
             </Step>
           </Steps>
@@ -560,6 +644,12 @@ function TwilioCard({ open, onToggle }: CardProps) {
   const [service, setService] = useState(t.messagingServiceSid ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const env = data.integrations.environment?.twilio;
+  const edit = (set: (value: string) => void, key: string) => (value: string) => {
+    set(value);
+    setFields((f) => without(f, key));
+  };
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [to, setTo] = useState('');
   const [test, runTest] = useIntegrationTest();
@@ -583,6 +673,7 @@ function TwilioCard({ open, onToggle }: CardProps) {
     if (!dirty || !complete || saving || fromInvalid || sidOff) return;
     setSaving(true);
     setError(null);
+    setFields({});
     try {
       const twilio: NonNullable<IntegrationsUpdate['twilio']> = {};
       if (sid.trim()) twilio.accountSid = sid.trim();
@@ -594,8 +685,9 @@ function TwilioCard({ open, onToggle }: CardProps) {
       setToken('');
       toast.success('Twilio saved', 'Send yourself a test text to make sure it works.');
     } catch (e) {
-      const failure = e instanceof ApiFailure ? e : null;
-      setError(failure?.fields ? Object.values(failure.fields)[0] : errorMessage(e, 'Twilio could not be saved.'));
+      const refused = refusal(e, ['twilio.accountSid', 'twilio.authToken', 'twilio.fromNumber', 'twilio.messagingServiceSid'], 'Twilio could not be saved.');
+      setFields(refused.fields);
+      setError(refused.notice);
     } finally {
       setSaving(false);
     }
@@ -644,21 +736,26 @@ function TwilioCard({ open, onToggle }: CardProps) {
           </p>
           <div className="ix-form">
             <div className="adm-grid2">
-              <Field label="Account SID" error={sidOff ? 'An Account SID starts with AC and has 34 characters.' : undefined}>
-                <SecretField plain saved={hasKeys} masked={t.accountSidMasked} value={sid} onChange={setSid} placeholder="AC..." />
+              <Field label="Account SID" error={sidOff ? 'An Account SID starts with AC and has 34 characters.' : fields['twilio.accountSid']}>
+                <SecretField plain fixed={env?.accountSid} saved={hasKeys} masked={t.accountSidMasked} value={sid} onChange={edit(setSid, 'twilio.accountSid')} placeholder="AC..." />
               </Field>
-              <Field label="Auth token">
-                <SecretField saved={hasKeys} value={token} onChange={setToken} placeholder="32 characters" onClear={hasKeys ? () => setConfirmRemove(true) : undefined} />
+              <Field label="Auth token" error={fields['twilio.authToken']}>
+                <SecretField fixed={env?.authToken} saved={hasKeys} value={token} onChange={edit(setToken, 'twilio.authToken')} placeholder="32 characters" onClear={hasKeys ? () => setConfirmRemove(true) : undefined} />
               </Field>
             </div>
             <div className="adm-grid2">
-              <Field label="Your Twilio number" hint="With the country code, like +14155550123." error={fromInvalid ? 'Use the international format, for example +14155550123.' : undefined}>
-                <Input type="tel" inputMode="tel" autoComplete="off" value={from} placeholder="+14155550123" onChange={(e) => setFrom(e.target.value)} />
+              <Field
+                label="Your Twilio number"
+                hint={env?.fromNumber ? 'Set in your deployment settings (TWILIO_FROM_NUMBER).' : 'With the country code, like +14155550123.'}
+                error={fromInvalid ? 'Use the international format, for example +14155550123.' : fields['twilio.fromNumber']}
+              >
+                <Input type="tel" inputMode="tel" autoComplete="off" value={from} placeholder="+14155550123" disabled={!!env?.fromNumber} onChange={(e) => edit(setFrom, 'twilio.fromNumber')(e.target.value)} />
               </Field>
-              <Field label="Messaging Service SID" optional hint="Only if you send texts through a Twilio Messaging Service.">
-                <Input autoComplete="off" spellCheck={false} value={service} placeholder="MG..." onChange={(e) => setService(e.target.value)} />
+              <Field label="Messaging Service SID" optional hint="Only if you send texts through a Twilio Messaging Service." error={fields['twilio.messagingServiceSid']}>
+                <Input autoComplete="off" spellCheck={false} value={service} placeholder="MG..." onChange={(e) => edit(setService, 'twilio.messagingServiceSid')(e.target.value)} />
               </Field>
             </div>
+            {env?.accountSid || env?.authToken ? <EnvNote names="TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN" /> : null}
             {error ? (
               <Notice tone="danger" title="Not saved">
                 {error}
@@ -727,6 +824,8 @@ function AssistantCard({ open, onToggle }: CardProps) {
   const [key, setKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const keyFixed = !!data.integrations.environment?.anthropic.apiKey;
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [test, runTest] = useIntegrationTest();
 
@@ -739,6 +838,7 @@ function AssistantCard({ open, onToggle }: CardProps) {
     if (!dirty || saving || modelInvalid) return;
     setSaving(true);
     setError(null);
+    setFields({});
     try {
       if (key.trim()) apply.integrations(await saveIntegrations({ anthropic: { apiKey: key.trim() } }));
       if (chosen !== current) await saveSite({ assistant: { model: chosen } });
@@ -746,7 +846,10 @@ function AssistantCard({ open, onToggle }: CardProps) {
       await refresh();
       toast.success('Assistant settings saved');
     } catch (e) {
-      setError(errorMessage(e, 'The assistant settings could not be saved.'));
+      const refused = refusal(e, ['anthropic.apiKey', 'assistant.model'], 'The assistant settings could not be saved.');
+      setFields(refused.fields);
+      // The model has a box of its own only when "Another model" is chosen.
+      setError(refused.notice ?? (model !== 'custom' && refused.fields['assistant.model'] ? refused.fields['assistant.model'] : null));
     } finally {
       setSaving(false);
     }
@@ -797,9 +900,20 @@ function AssistantCard({ open, onToggle }: CardProps) {
         </Step>
         <Step title="Create an API key and paste it here" done={a.configured}>
           <p>Open API keys, press Create key, give it a name like "Meetings" and copy it. You only see it once.</p>
-          <Field label="Anthropic API key">
-            <SecretField saved={a.configured} value={key} onChange={setKey} placeholder="sk-ant-..." onClear={a.configured ? () => setConfirmRemove(true) : undefined} />
+          <Field label="Anthropic API key" error={fields['anthropic.apiKey']}>
+            <SecretField
+              fixed={keyFixed}
+              saved={a.configured}
+              value={key}
+              onChange={(v) => {
+                setKey(v);
+                setFields((f) => without(f, 'anthropic.apiKey'));
+              }}
+              placeholder="sk-ant-..."
+              onClear={a.configured ? () => setConfirmRemove(true) : undefined}
+            />
           </Field>
+          {keyFixed ? <EnvNote names="ANTHROPIC_API_KEY" /> : null}
         </Step>
         <Step title="Choose the model">
           <div className="ix-form">
@@ -807,8 +921,18 @@ function AssistantCard({ open, onToggle }: CardProps) {
               <Select value={model} onChange={(e) => setModel(e.target.value)} options={[...MODELS.map((m) => ({ value: m.id, label: m.label })), { value: 'custom', label: 'Another model' }]} />
             </Field>
             {model === 'custom' ? (
-              <Field label="Model ID" error={custom.trim() !== '' && modelInvalid ? 'That does not look like a model ID.' : undefined} hint="Exactly as written in the Claude documentation.">
-                <Input autoComplete="off" spellCheck={false} autoCapitalize="off" value={custom} placeholder="claude-..." onChange={(e) => setCustom(e.target.value)} />
+              <Field label="Model ID" error={custom.trim() !== '' && modelInvalid ? 'That does not look like a model ID.' : fields['assistant.model']} hint="Exactly as written in the Claude documentation.">
+                <Input
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  value={custom}
+                  placeholder="claude-..."
+                  onChange={(e) => {
+                    setCustom(e.target.value);
+                    setFields((f) => without(f, 'assistant.model'));
+                  }}
+                />
               </Field>
             ) : null}
           </div>

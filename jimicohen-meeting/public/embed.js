@@ -121,6 +121,9 @@
         if (isFinite(h) && h > 0) entry.onHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(h))));
       } else if (data.type === 'meeting:booked' || data.type === 'meeting:rescheduled' || data.type === 'meeting:cancelled') {
         announce(entry.host, data.type, data);
+      } else if (data.type === 'meeting:escape') {
+        // Escape pressed while the focus is inside the frame: the key itself never reaches this page.
+        if (popup && popup.frame === entry.frame) closePopup();
       }
       return;
     }

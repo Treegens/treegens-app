@@ -1,3 +1,5 @@
+// First on purpose: its popstate listener has to be added before the router adds its own.
+import './lib/historyGuard';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/base.css';

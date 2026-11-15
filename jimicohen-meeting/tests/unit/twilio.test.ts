@@ -297,8 +297,13 @@ describe('account and features', () => {
     expect((await getTwilioAccount(ctx))?.authToken).toBe('from-env');
   });
 
-  it('falls back to a mock account in mock mode so local development works end to end', async () => {
-    const ctx = makeTestCtx({ env: { mockProviders: true } });
+  it('is not set up in mock mode either until credentials exist, so a fresh dev server looks like a fresh deployment', async () => {
+    const fresh = makeTestCtx({ env: { mockProviders: true } });
+    expect(await getTwilioAccount(fresh)).toBeNull();
+    expect(await twilioFeatures(fresh)).toEqual({ sms: false, calls: false });
+
+    // With credentials (the dev server's DEV_MOCK_CREDS, or values saved in the dashboard) the provider reads "mock".
+    const ctx = makeTestCtx({ env: { mockProviders: true, overrides: { twilioAccountSid: SID, twilioAuthToken: TOKEN, twilioFromNumber: '+15005550006' } } });
     const account = await getTwilioAccount(ctx);
     expect(account?.provider).toBe('mock');
     expect(await twilioFeatures(ctx)).toEqual({ sms: true, calls: true });

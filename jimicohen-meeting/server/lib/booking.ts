@@ -43,7 +43,7 @@ import type {
   Theme,
 } from '../../shared/types';
 import { rateLimit } from './auth';
-import { getBusyForHosts } from './busy';
+import { forgetHostBusy, getBusyForHosts } from './busy';
 import { hmacHex, randomId, safeEqual, sha256Hex } from './crypto';
 import type { Ctx } from './ctx';
 import { GoogleApiError, GoogleAuthError, googleCreateEvent, googleDeleteEvent, googleUpdateEvent, type CalendarEventInput } from './google';
@@ -968,7 +968,12 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
     ownBookingBuffers: s.buffers,
   };
   const first = checkSlot(query, startMs);
-  if (!first.ok) throw slotTaken(first.reason);
+  if (!first.ok) {
+    // The page offered this time from a calendar answer that can be a minute old. It is wrong now: drop it,
+    // so the list the visitor goes back to (and anyone else's) is built from the calendars as they are.
+    if (first.reason === 'busy') await forgetHostBusy(ctx, eventHosts.map((h) => h.id));
+    throw slotTaken(first.reason);
+  }
 
   // Everything the record needs is read before the time is taken, so nothing sits between the two writes below.
   const features = await twilioFeatures(ctx).catch(() => ({ sms: false, calls: false }));
@@ -1224,7 +1229,11 @@ export async function rescheduleBooking(
     ownBookingBuffers: s.buffers,
   };
   const first = checkSlot(query, startMs);
-  if (!first.ok) throw slotTaken(first.reason);
+  if (!first.ok) {
+    // As in createBooking: the list this time came from is out of date.
+    if (first.reason === 'busy') await forgetHostBusy(ctx, plan.hosts.map((h) => h.id));
+    throw slotTaken(first.reason);
+  }
 
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(endMs).toISOString();
@@ -1595,6 +1604,13 @@ async function syncCalendar(ctx: Ctx, bookingId: string, mode: SyncMode): Promis
       if (!outcome.again) break;
     }
     const { again: _again, ...result } = outcome;
+    // We changed a calendar ourselves (an event added, moved or removed), so what is remembered of the hosts'
+    // busy time describes a calendar that no longer exists. Without this a cancelled or moved meeting keeps
+    // its old time closed for up to a minute, although the booking page says it is free again.
+    if (result.status === 'synced') {
+      const booking = await getBooking(ctx, bookingId).catch(() => null);
+      if (booking) await forgetHostBusy(ctx, booking.google?.hostId ? [...booking.hostIds, booking.google.hostId] : booking.hostIds);
+    }
     return result;
   } catch (err) {
     ctx.log('error', 'booking: calendar sync stopped unexpectedly', { bookingId, error: shortError(err) });

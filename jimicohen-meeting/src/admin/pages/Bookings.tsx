@@ -60,7 +60,22 @@ export default function Bookings() {
       .then((res) => {
         if (id !== requestId.current) return;
         setList({ status: 'ready', bookings: res.bookings, total: res.total, loadingMore: false });
+        // The answer carries the size of every tab (whatever is being searched for), so the
+        // badges are right after one request, also while a search narrows the list.
+        if (res.counts) {
+          setCounts(res.counts);
+          return;
+        }
+        // Without them (the in-browser mock): this tab's total, and one small request per other tab.
         if (!q) setCounts((c) => ({ ...c, [scope]: res.total }));
+        for (const other of SCOPES) {
+          if (other === scope) continue;
+          listBookings({ scope: other, limit: 1, offset: 0 })
+            .then((r) => {
+              if (id === requestId.current) setCounts((c) => ({ ...c, [other]: r.total }));
+            })
+            .catch(() => undefined);
+        }
       })
       .catch((e: unknown) => {
         if (ctrl.signal.aborted || id !== requestId.current) return;
@@ -68,23 +83,6 @@ export default function Bookings() {
       });
     return () => ctrl.abort();
   }, [scope, q, reload]);
-
-  // Counts for the other tabs, so the tab bar is honest about what is behind each one.
-  useEffect(() => {
-    let cancelled = false;
-    for (const s of SCOPES) {
-      if (s === scope) continue;
-      listBookings({ scope: s, limit: 1, offset: 0 })
-        .then((res) => {
-          if (!cancelled) setCounts((c) => ({ ...c, [s]: res.total }));
-        })
-        .catch(() => undefined);
-    }
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reload]);
 
   // Keep the search in the URL so a reload or a shared link shows the same list.
   useEffect(() => {

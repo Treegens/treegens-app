@@ -9,7 +9,7 @@ import { KeyRound, Plus, Quote, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { DEFAULT_CONSENT_TEXT } from '../../../shared/defaults';
 import type { AssistantSettings, SiteSettings } from '../../../shared/types';
-import { ApiFailure, changePassword, errorMessage, saveSite } from '../../lib/api';
+import { ApiFailure, changePassword, errorMessage, saveSite, updateHost } from '../../lib/api';
 import { Button, Field, IconButton, Input, Select, Switch, Textarea, useToast } from '../../ui';
 import { FieldGroup, Notice, Page, PageHeader, SaveBar, Section } from '../components/Page';
 import { useUnsavedGuard } from '../components/UnsavedGuard';
@@ -25,6 +25,8 @@ interface Draft {
   assistant: AssistantDraft;
   booking: { reminderOptInDefault: boolean; consentText: string; privacyUrl: string };
   email: { fromName: string; replyTo: string };
+  /** where the owner's own booking notices go (the owner's host record, not the site) */
+  noticesTo: string;
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -43,10 +45,11 @@ const LANGUAGES: { value: string; label: string }[] = [
   { value: 'nl-NL', label: 'Dutch' },
 ];
 
-function toDraft(site: SiteSettings): Draft {
+function toDraft(site: SiteSettings, ownerEmail: string): Draft {
   const { model: _model, ...assistant } = site.assistant;
   void _model;
   return {
+    noticesTo: ownerEmail,
     profile: { ...site.profile, avatarAssetId: site.profile.avatarAssetId ?? null, links: site.profile.links.map((l) => ({ ...l })) },
     assistant,
     booking: { reminderOptInDefault: site.booking.reminderOptInDefault, consentText: site.booking.consentText, privacyUrl: site.booking.privacyUrl ?? '' },
@@ -92,6 +95,7 @@ function problemOf(d: Draft): string | null {
   if (!d.booking.consentText.trim()) return 'The consent wording cannot be empty.';
   if (d.booking.privacyUrl.trim() && !/^https:\/\//i.test(d.booking.privacyUrl.trim())) return 'The privacy link must start with https://';
   if (d.email.replyTo.trim() && !EMAIL.test(d.email.replyTo.trim())) return 'The reply-to address is not a full email address.';
+  if (d.noticesTo.trim() && !EMAIL.test(d.noticesTo.trim())) return 'The address for your booking notices is not a full email address.';
   return null;
 }
 
@@ -165,7 +169,7 @@ export default function SettingsPage() {
   const latest = useRef(data);
   latest.current = data;
 
-  const base = useMemo(() => toDraft(data.site), [data.site]);
+  const base = useMemo(() => toDraft(data.site, ownerHost.email), [data.site, ownerHost.email]);
   const [draft, setDraft] = useState<Draft>(base);
   const [saving, setSaving] = useState(false);
   const [serverProblem, setServerProblem] = useState<string | null>(null);
@@ -181,9 +185,11 @@ export default function SettingsPage() {
 
   const dirty = !sameJson(draft, base);
   useUnsavedGuard(dirty);
-  const problem = dirty ? (problemOf(draft) ?? serverProblem) : null;
+  // An address that is in use cannot be emptied again: notices need somewhere to go.
+  const noticesProblem = base.noticesTo && !draft.noticesTo.trim() ? 'Enter the address your booking notices should go to.' : null;
+  const problem = dirty ? (problemOf(draft) ?? noticesProblem ?? serverProblem) : null;
 
-  const set = <K extends keyof Draft>(key: K, patch: Partial<Draft[K]>) => {
+  const set = <K extends Exclude<keyof Draft, 'noticesTo'>>(key: K, patch: Partial<Draft[K]>) => {
     setDraft((d) => ({ ...d, [key]: { ...d[key], ...patch } }));
     setServerProblem(null);
   };
@@ -207,6 +213,13 @@ export default function SettingsPage() {
     try {
       const cleanLinks = draft.profile.links.map((l) => ({ label: l.label.trim(), url: l.url.trim() })).filter((l) => l.label && l.url);
       const avatarChanged = (draft.profile.avatarAssetId ?? null) !== (data.site.profile.avatarAssetId ?? null);
+      const nameChanged = draft.profile.name.trim() !== data.site.profile.name;
+      // The owner's own address first: it is the one thing here the server may refuse (someone on the team already has it).
+      const noticesTo = draft.noticesTo.trim();
+      if (noticesTo && noticesTo !== ownerHost.email) {
+        const host = await updateHost(ownerHost.id, { email: noticesTo });
+        setData({ ...latest.current, hosts: latest.current.hosts.map((h) => (h.id === host.id ? host : h)) });
+      }
       const site = await saveSite({
         profile: { ...draft.profile, name: draft.profile.name.trim(), headline: draft.profile.headline.trim(), welcome: draft.profile.welcome.trim(), links: cleanLinks },
         assistant: { ...draft.assistant, name: draft.assistant.name.trim(), voice: draft.assistant.voice.trim(), persona: draft.assistant.persona.trim() },
@@ -215,7 +228,8 @@ export default function SettingsPage() {
       });
       setData({ ...latest.current, site });
       baseRef.current = draft; // lets the effect above adopt what the server stored
-      if (avatarChanged) await refresh().catch(() => undefined);
+      // The owner's host record follows the profile photo and name: read it back.
+      if (avatarChanged || nameChanged) await refresh().catch(() => undefined);
       toast.success('Settings saved');
     } catch (e) {
       const failure = e instanceof ApiFailure ? e : null;
@@ -431,6 +445,29 @@ export default function SettingsPage() {
             <Input type="email" inputMode="email" value={draft.email.replyTo} maxLength={254} placeholder={ownerHost.email || 'you@example.com'} onChange={(e) => set('email', { replyTo: e.target.value })} />
           </Field>
         </div>
+        <Field
+          label="Send my booking notices to"
+          hint={
+            ownerHost.email
+              ? 'New, moved and cancelled bookings are emailed to you here. Visitors never see this address.'
+              : 'Without an address you are not emailed about new bookings. Connecting Google Calendar fills this in for you.'
+          }
+          className="adm-w-lg"
+        >
+          <Input
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            value={draft.noticesTo}
+            maxLength={254}
+            placeholder="you@example.com"
+            invalid={draft.noticesTo.trim() !== '' && !EMAIL.test(draft.noticesTo.trim())}
+            onChange={(e) => {
+              setDraft((d) => ({ ...d, noticesTo: e.target.value }));
+              setServerProblem(null);
+            }}
+          />
+        </Field>
       </Section>
 
       <Section title="Password" description="The password for this dashboard. Changing it signs out every other device.">
