@@ -2925,6 +2925,73 @@ describe('moving a meeting from the booking page', () => {
     expect(await failure(cancelBooking(ctx, booking.id, { by: 'invitee', actor: 'host' }))).toMatchObject({ status: 410, code: 'too_late' });
   });
 
+  it("sends the owner no notice of a move they made themselves, but tells the co-host and the invitee; anyone else's move reaches the owner", async () => {
+    const ctx = await setup({ env: { overrides: { ...RESEND_ENV.overrides, ...TWILIO_ENV.overrides } } });
+    await useResend(ctx);
+    // Both hosts get texts too, so a skipped text shows as well as a skipped email.
+    await updateHost(ctx, OWNER, (h) => ({ ...h, phone: '+14155550101', notify: { email: true, sms: true } }));
+    await addAlex(ctx, { phone: '+14155550102', notify: { email: true, sms: true } });
+    await addEvent(ctx, { id: 'evt_joint', slug: 'joint', title: 'Joint call', kind: 'collective', hostIds: [OWNER, ALEX], durations: [30], defaultDuration: 30 });
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request({ slug: 'joint', durationMin: 30, phone: '+14155552671', consent: { sms: true, call: false } }));
+    await ctx.settle();
+    const texts = (to: string) => calls.filter((c) => c.url.startsWith(TWILIO_ROOT) && c.url.includes('/Messages') && new URLSearchParams(c.body).get('To') === to);
+    const told = () => ({
+      owner: [emailsTo(calls, 'jimi@example.com').length, texts('+14155550101').length],
+      alex: [emailsTo(calls, 'alex@example.com').length, texts('+14155550102').length],
+      invitee: [emailsTo(calls, 'ada@example.com').length, texts('+14155552671').length],
+    });
+
+    // In the dashboard, and on the booking page with the owner signed in.
+    for (const [start, who] of [[THU(10), { by: 'host' as const }], [THU(11), { by: 'host' as const, actor: 'owner' as const }]] as const) {
+      calls.length = 0;
+      await rescheduleBooking(ctx, booking.id, { startIso: start, ...who });
+      await ctx.settle();
+      expect((await getBooking(ctx, booking.id))!.timeline.filter((t) => t.type === 'rescheduled').length).toBeGreaterThan(0);
+      expect(told()).toEqual({ owner: [0, 0], alex: [1, 1], invitee: [1, 1] });
+    }
+
+    // The invitee, and a host's link (which names no host): the owner hears of it.
+    calls.length = 0;
+    await rescheduleBooking(ctx, booking.id, { startIso: THU(12), by: 'invitee' });
+    await ctx.settle();
+    expect(told()).toEqual({ owner: [1, 1], alex: [1, 1], invitee: [1, 0] });
+    calls.length = 0;
+    await rescheduleBooking(ctx, booking.id, { startIso: THU(13), by: 'invitee', actor: 'host' });
+    await ctx.settle();
+    expect(told()).toEqual({ owner: [1, 1], alex: [1, 1], invitee: [1, 1] });
+  });
+
+  it("sends the owner no notice of a cancellation they made themselves, but tells the co-host and the invitee; the invitee's reaches the owner", async () => {
+    const ctx = await setup({ env: { overrides: { ...RESEND_ENV.overrides, ...TWILIO_ENV.overrides } } });
+    await useResend(ctx);
+    await updateHost(ctx, OWNER, (h) => ({ ...h, phone: '+14155550101', notify: { email: true, sms: true } }));
+    await addAlex(ctx, { phone: '+14155550102', notify: { email: true, sms: true } });
+    await addEvent(ctx, { id: 'evt_joint', slug: 'joint', title: 'Joint call', kind: 'collective', hostIds: [OWNER, ALEX], durations: [30], defaultDuration: 30 });
+    const calls = net(ctx);
+    const texts = (to: string) => calls.filter((c) => c.url.startsWith(TWILIO_ROOT) && c.url.includes('/Messages') && new URLSearchParams(c.body).get('To') === to);
+    let n = 0;
+    const cancelled = async (who: Parameters<typeof cancelBooking>[2]) => {
+      n++;
+      // A number of its own each time: one number may only get texts about a few bookings a day.
+      const phone = `+1415555267${n}`;
+      const { booking } = await createBooking(ctx, request({ slug: 'joint', durationMin: 30, start: THU(9 + n), phone, consent: { sms: true, call: false } }));
+      await ctx.settle();
+      calls.length = 0;
+      await cancelBooking(ctx, booking.id, who);
+      await ctx.settle();
+      return {
+        owner: [emailsTo(calls, 'jimi@example.com').length, texts('+14155550101').length],
+        alex: [emailsTo(calls, 'alex@example.com').length, texts('+14155550102').length],
+        invitee: [emailsTo(calls, 'ada@example.com').length, texts(phone).length],
+      };
+    };
+    expect(await cancelled({ by: 'host' })).toEqual({ owner: [0, 0], alex: [1, 1], invitee: [1, 1] });
+    expect(await cancelled({ by: 'host', actor: 'owner' })).toEqual({ owner: [0, 0], alex: [1, 1], invitee: [1, 1] });
+    expect(await cancelled({ by: 'invitee' })).toEqual({ owner: [1, 1], alex: [1, 1], invitee: [1, 0] });
+    expect(await cancelled({ by: 'invitee', actor: 'host' })).toEqual({ owner: [1, 1], alex: [1, 1], invitee: [1, 1] });
+  });
+
   it('records a cancellation through a host link as a host\'s, tells the owner and texts the invitee', async () => {
     const ctx = await setup({ env: { overrides: { ...RESEND_ENV.overrides, ...TWILIO_ENV.overrides } } });
     await useResend(ctx);

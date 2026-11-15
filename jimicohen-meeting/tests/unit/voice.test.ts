@@ -412,7 +412,7 @@ describe('the spoken script', () => {
     expect(callPhrases(s, Date.parse(NOW)).greeting).toContain('about your meeting today');
   });
 
-  it('names two hosts, and says "and the team" for more', async () => {
+  it('names every host who joins by first name, three of them too', async () => {
     const ctx = makeTestCtx({ now: NOW });
     const site = await getSite(ctx);
     const owner = (await listHosts(ctx))[0];
@@ -422,8 +422,24 @@ describe('the spoken script', () => {
     expect(two.hostFirstNames).toBe('Jimi and Alex');
     expect(two.hostNames).toBe('Jimi Cohen and Alex Rivera');
     const three = buildCallScript({ booking: makeBooking('b', { hostIds: ['host_owner', 'host_alex', 'host_kim'] }), site, hosts: [owner, alex, kim], purpose: 'reminder' });
-    expect(three.hostFirstNames).toBe('Jimi and the team');
+    expect(three.hostFirstNames).toBe('Jimi, Alex and Kim');
     expect(three.hostNames).toBe('Jimi Cohen, Alex Rivera and Kim Lee');
+    const lines = callPhrases(three, Date.parse(NOW));
+    expect(lines.greeting).toContain('an AI assistant calling for Jimi, Alex and Kim.');
+    expect(lines.repeat).toContain('with Jimi, Alex and Kim,');
+    expect(lines.cancelled).toContain('I will let Jimi, Alex and Kim know.');
+    expect(lines.voicemail).toContain('calling for Jimi, Alex and Kim.');
+    // A round robin booking carries only the host it went to.
+    const robin = buildCallScript({ booking: makeBooking('b', { kind: 'round_robin', hostIds: ['host_kim'] }), site, hosts: [owner, alex, kim], purpose: 'reminder' });
+    expect(robin.hostFirstNames).toBe('Kim');
+    // Too many long names for a voicemail: the first one alone, without a stray comma.
+    const long = [
+      { ...owner, name: 'Bartholomew Featherstonehaugh' },
+      { ...alex, name: 'Maximilienne Vandersloot' },
+      { ...kim, name: 'Christopher Abernathy' },
+    ];
+    const crowd = buildCallScript({ booking: makeBooking('b', { hostIds: ['host_owner', 'host_alex', 'host_kim'] }), site, hosts: long, purpose: 'reminder' });
+    expect(callPhrases(crowd, Date.parse(NOW)).voicemail).toContain('an AI assistant calling for Bartholomew. A reminder');
   });
 
   it('chooses how the link travels from the consent given', async () => {

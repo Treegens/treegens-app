@@ -49,6 +49,7 @@ vi.mock('../../server/lib/google', () => ({ gmailSendRaw: vi.fn() }));
 
 import {
   cancelBookingJobs,
+  composeBookingEmail,
   composeSms,
   deliverMessage,
   enqueueJob,
@@ -377,6 +378,42 @@ describe('scheduleBookingJobs', () => {
     expect(notice.subject).toBe('New time: Intro call with Jimi Cohen, Wed, Nov 18, 11:30 PM GMT+3');
     expect(notice.text).toContain('The old time was Tuesday, November 17, 2026 at 11:30 PM GMT+3.');
     expect(icsOf(notice)).toContain('SEQUENCE:1');
+  });
+
+  it("an owner's own move sends the owner no notice, but still tells a co-host and the invitee, and keeps the owner's reminders", async () => {
+    const world = await makeWorld({ rules: [...DEFAULT_RULES, { id: 'h_email', enabled: true, channel: 'email', audience: 'host', trigger: 'before_start', offsetMinutes: 30 }] });
+    await updateHost(world.ctx, 'host_owner', (h) => ({ ...h, phone: '+15550100', notify: { email: true, sms: true } }));
+    await updateHost(world.ctx, 'host_alex', (h) => ({ ...h, notify: { email: true, sms: true } }));
+    const moved = async (by: 'owner' | 'invitee' | 'host' | undefined): Promise<string[]> => {
+      for (const job of await listJobs(world.ctx)) await world.ctx.kv.delete(job.key);
+      const booking = await saveBooking(world.ctx, makeBooking({ id: `bkg_${by ?? 'none'}`, kind: 'collective', hostIds: ['host_owner', 'host_alex'], rescheduledFromStart: at(START, -HOUR), rescheduleCount: 1 }));
+      await scheduleBookingJobs(world.ctx, booking, world.eventType, 'rescheduled', by ? { by } : undefined);
+      return (await queue(world.ctx)).filter((j) => j.endsWith(`@ ${TEST_NOW}`) || j.includes('/host/')).sort();
+    };
+    const everyone = [
+      `rescheduled/email/host/host_alex @ ${TEST_NOW}`,
+      `rescheduled/email/host/host_owner @ ${TEST_NOW}`,
+      `rescheduled/email/invitee @ ${TEST_NOW}`,
+      `rescheduled/sms/host/host_alex @ ${TEST_NOW}`,
+      `rescheduled/sms/host/host_owner @ ${TEST_NOW}`,
+      `rescheduled/sms/invitee @ ${TEST_NOW}`,
+      `reminder/email/host/host_alex @ ${at(START, -30 * MIN)}`,
+      `reminder/email/host/host_owner @ ${at(START, -30 * MIN)}`,
+    ].sort();
+    expect(await moved('owner')).toEqual(everyone.filter((j) => !j.startsWith('rescheduled/email/host/host_owner') && !j.startsWith('rescheduled/sms/host/host_owner')));
+    // The invitee's own move: the owner is told, the invitee gets no text about it.
+    expect(await moved('invitee')).toEqual(everyone.filter((j) => !j.startsWith('rescheduled/sms/invitee')));
+    // A host's link names no host, and a move whose maker is not known tells everyone.
+    expect(await moved('host')).toEqual(everyone);
+    expect(await moved(undefined)).toEqual(everyone);
+  });
+
+  it("an owner's move that hands the owner a round robin meeting still tells the owner of the new booking", () => {
+    const booking = makeBooking({ kind: 'round_robin', hostIds: ['host_owner'], rescheduleCount: 1 });
+    const owner = { id: 'host_owner', email: 'jimi@example.com', notify: { email: true, sms: false } } as Host;
+    const plan = planBookingJobs({ booking, eventType: newEventType(TEST_NOW, { id: 'evt_rr', slug: 'rr', title: 'Team call', kind: 'round_robin', reminders: [] }), hosts: [owner], nowMs: Date.parse(TEST_NOW), immediate: 'rescheduled', by: 'owner', newHostIds: ['host_owner'], movedByHostId: 'host_owner' });
+    expect(plan.filter((p) => p.audience === 'host').map((p) => `${p.kind}/${p.channel}/${p.hostId}`)).toEqual(['host_new/email/host_owner']);
+    expect(planBookingJobs({ booking, eventType: newEventType(TEST_NOW, { id: 'evt_rr', slug: 'rr', title: 'Team call', kind: 'round_robin', reminders: [] }), hosts: [owner], nowMs: Date.parse(TEST_NOW), immediate: 'rescheduled', by: 'owner', movedByHostId: 'host_owner' }).filter((p) => p.audience === 'host')).toEqual([]);
   });
 
   it('queues nothing for a cancelled booking and clears its reminders', async () => {
@@ -2079,6 +2116,26 @@ describe('composeBookingEmail: what the invitee receives', () => {
     expect(host.html).not.toMatch(/href="https:\/\/evil\.example/);
   });
 
+  it('a reminder lets every host who joins know the invitee is coming; a round robin names its host, one host reads as before', async () => {
+    const world = await makeWorld();
+    const owner = (await updateHost(world.ctx, 'host_owner', (h) => h)) as Host;
+    const alex = (await updateHost(world.ctx, 'host_alex', (h) => h)) as Host;
+    const kim = await saveHost(world.ctx, { ...alex, id: 'host_kim', name: 'Kim Lee', email: 'kim@example.com' });
+    const hosts = [owner, alex, kim];
+    const site = await getSite(world.ctx);
+    const linkOf = (over: Partial<Booking>): string[] => {
+      const mail = composeBookingEmail(world.ctx, { booking: makeBooking(over), eventType: world.eventType, hosts, site, kind: 'reminder', audience: 'invitee', recipientHost: null, to: 'sam@example.com' });
+      return [...mail.html.matchAll(/>(Let [^<]+ know you(?:&#39;|')re coming)</g)].map((m) => m[1].replace('&#39;', "'"));
+    };
+    expect(linkOf({ kind: 'collective', hostIds: ['host_owner', 'host_alex'] })).toEqual(["Let Jimi and Alex know you're coming"]);
+    expect(linkOf({ kind: 'collective', hostIds: ['host_owner', 'host_alex', 'host_kim'] })).toEqual(["Let Jimi, Alex and Kim know you're coming"]);
+    expect(linkOf({ kind: 'round_robin', hostIds: ['host_alex'] })).toEqual(["Let Alex know you're coming"]);
+    expect(linkOf({})).toEqual(["Let Jimi know you're coming"]);
+    // The plain text says the same.
+    const text = composeBookingEmail(world.ctx, { booking: makeBooking({ kind: 'collective', hostIds: ['host_owner', 'host_alex'] }), eventType: world.eventType, hosts, site, kind: 'reminder', audience: 'invitee', recipientHost: null, to: 'sam@example.com' }).text;
+    expect(text).toContain("Let Jimi and Alex know you're coming");
+  });
+
   it("still links web addresses in the owner's own wording", async () => {
     const world = await makeWorld({
       rules: [{ id: 'r_prep', enabled: true, channel: 'email', audience: 'invitee', trigger: 'before_start', offsetMinutes: 60, body: 'Hi {{invitee_first_name}},\n\nPlease read https://jimicohen.com/prep before we meet.' }],
@@ -2209,6 +2266,32 @@ describe('a notice to a co-host about their Google accounts', () => {
     expect(toAlex.html).not.toContain('/admin');
     expect(toAlex.text).not.toContain('Open your dashboard');
     expect(toOwner.html).toContain('Open your dashboard');
+  });
+
+  it('ends quietly when the co-host was removed before it went out: nothing reaches the owner, and it is not tried again', async () => {
+    const world = await makeWorld();
+    const notice = { type: 'message' as const, kind: 'host_alert' as const, bookingId: '', channel: 'email' as const, audience: 'host' as const, body: 'Hi {{host_first_name}},\n\nalex@work.example was connected.', dueAt: TEST_NOW };
+    await enqueueJob(world.ctx, { ...notice, hostId: 'host_alex', subject: 'A Google account was connected to your booking page' });
+    // The owner's own notice, and one with no host named (the owner's too), still reach the owner.
+    await enqueueJob(world.ctx, { ...notice, hostId: 'host_owner', subject: 'Alex connected another Google account' });
+    await enqueueJob(world.ctx, { ...notice, subject: 'Your booking page needs attention' });
+    await repo.deleteHost(world.ctx, 'host_alex');
+    const logged: string[] = [];
+    const log = world.ctx.log;
+    world.ctx.log = (level, message, data) => {
+      logged.push(message);
+      log(level, message, data);
+    };
+    await runDueJobs(world.ctx);
+    expect(world.emails.map((e) => e.subject).sort()).toEqual(['Alex connected another Google account', 'Your booking page needs attention']);
+    expect(world.emails.every((e) => e.to[0].includes('jimi@example.com'))).toBe(true);
+    expect(smsSpy).not.toHaveBeenCalled();
+    expect(logged).toContain('jobs: a notice for a co-host who no longer exists was not sent');
+    // Done for good: nothing is left in the queue to be tried again.
+    expect(await listJobs(world.ctx)).toEqual([]);
+    world.ctx.clock.set(at(TEST_NOW, 2 * HOUR));
+    await runDueJobs(world.ctx);
+    expect(world.emails).toHaveLength(2);
   });
 
   it('when the email cannot go out, the text to the co-host carries no dashboard link either', async () => {

@@ -45,12 +45,13 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       const page = await s.newPage({ timezoneId: NY, ...(size === 'phone' ? PHONE_VIEWPORT : {}) });
       const email = `ada.${size}@example.com`;
       let slot;
-      await s.step(`${size}: /meet opens "Meet with Jimi" in Jimi's own look`, async () => {
+      await s.step(`${size}: /meet opens "Meeting with Jimi" in Jimi's own look`, async () => {
         await page.goto(s.shortUrl('meet'));
-        await page.getByRole('heading', { name: 'Meet with Jimi', level: 1 }).waitFor();
+        await page.getByRole('heading', { name: 'Meeting with Jimi', level: 1 }).waitFor();
         await calendarReady(page);
         s.expect(where(page), 'address').toBe('/meet');
-        s.expect(await page.title(), 'tab title').toBe('Meet with Jimi');
+        // The meeting's own name once the page runs; the link preview says "Meet with Jimi" (checked below).
+        s.expect(await page.title(), 'tab title').toBe('Meeting with Jimi');
         s.expect(await page.getByRole('link', { name: 'All meeting types' }).count(), 'no list of meetings').toBe(0);
         s.expect(await cssVar(page, '--m-bg'), 'forest page').toBe('#0b1d14');
         s.expect(await page.locator('.bw-summary__logo').count(), 'no brand logo').toBe(0);
@@ -84,7 +85,7 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       });
       await s.step(`${size}: the booking is Jimi's own, and its links lead to /meeting/booking`, async () => {
         const [booking] = await s.bookings((b) => b.invitee.email === email);
-        s.expect(booking.eventTitle, 'event').toBe('Meet with Jimi');
+        s.expect(booking.eventTitle, 'event').toBe('Meeting with Jimi');
         s.expect(booking.brandId, 'no brand').toBe(undefined);
         s.expect(booking.hostIds, 'Jimi alone').toEqual(['host_owner']);
         const [mail] = await s.outbox({ kind: 'email', to: email });
@@ -194,7 +195,7 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       const answer = await s.voice(call, 'start');
       s.expect(answer.said, 'greeting').toMatch(/an AI assistant calling for Eco Champions\. A quick reminder about your Eco Champions conversation with Jimi and Ian/);
     });
-    await s.step('the manage page from the email is Eco Champions, and stays so when the event loses the brand', async () => {
+    await s.step('the manage page from the email is Eco Champions, names both hosts, and stays so when the event loses the brand', async () => {
       await s.setClock('2026-11-16T09:00:00.000Z');
       await s.apiOk('PUT', '/admin/event-types/evt_eco_champions', { body: { brandId: null } });
       const manage = await s.newPage({ timezoneId: NY });
@@ -204,8 +205,16 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       s.expect(await manage.title(), 'tab title').toMatch(/Eco Champions conversation/);
       s.expect(await manage.locator('.bm__logo').getAttribute('src'), 'the Eco Champions logo on the manage page').toBe('/meeting/brand/eco-champions/logo.svg');
       await s.screenshot(manage, 'pod manage page');
+      // Both hosts join, so both are named: "Let Jimi and Ian know", and the thank-you says they both know.
+      await manage.getByText('Let Jimi and Ian know with one tap.', { exact: true }).waitFor();
+      s.expect(await manage.getByText('Let Jimi know with one tap.').count(), 'only the first host').toBe(0);
+      await manage.getByRole('button', { name: "I'll be there" }).click();
+      await manage.getByText('Jimi and Ian know you will be there.', { exact: true }).waitFor();
+      await manage.getByText('You said you will be there').waitFor();
+      await s.screenshot(manage, 'pod manage page attending');
       await s.clearOutbox();
       await manage.getByRole('link', { name: 'Cancel meeting' }).click();
+      await manage.getByText('Jimi and Ian will see this with the cancellation.', { exact: true }).waitFor();
       await manage.getByRole('button', { name: 'Cancel meeting' }).click();
       await manage.getByRole('link', { name: 'Book a new time' }).waitFor();
       s.expect(await manage.getByRole('link', { name: 'Book a new time' }).getAttribute('href'), 'book again at /pod').toBe(s.shortUrl('pod'));
@@ -286,6 +295,43 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       await page.getByRole('heading', { name: 'Eco Champions conversation', level: 1 }).waitFor();
       await s.eventually(async () => s.expect(where(page), 'address').toBe('/pod?utm_source=linkedin'));
     });
+    await s.step("/meeting/eco-champions has the brand's tab and home screen icons, and Jimi's page gets its own back", async () => {
+      const icons = (page) =>
+        page.evaluate(() => ({
+          svg: document.querySelector('link[rel="icon"][type="image/svg+xml"]')?.getAttribute('href') ?? null,
+          png: [...document.querySelectorAll('link[rel="icon"][type="image/png"]')].map((l) => l.getAttribute('href')),
+          touch: [...document.querySelectorAll('link[rel="apple-touch-icon"]')].map((l) => l.getAttribute('href')),
+        }));
+      const page = await s.newPage({ timezoneId: NY });
+      await page.goto(s.url('/eco-champions'));
+      await page.getByRole('heading', { name: 'Eco Champions conversation', level: 1 }).waitFor();
+      await s.eventually(async () =>
+        s.expect(await icons(page), 'icons on the brand page').toEqual({ svg: '/meeting/brand/eco-champions/favicon.svg', png: [], touch: ['/meeting/brand/eco-champions/apple-touch-icon.png'] }),
+      );
+      const touch = await fetch(`${s.server.origin}/meeting/brand/eco-champions/apple-touch-icon.png`);
+      s.expect([touch.status, touch.headers.get('content-type')], 'the home screen icon file').toEqual([200, 'image/png']);
+      // On to Jimi's own page in the same tab: his tab icon is back and the brand's home screen icon is gone, so the
+      // phone uses jimicohen.com's own.
+      await page.evaluate(() => {
+        window.history.pushState({}, '', '/meeting/intro');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await page.getByRole('heading', { name: 'Intro call', level: 1 }).waitFor();
+      await s.eventually(async () => s.expect(await icons(page), "icons on Jimi's page").toEqual({ svg: '/meeting/favicon.svg', png: [], touch: [] }));
+      const fresh = await s.newPage({ timezoneId: NY });
+      await fresh.goto(s.url('/intro'));
+      await fresh.getByRole('heading', { name: 'Intro call', level: 1 }).waitFor();
+      s.expect(await icons(fresh), "icons on Jimi's page opened directly").toEqual({ svg: '/meeting/favicon.svg', png: [], touch: [] });
+      // jimicohen.com/pod keeps the brand's icons from its own page, the small PNG one included.
+      const pod = await s.newPage({ timezoneId: NY });
+      await pod.goto(s.shortUrl('pod'));
+      await pod.getByRole('heading', { name: 'Eco Champions conversation', level: 1 }).waitFor();
+      s.expect(await icons(pod), 'icons on /pod').toEqual({
+        svg: '/meeting/brand/eco-champions/favicon.svg',
+        png: ['/meeting/brand/eco-champions/favicon-32.png'],
+        touch: ['/meeting/brand/eco-champions/apple-touch-icon.png'],
+      });
+    });
     await s.step('a booking path that slips through leaves for /meeting/booking with replace, and Back returns to /pod', async () => {
       const page = await s.newPage({ timezoneId: NY, allowConsoleErrors: [/status of 404/] });
       await page.goto(s.shortUrl('pod'));
@@ -356,7 +402,7 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       s.expect(await cssVar(page, '--m-bg'), 'skeleton while /meet loads').toBe('#0b1d14');
       await s.screenshot(page, 'meet loading after pod', { fullPage: false });
       release();
-      await page.getByRole('heading', { name: 'Meet with Jimi', level: 1 }).waitFor();
+      await page.getByRole('heading', { name: 'Meeting with Jimi', level: 1 }).waitFor();
     });
 
     await s.step("a first visit to /meeting/meeting boots in Jimi's forest, and its loading screen is not remembered", async () => {
@@ -374,7 +420,7 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       s.expect(await rootBackground(page), 'forest while loading').toBe(FOREST);
       s.expect(await page.evaluate(() => [localStorage.getItem('mtg:boot-theme'), localStorage.getItem('mtg:boot-theme:own')]), 'nothing remembered').toEqual([null, null]);
       release();
-      await page.getByRole('heading', { name: 'Meet with Jimi', level: 1 }).waitFor();
+      await page.getByRole('heading', { name: 'Meeting with Jimi', level: 1 }).waitFor();
       await s.eventually(async () => s.expect(await page.evaluate(() => localStorage.getItem('mtg:boot-theme')), 'remembered once shown').not.toBeNull());
       // Jimi's own look is also kept apart, for jimicohen.com/meet (which never boots in a brand's look seen since).
       s.expect(JSON.parse((await page.evaluate(() => localStorage.getItem('mtg:boot-theme:own'))) ?? '{}').bg, 'own look').toBe('#0b1d14');

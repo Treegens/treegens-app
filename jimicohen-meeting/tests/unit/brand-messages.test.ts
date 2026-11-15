@@ -240,25 +240,25 @@ describe('texts about a branded booking name the brand', () => {
   });
 });
 
-describe('"Meet with Jimi", the meeting behind jimicohen.com/meet', () => {
-  it('is never "Meet with Jimi with Jimi Cohen" in emails, texts or the reminder call', async () => {
+describe('"Meeting with Jimi", the meeting behind jimicohen.com/meet', () => {
+  it('is never "Meeting with Jimi with Jimi Cohen" in emails, texts or the reminder call', async () => {
     const w = await world({ brand: true });
-    const meetEvent = { ...(await repo.getEventType(w.ctx, 'evt_meeting'))!, title: 'Meet with Jimi' };
+    const meetEvent = { ...(await repo.getEventType(w.ctx, 'evt_meeting'))!, title: 'Meeting with Jimi' };
     await repo.saveEventType(w.ctx, meetEvent);
     await repo.saveBooking(w.ctx, booking('bkg_meet', meetEvent));
     await deliverMessage(w.ctx, job('bkg_meet', 'confirmation'));
     await deliverMessage(w.ctx, job('bkg_meet', 'reminder', 'host'));
     const [invitee, host] = w.emails;
-    expect(invitee.subject).toBe('Confirmed: Meet with Jimi, Tue, Nov 17, 3:00 PM EST');
-    expect(invitee.text).toContain('Your Meet with Jimi is confirmed for');
-    expect(host.subject).toBe('Reminder: Meet with Jimi (Ann Lee) is tomorrow at 3:00 PM EST');
-    for (const m of [invitee, host]) expect(`${m.subject} ${m.text}`).not.toMatch(/Meet with Jimi with/);
+    expect(invitee.subject).toBe('Confirmed: Meeting with Jimi, Tue, Nov 17, 3:00 PM EST');
+    expect(invitee.text).toContain('Your Meeting with Jimi is confirmed for');
+    expect(host.subject).toBe('Reminder: Meeting with Jimi (Ann Lee) is tomorrow at 3:00 PM EST');
+    for (const m of [invitee, host]) expect(`${m.subject} ${m.text}`).not.toMatch(/Meeting with Jimi with/);
     const site = await repo.getSite(w.ctx);
     const meetBooking = booking('bkg_meet', meetEvent);
     const text = composeBookingSms(w.ctx, { booking: meetBooking, eventType: meetEvent, hosts: w.hosts, site, kind: 'confirmation', audience: 'invitee' });
-    expect(text.startsWith("Hi Ann, you're booked: Meet with Jimi on ")).toBe(true);
+    expect(text.startsWith("Hi Ann, you're booked: Meeting with Jimi on ")).toBe(true);
     const call = callPhrases(buildCallScript({ booking: meetBooking, site, hosts: w.hosts, purpose: 'reminder' }), Date.parse(TEST_NOW), 'reminder');
-    expect(call.repeat).toMatch(/^Of course\. This is a reminder about your Meet with Jimi, /);
+    expect(call.repeat).toMatch(/^Of course\. This is a reminder about your Meeting with Jimi, /);
     // A name that names only some of the hosts keeps them, in brackets; every other name reads as before.
     const pod = booking('bkg_pod2', { ...w.pod, title: 'Coffee with Jimi' }, { brandId: ECO });
     const coffee = composeBookingSms(w.ctx, { booking: pod, eventType: w.pod, hosts: w.hosts, site: viewFor(site, pod), kind: 'confirmation', audience: 'invitee' });

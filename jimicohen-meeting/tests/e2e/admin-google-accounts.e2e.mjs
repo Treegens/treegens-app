@@ -334,6 +334,95 @@ export default defineSuite('admin-google-accounts', { mockCreds: true }, async (
     });
   });
 
+  await t.scenario('a co-host whose only Google accounts are other ones: busy times count, and every page says new meetings need an account', { reset: true }, async (s) => {
+    const owner = await ownerWithA(s);
+    const created = await s.apiOk('POST', '/admin/hosts', { body: { name: 'Alex Rivera', email: 'alex@example.com' } });
+    const alexId = created.host.id;
+    const joint = await s.apiOk('POST', '/admin/event-types', { body: { title: 'Joint call', slug: 'joint', kind: 'collective', hostIds: ['host_owner', alexId], durations: [15], defaultDuration: 15 } });
+    const jointId = (joint.eventType ?? joint).id;
+    await s.connectGoogle(owner, 'alex@gmail.example', 'Europe/London', { start: { hostId: alexId, returnTo: '/meeting/admin/team' } });
+    await s.connectGoogle(owner, 'alex@work.example', 'Europe/London', { start: { hostId: alexId, returnTo: '/meeting/admin/team', add: true } });
+    // Alex removes the main account; the other one stays.
+    const { main } = await s.googleAccountsOf(alexId);
+    await s.apiOk('DELETE', `/admin/hosts/${alexId}/google/${main.id}`);
+    const after = await s.googleAccountsOf(alexId);
+    s.expect([after.main, after.extras.map((a) => a.email)], "Alex's accounts").toEqual([null, ['alex@work.example']]);
+
+    await s.step('the other account still keeps its busy times off the joint meeting; 12:00 is offered', async () => {
+      await s.setGoogleBusy('alex@work.example', [{ start: thu('10:00'), end: thu('10:15') }]);
+      const times = await s.slots({ slug: 'joint', duration: 15, from: thu('00:00'), to: '2026-11-20T00:00:00.000Z' });
+      s.expect(times.includes(thu('10:00')), '10:00').toBe(false);
+      s.expect(times.includes(thu('12:00')), '12:00').toBe(true);
+    });
+
+    const alex = await s.newPage({ timezoneId: 'Europe/London', ip: '10.99.0.10', viewport: { width: 1280, height: 900 } });
+    const calendar = alex.getByRole('region', { name: 'Your calendar' });
+    await s.step("Alex's page: busy times are checked, no account takes new meetings, and the next step", async () => {
+      await alex.goto(created.inviteUrl);
+      await alex.getByRole('heading', { name: 'Your busy times are checked, Alex.', level: 1 }).waitFor();
+      await alex
+        .getByText(
+          'People can book time with you and Jimi only when you are both free. But none of your Google accounts takes new meetings, so meetings booked with you are not added to your calendar. Their invitations go to alex@example.com instead. Choose an account for new meetings below.',
+          { exact: true },
+        )
+        .waitFor();
+      s.expect(await alex.getByText('One step to go', { exact: false }).count(), '"One step to go"').toBe(0);
+      await calendar.getByText('Busy times only', { exact: true }).waitFor();
+      // The list of accounts says it once, with the one button that chooses the account for new meetings.
+      await calendar.getByText('New meetings are not added to any Google Calendar. Choose which of your accounts gets them.', { exact: true }).waitFor();
+      s.expect(await calendar.getByRole('button', { name: 'Choose an account for new meetings' }).count(), 'one button to choose').toBe(1);
+      s.expect(await calendar.getByRole('button', { name: 'Connect Google Calendar' }).count(), 'no second connect button').toBe(0);
+      s.expect(await calendar.getByText('Not connected', { exact: true }).count(), '"Not connected"').toBe(0);
+      s.expect(await calendar.getByText('New meetings are added for you.', { exact: false }).count(), '"New meetings are added for you"').toBe(0);
+      await s.screenshot(alex, 'co-host page with only another account');
+      const phone = await s.newPage({ timezoneId: 'Europe/London', ip: '10.99.0.11', ...PHONE });
+      await phone.goto(created.inviteUrl);
+      await phone.getByRole('heading', { name: 'Your busy times are checked, Alex.', level: 1 }).waitFor();
+      s.expect(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scroll').toBe(true);
+      const label = phone.getByRole('button', { name: 'Choose an account for new meetings' }).locator('.ui-btn__label');
+      s.expect(await label.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), 'the button says it in full').toBe(true);
+      await s.screenshot(phone, 'co-host page with only another account at 390');
+    });
+
+    await s.step('the Hosts tab of the joint meeting says so, and does not call Alex always free', async () => {
+      await owner.goto(s.url(`/admin/event-types/${jointId}?tab=hosts`));
+      const panel = owner.getByRole('tabpanel');
+      const row = panel.locator('label.adm-host').filter({ hasText: 'Alex Rivera' });
+      await row.getByText('Busy times checked, no account for new meetings', { exact: true }).waitFor();
+      s.expect(await row.getByText('No calendar connected').count(), '"No calendar connected"').toBe(0);
+      s.expect(await panel.getByText('A host without a connected calendar always looks free.', { exact: false }).count(), 'the "always looks free" note').toBe(0);
+      await s.screenshot(owner, 'hosts tab with a host who has only another account');
+    });
+
+    await s.step('Team says the same in its own words', async () => {
+      await owner.goto(s.url('/admin/team'));
+      const alexCard = owner.getByRole('listitem').filter({ hasText: 'Alex Rivera' }).first();
+      await alexCard.getByText('No account for new meetings', { exact: true }).waitFor();
+      await alexCard.getByText('Busy times in alex@work.example are checked, but new meetings are not added to Alex\'s calendar until Alex chooses an account for them on their private page.', { exact: true }).waitFor();
+      s.expect(await alexCard.getByText('Calendar connected', { exact: true }).count(), '"Calendar connected"').toBe(0);
+      await s.screenshot(owner, 'team with a host who has only another account');
+    });
+
+    await s.step("a joint booking goes on the owner's calendar and invites Alex at the address on file", async () => {
+      await s.clearOutbox();
+      const booked = await s.book({ slug: 'joint', start: thu('12:00'), name: 'Grace Hopper', email: 'grace@example.com' });
+      s.expect(booked.status, 'booking').toBe(201);
+      await s.settle();
+      const inserts = await s.outbox({ kind: 'calendar_insert' });
+      s.expect(inserts.map((i) => i.account), 'written only to the owner').toEqual([A]);
+      const [event] = await s.googleEvents(A);
+      s.expect(event.event.attendees.map((a) => a.email), 'attendees').toContain('alex@example.com');
+    });
+
+    await s.step('"Choose an account for new meetings" with that account makes it the main one', async () => {
+      const result = await s.connectGoogle(alex, 'alex@work.example', 'Europe/London', { start: calendar.getByRole('button', { name: 'Choose an account for new meetings' }) });
+      s.expect(result.result.status, 'connected').toBe('connected');
+      await alex.getByRole('heading', { name: 'You are all set, Alex.', level: 1 }).waitFor();
+      const now = await s.googleAccountsOf(alexId);
+      s.expect([now.main?.email, now.extras.length], 'main account').toEqual(['alex@work.example', 0]);
+    });
+  });
+
   await t.scenario('"Use a different Google account" sends no second invitation for meetings already booked', { reset: true }, async (s) => {
     const page = await ownerWithA(s);
     await s.apiOk('PUT', '/admin/site', { body: { email: { fromEmail: 'meetings@jimicohen.test' } } });

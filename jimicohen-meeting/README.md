@@ -122,7 +122,8 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
 
 ## Short links and the Eco Champions brand
 
-- **`jimicohen.com/meet`** opens one meeting with Jimi alone ("Meet with Jimi"), in Jimi's own look.
+- **`jimicohen.com/meet`** opens one meeting with Jimi alone ("Meeting with Jimi"), in Jimi's own look. Its link
+  preview says "Meet with Jimi".
   **`jimicohen.com/pod`** opens the Eco Champions conversation: Jimi and his co-hosts, only the times when they are
   all free, written into every host's calendar. `/meeting` keeps working as before, with the list of every meeting.
 - What each link opens is chosen on the dashboard, under Event types, **Short links** (Home lists both under "Your
@@ -135,10 +136,10 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
   the consent wording is the site's own. Jimi's dashboard, his own pages and a co-host's private page stay in Jimi's
   look. The built-in logo files are never deleted; "Use the built-in logo" brings them back after an upload.
 - **The one-time setup.** After the deploy that brings short links, the scheduled function (`cron.mts`) runs a setup
-  once, within about two minutes: "Meeting" becomes "Meet with Jimi" and `/meet` opens it (or the first active meeting
-  with Jimi alone), and `/pod` opens a joint meeting whose name says Eco Champions or podcast, else a new unlisted
-  "Eco Champions conversation" with Jimi and every co-host, 30 or 60 minutes. It only fills in what is missing, never
-  edits the profile, the welcome text, the theme or a choice made since, and leaves a marker
+  once, within about two minutes: "Meeting" becomes "Meeting with Jimi" and `/meet` opens it (or the first active
+  meeting with Jimi alone), and `/pod` opens a joint meeting whose name says Eco Champions or podcast, else a new
+  unlisted "Eco Champions conversation" with Jimi and every co-host, 30 or 60 minutes. It only fills in what is
+  missing, never edits the profile, the welcome text, the theme or a choice made since, and leaves a marker
   (`migrations/short-links-v1`) so it never runs again. Nothing a visitor or the dashboard does can start it. Locally,
   `POST /meeting/api/dev/one-time-moves` runs it (the dev server only; production answers 404). Home says "Your short
   links are being set up" until it has run; if that stays longer than a few minutes, read the scheduled function's log

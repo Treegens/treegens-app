@@ -30,13 +30,14 @@ function joint(id: string, title: string, hostIds: string[], over: Partial<Event
 const IAN = coHost('host_ian', 'Ian Poirier', '2026-11-10T10:00:00.000Z');
 
 describe('planShortLinks', () => {
-  it('on the live data: /meet opens "Meeting" renamed "Meet with Jimi", /pod a new unlisted Eco Champions event', () => {
+  it('on the live data: /meet opens "Meeting" renamed "Meeting with Jimi", /pod a new unlisted Eco Champions event', () => {
     const before = starterEventTypes(TEST_NOW);
     const plan = planShortLinks(before, [owner()], liveSite(), TEST_NOW);
     expect(plan.changed).toBe(true);
     expect(plan.targets).toEqual({ meet: 'evt_meeting', pod: 'evt_eco_champions' });
     const meet = plan.list.find((e) => e.id === 'evt_meeting')!;
-    expect(meet.title).toBe('Meet with Jimi');
+    // A name that reads in a sentence ("Your Meeting with Jimi is confirmed"). The link preview says "Meet with Jimi".
+    expect(meet.title).toBe('Meeting with Jimi');
     // Only the starter title changes: slug, description, lengths, hosts and brand stay.
     const original = before.find((e) => e.id === 'evt_meeting')!;
     expect({ ...meet, title: original.title }).toEqual(original);
@@ -83,7 +84,7 @@ describe('planShortLinks', () => {
 
     const plan = planShortLinks([], [owner()], liveSite(), TEST_NOW);
     const made = plan.list.find((e) => e.id === plan.targets.meet)!;
-    expect(made).toMatchObject({ id: 'evt_meet_with_jimi', title: 'Meet with Jimi', slug: 'meet-with-jimi', kind: 'solo', hostIds: ['host_owner'], visibility: 'public', durations: [30, 45, 60] });
+    expect(made).toMatchObject({ id: 'evt_meet_with_jimi', title: 'Meeting with Jimi', slug: 'meet-with-jimi', kind: 'solo', hostIds: ['host_owner'], visibility: 'public', durations: [30, 45, 60] });
     expect(made.brandId).toBeUndefined();
   });
 
@@ -176,7 +177,7 @@ describe('runShortLinkMove', () => {
     expect(after.shortLinks).toEqual({ meet: 'evt_meeting', pod: 'evt_eco_champions' });
     expect({ ...after, shortLinks: undefined, updatedAt: before.updatedAt }).toEqual({ ...before, shortLinks: undefined });
     expect(after.brands).toBeUndefined();
-    expect((await repo.getEventType(ctx, 'evt_meeting'))!.title).toBe('Meet with Jimi');
+    expect((await repo.getEventType(ctx, 'evt_meeting'))!.title).toBe('Meeting with Jimi');
     expect((await repo.getEventType(ctx, 'evt_eco_champions'))!.brandId).toBe(ECO);
     expect(await ctx.kv.getJSON(MOVE_MARKER)).toEqual({ at: TEST_NOW, report });
     // Again: nothing to do, nothing written.
@@ -205,7 +206,7 @@ describe('runShortLinkMove', () => {
     await Promise.all([runShortLinkMove(a), runShortLinkMove(b)]);
     const list = await repo.listEventTypes(a);
     expect(list.filter((e) => e.brandId === ECO)).toHaveLength(1);
-    expect(list.filter((e) => e.title === 'Meet with Jimi')).toHaveLength(1);
+    expect(list.filter((e) => e.title === 'Meeting with Jimi')).toHaveLength(1);
     expect((await repo.getSite(a)).shortLinks).toEqual({ meet: 'evt_meeting', pod: 'evt_eco_champions' });
   });
 
@@ -244,7 +245,7 @@ describe('runShortLinkMove', () => {
     expect(lied).toBe(true);
     const list = await repo.listEventTypes(ctx);
     expect(list.filter((e) => e.id === 'evt_eco_champions')).toHaveLength(1);
-    expect(list.find((e) => e.id === 'evt_meeting')!.title).toBe('Meet with Jimi');
+    expect(list.find((e) => e.id === 'evt_meeting')!.title).toBe('Meeting with Jimi');
     expect(await ctx.kv.getJSON(MOVE_MARKER)).not.toBeNull();
   });
 

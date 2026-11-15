@@ -136,7 +136,10 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
   const hasFeed = host.icsFeeds.length > 0;
   // A feed only tells us when someone is busy: meetings booked with them cannot be written into it.
   const feedOnly = !google && hasFeed;
-  const ready = connected || feedOnly;
+  // Only other Google accounts (the main one was removed): their busy times still count, but new meetings go to
+  // the main account, so none are added to a calendar of theirs. Joint meetings invite them at their own address.
+  const extrasOnly = !google && extraAccounts(host).length > 0;
+  const ready = connected || feedOnly || extrasOnly;
 
   const update = useCallback(
     async (patch: HostUpdate): Promise<AdminHost> => {
@@ -364,23 +367,25 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
           <p className="hp-hero__eyebrow">Co-host page · meetings with {siteName}</p>
         </div>
         <h1 className="hp-hero__title">
-          {connected && brokenExtras.length > 0
+          {(connected || extrasOnly) && brokenExtras.length > 0
             ? `${me}, one of your Google accounts needs to be reconnected.`
             : connected
               ? `You are all set, ${me}.`
               : needsReconnect
                 ? `${me}, please reconnect Google Calendar.`
-                : feedOnly
+                : feedOnly || extrasOnly
                   ? `Your busy times are checked, ${me}.`
                   : `Hi ${me}. One step to go.`}
         </h1>
         <p className="hp-hero__lead">
-          {connected && brokenExtras.length > 0
+          {(connected || extrasOnly) && brokenExtras.length > 0
             ? `Google asked you to sign in again to ${reconnectList(brokenExtras)}. Until you do, no times with you are offered.`
             : connected
             ? `People can now book time with you and ${owner}, and only when you are both free. Come back to this page whenever your hours or calendars change.`
             : needsReconnect
               ? `Google asked you to sign in again. Until you do, your busy times cannot be checked, so no times with you are offered.`
+              : extrasOnly
+                ? `People can book time with you and ${owner} only when you are both free. But none of your Google accounts takes new meetings, so meetings booked with you are not added to your calendar${host.email ? `. Their invitations go to ${host.email} instead` : ''}. Choose an account for new meetings below.`
               : feedOnly
                 ? `People can book time with you and ${owner} only when you are both free. But a calendar feed can only be read, so meetings booked with you are not added to your calendar. Connect Google Calendar below to have them added.`
                 : `${owner} added you as a co-host. Connect your calendar and people will only be offered times when you are really free.`}
@@ -391,7 +396,7 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
               {ready ? <Check size={13} strokeWidth={3} /> : '1'}
             </span>
             Calendar
-            <span className="u-vh">{connected ? ': connected' : feedOnly ? ': feed linked, read only' : needsReconnect ? ': needs reconnecting' : ': not connected yet'}</span>
+            <span className="u-vh">{connected ? ': connected' : extrasOnly ? ': busy times checked, no account for new meetings' : feedOnly ? ': feed linked, read only' : needsReconnect ? ': needs reconnecting' : ': not connected yet'}</span>
           </li>
           <li className="hp-track__step is-done">
             <span className="hp-track__mark" aria-hidden="true">
@@ -414,8 +419,10 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
         id="hp-calendar"
         icon={<CalendarCheck size={20} />}
         title="Your calendar"
-        description="We only look at when you are busy, never at what the event is. New meetings are added for you."
-        status={connected ? <Pill tone="ok">Connected</Pill> : needsReconnect ? <Pill tone="warn">Reconnect needed</Pill> : <Pill tone="wait">Not connected</Pill>}
+        description={`We only look at when you are busy, never at what the event is.${extrasOnly ? '' : ' New meetings are added for you.'}`}
+        status={
+          connected ? <Pill tone="ok">Connected</Pill> : needsReconnect ? <Pill tone="warn">Reconnect needed</Pill> : extrasOnly ? <Pill tone="wait">Busy times only</Pill> : <Pill tone="wait">Not connected</Pill>
+        }
       >
         {connected && google ? (
           <>
@@ -492,7 +499,8 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
               </Button>
             </div>
           </>
-        ) : (
+        ) : extrasOnly && googleConfigured ? null : (
+          // (Nothing here with only other accounts: their list below says no account takes new meetings, and offers to choose one.)
           <>
             {needsReconnect ? (
               <p className="hp-warn" role="status">

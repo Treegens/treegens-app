@@ -58,11 +58,11 @@ export default defineSuite('admin-brands', { mockCreds: true }, async (t) => {
       s.expect(await home.getByText('localhost', { exact: false }).count(), 'the main link is still there').toBeGreaterThan(0);
     });
 
-    await s.step('the setup: "Meeting" becomes "Meet with Jimi" for /meet, and a new unlisted joint meeting for /pod', async () => {
+    await s.step('the setup: "Meeting" becomes "Meeting with Jimi" for /meet, and a new unlisted joint meeting for /pod', async () => {
       const moved = await s.runOneTimeMoves();
       s.expect(moved, 'what the setup did').toMatchObject({ meet: { eventTypeId: 'evt_meeting', renamed: true }, pod: { eventTypeId: POD, created: true } });
       const events = await eventsById(s);
-      s.expect(events.evt_meeting, 'the /meet meeting').toMatchObject({ title: 'Meet with Jimi', slug: 'meeting', hostIds: ['host_owner'] });
+      s.expect(events.evt_meeting, 'the /meet meeting').toMatchObject({ title: 'Meeting with Jimi', slug: 'meeting', hostIds: ['host_owner'] });
       s.expect(events.evt_meeting.brandId ?? null, 'no brand on /meet').toBe(null);
       s.expect(events[POD], 'the /pod meeting').toMatchObject({
         title: 'Eco Champions conversation',
@@ -82,7 +82,7 @@ export default defineSuite('admin-brands', { mockCreds: true }, async (t) => {
 
     await s.step('the dashboard shows both links, and each opens its meeting', async () => {
       await page.reload();
-      await linkRow(home, `localhost:${s.server.port}/meet`).getByText('Meet with Jimi. Just you.').waitFor();
+      await linkRow(home, `localhost:${s.server.port}/meet`).getByText('Meeting with Jimi. Just you.').waitFor();
       await linkRow(home, `localhost:${s.server.port}/pod`).getByText('Eco Champions conversation. You and Ian, in the Eco Champions look.').waitFor();
       s.expect(await linkRow(home, `localhost:${s.server.port}/pod`).locator('.ab-chip').textContent(), 'the brand chip').toBe('Eco Champions');
       s.expect((await s.visitor().ok('GET', '/public/short/meet')).eventType?.id, '/meet opens').toBe('evt_meeting');
@@ -178,7 +178,7 @@ export default defineSuite('admin-brands', { mockCreds: true }, async (t) => {
 
     await s.step('"Your links": what each opens, "Only you for now" while the pod meeting is solo, and the copy buttons', async () => {
       await page.goto(s.url('/admin'));
-      await linkRow(home, meet).getByText('Meet with Jimi. Just you.').waitFor();
+      await linkRow(home, meet).getByText('Meeting with Jimi. Just you.').waitFor();
       await linkRow(home, pod).getByText('Eco Champions conversation. Just you, in the Eco Champions look.').waitFor();
       await linkRow(home, pod).getByText('Only you for now. Add your co-host on the Team page and it will only offer times when you are all free.').waitFor();
       await linkRow(home, meet).getByRole('button', { name: 'Copy', exact: true }).click();
@@ -207,7 +207,7 @@ export default defineSuite('admin-brands', { mockCreds: true }, async (t) => {
       await openPage(page, 'Event types');
       const card = (title) => page.locator('ul.adm-events > li').filter({ hasText: title }).first();
       s.expect(await card('Eco Champions conversation').locator('.ab-chip').allTextContents(), 'the pod card').toEqual(['Eco Champions', pod]);
-      s.expect(await card('Meet with Jimi').locator('.ab-chip').allTextContents(), 'the meet card').toEqual([meet]);
+      s.expect(await card('Meeting with Jimi').locator('.ab-chip').allTextContents(), 'the meet card').toEqual([meet]);
       s.expect(await card('Intro call').locator('.ab-chip').count(), 'Intro call has none').toBe(0);
       await s.screenshot(page, 'event types with short links', { fullPage: false });
     });

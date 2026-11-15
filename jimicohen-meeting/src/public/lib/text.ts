@@ -18,6 +18,16 @@ export function hostFirstName(hosts: { name: string }[], site: { profile: { name
   return site.brand ? site.profile.name.trim() : firstName(site.profile.name);
 }
 
+/**
+ * Everyone the meeting is with, by first name, for "Let Jimi and Ian know": "Jimi", "Jimi and Ian", "Jimi, Ian
+ * and Kim". A booking lists the hosts who join it (a round robin booking only the host it went to), and with one
+ * host, or none, this is hostFirstName.
+ */
+export function hostsFirstNames(hosts: { name: string }[], site: { profile: { name: string }; brand?: unknown }): string {
+  const names = hosts.map((h) => firstName(h.name)).filter(Boolean);
+  return names.length > 1 ? joinNames(names) : hostFirstName(hosts, site);
+}
+
 /** "Jimi", "Jimi and Alex", "Jimi, Alex and Sam". */
 export function joinNames(names: string[], conjunction: 'and' | 'or' = 'and'): string {
   const list = names.map((n) => n.trim()).filter(Boolean);

@@ -349,7 +349,7 @@ describe('GET /public/short/:name', () => {
     expect(meet.state).toBe('open');
     expect(meet.site.profile.name).toBe('Jimi Cohen');
     expect(meet.site.brand).toBeNull();
-    if (meet.state === 'open') expect(meet.eventType.title).toBe('Meet with Jimi');
+    if (meet.state === 'open') expect(meet.eventType.title).toBe('Meeting with Jimi');
   });
 
   it('a paused event, a link opening nothing and the time before setup show the closed page in the right brand', async () => {
@@ -397,7 +397,7 @@ describe('event pages, manage pages and files in the brand', () => {
     expect(landing.brand).toBeNull();
     expect(landing.profile.name).toBe('Jimi Cohen');
     expect(landing.theme.preset).toBe('forest');
-    // The pod event is unlisted, so the landing does not list it; "Meet with Jimi" carries its short link.
+    // The pod event is unlisted, so the landing does not list it; "Meeting with Jimi" carries its short link.
     expect(landing.eventTypes.map((e) => e.slug)).toEqual(['intro', 'meeting']);
     expect(landing.eventTypes.find((e) => e.slug === 'meeting')?.shortUrl).toBe('https://jimicohen.com/meet');
     expect(landing.eventTypes.find((e) => e.slug === 'intro')?.shortUrl).toBeUndefined();
@@ -448,7 +448,7 @@ describe('event pages, manage pages and files in the brand', () => {
     expect(branded.booking.eventSlug).toBe('intro');
     const file = await get(s.ctx, `/public/bookings/${branded.booking.id}/ics?t=${manageToken(s.ctx, branded.booking.id)}`);
     expect(file.headers.get('content-disposition')).toBe('attachment; filename="eco-champions.ics"');
-    // A booking on Jimi's own "Meet with Jimi" (link "meeting") keeps the file name of its link.
+    // A booking on Jimi's own "Meeting with Jimi" (link "meeting") keeps the file name of its link.
     const own = await bookPod(s.ctx, { slug: 'meeting', start: '2026-11-18T15:00:00.000Z', email: 'bo@example.com', name: 'Bo Diaz' });
     const ownFile = await get(s.ctx, `/public/bookings/${own.booking.id}/ics?t=${manageToken(s.ctx, own.booking.id)}`);
     expect(ownFile.headers.get('content-disposition')).toBe('attachment; filename="meeting.ics"');

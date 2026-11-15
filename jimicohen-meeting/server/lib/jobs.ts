@@ -631,9 +631,14 @@ export function planBookingJobs(p: {
   /** told about each call rule that finds no time inside calling hours before the meeting, with the note for the booking */
   onNoCallTime?: (ruleId: string, note: string) => void;
   /** who made the change. An invitee who just moved the meeting on the page gets no text about it (the email carries the new calendar file). */
-  by?: 'invitee' | 'host' | 'assistant' | 'system';
+  by?: 'invitee' | 'host' | 'owner' | 'assistant' | 'system';
   /** with 'rescheduled': hosts the move handed the meeting to (a round robin whose host left). For them it is a new booking. */
   newHostIds?: string[];
+  /**
+   * with 'rescheduled': the host who moved the meeting themselves (the owner, see scheduleBookingJobs). They get
+   * no "moved" notice about their own move; their timed reminders, and a move that hands them the meeting, still count.
+   */
+  movedByHostId?: string;
 }): PlannedJob[] {
   const { booking, hosts, nowMs } = p;
   const startMs = Date.parse(booking.start);
@@ -679,6 +684,8 @@ export function planBookingJobs(p: {
       if (!selfMadeMove && inviteeReachable(booking, channel)) planned.push({ dueMs: nowMs, channel, audience: 'invitee', kind: inviteeKind, immediate: true });
       for (const host of hosts) {
         const kind: MessageKind = p.immediate === 'rescheduled' && p.newHostIds?.includes(host.id) ? 'host_new' : hostKind;
+        // Whoever moved it already knows.
+        if (kind === 'rescheduled' && host.id === p.movedByHostId) continue;
         if (hostReachable(host, channel, kind)) planned.push({ dueMs: nowMs, channel, audience: 'host', kind, hostId: host.id, immediate: true });
       }
     }
@@ -699,8 +706,8 @@ export async function scheduleBookingJobs(
   opts?: {
     /** the caller already removed this booking's reminders (re-planning many bookings with one read of the queue) */
     remindersCleared?: boolean;
-    /** who made the change (see planBookingJobs) */
-    by?: 'invitee' | 'host' | 'assistant' | 'system';
+    /** who made the change (see planBookingJobs). 'owner': the owner moved it, and is not told about it. */
+    by?: 'invitee' | 'host' | 'owner' | 'assistant' | 'system';
     /** hosts a move handed the meeting to (see planBookingJobs) */
     newHostIds?: string[];
   },
@@ -724,6 +731,8 @@ export async function scheduleBookingJobs(
     onNoCallTime: (ruleId, note) => noCallTime.push({ ruleId, note }),
     ...(opts?.by ? { by: opts.by } : {}),
     ...(opts?.newHostIds?.length ? { newHostIds: opts.newHostIds } : {}),
+    // A host's link names no host (every host's link is the same), so only the owner's own moves are known.
+    ...(immediate === 'rescheduled' && opts?.by === 'owner' && site.ownerHostId ? { movedByHostId: site.ownerHostId } : {}),
   });
 
   const results = await Promise.allSettled([
@@ -1201,7 +1210,8 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
       { label: 'Apple or other', url: cal.ics },
     ];
   } else if (audience === 'invitee' && kind === 'reminder' && vars.join_url && !booking.attendance?.confirmedAt) {
-    links = [{ label: `Let ${vars.host_first_name} know you're coming`, url: vars.confirm_url }];
+    // Everyone who joins the meeting hears it ("Let Jimi and Ian know"); host_names gives first names for more than one.
+    links = [{ label: `Let ${assigned.length > 1 ? vars.host_names : vars.host_first_name} know you're coming`, url: vars.confirm_url }];
   }
 
   const footer =
@@ -1302,6 +1312,12 @@ async function markSent(ctx: Ctx, job: Job, recipient: Recipient): Promise<void>
 
 async function deliverSiteAlert(ctx: Ctx, job: StoredJob, site: SiteSettings, hosts: Host[]): Promise<DeliveryResult> {
   if ((job.channel ?? 'email') !== 'email') return { ok: false, provider: 'none', skipped: 'unsupported_channel' };
+  // A notice written to a co-host (about their Google accounts) is for them alone. Once they are gone it ends
+  // here, never with the owner, who would read words meant for someone else.
+  if (job.hostId && job.hostId !== site.ownerHostId && !hosts.some((h) => h.id === job.hostId)) {
+    ctx.log('info', 'jobs: a notice for a co-host who no longer exists was not sent', { id: job.id, hostId: job.hostId });
+    return { ok: false, provider: 'none', skipped: 'host_missing' };
+  }
   const owner = hosts.find((h) => h.id === (job.hostId ?? site.ownerHostId)) ?? hosts.find((h) => h.role === 'owner') ?? null;
   const phone = owner?.phone?.trim() ?? '';
   if (!owner || (!isEmail(owner.email) && !phone)) return { ok: false, provider: 'none', skipped: 'no_email' };

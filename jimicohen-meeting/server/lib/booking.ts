@@ -1929,7 +1929,8 @@ async function queueCancelledMessages(ctx: Ctx, booking: Booking): Promise<void>
  *
  * `by: 'host'` is the owner (the route checked the session; `actor: 'owner'` says it was done on the booking
  * page). None of the invitee's limits apply: no deadline, no cap on moves, no hourly limit. The new time
- * itself still has to pass the same checks as any booking (hours, notice, calendars, other bookings).
+ * itself still has to pass the same checks as any booking (hours, notice, calendars, other bookings). The
+ * owner is not sent a "moved" notice of their own move; co-hosts and the invitee are told as always.
  */
 export async function rescheduleBooking(
   ctx: Ctx,
@@ -2061,8 +2062,9 @@ export async function rescheduleBooking(
   const timezone = actor === 'invitee' && typeof p.timezone === 'string' && isZone(p.timezone.trim()) ? p.timezone.trim() : null;
   const who = by === 'host' ? (p.actor === 'owner' ? 'by the owner, from the booking page' : 'by the host') : actor === 'host' ? 'by a host, from the booking page' : 'by the invitee';
   const movedFrom = `Moved from ${formatInZone(Date.parse(booking.start), s.ownerTimezone, 'full')} ${who}`;
-  // A round robin booking whose host has left goes to a colleague: for them it is a new booking.
-  const marker = newFollowUp(ctx, 'rescheduled', actor, joinedHosts(booking.hostIds, assigned));
+  // A round robin booking whose host has left goes to a colleague: for them it is a new booking. The owner's own
+  // move is marked as theirs, so they are not sent a notice of it (a host's link could be any host's).
+  const marker = newFollowUp(ctx, 'rescheduled', by === 'host' ? 'owner' : actor, joinedHosts(booking.hostIds, assigned));
   let applied = false;
   let twin = false;
   let saved: Booking | null = null;
@@ -2354,7 +2356,7 @@ function reconnectError(ref: AccountRef): GoogleAuthError {
 }
 
 /** Where a booking's event is, after looking. */
-type Holder =
+export type Holder =
   /** this account holds it: by its stored id, or because a read just found our booking in it */
   | { kind: 'found'; ref: AccountRef; checked: boolean }
   /** every account of the host answered and none has it */
@@ -2367,9 +2369,10 @@ type Holder =
 /**
  * Finds the account holding a booking's event (see googleAccounts.holderCandidates). An account named by
  * the booking is trusted. Any other is read first, with a GET that tells nobody, and only counts when the
- * event it returns carries our booking id. Nothing is ever written through a guessed account.
+ * event it returns carries our booking id. Nothing is ever written through a guessed account. Also used by
+ * the dashboard's delete (admin/bookings.ts), for one more try at an event that was left behind.
  */
-async function findHolder(ctx: Ctx, booking: Booking, g: NonNullable<Booking['google']>, host: Host | null): Promise<Holder> {
+export async function findHolder(ctx: Ctx, booking: Booking, g: NonNullable<Booking['google']>, host: Host | null): Promise<Holder> {
   const { trusted, candidates } = holderCandidates(host, g);
   if (trusted) return trusted.account.status === 'ok' ? { kind: 'found', ref: trusted, checked: false } : { kind: 'reconnect', ref: trusted };
   const eventId = g.eventId || calendarEventIdFor(booking.id);

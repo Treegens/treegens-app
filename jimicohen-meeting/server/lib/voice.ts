@@ -340,8 +340,8 @@ export function buildCallScript(p: { booking: Booking; site: SiteSettings; hosts
   const brandName = isSiteView(site) ? cleanName(site.profile?.name, 60) : '';
   const siteName = brandName ? '' : cleanName(site.profile?.name, 60);
   const firstNames = (fullNames.length > 0 ? fullNames : siteName ? [siteName] : []).map(firstNameOf).filter(Boolean);
-  const hostFirstNames =
-    firstNames.length === 0 ? 'your host' : firstNames.length <= 2 ? joinNames(firstNames) : `${firstNames[0]} and the team`;
+  // Everyone who joins, by first name: "Jimi and Ian", "Jimi, Ian and Kim" (the voicemail has its own shorter form).
+  const hostFirstNames = firstNames.length === 0 ? 'your host' : joinNames(firstNames);
   const eventTitle = speakable(booking.eventTitle, 80) || 'meeting';
   const inviteeName = cleanName(booking.invitee.name, 60);
   const hasPhone = !!booking.invitee.phone?.trim();
@@ -400,13 +400,15 @@ export interface CallPhrases {
 
 /**
  * The message left on an answering machine. It has to stay under 20 seconds whatever the names
- * are, so it uses the shortest form of each: one word for the assistant, at most two hosts, and
- * "meeting" for a long title. It says how to reschedule: with the link that is sent alongside.
+ * are, so it uses the shortest form of each: one word for the assistant, the hosts' first names while they
+ * are short (else the first one alone), and "meeting" for a long title. It says how to reschedule: with the
+ * link that is sent alongside.
  */
 function voicemailLine(s: CallScript, when: string): string {
   const hi = s.inviteeFirstName ? `Hi ${s.inviteeFirstName}` : 'Hi there';
   const assistant = s.assistantName.length <= 16 ? s.assistantName : firstNameOf(s.assistantName) || s.assistantName;
-  const host = s.brandName ? s.brandName : s.hostFirstNames.length <= 24 ? s.hostFirstNames : (s.hostFirstNames.split(' ')[0] ?? 'your host');
+  // Too long to say in time: the first host's first name alone ("Jimi", never "Jimi,").
+  const host = s.brandName ? s.brandName : s.hostFirstNames.length <= 24 ? s.hostFirstNames : s.hostFirstNames.split(/[\s,]+/)[0] || 'your host';
   const event = s.eventShort.length <= 32 ? s.eventShort : 'meeting';
   const link = s.linkChannel === 'sms' ? 'the link I am texting you now' : s.linkChannel === 'email' ? 'the link I am emailing you now' : 'the link in your confirmation email';
   return `${hi}, this is ${assistant}, an AI assistant calling for ${host}. A reminder: your ${event} is ${when} your time. To change it, use ${link}. Goodbye.`;
@@ -432,7 +434,7 @@ export function callPhrases(s: CallScript, nowMs: number, purpose: 'reminder' | 
     greetingConfirmed: `${hi}, ${intro}. ${testNote}A quick reminder about your ${about} ${when} your time. I have you down as coming. Is that still right?`,
     reintroduce: `${hi}, ${intro}. I am calling with a quick reminder about your ${about} ${when} your time. Are you still able to make it?`,
     identity: `I am ${s.assistantName}, an AI assistant calling for ${caller}. I am calling about your ${about}${s.brandName ? ',' : ''} ${when} your time. Will you be able to make it?`,
-    // "your Meet with Jimi", never "your Meet with Jimi with Jimi".
+    // "your Meeting with Jimi", never "your Meeting with Jimi with Jimi".
     repeat: `Of course. This is a reminder about your ${eventNamesEveryone(event, s.hostFirstNames) ? event : `${event} with ${s.hostFirstNames}`}, ${when} your time. Will you be able to make it?`,
     confirmed: `Wonderful, I have you down as confirmed for ${when}. Thank you, and goodbye.`,
     linkSent: sendsLink

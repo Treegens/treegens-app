@@ -54,12 +54,20 @@ function calendarState(host: AdminHost, self: boolean): CalendarState {
     return { tone: 'warning', label: 'Needs reconnecting', detail: `Google asked ${self ? 'you' : firstName(host.name)} to sign in again to ${addressList(broken.map((a) => a.email))}.`, connected: false };
   }
   if (host.calendarHealth && !host.calendarHealth.ok) return { tone: 'danger', label: 'Calendar problem', detail: host.calendarHealth.message || `We could not read ${who} calendar.`, connected: accounts.length > 0 };
+  // Only other accounts (the main one was removed): their busy times count, but new meetings have no calendar to go to.
+  if (!host.google && accounts.length > 0) {
+    return {
+      tone: 'warning',
+      label: 'No account for new meetings',
+      detail: `Busy times in ${addressList(accounts.map((a) => a.email))} are checked, but new meetings are not added to ${who} calendar until ${self ? 'you choose an account for them' : `${firstName(host.name)} chooses an account for them on their private page`}.`,
+      connected: true,
+    };
+  }
   if (accounts.length > 1) {
     const [first, ...rest] = accounts;
     return { tone: 'success', label: `${accounts.length} Google accounts`, detail: `${first.email}${first.main ? ' (main)' : ''} and ${rest.length} more`, connected: true };
   }
   if (host.google) return { tone: 'success', label: 'Calendar connected', detail: host.google.email, connected: true };
-  if (accounts.length === 1) return { tone: 'success', label: 'Calendar connected', detail: accounts[0].email, connected: true };
   // A feed can only be read: busy times are checked, but booked meetings never reach that calendar.
   if (host.icsFeeds.length) {
     return {

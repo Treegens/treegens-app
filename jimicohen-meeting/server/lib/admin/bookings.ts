@@ -11,11 +11,10 @@
 import { DateTime, IANAZone } from 'luxon';
 import { CALENDAR_PENDING, calendarEventLeft } from '../../../shared/calendar';
 import type { AdminBookingsResponse, Booking, BookingIndexEntry, Host, Job } from '../../../shared/types';
-import { calendarEventIdFor } from '../booking';
+import { calendarEventIdFor, findHolder } from '../booking';
 import { forgetHostBusy } from '../busy';
 import type { Ctx } from '../ctx';
 import { googleDeleteEvent } from '../google';
-import { holderCandidates, mainOf } from '../googleAccounts';
 import { HttpError } from '../http';
 import {
   deleteBooking,
@@ -170,21 +169,21 @@ async function removeLeftEvent(ctx: Ctx, b: Booking): Promise<boolean> {
   const g = b.google;
   // A detached booking's event is in no account we can reach: nothing is written to Google for it.
   if (!g || g.detached) return false;
-  // Only through the account that holds it: the one the booking names. Anything else could be another event.
-  const { trusted } = holderCandidates(await getHost(ctx, g.hostId), g);
-  const holder = trusted ?? (g.accountId ? null : mainOf(await getHost(ctx, g.hostId)));
-  if (!holder || holder.account.status !== 'ok') return false;
-  const work = googleDeleteEvent(ctx, holder, g.calendarId || holder.account.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(b.id), true).then(
-    async () => {
-      // The meeting's time was given back when it was cancelled: what is remembered of the busy time should say so too.
-      await forgetHostBusy(ctx, [...new Set([g.hostId, ...b.hostIds])]).catch(() => undefined);
-      return true;
-    },
-    (err: unknown) => {
-      ctx.log('warn', 'bookings: the calendar event could still not be removed', { bookingId: b.id, hostId: g.hostId, error: err instanceof Error ? err.message : String(err) });
-      return false;
-    },
-  );
+  // Only through an account proven to hold it (booking.ts findHolder): the one the booking names, or, for a
+  // booking that names none, the one a read finds it in. Anything else could be another event, so when no
+  // account is proven nothing is deleted and the delete is refused as before (calendar_event_left).
+  const work = (async (): Promise<boolean> => {
+    const found = await findHolder(ctx, b, g, await getHost(ctx, g.hostId));
+    if (found.kind !== 'found' || found.ref.account.status !== 'ok') return false;
+    const holder = found.ref;
+    await googleDeleteEvent(ctx, holder, g.calendarId || holder.account.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(b.id), true);
+    // The meeting's time was given back when it was cancelled: what is remembered of the busy time should say so too.
+    await forgetHostBusy(ctx, [...new Set([g.hostId, ...b.hostIds])]).catch(() => undefined);
+    return true;
+  })().catch((err: unknown) => {
+    ctx.log('warn', 'bookings: the calendar event could still not be removed', { bookingId: b.id, hostId: g.hostId, error: err instanceof Error ? err.message : String(err) });
+    return false;
+  });
   const removed = await withinBudget(work, REMOVE_EVENT_BUDGET_MS);
   if (removed === TIMED_OUT) {
     ctx.waitUntil(work);

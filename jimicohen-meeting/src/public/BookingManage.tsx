@@ -21,7 +21,7 @@ import { SuccessMark } from './components/SuccessMark';
 import { TimezoneBar } from './components/TimezoneBar';
 import { isEmbedSearch, postToParent, withEmbed } from './lib/embed';
 import { useVisitorPrefs } from './lib/prefs';
-import { deliveryLine, firstName, hostFirstName, hostNames } from './lib/text';
+import { deliveryLine, firstName, hostFirstName, hostNames, hostsFirstNames } from './lib/text';
 
 export interface BookingManageProps {
   view?: 'details' | 'reschedule' | 'cancel';
@@ -56,6 +56,9 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
   const phase = phaseOf(booking);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const hostFirst = hostFirstName(booking.hosts, site);
+  // Everyone who joins hears it: "Let Jimi and Ian know". A round robin booking lists only the host it went to.
+  const hostsFirst = hostsFirstNames(booking.hosts, site);
+  const severalHosts = booking.hosts.filter((h) => firstName(h.name)).length > 1;
   // Opened from a host's link, the page speaks to a host about the invitee, not to the invitee.
   const inviteeFirst = firstName(booking.invitee.name);
 
@@ -101,7 +104,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
     try {
       const next = await confirmBooking(booking.id, token);
       onUpdated(next);
-      attendToast.current = toast.success('Thank you', `${hostFirst} knows you will be there.`);
+      attendToast.current = toast.success('Thank you', `${hostsFirst} ${severalHosts ? 'know' : 'knows'} you will be there.`);
     } catch (e) {
       setProblem(isApiFailure(e) && e.message ? e.message : 'We could not record that. Please try again.');
     } finally {
@@ -190,7 +193,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
   // what is typed there is never mailed to the address on the booking. It does show on this page, though,
   // which the invitee opens with the same link, so the host is not told that only hosts see it.
   const reasonHint = !asHost
-    ? `${hostFirst} will see this with the cancellation.`
+    ? `${hostsFirst} will see this with the cancellation.`
     : booking.ownerView
       ? `${inviteeFirst || 'The invitee'} will see this with the cancellation.`
       : `The hosts are sent this. It also shows on this page, which ${inviteeFirst || 'the invitee'} can open too.`;
@@ -383,7 +386,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
               <div className="bm__attend">
                 <div className="bm__attendtext">
                   <p className="bm__attendtitle">Still coming?</p>
-                  <p className="bm__attendhint">Let {hostFirst} know with one tap.</p>
+                  <p className="bm__attendhint">Let {hostsFirst} know with one tap.</p>
                 </div>
                 <Button variant="primary" iconLeft={<ThumbsUp size={16} />} loading={confirming} loadingLabel="Saving" onClick={confirmAttendance}>
                   I'll be there
@@ -499,7 +502,7 @@ export default function BookingManage({ view = 'details' }: BookingManageProps) 
   const data = state.status === 'ready' ? state.data : null;
   useDocumentTitle(data ? `${data.booking.eventTitle} · your booking` : null);
   // The booking's own look: a booking made under a brand shows the brand's icon in the tab.
-  useBrandIcon(data?.site.brand?.iconUrl);
+  useBrandIcon(data?.site.brand);
   const theme = useMemo(() => (data ? resolveTheme(data.site.theme, data.eventType?.themeOverride, data.eventType?.color) : undefined), [data]);
 
   if (!data || !theme) {

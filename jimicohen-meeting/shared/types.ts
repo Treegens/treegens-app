@@ -332,7 +332,12 @@ export interface Booking {
     kind: 'created' | 'rescheduled' | 'cancelled';
     id: string;
     at: ISODateTime;
-    by?: 'invitee' | 'host' | 'assistant';
+    /**
+     * Who made the change. 'host' is a host's link (any host, or the invitee, who holds the same link). 'owner' is
+     * the owner with the session checked (the dashboard, or the booking page while signed in): the owner is not
+     * told about their own move. A marker written before 'owner' existed says 'host' for those: everyone is told.
+     */
+    by?: 'invitee' | 'host' | 'owner' | 'assistant';
     /** with 'rescheduled': hosts the move handed the meeting to (a round robin whose host left); they are told of a new booking */
     newHostIds?: string[];
   };

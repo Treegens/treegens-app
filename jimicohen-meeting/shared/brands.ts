@@ -145,7 +145,7 @@ export function eventColorFor(eventType: { color?: string } | null | undefined, 
   return typeof color === 'string' && color !== '' ? color : undefined;
 }
 
-/** "Meet with Jimi" + "Jimi Cohen" → "Meet with Jimi"; "Intro call" + "Jimi Cohen" → "Intro call with Jimi Cohen". */
+/** "Meeting with Jimi" + "Jimi Cohen" → "Meeting with Jimi"; "Intro call" + "Jimi Cohen" → "Intro call with Jimi Cohen". */
 export function pageTitle(eventTitle: string, name: string): string {
   const title = (eventTitle ?? '').trim();
   const who = (name ?? '').trim();
@@ -153,7 +153,7 @@ export function pageTitle(eventTitle: string, name: string): string {
   if (!title) return who;
   const first = who.split(/\s+/)[0].toLowerCase();
   const words = title.toLowerCase().split(/[^\p{L}\p{N}]+/u);
-  // The title already names the person or the brand: "Meet with Jimi", "Eco Champions conversation".
+  // The title already names the person or the brand: "Meeting with Jimi", "Eco Champions conversation".
   if (title.toLowerCase().includes(who.toLowerCase()) || words.includes(first)) return title;
   return `${title} with ${who}`;
 }

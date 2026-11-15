@@ -92,7 +92,7 @@ export default function BookingPage({ shortName }: { shortName?: ShortName } = {
   const data = state.status === 'ready' ? state.data : null;
   const shownSite = data?.site ?? (state.status === 'closed' ? state.site : null);
   useDocumentTitle(data ? pageTitle(data.eventType.title, data.site.profile.name) : state.status === 'closed' ? closedWords(state.site).title : null);
-  useBrandIcon(shownSite?.brand?.iconUrl);
+  useBrandIcon(shownSite?.brand);
 
   const theme = useMemo(() => (data ? resolveTheme(data.site.theme, data.eventType.themeOverride, data.eventType.color) : undefined), [data]);
 

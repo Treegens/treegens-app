@@ -26,6 +26,8 @@ vi.mock('../../server/lib/booking', async () => {
     // The real ones: removing a Google account detaches the bookings whose event was in it.
     detachEventsOfAccount: (await vi.importActual<typeof import('../../server/lib/booking')>('../../server/lib/booking')).detachEventsOfAccount,
     countEventsInAccount: (await vi.importActual<typeof import('../../server/lib/booking')>('../../server/lib/booking')).countEventsInAccount,
+    // The real one: a delete takes a left-behind event off only through an account proven to hold it.
+    findHolder: (await vi.importActual<typeof import('../../server/lib/booking')>('../../server/lib/booking')).findHolder,
   };
 });
 vi.mock('../../server/routes/public', () => ({ routes: [] }));
@@ -1425,17 +1427,22 @@ describe('bookings', () => {
       }
 
       const deletesOf = (calls: NetCall[]): NetCall[] => calls.filter((c) => c.method === 'DELETE' && c.url.startsWith(EVENT_URL));
+      const eventCallsOf = (calls: NetCall[]): NetCall[] => calls.filter((c) => c.url.startsWith(EVENT_URL));
 
       it('tries Google once more first, and deletes at once when the event comes off now', async () => {
         const s = await stuck();
         await connectGoogle(s.ctx);
         const calls = useFetch(s.ctx, (c) => {
           if (c.url === TOKEN_URL) return Response.json({ access_token: 'at-1', expires_in: 3600 });
+          // The booking names no account (made before bookings recorded theirs): the event is read first, and only
+          // deleted once the read shows it is this booking's.
+          if (c.method === 'GET' && c.url.startsWith(EVENT_URL)) return Response.json({ id: 'ev_1', status: 'confirmed', extendedProperties: { private: { meetingBookingId: 'bk_cancelled' } } });
           if (c.method === 'DELETE' && c.url.startsWith(EVENT_URL)) return new Response(null, { status: 204 });
           throw new Error(`unexpected ${c.method} ${c.url}`);
         });
 
         expect(await ok(call(s, 'DELETE', '/admin/bookings/bk_cancelled'))).toEqual({ ok: true });
+        expect(eventCallsOf(calls).map((c) => c.method)).toEqual(['GET', 'DELETE']);
         const removed = deletesOf(calls);
         expect(removed).toHaveLength(1);
         // The attendees hear from Google that the event is gone, as they would have at the cancellation.
@@ -1460,18 +1467,21 @@ describe('bookings', () => {
         expect(refused.message).toBe(
           'The event for this meeting is still on Google Calendar, because it could not be removed. Google request failed (503). If you delete the booking anyway, the event stays on the calendar until someone removes it by hand.',
         );
-        const firstTry = deletesOf(calls).length;
+        const firstTry = eventCallsOf(calls).length;
         expect(firstTry).toBeGreaterThan(0);
+        // The read failed, so no account is proven to hold the event: nothing is deleted through a guessed one.
+        expect(deletesOf(calls)).toEqual([]);
         // Nothing of the booking was touched.
         expect(await repo.getBooking(s.ctx, 'bk_cancelled')).toMatchObject({ status: 'cancelled', google: { error: 'Google request failed (503).' } });
         expect(await jobsOf(s, 'bk_cancelled')).toEqual(['job_gcal']);
 
         // Only that answer lets it go.
         expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled?leaveCalendarEvent=0'), 409)).code).toBe('calendar_event_left');
-        const before = deletesOf(calls).length;
+        const before = eventCallsOf(calls).length;
         expect(await ok(call(s, 'DELETE', '/admin/bookings/bk_cancelled?leaveCalendarEvent=1'))).toEqual({ ok: true, calendarEventLeft: true });
         // Google was still asked first: it might have worked this time.
-        expect(deletesOf(calls).length).toBeGreaterThan(before);
+        expect(eventCallsOf(calls).length).toBeGreaterThan(before);
+        expect(deletesOf(calls)).toEqual([]);
         expect(await repo.getBooking(s.ctx, 'bk_cancelled')).toBeNull();
         expect(await jobsOf(s, 'bk_cancelled')).toEqual([]);
         expect(await indexIds(s)).not.toContain('bk_cancelled');

@@ -157,6 +157,7 @@ describe('small helpers', () => {
   });
 
   it('names a page without saying the name twice', () => {
+    expect(pageTitle('Meeting with Jimi', 'Jimi Cohen')).toBe('Meeting with Jimi');
     expect(pageTitle('Meet with Jimi', 'Jimi Cohen')).toBe('Meet with Jimi');
     expect(pageTitle('Intro call', 'Jimi Cohen')).toBe('Intro call with Jimi Cohen');
     expect(pageTitle('Eco Champions conversation', 'Eco Champions')).toBe('Eco Champions conversation');

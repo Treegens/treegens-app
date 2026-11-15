@@ -1,8 +1,10 @@
 /**
  * The one-time setup of the short links on the live data (docs: README, "Short links").
  *
- *   jimicohen.com/meet  opens a meeting with the owner alone: the starter "Meeting" (renamed "Meet with
- *                       Jimi" while it still has its starter title), or another solo meeting of theirs.
+ *   jimicohen.com/meet  opens a meeting with the owner alone: the starter "Meeting" (renamed "Meeting with
+ *                       Jimi" while it still has its starter title), or another solo meeting of theirs. The
+ *                       name reads in a sentence ("Your Meeting with Jimi is confirmed"); the link's own
+ *                       preview says "Meet with Jimi" (shared/shortLinks.ts).
  *   jimicohen.com/pod   opens the Eco Champions conversation: a joint meeting of the owner and every
  *                       co-host, in the Eco Champions look. A joint meeting the owner made whose name
  *                       already says Eco Champions or podcast is used; otherwise a new, unlisted one is made.
@@ -102,7 +104,7 @@ export function planShortLinks(input: EventType[], hosts: Host[], site: SiteSett
         target = newEventType(nowIso, {
           id: MEET_EVENT_ID,
           slug: freeSlug(`meet-with-${who}`, taken()),
-          title: `Meet with ${who}`,
+          title: `Meeting with ${who}`,
           description: 'Partnerships, speaking, press or a deeper conversation.',
           emoji: '🌱',
           hostIds: [ownerId],
@@ -116,7 +118,7 @@ export function planShortLinks(input: EventType[], hosts: Host[], site: SiteSett
       }
     }
     if (target.title === STARTER_TITLE) {
-      target.title = `Meet with ${who}`;
+      target.title = `Meeting with ${who}`;
       renamed = true;
       changed = true;
     }

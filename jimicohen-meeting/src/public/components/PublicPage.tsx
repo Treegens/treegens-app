@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { CloudOff, Compass, RefreshCw, WifiOff } from 'lucide-react';
-import type { Theme } from '../../../shared/types';
+import { BUILTIN_BRANDS, isBrandId } from '../../../shared/brands';
+import type { PublicSite, Theme } from '../../../shared/types';
 import type { ThemeAssets } from '../../../shared/theme';
+import { APP_BASE } from '../../lib/api';
 import { useAppHref } from '../../lib/links';
 import { ThemeScope, cachedTheme } from '../../lib/theme';
 import { Button, ButtonLink, Skeleton, cx } from '../../ui';
@@ -52,8 +54,43 @@ export function PublicPage({ theme, assets, boot: bootTheme, brandId = null, emb
   );
 }
 
-/** Shows a brand's icon in the tab while a page in that brand is open, and puts the site's back afterwards. */
-export function useBrandIcon(iconUrl: string | null | undefined): void {
+/**
+ * Shows a brand's icons while a page in that brand is open, and puts the site's back afterwards: the tab icon, the
+ * icon a phone keeps on its home screen, and the small PNG tab icon where the page has one (the short pages do). The
+ * app's own pages have no home screen icon of their own, so one is added only while a brand shows; without it the
+ * phone uses jimicohen.com's, which is Jimi's. These are the brand's built-in files, as on jimicohen.com/pod.
+ */
+export function useBrandIcon(brand: PublicSite['brand']): void {
+  const iconUrl = brand?.iconUrl ?? null;
+  const art = brand && isBrandId(brand.id) ? BUILTIN_BRANDS[brand.id].art : null;
+  const touchUrl = art ? `${APP_BASE}/${art.touchIcon}` : null;
+  const pngUrl = art ? `${APP_BASE}/${art.faviconPng}` : null;
+
+  useEffect(() => {
+    if (!touchUrl) return;
+    const undo: (() => void)[] = [];
+    const swap = (link: HTMLLinkElement, href: string) => {
+      const previous = link.getAttribute('href');
+      link.setAttribute('href', href);
+      undo.push(() => (previous !== null ? link.setAttribute('href', previous) : link.removeAttribute('href')));
+    };
+    const touch = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
+    if (touch) swap(touch, touchUrl);
+    else {
+      const added = document.createElement('link');
+      added.rel = 'apple-touch-icon';
+      added.href = touchUrl;
+      added.dataset.brandIcon = 'touch';
+      document.head.appendChild(added);
+      undo.push(() => added.remove());
+    }
+    const png = document.querySelector<HTMLLinkElement>('link[rel="icon"][type="image/png"]');
+    if (png && pngUrl) swap(png, pngUrl);
+    return () => {
+      for (const step of undo.reverse()) step();
+    };
+  }, [touchUrl, pngUrl]);
+
   useEffect(() => {
     if (!iconUrl) return;
     const link = document.querySelector<HTMLLinkElement>('link[rel="icon"][type="image/svg+xml"]') ?? document.querySelector<HTMLLinkElement>('link[rel="icon"]');

@@ -809,6 +809,66 @@ describe('detached bookings and re-checked stamps (verify round)', () => {
     expect(g.calls.filter((c) => c.kind.startsWith('event_'))).toEqual([]);
   });
 
+  describe('deleting a cancelled booking that names no account, whose event was left on a calendar', () => {
+    /** Cancelled, its event still on a calendar (the last try failed), and no account on the record. */
+    async function leftUnstamped(ctx: TestCtx): Promise<Booking> {
+      await setMain(ctx, OWNER, { email: A });
+      await addExtra(ctx, OWNER, { email: B });
+      fakeGoogle(ctx);
+      const booking = await booked(ctx, wed('12:00'));
+      await updateBooking(ctx, booking.id, (b) => {
+        const { accountId: _a, accountEmail: _e, ...google } = b.google!;
+        return { ...b, status: 'cancelled', cancellation: { at: NOW, by: 'invitee' }, google: { ...google, error: 'Google request failed (500)' } };
+      });
+      return (await getBooking(ctx, booking.id))!;
+    }
+
+    it('takes the event off through the extra account a read finds it in, and never through the main one', async () => {
+      const ctx = await setup();
+      const booking = await leftUnstamped(ctx);
+      const g = fakeGoogle(ctx, { accounts: { [B]: { events: { [booking.google!.eventId]: eventFor(booking.id, wed('12:00'), wed('12:15')) } } } });
+      const { eraseBooking } = await import('../../server/lib/admin/bookings');
+      const result = await eraseBooking(ctx, booking.id);
+      expect(result).toMatchObject({ found: true });
+      expect(result.calendarEventLeft).toBeUndefined();
+      expect(made(g, 'event_delete').map((c) => c.account)).toEqual([B]);
+      expect(g.accounts[B].events![booking.google!.eventId].status).toBe('cancelled');
+      // A was only read.
+      expect(g.calls.filter((c) => c.account === A && c.kind !== 'event_get' && c.kind !== 'token')).toEqual([]);
+      expect(await getBooking(ctx, booking.id)).toBeNull();
+    });
+
+    it('when no account holds it, deletes nothing anywhere and is refused with calendar_event_left, as before', async () => {
+      const ctx = await setup();
+      const booking = await leftUnstamped(ctx);
+      const g = fakeGoogle(ctx);
+      const { eraseBooking } = await import('../../server/lib/admin/bookings');
+      await expect(eraseBooking(ctx, booking.id)).rejects.toMatchObject({ status: 409, code: 'calendar_event_left' });
+      expect(made(g, 'event_delete')).toEqual([]);
+      // Both were asked, read only.
+      expect(made(g, 'event_get').map((c) => c.account).sort()).toEqual([A, B].sort());
+      expect(await getBooking(ctx, booking.id)).not.toBeNull();
+      // The owner can still let the event stay and delete the booking.
+      expect((await eraseBooking(ctx, booking.id, { leaveCalendarEvent: true })).calendarEventLeft).toBe(true);
+      expect(made(g, 'event_delete')).toEqual([]);
+    });
+
+    it('a booking that names its account is still deleted there without a read, as before', async () => {
+      const ctx = await setup();
+      await setMain(ctx, OWNER, { email: A });
+      await addExtra(ctx, OWNER, { email: B });
+      let g = fakeGoogle(ctx);
+      const booking = await booked(ctx, wed('12:00'));
+      await updateBooking(ctx, booking.id, (b) => ({ ...b, status: 'cancelled', cancellation: { at: NOW, by: 'invitee' }, google: { ...b.google!, error: 'Google request failed (500)' } }));
+      const event = g.accounts[A].events![booking.google!.eventId];
+      g = fakeGoogle(ctx, { accounts: { [A]: { events: { [booking.google!.eventId]: event } } } });
+      const { eraseBooking } = await import('../../server/lib/admin/bookings');
+      expect((await eraseBooking(ctx, booking.id)).found).toBe(true);
+      expect(made(g, 'event_delete').map((c) => c.account)).toEqual([A]);
+      expect(made(g, 'event_get')).toEqual([]);
+    });
+  });
+
   it('an unstamped booking whose host has a main account that needs a reconnect is not detached: the event may well be there', async () => {
     const ctx = await setup();
     await setMain(ctx, OWNER, { email: A });

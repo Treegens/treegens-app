@@ -94,7 +94,7 @@ export function renderTemplate(tpl: string, vars: TemplateVars, opts?: { html?: 
 }
 
 /**
- * True when a meeting's name already says it is with these people: "Meet with Jimi" names "Jimi Cohen", and
+ * True when a meeting's name already says it is with these people: "Meeting with Jimi" names "Jimi Cohen", and
  * "Coffee with Jimi and Ian" names "Jimi and Ian". `names` is a name or a list ("Jimi, Ian and Sam").
  */
 export function eventNamesEveryone(eventName: string, names: string): boolean {
@@ -109,9 +109,9 @@ export function eventNamesEveryone(eventName: string, names: string): boolean {
 
 /**
  * The wording "{{event_name}} with {{host_names}}" (or with {{invitee_name}}) for a meeting whose name already
- * says "with" ("Meet with Jimi", the meeting behind jimicohen.com/meet) would read "Meet with Jimi with Jimi
- * Cohen". Such a name is said alone when it already names the hosts, else with the people in brackets:
- * "Meet with Jimi (Ann Lee)". Every other name reads exactly as before.
+ * says "with" ("Meeting with Jimi", the meeting behind jimicohen.com/meet) would read "Meeting with Jimi with
+ * Jimi Cohen". Such a name is said alone when it already names the hosts, else with the people in brackets:
+ * "Meeting with Jimi (Ann Lee)". Every other name reads exactly as before.
  */
 function sayEventWith(tpl: string, vars: TemplateVars): string {
   if (!tpl.includes('{{event_name}} with {{')) return tpl;

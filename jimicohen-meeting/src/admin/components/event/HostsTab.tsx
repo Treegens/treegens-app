@@ -14,6 +14,8 @@ function calendarStatus(host: AdminHost): { label: string; tone: BadgeTone } {
   // Any of their Google accounts: one that needs a reconnect closes their times.
   if (host.google?.status === 'needs_reconnect' || (host.googleExtra ?? []).some((a) => a.status === 'needs_reconnect')) return { label: 'Reconnect Google', tone: 'danger' };
   if (host.google) return { label: 'Google Calendar connected', tone: 'success' };
+  // Only other accounts (the main one was removed): their busy times count, but new meetings have no calendar to go to.
+  if ((host.googleExtra ?? []).length) return { label: 'Busy times checked, no account for new meetings', tone: 'warning' };
   if (host.icsFeeds.length) return { label: 'Calendar feed', tone: 'neutral' };
   return { label: 'No calendar connected', tone: 'warning' };
 }
@@ -206,7 +208,7 @@ export function HostsTab({ draft, update, errors }: TabProps) {
 
         {selected.some((id) => {
           const h = hosts.find((x) => x.id === id);
-          return h && !h.google && h.icsFeeds.length === 0;
+          return h && !h.google && !(h.googleExtra ?? []).length && h.icsFeeds.length === 0;
         }) ? (
           <Notice tone="info">A host without a connected calendar always looks free. Their own bookings here are still respected.</Notice>
         ) : null}

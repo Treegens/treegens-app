@@ -166,6 +166,14 @@
     width: 100%;
     min-height: 44px;
   }
+  /* The one next step for someone whose accounts take no new meetings: said in full, on two lines if need be. */
+  .ga-nomain > .ui-btn {
+    padding-block: 10px;
+    white-space: normal;
+  }
+  .ga-nomain > .ui-btn > .ui-btn__label {
+    overflow: visible;
+  }
 }
 
 .tm-accounts {
