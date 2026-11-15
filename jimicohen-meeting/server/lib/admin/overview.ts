@@ -6,11 +6,14 @@
  * the mount path itself.
  */
 import { DEFAULT_THEME } from '../../../shared/defaults';
-import type { AdminOverview, EventType, Host, IntegrationsStatus, SiteSettings } from '../../../shared/types';
+import type { AdminOverview, EventType, Host, IntegrationsStatus, SharedHoursCheck, SiteSettings } from '../../../shared/types';
 import type { Ctx } from '../ctx';
 import { getBookingIndex, getBookings, getSite, listEventTypes, listHosts } from '../repo';
+import { computeSlots } from '../slots';
 import { firstName, joinNames } from '../templates';
+import { type Interval, isValidZone, zonedToUtcMs } from '../time';
 import { twilioFeatures } from '../twilio';
+import { isEmail } from '../validate';
 import { integrationsStatus } from './integrations';
 import { hostMap, ownerOf, toAdminBooking } from './view';
 
@@ -28,7 +31,132 @@ const LINK = {
   events: '/admin/event-types',
   design: '/admin/design',
   team: '/admin/team',
+  /** the "Send my booking notices to" field on the Settings page */
+  notices: '/admin/settings#notices',
 };
+
+// ───────────────────────── joint meetings: do the hours ever line up? ─────────────────────────
+
+/** The hours check walks the bookable days this many at a time and stops at the first time that works. */
+const HOURS_CHECK_STEP_DAYS = 14;
+/** The longest booking window an event type can have. */
+const HOURS_CHECK_MAX_DAYS = 730;
+
+/** "America/Los_Angeles" → "Los Angeles" */
+function zoneCity(zone: string): string {
+  if (zone === 'UTC' || zone === 'Etc/UTC' || zone === 'GMT') return 'UTC';
+  return (zone.split('/').pop() ?? zone).replace(/_/g, ' ');
+}
+
+function capitalised(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The days an event type can be booked on, from now: its fixed dates when it has them, otherwise its rolling window. */
+function bookableSpan(eventType: EventType, ownerTimezone: string, nowMs: number): Interval | null {
+  const limit = nowMs + HOURS_CHECK_MAX_DAYS * DAY_MS;
+  const dates = eventType.scheduling?.dateRange;
+  if (dates) {
+    const span = { start: Math.max(nowMs, zonedToUtcMs(dates.start, '00:00', ownerTimezone)), end: Math.min(limit, zonedToUtcMs(dates.end, '24:00', ownerTimezone)) };
+    return span.end > span.start ? span : null;
+  }
+  const maxDays = eventType.scheduling?.maxDaysAhead;
+  const days = Number.isFinite(maxDays) ? Math.min(Math.max(1, Math.ceil(maxDays)), HOURS_CHECK_MAX_DAYS) : HOURS_CHECK_MAX_DAYS;
+  return { start: nowMs, end: nowMs + days * DAY_MS };
+}
+
+/**
+ * Whether the slot engine would offer this event type at any moment of `span` if every calendar
+ * were empty and nothing were booked. That leaves working hours (each host's schedule for this
+ * event, date overrides, the event's own limited hours) as the only thing that can say no.
+ */
+function hasWorkingTime(eventType: EventType, hosts: Host[], ownerTimezone: string, span: Interval, nowMs: number): boolean {
+  if (!Array.isArray(eventType.durations) || eventType.durations.length === 0) return true;
+  // The shortest length on offer: when that fits nowhere, nothing does.
+  const durationMin = Math.min(...eventType.durations);
+  // Notice and the rolling window say when a time can be booked, not whether the hours line up. With
+  // fixed dates the window must not hide them either: they may simply not have come into reach yet.
+  const probe: EventType = { ...eventType, scheduling: { ...eventType.scheduling, minNoticeMinutes: 0, maxDaysAhead: HOURS_CHECK_MAX_DAYS + 1 } };
+  const inputs = hosts.map((host) => ({ host, busy: [] }));
+  const stepMs = HOURS_CHECK_STEP_DAYS * DAY_MS;
+  for (let start = span.start; start < span.end; start += stepMs) {
+    const range = { start, end: Math.min(start + stepMs, span.end) };
+    if (computeSlots({ eventType: probe, durationMin, hosts: inputs, ownerTimezone, range, nowMs, index: [] }).length > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * For a joint ("together") meeting: is there any time when all of its hosts are working? Two
+ * people on the default 9 to 5, eight or more hours apart, never are, and the booking page then
+ * has nothing to offer however empty their calendars. Every other kind of meeting passes.
+ *
+ * The answer comes from the same slot engine the booking page uses, so the hosts' schedules for
+ * this event, date overrides and the event's limited hours all count.
+ */
+export function checkSharedHours(p: { eventType: EventType; hosts: Host[]; owner: Host | null; nowMs: number }): SharedHoursCheck & { href?: string } {
+  const { eventType, owner, nowMs } = p;
+  if (eventType.kind !== 'collective') return { ok: true };
+  const byId = hostMap(p.hosts);
+  const found = [...new Set(eventType.hostIds ?? [])].map((id) => byId.get(id));
+  // Someone who is no longer on the team is another problem, and the editor already reports it.
+  if (found.length < 2 || found.some((h) => !h)) return { ok: true };
+  const hosts = found as Host[];
+  const ownerTimezone = owner && isValidZone(owner.timezone) ? owner.timezone : 'UTC';
+
+  let span: Interval | null;
+  let idle: Host[];
+  try {
+    span = bookableSpan(eventType, ownerTimezone, nowMs);
+    // Dates that have passed leave nothing to check.
+    if (!span) return { ok: true };
+    const days = span;
+    if (hasWorkingTime(eventType, hosts, ownerTimezone, days, nowMs)) return { ok: true };
+    // Nobody can book it. Is that because the hours never meet, or because someone has none at all?
+    idle = hosts.filter((host) => !hasWorkingTime({ ...eventType, kind: 'solo', hostIds: [host.id] }, [host], ownerTimezone, days, nowMs));
+  } catch {
+    // A check that cannot run has nothing to say. The booking page reports its own problems.
+    return { ok: true };
+  }
+
+  const isOwner = (host: Host): boolean => host.id === owner?.id;
+  const called = (host: Host): string => (isOwner(host) ? 'you' : firstName(host.name) || host.name || 'a co-host');
+  const others = hosts.filter((host) => !isOwner(host));
+  const pages = (count: number): string => (count === 1 ? 'private page' : 'private pages');
+  const limited = eventType.scheduling?.restrictHours ? ' The limited hours on its Scheduling tab count too.' : '';
+
+  if (idle.length > 0) {
+    const mine = idle.some(isOwner);
+    const theirs = idle.filter((host) => !isOwner(host));
+    const days = Math.round((span.end - span.start) / DAY_MS);
+    const when = eventType.scheduling?.dateRange ? 'on the dates it can be booked' : days === 1 ? 'in the next day' : `in the next ${days} days`;
+    const fix =
+      mine && theirs.length > 0
+        ? `Set your hours under Availability, and ask ${joinNames(theirs.map(called))} to set theirs on their ${pages(theirs.length)}.`
+        : mine
+          ? 'Set your hours under Availability.'
+          : `Ask ${joinNames(theirs.map(called))} to set their hours on their ${pages(theirs.length)}.`;
+    return {
+      ok: false,
+      reason: 'no_hours',
+      message: `"${eventType.title}" cannot be booked: ${joinNames(idle.map(called))} ${idle.length === 1 && !mine ? 'has' : 'have'} no working hours for it ${when}. ${fix}${limited}`,
+      href: mine ? LINK.availability : LINK.team,
+    };
+  }
+
+  const sameZone = hosts.every((host) => host.timezone === hosts[0].timezone);
+  const zones = sameZone ? '' : ` ${capitalised(joinNames(hosts.map((host) => `${isOwner(host) ? 'your' : `${called(host)}'s`} hours are in ${zoneCity(host.timezone)} time`)))}.`;
+  const withOwner = hosts.some(isOwner);
+  const fix = withOwner
+    ? `Change your hours under Availability, or ask ${joinNames(others.map(called))} to change theirs on their ${pages(others.length)}.`
+    : `Ask ${joinNames(others.map(called))} to change their hours on their ${pages(others.length)}.`;
+  return {
+    ok: false,
+    reason: 'no_overlap',
+    message: `"${eventType.title}" cannot be booked: there is no time when ${joinNames(hosts.map(called))} are ${hosts.length === 2 ? 'both' : 'all'} working.${zones} ${fix}${limited}`,
+    href: withOwner ? LINK.availability : LINK.team,
+  };
+}
 
 function hasHours(host: Host | null): boolean {
   if (!host) return false;

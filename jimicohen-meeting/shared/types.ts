@@ -236,6 +236,8 @@ export interface TimelineEntry {
 
 export interface Booking {
   id: string;
+  /** random mark of the last write, so a writer whose answer got lost can tell its own write landed (repo.updateBooking) */
+  rev?: string;
   eventTypeId: string;
   eventSlug: string;
   eventTitle: string;

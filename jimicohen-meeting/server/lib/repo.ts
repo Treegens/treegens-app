@@ -5,7 +5,7 @@
  */
 import { defaultOwnerHost, defaultSite, starterEventTypes } from '../../shared/defaults';
 import type { Booking, BookingIndexEntry, CallRecord, EventType, Host, Job, Secrets, SiteSettings } from '../../shared/types';
-import { open, randomId, seal, sha256Hex } from './crypto';
+import { open, randomId, randomToken, seal, sha256Hex } from './crypto';
 import { API_PREFIX, type Ctx, type Env } from './ctx';
 import { HttpError } from './http';
 
@@ -170,7 +170,15 @@ export async function saveSecrets(ctx: Ctx, next: Secrets): Promise<void> {
 
 type ListStep<T, R> = { next: T[]; result: R } | { keep: R };
 
-/** Compare-and-swap on a bootstrapped list blob. `step` may run several times and must not have side effects. */
+/**
+ * Compare-and-swap on a bootstrapped list blob. `step` may run several times and must not have side effects.
+ *
+ * A swap that is refused always runs `step` again on the fresh list, also in the rare case where the
+ * refusal is wrong (see the note on lost answers at updateBooking). Every list change here sets or removes
+ * one entry by id, so a second run on top of its own first write ends in the same list. Recognising the
+ * own write by comparing lists would not be safe: two callers who make the same change at the same instant
+ * write identical lists, and one of them would be told its change is in when it never was applied.
+ */
 async function mutateList<T, R>(ctx: Ctx, key: string, step: (list: T[]) => ListStep<T, R>): Promise<R> {
   for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
     const found = await ctx.kv.getJSONWithEtag<T[]>(key);
@@ -298,16 +306,27 @@ export async function saveBooking(ctx: Ctx, b: Booking): Promise<Booking> {
   return saved;
 }
 
-/** Read-modify-write on the freshest copy. `fn` may run more than once. Returns null when the booking does not exist. */
+/**
+ * Read-modify-write on the freshest copy. `fn` may run more than once. Returns null when the booking does not exist.
+ *
+ * A conditional write can come back as "not modified" although it went through: the storage client
+ * re-sends a request whose answer got lost on the way back, and the second copy then fails its own
+ * condition. Running `fn` again on top of its own write is the bug that follows (a cancellation that
+ * finds the booking "already cancelled" and skips its follow-up work, a move counted twice). So every
+ * write carries a fresh `rev`, and a refused swap first looks whether the record on file has it.
+ */
 export async function updateBooking(ctx: Ctx, id: string, fn: (b: Booking) => Booking): Promise<Booking | null> {
   if (!isStorageId(id)) return null;
   const key = bookingKey(id);
+  let found = await ctx.kv.getJSONWithEtag<Booking>(key);
   for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
-    const found = await ctx.kv.getJSONWithEtag<Booking>(key);
     if (!found) return null;
-    const saved: Booking = { ...fn(found.value), id: found.value.id, createdAt: found.value.createdAt, updatedAt: nowIso(ctx) };
+    const saved: Booking = { ...fn(found.value), id: found.value.id, createdAt: found.value.createdAt, updatedAt: nowIso(ctx), rev: randomToken(16) };
     const written = await ctx.kv.setJSON(key, saved, { onlyIfMatch: found.etag });
     if (written.modified) return saved;
+    // The read for the next round doubles as the check for a write that landed after all.
+    found = await ctx.kv.getJSONWithEtag<Booking>(key);
+    if (found && found.value.rev === saved.rev) return saved;
     await Promise.resolve();
   }
   throw busy();
@@ -327,12 +346,19 @@ export async function mutateBookingIndex(
   ctx: Ctx,
   fn: (entries: BookingIndexEntry[]) => BookingIndexEntry[] | { abort: string },
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  let found = await ctx.kv.getJSONWithEtag<BookingIndexEntry[]>(KEYS.bookingIndex);
   for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
-    const found = await ctx.kv.getJSONWithEtag<BookingIndexEntry[]>(KEYS.bookingIndex);
     const outcome = fn(found ? found.value : []);
     if (!Array.isArray(outcome)) return { ok: false, reason: outcome.abort };
     const written = await ctx.kv.setJSON(KEYS.bookingIndex, outcome, found ? { onlyIfMatch: found.etag } : { onlyIfNew: true });
     if (written.modified) return { ok: true };
+    // Refused. If the index now reads exactly as we wrote it, the write went through and only its answer
+    // was lost (see updateBooking). Running `fn` again would find our own entry in the way and report the
+    // time as taken. Comparing whole lists is exact for a new booking (its id exists nowhere else). For
+    // the other index changes (free a time, move an entry) an identical list written by somebody else
+    // means the wanted state is in place, and their callers cope with a twin: see rescheduleBooking.
+    found = await ctx.kv.getJSONWithEtag<BookingIndexEntry[]>(KEYS.bookingIndex);
+    if (found && JSON.stringify(found.value) === JSON.stringify(outcome)) return { ok: true };
     await Promise.resolve();
   }
   return { ok: false, reason: 'contention' };
@@ -401,10 +427,55 @@ export async function deleteJob(ctx: Ctx, key: string): Promise<void> {
 
 // ───────────────────────── claims (idempotency locks) ─────────────────────────
 
+interface ClaimRecord {
+  at: string;
+  /** random mark of the caller that wrote it, so that caller can tell its own write from somebody else's */
+  owner?: string;
+  /** what the winner left for everyone who comes later (claimValue) */
+  value?: string;
+}
+
+function claimKey(name: string): string {
+  return `${KEYS.claimPrefix}${nameSegment(name)}`;
+}
+
+/**
+ * Writes the claim create-only and says whose it is. A "not written" answer is checked against what is
+ * stored: when the storage client re-sent a write whose answer was lost, the claim on file carries our
+ * own mark and is ours, although the write came back as refused.
+ */
+async function takeClaim(ctx: Ctx, name: string, value?: string): Promise<{ mine: boolean; stored: ClaimRecord | null }> {
+  const key = claimKey(name);
+  const record: ClaimRecord = { at: nowIso(ctx), owner: randomToken(16), ...(value !== undefined ? { value } : {}) };
+  const written = await ctx.kv.setJSON(key, record, { onlyIfNew: true });
+  if (written.modified) return { mine: true, stored: record };
+  const stored = await ctx.kv.getJSON<ClaimRecord>(key);
+  return { mine: !!stored && stored.owner === record.owner, stored };
+}
+
 /** True exactly once per name, however many callers race. */
 export async function claim(ctx: Ctx, name: string): Promise<boolean> {
-  const written = await ctx.kv.setJSON(`${KEYS.claimPrefix}${nameSegment(name)}`, { at: nowIso(ctx) }, { onlyIfNew: true });
-  return written.modified;
+  return (await takeClaim(ctx, name)).mine;
+}
+
+/**
+ * A claim that leaves something behind for the callers who lose it. The first caller's `value` is stored;
+ * everyone gets back whether the claim is theirs and the value that is on file (with the time it was written).
+ */
+export async function claimValue(ctx: Ctx, name: string, value: string): Promise<{ mine: boolean; value: string | null; at: string | null }> {
+  const taken = await takeClaim(ctx, name, value);
+  return { mine: taken.mine, value: taken.stored?.value ?? null, at: taken.stored?.at ?? null };
+}
+
+/** What a claim holds, or null when nobody has taken it. */
+export async function readClaim(ctx: Ctx, name: string): Promise<{ at: string; value: string | null } | null> {
+  const stored = await ctx.kv.getJSON<ClaimRecord>(claimKey(name));
+  return stored ? { at: typeof stored.at === 'string' ? stored.at : '', value: stored.value ?? null } : null;
+}
+
+/** Takes a claim over whoever holds it: for a holder that is known to be gone. */
+export async function replaceClaimValue(ctx: Ctx, name: string, value: string): Promise<void> {
+  await ctx.kv.setJSON(claimKey(name), { at: nowIso(ctx), owner: randomToken(16), value } satisfies ClaimRecord);
 }
 
 // ───────────────────────── calls ─────────────────────────
