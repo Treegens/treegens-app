@@ -81,25 +81,39 @@ export async function integrationsStatus(ctx: Ctx, known?: { site?: SiteSettings
   if (isSet(secrets.google?.clientId)) google.clientIdMasked = maskClientId(secrets.google!.clientId);
   if (owner?.google) google.ownerEmail = owner.google.email;
 
-  const twilioStatus: IntegrationsStatus['twilio'] = { configured: !!twilio && (isSet(twilio.fromNumber) || isSet(twilio.messagingServiceSid)) };
+  // Texts go out with a number or a Messaging Service. A call needs a number of its own (see twilioFeatures).
+  const twilioStatus: IntegrationsStatus['twilio'] = {
+    configured: !!twilio && (isSet(twilio.fromNumber) || isSet(twilio.messagingServiceSid)),
+    calls: !!twilio && isSet(twilio.fromNumber),
+  };
   if (twilio) {
     twilioStatus.accountSidMasked = maskMiddle(twilio.accountSid);
     if (isSet(twilio.fromNumber)) twilioStatus.fromNumber = twilio.fromNumber;
     if (isSet(twilio.messagingServiceSid)) twilioStatus.messagingServiceSid = twilio.messagingServiceSid;
   }
 
+  // Gmail sends through the owner's Google connection. While that connection cannot be used
+  // (the keys are gone, or Google wants a new sign-in) nothing goes out, and the dashboard has
+  // to say so instead of "Sending from Gmail". This is a view for the screens only: the sender
+  // itself keeps trying, so queued messages are retried and not dropped as "not configured".
+  const gmailGranted = owner?.google?.gmailSend === true;
+  const gmailProblem: IntegrationsStatus['email']['gmailProblem'] = !gmailGranted ? undefined : !google.configured ? 'keys_missing' : owner?.google?.status !== 'ok' ? 'needs_reconnect' : undefined;
+  const gmailDown = resolved === 'gmail' && gmailProblem !== undefined;
+  const email: IntegrationsStatus['email'] = {
+    setting: site.email?.provider ?? 'auto',
+    resolved: gmailDown ? 'none' : resolved,
+    resendConfigured: isSet(secrets.resend?.apiKey),
+    gmailAvailable: gmailGranted && gmailProblem === undefined,
+    fromEmail: site.email?.fromEmail ?? '',
+  };
+  if (gmailDown) email.gmailProblem = gmailProblem;
+
   return {
     baseUrl: ctx.env.publicBaseUrl,
     google,
     twilio: twilioStatus,
     anthropic: { configured: isSet(secrets.anthropic?.apiKey), model: site.assistant?.model || DEFAULT_MODEL },
-    email: {
-      setting: site.email?.provider ?? 'auto',
-      resolved,
-      resendConfigured: isSet(secrets.resend?.apiKey),
-      gmailAvailable: owner?.google?.gmailSend === true,
-      fromEmail: site.email?.fromEmail ?? '',
-    },
+    email,
     environment: environmentFlags(ctx),
   };
 }

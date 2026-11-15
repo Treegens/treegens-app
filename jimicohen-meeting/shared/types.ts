@@ -590,7 +590,15 @@ export interface GoogleCalendarListItem {
 export interface IntegrationsStatus {
   baseUrl: string;
   google: { configured: boolean; clientIdMasked?: string; redirectUri: string; ownerConnected: boolean; ownerEmail?: string };
-  twilio: { configured: boolean; accountSidMasked?: string; fromNumber?: string; messagingServiceSid?: string };
+  twilio: {
+    /** texts can be sent: credentials plus a number or a Messaging Service */
+    configured: boolean;
+    /** calls can be placed: that needs a phone number of its own, a Messaging Service alone cannot call */
+    calls?: boolean;
+    accountSidMasked?: string;
+    fromNumber?: string;
+    messagingServiceSid?: string;
+  };
   anthropic: { configured: boolean; model: string };
   email: {
     setting: 'auto' | 'resend' | 'gmail' | 'none';
@@ -598,6 +606,11 @@ export interface IntegrationsStatus {
     resendConfigured: boolean;
     gmailAvailable: boolean;
     fromEmail: string;
+    /**
+     * Set when Gmail is the sender but cannot send right now: Google asked the owner to sign in
+     * again, or the Google keys were removed. `resolved` is then 'none' and `gmailAvailable` false.
+     */
+    gmailProblem?: 'needs_reconnect' | 'keys_missing';
   };
   /**
    * Which credentials are set in the deployment's environment. Those win over anything saved in
@@ -648,6 +661,19 @@ export interface AdminOverview {
   checklist: { key: string; label: string; done: boolean; href: string }[];
   warnings: { key: string; message: string; href?: string }[];
   publicUrl: string;
+}
+
+/**
+ * POST /admin/event-types-check (body: the event type being edited, saved or not) answers with
+ * this. For a joint meeting it says whether its hosts' working hours ever line up. Calendars and
+ * bookings are left out on purpose: this is about hours that can never work, not a busy week.
+ */
+export interface SharedHoursCheck {
+  ok: boolean;
+  /** when not ok: what to tell the owner, in a sentence or two */
+  message?: string;
+  /** when not ok: 'no_overlap' = everyone has hours but never at the same time, 'no_hours' = someone has none at all */
+  reason?: 'no_overlap' | 'no_hours';
 }
 
 /** GET /admin/bootstrap — everything the dashboard needs on load */
