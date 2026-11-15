@@ -264,6 +264,16 @@ export default defineSuite('public-look', { mockCreds: true }, async (t) => {
           await s.apiOk('PUT', '/admin/site', { body: { theme: { ...preset.theme, density } } });
           const page = await s.newPage({ ...PHONE_VIEWPORT, viewport: { width: 360, height: 740 }, timezoneId: NEW_YORK, locale: 'en-US' });
           await openEvent(s, page, 'meeting');
+          // The entrance animation moves the page by a fraction of a pixel
+          // while it runs, so measure once every finite animation is done.
+          await page.evaluate(() =>
+            Promise.all(
+              document
+                .getAnimations()
+                .filter((a) => Number.isFinite(a.effect?.getComputedTiming().endTime ?? Infinity))
+                .map((a) => a.finished.catch(() => {})),
+            ),
+          );
           const sizes = await page.evaluate(() => {
             const box = (el) => el.getBoundingClientRect();
             const card = box(document.querySelector('.bw__card'));

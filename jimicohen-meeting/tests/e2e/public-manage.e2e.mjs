@@ -497,6 +497,8 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       await page.getByRole('textbox').fill('Something came up on my side.');
       await page.getByRole('button', { name: 'Cancel meeting' }).click();
       await page.getByRole('heading', { name: 'This meeting was cancelled', level: 1 }).waitFor();
+      // Any host may hold that link, so the page does not guess a name.
+      await page.getByText(/^Intro call with Jimi Cohen, cancelled by the host on /).waitFor();
       await s.settle();
       const stored = (await s.bookings({ id: booking.id }))[0];
       s.expect(stored.cancellation, 'cancellation').toMatchObject({ by: 'host', via: 'host_link', reason: 'Something came up on my side.' });
@@ -504,6 +506,77 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       s.expect(await s.outbox({ kind: 'email', to: ADA.email }), 'email to Ada').toHaveLength(1);
       s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'email to the owner').toHaveLength(1);
       s.expect((await s.outbox({ kind: 'sms' })).map((x) => x.to), 'texts').toEqual([PHONE]);
+    });
+  });
+
+  await t.scenario('the signed-in owner moves a meeting the invitee may no longer move, and cancels it after it started', { reset: true }, async (s) => {
+    await s.step('prepare', () => prepare(s));
+    // The owner's own browser, signed in to the dashboard.
+    const owner = await s.newPage({ signedIn: true, timezoneId: 'Europe/London', locale: 'en-US' });
+    const booking = await s.step('Ada books from New York and moves the meeting five times, the most she may', async () => {
+      const made = await bookForAda(s);
+      const moves = ['2026-11-19T10:00:00.000Z', '2026-11-19T11:00:00.000Z', '2026-11-19T12:00:00.000Z', '2026-11-20T10:00:00.000Z', '2026-11-20T11:00:00.000Z'];
+      for (const [i, start] of moves.entries()) {
+        if (i === 3) await s.advanceClock({ hours: 1 }); // three moves an hour
+        const res = await s.visitor().request('POST', `/public/bookings/${made.id}/reschedule`, { body: { t: made.manageToken, start, timezone: NEW_YORK } });
+        s.expect(res.status, `move ${i + 1}`).toBe(200);
+      }
+      await s.settle();
+      s.expect((await s.bookings({ id: made.id }))[0].rescheduleCount, 'moves').toBe(5);
+      return made;
+    });
+
+    await s.step('a host link without the owner\'s session is held to the same limit', async () => {
+      const coHost = await s.newPage({ timezoneId: 'Africa/Nairobi', locale: 'en-US', allowConsoleErrors: [/status of 409/] });
+      await coHost.goto(`${s.url(`/booking/${booking.id}/reschedule`)}?t=${booking.manageToken}&as=host`);
+      await coHost.getByRole('heading', { name: 'Pick a new time' }).waitFor();
+      await calendarReady(coHost);
+      await pickDay(coHost, '2026-11-19');
+      await pickSlot(coHost, NEW_START);
+      await s.linger(coHost);
+      await coHost.locator('.bw-confirmbar').getByRole('button', { name: 'Confirm new time' }).click();
+      const notice = coHost.getByRole('alert').filter({ hasText: 'This meeting cannot be moved again right now' });
+      await notice.waitFor();
+      s.expect(await notice.innerText(), 'notice').toContain('The owner can still move it here while signed in to the dashboard in this browser.');
+      s.expect((await s.bookings({ id: booking.id }))[0].start, 'not moved').toBe('2026-11-20T11:00:00.000Z');
+      await coHost.close();
+    });
+
+    const tab = await s.step('the owner opens Reschedule in the dashboard drawer and moves it', async () => {
+      await owner.goto(s.url(`/admin/bookings?b=${booking.id}`));
+      const drawer = owner.getByRole('dialog').filter({ has: owner.locator('.adm-bk__body') });
+      const link = drawer.getByRole('link', { name: 'Reschedule' });
+      const [opened] = await Promise.all([owner.context().waitForEvent('page'), link.click()]);
+      await opened.waitForLoadState();
+      await opened.getByRole('heading', { name: 'Pick a new time' }).waitFor();
+      await calendarReady(opened);
+      await pickDay(opened, '2026-11-19');
+      await pickSlot(opened, NEW_START);
+      await s.linger(opened);
+      await opened.locator('.bw-confirmbar').getByRole('button', { name: 'Confirm new time' }).click();
+      await opened.getByText('Your meeting has moved').waitFor();
+      await s.settle();
+      const stored = (await s.bookings({ id: booking.id }))[0];
+      s.expect(stored, 'booking').toMatchObject({ start: NEW_START, rescheduleCount: 6, invitee: { timezone: NEW_YORK } });
+      s.expect(stored.timeline.filter((e) => e.type === 'rescheduled').at(-1).detail, 'timeline').toMatch(/by the owner, from the booking page$/);
+      return opened;
+    });
+
+    await s.step('once the meeting has started only the owner can still cancel it: recorded as the owner\'s, and Ada is told', async () => {
+      await s.clearOutbox();
+      await s.setClock('2026-11-19T14:35:00.000Z');
+      await tab.goto(`${s.url(`/booking/${booking.id}/cancel`)}?t=${booking.manageToken}&as=host`);
+      await tab.getByRole('heading', { name: 'Cancel this meeting?', level: 1 }).waitFor();
+      await tab.getByRole('textbox').fill('I have to stop early today.');
+      await tab.getByRole('button', { name: 'Cancel meeting' }).click();
+      await tab.getByRole('heading', { name: 'This meeting was cancelled', level: 1 }).waitFor();
+      await tab.getByText(/cancelled by Jimi on /).waitFor();
+      await s.settle();
+      const stored = (await s.bookings({ id: booking.id }))[0];
+      s.expect(stored.cancellation, 'cancellation').toEqual({ at: '2026-11-19T14:35:00.000Z', by: 'host', reason: 'I have to stop early today.' });
+      s.expect(stored.timeline.find((e) => e.type === 'cancelled').detail, 'timeline').toBe('Cancelled by the owner, from the booking page: I have to stop early today.');
+      s.expect(await s.outbox({ kind: 'email', to: ADA.email }), 'email to Ada').toHaveLength(1);
+      s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'no email to the owner about their own cancellation').toHaveLength(0);
     });
   });
 

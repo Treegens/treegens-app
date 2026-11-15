@@ -246,22 +246,36 @@ export async function hostFromToken(ctx: Ctx, hostId: string, token: string | nu
 const RATE_LIMIT_ATTEMPTS = 8;
 
 /**
- * Key of the fixed-window counter: `rl/<bucket>/<idHash>/<windowStartMs>`.
+ * Key of the fixed-window counter: `rl/<bucket>/<idHash>/<windowStartMs>-<windowSec>`.
  * The id (an IP address, an email) is stored only as a keyed SHA-256, so the raw value is
- * neither in the key nor recoverable from it by guessing.
+ * neither in the key nor recoverable from it by guessing. The window's length is part of the key,
+ * so housekeeping can remove a counter as soon as its window is over without reading it
+ * (repo.ts pruneEphemeral).
  */
 export function rateLimitKey(ctx: Ctx, bucket: string, id: string, windowSec: number): { key: string; windowStartMs: number; windowMs: number } {
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(bucket)) throw new Error(`rateLimit: invalid bucket "${bucket}"`);
-  const windowMs = Math.max(1, Math.round(windowSec)) * 1000;
+  const seconds = Math.max(1, Math.round(windowSec));
+  const windowMs = seconds * 1000;
   const windowStartMs = Math.floor(ctx.now().getTime() / windowMs) * windowMs;
-  return { key: `${KEYS.rateLimitPrefix}${bucket}/${hmacHex(ctx, 'rate-limit', id)}/${windowStartMs}`, windowStartMs, windowMs };
+  return { key: `${KEYS.rateLimitPrefix}${bucket}/${hmacHex(ctx, 'rate-limit', id)}/${windowStartMs}-${seconds}`, windowStartMs, windowMs };
 }
 
 /**
- * Counts one hit for `id` in `bucket` and throws HttpError(429) once more than `limit` hits
- * landed in the current window of `windowSec` seconds. The counter is incremented with
- * compare-and-swap, so parallel requests cannot slip past the limit.
+ * Counters were once kept as `rl/<bucket>/<idHash>/<windowStartMs>`, without the window's length.
+ * A window of an hour or more that was already running when the new layout shipped goes on from the
+ * count in its old key, so the deploy does not hand anybody a fresh allowance for the rest of that
+ * window (shorter windows are over within minutes anyway). Only windows that started before this
+ * moment can have such a key, so after it the extra read is never made.
  */
+const LEGACY_KEYS_BEFORE_MS = Date.UTC(2027, 0, 1);
+const LEGACY_MIN_WINDOW_MS = 60 * 60 * 1000;
+
+async function legacyCount(ctx: Ctx, key: string, windowStartMs: number, windowMs: number): Promise<number> {
+  if (windowMs < LEGACY_MIN_WINDOW_MS || windowStartMs >= LEGACY_KEYS_BEFORE_MS) return 0;
+  const old = await ctx.kv.getJSON<{ n: number }>(key.slice(0, key.lastIndexOf('-')));
+  return old && Number.isFinite(old.n) && old.n > 0 ? old.n : 0;
+}
+
 function tooManyRequests(ctx: Ctx, windowStartMs: number, windowMs: number): HttpError {
   const retryAfterSec = Math.max(1, Math.ceil((windowStartMs + windowMs - ctx.now().getTime()) / 1000));
   return new HttpError(429, 'rate_limited', 'Too many requests. Please wait a little and try again.', undefined, {
@@ -269,20 +283,57 @@ function tooManyRequests(ctx: Ctx, windowStartMs: number, windowMs: number): Htt
   });
 }
 
-export async function rateLimit(ctx: Ctx, bucket: string, id: string, limit: number, windowSec: number): Promise<void> {
+/** Counts one hit and answers the key it was counted under (see rateLimit). */
+async function countHit(ctx: Ctx, bucket: string, id: string, limit: number, windowSec: number): Promise<string> {
   const { key, windowStartMs, windowMs } = rateLimitKey(ctx, bucket, id, windowSec);
   const tooMany = tooManyRequests(ctx, windowStartMs, windowMs);
 
   for (let attempt = 0; attempt < RATE_LIMIT_ATTEMPTS; attempt++) {
     const found = await ctx.kv.getJSONWithEtag<{ n: number }>(key);
-    const n = found && Number.isFinite(found.value?.n) ? found.value.n : 0;
+    const n = found ? (Number.isFinite(found.value?.n) ? found.value.n : 0) : await legacyCount(ctx, key, windowStartMs, windowMs);
     if (n >= limit) throw tooMany;
     const written = await ctx.kv.setJSON(key, { n: n + 1 }, found ? { onlyIfMatch: found.etag } : { onlyIfNew: true });
-    if (written.modified) return;
+    if (written.modified) return key;
     await Promise.resolve();
   }
   // Only reachable when many requests for the same id collide at once, which is itself the thing being limited.
   throw tooMany;
+}
+
+/**
+ * Counts one hit for `id` in `bucket` and throws HttpError(429) once more than `limit` hits
+ * landed in the current window of `windowSec` seconds. The counter is incremented with
+ * compare-and-swap, so parallel requests cannot slip past the limit.
+ */
+export async function rateLimit(ctx: Ctx, bucket: string, id: string, limit: number, windowSec: number): Promise<void> {
+  await countHit(ctx, bucket, id, limit, windowSec);
+}
+
+/** A hit counted by rateLimitTake. */
+export interface RateLimitHit {
+  /**
+   * Gives this hit back, in the window it was counted in, for something that did not happen after
+   * all. Best effort and never throws: a refund that is lost stays counted, which errs on the safe side.
+   */
+  refund(): Promise<void>;
+}
+
+/**
+ * rateLimit for a limit on things that may still fail after they were counted: the place is taken
+ * before the work, so parallel requests cannot pass the limit together, and given back when the work
+ * did not happen.
+ */
+export async function rateLimitTake(ctx: Ctx, bucket: string, id: string, limit: number, windowSec: number): Promise<RateLimitHit> {
+  const key = await countHit(ctx, bucket, id, limit, windowSec);
+  return {
+    refund: async () => {
+      try {
+        await refundKey(ctx, key);
+      } catch (err) {
+        ctx.log('warn', 'rate limit: a hit could not be given back', { bucket, error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  };
 }
 
 /**
@@ -293,7 +344,7 @@ export async function rateLimit(ctx: Ctx, bucket: string, id: string, limit: num
 export async function rateLimitPeek(ctx: Ctx, bucket: string, id: string, limit: number, windowSec: number): Promise<void> {
   const { key, windowStartMs, windowMs } = rateLimitKey(ctx, bucket, id, windowSec);
   const found = await ctx.kv.getJSON<{ n: number }>(key);
-  const n = found && Number.isFinite(found.n) ? found.n : 0;
+  const n = found ? (Number.isFinite(found.n) ? found.n : 0) : await legacyCount(ctx, key, windowStartMs, windowMs);
   if (n >= limit) throw tooManyRequests(ctx, windowStartMs, windowMs);
 }
 
@@ -314,7 +365,10 @@ export async function rateLimitCount(ctx: Ctx, bucket: string, id: string, windo
  * to a window that just ended stays counted, which only errs on the safe side.
  */
 export async function rateLimitRefund(ctx: Ctx, bucket: string, id: string, windowSec: number): Promise<void> {
-  const { key } = rateLimitKey(ctx, bucket, id, windowSec);
+  await refundKey(ctx, rateLimitKey(ctx, bucket, id, windowSec).key);
+}
+
+async function refundKey(ctx: Ctx, key: string): Promise<void> {
   for (let attempt = 0; attempt < RATE_LIMIT_ATTEMPTS; attempt++) {
     const found = await ctx.kv.getJSONWithEtag<{ n: number }>(key);
     const n = found && Number.isFinite(found.value?.n) ? found.value.n : 0;

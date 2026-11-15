@@ -107,8 +107,9 @@ interface CardProps {
 // ═════════════════════════════ Google Calendar ═════════════════════════════
 
 /**
- * Google said, when this connection was made, that it ends on a set day: the consent screen is still in
- * "Testing", where a connection lasts 7 days. Publishing the screen and connecting again removes the end.
+ * Google said, when this connection was made, that it ends on a set day. Usually the consent screen is
+ * still in "Testing", where a connection lasts 7 days; it is also so when a time limit was picked on
+ * Google's screen. Google does not say which, so both are named. Connecting again without either removes the end.
  */
 function ExpiryNotice({ endsAt, zone, onReconnect }: { endsAt: string; zone: string; onReconnect: () => void }) {
   const ms = Date.parse(endsAt);
@@ -130,8 +131,9 @@ function ExpiryNotice({ endsAt, zone, onReconnect }: { endsAt: string; zone: str
         </Button>
       }
     >
-      Your consent screen in Google Cloud is still in "Testing", so Google ends the connection after 7 days. After that, no times are offered until you reconnect. Publish
-      the consent screen in Google Cloud (step 3 of the setup steps), then reconnect.
+      {ended ? 'Until you reconnect, no times are offered.' : 'After that, no times are offered until you reconnect.'} An end date like this usually means your consent screen in Google
+      Cloud is still in "Testing", where Google ends a connection after 7 days: publish it so it reads "In production" (step 3 of the setup steps), then reconnect. If
+      you chose a time limit on Google's screen when you connected, reconnecting and allowing ongoing access is enough.
     </Notice>
   );
 }

@@ -8,6 +8,7 @@ import type { Booking, BookingIndexEntry, CallRecord, EventType, Host, Job, Secr
 import { open, randomId, randomToken, seal, sha256Hex } from './crypto';
 import { API_PREFIX, type Ctx, type Env } from './ctx';
 import { HttpError } from './http';
+import { listKeyPages } from './store';
 
 export const KEYS = {
   site: 'site',
@@ -586,19 +587,42 @@ export async function cacheSet(ctx: Ctx, name: string, value: unknown, ttlSec: n
 export const PRUNE_LIMIT_PER_PREFIX = 1000;
 /** How long one pruning run may take, measured with ctx.now(). The rest waits for the next run. */
 export const PRUNE_BUDGET_MS = 5_000;
+/**
+ * A rate limit counter goes this long after its window ended. Nothing reads a window that is over;
+ * the minute covers servers whose clocks are a little apart and a request that began just before the end.
+ */
+export const RATE_LIMIT_PRUNE_GRACE_MS = 60_000;
+
+/** The prefixes pruneEphemeral looks after, in the order it sweeps them. */
+export type EphemeralPrefix = typeof KEYS.claimPrefix | typeof KEYS.cachePrefix | typeof KEYS.rateLimitPrefix;
+export const EPHEMERAL_PREFIXES: readonly EphemeralPrefix[] = [KEYS.claimPrefix, KEYS.cachePrefix, KEYS.rateLimitPrefix];
+
+/** `<windowStartMs>-<windowSec>`, the last part of a rate limit key (auth.ts rateLimitKey). */
+const RATE_LIMIT_WINDOW = /^(\d{1,15})-(\d{1,9})$/;
+/** `<windowStartMs>` alone: a key written before the window's length was part of it. */
+const LEGACY_RATE_LIMIT_WINDOW = /^\d{1,15}$/;
 
 /**
- * Deletes short-lived keys that are past use: claims and rate-limit windows older than `maxAgeMs`,
- * and cache entries that have expired (an expired entry is never read again). Returns how many
- * keys were removed.
+ * Deletes short-lived keys that are past use: claims older than `maxAgeMs`, cache entries that have
+ * expired (an expired entry is never read again), and rate limit counters whose window is over
+ * (a minute after its end; a counter in the older layout without the window's length, once it is
+ * older than `maxAgeMs`). Returns how many keys were removed. `prefixes` picks which of the three
+ * are swept (all of them by default).
  *
  * Bounded twice, so a scheduled run stays inside its time: every prefix may remove at most `limit`
  * keys, and the whole run stops after `budgetMs`. Each prefix has its own slice of that time (time a
- * prefix does not use passes on to the next), so a backlog in one cannot starve the others. Checks
- * and deletes run in parallel. A prefix that fails does not stop the others; the first failure is
- * thrown once all of them had their turn.
+ * prefix does not use passes on to the next), so a backlog in one cannot starve the others. Keys are
+ * listed a page at a time and the listing stops with the work, so a long backlog costs only the pages
+ * that are looked at. Checks and deletes run in parallel. A prefix that fails does not stop the
+ * others; the first failure is thrown once all of them had their turn.
  */
-export async function pruneEphemeral(ctx: Ctx, maxAgeMs: number, limit = PRUNE_LIMIT_PER_PREFIX, budgetMs = PRUNE_BUDGET_MS): Promise<number> {
+export async function pruneEphemeral(
+  ctx: Ctx,
+  maxAgeMs: number,
+  limit = PRUNE_LIMIT_PER_PREFIX,
+  budgetMs = PRUNE_BUDGET_MS,
+  prefixes: readonly EphemeralPrefix[] = EPHEMERAL_PREFIXES,
+): Promise<number> {
   const startMs = ctx.now().getTime();
   const cutoff = startMs - maxAgeMs;
   const cap = Math.max(0, Math.floor(limit));
@@ -606,64 +630,62 @@ export async function pruneEphemeral(ctx: Ctx, maxAgeMs: number, limit = PRUNE_L
 
   const sweep = async (prefix: string, until: number, isStale: (key: string) => Promise<boolean>): Promise<number> => {
     const outOfTime = (): boolean => ctx.now().getTime() >= until;
-    if (cap === 0 || outOfTime()) return 0;
-    const keys = await ctx.kv.list(prefix);
     let taken = 0;
     let removed = 0;
     let failed: { error: unknown } | null = null;
-    await mapLimit(keys, READ_CONCURRENCY, async (key) => {
-      if (failed || taken >= cap || outOfTime()) return;
-      try {
-        if (!(await isStale(key))) return;
-        // Checked again: the read may have used up the time, or another worker the allowance.
-        if (failed || taken >= cap || outOfTime()) return;
-        taken++;
-        await ctx.kv.delete(key);
-        removed++;
-      } catch (error) {
-        // The storage is in trouble: stop this prefix, report it once the others had their turn.
-        failed ??= { error };
-      }
-    });
+    const done = (): boolean => !!failed || taken >= cap || outOfTime();
+    if (done()) return 0;
+    for await (const keys of listKeyPages(ctx.kv, prefix)) {
+      await mapLimit(keys, READ_CONCURRENCY, async (key) => {
+        if (done()) return;
+        try {
+          if (!(await isStale(key))) return;
+          // Checked again: the read may have used up the time, or another worker the allowance.
+          if (done()) return;
+          taken++;
+          await ctx.kv.delete(key);
+          removed++;
+        } catch (error) {
+          // The storage is in trouble: stop this prefix, report it once the others had their turn.
+          failed ??= { error };
+        }
+      });
+      // No next page once the allowance or the time is used up.
+      if (done()) break;
+    }
     if (failed) throw (failed as { error: unknown }).error;
     return removed;
   };
 
-  const sweeps: [string, (key: string) => Promise<boolean>][] = [
-    [
-      KEYS.claimPrefix,
-      async (key) => {
-        const record = await ctx.kv.getJSON<{ at?: string }>(key);
-        const at = Date.parse(record?.at ?? '');
-        return Number.isFinite(at) && at < cutoff;
-      },
-    ],
-    [
-      KEYS.cachePrefix,
-      async (key) => {
-        const record = await ctx.kv.getJSON<CacheRecord>(key);
-        // cacheGet treats an entry as gone from the moment it expires.
-        return !!record && typeof record.exp === 'number' && record.exp <= ctx.now().getTime();
-      },
-    ],
-    // rl/<bucket>/<idHash>/<windowStartMs>: the age is in the key, no read needed. Last, because the
-    // biggest backlog builds up here and it then gets the time the others left over.
-    [
-      KEYS.rateLimitPrefix,
-      async (key) => {
-        const windowStart = Number(key.slice(key.lastIndexOf('/') + 1));
-        return Number.isFinite(windowStart) && windowStart < cutoff;
-      },
-    ],
-  ];
+  const checks: Record<EphemeralPrefix, (key: string) => Promise<boolean>> = {
+    [KEYS.claimPrefix]: async (key) => {
+      const record = await ctx.kv.getJSON<{ at?: string }>(key);
+      const at = Date.parse(record?.at ?? '');
+      return Number.isFinite(at) && at < cutoff;
+    },
+    [KEYS.cachePrefix]: async (key) => {
+      const record = await ctx.kv.getJSON<CacheRecord>(key);
+      // cacheGet treats an entry as gone from the moment it expires.
+      return !!record && typeof record.exp === 'number' && record.exp <= ctx.now().getTime();
+    },
+    // The window is in the key, so no read is needed. Last, because the biggest backlog builds up
+    // here and it then gets the time the others left over.
+    [KEYS.rateLimitPrefix]: async (key) => {
+      const span = key.slice(key.lastIndexOf('/') + 1);
+      const match = RATE_LIMIT_WINDOW.exec(span);
+      if (match) return Number(match[1]) + Number(match[2]) * 1000 + RATE_LIMIT_PRUNE_GRACE_MS <= ctx.now().getTime();
+      return LEGACY_RATE_LIMIT_WINDOW.test(span) && Number(span) < cutoff;
+    },
+  };
+  const sweeps = EPHEMERAL_PREFIXES.filter((prefix) => prefixes.includes(prefix));
 
   let removed = 0;
   let failure: unknown = null;
   for (let i = 0; i < sweeps.length; i++) {
-    const [prefix, isStale] = sweeps[i];
+    const prefix = sweeps[i];
     const until = startMs + (budget * (i + 1)) / sweeps.length;
     try {
-      removed += await sweep(prefix, until, isStale);
+      removed += await sweep(prefix, until, checks[prefix]);
     } catch (err) {
       failure ??= err;
     }

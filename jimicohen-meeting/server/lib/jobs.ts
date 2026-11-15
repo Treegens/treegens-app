@@ -26,6 +26,7 @@ import type {
   Job,
   MessageKind,
   ReminderChannel,
+  ReminderRule,
   SendResult,
   SiteSettings,
 } from '../../shared/types';
@@ -33,15 +34,17 @@ import { hmacHex, randomId, sha256Hex } from './crypto';
 import type { Ctx } from './ctx';
 import { renderEmailHtml, renderEmailText, sendEmail, urlsIn, type EmailMessage } from './email';
 import { buildBookingIcs, calendarLinks } from './ics';
-import { outboundAllowed } from './outbound';
+import { reserveOutbound } from './outbound';
 import {
   cacheGet,
   cacheSet,
   claim,
   deleteJob,
   getBooking,
+  getBookings,
   getEventType,
   getSite,
+  listEventTypes,
   listHosts,
   listJobs,
   putJob,
@@ -241,6 +244,92 @@ export async function replanBookingReminders(
   return failed;
 }
 
+const MAX_REPLANNED_CALLS = 500;
+const REPLAN_CALLS_BUDGET_MS = 8_000;
+
+/**
+ * After the calling hours changed: moves every reminder call still waiting in the queue to the time
+ * the new hours give it, with one read of the queue.
+ *   - A moved call keeps its job id, so it shares its attempt claim and "sent" marker with the old
+ *     copy and can still ring only once.
+ *   - The new copy is written before the old one is removed, so a run that is cut off part-way leaves
+ *     every call it did not reach at its old time, and never a booking with no call.
+ *   - Calls that are due already, being placed, or a retry are left to the runner. So is a call the new
+ *     hours leave no time for: the check when it is placed skips it then, unless the hours change back.
+ *   - Each call is read again just before it is moved, so one that left the queue meanwhile (planned
+ *     again, cancelled, placed) is not brought back next to the call that replaced it.
+ * Calls already placed are not touched, and nothing new is planned: a booking whose call found no time
+ * keeps the note that says so.
+ */
+export async function replanReminderCalls(
+  ctx: Ctx,
+  hours: Partial<CallHours> | null | undefined,
+  opts?: { budgetMs?: number; onError?: (jobId: string, err: unknown) => void },
+): Promise<{ moved: number; failed: number; left: number }> {
+  const startedMs = ctx.now().getTime();
+  const budgetMs = typeof opts?.budgetMs === 'number' && opts.budgetMs > 0 ? opts.budgetMs : REPLAN_CALLS_BUDGET_MS;
+  const calls = (await listJobs(ctx))
+    .map((j) => j as StoredJob)
+    .filter((j) => j.type === 'message' && j.channel === 'call' && messageKind(j) === 'reminder' && (j.audience ?? 'invitee') === 'invitee')
+    .filter((j) => !!j.bookingId && !!j.ruleId && j.attempt === 0 && Date.parse(j.dueAt) > startedMs);
+  const result = { moved: 0, failed: 0, left: 0 };
+  if (calls.length === 0) return result;
+  const todo = calls.slice(0, MAX_REPLANNED_CALLS);
+  result.left += calls.length - todo.length;
+
+  const [bookings, eventTypes] = await Promise.all([getBookings(ctx, [...new Set(todo.map((j) => j.bookingId as string))]), listEventTypes(ctx)]);
+  const bookingById = new Map(bookings.map((b) => [b.id, b]));
+  const eventTypeById = new Map(eventTypes.map((e) => [e.id, e]));
+
+  for (let i = 0; i < todo.length; i++) {
+    const nowMs = ctx.now().getTime();
+    if (nowMs - startedMs >= budgetMs) {
+      result.left += todo.length - i;
+      break;
+    }
+    const job = todo[i];
+    try {
+      const booking = bookingById.get(job.bookingId as string);
+      const startMs = Date.parse(booking?.start ?? '');
+      const rule = booking ? eventTypeById.get(booking.eventTypeId)?.reminders?.find((r) => r.id === job.ruleId) : undefined;
+      // Whatever the runner will drop or skip anyway (cancelled, moved, rule gone) is left for it to do so.
+      const current = !!booking && booking.status === 'confirmed' && (!job.forStart || Date.parse(job.forStart) === startMs);
+      if (!current || !rule || rule.enabled !== true || rule.channel !== 'call') {
+        result.left++;
+        continue;
+      }
+      const oldMs = Date.parse(job.dueAt);
+      const idealMs = ruleDueMs(rule, startMs, Date.parse(booking.end));
+      const nextMs = planCallTime({ idealMs, startMs, nowMs, timezone: booking.invitee.timezone, hours });
+      // The rule's own moment has gone by (the old hours had moved the call later). Moving it would make
+      // saving the settings ring people straight away, so a time the new hours still allow is kept.
+      const keep = nextMs !== null && nextMs < nowMs && insideCallHours(oldMs, booking.invitee.timezone, hours);
+      const dueMs = nextMs === null || keep ? null : Math.max(nextMs, nowMs);
+      // Due by now: the runner may be placing it already.
+      if (dueMs === null || dueMs === oldMs || !(oldMs > nowMs) || (await readClaim(ctx, claimName(job)))) {
+        result.left++;
+        continue;
+      }
+      // The queue was read when this run began. A call that has left it since (the booking was planned
+      // again for changed rules, or cancelled, or the call was placed) must not come back as a copy: next
+      // to the call planned in its place it would ring a second time.
+      const queued = await ctx.kv.getJSON<StoredJob>(job.key);
+      if (!queued || queued.id !== job.id || queued.attempt !== job.attempt) {
+        result.left++;
+        continue;
+      }
+      const dueAt = new Date(dueMs).toISOString();
+      await putJob(ctx, { ...job, dueAt, key: keyFor(dueAt, job.id) }, { onlyIfNew: true });
+      await deleteJob(ctx, job.key);
+      result.moved++;
+    } catch (err) {
+      result.failed++;
+      opts?.onError?.(job.id, err);
+    }
+  }
+  return result;
+}
+
 /** Removes every pending message for the booking except the ones that announce or follow a cancellation. */
 export async function cancelBookingJobs(ctx: Ctx, bookingId: string): Promise<void> {
   await removeBookingJobs(ctx, bookingId, (j) => j.type === 'message' && j.kind !== 'cancelled' && j.kind !== 'host_alert');
@@ -252,6 +341,12 @@ function inviteeReachable(booking: Booking, channel: ReminderChannel): boolean {
   if (channel === 'email') return isEmail(booking.invitee.email);
   if (!booking.invitee.phone?.trim()) return false;
   return channel === 'sms' ? booking.consent?.sms === true : booking.consent?.call === true;
+}
+
+/** When a rule's message is due before any calling hours are taken into account. */
+function ruleDueMs(rule: ReminderRule, startMs: number, endMs: number): number {
+  const offsetMs = Math.max(0, Number(rule.offsetMinutes) || 0) * 60_000;
+  return rule.trigger !== 'after_end' ? Math.min(startMs - offsetMs, startMs - REMINDER_MIN_LEAD_MS) : endMs + offsetMs;
 }
 
 /** Hosts get email unless they turned it off, texts only when they asked for them, and never an automated call. */
@@ -320,24 +415,73 @@ function atLocalHour(day: DateTime, hour: number): DateTime {
  * The call is placed only when the result is still inside calling hours at that moment, so a
  * daylight saving jump can never move it outside them.
  */
-export function planCallTime(p: { idealMs: number; startMs: number; nowMs: number; timezone: string; hours?: Partial<CallHours> | null }): number | null {
+export function planCallTime(p: CallPlanInput): number | null {
   const { idealMs, startMs, nowMs, timezone: tz, hours } = p;
   if (!Number.isFinite(idealMs) || !Number.isFinite(startMs) || !validZone(tz)) return null;
   const { open, close } = callHoursOf(hours);
   if (open === close) return null;
   if (insideCallHours(idealMs, tz, hours)) return idealMs;
 
+  const { openingMs, lastHourMs } = fallbackCallTimes(idealMs, tz, open, close);
+  if (openingMs > nowMs && openingMs <= startMs - CALL_MIN_LEAD_MS && insideCallHours(openingMs, tz, hours)) return openingMs;
+  if (lastHourMs > nowMs && lastHourMs < startMs && insideCallHours(lastHourMs, tz, hours)) return lastHourMs;
+  return null;
+}
+
+export interface CallPlanInput {
+  /** the rule's own moment */
+  idealMs: number;
+  startMs: number;
+  nowMs: number;
+  /** the invitee's zone */
+  timezone: string;
+  hours?: Partial<CallHours> | null;
+}
+
+/** planCallTime's two fall-backs: when calling hours next open after `idealMs`, and the start of their last hour before it. */
+function fallbackCallTimes(idealMs: number, tz: string, open: number, close: number): { openingMs: number; lastHourMs: number } {
   const day = DateTime.fromMillis(idealMs, { zone: tz }).startOf('day');
   let opening = atLocalHour(day, open);
   if (opening.toMillis() <= idealMs) opening = atLocalHour(day.plus({ days: 1 }), open);
-  const openingMs = opening.toMillis();
-  if (openingMs > nowMs && openingMs <= startMs - CALL_MIN_LEAD_MS && insideCallHours(openingMs, tz, hours)) return openingMs;
-
   let closing = atLocalHour(day, close);
   if (closing.toMillis() > idealMs) closing = atLocalHour(day.minus({ days: 1 }), close);
-  const lastHourMs = closing.toMillis() - 3_600_000;
-  if (lastHourMs > nowMs && lastHourMs < startMs && insideCallHours(lastHourMs, tz, hours)) return lastHourMs;
-  return null;
+  return { openingMs: opening.toMillis(), lastHourMs: closing.toMillis() - 3_600_000 };
+}
+
+/**
+ * Why planCallTime found no time for a call, in facts the note on the booking can be built from. Pure.
+ *   passed        planned earlier, the call would have rung at a moment that has already gone by
+ *   rightAway     calling hours are open now, but only for what is left of their last hour before the
+ *                 rule's moment: a call then would come straight after the booking, which reminds nobody
+ *   lastHalfHour  calling hours open before the meeting, but less than half an hour before it starts
+ */
+export function noCallTimeFacts(p: CallPlanInput): { passed: boolean; rightAway: boolean; lastHalfHour: boolean } {
+  const { idealMs, startMs, nowMs, timezone: tz, hours } = p;
+  const none = { passed: false, rightAway: false, lastHalfHour: false };
+  if (!Number.isFinite(idealMs) || !Number.isFinite(startMs) || !Number.isFinite(nowMs) || !validZone(tz)) return none;
+  const { open, close } = callHoursOf(hours);
+  if (open === close) return none;
+  const earlier = planCallTime({ ...p, nowMs: Number.NEGATIVE_INFINITY });
+  const { openingMs } = fallbackCallTimes(idealMs, tz, open, close);
+  return {
+    passed: earlier !== null && earlier <= nowMs,
+    rightAway: nowMs < startMs && insideCallHours(nowMs, tz, hours),
+    lastHalfHour: openingMs > nowMs && openingMs < startMs && openingMs > startMs - CALL_MIN_LEAD_MS && insideCallHours(openingMs, tz, hours),
+  };
+}
+
+/**
+ * The note on the booking when a reminder call gets no time, or null for none. `change` is what the
+ * booking is being planned for: new, moved, or neither (the rules or the calling hours changed).
+ */
+function noCallTimeNote(f: ReturnType<typeof noCallTimeFacts>, change: 'created' | 'rescheduled' | null): string | null {
+  // Planned again after the call's moment had gone by: it rang then, or the timeline already says why not.
+  if (change === null && f.passed) return null;
+  const soon = !f.rightAway ? '' : change === 'created' ? 'right after booking' : change === 'rescheduled' ? 'right after the meeting was moved' : 'right after the change';
+  if (soon && f.lastHalfHour) return `the only times inside calling hours before the meeting were ${soon} and in the half hour before it starts`;
+  if (soon) return `the only time inside calling hours before the meeting was ${soon}`;
+  if (f.lastHalfHour) return 'the only time inside calling hours before the meeting is in the half hour before it starts';
+  return skipText('no_call_time');
 }
 
 /** Pure: which messages a booking needs, given its reminder rules and who can be reached how. */
@@ -350,8 +494,8 @@ export function planBookingJobs(p: {
   immediate: 'created' | 'rescheduled' | null;
   /** calling hours (site.assistant); the defaults when left out */
   callHours?: Partial<CallHours> | null;
-  /** told about each call rule that finds no time inside calling hours before the meeting */
-  onNoCallTime?: (ruleId: string) => void;
+  /** told about each call rule that finds no time inside calling hours before the meeting, with the note for the booking */
+  onNoCallTime?: (ruleId: string, note: string) => void;
   /** who made the change. An invitee who just moved the meeting on the page gets no text about it (the email carries the new calendar file). */
   by?: 'invitee' | 'host' | 'assistant' | 'system';
   /** with 'rescheduled': hosts the move handed the meeting to (a round robin whose host left). For them it is a new booking. */
@@ -365,18 +509,19 @@ export function planBookingJobs(p: {
 
   for (const rule of p.eventType.reminders ?? []) {
     if (!rule || rule.enabled !== true) continue;
-    const offsetMs = Math.max(0, Number(rule.offsetMinutes) || 0) * 60_000;
     const before = rule.trigger !== 'after_end';
-    let dueMs = before ? Math.min(startMs - offsetMs, startMs - REMINDER_MIN_LEAD_MS) : endMs + offsetMs;
+    let dueMs = ruleDueMs(rule, startMs, endMs);
     if (!(dueMs > nowMs)) continue;
     if (rule.channel === 'call' && !before) continue; // a reminder call after the meeting makes no sense
     const kind: MessageKind = before ? 'reminder' : 'followup';
     if (rule.channel === 'call' && rule.audience !== 'host' && inviteeReachable(booking, 'call')) {
       // Calls only ring inside calling hours on the invitee's clock, so the time is chosen inside them now
       // rather than finding out at the last moment that the call cannot be made.
-      const callMs = planCallTime({ idealMs: dueMs, startMs, nowMs, timezone: booking.invitee.timezone, hours: p.callHours });
+      const call = { idealMs: dueMs, startMs, nowMs, timezone: booking.invitee.timezone, hours: p.callHours };
+      const callMs = planCallTime(call);
       if (callMs === null) {
-        p.onNoCallTime?.(rule.id);
+        const note = noCallTimeNote(noCallTimeFacts(call), p.immediate);
+        if (note) p.onNoCallTime?.(rule.id, note);
         continue;
       }
       dueMs = callMs;
@@ -431,7 +576,7 @@ export async function scheduleBookingJobs(
   const [allHosts, site] = await Promise.all([listHosts(ctx), getSite(ctx)]);
   const byId = new Map(allHosts.map((h) => [h.id, h]));
   const hosts = booking.hostIds.map((id) => byId.get(id)).filter((h): h is Host => !!h);
-  const noCallTime: string[] = [];
+  const noCallTime: { ruleId: string; note: string }[] = [];
   const planned = planBookingJobs({
     booking,
     eventType,
@@ -439,7 +584,7 @@ export async function scheduleBookingJobs(
     nowMs: ctx.now().getTime(),
     immediate,
     callHours: { ...DEFAULT_ASSISTANT, ...(site.assistant ?? {}) },
-    onNoCallTime: (ruleId) => noCallTime.push(ruleId),
+    onNoCallTime: (ruleId, note) => noCallTime.push({ ruleId, note }),
     ...(opts?.by ? { by: opts.by } : {}),
     ...(opts?.newHostIds?.length ? { newHostIds: opts.newHostIds } : {}),
   });
@@ -486,10 +631,10 @@ export async function scheduleBookingJobs(
         throw err;
       }
     }),
-    ...noCallTime.map(async (ruleId) => {
+    ...noCallTime.map(async ({ ruleId, note }) => {
       // Once per rule and start time, however often the booking is planned again.
       if (await claim(ctx, `call-unplanned-${booking.id}-${Date.parse(booking.start)}-${ruleId}`)) {
-        await addTimeline(ctx, booking.id, 'reminder_call_skipped', skipText('no_call_time'));
+        await addTimeline(ctx, booking.id, 'reminder_call_skipped', note);
       }
     }),
   ]);
@@ -1139,12 +1284,15 @@ export async function deliverMessage(ctx: Ctx, job: Job, extra?: JobRunExtra): P
       result = await sendEmail(ctx, { ...message, idempotencyKey: `${stored.id}-${recipient.key}` });
     } else if (channel === 'sms') {
       address = recipient.phone;
+      const body = composeBookingSms(ctx, parts(recipient));
       // Texts to invitees go to whatever number was typed on the booking page, so they have a daily
-      // ceiling. Hosts' own texts do not: they chose the number.
-      if (!recipient.host && !(await outboundAllowed(ctx, 'sms', recipient.phone))) {
-        return { ok: false, provider: 'none', skipped: 'daily_limit', detail: `to ${address}` };
-      }
-      result = await sendSms(ctx, { to: recipient.phone, body: composeBookingSms(ctx, parts(recipient)), bookingId: booking.id, kind });
+      // ceiling. Hosts' own texts do not: they chose the number. A text that does not go out after all
+      // (Twilio not set up, the number opted out, Twilio refused or failed it) gives its place back, so
+      // only texts that really leave are counted, and a retry counts once, when it goes through.
+      const pass = recipient.host ? null : await reserveOutbound(ctx, 'sms', recipient.phone);
+      if (!recipient.host && !pass) return { ok: false, provider: 'none', skipped: 'daily_limit', detail: `to ${address}` };
+      result = await sendSms(ctx, { to: recipient.phone, body, bookingId: booking.id, kind });
+      if (pass && !result.ok && !result.uncertain) await pass.release();
       if (result.uncertain && kind === 'reminder') {
         // Twilio got the request but did not answer in time, so the text may well be on the phone.
         // A second reminder is worse than a missing one: it counts as sent and is not tried again.

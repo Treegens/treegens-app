@@ -9,8 +9,12 @@
  * page are loaded in full.
  */
 import { DateTime, IANAZone } from 'luxon';
+import { calendarEventLeft } from '../../../shared/calendar';
 import type { AdminBookingsResponse, Booking, BookingIndexEntry, Host, Job } from '../../../shared/types';
+import { calendarEventIdFor } from '../booking';
+import { forgetHostBusy } from '../busy';
 import type { Ctx } from '../ctx';
+import { googleDeleteEvent } from '../google';
 import { HttpError } from '../http';
 import {
   deleteBooking,
@@ -19,6 +23,7 @@ import {
   getBooking,
   getBookingIndex,
   getBookings,
+  getHost,
   getSite,
   isStorageId,
   listHosts,
@@ -98,16 +103,32 @@ export interface EraseResult {
   calls: number;
 }
 
-/** Pending work that still needs the record of a cancelled meeting that is ahead: telling people, and taking the event off Google Calendar. */
-function finishesTheCancellation(job: Job): boolean {
-  return job.type === 'gcal_sync' || (job.type === 'message' && job.kind === 'cancelled');
+/** How long a delete waits for Google to take a left-behind event off the calendar. Slower than that, the delete answers without it. */
+const REMOVE_EVENT_BUDGET_MS = 6000;
+
+const TIMED_OUT = Symbol('timed out');
+
+async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
  * Why a booking may not be deleted yet, or null when it may. Only a meeting that is over or cancelled
  * can go: an upcoming one holds a time and a calendar event, so it is cancelled first. A cancelled
- * meeting that is still ahead also waits until its cancellation is finished (time given back, event
- * off the calendar, people told), or that work would be left half done with nothing to finish it.
+ * meeting that is still ahead also waits until the cancellation is finished (time given back, people
+ * told), or that work would be left half done with nothing to finish it.
+ *
+ * Its calendar event is different: Google may stay out of reach for as long as nobody reconnects it, and a
+ * request to delete someone's data cannot wait for that. So an event that could not be removed is refused
+ * with `calendar_event_left`, which eraseBooking lets the owner pass once they have said the event may stay.
  */
 export function eraseRefusal(b: Booking, pendingJobs: Job[], nowMs: number): HttpError | null {
   const ahead = Date.parse(b.end) > nowMs;
@@ -118,22 +139,59 @@ export function eraseRefusal(b: Booking, pendingJobs: Job[], nowMs: number): Htt
       : new HttpError(409, 'in_progress', 'This meeting is happening now. You can delete it once it is over.');
   }
   if (!ahead) return null;
-  if (b.followUp?.kind === 'cancelled' || pendingJobs.some(finishesTheCancellation)) {
+  const left = calendarEventLeft(b);
+  const telling = pendingJobs.some((j) => j.type === 'message' && j.kind === 'cancelled');
+  // A calendar retry still queued for an event that could not be removed is that same trouble, not work in progress.
+  const calendarBusy = !left && pendingJobs.some((j) => j.type === 'gcal_sync');
+  if (b.followUp?.kind === 'cancelled' || telling || calendarBusy) {
     return new HttpError(
       409,
       'still_cancelling',
       'This cancellation is not finished yet: the calendar event and the messages about it are still being taken care of. Please try again in a little while.',
     );
   }
-  if (b.google?.error) {
-    const why = b.google.error.trim();
+  if (left) {
     return new HttpError(
       409,
       'calendar_event_left',
-      `The event for this meeting is still on Google Calendar, because it could not be removed yet. ${/[.!?]$/.test(why) ? why : `${why}.`} Once the event is gone, you can delete the booking.`,
+      `The event for this meeting is still on Google Calendar, because it could not be removed. ${/[.!?]$/.test(left) ? left : `${left}.`} If you delete the booking anyway, the event stays on the calendar until someone removes it by hand.`,
     );
   }
   return null;
+}
+
+/**
+ * One more try at taking a left-behind event off Google Calendar, for a delete. Only when the host whose
+ * calendar has it is connected and in order now. True when the event is gone (removed now, or Google no
+ * longer had it). Never throws. A Google that is slow carries on in the background.
+ */
+async function removeLeftEvent(ctx: Ctx, b: Booking): Promise<boolean> {
+  const g = b.google;
+  if (!g) return false;
+  const holder = await getHost(ctx, g.hostId);
+  if (!holder?.google || holder.google.status !== 'ok') return false;
+  const work = googleDeleteEvent(ctx, holder, g.calendarId || holder.google.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(b.id), true).then(
+    async () => {
+      // The meeting's time was given back when it was cancelled: what is remembered of the busy time should say so too.
+      await forgetHostBusy(ctx, [...new Set([g.hostId, ...b.hostIds])]).catch(() => undefined);
+      return true;
+    },
+    (err: unknown) => {
+      ctx.log('warn', 'bookings: the calendar event could still not be removed', { bookingId: b.id, hostId: g.hostId, error: err instanceof Error ? err.message : String(err) });
+      return false;
+    },
+  );
+  const removed = await withinBudget(work, REMOVE_EVENT_BUDGET_MS);
+  if (removed === TIMED_OUT) {
+    ctx.waitUntil(work);
+    return false;
+  }
+  return removed;
+}
+
+export interface EraseOptions {
+  /** the owner has been told that the event of this cancelled meeting stays on Google Calendar, and deletes anyway */
+  leaveCalendarEvent?: boolean;
 }
 
 /**
@@ -141,18 +199,30 @@ export function eraseRefusal(b: Booking, pendingJobs: Job[], nowMs: number): Htt
  * consent, timeline), its entry in the index, its pending jobs and its call records with their
  * transcripts. Calendar events and messages that were already sent are not touched.
  *
+ * A cancelled meeting still ahead whose event could not be taken off Google Calendar gets one more try
+ * first. When that does not work either, the delete is refused with `calendar_event_left`, unless
+ * `leaveCalendarEvent` says the owner knows the event stays there.
+ *
  * Order: jobs and calls first, the record next, the index entry last. A delete cut off before the
  * record went leaves the booking in the dashboard, to be deleted again. One cut off after it is
  * finished by asking again (the drawer is still open): a delete of a record that is already gone
  * still clears its index entry, jobs and calls.
  */
-export async function eraseBooking(ctx: Ctx, id: string): Promise<EraseResult> {
+export async function eraseBooking(ctx: Ctx, id: string, opts: EraseOptions = {}): Promise<EraseResult & { calendarEventLeft?: boolean }> {
   if (!isStorageId(id)) throw new HttpError(404, 'not_found', 'That booking no longer exists.');
   const nowMs = ctx.now().getTime();
   const [booking, allJobs] = await Promise.all([getBooking(ctx, id), listJobs(ctx)]);
   const jobs = allJobs.filter((j) => j.bookingId === id);
+  let eventLeft = false;
   if (booking) {
-    const refusal = eraseRefusal(booking, jobs, nowMs);
+    let refusal = eraseRefusal(booking, jobs, nowMs);
+    if (refusal?.code === 'calendar_event_left') {
+      if (await removeLeftEvent(ctx, booking)) refusal = null;
+      else if (opts.leaveCalendarEvent) {
+        refusal = null;
+        eventLeft = true;
+      }
+    }
     if (refusal) throw refusal;
   }
 
@@ -168,6 +238,10 @@ export async function eraseBooking(ctx: Ctx, id: string): Promise<EraseResult> {
     return entries.filter((e) => e.id !== id);
   });
   if (!unlisted.ok && unlisted.reason === 'contention') throw new HttpError(503, 'busy', 'The booking was deleted, but the list could not be updated. Please try again.');
+  if (eventLeft) {
+    ctx.log('warn', 'bookings: booking deleted, its Google Calendar event was left in place as the owner chose', { bookingId: id, hostId: booking?.google?.hostId, jobs: jobs.length, calls });
+    return { found: !!booking, jobs: jobs.length, calls, calendarEventLeft: true };
+  }
   ctx.log('info', 'bookings: booking deleted', { bookingId: id, found: !!booking, jobs: jobs.length, calls });
   return { found: !!booking, jobs: jobs.length, calls };
 }

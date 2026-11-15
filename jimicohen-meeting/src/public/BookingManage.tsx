@@ -163,7 +163,15 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
 
   const title = phase === 'cancelled' ? 'This meeting was cancelled' : phase === 'past' ? 'This meeting has taken place' : booking.eventTitle;
   const who = hostNames(booking.hosts) || site.profile.name;
-  const cancelledBy = booking.cancellation?.by === 'invitee' ? 'you' : booking.cancellation?.by === 'assistant' ? 'you, on the reminder call' : firstName(booking.hosts[0]?.name ?? site.profile.name);
+  // A host's link may be used by any host: only a name the server knows for sure is shown.
+  const cancelledBy =
+    booking.cancellation?.by === 'invitee'
+      ? 'you'
+      : booking.cancellation?.by === 'assistant'
+        ? 'you, on the reminder call'
+        : booking.cancellation?.byName
+          ? firstName(booking.cancellation.byName)
+          : 'the host';
 
   // ───────────── cancel ─────────────
 
@@ -403,7 +411,8 @@ export default function BookingManage({ view = 'details' }: BookingManageProps) 
     }
     const controller = new AbortController();
     setState({ status: 'loading' });
-    getBooking(id, token, { signal: controller.signal }).then(
+    // From a host's link the server may recognise the signed-in owner, who may change a meeting that has started.
+    getBooking(id, token, { signal: controller.signal, ...(asHost ? { as: 'host' as const } : {}) }).then(
       (data) => setState({ status: 'ready', data }),
       (e: unknown) => {
         if (controller.signal.aborted) return;
@@ -412,7 +421,7 @@ export default function BookingManage({ view = 'details' }: BookingManageProps) 
       },
     );
     return () => controller.abort();
-  }, [id, token, attempt]);
+  }, [id, token, asHost, attempt]);
 
   const onUpdated = useCallback((booking: PublicBooking) => {
     setState((prev) => (prev.status === 'ready' ? { status: 'ready', data: { ...prev.data, booking } } : prev));

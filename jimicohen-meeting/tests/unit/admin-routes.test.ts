@@ -22,6 +22,7 @@ vi.mock('../../server/lib/booking', async () => {
     toPublicEventType: vi.fn(),
     toPublicBooking: vi.fn(),
     syncBookingToCalendar: vi.fn(),
+    calendarEventIdFor: (id: string) => `mtg${id}`,
   };
 });
 vi.mock('../../server/routes/public', () => ({ routes: [] }));
@@ -519,6 +520,48 @@ describe('PUT /admin/site', () => {
     const s = await signIn();
     expect((await call(s, 'PUT', '/admin/site', '[1,2,3]')).status).toBe(400);
     expect((await call(s, 'PUT', '/admin/site', 'not json at all')).status).toBe(400);
+  });
+
+  it('moves the reminder calls already planned when the calling hours change, and only then', async () => {
+    const s = await signIn();
+    const rule = { id: 'rem_call_2h', enabled: true, channel: 'call' as const, audience: 'invitee' as const, trigger: 'before_start' as const, offsetMinutes: 120 };
+    await repo.saveEventType(s.ctx, { ...(await repo.getEventType(s.ctx, 'evt_intro'))!, reminders: [rule] });
+    // A 10 AM meeting in New York: its call was planned for 8 AM there, when calling hours open by default.
+    const booking = await seedBooking(s.ctx, 'bk_call', { start: '2026-11-18T15:00:00.000Z', consent: { sms: false, call: true, at: TEST_NOW, text: 'ok' } });
+    const job: Job & { forStart: string } = {
+      key: 'jobs/2026-11-18T13:00:00.000Z_job_call1',
+      id: 'job_call1',
+      type: 'message',
+      bookingId: booking.id,
+      dueAt: '2026-11-18T13:00:00.000Z',
+      attempt: 0,
+      createdAt: TEST_NOW,
+      channel: 'call',
+      audience: 'invitee',
+      kind: 'reminder',
+      ruleId: rule.id,
+      forStart: booking.start,
+    };
+    await repo.putJob(s.ctx, job);
+    const calls = async () => (await repo.listJobs(s.ctx)).map((j) => [j.id, j.dueAt]);
+
+    await ok(call(s, 'PUT', '/admin/site', { assistant: { name: 'Mia' } }));
+    await s.ctx.settle();
+    expect(await calls()).toEqual([['job_call1', '2026-11-18T13:00:00.000Z']]);
+
+    await ok(call(s, 'PUT', '/admin/site', { assistant: { callWindowStartHour: 9 } }));
+    await s.ctx.settle();
+    expect(await calls()).toEqual([['job_call1', '2026-11-18T14:00:00.000Z']]); // 9 AM in New York
+    expect(s.ctx.logs.filter((l) => l.level === 'error' || l.level === 'warn')).toEqual([]);
+  });
+
+  it('a failing move of the reminder calls never fails the save', async () => {
+    const s = await signIn();
+    vi.spyOn(repo, 'listJobs').mockRejectedValue(new Error('storage hiccup'));
+    const { site } = await ok<{ site: SiteSettings }>(call(s, 'PUT', '/admin/site', { assistant: { callWindowStartHour: 9 } }));
+    expect(site.assistant.callWindowStartHour).toBe(9);
+    await s.ctx.settle();
+    expect(s.ctx.logs.some((l) => l.level === 'error' && l.msg.includes('re-planning reminder calls'))).toBe(true);
   });
 });
 
@@ -1298,7 +1341,7 @@ describe('bookings', () => {
       await repo.updateBooking(s.ctx, 'bk_cancelled', (b) => ({ ...b, followUp: { kind: 'cancelled', id: 'fu_1', at: TEST_NOW, by: 'invitee' } }));
       expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409)).code).toBe('still_cancelling');
 
-      // Google could not take the event off: say why, and keep the booking until it is gone.
+      // Google could not take the event off: say why, and keep the booking unless the owner says the event may stay.
       await repo.updateBooking(s.ctx, 'bk_cancelled', ({ followUp: _done, ...b }) => ({
         ...b,
         google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'ev_1', error: 'Google Calendar needs to be reconnected.' },
@@ -1306,8 +1349,9 @@ describe('bookings', () => {
       const left = await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409);
       expect(left.code).toBe('calendar_event_left');
       expect(left.message).toBe(
-        'The event for this meeting is still on Google Calendar, because it could not be removed yet. Google Calendar needs to be reconnected. Once the event is gone, you can delete the booking.',
+        'The event for this meeting is still on Google Calendar, because it could not be removed. Google Calendar needs to be reconnected. If you delete the booking anyway, the event stays on the calendar until someone removes it by hand.',
       );
+      expect(left.message).not.toContain('—');
       expect(await repo.getBooking(s.ctx, 'bk_cancelled')).not.toBeNull();
 
       await repo.updateBooking(s.ctx, 'bk_cancelled', (b) => ({ ...b, google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'ev_1', syncedAt: TEST_NOW } }));
@@ -1329,6 +1373,105 @@ describe('bookings', () => {
       await ok(call(s, 'DELETE', '/admin/bookings/bk_gone'));
       expect(await repo.getBooking(s.ctx, 'bk_gone')).toBeNull();
       expect(await jobsOf(s, 'bk_gone')).toEqual([]);
+    });
+
+    describe('a cancelled meeting ahead whose Google event could not be removed', () => {
+      const EVENT_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events/ev_1';
+      const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+      /** bk_cancelled (in 30 hours): the event is still on the owner's calendar, and its calendar retry is queued. */
+      async function stuck(): Promise<Session> {
+        const s = await seeded();
+        await repo.saveSecrets(s.ctx, { google: { clientId: 'id.apps.googleusercontent.com', clientSecret: 'secret-value' } });
+        await repo.updateBooking(s.ctx, 'bk_cancelled', (b) => ({
+          ...b,
+          google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'ev_1', error: 'Google request failed (503).' },
+          timeline: [...(b.timeline ?? []), { at: TEST_NOW, type: 'calendar_sync_failed', detail: 'Google request failed (503).' }],
+        }));
+        // That retry is the same trouble, not work that is about to finish: it does not hold the delete up on its own.
+        await repo.putJob(s.ctx, job('job_gcal', 'bk_cancelled', { type: 'gcal_sync', kind: undefined, channel: undefined, audience: undefined }));
+        return s;
+      }
+
+      const deletesOf = (calls: NetCall[]): NetCall[] => calls.filter((c) => c.method === 'DELETE' && c.url.startsWith(EVENT_URL));
+
+      it('tries Google once more first, and deletes at once when the event comes off now', async () => {
+        const s = await stuck();
+        await connectGoogle(s.ctx);
+        const calls = useFetch(s.ctx, (c) => {
+          if (c.url === TOKEN_URL) return Response.json({ access_token: 'at-1', expires_in: 3600 });
+          if (c.method === 'DELETE' && c.url.startsWith(EVENT_URL)) return new Response(null, { status: 204 });
+          throw new Error(`unexpected ${c.method} ${c.url}`);
+        });
+
+        expect(await ok(call(s, 'DELETE', '/admin/bookings/bk_cancelled'))).toEqual({ ok: true });
+        const removed = deletesOf(calls);
+        expect(removed).toHaveLength(1);
+        // The attendees hear from Google that the event is gone, as they would have at the cancellation.
+        expect(new URL(removed[0].url).searchParams.get('sendUpdates')).toBe('all');
+        expect(await repo.getBooking(s.ctx, 'bk_cancelled')).toBeNull();
+        expect(await jobsOf(s, 'bk_cancelled')).toEqual([]);
+        expect(await indexIds(s)).not.toContain('bk_cancelled');
+        expect(s.ctx.logs.find((l) => l.msg.includes('left in place'))).toBeUndefined();
+      });
+
+      it('when Google still cannot, refuses and says why, then deletes once the owner says the event may stay', async () => {
+        const s = await stuck();
+        await connectGoogle(s.ctx);
+        const calls = useFetch(s.ctx, (c) => {
+          if (c.url === TOKEN_URL) return Response.json({ access_token: 'at-1', expires_in: 3600 });
+          if (c.url.startsWith(EVENT_URL)) return Response.json({ error: { code: 503, message: 'Backend Error' } }, { status: 503 });
+          throw new Error(`unexpected ${c.method} ${c.url}`);
+        });
+
+        const refused = await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409);
+        expect(refused.code).toBe('calendar_event_left');
+        expect(refused.message).toBe(
+          'The event for this meeting is still on Google Calendar, because it could not be removed. Google request failed (503). If you delete the booking anyway, the event stays on the calendar until someone removes it by hand.',
+        );
+        const firstTry = deletesOf(calls).length;
+        expect(firstTry).toBeGreaterThan(0);
+        // Nothing of the booking was touched.
+        expect(await repo.getBooking(s.ctx, 'bk_cancelled')).toMatchObject({ status: 'cancelled', google: { error: 'Google request failed (503).' } });
+        expect(await jobsOf(s, 'bk_cancelled')).toEqual(['job_gcal']);
+
+        // Only that answer lets it go.
+        expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled?leaveCalendarEvent=0'), 409)).code).toBe('calendar_event_left');
+        const before = deletesOf(calls).length;
+        expect(await ok(call(s, 'DELETE', '/admin/bookings/bk_cancelled?leaveCalendarEvent=1'))).toEqual({ ok: true, calendarEventLeft: true });
+        // Google was still asked first: it might have worked this time.
+        expect(deletesOf(calls).length).toBeGreaterThan(before);
+        expect(await repo.getBooking(s.ctx, 'bk_cancelled')).toBeNull();
+        expect(await jobsOf(s, 'bk_cancelled')).toEqual([]);
+        expect(await indexIds(s)).not.toContain('bk_cancelled');
+        expect(s.ctx.logs.find((l) => l.msg.includes('left in place'))).toMatchObject({ level: 'warn', data: { bookingId: 'bk_cancelled', hostId: 'host_owner' } });
+      });
+
+      it('asks Google nothing when nobody can reach that calendar now, and still needs the answer after the error was cleared', async () => {
+        const s = await stuck();
+        // Google was disconnected: the calendar sync noted that the event was left there, and cleared the error.
+        await repo.updateBooking(s.ctx, 'bk_cancelled', (b) => ({
+          ...b,
+          google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'ev_1' },
+          timeline: [...(b.timeline ?? []), { at: TEST_NOW, type: 'calendar_event_left', detail: 'Google Calendar is no longer connected, so the event was not removed.' }],
+        }));
+        const calls = useFetch(s.ctx, (c) => {
+          throw new Error(`unexpected ${c.method} ${c.url}`);
+        });
+        const refused = await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409);
+        expect(refused.code).toBe('calendar_event_left');
+        expect(refused.message).toContain('Google Calendar is no longer connected, so the event was not removed.');
+
+        // The flag only ever covers the calendar event: an upcoming meeting, or a cancellation still being told, is refused as before.
+        expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_soon?leaveCalendarEvent=1'), 409)).code).toBe('upcoming');
+        await repo.putJob(s.ctx, job('job_told', 'bk_cancelled', { kind: 'cancelled', dueAt: TEST_NOW }));
+        expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled?leaveCalendarEvent=1'), 409)).code).toBe('still_cancelling');
+        await repo.deleteJob(s.ctx, repo.jobKey(TEST_NOW, 'job_told'));
+
+        expect(await ok(call(s, 'DELETE', '/admin/bookings/bk_cancelled?leaveCalendarEvent=1'))).toEqual({ ok: true, calendarEventLeft: true });
+        expect(await repo.getBooking(s.ctx, 'bk_cancelled')).toBeNull();
+        expect(calls).toEqual([]);
+      });
     });
 
     it('finishes a delete that was cut off after the record went, but never touches a booking that is being made', async () => {
@@ -2013,15 +2156,28 @@ describe('GET /admin/overview', () => {
     const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     const mine = o.warnings.find((w) => w.key === 'google_expiry_host_owner')!;
     expect(mine.href).toBe('/admin/integrations#google');
-    expect(mine.message).toMatch(/^Your Google connection ends on \w+day, \w+ \d+, 20\d\d, because the consent screen in Google Cloud is still in Testing\./);
-    expect(mine.message).toContain('Publish the consent screen in Google Cloud, then reconnect.');
+    expect(mine.message).toMatch(/^Your Google connection ends on \w+day, \w+ \d+, 20\d\d\. After that, no times are offered until you reconnect\./);
+    // Google names an end for a consent screen still in Testing, and for a time limit picked when connecting: both are said.
+    expect(mine.message).toContain('After that, no times are offered until you reconnect. An end date like this usually means the consent screen in Google Cloud is still in Testing: publish it so it reads In production, then reconnect.');
+    expect(mine.message).toContain("If you chose a time limit on Google's screen when you connected, reconnecting and allowing ongoing access is enough.");
+    expect(mine.message).not.toContain('because');
     const theirs = o.warnings.find((w) => w.key === `google_expiry_${host.id}`)!;
-    expect(theirs).toMatchObject({ href: '/admin/team', message: expect.stringMatching(/^Alex's Google connection ends on .* then ask Alex to connect again from their private link\.$/) });
+    expect(theirs).toMatchObject({
+      href: '/admin/team',
+      message: expect.stringMatching(
+        /^Alex's Google connection ends on [^.]+\. An end date like this usually means the consent screen .* then ask Alex to connect again from their private link\. If Alex chose a time limit on Google's screen, connecting again and allowing ongoing access is enough\.$/,
+      ),
+    });
     for (const w of o.warnings) expect(w.message).not.toMatch(/[‒-―]/);
 
     // The host view carries the date, so the Google card can say it too.
     const { hosts } = await ok<{ hosts: AdminHost[] }>(call(s, 'GET', '/admin/hosts'));
     expect(hosts.find((h) => h.id === 'host_owner')?.google?.refreshExpiresAt).toBe(ends);
+
+    // Once the day has passed, it says so.
+    s.ctx.clock.advance(8 * 86_400_000);
+    const ended = (await ok<AdminOverview>(call(s, 'GET', '/admin/overview'))).warnings.find((w) => w.key === 'google_expiry_host_owner')!;
+    expect(ended.message).toMatch(/^Your Google connection stopped working on [^.]+\. Until you reconnect, no times are offered\. An end date like this usually means /);
 
     // Reconnected after publishing: no end, no warning. A connection that already needs reconnecting says that instead.
     await connectGoogle(s.ctx, 'host_owner');

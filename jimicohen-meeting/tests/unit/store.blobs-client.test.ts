@@ -84,6 +84,15 @@ describe('blobsKV with the real @netlify/blobs client', () => {
     expect(all).toEqual(expect.arrayContaining(['site', 'index/bookings', ...keys]));
   });
 
+  it('hands out the same listing a page at a time', async () => {
+    const keys = ['rl/slots/a/1-60', 'rl/slots/b/1-60', 'rl/login/c/1-600'];
+    for (const key of keys) await kv.setJSON(key, { n: 1 });
+    const paged: string[] = [];
+    for await (const page of kv.listPages!('rl/')) paged.push(...page);
+    expect(paged.sort()).toEqual(await kv.list('rl/'));
+    expect(paged).toEqual([...keys].sort());
+  });
+
   it('round-trips binary data with its metadata', async () => {
     const data = new Uint8Array(512);
     for (let i = 0; i < data.length; i++) data[i] = (i * 13) & 0xff;

@@ -8,6 +8,7 @@ import { useAdmin } from '../../state';
 import { NumberField, OffsetInput } from '../Fields';
 import { FieldGroup, Section } from '../Page';
 import { WeeklyHoursEditor } from '../WeeklyHoursEditor';
+import { SharedHoursNotice, useSharedHours } from './SharedHoursNotice';
 import type { TabProps } from './shared';
 
 const BUFFERS = [0, 5, 10, 15, 20, 30, 45, 60, 90, 120];
@@ -24,6 +25,8 @@ export function SchedulingTab({ draft, update, errors }: TabProps) {
   const set = (patch: Partial<EventScheduling>) => update({ scheduling: { ...s, ...patch } });
   const hosts = draft.hostIds.map((id) => data.hosts.find((h) => h.id === id)).filter((h): h is NonNullable<typeof h> => !!h);
   const today = todayKey(ownerHost.timezone);
+  // A joint meeting's limited hours, dates and schedules can leave no time when all hosts work: the same check as on the Hosts tab.
+  const hours = useSharedHours(draft);
 
   return (
     <>
@@ -124,6 +127,7 @@ export function SchedulingTab({ draft, update, errors }: TabProps) {
             ) : null}
           </div>
         ) : null}
+        <SharedHoursNotice answer={hours} />
       </Section>
     </>
   );

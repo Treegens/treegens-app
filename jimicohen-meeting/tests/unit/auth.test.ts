@@ -15,6 +15,8 @@ import {
   rateLimitCount,
   rateLimitKey,
   rateLimitPeek,
+  rateLimitRefund,
+  rateLimitTake,
   requireAdmin,
   resetAdminPassword,
   SESSION_COOKIE,
@@ -444,10 +446,12 @@ describe('rateLimit', () => {
     for (const key of keys) {
       expect(key).not.toContain('ada');
       expect(key).not.toContain('203.0.113.7');
-      expect(key).toMatch(/^rl\/[a-z-]+\/[0-9a-f]{64}\/\d+$/);
+      // The window's start and its length in seconds: housekeeping reads the end from the key alone.
+      expect(key).toMatch(/^rl\/[a-z-]+\/[0-9a-f]{64}\/\d+-\d+$/);
     }
     const windowStart = Date.parse('2026-11-16T09:00:00.000Z');
-    expect(keys.find((k) => k.startsWith('rl/book-email/'))?.endsWith(`/${windowStart}`)).toBe(true);
+    expect(keys.find((k) => k.startsWith('rl/book-email/'))?.endsWith(`/${windowStart}-3600`)).toBe(true);
+    expect(keys.find((k) => k.startsWith('rl/login/'))?.endsWith(`/${windowStart}-600`)).toBe(true);
     // Not a plain SHA-256 either: an IP address would be trivial to recover from one.
     expect(keys.join(' ')).not.toContain(sha256Hex('203.0.113.7'));
     expect(keys.join(' ')).not.toContain(sha256Hex('ada@example.com'));
@@ -473,5 +477,60 @@ describe('rateLimit', () => {
     const ctx = makeTestCtx();
     await expect(rateLimit(ctx, 'a/b', 'id', 1, 60)).rejects.toThrow();
     await expect(rateLimit(ctx, '', 'id', 1, 60)).rejects.toThrow();
+  });
+
+  it('goes on from the count in the older key layout, so the deploy hands nobody a fresh allowance', async () => {
+    const ctx = makeTestCtx({ now: '2026-11-16T09:20:00.000Z' });
+    const legacy = (bucket: string, id: string, windowSec: number): string => rateLimitKey(ctx, bucket, id, windowSec).key.replace(/-\d+$/, '');
+    // Written by the version before: the window's start without its length.
+    await ctx.kv.setJSON(legacy('book-email', 'ada@example.com', 3600), { n: 5 });
+    await ctx.kv.setJSON(legacy('out-sms', '+14155552671', 86_400), { n: 6 });
+    await ctx.kv.setJSON(legacy('login', '203.0.113.7', 600), { n: 8 });
+
+    await rateLimit(ctx, 'book-email', 'ada@example.com', 6, 3600);
+    await expect(rateLimit(ctx, 'book-email', 'ada@example.com', 6, 3600)).rejects.toMatchObject({ status: 429 });
+    expect(await ctx.kv.getJSON(rateLimitKey(ctx, 'book-email', 'ada@example.com', 3600).key)).toEqual({ n: 6 });
+    await expect(rateLimitPeek(ctx, 'out-sms', '+14155552671', 6, 86_400)).rejects.toMatchObject({ status: 429 });
+    await expect(rateLimit(ctx, 'out-sms', '+14155552671', 6, 86_400)).rejects.toMatchObject({ status: 429 });
+    // A ten minute window is over soon anyway: it is not looked up.
+    await expect(rateLimit(ctx, 'login', '203.0.113.7', 8, 600)).resolves.toBeUndefined();
+
+    // The next window starts from nothing, as always.
+    ctx.clock.advance(3_600_000);
+    for (let i = 0; i < 6; i++) await rateLimit(ctx, 'book-email', 'ada@example.com', 6, 3600);
+  });
+
+  it('rateLimitTake gives a hit back in the window it was counted in, never below zero', async () => {
+    const ctx = makeTestCtx({ now: '2026-11-16T23:59:59.000Z' });
+    const day = (): string => rateLimitKey(ctx, 'out-sms', '+14155552671', 86_400).key;
+    const first = await rateLimitTake(ctx, 'out-sms', '+14155552671', 2, 86_400);
+    const second = await rateLimitTake(ctx, 'out-sms', '+14155552671', 2, 86_400);
+    await expect(rateLimitTake(ctx, 'out-sms', '+14155552671', 2, 86_400)).rejects.toMatchObject({ status: 429 });
+    const monday = day();
+
+    // Midnight passes before the second one turns out not to have happened.
+    ctx.clock.advance(2_000);
+    await rateLimit(ctx, 'out-sms', '+14155552671', 2, 86_400);
+    await second.refund();
+    expect(await ctx.kv.getJSON(monday)).toEqual({ n: 1 });
+    expect(await ctx.kv.getJSON(day())).toEqual({ n: 1 });
+
+    // Refunding twice never goes below zero.
+    await first.refund();
+    await first.refund();
+    expect(await ctx.kv.getJSON(monday)).toEqual({ n: 0 });
+    // The older refund by bucket and id works on the current window, as before.
+    await rateLimitRefund(ctx, 'out-sms', '+14155552671', 86_400);
+    expect(await ctx.kv.getJSON(day())).toEqual({ n: 0 });
+  });
+
+  it('rateLimitTake never throws from a refund the store cannot take', async () => {
+    const base = makeTestCtx();
+    const hit = await rateLimitTake(base, 'out-call', '+14155552671', 2, 86_400);
+    base.kv.getJSONWithEtag = async () => {
+      throw new Error('storage is down');
+    };
+    await expect(hit.refund()).resolves.toBeUndefined();
+    expect(base.logs.some((l) => l.level === 'warn' && l.msg.includes('could not be given back'))).toBe(true);
   });
 });

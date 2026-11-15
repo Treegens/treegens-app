@@ -519,7 +519,9 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       s.expect((await s.kv('hosts'))[0].google.refreshExpiresAt, 'stored end').toBe('2026-11-23T08:59:59.000Z');
       const notice = google.getByText('This connection ends on Monday, November 23, 2026');
       await notice.waitFor();
-      s.expect(await google.getByText('Publish the consent screen in Google Cloud (step 3 of the setup steps), then reconnect.').count(), 'what to do').toBe(1);
+      s.expect(await google.getByText('An end date like this usually means your consent screen in Google Cloud is still in "Testing"').count(), 'the usual cause').toBe(1);
+      s.expect(await google.getByText('publish it so it reads "In production" (step 3 of the setup steps), then reconnect.').count(), 'what to do').toBe(1);
+      s.expect(await google.getByText("If you chose a time limit on Google's screen when you connected, reconnecting and allowing ongoing access is enough.").count(), 'the other cause').toBe(1);
       await s.screenshot(page, 'google connection that ends in 7 days');
       const { warnings } = await s.apiOk('GET', '/admin/overview');
       const warning = warnings.find((w) => w.key === 'google_expiry_host_owner');

@@ -102,11 +102,22 @@ export function firstName(name: string): string {
 // test would also catch real names such as "J.R.R." or "Anne-Marie.S".
 const LINK_ENDINGS =
   'com|net|org|info|biz|io|co|app|dev|ai|me|ly|to|gg|so|sh|cc|tv|ws|xyz|top|link|click|online|site|website|shop|store|live|club|vip|win|work|page|email|zip|mov|ru|cn|tk|ml|ga|cf|gq|us|uk|de|in|ng|ke';
-const LINKISH = new RegExp(`(?::\\/\\/|www\\.|[\\/\\\\@]|[A-Za-z0-9-]{2,}\\.(?:${LINK_ENDINGS})(?![A-Za-z0-9]))`, 'i');
+const LINKISH = new RegExp(`(?::\\/\\/|www\\.|[\\/\\\\@]|[\\p{L}\\p{N}-]{2,}\\.(?:${LINK_ENDINGS})(?![\\p{L}\\p{N}]))`, 'iu');
+
+/**
+ * Visitor text the way phones, browsers and mail programs read it when they look for an address: wide
+ * and other compatibility forms folded (NFKC turns "ｅｖｉｌ．ｃｏｍ" into "evil.com"), and the ideographic
+ * full stops, which browsers also take as dots, made dots. The booking form's check uses it too.
+ */
+export function linkCheckText(text: string): string {
+  return String(text ?? '')
+    .normalize('NFKC')
+    .replace(/[。．｡]/g, '.');
+}
 
 /** True when a piece of visitor-typed text would show up as a link or an address on a phone or in a mail program. */
 export function looksLikeLink(text: string): boolean {
-  return LINKISH.test(String(text ?? ''));
+  return LINKISH.test(linkCheckText(text));
 }
 
 /** "Jimi", "Jimi and Alex", "Jimi, Alex and Sam" */

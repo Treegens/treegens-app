@@ -19,6 +19,12 @@ export interface KV {
   delete(key: string): Promise<void>;
   /** all keys starting with prefix, in ascending lexicographic order */
   list(prefix: string): Promise<string[]>;
+  /**
+   * The same keys a page at a time, each page fetched only when it is asked for: a caller that stops
+   * iterating stops the listing. Pages are not sorted against each other. Optional: use
+   * `listKeyPages` (store.ts), which falls back to `list` for a store without it.
+   */
+  listPages?(prefix: string): AsyncIterable<string[]>;
   getBlob(key: string): Promise<{ data: Uint8Array; metadata: Record<string, string> } | null>;
   setBlob(key: string, data: Uint8Array, metadata: Record<string, string>): Promise<void>;
 }

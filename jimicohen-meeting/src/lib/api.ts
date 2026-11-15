@@ -189,16 +189,20 @@ export function getSlots(q: SlotsQuery, opts?: CallOptions): Promise<SlotsRespon
  * POST /public/bookings. Errors worth handling by code:
  * 409 `slot_taken` (refresh slots, keep the form), 409 `booking_limit` (too many upcoming meetings for the
  * email), 409 `in_progress` (the same request is still being saved), 503 `calendar_unavailable`,
- * 422 `invalid` (see `fields`), 429 (`phone_limit`: too many bookings with reminders for the number today).
+ * 422 `invalid` (see `fields`), 429 (`phone_limit`: too many bookings with reminders for the number today;
+ * `email_limit`: too many bookings made with the email address today).
  * Send the same `requestKey` on every retry of one form: a retry whose first try went through gets that booking back.
  */
 export function createBooking(body: CreateBookingRequest): Promise<CreateBookingResponse> {
   return request('POST', '/public/bookings', { body });
 }
 
-/** GET /public/bookings/:id?t=: a booking for its manage page. 404 for a wrong token. */
-export function getBooking(id: string, token: string, opts?: CallOptions): Promise<GetBookingResponse> {
-  return request('GET', `/public/bookings/${enc(id)}`, { query: { t: token }, signal: opts?.signal });
+/**
+ * GET /public/bookings/:id?t=: a booking for its manage page. 404 for a wrong token. `as: 'host'` when the
+ * page was opened from a host's link: for the signed-in owner the answer then allows what the dashboard does.
+ */
+export function getBooking(id: string, token: string, opts?: CallOptions & { as?: 'host' }): Promise<GetBookingResponse> {
+  return request('GET', `/public/bookings/${enc(id)}`, { query: { t: token, as: opts?.as }, signal: opts?.signal });
 }
 
 /**
@@ -402,9 +406,13 @@ export async function setNoShow(id: string, noShow: boolean): Promise<AdminBooki
   return unwrap(await request('POST', `/admin/bookings/${enc(id)}/no-show`, { body: { noShow } }), 'booking');
 }
 
-/** DELETE /admin/bookings/:id : erases a cancelled or past booking for good (refused with 409 for an upcoming one). */
-export async function deleteAdminBooking(id: string): Promise<void> {
-  await request('DELETE', `/admin/bookings/${enc(id)}`);
+/**
+ * DELETE /admin/bookings/:id : erases a cancelled or past booking for good (refused with 409 for an upcoming one).
+ * 409 `calendar_event_left`: the cancelled meeting's event could not be taken off Google Calendar. Ask the owner,
+ * then send `leaveCalendarEvent` to delete it anyway, with the event left where it is.
+ */
+export async function deleteAdminBooking(id: string, opts?: { leaveCalendarEvent?: boolean }): Promise<void> {
+  await request('DELETE', `/admin/bookings/${enc(id)}`, opts?.leaveCalendarEvent ? { query: { leaveCalendarEvent: 1 } } : {});
 }
 
 /** URL of the CSV export (GET /admin/bookings.csv). Use it as a download link. */

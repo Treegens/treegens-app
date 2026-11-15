@@ -1444,6 +1444,9 @@ describe('Google Calendar sync', () => {
       htmlLink: 'https://calendar.google.com/calendar/event?eid=abc',
       meetUrl: MEET_LINK,
       syncedAt: NOW,
+      // The time Google now holds, so work finished again later can tell it is already there.
+      syncedStart: WED_14,
+      syncedEnd: '2026-11-18T14:30:00.000Z',
     });
     expect(booking.location).toEqual({ type: 'google_meet', label: 'Google Meet', joinUrl: MEET_LINK });
     expect(booking.timeline.map((t) => t.type)).toEqual(['created', 'calendar_synced']);
@@ -1513,6 +1516,28 @@ describe('Google Calendar sync', () => {
     const body = eventCalls(calls, 'POST')[0].json;
     expect(body.attendees).toEqual([]);
     expect(body.description).toContain('What would you like to talk about? Trees &lt;b&gt;and&lt;/b&gt; more');
+    await ctx.settle();
+  });
+
+  it('gives the event a host\'s manage link when only the hosts are on it, and the plain one when the invitee is', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    const calls = net(ctx);
+    const manageLine = (description: string) => description.split('\n').find((l) => l.startsWith('Reschedule or cancel: '));
+
+    // Only the hosts see this event: whoever opens its link is a host, whose zone must stay off the invitee.
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, googleInvite: false }));
+    const hostsOnly = (await createBooking(ctx, request())).booking;
+    expect(manageLine(eventCalls(calls, 'POST').at(-1)!.json.description)).toBe(
+      `Reschedule or cancel: https://jimicohen.com/meeting/booking/${hostsOnly.id}?t=${manageToken(ctx, hostsOnly.id)}&as=host`,
+    );
+
+    // The invitee is on this one and Google mails them the description: their own link, unmarked.
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, googleInvite: true }));
+    const withInvitee = (await createBooking(ctx, request({ start: '2026-11-18T15:00:00.000Z', email: 'grace@example.com' }))).booking;
+    expect(manageLine(eventCalls(calls, 'POST').at(-1)!.json.description)).toBe(
+      `Reschedule or cancel: https://jimicohen.com/meeting/booking/${withInvitee.id}?t=${manageToken(ctx, withInvitee.id)}`,
+    );
     await ctx.settle();
   });
 
@@ -2897,6 +2922,82 @@ describe('moving a meeting from the booking page', () => {
     // Any host (or the invitee) may hold that link: the owner is told, unlike a cancellation in the dashboard.
     expect(emailsTo(calls, 'jimi@example.com')).toHaveLength(1);
     expect(calls.filter((c) => c.url.startsWith(TWILIO_ROOT) && c.url.includes('/Messages'))).toHaveLength(1);
+    // The booking page cannot know which host it was, so it names nobody.
+    expect((await toPublicBooking(ctx, cancelled)).cancellation).toEqual({ at: NOW, by: 'host', reason: 'Clash' });
+  });
+
+  it('lets the owner move a meeting the invitee may no longer move: past five moves, more than three an hour, after it started', async () => {
+    const ctx = await setup({ env: { overrides: { ...RESEND_ENV.overrides, ...TWILIO_ENV.overrides } } });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request({ timezone: 'America/New_York', phone: '+14155552671', consent: { sms: true, call: false } }));
+    for (let i = 0; i < 5; i++) {
+      if (i === 3) ctx.clock.advance(HOUR);
+      await rescheduleBooking(ctx, booking.id, { startIso: THU(10 + i), by: 'invitee' });
+    }
+    await ctx.settle();
+    calls.length = 0;
+    // The invitee, and a host's link without the owner's session, are held to the limit.
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: THU(16), by: 'invitee', actor: 'host' }))).toMatchObject({ status: 409, code: 'move_limit' });
+
+    // Four moves within a few minutes: neither the cap of five nor three an hour applies to the owner.
+    const owner = { by: 'host' as const, actor: 'owner' as const };
+    for (const start of [THU(16), '2026-11-20T10:00:00.000Z', '2026-11-20T11:00:00.000Z', '2026-11-20T12:00:00.000Z']) {
+      expect((await rescheduleBooking(ctx, booking.id, { startIso: start, ...owner, timezone: 'Africa/Nairobi' })).start).toBe(start);
+    }
+    await ctx.settle();
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.rescheduleCount).toBe(9);
+    // The owner's browser zone is not the invitee's, and the record says who did it and where.
+    expect(stored.invitee.timezone).toBe('America/New_York');
+    expect(stored.timeline.filter((t) => t.type === 'rescheduled').at(-1)?.detail).toBe('Moved from Friday, November 20, 2026 at 11:00 AM UTC by the owner, from the booking page');
+    expect(stored.followUp).toBeUndefined();
+    // The invitee hears about each move by email and, since someone else moved it, by text.
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(4);
+    expect(calls.filter((c) => c.url.startsWith(TWILIO_ROOT) && c.url.includes('/Messages'))).toHaveLength(4);
+
+    // Once the meeting has started, the invitee can no longer move it; the owner still can, to a time that is
+    // bookable by the usual rules (four hours' notice on this meeting type).
+    ctx.clock.set('2026-11-20T12:05:00.000Z');
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: '2026-11-23T10:00:00.000Z', by: 'invitee' }))).toMatchObject({ status: 410, code: 'too_late' });
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: '2026-11-20T14:00:00.000Z', ...owner }))).toMatchObject({ status: 409, code: 'slot_taken' });
+    expect((await rescheduleBooking(ctx, booking.id, { startIso: '2026-11-23T10:00:00.000Z', ...owner })).start).toBe('2026-11-23T10:00:00.000Z');
+    await ctx.settle();
+  });
+
+  it('lets the owner cancel from the booking page after the meeting started, recorded as the owner\'s and without a notice to the owner', async () => {
+    const ctx = await setup({ env: { overrides: { ...RESEND_ENV.overrides, ...TWILIO_ENV.overrides } } });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request({ phone: '+14155552671', consent: { sms: true, call: false } }));
+    await ctx.settle();
+    calls.length = 0;
+    ctx.clock.set('2026-11-18T14:05:00.000Z');
+    expect(await failure(cancelBooking(ctx, booking.id, { by: 'invitee', actor: 'host' }))).toMatchObject({ status: 410, code: 'too_late' });
+
+    const cancelled = await cancelBooking(ctx, booking.id, { by: 'host', actor: 'owner', reason: 'Ran late' });
+    await ctx.settle();
+    expect(cancelled.cancellation).toEqual({ at: '2026-11-18T14:05:00.000Z', by: 'host', reason: 'Ran late' });
+    expect(cancelled.timeline.find((t) => t.type === 'cancelled')?.detail).toBe('Cancelled by the owner, from the booking page: Ran late');
+    expect(emailsTo(calls, 'jimi@example.com')).toEqual([]);
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
+    expect(calls.filter((c) => c.url.startsWith(TWILIO_ROOT) && c.url.includes('/Messages'))).toHaveLength(1);
+    // The booking page knows who that was, as it does for a cancellation in the dashboard.
+    expect((await toPublicBooking(ctx, cancelled)).cancellation).toEqual({ at: '2026-11-18T14:05:00.000Z', by: 'host', reason: 'Ran late', byName: 'Jimi Cohen' });
+  });
+
+  it('opens the owner\'s view of the booking page with what the dashboard allows, and everyone else\'s with the invitee\'s deadline', async () => {
+    const ctx = await setup();
+    const { booking } = await createBooking(ctx, request());
+    ctx.clock.set('2026-11-18T14:05:00.000Z');
+    const invitee = (await getManageView(ctx, booking.id))!.booking;
+    expect([invitee.canReschedule, invitee.canCancel]).toEqual([false, false]);
+    const owner = (await getManageView(ctx, booking.id, { owner: true }))!.booking;
+    expect([owner.canReschedule, owner.canCancel]).toEqual([true, true]);
+    await cancelBooking(ctx, booking.id, { by: 'host', actor: 'owner' });
+    const after = (await getManageView(ctx, booking.id, { owner: true }))!.booking;
+    expect([after.canReschedule, after.canCancel]).toEqual([false, false]);
+    await ctx.settle();
   });
 
   // The two interleavings of overlapping moves that matter. R1 (to Thursday) stalls at the marked point,
@@ -3006,6 +3107,64 @@ describe('follow-up work after a change', () => {
     // Done is done.
     ctx.clock.advance(30 * 60_000);
     expect((await reconcileBookings(ctx)).finished).toBeUndefined();
+  });
+
+  it('finishes such a move without changing the Google event again, so attendees get one "updated" email, not two', async () => {
+    const kv = failingKV((key) => key.startsWith('jobs/'));
+    const ctx = await setup({ kv, env: { overrides: { ...GOOGLE_ENV.overrides, ...RESEND_ENV.overrides } } });
+    await useResend(ctx);
+    await connectGoogle(ctx, OWNER);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+    kv.failing = true;
+    const moved = await rescheduleBooking(ctx, booking.id, { startIso: NEW_START, by: 'invitee' });
+    kv.failing = false;
+    expect(moved.followUp).toMatchObject({ kind: 'rescheduled' });
+    // Google has the new time: it was changed once, telling every attendee.
+    const patches = () => eventCalls(calls, 'PATCH').map((c) => new URL(c.url).searchParams.get('sendUpdates'));
+    expect(patches()).toEqual(['all']);
+    expect(moved.google).toMatchObject({ syncedStart: NEW_START, syncedEnd: '2026-11-19T10:15:00.000Z' });
+
+    ctx.clock.advance(11 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ finished: 1 });
+    await ctx.settle();
+    expect(patches()).toEqual(['all']);
+    expect(emailsTo(calls, 'ada@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^New time: Intro call/)]);
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.followUp).toBeUndefined();
+    expect(stored.google?.error).toBeUndefined();
+    expect(stored.timeline.filter((t) => t.type === 'calendar_updated')).toHaveLength(1);
+  });
+
+  it('does tell Google when it finishes a move whose calendar change did not get through the first time', async () => {
+    const kv = failingKV((key) => key.startsWith('jobs/'));
+    const ctx = await setup({ kv, env: { overrides: { ...GOOGLE_ENV.overrides, ...RESEND_ENV.overrides } } });
+    await useResend(ctx);
+    await connectGoogle(ctx, OWNER);
+    let googleDown = false;
+    const calls = net(ctx, (call) => (googleDown && call.method === 'PATCH' ? jsonResponse({ error: { code: 500 } }, 500) : undefined));
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+    googleDown = true;
+    kv.failing = true;
+    const moved = await rescheduleBooking(ctx, booking.id, { startIso: NEW_START, by: 'invitee' });
+    kv.failing = false;
+    googleDown = false;
+    expect(moved.google?.error).toBeTruthy();
+    expect(moved.google?.syncedStart).toBe(WED_14);
+
+    ctx.clock.advance(11 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ finished: 1 });
+    await ctx.settle();
+    const sent = eventCalls(calls, 'PATCH');
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.at(-1)!.json.start).toEqual({ dateTime: NEW_START, timeZone: 'UTC' });
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.google).toMatchObject({ syncedStart: NEW_START });
+    expect(stored.google?.error).toBeUndefined();
   });
 
   it('finishes the confirmation of a new booking whose messages could not be queued', async () => {
@@ -3144,6 +3303,60 @@ describe('follow-up work after a change', () => {
     // Nothing left to repair.
     ctx.clock.advance(3 * HOUR);
     expect(await reconcileBookings(ctx)).toMatchObject({ requeued: 0 });
+  });
+
+  it('removes the calendar event later when the calendar step of a cancellation broke and its retry could not be queued either', async () => {
+    // The calendar step stops on an unexpected error (here the event types cannot be read) before it notes any
+    // problem, and the gcal_sync job that would repeat it cannot be written. Only the note the cancellation's
+    // own save leaves on the booking tells reconcileBookings there is still an event to remove.
+    const inner = memoryKV();
+    let breakSync = false;
+    let breakRetry = false;
+    const kv: KV = {
+      ...inner,
+      async getJSON<T>(key: string) {
+        if (breakSync && key === 'event-types') {
+          breakSync = false;
+          throw new Error('storage read failed');
+        }
+        return inner.getJSON<T>(key);
+      },
+      async setJSON(key, value, opts) {
+        if (breakRetry && key.startsWith('jobs/') && (value as Partial<Job> | null)?.type === 'gcal_sync') {
+          breakRetry = false;
+          throw new Error('storage write failed');
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    const ctx = await setup({ kv, env: { overrides: { ...GOOGLE_ENV.overrides, ...RESEND_ENV.overrides } } });
+    await useResend(ctx);
+    await connectGoogle(ctx, OWNER);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+
+    breakSync = true;
+    breakRetry = true;
+    const cancelled = await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    await ctx.settle();
+    expect([breakSync, breakRetry]).toEqual([false, false]);
+    expect(eventCalls(calls, 'DELETE')).toEqual([]);
+    expect(await jobsOf(ctx, (j) => j.type === 'gcal_sync')).toEqual([]);
+    // Everything else was done, so the follow-up marker is off: the note is what is left.
+    expect(cancelled.followUp).toBeUndefined();
+    expect(cancelled.google?.error).toBe('Google Calendar did not answer in time. Trying again shortly.');
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
+
+    ctx.clock.advance(5 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ requeued: 1 });
+    await runDueJobs(ctx);
+    await ctx.settle();
+    expect(eventCalls(calls, 'DELETE')).toHaveLength(1);
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.google?.error).toBeUndefined();
+    expect(stored.timeline.map((t) => t.type)).toContain('calendar_event_removed');
   });
 });
 

@@ -19,12 +19,14 @@ import {
   Trash2,
   UserX,
 } from 'lucide-react';
+import { calendarEventLeft } from '../../../shared/calendar';
 import type { AdminBooking, TimelineEntry } from '../../../shared/types';
-import { adminCancelBooking, deleteAdminBooking, errorMessage, getAdminBooking, setNoShow } from '../../lib/api';
+import { APP_BASE, adminCancelBooking, deleteAdminBooking, errorMessage, getAdminBooking, isApiFailure, setNoShow } from '../../lib/api';
 import { formatDateLong, formatDateMedium, formatRange, formatTime, zoneCity, zoneLabel } from '../../lib/tz';
 import { Avatar, Badge, Button, ButtonLink, ConfirmDialog, CopyButton, Drawer, EmptyState, Field, Skeleton, Textarea, cx, useToast } from '../../ui';
 import { describeTimeline, describeTimelineDetail, namesList, rescheduleUrlOf } from '../format';
 import type { TimelineIcon } from '../format';
+import { useAdmin } from '../state';
 import { locationIcon } from './BookingRow';
 
 const ICONS: Record<TimelineIcon, ReactNode> = {
@@ -40,9 +42,20 @@ const ICONS: Record<TimelineIcon, ReactNode> = {
   dot: <CircleDot size={14} />,
 };
 
-/** The manage link as a host opens it: the booking page then keeps the host's zone off the invitee and records changes as a host's. */
+/**
+ * The manage link as a host opens it: the booking page then keeps the host's zone off the invitee and records
+ * changes as a host's. It opens on the address this dashboard runs on (the public one or the app's own), so the
+ * owner's session goes along and the page gives the owner the dashboard's rights instead of the invitee's limits.
+ */
 function asHostUrl(manageUrl: string): string {
-  return /[?&]as=host(?:&|$)/.test(manageUrl) ? manageUrl : `${manageUrl}${manageUrl.includes('?') ? '&' : '?'}as=host`;
+  const marked = /[?&]as=host(?:&|$)/.test(manageUrl) ? manageUrl : `${manageUrl}${manageUrl.includes('?') ? '&' : '?'}as=host`;
+  try {
+    const target = new URL(marked);
+    if (target.origin === window.location.origin || !target.pathname.startsWith(`${APP_BASE}/booking/`)) return marked;
+    return `${window.location.origin}${target.pathname}${target.search}`;
+  } catch {
+    return marked;
+  }
 }
 
 export interface BookingDrawerProps {
@@ -61,11 +74,14 @@ export interface BookingDrawerProps {
 
 export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, onDeleted }: BookingDrawerProps) {
   const toast = useToast();
+  const { data, ownerHost } = useAdmin();
   const [booking, setBooking] = useState<AdminBooking | null>(preview ?? null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // The second question: the event could not be taken off Google Calendar, delete anyway?
+  const [leaveOpen, setLeaveOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -90,13 +106,24 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, on
   // Only what is over or cancelled can be erased. An upcoming meeting is cancelled first (the server says so too).
   const deletable = !!b && (b.status === 'cancelled' || past);
 
-  const remove = async () => {
+  // Whose Google Calendar the event of this booking is on, for the question about leaving it there.
+  const holder = b?.google ? data.hosts.find((h) => h.id === b.google?.hostId) : undefined;
+  const whose = !holder ? "the host's" : holder.id === ownerHost.id ? 'your' : `${holder.name}'s`;
+
+  const remove = async (leaveCalendarEvent = false) => {
     if (!b) return;
     try {
-      await deleteAdminBooking(b.id);
+      await deleteAdminBooking(b.id, leaveCalendarEvent ? { leaveCalendarEvent: true } : undefined);
       toast.success('Booking deleted', `${b.invitee.name}'s details, answers and call records are gone from this app.`);
       onDeleted?.(b.id);
     } catch (e) {
+      // Google could not take the event off the calendar, even on a fresh try. Deleting is still the
+      // owner's call: ask once more, saying plainly that the event stays.
+      if (!leaveCalendarEvent && isApiFailure(e, 'calendar_event_left')) {
+        setDeleteOpen(false);
+        setLeaveOpen(true);
+        return;
+      }
       toast.error('Could not delete the booking', errorMessage(e));
       throw e;
     }
@@ -221,7 +248,7 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, on
       <ConfirmDialog
         open={deleteOpen && deletable}
         onClose={() => setDeleteOpen(false)}
-        onConfirm={remove}
+        onConfirm={() => remove()}
         tone="danger"
         title="Delete this booking for good?"
         description={
@@ -231,6 +258,17 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, on
         }
         confirmLabel="Delete booking"
         cancelLabel="Keep it"
+      />
+
+      <ConfirmDialog
+        open={leaveOpen && deletable}
+        onClose={() => setLeaveOpen(false)}
+        onConfirm={() => remove(true)}
+        tone="danger"
+        title="The calendar event could not be removed"
+        description={`The event is still on ${whose} Google Calendar and will stay there. Remove it by hand. Delete the booking anyway?`}
+        confirmLabel="Delete anyway"
+        cancelLabel="Cancel"
       />
     </>
   );
@@ -254,6 +292,7 @@ function StatusBadges({ booking }: { booking: AdminBooking }) {
 function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) {
   const sameZone = b.invitee.timezone === zone;
   const timeline = b.timeline.slice().sort((x, y) => y.at.localeCompare(x.at));
+  const leftOnCalendar = calendarEventLeft(b);
 
   return (
     <div className="adm-bk__body">
@@ -351,7 +390,16 @@ function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) 
         <div>
           <dt>Calendar</dt>
           <dd>
-            {b.google?.error ? (
+            {b.status === 'cancelled' ? (
+              // A cancelled meeting's event should be gone: say so when it is still there.
+              leftOnCalendar ? (
+                <span className="adm-bk__warn">
+                  <CircleAlert size={14} aria-hidden="true" /> Still on Google Calendar: {leftOnCalendar}
+                </span>
+              ) : (
+                <span className="adm-quiet">Removed</span>
+              )
+            ) : b.google?.error ? (
               <span className="adm-bk__warn">
                 <CircleAlert size={14} aria-hidden="true" /> Not on Google Calendar yet: {b.google.error}
               </span>
@@ -364,7 +412,7 @@ function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) 
                 <span>On Google Calendar</span>
               )
             ) : (
-              <span className="adm-quiet">{b.status === 'cancelled' ? 'Removed' : 'Not connected'}</span>
+              <span className="adm-quiet">Not connected</span>
             )}
           </dd>
         </div>

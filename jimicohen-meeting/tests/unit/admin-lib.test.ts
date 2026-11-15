@@ -21,9 +21,11 @@ import { seal } from '../../server/lib/crypto';
 import { HttpError } from '../../server/lib/http';
 import { putAsset } from '../../server/lib/repo';
 import { FieldErrors } from '../../server/lib/validate';
+import { calendarEventLeft } from '../../shared/calendar';
 import { DEFAULT_THEME, defaultOwnerHost, newEventType } from '../../shared/defaults';
 import type { AdminHost, Booking, BookingIndexEntry, EventType, Host, Job } from '../../shared/types';
 import { hostGap, unreachableHosts } from '../../src/admin/components/event/reach';
+import { askSharedHours, currentAnswer, sharedHoursKey } from '../../src/admin/components/event/sharedHours';
 import { describeTimelineDetail } from '../../src/admin/format';
 import { makeTestCtx, TEST_NOW } from '../helpers/ctx';
 
@@ -345,6 +347,82 @@ describe('joint meeting hours', () => {
       '"Together" cannot be booked: you and Sam have no working hours for it on the dates it can be booked. Set your hours under Availability, and ask Sam to set theirs on their private page. The dates on its Scheduling tab count too.',
     );
   });
+
+  describe('in the editor (Hosts and Scheduling tabs)', () => {
+    const asAdmin = (h: Host): AdminHost => toAdminHost(makeTestCtx(), h);
+    const alex = coHost('host_alex', 'Alex Rivera', 'Europe/Berlin');
+    const sam = coHost('host_sam', 'Sam Lee', 'Asia/Tokyo');
+    const team = [owner, alex, sam].map(asAdmin);
+    const draft = joint([owner.id, alex.id]);
+    const NO_OVERLAP = { ok: false, reason: 'no_overlap', message: '"Together" cannot be booked.', href: '/admin/availability' } as const;
+    const AFTERNOONS = { 0: [], 1: [{ start: '13:00', end: '17:00' }], 2: [], 3: [], 4: [], 5: [], 6: [] };
+
+    it('asks again for a change on either tab, and only for a joint meeting', () => {
+      const key = sharedHoursKey(draft, team);
+      expect(key).not.toBe('');
+      // Nothing to check for one host, or for any other kind of meeting.
+      expect(sharedHoursKey({ ...draft, hostIds: [owner.id] }, team)).toBe('');
+      expect(sharedHoursKey({ ...draft, kind: 'round_robin' }, team)).toBe('');
+      expect(sharedHoursKey({ ...draft, kind: 'solo' }, team)).toBe('');
+      // The Scheduling tab: limited hours, fixed dates, another schedule for a host.
+      expect(sharedHoursKey({ ...draft, scheduling: { ...draft.scheduling, restrictHours: AFTERNOONS } }, team)).not.toBe(key);
+      expect(sharedHoursKey({ ...draft, scheduling: { ...draft.scheduling, dateRange: { start: '2026-12-05', end: '2026-12-06' } } }, team)).not.toBe(key);
+      expect(sharedHoursKey({ ...draft, scheduling: { ...draft.scheduling, scheduleIds: { host_alex: 'sch_evenings' } } }, team)).not.toBe(key);
+      // The Hosts tab, and the lengths.
+      expect(sharedHoursKey({ ...draft, hostIds: [owner.id, sam.id] }, team)).not.toBe(key);
+      expect(sharedHoursKey({ ...draft, durations: [60] }, team)).not.toBe(key);
+      // A chosen host's own zone moved (another page, a refresh). Somebody who is not on the meeting does not count, nor does the title.
+      expect(sharedHoursKey(draft, [owner, { ...alex, timezone: 'America/New_York' }, sam].map(asAdmin))).not.toBe(key);
+      expect(sharedHoursKey(draft, [owner, alex, { ...sam, timezone: 'UTC' }].map(asAdmin))).toBe(key);
+      expect(sharedHoursKey({ ...draft, title: 'A new name' }, team)).toBe(key);
+    });
+
+    it('never shows an answer about the draft as it was before an edit', () => {
+      const before = sharedHoursKey(draft, team);
+      const after = sharedHoursKey({ ...draft, scheduling: { ...draft.scheduling, restrictHours: AFTERNOONS } }, team);
+      const held = { key: before, answer: NO_OVERLAP };
+      expect(currentAnswer(before, held)).toEqual(NO_OVERLAP);
+      // The edit starts a new check: the old warning goes at once, and nothing is shown until the new answer is in.
+      expect(currentAnswer(after, held)).toBeNull();
+      expect(currentAnswer(after, { key: after, answer: { ok: true } })).toEqual({ ok: true });
+      // No longer a joint meeting: nothing at all.
+      expect(currentAnswer('', held)).toBeNull();
+      expect(currentAnswer(before, null)).toBeNull();
+    });
+
+    it('says the check could not run when it fails, and nothing when the draft moved on in the meantime', async () => {
+      const sent: unknown[] = [];
+      const answered = await askSharedHours(draft, async (body) => {
+        sent.push(body);
+        return NO_OVERLAP;
+      }, new AbortController().signal);
+      expect(answered).toEqual(NO_OVERLAP);
+      // Only what decides when people can be booked, and the title for the message.
+      expect(Object.keys(sent[0] as object).sort()).toEqual(['durations', 'hostIds', 'id', 'kind', 'scheduling', 'title']);
+
+      // The server or the network failed: that is said, so the notice of an earlier answer does not stay.
+      const offline = async (): Promise<never> => {
+        throw new Error('Could not reach the server.');
+      };
+      expect(await askSharedHours(draft, offline, new AbortController().signal)).toBe('failed');
+      // Called off because the draft changed again: neither an answer nor a failure.
+      const called = new AbortController();
+      expect(
+        await askSharedHours(draft, async (_body, { signal }) => {
+          called.abort();
+          if (signal.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+          return NO_OVERLAP;
+        }, called.signal),
+      ).toBeNull();
+      const late = new AbortController();
+      expect(
+        await askSharedHours(draft, async () => {
+          late.abort();
+          return NO_OVERLAP;
+        }, late.signal),
+      ).toBeNull();
+    });
+  });
 });
 
 describe('reminders to the hosts', () => {
@@ -443,9 +521,27 @@ describe('deleting a booking', () => {
     expect(eraseRefusal(cancelled, [job({ kind: 'cancelled' })], at)?.code).toBe('still_cancelling');
     expect(eraseRefusal(cancelled, [job({ type: 'gcal_sync' })], at)?.code).toBe('still_cancelling');
     expect(eraseRefusal({ ...cancelled, followUp: { kind: 'cancelled', id: 'f', at: TEST_NOW } }, [], at)?.code).toBe('still_cancelling');
-    const left = eraseRefusal({ ...cancelled, google: { hostId: 'h', calendarId: 'primary', eventId: 'e', error: 'Google Calendar did not answer in time. Trying again shortly.' } }, [], at);
+    const stuck = { ...cancelled, google: { hostId: 'h', calendarId: 'primary', eventId: 'e', error: 'Google Calendar did not answer in time. Trying again shortly.' } };
+    const left = eraseRefusal(stuck, [], at);
     expect(left?.code).toBe('calendar_event_left');
+    expect(left?.message).toContain('Google Calendar did not answer in time.');
     expect(left?.message).not.toContain('—');
+    // The calendar retry queued for that event is the same trouble, which the owner may choose to leave: not "still cancelling".
+    expect(eraseRefusal(stuck, [job({ type: 'gcal_sync' })], at)?.code).toBe('calendar_event_left');
+    // Telling people is not something to skip, event or not.
+    expect(eraseRefusal(stuck, [job({ kind: 'cancelled' })], at)?.code).toBe('still_cancelling');
+    // Google was disconnected: the error is gone, the event is not.
+    const leftThere = { at: TEST_NOW, type: 'calendar_event_left', detail: 'Google Calendar is no longer connected, so the event was not removed.' };
+    const disconnected = { ...cancelled, google: { hostId: 'h', calendarId: 'primary', eventId: 'e' }, timeline: [leftThere] };
+    expect(calendarEventLeft(disconnected)).toBe('Google Calendar is no longer connected, so the event was not removed.');
+    expect(eraseRefusal(disconnected, [], at)?.code).toBe('calendar_event_left');
+    // Taken off later after all (Google reconnected): nothing is left.
+    const removedLater = { ...disconnected, timeline: [leftThere, { at: TEST_NOW, type: 'calendar_event_removed' }] };
+    expect(calendarEventLeft(removedLater)).toBeNull();
+    expect(eraseRefusal(removedLater, [], at)).toBeNull();
+    // An event a round robin move left on a former host's calendar is no longer the booking's (google is null then).
+    expect(calendarEventLeft({ ...cancelled, google: null, timeline: [leftThere] })).toBeNull();
+    expect(calendarEventLeft({ ...disconnected, status: 'confirmed' })).toBeNull();
     // Cancelled and in the past: whatever is left of the cancellation no longer matters.
     const past = { start: new Date(at - 7_200_000).toISOString(), end: new Date(at - 3_600_000).toISOString() };
     expect(eraseRefusal({ ...cancelled, ...past, followUp: { kind: 'cancelled', id: 'f', at: TEST_NOW } }, [job({ kind: 'cancelled' })], at)).toBeNull();

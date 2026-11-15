@@ -25,12 +25,12 @@ import { DateTime } from 'luxon';
 import { DEFAULT_ASSISTANT } from '../../shared/defaults';
 import type { AssistantSettings, Booking, CallRecord, Host, IanaZone, SendResult, SiteSettings } from '../../shared/types';
 import { cancelBooking, confirmAttendance } from './booking';
-import { randomId } from './crypto';
+import { randomId, sha256Hex } from './crypto';
 import type { Ctx } from './ctx';
 import { HttpError, readForm } from './http';
 import { enqueueJob, runDueJobs } from './jobs';
-import { outboundAllowed } from './outbound';
-import { cacheGet, cacheSet, claim, getBooking, getCall, getSecrets, getSite, listHosts, saveCall, updateBooking } from './repo';
+import { reserveOutbound } from './outbound';
+import { cacheGet, cacheSet, claim, getBooking, getCall, getSecrets, getSite, listHosts, releaseClaim, saveCall, updateBooking } from './repo';
 import { addDays, formatInZone, isValidZone, localDateOf } from './time';
 import {
   blockNumber,
@@ -900,17 +900,19 @@ async function modelMove(ctx: Ctx, apiKey: string, call: StoredCall, callerText:
 
 // ───────────────────────── follow-up messages ─────────────────────────
 
+/**
+ * A fixed job id for a message that a repeated webhook may queue again: a copy queued after a write
+ * whose answer was lost shares its "sent" marker and attempt claims with the first one, so it goes out once.
+ */
+function onceJobId(name: string): string {
+  return `job_${sha256Hex(name).slice(0, 20)}`;
+}
+
 /** Sends the invitee their reschedule and cancel link: by text when they agreed to texts, otherwise by email. */
-async function queueManageLink(ctx: Ctx, booking: Booking): Promise<void> {
+async function queueManageLink(ctx: Ctx, booking: Booking, opts?: { id?: string }): Promise<void> {
   const byText = booking.consent?.sms === true && !!booking.invitee.phone?.trim();
-  await enqueueJob(ctx, {
-    type: 'message',
-    bookingId: booking.id,
-    dueAt: ctx.now().toISOString(),
-    channel: byText ? 'sms' : 'email',
-    audience: 'invitee',
-    kind: 'manage_link',
-  });
+  const job = { type: 'message', bookingId: booking.id, dueAt: ctx.now().toISOString(), channel: byText ? 'sms' : 'email', audience: 'invitee', kind: 'manage_link' } as const;
+  await (opts?.id ? enqueueJob(ctx, job, { id: opts.id }) : enqueueJob(ctx, job));
   // The assistant has just said the link is on its way, so do not wait for the next scheduled run.
   ctx.waitUntil(
     runDueJobs(ctx, { onlyBookingId: booking.id, budgetMs: 8000 }).catch((err) => {
@@ -957,8 +959,8 @@ const HOST_ALERTS: Record<HostAlert, { subject: string; body: string }> = {
   },
 };
 
-async function queueHostAlert(ctx: Ctx, bookingId: string, kind: HostAlert): Promise<void> {
-  await enqueueJob(ctx, {
+async function queueHostAlert(ctx: Ctx, bookingId: string, kind: HostAlert, opts?: { id?: string }): Promise<void> {
+  const job = {
     type: 'message',
     bookingId,
     dueAt: ctx.now().toISOString(),
@@ -967,12 +969,18 @@ async function queueHostAlert(ctx: Ctx, bookingId: string, kind: HostAlert): Pro
     kind: 'host_alert',
     subject: HOST_ALERTS[kind].subject,
     body: HOST_ALERTS[kind].body,
-  });
+  } as const;
+  await (opts?.id ? enqueueJob(ctx, job, { id: opts.id }) : enqueueJob(ctx, job));
 }
 
+/** Adds a timeline entry. One about a call is added once: a repeat of the same entry for the same call changes nothing. */
 async function addTimeline(ctx: Ctx, bookingId: string, type: string, detail: string, callId?: string): Promise<void> {
   const entry = { at: ctx.now().toISOString(), type, ...(detail ? { detail } : {}), ...(callId ? { callId } : {}) };
-  await updateBooking(ctx, bookingId, (b) => ({ ...b, timeline: [...(b.timeline ?? []), entry] }));
+  await updateBooking(ctx, bookingId, (b) => {
+    const timeline = b.timeline ?? [];
+    if (callId && timeline.some((e) => e.type === type && e.callId === callId)) return b;
+    return { ...b, timeline: [...timeline, entry] };
+  });
 }
 
 // ───────────────────────── placing a call ─────────────────────────
@@ -1018,28 +1026,36 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
     if (!withinCallWindow(now, booking.invitee.timezone, { ...DEFAULT_ASSISTANT, ...(site.assistant ?? {}) })) return skip('outside_call_window');
     if (await isNumberBlocked(ctx, to, 'call')) return skip('opted_out');
     if (await cacheGet(ctx, `call-recent-${booking.id}`)) return skip('already_called');
-    // A daily ceiling per number and for the whole site (server/lib/outbound.ts). Counted last, so only
-    // a call that is really about to be placed uses up the allowance.
-    if (!(await outboundAllowed(ctx, 'call', to))) return skip('daily_limit');
   }
+  // A daily ceiling per number and for the whole site (server/lib/outbound.ts). Counted last, so only
+  // a call that is really about to be placed uses up the allowance, and given back below when the
+  // call does not go out after all, so a retry after a failure is counted once.
+  const pass = purpose === 'reminder' ? await reserveOutbound(ctx, 'call', to) : null;
+  if (purpose === 'reminder' && !pass) return skip('daily_limit');
 
   const nowIso = ctx.now().toISOString();
-  const call: StoredCall = {
-    id: randomId('call'),
-    bookingId: booking.id,
-    to,
-    status: 'queued',
-    turns: [],
-    pendingCancel: false,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    purpose,
-    script: buildCallScript({ booking, site, hosts, purpose }),
-    emptyCount: 0,
-    linkSent: false,
-    ended: false,
-  };
-  await saveCall(ctx, call);
+  let call: StoredCall;
+  try {
+    call = {
+      id: randomId('call'),
+      bookingId: booking.id,
+      to,
+      status: 'queued',
+      turns: [],
+      pendingCancel: false,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      purpose,
+      script: buildCallScript({ booking, site, hosts, purpose }),
+      emptyCount: 0,
+      linkSent: false,
+      ended: false,
+    };
+    await saveCall(ctx, call);
+  } catch (err) {
+    await pass?.release();
+    throw err;
+  }
 
   let created: any;
   try {
@@ -1065,6 +1081,8 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
       if (purpose === 'reminder') await cacheSet(ctx, `call-recent-${booking.id}`, { callId: call.id }, RECENT_CALL_TTL_SEC).catch(() => undefined);
       return { ok: false, provider: account.provider, error: err.message };
     }
+    // Twilio refused it or never got it: nothing rings, so it does not count against today's limits.
+    await pass?.release();
     await mutateCall(ctx, call.id, (c) => ({ ...c, status: 'failed', ended: true })).catch(() => null);
     if (err instanceof TwilioError) {
       const permanent = err.code !== null ? PERMANENT_CALL_ERRORS[err.code] : undefined;
@@ -1509,18 +1527,9 @@ async function stepStatus(ctx: Ctx, call: StoredCall, form: URLSearchParams): Pr
       ...(Number.isFinite(duration) && duration >= 0 ? { durationSec: Math.round(duration) } : {}),
     };
   });
-  if (!finished) return ack();
-  // Twilio can deliver the final status more than once. The follow-up below happens once.
-  if (!(await claim(ctx, `call-final-${call.id}`))) return ack();
-  if (finished.purpose !== 'reminder') return ack();
+  if (!finished || finished.purpose !== 'reminder') return ack();
 
   const note = timelineFor(finished);
-  try {
-    await addTimeline(ctx, finished.bookingId, note.type, note.detail, finished.id);
-  } catch (err) {
-    ctx.log('error', 'voice: could not write the call to the booking timeline', { callId: call.id, error: shortError(err) });
-  }
-
   const unfinishedCancel = finished.pendingCancel && finished.outcome !== 'cancelled' && !finished.cancelFailed;
   const alert: HostAlert | null = finished.cancelFailed
     ? 'cancel_failed'
@@ -1531,16 +1540,41 @@ async function stepStatus(ctx: Ctx, call: StoredCall, form: URLSearchParams): Pr
         : finished.outcome === 'reschedule_requested'
           ? 'reschedule'
           : null;
-  try {
-    if ((unfinishedCancel || finished.cancelFailed) && !finished.linkSent) {
-      const booking = await liveBooking(ctx, finished);
-      if (booking) await queueManageLink(ctx, booking);
-    }
-    if (alert) await queueHostAlert(ctx, finished.bookingId, alert);
-  } catch (err) {
-    ctx.log('error', 'voice: could not queue the follow-up after a call', { callId: call.id, error: shortError(err) });
+  const sendLink = (unfinishedCancel || finished.cancelFailed) && !finished.linkSent;
+  // Twilio can deliver the final status more than once: each follow-up happens once, under its own
+  // claim. A follow-up whose write fails gives its claim back, and the answer is an error, so a repeat
+  // of this status can still record the outcome instead of finding the claim taken and doing nothing.
+  // The messages are queued under ids fixed by their claim, so a repeat after a write whose answer was
+  // lost (it went through after all) queues a copy that cannot go out a second time.
+  const followUps: { name: string; what: string; work: () => Promise<void> }[] = [
+    { name: `call-final-${call.id}`, what: 'write the call to the booking timeline', work: () => addTimeline(ctx, finished.bookingId, note.type, note.detail, finished.id) },
+  ];
+  if (sendLink) {
+    followUps.push({
+      name: `call-final-link-${call.id}`,
+      what: 'queue the link after the call',
+      work: async () => {
+        const booking = await liveBooking(ctx, finished);
+        if (booking) await queueManageLink(ctx, booking, { id: onceJobId(`call-final-link-${call.id}`) });
+      },
+    });
   }
-  return ack();
+  if (alert) followUps.push({ name: `call-final-alert-${call.id}`, what: 'queue the host alert after the call', work: () => queueHostAlert(ctx, finished.bookingId, alert, { id: onceJobId(`call-final-alert-${call.id}`) }) });
+
+  let failed = false;
+  for (const step of followUps) {
+    if (!(await claim(ctx, step.name))) continue;
+    try {
+      await step.work();
+    } catch (err) {
+      failed = true;
+      ctx.log('error', `voice: could not ${step.what}`, { callId: call.id, error: shortError(err) });
+      await releaseClaim(ctx, step.name).catch((releaseErr) =>
+        ctx.log('error', 'voice: could not give back the claim of a follow-up that failed', { callId: call.id, error: shortError(releaseErr) }),
+      );
+    }
+  }
+  return failed ? new Response(null, { status: 500, headers: { 'Cache-Control': 'no-store' } }) : ack();
 }
 
 // ───────────────────────── entry point ─────────────────────────

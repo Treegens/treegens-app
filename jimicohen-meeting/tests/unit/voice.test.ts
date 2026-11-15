@@ -1351,6 +1351,64 @@ describe('status', () => {
     expect((await getBooking(ctx, 'bk_1'))?.timeline[0].detail).toContain('The call ended without a decision.');
     expect(enqueue).not.toHaveBeenCalled();
   });
+
+  it('still records the outcome on a repeat of the status when writing it failed the first time', async () => {
+    const { ctx, callId } = await answered();
+    await hook(ctx, 'turn', callId, { SpeechResult: "Yes, I'll be there" });
+    const realSet = ctx.kv.setJSON.bind(ctx.kv);
+    let broken = true;
+    ctx.kv.setJSON = (async (key: string, value: unknown, opts?: Parameters<typeof realSet>[2]) => {
+      if (broken && key === 'bookings/bk_1') {
+        broken = false;
+        throw new Error('storage hiccup');
+      }
+      return realSet(key, value, opts);
+    }) as typeof ctx.kv.setJSON;
+
+    // The write fails: nothing is recorded, and Twilio is told so.
+    expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '27' })).status).toBe(500);
+    expect((await getBooking(ctx, 'bk_1'))?.timeline).toEqual([]);
+    // The claim was given back, so the repeat records it, once.
+    expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '27' })).status).toBe(204);
+    expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '27' })).status).toBe(204);
+    expect((await getBooking(ctx, 'bk_1'))?.timeline).toEqual([{ at: NOW, type: 'call_completed', callId, detail: 'They confirmed they are coming. Call length: 27 seconds.' }]);
+  });
+
+  it('still alerts the host on a repeat of the status when queueing the alert failed, without writing the outcome twice', async () => {
+    const { ctx, callId } = await answered();
+    await hook(ctx, 'turn', callId, { Digits: '2' });
+    enqueue.mockClear();
+    enqueue.mockRejectedValueOnce(new Error('storage hiccup'));
+    expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '15' })).status).toBe(500);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '15' })).status).toBe(204);
+    await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '15' });
+    expect(enqueue).toHaveBeenCalledTimes(2); // the failed try and the one that worked
+    expect(enqueue.mock.calls[1][1]).toMatchObject({ kind: 'host_alert', subject: '{{invitee_name}} asked to move {{event_name}}' });
+    expect((await getBooking(ctx, 'bk_1'))?.timeline.map((e) => e.type)).toEqual(['call_completed']);
+  });
+
+  it('queues the link and the alert after a call under fixed ids, so a repeat after a lost answer cannot send them twice', async () => {
+    const { ctx, callId } = await answered();
+    await hook(ctx, 'turn', callId, { SpeechResult: 'I want to cancel' });
+    enqueue.mockClear();
+    // Both writes went through, but their answers were lost: the webhook sees errors and gives the claims back.
+    enqueue.mockImplementationOnce(async () => {
+      throw new Error('storage timed out');
+    });
+    enqueue.mockImplementationOnce(async () => {
+      throw new Error('storage timed out');
+    });
+    expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '12' })).status).toBe(500);
+    expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '12' })).status).toBe(204);
+    const queued = enqueue.mock.calls.map((c) => [(c[1] as { kind?: string }).kind, (c[2] as { id?: string } | undefined)?.id]);
+    expect(queued.map((q) => q[0])).toEqual(['manage_link', 'host_alert', 'manage_link', 'host_alert']);
+    // The same id on the first try and on the repeat: the copies share one "sent" marker and go out once.
+    for (const q of queued) expect(q[1]).toMatch(/^job_[0-9a-f]{20}$/);
+    expect(queued[2][1]).toBe(queued[0][1]);
+    expect(queued[3][1]).toBe(queued[1][1]);
+    expect(queued[0][1]).not.toBe(queued[1][1]);
+  });
 });
 
 // ───────────────────────── Claude ─────────────────────────

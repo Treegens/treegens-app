@@ -6,7 +6,7 @@
  *   GET  /public/event/:slug                 → { site, eventType }           404 when unknown or paused
  *   GET  /public/slots?slug&duration&from&to[&reschedule&t]  → SlotsResponse
  *   POST /public/bookings                    → 201 { booking, manageToken }  409 slot_taken · 503 calendar_unavailable · 422 · 429
- *   GET  /public/bookings/:id?t=             → { booking, site, eventType }
+ *   GET  /public/bookings/:id?t=[&as=host]   → { booking, site, eventType }
  *   POST /public/bookings/:id/cancel         { t, reason?, as? }             → { booking }
  *   POST /public/bookings/:id/reschedule     { t, start, timezone?, as? }    → { booking }
  *   POST /public/bookings/:id/confirm        { t }                           → { booking }
@@ -17,11 +17,15 @@
  * Every state-changing route passes the same-origin check. Nothing here needs a session.
  *
  * `as: 'host'` is sent by the booking page when it was opened from a host's link (host emails and the
- * dashboard add `as=host`). The invitee holds the same token, so it grants nothing: it only keeps the
- * host's time zone off the invitee and records the change as made by a host.
+ * dashboard add `as=host`). The invitee holds the same token, so on its own it grants nothing: it only
+ * keeps the host's time zone off the invitee and records the change as made by a host.
+ *
+ * With `as: 'host'` AND the owner's session (the dashboard's cookie, which reaches /meeting/api on the
+ * address where the owner signed in), the owner is acting, with the rights the dashboard gives: none of the
+ * invitee's deadlines or move limits. The token is still checked. Without the session nothing changes.
  */
 import type { Booking, CreateBookingRequest, CreateBookingResponse, GetBookingResponse, PublicBooking, PublicEventResponse } from '../../shared/types';
-import { assertSameOrigin, rateLimit } from '../lib/auth';
+import { assertSameOrigin, isAdmin, rateLimit } from '../lib/auth';
 import {
   cancelBooking,
   confirmAttendance,
@@ -88,18 +92,22 @@ function tokenOf(body: Record<string, unknown>): string | null {
   return typeof body.t === 'string' ? body.t : null;
 }
 
-/** Who is acting on the booking page, as far as the page knows. Never a permission: see the top of this file. */
-function actorOf(body: Record<string, unknown>): 'invitee' | 'host' {
-  return body.as === 'host' ? 'host' : 'invitee';
+/**
+ * Who is acting on the booking page. 'host' is only what the page says (never a permission, see the top of
+ * this file). 'owner' is a host's link opened by the signed-in owner: the session is the permission.
+ */
+async function actorOf(ctx: Ctx, req: Request, asHost: boolean): Promise<'invitee' | 'host' | 'owner'> {
+  if (!asHost) return 'invitee';
+  return (await isAdmin(ctx, req)) ? 'owner' : 'host';
 }
 
 /** The public view of a booking that was just changed. One retry: the change itself is already done. */
-async function publicView(ctx: Ctx, booking: Booking): Promise<PublicBooking> {
+async function publicView(ctx: Ctx, booking: Booking, opts?: { owner?: boolean }): Promise<PublicBooking> {
   try {
-    return await toPublicBooking(ctx, booking);
+    return await toPublicBooking(ctx, booking, opts);
   } catch (err) {
     ctx.log('warn', 'public: could not build the booking view, trying once more', { bookingId: booking.id, error: err instanceof Error ? err.message : String(err) });
-    return toPublicBooking(ctx, booking);
+    return toPublicBooking(ctx, booking, opts);
   }
 }
 
@@ -164,10 +172,12 @@ export const routes: Route[] = [
     return json(response, 201);
   }),
 
-  route('GET', '/public/bookings/:id', async ({ ctx, url, params }) => {
+  route('GET', '/public/bookings/:id', async ({ ctx, req, url, params }) => {
     await limitByVisitor(ctx, 'manage-read', MANAGE_READS_PER_MINUTE, 60);
     if (!verifyManageToken(ctx, params.id, url.searchParams.get('t'))) throw bookingNotFound();
-    const view = await getManageView(ctx, params.id);
+    // The owner's page offers what the dashboard allows: cancelling or moving a meeting that has started.
+    const owner = (await actorOf(ctx, req, url.searchParams.get('as') === 'host')) === 'owner';
+    const view = await getManageView(ctx, params.id, owner ? { owner } : undefined);
     if (!view) throw bookingNotFound();
     const body: GetBookingResponse = { booking: view.booking, site: view.site, eventType: view.eventType };
     return json(body);
@@ -185,8 +195,13 @@ export const routes: Route[] = [
     if (reason.length > MAX_REASON * 2) {
       throw new HttpError(422, 'invalid', `Please keep the reason under ${MAX_REASON} characters.`, { reason: `Please keep this under ${MAX_REASON} characters.` });
     }
-    const booking = await cancelBooking(ctx, params.id, { by: 'invitee', actor: actorOf(body), ...(reason.trim() ? { reason } : {}) });
-    return json({ booking: await publicView(ctx, booking) });
+    const actor = await actorOf(ctx, req, body.as === 'host');
+    const withReason = reason.trim() ? { reason } : {};
+    const booking =
+      actor === 'owner'
+        ? await cancelBooking(ctx, params.id, { by: 'host', actor, ...withReason })
+        : await cancelBooking(ctx, params.id, { by: 'invitee', actor, ...withReason });
+    return json({ booking: await publicView(ctx, booking, actor === 'owner' ? { owner: true } : undefined) });
   }),
 
   route('POST', '/public/bookings/:id/reschedule', async ({ ctx, req, params }) => {
@@ -195,15 +210,19 @@ export const routes: Route[] = [
     const body = await readJson<Record<string, unknown>>(req, MANAGE_BODY_LIMIT);
     if (!verifyManageToken(ctx, params.id, tokenOf(body))) throw bookingNotFound();
     if (typeof body.start !== 'string') throw new HttpError(422, 'invalid', 'Please pick a new time.', { start: 'Please pick a time.' });
-    const actor = actorOf(body);
-    const booking = await rescheduleBooking(ctx, params.id, {
-      startIso: body.start,
-      by: 'invitee',
-      actor,
-      // A host's browser is in the host's zone, not the invitee's.
-      ...(actor === 'invitee' && typeof body.timezone === 'string' ? { timezone: body.timezone } : {}),
-    });
-    return json({ booking: await publicView(ctx, booking) });
+    const actor = await actorOf(ctx, req, body.as === 'host');
+    const booking =
+      actor === 'owner'
+        ? // The owner moves it as in the dashboard. Their browser is in their own zone, not the invitee's.
+          await rescheduleBooking(ctx, params.id, { startIso: body.start, by: 'host', actor })
+        : await rescheduleBooking(ctx, params.id, {
+            startIso: body.start,
+            by: 'invitee',
+            actor,
+            // A host's browser is in the host's zone, not the invitee's.
+            ...(actor === 'invitee' && typeof body.timezone === 'string' ? { timezone: body.timezone } : {}),
+          });
+    return json({ booking: await publicView(ctx, booking, actor === 'owner' ? { owner: true } : undefined) });
   }),
 
   route('POST', '/public/bookings/:id/confirm', async ({ ctx, req, params }) => {

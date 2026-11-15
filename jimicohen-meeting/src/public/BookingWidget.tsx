@@ -466,7 +466,7 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
       setStep('done');
       onBooked?.(res);
     } catch (e) {
-      if (isApiFailure(e) && (e.code === 'booking_limit' || e.code === 'phone_limit' || e.code === 'in_progress')) {
+      if (isApiFailure(e) && (e.code === 'booking_limit' || e.code === 'phone_limit' || e.code === 'email_limit' || e.code === 'in_progress')) {
         setFormNotice({ title: e.code === 'in_progress' ? 'Your booking is on its way' : 'We could not complete the booking', message: e.message });
       } else if (isApiFailure(e) && (e.code === 'slot_taken' || e.status === 409)) {
         slotGone(start, e.message, true);

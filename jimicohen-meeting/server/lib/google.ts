@@ -237,7 +237,7 @@ interface TokenResponse {
   refresh_token?: unknown;
   scope?: unknown;
   id_token?: unknown;
-  /** only sent while the OAuth consent screen is in "Testing": the refresh token then dies after 7 days */
+  /** sent while the OAuth consent screen is in "Testing" (the refresh token then dies after 7 days), or for time-limited access picked on the consent screen */
   refresh_token_expires_in?: unknown;
   error?: unknown;
 }
@@ -343,7 +343,7 @@ export interface GoogleAuthResult {
   email?: string;
   /** true when this host had no Google connection before */
   firstConnect?: boolean;
-  /** when the new connection stops working, if Google said so (consent screen still in "Testing") */
+  /** when the new connection stops working, if Google said so (consent screen still in "Testing", or a time limit picked) */
   expiresAt?: string;
 }
 
@@ -423,14 +423,15 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
         'Google did not provide long-term access. Open myaccount.google.com/permissions, remove this app from the list, then connect again.',
       );
     }
-    // Google only says when the refresh token runs out while the consent screen is still in "Testing",
-    // where a connection lasts 7 days. It is stored so the dashboard can say so in time. The record is
-    // rebuilt on every connect, so a later connect without the field (a published app) clears it.
+    // Google says when the refresh token runs out while the consent screen is still in "Testing" (a
+    // connection lasts 7 days there), and when the person picked a time limit on the consent screen. It is
+    // stored so the dashboard can say so in time. The record is rebuilt on every connect, so a later
+    // connect without the field (a published app, ongoing access) clears it.
     const expiresInSec = Number(body.refresh_token_expires_in);
     const refreshExpiresAt =
       Number.isFinite(expiresInSec) && expiresInSec > 0 ? new Date(ctx.now().getTime() + Math.floor(expiresInSec) * 1000).toISOString() : undefined;
     if (body.refresh_token_expires_in !== undefined) {
-      ctx.log('warn', 'google oauth: the refresh token expires. Publish the OAuth consent screen ("In production") to keep the connection alive.', { refreshExpiresAt });
+      ctx.log('warn', 'google oauth: the refresh token expires. Publish the OAuth consent screen ("In production") to keep the connection alive, or connect again with ongoing access if a time limit was picked.', { refreshExpiresAt });
     }
 
     const connection: HostGoogle = {

@@ -45,8 +45,9 @@ import {
   updateBooking,
   updateHost,
 } from '../../server/lib/repo';
-import { memoryKV } from '../../server/lib/store';
-import { makeTestCtx, TEST_NOW } from '../helpers/ctx';
+import { rateLimit } from '../../server/lib/auth';
+import { LIST_PAGE_SIZE, memoryKV } from '../../server/lib/store';
+import { makeTestCtx, TEST_NOW, type TestCtx } from '../helpers/ctx';
 
 function makeHost(id: string, patch: Partial<Host> = {}): Host {
   return {
@@ -1027,6 +1028,10 @@ describe('pruneEphemeral', () => {
         if (prefix === 'claims/') throw new Error('cannot list claims/');
         return inner.list(prefix);
       },
+      async *listPages(prefix) {
+        if (prefix === 'claims/') throw new Error('cannot list claims/');
+        yield* inner.listPages!(prefix);
+      },
     };
     const ctx = makeTestCtx({ kv });
     await cacheSet(ctx, 'old-cache', 1, 60);
@@ -1035,5 +1040,94 @@ describe('pruneEphemeral', () => {
     await expect(pruneEphemeral(ctx, 2 * 86_400_000)).rejects.toThrow('cannot list claims/');
     expect(await inner.list('cache/')).toEqual([]);
     expect(await inner.list('rl/')).toEqual([]);
+  });
+
+  it('removes a rate limit counter a minute after its window is over, without reading it and without the two day wait', async () => {
+    const inner = memoryKV();
+    const reads: string[] = [];
+    const kv: KV = {
+      ...inner,
+      getJSON: (key) => {
+        reads.push(key);
+        return inner.getJSON(key);
+      },
+    };
+    const ctx = makeTestCtx({ kv, now: '2026-11-16T09:00:10.000Z' });
+    await rateLimit(ctx, 'slots', '203.0.113.7', 240, 60); // 09:00 to 09:01
+    await rateLimit(ctx, 'login', '203.0.113.7', 8, 600); // 09:00 to 09:10
+    await rateLimit(ctx, 'book-ip', '203.0.113.7', 10, 3600); // 09:00 to 10:00
+    await rateLimit(ctx, 'out-sms', '+14155552671', 6, 86_400); // the UTC day
+    // A counter from before the window's length was in the key: it keeps the two day rule.
+    await kv.setJSON(`rl/legacy/${'f'.repeat(64)}/${Date.parse('2026-11-16T09:00:00.000Z')}`, { n: 1 });
+    const left = async (): Promise<string[]> => (await inner.list('rl/')).map((k) => k.split('/')[1]);
+    reads.length = 0;
+
+    ctx.clock.set('2026-11-16T09:01:59.999Z'); // the minute's window ended, but a minute's grace has not passed
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000)).toBe(0);
+    ctx.clock.set('2026-11-16T09:02:00.000Z');
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000)).toBe(1);
+    expect(await left()).toEqual(['book-ip', 'legacy', 'login', 'out-sms']);
+    ctx.clock.set('2026-11-16T10:01:00.000Z');
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000)).toBe(2);
+    expect(await left()).toEqual(['legacy', 'out-sms']);
+    ctx.clock.set('2026-11-17T00:01:00.000Z');
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000)).toBe(1);
+    expect(await left()).toEqual(['legacy']);
+    ctx.clock.set('2026-11-18T09:00:00.001Z');
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000)).toBe(1);
+    expect(await left()).toEqual([]);
+    expect(reads.filter((key) => key.startsWith('rl/'))).toEqual([]);
+  });
+
+  it('can be limited to some of its prefixes', async () => {
+    const ctx = makeTestCtx();
+    await claim(ctx, 'old-claim');
+    await cacheSet(ctx, 'old-cache', 1, 60);
+    await rateLimit(ctx, 'slots', '203.0.113.7', 240, 60);
+    ctx.clock.advance(3 * 86_400_000);
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000, 1000, 5000, ['rl/'])).toBe(1);
+    expect(await ctx.kv.list('rl/')).toEqual([]);
+    expect(await ctx.kv.list('claims/')).toEqual(['claims/old-claim']);
+    expect(await ctx.kv.list('cache/')).toEqual(['cache/old-cache']);
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000, 1000, 5000, ['claims/', 'cache/'])).toBe(2);
+    expect(await ctx.kv.list('claims/')).toEqual([]);
+    expect(await ctx.kv.list('cache/')).toEqual([]);
+  });
+
+  it('lists a page at a time and stops listing once its time or its allowance is used up', async () => {
+    const inner = memoryKV();
+    let pages = 0;
+    let clock: TestCtx['clock'] | null = null;
+    const kv: KV = {
+      ...inner,
+      list: async () => {
+        throw new Error('the whole listing is never read in one go');
+      },
+      async *listPages(prefix) {
+        for await (const page of inner.listPages!(prefix)) {
+          pages++;
+          clock?.advance(400); // each page takes 0.4 s to arrive
+          yield page;
+        }
+      },
+    };
+    const ctx = makeTestCtx({ kv });
+    clock = ctx.clock;
+    const nowMs = ctx.now().getTime();
+    const counter = (i: number, windowStartMs: number): string => `rl/slots/${i.toString(16).padStart(64, '0')}/${windowStartMs}-60`;
+    // Five pages of counters that are all still in use: nothing to remove, but they have to be looked at.
+    for (let i = 0; i < 5 * LIST_PAGE_SIZE; i++) await inner.setJSON(counter(i, nowMs), { n: 1 });
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000, 1000, 1000, ['rl/'])).toBe(0);
+    // 0.4 s, 0.8 s, then 1.2 s: out of time after the third page, so the other two are never fetched.
+    expect(pages).toBe(3);
+
+    // Five pages of counters that are all over: the allowance of 1500 is used up on the second page.
+    for (let i = 0; i < 5 * LIST_PAGE_SIZE; i++) await inner.delete(counter(i, nowMs));
+    const ended = ctx.now().getTime() - 10 * 60_000;
+    for (let i = 0; i < 5 * LIST_PAGE_SIZE; i++) await inner.setJSON(counter(i, ended), { n: 1 });
+    pages = 0;
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000, 1500, 60_000, ['rl/'])).toBe(1500);
+    expect(pages).toBe(2);
+    expect(await inner.list('rl/')).toHaveLength(5 * LIST_PAGE_SIZE - 1500);
   });
 });

@@ -600,6 +600,89 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
     });
   });
 
+  await t.scenario('a cancelled meeting whose Google event could not be removed: tried again, then deleted after a second question', { reset: true }, async (s) => {
+    const OWNER_GOOGLE = 'jimi@example.com';
+    await s.setClock(MONDAY);
+    await s.setupAdmin({ timezone: 'UTC' });
+    s.allowConsoleErrors(/status of 409/);
+    const page = await s.newPage({ signedIn: true, viewport: { width: 1440, height: 900 } });
+    const google = await s.connectGoogle(page, OWNER_GOOGLE, 'UTC', { start: { hostId: 'host_owner' } });
+    s.expect(google.result.status, 'Google connected').toBe('connected');
+    const drawer = page.getByRole('dialog').filter({ has: page.locator('.adm-bk__body') });
+    const second = page.getByRole('dialog', { name: 'The calendar event could not be removed' });
+    const made = {};
+    const eventNamed = async (eventId) => (await s.googleEvents(OWNER_GOOGLE)).find((e) => e.event.id === eventId);
+
+    await s.step('two meetings are booked, then cancelled while Google refuses to remove their events', async () => {
+      for (const [key, name, start] of [
+        ['ada', 'Ada Lovelace', tue('10:00')],
+        ['alan', 'Alan Turing', tue('11:00')],
+      ]) {
+        const res = await s.book({ slug: 'intro', start, name, email: `${key}@example.com`, timezone: 'UTC' });
+        s.expect(res.status, `status of the booking for ${name}`).toBe(201);
+        made[key] = res.data.booking.id;
+      }
+      await s.settle();
+      made.adaEvent = (await s.bookings({ id: made.ada }))[0].google.eventId;
+      made.alanEvent = (await s.bookings({ id: made.alan }))[0].google.eventId;
+      await s.failService('google-events-delete');
+      for (const id of [made.ada, made.alan]) await s.apiOk('POST', `/admin/bookings/${id}/cancel`, { body: {} });
+      await s.settle();
+      for (const id of [made.ada, made.alan]) {
+        const [stored] = await s.bookings({ id });
+        s.expect(stored.status, 'status after cancelling').toBe('cancelled');
+        s.expect(stored.google.error, 'what Google said').toMatch(/Google request failed/);
+        s.expect((await eventNamed(stored.google.eventId)).event.status, 'the event, still on the calendar').toBe('confirmed');
+      }
+    });
+
+    await s.step('Google still refuses: the owner is told the event stays, and Cancel keeps the booking', async () => {
+      await page.goto(s.url(`/admin/bookings?scope=cancelled&b=${made.ada}`));
+      await drawer.getByRole('heading', { name: 'Ada Lovelace' }).waitFor();
+      await drawer.getByText(/Still on Google Calendar: Google request failed/).waitFor();
+      await drawer.getByRole('button', { name: 'Delete booking' }).click();
+      const first = page.getByRole('dialog', { name: 'Delete this booking for good?' });
+      const tried = (await s.outbox({ kind: 'calendar_delete' })).length;
+      await first.getByRole('button', { name: 'Delete booking' }).click();
+      await second.getByText('The event is still on your Google Calendar and will stay there. Remove it by hand. Delete the booking anyway?').waitFor();
+      await first.waitFor({ state: 'hidden' });
+      // It was tried again before asking.
+      s.expect((await s.outbox({ kind: 'calendar_delete' })).length, 'calendar deletes tried by the delete').toBeGreaterThan(tried);
+      await s.screenshot(page, 'delete a booking, the calendar event stays', { fullPage: false });
+      await second.getByRole('button', { name: 'Cancel' }).click();
+      await second.waitFor({ state: 'hidden' });
+      s.expect(await s.bookings({ id: made.ada }), 'still stored after Cancel').toHaveLength(1);
+    });
+
+    await s.step('"Delete anyway" deletes it, and the event is left on the calendar', async () => {
+      await clearToasts(page);
+      await drawer.getByRole('button', { name: 'Delete booking' }).click();
+      await page.getByRole('dialog', { name: 'Delete this booking for good?' }).getByRole('button', { name: 'Delete booking' }).click();
+      await second.getByRole('button', { name: 'Delete anyway' }).click();
+      await expectToast(page, 'Booking deleted');
+      await drawer.waitFor({ state: 'hidden' });
+      s.expect(await s.bookings({ id: made.ada }), 'stored after deleting').toEqual([]);
+      s.expect(await s.jobs({ bookingId: made.ada }), 'jobs left for it, the calendar retry included').toEqual([]);
+      s.expect(JSON.stringify(await s.kv('index/bookings')), 'the booking index').not.toContain(made.ada);
+      s.expect((await eventNamed(made.adaEvent)).event.status, 'the event, left as the owner was told').toBe('confirmed');
+    });
+
+    await s.step('once Google works again, a delete takes the event off first and asks nothing more', async () => {
+      await s.clearFailures();
+      await clearToasts(page);
+      await page.goto(s.url(`/admin/bookings?scope=cancelled&b=${made.alan}`));
+      await drawer.getByRole('heading', { name: 'Alan Turing' }).waitFor();
+      await drawer.getByRole('button', { name: 'Delete booking' }).click();
+      await page.getByRole('dialog', { name: 'Delete this booking for good?' }).getByRole('button', { name: 'Delete booking' }).click();
+      await expectToast(page, 'Booking deleted');
+      s.expect(await second.count(), 'the second question').toBe(0);
+      s.expect(await s.bookings({ id: made.alan }), 'stored after deleting').toEqual([]);
+      s.expect((await eventNamed(made.alanEvent)).event.status, 'the event, taken off').toBe('cancelled');
+      const [gone] = (await s.outbox({ kind: 'calendar_delete', status: 204 })).filter((e) => e.eventId === made.alanEvent);
+      s.expect(gone, 'the delete Google was sent').toMatchObject({ account: OWNER_GOOGLE, sendUpdates: 'all' });
+    });
+  });
+
   await t.scenario('a long list of bookings is paged, and the counts stay right', { reset: true }, async (s) => {
     await s.setClock(MONDAY);
     await s.setupAdmin({ timezone: 'UTC' });

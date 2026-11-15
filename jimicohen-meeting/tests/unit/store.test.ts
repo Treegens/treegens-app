@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { KV } from '../../server/lib/ctx';
-import { BLOBS_READ_DEADLINE_MS, blobsKV, fileKV, kvSelfTest, memoryKV, type BlobStoreLike } from '../../server/lib/store';
+import { BLOBS_READ_DEADLINE_MS, blobsKV, fileKV, kvSelfTest, LIST_PAGE_SIZE, listKeyPages, memoryKV, type BlobStoreLike } from '../../server/lib/store';
 
 const tempDirs: string[] = [];
 function tempDir(): string {
@@ -150,6 +150,18 @@ describe.each(backends)('%s', (_name, make) => {
     expect(all).toEqual([...all].sort());
     expect(all).toHaveLength(jobKeys.length + 4);
     expect(all).toContain('assets/ast_1');
+  });
+
+  it('lists the same keys a page at a time', async () => {
+    const kv = make();
+    const keys = Array.from({ length: LIST_PAGE_SIZE + 5 }, (_, i) => `rl/slots/${String(i).padStart(6, '0')}/0-60`);
+    for (const key of [...keys].reverse()) await kv.setJSON(key, { n: 1 });
+    await kv.setJSON('rlx', 1);
+    const pages: string[][] = [];
+    for await (const page of listKeyPages(kv, 'rl/')) pages.push(page);
+    expect(pages.map((p) => p.length)).toEqual([LIST_PAGE_SIZE, 5]);
+    expect(pages.flat()).toEqual(await kv.list('rl/'));
+    expect(pages.flat()).toEqual(keys);
   });
 
   it('keeps keys with unusual characters apart and intact', async () => {
@@ -396,6 +408,43 @@ describe('blobsKV adapter', () => {
     expect(await kv.list('')).toEqual([...keys].sort());
     const listCalls = fake.calls.filter((c) => c.op === 'list').map((c) => c.options);
     expect(listCalls).toEqual([{ prefix: 'jobs/', paginate: true }, { paginate: true }]);
+  });
+
+  it('hands out a listing page by page and asks for no page nobody wants', async () => {
+    const fake = fakeBlobStore(2);
+    let fetched = 0;
+    const kv = blobsKV('meeting', () => ({
+      ...fake.store,
+      list: (options) =>
+        (async function* () {
+          for await (const page of fake.store.list(options)) {
+            fetched++;
+            yield page;
+          }
+        })(),
+    }));
+    for (const key of ['rl/a', 'rl/b', 'rl/c', 'rl/d', 'rl/e', 'site']) await kv.setJSON(key, 1);
+    const seen: string[][] = [];
+    for await (const page of listKeyPages(kv, 'rl/')) {
+      seen.push(page);
+      if (seen.length === 2) break;
+    }
+    expect(seen.flat()).toHaveLength(4);
+    expect(fetched).toBe(2);
+    // Read to the end, it is the same listing as list().
+    const all: string[] = [];
+    for await (const page of kv.listPages!('rl/')) all.push(...page);
+    expect(all.sort()).toEqual(await kv.list('rl/'));
+  });
+
+  it('listKeyPages works with a store that can only list everything at once', async () => {
+    const inner = memoryKV();
+    await inner.setJSON('rl/a', 1);
+    await inner.setJSON('rl/b', 1);
+    const { listPages: _unused, ...withoutPages } = inner;
+    const pages: string[][] = [];
+    for await (const page of listKeyPages(withoutPages, 'rl/')) pages.push(page);
+    expect(pages).toEqual([['rl/a', 'rl/b']]);
   });
 
   it('round-trips binary data as an ArrayBuffer with string metadata', async () => {

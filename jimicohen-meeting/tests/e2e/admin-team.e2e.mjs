@@ -5,7 +5,7 @@
  */
 import { createHash } from 'node:crypto';
 import { defineSuite } from './lib.mjs';
-import { MONDAY, clearToasts, expectFieldProblem, expectToast, offeredTimes, openBookingPage, openPage, pngFile, wallTime } from './admin-helpers.mjs';
+import { MONDAY, clearToasts, expectFieldProblem, expectToast, offeredTimes, openBookingPage, openPage, pngFile, saveAndWait, wallTime } from './admin-helpers.mjs';
 
 const OWNER_GOOGLE = 'jimi@example.com';
 const CO_HOST = { name: 'Alex Rivera', email: 'alex@example.com' };
@@ -579,6 +579,56 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       await panel.getByRole('radio', { name: /^Together/ }).check();
       await notice.waitFor();
       await s.screenshot(owner, 'joint meeting whose hours never meet');
+    });
+
+    const CHECK = (url) => url.pathname.endsWith('/api/admin/event-types-check');
+    await s.step('the Scheduling tab shows it too, drops it the moment an edit there starts a new check, and asks again', async () => {
+      await owner.getByRole('tab', { name: /^Scheduling/ }).click();
+      await owner.getByRole('tab', { name: /^Scheduling/, selected: true }).waitFor();
+      const panel = owner.getByRole('tabpanel');
+      const notice = panel.locator('.adm-notice').filter({ hasText: 'Nobody can book this meeting' });
+      await notice.getByText(/there is no time when you and Alex are both working/).waitFor();
+      s.expect(await notice.textContent(), 'before the event has limited hours').not.toContain('limited hours');
+      // The next check is held back until the test lets it go, so what is on screen meanwhile can be read.
+      let release = () => undefined;
+      const held = new Promise((resolve) => {
+        release = resolve;
+      });
+      await owner.route(CHECK, async (route) => {
+        await held;
+        await route.continue();
+      }, { times: 1 });
+      const asked = owner.waitForRequest((r) => CHECK(new URL(r.url())));
+      await panel.getByRole('switch', { name: 'Only offer this event during certain hours' }).click();
+      // The answer about the hours as they were says nothing about the hours as they are: it goes at once.
+      await notice.waitFor({ state: 'detached' });
+      const body = (await asked).postDataJSON();
+      s.expect(body.scheduling.restrictHours, 'the limited hours, sent with the check').toBeTruthy();
+      release();
+      await notice.getByText(/The limited hours on its Scheduling tab count too\./).waitFor();
+      await notice.scrollIntoViewIfNeeded();
+      await s.screenshot(owner, 'joint meeting hours on the Scheduling tab', { fullPage: false });
+    });
+
+    await s.step('a check that cannot run says so quietly, on both tabs, and saving still works', async () => {
+      s.allowConsoleErrors(/status of 500/);
+      await owner.route(CHECK, (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 'server_error', message: 'Something went wrong on our side.' } }) }));
+      const panel = owner.getByRole('tabpanel');
+      const notice = panel.locator('.adm-notice').filter({ hasText: 'Nobody can book this meeting' });
+      const quiet = panel.getByText("Could not check whether the hosts' working hours meet.");
+      await panel.getByRole('switch', { name: 'Only offer this event during certain hours' }).click();
+      await quiet.waitFor();
+      s.expect(await notice.count(), 'an earlier answer left on screen').toBe(0);
+      await owner.getByRole('tab', { name: /^Hosts/ }).click();
+      await owner.getByRole('tab', { name: /^Hosts/, selected: true }).waitFor();
+      await quiet.waitFor();
+      s.expect(await notice.count(), 'an earlier answer on the Hosts tab').toBe(0);
+      // Saving does not wait for the check, or care that it failed.
+      await owner.getByRole('tab', { name: /^Scheduling/ }).click();
+      await panel.getByLabel('Buffer before').selectOption({ label: '15 minutes' });
+      await saveAndWait(owner, 'Save changes');
+      s.expect((await s.kv('event-types')).find((e) => e.id === joint.id).scheduling, 'saved').toMatchObject({ bufferBeforeMin: 15, restrictHours: null });
+      await owner.unroute(CHECK);
     });
 
     await s.step('the public page does not tell visitors to come back for times that will never open', async () => {

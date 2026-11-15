@@ -268,6 +268,13 @@ export interface Booking {
     htmlLink?: string;
     meetUrl?: string;
     syncedAt?: ISODateTime;
+    /**
+     * The start and end the event holds in Google, as last written by us (absent on events written before
+     * this was kept). Work finished again after an interruption skips a change Google already has, since
+     * every change emails each attendee.
+     */
+    syncedStart?: ISODateTime;
+    syncedEnd?: ISODateTime;
     error?: string;
   } | null;
   attendance: { confirmedAt?: ISODateTime; confirmedVia?: 'call' | 'sms' | 'link'; noShow?: boolean };
@@ -540,7 +547,8 @@ export interface PublicBooking {
   delivery?: { email: boolean; calendarInvite: boolean };
   /** outlook: Outlook.com (personal accounts); office365: Microsoft 365 work and school calendars */
   calendarLinks: { google: string; outlook: string; office365?: string; ics: string };
-  cancellation?: { at: ISODateTime; by: string; reason?: string } | null;
+  /** byName: who cancelled, when that is known (the owner); absent when any host could have done it */
+  cancellation?: { at: ISODateTime; by: string; reason?: string; byName?: string } | null;
   rescheduledFromStart?: ISODateTime | null;
   attendanceConfirmed: boolean;
 }

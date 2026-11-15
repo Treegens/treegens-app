@@ -126,6 +126,9 @@ describe('routes', () => {
     next = () => json({ booking: { id: 'bk 1', status: 'cancelled' } });
     await api.getBooking('bk 1', 'to/k');
     expect(last().url).toBe(`${api.API_BASE}/public/bookings/bk%201?t=to%2Fk`);
+    // From a host's link: the server may then recognise the signed-in owner.
+    await api.getBooking('bk 1', 'to/k', { as: 'host' });
+    expect(last().url).toBe(`${api.API_BASE}/public/bookings/bk%201?t=to%2Fk&as=host`);
     const cancelled = await api.cancelBooking('bk 1', 'tok', 'Plans changed');
     expect(cancelled.status).toBe('cancelled');
     expect(last().url).toBe(`${api.API_BASE}/public/bookings/bk%201/cancel`);
@@ -178,6 +181,8 @@ describe('routes', () => {
       [() => api.adminCancelBooking('b1', 'r'), 'POST', '/admin/bookings/b1/cancel'],
       [() => api.setNoShow('b1', true), 'POST', '/admin/bookings/b1/no-show'],
       [() => api.deleteAdminBooking('b1'), 'DELETE', '/admin/bookings/b1'],
+      [() => api.deleteAdminBooking('b1', { leaveCalendarEvent: false }), 'DELETE', '/admin/bookings/b1'],
+      [() => api.deleteAdminBooking('b1', { leaveCalendarEvent: true }), 'DELETE', '/admin/bookings/b1?leaveCalendarEvent=1'],
       [() => api.getIntegrations(), 'GET', '/admin/integrations'],
       [() => api.saveIntegrations({ resend: { apiKey: 'k' } }), 'PUT', '/admin/integrations'],
       [() => api.testIntegration({ channel: 'email' }), 'POST', '/admin/integrations/test'],

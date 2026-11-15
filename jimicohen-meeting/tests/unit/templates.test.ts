@@ -227,7 +227,13 @@ describe('buildVars', () => {
       expect(greet(name), name).toBe('there');
     }
     expect(greet('evil.com', 'host')).toBe('the invitee');
-    for (const [name, first] of [['J.R.R. Tolkien', 'J.R.R.'], ["Mary-Jane O'Neil Jr.", 'Mary-Jane'], ['J.Smith', 'J.Smith'], ['Zoë Ångström', 'Zoë']]) {
+    // Wide and ideographic full stops, wide letters, and letters from other scripts read as an address too
+    // (the same as the booking form's check), for bookings made before that check existed.
+    for (const name of ['evil．com now', 'evil。com', 'evil｡com', 'ｅｖｉｌ．ｃｏｍ', 'пример.com', 'me＠evil.example']) {
+      expect(greet(name), name).toBe('there');
+    }
+    expect(greet('evil．com', 'host')).toBe('the invitee');
+    for (const [name, first] of [['J.R.R. Tolkien', 'J.R.R.'], ["Mary-Jane O'Neil Jr.", 'Mary-Jane'], ['J.Smith', 'J.Smith'], ['Zoë Ångström', 'Zoë'], ['Ｊｉｍｉ Cohen', 'Ｊｉｍｉ']]) {
       expect(greet(name), name).toBe(first);
     }
     // what the person typed is still shown as it is where it is not a greeting

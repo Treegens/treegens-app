@@ -295,22 +295,27 @@ export function buildWarnings(
       const effect = mine ? 'so times are not being offered until this is fixed.' : `so times that include ${first} are not being offered until this is fixed.`;
       warnings.push({ key: `calendar_health_${host.id}`, message: `${what}, ${effect}${reason ? ` ${reason}` : ''}`, href: mine ? LINK.google : LINK.team });
     }
-    // Made while the consent screen was in "Testing": Google ends the connection after 7 days (google.ts completeGoogleAuth).
+    // Google said when the connection was made that it ends on a set day (google.ts completeGoogleAuth). It does
+    // that while the consent screen is still in "Testing" (7 days), and when the person picked a time limit on
+    // Google's screen. Which of the two it was is not said, so the warning names both, the usual one first.
     const ends = host.google?.status === 'ok' ? Date.parse(host.google.refreshExpiresAt ?? '') : Number.NaN;
     if (Number.isFinite(ends)) {
       const day = formatInZone(ends, owner?.timezone ?? host.timezone, 'date');
-      const when = ends <= ctx.now().getTime() ? `stopped working on ${day}` : `ends on ${day}`;
-      const why = 'because the consent screen in Google Cloud is still in Testing';
+      const ended = ends <= ctx.now().getTime();
+      const when = ended ? `stopped working on ${day}` : `ends on ${day}`;
+      const effect = ended ? 'Until you reconnect, no times are offered.' : 'After that, no times are offered until you reconnect.';
+      // Said of the end date, not of the sentence before it: "Usually that means" read as if no times being offered meant Testing.
+      const usually = 'An end date like this usually means the consent screen in Google Cloud is still in Testing: publish it so it reads In production';
       warnings.push(
         mine
           ? {
               key: `google_expiry_${host.id}`,
-              message: `Your Google connection ${when}, ${why}. After that, no times are offered until you reconnect. Publish the consent screen in Google Cloud, then reconnect.`,
+              message: `Your Google connection ${when}. ${effect} ${usually}, then reconnect. If you chose a time limit on Google's screen when you connected, reconnecting and allowing ongoing access is enough.`,
               href: LINK.google,
             }
           : {
               key: `google_expiry_${host.id}`,
-              message: `${first}'s Google connection ${when}, ${why}. Publish the consent screen in Google Cloud, then ask ${first} to connect again from their private link.`,
+              message: `${first}'s Google connection ${when}. ${usually}, then ask ${first} to connect again from their private link. If ${first} chose a time limit on Google's screen, connecting again and allowing ongoing access is enough.`,
               href: LINK.team,
             },
       );

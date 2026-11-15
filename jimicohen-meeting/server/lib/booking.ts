@@ -52,7 +52,7 @@ import type {
   SlotsResponse,
   Theme,
 } from '../../shared/types';
-import { getAdminAuth, rateLimit } from './auth';
+import { getAdminAuth, rateLimit, rateLimitTake, type RateLimitHit } from './auth';
 import { forgetHostBusy, getBusyForHosts } from './busy';
 import { hmacHex, randomId, randomToken, safeEqual, sha256Hex } from './crypto';
 import type { Ctx, KV } from './ctx';
@@ -79,7 +79,7 @@ import {
   updateBooking,
 } from './repo';
 import { checkSlot, computeSlots, pickRoundRobinHost, type HostAvailabilityInput, type SlotQuery, type SlotRejection } from './slots';
-import { firstName, joinNames, renderTemplate } from './templates';
+import { firstName, joinNames, linkCheckText, renderTemplate } from './templates';
 import { DAY_MS, MINUTE_MS, formatInZone, isValidZone, type Interval } from './time';
 import { normalizePhone, twilioFeatures } from './twilio';
 import { FieldErrors, cleanLine, cleanText, isEmail, isHttpsUrl, isIsoInstant, isPlainObject, isZone } from './validate';
@@ -91,16 +91,21 @@ const DAY_SEC = 24 * HOUR_SEC;
 const BOOKINGS_PER_IP_PER_HOUR = 10;
 const BOOKINGS_PER_EMAIL_PER_HOUR = 6;
 /**
+ * Bookings made a day with one email address (UTC day). Email addresses are not verified, so without it
+ * a script that books and cancels again and again could have the site send a stranger a confirmation
+ * and a cancellation every few minutes all day long. Counted only when a booking is really made.
+ */
+const BOOKINGS_PER_EMAIL_PER_DAY = 12;
+/**
  * Bookings a day that may send texts or calls to one phone number. Phone numbers are not verified, so
  * this is what keeps a stranger's number from being texted again and again (book, cancel, book again).
- * The window stays at one day: rate limit counters are pruned after two.
  */
 const TEXTED_BOOKINGS_PER_PHONE_PER_DAY = 3;
 /** Upcoming meetings one email address may hold at the same time. */
 const MAX_UPCOMING_PER_EMAIL = 5;
 /**
- * Moves from the booking page. The lifetime cap lives on the booking itself (rate limit counters are
- * pruned after two days); the hourly one keeps a single link from flooding inboxes and phones.
+ * Moves from the booking page. The lifetime cap lives on the booking itself (rate limit counters go
+ * once their window is over); the hourly one keeps a single link from flooding inboxes and phones.
  */
 const MAX_SELF_SERVICE_MOVES = 5;
 const MOVES_PER_BOOKING_PER_HOUR = 3;
@@ -476,10 +481,29 @@ function invitationSent(b: Booking, byId: Map<string, Host>, eventType: EventTyp
   return b.google.eventId !== '' || usable(byId.get(b.google.hostId));
 }
 
-function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventType | null, email: boolean): PublicBooking {
+/**
+ * Who cancelled, as the booking page names them: a name only when it is known. A cancellation by a host
+ * that was not made through a host's link was made by the owner (the dashboard, or the booking page while
+ * signed in). Through a host's link it could have been any host, so no name is given.
+ */
+function cancelledByName(b: Booking, site: SiteSettings, hosts: Host[]): string | null {
+  if (b.cancellation?.by !== 'host' || b.cancellation.via === 'host_link') return null;
+  const owner = hosts.find((h) => h.id === site.ownerHostId) ?? hosts.find((h) => h.role === 'owner') ?? null;
+  return owner?.name.trim() || null;
+}
+
+/**
+ * `rules: 'owner'`: the owner, signed in, opened the page from a host's link. The owner may cancel or move a
+ * meeting that has already started; the invitee's deadline only holds for everyone else. Once the meeting is
+ * over the page offers neither, as the dashboard does not: a cancellation then would only tell the invitee
+ * that a meeting which took place was called off.
+ */
+function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventType | null, email: boolean, site: SiteSettings, rules: 'invitee' | 'owner' = 'invitee'): PublicBooking {
   const byId = hostsById(hosts);
   const assigned = pickHosts(b.hostIds, byId);
-  const open = selfServiceOpen(b, ctx.now().getTime());
+  const nowMs = ctx.now().getTime();
+  const open = rules === 'owner' ? b.status === 'confirmed' && Date.parse(b.end) > nowMs : selfServiceOpen(b, nowMs);
+  const byName = cancelledByName(b, site, hosts);
   const invitee: PublicBooking['invitee'] = { name: b.invitee.name, email: b.invitee.email, timezone: b.invitee.timezone };
   if (b.invitee.phone) invitee.phone = b.invitee.phone;
   const location: BookingLocation = { type: b.location.type, label: b.location.label };
@@ -501,7 +525,9 @@ function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventTy
     canReschedule: open && !!eventType && eventType.active === true,
     canCancel: open,
     calendarLinks: calendarLinks({ booking: b, hosts: assigned, baseUrl: ctx.env.publicBaseUrl, manageToken: manageToken(ctx, b.id) }),
-    cancellation: b.cancellation ? { at: b.cancellation.at, by: b.cancellation.by, ...(b.cancellation.reason ? { reason: b.cancellation.reason } : {}) } : null,
+    cancellation: b.cancellation
+      ? { at: b.cancellation.at, by: b.cancellation.by, ...(b.cancellation.reason ? { reason: b.cancellation.reason } : {}), ...(byName ? { byName } : {}) }
+      : null,
     rescheduledFromStart: b.rescheduledFromStart ?? null,
     attendanceConfirmed: !!b.attendance?.confirmedAt,
     // What the page may promise: an email from us, an invitation from Google, both or neither.
@@ -515,23 +541,27 @@ function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventTy
 }
 
 /** The booking as its invitee may see it. Only ever hand this to someone who holds the manage token. */
-export async function toPublicBooking(ctx: Ctx, b: Booking): Promise<PublicBooking> {
+export async function toPublicBooking(ctx: Ctx, b: Booking, opts?: { owner?: boolean }): Promise<PublicBooking> {
   const site = await getSite(ctx);
   const [hosts, eventType, email] = await Promise.all([listHosts(ctx), getEventType(ctx, b.eventTypeId), emailGoesOut(ctx, site)]);
-  return publicBookingOf(ctx, b, hosts, eventType, email);
+  return publicBookingOf(ctx, b, hosts, eventType, email, site, opts?.owner ? 'owner' : 'invitee');
 }
 
-/** Everything the manage page needs, or null when the booking does not exist. The caller checks the token. */
+/**
+ * Everything the manage page needs, or null when the booking does not exist. The caller checks the token,
+ * and `owner` (the signed-in owner opened the page from a host's link, see publicBookingOf).
+ */
 export async function getManageView(
   ctx: Ctx,
   bookingId: string,
+  opts?: { owner?: boolean },
 ): Promise<{ booking: PublicBooking; site: PublicSite; eventType: PublicEventType | null } | null> {
   const record = await getBooking(ctx, bookingId);
   if (!record) return null;
   const loaded = await loadPublicSite(ctx);
   const eventType = loaded.eventTypes.find((e) => e.id === record.eventTypeId) ?? null;
   return {
-    booking: publicBookingOf(ctx, record, loaded.hosts, eventType, loaded.email),
+    booking: publicBookingOf(ctx, record, loaded.hosts, eventType, loaded.email, loaded.site, opts?.owner ? 'owner' : 'invitee'),
     // A booking exists, so setup was done (a store restored by hand without its admin record still shows it).
     site: buildPublicSite(ctx, { ...loaded, open: true }),
     eventType: eventType ? toPublicEventType(ctx, eventType, loaded.hosts) : null,
@@ -831,7 +861,7 @@ const ADDRESS_WITH_PATH = /[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+\//u;
  */
 function carriesLink(raw: string, kind: 'name' | 'place'): boolean {
   // Wide and ideographic full stops count as dots: browsers read them as dots in addresses.
-  const text = raw.normalize('NFKC').replace(/[。．｡]/g, '.');
+  const text = linkCheckText(raw);
   if (/:\/\/|www\./i.test(text) || DOMAIN_TOKEN.test(text)) return true;
   if (kind === 'name') return /[/\\@]/.test(text);
   return ADDRESS_WITH_PATH.test(text);
@@ -1164,6 +1194,42 @@ async function limitTextedBookings(ctx: Ctx, phone: string): Promise<void> {
   }
 }
 
+/**
+ * The inbox an address delivers to, which is what the limits per email address count: lower case, without
+ * a "+tag" (ada+1@example.com lands in ada@example.com), and for Gmail without dots and with googlemail.com
+ * read as gmail.com. Otherwise a script could book under endless spellings of one stranger's address and
+ * fill that one inbox all the same.
+ */
+function mailboxOf(email: string): string {
+  const address = email.trim().toLowerCase();
+  const at = address.lastIndexOf('@');
+  if (at <= 0) return address;
+  let local = address.slice(0, at);
+  let domain = address.slice(at + 1);
+  const plus = local.indexOf('+');
+  if (plus > 0) local = local.slice(0, plus);
+  if (domain === 'googlemail.com') domain = 'gmail.com';
+  if (domain === 'gmail.com') local = local.replace(/\./g, '') || local;
+  return `${local}@${domain}`;
+}
+
+/**
+ * Takes this booking's place among the day's bookings for its email address. The caller gives it back
+ * when the booking is not made after all, so a time that was taken or a refused request does not count.
+ */
+async function takeDailyBooking(ctx: Ctx, email: string, hostFirstName: string): Promise<RateLimitHit> {
+  try {
+    return await rateLimitTake(ctx, 'book-email-day', mailboxOf(email), BOOKINGS_PER_EMAIL_PER_DAY, DAY_SEC);
+  } catch (err) {
+    if (!(err instanceof HttpError) || err.status !== 429) throw err;
+    throw new HttpError(
+      429,
+      'email_limit',
+      `This email address has made a lot of bookings today, so the page cannot take another one. Please get in touch with ${hostFirstName || 'the host'} directly to find a time.`,
+    );
+  }
+}
+
 /** The booking this request already made, when its first try went through and only the answer was lost. */
 function alreadyBooked(ctx: Ctx, booking: Booking): { booking: Booking; manageToken: string } {
   ctx.log('info', 'booking: a repeated request got the booking its first try made', { bookingId: booking.id });
@@ -1228,7 +1294,7 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   // That id already holds somebody else's booking (a key that was not random after all): a new id then.
   const id = keyedId && !earlier ? keyedId : randomId('bkg');
 
-  await rateLimit(ctx, 'book-email', input.email.toLowerCase(), BOOKINGS_PER_EMAIL_PER_HOUR, HOUR_SEC);
+  await rateLimit(ctx, 'book-email', mailboxOf(input.email), BOOKINGS_PER_EMAIL_PER_HOUR, HOUR_SEC);
 
   const nowMs = ctx.now().getTime();
   const startMs = input.startMs;
@@ -1272,9 +1338,16 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   const sms = input.wantsSms && features.sms;
   // A call is only agreed to on a meeting that has one: the form does not offer it otherwise.
   const call = input.wantsCall && features.calls && hasReminderCall(eventType);
+  // The day's bookings for this email address. Its place is taken now, so requests sent together cannot
+  // pass the limit, and given back on every way out below that does not end in a new booking.
+  const daily = await takeDailyBooking(ctx, input.email, firstName(eventHosts[0]?.name ?? ''));
+  const notMade = async (err: unknown): Promise<never> => {
+    await daily.refund();
+    throw err;
+  };
   // Counted only for a request that is about to take a free time: a visitor who was unlucky with a time
   // keeps their allowance, and only bookings that really text or call a number use it up.
-  if (input.phone && (sms || call)) await limitTextedBookings(ctx, input.phone);
+  if (input.phone && (sms || call)) await limitTextedBookings(ctx, input.phone).catch(notMade);
 
   // Step 4: take it. The check runs again inside the swap, on the index as it is at that instant.
   const startIso = new Date(startMs).toISOString();
@@ -1310,8 +1383,10 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
       req: mark,
     };
     return [...entries, entry];
-  });
+  }).catch(notMade);
   if (!taken.ok && taken.reason !== 'ours') {
+    // Not made by this request: its place among the day's bookings goes back (an earlier try that did make it counted itself).
+    await daily.refund();
     if (taken.reason === 'contention') throw new HttpError(503, 'busy', 'The server is busy right now. Please try again in a moment.');
     if (taken.reason === 'booking_limit') throw tooManyUpcoming();
     if (taken.reason === 'duplicate') {
@@ -1381,9 +1456,10 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
     await quietly(ctx, 'releasing the time of a booking that could not be saved', id, () =>
       mutateBookingIndex(ctx, (entries) => entries.filter((e) => e.id !== id)),
     );
-    throw err;
+    return notMade(err);
   }
   if (!written.created) {
+    await daily.refund();
     if (sameRequest(written.booking, eventType, input)) return alreadyBooked(ctx, written.booking);
     throw stillSaving();
   }
@@ -1492,11 +1568,12 @@ async function followUpCancellation(ctx: Ctx, booking: Booking, marker: FollowUp
 
 // ───────────────────────── cancel ─────────────────────────
 
-const CANCELLED_BY: Record<'invitee' | 'host' | 'assistant' | 'host_link', string> = {
+const CANCELLED_BY: Record<'invitee' | 'host' | 'assistant' | 'host_link' | 'owner_page', string> = {
   invitee: 'Cancelled by the invitee',
   host: 'Cancelled by the host',
   assistant: 'Cancelled by the invitee on the reminder call',
   host_link: 'Cancelled by a host, from the booking page',
+  owner_page: 'Cancelled by the owner, from the booking page',
 };
 
 /**
@@ -1508,11 +1585,15 @@ const CANCELLED_BY: Record<'invitee' | 'host' | 'assistant' | 'host_link', strin
  * `actor: 'host'` comes from the booking page opened through a host's link. The invitee holds the same
  * link, so it grants nothing: the invitee's deadline still applies. It only decides how the cancellation is
  * recorded and announced (by a host, and the invitee is told by text as well).
+ *
+ * `by: 'host', actor: 'owner'`: the same page, with the owner signed in to the dashboard in that browser
+ * (the route checked the session). That is the owner acting, exactly as in the dashboard: no deadline, and
+ * the owner is not sent a notice of their own cancellation. Only the timeline says where it was done.
  */
 export async function cancelBooking(
   ctx: Ctx,
   bookingId: string,
-  p: { by: 'invitee' | 'host' | 'assistant'; reason?: string; actor?: 'invitee' | 'host' },
+  p: { by: 'invitee' | 'host' | 'assistant'; reason?: string; actor?: 'invitee' | 'host' | 'owner' },
   opts?: BookingActionOptions,
 ): Promise<Booking> {
   registerBookingJobHandlers();
@@ -1531,7 +1612,7 @@ export async function cancelBooking(
   const by = p.by === 'host' || p.by === 'assistant' ? p.by : 'invitee';
   const viaHostLink = by === 'invitee' && p.actor === 'host';
   const recordedBy = viaHostLink ? 'host' : by;
-  const timelineText = CANCELLED_BY[viaHostLink ? 'host_link' : by];
+  const timelineText = CANCELLED_BY[viaHostLink ? 'host_link' : by === 'host' && p.actor === 'owner' ? 'owner_page' : by];
   const deadline = by === 'invitee' ? Date.parse(existing.start) : by === 'assistant' ? Date.parse(existing.end) : Number.POSITIVE_INFINITY;
   if (!(nowMs < deadline)) {
     throw new HttpError(
@@ -1629,11 +1710,15 @@ async function queueCancelledMessages(ctx: Ctx, booking: Booking): Promise<void>
  * `actor: 'host'` comes from the booking page opened through a host's link. The invitee holds the same
  * link, so it grants nothing (the invitee's deadline and limits still apply). It only keeps the host's
  * own time zone off the invitee, words the timeline, and has the invitee told by text as well.
+ *
+ * `by: 'host'` is the owner (the route checked the session; `actor: 'owner'` says it was done on the booking
+ * page). None of the invitee's limits apply: no deadline, no cap on moves, no hourly limit. The new time
+ * itself still has to pass the same checks as any booking (hours, notice, calendars, other bookings).
  */
 export async function rescheduleBooking(
   ctx: Ctx,
   bookingId: string,
-  p: { startIso: string; by: 'invitee' | 'host'; timezone?: IanaZone; actor?: 'invitee' | 'host' },
+  p: { startIso: string; by: 'invitee' | 'host'; timezone?: IanaZone; actor?: 'invitee' | 'host' | 'owner' },
   opts?: BookingActionOptions,
 ): Promise<Booking> {
   registerBookingJobHandlers();
@@ -1652,7 +1737,7 @@ export async function rescheduleBooking(
       409,
       'move_limit',
       actor === 'host'
-        ? `This meeting has been moved ${MAX_SELF_SERVICE_MOVES} times already, so it cannot be moved again from this page. You can cancel it and ask the invitee to book a new time.`
+        ? `This meeting has been moved ${MAX_SELF_SERVICE_MOVES} times already, so it cannot be moved again from this link. The owner can still move it here while signed in to the dashboard in this browser. Or cancel it and ask the invitee to book a new time.`
         : `This meeting has been moved ${MAX_SELF_SERVICE_MOVES} times already, so it cannot be moved again from this page. Please get in touch with your host to change it.`,
     );
   }
@@ -1750,7 +1835,7 @@ export async function rescheduleBooking(
   const at = nowIso(ctx);
   // Only the invitee's own device says where the invitee is. A host moving the meeting is somewhere else.
   const timezone = actor === 'invitee' && typeof p.timezone === 'string' && isZone(p.timezone.trim()) ? p.timezone.trim() : null;
-  const who = by === 'host' ? 'by the host' : actor === 'host' ? 'by a host, from the booking page' : 'by the invitee';
+  const who = by === 'host' ? (p.actor === 'owner' ? 'by the owner, from the booking page' : 'by the host') : actor === 'host' ? 'by a host, from the booking page' : 'by the invitee';
   const movedFrom = `Moved from ${formatInZone(Date.parse(booking.start), s.ownerTimezone, 'full')} ${who}`;
   // A round robin booking whose host has left goes to a colleague: for them it is a new booking.
   const marker = newFollowUp(ctx, 'rescheduled', actor, joinedHosts(booking.hostIds, assigned));
@@ -1906,7 +1991,9 @@ function neutralWhere(location: BookingLocation): string {
  * nobody but the owner wrote (the meeting, the hosts, where) and the dashboard link: no answers, no phone
  * number, no manage link. Without guests it says who booked, the phone number and the manage link, which go
  * to the invitee's own address; the answers stay in the host emails and the dashboard. When only the hosts
- * are on the event, it carries everything.
+ * are on the event, it carries everything, and its manage link is a host's link (`as=host`): whoever opens
+ * it from the calendar is a host, whose browser's zone must not become the invitee's. While the invitee is
+ * on the event the plain link stays, since on a site that sends no email it may be their only copy.
  */
 function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[], outsiders: boolean): string {
   const dashboard = `Booking details in the dashboard: ${dashboardLink(ctx, booking.id)}`;
@@ -1934,7 +2021,8 @@ function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[], outsi
     }
   }
   const base = ctx.env.publicBaseUrl.replace(/\/+$/, '');
-  lines.push('', `Reschedule or cancel: ${base}/booking/${encodeURIComponent(booking.id)}?t=${manageToken(ctx, booking.id)}`, dashboard);
+  const asHost = outsiders ? '' : '&as=host';
+  lines.push('', `Reschedule or cancel: ${base}/booking/${encodeURIComponent(booking.id)}?t=${manageToken(ctx, booking.id)}${asHost}`, dashboard);
   return lines.join('\n');
 }
 
@@ -2090,8 +2178,14 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
     const linkMissing = booking.location.type === 'google_meet' && !booking.location.joinUrl;
     // Only the Meet link is outstanding: read it and change nothing, since every change emails each attendee.
     const onlyTheLink = mode === 'reconcile' && g.error === MEET_PENDING;
+    // Google already holds this very time: we wrote it, nothing went wrong since, and the booking has not moved.
+    // That is the case when the work after a move is finished again because its messages could not be queued
+    // the first time. Changing the event again would email every attendee a second "updated" notice for nothing.
+    // A booking that carries a problem is repaired the usual way, by writing the event again.
+    const timeInPlace = !g.error && g.syncedStart === booking.start && g.syncedEnd === booking.end;
+    const patch = !onlyTheLink && !timeInPlace;
     let gone = false;
-    if (!onlyTheLink) {
+    if (patch) {
       try {
         await googleUpdateEvent(ctx, known, g.calendarId, g.eventId, {
           startIso: booking.start,
@@ -2114,22 +2208,31 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
       }
     }
     if (!gone) {
+      // Nothing to change, nothing to fetch and nothing to clear: the event is in order as it is.
+      if (!patch && !linkMissing && !g.error) return { status: 'unchanged' };
       const stillMissing = linkMissing && !meetUrl;
+      const pushed = { start: booking.start, end: booking.end };
       const saved = await updateBooking(ctx, bookingId, (b) => {
         if (!b.google) return b;
         const timeline = [...(b.timeline ?? [])];
-        if (!onlyTheLink) timeline.push({ at, type: 'calendar_updated' });
+        if (patch) timeline.push({ at, type: 'calendar_updated' });
         if (meetUrl) timeline.push({ at, type: 'meet_link_added', detail: 'Google finished creating the Meet link.' });
         return {
           ...b,
-          google: { ...withoutError(b.google), syncedAt: at, ...(meetUrl ? { meetUrl } : {}), ...(stillMissing ? { error: MEET_PENDING } : {}) },
+          google: {
+            ...withoutError(b.google),
+            syncedAt: at,
+            ...(patch ? { syncedStart: pushed.start, syncedEnd: pushed.end } : {}),
+            ...(meetUrl ? { meetUrl } : {}),
+            ...(stillMissing ? { error: MEET_PENDING } : {}),
+          },
           location: b.location.type === 'google_meet' && meetUrl ? { ...b.location, joinUrl: meetUrl } : b.location,
           timeline,
         };
       });
       // Still no link: the retry job asks again (and tells the owner when it gives up, see gcalSyncJob).
       if (stillMissing) return { status: 'failed', error: MEET_PENDING, retry: true, again: movedOn(saved, booking) };
-      return { status: 'synced', again: movedOn(saved, booking) };
+      return { status: patch || meetUrl ? 'synced' : 'unchanged', again: movedOn(saved, booking) };
     }
     // Someone deleted the event in Google. Creating it again below brings it back under the same id.
   }
@@ -2170,7 +2273,14 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
   // Google creates Meet links asynchronously. One it has not finished yet is read again by the retry job.
   const linkPending = input.createMeet && !created.meetUrl;
   const saved = await updateBooking(ctx, bookingId, (b) => {
-    const google: NonNullable<Booking['google']> = { hostId: organizerId, calendarId: created.calendarId, eventId: created.eventId, syncedAt: at };
+    const google: NonNullable<Booking['google']> = {
+      hostId: organizerId,
+      calendarId: created.calendarId,
+      eventId: created.eventId,
+      syncedAt: at,
+      syncedStart: input.startIso,
+      syncedEnd: input.endIso,
+    };
     if (created.htmlLink) google.htmlLink = created.htmlLink;
     if (created.meetUrl) google.meetUrl = created.meetUrl;
     if (linkPending) google.error = MEET_PENDING;

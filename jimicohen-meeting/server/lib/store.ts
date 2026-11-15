@@ -53,6 +53,25 @@ function contentEtag(body: string | Uint8Array): string {
   return createHash('sha256').update(body).digest('hex').slice(0, 32);
 }
 
+/** How many keys one page of a listing holds in the memory and file stores (Netlify Blobs pages itself). */
+export const LIST_PAGE_SIZE = 1000;
+
+function* inPages(keys: string[], size = LIST_PAGE_SIZE): Generator<string[]> {
+  for (let i = 0; i < keys.length; i += size) yield keys.slice(i, i + size);
+}
+
+/**
+ * Keys under `prefix`, a page at a time. Stopping the loop stops the listing, so a caller with a time
+ * budget never waits for pages it will not get to. A store without `listPages` answers in one page.
+ */
+export async function* listKeyPages(kv: KV, prefix: string): AsyncGenerator<string[]> {
+  if (typeof kv.listPages === 'function') {
+    for await (const page of kv.listPages(prefix)) yield page;
+    return;
+  }
+  yield await kv.list(prefix);
+}
+
 function cleanMetadata(metadata: Record<string, unknown> | null | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(metadata ?? {})) {
@@ -103,6 +122,9 @@ export function memoryKV(): KV {
     },
     async list(prefix: string): Promise<string[]> {
       return [...entries.keys()].filter((k) => k.startsWith(prefix)).sort();
+    },
+    async *listPages(prefix: string): AsyncGenerator<string[]> {
+      yield* inPages([...entries.keys()].filter((k) => k.startsWith(prefix)).sort());
     },
     async getBlob(key: string): Promise<{ data: Uint8Array; metadata: Record<string, string> } | null> {
       assertKey(key);
@@ -197,6 +219,29 @@ export function fileKV(dir: string): KV {
     }
   };
 
+  const listKeys = (prefix: string): string[] => {
+    const keys = new Set<string>();
+    let names: string[];
+    try {
+      names = readdirSync(root);
+    } catch (err) {
+      if (isMissing(err)) return [];
+      throw err;
+    }
+    for (const name of names) {
+      const ext = name.endsWith(JSON_EXT) ? JSON_EXT : name.endsWith(BLOB_EXT) ? BLOB_EXT : null;
+      if (!ext || name.startsWith('.')) continue;
+      let key: string;
+      try {
+        key = decodeURIComponent(name.slice(0, -ext.length));
+      } catch {
+        continue; // not one of ours
+      }
+      if (key.startsWith(prefix)) keys.add(key);
+    }
+    return [...keys].sort();
+  };
+
   return {
     async getJSON<T>(key: string): Promise<T | null> {
       const body = readText(fileFor(key, JSON_EXT));
@@ -225,26 +270,10 @@ export function fileKV(dir: string): KV {
       for (const ext of [JSON_EXT, BLOB_EXT, BLOB_EXT + META_EXT]) rmSync(fileFor(key, ext), { force: true });
     },
     async list(prefix: string): Promise<string[]> {
-      const keys = new Set<string>();
-      let names: string[];
-      try {
-        names = readdirSync(root);
-      } catch (err) {
-        if (isMissing(err)) return [];
-        throw err;
-      }
-      for (const name of names) {
-        const ext = name.endsWith(JSON_EXT) ? JSON_EXT : name.endsWith(BLOB_EXT) ? BLOB_EXT : null;
-        if (!ext || name.startsWith('.')) continue;
-        let key: string;
-        try {
-          key = decodeURIComponent(name.slice(0, -ext.length));
-        } catch {
-          continue; // not one of ours
-        }
-        if (key.startsWith(prefix)) keys.add(key);
-      }
-      return [...keys].sort();
+      return listKeys(prefix);
+    },
+    async *listPages(prefix: string): AsyncGenerator<string[]> {
+      yield* inPages(listKeys(prefix));
     },
     async getBlob(key: string): Promise<{ data: Uint8Array; metadata: Record<string, string> } | null> {
       const file = fileFor(key, BLOB_EXT);
@@ -336,6 +365,20 @@ export function blobsKV(storeName = 'meeting', storeFactory?: () => BlobStoreLik
   const deadlineMs = opts?.readDeadlineMs ?? BLOBS_READ_DEADLINE_MS;
   const read = <T>(what: string, work: () => Promise<T>): Promise<T> => readWithin(deadlineMs, what, work);
 
+  /**
+   * `paginate: true` hands back one page per iteration, one request each, and the next request is only
+   * made when the next page is asked for. The deadline is per page, so a long listing that is making
+   * progress is never cut off.
+   */
+  async function* pagesOf(prefix: string): AsyncGenerator<string[]> {
+    const pages = store().list(prefix ? { prefix, paginate: true } : { paginate: true })[Symbol.asyncIterator]();
+    for (;;) {
+      const page = await read(`list ${prefix || '(everything)'}`, () => pages.next());
+      if (page.done) return;
+      yield page.value.blobs.map((blob) => blob.key);
+    }
+  }
+
   return {
     async getJSON<T>(key: string): Promise<T | null> {
       assertKey(key);
@@ -365,15 +408,11 @@ export function blobsKV(storeName = 'meeting', storeFactory?: () => BlobStoreLik
     },
     async list(prefix: string): Promise<string[]> {
       const keys: string[] = [];
-      // `paginate: true` hands back one page per iteration; walking the iterator to its end reads every page.
-      // The deadline is per page (one request each), so a long listing that is making progress is never cut off.
-      const pages = store().list(prefix ? { prefix, paginate: true } : { paginate: true })[Symbol.asyncIterator]();
-      for (;;) {
-        const page = await read(`list ${prefix || '(everything)'}`, () => pages.next());
-        if (page.done) break;
-        for (const blob of page.value.blobs) keys.push(blob.key);
-      }
+      for await (const page of pagesOf(prefix)) keys.push(...page);
       return [...new Set(keys)].sort();
+    },
+    listPages(prefix: string): AsyncGenerator<string[]> {
+      return pagesOf(prefix);
     },
     async getBlob(key: string): Promise<{ data: Uint8Array; metadata: Record<string, string> } | null> {
       assertKey(key);

@@ -24,7 +24,7 @@
  *   GET    /admin/bookings/:id                  { booking }
  *   POST   /admin/bookings/:id/cancel           { booking }
  *   POST   /admin/bookings/:id/no-show          { booking }
- *   DELETE /admin/bookings/:id                  { ok } (cancelled or past bookings only)
+ *   DELETE /admin/bookings/:id                  { ok } (cancelled or past bookings only; ?leaveCalendarEvent=1)
  *   GET    /admin/integrations                  IntegrationsStatus
  *   PUT    /admin/integrations                  IntegrationsStatus
  *   POST   /admin/integrations/test             { ok, detail }
@@ -47,7 +47,7 @@ import { randomId } from '../lib/crypto';
 import type { Ctx } from '../lib/ctx';
 import { disconnectGoogle } from '../lib/google';
 import { type Handler, HttpError, json, readJson, route, type Route } from '../lib/http';
-import { replanBookingReminders } from '../lib/jobs';
+import { replanBookingReminders, replanReminderCalls } from '../lib/jobs';
 import {
   assetUrl,
   deleteAsset,
@@ -145,6 +145,20 @@ async function replanReminders(ctx: Ctx, eventType: EventType): Promise<void> {
   ctx.log('info', 'event types: reminders re-planned', { eventTypeId: eventType.id, bookings: ids.length, failed });
 }
 
+/**
+ * After the calling hours changed: moves the reminder calls already waiting in the queue inside the
+ * new hours, as the Settings hint says. Runs after the response and never fails the save.
+ */
+function replanCallsInBackground(ctx: Ctx, hours: SiteSettings['assistant']): void {
+  ctx.waitUntil(
+    replanReminderCalls(ctx, hours, {
+      onError: (jobId, err) => ctx.log('warn', 'settings: could not move a reminder call into the new calling hours', { jobId, error: err instanceof Error ? err.name : 'unknown' }),
+    })
+      .then((r) => ctx.log('info', 'settings: reminder calls re-planned for the new calling hours', r))
+      .catch((err) => ctx.log('error', 'settings: re-planning reminder calls failed', { error: err instanceof Error ? err.name : 'unknown' })),
+  );
+}
+
 function replanInBackground(ctx: Ctx, eventType: EventType): void {
   ctx.waitUntil(
     replanReminders(ctx, eventType).catch((err) => {
@@ -222,6 +236,11 @@ export const routes: Route[] = [
     const name = site.profile.name.trim();
     if (name !== '' && name !== current.profile.name.trim()) {
       await updateHost(ctx, site.ownerHostId, (h) => (h.name === name ? h : { ...h, name }));
+    }
+    // Calls already planned move with the calling hours.
+    const before = current.assistant;
+    if (site.assistant.callWindowStartHour !== before?.callWindowStartHour || site.assistant.callWindowEndHour !== before?.callWindowEndHour) {
+      replanCallsInBackground(ctx, site.assistant);
     }
     return json({ site });
   }),
@@ -420,9 +439,11 @@ export const routes: Route[] = [
 
   // Erases a cancelled or past booking for good (a request to delete someone's data). An upcoming
   // meeting is refused: cancel it first. Deleting one that is already gone answers ok as well.
-  admin('DELETE', '/admin/bookings/:id', async ({ ctx, params }) => {
-    await eraseBooking(ctx, params.id);
-    return json({ ok: true });
+  // ?leaveCalendarEvent=1: the owner knows a cancelled meeting's event stays on Google Calendar, and deletes anyway.
+  admin('DELETE', '/admin/bookings/:id', async ({ ctx, params, url }) => {
+    const leave = url.searchParams.get('leaveCalendarEvent');
+    const result = await eraseBooking(ctx, params.id, { leaveCalendarEvent: leave === '1' || leave === 'true' });
+    return json(result.calendarEventLeft ? { ok: true, calendarEventLeft: true } : { ok: true });
   }),
 
   // ── integrations

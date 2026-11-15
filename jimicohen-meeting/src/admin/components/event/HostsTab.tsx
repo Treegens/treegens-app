@@ -1,14 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ChevronRight, Shuffle, User, Users } from 'lucide-react';
-import type { AdminHost, EventKind, SharedHoursCheck } from '../../../../shared/types';
-import { checkSharedHours } from '../../../lib/api';
+import type { AdminHost, EventKind } from '../../../../shared/types';
 import { zoneCity } from '../../../lib/tz';
 import { Avatar, Badge, ButtonLink, RadioGroup, cx } from '../../../ui';
 import type { BadgeTone } from '../../../ui';
 import { firstName, namesList } from '../../format';
 import { useAdmin } from '../../state';
 import { Notice, Section } from '../Page';
+import { SharedHoursNotice, useSharedHours } from './SharedHoursNotice';
 import type { TabProps } from './shared';
 
 function calendarStatus(host: AdminHost): { label: string; tone: BadgeTone } {
@@ -81,42 +80,6 @@ function OverlapDiagram({ kind, names }: { kind: EventKind; names: string[] }) {
   );
 }
 
-/**
- * For a joint meeting: do the hosts' working hours ever line up? Asked of the server, which runs
- * the booking page's own slot engine, a moment after the hosts, lengths or hours on screen change.
- */
-function useSharedHours(draft: TabProps['draft'], hostsVersion: string): SharedHoursCheck | null {
-  const [result, setResult] = useState<SharedHoursCheck | null>(null);
-  const joint = draft.kind === 'collective' && draft.hostIds.length >= 2;
-  const key = joint ? JSON.stringify([draft.id, draft.kind, draft.hostIds, draft.durations, draft.scheduling, hostsVersion]) : '';
-  const latest = useRef(draft);
-  latest.current = draft;
-
-  useEffect(() => {
-    if (!key) {
-      setResult(null);
-      return;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      const d = latest.current;
-      checkSharedHours({ id: d.id, title: d.title, kind: d.kind, hostIds: d.hostIds, durations: d.durations, scheduling: d.scheduling }, { signal: controller.signal }).then(
-        (answer) => {
-          if (!controller.signal.aborted) setResult(answer);
-        },
-        // A check that cannot run has nothing to say. Saving still works.
-        () => undefined,
-      );
-    }, 400);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [key]);
-
-  return key ? result : null;
-}
-
 export function HostsTab({ draft, update, errors }: TabProps) {
   const { data, ownerHost } = useAdmin();
   const hosts = data.hosts;
@@ -124,9 +87,7 @@ export function HostsTab({ draft, update, errors }: TabProps) {
   const multi = draft.kind !== 'solo';
   const enoughHosts = hosts.length >= 2;
   const names = selected.map((id) => firstName(hosts.find((h) => h.id === id)?.name ?? ''));
-  // Hours and zones live on the hosts: a change there (another tab, a refresh) asks again.
-  const hostsVersion = useMemo(() => JSON.stringify(hosts.filter((h) => draft.hostIds.includes(h.id)).map((h) => [h.id, h.timezone, h.schedules, h.defaultScheduleId])), [hosts, draft.hostIds]);
-  const hours = useSharedHours(draft, hostsVersion);
+  const hours = useSharedHours(draft);
 
   const setKind = (kind: EventKind) => {
     if (kind === 'solo') {
@@ -240,21 +201,7 @@ export function HostsTab({ draft, update, errors }: TabProps) {
           {hostsSummary(draft.kind, names)}
         </p>
 
-        {hours && !hours.ok && hours.message ? (
-          <Notice
-            tone="warning"
-            title="Nobody can book this meeting"
-            action={
-              hours.href ? (
-                <ButtonLink variant="secondary" size="sm" to={hours.href} iconRight={<ChevronRight size={15} />}>
-                  {hours.href === '/admin/availability' ? 'Your hours' : 'Team'}
-                </ButtonLink>
-              ) : undefined
-            }
-          >
-            {hours.message}
-          </Notice>
-        ) : null}
+        <SharedHoursNotice answer={hours} />
 
         {selected.some((id) => {
           const h = hosts.find((x) => x.id === id);

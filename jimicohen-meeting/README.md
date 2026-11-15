@@ -75,6 +75,10 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
   (and the Gmail API if emails should be sent from Gmail), add the redirect URI
   `https://jimicohen.com/meeting/api/google/callback`, and publish the consent screen to **In production**.
   While it is in "Testing", Google ends the connection after 7 days.
+  Press **Connect** on the public address, `https://jimicohen.com/meeting/admin` (a co-host's private link already
+  uses it). The connection is checked with a cookie set on that address, and Google always sends you back there, so a
+  Connect pressed on the `jimicohen-meeting.netlify.app` address is turned away with a note asking you to press it
+  again on the page it opens.
 - **Email**: a Resend API key with a verified sender, or "send from my Gmail".
 - **Texts and reminder calls**: a Twilio Account SID, Auth Token and phone number. For replies by text, set the
   number's incoming message webhook to `https://jimicohen.com/meeting/api/twilio/sms` (POST).

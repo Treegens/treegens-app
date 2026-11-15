@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { newEventType } from '../../shared/defaults';
 import type { CreateBookingRequest, CreateBookingResponse, EventType, GetBookingResponse, PublicEventResponse, PublicSite, SlotsResponse } from '../../shared/types';
 import { handle } from '../../server/api';
+import { sessionSetCookie } from '../../server/lib/auth';
 import { manageToken } from '../../server/lib/booking';
 import { seal, sha256Hex } from '../../server/lib/crypto';
 import type { Env } from '../../server/lib/ctx';
-import { getBooking, getBookingIndex, getEventType, getSite, listJobs, putAsset, saveEventType, updateHost } from '../../server/lib/repo';
+import { getBooking, getBookingIndex, getEventType, getSite, listJobs, putAsset, saveEventType, updateBooking, updateHost } from '../../server/lib/repo';
 import * as client from '../../src/lib/api';
-import { apiRequest, makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
+import { apiRequest, cookiePair, makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
 
 // ───────────────────────── fixtures ─────────────────────────
 
@@ -505,7 +506,96 @@ describe('manage link routes', () => {
     ctx.clock.set('2026-11-18T15:01:00.000Z');
     const tooLate = await post(ctx, `/public/bookings/${later.booking.id}/cancel`, { t: later.manageToken, as: 'host' });
     expect(tooLate.status).toBe(410);
+    // The page names nobody: any host may hold that link.
+    const view = (await (await get(ctx, `/public/bookings/${booking.id}?t=${token}`)).json()) as GetBookingResponse;
+    expect(view.booking.cancellation).toEqual({ at: NOW, by: 'host' });
     await ctx.settle();
+  });
+
+  describe('a host link opened by the signed-in owner', () => {
+    const APP_ADDRESS = 'https://jimicohen-meeting.netlify.app/meeting';
+    const ownerCookie = (ctx: TestCtx) => cookiePair(sessionSetCookie(ctx, 1));
+
+    /** A booking its invitee has already moved five times, the most the booking page allows. */
+    async function movedFiveTimes(ctx: TestCtx): Promise<CreateBookingResponse> {
+      const made = await book(ctx, { timezone: 'America/New_York' });
+      await updateBooking(ctx, made.booking.id, (b) => ({ ...b, rescheduleCount: 5 }));
+      return made;
+    }
+
+    it('moves the meeting without the invitee\'s limits, on the public address and on the app\'s own', async () => {
+      const ctx = await setup();
+      const { booking, manageToken: token } = await movedFiveTimes(ctx);
+      const path = `/public/bookings/${booking.id}/reschedule`;
+      const at = (hour: number) => `2026-11-19T${hour}:00:00.000Z`;
+
+      // Without the session, or without the host mark, it is the booking page as everyone else has it.
+      const coHost = await post(ctx, path, { t: token, start: at(11), as: 'host' });
+      expect(coHost.status).toBe(409);
+      expect((await coHost.json()).error).toEqual({
+        code: 'move_limit',
+        message:
+          'This meeting has been moved 5 times already, so it cannot be moved again from this link. The owner can still move it here while signed in to the dashboard in this browser. Or cancel it and ask the invitee to book a new time.',
+      });
+      const unmarked = await post(ctx, path, { t: token, start: at(11) }, { cookie: ownerCookie(ctx) });
+      expect(unmarked.status).toBe(409);
+      expect((await unmarked.json()).error.message).toMatch(/get in touch with your host/);
+      // A session for an older password counts for nothing.
+      const stale = await post(ctx, path, { t: token, start: at(11), as: 'host' }, { cookie: cookiePair(sessionSetCookie(ctx, 7)) });
+      expect(stale.status).toBe(409);
+
+      const moved = await post(ctx, path, { t: token, start: at(11), timezone: 'Africa/Nairobi', as: 'host' }, { cookie: ownerCookie(ctx) });
+      expect(moved.status).toBe(200);
+      expect((await moved.json()).booking).toMatchObject({ start: at(11), invitee: { timezone: 'America/New_York' } });
+      // More than three an hour, from the app's own address, where the owner may just as well be signed in.
+      for (const hour of [12, 13, 14]) {
+        const res = await post(ctx, path, { t: token, start: at(hour), as: 'host' }, { cookie: ownerCookie(ctx), baseUrl: APP_ADDRESS });
+        expect(res.status, `move to ${hour}:00`).toBe(200);
+      }
+      const stored = (await getBooking(ctx, booking.id))!;
+      expect(stored).toMatchObject({ start: at(14), rescheduleCount: 9, invitee: { timezone: 'America/New_York' } });
+      expect(stored.timeline.filter((t) => t.type === 'rescheduled').at(-1)?.detail).toMatch(/by the owner, from the booking page$/);
+
+      // The same-origin check still applies to the owner.
+      const crossSite = await post(ctx, path, { t: token, start: at(15), as: 'host' }, { cookie: ownerCookie(ctx), origin: 'https://evil.example' });
+      expect(crossSite.status).toBe(403);
+      // And the token: the session does not open another booking's page.
+      const wrongToken = await post(ctx, path, { t: 'x'.repeat(64), start: at(15), as: 'host' }, { cookie: ownerCookie(ctx) });
+      expect(wrongToken.status).toBe(404);
+      await ctx.settle();
+    });
+
+    it('may change a meeting that has started, which the invitee and a co-host may not, and the page offers it', async () => {
+      const ctx = await setup();
+      const { booking, manageToken: token } = await book(ctx);
+      ctx.clock.set('2026-11-18T14:05:00.000Z');
+      const view = async (query: string, cookie?: string) =>
+        ((await (await handle(apiRequest('GET', `/public/bookings/${booking.id}?t=${token}${query}`, cookie ? { cookie } : {}), ctx)).json()) as GetBookingResponse).booking;
+
+      expect(await view('&as=host')).toMatchObject({ canReschedule: false, canCancel: false });
+      expect(await view('', ownerCookie(ctx))).toMatchObject({ canReschedule: false, canCancel: false });
+      expect(await view('&as=host', ownerCookie(ctx))).toMatchObject({ canReschedule: true, canCancel: true });
+
+      expect((await post(ctx, `/public/bookings/${booking.id}/cancel`, { t: token, as: 'host' })).status).toBe(410);
+      const res = await post(ctx, `/public/bookings/${booking.id}/cancel`, { t: token, as: 'host', reason: 'Ran late' }, { cookie: ownerCookie(ctx), baseUrl: APP_ADDRESS });
+      expect(res.status).toBe(200);
+      // The page can say who it was: the owner, by name.
+      expect((await res.json()).booking.cancellation).toEqual({ at: '2026-11-18T14:05:00.000Z', by: 'host', reason: 'Ran late', byName: 'Jimi Cohen' });
+      const stored = (await getBooking(ctx, booking.id))!;
+      expect(stored.cancellation).toEqual({ at: '2026-11-18T14:05:00.000Z', by: 'host', reason: 'Ran late' });
+      expect(stored.timeline.find((t) => t.type === 'cancelled')?.detail).toBe('Cancelled by the owner, from the booking page: Ran late');
+      await ctx.settle();
+    });
+
+    it('offers nothing to change once the meeting is over, as the dashboard does', async () => {
+      const ctx = await setup();
+      const { booking, manageToken: token } = await book(ctx);
+      // The meeting ran 14:00 to 14:15. Cancelling it now would only send Ada a cancellation for a meeting that took place.
+      ctx.clock.set('2026-11-18T14:20:00.000Z');
+      const res = await handle(apiRequest('GET', `/public/bookings/${booking.id}?t=${token}&as=host`, { cookie: ownerCookie(ctx) }), ctx);
+      expect(((await res.json()) as GetBookingResponse).booking).toMatchObject({ canReschedule: false, canCancel: false });
+      await ctx.settle();
+    });
   });
 
   it('answers a booking request sent again with the booking its first try made', async () => {

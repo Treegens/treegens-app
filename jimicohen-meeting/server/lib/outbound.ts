@@ -7,10 +7,16 @@
  *   per number   a handful of texts and calls to any one number
  *   site-wide    a ceiling for all invitee texts or calls together; reaching it alerts the owner once that day
  *
+ * Only what really goes out counts. A send takes its place just before it is handed to Twilio (so
+ * sends at the same moment cannot pass a limit together) and gives it back when nothing went out:
+ * Twilio is not set up, the number opted out, or Twilio refused or failed it. A send that failed and
+ * is tried again therefore counts once, when it goes through. A send Twilio may have taken without
+ * saying so in time stays counted.
+ *
  * Not counted: texts to hosts (their own notifications and alerts), the dashboard's test text or
  * call, and replies to texts people send in. Those go to numbers the owner chose.
  */
-import { rateLimit } from './auth';
+import { rateLimitTake, type RateLimitHit } from './auth';
 import type { Ctx } from './ctx';
 import { HttpError } from './http';
 import { enqueueJob } from './jobs';
@@ -25,7 +31,7 @@ export const CALLS_PER_NUMBER_PER_DAY = 2;
 export const TEXTS_PER_DAY = 150;
 export const CALLS_PER_DAY = 40;
 
-/** Rate-limit windows are kept to one day: housekeeping removes older counters after two. */
+/** One UTC day. */
 const DAY_SEC = 86_400;
 
 /** The limiter key for a number: digits only, so "+1 202 555 0143" and "+12025550143" count together. */
@@ -34,13 +40,12 @@ function numberId(phone: string): string {
   return digits ? `+${digits}` : String(phone ?? '').trim() || 'unknown';
 }
 
-/** True when the hit was counted, false when the limit was already reached. Storage trouble is thrown. */
-async function countHit(ctx: Ctx, bucket: string, id: string, limit: number): Promise<boolean> {
+/** The counted hit, or null when the limit was already reached. Storage trouble is thrown. */
+async function countHit(ctx: Ctx, bucket: string, id: string, limit: number): Promise<RateLimitHit | null> {
   try {
-    await rateLimit(ctx, bucket, id, limit, DAY_SEC);
-    return true;
+    return await rateLimitTake(ctx, bucket, id, limit, DAY_SEC);
   } catch (err) {
-    if (err instanceof HttpError && err.status === 429) return false;
+    if (err instanceof HttpError && err.status === 429) return null;
     throw err;
   }
 }
@@ -82,25 +87,52 @@ async function alertOwnerOnce(ctx: Ctx, channel: OutboundChannel, ceiling: numbe
   }
 }
 
+/** A text or call that has its place in today's limits. */
+export interface OutboundPass {
+  /** Gives the place back: the text or call did not go out after all. Never throws. */
+  release(): Promise<void>;
+}
+
 /**
- * Counts one text or reminder call to `phone` against today's limits. False means it must not go
- * out today; the caller reports it as skipped ('daily_limit'), never as a failure to retry.
+ * Takes a place for one text or reminder call to `phone` in today's limits, right before it is sent.
+ * Null means it must not go out today; the caller reports it as skipped ('daily_limit'), never as a
+ * failure to retry. When the send then turns out not to go out, the caller calls `release()`.
  * The number's own limit is checked first, so a flood aimed at one number does not use up the
  * site's allowance for everybody else.
  */
-export async function outboundAllowed(ctx: Ctx, channel: OutboundChannel, phone: string): Promise<boolean> {
+export async function reserveOutbound(ctx: Ctx, channel: OutboundChannel, phone: string): Promise<OutboundPass | null> {
   const perNumber = channel === 'sms' ? TEXTS_PER_NUMBER_PER_DAY : CALLS_PER_NUMBER_PER_DAY;
-  if (!(await countHit(ctx, `out-${channel}`, numberId(phone), perNumber))) {
+  const numberHit = await countHit(ctx, `out-${channel}`, numberId(phone), perNumber);
+  if (!numberHit) {
     ctx.log('warn', 'outbound: the daily limit for one number was reached', { channel });
-    return false;
+    return null;
   }
   const ceiling = channel === 'sms' ? TEXTS_PER_DAY : CALLS_PER_DAY;
-  if (await countHit(ctx, `out-${channel}-all`, 'site', ceiling)) return true;
+  let siteHit: RateLimitHit | null;
+  try {
+    siteHit = await countHit(ctx, `out-${channel}-all`, 'site', ceiling);
+  } catch (err) {
+    await numberHit.refund();
+    throw err;
+  }
+  if (siteHit) {
+    const hits = [numberHit, siteHit];
+    let released = false;
+    return {
+      release: async () => {
+        if (released) return;
+        released = true;
+        await Promise.all(hits.map((hit) => hit.refund()));
+      },
+    };
+  }
+  // Nothing goes out, so the number is not charged for it either.
+  await numberHit.refund();
   ctx.log('warn', 'outbound: the daily limit for the whole site was reached', { channel, ceiling });
   try {
     await alertOwnerOnce(ctx, channel, ceiling);
   } catch (err) {
     ctx.log('error', 'outbound: could not queue the alert about the daily limit', { channel, error: err instanceof Error ? err.message : String(err) });
   }
-  return false;
+  return null;
 }

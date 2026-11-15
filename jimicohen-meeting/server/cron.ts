@@ -1,7 +1,8 @@
 /**
  * What the scheduled function does every two minutes: send everything that is due, then, at most
- * every half hour, housekeeping. Each housekeeping step stands alone: one that fails is logged and
- * reported in the summary, and the others still run. The run as a whole never fails because of them.
+ * every half hour, housekeeping, and last, on every run, removing rate limit counters whose window is
+ * over. Each housekeeping step stands alone: one that fails is logged and reported in the summary,
+ * and the others still run. The run as a whole never fails because of them.
  */
 import type { CallRecord, Host } from '../shared/types';
 import { alertCalendarTrouble, reconcileBookings, registerBookingJobHandlers } from './lib/booking';
@@ -33,6 +34,12 @@ const PRUNE_GRACE_MS = 1_500;
 const MIN_CLEANUP_MS = 1_000;
 
 const EPHEMERAL_MAX_AGE_MS = 2 * DAY_MS;
+/**
+ * Rate limit counters one run may remove. A visitor makes about one a minute on the booking page,
+ * and a flood from many addresses makes them faster than a half-hourly sweep could ever remove, so
+ * they are swept on every run, with all the time the run has left. The time is the real bound.
+ */
+const RATE_LIMIT_PRUNE_LIMIT = 10_000;
 const CALL_MAX_AGE_MS = 90 * DAY_MS;
 const CALL_SCAN_LIMIT = 2000;
 const READ_CONCURRENCY = 16;
@@ -156,11 +163,12 @@ async function housekeeping(ctx: Ctx, waitMs: { network: number; reconcile: numb
   // failed calendar writes, and a backlog of old keys must never keep it from running.
   out.bookings = await networkStep(ctx, 'the booking check', waitMs.reconcile, () => reconcileBookings(ctx));
 
+  // Rate limit counters are not part of this: every run removes them (pruneRateLimits).
   const pruneBudget = Math.min(PRUNE_BUDGET_MS, left() - PRUNE_GRACE_MS);
   out.pruned =
     pruneBudget >= MIN_CLEANUP_MS
-      ? await networkStep(ctx, 'pruning old claims and rate limit counters', pruneBudget + PRUNE_GRACE_MS, () =>
-          pruneEphemeral(ctx, EPHEMERAL_MAX_AGE_MS, PRUNE_LIMIT_PER_PREFIX, pruneBudget),
+      ? await networkStep(ctx, 'pruning old claims and cache entries', pruneBudget + PRUNE_GRACE_MS, () =>
+          pruneEphemeral(ctx, EPHEMERAL_MAX_AGE_MS, PRUNE_LIMIT_PER_PREFIX, pruneBudget, [KEYS.claimPrefix, KEYS.cachePrefix]),
         )
       : { skipped: 'out_of_time' };
   out.calls =
@@ -168,6 +176,18 @@ async function housekeeping(ctx: Ctx, waitMs: { network: number; reconcile: numb
       ? await networkStep(ctx, 'pruning old call records', left(), () => pruneOldCalls(ctx, deadlineMs - PRUNE_GRACE_MS))
       : { skipped: 'out_of_time' };
   return out;
+}
+
+/**
+ * Removes the rate limit counters whose window is over, with what is left of the run's time (never
+ * past `deadlineMs`). What it does not get to waits for the next run, two minutes later.
+ */
+async function pruneRateLimits(ctx: Ctx, deadlineMs: number): Promise<unknown> {
+  const budget = deadlineMs - ctx.now().getTime() - PRUNE_GRACE_MS;
+  if (budget < MIN_CLEANUP_MS) return { skipped: 'out_of_time' };
+  return networkStep(ctx, 'pruning old rate limit counters', budget + PRUNE_GRACE_MS, () =>
+    pruneEphemeral(ctx, EPHEMERAL_MAX_AGE_MS, RATE_LIMIT_PRUNE_LIMIT, budget, [KEYS.rateLimitPrefix]),
+  );
 }
 
 export interface ScheduledRunOptions {
@@ -193,18 +213,19 @@ export async function runScheduled(ctx: Ctx, opts?: ScheduledRunOptions): Promis
 
   if (!due) {
     summary.housekeeping = unreadable ? 'skipped' : 'not_due';
-    return summary;
+  } else {
+    // Marked before the work starts: a step that fails or runs long must not bring housekeeping back every two minutes.
+    const marked = await step(ctx, 'saving the housekeeping marker', async () => {
+      await cacheSet(ctx, HOUSEKEEPING_MARK, { at: ctx.now().toISOString() }, HOUSEKEEPING_EVERY_SEC);
+      return true;
+    });
+    if (marked !== true) {
+      summary.housekeeping = 'skipped';
+    } else {
+      const wait = typeof opts?.stepWaitMs === 'number' && opts.stepWaitMs >= 0 ? opts.stepWaitMs : null;
+      summary.housekeeping = await housekeeping(ctx, { network: wait ?? NETWORK_STEP_MS, reconcile: wait ?? RECONCILE_STEP_MS }, startedMs + RUN_DEADLINE_MS);
+    }
   }
-  // Marked before the work starts: a step that fails or runs long must not bring housekeeping back every two minutes.
-  const marked = await step(ctx, 'saving the housekeeping marker', async () => {
-    await cacheSet(ctx, HOUSEKEEPING_MARK, { at: ctx.now().toISOString() }, HOUSEKEEPING_EVERY_SEC);
-    return true;
-  });
-  if (marked !== true) {
-    summary.housekeeping = 'skipped';
-    return summary;
-  }
-  const wait = typeof opts?.stepWaitMs === 'number' && opts.stepWaitMs >= 0 ? opts.stepWaitMs : null;
-  summary.housekeeping = await housekeeping(ctx, { network: wait ?? NETWORK_STEP_MS, reconcile: wait ?? RECONCILE_STEP_MS }, startedMs + RUN_DEADLINE_MS);
+  summary.rateLimits = await pruneRateLimits(ctx, startedMs + RUN_DEADLINE_MS);
   return summary;
 }

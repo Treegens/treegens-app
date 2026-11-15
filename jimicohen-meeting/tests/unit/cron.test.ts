@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultOwnerHost } from '../../shared/defaults';
 import type { BookingIndexEntry, CallRecord, Host, HostGoogle, Job } from '../../shared/types';
 import { runScheduled } from '../../server/cron';
+import { rateLimit } from '../../server/lib/auth';
 import { createBooking } from '../../server/lib/booking';
 import { seal } from '../../server/lib/crypto';
 import type { Env, KV } from '../../server/lib/ctx';
@@ -177,7 +178,7 @@ describe('runScheduled: housekeeping', () => {
     await updateHost(ctx, OWNER, (h) => ({ ...h, google: google(ctx), timezoneMode: 'google' }));
     const summary = await runScheduled(ctx);
     expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
-    expect(Object.keys(summary).sort()).toEqual(['at', 'housekeeping', 'jobs']);
+    expect(Object.keys(summary).sort()).toEqual(['at', 'housekeeping', 'jobs', 'rateLimits']);
   });
 
   it('follows the Google Calendar zone of hosts who asked for that, and leaves the others alone', async () => {
@@ -251,40 +252,69 @@ describe('runScheduled: housekeeping', () => {
     expect((await alerts(ctx)).map((j) => j.subject)).toEqual(['A calendar needs attention: Alex Kim']);
   });
 
-  it('removes claims and rate limit counters older than two days, and keeps recent ones', async () => {
+  it('removes claims older than two days, expired cache entries and rate limit counters that are over, and keeps recent ones', async () => {
     const ctx = await setup();
     await claim(ctx, 'old-claim');
+    // A counter in the layout from before the window's length was in the key: two days, as before.
     await ctx.kv.setJSON('rl/slots/abc/1000', { n: 3 });
     await cacheSet(ctx, 'old-cache', { v: 1 }, 60);
     ctx.clock.advance(2 * DAY + HOUR);
     await claim(ctx, 'fresh-claim');
     const freshWindow = Math.floor(ctx.now().getTime() / 60_000) * 60_000;
     await ctx.kv.setJSON(`rl/slots/abc/${freshWindow}`, { n: 1 });
+    await ctx.kv.setJSON(`rl/slots/def/${freshWindow}-60`, { n: 1 });
+    await ctx.kv.setJSON(`rl/slots/def/${freshWindow - 3 * MINUTE}-60`, { n: 1 });
     await cacheSet(ctx, 'fresh-cache', { v: 1 }, 60);
     // Expired a moment ago: an expired cache entry is never read again, so it goes at once.
     await cacheSet(ctx, 'just-expired', { v: 1 }, 0);
 
     const summary = await runScheduled(ctx);
-    expect(housekeeping(summary).pruned).toBe(4);
+    expect(housekeeping(summary).pruned).toBe(3);
+    expect(summary.rateLimits).toBe(2);
     const keys = await ctx.kv.list('');
     expect(keys).not.toContain('claims/old-claim');
     expect(keys).not.toContain('rl/slots/abc/1000');
+    expect(keys).not.toContain(`rl/slots/def/${freshWindow - 3 * MINUTE}-60`);
     expect(keys).not.toContain('cache/old-cache');
     expect(keys).not.toContain('cache/just-expired');
     expect(keys).toContain('claims/fresh-claim');
     expect(keys).toContain(`rl/slots/abc/${freshWindow}`);
+    expect(keys).toContain(`rl/slots/def/${freshWindow}-60`);
     expect(keys).toContain('cache/fresh-cache');
+  });
+
+  it('removes rate limit counters on every run, also when housekeeping is not due', async () => {
+    const ctx = await setup();
+    expect(typeof housekeeping(await runScheduled(ctx))).toBe('object');
+    for (let i = 0; i < 5; i++) await rateLimit(ctx, 'slots', `198.51.100.${i}`, 60, 60);
+    await rateLimit(ctx, 'login', '203.0.113.7', 8, 600);
+
+    ctx.clock.advance(2 * MINUTE);
+    const next = await runScheduled(ctx);
+    expect(next.housekeeping).toBe('not_due');
+    expect(next.rateLimits).toBe(5);
+    expect((await ctx.kv.list('rl/')).map((k) => k.split('/')[1])).toEqual(['login']);
+    ctx.clock.advance(10 * MINUTE);
+    expect(await runScheduled(ctx)).toMatchObject({ housekeeping: 'not_due', rateLimits: 1 });
+    expect(await ctx.kv.list('rl/')).toEqual([]);
   });
 
   it('repairs the booking index before it prunes, so a pruning backlog cannot hold the repair up', async () => {
     const inner = memoryKV();
     let indexAtPruneStart: BookingIndexEntry[] | null = null;
+    const notePruneStart = async (prefix: string): Promise<void> => {
+      // The first listing of a pruned prefix is where pruning starts.
+      if (indexAtPruneStart === null && ['rl/', 'claims/', 'cache/'].includes(prefix)) indexAtPruneStart = (await inner.getJSON<BookingIndexEntry[]>('index/bookings')) ?? [];
+    };
     const kv: KV = {
       ...inner,
       async list(prefix) {
-        // The first listing of a pruned prefix is where pruning starts.
-        if (indexAtPruneStart === null && ['rl/', 'claims/', 'cache/'].includes(prefix)) indexAtPruneStart = (await inner.getJSON<BookingIndexEntry[]>('index/bookings')) ?? [];
+        await notePruneStart(prefix);
         return inner.list(prefix);
+      },
+      async *listPages(prefix) {
+        await notePruneStart(prefix);
+        yield* inner.listPages!(prefix);
       },
     };
     const ctx = await setup({ kv });
@@ -323,10 +353,13 @@ describe('runScheduled: housekeeping', () => {
     ctx.clock.advance(3 * DAY);
     slowIndex = true;
 
-    const done = housekeeping(await runScheduled(ctx));
+    const summary = await runScheduled(ctx);
+    const done = housekeeping(summary);
     expect(done.bookings).toMatchObject({ checked: 0 });
     expect(done.pruned).toEqual({ skipped: 'out_of_time' });
     expect(done.calls).toEqual({ skipped: 'out_of_time' });
+    // The rate limit sweep at the end of every run never goes past the run's deadline either.
+    expect(summary.rateLimits).toEqual({ skipped: 'out_of_time' });
     expect(await ctx.kv.list('claims/')).toContain('claims/old-claim');
 
     // The next run with time to spare does it, the daily call check included.
@@ -386,8 +419,12 @@ describe('runScheduled: housekeeping', () => {
     const kv: KV = {
       ...inner,
       async list(prefix) {
-        if (broken && (prefix === 'calls/' || prefix === 'rl/')) throw new Error(`cannot list ${prefix}`);
+        if (broken && (prefix === 'calls/' || prefix === 'rl/' || prefix === 'claims/')) throw new Error(`cannot list ${prefix}`);
         return inner.list(prefix);
+      },
+      async *listPages(prefix) {
+        if (broken && (prefix === 'rl/' || prefix === 'claims/')) throw new Error(`cannot list ${prefix}`);
+        yield* inner.listPages!(prefix);
       },
     };
     const ctx = await setup({ kv });
@@ -397,15 +434,20 @@ describe('runScheduled: housekeeping', () => {
 
     const summary = await runScheduled(ctx);
     const done = housekeeping(summary);
-    expect(done.pruned).toEqual({ error: 'cannot list rl/' });
+    expect(done.pruned).toEqual({ error: 'cannot list claims/' });
     expect(done.calls).toEqual({ error: 'cannot list calls/' });
+    expect(summary.rateLimits).toEqual({ error: 'cannot list rl/' });
     // A zone lookup that fails leaves the host as it was and is not an error of the run.
     expect(done.timezones).toEqual({ checked: 1, changed: 0 });
     expect(done.calendars).toEqual({ checked: 1, broken: 0, alerted: 0 });
     expect(done.bookings).toMatchObject({ checked: 0 });
     expect(summary.jobs).toEqual({ processed: 0, failed: 0, remaining: 0 });
     expect(ctx.logs.filter((l) => l.level === 'error').map((l) => l.msg)).toEqual(
-      expect.arrayContaining(['cron: pruning old claims and rate limit counters failed', 'cron: pruning old call records failed']),
+      expect.arrayContaining([
+        'cron: pruning old claims and cache entries failed',
+        'cron: pruning old call records failed',
+        'cron: pruning old rate limit counters failed',
+      ]),
     );
     expect((await getHost(ctx, OWNER))?.timezone).toBe('UTC');
   });
@@ -461,5 +503,75 @@ describe('runScheduled: housekeeping', () => {
     release();
     await ctx.settle();
     expect((await getHost(ctx, OWNER))?.timezone).toBe('Europe/Berlin');
+  });
+});
+
+// ───────────────────────── rate limit counters under a flood ─────────────────────────
+
+describe('runScheduled: rate limit counters under a flood', () => {
+  it('keeps the counters bounded while a flood of addresses asks for times, and clears them within two runs after it stops', async () => {
+    // A store that takes time, the way the real one does: every delete and every page of a listing moves
+    // the run's clock on. Sixteen deletes run at once, so 3 ms each stands for about 50 ms per delete.
+    const inner = memoryKV();
+    let charge: TestCtx['clock'] | null = null;
+    const kv: KV = {
+      ...inner,
+      async delete(key) {
+        charge?.advance(3);
+        return inner.delete(key);
+      },
+      async *listPages(prefix) {
+        for await (const page of inner.listPages!(prefix)) {
+          charge?.advance(150);
+          yield page;
+        }
+      },
+    };
+    const ctx = await setup({ kv });
+    const counters = async (): Promise<number> => (await inner.list('rl/')).length;
+
+    // 1,200 new addresses a minute for an hour (72,000 in all, each asking for times once), in steps of
+    // 10 seconds, the way GET /public/slots counts them. The scheduled run comes every two minutes.
+    const PER_MINUTE = 1200;
+    const STEP_MS = 10_000;
+    const PER_STEP = PER_MINUTE / (MINUTE / STEP_MS);
+    const startMs = ctx.now().getTime();
+    let address = 0;
+    let most = 0;
+    const run = async (): Promise<Record<string, unknown>> => {
+      most = Math.max(most, await counters());
+      charge = ctx.clock;
+      try {
+        return await runScheduled(ctx);
+      } finally {
+        charge = null;
+      }
+    };
+    for (let step = 0; step < HOUR / STEP_MS; step++) {
+      const plannedMs = startMs + step * STEP_MS;
+      if (ctx.now().getTime() < plannedMs) ctx.clock.set(plannedMs);
+      if (step % (2 * MINUTE / STEP_MS) === 0) {
+        const summary = await run();
+        expect(summary.rateLimits, `run at minute ${step / 6}`).toEqual(expect.any(Number));
+      }
+      for (let i = 0; i < PER_STEP; i++) {
+        address++;
+        await rateLimit(ctx, 'slots', `2001:db8:${(address >> 16).toString(16)}:${(address & 0xffff).toString(16)}::`, 60, 60);
+      }
+    }
+    expect(address).toBe(60 * PER_MINUTE);
+    // A one minute counter goes a minute after its window ends, and a run comes every two minutes:
+    // never more than four minutes of visitors are stored (here about three), not the hour's 72,000.
+    expect(most).toBeLessThanOrEqual(4 * PER_MINUTE);
+    expect(most).toBeGreaterThan(2 * PER_MINUTE);
+
+    // The flood stops. Two more runs and nothing is left.
+    const after: number[] = [];
+    for (let i = 0; i < 2; i++) {
+      ctx.clock.set(Math.max(ctx.now().getTime(), startMs + HOUR + i * 2 * MINUTE));
+      await run();
+      after.push(await counters());
+    }
+    expect(after[after.length - 1]).toBe(0);
   });
 });
