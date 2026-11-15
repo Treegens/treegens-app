@@ -178,6 +178,17 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       await identity.getByText('Without an address you are not emailed about new bookings.').waitFor();
       await notices.fill('jimi-at-home');
       await saveBar(page).getByText('The address for your booking notices is not a full email address.').waitFor();
+      // An address a co-host already uses is refused by the server, and nothing at all is saved.
+      s.allowConsoleErrors(/status of 422/);
+      await s.apiOk('POST', '/admin/hosts', { body: { name: 'Sam Okafor', email: 'sam@example.com' } });
+      await notices.fill('SAM@example.com');
+      await saveBar(page).getByRole('button', { name: 'Save settings' }).click();
+      const refused = await expectToast(page, 'Your settings were not saved');
+      s.expect(await refused.textContent(), 'why it was refused').toContain('Someone with this email is already on the team.');
+      await saveBar(page).getByText('Someone with this email is already on the team.').waitFor();
+      s.expect((await s.kv('hosts'))[0].email, "the owner's address after the refusal").toBe('');
+      s.expect((await site()).email.fromName, 'the sender name after the refusal').not.toBe('Jimi at Treegens');
+      await clearToasts(page);
       await notices.fill('jimi@jimicohen.com');
       await save();
       s.expect((await site()).email, 'stored email identity').toMatchObject({ fromName: 'Jimi at Treegens', replyTo: 'hello@jimicohen.com', fromEmail: 'meetings@example.com' });
@@ -494,7 +505,8 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect(overview.stats, 'overview numbers').toEqual({ upcomingCount: 2, last30Count: 5, cancelledLast30: 2, confirmedByAssistant: 0 });
       await openPage(page, 'Home', /^Good (morning|afternoon|evening), Jimi$/);
       const stat = async (label) => (await page.locator('dl, .adm-stats').locator(`xpath=.//dt[normalize-space()="${label}"]/following-sibling::dd[1]`).first().textContent()).trim();
-      s.expect(await stat('Upcoming'), 'upcoming on Home').toBe('2');
+      // The heading is there before the numbers are: they come with the overview request.
+      await s.eventually(async () => s.expect(await stat('Upcoming'), 'upcoming on Home').toBe('2'));
       s.expect(await stat('Booked'), 'booked on Home').toBe('5');
       s.expect(await stat('Cancelled'), 'cancelled on Home').toBe('2');
       s.expect(await stat('Confirmed by your assistant'), 'confirmed by the assistant on Home').toBe('0');

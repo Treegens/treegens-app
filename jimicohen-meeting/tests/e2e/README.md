@@ -100,6 +100,32 @@ With the clock frozen every booking made in a scenario has the same creation tim
 The embed suite serves its page on the highest free port of `E2E_PORTS` (or `E2E_EMBED_PORT`)
 from `E2E_EMBED_DIR` (default: `<E2E_WORK_DIR>/embed-host`).
 
+## The admin suites
+
+Every dashboard screen and the co-host page, `node tests/e2e/run.mjs admin`. Each step asserts
+the page and then what was stored (or sent), read back through `s.kv`, `s.outbox` or the API.
+
+| file | what it covers |
+|---|---|
+| `admin-auth` | first run (wrong setup code, short password, checklist, second setup refused), sign out and in with the deep link kept, a password change signing out the other browser; the owner's zone following the device, then Google, then fixed |
+| `admin-events` | solo, together and round robin event types made in the browser, every tab of the editor, values kept over a reload, server refusals on the right field and tab, reorder, duplicate, pause, delete refused with upcoming bookings; weekly hours, date overrides and a second schedule against the times the public page offers |
+| `admin-design` | every design control, the preview and then the public page read through computed styles, logo and cover upload, wording, custom CSS, undo, discard, the unsaved-changes guard (also with a slow Back), the contrast warning and its Fix |
+| `admin-team` | a co-host added, their private link opened in another browser (Google as a different account, calendars, hours, zone, ICS feed), a joint meeting offering only shared free time, edit details, disconnect and reconnect, a new link, removal refused while in use |
+| `admin-integrations` | a server with nothing configured (`mockCreds: false`): credentials pasted, masked and never sent back, badges, every "Send test" against the outbox, field errors, Remove; a refused Google secret, the owner's calendar choice, Cancel at Google |
+| `admin-settings` | profile, assistant, booking form defaults and email identity reaching the landing page, the form, the next emails and the TwiML; bookings tabs, search, drawer, cancel, no-show, CSV, Home numbers; paging over 45 bookings; Share and embed |
+| `admin-look` | every dashboard page and the co-host page at 1440 and 390, light and dark: screenshots to read, plus failed requests, console errors and sideways scrolling checked by program |
+
+`admin-helpers.mjs` holds what they share: `MONDAY` (the frozen "now"), `openPage` (through the
+sidebar), `expectToast`, `clearToasts`, `expectFieldProblem` (the message a field announces through
+`aria-invalid` and `aria-describedby`), `saveAndWait`, `pngFile` (a real PNG to upload),
+`openBookingPage`, `openDays` and `offeredTimes` (what the public page offers, from its buttons).
+
+- Controls that save on their own (calendar ticks, zone choices) are driven with `click()` and a
+  wait for the new state, not `check()`: the tick only moves once the server has answered.
+- A suite that needs the embed address passes `env: { EMBED_BASE_URL: 'http://127.0.0.1:{port}/meeting' }`
+  to `defineSuite`; the dev server swaps `{port}` for its own.
+- On Integrations a connected card starts closed after a reload; open it before reading inside.
+
 ## Helpers
 
 `t` is the suite, `s` a scenario. Everything under "dev controls" exists on both.
