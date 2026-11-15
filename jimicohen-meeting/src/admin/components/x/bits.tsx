@@ -139,6 +139,10 @@ export interface ImageFieldProps {
   /** wide = banner-like preview (cover, background). square = logo or avatar. */
   shape?: 'wide' | 'square' | 'round';
   uploadLabel?: string;
+  /** the remove button's label ("Use the built-in logo"); default "Remove" */
+  removeLabel?: string;
+  /** false hides the remove button, e.g. while a built-in image is shown */
+  removable?: boolean;
   disabled?: boolean;
 }
 
@@ -146,7 +150,7 @@ export interface ImageFieldProps {
  * Pick an image, preview it from a data: URL, upload it through the API (POST /admin/assets).
  * Files can also be dropped on the box. Nothing leaves the browser except to our own API.
  */
-export function ImageField({ label, url, purpose, onUploaded, onRemove, hint, shape = 'wide', uploadLabel, disabled = false }: ImageFieldProps) {
+export function ImageField({ label, url, purpose, onUploaded, onRemove, hint, shape = 'wide', uploadLabel, removeLabel, removable = true, disabled = false }: ImageFieldProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,9 +216,9 @@ export function ImageField({ label, url, purpose, onUploaded, onRemove, hint, sh
           <Button size="sm" variant="secondary" loading={busy} loadingLabel="Uploading" disabled={disabled} aria-describedby={error ? errorId : undefined} onClick={() => inputRef.current?.click()}>
             {uploadLabel ?? (has ? 'Replace' : 'Upload image')}
           </Button>
-          {url ? (
-            <Button size="sm" variant="ghost" iconLeft={<Trash2 size={14} />} disabled={busy || disabled} onClick={onRemove}>
-              Remove
+          {url && removable ? (
+            <Button size="sm" variant="ghost" iconLeft={removeLabel ? undefined : <Trash2 size={14} />} disabled={busy || disabled} onClick={onRemove}>
+              {removeLabel ?? 'Remove'}
             </Button>
           ) : null}
         </div>

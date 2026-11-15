@@ -23,6 +23,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { DateTime } from 'luxon';
 import { DEFAULT_ASSISTANT } from '../../shared/defaults';
+import { isSiteView, viewFor } from '../../shared/brands';
 import type { AssistantSettings, Booking, CallRecord, Host, IanaZone, SendResult, SiteSettings } from '../../shared/types';
 import { cancelBooking, confirmAttendance } from './booking';
 import { randomId, sha256Hex } from './crypto';
@@ -49,6 +50,7 @@ import {
   xmlEscape,
   type TwilioAccount,
 } from './twilio';
+import { eventNamesEveryone } from './templates';
 
 // ───────────────────────── voices ─────────────────────────
 
@@ -129,6 +131,11 @@ export interface CallScript {
   model: string;
   /** how a reschedule link reaches the invitee; "none" on test calls, where nothing is sent */
   linkChannel: 'sms' | 'email' | 'none';
+  /**
+   * The brand the meeting was booked under ("Eco Champions"): the assistant then calls for the brand, on
+   * behalf of the hosts. Absent on every call record from before brands, which speak exactly as before.
+   */
+  brandName?: string;
 }
 
 /** The stored record: the shared CallRecord plus what this module needs between webhooks. */
@@ -329,7 +336,9 @@ export function buildCallScript(p: { booking: Booking; site: SiteSettings; hosts
   const owner = p.hosts.find((h) => h.id === site.ownerHostId);
   const people = assigned.length > 0 ? assigned : owner ? [owner] : [];
   const fullNames = people.map((h) => cleanName(h.name, 60)).filter(Boolean);
-  const siteName = cleanName(site.profile?.name, 60);
+  // Under a brand the site's name is the brand's: a host fallback must never turn "Eco Champions" into "Eco".
+  const brandName = isSiteView(site) ? cleanName(site.profile?.name, 60) : '';
+  const siteName = brandName ? '' : cleanName(site.profile?.name, 60);
   const firstNames = (fullNames.length > 0 ? fullNames : siteName ? [siteName] : []).map(firstNameOf).filter(Boolean);
   const hostFirstNames =
     firstNames.length === 0 ? 'your host' : firstNames.length <= 2 ? joinNames(firstNames) : `${firstNames[0]} and the team`;
@@ -353,6 +362,7 @@ export function buildCallScript(p: { booking: Booking; site: SiteSettings; hosts
     persona: speakable(assistant.persona, 600),
     model: modelSetting(assistant.model),
     linkChannel: p.purpose === 'test' ? 'none' : booking.consent?.sms === true && hasPhone ? 'sms' : 'email',
+    ...(brandName ? { brandName } : {}),
   };
 }
 
@@ -396,7 +406,7 @@ export interface CallPhrases {
 function voicemailLine(s: CallScript, when: string): string {
   const hi = s.inviteeFirstName ? `Hi ${s.inviteeFirstName}` : 'Hi there';
   const assistant = s.assistantName.length <= 16 ? s.assistantName : firstNameOf(s.assistantName) || s.assistantName;
-  const host = s.hostFirstNames.length <= 24 ? s.hostFirstNames : (s.hostFirstNames.split(' ')[0] ?? 'your host');
+  const host = s.brandName ? s.brandName : s.hostFirstNames.length <= 24 ? s.hostFirstNames : (s.hostFirstNames.split(' ')[0] ?? 'your host');
   const event = s.eventShort.length <= 32 ? s.eventShort : 'meeting';
   const link = s.linkChannel === 'sms' ? 'the link I am texting you now' : s.linkChannel === 'email' ? 'the link I am emailing you now' : 'the link in your confirmation email';
   return `${hi}, this is ${assistant}, an AI assistant calling for ${host}. A reminder: your ${event} is ${when} your time. To change it, use ${link}. Goodbye.`;
@@ -408,18 +418,22 @@ export function callPhrases(s: CallScript, nowMs: number, purpose: 'reminder' | 
   const when = whenPhrase(s.startMs, nowMs, s.timezone);
   const name = s.inviteeFirstName;
   const hi = name ? `Hi ${name}` : 'Hi there';
-  const intro = `this is ${s.assistantName}, an AI assistant calling for ${s.hostFirstNames}`;
+  // Under a brand the assistant calls for the brand and names the hosts with the meeting.
+  const caller = s.brandName || s.hostFirstNames;
+  const intro = `this is ${s.assistantName}, an AI assistant calling for ${caller}`;
   const event = s.eventShort;
+  const about = s.brandName ? `${event} with ${s.hostFirstNames}` : event;
   const sending = s.linkChannel === 'sms' ? 'texting' : 'emailing';
   const sendsLink = s.linkChannel !== 'none';
   const testNote = purpose === 'test' ? 'This is a test call, so nothing will be changed. ' : '';
   return {
     when,
-    greeting: `${hi}, ${intro}. ${testNote}A quick reminder about your ${event} ${when} your time. Are you still able to make it?`,
-    greetingConfirmed: `${hi}, ${intro}. ${testNote}A quick reminder about your ${event} ${when} your time. I have you down as coming. Is that still right?`,
-    reintroduce: `${hi}, ${intro}. I am calling with a quick reminder about your ${event} ${when} your time. Are you still able to make it?`,
-    identity: `I am ${s.assistantName}, an AI assistant calling for ${s.hostFirstNames}. I am calling about your ${event} ${when} your time. Will you be able to make it?`,
-    repeat: `Of course. This is a reminder about your ${event} with ${s.hostFirstNames}, ${when} your time. Will you be able to make it?`,
+    greeting: `${hi}, ${intro}. ${testNote}A quick reminder about your ${about} ${when} your time. Are you still able to make it?`,
+    greetingConfirmed: `${hi}, ${intro}. ${testNote}A quick reminder about your ${about} ${when} your time. I have you down as coming. Is that still right?`,
+    reintroduce: `${hi}, ${intro}. I am calling with a quick reminder about your ${about} ${when} your time. Are you still able to make it?`,
+    identity: `I am ${s.assistantName}, an AI assistant calling for ${caller}. I am calling about your ${about}${s.brandName ? ',' : ''} ${when} your time. Will you be able to make it?`,
+    // "your Meet with Jimi", never "your Meet with Jimi with Jimi".
+    repeat: `Of course. This is a reminder about your ${eventNamesEveryone(event, s.hostFirstNames) ? event : `${event} with ${s.hostFirstNames}`}, ${when} your time. Will you be able to make it?`,
     confirmed: `Wonderful, I have you down as confirmed for ${when}. Thank you, and goodbye.`,
     linkSent: sendsLink
       ? `No problem. I am ${sending} you a link now so you can pick a new time. Your meeting stays as it is until you choose one. Goodbye.`
@@ -695,7 +709,7 @@ export function buildSystemPrompt(s: CallScript, nowMs: number, purpose: 'remind
         ? 'by email to the address they booked with'
         : 'by email';
   const lines = [
-    `You are ${s.assistantName}, an AI voice assistant. You are on a live phone call that you placed for ${s.hostNames}, to remind ${s.inviteeName || 'their guest'} about an upcoming meeting.`,
+    `You are ${s.assistantName}, an AI voice assistant. You are on a live phone call that you placed for ${s.brandName ? `${s.brandName}, on behalf of ${s.hostNames}` : s.hostNames}, to remind ${s.inviteeName || 'their guest'} about an upcoming meeting.`,
     s.persona ? `Your manner: ${s.persona}` : '',
     purpose === 'test'
       ? 'This is a test call the host placed to hear how you sound. Behave exactly as you would on a real call. Nothing is really changed or sent.'
@@ -730,7 +744,7 @@ export function buildSystemPrompt(s: CallScript, nowMs: number, purpose: 'remind
     '- One or two short sentences. Warm, natural spoken English, the way a capable human assistant talks on the phone.',
     '- No lists, no markup, no emoji, no symbols and no web addresses. Say times the way people say them, like 3:30 PM.',
     '- Only say that something was done when you choose the action that does it in this same reply.',
-    `- If you are asked, say plainly that you are an AI assistant calling for ${s.hostFirstNames}. Never claim to be a person.`,
+    `- If you are asked, say plainly that you are an AI assistant calling for ${s.brandName || s.hostFirstNames}. Never claim to be a person.`,
     `- Use only the meeting details above. If you are asked something you do not know, such as the agenda or whether another time would suit, say you do not have that information and offer the link, or suggest they contact ${s.hostFirstNames} directly. Never make anything up.`,
     '- Stay with this meeting. Politely decline anything else.',
     '',
@@ -1047,7 +1061,8 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
       createdAt: nowIso,
       updatedAt: nowIso,
       purpose,
-      script: buildCallScript({ booking, site, hosts, purpose }),
+      // A reminder speaks for the brand the meeting was booked under; a test call is always the owner's own.
+      script: buildCallScript({ booking, site: purpose === 'reminder' ? viewFor(site, booking) : site, hosts, purpose }),
       emptyCount: 0,
       linkSent: false,
       ended: false,

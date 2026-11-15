@@ -45,6 +45,8 @@ import {
   DEV_TWILIO_CALL_PREFIX,
   appendOutbox,
   devAccountKey,
+  ensureMockAccount,
+  mockAccountBySub,
   parseFailSpec,
   readDevClock,
   type DevBusyInterval,
@@ -351,8 +353,12 @@ const SCOPE_GMAIL_SEND = 'https://www.googleapis.com/auth/gmail.send';
 const ACCESS_TOKEN_TTL_SEC = 3599;
 
 interface TokenClaims {
-  /** account email */
+  /** account email when the token was minted */
   e: string;
+  /** the account's sub: a token belongs to the Google account, not to an address */
+  u?: string;
+  /** grant generation the token was minted in: a revoke ends every older one */
+  g?: number;
   /** Calendar time zone from the sign-in code */
   z: string;
   /** granted scopes */
@@ -370,7 +376,14 @@ function readToken(prefix: 'mock-at' | 'mock-rt', token: string): TokenClaims | 
   if (parts.length !== 3 || parts[0] !== prefix) return null;
   const claims = parseJson(Buffer.from(parts[1], 'base64url').toString('utf8'));
   if (!isRecord(claims) || typeof claims.e !== 'string' || typeof claims.z !== 'string' || !Array.isArray(claims.s)) return null;
-  return { e: claims.e, z: claims.z, s: claims.s.filter((s): s is string => typeof s === 'string'), ...(typeof claims.x === 'number' ? { x: claims.x } : {}) };
+  return {
+    e: claims.e,
+    z: claims.z,
+    s: claims.s.filter((s): s is string => typeof s === 'string'),
+    ...(typeof claims.x === 'number' ? { x: claims.x } : {}),
+    ...(typeof claims.u === 'string' ? { u: claims.u } : {}),
+    ...(typeof claims.g === 'number' ? { g: claims.g } : {}),
+  };
 }
 
 function bearer(call: Call): string {
@@ -395,6 +408,20 @@ function parseAuthCode(code: string): AuthCode | null {
 
 async function loadAccount(kv: KV, email: string): Promise<DevGoogleAccount> {
   return (await kv.getJSON<DevGoogleAccount>(`${DEV_GOOGLE_ACCOUNT_PREFIX}${email}`)) ?? { email };
+}
+
+/**
+ * The account a token belongs to: found by its sub wherever its address is now (a renamed account keeps
+ * working), null when no account has that sub any more. Tokens from before subs were kept go by address.
+ */
+async function accountOfToken(kv: KV, claims: TokenClaims): Promise<DevGoogleAccount | null> {
+  if (claims.u) return mockAccountBySub(kv, claims.u);
+  return loadAccount(kv, claims.e);
+}
+
+/** Whether a revoke since the token was minted ended its grant. */
+function grantEnded(account: DevGoogleAccount, claims: TokenClaims): boolean {
+  return (claims.g ?? 0) < (account.grant ?? 0);
 }
 
 function oauthError(status: number, error: string, description: string): Outcome {
@@ -433,11 +460,10 @@ function planGoogleToken(call: Call): Plan {
         const scopes = ['openid', SCOPE_EMAIL];
         if (!code.flags.has('nocalendar')) scopes.push(SCOPE_CALENDAR_READONLY, SCOPE_CALENDAR_EVENTS);
         if (code.flags.has('gmail')) scopes.push(SCOPE_GMAIL_SEND);
-        const claims: TokenClaims = { e: code.email, z: code.zone, s: scopes };
-
         // Signing in again makes the account whole: a fresh grant, with the zone the code names.
-        const known = await loadAccount(mock.kv, code.email);
+        const known = await ensureMockAccount(mock.kv, code.email);
         await mock.kv.setJSON(`${DEV_GOOGLE_ACCOUNT_PREFIX}${code.email}`, { ...known, email: code.email, timezone: code.zone, revoked: false });
+        const claims: TokenClaims = { e: code.email, z: code.zone, s: scopes, u: known.sub, g: known.grant ?? 0 };
 
         const body: Record<string, unknown> = {
           access_token: mintToken('mock-at', withExpiry(claims, mock)),
@@ -448,18 +474,19 @@ function planGoogleToken(call: Call): Plan {
         if (!code.flags.has('norefresh')) body.refresh_token = mintToken('mock-rt', claims);
         // What Google adds while the OAuth consent screen is still in "Testing": the grant ends after 7 days.
         if (code.flags.has('testing') && !code.flags.has('norefresh')) body.refresh_token_expires_in = 604_799;
-        if (!code.flags.has('noidtoken')) body.id_token = idToken(code.email, clientId, mock);
+        if (!code.flags.has('noidtoken')) body.id_token = idToken(code.email, known.sub ?? '', clientId, mock);
         return { status: 200, json: body, entry: { grant, scopes, refreshTokenIssued: !code.flags.has('norefresh'), timezone: code.zone } };
       }
 
       if (grant === 'refresh_token') {
         const token = form.get('refresh_token') ?? '';
         if (!refresh) return oauthError(400, 'invalid_grant', 'Bad Request');
-        const revoked = (await mock.kv.getJSON<unknown>(`${REVOKED_PREFIX}${sha(token).slice(0, 32)}`)) !== null || (await loadAccount(mock.kv, refresh.e)).revoked === true;
-        if (revoked) return oauthError(400, 'invalid_grant', 'Token has been expired or revoked.');
+        const owner = await accountOfToken(mock.kv, refresh);
+        const revoked = !owner || (await mock.kv.getJSON<unknown>(`${REVOKED_PREFIX}${sha(token).slice(0, 32)}`)) !== null || owner.revoked === true || grantEnded(owner, refresh);
+        if (!owner || revoked) return oauthError(400, 'invalid_grant', 'Token has been expired or revoked.');
         return {
           status: 200,
-          json: { access_token: mintToken('mock-at', withExpiry(refresh, mock)), expires_in: ACCESS_TOKEN_TTL_SEC, scope: refresh.s.join(' '), token_type: 'Bearer' },
+          json: { access_token: mintToken('mock-at', withExpiry({ ...refresh, e: owner.email }, mock)), expires_in: ACCESS_TOKEN_TTL_SEC, scope: refresh.s.join(' '), token_type: 'Bearer' },
           entry: { grant, scopes: refresh.s },
         };
       }
@@ -474,13 +501,13 @@ function withExpiry(claims: TokenClaims, mock: Mock): TokenClaims {
   return mock.nowMs === null ? rest : { ...rest, x: mock.nowMs + ACCESS_TOKEN_TTL_SEC * 1000 };
 }
 
-function idToken(email: string, clientId: string, mock: Mock): string {
+function idToken(email: string, sub: string, clientId: string, mock: Mock): string {
   const iat = Math.floor((mock.nowMs ?? 0) / 1000);
   const payload = {
     iss: 'https://accounts.google.com',
     azp: clientId,
     aud: clientId,
-    sub: String(BigInt(`0x${sha(email).slice(0, 15)}`)),
+    sub,
     email,
     email_verified: true,
     iat,
@@ -500,7 +527,10 @@ function planGoogleRevoke(call: Call): Plan {
     run: async (mock) => {
       if (!claims) return oauthError(400, 'invalid_token', 'Token expired or revoked');
       await mock.kv.setJSON(`${REVOKED_PREFIX}${sha(token).slice(0, 32)}`, { at: mock.at });
-      return { status: 200, json: {} };
+      // Like Google: the revoke ends the whole grant of that account for this app, every token of it.
+      const owner = await accountOfToken(mock.kv, claims);
+      if (owner) await mock.kv.setJSON(`${DEV_GOOGLE_ACCOUNT_PREFIX}${owner.email}`, { ...owner, grant: (owner.grant ?? 0) + 1 });
+      return { status: 200, json: {}, entry: { grantEnded: !!owner } };
     },
   };
 }
@@ -511,8 +541,8 @@ async function googleSession(mock: Mock, call: Call): Promise<{ claims: TokenCla
   const denied = googleError(401, 'authError', 'Invalid Credentials', 'UNAUTHENTICATED');
   if (!claims) return denied;
   if (claims.x !== undefined && mock.nowMs !== null && mock.nowMs >= claims.x) return denied;
-  const account = await loadAccount(mock.kv, claims.e);
-  if (account.revoked === true) return denied;
+  const account = await accountOfToken(mock.kv, claims);
+  if (!account || account.revoked === true || grantEnded(account, claims)) return denied;
   return { claims, account };
 }
 
@@ -529,8 +559,8 @@ function planGoogleUserinfo(call: Call): Plan {
     run: async (mock) => {
       const session = await googleSession(mock, call);
       if (isOutcome(session)) return session;
-      const email = session.claims.e;
-      return { status: 200, json: { sub: String(BigInt(`0x${sha(email).slice(0, 15)}`)), email, email_verified: true } };
+      const { email } = session.account;
+      return { status: 200, json: { sub: session.account.sub ?? (await ensureMockAccount(mock.kv, email)).sub, email, email_verified: true } };
     },
   };
 }

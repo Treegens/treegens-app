@@ -11,12 +11,18 @@ import { displayUrl } from '../format';
 import { AdminStateContext } from '../state';
 import { CopyField } from './x/bits';
 import '../../styles/adminx.css';
+import '../../styles/adminbrands.css';
 
 export interface SharePanelProps {
   /** absolute public URL to share, e.g. appUrl('/intro') */
   url: string;
   /** what is being shared, for headings and button labels */
   title?: string;
+  /**
+   * The short link that opens this meeting (jimicohen.com/pod), when there is one: the Link tab shares it, with
+   * the full address under it. The embed codes keep the full address: short pages cannot be framed.
+   */
+  shortUrl?: string;
 }
 
 type Mode = 'link' | 'inline' | 'popup';
@@ -59,7 +65,7 @@ function embedTargets(url: string, publicUrl: string | undefined, embedBaseUrl: 
   }
 }
 
-export function SharePanel({ url, title }: SharePanelProps) {
+export function SharePanel({ url, title, shortUrl }: SharePanelProps) {
   const admin = useContext(AdminStateContext);
   const [mode, setMode] = useState<Mode>('link');
   const [buttonText, setButtonText] = useState('Book a meeting');
@@ -93,13 +99,14 @@ export function SharePanel({ url, title }: SharePanelProps) {
         <div className="sp__pane">
           <p className="sp__lead">Send this link in an email, a message or your bio. People pick a time and it lands on your calendar.</p>
           <div className="sp__link">
-            <a className="sp__url" href={url} target="_blank" rel="noopener noreferrer" title={url}>
-              {displayUrl(url)}
+            <a className="sp__url" href={shortUrl ?? url} target="_blank" rel="noopener noreferrer" title={shortUrl ?? url}>
+              {displayUrl(shortUrl ?? url)}
             </a>
-            <CopyButton value={url} label="Copy link" variant="primary" />
+            <CopyButton value={shortUrl ?? url} label="Copy link" variant="primary" />
           </div>
+          {shortUrl ? <p className="sp__full">Full link: {displayUrl(url)}</p> : null}
           <div className="sp__row">
-            <ButtonLink href={url} external variant="ghost" size="sm" iconRight={<ExternalLink size={14} />}>
+            <ButtonLink href={shortUrl ?? url} external variant="ghost" size="sm" iconRight={<ExternalLink size={14} />}>
               Open the page
             </ButtonLink>
           </div>

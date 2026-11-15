@@ -23,6 +23,9 @@ vi.mock('../../server/lib/booking', async () => {
     toPublicBooking: vi.fn(),
     syncBookingToCalendar: vi.fn(),
     calendarEventIdFor: (id: string) => `mtg${id}`,
+    // The real ones: removing a Google account detaches the bookings whose event was in it.
+    detachEventsOfAccount: (await vi.importActual<typeof import('../../server/lib/booking')>('../../server/lib/booking')).detachEventsOfAccount,
+    countEventsInAccount: (await vi.importActual<typeof import('../../server/lib/booking')>('../../server/lib/booking')).countEventsInAccount,
   };
 });
 vi.mock('../../server/routes/public', () => ({ routes: [] }));
@@ -35,6 +38,7 @@ import { cancelBooking } from '../../server/lib/booking';
 import { hmacHex, open, seal, sha256Hex } from '../../server/lib/crypto';
 import { GOOGLE_CALENDAR_SCOPES } from '../../server/lib/google';
 import { HttpError, matchPattern } from '../../server/lib/http';
+import { mainOf } from '../../server/lib/googleAccounts';
 import * as repo from '../../server/lib/repo';
 import { TEMPLATE_VARIABLES } from '../../server/lib/templates';
 import { VOICE_OPTIONS } from '../../server/lib/voice';
@@ -199,6 +203,9 @@ const EVERY_ROUTE: [method: string, path: string, body?: unknown][] = [
   ['POST', '/admin/hosts/host_someone/invite', {}],
   ['GET', '/admin/hosts/host_owner/calendars'],
   ['POST', '/admin/hosts/host_owner/google/disconnect', {}],
+  ['GET', '/admin/hosts/host_owner/google/gacc_x/calendars'],
+  ['GET', '/admin/hosts/host_owner/google/gacc_x/removal'],
+  ['DELETE', '/admin/hosts/host_owner/google/gacc_x'],
   ['GET', '/admin/bookings'],
   ['GET', '/admin/bookings.csv'],
   ['GET', '/admin/bookings/bk_1'],
@@ -210,6 +217,8 @@ const EVERY_ROUTE: [method: string, path: string, body?: unknown][] = [
   ['POST', '/admin/integrations/test', { channel: 'email' }],
   ['POST', '/admin/assets', { dataUrl: dataUrl('image/png', PNG), purpose: 'logo' }],
   ['DELETE', '/admin/assets/ast_1'],
+  ['PUT', '/admin/brands/brand_eco_champions', { emailFromName: 'Mallory' }],
+  ['PUT', '/admin/short-links', { name: 'pod', eventTypeId: 'evt_intro' }],
 ];
 
 describe('access to /admin/*', () => {
@@ -328,7 +337,16 @@ describe('GET /admin/bootstrap', () => {
     }
     const b = await ok<AdminBootstrap>(call(s, 'GET', '/admin/bootstrap'));
     expect(b.hosts.find((h) => h.id === host.id)).toMatchObject({ hasInviteLink: true, icsFeeds: [{ label: 'Work' }] });
-    expect(b.hosts[0].google).toEqual({ email: 'jimi@example.com', status: 'ok', busyCalendarIds: ['primary'], writeCalendarId: 'primary', gmailSend: false });
+    expect(b.hosts[0].google).toEqual({
+      id: mainOf(owner)!.account.id,
+      email: 'jimi@example.com',
+      status: 'ok',
+      busyCalendarIds: ['primary'],
+      writeCalendarId: 'primary',
+      gmailSend: false,
+      connectedAt: owner.google!.connectedAt,
+      health: null,
+    });
   });
 });
 
@@ -2140,8 +2158,8 @@ describe('GET /admin/overview', () => {
     await connectGoogle(s.ctx, host.id, { email: 'alex@example.com', status: 'needs_reconnect' });
     let o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     expect(keys(o)).toEqual(expect.arrayContaining(['google_reconnect_host_owner', `google_reconnect_${host.id}`]));
-    expect(o.warnings.find((w) => w.key === 'google_reconnect_host_owner')).toMatchObject({ href: '/admin/integrations#google', message: expect.stringMatching(/^Your Google Calendar needs to be reconnected/) });
-    expect(o.warnings.find((w) => w.key === `google_reconnect_${host.id}`)).toMatchObject({ href: '/admin/team', message: expect.stringMatching(/^Alex's Google Calendar needs to be reconnected/) });
+    expect(o.warnings.find((w) => w.key === 'google_reconnect_host_owner')).toMatchObject({ href: '/admin/integrations#google', message: expect.stringMatching(/^Your Google account jimi@example.com needs to be reconnected/) });
+    expect(o.warnings.find((w) => w.key === `google_reconnect_${host.id}`)).toMatchObject({ href: '/admin/team', message: expect.stringMatching(/^Alex's Google account alex@example.com needs to be reconnected/) });
     expect(done(o).google).toBe(false);
 
     await connectGoogle(s.ctx);
@@ -2298,7 +2316,7 @@ describe('GET /admin/overview', () => {
     let o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     const reconnect = o.warnings.find((w) => w.key === 'google_reconnect_host_owner')!;
     expect(reconnect.message).toBe(
-      'Your Google Calendar needs to be reconnected. Until then, no times are offered for meetings with you and new bookings cannot reach your calendar. No emails are going out either, because they are sent from your Gmail.',
+      'Your Google account jimi@example.com needs to be reconnected. Until then, no times are offered for meetings with you and new bookings cannot reach your calendar. No emails are going out either, because they are sent from your Gmail.',
     );
     expect(reconnect.href).toBe('/admin/integrations#google');
     // One warning for one cause: not a second one that blames a missing email provider, or that says

@@ -102,12 +102,14 @@ function locationOf(booking: Booking): string {
   return value && value !== label ? [label, value].filter(Boolean).join(': ') : label;
 }
 
-function descriptionOf(booking: Booking, hosts: Host[], manageUrl: string | null, cancelled: boolean): string {
+/** `brandLine`: "Booked through Eco Champions: https://jimicohen.com/pod" for a booking made under a brand, last. */
+function descriptionOf(booking: Booking, hosts: Host[], manageUrl: string | null, cancelled: boolean, brandLine?: string | null): string {
   const withHosts = joinNames(hosts.map((h) => h.name));
   const lines = [cancelled ? 'This meeting was cancelled.' : `${booking.eventTitle}${withHosts ? ` with ${withHosts}` : ''}.`];
   const join = joinUrlOf(booking);
   if (!cancelled && join) lines.push(`Join: ${join}`);
   if (!cancelled && manageUrl) lines.push(`Reschedule or cancel: ${manageUrl}`);
+  if (brandLine) lines.push(brandLine);
   return lines.join('\n');
 }
 
@@ -128,6 +130,8 @@ export function buildBookingIcs(p: {
   baseUrl: string;
   /** manage link written into the description and used as the event URL when there is no video link */
   manageUrl?: string | null;
+  /** the brand line of a booking made under a brand (booking.ts brandLineFor), written last in the description */
+  brandLine?: string | null;
 }): string {
   const { booking, site } = p;
   const hosts = assigned(booking, p.hosts ?? []);
@@ -161,7 +165,7 @@ export function buildBookingIcs(p: {
     `DTEND:${utcStamp(booking.end)}`,
     `SEQUENCE:${Math.max(0, Math.trunc(Number(booking.rescheduleCount) || 0))}`,
     `SUMMARY:${escapeIcsText(summaryOf(booking, hosts))}`,
-    `DESCRIPTION:${escapeIcsText(descriptionOf(booking, hosts, manageUrl, cancelled))}`,
+    `DESCRIPTION:${escapeIcsText(descriptionOf(booking, hosts, manageUrl, cancelled, p.brandLine))}`,
   ];
   if (location) lines.push(`LOCATION:${escapeIcsText(location)}`);
   if (eventUrl) lines.push(`URL:${eventUrl}`);
@@ -195,7 +199,7 @@ export function buildBookingIcs(p: {
  * same compose link on Microsoft 365, for work and school calendars, which outlook.live.com sends to
  * a personal sign-in page instead.
  */
-export function calendarLinks(p: { booking: Booking; hosts: Host[]; baseUrl: string; manageToken: string }): {
+export function calendarLinks(p: { booking: Booking; hosts: Host[]; baseUrl: string; manageToken: string; brandLine?: string | null }): {
   google: string;
   outlook: string;
   office365: string;
@@ -207,7 +211,7 @@ export function calendarLinks(p: { booking: Booking; hosts: Host[]; baseUrl: str
   const token = encodeURIComponent(p.manageToken);
   const hosts = assigned(booking, p.hosts ?? []);
   const title = summaryOf(booking, hosts);
-  const details = descriptionOf(booking, hosts, `${base}/booking/${id}?t=${token}`, false);
+  const details = descriptionOf(booking, hosts, `${base}/booking/${id}?t=${token}`, false, p.brandLine);
   const location = locationOf(booking);
 
   const google = new URLSearchParams({

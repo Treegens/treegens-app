@@ -8,12 +8,15 @@ import type { FormEvent } from 'react';
 import { ArrowRight, CalendarCheck, CalendarX2, ChevronRight, Clock, Globe, Link2, Mail, MoreHorizontal, Pencil, RefreshCw, Trash2, Unplug, UserPlus, Users } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { RESERVED_SLUGS } from '../../../shared/defaults';
-import type { AdminBootstrap, AdminHost, EventType, HostUpdate } from '../../../shared/types';
-import { ApiFailure, assetUrl, checkSharedHours, createEventType, createHost, deleteHost, disconnectGoogle, errorMessage, regenerateInvite, updateHost } from '../../lib/api';
+import type { AdminBootstrap, AdminHost, EventType, HostInviteResponse, HostUpdate } from '../../../shared/types';
+import { APP_BASE, ApiFailure, assetUrl, checkSharedHours, createEventType, createHost, deleteHost, disconnectGoogle, errorMessage, getAccountCalendars, getRemovalPreview, googleConnectUrl, regenerateInvite, removeGoogleAccount, testIntegration, updateHost } from '../../lib/api';
+import { addressList, allAccounts, extraAccounts } from '../../lib/googleAccounts';
+import { OtherGoogleAccounts, type AccountsApi } from '../components/GoogleAccounts';
 import { formatTime, zoneLabel } from '../../lib/tz';
 import { Avatar, Badge, Button, ButtonLink, ConfirmDialog, Field, IconButton, Input, Menu, Modal, Switch, useToast } from '../../ui';
 import type { BadgeTone, MenuItem } from '../../ui';
 import { Page, PageHeader } from '../components/Page';
+import { AddedToMeetings, PodOfferChoices, usePodChoices } from '../components/TeamPodOffer';
 import { CopyField, ImageField } from '../components/x/bits';
 import { firstName, slugify } from '../format';
 import { useAdmin } from '../state';
@@ -44,9 +47,19 @@ interface CalendarState {
 
 function calendarState(host: AdminHost, self: boolean): CalendarState {
   const who = self ? 'your' : `${firstName(host.name)}'s`;
-  if (host.google?.status === 'needs_reconnect') return { tone: 'warning', label: 'Needs reconnecting', detail: `Google asked ${self ? 'you' : firstName(host.name)} to sign in again.`, connected: false };
-  if (host.calendarHealth && !host.calendarHealth.ok) return { tone: 'danger', label: 'Calendar problem', detail: host.calendarHealth.message || `We could not read ${who} calendar.`, connected: !!host.google };
+  // Every Google account of the host counts: one that cannot be read closes their times.
+  const accounts = allAccounts(host);
+  const broken = accounts.filter((a) => a.status === 'needs_reconnect');
+  if (broken.length > 0) {
+    return { tone: 'warning', label: 'Needs reconnecting', detail: `Google asked ${self ? 'you' : firstName(host.name)} to sign in again to ${addressList(broken.map((a) => a.email))}.`, connected: false };
+  }
+  if (host.calendarHealth && !host.calendarHealth.ok) return { tone: 'danger', label: 'Calendar problem', detail: host.calendarHealth.message || `We could not read ${who} calendar.`, connected: accounts.length > 0 };
+  if (accounts.length > 1) {
+    const [first, ...rest] = accounts;
+    return { tone: 'success', label: `${accounts.length} Google accounts`, detail: `${first.email}${first.main ? ' (main)' : ''} and ${rest.length} more`, connected: true };
+  }
   if (host.google) return { tone: 'success', label: 'Calendar connected', detail: host.google.email, connected: true };
+  if (accounts.length === 1) return { tone: 'success', label: 'Calendar connected', detail: accounts[0].email, connected: true };
   // A feed can only be read: busy times are checked, but booked meetings never reach that calendar.
   if (host.icsFeeds.length) {
     return {
@@ -83,12 +96,15 @@ function inviteMailto(host: AdminHost, url: string, ownerName: string): string {
 interface AddDialogProps {
   open: boolean;
   onClose: () => void;
-  onAdded: (host: AdminHost, inviteUrl: string) => void;
+  onAdded: (host: AdminHost, inviteUrl: string, answer: HostInviteResponse) => void;
 }
 
 function AddDialog({ open, onClose, onAdded }: AddDialogProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  // The meeting behind jimicohen.com/pod, ticked: adding a co-host is how it grows (TeamPodOffer.tsx).
+  const choices = usePodChoices();
+  const [addTo, setAddTo] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +118,7 @@ function AddDialog({ open, onClose, onAdded }: AddDialogProps) {
     if (open) {
       setName('');
       setEmail('');
+      setAddTo(choices.filter((c) => c.ticked).map((c) => c.eventType.id));
       setFields({});
       setError(null);
       setBusy(false);
@@ -119,8 +136,8 @@ function AddDialog({ open, onClose, onAdded }: AddDialogProps) {
     if (Object.keys(next).length) return;
     setBusy(true);
     try {
-      const res = await createHost({ name: name.trim(), email: email.trim() });
-      onAdded(res.host, res.inviteUrl);
+      const res = await createHost({ name: name.trim(), email: email.trim(), ...(addTo.length ? { addToEventTypeIds: addTo } : {}) });
+      onAdded(res.host, res.inviteUrl, res);
     } catch (err) {
       const failure = err instanceof ApiFailure ? err : null;
       if (failure?.fields && Object.keys(failure.fields).length) setFields(failure.fields);
@@ -156,6 +173,7 @@ function AddDialog({ open, onClose, onAdded }: AddDialogProps) {
         <Field label="Email" error={fields.email} hint="Used for booking notifications. We do not email them the link, you send it.">
           <Input type="email" inputMode="email" value={email} autoComplete="off" placeholder="alex@example.com" onChange={(e) => setEmail(e.target.value)} />
         </Field>
+        <PodOfferChoices name={name} choices={choices} value={addTo} onChange={setAddTo} />
         {error ? (
           <p className="adm-fielderror" role="alert">
             {error}
@@ -168,7 +186,7 @@ function AddDialog({ open, onClose, onAdded }: AddDialogProps) {
 
 interface LinkDialogProps {
   /** the co-host and their fresh link, or null when closed */
-  invite: { host: AdminHost; url: string; fresh: boolean } | null;
+  invite: { host: AdminHost; url: string; fresh: boolean; answer?: HostInviteResponse } | null;
   ownerName: string;
   onClose: () => void;
   onCreateJoint: (host: AdminHost) => void;
@@ -205,6 +223,7 @@ function LinkDialog({ invite, ownerName, onClose, onCreateJoint, jointBusy, hasJ
       }
     >
       <div className="tm-invite">
+        {shown.answer ? <AddedToMeetings answer={shown.answer} /> : null}
         <CopyField value={url} label={`Private link for ${host.name}`} copyLabel="Copy link" />
         <div className="tm-invite__row">
           <ButtonLink href={inviteMailto(host, url, ownerName)} variant="ghost" size="sm" iconLeft={<Mail size={15} />}>
@@ -392,13 +411,23 @@ export default function TeamPage() {
   latest.current = data;
 
   const [adding, setAdding] = useState(false);
-  const [invite, setInvite] = useState<{ host: AdminHost; url: string; fresh: boolean } | null>(null);
+  const [invite, setInvite] = useState<{ host: AdminHost; url: string; fresh: boolean; answer?: HostInviteResponse } | null>(null);
   /** links created in this session, so "Copy link" keeps working until the page is reloaded */
   const [links, setLinks] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<AdminHost | null>(null);
   const [removing, setRemoving] = useState<AdminHost | null>(null);
   const [renewing, setRenewing] = useState<AdminHost | null>(null);
   const [disconnecting, setDisconnecting] = useState<AdminHost | null>(null);
+  /** the co-host whose Google accounts are shown */
+  const [showingAccounts, setShowingAccounts] = useState<string | null>(null);
+  const accountsApiFor = (host: AdminHost): AccountsApi => ({
+    listCalendars: (accountId, signal) => getAccountCalendars(host.id, accountId, { signal }),
+    saveCalendars: (accountId, busyCalendarIds) => updateHost(host.id, { googleCalendars: { accountId, busyCalendarIds } }),
+    preview: (accountId) => getRemovalPreview(host.id, accountId),
+    remove: (accountId) => removeGoogleAccount(host.id, accountId),
+    connectUrl: ({ add, accountId }) => googleConnectUrl({ hostId: host.id, returnTo: `${APP_BASE}/admin/team`, add, accountId }),
+    test: (accountId) => testIntegration({ channel: 'google', accountId, hostId: host.id }),
+  });
   const [jointBusy, setJointBusy] = useState<string | null>(null);
   const [busyLink, setBusyLink] = useState<string | null>(null);
 
@@ -550,6 +579,12 @@ export default function TeamPage() {
                 {cal.label}
               </Badge>
               <span className="tm-fact__detail">{cal.detail}</span>
+              {!self && allAccounts(host).length > 0 ? (
+                <button type="button" className="ix-toggle" aria-expanded={showingAccounts === host.id} onClick={() => setShowingAccounts((v) => (v === host.id ? null : host.id))}>
+                  <ChevronRight size={15} aria-hidden="true" />
+                  {showingAccounts === host.id ? 'Hide accounts' : 'Show accounts'}
+                </button>
+              ) : null}
             </dd>
           </div>
           <div className="tm-fact">
@@ -576,6 +611,29 @@ export default function TeamPage() {
           </div>
         </dl>
 
+        {!self && showingAccounts === host.id ? (
+          <div className="tm-accounts">
+            {host.google ? (
+              <p className="tm-fact__detail">
+                Main account: {host.google.email}. New meetings with {first} go there.
+              </p>
+            ) : null}
+            <OtherGoogleAccounts
+              host={host}
+              api={accountsApiFor(host)}
+              voice={{ who: first || 'they' }}
+              onHost={(h) => {
+                upsertHost(h);
+                void refresh().catch(() => undefined);
+              }}
+              // Adding and reconnecting stay with the co-host, on their private page: from this browser Google
+              // would sign in whoever is signed in at Google here, most likely you.
+              offerConnect={false}
+              addHelp={`${first || 'They'} adds and reconnects their own Google accounts from their private link. You can remove any of them here.`}
+            />
+          </div>
+        ) : null}
+
         {self ? (
           <div className="tm-host__foot">
             <ButtonLink to="/admin/integrations#google" variant="secondary" size="sm">
@@ -590,7 +648,9 @@ export default function TeamPage() {
             {waiting ? (
               <div className="tm-wait">
                 <p className="tm-wait__text">
-                  {host.google?.status === 'needs_reconnect' ? `${first} needs to open their private link and reconnect Google Calendar.` : `Waiting for ${first} to open their private link and connect a calendar.`}
+                  {allAccounts(host).some((a) => a.status === 'needs_reconnect')
+                    ? `${first} needs to open their private link and reconnect ${addressList(allAccounts(host).filter((a) => a.status === 'needs_reconnect').map((a) => a.email))}.`
+                    : `Waiting for ${first} to open their private link and connect a calendar.`}
                 </p>
                 {link ? (
                   <CopyField value={link} label={`Private link for ${host.name}`} copyLabel="Copy link" className="tm-wait__link" />
@@ -694,11 +754,16 @@ export default function TeamPage() {
       <AddDialog
         open={adding}
         onClose={() => setAdding(false)}
-        onAdded={(host, url) => {
+        onAdded={(host, url, answer) => {
           upsertHost(host);
+          // The meetings they joined in the same step.
+          if (answer.eventTypes?.length) {
+            const changed = new Map(answer.eventTypes.map((e) => [e.id, e]));
+            patch((prev) => ({ ...prev, eventTypes: prev.eventTypes.map((e) => changed.get(e.id) ?? e) }));
+          }
           setLinks((prev) => ({ ...prev, [host.id]: url }));
           setAdding(false);
-          setInvite({ host, url, fresh: true });
+          setInvite({ host, url, fresh: true, answer });
         }}
       />
       <LinkDialog

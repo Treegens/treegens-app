@@ -32,6 +32,7 @@
  *    co-host email "taken@example.com" → 422 field error
  */
 import { RESERVED_SLUGS, defaultSchedule, newEventType } from '../../shared/defaults';
+import { SHORT_LINK_NAMES, isShortName } from '../../shared/shortLinks';
 import type {
   AdminBooking,
   AdminBookingsResponse,
@@ -58,6 +59,8 @@ import type {
   PublicHost,
   PublicSite,
   Schedule,
+  ShortLinkResponse,
+  SiteSettings,
   SlotsResponse,
   TimeRange,
 } from '../../shared/types';
@@ -138,10 +141,37 @@ function applyUrlSwitches(): void {
     touchedFlags = true;
   }
   if (touchedFlags) writeSession(FLAGS_KEY, flags);
+  for (const f of flags.fail ?? []) {
+    if (!f.startsWith('google:')) continue;
+    const email = f.slice('google:'.length);
+    for (const h of state.hosts) {
+      if (h.google?.email === email) h.google.status = 'needs_reconnect';
+      for (const a of h.googleExtra ?? []) if (a.email === email) a.status = 'needs_reconnect';
+    }
+  }
 
   // Return leg of the fake Google OAuth redirect (see googleConnectUrl in api.ts).
   const googleHost = params.get('mock_google_host');
-  if (googleHost && params.get('google') === 'connected') {
+  const intent = params.get('mock_google_intent');
+  if (googleHost && params.get('google') === 'connected' && (intent === 'extra' || intent === 'reconnect')) {
+    // "Add another Google account" adds a row (the same address refreshes it); a row's Reconnect mends that row.
+    const host = state.hosts.find((h) => h.id === googleHost);
+    if (host) {
+      const extras = (host.googleExtra ??= []);
+      if (intent === 'reconnect') {
+        const id = params.get('mock_google_account');
+        const row = extras.find((a) => a.id === id);
+        if (row) row.status = 'ok';
+        if (host.google && host.google.id === id) host.google.status = 'ok';
+      } else {
+        const email = params.get('mock_google_email') || `you+${extras.length + 1}@example.com`;
+        const row = extras.find((a) => a.email === email);
+        if (row) row.status = 'ok';
+        else extras.push({ id: nextId('gacc'), email, status: 'ok', busyCalendarIds: ['primary'], connectedAt: new Date().toISOString(), health: null });
+      }
+      save();
+    }
+  } else if (googleHost && params.get('google') === 'connected') {
     const host = state.hosts.find((h) => h.id === googleHost);
     if (host) {
       host.google = {
@@ -700,12 +730,19 @@ function overview(): AdminOverview {
 }
 
 function bootstrap(): AdminBootstrap {
+  const links = state.site.shortLinks;
   return {
     site: clone(state.site),
     hosts: clone(state.hosts),
     eventTypes: clone(state.eventTypes).sort((a, b) => a.position - b.position),
     integrations: clone(state.integrations),
     publicUrl: `${origin()}${basePath()}`,
+    shortLinks: links
+      ? SHORT_LINK_NAMES.map((name) => {
+          const id = links[name] ?? null;
+          return { name, url: `${origin()}/${name}`, eventTypeId: id && state.eventTypes.some((e) => e.id === id) ? id : null };
+        })
+      : null,
   };
 }
 
@@ -735,8 +772,45 @@ function applyHostUpdate(host: AdminHost, u: HostUpdate, self: boolean): void {
     if (u.busyCalendarIds !== undefined) host.google.busyCalendarIds = u.busyCalendarIds.slice();
     if (u.writeCalendarId !== undefined) host.google.writeCalendarId = u.writeCalendarId;
   }
+  if (u.googleCalendars) {
+    const { accountId, busyCalendarIds } = u.googleCalendars;
+    if (busyCalendarIds.length === 0) fail(422, 'invalid', 'Tick at least one calendar of this account, or remove the account.');
+    if (host.google && host.google.id === accountId) host.google.busyCalendarIds = busyCalendarIds.slice();
+    else {
+      const extra = (host.googleExtra ?? []).find((a) => a.id === accountId);
+      if (!extra) fail(404, 'google_account_not_found', 'That Google account is not connected any more. Reload the page.');
+      extra.busyCalendarIds = busyCalendarIds.slice();
+    }
+  }
   if (u.addIcsFeed) host.icsFeeds = [...host.icsFeeds, { id: nextId('ics'), label: u.addIcsFeed.label.trim() || 'Calendar feed' }];
   if (u.removeIcsFeedId) host.icsFeeds = host.icsFeeds.filter((f) => f.id !== u.removeIcsFeedId);
+}
+
+/** One Google account of the host by id (main or extra), or a 404 the way the server says it. */
+function mockAccount(host: AdminHost, accountId: string): { email: string; main: boolean } {
+  if (host.google && host.google.id === accountId) return { email: host.google.email, main: true };
+  const extra = (host.googleExtra ?? []).find((a) => a.id === accountId);
+  if (!extra) fail(404, 'google_account_not_found', 'That Google account is not connected any more. Reload the page.');
+  if (extra.status === 'needs_reconnect') fail(409, 'google_needs_reconnect', `${extra.email} needs to be reconnected before its calendars can be listed.`);
+  return { email: extra.email, main: false };
+}
+
+function accountCalendarsOf(host: AdminHost, accountId: string): GoogleCalendarListItem[] {
+  const { email } = mockAccount(host, accountId);
+  return [
+    { id: 'primary', summary: email, primary: true, accessRole: 'owner', backgroundColor: '#2f6b57' },
+    { id: `team-${accountId}@group.calendar.google.com`, summary: 'Team', primary: false, accessRole: 'owner', backgroundColor: '#b7791f' },
+  ];
+}
+
+function removeMockAccount(host: AdminHost, accountId: string): { id: string; email: string; main: boolean } {
+  const { email, main } = mockAccount(host, accountId);
+  if (main) {
+    host.google = null;
+    if (host.timezoneMode === 'google') host.timezoneMode = 'device';
+  } else host.googleExtra = (host.googleExtra ?? []).filter((a) => a.id !== accountId);
+  save();
+  return { id: accountId, email, main };
 }
 
 function calendarsOf(host: AdminHost): GoogleCalendarListItem[] {
@@ -785,6 +859,18 @@ on(
   },
   { failKey: 'event' },
 );
+
+// What a short link opens. The kit shows the event in the owner's site data (no brand view here).
+on('GET', '/public/short/:name', ({ params }): ShortLinkResponse => {
+  const name = params[0];
+  if (!isShortName(name)) fail(404, 'not_found', 'That short link is not set up.');
+  const id = state.site.shortLinks?.[name] ?? null;
+  const et = id ? state.eventTypes.find((e) => e.id === id) : undefined;
+  const url = `${origin()}/${name}`;
+  if (!et) return { name, url, state: 'closed', reason: 'unassigned', site: publicSite() };
+  if (!et.active) return { name, url, state: 'closed', reason: 'paused', site: publicSite() };
+  return { name, url, state: 'open', site: publicSite(), eventType: publicEventType(et) };
+});
 
 on('GET', '/public/slots', ({ query }): SlotsResponse => {
   const et = state.eventTypes.find((e) => e.slug === query.slug);
@@ -890,6 +976,39 @@ on('POST', '/auth/password', ({ body }) => {
 
 // admin
 on('GET', '/admin/bootstrap', () => (requireAdmin(), bootstrap()), { failKey: 'bootstrap' });
+
+on(
+  'PUT',
+  '/admin/brands/:id',
+  ({ params, body }) => {
+    requireAdmin();
+    if (params[0] !== 'brand_eco_champions') fail(404, 'not_found', 'That brand does not exist.');
+    const b = (body ?? {}) as { theme?: Partial<SiteSettings['theme']>; emailFromName?: string };
+    const list = state.site.brands ?? [];
+    const current = list.find((x) => x.id === params[0]);
+    const theme = { ...(current?.theme ?? state.site.theme), ...(b.theme ?? {}) } as SiteSettings['theme'];
+    const entry = { id: 'brand_eco_champions' as const, theme, emailFromName: b.emailFromName ?? current?.emailFromName ?? '', updatedAt: new Date().toISOString() };
+    state.site.brands = [...list.filter((x) => x.id !== entry.id), entry];
+    return { brand: clone(entry), site: clone(state.site) };
+  },
+  { write: true },
+);
+
+on(
+  'PUT',
+  '/admin/short-links',
+  ({ body }) => {
+    requireAdmin();
+    const b = (body ?? {}) as { name?: string; eventTypeId?: string | null; brand?: boolean };
+    if (!isShortName(b.name)) fail(422, 'invalid', 'Please check the highlighted fields.', { name: 'Choose jimicohen.com/meet or jimicohen.com/pod.' });
+    const et = typeof b.eventTypeId === 'string' ? state.eventTypes.find((e) => e.id === b.eventTypeId) : undefined;
+    if (b.eventTypeId !== null && !et) fail(422, 'invalid', 'That meeting no longer exists. Choose another.', { eventTypeId: 'That meeting no longer exists. Choose another.' });
+    if (et && b.brand) et.brandId = b.name === 'pod' ? 'brand_eco_champions' : null;
+    state.site.shortLinks = { ...(state.site.shortLinks ?? {}), [b.name]: b.eventTypeId ?? null };
+    return et ? { shortLinks: clone(state.site.shortLinks), eventType: clone(et) } : { shortLinks: clone(state.site.shortLinks) };
+  },
+  { write: true },
+);
 on('GET', '/admin/overview', () => (requireAdmin(), overview()), { failKey: 'overview' });
 
 on(
@@ -1092,6 +1211,34 @@ on(
     host.hasInviteLink = true;
     save();
     return { host: clone(host), inviteUrl: `${origin()}${basePath()}/host/${host.id}?t=${DEMO_TOKEN}` };
+  },
+  { write: true },
+);
+
+on('GET', '/admin/hosts/:id/google/:aid/calendars', ({ params }) => {
+  requireAdmin();
+  const host = state.hosts.find((h) => h.id === params[0]);
+  if (!host) fail(404, 'not_found', 'That person is no longer on the team.');
+  return { calendars: accountCalendarsOf(host, params[1]) };
+});
+
+on('GET', '/admin/hosts/:id/google/:aid/removal', ({ params }) => {
+  requireAdmin();
+  const host = state.hosts.find((h) => h.id === params[0]);
+  if (!host) fail(404, 'not_found', 'That person is no longer on the team.');
+  const { email, main } = mockAccount(host, params[1]);
+  return main ? { main, email, upcomingEvents: 2, extrasKeepBlocking: (host.googleExtra ?? []).length } : { main, email, upcomingEvents: 0 };
+});
+
+on(
+  'DELETE',
+  '/admin/hosts/:id/google/:aid',
+  ({ params }) => {
+    requireAdmin();
+    const host = state.hosts.find((h) => h.id === params[0]);
+    if (!host) fail(404, 'not_found', 'That person is no longer on the team.');
+    const removed = removeMockAccount(host, params[1]);
+    return { ok: true, host: clone(host), removed, effects: { timezoneMode: host.timezoneMode, detached: removed.main ? 2 : 0 } };
   },
   { write: true },
 );
@@ -1301,6 +1448,22 @@ on('PUT', '/host/:id', ({ params, query, body }) => {
 });
 
 on('GET', '/host/:id/calendars', ({ params, query }) => ({ calendars: calendarsOf(hostByToken(params[0], query.t)) }));
+on('GET', '/host/:id/google/:aid/calendars', ({ params, query }) => ({ calendars: accountCalendarsOf(hostByToken(params[0], query.t), params[1]) }));
+on('GET', '/host/:id/google/:aid/removal', ({ params, query }) => {
+  const host = hostByToken(params[0], query.t);
+  const { email, main } = mockAccount(host, params[1]);
+  return { main, email, upcomingEvents: 0, ...(main ? { extrasKeepBlocking: (host.googleExtra ?? []).length } : {}) };
+});
+on(
+  'DELETE',
+  '/host/:id/google/:aid',
+  ({ params, query }) => {
+    const host = hostByToken(params[0], query.t);
+    const removed = removeMockAccount(host, params[1]);
+    return { ok: true, host: clone(host), removed, effects: { timezoneMode: host.timezoneMode, detached: 0 } };
+  },
+  { write: true },
+);
 
 on(
   'POST',

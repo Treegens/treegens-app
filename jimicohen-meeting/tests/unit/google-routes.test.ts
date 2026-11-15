@@ -14,6 +14,8 @@ vi.mock('../../server/lib/booking', async () => {
     toPublicEventType: vi.fn(),
     toPublicBooking: vi.fn(),
     syncBookingToCalendar: vi.fn(),
+    detachEventsOfAccount: vi.fn(async () => 0),
+    countEventsInAccount: vi.fn(async () => ({ count: 0, atLeast: false })),
   };
 });
 vi.mock('../../server/routes/public', () => ({ routes: [] }));
@@ -27,6 +29,10 @@ import { GMAIL_SEND_SCOPE, GOOGLE_CALENDAR_SCOPES, readGoogleState } from '../..
 import * as repo from '../../server/lib/repo';
 import { absoluteReturnUrl } from '../../server/routes/google';
 import type { Host } from '../../shared/types';
+import { accountIdFor } from '../../server/lib/googleAccounts';
+
+/** The id the owner's first account gets: from its Google account id, never from the address. */
+const OWNER_ACCOUNT = accountIdFor('host_owner', 'sub-jimi@example.com');
 import { apiRequest, cookiePair, makeTestCtx, TEST_BASE_URL, TEST_NOW, type TestCtx, type TestCtxOptions } from '../helpers/ctx';
 
 // ───────────────────────── helpers ─────────────────────────
@@ -129,8 +135,9 @@ function b64url(value: unknown): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
 }
 
-function idToken(email: string): string {
-  return `${b64url({ alg: 'RS256', typ: 'JWT' })}.${b64url({ iss: 'https://accounts.google.com', aud: CLIENT_ID, sub: '1', email, email_verified: true })}.signature`;
+/** Every address is its own Google account (sub-<address>) unless a test says otherwise. */
+function idToken(email: string, sub = `sub-${email}`): string {
+  return `${b64url({ alg: 'RS256', typ: 'JWT' })}.${b64url({ iss: 'https://accounts.google.com', aud: CLIENT_ID, sub, email, email_verified: true })}.signature`;
 }
 
 interface GoogleFake {
@@ -295,7 +302,7 @@ describe('GET /google/callback', () => {
     const google = fakeGoogle(w.ctx);
     const res = await callback(w.ctx, { state, code: 'auth-code-1', scope: 'ignored' });
     // The page is told the zone changed with it: every hour the owner offers moved.
-    expect(locationOf(res).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York`);
+    expect(locationOf(res).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York&gresult=first&gaccount=${OWNER_ACCOUNT}`);
 
     expect(google.tokenForms).toHaveLength(1);
     expect(Object.fromEntries(google.tokenForms[0])).toEqual({ code: 'auth-code-1', client_id: CLIENT_ID, client_secret: CLIENT_SECRET, redirect_uri: `${TEST_BASE_URL}/api/google/callback`, grant_type: 'authorization_code' });
@@ -322,7 +329,9 @@ describe('GET /google/callback', () => {
     expect(to.searchParams.get('t')).toBe(w.alexToken);
     expect(to.searchParams.get('google')).toBe('connected');
     expect(to.searchParams.get('zone')).toBe('Europe/Berlin');
-    expect([...to.searchParams.keys()].sort()).toEqual(['google', 't', 'zone']);
+    // The account goes by its id, never by its address.
+    expect([...to.searchParams.keys()].sort()).toEqual(['gaccount', 'google', 'gresult', 't', 'zone']);
+    expect(to.searchParams.get('gaccount')).toBe(accountIdFor('host_alex', 'sub-alex@gmail.example'));
 
     const alex = (await repo.getHost(w.ctx, 'host_alex'))!;
     expect(alex.google).toMatchObject({ email: 'alex@gmail.example', status: 'ok' });
@@ -337,11 +346,13 @@ describe('GET /google/callback', () => {
     const w = await world();
     fakeGoogle(w.ctx);
     const admin = await begin(w.ctx, { cookie: w.cookie });
-    expect(locationOf(await callback(w.ctx, { state: admin, code: 'c1' })).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York`);
+    expect(locationOf(await callback(w.ctx, { state: admin, code: 'c1' })).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York&gresult=first&gaccount=${OWNER_ACCOUNT}`);
     const cohost = await begin(w.ctx, { host: 'host_alex', t: w.alexToken });
     fakeGoogle(w.ctx, { email: 'alex@gmail.example', zone: 'UTC' });
     // Alex's zone was UTC already: following the calendar changed nothing, so nothing is said about it.
-    expect(locationOf(await callback(w.ctx, { state: cohost, code: 'c2' })).href).toBe(`${TEST_BASE_URL}/host/host_alex?t=${w.alexToken}&google=connected`);
+    expect(locationOf(await callback(w.ctx, { state: cohost, code: 'c2' })).href).toBe(
+      `${TEST_BASE_URL}/host/host_alex?t=${w.alexToken}&google=connected&gresult=first&gaccount=${accountIdFor('host_alex', 'sub-alex@gmail.example')}`,
+    );
     expect((await repo.getHost(w.ctx, 'host_alex'))!.timezoneMode).toBe('google');
   });
 
@@ -390,14 +401,14 @@ describe('GET /google/callback', () => {
     // An address the person chose stays, whatever account they connect later.
     await repo.updateHost(w.ctx, 'host_owner', (h) => ({ ...h, email: 'jimi@jimicohen.com' }));
     fakeGoogle(w.ctx, { email: 'other.account@example.com' });
-    await callback(w.ctx, { state: await begin(w.ctx, { cookie: w.cookie }), code: 'c2' });
+    await callback(w.ctx, { state: await begin(w.ctx, { cookie: w.cookie, switchAccount: true }), code: 'c2' });
     expect((await repo.getHost(w.ctx, 'host_owner'))!).toMatchObject({ email: 'jimi@jimicohen.com', google: { email: 'other.account@example.com' } });
 
     // Two people never end up with the same address: one that a team mate already uses is not taken over.
     const alex = (await repo.getHost(w.ctx, 'host_alex'))!;
     await repo.updateHost(w.ctx, 'host_owner', (h) => ({ ...h, email: '' }));
     fakeGoogle(w.ctx, { email: alex.email.toUpperCase() });
-    await callback(w.ctx, { state: await begin(w.ctx, { cookie: w.cookie }), code: 'c3' });
+    await callback(w.ctx, { state: await begin(w.ctx, { cookie: w.cookie, switchAccount: true }), code: 'c3' });
     expect((await repo.getHost(w.ctx, 'host_owner'))!).toMatchObject({ email: '', google: { email: alex.email.toUpperCase(), status: 'ok' } });
   });
 
@@ -493,7 +504,7 @@ describe('GET /google/callback', () => {
     fakeGoogle(w.ctx);
     const state = await begin(w.ctx, { cookie: w.cookie, baseUrl: APP_HOST });
     const ok = locationOf(await callback(w.ctx, { state, code: 'c1' }, APP_HOST));
-    expect(ok.href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York`);
+    expect(ok.href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York&gresult=first&gaccount=${OWNER_ACCOUNT}`);
     const bad = locationOf(await callback(w.ctx, { state: 'garbage' }, APP_HOST));
     expect(bad.origin).toBe('https://jimicohen.com');
     const hostile = await handle(new Request('https://evil.example/meeting/api/google/callback?state=garbage', { headers: { host: 'evil.example' } }), w.ctx);

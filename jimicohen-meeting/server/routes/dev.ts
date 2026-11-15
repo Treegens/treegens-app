@@ -10,14 +10,17 @@
  *   POST   /dev/clock      { now: ISO } freezes time, { now: null } returns to real time,
  *                          { advanceMs: n } moves on from the current (fake or real) time
  *   POST   /dev/run-jobs   what the cron function does            → result of runScheduled
+ *   POST   /dev/one-time-moves  the one-time setup of the short links (server/lib/seed.ts) → { shortLinks }
  *
  * Controls for the provider mocks (server/lib/mocks.ts) and direct views for end-to-end tests:
  *
  *   GET    /dev/google/busy[?email=]     busy time the mock Google reports → { busy: { email: [...] } }
  *   PUT    /dev/google/busy              { email, busy: [{ start, end, calendarId? }], keepCache? }
  *   DELETE /dev/google/busy[?email=]     clear one account, or all of them
- *   GET    /dev/google/accounts          mock Google accounts seen so far  → { accounts: [...] }
+ *   GET    /dev/google/accounts          mock Google accounts seen so far, with sub and grant → { accounts: [...] }
  *   PUT    /dev/google/account           { email, timezone?, calendars?, revoked? }
+ *                                         { email, renameTo }    the same Google account under a new address
+ *                                         { email, newAccount: true }  the address now belongs to another Google account
  *   GET    /dev/google/events[?email=]   events on the mock calendars      → { events: [...] }
  *   GET    /dev/fail                     failure injection in force        → { fail: { service: spec } }
  *   PUT    /dev/fail                     { service, mode?, status?, code?, message?, ms?, times?, account? }
@@ -26,16 +29,19 @@
  *   GET    /dev/calls                    calls placed through mock Twilio  → { calls: [...] }
  *   GET    /dev/bookings                 every booking with its manage link → { bookings: [...] }
  *   GET    /dev/kv?prefix= | ?key=       raw look into the store           → { keys } | { key, value }
+ *   PUT    /dev/kv                       { key, value } writes one raw record (old-shape data for tests)
  *   PUT    /dev/llm-script               { replies: [...] } answers the mock model gives next, in order
  *   DELETE /dev/llm-script
  *   PUT    /dev/ics                      { name, body? | events?: [{ start, end, summary? }], status? } → { url }
  *   DELETE /dev/ics[?name=]
  */
+import { createHash, randomBytes } from 'node:crypto';
 import { runScheduled } from '../cron';
 import { manageToken } from '../lib/booking';
 import type { Ctx, KV } from '../lib/ctx';
 import { HttpError, json, readJson, route, type Route } from '../lib/http';
 import { KEYS, getBookingIndex, getBookings, listJobs } from '../lib/repo';
+import { runShortLinkMove } from '../lib/seed';
 
 export const DEV_CLOCK_KEY = 'dev/clock';
 export const DEV_OUTBOX_KEY = 'dev/outbox';
@@ -75,6 +81,10 @@ export interface DevGoogleCalendar {
 
 export interface DevGoogleAccount {
   email: string;
+  /** Google's own id for the account. Stays with the account when its address is renamed. */
+  sub?: string;
+  /** grant generation: a revoke ends every token of the account minted before it */
+  grant?: number;
   /** Calendar time zone (settings/timezone). Set from the OAuth code, changeable through PUT /dev/google/account. */
   timezone?: string;
   /** replaces the default calendar list */
@@ -109,6 +119,82 @@ export interface DevIcsFeed {
 /** Account emails are compared and stored in lower case. */
 export function devAccountKey(email: string): string {
   return String(email ?? '').trim().toLowerCase();
+}
+
+/** `dev/google-sub/<sub>` → { email }: where a mock Google account lives now. */
+export const DEV_GOOGLE_SUB_PREFIX = 'dev/google-sub/';
+
+/** The sub a mock account gets the first time its address is seen: derived from the address, then stored. */
+export function defaultMockSub(email: string): string {
+  return String(BigInt(`0x${createHash('sha256').update(devAccountKey(email)).digest('hex').slice(0, 15)}`));
+}
+
+/** The mock account at this address, with its sub stored (and findable by it). */
+export async function ensureMockAccount(kv: KV, email: string): Promise<DevGoogleAccount> {
+  const address = devAccountKey(email);
+  const key = `${DEV_GOOGLE_ACCOUNT_PREFIX}${address}`;
+  const known = (await kv.getJSON<DevGoogleAccount>(key)) ?? { email: address };
+  if (known.sub) return known;
+  const sub = defaultMockSub(address);
+  const next: DevGoogleAccount = { ...known, email: address, sub };
+  await kv.setJSON(key, next);
+  await kv.setJSON(`${DEV_GOOGLE_SUB_PREFIX}${sub}`, { email: address });
+  return next;
+}
+
+/** The mock account with this sub, wherever its address is now; null when no account has it any more. */
+export async function mockAccountBySub(kv: KV, sub: string): Promise<DevGoogleAccount | null> {
+  const where = await kv.getJSON<{ email?: string }>(`${DEV_GOOGLE_SUB_PREFIX}${sub}`);
+  const email = typeof where?.email === 'string' ? where.email : null;
+  if (!email) return null;
+  const account = (await kv.getJSON<DevGoogleAccount>(`${DEV_GOOGLE_ACCOUNT_PREFIX}${email}`)) ?? null;
+  if (!account) return null;
+  return (account.sub ?? defaultMockSub(email)) === sub ? { ...account, sub } : null;
+}
+
+/** A renamed Google account: the same sub, busy time and events, under a new address. */
+export async function moveMockAccount(kv: KV, from: string, to: string): Promise<DevGoogleAccount> {
+  const source = devAccountKey(from);
+  const target = devAccountKey(to);
+  const account = await ensureMockAccount(kv, source);
+  const moved: DevGoogleAccount = { ...account, email: target };
+  await kv.setJSON(`${DEV_GOOGLE_ACCOUNT_PREFIX}${target}`, moved);
+  await kv.delete(`${DEV_GOOGLE_ACCOUNT_PREFIX}${source}`);
+  await kv.setJSON(`${DEV_GOOGLE_SUB_PREFIX}${account.sub}`, { email: target });
+  const busy = await kv.getJSON<DevBusyInterval[]>(`${DEV_GOOGLE_BUSY_PREFIX}${source}`);
+  if (busy) {
+    await kv.setJSON(
+      `${DEV_GOOGLE_BUSY_PREFIX}${target}`,
+      busy.map((b) => (b.calendarId && devAccountKey(b.calendarId) === source ? { ...b, calendarId: target } : b)),
+    );
+    await kv.delete(`${DEV_GOOGLE_BUSY_PREFIX}${source}`);
+  }
+  // The primary calendar's id is the address, so it moves with it.
+  for (const key of await kv.list(`${DEV_GOOGLE_EVENT_PREFIX}${source}/`)) {
+    const stored = await kv.getJSON<{ account: string; calendarId: string; event: Record<string, unknown> }>(key);
+    if (!stored) continue;
+    const calendarId = devAccountKey(stored.calendarId) === source ? target : stored.calendarId;
+    const event = { ...stored.event, ...(calendarId === target ? { organizer: { email: target, self: true } } : {}) };
+    await kv.setJSON(`${DEV_GOOGLE_EVENT_PREFIX}${target}/${key.slice(`${DEV_GOOGLE_EVENT_PREFIX}${source}/`.length)}`, { account: target, calendarId, event });
+    await kv.delete(key);
+  }
+  return moved;
+}
+
+/**
+ * The address now belongs to another Google account (a reused Workspace address, or Google's own rename of a
+ * conflicting account): the old account keeps its sub, calendars and tokens under a hidden address, and the
+ * address starts over with a fresh sub and empty calendars.
+ */
+export async function reuseMockAddress(kv: KV, email: string): Promise<DevGoogleAccount> {
+  const address = devAccountKey(email);
+  const old = await ensureMockAccount(kv, address);
+  await moveMockAccount(kv, address, `moved-${String(old.sub).slice(0, 12)}@renamed.mock`);
+  const sub = String(BigInt(`0x${randomBytes(7).toString('hex')}`));
+  const fresh: DevGoogleAccount = { email: address, sub, grant: 0, ...(old.timezone ? { timezone: old.timezone } : {}) };
+  await kv.setJSON(`${DEV_GOOGLE_ACCOUNT_PREFIX}${address}`, fresh);
+  await kv.setJSON(`${DEV_GOOGLE_SUB_PREFIX}${sub}`, { email: address });
+  return fresh;
 }
 
 const FAIL_MODES: readonly string[] = ['error', 'timeout', 'network', 'delay'];
@@ -276,6 +362,13 @@ export const routes: Route[] = [
     return json(await runScheduled(ctx));
   }),
 
+  // The one-time changes to stored data that only the deploy's scheduled function runs (server/lib/seed.ts).
+  // run-jobs above never runs them, so the suites that do not ask for them never see them.
+  route('POST', '/dev/one-time-moves', async ({ ctx }) => {
+    assertDev(ctx);
+    return json({ shortLinks: await runShortLinkMove(ctx, { readMarker: true }) });
+  }),
+
   // ───────────── mock Google ─────────────
 
   route('GET', '/dev/google/busy', async ({ ctx, url }) => {
@@ -321,8 +414,13 @@ export const routes: Route[] = [
     assertDev(ctx);
     const body = await readJson<Record<string, unknown>>(req);
     const email = requireEmail(body.email);
+    if (body.renameTo !== undefined) {
+      const to = requireEmail(body.renameTo);
+      return json({ account: await moveMockAccount(ctx.kv, email, to) });
+    }
+    if (body.newAccount === true) return json({ account: await reuseMockAddress(ctx.kv, email) });
     const key = `${DEV_GOOGLE_ACCOUNT_PREFIX}${email}`;
-    const account: DevGoogleAccount = { ...((await ctx.kv.getJSON<DevGoogleAccount>(key)) ?? {}), email };
+    const account: DevGoogleAccount = { ...(await ensureMockAccount(ctx.kv, email)), email };
     if (typeof body.timezone === 'string' && body.timezone !== '') account.timezone = body.timezone;
     if (typeof body.revoked === 'boolean') account.revoked = body.revoked;
     if (body.calendars === null) delete account.calendars;
@@ -418,6 +516,17 @@ export const routes: Route[] = [
     const key = url.searchParams.get('key');
     if (key) return json({ key, value: await ctx.kv.getJSON<unknown>(key) });
     return json({ keys: await ctx.kv.list(url.searchParams.get('prefix') ?? '') });
+  }),
+
+  // Writes one raw record, so a test can put data in the shape an older deploy left it.
+  route('PUT', '/dev/kv', async ({ ctx, req }) => {
+    assertDev(ctx);
+    const body = await readJson<Record<string, unknown>>(req);
+    const key = typeof body.key === 'string' ? body.key : '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9/_.@+-]{0,255}$/.test(key)) throw invalid('Send the key of the record.', 'key');
+    if (body.value === null || body.value === undefined) await ctx.kv.delete(key);
+    else await ctx.kv.setJSON(key, body.value);
+    return json({ ok: true, key });
   }),
 
   // ───────────── mock model, mock calendar feeds ─────────────

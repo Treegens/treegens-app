@@ -29,8 +29,10 @@
  *   Google is best effort. A slow or failing Google call never costs the booking: the problem is noted
  *   on booking.google.error and a gcal_sync job repeats the work.
  */
+import { brandLine, brandOf, bookUrlFor, isBrandId, siteForBrand, viewFor, type Brand } from '../../shared/brands';
 import { CALENDAR_PENDING } from '../../shared/calendar';
 import { smsOnlyConsentText } from '../../shared/defaults';
+import { SHORT_LINKS, shortLinkTarget, shortNameFor, shortUrlOf } from '../../shared/shortLinks';
 import { sanitizeCustomCss } from '../../shared/theme';
 import type {
   Booking,
@@ -49,16 +51,19 @@ import type {
   PublicSite,
   Question,
   SendResult,
+  ShortLinkResponse,
+  ShortName,
   SiteSettings,
   SlotsResponse,
   Theme,
 } from '../../shared/types';
 import { getAdminAuth, rateLimit, rateLimitTake, type RateLimitHit } from './auth';
-import { forgetHostBusy, getBusyForHosts } from './busy';
+import { FEEDS_SOURCE, forgetHostBusy, getBusyForHosts, type BusyProblem } from './busy';
 import { hmacHex, randomId, randomToken, safeEqual, sha256Hex } from './crypto';
-import type { Ctx, KV } from './ctx';
+import { BASE_PATH, type Ctx, type KV } from './ctx';
 import { resolveEmailProvider } from './email';
-import { GoogleApiError, GoogleAuthError, googleCreateEvent, googleDeleteEvent, googleGetEventLinks, googleUpdateEvent, type CalendarEventInput } from './google';
+import { GoogleApiError, GoogleAuthError, googleCreateEvent, googleDeleteEvent, googleGetEvent, googleGetEventLinks, googleUpdateEvent, type CalendarEventInput } from './google';
+import { accountGone, accountsOf, holderCandidates, mainOf, type AccountRef } from './googleAccounts';
 import { HttpError } from './http';
 import { calendarLinks } from './ics';
 import { cancelBookingJobs, enqueueJob, registerJobHandler, runDueJobs, scheduleBookingJobs } from './jobs';
@@ -380,8 +385,12 @@ function locationsOf(et: EventType): LocationConfig[] {
   return list.length > 0 ? list : [{ type: 'google_meet' }];
 }
 
-/** `hosts` may be every host of the site: only the ones assigned to the event type are shown. */
-export function toPublicEventType(ctx: Ctx, et: EventType, hosts: Host[]): PublicEventType {
+/**
+ * `hosts` may be every host of the site: only the ones assigned to the event type are shown.
+ * `brand`: the page is shown in a brand, whose look is all its own, so the event's colour is left out.
+ * `site`: the stored settings, to name the short link that opens this event.
+ */
+export function toPublicEventType(ctx: Ctx, et: EventType, hosts: Host[], opts?: { brand?: Brand | null; site?: SiteSettings }): PublicEventType {
   const assigned = pickHosts(et.hostIds, hostsById(hosts));
   const lead = firstName(assigned[0]?.name ?? '');
   const invites = invitationsReachInvitee(et, assigned);
@@ -409,15 +418,27 @@ export function toPublicEventType(ctx: Ctx, et: EventType, hosts: Host[]): Publi
     reminderChannels: { call: hasReminderCall(et) },
   };
   if (et.emoji) out.emoji = et.emoji;
-  if (et.color) out.color = et.color;
+  if (et.color) out.color = opts?.brand ? '' : et.color;
+  const short = opts?.site ? shortNameFor(opts.site, et.id) : null;
+  if (short) out.shortUrl = shortUrlOf(ctx.env.publicBaseUrl, short);
   return out;
 }
 
-function buildPublicSite(
-  ctx: Ctx,
-  p: { site: SiteSettings; hosts: Host[]; eventTypes: EventType[]; features: { sms: boolean; calls: boolean }; email: boolean; open: boolean },
-): PublicSite {
-  const { site, hosts } = p;
+type LoadedSite = { site: SiteSettings; hosts: Host[]; eventTypes: EventType[]; features: { sms: boolean; calls: boolean }; email: boolean; open: boolean };
+
+/** The brand's logo for its pages: the one the owner uploaded, else the built-in one (a same-origin static file). */
+function brandLogoUrl(ctx: Ctx, brand: Brand): string {
+  return assetUrl(ctx, brand.theme.logoAssetId) ?? `${BASE_PATH}/${brand.art.logo}`;
+}
+
+/**
+ * The public site. With a `brand`, as that brand shows it: its name instead of the owner's profile, its look
+ * and logo, and no list of the owner's meetings (the page only links back to it in the owner's own look).
+ * The consent wording, the assistant and everything else stay the site's.
+ */
+function buildPublicSite(ctx: Ctx, p: LoadedSite, brand: Brand | null = null): PublicSite {
+  const { hosts } = p;
+  const site: SiteSettings = brand ? siteForBrand(p.site, brand) : p.site;
   const consentText = site.booking?.consentText ?? '';
   const booking: PublicSite['booking'] = {
     reminderOptInDefault: site.booking?.reminderOptInDefault === true,
@@ -436,20 +457,24 @@ function buildPublicSite(
     theme: publicThemePart(site.theme),
     themeAssets: {
       coverUrl: assetUrl(ctx, site.theme.coverAssetId),
-      logoUrl: assetUrl(ctx, site.theme.logoAssetId),
+      logoUrl: brand ? brandLogoUrl(ctx, brand) : assetUrl(ctx, site.theme.logoAssetId),
       backgroundUrl: assetUrl(ctx, site.theme.background?.imageAssetId),
     },
-    // Before first-run setup nothing is on offer (see siteIsOpen).
-    eventTypes: p.open ? p.eventTypes.filter((et) => et.active === true && et.visibility === 'public').map((et) => toPublicEventType(ctx, et, hosts)) : [],
+    // Before first-run setup nothing is on offer (see siteIsOpen). A brand's page never lists the owner's meetings.
+    eventTypes:
+      p.open && !brand
+        ? p.eventTypes.filter((et) => et.active === true && et.visibility === 'public').map((et) => toPublicEventType(ctx, et, hosts, { brand: brandOf(p.site, et), site: p.site }))
+        : [],
     booking,
     assistantName: site.assistant?.name ?? '',
     features: { sms: p.features.sms === true, calls: p.features.calls === true, email: p.email },
     ownerTimezone: ownerZoneOf(ctx, site, hosts),
+    brand: brand ? { id: brand.id, name: brand.name, iconUrl: assetUrl(ctx, brand.theme.logoAssetId) ?? `${BASE_PATH}/${brand.art.favicon}` } : null,
   };
 }
 
 /** Everything the public site is built from, read in one go. */
-async function loadPublicSite(ctx: Ctx): Promise<{ site: SiteSettings; hosts: Host[]; eventTypes: EventType[]; features: { sms: boolean; calls: boolean }; email: boolean; open: boolean }> {
+async function loadPublicSite(ctx: Ctx): Promise<LoadedSite> {
   const [site, open] = await Promise.all([getSite(ctx), siteIsOpen(ctx)]);
   const [hosts, eventTypes, features, email] = await Promise.all([listHosts(ctx), listEventTypes(ctx), twilioFeatures(ctx), emailGoesOut(ctx, site)]);
   return { site, hosts, eventTypes, features, email, open };
@@ -466,7 +491,35 @@ export async function getPublicEvent(ctx: Ctx, slug: string): Promise<{ site: Pu
   const wanted = typeof slug === 'string' ? slug.toLowerCase() : '';
   const et = wanted === '' ? undefined : loaded.eventTypes.find((e) => e.slug.toLowerCase() === wanted);
   if (!et || et.active !== true) return null;
-  return { site: buildPublicSite(ctx, loaded), eventType: toPublicEventType(ctx, et, loaded.hosts) };
+  const brand = brandOf(loaded.site, et);
+  return { site: buildPublicSite(ctx, loaded, brand), eventType: toPublicEventType(ctx, et, loaded.hosts, { brand, site: loaded.site }) };
+}
+
+/**
+ * What a short link opens right now (GET /public/short/:name). Read-only. An event that is paused shows its
+ * closed page in its own brand; a link that opens nothing (never set, turned off, its event deleted) and every
+ * link before first-run setup show the closed page in the link's own brand.
+ */
+export async function getShortLink(ctx: Ctx, name: ShortName): Promise<ShortLinkResponse> {
+  const loaded = await loadPublicSite(ctx);
+  const url = shortUrlOf(ctx.env.publicBaseUrl, name);
+  const linkBrand = brandOf(loaded.site, { brandId: SHORT_LINKS[name].brandId });
+  if (!loaded.open) return { name, url, state: 'closed', reason: 'not_open', site: buildPublicSite(ctx, loaded, linkBrand) };
+  const id = shortLinkTarget(loaded.site, name);
+  const et = id ? loaded.eventTypes.find((e) => e.id === id) : undefined;
+  if (!et) return { name, url, state: 'closed', reason: 'unassigned', site: buildPublicSite(ctx, loaded, linkBrand) };
+  const brand = brandOf(loaded.site, et);
+  if (et.active !== true) return { name, url, state: 'closed', reason: 'paused', site: buildPublicSite(ctx, loaded, brand) };
+  return { name, url, state: 'open', site: buildPublicSite(ctx, loaded, brand), eventType: toPublicEventType(ctx, et, loaded.hosts, { brand, site: loaded.site }) };
+}
+
+/**
+ * "Booked through Eco Champions: https://jimicohen.com/pod" for a booking made under a brand, null for one
+ * made in the owner's own look. `site` is the stored settings.
+ */
+export function brandLineFor(ctx: Ctx, site: SiteSettings, booking: Booking): string | null {
+  if (!isBrandId(booking.brandId)) return null;
+  return brandLine(viewFor(site, booking), bookUrlFor(ctx.env.publicBaseUrl, site, booking));
 }
 
 function selfServiceOpen(b: Booking, nowMs: number): boolean {
@@ -478,7 +531,8 @@ function selfServiceOpen(b: Booking, nowMs: number): boolean {
  * asks for one and the booking has a Google event, or one that is still being written to a calendar that works.
  */
 function invitationSent(b: Booking, byId: Map<string, Host>, eventType: EventType | null): boolean {
-  if (b.status !== 'confirmed' || !b.google || eventType?.googleInvite === false) return false;
+  // A detached booking's Google invitation can no longer be kept up to date: the page promises none.
+  if (b.status !== 'confirmed' || !b.google || b.google.detached || eventType?.googleInvite === false) return false;
   return b.google.eventId !== '' || usable(byId.get(b.google.hostId));
 }
 
@@ -525,7 +579,7 @@ function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventTy
     location,
     canReschedule: open && !!eventType && eventType.active === true,
     canCancel: open,
-    calendarLinks: calendarLinks({ booking: b, hosts: assigned, baseUrl: ctx.env.publicBaseUrl, manageToken: manageToken(ctx, b.id) }),
+    calendarLinks: calendarLinks({ booking: b, hosts: assigned, baseUrl: ctx.env.publicBaseUrl, manageToken: manageToken(ctx, b.id), brandLine: brandLineFor(ctx, site, b) }),
     cancellation: b.cancellation
       ? { at: b.cancellation.at, by: b.cancellation.by, ...(b.cancellation.reason ? { reason: b.cancellation.reason } : {}), ...(byName ? { byName } : {}) }
       : null,
@@ -564,11 +618,13 @@ export async function getManageView(
   if (!record) return null;
   const loaded = await loadPublicSite(ctx);
   const eventType = loaded.eventTypes.find((e) => e.id === record.eventTypeId) ?? null;
+  // The look the booking was made in, whatever its event type carries now.
+  const brand = brandOf(loaded.site, record);
   return {
     booking: publicBookingOf(ctx, record, loaded.hosts, eventType, loaded.email, loaded.site, opts?.owner ? 'owner' : 'invitee'),
     // A booking exists, so setup was done (a store restored by hand without its admin record still shows it).
-    site: buildPublicSite(ctx, { ...loaded, open: true }),
-    eventType: eventType ? toPublicEventType(ctx, eventType, loaded.hosts) : null,
+    site: buildPublicSite(ctx, { ...loaded, open: true }, brand),
+    eventType: eventType ? toPublicEventType(ctx, eventType, loaded.hosts, { brand, site: loaded.site }) : null,
   };
 }
 
@@ -592,6 +648,8 @@ async function loadScheduling(ctx: Ctx): Promise<Scheduling> {
 interface CalendarFailure {
   host: Host;
   error: string;
+  /** each source of the host that could not be read, naming its account */
+  problems?: BusyProblem[];
 }
 
 interface ExternalBusy {
@@ -604,6 +662,8 @@ interface ExternalBusy {
   timedOut?: boolean;
   /** with timedOut: the hosts whose calendars had not answered */
   slow?: Host[];
+  /** with timedOut: per host id, the sources still being read (an address, or "calendar feeds") */
+  slowSources?: Record<string, string[]>;
 }
 
 /**
@@ -612,11 +672,13 @@ interface ExternalBusy {
  * is required); a round robin carries on with the hosts that can be read.
  */
 async function loadExternalBusy(ctx: Ctx, kind: EventKind, hosts: Host[], range: Interval, fresh: boolean, budgetMs: number = CALENDAR_READ_BUDGET_MS): Promise<ExternalBusy> {
-  // One read per host (the same work getBusyForHosts does), so a timeout can say whose calendar was slow.
+  // One read per host (the same work getBusyForHosts does), so a timeout can say whose calendar was slow,
+  // and which of their accounts.
   const answered = hosts.map(() => false);
+  const pending = hosts.map(() => new Set<string>());
   const reading = Promise.all(
     hosts.map((host, i) =>
-      getBusyForHosts(ctx, [host], range, fresh ? { fresh: true } : undefined).then((found) => {
+      getBusyForHosts(ctx, [host], range, fresh ? { fresh: true, pending: pending[i] } : { pending: pending[i] }).then((found) => {
         answered[i] = true;
         return found[0];
       }),
@@ -626,16 +688,20 @@ async function loadExternalBusy(ctx: Ctx, kind: EventKind, hosts: Host[], range:
   if (results === TIMED_OUT) {
     // Slow is not the same as broken, so nobody is alerted here. But without an answer nothing can be offered.
     const slow = hosts.filter((_, i) => !answered[i]);
+    const slowSources: Record<string, string[]> = {};
+    hosts.forEach((host, i) => {
+      if (!answered[i]) slowSources[host.id] = [...pending[i]];
+    });
     ctx.log('warn', 'booking: the calendars did not answer in time', { hosts: hosts.map((h) => h.id), slow: slow.map((h) => h.id) });
     ctx.waitUntil(reading);
-    return { inputs: [], failed: [], blocked: true, timedOut: true, slow };
+    return { inputs: [], failed: [], blocked: true, timedOut: true, slow, slowSources };
   }
   const inputs: HostAvailabilityInput[] = [];
   const failed: CalendarFailure[] = [];
   hosts.forEach((host, i) => {
     const result = results[i];
     if (result && result.ok) inputs.push({ host, busy: result.busy });
-    else failed.push({ host, error: result?.error ?? 'Calendar could not be read.' });
+    else failed.push({ host, error: result?.error ?? 'Calendar could not be read.', ...(result?.problems?.length ? { problems: result.problems } : {}) });
   });
   const blocked = failed.length > 0 && (kind === 'round_robin' ? inputs.length === 0 : true);
   return { inputs, failed, blocked };
@@ -645,20 +711,51 @@ function bufferPadMs(et: EventType): number {
   return Math.max(positive(et.scheduling?.bufferBeforeMin), positive(et.scheduling?.bufferAfterMin)) * MINUTE_MS;
 }
 
+interface TroubleLine {
+  host: Host;
+  /** the source: an account id, "feeds", or "host" when the read failed as a whole */
+  key: string;
+  /** the account's address, when it is one */
+  address: string;
+  message: string;
+}
+
+function troubleLines(failures: CalendarFailure[]): TroubleLine[] {
+  const out: TroubleLine[] = [];
+  for (const f of failures) {
+    const problems = (f.problems ?? []).filter((p) => p && typeof p.key === 'string' && p.key !== '');
+    if (problems.length === 0) {
+      out.push({ host: f.host, key: 'host', address: '', message: f.error });
+      continue;
+    }
+    for (const p of problems) out.push({ host: f.host, key: p.key, address: p.accountId ? p.label : '', message: p.message });
+  }
+  return out;
+}
+
 /**
- * Tells the owner that a calendar cannot be read: one email per broken host per day, however many
- * bookings or health checks run into it.
+ * Tells the owner that a calendar cannot be read: one email per broken account (or the feeds of a host) per
+ * day, however many bookings or health checks run into it. Every line names the account.
  */
-export async function alertCalendarTrouble(ctx: Ctx, failures: { host: Host; error: string }[], during?: { eventTitle?: string }): Promise<number> {
+export async function alertCalendarTrouble(ctx: Ctx, failures: CalendarFailure[], during?: { eventTitle?: string }): Promise<number> {
   const day = nowIso(ctx).slice(0, 10);
-  const fresh: { host: Host; error: string }[] = [];
-  for (const failure of failures) {
-    if (await claim(ctx, `alert-calendar-${failure.host.id}-${day}`)) fresh.push(failure);
+  const claimName = (line: TroubleLine): string => `alert-calendar-${line.host.id}-${line.key}-${day}`;
+  const fresh: TroubleLine[] = [];
+  for (const line of troubleLines(failures)) {
+    if (await claim(ctx, claimName(line))) fresh.push(line);
   }
   if (fresh.length === 0) return 0;
 
-  const names = joinNames(fresh.map((f) => f.host.name.trim() || 'a host'));
-  const seen = fresh.map((f) => `${f.host.name.trim() || 'A host'}: ${f.error}`).join('\n');
+  const hostName = (h: Host, capital = false): string => h.name.trim() || (capital ? 'A host' : 'a host');
+  const hosts = [...new Map(fresh.map((l) => [l.host.id, l.host])).values()];
+  const names = joinNames(hosts.map((h) => hostName(h)));
+  const subjectNames = joinNames(
+    hosts.map((h) => {
+      const addresses = [...new Set(fresh.filter((l) => l.host.id === h.id && l.address).map((l) => l.address))];
+      return addresses.length > 0 ? `${hostName(h)} (${addresses.join(', ')})` : hostName(h);
+    }),
+  );
+  const seen = fresh.map((l) => (l.address ? `${hostName(l.host, true)}, ${l.address}: ${l.message}` : `${hostName(l.host, true)}: ${l.message}`)).join('\n');
   const first = during?.eventTitle
     ? `Someone just tried to book "${during.eventTitle}", but the calendar of ${names} could not be read. To avoid a double booking the request was turned away.`
     : `The calendar of ${names} could not be read during a routine check.`;
@@ -675,13 +772,13 @@ export async function alertCalendarTrouble(ctx: Ctx, failures: { host: Host; err
       bookingId: '',
       channel: 'email',
       audience: 'host',
-      subject: literal(`A calendar needs attention: ${names}`),
+      subject: literal(`A calendar needs attention: ${subjectNames}`),
       body,
       dueAt: nowIso(ctx),
     });
   } catch (err) {
     // Nothing was queued: give the day's claims back so the next failed read can still raise the alert.
-    await Promise.all(fresh.map((f) => releaseClaim(ctx, `alert-calendar-${f.host.id}-${day}`).catch(() => undefined)));
+    await Promise.all(fresh.map((l) => releaseClaim(ctx, claimName(l)).catch(() => undefined)));
     throw err;
   }
   return fresh.length;
@@ -689,15 +786,29 @@ export async function alertCalendarTrouble(ctx: Ctx, failures: { host: Host; err
 
 /**
  * A booking or a move was turned away because calendars were too slow to answer. Once is noise and stays in
- * the log. The second time in a day for the same host the owner is told (alertCalendarTrouble keeps that to
- * one email a day), so a calendar that is always too slow does not keep visitors out in silence.
+ * the log. The second time in a day for the same account the owner is told (alertCalendarTrouble keeps that
+ * to one email a day), so a calendar that is always too slow does not keep visitors out in silence.
  */
-async function reportSlowCalendars(ctx: Ctx, slow: Host[], during: { eventTitle: string; bookingId?: string }): Promise<void> {
+async function reportSlowCalendars(ctx: Ctx, slow: Host[], during: { eventTitle: string; bookingId?: string }, sources?: Record<string, string[]>): Promise<void> {
   ctx.log('error', 'booking: turned away because the calendars did not answer in time', { bookingId: during.bookingId, hosts: slow.map((h) => h.id) });
   const day = nowIso(ctx).slice(0, 10);
-  const repeated: { host: Host; error: string }[] = [];
+  const repeated: CalendarFailure[] = [];
+  const message = 'The calendar took too long to answer, more than once today.';
   for (const host of slow) {
-    if (!(await claim(ctx, `calendar-slow-${host.id}-${day}`))) repeated.push({ host, error: 'The calendar took too long to answer, more than once today.' });
+    const labels = sources?.[host.id] ?? [];
+    const accounts = accountsOf(host);
+    const keys: BusyProblem[] =
+      labels.length > 0
+        ? labels.map((label) => {
+            const ref = accounts.find((a) => a.account.email === label);
+            return ref ? { key: ref.account.id, label, message, accountId: ref.account.id } : { key: FEEDS_SOURCE, label, message };
+          })
+        : [{ key: 'host', label: '', message }];
+    const problems: BusyProblem[] = [];
+    for (const p of keys) if (!(await claim(ctx, `calendar-slow-${host.id}-${p.key}-${day}`))) problems.push(p);
+    if (problems.length === 0) continue;
+    const named = problems.filter((p) => p.key !== 'host');
+    repeated.push({ host, error: message, ...(named.length > 0 ? { problems: named } : {}) });
   }
   if (repeated.length > 0) await alertCalendarTrouble(ctx, repeated, { eventTitle: during.eventTitle });
 }
@@ -1351,7 +1462,7 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   if (external.failed.length > 0) {
     await quietly(ctx, 'the calendar alert', '', () => alertCalendarTrouble(ctx, external.failed, { eventTitle: eventType.title }));
   }
-  if (external.timedOut) await quietly(ctx, 'the slow calendar note', '', () => reportSlowCalendars(ctx, external.slow ?? [], { eventTitle: eventType.title }));
+  if (external.timedOut) await quietly(ctx, 'the slow calendar note', '', () => reportSlowCalendars(ctx, external.slow ?? [], { eventTitle: eventType.title }, external.slowSources));
   if (external.blocked) throw calendarUnavailable();
 
   // Step 3: is the time free?
@@ -1482,15 +1593,17 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   // Step 5: the booking itself.
   const assignedHosts = pickHosts(assigned, s.byId);
   const consentHost = eventHosts[0] ?? ownerOf(s.site, s.hosts);
-  // The words the visitor saw under the switches: texts alone get the wording without the call.
+  // The words the visitor saw under the switches: texts alone get the wording without the call. The wording
+  // is the site's for every brand; only {{site_name}} reads as the page did (the brand's name on its pages).
   const siteConsent = s.site.booking?.consentText ?? '';
+  const shown = viewFor(s.site, eventType);
   const consentText =
     sms || call
       ? renderTemplate(call ? siteConsent : smsOnlyConsentText(siteConsent), {
           host_first_name: firstName(consentHost?.name ?? s.site.profile.name),
           host_name: consentHost?.name ?? s.site.profile.name,
           assistant_name: s.site.assistant?.name ?? '',
-          site_name: s.site.profile.name,
+          site_name: shown.profile.name,
           event_name: eventType.title,
         }).trim()
       : '';
@@ -1528,6 +1641,8 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
     updatedAt: at,
   };
   if (input.utm) record.utm = input.utm;
+  // The look it is booked in. Every page and message about it keeps that look, whatever happens to the event later.
+  if (isBrandId(eventType.brandId)) record.brandId = eventType.brandId;
 
   let written: { created: boolean; booking: Booking };
   if (orphan) {
@@ -1863,7 +1978,7 @@ export async function rescheduleBooking(
   if (external.failed.length > 0) {
     await quietly(ctx, 'the calendar alert', bookingId, () => alertCalendarTrouble(ctx, external.failed, { eventTitle: eventType.title }));
   }
-  if (external.timedOut) await quietly(ctx, 'the slow calendar note', bookingId, () => reportSlowCalendars(ctx, external.slow ?? [], { eventTitle: eventType.title, bookingId }));
+  if (external.timedOut) await quietly(ctx, 'the slow calendar note', bookingId, () => reportSlowCalendars(ctx, external.slow ?? [], { eventTitle: eventType.title, bookingId }, external.slowSources));
   if (external.blocked) throw calendarUnavailable('move');
 
   const query: SlotQuery = {
@@ -2072,8 +2187,9 @@ export function calendarEventIdFor(bookingId: string): string {
   return `mtg${sha256Hex(bookingId).slice(0, 40)}`;
 }
 
+/** Whether the host's main account (where new meetings go) works. */
 function usable(host: Host | null | undefined): host is Host {
-  return !!host?.google && host.google.status === 'ok';
+  return mainOf(host)?.account.status === 'ok';
 }
 
 /** The first assigned host with a working Google connection, the owner first. */
@@ -2124,6 +2240,11 @@ function neutralWhere(location: BookingLocation): string {
  * it from the calendar is a host, whose browser's zone must not become the invitee's. While the invitee is
  * on the event the plain link stays, since on a site that sends no email it may be their only copy.
  */
+/** The brand line first, then the description (escaped: Google renders the description as HTML). */
+function withBrandLine(line: string | null, description: string): string {
+  return line ? `${escapeForCalendar(line)}\n\n${description}` : description;
+}
+
 function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[], outsiders: boolean): string {
   const dashboard = `Booking details in the dashboard: ${dashboardLink(ctx, booking.id)}`;
   if (outsiders && booking.guests.length > 0) {
@@ -2155,7 +2276,8 @@ function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[], outsi
   return lines.join('\n');
 }
 
-function calendarEventInput(ctx: Ctx, booking: Booking, eventType: EventType | null, organizer: Host, assigned: Host[]): CalendarEventInput {
+/** `site`: the stored settings. A booking made under a brand gets its brand line on top of the description. */
+export function calendarEventInput(ctx: Ctx, booking: Booking, eventType: EventType | null, organizer: Host, assigned: Host[], site?: SiteSettings): CalendarEventInput {
   // With guests Google writes to addresses the visitor chose: nothing they typed goes into what it sends (see calendarDescription).
   const withGuests = booking.guests.length > 0;
   const attendees: CalendarEventInput['attendees'] = [];
@@ -2172,7 +2294,7 @@ function calendarEventInput(ctx: Ctx, booking: Booking, eventType: EventType | n
   const people = joinNames(withGuests ? assigned.map((h) => h.name) : [booking.invitee.name, ...assigned.map((h) => h.name)]);
   const input: CalendarEventInput = {
     summary: people ? `${booking.eventTitle}: ${people}` : booking.eventTitle,
-    description: calendarDescription(ctx, booking, assigned, eventType?.googleInvite !== false),
+    description: withBrandLine(site ? brandLineFor(ctx, site, booking) : null, calendarDescription(ctx, booking, assigned, eventType?.googleInvite !== false)),
     startIso: booking.start,
     endIso: booking.end,
     timezone: isValidZone(organizer.timezone) ? organizer.timezone : 'UTC',
@@ -2192,16 +2314,20 @@ function describeGoogleError(err: unknown): { message: string; retry: boolean } 
   return { message: 'Google Calendar could not be updated.', retry: true };
 }
 
-/** Writes a calendar problem onto the booking. The timeline gets one line per distinct problem, not one per retry. */
-async function noteCalendarError(ctx: Ctx, bookingId: string, organizer: Host | null, message: string, type = 'calendar_sync_failed'): Promise<void> {
+/**
+ * Writes a calendar problem onto the booking. The timeline gets one line per distinct problem, not one per
+ * retry. A first write that failed records the account it was made through, so a retry stays on it.
+ */
+async function noteCalendarError(ctx: Ctx, bookingId: string, organizer: AccountRef | null, message: string, type = 'calendar_sync_failed'): Promise<void> {
   const at = nowIso(ctx);
   await updateBooking(ctx, bookingId, (b) => {
     const current = b.google ?? null;
     if (!current && !organizer) return b;
     const google: NonNullable<Booking['google']> = {
-      hostId: current?.hostId ?? organizer!.id,
-      calendarId: current?.calendarId ?? (organizer!.google?.writeCalendarId || 'primary'),
+      hostId: current?.hostId ?? organizer!.host.id,
+      calendarId: current?.calendarId ?? (organizer!.account.writeCalendarId || 'primary'),
       eventId: current?.eventId ?? '',
+      ...(!current && organizer ? { accountId: organizer.account.id, accountEmail: organizer.account.email } : {}),
       ...current,
       error: message,
     };
@@ -2215,11 +2341,81 @@ function withoutError(google: NonNullable<Booking['google']>): NonNullable<Booki
   return rest;
 }
 
-async function failSync(ctx: Ctx, bookingId: string, organizer: Host | null, err: unknown): Promise<SyncOutcome> {
+async function failSync(ctx: Ctx, bookingId: string, organizer: AccountRef | null, err: unknown): Promise<SyncOutcome> {
   const { message, retry } = describeGoogleError(err);
-  ctx.log('warn', 'booking: Google Calendar could not be updated', { bookingId, hostId: organizer?.id, error: message });
+  ctx.log('warn', 'booking: Google Calendar could not be updated', { bookingId, hostId: organizer?.host.id, accountId: organizer?.account.id, error: message });
   await noteCalendarError(ctx, bookingId, organizer, message);
   return { status: 'failed', error: message, retry };
+}
+
+/** "jimi@gmail.example needs to be reconnected." */
+function reconnectError(ref: AccountRef): GoogleAuthError {
+  return new GoogleAuthError(`${ref.account.email} needs to be reconnected.`);
+}
+
+/** Where a booking's event is, after looking. */
+type Holder =
+  /** this account holds it: by its stored id, or because a read just found our booking in it */
+  | { kind: 'found'; ref: AccountRef; checked: boolean }
+  /** every account of the host answered and none has it */
+  | { kind: 'none' }
+  /** an account that may have it needs reconnecting */
+  | { kind: 'reconnect'; ref: AccountRef }
+  /** an account that may have it could not be asked (a timeout, an error): try again later */
+  | { kind: 'unreachable'; ref: AccountRef; err: unknown };
+
+/**
+ * Finds the account holding a booking's event (see googleAccounts.holderCandidates). An account named by
+ * the booking is trusted. Any other is read first, with a GET that tells nobody, and only counts when the
+ * event it returns carries our booking id. Nothing is ever written through a guessed account.
+ */
+async function findHolder(ctx: Ctx, booking: Booking, g: NonNullable<Booking['google']>, host: Host | null): Promise<Holder> {
+  const { trusted, candidates } = holderCandidates(host, g);
+  if (trusted) return trusted.account.status === 'ok' ? { kind: 'found', ref: trusted, checked: false } : { kind: 'reconnect', ref: trusted };
+  const eventId = g.eventId || calendarEventIdFor(booking.id);
+  const answers = await Promise.all(
+    candidates.map(async (ref) => {
+      try {
+        const got = await googleGetEvent(ctx, ref, g.calendarId || 'primary', eventId);
+        return { ref, hit: got.status === 200 && got.bookingId === booking.id, err: null as unknown };
+      } catch (err) {
+        return { ref, hit: false, err };
+      }
+    }),
+  );
+  const hit = answers.find((a) => a.hit);
+  if (hit) return { kind: 'found', ref: hit.ref, checked: true };
+  const failed = answers.find((a) => a.err !== null);
+  if (failed) {
+    if (failed.err instanceof GoogleAuthError) return { kind: 'reconnect', ref: failed.ref };
+    return { kind: 'unreachable', ref: failed.ref, err: failed.err };
+  }
+  // An account that cannot be asked right now may be the one: wait for it instead of giving up on the event.
+  const waiting = host ? accountsOf(host).find((a) => a.account.status !== 'ok') : undefined;
+  if (waiting) return { kind: 'reconnect', ref: waiting };
+  return { kind: 'none' };
+}
+
+/** The booking stamped with the account a read found its event in. */
+function stampedWith(google: NonNullable<Booking['google']>, ref: AccountRef): NonNullable<Booking['google']> {
+  return { ...google, accountId: ref.account.id, accountEmail: ref.account.email };
+}
+
+/**
+ * Nothing is written to Google for this booking any more: its event is in no account we can reach. The
+ * invitee's next emails carry our own calendar file and say why (jobs.ts).
+ */
+async function detachBooking(ctx: Ctx, bookingId: string, type: string, detail: string, still?: (b: Booking) => boolean): Promise<Booking | null> {
+  const at = nowIso(ctx);
+  return updateBooking(ctx, bookingId, (b) =>
+    b.google && !b.google.detached && (!still || still(b))
+      ? { ...b, google: { ...withoutError(b.google), detached: true }, timeline: [...(b.timeline ?? []), { at, type, detail }] }
+      : b,
+  );
+}
+
+function gonePlace(g: NonNullable<Booking['google']>): string {
+  return g.accountEmail ? `The event is in ${g.accountEmail}, which is no longer connected` : 'Google Calendar is no longer connected';
 }
 
 /** Whether the booking moved on (cancelled, moved) while Google was being told about an older state. */
@@ -2229,24 +2425,28 @@ function movedOn(saved: Booking | null, synced: Booking): boolean {
 
 /**
  * The event of a booking sits on the calendar of a host who no longer has the meeting (a round robin booking
- * whose host has left went to a colleague when it was moved). It comes off that calendar, with notice to the
- * attendees, and the booking forgets it, so the caller writes it to a host who has the meeting now. A calendar
- * that cannot be reached any more is noted on the timeline. Returns a failure only when trying again can help.
+ * whose host has left went to a colleague when it was moved). It comes off that calendar, through the account
+ * that holds it, with notice to the attendees, and the booking forgets it, so the caller writes it to a host
+ * who has the meeting now. A calendar that cannot be reached any more is noted on the timeline. Returns a
+ * failure only when trying again can help.
  */
 async function leaveCalendarOf(ctx: Ctx, booking: Booking, g: NonNullable<Booking['google']>, holder: Host | null, at: string): Promise<SyncOutcome | null> {
   const name = holder?.name.trim() || 'a host';
+  const where = g.accountEmail ? `${name} (${g.accountEmail})` : name;
   let entry: { at: string; type: string; detail: string } = {
     at,
     type: 'calendar_event_left',
-    detail: holder?.google ? `The event could not be taken off the calendar of ${name}, which needs to be reconnected.` : 'The event could not be taken off the calendar of a host who is no longer connected.',
+    detail: holder && accountsOf(holder).length > 0 ? `The event could not be taken off the calendar of ${where}, which needs to be reconnected.` : 'The event could not be taken off the calendar of a host who is no longer connected.',
   };
-  if (holder?.google?.status === 'ok') {
+  const found = g.detached ? ({ kind: 'none' } as Holder) : await findHolder(ctx, booking, g, holder);
+  if (found.kind === 'unreachable') return failSync(ctx, booking.id, found.ref, found.err);
+  if (found.kind === 'found') {
     try {
-      await googleDeleteEvent(ctx, holder, g.calendarId || holder.google.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(booking.id), true);
+      await googleDeleteEvent(ctx, found.ref, g.calendarId || found.ref.account.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(booking.id), true);
       entry = { at, type: 'calendar_event_removed', detail: `Taken off the Google Calendar of ${name}, who no longer hosts this meeting` };
     } catch (err) {
       // Waiting for a reconnect would keep the meeting off the new host's calendar for good: carry on without it.
-      if (!(err instanceof GoogleAuthError)) return failSync(ctx, booking.id, holder, err);
+      if (!(err instanceof GoogleAuthError)) return failSync(ctx, booking.id, found.ref, err);
     }
   }
   await updateBooking(ctx, booking.id, (b) => (b.google?.hostId === g.hostId ? { ...b, google: null, timeline: [...(b.timeline ?? []), entry] } : b));
@@ -2263,6 +2463,12 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
   let known = g ? (byId.get(g.hostId) ?? null) : null;
   const at = nowIso(ctx);
 
+  // ── a detached booking: its event is in no account we can reach, so nothing more goes to Google ──
+  if (g?.detached) {
+    if (g.error) await updateBooking(ctx, bookingId, (b) => (b.google ? { ...b, google: withoutError(b.google) } : b));
+    return { status: 'skipped' };
+  }
+
   // ── a confirmed booking whose event is with a host who no longer has it: off that calendar, onto the right one ──
   if (booking.status === 'confirmed' && g && !booking.hostIds.includes(g.hostId)) {
     const stuck = await leaveCalendarOf(ctx, booking, g, known, at);
@@ -2271,39 +2477,44 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
     known = null;
   }
 
-  // ── a cancelled booking: its event has to go ──
+  // ── a cancelled booking: its event has to go, through the account that holds it ──
   if (booking.status === 'cancelled') {
     if (!g) return { status: 'skipped' };
     if (mode === 'reconcile' && !g.error) return { status: 'unchanged' };
-    if (!known?.google) {
-      // The organiser disconnected Google (or left). Nothing can reach that calendar any more.
-      await updateBooking(ctx, bookingId, (b) =>
-        b.google ? { ...b, google: withoutError(b.google), timeline: [...(b.timeline ?? []), { at, type: 'calendar_event_left', detail: 'Google Calendar is no longer connected, so the event was not removed.' }] } : b,
-      );
+    const holder = await findHolder(ctx, booking, g, known);
+    if (holder.kind === 'none') {
+      // Nothing can reach that calendar any more. The invitee's cancellation email carries our own CANCEL file.
+      await detachBooking(ctx, bookingId, 'calendar_event_left', `${gonePlace(g)}, so the event was not removed.`);
       return { status: 'skipped' };
     }
-    if (known.google.status !== 'ok') return failSync(ctx, bookingId, known, new GoogleAuthError(CALENDAR_RECONNECT));
+    if (holder.kind === 'reconnect') return failSync(ctx, bookingId, holder.ref, reconnectError(holder.ref));
+    if (holder.kind === 'unreachable') return failSync(ctx, bookingId, holder.ref, holder.err);
     try {
-      await googleDeleteEvent(ctx, known, g.calendarId || known.google.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(booking.id), true);
+      await googleDeleteEvent(ctx, holder.ref, g.calendarId || holder.ref.account.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(booking.id), true);
     } catch (err) {
-      return failSync(ctx, bookingId, known, err);
+      return failSync(ctx, bookingId, holder.ref, err);
     }
     await updateBooking(ctx, bookingId, (b) =>
-      b.google ? { ...b, google: { ...withoutError(b.google), syncedAt: at }, timeline: [...(b.timeline ?? []), { at, type: 'calendar_event_removed' }] } : b,
+      b.google
+        ? { ...b, google: { ...withoutError(holder.checked ? stampedWith(b.google, holder.ref) : b.google), syncedAt: at }, timeline: [...(b.timeline ?? []), { at, type: 'calendar_event_removed' }] }
+        : b,
     );
     return { status: 'synced' };
   }
 
   // ── a confirmed booking that already has an event: keep its time right ──
+  let recreateIn: AccountRef | null = null;
   if (g?.eventId) {
     if (mode === 'reconcile' && !g.error) return { status: 'unchanged' };
-    if (!known?.google) {
-      await updateBooking(ctx, bookingId, (b) =>
-        b.google ? { ...b, google: withoutError(b.google), timeline: [...(b.timeline ?? []), { at, type: 'calendar_not_updated', detail: 'Google Calendar is no longer connected, so the event was not changed.' }] } : b,
-      );
+    const holder = await findHolder(ctx, booking, g, known);
+    if (holder.kind === 'none') {
+      // Never created anywhere else: a second invitation would reach every attendee. Emails carry the change.
+      await detachBooking(ctx, bookingId, 'calendar_not_updated', `${gonePlace(g)}, so it was not changed. Change it in Google Calendar.`);
       return { status: 'skipped' };
     }
-    if (known.google.status !== 'ok') return failSync(ctx, bookingId, known, new GoogleAuthError(CALENDAR_RECONNECT));
+    if (holder.kind === 'reconnect') return failSync(ctx, bookingId, holder.ref, reconnectError(holder.ref));
+    if (holder.kind === 'unreachable') return failSync(ctx, bookingId, holder.ref, holder.err);
+    const ref = holder.ref;
     const linkMissing = booking.location.type === 'google_meet' && !booking.location.joinUrl;
     // Only the Meet link is outstanding: read it and change nothing, since every change emails each attendee.
     const onlyTheLink = mode === 'reconcile' && g.error === MEET_PENDING;
@@ -2316,29 +2527,29 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
     let gone = false;
     if (patch) {
       try {
-        await googleUpdateEvent(ctx, known, g.calendarId, g.eventId, {
+        await googleUpdateEvent(ctx, ref, g.calendarId, g.eventId, {
           startIso: booking.start,
           endIso: booking.end,
-          timezone: isValidZone(known.timezone) ? known.timezone : 'UTC',
+          timezone: isValidZone(ref.host.timezone) ? ref.host.timezone : 'UTC',
           notifyAttendees: true,
         });
       } catch (err) {
         if (err instanceof GoogleApiError && (err.status === 404 || err.status === 410)) gone = true;
-        else return failSync(ctx, bookingId, known, err);
+        else return failSync(ctx, bookingId, ref, err);
       }
     }
     let meetUrl: string | undefined;
     if (!gone && linkMissing) {
       try {
-        meetUrl = (await googleGetEventLinks(ctx, known, g.calendarId, g.eventId)).meetUrl;
+        meetUrl = (await googleGetEventLinks(ctx, ref, g.calendarId, g.eventId)).meetUrl;
       } catch (err) {
         if (err instanceof GoogleApiError && (err.status === 404 || err.status === 410)) gone = true;
-        else return failSync(ctx, bookingId, known, err);
+        else return failSync(ctx, bookingId, ref, err);
       }
     }
     if (!gone) {
       // Nothing to change, nothing to fetch and nothing to clear: the event is in order as it is.
-      if (!patch && !linkMissing && !g.error) return { status: 'unchanged' };
+      if (!patch && !linkMissing && !g.error && !holder.checked) return { status: 'unchanged' };
       const stillMissing = linkMissing && !meetUrl;
       const pushed = { start: booking.start, end: booking.end };
       const saved = await updateBooking(ctx, bookingId, (b) => {
@@ -2349,7 +2560,7 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
         return {
           ...b,
           google: {
-            ...withoutError(b.google),
+            ...withoutError(holder.checked ? stampedWith(b.google, ref) : b.google),
             syncedAt: at,
             ...(patch ? { syncedStart: pushed.start, syncedEnd: pushed.end } : {}),
             ...(meetUrl ? { meetUrl } : {}),
@@ -2363,27 +2574,40 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
       if (stillMissing) return { status: 'failed', error: MEET_PENDING, retry: true, again: movedOn(saved, booking) };
       return { status: patch || meetUrl ? 'synced' : 'unchanged', again: movedOn(saved, booking) };
     }
-    // Someone deleted the event in Google. Creating it again below brings it back under the same id.
+    // Someone deleted the event in Google. The account is proven to hold it (by its stored id, or the read
+    // just now found it there), so it is created again below in that account, under the same id.
+    recreateIn = ref;
   }
 
   // ── a confirmed booking without an event: create it ──
-  let organizer: Host | null;
-  if (g && known?.google) {
-    // An earlier attempt may have gone through without us hearing about it: stay on that calendar.
-    if (known.google.status !== 'ok') return failSync(ctx, bookingId, known, new GoogleAuthError(CALENDAR_RECONNECT));
-    organizer = known;
-  } else {
-    organizer = chooseOrganizer(booking, byId, site);
+  let organizer: AccountRef | null = null;
+  if (recreateIn) {
+    organizer = recreateIn;
+  } else if (g && known) {
+    // An earlier attempt may have gone through without us hearing about it: stay on that account while it is there.
+    const { trusted } = holderCandidates(known, g);
+    const stay = trusted ?? (g.accountId ? null : mainOf(known));
+    if (stay) {
+      if (stay.account.status !== 'ok') return failSync(ctx, bookingId, stay, reconnectError(stay));
+      organizer = stay;
+    } else {
+      // The account of the first attempt was removed meanwhile. That attempt may have reached Google.
+      ctx.log('warn', 'booking: the account of an unfinished first calendar write is gone, choosing another', { bookingId, accountId: g.accountId });
+    }
+  }
+  if (!organizer) {
+    const host = chooseOrganizer(booking, byId, site);
+    organizer = host ? mainOf(host) : null;
   }
   if (!organizer) {
     if (g?.error) await updateBooking(ctx, bookingId, (b) => (b.google ? { ...b, google: b.google.eventId ? withoutError(b.google) : null } : b));
     return { status: 'skipped' };
   }
 
-  const input = calendarEventInput(ctx, booking, eventType, organizer, pickHosts(booking.hostIds, byId));
+  const input = calendarEventInput(ctx, booking, eventType, organizer.host, pickHosts(booking.hostIds, byId), site);
   let created: Awaited<ReturnType<typeof googleCreateEvent>>;
   try {
-    created = await googleCreateEvent(ctx, organizer, input);
+    created = await googleCreateEvent(ctx, organizer, input, recreateIn && g?.calendarId ? { calendarId: g.calendarId } : undefined);
     // An event adopted from an earlier attempt still carries that attempt's time.
     if (g && (booking.rescheduleCount ?? 0) > 0) {
       await googleUpdateEvent(ctx, organizer, created.calendarId, created.eventId, {
@@ -2397,13 +2621,15 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
     return failSync(ctx, bookingId, organizer, err);
   }
 
-  const organizerId = organizer.id;
-  const organizerName = organizer.name;
+  const organizerId = organizer.host.id;
+  const organizerName = organizer.host.name;
+  const account = { accountId: organizer.account.id, accountEmail: organizer.account.email };
   // Google creates Meet links asynchronously. One it has not finished yet is read again by the retry job.
   const linkPending = input.createMeet && !created.meetUrl;
   const saved = await updateBooking(ctx, bookingId, (b) => {
     const google: NonNullable<Booking['google']> = {
       hostId: organizerId,
+      ...account,
       calendarId: created.calendarId,
       eventId: created.eventId,
       syncedAt: at,
@@ -2462,10 +2688,10 @@ async function queueCalendarRetry(ctx: Ctx, bookingId: string, delayMs: number):
 async function noteCalendarPending(ctx: Ctx, bookingId: string): Promise<void> {
   const booking = await getBooking(ctx, bookingId);
   if (!booking) return;
-  let organizer: Host | null = null;
+  let organizer: AccountRef | null = null;
   if (!booking.google) {
     const site = await getSite(ctx);
-    organizer = chooseOrganizer(booking, hostsById(await listHosts(ctx)), site);
+    organizer = mainOf(chooseOrganizer(booking, hostsById(await listHosts(ctx)), site));
     if (!organizer) return;
   }
   await noteCalendarError(ctx, bookingId, organizer, CALENDAR_PENDING, 'calendar_sync_delayed');
@@ -2579,6 +2805,10 @@ export interface ReconcileResult {
   requeued: number;
   /** follow-up work (calendar, reminders, notices) finished for a change whose request was cut off; only present when there was some */
   finished?: number;
+  /** bookings made before events recorded their Google account, now stamped with it; only present when there were some */
+  stamped?: number;
+  /** bookings whose event was found in no connected Google account; only present when there were some */
+  detached?: number;
 }
 
 async function readRecords(ctx: Ctx, entries: BookingIndexEntry[]): Promise<(Booking | null)[]> {
@@ -2600,6 +2830,102 @@ async function requeueCalendarRepair(ctx: Ctx, record: Booking, nowMs: number): 
   await cacheSet(ctx, `gcal-requeue-${record.id}`, { at: nowMs }, REQUEUE_TTL_SEC);
   await queueCalendarRetry(ctx, record.id, 0);
   return true;
+}
+
+/** At most this many bookings are looked up per housekeeping run to learn which Google account holds their event. */
+const STAMP_PER_RUN = 10;
+const STAMP_CONCURRENCY = 3;
+/** Upcoming records read when an account goes; any more are found by the stamp of later runs. */
+const ACCOUNT_BOOKINGS_READ_LIMIT = 200;
+const EVENT_NOT_FOUND = 'The calendar event could not be found in any connected Google account. Changes to this meeting will not reach Google Calendar.';
+
+/**
+ * Bookings made before events recorded their account (or by an older deploy, or whose account went): each
+ * is read through the host's accounts, the main one first, and stamped with the one whose copy of the event
+ * carries our booking id. Found in none, with every account answering: detached. An account that could not
+ * be asked leaves the booking for a later run.
+ */
+async function stampBookings(ctx: Ctx, records: (Booking | null)[]): Promise<{ stamped: number; detached: number }> {
+  const out = { stamped: 0, detached: 0 };
+  const hosts = hostsById(await listHosts(ctx));
+  const picked = records
+    .filter((r): r is Booking => !!r && r.status === 'confirmed' && !!r.google?.eventId && !r.google.detached && accountGone(hosts.get(r.google.hostId), r.google))
+    .slice(0, STAMP_PER_RUN);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < picked.length) {
+      const booking = picked[next++];
+      const g = booking.google!;
+      const host = hosts.get(g.hostId) ?? null;
+      try {
+        const holder = await findHolder(ctx, booking, g, host);
+        if (holder.kind === 'found') {
+          const saved = await updateBooking(ctx, booking.id, (b) =>
+            b.google && !b.google.detached && b.google.eventId === g.eventId && accountGone(host, b.google) ? { ...b, google: stampedWith(b.google, holder.ref) } : b,
+          );
+          if (saved?.google?.accountId === holder.ref.account.id) out.stamped++;
+        } else if (holder.kind === 'none') {
+          // Only the booking as it was looked at: one that a sync stamped, moved to another host or cancelled
+          // meanwhile is left alone (the records were read at the start of the run).
+          const still = (b: Booking): boolean => b.status === 'confirmed' && b.google?.hostId === g.hostId && b.google.eventId === g.eventId && accountGone(host, b.google);
+          const saved = await detachBooking(ctx, booking.id, 'calendar_not_found', EVENT_NOT_FOUND, still);
+          if (saved?.google?.detached && saved.timeline.at(-1)?.type === 'calendar_not_found') out.detached++;
+        }
+      } catch (err) {
+        ctx.log('warn', 'booking: could not look up the account of a calendar event', { bookingId: booking.id, error: shortError(err) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(STAMP_CONCURRENCY, picked.length) }, worker));
+  return out;
+}
+
+function eventInAccount(b: Booking, hostId: string, accountId: string, includeUnstamped: boolean): boolean {
+  const g = b.google;
+  if (!g || g.detached || b.status !== 'confirmed' || g.hostId !== hostId || !g.eventId) return false;
+  return g.accountId === accountId || (includeUnstamped && !g.accountId);
+}
+
+async function upcomingOfHost(ctx: Ctx, hostId: string): Promise<{ records: Booking[]; atLeast: boolean }> {
+  const nowMs = ctx.now().getTime();
+  const entries = (await getBookingIndex(ctx))
+    .filter((e) => e.status === 'confirmed' && Date.parse(e.end) > nowMs && Array.isArray(e.hostIds) && e.hostIds.includes(hostId))
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const records = await readRecords(ctx, entries.slice(0, ACCOUNT_BOOKINGS_READ_LIMIT));
+  return { records: records.filter((r): r is Booking => !!r), atLeast: entries.length > ACCOUNT_BOOKINGS_READ_LIMIT };
+}
+
+/**
+ * How many upcoming confirmed bookings have their event in this account. `includeUnstamped`: also those of
+ * the host whose account is not recorded yet (they were written into the main account).
+ */
+export async function countEventsInAccount(ctx: Ctx, hostId: string, accountId: string, opts: { includeUnstamped: boolean }): Promise<{ count: number; atLeast: boolean }> {
+  const { records, atLeast } = await upcomingOfHost(ctx, hostId);
+  return { count: records.filter((b) => eventInAccount(b, hostId, accountId, opts.includeUnstamped)).length, atLeast };
+}
+
+/**
+ * The account that holds these bookings' events is going (removed, or replaced by "Use a different Google
+ * account"): they are detached, so nothing is written into another account and the invitee's next emails
+ * carry our own calendar file and say why. Returns how many.
+ */
+export async function detachEventsOfAccount(ctx: Ctx, hostId: string, account: { id: string; email: string }, opts: { includeUnstamped: boolean; why: 'removed' | 'replaced' }): Promise<number> {
+  const { records } = await upcomingOfHost(ctx, hostId);
+  const detail =
+    opts.why === 'replaced'
+      ? `The calendar event is in ${account.email}, which was replaced by another Google account. Changes to this meeting will not reach Google Calendar.`
+      : `The calendar event is in ${account.email}, which was removed. Changes to this meeting will not reach Google Calendar.`;
+  let detached = 0;
+  for (const record of records) {
+    if (!eventInAccount(record, hostId, account.id, opts.includeUnstamped)) continue;
+    const saved = await updateBooking(ctx, record.id, (b) =>
+      eventInAccount(b, hostId, account.id, opts.includeUnstamped)
+        ? { ...b, google: { ...withoutError(b.google!), accountEmail: b.google!.accountEmail ?? account.email, detached: true }, timeline: [...(b.timeline ?? []), { at: nowIso(ctx), type: 'calendar_detached', detail }] }
+        : b,
+    ).catch(() => null);
+    if (saved?.google?.detached) detached++;
+  }
+  return detached;
 }
 
 /**
@@ -2700,6 +3026,12 @@ export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Pr
 
   await cacheSet(ctx, SUSPECTS_CACHE, suspects, SUSPECTS_TTL_SEC);
   if (finished > 0) result.finished = finished;
+
+  // Which Google account holds the event of bookings that do not say yet. No storage reads of its own:
+  // it works on the records read above.
+  const stamp = await stampBookings(ctx, records);
+  if (stamp.stamped > 0) result.stamped = stamp.stamped;
+  if (stamp.detached > 0) result.detached = stamp.detached;
   return result;
 }
 

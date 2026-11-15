@@ -43,6 +43,7 @@ import {
   updateBooking,
   updateHost,
 } from '../../server/lib/repo';
+import { mainOf } from '../../server/lib/googleAccounts';
 import { memoryKV } from '../../server/lib/store';
 import { makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
 
@@ -93,6 +94,7 @@ async function editEvent(ctx: TestCtx, id: string, change: (et: EventType) => Ev
 function googleConnection(ctx: TestCtx, over: Partial<HostGoogle> = {}): HostGoogle {
   return {
     email: 'jimi.calendar@gmail.test',
+    sub: `sub-${over.email ?? 'jimi.calendar@gmail.test'}`,
     refreshTokenEnc: seal(ctx, 'google-refresh', 'refresh-token-1'),
     scopes: [],
     busyCalendarIds: ['primary'],
@@ -1230,9 +1232,9 @@ describe('createBooking: calendars fail closed', () => {
     let alerts = await jobsOf(ctx, (j) => j.kind === 'host_alert');
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toMatchObject({ type: 'message', bookingId: '', channel: 'email', audience: 'host', dueAt: NOW });
-    expect(alerts[0].subject).toBe('A calendar needs attention: Jimi Cohen');
+    expect(alerts[0].subject).toBe('A calendar needs attention: Jimi Cohen (jimi.calendar@gmail.test)');
     expect(alerts[0].body).toContain('Someone just tried to book "Intro call"');
-    expect(alerts[0].body).toContain('Jimi Cohen: Google request failed (500');
+    expect(alerts[0].body).toContain('Jimi Cohen, jimi.calendar@gmail.test: Google request failed (500');
     expect(`${alerts[0].subject}${alerts[0].body}`).not.toContain('—');
 
     // Later the same day: still refused, no second email.
@@ -1263,7 +1265,7 @@ describe('createBooking: calendars fail closed', () => {
     await addEvent(ctx, { id: 'evt_joint', slug: 'joint', title: 'Joint call', kind: 'collective', hostIds: [OWNER, ALEX], durations: [30], defaultDuration: 30 });
     net(ctx);
     expect(await failure(createBooking(ctx, request({ slug: 'joint', durationMin: 30 })))).toMatchObject({ status: 503, code: 'calendar_unavailable' });
-    expect((await jobsOf(ctx, (j) => j.kind === 'host_alert'))[0].subject).toBe('A calendar needs attention: Alex Kim');
+    expect((await jobsOf(ctx, (j) => j.kind === 'host_alert'))[0].subject).toBe('A calendar needs attention: Alex Kim (jimi.calendar@gmail.test)');
     // The owner's own event type is unaffected.
     expect((await createBooking(ctx, request())).booking.hostIds).toEqual([OWNER]);
   });
@@ -1438,9 +1440,11 @@ describe('Google Calendar sync', () => {
     expect(body.description).toContain(`Reschedule or cancel: https://jimicohen.com/meeting/booking/${booking.id}?t=${manageToken(ctx, booking.id)}`);
     expect(body.description).toContain(`Booking details in the dashboard: https://jimicohen.com/meeting/admin/bookings?b=${booking.id}`);
 
-    // The owner is preferred as organiser even though Alex is listed first.
+    // The owner is preferred as organiser even though Alex is listed first. The event records the account it is in.
     expect(booking.google).toEqual({
       hostId: OWNER,
+      accountId: mainOf(await getHost(ctx, OWNER))!.account.id,
+      accountEmail: 'jimi.calendar@gmail.test',
       calendarId: 'primary',
       eventId: calendarEventIdFor(booking.id),
       htmlLink: 'https://calendar.google.com/calendar/event?eid=abc',
@@ -1719,7 +1723,15 @@ describe('Google Calendar sync', () => {
 
     const { booking } = await createBooking(ctx, request(), { calendarBudgetMs: 25 });
     expect(booking.status).toBe('confirmed');
-    expect(booking.google).toEqual({ hostId: OWNER, calendarId: 'primary', eventId: '', error: 'Google Calendar did not answer in time. Trying again shortly.' });
+    // The account the first write went to is kept, so a retry stays on it.
+    expect(booking.google).toEqual({
+      hostId: OWNER,
+      accountId: mainOf(await getHost(ctx, OWNER))!.account.id,
+      accountEmail: 'jimi.calendar@gmail.test',
+      calendarId: 'primary',
+      eventId: '',
+      error: 'Google Calendar did not answer in time. Trying again shortly.',
+    });
     expect(booking.timeline.map((t) => t.type)).toEqual(['created', 'calendar_sync_delayed']);
     const retries = await jobsOf(ctx, (j) => j.type === 'gcal_sync');
     expect(retries).toHaveLength(1);
@@ -1816,7 +1828,7 @@ describe('Google Calendar sync', () => {
     ctx.clock.advance(2 * 60_000);
     expect(await runDueJobs(ctx)).toMatchObject({ processed: 1, failed: 0 });
     expect(await jobsOf(ctx, (j) => j.type === 'gcal_sync')).toEqual([]);
-    expect((await getBooking(ctx, booking.id))?.google?.error).toBe('Google Calendar needs to be reconnected.');
+    expect((await getBooking(ctx, booking.id))?.google?.error).toBe('jimi.calendar@gmail.test needs to be reconnected.');
 
     // After the reconnect the periodic check queues the repair again, and this time it goes through.
     await connectGoogle(ctx, OWNER);
@@ -2689,7 +2701,10 @@ describe('reconcileBookings', () => {
   it('queues a calendar repair for a booking that still carries a calendar problem, at most every two hours', async () => {
     const ctx = await setup();
     const { booking } = await createBooking(ctx, request());
-    await updateBooking(ctx, booking.id, (b) => ({ ...b, google: { hostId: OWNER, calendarId: 'primary', eventId: 'evt1', error: 'Google Calendar needs to be reconnected.' } }));
+    // Stamped with an account the host has: a booking that is not would be looked up first (see the stamp tests).
+    await connectGoogle(ctx, OWNER);
+    const accountId = mainOf(await getHost(ctx, OWNER))!.account.id;
+    await updateBooking(ctx, booking.id, (b) => ({ ...b, google: { hostId: OWNER, accountId, calendarId: 'primary', eventId: 'evt1', error: 'Google Calendar needs to be reconnected.' } }));
 
     expect(await reconcileBookings(ctx)).toMatchObject({ requeued: 1 });
     expect(await jobsOf(ctx, (j) => j.type === 'gcal_sync')).toHaveLength(1);
@@ -3293,7 +3308,7 @@ describe('follow-up work after a change', () => {
     await runDueJobs(ctx);
     await ctx.settle();
     expect(eventCalls(calls, 'DELETE')).toEqual([]);
-    expect((await getBooking(ctx, booking.id))?.google?.error).toBe('Google Calendar needs to be reconnected.');
+    expect((await getBooking(ctx, booking.id))?.google?.error).toBe('jimi.calendar@gmail.test needs to be reconnected.');
 
     await updateHost(ctx, OWNER, (h) => ({ ...h, google: { ...h.google!, status: 'ok' } }));
     ctx.clock.advance(30 * 60_000);

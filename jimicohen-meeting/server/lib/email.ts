@@ -7,6 +7,7 @@ import type { Host, HostGoogle, Secrets, SendResult, SiteSettings } from '../../
 import { sha256Hex } from './crypto';
 import type { Ctx } from './ctx';
 import { gmailSendRaw } from './google';
+import { mainOf } from './googleAccounts';
 import { getSecrets, getSite, listHosts } from './repo';
 import { escapeHtml } from './templates';
 import { isEmail } from './validate';
@@ -21,6 +22,8 @@ export interface EmailMessage {
   ics?: { filename: string; content: string; method: 'REQUEST' | 'CANCEL' | 'PUBLISH' };
   /** Same key = same message. Lets the provider drop a repeat when a send is retried after an unclear failure. */
   idempotencyKey?: string;
+  /** The sender name for this message (a brand's, for a meeting booked under it). Absent: the site's. The address stays the site's. */
+  fromName?: string;
 }
 
 export type EmailProvider = 'resend' | 'gmail' | 'none';
@@ -340,13 +343,16 @@ export async function sendEmail(
   }
   const { site, secrets, owner } = setup;
   const provider: EmailProvider = opts?.preferResend && setup.resendReady ? 'resend' : setup.provider;
-  const fromName = headerText(site.email?.fromName, MAX_NAME) || headerText(site.profile?.name, MAX_NAME) || 'Meetings';
+  const fromName = headerText(msg.fromName, MAX_NAME) || headerText(site.email?.fromName, MAX_NAME) || headerText(site.profile?.name, MAX_NAME) || 'Meetings';
   const replyTo = cleanAddress(msg.replyTo) ?? cleanAddress(site.email?.replyTo) ?? cleanAddress(owner?.email);
 
   const viaGmail = async (host: Host, google: HostGoogle): Promise<SendResult> => {
     try {
       const mime = buildMime({ ...msg, to, subject, replyTo: replyTo ?? undefined }, { name: fromName, email: google.email }, { date: ctx.now() });
-      const sent = await gmailSendRaw(ctx, host, mime);
+      // Gmail always sends from the main account (the one the owner allowed sending from).
+      const main = mainOf(host);
+      if (!main) return { ok: false, provider: 'gmail', error: 'Google Calendar is not connected.' };
+      const sent = await gmailSendRaw(ctx, main, mime);
       return { ok: true, provider: 'gmail', id: sent.id };
     } catch (err) {
       return { ok: false, provider: 'gmail', error: shortError(err) };
@@ -392,6 +398,8 @@ export interface EmailContent {
   linksLabel?: string;
   /** absolute https URL of the profile picture; left out when not given */
   avatarUrl?: string | null;
+  /** how the picture is cut: a circle for a person's photo (default), a rounded square for a brand's logo */
+  avatarShape?: 'circle' | 'rounded';
   /** overrides the theme's brand colour (per-event colour) */
   accentColor?: string | null;
   /**
@@ -500,7 +508,7 @@ export function renderEmailHtml(p: EmailContent): string {
 
   if (siteName || avatarOk) {
     const picture = avatarOk
-      ? `<td valign="middle" style="padding-right:12px;"><img src="${escapeHtml(avatarOk)}" width="40" height="40" alt="" style="display:block;width:40px;height:40px;border-radius:50%;border:0;"></td>`
+      ? `<td valign="middle" style="padding-right:12px;"><img src="${escapeHtml(avatarOk)}" width="40" height="40" alt="" style="display:block;width:40px;height:40px;border-radius:${p.avatarShape === 'rounded' ? '8px' : '50%'};border:0;"></td>`
       : '';
     row(
       `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>${picture}<td valign="middle" class="m-muted" style="font-family:${FONT};font-size:14px;line-height:20px;font-weight:600;color:${LIGHT.muted};">${escapeHtml(siteName)}</td></tr></table>`,
@@ -621,7 +629,7 @@ function labelled(label: string): string {
 }
 
 /** The plain-text twin of renderEmailHtml: same content, same order. */
-export function renderEmailText(p: Omit<EmailContent, 'site' | 'preheader' | 'avatarUrl' | 'accentColor'>): string {
+export function renderEmailText(p: Omit<EmailContent, 'site' | 'preheader' | 'avatarUrl' | 'avatarShape' | 'accentColor'>): string {
   const blocks: string[] = [];
   const heading = clean(p.heading);
   if (heading) blocks.push(heading);

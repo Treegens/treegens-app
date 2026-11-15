@@ -126,7 +126,7 @@ export const TEMPLATE_VARIABLES_FALLBACK: { key: string; description: string }[]
   { key: 'guests', description: 'Email addresses of invited guests' },
   { key: 'cancel_reason', description: 'Reason given when the meeting was cancelled' },
   { key: 'cancelled_by', description: 'Who cancelled the meeting' },
-  { key: 'site_name', description: 'Name shown on your booking page' },
+  { key: 'site_name', description: 'The name of the brand this meeting uses: your own name, or a brand such as Eco Champions' },
   { key: 'assistant_name', description: 'Name of your AI assistant' },
 ];
 

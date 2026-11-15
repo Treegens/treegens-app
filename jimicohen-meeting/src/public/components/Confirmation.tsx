@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { RefObject } from 'react';
-import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import type { PublicBooking, PublicSite } from '../../../shared/types';
 import { appUrl } from '../../lib/api';
+import { AppLink } from '../../lib/links';
 import { useTheme } from '../../lib/theme';
 import { formatDateLong, formatDuration, formatRange, zoneLabel } from '../../lib/tz';
 import { withEmbed } from '../lib/embed';
-import { deliveryLine, deliveryOf, fillTemplate, firstName, hostNames, hostnameOf, isHttpsUrl, paragraphs } from '../lib/text';
+import { deliveryLine, deliveryOf, fillTemplate, firstName, hostFirstName, hostNames, hostnameOf, isHttpsUrl, paragraphs } from '../lib/text';
 import { BookingFacts } from './BookingFacts';
 import { CalendarButtons } from './CalendarButtons';
 import { Confetti } from './Confetti';
@@ -41,7 +41,7 @@ export function confirmationVars(site: PublicSite, booking: PublicBooking, manag
     invitee_first_name: firstName(booking.invitee.name),
     invitee_email: booking.invitee.email,
     host_name: hosts[0]?.name ?? site.profile.name,
-    host_first_name: firstName(hosts[0]?.name ?? site.profile.name),
+    host_first_name: hostFirstName(hosts, site),
     host_names: hostNames(hosts) || site.profile.name,
     event_name: booking.eventTitle,
     duration: formatDuration(booking.durationMin),
@@ -141,7 +141,7 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
 
       {note.length ? (
         <div className="bw-done__note">
-          <p className="bw-done__notelabel">A note from {firstName(booking.hosts[0]?.name ?? site.profile.name)}</p>
+          <p className="bw-done__notelabel">A note from {hostFirstName(booking.hosts, site)}</p>
           {note.map((p, i) => (
             <p key={i}>{p}</p>
           ))}
@@ -161,13 +161,14 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
           </>
         ) : (
           <>
-            <Link className="bw-done__link" to={withEmbed(`${manageBase}/reschedule${tokenQuery}`, embed)}>
+            {/* On a short link's page these are plain links to /meeting/booking/..., the pages the email links open. */}
+            <AppLink className="bw-done__link" to={withEmbed(`${manageBase}/reschedule${tokenQuery}`, embed)}>
               Reschedule
-            </Link>{' '}
+            </AppLink>{' '}
             or{' '}
-            <Link className="bw-done__link" to={withEmbed(`${manageBase}/cancel${tokenQuery}`, embed)}>
+            <AppLink className="bw-done__link" to={withEmbed(`${manageBase}/cancel${tokenQuery}`, embed)}>
               cancel
-            </Link>
+            </AppLink>
           </>
         )}{' '}
         any time before the meeting.{emailed ? ' The same links are in your email.' : ' These links are not emailed to you, so keep one of them to find your booking again.'}

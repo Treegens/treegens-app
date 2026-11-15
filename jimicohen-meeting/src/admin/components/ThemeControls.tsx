@@ -73,6 +73,13 @@ export interface ThemeControlsProps {
   onPaletteChange?: (palette: 'light' | 'dark') => void;
   /** groups that start open */
   defaultOpen?: ThemeGroupId[];
+  /**
+   * A built-in logo shown while no logo is uploaded (a brand's): the field then offers "Replace", and an
+   * upload offers `restoreLabel` instead of "Remove".
+   */
+  logoFallback?: { url: string; label: string; restoreLabel: string };
+  /** Whose clock and week this look follows (a brand follows the owner's): the two controls become a note. */
+  clockFrom?: string;
 }
 
 /** Fields that make up "the look". Touching one of them turns a preset into a custom theme. */
@@ -183,7 +190,7 @@ function Group({ id, title, icon, summary, changed = 0, problems = 0, open, onTo
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-export function ThemeControls({ theme, onChange, assets, onAssetsChange, baseline, onAssetUploaded, palette = 'light', onPaletteChange, defaultOpen = ['presets'] }: ThemeControlsProps) {
+export function ThemeControls({ theme, onChange, assets, onAssetsChange, baseline, onAssetUploaded, palette = 'light', onPaletteChange, defaultOpen = ['presets'], logoFallback, clockFrom }: ThemeControlsProps) {
   const [open, setOpen] = useState<Set<ThemeGroupId>>(() => new Set(defaultOpen));
   const base = baseline ?? null;
   const a = assets ?? NO_ASSETS;
@@ -735,6 +742,10 @@ export function ThemeControls({ theme, onChange, assets, onAssetsChange, baselin
             ]}
           />
         </Control>
+        {clockFrom ? (
+          <p className="dx-note dx-note--quiet">The clock and the first day of the week follow {clockFrom}, so every message writes times the same way.</p>
+        ) : (
+          <>
         <Control label="Clock" changed={changed('timeFormat')} onReset={reset('timeFormat')} hint="Automatic follows each visitor's region. They can always switch.">
           <SegmentedControl<Theme['timeFormat']>
             aria-label="Clock"
@@ -763,6 +774,8 @@ export function ThemeControls({ theme, onChange, assets, onAssetsChange, baselin
             ]}
           />
         </Control>
+          </>
+        )}
       </Group>
 
       <Group id="images" title="Images" icon={<ImageIcon size={16} />} summary={imageSummary(theme)} changed={count('logoAssetId', 'coverAssetId', 'coverHeight')} open={open.has('images')} onToggle={toggle}>
@@ -770,11 +783,14 @@ export function ThemeControls({ theme, onChange, assets, onAssetsChange, baselin
           label="Logo"
           shape="square"
           purpose="logo"
-          url={a.logoUrl}
-          hint="Shown above your name. A PNG with a transparent background works best."
+          url={logoFallback && !theme.logoAssetId ? logoFallback.url : a.logoUrl}
+          hint={logoFallback && !theme.logoAssetId ? logoFallback.label : 'Shown above your name. A PNG with a transparent background works best.'}
+          uploadLabel={logoFallback && !theme.logoAssetId ? 'Replace' : undefined}
+          removable={!logoFallback || !!theme.logoAssetId}
+          removeLabel={logoFallback ? logoFallback.restoreLabel : undefined}
           onUploaded={uploaded('logo')}
           onRemove={() => {
-            onAssetsChange?.({ ...a, logoUrl: null });
+            onAssetsChange?.({ ...a, logoUrl: logoFallback ? logoFallback.url : null });
             set({ logoAssetId: null }, 'logo');
           }}
         />

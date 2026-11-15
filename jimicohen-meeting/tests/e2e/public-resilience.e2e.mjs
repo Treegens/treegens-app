@@ -105,7 +105,8 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
       s.expect(second.data.error.message, 'message').toBe('We could not check the calendar just now, so nothing was booked. Please try again in a minute.');
       await s.runJobs();
       const alerts = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
-      s.expect(alerts.map((e) => e.subject), 'alerts to the owner').toEqual(['A calendar needs attention: Jimi Cohen']);
+      // The alert names the Google account that could not be read: a host can have several.
+      s.expect(alerts.map((e) => e.subject), 'alerts to the owner').toEqual([`A calendar needs attention: Jimi Cohen (${OWNER_GOOGLE})`]);
       s.expect(alerts[0].text, 'alert text').toContain('Someone just tried to book "Intro call", but the calendar of Jimi Cohen could not be read.');
     });
 

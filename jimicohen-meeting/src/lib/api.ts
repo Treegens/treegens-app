@@ -26,7 +26,9 @@ import type {
   CreateBookingResponse,
   EventType,
   GetBookingResponse,
+  GoogleAccountRemoved,
   GoogleCalendarListItem,
+  GoogleRemovalPreview,
   HostInviteResponse,
   HostSelfResponse,
   HostUpdate,
@@ -38,8 +40,11 @@ import type {
   PublicEventResponse,
   PublicSite,
   SharedHoursCheck,
+  ShortLinkResponse,
+  ShortName,
   SiteSettings,
   SlotsResponse,
+  Theme,
 } from '../../shared/types';
 import { ApiFailure, defaultMessageForStatus } from './apiError';
 import { readFileAsDataUrl } from '../ui/util';
@@ -162,6 +167,11 @@ export function getPublicSite(opts?: CallOptions): Promise<PublicSite> {
 /** GET /public/event/:slug: one event type (also resolves unlisted ones) plus the site. 404 when unknown or inactive. */
 export function getPublicEvent(slug: string, opts?: CallOptions): Promise<PublicEventResponse> {
   return request('GET', `/public/event/${enc(slug)}`, opts);
+}
+
+/** GET /public/short/:name: what jimicohen.com/meet or /pod opens right now (open, or closed with the reason). */
+export function getShortLink(name: ShortName, opts?: CallOptions): Promise<ShortLinkResponse> {
+  return request('GET', `/public/short/${enc(name)}`, opts);
 }
 
 export interface SlotsQuery {
@@ -328,9 +338,22 @@ export async function listHosts(opts?: CallOptions): Promise<AdminHost[]> {
   return unwrap(await request('GET', '/admin/hosts', opts), 'hosts');
 }
 
-/** POST /admin/hosts: adds a co-host. The invite link in the answer is shown once. */
-export function createHost(input: { name: string; email: string }): Promise<HostInviteResponse> {
+/**
+ * POST /admin/hosts: adds a co-host. The invite link in the answer is shown once. `addToEventTypeIds`: meetings
+ * they join at once (the answer lists them in eventTypes, and any that could not be changed in notAddedTo).
+ */
+export function createHost(input: { name: string; email: string; addToEventTypeIds?: string[] }): Promise<HostInviteResponse> {
   return request('POST', '/admin/hosts', { body: input });
+}
+
+/** PUT /admin/brands/:id: the owner's changes to a built-in brand's look (a partial theme), logo and sender name. */
+export async function updateBrand(id: string, patch: { theme?: DeepPartial<Theme>; emailFromName?: string }): Promise<SiteSettings> {
+  return unwrap(await request('PUT', `/admin/brands/${enc(id)}`, { body: patch }), 'site');
+}
+
+/** PUT /admin/short-links: what a short link opens (null turns it off). `brand`: give the event the link's own look too. */
+export function setShortLink(name: ShortName, eventTypeId: string | null, brand?: boolean): Promise<{ shortLinks: SiteSettings['shortLinks']; eventType?: EventType }> {
+  return request('PUT', '/admin/short-links', { body: brand === undefined ? { name, eventTypeId } : { name, eventTypeId, brand } });
 }
 
 /** PUT /admin/hosts/:id */
@@ -376,6 +399,21 @@ export async function getHostCalendars(id: string, opts?: CallOptions): Promise<
 /** POST /admin/hosts/:id/google/disconnect */
 export async function disconnectGoogle(id: string): Promise<void> {
   await request('POST', `/admin/hosts/${enc(id)}/google/disconnect`, { body: {} });
+}
+
+/** GET /admin/hosts/:id/google/:accountId/calendars: the calendars of one Google account of the host. */
+export async function getAccountCalendars(hostId: string, accountId: string, opts?: CallOptions): Promise<GoogleCalendarListItem[]> {
+  return unwrap(await request('GET', `/admin/hosts/${enc(hostId)}/google/${enc(accountId)}/calendars`, opts), 'calendars');
+}
+
+/** GET /admin/hosts/:id/google/:accountId/removal: what removing that account would change. */
+export function getRemovalPreview(hostId: string, accountId: string, opts?: CallOptions): Promise<GoogleRemovalPreview> {
+  return request('GET', `/admin/hosts/${enc(hostId)}/google/${enc(accountId)}/removal`, opts);
+}
+
+/** DELETE /admin/hosts/:id/google/:accountId */
+export function removeGoogleAccount(hostId: string, accountId: string): Promise<GoogleAccountRemoved> {
+  return request('DELETE', `/admin/hosts/${enc(hostId)}/google/${enc(accountId)}`);
 }
 
 export interface BookingsQuery {
@@ -488,6 +526,21 @@ export async function disconnectGoogleSelf(id: string, token: string): Promise<A
   return unwrap(await request('POST', `/host/${enc(id)}/google/disconnect`, { query: { t: token }, body: {} }), 'host');
 }
 
+/** GET /host/:id/google/:accountId/calendars?t= */
+export async function getAccountCalendarsSelf(id: string, token: string, accountId: string, opts?: CallOptions): Promise<GoogleCalendarListItem[]> {
+  return unwrap(await request('GET', `/host/${enc(id)}/google/${enc(accountId)}/calendars`, { query: { t: token }, signal: opts?.signal }), 'calendars');
+}
+
+/** GET /host/:id/google/:accountId/removal?t= */
+export function getRemovalPreviewSelf(id: string, token: string, accountId: string, opts?: CallOptions): Promise<GoogleRemovalPreview> {
+  return request('GET', `/host/${enc(id)}/google/${enc(accountId)}/removal`, { query: { t: token }, signal: opts?.signal });
+}
+
+/** DELETE /host/:id/google/:accountId?t= */
+export function removeGoogleAccountSelf(id: string, token: string, accountId: string): Promise<GoogleAccountRemoved> {
+  return request('DELETE', `/host/${enc(id)}/google/${enc(accountId)}`, { query: { t: token } });
+}
+
 // ═════════════════════════════ google ═════════════════════════════
 
 export interface GoogleConnectParams {
@@ -500,6 +553,10 @@ export interface GoogleConnectParams {
   token?: string;
   /** "Use a different Google account": Google shows its account chooser */
   switchAccount?: boolean;
+  /** "Add another Google account": Google shows its account chooser, and the account is added next to the others */
+  add?: boolean;
+  /** reconnect this one account (main or extra) */
+  accountId?: string;
 }
 
 /**
@@ -508,13 +565,22 @@ export interface GoogleConnectParams {
  * `returnTo` with `?google=connected` (and `&zone=<IANA zone>` when their time zone changed with
  * it) or `?google=error&reason=...`.
  */
-export function googleConnectUrl({ hostId, returnTo, gmail = false, token, switchAccount = false }: GoogleConnectParams): string {
+export function googleConnectUrl({ hostId, returnTo, gmail = false, token, switchAccount = false, add = false, accountId }: GoogleConnectParams): string {
   if (import.meta.env.DEV && import.meta.env.VITE_MOCK_API) {
     const sep = returnTo.includes('?') ? '&' : '?';
-    return `${returnTo}${sep}google=connected&mock_google_host=${enc(hostId)}${gmail ? '&mock_google_gmail=1' : ''}`;
+    const intent = add ? '&mock_google_intent=extra' : accountId ? `&mock_google_intent=reconnect&mock_google_account=${enc(accountId)}` : switchAccount ? '&mock_google_intent=replace' : '';
+    return `${returnTo}${sep}google=connected&mock_google_host=${enc(hostId)}${gmail ? '&mock_google_gmail=1' : ''}${intent}`;
   }
-  return `${API_BASE}/google/connect${queryString({ host: hostId, gmail: gmail ? 1 : 0, return: returnTo, t: token, switch: switchAccount ? 1 : undefined })}`;
+  return `${API_BASE}/google/connect${queryString({
+    host: hostId,
+    gmail: gmail && !add ? 1 : 0,
+    return: returnTo,
+    t: token,
+    add: add ? 1 : undefined,
+    account: !add && accountId ? accountId : undefined,
+    switch: switchAccount && !add && !accountId ? 1 : undefined,
+  })}`;
 }
 
 /** The query parameters a return from Google leaves on the page it lands on. Read them, then remove them. */
-export const GOOGLE_RETURN_PARAMS = ['google', 'reason', 'zone'] as const;
+export const GOOGLE_RETURN_PARAMS = ['google', 'reason', 'zone', 'gresult', 'gaccount', 'gnote', 'gwanted'] as const;

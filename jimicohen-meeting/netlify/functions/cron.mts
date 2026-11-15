@@ -11,7 +11,8 @@ export default async (req: Request, context: Context): Promise<Response> => {
     return new Response(null, { status: 503 });
   }
   try {
-    ctx.log('info', 'scheduled run finished', await runScheduled(ctx));
+    // Only this function runs the one-time setup of stored data: Netlify runs it for the published deploy alone.
+    ctx.log('info', 'scheduled run finished', await runScheduled(ctx, { oneTimeMoves: true }));
     return new Response(null, { status: 204 });
   } catch (err) {
     ctx.log('error', 'scheduled run failed', { error: err });

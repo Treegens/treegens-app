@@ -1,15 +1,24 @@
 /**
  * Connecting a Google account. Two full-page redirects, no popups:
  *
- *   GET /google/connect?host=<id>&gmail=0|1&return=<path>[&t=<host token>][&switch=1]
+ *   GET /google/connect?host=<id>&gmail=0|1&return=<path>[&t=<host token>][&add=1 | &account=<id> | &switch=1]
  *       Allowed for the signed-in owner (any host), or for a co-host holding the private-link
- *       token of that same host. Answers 302 to Google's consent screen. `switch=1` asks Google
- *       to show its account chooser (and sends no login hint), to pick another account.
+ *       token of that same host. Answers 302 to Google's consent screen.
+ *         add=1       "Add another Google account": the account chooser, no login hint. 409
+ *                     too_many_google_accounts at the ceiling.
+ *         account=id  reconnect that account (main or extra), hinted by its address.
+ *         switch=1    "Use a different Google account": the account picked becomes the main one.
+ *         (none)      the plain Connect and Reconnect buttons, for the main account.
  *   GET /google/callback
- *       Where Google sends the browser back. Finishes the exchange, applies the defaults for a
- *       first connection, and answers 302 to where the person started, with
- *       `?google=connected` (plus `&zone=<IANA zone>` when the host's time zone changed with it)
- *       or `?google=error&reason=<sentence>`.
+ *       Where Google sends the browser back. Finishes the exchange, puts the account on the host
+ *       (an account that is already there is refreshed, never added twice), and answers 302 to
+ *       where the person started, with `?google=connected&gresult=<first|added|refreshed|promoted|
+ *       replaced>&gaccount=<account id>` (plus `&gnote=other_account&gwanted=<id>` when another
+ *       account was picked than the button was for, and `&zone=<IANA zone>` when the host's time
+ *       zone changed with it) or `?google=error&reason=<sentence>`.
+ *
+ * A sign-in started from a co-host's private link carries a mark of that link. A link replaced while
+ * the person was at Google finishes nothing.
  *
  * A connection belongs to the browser that started it: the connect answer sets a short-lived
  * cookie with the nonce of the state it sent to Google, and the callback goes no further unless
@@ -27,7 +36,10 @@ import { hostFromToken, isAdmin, rateLimit } from '../lib/auth';
 import { syncHostTimezone } from '../lib/busy';
 import { safeEqual } from '../lib/crypto';
 import { BASE_PATH, type Ctx } from '../lib/ctx';
-import { buildGoogleAuthUrl, completeGoogleAuth, readGoogleState } from '../lib/google';
+import { detachEventsOfAccount } from '../lib/booking';
+import { buildGoogleAuthUrl, completeGoogleAuth, linkMark, readGoogleState, type GoogleAuthResult } from '../lib/google';
+import { findAccount, mainOf, type ConnectIntent, type ConnectOutcome } from '../lib/googleAccounts';
+import { noticeGoogleConnection } from '../lib/googleNotices';
 import { HttpError, json, redirect, route, type Route } from '../lib/http';
 import { getHost, getSite, isStorageId, listHosts, updateHost } from '../lib/repo';
 import { isEmail } from '../lib/validate';
@@ -135,15 +147,29 @@ export function absoluteReturnUrl(ctx: Ctx, returnTo: string | null | undefined)
   }
 }
 
-function withResult(target: URL, result: { ok: true; zone?: string | null } | { ok: false; reason: string }): string {
+const RETURN_PARAMS = ['google', 'reason', 'zone', 'gresult', 'gaccount', 'gnote', 'gwanted'];
+const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
+
+type Connected = { ok: true; zone?: string | null; outcome?: ConnectOutcome; accountId?: string; note?: 'other_account'; wanted?: string };
+
+/**
+ * The return address with the result. Accounts are named by id, never by address, so nothing personal
+ * lands in the address bar or the browser history: the page looks the addresses up.
+ */
+function withResult(target: URL, result: Connected | { ok: false; reason: string }): string {
   const url = new URL(target.href);
-  url.searchParams.delete('google');
-  url.searchParams.delete('reason');
-  url.searchParams.delete('zone');
+  for (const name of RETURN_PARAMS) url.searchParams.delete(name);
   url.searchParams.set('google', result.ok ? 'connected' : 'error');
-  if (!result.ok) url.searchParams.set('reason', result.reason.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_LENGTH));
+  if (!result.ok) {
+    url.searchParams.set('reason', result.reason.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_LENGTH));
+    return url.href;
+  }
   // The page says so: a new zone moves every hour the host offers.
-  else if (result.zone && result.zone.length <= 64 && IANAZone.isValidZone(result.zone)) url.searchParams.set('zone', result.zone);
+  if (result.zone && result.zone.length <= 64 && IANAZone.isValidZone(result.zone)) url.searchParams.set('zone', result.zone);
+  if (result.outcome) url.searchParams.set('gresult', result.outcome);
+  if (result.accountId && ID_RE.test(result.accountId)) url.searchParams.set('gaccount', result.accountId);
+  if (result.note) url.searchParams.set('gnote', result.note);
+  if (result.note && result.wanted && ID_RE.test(result.wanted)) url.searchParams.set('gwanted', result.wanted);
   return url.href;
 }
 
@@ -164,13 +190,15 @@ function wantsPage(req: Request): boolean {
 }
 
 /**
- * What a first connection sets up, on top of what the token exchange already stored. Returns the
- * host's new time zone when connecting changed it (a host who followed their device now follows
- * their calendar, SPEC 4.6), so the page can say so.
+ * What a connection sets up, on top of what the token exchange already stored. Returns the host's new
+ * time zone when connecting changed it (a host who followed their device now follows their calendar,
+ * SPEC 4.6), so the page can say so. Only the host's first account ever switches the zone mode; an extra
+ * account never changes the zone or the address.
  */
-async function finishConnection(ctx: Ctx, hostId: string, firstConnect: boolean): Promise<string | null> {
+async function finishConnection(ctx: Ctx, hostId: string, accountId: string, firstConnect: boolean): Promise<string | null> {
   const host = await getHost(ctx, hostId);
-  if (!host?.google) return null;
+  const ref = host ? findAccount(host, { id: accountId }) : null;
+  if (!host || !ref || !ref.main || !host.google) return null;
   const zoneBefore = host.timezone;
   const noSelection = (host.google.busyCalendarIds ?? []).length === 0 || !host.google.writeCalendarId;
   // Someone who let their zone follow their device now has a better source: their calendar.
@@ -184,7 +212,7 @@ async function finishConnection(ctx: Ctx, hostId: string, firstConnect: boolean)
   let current = host;
   if (noSelection || followGoogle || adoptEmail) {
     const saved = await updateHost(ctx, hostId, (h) => {
-      if (!h.google) return h;
+      if (!h.google || mainOf(h)?.account.id !== accountId) return h;
       const google = { ...h.google };
       if ((google.busyCalendarIds ?? []).length === 0) google.busyCalendarIds = ['primary'];
       if (!google.writeCalendarId) google.writeCalendarId = 'primary';
@@ -200,6 +228,41 @@ async function finishConnection(ctx: Ctx, hostId: string, firstConnect: boolean)
   // Does nothing unless the host follows Google Calendar. Never throws.
   const after = await syncHostTimezone(ctx, current);
   return after.timezone !== zoneBefore ? after.timezone : null;
+}
+
+/** Everything after a successful sign-in that is not the connection itself. None of it may undo the connection. */
+async function afterConnection(ctx: Ctx, result: GoogleAuthResult, viaLink: boolean): Promise<string | null> {
+  const hostId = result.hostId!;
+  let zone: string | null = null;
+  if (result.accountId) {
+    try {
+      zone = await finishConnection(ctx, hostId, result.accountId, result.firstConnect === true);
+    } catch (err) {
+      // The connection itself is saved. Defaults and the zone catch up on the next save or scheduled run.
+      ctx.log('warn', 'google: could not finish setting up a new connection', { hostId, error: err instanceof Error ? err.name : 'unknown' });
+    }
+  }
+  if (result.dropped) {
+    // "Use a different Google account": the old main's events stay where they are. Writing them again
+    // into the new account would send every attendee a second invitation, so they are detached instead.
+    // Any that are missed here are found by the stamp of the next housekeeping runs.
+    try {
+      await detachEventsOfAccount(ctx, hostId, { id: result.dropped.id, email: result.dropped.email }, { includeUnstamped: true, why: 'replaced' });
+    } catch (err) {
+      ctx.log('warn', 'google: could not detach the bookings of a replaced account', { hostId, error: err instanceof Error ? err.name : 'unknown' });
+    }
+  }
+  if (result.outcome && result.accountId && result.email) {
+    await noticeGoogleConnection(ctx, { hostId, accountId: result.accountId, email: result.email, outcome: result.outcome, viaLink, ...(result.dropped ? { replacedEmail: result.dropped.email } : {}) });
+  }
+  return zone;
+}
+
+function intentFrom(url: URL): ConnectIntent {
+  if (url.searchParams.get('add') === '1') return 'extra';
+  if ((url.searchParams.get('account') ?? '') !== '') return 'reconnect';
+  if (url.searchParams.get('switch') === '1') return 'replace';
+  return 'main';
 }
 
 export const routes: Route[] = [
@@ -237,11 +300,24 @@ export const routes: Route[] = [
       const site = await getSite(ctx);
       // A co-host's link always comes back to that co-host's own page, which names them, never to the dashboard.
       const returnTo = linked ? refusalPage : (url.searchParams.get('return') ?? refusalPage);
-      // Sending mail from Gmail only ever happens from the owner's account, and only the owner can ask for it.
-      const gmail = admin && host.id === site.ownerHostId && url.searchParams.get('gmail') === '1';
-      // "Use a different Google account": the account chooser, and no hint pointing at the old one.
-      const selectAccount = url.searchParams.get('switch') === '1';
-      const location = await buildGoogleAuthUrl(ctx, { hostId: host.id, returnTo, gmail, selectAccount, loginHint: selectAccount ? undefined : host.google?.email || host.email || undefined });
+      const intent = intentFrom(url);
+      const accountId = intent === 'reconnect' ? (url.searchParams.get('account') ?? '') : undefined;
+      // Sending mail from Gmail only ever happens from the owner's main account, and only the owner can ask
+      // for it. Reconnecting that account asks for it again by itself when it had it.
+      const ownersMain = admin && host.id === site.ownerHostId;
+      const reconnectsGmail = ownersMain && intent === 'reconnect' && !!host.google && mainOf(host)?.account.id === accountId && host.google.gmailSend === true;
+      const gmail = ownersMain && intent !== 'extra' && (url.searchParams.get('gmail') === '1' || reconnectsGmail);
+      const location = await buildGoogleAuthUrl(ctx, {
+        hostId: host.id,
+        returnTo,
+        gmail,
+        intent,
+        ...(accountId !== undefined ? { accountId } : {}),
+        // The main account's address, else the host's own (unused for the account chooser).
+        loginHint: host.google?.email || host.email || undefined,
+        // Marks the link this was started from, so a link replaced meanwhile cannot finish it.
+        ...(linked && typeof linked.inviteTokenHash === 'string' && linked.inviteTokenHash !== '' ? { linkMark: linkMark(ctx, linked.inviteTokenHash) } : {}),
+      });
       const nonce = readGoogleState(ctx, new URL(location).searchParams.get('state') ?? '')?.nonce;
       if (!nonce) throw new Error('google: the new state could not be read back');
       const kept = heldNonces(req).filter((n) => n !== nonce).slice(-(GSTATE_KEEP - 1));
@@ -273,6 +349,23 @@ export const routes: Route[] = [
       return redirect(withResult(absoluteReturnUrl(ctx, state.returnTo)!, { ok: false, reason: unboundReason(state.returnTo) }), 302, cookie);
     }
 
+    // Started from a co-host's private link: that link must still be the current one, before any code is exchanged.
+    const viaLink = !!state && (state.lt !== undefined || state.returnTo.startsWith(`${BASE_PATH}/host/`));
+    if (state && viaLink) {
+      const linkHost = await getHost(ctx, state.hostId);
+      const current = typeof linkHost?.inviteTokenHash === 'string' && linkHost.inviteTokenHash !== '' ? linkHost.inviteTokenHash : null;
+      // A state signed by the previous deploy has no mark: then the host only has to still have a link.
+      const still = !!current && (state.lt === undefined || safeEqual(state.lt, linkMark(ctx, current)));
+      if (!still) {
+        ctx.log('warn', 'google: a sign-in came back for a private link that was replaced meanwhile', { hostId: state.hostId });
+        return redirect(
+          withResult(absoluteReturnUrl(ctx, state.returnTo)!, { ok: false, reason: 'This private link was replaced while you were at Google. Open the new link and connect again.' }),
+          302,
+          cookie,
+        );
+      }
+    }
+
     const result = await completeGoogleAuth(ctx, url.searchParams);
     // Without a host the state could not be read, so the return path in it is not to be relied on.
     const target = absoluteReturnUrl(ctx, result.hostId ? result.returnTo : null)!;
@@ -280,15 +373,7 @@ export const routes: Route[] = [
     if (!result.ok) {
       return redirect(withResult(target, { ok: false, reason: result.error || 'Google did not finish connecting. Please try again.' }), 302, cookie);
     }
-    let zone: string | null = null;
-    if (result.hostId) {
-      try {
-        zone = await finishConnection(ctx, result.hostId, result.firstConnect === true);
-      } catch (err) {
-        // The connection itself is saved. Defaults and the zone catch up on the next save or scheduled run.
-        ctx.log('warn', 'google: could not finish setting up a new connection', { hostId: result.hostId, error: err instanceof Error ? err.name : 'unknown' });
-      }
-    }
-    return redirect(withResult(target, { ok: true, zone }), 302, cookie);
+    const zone = result.hostId ? await afterConnection(ctx, result, viaLink) : null;
+    return redirect(withResult(target, { ok: true, zone, outcome: result.outcome, accountId: result.accountId, note: result.note, wanted: result.wanted }), 302, cookie);
   }),
 ];

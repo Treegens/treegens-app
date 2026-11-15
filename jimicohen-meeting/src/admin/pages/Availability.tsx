@@ -131,7 +131,7 @@ export default function Availability() {
                 value: 'google',
                 icon: <CalendarDays size={18} />,
                 label: 'Follow Google Calendar',
-                description: ownerHost.google ? 'Uses the time zone set in your Google Calendar.' : 'Connect Google Calendar to use this.',
+                description: ownerHost.google ? `Uses the time zone set in ${ownerHost.google.email}, your main Google account.` : 'Connect Google Calendar to use this.',
                 disabled: !ownerHost.google,
               },
               { value: 'fixed', icon: <Lock size={18} />, label: 'Keep it fixed', description: 'Stays put until you choose another one.' },

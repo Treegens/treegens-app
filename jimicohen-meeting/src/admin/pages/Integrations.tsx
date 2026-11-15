@@ -11,15 +11,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Bot, CalendarCheck, Check, ChevronRight, CircleCheck, Mail, MessageSquareText, PhoneCall, RefreshCw, Send, Unplug } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import type { AdminHost, GoogleCalendarListItem, IntegrationsStatus, IntegrationsUpdate, SiteSettings } from '../../../shared/types';
-import { APP_BASE, ApiFailure, disconnectGoogle, errorMessage, getHostCalendars, googleConnectUrl, saveIntegrations, saveSite, updateHost } from '../../lib/api';
+import type { AdminHost, GoogleCalendarListItem, GoogleRemovalPreview, IntegrationsStatus, IntegrationsUpdate, SiteSettings } from '../../../shared/types';
+import { APP_BASE, ApiFailure, disconnectGoogle, errorMessage, getAccountCalendars, getHostCalendars, getRemovalPreview, googleConnectUrl, removeGoogleAccount, saveIntegrations, saveSite, testIntegration, updateHost } from '../../lib/api';
+import { accountsNeedingReconnect, allAccounts, extraAccounts } from '../../lib/googleAccounts';
+import { OtherGoogleAccounts, accountsSummary, removalLines, type AccountsApi } from '../components/GoogleAccounts';
 import { Button, Checkbox, ConfirmDialog, Field, Input, RadioGroup, Select, Skeleton, useToast } from '../../ui';
 import { Notice, Page, PageHeader } from '../components/Page';
 import { IntegrationCard, IxBlock, useIntegrationTest } from '../components/x/IntegrationCard';
 import type { IntegrationStatus } from '../components/x/IntegrationCard';
 import { CopyField, Ext, SecretField, Step, Steps, TestResult } from '../components/x/bits';
 import { firstName } from '../format';
-import { announceGoogleReturn } from '../googleReturn';
+import { announceGoogleReturn, findScreenAccount } from '../googleReturn';
 import { formatDateLong } from '../../lib/tz';
 import { useAdmin } from '../state';
 import '../../styles/adminx.css';
@@ -148,7 +150,11 @@ function GoogleCard({ open, onToggle }: CardProps) {
   const keysGone = !!hostGoogle && !g.configured;
   const needsReconnect = hostGoogle?.status === 'needs_reconnect';
   const connected = g.ownerConnected && !!hostGoogle && !needsReconnect && !keysGone;
-  const teamConnected = data.hosts.some((h) => !!h.google);
+  const teamConnected = data.hosts.some((h) => allAccounts(h).length > 0);
+  // Every account counts for the badge: one that cannot be read closes the owner's times.
+  const brokenAccounts = accountsNeedingReconnect(ownerHost);
+  const extras = extraAccounts(ownerHost);
+  const ownerAccounts = allAccounts(ownerHost);
 
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
@@ -165,9 +171,11 @@ function GoogleCard({ open, onToggle }: CardProps) {
   const [confirmRemoveKeys, setConfirmRemoveKeys] = useState(false);
   const [test, runTest] = useIntegrationTest();
 
-  const status: IntegrationStatus = connected
+  const status: IntegrationStatus = connected && brokenAccounts.length === 0
     ? { tone: 'success', label: 'Connected' }
-    : keysGone
+    : connected
+      ? { tone: 'warning', label: brokenAccounts.length === 1 ? '1 account needs reconnecting' : `${brokenAccounts.length} accounts need reconnecting` }
+      : keysGone || (ownerAccounts.length > 0 && !g.configured)
       ? { tone: 'danger', label: 'Keys missing' }
       : needsReconnect
         ? { tone: 'warning', label: 'Needs reconnecting' }
@@ -227,6 +235,36 @@ function GoogleCard({ open, onToggle }: CardProps) {
 
   const connect = (gmail = false) => {
     window.location.assign(googleConnectUrl({ hostId: ownerHost.id, returnTo: `${APP_BASE}/admin/integrations`, gmail: gmail || !!hostGoogle?.gmailSend }));
+  };
+
+  // The rows of the other accounts talk to the dashboard's own routes.
+  const accountsApi: AccountsApi = {
+    listCalendars: (accountId, signal) => getAccountCalendars(ownerHost.id, accountId, { signal }),
+    saveCalendars: (accountId, busyCalendarIds) => updateHost(ownerHost.id, { googleCalendars: { accountId, busyCalendarIds } }),
+    preview: (accountId) => getRemovalPreview(ownerHost.id, accountId),
+    remove: (accountId) => removeGoogleAccount(ownerHost.id, accountId),
+    connectUrl: ({ add, accountId }) => googleConnectUrl({ hostId: ownerHost.id, returnTo: `${APP_BASE}/admin/integrations`, add, accountId, gmail: !add && !accountId ? !!hostGoogle?.gmailSend : false }),
+    test: (accountId) => testIntegration({ channel: 'google', accountId }),
+  };
+
+  // What removing or replacing the main account changes, read when its dialog opens.
+  const [mainPreview, setMainPreview] = useState<GoogleRemovalPreview | null>(null);
+  const [confirmSwitch, setConfirmSwitch] = useState(false);
+  const mainId = hostGoogle?.id ?? '';
+  useEffect(() => {
+    if (!(confirmDisconnect || confirmSwitch) || !mainId) return;
+    let live = true;
+    setMainPreview(null);
+    getRemovalPreview(ownerHost.id, mainId).then(
+      (p) => live && setMainPreview(p),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [confirmDisconnect, confirmSwitch, mainId, ownerHost.id]);
+  const switchAccount = () => {
+    window.location.assign(googleConnectUrl({ hostId: ownerHost.id, returnTo: `${APP_BASE}/admin/integrations`, switchAccount: true, gmail: !!hostGoogle?.gmailSend }));
   };
 
   // Emails go out from this Gmail: disconnecting stops them too, which the owner has to hear before deciding.
@@ -329,10 +367,18 @@ function GoogleCard({ open, onToggle }: CardProps) {
             <div className="ix-connected__text">
               <p className="ix-connected__title">Connected as {hostGoogle.email}</p>
               <p className="ix-connected__desc">Bookings are added to this account. Your busy times there are never offered.</p>
+              <ul className="ga-tags" aria-label="What this account does">
+                <li>New meetings go here</li>
+                {hostGoogle.gmailSend ? <li>Sends your emails</li> : null}
+                {ownerHost.timezoneMode === 'google' ? <li>Sets your time zone</li> : null}
+              </ul>
             </div>
             <div className="ix-connected__actions">
               <Button size="sm" variant="secondary" iconLeft={<RefreshCw size={14} />} loading={test.status === 'running'} loadingLabel="Checking" onClick={() => void runTest({ channel: 'google' })}>
-                Check connection
+                {extras.length > 0 ? 'Check all accounts' : 'Check connection'}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmSwitch(true)}>
+                Use a different Google account
               </Button>
               <Button size="sm" variant="ghost" iconLeft={<Unplug size={14} />} onClick={() => setConfirmDisconnect(true)}>
                 Disconnect
@@ -397,6 +443,18 @@ function GoogleCard({ open, onToggle }: CardProps) {
         </>
       ) : null}
 
+      {g.configured && ownerAccounts.length > 0 ? (
+        <OtherGoogleAccounts
+          host={ownerHost}
+          api={accountsApi}
+          voice={{ who: 'you' }}
+          onHost={(h) => {
+            apply.host(h);
+            void refresh().catch(() => undefined);
+          }}
+        />
+      ) : null}
+
       {keysGone && hostGoogle ? (
         <Notice tone="danger" title="Your calendar connection needs the Google keys">
           The client ID and client secret were removed, so your calendar cannot be read and no times are offered for meetings with you{hostGoogle.gmailSend ? '. No emails go out from your Gmail either' : ''}. Paste the same
@@ -449,7 +507,7 @@ function GoogleCard({ open, onToggle }: CardProps) {
             </Step>
             <Step title="Connect your calendar" done={connected}>
               {connected ? (
-                <p>Done. You are connected as {hostGoogle?.email}.</p>
+                <p>Done. You are connected as {extras.length > 0 ? accountsSummary(ownerHost) : hostGoogle?.email}.</p>
               ) : (
                 <>
                   <p>{g.configured ? 'You will be taken to Google to allow access, then brought straight back here.' : 'Save the two keys first, then this button wakes up.'}</p>
@@ -472,11 +530,39 @@ function GoogleCard({ open, onToggle }: CardProps) {
         tone="danger"
         title="Disconnect Google Calendar?"
         description={
-          sendsFromGmail
-            ? 'Your busy times will no longer be checked and new bookings will not be added to your calendar. Meetings already booked stay where they are. Your emails are sent from this Gmail, so confirmations and reminders stop too until you connect again or set up Resend.'
-            : 'Your busy times will no longer be checked and new bookings will not be added to your calendar. Meetings already booked stay where they are.'
+          <span className="ga-lines">
+            <span className="ga-lines__line">
+              {sendsFromGmail
+                ? `The busy times in ${hostGoogle?.email ?? 'this account'} will no longer be checked and new bookings will not be added to your calendar. Meetings already booked stay where they are. Your emails are sent from this Gmail, so confirmations and reminders stop too until you connect again or set up Resend.`
+                : `The busy times in ${hostGoogle?.email ?? 'this account'} will no longer be checked and new bookings will not be added to your calendar. Meetings already booked stay where they are.`}
+            </span>
+            {removalLines(mainPreview, { who: 'you' }, extras.length)
+              .filter((l) => !l.startsWith('New meetings will not') && !l.startsWith('Your emails are sent'))
+              .map((l) => (
+                <span key={l} className="ga-lines__line">
+                  {l}
+                </span>
+              ))}
+          </span>
         }
         confirmLabel="Disconnect"
+      />
+      <ConfirmDialog
+        open={confirmSwitch}
+        onClose={() => setConfirmSwitch(false)}
+        onConfirm={() => switchAccount()}
+        title="Use a different Google account?"
+        description={
+          <span className="ga-lines">
+            <span className="ga-lines__line">Google asks which account to use. The one you pick becomes the account new meetings are added to, and {hostGoogle?.email ?? 'this account'} is disconnected.</span>
+            {mainPreview && mainPreview.upcomingEvents > 0 ? (
+              <span className="ga-lines__line">
+                {mainPreview.upcomingEvents === 1 ? '1 upcoming meeting is' : `${mainPreview.upcomingEvents} upcoming meetings are`} in {hostGoogle?.email}. They stay in that calendar, and changes to them will reach your invitees by email only.
+              </span>
+            ) : null}
+          </span>
+        }
+        confirmLabel="Choose another account"
       />
       <ConfirmDialog
         open={confirmRemoveKeys}
@@ -1134,14 +1220,24 @@ export default function IntegrationsPage() {
 
   // Back from Google: say what happened, then tidy the address bar.
   const handledReturn = useRef(false);
+  const [returned, setReturned] = useState<string | null>(null);
+  useEffect(() => {
+    if (returned === null) return;
+    setReturned(null);
+    announceGoogleReturn(toast, returned, googleReason, (id) => findScreenAccount(data.hosts, id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returned]);
   useEffect(() => {
     if (!new URLSearchParams(location.search).has('google') || handledReturn.current) return;
     handledReturn.current = true;
     // Also says when the time zone changed with the connection (it then follows Google Calendar).
-    announceGoogleReturn(toast, location.search, googleReason);
+    const search = location.search;
     setOpen((prev) => new Set(prev).add('google'));
     navigate('/admin/integrations', { replace: true });
-    void refresh().catch(() => undefined);
+    // The hosts are read again first, so the toast can name an account that was just added.
+    void refresh()
+      .catch(() => undefined)
+      .then(() => setReturned(search));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search]);
 

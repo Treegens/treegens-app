@@ -12,6 +12,7 @@ import { syncHostTimezone } from '../busy';
 import { open, randomId, randomToken, seal, sha256Hex } from '../crypto';
 import type { Ctx } from '../ctx';
 import { GoogleAuthError, googleListCalendars } from '../google';
+import { findAccount, mainOf, writeAccount, type AccountRef } from '../googleAccounts';
 import { HttpError } from '../http';
 import { assertSafeFeedUrl } from '../icsfeed';
 import { listHosts, saveHost, updateHost } from '../repo';
@@ -72,6 +73,7 @@ export async function createCoHost(ctx: Ctx, body: unknown): Promise<{ host: Hos
     schedules: [schedule],
     defaultScheduleId: schedule.id,
     google: null,
+    googleExtra: [],
     icsFeeds: [],
     inviteTokenHash: invite.hash,
     notify: { email: true, sms: false },
@@ -133,13 +135,32 @@ function prepareFeed(ctx: Ctx, host: Host, value: unknown, errors: FieldErrors):
 
 // ───────────────────────── updates ─────────────────────────
 
-function readCalendarIds(value: unknown, errors: FieldErrors): string[] | null {
+function readCalendarIds(value: unknown, errors: FieldErrors, field = 'busyCalendarIds'): string[] | null {
   const ok = Array.isArray(value) && value.length <= MAX_CALENDARS && value.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 256 && !/[\u0000-\u001F\u007F]/.test(id));
   if (!ok) {
-    errors.add('busyCalendarIds', 'The calendar choice is not readable. Reload the page and try again.');
+    errors.add(field, 'The calendar choice is not readable. Reload the page and try again.');
     return null;
   }
   return [...new Set(value as string[])];
+}
+
+/** `googleCalendars`: which calendars of one account (main or extra) block times. At least one always counts. */
+function readAccountCalendars(host: Host, value: unknown, errors: FieldErrors): { accountId: string; busyCalendarIds: string[] } | null {
+  if (!isPlainObject(value) || typeof value.accountId !== 'string' || value.accountId === '') {
+    errors.add('googleCalendars.accountId', 'That Google account is not connected any more. Reload the page.');
+    return null;
+  }
+  if (!findAccount(host, { id: value.accountId })) {
+    errors.add('googleCalendars.accountId', 'That Google account is not connected any more. Reload the page.');
+    return null;
+  }
+  const ids = readCalendarIds(value.busyCalendarIds, errors, 'googleCalendars.busyCalendarIds');
+  if (ids === null) return null;
+  if (ids.length === 0) {
+    errors.add('googleCalendars.busyCalendarIds', 'Tick at least one calendar of this account, or remove the account.');
+    return null;
+  }
+  return { accountId: value.accountId, busyCalendarIds: ids };
 }
 
 export interface HostUpdateResult {
@@ -230,6 +251,8 @@ export async function applyHostUpdate(ctx: Ctx, host: Host, body: unknown, opts:
     }
   }
 
+  const accountCalendars = given(u, 'googleCalendars') ? readAccountCalendars(host, u.googleCalendars, errors) : null;
+
   const newFeed = given(u, 'addIcsFeed') ? prepareFeed(ctx, host, u.addIcsFeed, errors) : null;
   const removeFeedId = typeof u.removeIcsFeedId === 'string' && u.removeIcsFeedId !== '' ? u.removeIcsFeedId : undefined;
 
@@ -256,6 +279,14 @@ export async function applyHostUpdate(ctx: Ctx, host: Host, body: unknown, opts:
     if (h.google && (busyCalendarIds !== undefined || writeCalendarId !== undefined)) {
       next.google = { ...h.google, ...(busyCalendarIds !== undefined ? { busyCalendarIds } : {}), ...(writeCalendarId !== undefined ? { writeCalendarId } : {}) };
       sourcesChanged = busyCalendarIds !== undefined;
+    }
+    if (accountCalendars && findAccount(next, { id: accountCalendars.accountId })) {
+      const { accountId, busyCalendarIds: ids } = accountCalendars;
+      const ref = findAccount(next, { id: accountId })!;
+      // The main account keeps every field it has, the id included once it is known.
+      if (ref.main && next.google) next.google = { ...next.google, id: ref.account.id, busyCalendarIds: ids };
+      else Object.assign(next, writeAccount(next, accountId, (a) => ({ ...a, busyCalendarIds: ids })));
+      sourcesChanged = true;
     }
     // Only when it is not there yet: a second run on top of the store's own write must not add it twice.
     if (newFeed && !(h.icsFeeds ?? []).some((f) => f.id === newFeed.id) && (h.icsFeeds ?? []).length < MAX_ICS_FEEDS) {
@@ -285,16 +316,28 @@ export async function applyHostUpdate(ctx: Ctx, host: Host, body: unknown, opts:
 
 // ───────────────────────── Google calendars ─────────────────────────
 
-/** The host's Google calendars, or an HttpError that says what to do. */
-export async function loadCalendars(ctx: Ctx, host: Host): Promise<GoogleCalendarListItem[]> {
-  if (!host.google) throw new HttpError(409, 'google_not_connected', 'Connect Google Calendar first.');
-  if (host.google.status === 'needs_reconnect') throw new HttpError(409, 'google_needs_reconnect', 'Google Calendar needs to be reconnected before the calendars can be listed.');
+/**
+ * The calendars of one Google account of the host (the main one when `accountId` is left out), or an
+ * HttpError that says what to do. An id of another host's account is not found: accounts are only looked
+ * up inside the record the route opened.
+ */
+export async function loadCalendars(ctx: Ctx, host: Host, accountId?: string): Promise<GoogleCalendarListItem[]> {
+  let ref: AccountRef | null;
+  if (accountId === undefined) {
+    ref = mainOf(host);
+    if (!ref) throw new HttpError(409, 'google_not_connected', 'Connect a Google account first.');
+  } else {
+    ref = findAccount(host, { id: accountId });
+    if (!ref) throw new HttpError(404, 'google_account_not_found', 'That Google account is not connected any more. Reload the page.');
+  }
+  const email = ref.account.email;
+  if (ref.account.status === 'needs_reconnect') throw new HttpError(409, 'google_needs_reconnect', `${email} needs to be reconnected before its calendars can be listed.`);
   try {
-    return await googleListCalendars(ctx, host);
+    return await googleListCalendars(ctx, ref);
   } catch (err) {
-    if (err instanceof GoogleAuthError) throw new HttpError(409, 'google_needs_reconnect', err.message);
-    ctx.log('warn', 'hosts: could not list Google calendars', { hostId: host.id, error: err instanceof Error ? err.name : 'unknown' });
-    throw new HttpError(502, 'google_unavailable', 'Google Calendar could not be reached just now. Please try again in a moment.');
+    if (err instanceof GoogleAuthError) throw new HttpError(409, 'google_needs_reconnect', `${email} needs to be reconnected before its calendars can be listed.`);
+    ctx.log('warn', 'hosts: could not list Google calendars', { hostId: host.id, accountId: ref.account.id, error: err instanceof Error ? err.name : 'unknown' });
+    throw new HttpError(502, 'google_unavailable', `The calendars of ${email} could not be loaded just now. Please try again in a moment.`);
   }
 }
 

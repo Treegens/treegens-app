@@ -14,7 +14,17 @@ export const CALENDAR_PENDING = 'Google Calendar did not answer in time. Trying 
  */
 export function calendarEventLeft(b: Pick<Booking, 'status' | 'google' | 'timeline'>): string | null {
   if (b.status !== 'cancelled' || !b.google) return null;
+  // Its event is in a Google account that is gone: nothing can take it off that calendar any more.
+  if (b.google.detached) return b.google.eventId ? detachedReason(b) : null;
   if (b.google.error) return b.google.error.trim() || 'Google Calendar could not be updated.';
   const last = [...(b.timeline ?? [])].reverse().find((t) => t.type === 'calendar_event_removed' || t.type === 'calendar_event_left');
   return last?.type === 'calendar_event_left' ? last.detail?.trim() || 'Google Calendar could not be reached.' : null;
+}
+
+/** What the dashboard says about a booking whose event is in a Google account that is no longer connected. */
+export function detachedReason(b: Pick<Booking, 'google' | 'timeline'>): string {
+  const email = b.google?.accountEmail;
+  return email
+    ? `The event was in ${email}, which is no longer connected. Change or delete it in Google Calendar.`
+    : 'The event is in a Google account that is no longer connected. Change or delete it in Google Calendar.';
 }

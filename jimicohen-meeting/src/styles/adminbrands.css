@@ -1,0 +1,289 @@
+/* Brands and short links in the dashboard: chips, "Your links" on Home, the Short links card, the pod offer,
+   the Look section of the event editor and the brand switch in Design. Uses the dashboard tokens (ui.css). */
+
+.ab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 1px 8px 1px 4px;
+  border: 1px solid var(--a-border);
+  border-radius: 999px;
+  background: var(--a-surface-2);
+  color: var(--a-text);
+  font-size: var(--a-text-xs);
+  font-weight: 550;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+/* In a row of the bookings list: the brand a meeting was booked under, kept whole next to the event title. */
+.adm-agenda__what > .ab-chip {
+  flex: none;
+}
+
+.ab-chip__logo {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+}
+
+.ab-chip--link {
+  padding-left: 7px;
+  color: var(--a-muted);
+  font-family: var(--a-font-mono);
+  font-weight: 500;
+}
+
+/* ───────────── Your links / Short links ───────────── */
+
+.ab-links {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ab-links__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
+  border-top: 1px solid var(--a-hairline, var(--a-border));
+}
+
+.ab-links__item:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+
+.ab-links__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ab-links__url {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--a-text);
+  font-family: var(--a-font-mono);
+  font-size: var(--a-text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: 3px;
+}
+
+a.ab-links__url:hover {
+  text-decoration: underline;
+}
+
+.ab-links__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.ab-links__line,
+.ab-links__hint {
+  margin: 0;
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+  line-height: 1.45;
+}
+
+.ab-links__hint {
+  color: var(--a-faint);
+}
+
+.ab-links__change {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: var(--a-text-sm);
+}
+
+.ab-links__opens {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.ab-links__opens-label {
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+}
+
+.ab-links__select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 340px;
+}
+
+.ab-links__top--choose .ab-links__url {
+  flex: 0 0 auto;
+  min-width: 9.5em;
+}
+
+.ab-shortlinks {
+  margin-bottom: 14px;
+  scroll-margin-top: 80px;
+}
+
+.ab-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--a-border);
+  border-radius: var(--a-radius);
+  background: var(--a-primary-soft);
+}
+
+.ab-offer__text {
+  margin: 0;
+  font-size: var(--a-text-sm);
+  line-height: 1.45;
+}
+
+.ab-offer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ───────────── the event editor's Look section ───────────── */
+
+.ab-look {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ab-look__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.ab-look__select {
+  flex: 0 1 300px;
+  min-width: 200px;
+}
+
+.ab-look__note {
+  margin: 0;
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+  line-height: 1.45;
+}
+
+.ab-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--a-control-h);
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+}
+
+.ab-swatch__dot {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--a-border);
+  border-radius: 6px;
+}
+
+/* ───────────── Design: whose look ───────────── */
+
+.ab-lookfor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 14px;
+}
+
+.ab-lookfor__label {
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+  font-weight: 550;
+}
+
+.ab-lookfor__note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+}
+
+.ab-brandcard__logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ab-brandcard__img {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--a-surface-2);
+}
+
+@media (max-width: 520px) {
+  .ab-links__actions {
+    margin-left: 0;
+  }
+
+  .ab-links__top--choose .ab-links__url {
+    min-width: 0;
+  }
+
+  .ab-links__opens {
+    flex-basis: 100%;
+  }
+}
+
+/* The Share panel's second line under a short link. */
+.sp__full {
+  margin: -4px 0 0;
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* ───────────── Team: the /pod meeting offered when a co-host is added ───────────── */
+
+.tm-podoffer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--a-border);
+  border-radius: var(--a-radius);
+  background: var(--a-surface-2);
+}
+
+.tm-added {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.tm-added__text {
+  margin: 0;
+  font-size: var(--a-text-sm);
+  line-height: 1.45;
+}

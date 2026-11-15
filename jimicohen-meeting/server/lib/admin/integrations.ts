@@ -20,7 +20,8 @@ import { randomId } from '../crypto';
 import type { Ctx } from '../ctx';
 import { renderEmailHtml, renderEmailText, resolveEmailProvider, sendEmail } from '../email';
 import { GoogleApiError, GoogleAuthError, googleFreeBusy, googleRedirectUri } from '../google';
-import { getHost, getSecrets, getSite, getStoredSecrets, listHosts, saveSecrets, saveSite } from '../repo';
+import { accountsOf, findAccount, type AccountRef } from '../googleAccounts';
+import { getHost, getSecrets, getSite, getStoredSecrets, listHosts, saveSecrets, updateSite } from '../repo';
 import { sendSms } from '../sms';
 import { firstName } from '../templates';
 import { getTwilioAccount, normalizePhone, twilioFeatures } from '../twilio';
@@ -203,7 +204,8 @@ export async function updateIntegrations(ctx: Ctx, body: unknown): Promise<Integ
   }
   if (model !== undefined) {
     const site = await getSite(ctx);
-    if (site.assistant.model !== model) await saveSite(ctx, { ...site, assistant: { ...site.assistant, model } });
+    // A compare-and-swap, so a Design or brand save made at the same moment is not lost.
+    if (site.assistant.model !== model) await updateSite(ctx, (fresh) => ({ ...fresh, assistant: { ...fresh.assistant, model } }));
   }
   return integrationsStatus(ctx);
 }
@@ -324,21 +326,50 @@ async function testCall(ctx: Ctx, site: SiteSettings, owner: Host | null, to: un
   return { ok: false, detail: problem(result, 'The test call could not be placed.') };
 }
 
-async function testGoogle(ctx: Ctx, host: Host | null, isOwner: boolean): Promise<IntegrationTestResponse> {
-  if (!host) return { ok: false, detail: 'That person is no longer on the team.' };
-  const calendar = isOwner ? 'Your Google Calendar' : `${firstName(host.name) || 'Their'}'s Google Calendar`;
-  if (!host.google) return { ok: false, detail: `${calendar} is not connected yet.` };
-  if (host.google.status === 'needs_reconnect') return { ok: false, detail: `${calendar} needs to be reconnected. Google asked for a new sign-in.` };
+function blocksText(count: number): string {
+  return count === 1 ? '1 busy block' : `${count} busy blocks`;
+}
+
+/** Reads the next 7 days of one account. Both error classes only carry sentences written in google.ts. */
+async function readAccount(ctx: Ctx, ref: AccountRef): Promise<{ ok: true; blocks: number } | { ok: false; reconnect: boolean; message: string }> {
+  if (ref.account.status === 'needs_reconnect') return { ok: false, reconnect: true, message: 'needs to be reconnected' };
   const now = ctx.now().getTime();
   try {
-    const busy = await googleFreeBusy(ctx, host, { start: now, end: now + 7 * DAY_MS });
-    const blocks = busy.length === 1 ? '1 busy block' : `${busy.length} busy blocks`;
-    return { ok: true, detail: `Connected as ${host.google.email}. Found ${blocks} in the next 7 days.` };
+    return { ok: true, blocks: (await googleFreeBusy(ctx, ref, { start: now, end: now + 7 * DAY_MS })).length };
   } catch (err) {
-    // Both error classes only carry sentences written in google.ts: no tokens, no response bodies.
-    if (err instanceof GoogleAuthError || err instanceof GoogleApiError) return { ok: false, detail: err.message };
+    if (err instanceof GoogleAuthError) return { ok: false, reconnect: true, message: err.message };
+    if (err instanceof GoogleApiError) return { ok: false, reconnect: false, message: err.message };
     throw err;
   }
+}
+
+/** One account (`accountId`), or every account of the host with a line for each. */
+async function testGoogle(ctx: Ctx, host: Host | null, isOwner: boolean, accountId?: string): Promise<IntegrationTestResponse> {
+  if (!host) return { ok: false, detail: 'That person is no longer on the team.' };
+  const calendar = isOwner ? 'Your Google Calendar' : `${firstName(host.name) || 'Their'}'s Google Calendar`;
+  let refs = accountsOf(host);
+  if (accountId) {
+    const one = findAccount(host, { id: accountId });
+    if (!one) return { ok: false, detail: 'That Google account is not connected any more. Reload the page.' };
+    refs = [one];
+  }
+  if (refs.length === 0) return { ok: false, detail: `${calendar} is not connected yet.` };
+  if (refs.length === 1 && !accountId && refs[0].main) {
+    // The one account there is: said as before.
+    const [ref] = refs;
+    const read = await readAccount(ctx, ref);
+    if (read.ok) return { ok: true, detail: `Connected as ${ref.account.email}. Found ${blocksText(read.blocks)} in the next 7 days.` };
+    if (ref.account.status === 'needs_reconnect') return { ok: false, detail: `${calendar} needs to be reconnected. Google asked for a new sign-in.` };
+    return { ok: false, detail: read.message };
+  }
+  const reads = await Promise.all(refs.map(async (ref) => ({ ref, read: await readAccount(ctx, ref) })));
+  const lines = reads.map(({ ref, read }, i) => {
+    const email = ref.account.email;
+    if (read.ok) return i === 0 ? `${email}: ${blocksText(read.blocks)} in the next 7 days.` : `${email}: ${blocksText(read.blocks)}.`;
+    if (read.reconnect) return `${email} needs to be reconnected.`;
+    return `${email}: ${read.message}`;
+  });
+  return { ok: reads.every((r) => r.read.ok), detail: lines.join(' ') };
 }
 
 function anthropicProblem(err: unknown, model: string): string {
@@ -430,7 +461,8 @@ export async function runIntegrationTest(ctx: Ctx, body: unknown): Promise<Integ
       case 'google': {
         const hostId = typeof request.hostId === 'string' && request.hostId !== '' ? request.hostId : owner?.id;
         const host = hostId ? await getHost(ctx, hostId) : null;
-        return await testGoogle(ctx, host, !!host && host.id === owner?.id);
+        const accountId = typeof request.accountId === 'string' && request.accountId !== '' ? request.accountId : undefined;
+        return await testGoogle(ctx, host, !!host && host.id === owner?.id, accountId);
       }
       case 'anthropic':
         return await testAnthropic(ctx, site);

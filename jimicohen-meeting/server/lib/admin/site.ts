@@ -61,9 +61,28 @@ function readOptionalEmail(bag: Record<string, unknown>, key: string, path: stri
  * every invalid field.
  */
 export async function applySitePatch(ctx: Ctx, current: SiteSettings, body: unknown): Promise<SiteSettings> {
-  const patch = requireObject(body);
   const errors = new FieldErrors();
   const refs: AssetRef[] = [];
+  const next = patchSite(current, body, refs, errors);
+  await verifyAssets(ctx, refs, errors);
+  errors.throwIfAny();
+  return next;
+}
+
+/**
+ * The same patch laid over settings read later, inside a compare-and-swap (repo.updateSite), once
+ * applySitePatch has checked it against the first read. Images it names were checked then. Keys the
+ * dashboard does not edit here (brands, short links) are kept as they are in `fresh`.
+ */
+export function reapplySitePatch(fresh: SiteSettings, body: unknown): SiteSettings {
+  const errors = new FieldErrors();
+  const next = patchSite(fresh, body, [], errors);
+  errors.throwIfAny();
+  return next;
+}
+
+function patchSite(current: SiteSettings, body: unknown, refs: AssetRef[], errors: FieldErrors): SiteSettings {
+  const patch = requireObject(body);
   const next: SiteSettings = structuredClone(current);
 
   if (given(patch, 'profile')) {
@@ -151,8 +170,6 @@ export async function applySitePatch(ctx: Ctx, current: SiteSettings, body: unkn
     if (themePatch) next.theme = mergeTheme(current.theme, themePatch);
   }
 
-  await verifyAssets(ctx, refs, errors);
-  errors.throwIfAny();
   // Never taken from the request.
   next.ownerHostId = current.ownerHostId;
   next.updatedAt = current.updatedAt;

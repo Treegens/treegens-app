@@ -4,6 +4,9 @@
  *   /meeting/api/*  the real API (server/api.ts) on a file-backed KV, with mocked providers
  *   /meeting/*      the built app from dist/meeting, with SPA fallback and the response
  *                   headers from netlify.toml (so the strict CSP is enforced locally too)
+ *   /meet, /pod     the short links' static pages (dist/meet, dist/pod, written by the build), answered
+ *                   at the root the way jimicohen.com answers them: 200 without the slash, and anything
+ *                   below them opens the same page (netlify.toml)
  *
  * Environment:
  *   PORT              default 8788
@@ -34,6 +37,7 @@ import { configureMocks, mockFetch } from '../server/lib/mocks';
 import { consoleLogger } from '../server/lib/runtime';
 import { fileKV } from '../server/lib/store';
 import { readDevClock } from '../server/routes/dev';
+import { shortNameOfPath, type ShortName } from '../shared/shortLinks';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -341,6 +345,23 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: 
   res.end(method === 'HEAD' ? undefined : body);
 }
 
+/**
+ * A short link's page. Locally the server plays jimicohen.com, whose address never shows the slash, so
+ * /pod answers 200 directly (the netlify.app address answers it with a 301 to /pod/).
+ */
+async function serveShortPage(req: IncomingMessage, res: ServerResponse, name: ShortName): Promise<void> {
+  const method = (req.method ?? 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return sendText(res, 405, 'Method not allowed', { allow: 'GET, HEAD' });
+  const file = path.resolve(DIST_DIR, '..', name, 'index.html');
+  const body = await fileIfExists(file);
+  if (!body) return sendText(res, 503, `The short page is not built yet (${file} is missing).\nRun: npm run build\n`);
+  const headers = staticHeaders(`/${name}/`);
+  headers['content-type'] = MIME['.html'] ?? 'text/html; charset=utf-8';
+  headers['content-length'] = String(body.length);
+  res.writeHead(200, headers);
+  res.end(method === 'HEAD' ? undefined : body);
+}
+
 // ───────────────────────── server ─────────────────────────
 
 /**
@@ -376,6 +397,8 @@ async function onRequest(req: IncomingMessage, res: ServerResponse): Promise<voi
     return;
   }
   if (pathname.startsWith(`${BASE_PATH}/`)) return serveStatic(req, res, pathname);
+  const short = shortNameOfPath(pathname);
+  if (short) return serveShortPage(req, res, short);
   return sendText(res, 404, 'Not found');
 }
 

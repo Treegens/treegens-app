@@ -35,7 +35,7 @@ import { detectZone, zoneLabel } from '../lib/tz';
 import { Avatar, Button, ButtonLink, Drawer, EmptyState, LoadingBlock, Menu, Skeleton, cx, useLatest, useToast } from '../ui';
 import type { MenuItem } from '../ui';
 import { UnsavedGuardProvider, useUnsavedGuard } from './components/UnsavedGuard';
-import { announceGoogleReturn, withoutGoogleReturn } from './googleReturn';
+import { announceGoogleReturn, findScreenAccount, withoutGoogleReturn } from './googleReturn';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
@@ -469,6 +469,7 @@ function GoogleReturnSync() {
   const location = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
+  const { data } = useAdmin();
   const announced = useRef<string | null>(null);
 
   useEffect(() => {
@@ -476,7 +477,8 @@ function GoogleReturnSync() {
     if (!new URLSearchParams(location.search).has('google')) return;
     if (announced.current !== location.search) {
       announced.current = location.search;
-      announceGoogleReturn(toast, location.search);
+      // The page was loaded fresh on the way back from Google, so a new account is already in the hosts.
+      announceGoogleReturn(toast, location.search, undefined, (id) => findScreenAccount(data.hosts, id));
     }
     navigate({ pathname: location.pathname, search: withoutGoogleReturn(location.search), hash: location.hash }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -94,21 +94,39 @@ export interface Schedule {
 
 // ───────────────────────────── Hosts ─────────────────────────────
 
+/**
+ * One connected Google account. `Host.google` (the main account) and every entry of `Host.googleExtra` have
+ * this shape, so an account can move between the two without filling anything in.
+ */
 export interface HostGoogle {
+  /**
+   * "gacc_" + 24 hex characters (server/lib/googleAccounts.ts). Absent on a main account written before
+   * accounts had ids, or by an older deploy: it is then computed from the record, and stored by the next write.
+   */
+  id?: string;
   email: string;
+  /** Google's own id for the account (ID token or userinfo "sub"). Never sent to the browser. */
+  sub?: string;
   refreshTokenEnc: string; // sealed with purpose "google-refresh"
   scopes: string[];
-  busyCalendarIds: string[]; // calendars checked for conflicts
-  writeCalendarId: string; // calendar events are written to ("primary" by default)
-  gmailSend: boolean; // gmail.send scope granted
+  busyCalendarIds: string[]; // calendars checked for conflicts; [] still means "primary"
+  writeCalendarId: string; // calendar events are written to ("primary" by default); used on the main account only
+  gmailSend: boolean; // gmail.send scope granted; used on the owner's main account only
   status: 'ok' | 'needs_reconnect';
-  connectedAt: ISODateTime;
+  connectedAt: ISODateTime; // first connected to this host
   /**
    * When Google said the refresh token runs out: it only says so while the OAuth consent screen is in
    * "Testing", where a connection lasts 7 days. Absent for a connection that does not expire.
    */
   refreshExpiresAt?: ISODateTime;
+  /** the last time Google's consent screen was completed for this account */
+  refreshedAt?: ISODateTime;
+  /** the last verdict of a read of this account, written only when it changes */
+  health?: { ok: boolean; message?: string; at: ISODateTime } | null;
 }
+
+/** An entry of Host.googleExtra. Its id is always stored. */
+export type GoogleAccount = HostGoogle & { id: string };
 
 export interface IcsFeed {
   id: string;
@@ -129,7 +147,10 @@ export interface Host {
   timezoneMode: 'google' | 'device' | 'fixed';
   schedules: Schedule[];
   defaultScheduleId: string;
+  /** The main Google account: new meetings go there, Gmail sends from it (owner), "Follow Google Calendar" reads it. */
   google?: HostGoogle | null;
+  /** Every other connected Google account of this host. Their busy times block this host too. */
+  googleExtra?: GoogleAccount[];
   icsFeeds: IcsFeed[];
   inviteTokenHash?: string | null; // sha256 of the member self-service token
   notify: { email: boolean; sms: boolean };
@@ -219,6 +240,8 @@ export interface EventType {
   /** Add the invitee as an attendee on the Google Calendar event (Google emails them the invite) */
   googleInvite: boolean;
   themeOverride?: Partial<Theme> | null;
+  /** The brand of this meeting's pages and messages (shared/brands.ts). Absent, null or unknown: the owner's own look. */
+  brandId?: BrandId | null;
   position: number;
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
@@ -263,6 +286,12 @@ export interface Booking {
   consent: { sms: boolean; call: boolean; at: ISODateTime; text: string };
   google?: {
     hostId: string;
+    /** the Google account holding the event: set when we created it, or after a read found our booking in it */
+    accountId?: string;
+    /** that account's address at the time, for messages */
+    accountEmail?: string;
+    /** the event could not be found in any connected account: nothing is written to Google for this booking any more */
+    detached?: boolean;
     calendarId: string;
     eventId: string;
     htmlLink?: string;
@@ -309,6 +338,11 @@ export interface Booking {
   };
   source: 'page' | 'embed' | 'admin';
   utm?: Record<string, string>;
+  /**
+   * The brand the booking was made under, copied from its event type at that moment and never changed. Its
+   * pages, messages, calendar event and file use it. Absent (every booking from before brands): the owner's look.
+   */
+  brandId?: BrandId | null;
   timeline: TimelineEntry[];
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
@@ -425,6 +459,28 @@ export interface SiteSettings {
     fromEmail: string; // used with Resend; Gmail always sends as the connected account
     replyTo: string;
   };
+  /** The owner's changes to the built-in brands (Design). Absent: none. Entries with an unknown id are kept and ignored. */
+  brands?: BrandSettings[];
+  /** Which event type each short link opens (shared/shortLinks.ts). A missing key: not set up yet. null: turned off. */
+  shortLinks?: Partial<Record<ShortName, string | null>>;
+  updatedAt: ISODateTime;
+}
+
+// ───────────────────────────── Brands and short links ─────────────────────────────
+
+/** A built-in brand (shared/brands.ts). */
+export type BrandId = 'brand_eco_champions';
+
+/** A root address on the public domain that opens one booking calendar (shared/shortLinks.ts). */
+export type ShortName = 'meet' | 'pod';
+
+/** The owner's changes to a built-in brand, stored in the site settings. Written only from Design. */
+export interface BrandSettings {
+  id: BrandId;
+  /** the brand's look; theme.logoAssetId is an uploaded logo, null for the built-in one */
+  theme: Theme;
+  /** the sender name on emails about its meetings; '' = the built-in default */
+  emailFromName: string;
   updatedAt: ISODateTime;
 }
 
@@ -478,6 +534,8 @@ export interface PublicEventType {
   calendarInvite?: boolean;
   /** Reminder channels this meeting really uses. `call`: it has a reminder call. Absent: as site.features says. */
   reminderChannels?: { call: boolean };
+  /** "https://jimicohen.com/pod" when a short link opens this meeting */
+  shortUrl?: string;
 }
 
 export interface PublicSite {
@@ -492,6 +550,8 @@ export interface PublicSite {
   /** email: the site emails invitees (a confirmation, reminders). Absent: not known (treat as yes). */
   features: { sms: boolean; calls: boolean; email?: boolean };
   ownerTimezone: IanaZone;
+  /** The brand this page is shown in (its profile, theme and assets are the brand's then). null or absent: the owner's own pages. */
+  brand?: { id: string; name: string; iconUrl: string | null } | null;
 }
 
 /** GET /public/event/:slug */
@@ -499,6 +559,11 @@ export interface PublicEventResponse {
   site: PublicSite;
   eventType: PublicEventType;
 }
+
+/** GET /public/short/:name: what a short link opens right now. */
+export type ShortLinkResponse =
+  | { name: ShortName; url: string; state: 'open'; site: PublicSite; eventType: PublicEventType }
+  | { name: ShortName; url: string; state: 'closed'; reason: 'paused' | 'unassigned' | 'not_open'; site: PublicSite };
 
 /** GET /public/slots?slug=&duration=&from=&to=[&reschedule=<bookingId>&t=<token>] */
 export interface SlotsResponse {
@@ -620,7 +685,10 @@ export interface AdminHost {
   timezoneMode: 'google' | 'device' | 'fixed';
   schedules: Schedule[];
   defaultScheduleId: string;
+  /** the main Google account */
   google: {
+    /** the account's id, for the per-account routes (absent only from an older server) */
+    id?: string;
     email: string;
     status: 'ok' | 'needs_reconnect';
     busyCalendarIds: string[];
@@ -628,7 +696,11 @@ export interface AdminHost {
     gmailSend: boolean;
     /** the connection stops working then (consent screen still in "Testing"); see HostGoogle */
     refreshExpiresAt?: ISODateTime;
+    connectedAt?: ISODateTime;
+    health?: { ok: boolean; message?: string; at: ISODateTime } | null;
   } | null;
+  /** every other Google account of the host (absent from an older server) */
+  googleExtra?: AdminGoogleAccount[];
   icsFeeds: { id: string; label: string }[];
   hasInviteLink: boolean;
   notify: { email: boolean; sms: boolean };
@@ -650,6 +722,8 @@ export interface HostUpdate {
   defaultScheduleId?: string;
   busyCalendarIds?: string[];
   writeCalendarId?: string;
+  /** the calendars that block times in one Google account (main or extra). An empty list is refused. */
+  googleCalendars?: { accountId: string; busyCalendarIds: string[] };
   notify?: { email: boolean; sms: boolean };
   addIcsFeed?: { label: string; url: string };
   removeIcsFeedId?: string;
@@ -670,6 +744,43 @@ export interface GoogleCalendarListItem {
   primary: boolean;
   accessRole: string;
   backgroundColor?: string;
+}
+
+/** An extra Google account of a host, as the dashboard and the co-host page see it. Never the token or the sub. */
+export interface AdminGoogleAccount {
+  id: string;
+  email: string;
+  status: 'ok' | 'needs_reconnect';
+  busyCalendarIds: string[];
+  connectedAt: ISODateTime;
+  refreshExpiresAt?: ISODateTime;
+  health: { ok: boolean; message?: string; at: ISODateTime } | null;
+}
+
+/** GET .../google/:accountId/removal: what removing that account would change, so the dialog can say so first. */
+export interface GoogleRemovalPreview {
+  main: boolean;
+  email: string;
+  /** upcoming confirmed bookings whose event is in this account (from at most 200 upcoming records) */
+  upcomingEvents: number;
+  /** true when 200 records were read and there may be more */
+  atLeast?: boolean;
+  /** main account of the owner only: emails go out through this Gmail and nothing replaces it */
+  emailStops?: boolean;
+  /** main account of the owner only, when its Gmail sends the emails: what sends them afterwards */
+  emailFallback?: 'resend' | 'none';
+  /** main account only: the time zone followed this account */
+  timezoneModeBecomes?: 'device';
+  /** main account only: how many extra accounts still count */
+  extrasKeepBlocking?: number;
+}
+
+/** DELETE .../google/:accountId */
+export interface GoogleAccountRemoved {
+  ok: true;
+  host: AdminHost;
+  removed: { id: string; email: string; main: boolean };
+  effects: { timezoneMode: 'google' | 'device' | 'fixed'; emailFallback?: 'resend' | 'none'; detached: number };
 }
 
 export interface IntegrationsStatus {
@@ -721,6 +832,10 @@ export interface IntegrationsUpdate {
 export interface IntegrationTestRequest {
   channel: 'email' | 'sms' | 'call' | 'google' | 'anthropic';
   to?: string; // email address or phone
+  /** with channel 'google': whose accounts (default the owner) */
+  hostId?: string;
+  /** with channel 'google': test this one account. Without it every account of that host is tested. */
+  accountId?: string;
 }
 export interface IntegrationTestResponse {
   ok: boolean;
@@ -781,12 +896,18 @@ export interface AdminBootstrap {
   voiceOptions?: { id: string; label: string }[];
   /** template variables available in reminder wording */
   templateVariables?: { key: string; description: string }[];
+  /** the short links and what each opens; null until the one-time setup has filled site.shortLinks */
+  shortLinks?: { name: ShortName; url: string; eventTypeId: string | null }[] | null;
 }
 
 /** POST /admin/hosts → { host: AdminHost, inviteUrl } · POST /admin/hosts/:id/invite → { inviteUrl } */
 export interface HostInviteResponse {
   host: AdminHost;
   inviteUrl: string;
+  /** POST /admin/hosts with addToEventTypeIds: the event types the new co-host was added to */
+  eventTypes?: EventType[];
+  /** ...and the ones they could not be added to, with the reason */
+  notAddedTo?: { id: string; message: string }[];
 }
 
 /** POST /admin/assets (body: { dataUrl, purpose }) → { id, url } */

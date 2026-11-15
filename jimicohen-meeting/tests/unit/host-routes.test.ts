@@ -14,6 +14,9 @@ vi.mock('../../server/lib/booking', async () => {
     toPublicEventType: vi.fn(),
     toPublicBooking: vi.fn(),
     syncBookingToCalendar: vi.fn(),
+    // The real ones: removing a Google account detaches the bookings whose event was in it.
+    detachEventsOfAccount: (await vi.importActual<typeof import('../../server/lib/booking')>('../../server/lib/booking')).detachEventsOfAccount,
+    countEventsInAccount: (await vi.importActual<typeof import('../../server/lib/booking')>('../../server/lib/booking')).countEventsInAccount,
   };
 });
 vi.mock('../../server/routes/public', () => ({ routes: [] }));

@@ -18,6 +18,19 @@
   to = "/meeting/"
   status = 302
 
+# Short links: /meet/ and /pod/ are static pages written by the build (scripts/shortPages.ts, names in
+# shared/shortLinks.ts). Anything below them opens the same page. Not forced, so the page itself is served
+# as a file. jimicohen.com proxies /meet and /pod here (README, "Short links").
+[[redirects]]
+  from = "/meet/*"
+  to = "/meet/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/pod/*"
+  to = "/pod/index.html"
+  status = 200
+
 # A hashed file that is not there (an open tab asking for a chunk of an older deploy) is a real 404,
 # never the HTML shell with status 200 handed out as a script. Not forced, so files that exist win.
 [[redirects]]
@@ -67,3 +80,41 @@
   for = "/meeting/booking/*"
   [headers.values]
   X-Robots-Tag = "noindex, nofollow"
+
+# The short pages may never be framed (embeds use /meeting/<slug>?embed=1 on this address). Through
+# jimicohen.com that site's own headers replace these; both forbid framing. The CSP is the /meeting/* one
+# with frame-ancestors 'none' (tests/unit/shortlinks.test.ts checks that they stay so).
+[[headers]]
+  for = "/meet/*"
+  [headers.values]
+  Content-Security-Policy = "default-src 'none'; base-uri 'self'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; script-src 'self'; manifest-src 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+  X-Frame-Options = "DENY"
+  Cross-Origin-Opener-Policy = "same-origin"
+  Cache-Control = "public, max-age=0, must-revalidate"
+  Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+  X-Content-Type-Options = "nosniff"
+  Referrer-Policy = "strict-origin-when-cross-origin"
+  Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+[[headers]]
+  for = "/pod/*"
+  [headers.values]
+  Content-Security-Policy = "default-src 'none'; base-uri 'self'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; script-src 'self'; manifest-src 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+  X-Frame-Options = "DENY"
+  Cross-Origin-Opener-Policy = "same-origin"
+  Cache-Control = "public, max-age=0, must-revalidate"
+  Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+  X-Content-Type-Options = "nosniff"
+  Referrer-Policy = "strict-origin-when-cross-origin"
+  Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+# Brand art changes only with a deploy, under the same names.
+[[headers]]
+  for = "/meeting/brand/*"
+  [headers.values]
+  Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/meeting/og/*"
+  [headers.values]
+  Cache-Control = "public, max-age=86400"

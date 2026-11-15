@@ -274,12 +274,14 @@ describe('links, slugs, css, masks', () => {
     };
     const view = toAdminHost(ctx, host);
     expect(Object.keys(view).sort()).toEqual(
-      ['avatarAssetId', 'avatarUrl', 'calendarHealth', 'defaultScheduleId', 'email', 'google', 'hasInviteLink', 'icsFeeds', 'id', 'name', 'notify', 'phone', 'role', 'schedules', 'timezone', 'timezoneMode', 'title'].sort(),
+      ['avatarAssetId', 'avatarUrl', 'calendarHealth', 'defaultScheduleId', 'email', 'google', 'googleExtra', 'hasInviteLink', 'icsFeeds', 'id', 'name', 'notify', 'phone', 'role', 'schedules', 'timezone', 'timezoneMode', 'title'].sort(),
     );
     expect(view.avatarUrl).toBe('/meeting/api/assets/ast_abcdefghijklmnop');
     expect(view.hasInviteLink).toBe(true);
     expect(view.icsFeeds).toEqual([{ id: 'ics_1', label: 'Work' }]);
-    expect(Object.keys(view.google!).sort()).toEqual(['busyCalendarIds', 'email', 'gmailSend', 'status', 'writeCalendarId']);
+    // The id and health are there for the per-account screens; never the token, the scopes or Google's account id.
+    expect(Object.keys(view.google!).sort()).toEqual(['busyCalendarIds', 'connectedAt', 'email', 'gmailSend', 'health', 'id', 'status', 'writeCalendarId']);
+    expect(view.googleExtra).toEqual([]);
     expect(toAdminHost(ctx, { ...host, inviteTokenHash: null, google: null, phone: undefined })).toMatchObject({ hasInviteLink: false, google: null });
   });
 });

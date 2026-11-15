@@ -4,7 +4,7 @@
  * Anthropic SDK), with createMockFetch as ctx.fetch and an in-memory store.
  */
 import { describe, expect, it } from 'vitest';
-import type { CreateBookingRequest } from '../../shared/types';
+import type { CreateBookingRequest, Host } from '../../shared/types';
 import { handle } from '../../server/api';
 import { runIntegrationTest } from '../../server/lib/admin/integrations';
 import { cancelBooking, createBooking } from '../../server/lib/booking';
@@ -44,6 +44,14 @@ import {
   readOutbox,
 } from '../../server/routes/dev';
 import { TEST_BASE_URL, apiRequest, makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
+import { mainOf, type AccountRef } from '../../server/lib/googleAccounts';
+
+/** The host's main Google account, the way every Google call now names the account it is made as. */
+function main(host: Host): AccountRef {
+  const ref = mainOf(host);
+  if (!ref) throw new Error('no main account');
+  return ref;
+}
 
 // ───────────────────────── fixtures ─────────────────────────
 
@@ -155,7 +163,7 @@ describe('mock Google: sign-in', () => {
     const host = await owner(ctx);
     expect(host.google).toMatchObject({ email: JIMI, status: 'ok', gmailSend: false, busyCalendarIds: ['primary'], writeCalendarId: 'primary' });
     expect(host.google!.scopes).toEqual(expect.arrayContaining(['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar.events']));
-    expect(await googleGetTimezone(ctx, host)).toBe('Europe/London');
+    expect(await googleGetTimezone(ctx, main(host))).toBe('Europe/London');
 
     const [token] = await outbox(ctx, 'token');
     expect(token).toMatchObject({ service: 'google', status: 200, ok: true, account: JIMI, grant: 'authorization_code', refreshTokenIssued: true, at: NOW });
@@ -170,8 +178,8 @@ describe('mock Google: sign-in', () => {
     await connect(ctx, ALEX, 'mock:alex@example.com:Africa/Nairobi');
     const alex = (await getHost(ctx, ALEX))!;
     expect(alex.google?.email).toBe('alex@example.com');
-    expect(await googleGetTimezone(ctx, alex)).toBe('Africa/Nairobi');
-    expect(await googleGetTimezone(ctx, await owner(ctx))).toBe('Europe/London');
+    expect(await googleGetTimezone(ctx, main(alex))).toBe('Africa/Nairobi');
+    expect(await googleGetTimezone(ctx, main(await owner(ctx)))).toBe('Europe/London');
   });
 
   it('flags on the code: gmail, noidtoken, norefresh, nocalendar', async () => {
@@ -205,24 +213,24 @@ describe('mock Google: sign-in', () => {
   it('access tokens expire with the clock and are refreshed; a revoked account needs a reconnect', async () => {
     const ctx = await world();
     await connect(ctx, OWNER, 'mock:jimi@example.com:Europe/London');
-    await googleGetTimezone(ctx, await owner(ctx));
+    await googleGetTimezone(ctx, main(await owner(ctx)));
     expect(await outbox(ctx, 'token')).toHaveLength(1);
 
     ctx.clock.advance(2 * HOUR);
-    expect(await googleGetTimezone(ctx, await owner(ctx))).toBe('Europe/London');
+    expect(await googleGetTimezone(ctx, main(await owner(ctx)))).toBe('Europe/London');
     const tokens = await outbox(ctx, 'token');
     expect(tokens).toHaveLength(2);
     expect(tokens[1]).toMatchObject({ grant: 'refresh_token', status: 200, account: JIMI });
 
     await ctx.kv.setJSON(`${DEV_GOOGLE_ACCOUNT_PREFIX}${JIMI}`, { email: JIMI, timezone: 'Europe/London', revoked: true });
     ctx.clock.advance(2 * HOUR);
-    await expect(googleGetTimezone(ctx, await owner(ctx))).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(googleGetTimezone(ctx, main(await owner(ctx)))).rejects.toBeInstanceOf(GoogleAuthError);
     expect((await owner(ctx)).google?.status).toBe('needs_reconnect');
     expect((await outbox(ctx, 'token')).at(-1)).toMatchObject({ status: 400, error: 'invalid_grant' });
 
     // Signing in again repairs the account.
     expect(await connect(ctx, OWNER, 'mock:jimi@example.com:Europe/London')).toMatchObject({ ok: true, firstConnect: false });
-    expect(await googleGetTimezone(ctx, await owner(ctx))).toBe('Europe/London');
+    expect(await googleGetTimezone(ctx, main(await owner(ctx)))).toBe('Europe/London');
   });
 
   it('disconnecting revokes the grant at the mock too', async () => {
@@ -240,13 +248,13 @@ describe('mock Google: calendars and free/busy', () => {
   it('lists the calendars of the account, the main one first, and the zone can be changed later', async () => {
     const ctx = await world();
     await connect(ctx, OWNER, 'mock:jimi@example.com:Europe/London');
-    const calendars = await googleListCalendars(ctx, await owner(ctx));
+    const calendars = await googleListCalendars(ctx, main(await owner(ctx)));
     expect(calendars[0]).toMatchObject({ id: JIMI, primary: true, accessRole: 'owner' });
     expect(calendars.map((c) => c.summary)).toEqual([JIMI, 'Family', 'Holidays in United States']);
 
     await ctx.kv.setJSON(`${DEV_GOOGLE_ACCOUNT_PREFIX}${JIMI}`, { email: JIMI, timezone: 'Asia/Tokyo', calendars: [{ id: 'team@group.calendar.google.com', summary: 'Team' }] });
-    expect(await googleGetTimezone(ctx, await owner(ctx))).toBe('Asia/Tokyo');
-    expect((await googleListCalendars(ctx, await owner(ctx))).map((c) => c.id)).toEqual([JIMI, 'team@group.calendar.google.com']);
+    expect(await googleGetTimezone(ctx, main(await owner(ctx)))).toBe('Asia/Tokyo');
+    expect((await googleListCalendars(ctx, main(await owner(ctx)))).map((c) => c.id)).toEqual([JIMI, 'team@group.calendar.google.com']);
   });
 
   it('free/busy is empty by default and reads dev/google-busy/<email>, clipped to the window', async () => {
@@ -275,14 +283,14 @@ describe('mock Google: calendars and free/busy', () => {
   it('answers with one calendars entry per requested id, and reports a calendar it does not know', async () => {
     const ctx = await world();
     await connect(ctx, OWNER, 'mock:jimi@example.com:UTC');
-    const family = (await googleListCalendars(ctx, await owner(ctx)))[1].id;
+    const family = (await googleListCalendars(ctx, main(await owner(ctx))))[1].id;
     await updateHost(ctx, OWNER, (h) => ({ ...h, google: { ...h.google!, busyCalendarIds: ['primary', family] } }));
     await ctx.kv.setJSON(`${DEV_GOOGLE_BUSY_PREFIX}${JIMI}`, [
       { start: '2026-11-18T09:00:00Z', end: '2026-11-18T09:30:00Z' },
       { start: '2026-11-18T15:00:00Z', end: '2026-11-18T16:00:00Z', calendarId: family },
     ]);
     const range = { start: Date.parse('2026-11-18T00:00:00Z'), end: Date.parse('2026-11-19T00:00:00Z') };
-    expect(await googleFreeBusy(ctx, await owner(ctx), range)).toHaveLength(2);
+    expect(await googleFreeBusy(ctx, main(await owner(ctx)), range)).toHaveLength(2);
     expect(Object.keys((await outbox(ctx, 'freebusy')).at(-1)!.busy)).toEqual(['primary', family]);
 
     await updateHost(ctx, OWNER, (h) => ({ ...h, google: { ...h.google!, busyCalendarIds: ['gone@group.calendar.google.com'] } }));
@@ -296,7 +304,7 @@ describe('mock Google: events', () => {
   it('insert returns an id, a Meet link and conference data, and the outbox entry is assertable', async () => {
     const ctx = await world();
     await connect(ctx, OWNER, 'mock:jimi@example.com:Europe/London');
-    const created = await googleCreateEvent(ctx, await owner(ctx), eventInput());
+    const created = await googleCreateEvent(ctx, main(await owner(ctx)), eventInput());
     expect(created.eventId).toMatch(/^mtg[0-9a-f]{40}$/);
     expect(created.calendarId).toBe('primary');
     expect(created.meetUrl).toMatch(/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/);
@@ -324,15 +332,15 @@ describe('mock Google: events', () => {
     });
 
     // Without a Meet request there is no link.
-    const plain = await googleCreateEvent(ctx, await owner(ctx), eventInput({ bookingId: 'bk_mock_2', createMeet: false, startIso: '2026-11-19T10:00:00.000Z', endIso: '2026-11-19T10:15:00.000Z' }));
+    const plain = await googleCreateEvent(ctx, main(await owner(ctx)), eventInput({ bookingId: 'bk_mock_2', createMeet: false, startIso: '2026-11-19T10:00:00.000Z', endIso: '2026-11-19T10:15:00.000Z' }));
     expect(plain.meetUrl).toBeUndefined();
   });
 
   it('a second insert with the same id is a 409, which the real client turns into "adopt the event"', async () => {
     const ctx = await world();
     await connect(ctx, OWNER, 'mock:jimi@example.com:UTC');
-    const first = await googleCreateEvent(ctx, await owner(ctx), eventInput());
-    const again = await googleCreateEvent(ctx, await owner(ctx), eventInput());
+    const first = await googleCreateEvent(ctx, main(await owner(ctx)), eventInput());
+    const again = await googleCreateEvent(ctx, main(await owner(ctx)), eventInput());
     expect(again).toEqual(first);
     expect((await outbox(ctx, 'calendar_insert')).map((e) => e.status)).toEqual([200, 409]);
     expect(await outbox(ctx, 'calendar_get')).toMatchObject([{ status: 200, eventId: first.eventId }]);
@@ -343,28 +351,28 @@ describe('mock Google: events', () => {
     await connect(ctx, OWNER, 'mock:jimi@example.com:UTC');
     const host = await owner(ctx);
     const range = { start: Date.parse('2026-11-18T00:00:00Z'), end: Date.parse('2026-11-20T00:00:00Z') };
-    const created = await googleCreateEvent(ctx, host, eventInput());
-    expect(await googleFreeBusy(ctx, host, range)).toEqual([{ start: Date.parse(WED_14), end: Date.parse(WED_14) + 15 * 60_000 }]);
+    const created = await googleCreateEvent(ctx, main(host), eventInput());
+    expect(await googleFreeBusy(ctx, main(host), range)).toEqual([{ start: Date.parse(WED_14), end: Date.parse(WED_14) + 15 * 60_000 }]);
 
-    await googleUpdateEvent(ctx, host, created.calendarId, created.eventId, { startIso: '2026-11-19T10:00:00.000Z', endIso: '2026-11-19T10:15:00.000Z', timezone: 'UTC' });
-    expect(await googleFreeBusy(ctx, host, range)).toEqual([{ start: Date.parse('2026-11-19T10:00:00Z'), end: Date.parse('2026-11-19T10:15:00Z') }]);
+    await googleUpdateEvent(ctx, main(host), created.calendarId, created.eventId, { startIso: '2026-11-19T10:00:00.000Z', endIso: '2026-11-19T10:15:00.000Z', timezone: 'UTC' });
+    expect(await googleFreeBusy(ctx, main(host), range)).toEqual([{ start: Date.parse('2026-11-19T10:00:00Z'), end: Date.parse('2026-11-19T10:15:00Z') }]);
     const [patch] = await outbox(ctx, 'calendar_patch');
     expect(patch).toMatchObject({ status: 200, eventId: created.eventId, moved: true, sendUpdates: 'all', notified: ['ada@example.com'] });
     expect(patch.event).toMatchObject({ sequence: 1, start: { dateTime: '2026-11-19T10:00:00.000Z' }, hangoutLink: created.meetUrl });
 
-    await googleDeleteEvent(ctx, host, created.calendarId, created.eventId, true);
-    expect(await googleFreeBusy(ctx, host, range)).toEqual([]);
+    await googleDeleteEvent(ctx, main(host), created.calendarId, created.eventId, true);
+    expect(await googleFreeBusy(ctx, main(host), range)).toEqual([]);
     // Deleting it again is "already gone" (410), which the client accepts.
-    await googleDeleteEvent(ctx, host, created.calendarId, created.eventId, false);
+    await googleDeleteEvent(ctx, main(host), created.calendarId, created.eventId, false);
     expect((await outbox(ctx, 'calendar_delete')).map((e) => e.status)).toEqual([204, 410]);
 
-    await expect(googleUpdateEvent(ctx, host, 'primary', 'mtgunknown00000', { summary: 'x' })).rejects.toMatchObject({ status: 404 });
-    await expect(googleUpdateEvent(ctx, host, 'primary', 'mtgunknown00000', { summary: 'x' })).rejects.toBeInstanceOf(GoogleApiError);
+    await expect(googleUpdateEvent(ctx, main(host), 'primary', 'mtgunknown00000', { summary: 'x' })).rejects.toMatchObject({ status: 404 });
+    await expect(googleUpdateEvent(ctx, main(host), 'primary', 'mtgunknown00000', { summary: 'x' })).rejects.toBeInstanceOf(GoogleApiError);
 
     // The id of a deleted event stays taken: creating the booking's event again revives it.
-    const revived = await googleCreateEvent(ctx, host, eventInput());
+    const revived = await googleCreateEvent(ctx, main(host), eventInput());
     expect(revived.eventId).toBe(created.eventId);
-    expect(await googleFreeBusy(ctx, host, range)).toHaveLength(1);
+    expect(await googleFreeBusy(ctx, main(host), range)).toHaveLength(1);
   });
 
   it('an invitation blocks the calendar of a guest who is also a mock account', async () => {
@@ -372,9 +380,9 @@ describe('mock Google: events', () => {
     await saveHost(ctx, { ...defaultOwnerHost(NOW, 'UTC'), id: ALEX, role: 'member', name: 'Alex Kim', email: 'alex@example.com' });
     await connect(ctx, OWNER, 'mock:jimi@example.com:UTC');
     await connect(ctx, ALEX, 'mock:alex@example.com:UTC');
-    await googleCreateEvent(ctx, await owner(ctx), eventInput({ attendees: [{ email: 'alex@example.com', accepted: true }, { email: 'ada@example.com' }] }));
+    await googleCreateEvent(ctx, main(await owner(ctx)), eventInput({ attendees: [{ email: 'alex@example.com', accepted: true }, { email: 'ada@example.com' }] }));
     const range = { start: Date.parse('2026-11-18T00:00:00Z'), end: Date.parse('2026-11-19T00:00:00Z') };
-    expect(await googleFreeBusy(ctx, (await getHost(ctx, ALEX))!, range)).toEqual([{ start: Date.parse(WED_14), end: Date.parse(WED_14) + 15 * 60_000 }]);
+    expect(await googleFreeBusy(ctx, main((await getHost(ctx, ALEX))!), range)).toEqual([{ start: Date.parse(WED_14), end: Date.parse(WED_14) + 15 * 60_000 }]);
   });
 });
 
@@ -640,12 +648,12 @@ describe('a booking through every mock', () => {
 
     // The time is now taken on the mock calendar as well.
     const range = { start: Date.parse(WED_14) - DAY, end: Date.parse(WED_14) + DAY };
-    expect(await googleFreeBusy(ctx, await owner(ctx), range)).toEqual([{ start: Date.parse(WED_14), end: Date.parse(WED_14) + 15 * 60_000 }]);
+    expect(await googleFreeBusy(ctx, main(await owner(ctx)), range)).toEqual([{ start: Date.parse(WED_14), end: Date.parse(WED_14) + 15 * 60_000 }]);
 
     await cancelBooking(ctx, booking.id, { by: 'invitee', reason: 'Something came up' });
     await ctx.settle();
     expect(await outbox(ctx, 'calendar_delete')).toMatchObject([{ status: 204, eventId: insert.eventId }]);
-    expect(await googleFreeBusy(ctx, await owner(ctx), range)).toEqual([]);
+    expect(await googleFreeBusy(ctx, main(await owner(ctx)), range)).toEqual([]);
   });
 });
 
@@ -674,7 +682,7 @@ describe('failure injection (dev/fail/<service>)', () => {
       [500, 'error', 'google-freebusy'],
     ]);
     // Other Google calls are untouched.
-    expect(await googleGetTimezone(ctx, await owner(ctx))).toBe('UTC');
+    expect(await googleGetTimezone(ctx, main(await owner(ctx)))).toBe('UTC');
 
     await ctx.kv.delete(`${DEV_FAIL_PREFIX}google-freebusy`);
     expect((await getHostBusy(ctx, await owner(ctx), range, { fresh: true })).ok).toBe(true);
@@ -684,7 +692,7 @@ describe('failure injection (dev/fail/<service>)', () => {
     const ctx = await world();
     await connect(ctx, OWNER, 'mock:jimi@example.com:UTC');
     await ctx.kv.setJSON(`${DEV_FAIL_PREFIX}google`, { mode: 'error', status: 503, times: 1 });
-    expect(await googleGetTimezone(ctx, await owner(ctx))).toBe('UTC');
+    expect(await googleGetTimezone(ctx, main(await owner(ctx)))).toBe('UTC');
     expect((await outbox(ctx, 'timezone')).map((e) => e.status)).toEqual([503, 200]);
     expect(await ctx.kv.getJSON(`${DEV_FAIL_PREFIX}google`)).toBeNull();
   });
@@ -796,7 +804,7 @@ describe('dev routes that steer the mocks', () => {
 
     const account = await handle(apiRequest('PUT', '/dev/google/account', { body: { email: JIMI, timezone: 'America/New_York' } }), ctx);
     expect((await account.json()).account).toMatchObject({ email: JIMI, timezone: 'America/New_York', revoked: false });
-    expect(await googleGetTimezone(ctx, await owner(ctx))).toBe('America/New_York');
+    expect(await googleGetTimezone(ctx, main(await owner(ctx)))).toBe('America/New_York');
     expect((await (await handle(apiRequest('GET', '/dev/google/accounts'), ctx)).json()).accounts).toHaveLength(1);
 
     const { booking, manageToken } = await createBooking(ctx, bookingRequest());

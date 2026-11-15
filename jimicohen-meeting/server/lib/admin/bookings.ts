@@ -15,6 +15,7 @@ import { calendarEventIdFor } from '../booking';
 import { forgetHostBusy } from '../busy';
 import type { Ctx } from '../ctx';
 import { googleDeleteEvent } from '../google';
+import { holderCandidates, mainOf } from '../googleAccounts';
 import { HttpError } from '../http';
 import {
   deleteBooking,
@@ -167,10 +168,13 @@ export function eraseRefusal(b: Booking, pendingJobs: Job[], nowMs: number): Htt
  */
 async function removeLeftEvent(ctx: Ctx, b: Booking): Promise<boolean> {
   const g = b.google;
-  if (!g) return false;
-  const holder = await getHost(ctx, g.hostId);
-  if (!holder?.google || holder.google.status !== 'ok') return false;
-  const work = googleDeleteEvent(ctx, holder, g.calendarId || holder.google.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(b.id), true).then(
+  // A detached booking's event is in no account we can reach: nothing is written to Google for it.
+  if (!g || g.detached) return false;
+  // Only through the account that holds it: the one the booking names. Anything else could be another event.
+  const { trusted } = holderCandidates(await getHost(ctx, g.hostId), g);
+  const holder = trusted ?? (g.accountId ? null : mainOf(await getHost(ctx, g.hostId)));
+  if (!holder || holder.account.status !== 'ok') return false;
+  const work = googleDeleteEvent(ctx, holder, g.calendarId || holder.account.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(b.id), true).then(
     async () => {
       // The meeting's time was given back when it was cancelled: what is remembered of the busy time should say so too.
       await forgetHostBusy(ctx, [...new Set([g.hostId, ...b.hostIds])]).catch(() => undefined);

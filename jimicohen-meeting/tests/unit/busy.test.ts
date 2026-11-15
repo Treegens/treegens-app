@@ -5,6 +5,7 @@ import { seal } from '../../server/lib/crypto';
 import { getHost, getSite, saveHost, saveSecrets, updateHost } from '../../server/lib/repo';
 import type { Interval } from '../../server/lib/time';
 import { makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { mainOf } from '../../server/lib/googleAccounts';
 
 // ───────────────────────── fake network ─────────────────────────
 
@@ -68,6 +69,7 @@ function network(opts: { google?: [string, string][]; work?: [string, string][];
 function googleConnection(ctx: TestCtx, over: Partial<HostGoogle> = {}): HostGoogle {
   return {
     email: 'jimi@example.com',
+    sub: `sub-${over.email ?? 'jimi@example.com'}`,
     refreshTokenEnc: seal(ctx, 'google-refresh', 'refresh-token-1'),
     scopes: [],
     busyCalendarIds: ['primary'],
@@ -357,9 +359,17 @@ describe('getHostBusy', () => {
     const host = await setHost(ctx, (h) => ({ ...h, google: googleConnection(ctx, { status: 'needs_reconnect' }) }));
     const calls = useFetch(ctx, network());
     const result = await getHostBusy(ctx, host, WEEK);
-    expect(result).toEqual({ hostId: OWNER, busy: [], ok: false, error: 'Google Calendar needs to be reconnected.' });
+    // The account is named: a host can have several.
+    const id = mainOf(host)!.account.id;
+    expect(result).toEqual({
+      hostId: OWNER,
+      busy: [],
+      ok: false,
+      error: 'jimi@example.com: Google Calendar needs to be reconnected.',
+      problems: [{ key: id, label: 'jimi@example.com', message: 'Google Calendar needs to be reconnected.', accountId: id }],
+    });
     expect(calls).toHaveLength(0);
-    expect((await getHost(ctx, OWNER))?.calendarHealth).toMatchObject({ ok: false, message: 'Google Calendar needs to be reconnected.' });
+    expect((await getHost(ctx, OWNER))?.calendarHealth).toMatchObject({ ok: false, message: 'jimi@example.com: Google Calendar needs to be reconnected.' });
   });
 
   it('turns a revoked Google grant into a failed result and marks the host', async () => {
@@ -367,7 +377,7 @@ describe('getHostBusy', () => {
     useFetch(ctx, () => jsonResponse({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }, 400));
     const result = await getHostBusy(ctx, host, WEEK);
     expect(result.ok).toBe(false);
-    expect(result.error).toBe('Google Calendar needs to be reconnected.');
+    expect(result.error).toBe('jimi@example.com: Google Calendar needs to be reconnected.');
     const stored = await getHost(ctx, OWNER);
     expect(stored?.google?.status).toBe('needs_reconnect');
     expect(stored?.calendarHealth?.ok).toBe(false);

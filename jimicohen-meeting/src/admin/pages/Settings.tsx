@@ -14,6 +14,7 @@ import { Button, Field, IconButton, Input, Select, Switch, Textarea, useToast } 
 import { FieldGroup, Notice, Page, PageHeader, SaveBar, Section } from '../components/Page';
 import { useUnsavedGuard } from '../components/UnsavedGuard';
 import { ImageField } from '../components/x/bits';
+import { BRAND_CHOICES, shortLinkRows } from '../brands';
 import { firstName, sameJson } from '../format';
 import { useAdmin } from '../state';
 import '../../styles/adminx.css';
@@ -290,7 +291,7 @@ export default function SettingsPage() {
     <Page>
       <PageHeader title="Settings" description="Your profile, your assistant and the details of the booking form." />
 
-      <Section title="Profile" description="How you appear at the top of your booking page and in emails.">
+      <Section title="Profile" description={profileHint(shortLinkRows(data))}>
         <ImageField
           label="Photo"
           shape="round"
@@ -480,7 +481,7 @@ export default function SettingsPage() {
         }
       >
         <div className="adm-grid2">
-          <Field label="Sender name">
+          <Field label="Sender name" hint={senderHint()}>
             <Input value={draft.email.fromName} maxLength={80} placeholder={draft.profile.name} onChange={(e) => set('email', { fromName: e.target.value })} />
           </Field>
           <Field label="Replies go to" optional hint={ownerHost.email ? `Leave empty to use ${ownerHost.email}.` : undefined}>
@@ -541,4 +542,17 @@ export default function SettingsPage() {
       <SaveBar dirty={dirty} saving={saving} problem={problem} saveLabel="Save settings" onSave={() => void save()} onDiscard={() => setDraft(base)} />
     </Page>
   );
+}
+
+/** Who the profile is for: the owner's own pages, while a brand's meetings show the brand (DESIGN 6.6). */
+function profileHint(rows: ReturnType<typeof shortLinkRows>): string {
+  const meet = rows?.find((r) => r.name === 'meet');
+  const own = meet ? `your own pages (${meet.label.replace(/\/meet$/, '/meeting')}, ${meet.label})` : 'the top of your booking page';
+  const brands = BRAND_CHOICES.map((b) => b.name);
+  return `How you appear on ${own} and in emails about your own meetings. Meetings with the ${brands.join(' or ')} look show ${brands.join(' or ')} instead (Design, ${brands[0]}).`;
+}
+
+function senderHint(): string {
+  const brands = BRAND_CHOICES.map((b) => b.name);
+  return `For your own meetings. ${brands[0]} meetings are sent as ${brands[0]} (Design, ${brands[0]}).`;
 }

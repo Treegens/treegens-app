@@ -17,8 +17,11 @@
  *   PUT    /admin/hosts/:id                     { host, timezone, timezoneChanged }
  *   DELETE /admin/hosts/:id
  *   POST   /admin/hosts/:id/invite              { host, inviteUrl }
- *   GET    /admin/hosts/:id/calendars           { calendars }
- *   POST   /admin/hosts/:id/google/disconnect
+ *   GET    /admin/hosts/:id/calendars           { calendars } of the main Google account
+ *   POST   /admin/hosts/:id/google/disconnect   the main Google account goes
+ *   GET    /admin/hosts/:id/google/:accountId/calendars   { calendars } of one account
+ *   GET    /admin/hosts/:id/google/:accountId/removal     GoogleRemovalPreview
+ *   DELETE /admin/hosts/:id/google/:accountId             GoogleAccountRemoved
  *   GET    /admin/bookings                      { bookings, total, counts }
  *   GET    /admin/bookings.csv                  text/csv
  *   GET    /admin/bookings/:id                  { booking }
@@ -30,22 +33,29 @@
  *   POST   /admin/integrations/test             { ok, detail }
  *   POST   /admin/assets                        { id, url }
  *   DELETE /admin/assets/:id
+ *   PUT    /admin/brands/:id                    { brand, site } (the owner's changes to a built-in brand)
+ *   PUT    /admin/short-links                   { shortLinks, eventType? } (what jimicohen.com/meet and /pod open)
  */
+import { storedBrand } from '../../shared/brands';
 import { newEventType } from '../../shared/defaults';
+import { SHORT_LINK_NAMES, SHORT_LINKS, isShortName, shortLabelOf, shortLinkTarget, shortUrlOf } from '../../shared/shortLinks';
 import type { AdminBootstrap, AssetUploadResponse, Booking, EventType, Host, HostInviteResponse, SiteSettings } from '../../shared/types';
 import { cleanPurpose, MAX_ASSET_REQUEST_BYTES, parseImageDataUrl } from '../lib/admin/assets';
 import { calendarBeingRemoved, eraseBooking, exportBookingsCsv, listAdminBookings } from '../lib/admin/bookings';
+import { brandAssetIds, forgetBrandAsset, prepareBrandPatch } from '../lib/admin/brands';
 import { buildEventType, freeSlug, MAX_TITLE_LENGTH, remindersChanged } from '../lib/admin/event-types';
 import { applyHostUpdate, createCoHost, loadCalendars, rotateInvite } from '../lib/admin/hosts';
 import { integrationsStatus, runIntegrationTest, updateIntegrations } from '../lib/admin/integrations';
 import { buildOverview, checkSharedHours } from '../lib/admin/overview';
-import { applySitePatch } from '../lib/admin/site';
+import { applySitePatch, reapplySitePatch } from '../lib/admin/site';
 import { hostMap, ownerOf, toAdminBooking, toAdminHost, withCallTranscripts } from '../lib/admin/view';
 import { rateLimit, requireAdmin } from '../lib/auth';
 import { cancelBooking } from '../lib/booking';
+import { isBuiltinAssetId } from '../lib/builtinAssets';
 import { randomId } from '../lib/crypto';
 import type { Ctx } from '../lib/ctx';
-import { disconnectGoogle } from '../lib/google';
+import { disconnectAllGoogle } from '../lib/google';
+import { googleRemovalPreview, removeHostGoogleAccount, removeMainGoogleAccount } from '../lib/googleRemoval';
 import { type Handler, HttpError, json, readJson, route, type Route } from '../lib/http';
 import { planMissedReminderCalls, replanBookingReminders, replanReminderCalls } from '../lib/jobs';
 import {
@@ -64,12 +74,13 @@ import {
   listHosts,
   putAsset,
   saveEventType,
-  saveSite,
   updateBooking,
+  updateEventTypes,
   updateHost,
+  updateSite,
 } from '../lib/repo';
 import { TEMPLATE_VARIABLES, joinNames } from '../lib/templates';
-import { cleanText, isPlainObject } from '../lib/validate';
+import { FieldErrors, cleanText, isPlainObject } from '../lib/validate';
 import { VOICE_OPTIONS } from '../lib/voice';
 
 const MAX_REPLANNED_BOOKINGS = 200;
@@ -107,10 +118,13 @@ async function adminBookingResponse(ctx: Ctx, booking: Booking): Promise<Respons
 
 // ───────────────────────── event types ─────────────────────────
 
-/** Saves, turning the store's "link already in use" conflict into the same field error the editor shows for it. */
-async function saveValidated(ctx: Ctx, eventType: EventType): Promise<EventType> {
+/**
+ * Saves, turning the store's "link already in use" conflict into the same field error the editor shows for it.
+ * `setBrand`: the request chose the brand. Otherwise the stored brand is kept (a tab opened before brands never sends it).
+ */
+async function saveValidated(ctx: Ctx, eventType: EventType, opts?: { setBrand?: boolean }): Promise<EventType> {
   try {
-    return await saveEventType(ctx, eventType);
+    return await saveEventType(ctx, eventType, opts);
   } catch (err) {
     if (err instanceof HttpError && err.code === 'slug_taken') {
       throw new HttpError(422, 'invalid', 'Please check the highlighted fields.', { slug: 'Another event type already uses this link.' });
@@ -180,14 +194,18 @@ function replanInBackground(ctx: Ctx, eventType: EventType): void {
 async function forgetAsset(ctx: Ctx, id: string): Promise<void> {
   const site = await getSite(ctx);
   const theme = site.theme;
-  const usedBySite = site.profile.avatarAssetId === id || theme.coverAssetId === id || theme.logoAssetId === id || theme.background?.imageAssetId === id;
+  const usedBySite =
+    site.profile.avatarAssetId === id || theme.coverAssetId === id || theme.logoAssetId === id || theme.background?.imageAssetId === id || brandAssetIds(site).includes(id);
   if (usedBySite) {
-    const next: SiteSettings = structuredClone(site);
-    if (next.profile.avatarAssetId === id) next.profile.avatarAssetId = null;
-    if (next.theme.coverAssetId === id) next.theme.coverAssetId = null;
-    if (next.theme.logoAssetId === id) next.theme.logoAssetId = null;
-    if (next.theme.background?.imageAssetId === id) next.theme.background.imageAssetId = null;
-    await saveSite(ctx, next);
+    await updateSite(ctx, (fresh) => {
+      const next: SiteSettings = structuredClone(fresh);
+      if (next.profile.avatarAssetId === id) next.profile.avatarAssetId = null;
+      if (next.theme.coverAssetId === id) next.theme.coverAssetId = null;
+      if (next.theme.logoAssetId === id) next.theme.logoAssetId = null;
+      if (next.theme.background?.imageAssetId === id) next.theme.background.imageAssetId = null;
+      // A brand's uploaded logo goes back to the built-in one.
+      return forgetBrandAsset(next, id);
+    });
   }
   for (const host of await listHosts(ctx)) {
     if (host.avatarAssetId === id) await updateHost(ctx, host.id, (h) => (h.avatarAssetId === id ? { ...h, avatarAssetId: null } : h));
@@ -223,6 +241,13 @@ export const routes: Route[] = [
       embedBaseUrl: ctx.env.embedBaseUrl ?? ctx.env.publicBaseUrl,
       voiceOptions: VOICE_OPTIONS,
       templateVariables: TEMPLATE_VARIABLES,
+      // null until the one-time setup has run; a link whose event was deleted opens nothing.
+      shortLinks: site.shortLinks
+        ? SHORT_LINK_NAMES.map((name) => {
+            const id = shortLinkTarget(site, name);
+            return { name, url: shortUrlOf(ctx.env.publicBaseUrl, name), eventTypeId: id && eventTypes.some((e) => e.id === id) ? id : null };
+          })
+        : null,
     };
     return json(bootstrap);
   }),
@@ -230,19 +255,25 @@ export const routes: Route[] = [
   admin('GET', '/admin/overview', async ({ ctx }) => json(await buildOverview(ctx))),
 
   admin('PUT', '/admin/site', async ({ ctx, req }) => {
+    const body = await readJson(req);
     const current = await getSite(ctx);
-    const next = await applySitePatch(ctx, current, await readJson(req));
-    const site = await saveSite(ctx, next);
-    // The owner's photo on event pages is the profile photo: keep the two in step.
+    // Checked once against what was read (images included), then laid over the freshest settings in a
+    // compare-and-swap, so a brand change or the short link setup saved at the same moment is kept.
+    await applySitePatch(ctx, current, body);
+    const site = await updateSite(ctx, (fresh) => reapplySitePatch(fresh, body));
+    // The owner's photo on event pages is the profile photo: keep the two in step, while they are.
+    const oldAvatar = current.profile.avatarAssetId ?? null;
     const avatar = site.profile.avatarAssetId ?? null;
-    if (avatar !== (current.profile.avatarAssetId ?? null)) {
-      await updateHost(ctx, site.ownerHostId, (h) => ((h.avatarAssetId ?? null) === avatar ? h : { ...h, avatarAssetId: avatar }));
+    if (avatar !== oldAvatar) {
+      await updateHost(ctx, site.ownerHostId, (h) => ((h.avatarAssetId ?? null) === oldAvatar ? { ...h, avatarAssetId: avatar } : h));
     }
-    // The same goes for the name: event pages, emails and the assistant on the phone name the
-    // host, and for the owner that is the name on the profile.
+    // The same goes for the name: event pages, emails and the assistant on the phone name the host, and for
+    // the owner that is the name on the profile. Only while the two are the same: a profile that carries
+    // another name (a brand, say) must never rename the person on every message.
     const name = site.profile.name.trim();
-    if (name !== '' && name !== current.profile.name.trim()) {
-      await updateHost(ctx, site.ownerHostId, (h) => (h.name === name ? h : { ...h, name }));
+    const was = current.profile.name.trim();
+    if (name !== '' && name !== was) {
+      await updateHost(ctx, site.ownerHostId, (h) => (h.name.trim() === was ? { ...h, name } : h));
     }
     // Calls already planned move with the calling hours.
     const before = current.assistant;
@@ -269,7 +300,7 @@ export const routes: Route[] = [
     const current = all.find((e) => e.id === params.id);
     if (!current) throw missing('That event type no longer exists.');
     const next = await buildEventType(ctx, body, current, { hosts, others: all.filter((e) => e.id !== current.id), creating: false });
-    const eventType = await saveValidated(ctx, next);
+    const eventType = await saveValidated(ctx, next, { setBrand: isPlainObject(body) && 'brandId' in body });
     if (remindersChanged(current.reminders, eventType.reminders)) replanInBackground(ctx, eventType);
     return json({ eventType });
   }),
@@ -353,9 +384,24 @@ export const routes: Route[] = [
 
   admin('GET', '/admin/hosts', async ({ ctx }) => json({ hosts: (await listHosts(ctx)).map((h) => toAdminHost(ctx, h)) })),
 
+  // With addToEventTypeIds the new co-host also joins those meetings (the Team dialog offers the /pod one).
+  // The co-host exists either way: a meeting that could not be changed is reported in notAddedTo.
   admin('POST', '/admin/hosts', async ({ ctx, req }) => {
-    const created = await createCoHost(ctx, await readJson(req));
+    const body = await readJson<Record<string, unknown>>(req);
+    const addTo = readAddTo(isPlainObject(body) ? body.addToEventTypeIds : undefined);
+    const created = await createCoHost(ctx, body);
     const answer: HostInviteResponse = { host: toAdminHost(ctx, created.host), inviteUrl: created.inviteUrl };
+    if (addTo.length > 0) {
+      try {
+        const outcome = await updateEventTypes(ctx, (list) => addHostToEventTypes(list, created.host.id, addTo));
+        answer.eventTypes = outcome.changed;
+        answer.notAddedTo = outcome.notAdded;
+      } catch (err) {
+        ctx.log('warn', 'team: the new co-host could not be added to their meetings', { error: err instanceof Error ? err.message : 'unknown' });
+        answer.eventTypes = [];
+        answer.notAddedTo = addTo.map((id) => ({ id, message: 'The meeting could not be changed just now.' }));
+      }
+    }
     return json(answer, 201);
   }),
 
@@ -374,8 +420,8 @@ export const routes: Route[] = [
       const titles = joinNames(used.map((e) => `"${e.title}"`));
       throw new HttpError(409, 'host_in_use', `${host.name} still hosts ${titles}. Remove them from ${used.length === 1 ? 'that event type' : 'those event types'} first.`);
     }
-    // Hands the Google grant back (best effort) before the record, and with it the stored token, goes.
-    if (host.google) await disconnectGoogle(ctx, host.id);
+    // Hands every Google grant back (best effort) before the record, and with it the stored tokens, goes.
+    await disconnectAllGoogle(ctx, host.id);
     await deleteHost(ctx, host.id);
     return json({ ok: true });
   }),
@@ -390,12 +436,22 @@ export const routes: Route[] = [
     return json({ calendars: await loadCalendars(ctx, await requireHost(ctx, params.id)) });
   }),
 
+  // The main account, for pages opened before accounts could be told apart: they show only that one.
   admin('POST', '/admin/hosts/:id/google/disconnect', async ({ ctx, params }) => {
     const host = await requireHost(ctx, params.id);
-    await disconnectGoogle(ctx, host.id);
-    // Nothing to follow any more: fall back to the device the person uses.
-    const after = await updateHost(ctx, host.id, (h) => (h.timezoneMode === 'google' ? { ...h, timezoneMode: 'device' } : h));
-    return json({ ok: true, host: toAdminHost(ctx, after ?? { ...host, google: null, calendarHealth: null }) });
+    return json({ ok: true, host: toAdminHost(ctx, await removeMainGoogleAccount(ctx, host)) });
+  }),
+
+  admin('GET', '/admin/hosts/:id/google/:accountId/calendars', async ({ ctx, params }) => {
+    return json({ calendars: await loadCalendars(ctx, await requireHost(ctx, params.id), params.accountId) });
+  }),
+
+  admin('GET', '/admin/hosts/:id/google/:accountId/removal', async ({ ctx, params }) => {
+    return json(await googleRemovalPreview(ctx, await requireHost(ctx, params.id), params.accountId, { self: false }));
+  }),
+
+  admin('DELETE', '/admin/hosts/:id/google/:accountId', async ({ ctx, params }) => {
+    return json(await removeHostGoogleAccount(ctx, await requireHost(ctx, params.id), params.accountId, { self: false }));
   }),
 
   // ── bookings
@@ -485,9 +541,106 @@ export const routes: Route[] = [
   }),
 
   admin('DELETE', '/admin/assets/:id', async ({ ctx, params }) => {
-    if (!isStorageId(params.id)) throw missing('That image does not exist.');
+    if (!isStorageId(params.id) || isBuiltinAssetId(params.id)) throw missing('That image does not exist.');
     await forgetAsset(ctx, params.id);
     await deleteAsset(ctx, params.id);
     return json({ ok: true });
   }),
+
+  // ── brands and short links
+
+  // The owner's changes to a built-in brand: its look (a partial theme, as in PUT /admin/site), logo and sender name.
+  admin('PUT', '/admin/brands/:id', async ({ ctx, req, params }) => {
+    const body = await readJson(req);
+    const apply = await prepareBrandPatch(ctx, await getSite(ctx), params.id, body);
+    const site = await updateSite(ctx, apply);
+    return json({ brand: storedBrand(site, params.id as never), site });
+  }),
+
+  // What a short link opens. With `brand: true` the event first gets the link's own look (Eco Champions for
+  // /pod, the owner's own for /meet). The map is written last; when that fails the brand change stays.
+  admin('PUT', '/admin/short-links', async ({ ctx, req }) => {
+    const body = await readJson<Record<string, unknown>>(req);
+    const b = isPlainObject(body) ? body : {};
+    const errors = new FieldErrors();
+    const labels = SHORT_LINK_NAMES.map((n) => shortLabelOf(ctx.env.publicBaseUrl, n));
+    if (!isShortName(b.name)) errors.add('name', `Choose ${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}.`);
+    const id = b.eventTypeId;
+    if (!(id === null || (typeof id === 'string' && id !== ''))) errors.add('eventTypeId', 'That meeting no longer exists. Choose another.');
+    if (b.brand !== undefined && typeof b.brand !== 'boolean') errors.add('brand', 'Expected true or false.');
+    errors.throwIfAny('Please check the highlighted fields.');
+    const name = b.name as (typeof SHORT_LINK_NAMES)[number];
+    let eventType: EventType | undefined;
+    if (typeof id === 'string') {
+      const found = await getEventType(ctx, id);
+      if (!found) throw new HttpError(422, 'invalid', 'That meeting no longer exists. Choose another.', { eventTypeId: 'That meeting no longer exists. Choose another.' });
+      eventType = found;
+      const wanted = SHORT_LINKS[name].brandId;
+      if (b.brand === true && (found.brandId ?? null) !== wanted) {
+        eventType = await updateEventTypes(ctx, (list) => {
+          const target = list.find((e) => e.id === id);
+          if (!target) return { keep: found };
+          if ((target.brandId ?? null) === wanted) return { keep: target };
+          const next = { ...target, brandId: wanted };
+          return { next: list.map((e) => (e.id === id ? next : e)), result: next };
+        });
+      }
+    }
+    let site: SiteSettings;
+    try {
+      site = await updateSite(ctx, (fresh) => ({ ...fresh, shortLinks: { ...(fresh.shortLinks ?? {}), [name]: id as string | null } }));
+    } catch (err) {
+      ctx.log('warn', 'short links: the link could not be saved', { error: err instanceof Error ? err.message : 'unknown' });
+      throw new HttpError(503, 'busy', 'The link could not be saved just now. Please try again in a moment.');
+    }
+    return json(eventType ? { shortLinks: site.shortLinks, eventType } : { shortLinks: site.shortLinks });
+  }),
 ];
+
+const MAX_ADD_TO = 20;
+
+/** addToEventTypeIds of POST /admin/hosts: absent or a list of at most 20 ids (422 otherwise). */
+function readAddTo(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MAX_ADD_TO || value.some((id) => typeof id !== 'string' || id === '')) {
+    throw new HttpError(422, 'invalid', 'Choose meetings from the list.', { addToEventTypeIds: 'Choose meetings from the list.' });
+  }
+  return [...new Set(value as string[])];
+}
+
+const MAX_HOSTS_PER_EVENT = 20;
+
+/**
+ * A new co-host joins the listed event types: added to the hosts, a one-host meeting becomes a joint one, a
+ * round robin stays one. Pure and idempotent, for updateEventTypes.
+ */
+export function addHostToEventTypes(
+  list: EventType[],
+  hostId: string,
+  ids: string[],
+): { next: EventType[]; result: { changed: EventType[]; notAdded: { id: string; message: string }[] } } | { keep: { changed: EventType[]; notAdded: { id: string; message: string }[] } } {
+  const changed: EventType[] = [];
+  const notAdded: { id: string; message: string }[] = [];
+  const next = [...list];
+  for (const id of ids) {
+    const at = next.findIndex((e) => e.id === id);
+    if (at === -1) {
+      notAdded.push({ id, message: 'That meeting no longer exists.' });
+      continue;
+    }
+    const et = next[at];
+    if (et.hostIds.includes(hostId)) {
+      changed.push(et);
+      continue;
+    }
+    if (et.hostIds.length >= MAX_HOSTS_PER_EVENT) {
+      notAdded.push({ id, message: 'That meeting already has 20 hosts.' });
+      continue;
+    }
+    const joined: EventType = { ...et, hostIds: [...et.hostIds, hostId], kind: et.kind === 'solo' ? 'collective' : et.kind };
+    next[at] = joined;
+    changed.push(joined);
+  }
+  const touched = next.some((e, i) => e !== list[i]);
+  return touched ? { next, result: { changed, notAdded } } : { keep: { changed, notAdded } };
+}

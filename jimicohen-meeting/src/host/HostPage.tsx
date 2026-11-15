@@ -15,7 +15,24 @@ import { NO_ASSETS } from '../../shared/theme';
 import type { ThemeAssets } from '../../shared/theme';
 import type { AdminHost, GoogleCalendarListItem, HostSelfResponse, HostUpdate, Schedule } from '../../shared/types';
 import { ScheduleEditor, scheduleProblem } from '../admin/components/ScheduleEditor';
-import { APP_BASE, ApiFailure, assetUrl, disconnectGoogleSelf, errorMessage, getHostSelf, getHostSelfCalendars, googleConnectUrl, reportDeviceZoneSelf, updateHostSelf } from '../lib/api';
+import {
+  APP_BASE,
+  ApiFailure,
+  assetUrl,
+  disconnectGoogleSelf,
+  errorMessage,
+  getAccountCalendarsSelf,
+  getHostSelf,
+  getHostSelfCalendars,
+  getRemovalPreviewSelf,
+  googleConnectUrl,
+  removeGoogleAccountSelf,
+  reportDeviceZoneSelf,
+  updateHostSelf,
+} from '../lib/api';
+import { OtherGoogleAccounts, reconnectList, type AccountsApi } from '../admin/components/GoogleAccounts';
+import { connectedMessage, findScreenAccount } from '../admin/googleReturn';
+import { allAccounts, extraAccounts } from '../lib/googleAccounts';
 import { ThemeScope, cachedTheme } from '../lib/theme';
 import { detectZone, formatOffset, formatTime, isValidZone, zoneLabel, zoneOffsetMinutes } from '../lib/tz';
 import { Avatar, Button, Checkbox, ConfirmDialog, EmptyState, Field, IconButton, Input, RadioGroup, Select, Skeleton, Switch, TimezoneSelect, cx, useToast } from '../ui';
@@ -114,6 +131,8 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
   const google = host.google;
   const needsReconnect = google?.status === 'needs_reconnect';
   const connected = !!google && !needsReconnect;
+  // Another of their accounts that Google asked to sign in to again closes their times just the same.
+  const brokenExtras = extraAccounts(host).filter((a) => a.status === 'needs_reconnect');
   const hasFeed = host.icsFeeds.length > 0;
   // A feed only tells us when someone is busy: meetings booked with them cannot be written into it.
   const feedOnly = !google && hasFeed;
@@ -165,6 +184,16 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
   };
 
   // ── calendars
+  const returnTo = `${APP_BASE}/host/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}`;
+  // Their other Google accounts, through their own link only.
+  const accountsApi: AccountsApi = {
+    listCalendars: (accountId, signal) => getAccountCalendarsSelf(id, token, accountId, { signal }),
+    saveCalendars: (accountId, busyCalendarIds) => updateHostSelf(id, token, { googleCalendars: { accountId, busyCalendarIds } }),
+    preview: (accountId) => getRemovalPreviewSelf(id, token, accountId),
+    remove: (accountId) => removeGoogleAccountSelf(id, token, accountId),
+    connectUrl: ({ add, accountId }) => googleConnectUrl({ hostId: id, token, add, accountId, returnTo }),
+  };
+
   /** `switchAccount`: Google shows its account chooser, for someone who connected the wrong account. */
   const connect = (switchAccount = false) => {
     window.location.assign(googleConnectUrl({ hostId: id, token, switchAccount, returnTo: `${APP_BASE}/host/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}` }));
@@ -335,10 +364,20 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
           <p className="hp-hero__eyebrow">Co-host page · meetings with {siteName}</p>
         </div>
         <h1 className="hp-hero__title">
-          {connected ? `You are all set, ${me}.` : needsReconnect ? `${me}, please reconnect Google Calendar.` : feedOnly ? `Your busy times are checked, ${me}.` : `Hi ${me}. One step to go.`}
+          {connected && brokenExtras.length > 0
+            ? `${me}, one of your Google accounts needs to be reconnected.`
+            : connected
+              ? `You are all set, ${me}.`
+              : needsReconnect
+                ? `${me}, please reconnect Google Calendar.`
+                : feedOnly
+                  ? `Your busy times are checked, ${me}.`
+                  : `Hi ${me}. One step to go.`}
         </h1>
         <p className="hp-hero__lead">
-          {connected
+          {connected && brokenExtras.length > 0
+            ? `Google asked you to sign in again to ${reconnectList(brokenExtras)}. Until you do, no times with you are offered.`
+            : connected
             ? `People can now book time with you and ${owner}, and only when you are both free. Come back to this page whenever your hours or calendars change.`
             : needsReconnect
               ? `Google asked you to sign in again. Until you do, your busy times cannot be checked, so no times with you are offered.`
@@ -508,6 +547,17 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
             </ul>
           </>
         )}
+        {googleConfigured && allAccounts(host).length > 0 ? (
+          <OtherGoogleAccounts
+            host={host}
+            api={accountsApi}
+            voice={{ who: 'you' }}
+            onHost={onHost}
+            addHelp={`The account picked is added next to ${google ? google.email : 'the others'}. New meetings still go to your main account.`}
+            // The Google Cloud app is the owner's, not theirs.
+            testingHelp={`If Google says this app is not allowed for that account, ask ${owner} to add the account as a test user.`}
+          />
+        ) : null}
         {google ? (
           <ConfirmDialog
             open={confirmDisconnect}
@@ -818,7 +868,7 @@ export default function HostPage() {
           </div>
         ) : (
           <>
-            <GoogleReturn onDone={() => navigate(`/host/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}`, { replace: true })} />
+            <GoogleReturn host={state.data.host} onDone={() => navigate(`/host/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}`, { replace: true })} />
             <HostPanel id={id} token={token} data={state.data} onHost={onHost} onCalendars={onCalendars} />
           </>
         )}
@@ -828,7 +878,7 @@ export default function HostPage() {
 }
 
 /** Back from Google: say what happened (inside the theme, so the toast is themed) and tidy the address. */
-function GoogleReturn({ onDone }: { onDone: () => void }) {
+function GoogleReturn({ onDone, host }: { onDone: () => void; host?: AdminHost }) {
   const [params] = useSearchParams();
   const toast = useToast();
   const handled = useRef(false);
@@ -837,7 +887,9 @@ function GoogleReturn({ onDone }: { onDone: () => void }) {
     if (!result || handled.current) return;
     handled.current = true;
     if (result === 'connected') {
-      toast.success('Your calendar is connected', 'Times when you are busy are no longer offered.');
+      const said = connectedMessage(params, (accountId) => (host ? findScreenAccount([host], accountId) : null));
+      if (said) toast[said.tone](said.title, said.body);
+      else toast.success('Your calendar is connected', 'Times when you are busy are no longer offered.');
       // Connecting moved the hours onto the calendar's zone: that shifts every time offered, so say it.
       const zone = params.get('zone');
       if (isValidZone(zone)) toast.info(`Your time zone is now ${zoneLabel(zone)}`, 'It was taken from your Google Calendar, and your hours are read in it. You can change it under Your time zone below.');

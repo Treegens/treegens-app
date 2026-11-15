@@ -3,15 +3,20 @@ import type { ReactNode } from 'react';
 import { CloudOff, Compass, RefreshCw, WifiOff } from 'lucide-react';
 import type { Theme } from '../../../shared/types';
 import type { ThemeAssets } from '../../../shared/theme';
+import { useAppHref } from '../../lib/links';
 import { ThemeScope, cachedTheme } from '../../lib/theme';
 import { Button, ButtonLink, Skeleton, cx } from '../../ui';
 import '../../styles/public.css';
 import { useEmbedAutoHeight, useEmbedEscape, withEmbed } from '../lib/embed';
 
 export interface PublicPageProps {
-  /** the theme to render with. Leave out while loading: the theme seen on the last visit is used. */
+  /** the theme to render with. Leave out while loading: `boot`, else the theme seen on the last visit, is used. */
   theme?: Theme;
   assets?: ThemeAssets | null;
+  /** the look before the page has data (a short link's own brand, see shortBootTheme) */
+  boot?: { theme: Theme; assets: ThemeAssets } | null;
+  /** the brand the page is shown in (PublicSite.brand.id): its look is remembered for its next first paint too */
+  brandId?: string | null;
   /** `?embed=1`: no backdrop, no page chrome, height reported to the parent window */
   embed?: boolean;
   /** how wide the content may get */
@@ -21,11 +26,11 @@ export interface PublicPageProps {
 }
 
 /** The frame every public screen sits in: theme scope, page gutters, embed behaviour. */
-export function PublicPage({ theme, assets, embed = false, width = 'wide', className, children }: PublicPageProps) {
+export function PublicPage({ theme, assets, boot: bootTheme, brandId = null, embed = false, width = 'wide', className, children }: PublicPageProps) {
   const ref = useRef<HTMLElement>(null);
   useEmbedAutoHeight(embed, ref);
   useEmbedEscape(embed);
-  const boot = theme ? null : cachedTheme();
+  const boot = theme ? null : (bootTheme ?? cachedTheme());
 
   // Embedded: browsers paint an opaque canvas behind an iframe whose root color scheme differs
   // from the host page's, which hides the host background we promised to let through. ThemeScope
@@ -38,12 +43,29 @@ export function PublicPage({ theme, assets, embed = false, width = 'wide', class
     document.documentElement.style.colorScheme = 'normal';
   }, [embed, theme]);
   return (
-    <ThemeScope theme={theme ?? boot!.theme} assets={theme ? assets : boot!.assets} backdrop={!embed}>
+    // A loading, offline or error screen shown before the data arrived is never remembered as the look of the next visit.
+    <ThemeScope theme={theme ?? boot!.theme} assets={theme ? assets : boot!.assets} backdrop={!embed} remember={!!theme} brandId={theme ? brandId : null}>
       <main ref={ref} className={cx('pp', `pp--${width}`, embed && 'pp--embed', className)}>
         {children}
       </main>
     </ThemeScope>
   );
+}
+
+/** Shows a brand's icon in the tab while a page in that brand is open, and puts the site's back afterwards. */
+export function useBrandIcon(iconUrl: string | null | undefined): void {
+  useEffect(() => {
+    if (!iconUrl) return;
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"][type="image/svg+xml"]') ?? document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!link) return;
+    const previous = { href: link.getAttribute('href'), type: link.getAttribute('type') };
+    link.setAttribute('href', iconUrl);
+    if (!/\.svg(?:$|\?)/i.test(iconUrl)) link.removeAttribute('type');
+    return () => {
+      if (previous.href !== null) link.setAttribute('href', previous.href);
+      if (previous.type !== null) link.setAttribute('type', previous.type);
+    };
+  }, [iconUrl]);
 }
 
 /** Sets the tab title while the screen is mounted. */
@@ -70,6 +92,8 @@ export interface PageMessageProps {
 
 /** A whole-page state: not found, failed to load, offline. */
 export function PageMessage({ kind, title, description, onRetry, homeHref, embed = false }: PageMessageProps) {
+  // On a short link's page the app's own pages are a plain link away (src/lib/links.tsx).
+  const app = useAppHref();
   return (
     <div className="pp-card pp-message" role={kind === 'missing' ? undefined : 'alert'}>
       {/* Same look as the kit's EmptyState, with a page-level heading. */}
@@ -86,9 +110,15 @@ export function PageMessage({ kind, title, description, onRetry, homeHref, embed
             </Button>
           ) : null}
           {homeHref ? (
-            <ButtonLink to={withEmbed(homeHref, embed)} variant={onRetry ? 'secondary' : 'primary'}>
-              See all meeting types
-            </ButtonLink>
+            app.outside ? (
+              <ButtonLink href={app.href(homeHref)} variant={onRetry ? 'secondary' : 'primary'}>
+                See all meeting types
+              </ButtonLink>
+            ) : (
+              <ButtonLink to={withEmbed(homeHref, embed)} variant={onRetry ? 'secondary' : 'primary'}>
+                See all meeting types
+              </ButtonLink>
+            )
           ) : null}
         </div>
       </div>

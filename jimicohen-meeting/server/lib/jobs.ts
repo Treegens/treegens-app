@@ -16,6 +16,7 @@
  *      worse than not ringing).
  */
 import { DateTime, IANAZone } from 'luxon';
+import { bookUrlFor, brandLine, brandOfView, eventColorFor, isSiteView, viewFor } from '../../shared/brands';
 import { DEFAULT_ASSISTANT } from '../../shared/defaults';
 import type {
   AssistantSettings,
@@ -1077,8 +1078,18 @@ function assignedTo(booking: Booking, hosts: Host[]): Host[] {
  * carry a second invitation with a different UID, which would leave the invitee with two entries.
  */
 function googleSendsInvite(booking: Booking, eventType: EventType | null): boolean {
-  return eventType?.googleInvite !== false && !!booking.google;
+  // A detached booking's event is in an account that is gone: Google will not tell the invitee about changes.
+  return eventType?.googleInvite !== false && !!booking.google && !booking.google.detached;
 }
+
+/** The invitee got a Google invitation earlier that can no longer be changed (the booking is detached). */
+function staleGoogleInvite(booking: Booking, eventType: EventType | null): boolean {
+  return eventType?.googleInvite !== false && !!booking.google?.detached && !!booking.google.eventId;
+}
+
+const STALE_INVITE_MOVED =
+  'You may still see this meeting at its old time in your calendar, from the earlier Google Calendar invitation. That invitation could not be updated, so please delete it and use the attached calendar file for the new time.';
+const STALE_INVITE_CANCELLED = 'If this meeting is still in your calendar from the earlier Google Calendar invitation, please delete it there. That invitation could not be cancelled for you.';
 
 function emailDetails(p: MessageParts, vars: TemplateVars): { label: string; value: string }[] {
   const { booking, kind, audience } = p;
@@ -1167,6 +1178,11 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
     ...(ownPlace ? urlsIn(`${booking.location.label ?? ''} ${booking.location.value ?? ''}`) : []),
   ].filter(Boolean);
   const paragraphs = body.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+  // Said after the body, whatever the owner's own wording: the earlier Google invitation will not change by itself.
+  if (audience === 'invitee' && staleGoogleInvite(booking, eventType)) {
+    if (kind === 'rescheduled') paragraphs.push(STALE_INVITE_MOVED);
+    else if (kind === 'cancelled') paragraphs.push(STALE_INVITE_CANCELLED);
+  }
   const heading = oneLine(renderTemplate(wording.heading, vars));
   const details = emailDetails(p, vars);
   const actions = emailActions(p, vars);
@@ -1176,7 +1192,7 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
   let links: { label: string; url: string }[] = [];
   let linksLabel = '';
   if (audience === 'invitee' && (kind === 'confirmation' || kind === 'host_new' || kind === 'rescheduled')) {
-    const cal = calendarLinks({ booking, hosts: assigned, baseUrl: base, manageToken: token });
+    const cal = calendarLinks({ booking, hosts: assigned, baseUrl: base, manageToken: token, brandLine: brandLine(site, bookUrlFor(base, site, booking)) });
     linksLabel = 'Add to your calendar:';
     links = [
       { label: 'Google', url: cal.google },
@@ -1195,16 +1211,22 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
   const content = { heading, paragraphs, details, actions, links, linksLabel, footer, linkUrls };
   // Plain text keeps to the one short calendar link: the Google and Outlook ones are a wall of characters there.
   const textLinks = linksLabel ? links.filter((l) => l.label === 'Apple or other').map((l) => ({ label: 'Calendar file', url: l.url })) : links;
-  const avatarId = site.profile.avatarAssetId;
+  // A brand shows its logo (the upload, else the built-in one, served by the asset route) in a rounded square,
+  // never the owner's photo, and its own green on the buttons whatever colour the event has.
+  const brand = brandOfView(site);
+  const avatarId = brand ? brand.theme.logoAssetId || brand.art.emailLogoAssetId : site.profile.avatarAssetId;
   const html = renderEmailHtml({
     ...content,
     site,
     preheader: clip(paragraphs[1] ?? paragraphs[0] ?? heading, 140),
     avatarUrl: avatarId && /^[A-Za-z0-9_-]{1,80}$/.test(avatarId) ? `${base}/api/assets/${avatarId}` : null,
-    accentColor: eventType?.color || null,
+    avatarShape: brand ? 'rounded' : 'circle',
+    accentColor: eventColorFor(eventType, brand) || null,
   });
 
   const message: EmailMessage = { to: p.to, toName: p.toName, subject, text: renderEmailText({ ...content, links: textLinks }), html };
+  // The brand's sender name; the address and the reply-to stay the site's (sendEmail reads those itself).
+  if (brand) message.fromName = site.email.fromName;
   // Hosts can answer the notification to reach the invitee directly.
   if (audience === 'host' && isEmail(booking.invitee.email)) message.replyTo = booking.invitee.email;
 
@@ -1213,12 +1235,13 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
     const invited = googleSendsInvite(booking, eventType);
     let method: 'REQUEST' | 'CANCEL' | 'PUBLISH' | null;
     if (audience === 'invitee') method = kind === 'cancelled' ? (invited ? null : 'CANCEL') : invited ? 'PUBLISH' : 'REQUEST';
-    else method = booking.google?.eventId ? null : kind === 'cancelled' ? 'CANCEL' : 'PUBLISH'; // hosts with Google already have the event
+    // Hosts with Google already have the event, unless it is in an account that is gone (detached).
+    else method = booking.google?.eventId && !booking.google.detached ? null : kind === 'cancelled' ? 'CANCEL' : 'PUBLISH';
     if (method) {
       message.ics = {
         filename: method === 'CANCEL' ? 'cancelled.ics' : 'invite.ics',
         method,
-        content: buildBookingIcs({ booking, hosts: assigned, site, method, baseUrl: base, manageUrl: vars.manage_url }),
+        content: buildBookingIcs({ booking, hosts: assigned, site, method, baseUrl: base, manageUrl: vars.manage_url, brandLine: brandLine(site, bookUrlFor(base, site, booking)) }),
       };
     }
   }
@@ -1243,7 +1266,14 @@ export function composeBookingSms(ctx: Ctx, p: MessageParts): string {
     links = manage; // the join link follows in the reminder, when it is needed
   }
   const tail = audience === 'invitee' && (kind === 'confirmation' || kind === 'host_new') ? 'Reply STOP to opt out.' : undefined;
-  return composeSms(prose, links, { tail });
+  return composeSms(brandedText(p.site, prose), links, { tail });
+}
+
+/** A text about a meeting under a brand names the brand: "Eco Champions: " in front, unless the text already says it. */
+export function brandedText(site: SiteSettings, prose: string): string {
+  if (!isSiteView(site)) return prose;
+  const name = site.profile.name.trim();
+  return name && !prose.toLowerCase().includes(name.toLowerCase()) ? `${name}: ${prose}` : prose;
 }
 
 // ───────────────────────── delivery ─────────────────────────
@@ -1298,7 +1328,8 @@ async function deliverSiteAlert(ctx: Ctx, job: StoredJob, site: SiteSettings, ho
   const content = {
     heading: oneLine(renderTemplate(wording.heading, vars)),
     paragraphs,
-    actions: [{ label: 'Open your dashboard', url: vars.admin_url, primary: true }],
+    // A co-host (a notice about their Google accounts) has no dashboard: their page is behind their private link.
+    actions: owner.role === 'owner' ? [{ label: 'Open your dashboard', url: vars.admin_url, primary: true }] : [],
     footer: `Sent by the ${site.profile.name} booking page.`,
   };
   let emailed: DeliveryResult = { ok: false, provider: 'none', skipped: 'no_email' };
@@ -1328,7 +1359,8 @@ async function deliverSiteAlert(ctx: Ctx, job: StoredJob, site: SiteSettings, ho
   // and they gave a number (their own texts are not subject to the invitee limits).
   if (phone) {
     const prose = `${site.profile.name}: ${subject.replace(/[.!?]+$/, '')}. We could not email you about it, so this is a text instead.`;
-    const texted = await sendSms(ctx, { to: phone, body: composeSms(prose, [{ label: 'Open your dashboard:', url: vars.admin_url }]) });
+    // A co-host has no dashboard (a notice about their Google accounts): no link they cannot open.
+    const texted = await sendSms(ctx, { to: phone, body: composeSms(prose, owner.role === 'owner' ? [{ label: 'Open your dashboard:', url: vars.admin_url }] : []) });
     if (texted.ok) {
       await markSent(ctx, job, byText);
       return { ...texted, detail: `to ${phone} by text, because the email could not be sent` };
@@ -1366,14 +1398,17 @@ export async function deliverMessage(ctx: Ctx, job: Job, extra?: JobRunExtra): P
   const audience: Audience = stored.audience ?? 'invitee';
   const kind = messageKind(stored);
 
-  const [site, hosts] = await Promise.all([getSite(ctx), listHosts(ctx)]);
+  const [storedSite, hosts] = await Promise.all([getSite(ctx), listHosts(ctx)]);
   if (!stored.bookingId) {
     if (kind !== 'host_alert') return { ok: false, provider: 'none', skipped: 'no_booking' };
-    return deliverSiteAlert(ctx, stored, site, hosts);
+    // Alerts about the site itself are the owner's: never in a brand.
+    return deliverSiteAlert(ctx, stored, storedSite, hosts);
   }
   const booking = extra?.booking ?? (await getBooking(ctx, stored.bookingId));
   if (!booking) return { ok: false, provider: 'none', skipped: 'booking_missing' };
   const eventType = await getEventType(ctx, booking.eventTypeId);
+  // Everything about the booking (emails, texts, the calendar file) is in the brand it was booked under.
+  const site = viewFor(storedSite, booking);
 
   const rule = stored.ruleId ? eventType?.reminders?.find((r) => r.id === stored.ruleId) : undefined;
   // A reminder from a rule that was switched off or removed is not sent. (When the event type itself

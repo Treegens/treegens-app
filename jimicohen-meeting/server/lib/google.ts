@@ -5,13 +5,33 @@
  * and nothing that could contain either is ever logged.
  */
 import { IANAZone } from 'luxon';
-import type { GoogleCalendarListItem, Host, HostGoogle, IanaZone } from '../../shared/types';
-import { open, randomToken, seal, sha256Hex, signPayload, verifyPayload } from './crypto';
+import { MAX_GOOGLE_ACCOUNTS_PER_HOST } from '../../shared/defaults';
+import type { GoogleAccount, GoogleCalendarListItem, Host, IanaZone } from '../../shared/types';
+import { hmacHex, open, randomToken, seal, sha256Hex, signPayload, verifyPayload } from './crypto';
 import { BASE_PATH, type Ctx } from './ctx';
+import {
+  accountCount,
+  accountsOf,
+  findAccount,
+  foldIntoMain,
+  heldElsewhere,
+  legacyMainId,
+  mainOf,
+  removeExtra,
+  upsertAccount,
+  writeExtra,
+  type AccountRef,
+  type ConnectIntent,
+  type ConnectOutcome,
+  type IncomingGrant,
+  type UpsertResult,
+} from './googleAccounts';
 import { HttpError } from './http';
 import { mergeBusy } from './icsfeed';
 import { cacheGet, cacheSet, claim, getHost, getSecrets, listHosts, updateHost } from './repo';
 import type { Interval } from './time';
+
+export type { AccountRef } from './googleAccounts';
 
 // ───────────────────────── constants ─────────────────────────
 
@@ -145,10 +165,14 @@ async function clientCredentials(ctx: Ctx): Promise<{ clientId: string; clientSe
   return { clientId: google.clientId, clientSecret: google.clientSecret };
 }
 
-function requireGoogle(host: Host): HostGoogle {
-  if (!host.google) throw new GoogleAuthError('Google Calendar is not connected.');
-  return host.google;
+/** The account a call is made as. Every Google call names one, so none can fall back to "the host's connection". */
+function requireAccount(ref: AccountRef | null | undefined): GoogleAccount {
+  if (!ref?.account) throw new GoogleAuthError('Google Calendar is not connected.');
+  return ref.account;
 }
+
+/** The sentence when a person would go past the ceiling. */
+export const TOO_MANY_ACCOUNTS_MESSAGE = `You have connected ${MAX_GOOGLE_ACCOUNTS_PER_HOST} Google accounts, the most one person can connect here. Remove one to add another.`;
 
 // ───────────────────────── OAuth: start ─────────────────────────
 
@@ -184,23 +208,69 @@ interface StatePayload {
   returnTo: string;
   gmail: boolean;
   n: string;
+  /** what the sign-in is for. Absent on states signed by the previous deploy: read as 'main'. */
+  intent?: ConnectIntent;
+  /** with 'reconnect': the account being reconnected */
+  aid?: string;
+  /** started from a co-host's private link: a mark of that link (linkMark), checked when Google sends the person back */
+  lt?: string;
+}
+
+const INTENTS: readonly ConnectIntent[] = ['main', 'extra', 'reconnect', 'replace'];
+
+function intentOf(v: unknown): ConnectIntent {
+  return typeof v === 'string' && (INTENTS as readonly string[]).includes(v) ? (v as ConnectIntent) : 'main';
 }
 
 /**
- * `selectAccount`: Google shows its account chooser as well as the consent screen (and no login hint
- * is sent), for someone who connected the wrong account and wants to pick another one.
+ * A mark of a co-host's private link as it is now. A sign-in started from the link carries it, so a link that
+ * was replaced while the person was at Google cannot finish the connection. Not a secret, and no key to anything.
  */
-export async function buildGoogleAuthUrl(ctx: Ctx, p: { hostId: string; returnTo: string; gmail?: boolean; loginHint?: string; selectAccount?: boolean }): Promise<string> {
+export function linkMark(ctx: Ctx, inviteTokenHash: string): string {
+  return hmacHex(ctx, 'gstate-link', inviteTokenHash).slice(0, 16);
+}
+
+/**
+ * `intent`: 'main' (the plain Connect and Reconnect buttons), 'extra' ("Add another Google account": the
+ * account chooser, no hint, refused at the ceiling), 'reconnect' (one account, `accountId`, hinted by its
+ * address), 'replace' ("Use a different Google account": the account chooser, no hint).
+ * `selectAccount` is the older name for 'replace'.
+ */
+export async function buildGoogleAuthUrl(
+  ctx: Ctx,
+  p: { hostId: string; returnTo: string; gmail?: boolean; loginHint?: string; selectAccount?: boolean; intent?: ConnectIntent; accountId?: string; linkMark?: string },
+): Promise<string> {
   const creds = await clientCredentials(ctx);
   if (!creds) {
     throw new HttpError(400, 'google_not_configured', 'Add the Google client ID and client secret under Integrations before connecting a calendar.');
   }
   const returnTo = safeReturnTo(p.returnTo);
   if (!returnTo) throw new HttpError(400, 'invalid_return', 'That return address is not allowed.');
-  if (!(await getHost(ctx, p.hostId))) throw new HttpError(404, 'host_not_found', 'That team member does not exist.');
+  const host = await getHost(ctx, p.hostId);
+  if (!host) throw new HttpError(404, 'host_not_found', 'That team member does not exist.');
 
-  const payload: StatePayload = { hostId: p.hostId, returnTo: seal(ctx, RETURN_PURPOSE, returnTo), gmail: p.gmail === true, n: randomToken(16) };
-  const scopes = p.gmail === true ? [...GOOGLE_CALENDAR_SCOPES, GMAIL_SEND_SCOPE] : GOOGLE_CALENDAR_SCOPES;
+  const intent: ConnectIntent = p.intent ?? (p.selectAccount === true ? 'replace' : 'main');
+  let hint = oneLine(p.loginHint, 254);
+  let aid: string | undefined;
+  if (intent === 'extra') {
+    if (accountCount(host) >= MAX_GOOGLE_ACCOUNTS_PER_HOST) throw new HttpError(409, 'too_many_google_accounts', TOO_MANY_ACCOUNTS_MESSAGE);
+    hint = '';
+  } else if (intent === 'reconnect') {
+    const ref = p.accountId ? findAccount(host, { id: p.accountId }) : null;
+    if (!ref) throw new HttpError(404, 'google_account_not_found', 'That Google account is not connected any more. Reload the page.');
+    aid = ref.account.id;
+    hint = oneLine(ref.account.email, 254);
+  } else if (intent === 'replace') {
+    hint = '';
+  }
+  // Gmail is only ever asked for on the main account (the route only offers it to the owner).
+  const gmail = p.gmail === true && intent !== 'extra';
+
+  const payload: StatePayload = { hostId: p.hostId, returnTo: seal(ctx, RETURN_PURPOSE, returnTo), gmail, n: randomToken(16), intent };
+  if (aid) payload.aid = aid;
+  if (p.linkMark) payload.lt = p.linkMark;
+  const scopes = gmail ? [...GOOGLE_CALENDAR_SCOPES, GMAIL_SEND_SCOPE] : GOOGLE_CALENDAR_SCOPES;
+  const chooser = intent === 'extra' || intent === 'replace';
   const query = new URLSearchParams({
     client_id: creds.clientId,
     redirect_uri: googleRedirectUri(ctx),
@@ -208,13 +278,22 @@ export async function buildGoogleAuthUrl(ctx: Ctx, p: { hostId: string; returnTo
     scope: scopes.join(' '),
     // offline + consent: Google only hands out a refresh token when the user sees the consent screen
     access_type: 'offline',
-    prompt: p.selectAccount === true ? 'consent select_account' : 'consent',
+    prompt: chooser ? 'consent select_account' : 'consent',
     include_granted_scopes: 'true',
     state: signPayload(ctx, STATE_PURPOSE, payload, STATE_TTL_SEC),
   });
-  const hint = p.selectAccount === true ? '' : oneLine(p.loginHint, 254);
-  if (hint.includes('@') && !/\s/.test(hint)) query.set('login_hint', hint);
+  if (!chooser && hint.includes('@') && !/\s/.test(hint)) query.set('login_hint', hint);
   return `${AUTH_ENDPOINT}?${query.toString()}`;
+}
+
+export interface GoogleStateInfo {
+  hostId: string;
+  returnTo: string;
+  nonce: string;
+  intent: ConnectIntent;
+  aid?: string;
+  /** the link mark, when the sign-in was started from a co-host's private link by this deploy */
+  lt?: string;
 }
 
 /**
@@ -223,10 +302,18 @@ export async function buildGoogleAuthUrl(ctx: Ctx, p: { hostId: string; returnTo
  * the browser with a cookie). Null for a state that is not ours, was altered or has expired.
  * Spends nothing: completeGoogleAuth still claims the nonce.
  */
-export function readGoogleState(ctx: Ctx, state: string): { hostId: string; returnTo: string; nonce: string } | null {
+export function readGoogleState(ctx: Ctx, state: string): GoogleStateInfo | null {
   const payload = verifyPayload<Partial<StatePayload>>(ctx, STATE_PURPOSE, state);
   if (!payload || typeof payload.hostId !== 'string' || typeof payload.n !== 'string' || payload.n === '' || typeof payload.returnTo !== 'string') return null;
-  return { hostId: payload.hostId, returnTo: safeReturnTo(open(ctx, RETURN_PURPOSE, payload.returnTo)) ?? DEFAULT_RETURN, nonce: payload.n };
+  const info: GoogleStateInfo = {
+    hostId: payload.hostId,
+    returnTo: safeReturnTo(open(ctx, RETURN_PURPOSE, payload.returnTo)) ?? DEFAULT_RETURN,
+    nonce: payload.n,
+    intent: intentOf(payload.intent),
+  };
+  if (typeof payload.aid === 'string' && payload.aid !== '') info.aid = payload.aid;
+  if (typeof payload.lt === 'string' && payload.lt !== '') info.lt = payload.lt;
+  return info;
 }
 
 // ───────────────────────── OAuth: token endpoint ─────────────────────────
@@ -270,8 +357,13 @@ async function tokenRequest(ctx: Ctx, form: Record<string, string>): Promise<{ s
   }
 }
 
-function tokenCacheName(hostId: string): string {
-  return `gtok-${hostId}`;
+/**
+ * Where an account's access token is kept. The main account keeps the name it always had, so a deploy mints
+ * no new token for it and an older deploy running at the same time shares the entry (the fingerprint ties a
+ * cached token to its refresh token, so two accounts can never mix). Other accounts have one of their own.
+ */
+function tokenCacheName(ref: AccountRef): string {
+  return ref.main ? `gtok-${ref.host.id}` : `gtok-${ref.host.id}-${ref.account.id}`;
 }
 
 /** Ties a cached access token to the refresh token it was minted from, so a reconnect can never reuse the old account's token. */
@@ -279,14 +371,14 @@ function grantFingerprint(refreshTokenEnc: string): string {
   return sha256Hex(refreshTokenEnc).slice(0, 16);
 }
 
-async function cacheAccessToken(ctx: Ctx, hostId: string, refreshTokenEnc: string, accessToken: string, expiresIn: unknown): Promise<void> {
+async function cacheAccessToken(ctx: Ctx, ref: AccountRef, refreshTokenEnc: string, accessToken: string, expiresIn: unknown): Promise<void> {
   const ttl = Math.floor(Number(expiresIn)) - TOKEN_EXPIRY_MARGIN_SEC;
   if (!Number.isFinite(ttl) || ttl <= 0) return;
-  await cacheSet(ctx, tokenCacheName(hostId), { t: seal(ctx, ACCESS_PURPOSE, accessToken), fp: grantFingerprint(refreshTokenEnc) }, ttl);
+  await cacheSet(ctx, tokenCacheName(ref), { t: seal(ctx, ACCESS_PURPOSE, accessToken), fp: grantFingerprint(refreshTokenEnc) }, ttl);
 }
 
-async function forgetAccessToken(ctx: Ctx, hostId: string): Promise<void> {
-  await cacheSet(ctx, tokenCacheName(hostId), null, 0);
+async function forgetAccessToken(ctx: Ctx, ref: AccountRef): Promise<void> {
+  await cacheSet(ctx, tokenCacheName(ref), null, 0);
 }
 
 function grantedScopes(scope: unknown, requested: string[]): string[] {
@@ -294,11 +386,25 @@ function grantedScopes(scope: unknown, requested: string[]): string[] {
   return list.length > 0 ? list : requested;
 }
 
+interface Identity {
+  email: string;
+  /** Google's own id for the account; '' when Google did not say */
+  sub: string;
+}
+
+function identityOf(claims: Record<string, unknown>): Identity | null {
+  const email = oneLine(claims.email, 254);
+  if (!email.includes('@')) return null;
+  const sub = oneLine(claims.sub, 255);
+  // Google's ids are digits; anything printable without spaces is accepted.
+  return { email, sub: /^[\x21-\x7E]{1,255}$/.test(sub) ? sub : '' };
+}
+
 /**
- * Email claim of an ID token we received straight from Google's token endpoint over TLS
- * (so its signature needs no second check); audience and issuer are still compared.
+ * Who an ID token we received straight from Google's token endpoint over TLS says signed in (so its
+ * signature needs no second check); audience and issuer are still compared.
  */
-function emailFromIdToken(idToken: unknown, clientId: string): string | null {
+function identityFromIdToken(idToken: unknown, clientId: string): Identity | null {
   const parts = str(idToken).split('.');
   if (parts.length !== 3) return null;
   try {
@@ -306,14 +412,13 @@ function emailFromIdToken(idToken: unknown, clientId: string): string | null {
     if (!isRecord(claims)) return null;
     if (claims.aud !== clientId) return null;
     if (claims.iss !== 'https://accounts.google.com' && claims.iss !== 'accounts.google.com') return null;
-    const email = oneLine(claims.email, 254);
-    return email.includes('@') ? email : null;
+    return identityOf(claims);
   } catch {
     return null;
   }
 }
 
-async function emailFromUserinfo(ctx: Ctx, accessToken: string): Promise<string | null> {
+async function identityFromUserinfo(ctx: Ctx, accessToken: string): Promise<Identity | null> {
   try {
     const res = await ctx.fetch(USERINFO_ENDPOINT, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
@@ -324,8 +429,7 @@ async function emailFromUserinfo(ctx: Ctx, accessToken: string): Promise<string 
       return null;
     }
     const body = await readJsonBody(res);
-    const email = isRecord(body) ? oneLine(body.email, 254) : '';
-    return email.includes('@') ? email : null;
+    return isRecord(body) ? identityOf(body) : null;
   } catch {
     return null;
   }
@@ -341,11 +445,23 @@ export interface GoogleAuthResult {
   error?: string;
   /** the Google account that is now connected */
   email?: string;
-  /** true when this host had no Google connection before */
+  /** its id (gacc_...) */
+  accountId?: string;
+  outcome?: ConnectOutcome;
+  /** the person picked another account at Google than the one the button was for */
+  note?: 'other_account';
+  wanted?: string;
+  /** true when this host had no Google account at all before */
   firstConnect?: boolean;
   /** when the new connection stops working, if Google said so (consent screen still in "Testing", or a time limit picked) */
   expiresAt?: string;
+  /** the main account that "Use a different Google account" dropped */
+  dropped?: GoogleAccount;
+  intent?: ConnectIntent;
 }
+
+const CEILING_REFUSED = `You have connected ${MAX_GOOGLE_ACCOUNTS_PER_HOST} Google accounts, the most one person can have here. Remove one, then add this one again.`;
+const NO_LONG_TERM_ACCESS = 'Google did not provide long-term access. Open myaccount.google.com/permissions, remove this app from the list, then connect again.';
 
 /**
  * Handles the redirect back from Google. Never throws: every failure comes back as
@@ -358,7 +474,9 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
   }
   const returnTo = safeReturnTo(open(ctx, RETURN_PURPOSE, payload.returnTo)) ?? DEFAULT_RETURN;
   const hostId = payload.hostId;
-  const fail = (error: string): GoogleAuthResult => ({ ok: false, hostId, returnTo, error });
+  const intent = intentOf(payload.intent);
+  const aid = typeof payload.aid === 'string' && payload.aid !== '' ? payload.aid : undefined;
+  const fail = (error: string): GoogleAuthResult => ({ ok: false, hostId, returnTo, error, intent });
 
   try {
     // Single use, whatever happens next: a state that was seen once is spent.
@@ -367,6 +485,9 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
     const denied = params.get('error');
     if (denied) {
       if (denied === 'access_denied') return fail('Google sign-in was cancelled, so nothing was connected.');
+      if (denied === 'admin_policy_enforced') {
+        return fail("Your organisation's Google admin does not allow this app for that account. Ask them to allow it, or connect another account.");
+      }
       const code = codeOf(denied);
       return fail(code ? `Google could not complete the sign-in (${code}).` : 'Google could not complete the sign-in.');
     }
@@ -395,6 +516,9 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
       if (reason === 'redirect_uri_mismatch') {
         return fail('The redirect address is not registered in Google Cloud. Add the exact redirect address shown under Integrations.');
       }
+      if (reason === 'admin_policy_enforced') {
+        return fail("Your organisation's Google admin does not allow this app for that account. Ask them to allow it, or connect another account.");
+      }
       return fail('Google did not accept the sign-in. Please try again.');
     }
 
@@ -402,31 +526,23 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
     const scopes = grantedScopes(body.scope, requested);
     const canRead = scopes.includes(SCOPE_CALENDAR_FULL) || scopes.includes(SCOPE_CALENDAR_READONLY);
     const canWrite = scopes.includes(SCOPE_CALENDAR_FULL) || scopes.includes(SCOPE_CALENDAR_EVENTS);
+    const newRefreshToken = str(body.refresh_token);
+    const revokeFresh = async (): Promise<void> => {
+      if (newRefreshToken) await revokeToken(ctx, newRefreshToken, hostId);
+    };
     if (!canRead || !canWrite) {
       return fail('Calendar access was not granted. Please connect again and tick every calendar permission on the Google screen.');
     }
 
-    const email = emailFromIdToken(body.id_token, creds.clientId) ?? (await emailFromUserinfo(ctx, accessToken));
-    if (!email) return fail('Google did not tell us which account signed in. Please try again.');
+    // Accounts are told apart by Google's own id: an address can be renamed, or reused by another account.
+    const fromToken = identityFromIdToken(body.id_token, creds.clientId);
+    const identity = fromToken?.sub ? fromToken : ((await identityFromUserinfo(ctx, accessToken)) ?? fromToken);
+    if (!identity || !identity.sub) return fail('Google did not tell us which account signed in. Please try again.');
 
-    const previous = host.google ?? null;
-    const sameAccount = !!previous && previous.email.toLowerCase() === email.toLowerCase();
-    const newRefreshToken = str(body.refresh_token);
-    let refreshTokenEnc: string;
-    if (newRefreshToken) {
-      refreshTokenEnc = seal(ctx, REFRESH_PURPOSE, newRefreshToken);
-    } else if (previous && sameAccount && open(ctx, REFRESH_PURPOSE, previous.refreshTokenEnc) !== null) {
-      // Google leaves the refresh token out when it considers the earlier one still good: keep that one.
-      refreshTokenEnc = previous.refreshTokenEnc;
-    } else {
-      return fail(
-        'Google did not provide long-term access. Open myaccount.google.com/permissions, remove this app from the list, then connect again.',
-      );
-    }
     // Google says when the refresh token runs out while the consent screen is still in "Testing" (a
     // connection lasts 7 days there), and when the person picked a time limit on the consent screen. It is
-    // stored so the dashboard can say so in time. The record is rebuilt on every connect, so a later
-    // connect without the field (a published app, ongoing access) clears it.
+    // stored so the dashboard can say so in time. A later connect without the field (a published app,
+    // ongoing access) clears it.
     const expiresInSec = Number(body.refresh_token_expires_in);
     const refreshExpiresAt =
       Number.isFinite(expiresInSec) && expiresInSec > 0 ? new Date(ctx.now().getTime() + Math.floor(expiresInSec) * 1000).toISOString() : undefined;
@@ -434,21 +550,52 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
       ctx.log('warn', 'google oauth: the refresh token expires. Publish the OAuth consent screen ("In production") to keep the connection alive, or connect again with ongoing access if a time limit was picked.', { refreshExpiresAt });
     }
 
-    const connection: HostGoogle = {
-      email,
-      refreshTokenEnc,
+    const incoming: IncomingGrant = {
+      email: identity.email,
+      sub: identity.sub,
+      refreshTokenEnc: newRefreshToken ? seal(ctx, REFRESH_PURPOSE, newRefreshToken) : null,
       scopes,
-      busyCalendarIds: sameAccount && previous && previous.busyCalendarIds.length > 0 ? previous.busyCalendarIds : ['primary'],
-      writeCalendarId: sameAccount && previous && previous.writeCalendarId ? previous.writeCalendarId : 'primary',
       gmailSend: scopes.includes(GMAIL_SEND_SCOPE),
-      status: 'ok',
-      connectedAt: ctx.now().toISOString(),
       ...(refreshExpiresAt ? { refreshExpiresAt } : {}),
+      at: ctx.now().toISOString(),
     };
-    const saved = await updateHost(ctx, hostId, (h) => ({ ...h, google: connection, calendarHealth: null }));
+    const canOpen = (sealed: string): boolean => open(ctx, REFRESH_PURPOSE, sealed) !== null;
+
+    const refusal = async (why: 'ceiling' | 'no_refresh_token'): Promise<GoogleAuthResult> => {
+      if (why === 'no_refresh_token') return fail(NO_LONG_TERM_ACCESS);
+      // Nothing was stored. The fresh grant goes back to Google, unless that account is connected somewhere already.
+      if (!heldElsewhere(await listHosts(ctx), hostId, '', identity)) await revokeFresh();
+      return fail(CEILING_REFUSED);
+    };
+    // Read first, so a refusal stores nothing at all.
+    const preview = upsertAccount(host, incoming, intent, aid, canOpen);
+    if (preview.refused) return refusal(preview.refused);
+
+    let result: UpsertResult = preview;
+    const saved = await updateHost(ctx, hostId, (h) => {
+      result = upsertAccount(h, incoming, intent, aid, canOpen);
+      return result.refused ? h : result.host;
+    });
     if (!saved) return fail('This team member no longer exists.');
-    await cacheAccessToken(ctx, hostId, refreshTokenEnc, accessToken, body.expires_in);
-    return { ok: true, hostId, returnTo, email, firstConnect: previous === null, ...(refreshExpiresAt ? { expiresAt: refreshExpiresAt } : {}) };
+    if (result.refused) return refusal(result.refused);
+
+    const ref = result.accountId ? findAccount(saved, { id: result.accountId }) : null;
+    if (ref) await cacheAccessToken(ctx, ref, ref.account.refreshTokenEnc, accessToken, body.expires_in);
+    const answer: GoogleAuthResult = {
+      ok: true,
+      hostId,
+      returnTo,
+      email: identity.email,
+      accountId: result.accountId,
+      outcome: result.outcome,
+      firstConnect: result.firstEver,
+      intent,
+      ...(refreshExpiresAt ? { expiresAt: refreshExpiresAt } : {}),
+    };
+    if (result.note) answer.note = result.note;
+    if (result.wanted) answer.wanted = result.wanted;
+    if (result.dropped) answer.dropped = result.dropped;
+    return answer;
   } catch (err) {
     ctx.log('error', 'google oauth: callback failed', { error: err instanceof Error ? err.name : 'unknown' });
     return fail(err instanceof GoogleApiError && err.reason === 'network' ? 'Google could not be reached. Please try again.' : 'Something went wrong while connecting Google. Please try again.');
@@ -457,30 +604,58 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
 
 // ───────────────────────── access tokens ─────────────────────────
 
-async function markNeedsReconnect(ctx: Ctx, host: Host): Promise<void> {
-  const failedGrant = host.google?.refreshTokenEnc;
+/** Marks one account as needing a reconnect, but only while its stored grant is still the one that failed. */
+async function markNeedsReconnect(ctx: Ctx, ref: AccountRef): Promise<void> {
+  const failedGrant = ref.account.refreshTokenEnc;
   try {
-    // Only when the stored grant is still the one that failed: a reconnect may have replaced it meanwhile.
-    await updateHost(ctx, host.id, (h) =>
-      h.google && h.google.refreshTokenEnc === failedGrant && h.google.status !== 'needs_reconnect' ? { ...h, google: { ...h.google, status: 'needs_reconnect' } } : h,
-    );
-    await forgetAccessToken(ctx, host.id);
+    await updateHost(ctx, ref.host.id, (h) => {
+      if (ref.main) {
+        return h.google && h.google.refreshTokenEnc === failedGrant && h.google.status !== 'needs_reconnect' ? { ...h, google: { ...h.google, status: 'needs_reconnect' } } : h;
+      }
+      const current = findAccount(h, { id: ref.account.id });
+      if (!current || current.main || current.account.refreshTokenEnc !== failedGrant || current.account.status === 'needs_reconnect') return h;
+      return writeExtra(h, ref.account.id, (a) => ({ ...a, status: 'needs_reconnect' }));
+    });
+    await forgetAccessToken(ctx, ref);
   } catch {
-    ctx.log('error', 'google: could not record that a reconnect is needed', { hostId: host.id });
+    ctx.log('error', 'google: could not record that a reconnect is needed', { hostId: ref.host.id, accountId: ref.account.id });
   }
 }
 
 /**
- * A valid access token for the host: from the cache while it has more than a minute left,
- * otherwise freshly minted with the refresh token. `force` skips the cache (used after a 401).
- * Throws GoogleAuthError when the host has to connect again.
+ * A main account connected before accounts were told apart by Google's own id has none on record. After
+ * its first successful refresh one userinfo call learns it (every grant has openid), and one write stores
+ * it with the account's id, but only while the stored grant is still the one that was refreshed. An extra
+ * entry that turns out to be the same Google account is folded into the main one in the same write.
  */
-export async function getGoogleAccessToken(ctx: Ctx, host: Host, opts?: { force?: boolean }): Promise<string> {
-  const google = requireGoogle(host);
+async function learnSub(ctx: Ctx, ref: AccountRef, accessToken: string, idToken: unknown): Promise<void> {
+  try {
+    const creds = await clientCredentials(ctx);
+    const fromToken = creds ? identityFromIdToken(idToken, creds.clientId) : null;
+    const identity = fromToken?.sub ? fromToken : await identityFromUserinfo(ctx, accessToken);
+    if (!identity?.sub) return;
+    const grant = ref.account.refreshTokenEnc;
+    await updateHost(ctx, ref.host.id, (h) => {
+      if (!h.google || h.google.refreshTokenEnc !== grant || h.google.sub) return h;
+      const id = typeof h.google.id === 'string' && h.google.id !== '' ? h.google.id : (legacyMainId(h) ?? ref.account.id);
+      return foldIntoMain({ ...h, google: { ...h.google, id, sub: identity.sub } }).host;
+    });
+  } catch (err) {
+    ctx.log('warn', 'google: could not learn which Google account a connection is', { hostId: ref.host.id, error: err instanceof Error ? err.name : 'unknown' });
+  }
+}
+
+/**
+ * A valid access token for one account: from the cache while it has more than a minute left,
+ * otherwise freshly minted with that account's refresh token. `force` skips the cache (used after a 401).
+ * Throws GoogleAuthError when the account has to be connected again.
+ */
+export async function getGoogleAccessToken(ctx: Ctx, ref: AccountRef, opts?: { force?: boolean }): Promise<string> {
+  const google = requireAccount(ref);
   if (google.status === 'needs_reconnect') throw new GoogleAuthError();
 
   if (!opts?.force) {
-    const cached = await cacheGet<{ t?: unknown; fp?: unknown }>(ctx, tokenCacheName(host.id));
+    const cached = await cacheGet<{ t?: unknown; fp?: unknown }>(ctx, tokenCacheName(ref));
     if (cached && typeof cached.t === 'string' && cached.fp === grantFingerprint(google.refreshTokenEnc)) {
       const token = open(ctx, ACCESS_PURPOSE, cached.t);
       if (token) return token;
@@ -490,7 +665,7 @@ export async function getGoogleAccessToken(ctx: Ctx, host: Host, opts?: { force?
   const refreshToken = open(ctx, REFRESH_PURPOSE, google.refreshTokenEnc);
   if (!refreshToken) {
     // sealed with a key we no longer have
-    await markNeedsReconnect(ctx, host);
+    await markNeedsReconnect(ctx, ref);
     throw new GoogleAuthError();
   }
   const creds = await clientCredentials(ctx);
@@ -504,14 +679,15 @@ export async function getGoogleAccessToken(ctx: Ctx, host: Host, opts?: { force?
   });
   const accessToken = str(body.access_token);
   if (status === 200 && accessToken) {
-    await cacheAccessToken(ctx, host.id, google.refreshTokenEnc, accessToken, body.expires_in);
+    await cacheAccessToken(ctx, ref, google.refreshTokenEnc, accessToken, body.expires_in);
+    if (ref.main && !google.sub) await learnSub(ctx, ref, accessToken, body.id_token);
     return accessToken;
   }
   const reason = codeOf(body.error);
-  ctx.log('warn', 'google: token refresh failed', { hostId: host.id, status, reason });
+  ctx.log('warn', 'google: token refresh failed', { hostId: ref.host.id, accountId: google.id, status, reason });
   if (reason === 'invalid_grant') {
     // revoked, expired, or the account's password changed: only a new consent fixes it
-    await markNeedsReconnect(ctx, host);
+    await markNeedsReconnect(ctx, ref);
     throw new GoogleAuthError();
   }
   if (reason === 'invalid_client' || reason === 'unauthorized_client') {
@@ -543,12 +719,12 @@ interface ApiRequest {
 }
 
 /**
- * One Google API call as the host. Retries once on a network failure, a 5xx or a rate limit
+ * One Google API call as one account. Retries once on a network failure, a 5xx or a rate limit
  * (only on a rate limit when `repeatable` is false), and once more with a fresh token after a 401.
  * Everything else becomes GoogleApiError, or GoogleAuthError when only a new consent can fix it.
  */
-async function googleApi<T>(ctx: Ctx, host: Host, req: ApiRequest): Promise<{ status: number; data: T | null }> {
-  let token = await getGoogleAccessToken(ctx, host);
+async function googleApi<T>(ctx: Ctx, ref: AccountRef, req: ApiRequest): Promise<{ status: number; data: T | null }> {
+  let token = await getGoogleAccessToken(ctx, ref);
   let retried = false;
   let refreshed = false;
   for (;;) {
@@ -574,7 +750,7 @@ async function googleApi<T>(ctx: Ctx, host: Host, req: ApiRequest): Promise<{ st
     if (res.status === 401 && !refreshed) {
       refreshed = true;
       await drain(res);
-      token = await getGoogleAccessToken(ctx, host, { force: true });
+      token = await getGoogleAccessToken(ctx, ref, { force: true });
       continue;
     }
     if (res.ok || req.allow?.includes(res.status)) {
@@ -589,7 +765,7 @@ async function googleApi<T>(ctx: Ctx, host: Host, req: ApiRequest): Promise<{ st
       await pause(RETRY_PAUSE_MS);
       continue;
     }
-    ctx.log('warn', 'google: request failed', { hostId: host.id, method: req.method, status: res.status, reason });
+    ctx.log('warn', 'google: request failed', { hostId: ref.host.id, accountId: ref.account.id, method: req.method, status: res.status, reason });
     if (res.status === 401) throw new GoogleAuthError();
     if (res.status === 403 && SCOPE_REASONS.has(reason)) {
       throw new GoogleAuthError('Google permission is missing. Connect Google again and allow every permission it asks for.');
@@ -616,24 +792,24 @@ function chunk<T>(list: T[], size: number): T[][] {
 }
 
 /**
- * Busy time on the host's selected calendars, merged, inside `range`.
+ * Busy time on the selected calendars of one account, merged, inside `range`.
  * Fails as a whole when Google reports a problem with any one calendar: a partial answer
  * would show the host as free when they may not be.
  */
-export async function googleFreeBusy(ctx: Ctx, host: Host, range: Interval): Promise<Interval[]> {
-  const google = requireGoogle(host);
+export async function googleFreeBusy(ctx: Ctx, ref: AccountRef, range: Interval): Promise<Interval[]> {
+  const google = requireAccount(ref);
   if (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.end <= range.start) return [];
   const ids = [...new Set(google.busyCalendarIds.filter((id) => typeof id === 'string' && id !== ''))];
   if (ids.length === 0) ids.push('primary');
 
   // Mint (or load) the token once, so the parallel requests below all find it in the cache.
-  await getGoogleAccessToken(ctx, host);
+  await getGoogleAccessToken(ctx, ref);
   const requests: Promise<Interval[]>[] = [];
   for (let from = range.start; from < range.end; from += FREEBUSY_CHUNK_MS) {
     const to = Math.min(from + FREEBUSY_CHUNK_MS, range.end);
     for (const group of chunk(ids, FREEBUSY_MAX_CALENDARS)) {
       requests.push(
-        googleApi<FreeBusyResponse>(ctx, host, {
+        googleApi<FreeBusyResponse>(ctx, ref, {
           method: 'POST',
           url: `${CALENDAR_BASE}/freeBusy`,
           body: { timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), items: group.map((id) => ({ id })) },
@@ -673,14 +849,14 @@ interface CalendarListResponse {
   nextPageToken?: string;
 }
 
-export async function googleListCalendars(ctx: Ctx, host: Host): Promise<GoogleCalendarListItem[]> {
-  requireGoogle(host);
+export async function googleListCalendars(ctx: Ctx, ref: AccountRef): Promise<GoogleCalendarListItem[]> {
+  requireAccount(ref);
   const out: GoogleCalendarListItem[] = [];
   let pageToken = '';
   for (let page = 0; page < CALENDAR_LIST_MAX_PAGES; page++) {
     const query: Record<string, string> = { maxResults: '250', minAccessRole: 'freeBusyReader' };
     if (pageToken) query.pageToken = pageToken;
-    const { data } = await googleApi<CalendarListResponse>(ctx, host, { method: 'GET', url: withQuery(`${CALENDAR_BASE}/users/me/calendarList`, query) });
+    const { data } = await googleApi<CalendarListResponse>(ctx, ref, { method: 'GET', url: withQuery(`${CALENDAR_BASE}/users/me/calendarList`, query) });
     for (const item of isRecord(data) && Array.isArray(data.items) ? data.items : []) {
       if (!isRecord(item) || typeof item.id !== 'string' || item.id === '' || item.deleted === true) continue;
       const entry: GoogleCalendarListItem = {
@@ -698,10 +874,10 @@ export async function googleListCalendars(ctx: Ctx, host: Host): Promise<GoogleC
   return out.sort((a, b) => Number(b.primary) - Number(a.primary) || a.summary.localeCompare(b.summary));
 }
 
-/** The time zone set in the host's Google Calendar settings, or null when it is missing or not a zone we know. */
-export async function googleGetTimezone(ctx: Ctx, host: Host): Promise<IanaZone | null> {
-  requireGoogle(host);
-  const { data } = await googleApi<{ value?: unknown }>(ctx, host, { method: 'GET', url: `${CALENDAR_BASE}/users/me/settings/timezone` });
+/** The time zone set in one account's Google Calendar settings, or null when it is missing or not a zone we know. */
+export async function googleGetTimezone(ctx: Ctx, ref: AccountRef): Promise<IanaZone | null> {
+  requireAccount(ref);
+  const { data } = await googleApi<{ value?: unknown }>(ctx, ref, { method: 'GET', url: `${CALENDAR_BASE}/users/me/settings/timezone` });
   const value = isRecord(data) ? data.value : null;
   return isValidZone(value) ? value : null;
 }
@@ -725,6 +901,7 @@ interface GoogleEvent {
   id?: string;
   status?: string;
   htmlLink?: string;
+  extendedProperties?: { private?: Record<string, unknown> };
   hangoutLink?: string;
   conferenceData?: {
     entryPoints?: { entryPointType?: string; uri?: string }[];
@@ -808,13 +985,18 @@ function meetUrlOf(event: GoogleEvent | null): string | undefined {
   return video?.uri;
 }
 
+/**
+ * Creates the event of a booking in one account, in its "add new meetings to" calendar, or in `calendarId`
+ * when given (an event someone deleted comes back where it was).
+ */
 export async function googleCreateEvent(
   ctx: Ctx,
-  host: Host,
+  ref: AccountRef,
   input: CalendarEventInput,
+  opts?: { calendarId?: string },
 ): Promise<{ eventId: string; calendarId: string; htmlLink?: string; meetUrl?: string }> {
-  const google = requireGoogle(host);
-  const calendarId = google.writeCalendarId || 'primary';
+  const google = requireAccount(ref);
+  const calendarId = opts?.calendarId || google.writeCalendarId || 'primary';
   const eventId = eventIdForBooking(input.bookingId);
   const fields = {
     ...eventFields(input, google.email),
@@ -824,7 +1006,7 @@ export async function googleCreateEvent(
   // conferenceDataVersion=1 is what makes Google act on conferenceData at all
   const query = { conferenceDataVersion: '1', sendUpdates: sendUpdates(input.notifyAttendees) };
 
-  const created = await googleApi<GoogleEvent>(ctx, host, {
+  const created = await googleApi<GoogleEvent>(ctx, ref, {
     method: 'POST',
     url: withQuery(eventsUrl(calendarId), query),
     body: { id: eventId, ...fields },
@@ -833,10 +1015,10 @@ export async function googleCreateEvent(
   let event = created.status === 409 ? null : created.data;
   if (created.status === 409) {
     // An earlier attempt for this booking already went through: adopt its event.
-    event = (await googleApi<GoogleEvent>(ctx, host, { method: 'GET', url: eventsUrl(calendarId, eventId) })).data;
+    event = (await googleApi<GoogleEvent>(ctx, ref, { method: 'GET', url: eventsUrl(calendarId, eventId) })).data;
     if (event?.status === 'cancelled') {
       event = (
-        await googleApi<GoogleEvent>(ctx, host, {
+        await googleApi<GoogleEvent>(ctx, ref, {
           method: 'PATCH',
           url: withQuery(eventsUrl(calendarId, eventId), query),
           body: { ...fields, status: 'confirmed' },
@@ -855,7 +1037,7 @@ export async function googleCreateEvent(
   for (let look = 0; input.createMeet && !meetUrl && pending && look < MEET_LOOKS; look++) {
     await new Promise((resolve) => setTimeout(resolve, MEET_LOOK_PAUSE_MS));
     try {
-      const again = (await googleApi<GoogleEvent>(ctx, host, { method: 'GET', url: eventsUrl(calendarId, event.id) })).data;
+      const again = (await googleApi<GoogleEvent>(ctx, ref, { method: 'GET', url: eventsUrl(calendarId, event.id) })).data;
       meetUrl = meetUrlOf(again);
       pending = again?.conferenceData?.createRequest?.status?.statusCode === 'pending';
     } catch {
@@ -873,9 +1055,9 @@ export async function googleCreateEvent(
  * The links of an existing event, read again: the Meet link of an event whose conference Google was still
  * creating when it was inserted. Nothing is changed, so nobody is notified.
  */
-export async function googleGetEventLinks(ctx: Ctx, host: Host, calendarId: string, eventId: string): Promise<{ meetUrl?: string; htmlLink?: string }> {
-  requireGoogle(host);
-  const event = (await googleApi<GoogleEvent>(ctx, host, { method: 'GET', url: eventsUrl(calendarId || 'primary', eventId) })).data;
+export async function googleGetEventLinks(ctx: Ctx, ref: AccountRef, calendarId: string, eventId: string): Promise<{ meetUrl?: string; htmlLink?: string }> {
+  requireAccount(ref);
+  const event = (await googleApi<GoogleEvent>(ctx, ref, { method: 'GET', url: eventsUrl(calendarId || 'primary', eventId) })).data;
   const out: { meetUrl?: string; htmlLink?: string } = {};
   const meetUrl = meetUrlOf(event);
   if (meetUrl) out.meetUrl = meetUrl;
@@ -884,14 +1066,28 @@ export async function googleGetEventLinks(ctx: Ctx, host: Host, calendarId: stri
 }
 
 /**
+ * Reads an event without changing it (nobody is told), to see whether this account holds it: `ours` is
+ * true when the event carries our booking id in its private properties. Google keeps those per calendar
+ * copy, so an attendee's copy of someone else's event never matches. `status` is 404, 410 or 403 when the
+ * account does not have it; other failures throw.
+ */
+export async function googleGetEvent(ctx: Ctx, ref: AccountRef, calendarId: string, eventId: string): Promise<{ status: number; bookingId: string | null }> {
+  requireAccount(ref);
+  const { status, data } = await googleApi<GoogleEvent>(ctx, ref, { method: 'GET', url: eventsUrl(calendarId || 'primary', eventId), allow: [403, 404, 410] });
+  if (status !== 200) return { status, bookingId: null };
+  const id = data?.extendedProperties?.private?.meetingBookingId;
+  return { status, bookingId: typeof id === 'string' && id !== '' ? id : null };
+}
+
+/**
  * Changes the given fields of an event (PATCH). Attendees are told unless `notifyAttendees` is false:
  * for guests outside Google the update email is the only thing that moves the event in their calendar.
  */
-export async function googleUpdateEvent(ctx: Ctx, host: Host, calendarId: string, eventId: string, patch: Partial<CalendarEventInput>): Promise<void> {
-  const google = requireGoogle(host);
+export async function googleUpdateEvent(ctx: Ctx, ref: AccountRef, calendarId: string, eventId: string, patch: Partial<CalendarEventInput>): Promise<void> {
+  const google = requireAccount(ref);
   const body = eventFields(patch, google.email);
   if (Object.keys(body).length === 0) return;
-  await googleApi<GoogleEvent>(ctx, host, {
+  await googleApi<GoogleEvent>(ctx, ref, {
     method: 'PATCH',
     url: withQuery(eventsUrl(calendarId || 'primary', eventId), { conferenceDataVersion: '1', sendUpdates: sendUpdates(patch.notifyAttendees !== false) }),
     body,
@@ -899,9 +1095,9 @@ export async function googleUpdateEvent(ctx: Ctx, host: Host, calendarId: string
 }
 
 /** Removes an event. An event that is already gone (404 / 410) counts as removed. */
-export async function googleDeleteEvent(ctx: Ctx, host: Host, calendarId: string, eventId: string, notifyAttendees: boolean): Promise<void> {
-  requireGoogle(host);
-  await googleApi<null>(ctx, host, {
+export async function googleDeleteEvent(ctx: Ctx, ref: AccountRef, calendarId: string, eventId: string, notifyAttendees: boolean): Promise<void> {
+  requireAccount(ref);
+  await googleApi<null>(ctx, ref, {
     method: 'DELETE',
     url: withQuery(eventsUrl(calendarId || 'primary', eventId), { sendUpdates: sendUpdates(notifyAttendees) }),
     allow: [404, 410],
@@ -910,11 +1106,11 @@ export async function googleDeleteEvent(ctx: Ctx, host: Host, calendarId: string
 
 // ───────────────────────── gmail ─────────────────────────
 
-/** Sends a complete RFC 5322 message as the host's Gmail account. */
-export async function gmailSendRaw(ctx: Ctx, host: Host, rawMime: string): Promise<{ id: string }> {
-  const google = requireGoogle(host);
+/** Sends a complete RFC 5322 message as one account's Gmail (the owner's main account). */
+export async function gmailSendRaw(ctx: Ctx, ref: AccountRef, rawMime: string): Promise<{ id: string }> {
+  const google = requireAccount(ref);
   if (!google.gmailSend) throw new GoogleAuthError('Sending from Gmail is not enabled. Connect Google again and allow sending email.');
-  const { data } = await googleApi<{ id?: unknown }>(ctx, host, {
+  const { data } = await googleApi<{ id?: unknown }>(ctx, ref, {
     method: 'POST',
     url: GMAIL_SEND_ENDPOINT,
     body: { raw: Buffer.from(rawMime, 'utf8').toString('base64url') },
@@ -927,24 +1123,10 @@ export async function gmailSendRaw(ctx: Ctx, host: Host, rawMime: string): Promi
   return { id };
 }
 
-// ───────────────────────── disconnect ─────────────────────────
+// ───────────────────────── removing accounts ─────────────────────────
 
-/**
- * Forgets the host's Google connection and, when no other host shares the same Google account,
- * revokes the grant at Google as well (best effort: the local disconnect never depends on it).
- */
-export async function disconnectGoogle(ctx: Ctx, hostId: string): Promise<void> {
-  const hosts = await listHosts(ctx);
-  const host = hosts.find((h) => h.id === hostId);
-  if (!host) return;
-  const google = host.google ?? null;
-  await updateHost(ctx, hostId, (h) => ({ ...h, google: null, calendarHealth: null }));
-  await forgetAccessToken(ctx, hostId);
-  if (!google) return;
-
-  const shared = hosts.some((h) => h.id !== hostId && h.google && h.google.email.toLowerCase() === google.email.toLowerCase());
-  const refreshToken = open(ctx, REFRESH_PURPOSE, google.refreshTokenEnc);
-  if (shared || !refreshToken) return;
+/** Ends a grant at Google (best effort: nothing local ever waits on it). */
+async function revokeToken(ctx: Ctx, refreshToken: string, hostId: string): Promise<void> {
   try {
     const res = await ctx.fetch(REVOKE_ENDPOINT, {
       method: 'POST',
@@ -954,6 +1136,83 @@ export async function disconnectGoogle(ctx: Ctx, hostId: string): Promise<void> 
     });
     await drain(res);
   } catch {
-    ctx.log('warn', 'google: could not revoke the grant while disconnecting', { hostId });
+    ctx.log('warn', 'google: could not revoke the grant', { hostId });
+  }
+}
+
+/**
+ * Google's revoke ends the whole grant of that Google account for this app, not one refresh token. So it
+ * only happens when no other entry anywhere is the same Google account: no account of another host, and
+ * no other entry of this host.
+ */
+async function revokeUnlessHeld(ctx: Ctx, hosts: Host[], hostId: string, account: GoogleAccount): Promise<boolean> {
+  if (heldElsewhere(hosts, hostId, account.id, account)) return false;
+  const refreshToken = typeof account.refreshTokenEnc === 'string' ? open(ctx, REFRESH_PURPOSE, account.refreshTokenEnc) : null;
+  if (!refreshToken) return false;
+  await revokeToken(ctx, refreshToken, hostId);
+  return true;
+}
+
+export interface RemovedAccount {
+  host: Host;
+  removed: GoogleAccount;
+  main: boolean;
+  /** true when the grant was handed back to Google */
+  revoked: boolean;
+}
+
+/**
+ * Removes one Google account of a host (main or extra) and, when nothing else holds the same Google
+ * account, revokes its grant. Removing the main account is the disconnect of old: `host.google` becomes
+ * null and the other accounts keep blocking. Null when the host or the account does not exist.
+ */
+export async function removeGoogleAccount(ctx: Ctx, hostId: string, accountId: string): Promise<RemovedAccount | null> {
+  const hosts = await listHosts(ctx);
+  const host = hosts.find((h) => h.id === hostId);
+  if (!host) return null;
+  const target = findAccount(host, { id: accountId });
+  if (!target) return null;
+  let removed: GoogleAccount | null = null;
+  let main = false;
+  const saved = await updateHost(ctx, hostId, (h) => {
+    const current = findAccount(h, { id: accountId });
+    if (!current) {
+      removed = null;
+      return h;
+    }
+    removed = current.account;
+    main = current.main;
+    if (current.main) return { ...h, google: null, calendarHealth: null };
+    return { ...removeExtra(h, accountId).host, calendarHealth: null };
+  });
+  if (!saved || !removed) return null;
+  const gone: GoogleAccount = removed;
+  await forgetAccessToken(ctx, { host, account: gone, main }).catch(() => undefined);
+  const revoked = await revokeUnlessHeld(ctx, hosts, hostId, gone);
+  return { host: saved, removed: gone, main, revoked };
+}
+
+/**
+ * The main account of the host goes (the "Disconnect" of old), revoked unless shared. The other accounts
+ * stay and keep blocking.
+ */
+export async function disconnectGoogle(ctx: Ctx, hostId: string): Promise<void> {
+  const host = await getHost(ctx, hostId);
+  const main = mainOf(host);
+  if (!main) {
+    if (host?.google !== undefined && host.google !== null) await updateHost(ctx, hostId, (h) => ({ ...h, google: null, calendarHealth: null }));
+    return;
+  }
+  await removeGoogleAccount(ctx, hostId, main.account.id);
+}
+
+/** Every Google account of the host goes, each grant revoked unless something else holds it (deleting a co-host). */
+export async function disconnectAllGoogle(ctx: Ctx, hostId: string): Promise<void> {
+  // One at a time, each against the record as it is now; bounded, so a record that will not change cannot loop.
+  for (let i = 0; i < MAX_GOOGLE_ACCOUNTS_PER_HOST + 5; i++) {
+    const host = await getHost(ctx, hostId);
+    const ref = host ? accountsOf(host)[0] : undefined;
+    if (!ref) return;
+    if (!(await removeGoogleAccount(ctx, hostId, ref.account.id))) return;
   }
 }

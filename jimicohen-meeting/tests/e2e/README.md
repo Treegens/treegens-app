@@ -22,6 +22,7 @@ folder and its own log file. Exit code 0 means every scenario of every suite pas
 | `E2E_SKIP_BUILD=1` | reuse the build that is already there | build every run |
 | `E2E_WORK_DIR` | data folders and `server.log` per suite | a fresh temp folder |
 | `E2E_TIMEOUT_MS` | how long a browser action may take | `10000` |
+| `E2E_SCREENSHOT_DIR` | where screenshots go, a folder per suite | `tests/e2e/screenshots` |
 
 Several people can run at once when each uses their own `E2E_PORTS`, `E2E_DIST_DIR` and
 `E2E_WORK_DIR`. Screenshots go to `tests/e2e/screenshots/<suite>/` (not committed).
@@ -89,6 +90,8 @@ Everything a visitor and an invitee can do, `node tests/e2e/run.mjs public`:
 | `public-resilience` | Google down, slow or failing on the write, email provider failing, switched-off and unlisted events, honeypot, prefill links, redirect |
 | `public-embed` | the Share panel's inline and popup code on a page served from another port under a strict CSP |
 | `public-look` | every public screen on desktop and phone in three presets: screenshots to read, plus overflow, cut-off text and contrast checked by program |
+| `public-short-links` | `/meet` (Jimi alone, in his look) and `/pod` (Jimi and Ian, only shared free times, everything in Eco Champions: page, emails, text, Google event, call, manage page) on desktop and at 390 px; link previews read without scripts, the headers, no forest while `/pod` loads, closed and moved links |
+| `public-no-brand-leak` | with Eco Champions set up and edited, Jimi's own pages and messages show none of it |
 
 `public-helpers.mjs` holds what they share: `prepare(s)` (fresh site, owner signed in, Google
 connected), `addCoHost`, `openEvent`, `pickDay`, `pickSlot`, `fillDetails`, `confirmBooking`,
@@ -114,6 +117,15 @@ the page and then what was stored (or sent), read back through `s.kv`, `s.outbox
 | `admin-integrations` | a server with nothing configured (`mockCreds: false`): credentials pasted, masked and never sent back, badges, every "Send test" against the outbox, field errors, Remove; a refused Google secret, the owner's calendar choice, Cancel at Google |
 | `admin-settings` | profile, assistant, booking form defaults and email identity reaching the landing page, the form, the next emails and the TwiML; bookings tabs, search, drawer, cancel, no-show, delete (also when Google could not remove the calendar event), CSV, Home numbers; paging over 45 bookings; Share and embed |
 | `admin-look` | every dashboard page and the co-host page at 1440 and 390, light and dark: screenshots to read, plus failed requests, console errors and sideways scrolling checked by program |
+| `admin-google-accounts` | several Google accounts per person: added with "Add another Google account" (chooser, no hint), busy time on each closing its time, bookings still going to the main account, an account picked twice, a renamed address and a reused one, removing one (revoked), one that needs a reconnect named on Home, Integrations and the alert, old-shape data stamped by housekeeping, a co-host with two accounts on a joint meeting, "Use a different Google account" without a second invitation, the ceiling of 20, a link replaced mid sign-in, and the rows at 390 |
+| `admin-brands` | the one-time setup on data like the live site (and a second run changing nothing), joint meetings made before it, "Your links" on Home with its copy buttons, the Short links card and the chips, the Look section of the editor, the Eco Champions look, logo and sender name in Design, and the `/pod` meeting offered when a co-host is added |
+
+`joint-pod-accounts` covers where several Google accounts and the Eco Champions brand meet: Jimi and Ian
+with two accounts each, busy time on either second account closing that time on `/pod` (and `/meet`
+minding only Jimi's), a broken second account named on Home and in the alert in Jimi's own name, and the
+`/pod` and `/meet` emails each in their own brand, also after "Use a different Google account" leaves both
+bookings no longer linked to their events. Integrations, Team, the co-host page, Home and `/pod` at 1280
+and at 390.
 
 `admin-helpers.mjs` holds what they share: `MONDAY` (the frozen "now"), `openPage` (through the
 sidebar), `expectToast`, `clearToasts`, `expectFieldProblem` (the message a field announces through
@@ -174,10 +186,14 @@ Playwright: `await page.getByRole(...).waitFor()`.
 | `s.clearOutbox()`, `s.waitForOutbox(filter, { count, timeout })` | |
 | `s.setClock(iso)`, `s.advanceClock({ days, hours, minutes })`, `s.now()` | the frozen server clock. Open pages follow. `setClock(null)` returns to real time. |
 | `s.runJobs()` | what the cron function does (due reminders, housekeeping), then `settle()` |
+| `s.runOneTimeMoves()` | the one-time short link setup, which only the published deploy's scheduled function runs (`runJobs()` never does); returns its report, or `'already_done'` |
+| `s.shortUrl(name, { origin })`, `s.fetchHtml(url, { userAgent })`, `metaOf(html)` | the address of `/meet` or `/pod` the way jimicohen.com reaches it; a plain request without scripts, as a link preview crawler makes it; the title, meta tags and links of a page's head |
 | `s.jobs(filter)`, `s.calls()`, `s.bookings(filter)` | queued jobs, calls placed through mock Twilio (with our call record), every booking with `manageToken` and `manageUrl` |
 | `s.kv(key)`, `s.kvKeys(prefix)` | raw look into the store, for example `s.kv('hosts')` |
+| `s.putKv(key, value)`, `s.googleAccountsOf(hostId)` | write one raw record (data in the shape an older deploy left it); a host's stored Google accounts as `{ main, extras }` |
+| `s.addGoogleAccount(page, region, email, zone)` | presses "Add another Google account" in `region` and signs in as `email`; checks Google was asked for its account chooser with no hint |
 | `s.setGoogleBusy(email, [{ start, end, calendarId? }])`, `s.clearGoogleBusy(email)` | busy time of a mock Google account. Also drops the app's one minute free/busy cache. |
-| `s.setGoogleAccount(email, { timezone, calendars, revoked })`, `s.googleEvents(email)` | change a mock account, read the events on its calendars |
+| `s.setGoogleAccount(email, { timezone, calendars, revoked })`, `s.googleEvents(email)` | change a mock account, read the events on its calendars. `{ renameTo }` moves the same Google account (same sub, events and busy time) to a new address; `{ newAccount: true }` gives the address to another Google account. A revoke ends every token of that account. |
 | `s.failService(service, spec)`, `s.clearFailures(service?)` | failure injection, see below |
 | `s.scriptModel([{ say, action }, { stopReason: 'refusal' }, { text }, { status: 529 }])` | the next answers of the mock model, in order |
 | `s.setIcsFeed(name, { events: [{ start, end, summary }] })` | a calendar feed served by the mock, returns its https address |

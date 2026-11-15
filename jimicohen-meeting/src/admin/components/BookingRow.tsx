@@ -1,9 +1,11 @@
 import { Check, ChevronRight, MapPin, Phone, RefreshCw, Video } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { To } from 'react-router-dom';
+import { isBrandId } from '../../../shared/brands';
 import type { AdminBooking, LocationType } from '../../../shared/types';
 import { dayKey, daysBetween, formatDateMedium, formatTime, todayKey } from '../../lib/tz';
 import { AvatarGroup, Badge } from '../../ui';
+import { BrandChip } from './BrandBits';
 
 export function locationIcon(type: LocationType) {
   if (type === 'google_meet' || type === 'custom_link') return <Video size={14} aria-hidden="true" />;
@@ -64,6 +66,8 @@ export function BookingRow({ booking: b, zone, to, showEmail = false }: BookingR
         </span>
         <span className="adm-agenda__what">
           <span className="u-truncate">{b.eventTitle}</span>
+          {/* Booked under a brand: its pages and messages are in that brand, whatever the event carries now. */}
+          {isBrandId(b.brandId) ? <BrandChip id={b.brandId} /> : null}
           <span className="adm-agenda__loc">
             {locationIcon(b.location.type)}
             <span className="u-truncate">{b.location.label}</span>

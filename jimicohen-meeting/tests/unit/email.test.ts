@@ -334,7 +334,8 @@ describe('sendEmail with Gmail', () => {
     expect(result).toEqual({ ok: true, provider: 'gmail', id: 'gmail_1' });
     expect(gmailSend).toHaveBeenCalledTimes(1);
     const [, host, raw] = gmailSend.mock.calls[0];
-    expect(host.id).toBe('host_owner');
+    expect(host.host.id).toBe('host_owner');
+    expect(host.main).toBe(true);
     expect(raw).toContain('From: "Jimi Cohen" <jimi@gmail.example>\r\n');
     expect(raw).toContain('To: "Sam Rivera" <sam@example.com>\r\n');
     expect(raw).toContain('Reply-To: owner@example.com\r\n');

@@ -2153,3 +2153,73 @@ describe('deliverMessage: alerts to the owner', () => {
     expect(smsSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a detached booking: its Google invitation can no longer be changed', () => {
+  // The event is in a Google account that is gone (removed, or replaced by "Use a different Google account").
+  const detached = { hostId: 'host_owner', accountId: 'gacc_gone', accountEmail: 'jimi@oldjob.example', calendarId: 'primary', eventId: 'mtgabc123', detached: true };
+
+  it('sends the invitee our CANCEL file and says to delete the earlier invitation, and gives the host a file too', async () => {
+    const world = await makeWorld();
+    const booking = await book(world, { google: detached }, null);
+    await saveBooking(world.ctx, { ...booking, status: 'cancelled', cancellation: { at: TEST_NOW, by: 'host' } });
+    await enqueueJob(world.ctx, { type: 'message', bookingId: booking.id, dueAt: TEST_NOW, channel: 'email', audience: 'invitee', kind: 'cancelled' });
+    await enqueueJob(world.ctx, { type: 'message', bookingId: booking.id, dueAt: TEST_NOW, channel: 'email', audience: 'host', kind: 'cancelled' });
+    await runDueJobs(world.ctx);
+    const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(invitee.attachments![0].content_type).toContain('method=CANCEL');
+    expect(invitee.text).toContain('If this meeting is still in your calendar from the earlier Google Calendar invitation, please delete it there.');
+    expect(invitee.html).toContain('That invitation could not be cancelled for you.');
+    const host = world.emails.find((e) => e.to[0].includes('jimi@example.com'))!;
+    expect(host.attachments![0].content_type).toContain('method=CANCEL');
+    expect(host.text).not.toContain('earlier Google Calendar invitation');
+  });
+
+  it('sends a moved invitee our REQUEST file and the sentence about the old time', async () => {
+    const world = await makeWorld();
+    await book(world, { google: detached, rescheduledFromStart: '2026-11-18T13:00:00.000Z', rescheduleCount: 1 }, 'rescheduled');
+    await runDueJobs(world.ctx);
+    const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(invitee.attachments![0].content_type).toContain('method=REQUEST');
+    expect(invitee.text).toContain('You may still see this meeting at its old time in your calendar, from the earlier Google Calendar invitation.');
+    expect(`${invitee.subject} ${invitee.text}`).not.toContain('—');
+  });
+
+  it('compat: a booking that is not detached keeps what it had (no CANCEL beside Google, PUBLISH for a move)', async () => {
+    const world = await makeWorld();
+    const google = { ...detached, detached: undefined };
+    await book(world, { google, rescheduledFromStart: '2026-11-18T13:00:00.000Z', rescheduleCount: 1 }, 'rescheduled');
+    await runDueJobs(world.ctx);
+    const moved = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(moved.attachments![0].content_type).toContain('method=PUBLISH');
+    expect(moved.text).not.toContain('earlier Google Calendar invitation');
+    const host = world.emails.find((e) => e.to[0].includes('jimi@example.com'))!;
+    expect(host.attachments).toBeUndefined();
+  });
+});
+
+describe('a notice to a co-host about their Google accounts', () => {
+  it('has no button to a dashboard they cannot open; the owner\'s keeps it', async () => {
+    const world = await makeWorld();
+    const notice = { type: 'message' as const, kind: 'host_alert' as const, bookingId: '', channel: 'email' as const, audience: 'host' as const, subject: 'A Google account was connected to your booking page', body: 'Hi {{host_first_name}},\n\nalex@work.example was connected.', dueAt: TEST_NOW };
+    await enqueueJob(world.ctx, { ...notice, hostId: 'host_alex' });
+    await enqueueJob(world.ctx, { ...notice, hostId: 'host_owner' });
+    await runDueJobs(world.ctx);
+    const toAlex = world.emails.find((e) => e.subject === 'A Google account was connected to your booking page' && !e.to[0].includes('jimi@example.com'))!;
+    const toOwner = world.emails.find((e) => e.to[0].includes('jimi@example.com'))!;
+    expect(toAlex.html).not.toContain('/admin');
+    expect(toAlex.text).not.toContain('Open your dashboard');
+    expect(toOwner.html).toContain('Open your dashboard');
+  });
+
+  it('when the email cannot go out, the text to the co-host carries no dashboard link either', async () => {
+    const world = await makeWorld();
+    world.failEmail = (sent) => sent.to[0].includes('alex@example.com');
+    await enqueueJob(world.ctx, { type: 'message', kind: 'host_alert', bookingId: '', channel: 'email', audience: 'host', hostId: 'host_alex', subject: 'A Google account was connected to your booking page', body: 'Hi {{host_first_name}},\n\nalex@work.example was connected.', dueAt: TEST_NOW });
+    await runDueJobs(world.ctx);
+    const texts = smsSpy.mock.calls.map((c) => c[1]);
+    expect(texts.map((t) => t.to)).toEqual(['+447700900123']);
+    expect(texts[0].body).toContain('A Google account was connected to your booking page');
+    expect(texts[0].body).not.toContain('/admin');
+    expect(texts[0].body).not.toContain('dashboard');
+  });
+});

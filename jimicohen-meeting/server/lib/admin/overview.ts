@@ -8,6 +8,7 @@
 import { DEFAULT_THEME } from '../../../shared/defaults';
 import type { AdminOverview, EventType, Host, IntegrationsStatus, SharedHoursCheck, SiteSettings } from '../../../shared/types';
 import type { Ctx } from '../ctx';
+import { accountsOf } from '../googleAccounts';
 import { getBookingIndex, getBookings, getSite, listEventTypes, listHosts } from '../repo';
 import { computeSlots } from '../slots';
 import { firstName, joinNames } from '../templates';
@@ -185,7 +186,12 @@ function hasHours(host: Host | null): boolean {
 }
 
 function hasCalendar(host: Host): boolean {
-  return !!host.google || (host.icsFeeds ?? []).length > 0;
+  return accountsOf(host).length > 0 || (host.icsFeeds ?? []).length > 0;
+}
+
+/** "a@x", "a@x and b@x" */
+function addresses(list: string[]): string {
+  return joinNames(list);
 }
 
 function madeTheirOwn(site: SiteSettings): boolean {
@@ -256,16 +262,22 @@ export function buildWarnings(
   // Every Google connection needs the keys it was made with. Without them no calendar can be
   // read, and a calendar that cannot be read closes the times of everyone it belongs to.
   const keysMissing = !integrations.google.configured;
-  const cutOff = keysMissing ? hosts.filter((h) => !!h.google) : [];
+  const cutOff = keysMissing ? hosts.filter((h) => accountsOf(h).length > 0) : [];
   if (cutOff.length > 0) {
-    const ownerCut = cutOff.some((h) => h.id === owner?.id);
-    const others = cutOff.filter((h) => h.id !== owner?.id).map((h) => firstName(h.name) || h.name || 'a co-host');
-    const theirs = joinNames(others.map((name) => `${name}'s`));
+    const ownerHost = cutOff.find((h) => h.id === owner?.id);
+    const ownerCut = !!ownerHost;
+    const otherHosts = cutOff.filter((h) => h.id !== owner?.id);
+    const others = otherHosts.map((h) => firstName(h.name) || h.name || 'a co-host');
+    // How many accounts each has, when it is more than one: "your 3 Google accounts and Alex's 2".
+    const theirs = joinNames(otherHosts.map((h, i) => (accountsOf(h).length > 1 ? `${others[i]}'s ${accountsOf(h).length}` : `${others[i]}'s`)));
+    const ownerCount = ownerHost ? accountsOf(ownerHost).length : 0;
+    const yours = ownerCount > 1 ? `your ${ownerCount} Google accounts` : 'your Google Calendar';
+    const severalTheirs = others.length > 1 || otherHosts.some((h) => accountsOf(h).length > 1);
     const whose = ownerCut
       ? others.length > 0
-        ? `your Google Calendar and ${theirs} cannot be read`
-        : 'your Google Calendar cannot be read'
-      : `${theirs} Google ${others.length === 1 ? 'Calendar' : 'Calendars'} cannot be read`;
+        ? `${yours} and ${theirs} cannot be read`
+        : `${yours} cannot be read`
+      : `${theirs} Google ${severalTheirs ? 'Calendars' : 'Calendar'} cannot be read`;
     const effect = ownerCut ? 'no times are offered for meetings with you' : `times that include ${joinNames(others)} are not offered`;
     warnings.push({
       key: 'google_keys_missing',
@@ -277,19 +289,31 @@ export function buildWarnings(
   for (const host of hosts) {
     const mine = host.id === owner?.id;
     const first = firstName(host.name) || 'A co-host';
+    const accounts = accountsOf(host);
     // Said once, above, for everyone it affects.
-    if (keysMissing && host.google) continue;
-    if (host.google?.status === 'needs_reconnect') {
+    if (keysMissing && accounts.length > 0) continue;
+    // One warning per host (its key unchanged), naming every account of it that needs a reconnect.
+    const broken = accounts.filter((a) => a.account.status === 'needs_reconnect');
+    if (broken.length > 0) {
+      const mainBroken = broken.some((a) => a.main);
+      const several = broken.length > 1;
+      const list = addresses(broken.map((a) => a.account.email));
+      const what = `Google ${several ? 'accounts' : 'account'} ${list} ${several ? 'need' : 'needs'} to be reconnected`;
       warnings.push(
         mine
           ? {
               key: `google_reconnect_${host.id}`,
-              message: `Your Google Calendar needs to be reconnected. Until then, no times are offered for meetings with you and new bookings cannot reach your calendar.${gmailProblem === 'needs_reconnect' ? noGmail : ''}`,
+              message: `Your ${what}. Until then, no times are offered for meetings with you${mainBroken ? ' and new bookings cannot reach your calendar' : ''}.${mainBroken && gmailProblem === 'needs_reconnect' ? noGmail : ''}`,
               href: LINK.google,
             }
-          : { key: `google_reconnect_${host.id}`, message: `${first}'s Google Calendar needs to be reconnected. Until then, times that include ${first} are not offered. Ask them to open their private link and connect again.`, href: LINK.team },
+          : {
+              key: `google_reconnect_${host.id}`,
+              message: `${first}'s ${what}. Until then, times that include ${first} are not offered. Ask ${first} to open their private link and reconnect ${several ? 'them' : 'it'}.`,
+              href: LINK.team,
+            },
       );
     } else if (host.calendarHealth && host.calendarHealth.ok === false) {
+      // The message names each account that could not be read (busy.ts).
       const reason = (host.calendarHealth.message ?? '').trim();
       const what = mine ? 'Your calendar could not be read' : `${first}'s calendar could not be read`;
       const effect = mine ? 'so times are not being offered until this is fixed.' : `so times that include ${first} are not being offered until this is fixed.`;
@@ -298,11 +322,19 @@ export function buildWarnings(
     // Google said when the connection was made that it ends on a set day (google.ts completeGoogleAuth). It does
     // that while the consent screen is still in "Testing" (7 days), and when the person picked a time limit on
     // Google's screen. Which of the two it was is not said, so the warning names both, the usual one first.
-    const ends = host.google?.status === 'ok' ? Date.parse(host.google.refreshExpiresAt ?? '') : Number.NaN;
-    if (Number.isFinite(ends)) {
-      const day = formatInZone(ends, owner?.timezone ?? host.timezone, 'date');
-      const ended = ends <= ctx.now().getTime();
-      const when = ended ? `stopped working on ${day}` : `ends on ${day}`;
+    const nowMs = ctx.now().getTime();
+    const ending = accounts
+      .filter((a) => a.account.status === 'ok')
+      .map((a) => ({ email: a.account.email, ends: Date.parse(a.account.refreshExpiresAt ?? '') }))
+      .filter((e) => Number.isFinite(e.ends))
+      .sort((x, y) => x.ends - y.ends);
+    if (ending.length > 0) {
+      const zone = owner?.timezone ?? host.timezone;
+      const whenOf = (e: { ends: number }) => (e.ends <= nowMs ? `stopped working on ${formatInZone(e.ends, zone, 'date')}` : `ends on ${formatInZone(e.ends, zone, 'date')}`);
+      const ended = ending[0].ends <= nowMs;
+      // With one account, said as before; with several, each is named with its day.
+      const named = accounts.length > 1;
+      const when = named ? joinNames(ending.map((e) => `for ${e.email} ${whenOf(e)}`)) : whenOf(ending[0]);
       const effect = ended ? 'Until you reconnect, no times are offered.' : 'After that, no times are offered until you reconnect.';
       // Said of the end date, not of the sentence before it: "Usually that means" read as if no times being offered meant Testing.
       const usually = 'An end date like this usually means the consent screen in Google Cloud is still in Testing: publish it so it reads In production';
@@ -351,7 +383,11 @@ export function buildWarnings(
     // needs one cannot be booked at all, and the Google warnings above already say so: telling the
     // owner here that "people can book" it would contradict them. This is also how a Gmail that went
     // down with the owner's Google connection empties `resolved`.
-    const unreadable = (host: Host) => !!host.google && (host.google.status !== 'ok' || keysMissing);
+    const unreadable = (host: Host) => {
+      // Any account that cannot be read closes the host's times, not only the main one.
+      const accounts = accountsOf(host);
+      return accounts.length > 0 && (keysMissing || accounts.some((a) => a.account.status !== 'ok'));
+    };
     const unheard = active.filter((e) => {
       if (!bookable(e)) return false;
       const assigned = e.hostIds.map((id) => byHost.get(id)).filter((h): h is Host => !!h);

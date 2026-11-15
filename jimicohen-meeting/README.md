@@ -13,18 +13,34 @@ Live at **https://jimicohen.com/meeting**. The dashboard is at **https://jimicoh
 | API | `server/`, `netlify/functions/api.mts` | One Netlify Function for everything under `/meeting/api/*`. |
 | Scheduled work | `netlify/functions/cron.mts` | Runs every 2 minutes: reminders, calendar retries, housekeeping. |
 | Storage | Netlify Blobs | Strong consistency, compare-and-swap on the booking index to stop double booking. |
-| Shared types | `shared/` | Data model, defaults, theme engine and presets. |
+| Shared types | `shared/` | Data model, defaults, theme engine and presets. Short links in `shared/shortLinks.ts`, the built-in brands in `shared/brands.ts`. |
+| Short pages | `scripts/shortPages.ts` | A build step that writes `dist/meet/index.html` and `dist/pod/index.html`: the app's page with each link's title, preview and icon. |
+| Brand files | `public/brand/`, `public/og/` | The Eco Champions logo, icons, email logo and preview picture, Jimi's photo and the `/meet` preview picture. |
 
-The app is its own Netlify site, `jimicohen-meeting`. The main `jimicohen.com` site proxies `/meeting/*` to it with
-two lines in its `_redirects` file:
+The app is its own Netlify site, `jimicohen-meeting`. The main `jimicohen.com` site proxies `/meeting/*`, `/meet` and
+`/pod` to it with these lines in its `_redirects` file:
 
 ```
 /meeting    https://jimicohen-meeting.netlify.app/meeting/         200!
 /meeting/*  https://jimicohen-meeting.netlify.app/meeting/:splat   200!
+# Short links into the scheduling app: each opens one booking calendar (see the app's README).
+/meet    https://jimicohen-meeting.netlify.app/meet/         200!
+/meet/*  https://jimicohen-meeting.netlify.app/meet/:splat   200!
+/pod     https://jimicohen-meeting.netlify.app/pod/          200!
+/pod/*   https://jimicohen-meeting.netlify.app/pod/:splat    200!
+# The same links typed with capitals (these rules match case exactly).
+/Meet    /meet   301!
+/MEET    /meet   301!
+/Pod     /pod    301!
+/POD     /pod    301!
 ```
 
-**Keep those two lines in the jimicohen.com source.** A deploy of jimicohen.com without them takes `/meeting` offline
-until they are back.
+**Keep these ten lines in the jimicohen.com source** (the comment lines do not count). A deploy of jimicohen.com
+without them takes `/meeting`, `/meet` or `/pod` offline until they are back. The short link lines go below the two
+`/meeting` lines and above any catch-all rule. `200!` keeps `jimicohen.com/pod` in the address bar; the targets end in
+a slash so the app's site does not add a redirect of its own; the capital forms send people to the one lower-case
+address, so there is one address to share and to preview. Query strings pass through, so
+`jimicohen.com/pod?name=Ann&email=ann@example.com` still fills in the form.
 
 Embeds on other websites load from the app's own address (`https://jimicohen-meeting.netlify.app/meeting`), because
 jimicohen.com forbids being framed. The dashboard's Share panel writes the snippets that way: it uses `EMBED_BASE_URL`
@@ -83,10 +99,66 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
   uses it). The connection is checked with a cookie set on that address, and Google always sends you back there, so a
   Connect pressed on the `jimicohen-meeting.netlify.app` address is turned away with a note asking you to press it
   again on the page it opens.
+- **More than one Google account**: anyone on the team can connect up to 20 Google accounts, with **Add another
+  Google account** (Integrations for you, a co-host's own private page for them; Team lets you remove a co-host's
+  accounts, but adding and reconnecting stay on their private page). Busy times
+  in every one of them keep those times off the booking page. The first account stays the main one: new meetings,
+  your Gmail and "Follow Google Calendar" use it, and "Use a different Google account" still replaces it. An account
+  that cannot be read closes that person's times, as one calendar always did, and every warning and alert names it.
+  While the consent screen is in "Testing", every Google account you add must be listed there as a test user, and an
+  app Google has not verified can be used by at most 100 Google accounts in all, each added account counting.
+  Every account a co-host adds on their private page, and every change of their main account there, is emailed to
+  them and to you. Changes you make to your own accounts from the dashboard send no email.
+- **Rolling back with more than one account**: an older deploy only knows the main account. While it serves (a
+  rollback, or the permanent link of an older deploy), times that only another account blocks are offered again,
+  and meetings still go to the main account; the accounts are all read again as soon as the current deploy is back.
+  The same release brings the Eco Champions brand, which older deploys do not know either, so do not roll back past
+  it (see "Older deploys after this release" below). Take a copy of the `hosts` blob before deploying this change,
+  for example with `netlify blobs:get meeting hosts`.
 - **Email**: a Resend API key with a verified sender, or "send from my Gmail".
 - **Texts and reminder calls**: a Twilio Account SID, Auth Token and phone number. For replies by text, set the
   number's incoming message webhook to `https://jimicohen.com/meeting/api/twilio/sms` (POST).
 - **Voice assistant**: an Anthropic API key. Without one the reminder call still works with a simpler scripted menu.
+
+## Short links and the Eco Champions brand
+
+- **`jimicohen.com/meet`** opens one meeting with Jimi alone ("Meet with Jimi"), in Jimi's own look.
+  **`jimicohen.com/pod`** opens the Eco Champions conversation: Jimi and his co-hosts, only the times when they are
+  all free, written into every host's calendar. `/meeting` keeps working as before, with the list of every meeting.
+- What each link opens is chosen on the dashboard, under Event types, **Short links** (Home lists both under "Your
+  links"). Set to "Nothing for now", a link says it is not open right now.
+- **The brand.** A meeting's Basics tab has a Look section: Jimi's own look, or Eco Champions. A meeting in the Eco
+  Champions look shows its name, logo, colours and fonts on its pages, and its emails, texts, reminder calls, Google
+  Calendar event and calendar file speak for Eco Champions. Each booking remembers the look it was made in, so
+  changing a meeting's look later never changes bookings already made. The Eco Champions look, logo and sender name
+  are edited in Design ("Look for: Eco Champions"); replies to its emails still go to the site's reply-to address, and
+  the consent wording is the site's own. Jimi's dashboard, his own pages and a co-host's private page stay in Jimi's
+  look. The built-in logo files are never deleted; "Use the built-in logo" brings them back after an upload.
+- **The one-time setup.** After the deploy that brings short links, the scheduled function (`cron.mts`) runs a setup
+  once, within about two minutes: "Meeting" becomes "Meet with Jimi" and `/meet` opens it (or the first active meeting
+  with Jimi alone), and `/pod` opens a joint meeting whose name says Eco Champions or podcast, else a new unlisted
+  "Eco Champions conversation" with Jimi and every co-host, 30 or 60 minutes. It only fills in what is missing, never
+  edits the profile, the welcome text, the theme or a choice made since, and leaves a marker
+  (`migrations/short-links-v1`) so it never runs again. Nothing a visitor or the dashboard does can start it. Locally,
+  `POST /meeting/api/dev/one-time-moves` runs it (the dev server only; production answers 404). Home says "Your short
+  links are being set up" until it has run; if that stays longer than a few minutes, read the scheduled function's log
+  for "the short link setup".
+- **Link previews.** The title, description and picture of each link are part of its static page, so they change
+  only with a deploy. `/pod` always previews as Eco Champions and `/meet` as Jimi, whatever meeting they open. The
+  pictures are `public/brand/eco-champions/og.png` and `public/og/meet.png`; replacing one means a new file and a
+  deploy. LinkedIn keeps a preview for about a week: after a change, run the link through LinkedIn's Post Inspector to
+  refresh it. Slack refreshes by itself within about half an hour; iMessage keeps its own copy on each device.
+- **Adding a short link name takes four edits**: `SHORT_LINK_NAMES` and `SHORT_LINKS` in `shared/shortLinks.ts`, the
+  two blocks per name in `netlify.toml` (the redirect and the headers), and the jimicohen.com `_redirects` lines. A
+  unit test ties the first three together; the fourth is on the jimicohen.com site. Names are lower case letters,
+  digits and dashes, and the app's own paths (`meeting`, `brand`, `og`, `meet`, `pod`) cannot be used as a meeting's
+  link.
+- **The canonical header** that jimicohen.com adds to proxied pages is out of scope here: it names
+  `/meeting/index.html` for every `/meeting/<slug>` page today, which is an existing jimicohen.com issue. The short
+  pages are real files at their own address, so their header names `jimicohen.com/pod/` and `jimicohen.com/meet/`.
+- **Older deploys after this release.** An older deploy does not know about brands: if it serves (a rollback, or an
+  old permanent link), it shows and sends Eco Champions bookings in Jimi's look, and its site saves can race the
+  current ones. Delete older deploys after this release, and never roll back past it.
 
 ## Working on it locally
 
@@ -110,6 +182,24 @@ netlify deploy --prod --no-build --dir dist --functions netlify/functions --site
 ```
 
 After a deploy, `GET https://jimicohen.com/meeting/api/health` should answer `{"ok":true,"storage":"ok"}`.
+
+`--dir dist` publishes the short pages too (`dist/meet/`, `dist/pod/`). The first time short links go live, check in
+this order:
+
+1. `npm run build`: `dist/meet/index.html` and `dist/pod/index.html` exist. Take the copy of the `hosts` blob (see
+   "Rolling back with more than one account" above), then deploy with the command above.
+2. Within about two minutes the dashboard's Home shows both links under "Your links" (the one-time setup ran).
+3. On the app's own address: `curl -sI https://jimicohen-meeting.netlify.app/pod/` answers 200 with
+   `frame-ancestors 'none'` and `X-Frame-Options: DENY`; `curl -s https://jimicohen-meeting.netlify.app/pod/ | grep -E 'og:|<title>'`
+   shows the Eco Champions preview; the same for `/meet/` with Jimi's; `/meeting/brand/eco-champions/og.png` and
+   `/meeting/api/assets/builtin_eco_champions_email` answer 200 `image/png`.
+4. Add the short link lines to the jimicohen.com `_redirects` file (above) and deploy that site.
+5. On jimicohen.com: `/pod` and `/pod/` answer 200 with `X-Frame-Options: DENY`, `/Pod` and `/POD` answer 301 to
+   `/pod`, the same for `/meet`, and `curl -s https://jimicohen.com/pod | grep og:` shows the preview.
+6. Run both links through LinkedIn's Post Inspector, and paste them into Slack and iMessage.
+7. On a phone, book a test meeting on `/pod` with a co-host's calendar connected: the email logo shows in Gmail and
+   Apple Mail. Cancel it from the email.
+8. `GET https://jimicohen.com/meeting/api/health` as above.
 
 **Every deploy of this site uses the live data.** Netlify Blobs belong to the site, not to a deploy: draft deploys
 (`netlify deploy` without `--prod`), deploy previews and the permanent link of every earlier deploy read and write

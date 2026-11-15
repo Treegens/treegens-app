@@ -3,6 +3,7 @@
  * Anything stored as "one blob holding a list" is changed through a compare-and-swap loop:
  * read with etag, compute the next list, write only if the etag still matches, retry otherwise.
  */
+import { isSiteView } from '../../shared/brands';
 import { defaultOwnerHost, defaultSite, starterEventTypes } from '../../shared/defaults';
 import type { Booking, BookingIndexEntry, CallRecord, EventType, Host, Job, Secrets, SiteSettings } from '../../shared/types';
 import { open, randomId, randomToken, seal, sha256Hex } from './crypto';
@@ -24,6 +25,8 @@ export const KEYS = {
   assetPrefix: 'assets/',
   cachePrefix: 'cache/',
   rateLimitPrefix: 'rl/',
+  /** one-time changes to stored data, each a permanent marker written when it is done (server/lib/seed.ts). Never pruned. */
+  migrationPrefix: 'migrations/',
 } as const;
 
 /** How often a compare-and-swap is retried. Every round one contender wins, so this covers 16 simultaneous writers of one blob. */
@@ -93,10 +96,48 @@ export async function getSite(ctx: Ctx): Promise<SiteSettings> {
   return (await ctx.kv.getJSON<SiteSettings>(KEYS.site)) ?? bootstrap(ctx);
 }
 
-export async function saveSite(ctx: Ctx, site: SiteSettings): Promise<SiteSettings> {
+/**
+ * A brand view (shared/brands.ts siteForBrand) is the site settings with a brand's name and look laid over
+ * them, for pages and messages. Saved, it would replace the owner's profile with the brand. The types refuse
+ * it (`brandViewOf?: never`) and so does this, at run time, for a copy the types cannot see.
+ */
+function refuseBrandView(site: unknown): void {
+  if (isSiteView(site)) throw new Error('a brand view cannot be saved');
+}
+
+/** Replaces the site settings. For first-run setup and tests; everything else changes them through updateSite. */
+export async function saveSite(ctx: Ctx, site: SiteSettings & { brandViewOf?: never }): Promise<SiteSettings> {
+  refuseBrandView(site);
   const saved: SiteSettings = { ...site, updatedAt: nowIso(ctx) };
   await ctx.kv.setJSON(KEYS.site, saved);
   return saved;
+}
+
+/**
+ * Compare-and-swap on the site settings: `fn` gets a copy of the fresh settings and returns the next ones,
+ * written only if nobody wrote in between, else tried again on what they wrote. `fn` may run several times
+ * and must end the same way when run again on its own output (a write whose answer got lost is then
+ * recognised by reading it back, or simply made again). 503 `busy` after 16 lost rounds.
+ */
+export async function updateSite(ctx: Ctx, fn: (fresh: SiteSettings) => SiteSettings & { brandViewOf?: never }): Promise<SiteSettings> {
+  for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+    const found = await ctx.kv.getJSONWithEtag<SiteSettings>(KEYS.site);
+    if (!found) {
+      await bootstrap(ctx);
+      continue;
+    }
+    refuseBrandView(found.value);
+    const next = fn(structuredClone(found.value));
+    refuseBrandView(next);
+    const saved: SiteSettings = { ...next, updatedAt: nowIso(ctx) };
+    const written = await ctx.kv.setJSON(KEYS.site, saved, { onlyIfMatch: found.etag });
+    if (written.modified) return saved;
+    // Refused: when the settings now read exactly as we wrote them, the write went through and only its answer was lost.
+    const after = await ctx.kv.getJSON<SiteSettings>(KEYS.site);
+    if (after && JSON.stringify(after) === JSON.stringify(saved)) return saved;
+    await Promise.resolve();
+  }
+  throw busy();
 }
 
 // ───────────────────────── secrets ─────────────────────────
@@ -264,17 +305,44 @@ export async function getEventTypeBySlug(ctx: Ctx, slug: string): Promise<EventT
   return (await listEventTypes(ctx)).find((e) => e.slug.toLowerCase() === wanted) ?? null;
 }
 
-/** Upsert; sets updatedAt. Refuses (409) a slug another event type already uses, checked inside the swap so two saves cannot race past it. */
-export async function saveEventType(ctx: Ctx, et: EventType): Promise<EventType> {
+/**
+ * Upsert; sets updatedAt. Refuses (409) a slug another event type already uses, checked inside the swap so two saves cannot race past it.
+ *
+ * The brand of an event type that is already stored is kept as stored unless the caller sets it on purpose
+ * (`setBrand`): a save built from an earlier read (a dashboard tab opened before brands existed, the reorder
+ * route, a save racing the one-time setup) can then never wipe or bring back a brand.
+ */
+export async function saveEventType(ctx: Ctx, et: EventType, opts?: { setBrand?: boolean }): Promise<EventType> {
   requireId(et.id, 'event type');
   return mutateList<EventType, EventType>(ctx, KEYS.eventTypes, (list) => {
     const slug = et.slug.toLowerCase();
     if (list.some((e) => e.id !== et.id && e.slug.toLowerCase() === slug)) {
       throw new HttpError(409, 'slug_taken', 'Another event type already uses that link.', { slug: 'This link is already in use.' });
     }
+    const stored = list.find((e) => e.id === et.id);
     const saved: EventType = { ...et, updatedAt: nowIso(ctx) };
-    const exists = list.some((e) => e.id === et.id);
-    return { next: exists ? list.map((e) => (e.id === et.id ? saved : e)) : [...list, saved], result: saved };
+    if (stored && !opts?.setBrand) {
+      if (stored.brandId === undefined) delete saved.brandId;
+      else saved.brandId = stored.brandId;
+    }
+    return { next: stored ? list.map((e) => (e.id === et.id ? saved : e)) : [...list, saved], result: saved };
+  });
+}
+
+/**
+ * Compare-and-swap over the whole event type list, for changes to several at once (the one-time setup,
+ * adding a new co-host to meetings). `fn` gets copies of the fresh list and returns the next list, or null
+ * to change nothing. It may run several times and must end the same way when run again on its own output.
+ */
+export async function updateEventTypes<R>(ctx: Ctx, fn: (list: EventType[]) => { next: EventType[]; result: R } | { keep: R }): Promise<R> {
+  return mutateList<EventType, R>(ctx, KEYS.eventTypes, (list) => {
+    const outcome = fn(structuredClone(list));
+    if ('keep' in outcome) return outcome;
+    const at = nowIso(ctx);
+    const before = new Map(list.map((e) => [e.id, JSON.stringify(e)]));
+    // Only the event types that really changed get a new updatedAt.
+    const next = outcome.next.map((e) => (before.get(e.id) === JSON.stringify(e) ? e : { ...e, updatedAt: at }));
+    return { next, result: outcome.result };
   });
 }
 

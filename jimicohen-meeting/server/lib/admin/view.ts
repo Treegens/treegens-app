@@ -3,13 +3,15 @@
  * stored data with the secrets left behind: an AdminHost never carries a token hash, a sealed
  * refresh token or a calendar feed address, only the facts the screens need.
  */
-import type { AdminBooking, AdminHost, Booking, Host, PublicHost, SiteSettings } from '../../../shared/types';
+import type { AdminBooking, AdminGoogleAccount, AdminHost, Booking, Host, PublicHost, SiteSettings } from '../../../shared/types';
 import { manageToken } from '../booking';
 import type { Ctx } from '../ctx';
+import { extrasOf, mainOf } from '../googleAccounts';
 import { assetUrl, getCall } from '../repo';
 import { callTranscript } from '../voice';
 
 export function toAdminHost(ctx: Ctx, host: Host): AdminHost {
+  const main = mainOf(host);
   const out: AdminHost = {
     id: host.id,
     role: host.role,
@@ -22,17 +24,30 @@ export function toAdminHost(ctx: Ctx, host: Host): AdminHost {
     timezoneMode: host.timezoneMode,
     schedules: host.schedules,
     defaultScheduleId: host.defaultScheduleId,
-    google: host.google
+    google: main
       ? {
-          email: host.google.email,
-          status: host.google.status,
-          busyCalendarIds: [...(host.google.busyCalendarIds ?? [])],
-          writeCalendarId: host.google.writeCalendarId,
-          gmailSend: host.google.gmailSend === true,
+          id: main.account.id,
+          email: main.account.email,
+          status: main.account.status,
+          busyCalendarIds: [...main.account.busyCalendarIds],
+          writeCalendarId: main.account.writeCalendarId,
+          gmailSend: main.account.gmailSend === true,
           // A connection made while the consent screen is in "Testing" stops after 7 days: the screens warn ahead.
-          ...(host.google.refreshExpiresAt ? { refreshExpiresAt: host.google.refreshExpiresAt } : {}),
+          ...(main.account.refreshExpiresAt ? { refreshExpiresAt: main.account.refreshExpiresAt } : {}),
+          ...(main.account.connectedAt ? { connectedAt: main.account.connectedAt } : {}),
+          health: main.account.health ?? null,
         }
       : null,
+    // The other accounts: what the screens show, never the token, the scopes or Google's account id.
+    googleExtra: extrasOf(host).map(({ account: a }): AdminGoogleAccount => ({
+      id: a.id,
+      email: a.email,
+      status: a.status,
+      busyCalendarIds: [...a.busyCalendarIds],
+      connectedAt: a.connectedAt,
+      ...(a.refreshExpiresAt ? { refreshExpiresAt: a.refreshExpiresAt } : {}),
+      health: a.health ?? null,
+    })),
     // The label only. The feed address is a secret (it usually contains a private key) and stays sealed.
     icsFeeds: (host.icsFeeds ?? []).map((feed) => ({ id: feed.id, label: feed.label })),
     hasInviteLink: typeof host.inviteTokenHash === 'string' && host.inviteTokenHash !== '',

@@ -23,6 +23,14 @@ import {
 import { HttpError } from '../../server/lib/http';
 import { getHost, getSite, saveSecrets, updateHost } from '../../server/lib/repo';
 import { makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { accountIdFor, mainOf, type AccountRef } from '../../server/lib/googleAccounts';
+
+/** The host's main Google account, the way every Google call now names the account it is made as. */
+function main(host: Host): AccountRef {
+  const ref = mainOf(host);
+  if (!ref) throw new Error('no main account');
+  return ref;
+}
 
 // ───────────────────────── fake fetch ─────────────────────────
 
@@ -61,11 +69,13 @@ function b64url(value: unknown): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
 }
 
+/** An ID token. Without a `sub` of its own, every address is its own Google account: sub-<address>. */
 function idToken(claims: Record<string, unknown>): string {
-  return `${b64url({ alg: 'RS256', typ: 'JWT' })}.${b64url(claims)}.signature`;
+  const withSub = 'sub' in claims ? claims : { ...claims, sub: `sub-${String(claims.email ?? '')}` };
+  return `${b64url({ alg: 'RS256', typ: 'JWT' })}.${b64url(withSub)}.signature`;
 }
 
-const GOOD_CLAIMS = { iss: 'https://accounts.google.com', aud: CLIENT_ID, sub: '1', email: 'jimi@example.com', email_verified: true };
+const GOOD_CLAIMS = { iss: 'https://accounts.google.com', aud: CLIENT_ID, email: 'jimi@example.com', email_verified: true };
 const ALL_SCOPES = GOOGLE_CALENDAR_SCOPES.join(' ');
 
 /** Swaps the network behaviour of an existing context. */
@@ -85,6 +95,7 @@ async function newCtx(): Promise<TestCtx> {
 async function connect(ctx: TestCtx, over: Partial<HostGoogle> = {}, hostId = OWNER): Promise<Host> {
   const google: HostGoogle = {
     email: 'jimi@example.com',
+    sub: `sub-${over.email ?? 'jimi@example.com'}`,
     refreshTokenEnc: seal(ctx, 'google-refresh', 'refresh-token-1'),
     scopes: [...GOOGLE_CALENDAR_SCOPES],
     busyCalendarIds: ['primary'],
@@ -201,7 +212,16 @@ describe('completeGoogleAuth', () => {
     );
 
     const result = await completeGoogleAuth(ctx, callbackParams(state));
-    expect(result).toEqual({ ok: true, hostId: OWNER, returnTo: '/meeting/admin/integrations?tab=google', email: 'jimi@example.com', firstConnect: true });
+    expect(result).toEqual({
+      ok: true,
+      hostId: OWNER,
+      returnTo: '/meeting/admin/integrations?tab=google',
+      email: 'jimi@example.com',
+      firstConnect: true,
+      outcome: 'first',
+      intent: 'main',
+      accountId: accountIdFor(OWNER, 'sub-jimi@example.com'),
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(TOKEN_URL);
@@ -229,7 +249,7 @@ describe('completeGoogleAuth', () => {
     expect(open(ctx, 'google-refresh', host?.google?.refreshTokenEnc ?? '')).toBe('refresh-A');
 
     // the access token from the exchange is reused without another request
-    expect(await getGoogleAccessToken(ctx, host as Host)).toBe('access-A');
+    expect(await getGoogleAccessToken(ctx, main(host as Host))).toBe('access-A');
     expect(calls).toHaveLength(1);
   });
 
@@ -238,7 +258,7 @@ describe('completeGoogleAuth', () => {
     const calls = useFetch(ctx, (call) =>
       call.url === TOKEN_URL
         ? jsonResponse({ access_token: 'access-A', expires_in: 3599, refresh_token: 'refresh-A', scope: `${ALL_SCOPES} ${GMAIL_SEND_SCOPE}` })
-        : jsonResponse({ sub: '1', email: 'owner@example.org', email_verified: true }),
+        : jsonResponse({ sub: 'sub-owner@example.org', email: 'owner@example.org', email_verified: true }),
     );
     const result = await completeGoogleAuth(ctx, callbackParams(state));
     expect(result.ok).toBe(true);
@@ -254,7 +274,7 @@ describe('completeGoogleAuth', () => {
     useFetch(ctx, (call) =>
       call.url === TOKEN_URL
         ? jsonResponse({ access_token: 'a', expires_in: 3599, refresh_token: 'r', scope: ALL_SCOPES, id_token: idToken({ ...GOOD_CLAIMS, aud: 'someone-else', email: 'attacker@example.com' }) })
-        : jsonResponse({ email: 'real@example.com' }),
+        : jsonResponse({ sub: 'sub-real', email: 'real@example.com' }),
     );
     expect((await completeGoogleAuth(ctx, callbackParams(state))).email).toBe('real@example.com');
   });
@@ -406,7 +426,7 @@ describe('getGoogleAccessToken', () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => jsonResponse({})));
 
-    expect(await getGoogleAccessToken(ctx, host)).toBe('access-1');
+    expect(await getGoogleAccessToken(ctx, main(host))).toBe('access-1');
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(TOKEN_URL);
     expect(Object.fromEntries(new URLSearchParams(calls[0].body))).toEqual({
@@ -416,25 +436,25 @@ describe('getGoogleAccessToken', () => {
       grant_type: 'refresh_token',
     });
 
-    expect(await getGoogleAccessToken(ctx, host)).toBe('access-1');
+    expect(await getGoogleAccessToken(ctx, main(host))).toBe('access-1');
     expect(calls).toHaveLength(1);
     const stored = JSON.stringify(await ctx.kv.getJSON('cache/gtok-host_owner'));
     expect(stored).not.toContain('access-1');
 
     // still valid 61 s before expiry, gone inside the last minute
     ctx.clock.advance((3599 - 61) * 1000);
-    expect(await getGoogleAccessToken(ctx, host)).toBe('access-1');
+    expect(await getGoogleAccessToken(ctx, main(host))).toBe('access-1');
     ctx.clock.advance(2000);
-    expect(await getGoogleAccessToken(ctx, host)).toBe('access-2');
+    expect(await getGoogleAccessToken(ctx, main(host))).toBe('access-2');
     expect(calls).toHaveLength(2);
   });
 
   it('never serves a token cached for an earlier grant', async () => {
     const first = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => jsonResponse({})));
-    expect(await getGoogleAccessToken(ctx, first)).toBe('access-1');
+    expect(await getGoogleAccessToken(ctx, main(first))).toBe('access-1');
     const second = await connect(ctx, { refreshTokenEnc: seal(ctx, 'google-refresh', 'refresh-token-2') });
-    expect(await getGoogleAccessToken(ctx, second)).toBe('access-2');
+    expect(await getGoogleAccessToken(ctx, main(second))).toBe('access-2');
     expect(new URLSearchParams(calls[1].body).get('refresh_token')).toBe('refresh-token-2');
   });
 
@@ -442,13 +462,13 @@ describe('getGoogleAccessToken', () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, () => jsonResponse({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }, 400));
 
-    await expect(getGoogleAccessToken(ctx, host)).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(getGoogleAccessToken(ctx, main(host))).rejects.toBeInstanceOf(GoogleAuthError);
     const stored = await getHost(ctx, OWNER);
     expect(stored?.google?.status).toBe('needs_reconnect');
     expect(calls).toHaveLength(1);
 
     // once marked, no more requests are wasted on a dead grant
-    await expect(getGoogleAccessToken(ctx, stored as Host)).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(getGoogleAccessToken(ctx, main(stored as Host))).rejects.toBeInstanceOf(GoogleAuthError);
     expect(calls).toHaveLength(1);
     const logged = JSON.stringify(ctx.logs);
     expect(logged).not.toContain('refresh-token-1');
@@ -458,7 +478,7 @@ describe('getGoogleAccessToken', () => {
   it('treats an unreadable refresh token as a lost connection', async () => {
     const host = await connect(ctx, { refreshTokenEnc: 'v1.not-a-sealed-value' });
     const calls = useFetch(ctx, () => jsonResponse({}));
-    await expect(getGoogleAccessToken(ctx, host)).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(getGoogleAccessToken(ctx, main(host))).rejects.toBeInstanceOf(GoogleAuthError);
     expect(calls).toHaveLength(0);
     expect((await getHost(ctx, OWNER))?.google?.status).toBe('needs_reconnect');
   });
@@ -466,7 +486,7 @@ describe('getGoogleAccessToken', () => {
   it('does not blame the host when the OAuth client itself is rejected', async () => {
     const host = await connect(ctx);
     useFetch(ctx, () => jsonResponse({ error: 'invalid_client' }, 401));
-    const err = await getGoogleAccessToken(ctx, host).catch((e: unknown) => e);
+    const err = await getGoogleAccessToken(ctx, main(host)).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GoogleApiError);
     expect(err).not.toBeInstanceOf(GoogleAuthError);
     expect((await getHost(ctx, OWNER))?.google?.status).toBe('ok');
@@ -474,7 +494,7 @@ describe('getGoogleAccessToken', () => {
 
   it('needs a connection', async () => {
     const host = (await getHost(ctx, OWNER)) as Host;
-    await expect(getGoogleAccessToken(ctx, host)).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(getGoogleAccessToken(ctx, mainOf(host) as AccountRef)).rejects.toBeInstanceOf(GoogleAuthError);
   });
 });
 
@@ -498,7 +518,7 @@ describe('googleFreeBusy', () => {
         }),
       ),
     );
-    const busy = await googleFreeBusy(ctx, host, { start, end: start + 7 * DAY });
+    const busy = await googleFreeBusy(ctx, main(host), { start, end: start + 7 * DAY });
     expect(busy).toEqual([
       { start: Date.parse('2026-11-03T10:00:00Z'), end: Date.parse('2026-11-03T12:00:00Z') },
       { start: Date.parse('2026-11-05T05:00:00Z'), end: Date.parse('2026-11-05T06:00:00Z') },
@@ -533,7 +553,7 @@ describe('googleFreeBusy', () => {
         return jsonResponse({ calendars: { primary: { busy } } });
       }),
     );
-    const busy = await googleFreeBusy(ctx, host, { start, end: start + 130 * DAY });
+    const busy = await googleFreeBusy(ctx, main(host), { start, end: start + 130 * DAY });
     expect(busy).toEqual([{ start: seam - 3_600_000, end: seam + 3_600_000 }]);
 
     const windows = calls
@@ -552,9 +572,9 @@ describe('googleFreeBusy', () => {
   it('defaults to the primary calendar and skips the network for an empty range', async () => {
     const host = await connect(ctx, { busyCalendarIds: [] });
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ calendars: { primary: { busy: [] } } })));
-    expect(await googleFreeBusy(ctx, host, { start, end: start })).toEqual([]);
+    expect(await googleFreeBusy(ctx, main(host), { start, end: start })).toEqual([]);
     expect(calls).toHaveLength(0);
-    expect(await googleFreeBusy(ctx, host, { start, end: start + DAY })).toEqual([]);
+    expect(await googleFreeBusy(ctx, main(host), { start, end: start + DAY })).toEqual([]);
     expect(JSON.parse(calls[1].body).items).toEqual([{ id: 'primary' }]);
   });
 
@@ -571,7 +591,7 @@ describe('googleFreeBusy', () => {
         }),
       ),
     );
-    const err = await googleFreeBusy(ctx, host, { start, end: start + DAY }).catch((e: unknown) => e);
+    const err = await googleFreeBusy(ctx, main(host), { start, end: start + DAY }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GoogleApiError);
     expect((err as GoogleApiError).reason).toBe('notFound');
   });
@@ -579,7 +599,7 @@ describe('googleFreeBusy', () => {
   it('fails when a calendar is missing from the answer', async () => {
     const host = await connect(ctx, { busyCalendarIds: ['primary', 'other@example.com'] });
     useFetch(ctx, withTokens(() => jsonResponse({ calendars: { primary: { busy: [] } } })));
-    await expect(googleFreeBusy(ctx, host, { start, end: start + DAY })).rejects.toBeInstanceOf(GoogleApiError);
+    await expect(googleFreeBusy(ctx, main(host), { start, end: start + DAY })).rejects.toBeInstanceOf(GoogleApiError);
   });
 });
 
@@ -600,17 +620,17 @@ describe('request handling', () => {
       }),
     );
     // start from a cached token so the first call does not have to mint one
-    expect(await getGoogleAccessToken(ctx, host)).toBe('access-1');
-    expect(await googleGetTimezone(ctx, host)).toBeNull();
+    expect(await getGoogleAccessToken(ctx, main(host))).toBe('access-1');
+    expect(await googleGetTimezone(ctx, main(host))).toBeNull();
     expect(calls.map((c) => (c.url === TOKEN_URL ? 'token' : c.headers.get('authorization')))).toEqual(['token', 'Bearer access-1', 'token', 'Bearer access-2']);
     // the replacement token is the cached one from now on
-    expect(await getGoogleAccessToken(ctx, host)).toBe('access-2');
+    expect(await getGoogleAccessToken(ctx, main(host))).toBe('access-2');
   });
 
   it('gives up with GoogleAuthError when the fresh token is refused as well', async () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ error: { code: 401, message: 'Invalid Credentials' } }, 401)));
-    await expect(googleFreeBusy(ctx, host, range)).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(googleFreeBusy(ctx, main(host), range)).rejects.toBeInstanceOf(GoogleAuthError);
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(2);
   });
 
@@ -624,7 +644,7 @@ describe('request handling', () => {
         return apiCalls === 1 ? jsonResponse({ error: { code: 503, message: 'Backend Error', errors: [{ reason: 'backendError' }] } }, 503) : empty();
       }),
     );
-    expect(await googleFreeBusy(ctx, host, range)).toEqual([]);
+    expect(await googleFreeBusy(ctx, main(host), range)).toEqual([]);
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(2);
   });
 
@@ -639,7 +659,7 @@ describe('request handling', () => {
         return empty();
       }),
     );
-    expect(await googleFreeBusy(ctx, host, range)).toEqual([]);
+    expect(await googleFreeBusy(ctx, main(host), range)).toEqual([]);
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(2);
 
     const down = useFetch(
@@ -648,7 +668,7 @@ describe('request handling', () => {
         throw new TypeError('fetch failed');
       }),
     );
-    const err = await googleFreeBusy(ctx, host, range).catch((e: unknown) => e);
+    const err = await googleFreeBusy(ctx, main(host), range).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GoogleApiError);
     expect((err as GoogleApiError).reason).toBe('network');
     expect(down.filter((c) => c.url !== TOKEN_URL)).toHaveLength(2);
@@ -657,7 +677,7 @@ describe('request handling', () => {
   it('does not retry a plain client error', async () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ error: { code: 400, message: 'Bad Request', errors: [{ reason: 'badRequest' }] } }, 400)));
-    const err = await googleFreeBusy(ctx, host, range).catch((e: unknown) => e);
+    const err = await googleFreeBusy(ctx, main(host), range).catch((e: unknown) => e);
     expect(err).toMatchObject({ name: 'GoogleApiError', status: 400, reason: 'badRequest' });
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(1);
   });
@@ -665,7 +685,7 @@ describe('request handling', () => {
   it('asks for a reconnect when a permission is missing', async () => {
     const host = await connect(ctx);
     useFetch(ctx, withTokens(() => jsonResponse({ error: { code: 403, message: 'Insufficient Permission', errors: [{ reason: 'insufficientPermissions' }] } }, 403)));
-    await expect(googleFreeBusy(ctx, host, range)).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(googleFreeBusy(ctx, main(host), range)).rejects.toBeInstanceOf(GoogleAuthError);
     // a missing scope says nothing about the grant itself
     expect((await getHost(ctx, OWNER))?.google?.status).toBe('ok');
   });
@@ -710,7 +730,7 @@ describe('googleCreateEvent', () => {
       }),
     );
 
-    const result = await googleCreateEvent(ctx, host, EVENT);
+    const result = await googleCreateEvent(ctx, main(host), EVENT);
     const api = calls.filter((c) => c.url !== TOKEN_URL);
     expect(api).toHaveLength(1);
     expect(api[0].method).toBe('POST');
@@ -745,7 +765,7 @@ describe('googleCreateEvent', () => {
   it('leaves out the conference and silences updates when asked', async () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ id: 'evt1', status: 'confirmed' })));
-    const result = await googleCreateEvent(ctx, host, { ...EVENT, createMeet: false, notifyAttendees: false, location: undefined });
+    const result = await googleCreateEvent(ctx, main(host), { ...EVENT, createMeet: false, notifyAttendees: false, location: undefined });
     const api = calls.filter((c) => c.url !== TOKEN_URL);
     expect(api[0].url).toBe(`${CAL}/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none`);
     const body = JSON.parse(api[0].body) as Record<string, unknown>;
@@ -770,7 +790,7 @@ describe('googleCreateEvent', () => {
         }),
       ),
     );
-    expect((await googleCreateEvent(ctx, host, EVENT)).meetUrl).toBe('https://meet.google.com/xyz-abcd-efg');
+    expect((await googleCreateEvent(ctx, main(host), EVENT)).meetUrl).toBe('https://meet.google.com/xyz-abcd-efg');
   });
 
   it('looks once more when the Meet link is still being created', async () => {
@@ -783,7 +803,7 @@ describe('googleCreateEvent', () => {
           : jsonResponse({ id: 'evt1', hangoutLink: 'https://meet.google.com/late-link-now' }),
       ),
     );
-    expect((await googleCreateEvent(ctx, host, EVENT)).meetUrl).toBe('https://meet.google.com/late-link-now');
+    expect((await googleCreateEvent(ctx, main(host), EVENT)).meetUrl).toBe('https://meet.google.com/late-link-now');
     const api = calls.filter((c) => c.url !== TOKEN_URL);
     expect(api.map((c) => c.method)).toEqual(['POST', 'GET']);
     expect(api[1].url).toBe(`${CAL}/calendars/primary/events/evt1`);
@@ -799,7 +819,7 @@ describe('googleCreateEvent', () => {
           : jsonResponse({ id: 'from-first-attempt', status: 'confirmed', htmlLink: 'https://www.google.com/calendar/event?eid=1', hangoutLink: 'https://meet.google.com/aaa-bbbb-ccc' }),
       ),
     );
-    const first = await googleCreateEvent(ctx, host, EVENT);
+    const first = await googleCreateEvent(ctx, main(host), EVENT);
     expect(first).toEqual({
       eventId: 'from-first-attempt',
       calendarId: 'primary',
@@ -813,8 +833,8 @@ describe('googleCreateEvent', () => {
 
     // the id depends on the booking only
     const again = useFetch(ctx, withTokens(() => jsonResponse({ id: 'x' })));
-    await googleCreateEvent(ctx, host, { ...EVENT, summary: 'changed' });
-    await googleCreateEvent(ctx, host, { ...EVENT, bookingId: 'bk_other' });
+    await googleCreateEvent(ctx, main(host), { ...EVENT, summary: 'changed' });
+    await googleCreateEvent(ctx, main(host), { ...EVENT, bookingId: 'bk_other' });
     const ids = again.filter((c) => c.url !== TOKEN_URL).map((c) => (JSON.parse(c.body) as { id: string }).id);
     expect(ids[0]).toBe(sentId);
     expect(ids[1]).not.toBe(sentId);
@@ -823,8 +843,8 @@ describe('googleCreateEvent', () => {
   it('rejects impossible times before calling Google', async () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ id: 'x' })));
-    await expect(googleCreateEvent(ctx, host, { ...EVENT, startIso: 'yesterday-ish' })).rejects.toBeInstanceOf(GoogleApiError);
-    await expect(googleCreateEvent(ctx, host, { ...EVENT, endIso: EVENT.startIso })).rejects.toBeInstanceOf(GoogleApiError);
+    await expect(googleCreateEvent(ctx, main(host), { ...EVENT, startIso: 'yesterday-ish' })).rejects.toBeInstanceOf(GoogleApiError);
+    await expect(googleCreateEvent(ctx, main(host), { ...EVENT, endIso: EVENT.startIso })).rejects.toBeInstanceOf(GoogleApiError);
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(0);
   });
 });
@@ -833,7 +853,7 @@ describe('googleUpdateEvent and googleDeleteEvent', () => {
   it('patches only what changed', async () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ id: 'evt1' })));
-    await googleUpdateEvent(ctx, host, 'primary', 'evt 1/x', { startIso: '2026-11-18T09:00:00.000Z', endIso: '2026-11-18T09:30:00.000Z', timezone: 'Europe/London' });
+    await googleUpdateEvent(ctx, main(host), 'primary', 'evt 1/x', { startIso: '2026-11-18T09:00:00.000Z', endIso: '2026-11-18T09:30:00.000Z', timezone: 'Europe/London' });
     const api = calls.filter((c) => c.url !== TOKEN_URL);
     expect(api).toHaveLength(1);
     expect(api[0].method).toBe('PATCH');
@@ -843,13 +863,13 @@ describe('googleUpdateEvent and googleDeleteEvent', () => {
       end: { dateTime: '2026-11-18T09:30:00.000Z', timeZone: 'Europe/London' },
     });
 
-    await googleUpdateEvent(ctx, host, 'primary', 'evt1', { description: 'new text', notifyAttendees: false });
+    await googleUpdateEvent(ctx, main(host), 'primary', 'evt1', { description: 'new text', notifyAttendees: false });
     const second = calls.filter((c) => c.url !== TOKEN_URL)[1];
     expect(second.url).toContain('sendUpdates=none');
     expect(JSON.parse(second.body)).toEqual({ description: 'new text' });
 
     // nothing to change, nothing sent
-    await googleUpdateEvent(ctx, host, 'primary', 'evt1', {});
+    await googleUpdateEvent(ctx, main(host), 'primary', 'evt1', {});
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(2);
   });
 
@@ -863,9 +883,9 @@ describe('googleUpdateEvent and googleDeleteEvent', () => {
         return status === 204 ? new Response(null, { status }) : jsonResponse({ error: { code: status, message: 'gone', errors: [{ reason: 'deleted' }] } }, status);
       }),
     );
-    await googleDeleteEvent(ctx, host, 'primary', 'evt1', true);
-    await googleDeleteEvent(ctx, host, 'primary', 'evt1', false);
-    await googleDeleteEvent(ctx, host, 'primary', 'evt1', false);
+    await googleDeleteEvent(ctx, main(host), 'primary', 'evt1', true);
+    await googleDeleteEvent(ctx, main(host), 'primary', 'evt1', false);
+    await googleDeleteEvent(ctx, main(host), 'primary', 'evt1', false);
     const api = calls.filter((c) => c.url !== TOKEN_URL);
     expect(api.map((c) => c.method)).toEqual(['DELETE', 'DELETE', 'DELETE']);
     expect(api[0].url).toBe(`${CAL}/calendars/primary/events/evt1?sendUpdates=all`);
@@ -875,7 +895,7 @@ describe('googleUpdateEvent and googleDeleteEvent', () => {
   it('still reports a delete that really failed', async () => {
     const host = await connect(ctx);
     useFetch(ctx, withTokens(() => jsonResponse({ error: { code: 403, message: 'Forbidden', errors: [{ reason: 'forbidden' }] } }, 403)));
-    await expect(googleDeleteEvent(ctx, host, 'primary', 'evt1', true)).rejects.toMatchObject({ name: 'GoogleApiError', status: 403 });
+    await expect(googleDeleteEvent(ctx, main(host), 'primary', 'evt1', true)).rejects.toMatchObject({ name: 'GoogleApiError', status: 403 });
   });
 });
 
@@ -904,7 +924,7 @@ describe('calendar list and settings', () => {
             });
       }),
     );
-    expect(await googleListCalendars(ctx, host)).toEqual([
+    expect(await googleListCalendars(ctx, main(host))).toEqual([
       { id: 'jimi@example.com', summary: 'Personal', primary: true, accessRole: 'owner' },
       { id: 'holidays@group.v.calendar.google.com', summary: 'Holidays', primary: false, accessRole: 'reader' },
       { id: 'team@group.calendar.google.com', summary: 'Team', primary: false, accessRole: 'writer', backgroundColor: '#16a765' },
@@ -918,9 +938,9 @@ describe('calendar list and settings', () => {
     const host = await connect(ctx);
     const values: unknown[] = ['Africa/Nairobi', 'Mars/Olympus_Mons', 42];
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ kind: 'calendar#setting', id: 'timezone', value: values.shift() })));
-    expect(await googleGetTimezone(ctx, host)).toBe('Africa/Nairobi');
-    expect(await googleGetTimezone(ctx, host)).toBeNull();
-    expect(await googleGetTimezone(ctx, host)).toBeNull();
+    expect(await googleGetTimezone(ctx, main(host))).toBe('Africa/Nairobi');
+    expect(await googleGetTimezone(ctx, main(host))).toBeNull();
+    expect(await googleGetTimezone(ctx, main(host))).toBeNull();
     expect(calls.filter((c) => c.url !== TOKEN_URL)[0].url).toBe(`${CAL}/users/me/settings/timezone`);
   });
 });
@@ -931,7 +951,7 @@ describe('gmailSendRaw', () => {
   it('posts the message as base64url', async () => {
     const host = await connect(ctx, { gmailSend: true });
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ id: 'msg-1', threadId: 'thr-1', labelIds: ['SENT'] })));
-    expect(await gmailSendRaw(ctx, host, mime)).toEqual({ id: 'msg-1' });
+    expect(await gmailSendRaw(ctx, main(host), mime)).toEqual({ id: 'msg-1' });
     const api = calls.filter((c) => c.url !== TOKEN_URL);
     expect(api[0].url).toBe('https://gmail.googleapis.com/gmail/v1/users/me/messages/send');
     expect(api[0].method).toBe('POST');
@@ -943,7 +963,7 @@ describe('gmailSendRaw', () => {
   it('refuses without the Gmail permission', async () => {
     const host = await connect(ctx, { gmailSend: false });
     const calls = useFetch(ctx, withTokens(() => jsonResponse({ id: 'x' })));
-    await expect(gmailSendRaw(ctx, host, mime)).rejects.toBeInstanceOf(GoogleAuthError);
+    await expect(gmailSendRaw(ctx, main(host), mime)).rejects.toBeInstanceOf(GoogleAuthError);
     expect(calls).toHaveLength(0);
   });
 
@@ -955,7 +975,7 @@ describe('gmailSendRaw', () => {
   ])('posts once and reports a failure when %s', async (_name, answer) => {
     const host = await connect(ctx, { gmailSend: true });
     const calls = useFetch(ctx, withTokens(() => answer()));
-    await expect(gmailSendRaw(ctx, host, mime)).rejects.toBeInstanceOf(GoogleApiError);
+    await expect(gmailSendRaw(ctx, main(host), mime)).rejects.toBeInstanceOf(GoogleApiError);
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(1);
   });
 
@@ -972,7 +992,7 @@ describe('gmailSendRaw', () => {
         return apiCalls === 1 ? jsonResponse({ error: { code: status, message: 'Rate Limit Exceeded', errors: [{ reason }] } }, status) : jsonResponse({ id: 'msg-2' });
       }),
     );
-    expect(await gmailSendRaw(ctx, host, mime)).toEqual({ id: 'msg-2' });
+    expect(await gmailSendRaw(ctx, main(host), mime)).toEqual({ id: 'msg-2' });
     expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(2);
   });
 
@@ -986,7 +1006,7 @@ describe('gmailSendRaw', () => {
         return apiCalls === 1 ? jsonResponse({ error: { code: 401, message: 'Invalid Credentials' } }, 401) : jsonResponse({ id: 'msg-3' });
       }),
     );
-    expect(await gmailSendRaw(ctx, host, mime)).toEqual({ id: 'msg-3' });
+    expect(await gmailSendRaw(ctx, main(host), mime)).toEqual({ id: 'msg-3' });
     expect(calls.map((c) => (c.url === TOKEN_URL ? 'token' : c.headers.get('authorization')))).toEqual(['token', 'Bearer access-1', 'token', 'Bearer access-2']);
   });
 
@@ -996,7 +1016,7 @@ describe('disconnectGoogle', () => {
   it('removes the connection, forgets the cached token and revokes the grant', async () => {
     const host = await connect(ctx);
     const calls = useFetch(ctx, withTokens(() => new Response(null, { status: 200 })));
-    await getGoogleAccessToken(ctx, host);
+    await getGoogleAccessToken(ctx, main(host));
 
     await disconnectGoogle(ctx, OWNER);
     const stored = await getHost(ctx, OWNER);
@@ -1009,7 +1029,7 @@ describe('disconnectGoogle', () => {
     // a later connection starts from scratch
     const again = await connect(ctx);
     const before = calls.length;
-    await getGoogleAccessToken(ctx, again);
+    await getGoogleAccessToken(ctx, main(again));
     expect(calls.length).toBe(before + 1);
   });
 

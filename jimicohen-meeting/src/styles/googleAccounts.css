@@ -1,0 +1,176 @@
+/* The other Google accounts of a host (src/admin/components/GoogleAccounts.tsx). Dashboard and co-host page. */
+
+.ga-other {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.ga-other__title {
+  margin: 6px 0 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.ga-other__desc,
+.ga-other__none,
+.ga-add__help {
+  margin: 0;
+  color: var(--c-muted, var(--a-muted));
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.ga-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ga-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--c-border, var(--a-border));
+  border-radius: var(--c-radius, 10px);
+  min-width: 0;
+}
+
+.ga-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.ga-row__email {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.ga-row__meta,
+.ga-row__why,
+.ga-row__check {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--c-muted, var(--a-muted));
+}
+
+.ga-row__check--bad {
+  color: var(--c-danger-text, #b42318);
+}
+
+.ga-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ga-turned {
+  transform: rotate(90deg);
+}
+
+.ga-cals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.ga-cals__title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.ga-cals__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ga-cals__note,
+.ga-cals__error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--c-muted, var(--a-muted));
+}
+
+.ga-add {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.ga-nomain {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--c-radius, 10px);
+  background: var(--c-warning-soft, var(--a-warning-soft, #fff4e5));
+}
+
+.ga-nomain p {
+  margin: 0;
+}
+
+.ga-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ga-lines__line {
+  display: block;
+}
+
+.ga-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  color: var(--c-muted, var(--a-muted));
+}
+
+.ga-tags li + li::before {
+  content: '·';
+  margin-right: 6px;
+}
+
+/* Phones: the address on its own line, then the status, then the buttons as one full-width row. */
+@media (max-width: 479.98px) {
+  .ga-row__actions > .ui-btn {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+  .ga-add > .ui-btn,
+  .ga-nomain > .ui-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+.tm-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 8px;
+}

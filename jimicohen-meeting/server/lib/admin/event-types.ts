@@ -8,6 +8,7 @@
  * kind, scheduling.<field>, questions.<n>.label, reminders.<n>.<field>, locations.<n>.value,
  * confirmation.redirectUrl.
  */
+import { BRAND_IDS, BUILTIN_BRANDS, isBrandId } from '../../../shared/brands';
 import { RESERVED_SLUGS } from '../../../shared/defaults';
 import type { EventScheduling, EventType, Host, LocationConfig, LocationType, Question, QuestionType, ReminderRule } from '../../../shared/types';
 import { randomId } from '../crypto';
@@ -57,6 +58,13 @@ export function freeSlug(root: string, taken: Set<string>): string {
     if (usable(candidate)) return candidate;
   }
   return randomId('meeting').replace(/_/g, '-');
+}
+
+/** "Choose your own look or Eco Champions.", built from the built-in brands. */
+export function brandChoiceMessage(): string {
+  const names = BRAND_IDS.map((id) => BUILTIN_BRANDS[id].name);
+  const last = names.pop();
+  return `Choose your own look${names.length ? `, ${names.join(', ')},` : ''} or ${last}.`;
 }
 
 // ───────────────────────── pieces ─────────────────────────
@@ -302,7 +310,8 @@ export async function buildEventType(ctx: Ctx, body: unknown, base: EventType, e
     const raw = typeof b.slug === 'string' ? b.slug.trim() : '';
     if (raw === '') errors.add('slug', 'Choose a link for this event.');
     else if (raw.length > MAX_SLUG_LENGTH || !isSlug(raw)) errors.add('slug', 'Use lowercase letters, numbers and dashes, without a dash at either end.');
-    else if (RESERVED_SLUGS.includes(raw)) errors.add('slug', 'That link is reserved. Please choose another.');
+    // A link already in use stays usable when the list grows (an event saved before 'pod' was reserved keeps it).
+    else if (RESERVED_SLUGS.includes(raw) && (env.creating || raw !== base.slug)) errors.add('slug', 'That link is reserved. Please choose another.');
     else if (taken.has(raw)) errors.add('slug', 'Another event type already uses this link.');
     else next.slug = raw;
   } else if (env.creating) {
@@ -408,6 +417,13 @@ export async function buildEventType(ctx: Ctx, body: unknown, base: EventType, e
   }
   const googleInvite = readBool(b, 'googleInvite', 'googleInvite', errors);
   if (googleInvite !== undefined) next.googleInvite = googleInvite;
+
+  // brand: the name and look of this meeting's pages and messages
+  if (given(b, 'brandId')) {
+    if (b.brandId === null || b.brandId === '') next.brandId = null;
+    else if (isBrandId(b.brandId)) next.brandId = b.brandId;
+    else errors.add('brandId', brandChoiceMessage());
+  }
 
   // look
   if (given(b, 'themeOverride')) {

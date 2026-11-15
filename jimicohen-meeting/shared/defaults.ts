@@ -9,6 +9,9 @@ import type {
   WeeklyHours,
 } from './types';
 
+/** How many Google accounts one person can connect, the main account included. */
+export const MAX_GOOGLE_ACCOUNTS_PER_HOST = 20;
+
 /** Default look: matches jimicohen.com (deep forest, cream ink, leaf green, Fraunces + Inter). */
 export const DEFAULT_THEME: Theme = {
   preset: 'forest',
@@ -117,6 +120,7 @@ export function defaultOwnerHost(nowIso: string, timezone = 'UTC'): Host {
     schedules: [defaultSchedule()],
     defaultScheduleId: 'sch_default',
     google: null,
+    googleExtra: [],
     icsFeeds: [],
     inviteTokenHash: null,
     notify: { email: true, sms: false },
@@ -220,5 +224,9 @@ export function starterEventTypes(nowIso: string): EventType[] {
   ];
 }
 
-/** Slugs that collide with app routes and may not be used for event types. */
-export const RESERVED_SLUGS = ['admin', 'api', 'assets', 'booking', 'host', 'embed', 'embed.js', 'favicon.svg', 'index.html'];
+/**
+ * Slugs that collide with app routes and may not be used for event types: the routes, the static folders
+ * under /meeting (brand art, preview pictures) and the short links' names, so /meeting/pod never means
+ * something else than jimicohen.com/pod.
+ */
+export const RESERVED_SLUGS = ['admin', 'api', 'assets', 'booking', 'host', 'embed', 'embed.js', 'favicon.svg', 'index.html', 'brand', 'og', 'meet', 'pod'];

@@ -5,9 +5,10 @@ import type { AdminBooking, AdminOverview } from '../../../shared/types';
 import { APP_BASE, errorMessage, getOverview } from '../../lib/api';
 import { formatDateLong, zoneLabel, zonedParts } from '../../lib/tz';
 import { Button, ButtonLink, CopyButton, EmptyState, Skeleton } from '../../ui';
+import { YourLinksCard } from '../components/BrandBits';
 import { Notice, Page, PageHeader } from '../components/Page';
 import { BookingRow, groupByDay } from '../components/BookingRow';
-import { displayUrl, firstName, trimUrl } from '../format';
+import { firstName, trimUrl } from '../format';
 import { useAdmin } from '../state';
 
 type Load = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; overview: AdminOverview };
@@ -35,7 +36,6 @@ export default function Home() {
   const hour = zonedParts(now, zone).hour;
   const greeting = hour < 5 ? 'Hello' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const publicUrl = trimUrl(load.status === 'ready' ? load.overview.publicUrl || data.publicUrl : data.publicUrl);
-  const listed = data.eventTypes.filter((e) => e.active).slice(0, 4);
 
   return (
     <Page width="wide">
@@ -116,36 +116,8 @@ export default function Home() {
         <div className="adm-home__aside">
           {load.status === 'ready' ? <Checklist items={load.overview.checklist} /> : load.status === 'loading' ? <Skeleton height={220} radius={14} style={{ display: 'block' }} /> : null}
 
-          <section className="adm-panel" aria-labelledby="home-share">
-            <div className="adm-panel__head">
-              <div>
-                <h2 className="adm-panel__title" id="home-share">
-                  Your booking page
-                </h2>
-                <p className="adm-panel__desc">Send this link and people pick a time that suits you both.</p>
-              </div>
-            </div>
-            <div className="adm-linkfield">
-              <a className="adm-linkfield__url u-truncate" href={publicUrl} target="_blank" rel="noopener noreferrer">
-                {displayUrl(publicUrl)}
-              </a>
-              <CopyButton value={publicUrl} label="Copy" size="sm" variant="primary" />
-            </div>
-            {listed.length ? (
-              <ul className="adm-sharelist" role="list">
-                {listed.map((et) => (
-                  <li key={et.id} className="adm-sharelist__item">
-                    <span className="adm-dot" style={{ background: et.color || 'var(--a-primary)' }} aria-hidden="true" />
-                    <Link to={`/admin/event-types/${et.id}`} className="adm-sharelist__title u-truncate">
-                      {et.title}
-                    </Link>
-                    <span className="adm-sharelist__slug u-truncate">/{et.slug}</span>
-                    <CopyButton value={`${publicUrl}/${et.slug}`} label={`Copy the link to ${et.title}`} iconOnly size="sm" variant="ghost" />
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
+          {/* jimicohen.com/meet, jimicohen.com/pod and the main link, with what each opens. */}
+          <YourLinksCard />
         </div>
       </div>
     </Page>

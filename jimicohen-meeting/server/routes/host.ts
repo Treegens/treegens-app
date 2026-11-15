@@ -5,8 +5,11 @@
  *
  *   GET  /host/:id?t=                    HostSelfResponse
  *   PUT  /host/:id?t=                    HostUpdate (the role, the email address and the photo stay the owner's call) → { host }
- *   GET  /host/:id/calendars?t=          { calendars }
- *   POST /host/:id/google/disconnect?t=  { ok, host }: a co-host who connected the wrong account, or wants out
+ *   GET  /host/:id/calendars?t=          { calendars } of the main Google account
+ *   POST /host/:id/google/disconnect?t=  { ok, host }: the main Google account goes
+ *   GET  /host/:id/google/:accountId/calendars?t=   { calendars } of one of their accounts
+ *   GET  /host/:id/google/:accountId/removal?t=     GoogleRemovalPreview (no Gmail fields)
+ *   DELETE /host/:id/google/:accountId?t=           GoogleAccountRemoved
  *
  * A wrong, old or missing token gives the same 404 as a host that does not exist.
  */
@@ -14,11 +17,10 @@ import type { Host, HostSelfResponse } from '../../shared/types';
 import { applyHostUpdate, loadCalendars } from '../lib/admin/hosts';
 import { toAdminHost } from '../lib/admin/view';
 import { assertSameOrigin, hostFromToken, rateLimit } from '../lib/auth';
-import { forgetHostBusy } from '../lib/busy';
 import type { Ctx } from '../lib/ctx';
-import { disconnectGoogle } from '../lib/google';
+import { googleRemovalPreview, removeHostGoogleAccount, removeMainGoogleAccount } from '../lib/googleRemoval';
 import { HttpError, json, readJson, route, type Route } from '../lib/http';
-import { getSecrets, getSite, updateHost } from '../lib/repo';
+import { getSecrets, getSite } from '../lib/repo';
 
 const REQUESTS_PER_VISITOR = 120;
 const WINDOW_SEC = 10 * 60;
@@ -62,11 +64,24 @@ export const routes: Route[] = [
   route('POST', '/host/:id/google/disconnect', async ({ ctx, req, url, params }) => {
     assertSameOrigin(ctx, req);
     const host = await hostOfLink(ctx, url, params.id);
-    await disconnectGoogle(ctx, host.id);
-    // Nothing to follow any more: fall back to the device the person uses.
-    const after = await updateHost(ctx, host.id, (h) => (h.timezoneMode === 'google' ? { ...h, timezoneMode: 'device' } : h));
-    // What was read from that account must not be offered from the cache for another minute.
-    await forgetHostBusy(ctx, [host.id]);
-    return json({ ok: true, host: toAdminHost(ctx, after ?? { ...host, google: null, calendarHealth: null }) });
+    // Nothing to follow any more: the zone falls back to the device; the cache forgets what was read.
+    return json({ ok: true, host: toAdminHost(ctx, await removeMainGoogleAccount(ctx, host)) });
+  }),
+
+  // Only accounts of the record the link opens: another host's account id is not found.
+  route('GET', '/host/:id/google/:accountId/calendars', async ({ ctx, url, params }) => {
+    const host = await hostOfLink(ctx, url, params.id);
+    return json({ calendars: await loadCalendars(ctx, host, params.accountId) });
+  }),
+
+  route('GET', '/host/:id/google/:accountId/removal', async ({ ctx, url, params }) => {
+    const host = await hostOfLink(ctx, url, params.id);
+    return json(await googleRemovalPreview(ctx, host, params.accountId, { self: true }));
+  }),
+
+  route('DELETE', '/host/:id/google/:accountId', async ({ ctx, req, url, params }) => {
+    assertSameOrigin(ctx, req);
+    const host = await hostOfLink(ctx, url, params.id);
+    return json(await removeHostGoogleAccount(ctx, host, params.accountId, { self: true }));
   }),
 ];

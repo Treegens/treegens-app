@@ -756,7 +756,8 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
 
     await s.step('Home: the booking page link and each event link can be copied', async () => {
       await page.goto(s.url('/admin'));
-      const share = page.getByRole('region', { name: 'Your booking page' });
+      // "Your links": before the short links are set up only the main link is there to copy.
+      const share = page.getByRole('region', { name: 'Your links' });
       await share.getByRole('button', { name: 'Copy', exact: true }).click();
       await s.eventually(async () => s.expect(await clipboard(), 'clipboard after copying the page link').toBe(publicBase));
       await share.getByRole('button', { name: 'Copy the link to Meeting' }).click();

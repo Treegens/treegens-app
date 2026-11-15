@@ -2,6 +2,8 @@ import { Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Theme } from '../../../../shared/types';
 import { Button, Field, RadioGroup, Select, Switch } from '../../../ui';
+import { BUILTIN_BRANDS } from '../../../../shared/brands';
+import { brandIdOf, shortLinkOf } from '../../brands';
 import { useAdmin } from '../../state';
 import { Notice, Section } from '../Page';
 import type { TabProps } from './shared';
@@ -41,7 +43,11 @@ const LOOK: { key: OverrideKey; label: string; options: { value: string; label: 
 export function AdvancedTab({ draft, update, errors, isNew, onDelete }: TabProps & { onDelete: () => void }) {
   const { data, ownerHost } = useAdmin();
   const override = draft.themeOverride ?? {};
-  const theme = data.site.theme;
+  // A branded event follows the brand's look, not the owner's page.
+  const brand = brandIdOf(draft);
+  const brandName = brand ? BUILTIN_BRANDS[brand].name : null;
+  const theme = brand ? (data.site.brands?.find((b) => b.id === brand)?.theme ?? BUILTIN_BRANDS[brand].theme) : data.site.theme;
+  const short = draft.id ? shortLinkOf(data, draft.id) : null;
 
   const setLook = (key: OverrideKey, value: string) => {
     const next: Partial<Theme> = { ...override };
@@ -61,7 +67,11 @@ export function AdvancedTab({ draft, update, errors, isNew, onDelete }: TabProps
           onChange={(visibility) => update({ visibility })}
           options={[
             { value: 'public', label: 'Listed', description: 'Shown on your booking page for anyone to pick.' },
-            { value: 'unlisted', label: 'Unlisted', description: 'Hidden from your page. Only people you send the link to can book.' },
+            {
+              value: 'unlisted',
+              label: 'Unlisted',
+              description: `Hidden from your page. Only people you send the link to can book.${short ? ` ${short.label} still opens it.` : ''}`,
+            },
           ]}
         />
         <Switch labelSide="start" checked={draft.active} onChange={(active) => update({ active })} label="Accept bookings" description={draft.active ? 'People can book this event.' : 'Paused. The link shows that this event is not available right now.'} />
@@ -91,9 +101,13 @@ export function AdvancedTab({ draft, update, errors, isNew, onDelete }: TabProps
 
       <Section
         title="Look of this event"
-        description="Use a different layout for this event's page. Its colour is on the Basics tab, and everything else follows your design."
+        description={
+          brandName
+            ? `Use a different layout for this event's page. Everything else follows the ${brandName} look.`
+            : "Use a different layout for this event's page. Its colour is on the Basics tab, and everything else follows your design."
+        }
         aside={
-          <Link className="adm-textlink" to="/admin/design">
+          <Link className="adm-textlink" to={brand ? `/admin/design?brand=${brand}` : '/admin/design'}>
             Open Design
           </Link>
         }
@@ -102,7 +116,7 @@ export function AdvancedTab({ draft, update, errors, isNew, onDelete }: TabProps
           {LOOK.map((item) => {
             const pageValue = item.options.find((o) => o.value === theme[item.key])?.label ?? 'page setting';
             return (
-              <Field key={item.key} label={item.label} hint={`Your page uses ${pageValue.toLowerCase()}.`} error={errors[`themeOverride.${item.key}`]}>
+              <Field key={item.key} label={item.label} hint={`${brand ? 'The brand' : 'Your page'} uses ${pageValue.toLowerCase()}.`} error={errors[`themeOverride.${item.key}`]}>
                 <Select value={(override[item.key] as string | undefined) ?? ''} options={[{ value: '', label: 'Same as my page' }, ...item.options]} onChange={(e) => setLook(item.key, e.target.value)} />
               </Field>
             );

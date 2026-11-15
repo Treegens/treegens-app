@@ -28,6 +28,13 @@ html[data-surface='public'] {
   color-scheme: var(--boot-scheme, dark);
 }
 
+/* A brand's short page (jimicohen.com/pod) names its brand in a meta tag: its sand from the very first
+   paint, before any script runs. Once main.tsx has run, the rule above takes over with the same colour. */
+html:not([data-surface]):has(meta[name='meeting-boot-brand'][content='brand_eco_champions']) {
+  background: #faf5e6;
+  color-scheme: light;
+}
+
 body {
   margin: 0;
   min-height: 100vh;

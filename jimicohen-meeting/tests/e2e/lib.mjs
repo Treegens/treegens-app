@@ -22,7 +22,8 @@ import { inspect, isDeepStrictEqual } from 'node:util';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const E2E_DIR = path.join(ROOT, 'tests', 'e2e');
-export const SCREENSHOT_DIR = path.join(E2E_DIR, 'screenshots');
+/** E2E_SCREENSHOT_DIR lets several people keep their screenshots apart, like E2E_DIST_DIR and E2E_WORK_DIR. */
+export const SCREENSHOT_DIR = process.env.E2E_SCREENSHOT_DIR ? path.resolve(process.env.E2E_SCREENSHOT_DIR) : path.join(E2E_DIR, 'screenshots');
 /** Must match scripts/dev-server.ts and vite.config.ts. */
 export const BASE_PATH = '/meeting';
 /** The dev server's one-time setup code. */
@@ -529,6 +530,30 @@ class DevTools {
     return result;
   }
 
+  /**
+   * The one-time setup of the short links (server/lib/seed.ts), which only the deploy's scheduled function
+   * runs in production and runJobs() never does. Returns its report, or 'already_done'.
+   */
+  async runOneTimeMoves() {
+    const result = await this.apiOk('POST', '/dev/one-time-moves', { body: {} });
+    await this.settle();
+    return result.shortLinks;
+  }
+
+  /**
+   * Address of a short link: shortUrl('pod') → http://localhost:8800/pod, the way jimicohen.com/pod reaches
+   * the app. { origin: 'http://127.0.0.1:8800' } plays the app's own (netlify.app) address.
+   */
+  shortUrl(name, { origin } = {}) {
+    return `${origin ?? this.server.origin}/${name}`;
+  }
+
+  /** A plain request, no browser and no scripts, the way a link preview crawler fetches a page. */
+  async fetchHtml(url, { userAgent = 'LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)' } = {}) {
+    const res = await fetch(url, { headers: { 'User-Agent': userAgent }, redirect: 'manual' });
+    return { status: res.status, headers: res.headers, text: await res.text() };
+  }
+
   /** Queued jobs, soonest first. */
   async jobs(filter) {
     const { jobs } = await this.apiOk('GET', '/dev/jobs');
@@ -552,6 +577,17 @@ class DevTools {
 
   async kvKeys(prefix = '') {
     return (await this.apiOk('GET', '/dev/kv', { query: { prefix } })).keys;
+  }
+
+  /** Writes one raw record, for data in the shape an older deploy left it. null removes it. */
+  async putKv(key, value) {
+    return this.apiOk('PUT', '/dev/kv', { body: { key, value } });
+  }
+
+  /** The Google accounts of a host as stored: { main, extras }. */
+  async googleAccountsOf(hostId) {
+    const host = ((await this.kv('hosts')) ?? []).find((h) => h.id === hostId) ?? null;
+    return { main: host?.google ?? null, extras: host?.googleExtra ?? [] };
   }
 
   // ── mock Google ──
@@ -1031,12 +1067,28 @@ class Scenario extends DevTools {
     } else {
       const query = new URLSearchParams({ host: start.hostId, gmail: start.gmail ? '1' : '0', return: start.returnTo ?? `${BASE_PATH}/admin/integrations` });
       if (start.token) query.set('t', start.token);
+      // add: "Add another Google account"; accountId: reconnect that one account; switch: "Use a different Google account".
+      if (start.add) query.set('add', '1');
+      if (start.accountId) query.set('account', start.accountId);
+      if (start.switch) query.set('switch', '1');
       // As a Connect button does: from one of the app's own pages (the server refuses a link opened from anywhere
       // else). A page of the app without an earlier ?google= answer in its address, so done() waits for this one.
       await page.goto(`${this.server.origin}${BASE_PATH}/`);
       await page.evaluate((target) => window.location.assign(target), `${this.server.api}/google/connect?${query}`);
     }
     return { ...handle, result: await done() };
+  }
+
+  /**
+   * "Add another Google account" in `region` (a locator), signing in as `email` at Google. Checks that the
+   * request asked Google for its account chooser and sent no login hint, and returns the result.
+   */
+  async addGoogleAccount(page, region, email, zone = 'UTC') {
+    const google = await this.connectGoogle(page, email, zone, { start: region.getByRole('button', { name: 'Add another Google account' }) });
+    const request = google.result.request;
+    this.expect(request?.accountChooser, `the account chooser for ${email}`).toBe(true);
+    this.expect(request?.loginHint ?? null, `no login hint for ${email}`).toBe(null);
+    return google.result;
   }
 
   async finish() {
@@ -1154,4 +1206,22 @@ export async function runSuite(suite, { browser, ports, workDir, dist, only } = 
   const ok = !error && scenarios.every((s) => s.ok) && (ran.length > 0 || !!only);
   if (!error && ran.length === 0 && !only) console.log(red('  The suite ran no scenario.'));
   return { name: suite.name, ok, scenarios, logFile: server?.logFile ?? null, ms: Date.now() - started, error: error ? (error.message ?? String(error)) : null };
+}
+
+/**
+ * The <title>, <meta> and <link> tags of an HTML page, the way a link preview reads them:
+ * { title, meta: { 'og:title': ..., description: ... }, links: [{ rel, href, sizes, type }] }.
+ */
+export function metaOf(html) {
+  const head = String(html ?? '').split(/<\/head>/i)[0];
+  const attrs = (tag) => Object.fromEntries([...tag.matchAll(/([a-zA-Z:-]+)="([^"]*)"/g)].map((m) => [m[1].toLowerCase(), m[2].replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')]));
+  const meta = {};
+  for (const m of head.matchAll(/<meta\b[^>]*>/gi)) {
+    const a = attrs(m[0]);
+    const key = a.property ?? a.name;
+    if (key && a.content !== undefined) meta[key] = a.content;
+  }
+  const links = [...head.matchAll(/<link\b[^>]*>/gi)].map((m) => attrs(m[0]));
+  const titles = [...head.matchAll(/<title>([^<]*)<\/title>/gi)].map((m) => m[1]);
+  return { title: titles[0] ?? null, titles, meta, links };
 }

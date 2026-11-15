@@ -18,6 +18,8 @@ import { RemindersTab, sortRules } from '../components/event/RemindersTab';
 import { SchedulingTab } from '../components/event/SchedulingTab';
 import { TAB_LABELS, TAB_ORDER, tabOfField } from '../components/event/shared';
 import type { TabId } from '../components/event/shared';
+import { brandIdOf, deleteText, shortLinkOf } from '../brands';
+import { BrandChip, ShortChip } from '../components/BrandBits';
 import { KIND_LABEL, sameJson, trimUrl } from '../format';
 import { useAdmin } from '../state';
 
@@ -75,7 +77,8 @@ function validate(et: EventType, all: EventType[], hostIds: string[]): Record<st
   if (!et.title.trim()) errors.title = 'Give this event type a name.';
   if (!et.slug) errors.slug = 'Choose a link for this event.';
   else if (!SLUG_RE.test(et.slug)) errors.slug = 'Use lowercase letters, numbers and dashes, without a dash at either end.';
-  else if (RESERVED_SLUGS.includes(et.slug)) errors.slug = 'That link is reserved. Please choose another.';
+  // A link that became reserved stays usable for the event that already has it (as on the server).
+  else if (RESERVED_SLUGS.includes(et.slug) && !all.some((e) => e.id === et.id && e.slug === et.slug)) errors.slug = 'That link is reserved. Please choose another.';
   else if (all.some((e) => e.slug === et.slug && e.id !== et.id)) errors.slug = 'Another event type already uses this link.';
   if (!et.durations.length) errors.durations = 'Offer at least one length.';
   else if (et.durations.some((d) => d < 5 || d > 480)) errors.durations = 'Lengths have to be between 5 minutes and 8 hours.';
@@ -270,7 +273,10 @@ function Editor({ initial, isNew }: { initial: EventType; isNew: boolean }) {
   );
 
   const orphanErrors = Object.entries(errors).filter(([k]) => tabOfField(k) === null);
-  const link = `${trimUrl(data.publicUrl)}/${base.slug}`;
+  // The short link that opens this event is the one to copy and open.
+  const short = isNew ? null : shortLinkOf(data, base.id);
+  const link = short?.url ?? `${trimUrl(data.publicUrl)}/${base.slug}`;
+  const brand = brandIdOf(draft);
   const tabProps = { draft, update, errors, isNew };
 
   return (
@@ -291,6 +297,8 @@ function Editor({ initial, isNew }: { initial: EventType; isNew: boolean }) {
                 Paused
               </Badge>
             ) : null}
+            {brand ? <BrandChip id={brand} /> : null}
+            {short ? <ShortChip label={short.label} /> : null}
           </>
         }
         actions={
@@ -364,7 +372,7 @@ function Editor({ initial, isNew }: { initial: EventType; isNew: boolean }) {
         onConfirm={remove}
         tone="danger"
         title={`Delete "${base.title}"?`}
-        description="Its link stops working straight away. Meetings that are already booked stay on your calendar."
+        description={deleteText(short?.label)}
         confirmLabel="Delete event type"
       />
     </Page>

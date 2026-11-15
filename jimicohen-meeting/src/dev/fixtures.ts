@@ -27,7 +27,7 @@ export interface MockState {
   seq: number;
 }
 
-export const MOCK_STATE_VERSION = 4;
+export const MOCK_STATE_VERSION = 5;
 
 function svgDataUrl(svg: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
@@ -68,7 +68,8 @@ function ownerHost(): AdminHost {
       },
     ],
     defaultScheduleId: 'sch_default',
-    google: { email: 'jimi@example.com', status: 'ok', busyCalendarIds: ['primary'], writeCalendarId: 'primary', gmailSend: true },
+    google: { id: 'gacc_owner_main', email: 'jimi@example.com', status: 'ok', busyCalendarIds: ['primary'], writeCalendarId: 'primary', gmailSend: true },
+    googleExtra: [{ id: 'gacc_owner_work', email: 'jimi@work.example.com', status: 'ok', busyCalendarIds: ['primary'], connectedAt: new Date().toISOString(), health: null }],
     icsFeeds: [],
     hasInviteLink: false,
     notify: { email: true, sms: false },
@@ -89,7 +90,8 @@ function coHost(): AdminHost {
     timezoneMode: 'google',
     schedules: [defaultSchedule('sch_alex')],
     defaultScheduleId: 'sch_alex',
-    google: { email: 'alex@example.com', status: 'ok', busyCalendarIds: ['primary'], writeCalendarId: 'primary', gmailSend: false },
+    google: { id: 'gacc_alex_main', email: 'alex@example.com', status: 'ok', busyCalendarIds: ['primary'], writeCalendarId: 'primary', gmailSend: false },
+    googleExtra: [],
     icsFeeds: [{ id: 'ics_1', label: 'Personal calendar' }],
     hasInviteLink: true,
     notify: { email: true, sms: false },
@@ -187,6 +189,21 @@ function seedEventTypes(nowIso: string): EventType[] {
       active: false,
       position: 4,
     }),
+    // The meeting behind jimicohen.com/pod: joint, unlisted, in the Eco Champions look.
+    newEventType(nowIso, {
+      id: 'evt_eco_champions',
+      slug: 'eco-champions',
+      title: 'Eco Champions conversation',
+      description: 'A conversation with the hosts of Eco Champions, the podcast interviewing the forces of nature on climate and sustainability.',
+      emoji: '🌿',
+      kind: 'collective',
+      hostIds: [OWNER_ID, COHOST_ID],
+      durations: [30, 60],
+      defaultDuration: 30,
+      visibility: 'unlisted',
+      brandId: 'brand_eco_champions',
+      position: 5,
+    }),
   ];
 }
 
@@ -207,6 +224,7 @@ function seedSite(nowIso: string): SiteSettings {
     assistant: { ...DEFAULT_ASSISTANT },
     booking: { reminderOptInDefault: true, consentText: DEFAULT_CONSENT_TEXT, privacyUrl: 'https://jimicohen.com/privacy' },
     email: { provider: 'auto', fromName: 'Jimi Cohen', fromEmail: '', replyTo: 'jimi@example.com' },
+    shortLinks: { meet: 'evt_intro', pod: 'evt_eco_champions' },
     updatedAt: nowIso,
   };
 }

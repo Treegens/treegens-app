@@ -3,8 +3,9 @@
  * render the real booking widget with a draft theme without asking the server.
  */
 import type { ThemeAssets } from '../../../../shared/theme';
-import type { AdminBootstrap, AdminHost, EventType, LocationConfig, PublicEventType, PublicHost, PublicSite, Theme } from '../../../../shared/types';
-import { assetUrl } from '../../../lib/api';
+import { BUILTIN_BRANDS, eventColorFor, isBrandId } from '../../../../shared/brands';
+import type { AdminBootstrap, AdminHost, BrandId, EventType, LocationConfig, PublicEventType, PublicHost, PublicSite, Theme } from '../../../../shared/types';
+import { APP_BASE, assetUrl } from '../../../lib/api';
 
 const LOCATION_LABELS: Record<LocationConfig['type'], string> = {
   google_meet: 'Google Meet',
@@ -48,7 +49,8 @@ export function toPublicEventType(et: EventType, hosts: AdminHost[]): PublicEven
     title: et.title,
     description: et.description,
     emoji: et.emoji || undefined,
-    color: et.color || undefined,
+    // A branded event shows the brand's colours only (as the server sends it).
+    color: eventColorFor(et, isBrandId(et.brandId) ? BUILTIN_BRANDS[et.brandId] : null),
     coverUrl: assetUrl(et.coverAssetId),
     kind: et.kind,
     hosts: assigned.map(toPublicHost),
@@ -88,12 +90,32 @@ export function sampleEventType(owner: AdminHost): PublicEventType {
   };
 }
 
-/** Event types a visitor could open, listed ones first. */
-export function previewEventTypes(data: AdminBootstrap, owner: AdminHost): PublicEventType[] {
-  const active = data.eventTypes.filter((e) => e.active);
+/**
+ * Event types a visitor could open, listed ones first: those in the look being edited (the owner's own,
+ * or one brand's), so the preview shows them as they really look.
+ */
+export function previewEventTypes(data: AdminBootstrap, owner: AdminHost, brandId: BrandId | null = null): PublicEventType[] {
+  const inLook = (e: EventType) => (isBrandId(e.brandId) ? e.brandId : null) === brandId;
+  const active = data.eventTypes.filter((e) => e.active && inLook(e));
   const ordered = [...active.filter((e) => e.visibility === 'public'), ...active.filter((e) => e.visibility !== 'public')];
   const list = ordered.map((e) => toPublicEventType(e, data.hosts));
-  return list.length ? list : [sampleEventType(owner)];
+  if (list.length) return list;
+  if (!brandId) return [sampleEventType(owner)];
+  const sample = sampleEventType(owner);
+  return [{ ...sample, title: `${BUILTIN_BRANDS[brandId].name} conversation`, description: 'This is a sample. Choose this look on a meeting and it will show up here.' }];
+}
+
+/** PublicSite as a brand's page receives it: the brand's name, no profile photo or links, the brand's logo. */
+export function toBrandPreviewSite(data: AdminBootstrap, owner: AdminHost, brandId: BrandId, theme: Theme, assets: ThemeAssets): PublicSite {
+  const site = toPreviewSite(data, owner, theme, assets, []);
+  const brand = BUILTIN_BRANDS[brandId];
+  return {
+    ...site,
+    profile: { name: brand.name, headline: '', welcome: '', avatarUrl: null, links: [] },
+    themeAssets: { ...assets, logoUrl: assets.logoUrl ?? `${APP_BASE}/${brand.art.logo}` },
+    eventTypes: [],
+    brand: { id: brand.id, name: brand.name, iconUrl: `${APP_BASE}/${brand.art.favicon}` },
+  };
 }
 
 /** PublicSite as the booking page would receive it, with `theme` swapped for the draft. */

@@ -9,6 +9,15 @@ export function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] || name.trim();
 }
 
+/**
+ * The first host's first name, for "a note from Jimi". Without a host the page's own name stands in: cut to
+ * its first word for the owner ("Jimi"), but whole for a brand, which is not a person ("Eco Champions", never "Eco").
+ */
+export function hostFirstName(hosts: { name: string }[], site: { profile: { name: string }; brand?: unknown }): string {
+  if (hosts[0]?.name) return firstName(hosts[0].name);
+  return site.brand ? site.profile.name.trim() : firstName(site.profile.name);
+}
+
 /** "Jimi", "Jimi and Alex", "Jimi, Alex and Sam". */
 export function joinNames(names: string[], conjunction: 'and' | 'or' = 'and'): string {
   const list = names.map((n) => n.trim()).filter(Boolean);

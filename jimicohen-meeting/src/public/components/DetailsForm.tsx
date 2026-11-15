@@ -5,7 +5,7 @@ import type { PublicEventType, PublicSite } from '../../../shared/types';
 import { dayKey, formatDayKey, formatRange } from '../../lib/tz';
 import { Button, Field, Input, Switch } from '../../ui';
 import { checkPhone, loadPhoneLib } from '../lib/phone';
-import { EMAIL_RE, fillTemplate, firstName, isWebUrl } from '../lib/text';
+import { EMAIL_RE, fillTemplate, firstName, hostFirstName, isWebUrl } from '../lib/text';
 import { GuestsField } from './GuestsField';
 import { PhoneField } from './PhoneField';
 import { QuestionField, validateAnswer } from './QuestionField';
@@ -83,7 +83,7 @@ export function DetailsForm({ site, eventType, location, values, onChange, onSub
     setDismissed(new Set());
   }, [serverErrors]);
 
-  const hostFirst = firstName(eventType.hosts[0]?.name ?? site.profile.name);
+  const hostFirst = hostFirstName(eventType.hosts, site);
   const phoneNeeded = eventType.phone === 'required' || location?.type === 'phone_host_calls';
   const showPhone = eventType.phone !== 'hidden' || phoneNeeded;
   const hasPhone = values.phone.trim().length > 0;

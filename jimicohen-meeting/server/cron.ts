@@ -6,10 +6,12 @@
  */
 import type { CallRecord, Host } from '../shared/types';
 import { alertCalendarTrouble, reconcileBookings, registerBookingJobHandlers } from './lib/booking';
-import { getHostBusy, syncHostTimezone } from './lib/busy';
+import { getHostBusy, syncHostTimezone, type BusyProblem } from './lib/busy';
+import { accountsOf } from './lib/googleAccounts';
 import type { Ctx } from './lib/ctx';
 import { runDueJobs } from './lib/jobs';
 import { KEYS, PRUNE_BUDGET_MS, PRUNE_LIMIT_PER_PREFIX, cacheGet, cacheSet, listHosts, pruneEphemeral } from './lib/repo';
+import { runShortLinkMove } from './lib/seed';
 import { DAY_MS } from './lib/time';
 
 const HOUSEKEEPING_MARK = 'housekeeping-ran';
@@ -43,6 +45,8 @@ const RATE_LIMIT_PRUNE_LIMIT = 10_000;
 const CALL_MAX_AGE_MS = 90 * DAY_MS;
 const CALL_SCAN_LIMIT = 2000;
 const READ_CONCURRENCY = 16;
+/** Hosts whose calendars the health check reads at the same time (each reads all of its accounts at once). */
+const PROBE_CONCURRENCY = 8;
 
 function shortError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -107,15 +111,15 @@ async function syncTimezones(ctx: Ctx, hosts: Host[]): Promise<{ checked: number
  * host.calendarHealth; a calendar that cannot be read is reported to the owner, once a day per host.
  */
 async function probeCalendars(ctx: Ctx, hosts: Host[]): Promise<{ checked: number; broken: number; alerted: number }> {
-  const connected = hosts.filter((h) => !!h.google || (Array.isArray(h.icsFeeds) && h.icsFeeds.length > 0));
+  // Every Google account of a host counts, not only the main one.
+  const connected = hosts.filter((h) => accountsOf(h).length > 0 || (Array.isArray(h.icsFeeds) && h.icsFeeds.length > 0));
   const nowMs = ctx.now().getTime();
-  const failures: { host: Host; error: string }[] = [];
-  await Promise.all(
-    connected.map(async (host) => {
-      const result = await getHostBusy(ctx, host, { start: nowMs, end: nowMs + DAY_MS }, { fresh: true });
-      if (!result.ok) failures.push({ host, error: result.error ?? 'Calendar could not be read.' });
-    }),
-  );
+  const failures: { host: Host; error: string; problems?: BusyProblem[] }[] = [];
+  // A host reads all of its accounts at once; a few hosts at a time keeps the run's requests bounded.
+  await eachLimited(connected, PROBE_CONCURRENCY, async (host) => {
+    const result = await getHostBusy(ctx, host, { start: nowMs, end: nowMs + DAY_MS }, { fresh: true });
+    if (!result.ok) failures.push({ host, error: result.error ?? 'Calendar could not be read.', ...(result.problems?.length ? { problems: result.problems } : {}) });
+  });
   failures.sort((a, b) => a.host.id.localeCompare(b.host.id));
   const alerted = failures.length > 0 ? await alertCalendarTrouble(ctx, failures) : 0;
   return { checked: connected.length, broken: failures.length, alerted };
@@ -193,7 +197,15 @@ async function pruneRateLimits(ctx: Ctx, deadlineMs: number): Promise<unknown> {
 export interface ScheduledRunOptions {
   /** how long a housekeeping step that talks to calendars is waited for (default 6 s; the booking check 5 s) */
   stepWaitMs?: number;
+  /**
+   * Run the one-time changes to stored data first (server/lib/seed.ts). Passed only by the scheduled
+   * function of the deploy (netlify/functions/cron.mts), never by the dev server's timer or POST /dev/run-jobs.
+   */
+  oneTimeMoves?: boolean;
 }
+
+/** How long the one-time setup is waited for before the run carries on (it then finishes in the background). */
+const ONE_TIME_MOVES_MS = 5_000;
 
 /**
  * One scheduled run. Never throws because of a job or a housekeeping step: what went wrong is in the
@@ -204,6 +216,9 @@ export async function runScheduled(ctx: Ctx, opts?: ScheduledRunOptions): Promis
   registerBookingJobHandlers();
   const startedMs = ctx.now().getTime();
   const summary: Record<string, unknown> = { at: ctx.now().toISOString() };
+
+  // A failure is logged and reported, a slow store stops being waited for: the due jobs below always run.
+  if (opts?.oneTimeMoves) summary.shortLinks = await networkStep(ctx, 'the short link setup', ONE_TIME_MOVES_MS, () => runShortLinkMove(ctx));
 
   const lastRun = await step(ctx, 'reading the housekeeping marker', () => cacheGet<{ at: string }>(ctx, HOUSEKEEPING_MARK));
   const unreadable = !!lastRun && typeof lastRun === 'object' && 'error' in lastRun;

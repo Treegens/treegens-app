@@ -41,8 +41,10 @@ describe('handle()', () => {
       '/dev/ics',
       '/dev/jobs',
       '/dev/kv',
+      '/dev/kv',
       '/dev/llm-script',
       '/dev/llm-script',
+      '/dev/one-time-moves',
       '/dev/outbox',
       '/dev/outbox',
       '/dev/reset',
@@ -50,7 +52,7 @@ describe('handle()', () => {
     ]);
     expect(allRoutes(prod).some((r) => r.pattern.startsWith('/dev/'))).toBe(false);
 
-    for (const [method, path] of [['GET', '/dev/outbox'], ['POST', '/dev/reset'], ['POST', '/dev/clock'], ['POST', '/dev/run-jobs'], ['GET', '/dev/clock']]) {
+    for (const [method, path] of [['GET', '/dev/outbox'], ['POST', '/dev/reset'], ['POST', '/dev/clock'], ['POST', '/dev/run-jobs'], ['POST', '/dev/one-time-moves'], ['GET', '/dev/clock']]) {
       const res = await handle(apiRequest(method, path), prod);
       expect(res.status).toBe(404);
     }
@@ -67,7 +69,15 @@ describe('co-host routes', () => {
       .filter((r) => r.pattern.startsWith('/host/'))
       .map((r) => `${r.method} ${r.pattern}`)
       .sort();
-    expect(coHost).toEqual(['GET /host/:id', 'GET /host/:id/calendars', 'POST /host/:id/google/disconnect', 'PUT /host/:id']);
+    expect(coHost).toEqual([
+      'DELETE /host/:id/google/:accountId',
+      'GET /host/:id',
+      'GET /host/:id/calendars',
+      'GET /host/:id/google/:accountId/calendars',
+      'GET /host/:id/google/:accountId/removal',
+      'POST /host/:id/google/disconnect',
+      'PUT /host/:id',
+    ]);
   });
 });
 

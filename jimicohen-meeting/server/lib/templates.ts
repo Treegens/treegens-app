@@ -10,6 +10,7 @@
  * "{{manage_url}}" stays plain text.
  */
 import { DateTime, IANAZone } from 'luxon';
+import { bookUrlFor, isSiteView } from '../../shared/brands';
 import type { Booking, EventType, Host, IanaZone, LocationType, MessageKind, ReminderChannel, SiteSettings } from '../../shared/types';
 import { hmacHex } from './crypto';
 import type { Ctx } from './ctx';
@@ -44,12 +45,12 @@ export const TEMPLATE_VARIABLES: { key: string; description: string }[] = [
   { key: 'reschedule_url', description: 'Link straight to picking a new time' },
   { key: 'cancel_url', description: 'Link straight to cancelling' },
   { key: 'confirm_url', description: 'Link that confirms the invitee is coming' },
-  { key: 'book_url', description: 'Booking page of this event type' },
+  { key: 'book_url', description: 'Booking page of this event type (its short link, such as jimicohen.com/pod, when one opens it)' },
   { key: 'answers', description: 'Answers to your booking questions, one per line' },
   { key: 'guests', description: 'Email addresses of invited guests' },
   { key: 'cancel_reason', description: 'Reason given when the meeting was cancelled' },
   { key: 'cancelled_by', description: 'Who cancelled the meeting' },
-  { key: 'site_name', description: 'Name shown on your booking page' },
+  { key: 'site_name', description: 'The name of the brand this meeting uses: your own name, or a brand such as Eco Champions' },
   { key: 'assistant_name', description: 'Name of your AI assistant' },
 ];
 
@@ -84,12 +85,41 @@ function resolveSections(tpl: string, vars: TemplateVars, depth: number): string
 export function renderTemplate(tpl: string, vars: TemplateVars, opts?: { html?: boolean }): string {
   if (typeof tpl !== 'string' || tpl === '') return '';
   const safeVars = vars ?? {};
-  return resolveSections(tpl, safeVars, 0)
+  return resolveSections(sayEventWith(tpl, safeVars), safeVars, 0)
     .replace(STRAY_TAG, '')
     .replace(VARIABLE, (_all, key: string) => {
       const value = lookup(safeVars, key);
       return opts?.html ? escapeHtml(value) : value;
     });
+}
+
+/**
+ * True when a meeting's name already says it is with these people: "Meet with Jimi" names "Jimi Cohen", and
+ * "Coffee with Jimi and Ian" names "Jimi and Ian". `names` is a name or a list ("Jimi, Ian and Sam").
+ */
+export function eventNamesEveryone(eventName: string, names: string): boolean {
+  const words = String(eventName ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  if (!words.includes('with')) return false;
+  const firsts = String(names ?? '')
+    .split(/,\s*|\s+and\s+/)
+    .map((n) => firstName(n).toLowerCase())
+    .filter(Boolean);
+  return firsts.length > 0 && firsts.every((first) => words.includes(first));
+}
+
+/**
+ * The wording "{{event_name}} with {{host_names}}" (or with {{invitee_name}}) for a meeting whose name already
+ * says "with" ("Meet with Jimi", the meeting behind jimicohen.com/meet) would read "Meet with Jimi with Jimi
+ * Cohen". Such a name is said alone when it already names the hosts, else with the people in brackets:
+ * "Meet with Jimi (Ann Lee)". Every other name reads exactly as before.
+ */
+function sayEventWith(tpl: string, vars: TemplateVars): string {
+  if (!tpl.includes('{{event_name}} with {{')) return tpl;
+  const name = String(vars.event_name ?? '');
+  if (!name.toLowerCase().split(/[^\p{L}\p{N}]+/u).includes('with')) return tpl;
+  return tpl.replace(/\{\{event_name\}\} with \{\{(host_names|invitee_name)\}\}/g, (_all, key: string) =>
+    key === 'host_names' && eventNamesEveryone(name, String(vars.host_names ?? '')) ? '{{event_name}}' : `{{event_name}} ({{${key}}})`,
+  );
 }
 
 // ───────────────────────── small wording helpers ─────────────────────────
@@ -286,6 +316,8 @@ export function buildVars(
   const inviteeFirst = typedFirst && !looksLikeLink(typedFirst) ? typedFirst : audience === 'host' ? 'the invitee' : 'there';
   const namedHost = audience === 'host' ? reader : primaryHost;
   const hostName = namedHost?.name?.trim() || site.profile.name;
+  // Without a host the name comes from the site, which under a brand is the brand: never cut "Eco Champions" to "Eco".
+  const hostFirst = !namedHost?.name?.trim() && isSiteView(site) ? hostName : firstName(hostName);
   const hostNames = hosts.length > 1 ? joinNames(hosts.map((h) => firstName(h.name))) : hostName;
 
   const base = ctx.env.publicBaseUrl.replace(/\/+$/, '');
@@ -303,7 +335,7 @@ export function buildVars(
     invitee_phone: booking.invitee.phone ?? '',
     invitee_timezone: zoneNames(startMs, inviteeZone).long,
     host_name: hostName,
-    host_first_name: firstName(hostName),
+    host_first_name: hostFirst,
     host_names: hostNames,
     host_email: namedHost?.email ?? '',
     event_name: booking.eventTitle || p.eventType?.title || 'Meeting',
@@ -325,7 +357,8 @@ export function buildVars(
     reschedule_url: `${base}/booking/${id}/reschedule?t=${token}${asHost}`,
     cancel_url: `${base}/booking/${id}/cancel?t=${token}${asHost}`,
     confirm_url: `${base}/booking/${id}?t=${token}&confirm=1`,
-    book_url: `${base}/${encodeURIComponent(booking.eventSlug)}`,
+    // The short address when a link opens the event now in the look the booking was made in, else the event's page.
+    book_url: bookUrlFor(base, site, booking),
     admin_url: `${base}/admin/bookings`,
     answers: booking.answers
       .filter((a) => a.value.trim() !== '')

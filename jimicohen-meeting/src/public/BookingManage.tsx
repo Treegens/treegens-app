@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, CalendarPlus, CircleAlert, CircleCheck, History, ThumbsUp } from 'lucide-react';
-import type { CreateBookingResponse, GetBookingResponse, PublicBooking } from '../../shared/types';
+import { SHORT_LINKS, isShortName } from '../../shared/shortLinks';
+import type { CreateBookingResponse, GetBookingResponse, PublicBooking, PublicSite } from '../../shared/types';
 import { resolveTheme } from '../../shared/theme';
 import { cancelBooking, confirmBooking, getBooking, isApiFailure } from '../lib/api';
 import { useTheme } from '../lib/theme';
@@ -14,13 +15,13 @@ import { Badge, Button, ButtonLink, Field, Skeleton, Textarea, useToast } from '
 import { BookingWidget } from './BookingWidget';
 import { BookingFacts } from './components/BookingFacts';
 import { CalendarButtons } from './components/CalendarButtons';
-import { PageMessage, PublicPage, useDocumentTitle } from './components/PublicPage';
+import { PageMessage, PublicPage, useBrandIcon, useDocumentTitle } from './components/PublicPage';
 import { PublicFooter } from './components/PublicFooter';
 import { SuccessMark } from './components/SuccessMark';
 import { TimezoneBar } from './components/TimezoneBar';
 import { isEmbedSearch, postToParent, withEmbed } from './lib/embed';
 import { useVisitorPrefs } from './lib/prefs';
-import { deliveryLine, firstName, hostNames } from './lib/text';
+import { deliveryLine, firstName, hostFirstName, hostNames } from './lib/text';
 
 export interface BookingManageProps {
   view?: 'details' | 'reschedule' | 'cancel';
@@ -54,7 +55,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
   const toast = useToast();
   const phase = phaseOf(booking);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const hostFirst = firstName(booking.hosts[0]?.name ?? site.profile.name);
+  const hostFirst = hostFirstName(booking.hosts, site);
   // Opened from a host's link, the page speaks to a host about the invitee, not to the invitee.
   const inviteeFirst = firstName(booking.invitee.name);
 
@@ -65,6 +66,8 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
   const rescheduleHref = withEmbed(`${base}/reschedule${tq}`, embed);
   const cancelHref = withEmbed(`${base}/cancel${tq}`, embed);
   const rebookHref = withEmbed(`/${booking.eventSlug}`, embed);
+  // "Book a new time" goes to the short link that opens this meeting now, when it shows the look the booking was made in.
+  const rebookShort = embed ? null : rebookShortUrl(eventType?.shortUrl, site);
 
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -293,6 +296,8 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
         ) : null}
 
         <header className="bm__head">
+          {/* A booking made under a brand shows the brand's logo here too, as its booking page did. */}
+          {site.brand && site.themeAssets.logoUrl ? <img className="bm__logo" src={site.themeAssets.logoUrl} alt={`${site.profile.name} logo`} /> : null}
           {phase === 'cancelled' && flash === 'cancelled' ? <SuccessMark kind="cross" size={56} className="bm__mark" /> : null}
           <div className="bm__status">
             {phase === 'upcoming' ? (
@@ -411,9 +416,15 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
           <div className="bm__section">
             <p className="bm__label">{phase === 'cancelled' ? 'Changed your mind?' : 'Want to meet again?'}</p>
             <div className="bm__actions">
-              <ButtonLink to={rebookHref} variant="primary" iconLeft={<CalendarPlus size={16} />}>
-                {phase === 'cancelled' ? 'Book a new time' : 'Book another time'}
-              </ButtonLink>
+              {rebookShort ? (
+                <ButtonLink href={rebookShort} variant="primary" iconLeft={<CalendarPlus size={16} />}>
+                  {phase === 'cancelled' ? 'Book a new time' : 'Book another time'}
+                </ButtonLink>
+              ) : (
+                <ButtonLink to={rebookHref} variant="primary" iconLeft={<CalendarPlus size={16} />}>
+                  {phase === 'cancelled' ? 'Book a new time' : 'Book another time'}
+                </ButtonLink>
+              )}
             </div>
           </div>
         )}
@@ -438,6 +449,19 @@ function ManageSkeleton() {
       </div>
     </div>
   );
+}
+
+/** The short link to book this meeting again, when one opens it now in the look this booking was made in. */
+function rebookShortUrl(shortUrl: string | undefined, site: PublicSite): string | null {
+  if (!shortUrl) return null;
+  let name = '';
+  try {
+    name = new URL(shortUrl).pathname.replace(/^\/+|\/+$/g, '');
+  } catch {
+    return null;
+  }
+  if (!isShortName(name)) return null;
+  return SHORT_LINKS[name].brandId === (site.brand?.id ?? null) ? shortUrl : null;
 }
 
 export default function BookingManage({ view = 'details' }: BookingManageProps) {
@@ -474,6 +498,8 @@ export default function BookingManage({ view = 'details' }: BookingManageProps) 
 
   const data = state.status === 'ready' ? state.data : null;
   useDocumentTitle(data ? `${data.booking.eventTitle} · your booking` : null);
+  // The booking's own look: a booking made under a brand shows the brand's icon in the tab.
+  useBrandIcon(data?.site.brand?.iconUrl);
   const theme = useMemo(() => (data ? resolveTheme(data.site.theme, data.eventType?.themeOverride, data.eventType?.color) : undefined), [data]);
 
   if (!data || !theme) {
@@ -504,7 +530,7 @@ export default function BookingManage({ view = 'details' }: BookingManageProps) 
   const widgetView = view === 'reschedule' && data.booking.canReschedule && !!data.eventType;
 
   return (
-    <PublicPage theme={theme} assets={data.site.themeAssets} embed={embed} width={widgetView ? 'wide' : 'narrow'}>
+    <PublicPage theme={theme} assets={data.site.themeAssets} embed={embed} width={widgetView ? 'wide' : 'narrow'} brandId={data.site.brand?.id ?? null}>
       <ManageViews data={data} token={token} asHost={asHost} embed={embed} view={view} onUpdated={onUpdated} />
     </PublicPage>
   );

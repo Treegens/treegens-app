@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
 import type { PublicSite } from '../../../shared/types';
+import { AppLink } from '../../lib/links';
 import { useTheme } from '../../lib/theme';
 import { isWebUrl, paragraphs } from '../lib/text';
 
@@ -41,16 +41,17 @@ export function PublicFooter({ site, inert = false }: PublicFooterProps) {
       ) : null}
       {privacy || !theme.hideBranding ? (
         <p className="pf__line">
-          {theme.hideBranding ? null : inert ? (
+          {/* A brand's credit is plain text: the owner's list of meetings is not the brand's home. */}
+          {theme.hideBranding ? null : inert || site.brand ? (
             <span className="pf__credit">
               <Glyph />
               <span>{credit}</span>
             </span>
           ) : (
-            <Link to="/" className="pf__credit">
+            <AppLink to="/" className="pf__credit">
               <Glyph />
               <span>{credit}</span>
-            </Link>
+            </AppLink>
           )}
           {privacy ? (
             <a className="pf__link" href={privacy} target="_blank" rel="noopener noreferrer">

@@ -65,3 +65,14 @@ export const STORAGE_KEYS = {
   /** last public theme seen, so the next visit paints the right colours before the API answers */
   bootTheme: 'mtg:boot-theme',
 } as const;
+
+/** The last look of one brand seen ("mtg:boot-theme:brand_eco_champions"), for the first paint of its short link. */
+export function brandBootThemeKey(brandId: string): string {
+  return `${STORAGE_KEYS.bootTheme}:${brandId}`;
+}
+
+/**
+ * The owner's own look seen last ("mtg:boot-theme:own": any page without a brand), for the first paint of a short
+ * link in that look (jimicohen.com/meet), which must never boot in a brand's look seen since.
+ */
+export const OWN_BOOT_THEME_KEY = `${STORAGE_KEYS.bootTheme}:own`;

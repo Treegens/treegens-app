@@ -5,6 +5,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { EventKind, EventType } from '../../../shared/types';
 import { deleteEventType, duplicateEventType, errorMessage, reorderEventTypes, updateEventType } from '../../lib/api';
 import { Badge, Button, ButtonLink, ConfirmDialog, CopyButton, EmptyState, IconButton, Menu, Modal, Switch, cx, useToast } from '../../ui';
+import { brandIdOf, deleteText, shortLinkOf } from '../brands';
+import { BrandChip, ShortChip, ShortLinksCard } from '../components/BrandBits';
 import { Page, PageHeader } from '../components/Page';
 import { SharePanel } from '../components/SharePanel';
 import { KIND_LABEL, eventMeta, trimUrl } from '../format';
@@ -152,6 +154,9 @@ export default function EventTypes() {
         }
       />
 
+      {/* jimicohen.com/meet and /pod: what each opens, changed here. */}
+      <ShortLinksCard />
+
       {rows.length === 0 ? (
         <div className="adm-panel">
           <EmptyState
@@ -168,7 +173,11 @@ export default function EventTypes() {
       ) : (
         <ul role="list" className="adm-events">
           {rows.map((et, i) => {
-            const link = `${publicUrl}/${et.slug}`;
+            const full = `${publicUrl}/${et.slug}`;
+            // A short link that opens this event is the one to share.
+            const short = shortLinkOf(data, et.id);
+            const link = short?.url ?? full;
+            const brand = brandIdOf(et);
             return (
               <li
                 key={et.id}
@@ -208,10 +217,12 @@ export default function EventTypes() {
                         Unlisted
                       </Badge>
                     ) : null}
+                    {brand ? <BrandChip id={brand} /> : null}
+                    {short ? <ShortChip label={short.label} /> : null}
                   </div>
                   <p className="adm-event__meta">{eventMeta(et, hostName)}</p>
                   <a className="adm-event__link u-truncate" href={link} target="_blank" rel="noopener noreferrer">
-                    /{et.slug}
+                    {short ? short.label : `/${et.slug}`}
                     <ArrowUpRight size={13} aria-hidden="true" />
                   </a>
                 </div>
@@ -290,7 +301,7 @@ export default function EventTypes() {
       </Modal>
 
       <Modal open={toShare !== null} onClose={() => setToShare(null)} title={toShare ? `Share ${toShare.title}` : 'Share'} size="lg">
-        {toShare ? <SharePanel url={`${publicUrl}/${toShare.slug}`} title={toShare.title} /> : null}
+        {toShare ? <SharePanel url={`${publicUrl}/${toShare.slug}`} title={toShare.title} shortUrl={shortLinkOf(data, toShare.id)?.url} /> : null}
       </Modal>
 
       <ConfirmDialog
@@ -299,7 +310,7 @@ export default function EventTypes() {
         onConfirm={remove}
         tone="danger"
         title={toDelete ? `Delete "${toDelete.title}"?` : 'Delete?'}
-        description="Its link stops working straight away. Meetings that are already booked stay on your calendar."
+        description={deleteText(toDelete ? shortLinkOf(data, toDelete.id)?.label : undefined)}
         confirmLabel="Delete event type"
       />
     </Page>

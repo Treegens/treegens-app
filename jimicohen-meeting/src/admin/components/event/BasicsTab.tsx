@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { LocationConfig, LocationType } from '../../../../shared/types';
+import { BUILTIN_BRANDS, isBrandId } from '../../../../shared/brands';
+import type { BrandId, LocationConfig, LocationType } from '../../../../shared/types';
 import { assetUrl } from '../../../lib/api';
 import { Button, ColorInput, Field, IconButton, Input, Select, Textarea, cx } from '../../../ui';
+import { brandIdOf, shortLinkOf } from '../../brands';
+import { brandOptions } from '../BrandBits';
 import { LOCATION_LABEL, displayUrl, slugify } from '../../format';
 import { useAdmin } from '../../state';
 import { NumberField } from '../Fields';
@@ -11,6 +14,9 @@ import { FieldGroup, Notice, Section } from '../Page';
 import { ImageField } from '../x/bits';
 import { errorFor } from './shared';
 import type { TabProps } from './shared';
+// The cover image field is the shared ImageField: its styles live with the other x- bits, and the editor can be the
+// first dashboard page opened, before any page that loads them.
+import '../../../styles/adminx.css';
 
 const PRESET_DURATIONS = [15, 20, 30, 45, 60, 90, 120];
 const EMOJI_PICKS = ['👋', '☕', '🌱', '💬', '📞', '🎯', '🤝', '✨'];
@@ -36,6 +42,9 @@ export function BasicsTab({ draft, update, errors, isNew, slugTouched, onSlugTou
   const [justUploaded, setJustUploaded] = useState<Record<string, string>>({});
   const coverUrl = draft.coverAssetId ? (justUploaded[draft.coverAssetId] ?? assetUrl(draft.coverAssetId)) : null;
   const base = displayUrl(data.publicUrl);
+  const brand = brandIdOf(draft);
+  const brandLabel = brand ? BUILTIN_BRANDS[brand].name : null;
+  const short = draft.id ? shortLinkOf(data, draft.id) : null;
   const durations = draft.durations.slice().sort((a, b) => a - b);
   const chips = Array.from(new Set([...PRESET_DURATIONS, ...durations])).sort((a, b) => a - b);
 
@@ -62,7 +71,7 @@ export function BasicsTab({ draft, update, errors, isNew, slugTouched, onSlugTou
             }}
           />
         </Field>
-        <Field label="Link" error={errors.slug} hint={`People book at ${base}/${draft.slug || 'your-link'}`} required>
+        <Field label="Link" error={errors.slug} hint={`People book at ${base}/${draft.slug || 'your-link'}${short ? `, and at ${short.label}` : ''}.`} required>
           <Input
             value={draft.slug}
             maxLength={60}
@@ -92,21 +101,31 @@ export function BasicsTab({ draft, update, errors, isNew, slugTouched, onSlugTou
               </div>
             </div>
           </Field>
-          <FieldGroup
-            label="Colour"
-            optional
-            error={errors.color}
-            hint={draft.color ? 'Used for buttons and highlights on this event.' : 'Using your page colour. Pick one to give this event its own.'}
-            action={
-              draft.color ? (
-                <button type="button" className="adm-textbtn" onClick={() => update({ color: '' })}>
-                  Use page colour
-                </button>
-              ) : undefined
-            }
-          >
-            <ColorInput aria-label="Event colour" value={draft.color || data.site.theme.colors.primary} presets={COLOR_PICKS} onChange={(color) => update({ color })} />
-          </FieldGroup>
+          {brand ? (
+            // A branded event is all the brand's: its colour comes from the brand's look (the stored colour comes back without the brand).
+            <FieldGroup label="Colour" hint={<BrandColourHint name={brandLabel!} />}>
+              <span className="ab-swatch">
+                <span className="ab-swatch__dot" style={{ background: brandPrimary(data.site.brands, brand) }} aria-hidden="true" />
+                The {brandLabel} colour
+              </span>
+            </FieldGroup>
+          ) : (
+            <FieldGroup
+              label="Colour"
+              optional
+              error={errors.color}
+              hint={draft.color ? 'Used for buttons and highlights on this event.' : 'Using your page colour. Pick one to give this event its own.'}
+              action={
+                draft.color ? (
+                  <button type="button" className="adm-textbtn" onClick={() => update({ color: '' })}>
+                    Use page colour
+                  </button>
+                ) : undefined
+              }
+            >
+              <ColorInput aria-label="Event colour" value={draft.color || data.site.theme.colors.primary} presets={COLOR_PICKS} onChange={(color) => update({ color })} />
+            </FieldGroup>
+          )}
         </div>
         <ImageField
           label="Cover image"
@@ -134,6 +153,38 @@ export function BasicsTab({ draft, update, errors, isNew, slugTouched, onSlugTou
             {errors.coverAssetId}
           </p>
         ) : null}
+      </Section>
+
+      <Section title="Look" description="Whose name, logo and colours this meeting shows.">
+        <div className="ab-look">
+          <Field label="Brand" error={errors.brandId}>
+            <div className="ab-look__row">
+              <Select
+                wrapperClassName="ab-look__select"
+                value={brand ?? ''}
+                options={brandOptions(data.site.profile.name)}
+                onChange={(e) => update({ brandId: isBrandId(e.target.value) ? e.target.value : null })}
+              />
+              {brand ? (
+                <Link className="adm-textlink" to={`/admin/design?brand=${brand}`}>
+                  Edit the {brandLabel} look
+                </Link>
+              ) : null}
+            </div>
+          </Field>
+          <p className="ab-look__note">
+            Sets the name, logo, colours and fonts on this meeting's pages, and in its emails, texts and reminder calls. People who already booked keep the look they booked in.
+          </p>
+          {short ? (
+            <p className="ab-look__note">
+              Opens at {short.label}. Change this under{' '}
+              <Link className="adm-textlink" to="/admin/event-types#short-links">
+                Short links
+              </Link>
+              .
+            </p>
+          ) : null}
+        </div>
       </Section>
 
       <Section title="Length" description="Offer one length, or several and let people choose.">
@@ -244,4 +295,21 @@ export function BasicsTab({ draft, update, errors, isNew, slugTouched, onSlugTou
 
 function nextLocationType(existing: LocationConfig[]): LocationType {
   return LOCATION_TYPES.find((t) => !existing.some((l) => l.type === t)) ?? 'custom_link';
+}
+
+function BrandColourHint({ name }: { name: string }) {
+  return (
+    <>
+      Colours come from the {name} look. Change them in{' '}
+      <Link className="adm-textlink" to={`/admin/design?brand=${Object.values(BUILTIN_BRANDS).find((b) => b.name === name)?.id ?? ''}`}>
+        Design
+      </Link>
+      .
+    </>
+  );
+}
+
+/** The brand's main colour as the owner left it in Design, else as it ships. */
+function brandPrimary(stored: { id: string; theme: { colors?: { primary?: string } } }[] | undefined, id: BrandId): string {
+  return stored?.find((b) => b.id === id)?.theme.colors?.primary ?? BUILTIN_BRANDS[id].theme.colors.primary;
 }

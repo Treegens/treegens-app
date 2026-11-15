@@ -179,6 +179,26 @@ export const THEME_PRESETS: ThemePreset[] = [
     theme: structuredClone(DEFAULT_THEME),
   },
   {
+    // From ecochampions.live and the LinkedIn picture: sand paper, forest ink, the logo green and a lime highlight.
+    key: 'eco-champions',
+    label: 'Eco Champions',
+    description: 'Sand paper, forest ink and the Eco Champions green, with Fraunces headings.',
+    theme: make('eco-champions', {
+      colors: colors('#14432f', '#e1f250', '#faf5e6', '#ffffff', '#06210d', '#2f5838', '#dcdacb'),
+      background: solid,
+      fontHeading: 'fraunces',
+      fontBody: 'inter',
+      radius: 16,
+      buttonStyle: 'solid',
+      buttonShape: 'pill',
+      cardStyle: 'elevated',
+      shadow: 1,
+      layout: 'split',
+      calendarStyle: 'bubbles',
+      slotStyle: 'list',
+    }),
+  },
+  {
     key: 'meadow',
     label: 'Meadow',
     description: 'The daytime sibling of Forest: soft sage paper with a deep green.',

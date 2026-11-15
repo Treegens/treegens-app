@@ -2540,6 +2540,15 @@ a.bw-done__link:focus-visible {
   gap: 10px;
 }
 
+/* A brand's logo at the top of its bookings' manage page, the same size as on the booking page. */
+.bm__logo {
+  width: auto;
+  max-width: 168px;
+  height: auto;
+  max-height: 40px;
+  object-fit: contain;
+}
+
 .bm__status {
   display: flex;
   flex-wrap: wrap;

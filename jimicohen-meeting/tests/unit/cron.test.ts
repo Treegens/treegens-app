@@ -209,14 +209,15 @@ describe('runScheduled: housekeeping', () => {
     const probes = calls.filter((c) => c.url === FREEBUSY_URL);
     expect(probes).toHaveLength(1);
     expect(probes[0].json).toMatchObject({ timeMin: NOW, timeMax: '2026-11-17T09:00:00.000Z' });
-    expect((await getHost(ctx, ALEX))?.calendarHealth).toMatchObject({ ok: false, message: 'Google Calendar needs to be reconnected.' });
+    // Each account is named: a host can have several.
+    expect((await getHost(ctx, ALEX))?.calendarHealth).toMatchObject({ ok: false, message: 'alex@gmail.test: Google Calendar needs to be reconnected.' });
     expect((await getHost(ctx, OWNER))?.calendarHealth).toMatchObject({ ok: true });
 
     let queued = await alerts(ctx);
     expect(queued).toHaveLength(1);
-    expect(queued[0]).toMatchObject({ type: 'message', bookingId: '', channel: 'email', audience: 'host', subject: 'A calendar needs attention: Alex Kim' });
+    expect(queued[0]).toMatchObject({ type: 'message', bookingId: '', channel: 'email', audience: 'host', subject: 'A calendar needs attention: Alex Kim (alex@gmail.test)' });
     expect(queued[0].body).toContain('could not be read during a routine check');
-    expect(queued[0].body).toContain('Alex Kim: Google Calendar needs to be reconnected.');
+    expect(queued[0].body).toContain('Alex Kim, alex@gmail.test: Google Calendar needs to be reconnected.');
     expect(`${queued[0].subject} ${queued[0].body}`).not.toContain('—');
 
     // The next run delivers it. Later runs the same day find the calendar still broken and stay quiet.
@@ -244,12 +245,12 @@ describe('runScheduled: housekeeping', () => {
     await addAlex(ctx, { google: google(ctx, { email: 'alex@gmail.test', status: 'needs_reconnect' }) });
     // A visitor already ran into the owner's broken calendar this morning.
     await createBooking(ctx, { slug: 'intro', start: '2026-11-18T14:00:00.000Z', durationMin: 15, name: 'Ada Lovelace', email: 'ada@example.com', timezone: 'UTC' }).catch(() => undefined);
-    expect((await alerts(ctx)).map((j) => j.subject)).toEqual(['A calendar needs attention: Jimi Cohen']);
+    expect((await alerts(ctx)).map((j) => j.subject)).toEqual(['A calendar needs attention: Jimi Cohen (calendar@gmail.test)']);
 
     const summary = await runScheduled(ctx, { stepWaitMs: 2000 });
     expect(housekeeping(summary).calendars).toEqual({ checked: 2, broken: 2, alerted: 1 });
     // The run delivered the first alert; the new one is about Alex only.
-    expect((await alerts(ctx)).map((j) => j.subject)).toEqual(['A calendar needs attention: Alex Kim']);
+    expect((await alerts(ctx)).map((j) => j.subject)).toEqual(['A calendar needs attention: Alex Kim (alex@gmail.test)']);
   });
 
   it('removes claims older than two days, expired cache entries and rate limit counters that are over, and keeps recent ones', async () => {

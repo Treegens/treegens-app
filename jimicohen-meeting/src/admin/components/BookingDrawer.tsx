@@ -28,6 +28,8 @@ import { describeTimeline, describeTimelineDetail, namesList, rescheduleUrlOf } 
 import type { TimelineIcon } from '../format';
 import { useAdmin } from '../state';
 import { locationIcon } from './BookingRow';
+import { isBrandId } from '../../../shared/brands';
+import { BrandChip } from './BrandBits';
 
 const ICONS: Record<TimelineIcon, ReactNode> = {
   calendar: <CalendarCheck2 size={14} />,
@@ -173,7 +175,20 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, on
         onClose={onClose}
         width={520}
         title={b ? b.invitee.name : 'Booking'}
-        description={b ? b.eventTitle : undefined}
+        description={
+          b ? (
+            <>
+              {b.eventTitle}
+              {/* The brand it was booked under, which its pages and messages keep. */}
+              {isBrandId(b.brandId) ? (
+                <>
+                  {' '}
+                  <BrandChip id={b.brandId} />
+                </>
+              ) : null}
+            </>
+          ) : undefined
+        }
         className="adm-bk"
         footer={
           b && b.status === 'confirmed' ? (
@@ -411,6 +426,12 @@ function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) 
               ) : (
                 <span className="adm-quiet">Not connected</span>
               )
+            ) : b.google?.detached ? (
+              // Its event is in a Google account that is no longer connected: nothing reaches it from here.
+              <span className="adm-bk__warn">
+                <CircleAlert size={14} aria-hidden="true" /> This meeting is no longer linked to a Google Calendar event.{' '}
+                {b.google.accountEmail ? `The event was in ${b.google.accountEmail}, which is no longer connected.` : 'The event is in a Google account that is no longer connected.'} Change or delete it in Google Calendar.
+              </span>
             ) : b.google?.error ? (
               <span className="adm-bk__warn">
                 <CircleAlert size={14} aria-hidden="true" /> Not on Google Calendar yet: {b.google.error}
@@ -418,10 +439,10 @@ function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) 
             ) : b.google?.eventId ? (
               b.google.htmlLink ? (
                 <a className="adm-textlink" href={b.google.htmlLink} target="_blank" rel="noopener noreferrer">
-                  On Google Calendar
+                  {b.google.accountEmail ? `On Google Calendar (${b.google.accountEmail})` : 'On Google Calendar'}
                 </a>
               ) : (
-                <span>On Google Calendar</span>
+                <span>{b.google.accountEmail ? `On Google Calendar (${b.google.accountEmail})` : 'On Google Calendar'}</span>
               )
             ) : (
               <span className="adm-quiet">Not connected</span>

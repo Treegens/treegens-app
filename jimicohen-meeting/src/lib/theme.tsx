@@ -1,13 +1,16 @@
 import { createContext, useContext, useEffect, useMemo } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
+import { BUILTIN_BRANDS, isBrandId } from '../../shared/brands';
 import { DEFAULT_THEME } from '../../shared/defaults';
+import { SHORT_LINKS, type ShortName } from '../../shared/shortLinks';
 import { NO_ASSETS, googleFontsHref, googleFontsHrefFor, resolveTheme, sanitizeCustomCss, scopeCss, themeDataAttrs, themeToCssVars } from '../../shared/theme';
 import type { ThemeAssets } from '../../shared/theme';
 import type { Theme } from '../../shared/types';
 import { PortalHost } from '../ui/Portal';
 import { ToastProvider } from '../ui/Toast';
 import { cx, useMediaQuery } from '../ui/util';
-import { STORAGE_KEYS, storageGetJson, storageSetJson } from './storage';
+import { APP_BASE } from './api';
+import { OWN_BOOT_THEME_KEY, STORAGE_KEYS, brandBootThemeKey, storageGetJson, storageSetJson } from './storage';
 import { uses12h, weekStartsOn } from './tz';
 import type { Weekday } from '../../shared/types';
 
@@ -44,22 +47,60 @@ interface BootTheme {
  * the wrong colours while the site settings load.
  */
 export function cachedTheme(): BootTheme {
-  const saved = storageGetJson<BootTheme>(STORAGE_KEYS.bootTheme);
+  return savedTheme(STORAGE_KEYS.bootTheme) ?? { theme: DEFAULT_THEME, assets: NO_ASSETS };
+}
+
+/** `ownOnly`: a look remembered from a brand's page does not count (a value from before brands has no `brand`). */
+function savedTheme(key: string, opts?: { ownOnly?: boolean }): BootTheme | null {
+  const saved = storageGetJson<BootTheme & { brand?: unknown }>(key);
+  if (opts?.ownOnly && saved && isBrandId(saved.brand)) return null;
   if (saved && saved.theme && typeof saved.theme === 'object' && saved.theme.colors) {
     return { theme: resolveTheme(saved.theme), assets: { ...NO_ASSETS, ...(saved.assets ?? {}) } };
   }
-  return { theme: DEFAULT_THEME, assets: NO_ASSETS };
+  return null;
 }
 
-function rememberTheme(theme: Theme, assets: ThemeAssets, bg: string, scheme: string): void {
+/**
+ * The owner's own look seen last, for a short link in that look (jimicohen.com/meet): never a brand's look seen
+ * since (after a visit to /pod, /meet still boots in Jimi's colours), else the default forest look.
+ */
+export function ownBootTheme(): BootTheme {
+  return savedTheme(OWN_BOOT_THEME_KEY) ?? savedTheme(STORAGE_KEYS.bootTheme, { ownOnly: true }) ?? { theme: DEFAULT_THEME, assets: NO_ASSETS };
+}
+
+/** A built-in brand's look as it ships, with its built-in logo: for the moment before its page has data. */
+export function builtinBrandTheme(brandId: string): BootTheme | null {
+  if (!isBrandId(brandId)) return null;
+  const brand = BUILTIN_BRANDS[brandId];
+  return { theme: brand.theme, assets: { ...NO_ASSETS, logoUrl: `${APP_BASE}/${brand.art.logo}` } };
+}
+
+/**
+ * The look of a short link's loading, offline and error screens, before the API answers: the look of the
+ * link's brand seen last, else the brand's built-in look. A link in the owner's own look (/meet) boots in the
+ * owner's look seen last, never in a brand's.
+ */
+export function shortBootTheme(name: ShortName): BootTheme {
+  const brandId = SHORT_LINKS[name].brandId;
+  if (!brandId) return ownBootTheme();
+  return savedTheme(brandBootThemeKey(brandId)) ?? builtinBrandTheme(brandId) ?? cachedTheme();
+}
+
+function rememberTheme(theme: Theme, assets: ThemeAssets, bg: string, scheme: string, brandId?: string | null): void {
   // Data URLs (unsaved previews) are too big to cache and never appear on real public pages.
   const safe = (u: string | null) => (u && !u.startsWith('data:') ? u : null);
-  storageSetJson(STORAGE_KEYS.bootTheme, {
+  const brand = brandId && isBrandId(brandId) ? brandId : null;
+  const value = {
     theme: { ...theme, customCss: '' },
     assets: { coverUrl: safe(assets.coverUrl), logoUrl: safe(assets.logoUrl), backgroundUrl: safe(assets.backgroundUrl) },
     bg,
     scheme,
-  });
+    brand,
+  };
+  // The look seen last, which a guest's manage page from an email boots in; and under its own key the look of
+  // that brand, or the owner's own look, so each short link boots in its own (main.tsx prepaint, shortBootTheme).
+  storageSetJson(STORAGE_KEYS.bootTheme, value);
+  storageSetJson(brand ? brandBootThemeKey(brand) : OWN_BOOT_THEME_KEY, value);
 }
 
 // ───────────── theme context ─────────────
@@ -117,6 +158,13 @@ export interface ThemeScopeProps {
   /** extra class on the scope element, e.g. your page layout class */
   className?: string;
   style?: CSSProperties;
+  /**
+   * false = do not remember this look for the next first paint. For loading, offline and error screens shown
+   * before the page has its data: their look is only a guess, and must not become the next visit's.
+   */
+  remember?: boolean;
+  /** the brand this look belongs to (PublicSite.brand), remembered under its own key as well */
+  brandId?: string | null;
   children: ReactNode;
 }
 
@@ -129,7 +177,7 @@ export interface ThemeScopeProps {
  *  - applies the owner's custom CSS, sanitised and scoped to `.m-scope`
  *  - hosts overlays (Modal, Menu, Toast, ...) so they are themed too, and provides useToast()
  */
-export function ThemeScope({ theme, assets, mode = 'page', forceScheme, backdrop = true, className, style, children }: ThemeScopeProps) {
+export function ThemeScope({ theme, assets, mode = 'page', forceScheme, backdrop = true, className, style, remember = true, brandId = null, children }: ThemeScopeProps) {
   const prefersDark = useMediaQuery('(prefers-color-scheme: dark)');
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
   // Callers often build the theme inline (resolveTheme(site.theme, event.themeOverride)), so key
@@ -181,8 +229,8 @@ export function ThemeScope({ theme, assets, mode = 'page', forceScheme, backdrop
   }, [mode, bg, scheme, backdrop]);
 
   useEffect(() => {
-    if (mode === 'page' && backdrop) rememberTheme(resolved, a, bg, scheme);
-  }, [mode, backdrop, resolved, a, bg, scheme]);
+    if (mode === 'page' && backdrop && remember) rememberTheme(resolved, a, bg, scheme, brandId);
+  }, [mode, backdrop, remember, brandId, resolved, a, bg, scheme]);
 
   const context = useMemo<ThemeContextValue>(
     () => ({

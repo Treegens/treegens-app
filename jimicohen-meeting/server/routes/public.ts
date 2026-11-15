@@ -11,7 +11,8 @@
  *   POST /public/bookings/:id/reschedule     { t, start, timezone?, as? }    → { booking }
  *   POST /public/bookings/:id/confirm        { t }                           → { booking }
  *   GET  /public/bookings/:id/ics?t=         → the calendar file
- *   GET  /assets/:id                         → an uploaded image
+ *   GET  /public/short/:name                 → ShortLinkResponse: what jimicohen.com/meet or /pod opens now (read-only)
+ *   GET  /assets/:id                         → an uploaded image, or a built-in one (server/lib/builtinAssets.ts)
  *
  * A wrong or missing manage token is always the same plain 404, whether or not the booking exists.
  * Every state-changing route passes the same-origin check. Nothing here needs a session.
@@ -24,14 +25,18 @@
  * address where the owner signed in), the owner is acting, with the rights the dashboard gives: none of the
  * invitee's deadlines or move limits. The token is still checked. Without the session nothing changes.
  */
-import type { Booking, CreateBookingRequest, CreateBookingResponse, GetBookingResponse, PublicBooking, PublicEventResponse } from '../../shared/types';
+import { brandOf } from '../../shared/brands';
+import { isShortName } from '../../shared/shortLinks';
+import type { Booking, CreateBookingRequest, CreateBookingResponse, GetBookingResponse, PublicBooking, PublicEventResponse, ShortLinkResponse } from '../../shared/types';
 import { assertSameOrigin, isAdmin, rateLimit } from '../lib/auth';
 import {
+  brandLineFor,
   cancelBooking,
   confirmAttendance,
   createBooking,
   getManageView,
   getPublicEvent,
+  getShortLink,
   getSlots,
   manageToken,
   registerBookingJobHandlers,
@@ -42,6 +47,7 @@ import {
 } from '../lib/booking';
 import type { Ctx } from '../lib/ctx';
 import { HttpError, json, readJson, route, type Route } from '../lib/http';
+import { builtinAsset } from '../lib/builtinAssets';
 import { buildBookingIcs } from '../lib/ics';
 import { getAsset, getBooking, getSite, isStorageId, listHosts } from '../lib/repo';
 import { FieldErrors, isIsoInstant } from '../lib/validate';
@@ -111,6 +117,7 @@ async function publicView(ctx: Ctx, booking: Booking, opts?: { owner?: boolean }
   }
 }
 
+/** The meeting's link, or the brand's name for a booking made under a brand ("eco-champions.ics"). */
 function icsFilename(slug: string): string {
   const safe = String(slug ?? '')
     .toLowerCase()
@@ -122,6 +129,13 @@ function icsFilename(slug: string): string {
 
 export const routes: Route[] = [
   route('GET', '/public/site', async ({ ctx }) => json(await toPublicSite(ctx))),
+
+  // The booking calendar behind jimicohen.com/meet and /pod. No store writes, whatever it finds.
+  route('GET', '/public/short/:name', async ({ ctx, params }) => {
+    if (!isShortName(params.name)) throw new HttpError(404, 'not_found', 'That short link is not set up.');
+    const body: ShortLinkResponse = await getShortLink(ctx, params.name);
+    return json(body);
+  }),
 
   route('GET', '/public/event/:slug', async ({ ctx, params }) => {
     const found = await getPublicEvent(ctx, params.slug);
@@ -255,12 +269,14 @@ export const routes: Route[] = [
       method,
       baseUrl: base,
       manageUrl: `${base}/booking/${encodeURIComponent(booking.id)}?t=${manageToken(ctx, booking.id)}`,
+      brandLine: brandLineFor(ctx, site, booking),
     });
+    const brand = brandOf(site, booking);
     return new Response(content, {
       status: 200,
       headers: {
         'Content-Type': `text/calendar; charset=utf-8; method=${method}`,
-        'Content-Disposition': `attachment; filename="${icsFilename(booking.eventSlug)}"`,
+        'Content-Disposition': `attachment; filename="${icsFilename(brand ? brand.name : booking.eventSlug)}"`,
         // Personal, and reachable only with the token in the address: never stored by anything in between.
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
@@ -269,15 +285,17 @@ export const routes: Route[] = [
   }),
 
   route('GET', '/assets/:id', async ({ ctx, params }) => {
-    const asset = isStorageId(params.id) ? await getAsset(ctx, params.id) : null;
+    // Built-in images first (the Eco Champions email logo): answered from the app itself, nothing is read.
+    const builtin = builtinAsset(params.id);
+    const asset = builtin ?? (isStorageId(params.id) ? await getAsset(ctx, params.id) : null);
     if (!asset) throw new HttpError(404, 'not_found', 'Not found.');
     const stored = asset.contentType.split(';')[0].trim().toLowerCase();
     const isImage = IMAGE_TYPES.has(stored);
     const headers: Record<string, string> = {
       'Content-Type': isImage ? stored : 'application/octet-stream',
       'Content-Length': String(asset.data.byteLength),
-      // An asset id never gets new content: a changed image is a new id.
-      'Cache-Control': 'public, max-age=31536000, immutable',
+      // An uploaded asset id never gets new content: a changed image is a new id. A built-in one changes with a deploy.
+      'Cache-Control': builtin ? 'public, max-age=86400' : 'public, max-age=31536000, immutable',
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy': "default-src 'none'",
     };

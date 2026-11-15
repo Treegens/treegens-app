@@ -11,7 +11,8 @@ import { SharedHoursNotice, useSharedHours } from './SharedHoursNotice';
 import type { TabProps } from './shared';
 
 function calendarStatus(host: AdminHost): { label: string; tone: BadgeTone } {
-  if (host.google?.status === 'needs_reconnect') return { label: 'Reconnect Google', tone: 'danger' };
+  // Any of their Google accounts: one that needs a reconnect closes their times.
+  if (host.google?.status === 'needs_reconnect' || (host.googleExtra ?? []).some((a) => a.status === 'needs_reconnect')) return { label: 'Reconnect Google', tone: 'danger' };
   if (host.google) return { label: 'Google Calendar connected', tone: 'success' };
   if (host.icsFeeds.length) return { label: 'Calendar feed', tone: 'neutral' };
   return { label: 'No calendar connected', tone: 'warning' };
