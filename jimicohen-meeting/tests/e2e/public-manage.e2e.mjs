@@ -510,8 +510,10 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       await s.clearOutbox();
       await page.goto(`${s.url(`/booking/${booking.id}/cancel`)}?t=${booking.manageToken}&as=host`);
       await page.getByRole('heading', { name: 'Cancel this meeting?', level: 1 }).waitFor();
-      // Typed through a host's link, the reason goes to the hosts only (the invitee holds the same link).
-      await page.getByText('Only the hosts see this. Ada is told that the meeting is cancelled.').waitFor();
+      // Typed through a host's link, the reason is mailed to the hosts only (the invitee holds the same link),
+      // but it shows on the booking page, which Ada opens too: the hint says so, not that only hosts see it.
+      await page.getByText('The hosts are sent this. It also shows on this page, which Ada can open too.').waitFor();
+      s.expect(await page.getByText(/Only the hosts see this/).count(), 'a hint that hides who reads it').toBe(0);
       await page.getByRole('textbox').fill('Something came up on my side.');
       await page.getByRole('button', { name: 'Cancel meeting' }).click();
       await page.getByRole('heading', { name: 'This meeting was cancelled', level: 1 }).waitFor();
@@ -528,6 +530,11 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       s.expect(toOwner, 'email to the owner').toHaveLength(1);
       s.expect(toOwner[0].text, 'what the owner is sent').toContain('Something came up on my side.');
       s.expect((await s.outbox({ kind: 'sms' })).map((x) => x.to), 'texts').toEqual([PHONE]);
+      // Ada opens the link from her own emails: the booking page shows her the reason, as the hint said it would.
+      const ada = await s.newPage({ timezoneId: NEW_YORK });
+      await ada.goto(`${s.url(`/booking/${booking.id}`)}?t=${booking.manageToken}`);
+      await ada.getByRole('heading', { name: 'This meeting was cancelled', level: 1 }).waitFor();
+      s.expect(await ada.locator('.bm__reason').innerText(), "the reason on Ada's page").toContain('Something came up on my side.');
     });
   });
 

@@ -183,13 +183,14 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
           ? firstName(booking.cancellation.byName)
           : 'the host';
   // Who reads the reason written below. The invitee's goes to the hosts. The owner's (signed in) goes to the
-  // invitee. One written through a host's link goes to the hosts only: the invitee holds that link too, so
-  // what is typed there is never mailed to the address on the booking.
+  // invitee. One written through a host's link is mailed to the hosts only: the invitee holds that link too, so
+  // what is typed there is never mailed to the address on the booking. It does show on this page, though,
+  // which the invitee opens with the same link, so the host is not told that only hosts see it.
   const reasonHint = !asHost
     ? `${hostFirst} will see this with the cancellation.`
     : booking.ownerView
       ? `${inviteeFirst || 'The invitee'} will see this with the cancellation.`
-      : `Only the hosts see this. ${inviteeFirst || 'The invitee'} is told that the meeting is cancelled.`;
+      : `The hosts are sent this. It also shows on this page, which ${inviteeFirst || 'the invitee'} can open too.`;
 
   // ───────────── cancel ─────────────
 
