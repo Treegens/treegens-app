@@ -142,6 +142,11 @@ export function buildBookingIcs(p: {
   const domain = hostnameOf(p.baseUrl);
   const location = locationOf(booking);
   const eventUrl = joinUrlOf(booking) ?? manageUrl;
+  // DTSTAMP is when this version of the event came about: the booking, its last move or its cancellation.
+  // Not `updatedAt`, which every timeline note changes: the file has to stay byte-identical across
+  // retries of one email, or the provider refuses the repeat as a different message.
+  const changes = (booking.timeline ?? []).filter((t) => (t.type === 'created' || t.type === 'rescheduled' || t.type === 'cancelled') && Number.isFinite(Date.parse(t.at)));
+  const stampedAt = changes.length > 0 ? changes[changes.length - 1].at : booking.createdAt || booking.start;
 
   const lines: string[] = [
     'BEGIN:VCALENDAR',
@@ -151,7 +156,7 @@ export function buildBookingIcs(p: {
     `METHOD:${method}`,
     'BEGIN:VEVENT',
     `UID:${escapeIcsText(booking.id)}@${escapeIcsText(domain)}`,
-    `DTSTAMP:${utcStamp(booking.updatedAt || booking.createdAt || booking.start)}`,
+    `DTSTAMP:${utcStamp(Number.isFinite(Date.parse(stampedAt)) ? stampedAt : booking.start)}`,
     `DTSTART:${utcStamp(booking.start)}`,
     `DTEND:${utcStamp(booking.end)}`,
     `SEQUENCE:${Math.max(0, Math.trunc(Number(booking.rescheduleCount) || 0))}`,
@@ -185,9 +190,15 @@ export function buildBookingIcs(p: {
 
 // ───────────────────────── add-to-calendar links ─────────────────────────
 
+/**
+ * "Add to calendar" links. `outlook` is Outlook.com (personal Microsoft accounts); `office365` is the
+ * same compose link on Microsoft 365, for work and school calendars, which outlook.live.com sends to
+ * a personal sign-in page instead.
+ */
 export function calendarLinks(p: { booking: Booking; hosts: Host[]; baseUrl: string; manageToken: string }): {
   google: string;
   outlook: string;
+  office365: string;
   ics: string;
 } {
   const { booking } = p;
@@ -222,6 +233,7 @@ export function calendarLinks(p: { booking: Booking; hosts: Host[]; baseUrl: str
   return {
     google: `https://calendar.google.com/calendar/render?${query(google)}`,
     outlook: `https://outlook.live.com/calendar/0/action/compose?${query(outlook)}`,
+    office365: `https://outlook.office.com/calendar/0/action/compose?${query(outlook)}`,
     ics: `${base}/api/public/bookings/${id}/ics?t=${token}`,
   };
 }

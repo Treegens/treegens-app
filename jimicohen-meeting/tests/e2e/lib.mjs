@@ -702,13 +702,25 @@ function consentAnswer(requestUrl, armed, server) {
   if (!p.get('client_id')) problems.push('client_id is missing');
   if (p.get('response_type') !== 'code') problems.push(`response_type is ${p.get('response_type')}, expected code`);
   if (p.get('access_type') !== 'offline') problems.push('access_type=offline is missing (no refresh token would be issued)');
-  if (p.get('prompt') !== 'consent') problems.push('prompt=consent is missing');
+  // A space separated list: "consent", or "consent select_account" when the account chooser is asked for.
+  const prompt = (p.get('prompt') ?? '').split(/\s+/).filter(Boolean);
+  if (!prompt.includes('consent')) problems.push('prompt=consent is missing');
+  if (prompt.some((v) => !['consent', 'select_account'].includes(v))) problems.push(`unexpected prompt ${p.get('prompt')}`);
   if (!p.get('state')) problems.push('state is missing');
   const redirectUri = p.get('redirect_uri') ?? '';
   if (redirectUri !== `${server.api}/google/callback`) problems.push(`redirect_uri is ${redirectUri || '(missing)'}, expected ${server.api}/google/callback`);
   const scopes = (p.get('scope') ?? '').split(/\s+/).filter(Boolean);
   for (const scope of ['openid', 'email', ...CALENDAR_SCOPES]) if (!scopes.includes(scope)) problems.push(`scope ${scope} was not requested`);
-  const request = { url: requestUrl.href, clientId: p.get('client_id'), redirectUri, scopes, state: p.get('state'), loginHint: p.get('login_hint'), gmailRequested: scopes.includes(GMAIL_SCOPE) };
+  const request = {
+    url: requestUrl.href,
+    clientId: p.get('client_id'),
+    redirectUri,
+    scopes,
+    state: p.get('state'),
+    loginHint: p.get('login_hint'),
+    gmailRequested: scopes.includes(GMAIL_SCOPE),
+    accountChooser: prompt.includes('select_account'),
+  };
   if (problems.length > 0) {
     return { request, problems, fulfil: { status: 400, contentType: 'text/plain; charset=utf-8', body: `Error 400: invalid_request\n${problems.join('\n')}` } };
   }

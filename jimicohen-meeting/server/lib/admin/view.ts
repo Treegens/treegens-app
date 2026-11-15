@@ -6,7 +6,8 @@
 import type { AdminBooking, AdminHost, Booking, Host, PublicHost, SiteSettings } from '../../../shared/types';
 import { manageToken } from '../booking';
 import type { Ctx } from '../ctx';
-import { assetUrl } from '../repo';
+import { assetUrl, getCall } from '../repo';
+import { callTranscript } from '../voice';
 
 export function toAdminHost(ctx: Ctx, host: Host): AdminHost {
   const out: AdminHost = {
@@ -28,6 +29,8 @@ export function toAdminHost(ctx: Ctx, host: Host): AdminHost {
           busyCalendarIds: [...(host.google.busyCalendarIds ?? [])],
           writeCalendarId: host.google.writeCalendarId,
           gmailSend: host.google.gmailSend === true,
+          // A connection made while the consent screen is in "Testing" stops after 7 days: the screens warn ahead.
+          ...(host.google.refreshExpiresAt ? { refreshExpiresAt: host.google.refreshExpiresAt } : {}),
         }
       : null,
     // The label only. The feed address is a secret (it usually contains a private key) and stays sealed.
@@ -54,6 +57,38 @@ export function manageUrlOf(ctx: Ctx, bookingId: string): string {
 export function toAdminBooking(ctx: Ctx, booking: Booking, hostsById: Map<string, Host>): AdminBooking {
   const hosts = booking.hostIds.map((id) => hostsById.get(id)).filter((h): h is Host => !!h);
   return { ...booking, hosts: hosts.map((h) => toPublicHost(ctx, h)), manageUrl: manageUrlOf(ctx, booking.id) };
+}
+
+/** More calls than this on one booking are shown without their transcripts. */
+const MAX_TRANSCRIPTS = 20;
+
+/**
+ * The view of one booking with the transcript of each reminder call attached to its timeline entry,
+ * read from the call record while that record exists. The booking itself only stores the outcome and
+ * the call id, so a transcript is gone once the call record is pruned (after 90 days, server/cron.ts).
+ * A call record that cannot be read leaves its entry without a transcript.
+ */
+export async function withCallTranscripts(ctx: Ctx, booking: AdminBooking): Promise<AdminBooking> {
+  const ids = [...new Set(booking.timeline.map((e) => e.callId).filter((id): id is string => typeof id === 'string' && id !== ''))].slice(0, MAX_TRANSCRIPTS);
+  if (ids.length === 0) return booking;
+  const transcripts = new Map<string, string>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const call = await getCall(ctx, id).catch(() => null);
+      // A record belongs to this booking only: a call id copied onto another booking shows nothing.
+      if (!call || call.bookingId !== booking.id) return;
+      const text = callTranscript(call);
+      if (text) transcripts.set(id, text);
+    }),
+  );
+  if (transcripts.size === 0) return booking;
+  return {
+    ...booking,
+    timeline: booking.timeline.map((e) => {
+      const transcript = e.callId ? transcripts.get(e.callId) : undefined;
+      return transcript ? { ...e, transcript } : e;
+    }),
+  };
 }
 
 export function hostMap(hosts: Host[]): Map<string, Host> {

@@ -49,7 +49,8 @@ export const DEFAULT_THEME: Theme = {
     ctaLabel: 'Confirm booking',
     pickTimeLabel: 'Pick a time',
     confirmationTitle: "You're booked",
-    confirmationBody: 'A calendar invitation is on its way to {{invitee_email}}.',
+    // Neutral on purpose: whether an email or a calendar invitation follows is said by the page itself, from what really goes out.
+    confirmationBody: 'Thanks, {{invitee_first_name}}. Here are the details of your meeting.',
     footerNote: '',
   },
   customCss: '',
@@ -82,6 +83,17 @@ export const DEFAULT_ASSISTANT: AssistantSettings = {
 
 export const DEFAULT_CONSENT_TEXT =
   "By adding your number you agree to receive reminder texts and an automated reminder call from {{host_first_name}}'s AI assistant about this meeting. Message and data rates may apply.";
+
+/** The default consent for texts alone: on a meeting without a reminder call, or when the call is switched off. */
+export const DEFAULT_SMS_CONSENT_TEXT = 'By adding your number you agree to receive texts about this meeting, such as the confirmation and reminders. Message and data rates may apply.';
+
+/**
+ * The consent wording when no call is agreed to. The default wording names a call, so it has a texts-only
+ * twin. A wording the owner wrote is theirs and is shown as written.
+ */
+export function smsOnlyConsentText(consentText: string): string {
+  return consentText.trim() === DEFAULT_CONSENT_TEXT ? DEFAULT_SMS_CONSENT_TEXT : consentText;
+}
 
 export function defaultReminders(): ReminderRule[] {
   return [
@@ -157,7 +169,8 @@ export function newEventType(nowIso: string, partial: Partial<EventType> & Pick<
       restrictHours: null,
     },
     questions: [{ id: 'q_topic', label: 'What would you like to talk about?', type: 'textarea', required: false }],
-    allowGuests: true,
+    // Guests are invited by Google from the host's own account, so letting visitors add them is the owner's choice.
+    allowGuests: false,
     maxGuests: 5,
     phone: 'optional',
     reminders: defaultReminders(),

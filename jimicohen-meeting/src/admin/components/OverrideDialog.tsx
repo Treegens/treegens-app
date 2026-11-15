@@ -34,16 +34,21 @@ export function OverrideDialog({ open, onClose, timezone, existing, initial, onA
   const gridRef = useRef<HTMLDivElement>(null);
   const moveFocus = useRef(false);
 
-  useEffect(() => {
-    if (!open) return;
-    const startDates = initial?.dates ?? [];
-    const anchor = startDates[0] ?? today;
-    setDates(startDates);
-    setMode(initial && initial.ranges.length ? 'hours' : 'off');
-    setRanges(initial && initial.ranges.length ? initial.ranges.map((r) => ({ ...r })) : [{ start: '09:00', end: '17:00' }]);
-    setView({ year: parseDayKey(anchor).year, month: parseDayKey(anchor).month });
-    setFocusKey(anchor);
-  }, [open, initial, today]);
+  // Start from `initial` (or empty) each time the dialog opens. This happens while rendering, not in an
+  // effect: an effect runs a frame late, and for that frame a reopened dialog shows what it held last time.
+  const [adopted, setAdopted] = useState<{ open: boolean; initial: OverrideDialogProps['initial']; today: LocalDate } | null>(null);
+  if (!adopted || adopted.open !== open || (open && (adopted.initial !== initial || adopted.today !== today))) {
+    setAdopted({ open, initial, today });
+    if (open) {
+      const startDates = initial?.dates ?? [];
+      const anchor = startDates[0] ?? today;
+      setDates(startDates);
+      setMode(initial && initial.ranges.length ? 'hours' : 'off');
+      setRanges(initial && initial.ranges.length ? initial.ranges.map((r) => ({ ...r })) : [{ start: '09:00', end: '17:00' }]);
+      setView({ year: parseDayKey(anchor).year, month: parseDayKey(anchor).month });
+      setFocusKey(anchor);
+    }
+  }
 
   useEffect(() => {
     if (!moveFocus.current) return;

@@ -9,9 +9,22 @@
  * page are loaded in full.
  */
 import { DateTime, IANAZone } from 'luxon';
-import type { AdminBookingsResponse, Booking, BookingIndexEntry, Host } from '../../../shared/types';
+import type { AdminBookingsResponse, Booking, BookingIndexEntry, Host, Job } from '../../../shared/types';
 import type { Ctx } from '../ctx';
-import { getBookingIndex, getBookings, getSite, listHosts } from '../repo';
+import { HttpError } from '../http';
+import {
+  deleteBooking,
+  deleteCallsOfBooking,
+  deleteJob,
+  getBooking,
+  getBookingIndex,
+  getBookings,
+  getSite,
+  isStorageId,
+  listHosts,
+  listJobs,
+  mutateBookingIndex,
+} from '../repo';
 import { clampInt, cleanLine } from '../validate';
 import { hostMap, ownerOf, toAdminBooking } from './view';
 
@@ -74,6 +87,89 @@ export async function listAdminBookings(ctx: Ctx, params: URLSearchParams): Prom
     // Per tab, without the search: what the tab badges show.
     counts: countScopes(index, nowMs),
   };
+}
+
+// ───────────────────────── delete ─────────────────────────
+
+export interface EraseResult {
+  /** false when there was no booking record any more (an earlier delete got cut off, or it never existed) */
+  found: boolean;
+  jobs: number;
+  calls: number;
+}
+
+/** Pending work that still needs the record of a cancelled meeting that is ahead: telling people, and taking the event off Google Calendar. */
+function finishesTheCancellation(job: Job): boolean {
+  return job.type === 'gcal_sync' || (job.type === 'message' && job.kind === 'cancelled');
+}
+
+/**
+ * Why a booking may not be deleted yet, or null when it may. Only a meeting that is over or cancelled
+ * can go: an upcoming one holds a time and a calendar event, so it is cancelled first. A cancelled
+ * meeting that is still ahead also waits until its cancellation is finished (time given back, event
+ * off the calendar, people told), or that work would be left half done with nothing to finish it.
+ */
+export function eraseRefusal(b: Booking, pendingJobs: Job[], nowMs: number): HttpError | null {
+  const ahead = Date.parse(b.end) > nowMs;
+  if (b.status === 'confirmed') {
+    if (!ahead) return null;
+    return Date.parse(b.start) > nowMs
+      ? new HttpError(409, 'upcoming', 'This meeting has not happened yet. Cancel it first, then you can delete it.')
+      : new HttpError(409, 'in_progress', 'This meeting is happening now. You can delete it once it is over.');
+  }
+  if (!ahead) return null;
+  if (b.followUp?.kind === 'cancelled' || pendingJobs.some(finishesTheCancellation)) {
+    return new HttpError(
+      409,
+      'still_cancelling',
+      'This cancellation is not finished yet: the calendar event and the messages about it are still being taken care of. Please try again in a little while.',
+    );
+  }
+  if (b.google?.error) {
+    const why = b.google.error.trim();
+    return new HttpError(
+      409,
+      'calendar_event_left',
+      `The event for this meeting is still on Google Calendar, because it could not be removed yet. ${/[.!?]$/.test(why) ? why : `${why}.`} Once the event is gone, you can delete the booking.`,
+    );
+  }
+  return null;
+}
+
+/**
+ * DELETE /admin/bookings/:id : erases one booking for good. The record (name, email, phone, answers,
+ * consent, timeline), its entry in the index, its pending jobs and its call records with their
+ * transcripts. Calendar events and messages that were already sent are not touched.
+ *
+ * Order: jobs and calls first, the record next, the index entry last. A delete cut off before the
+ * record went leaves the booking in the dashboard, to be deleted again. One cut off after it is
+ * finished by asking again (the drawer is still open): a delete of a record that is already gone
+ * still clears its index entry, jobs and calls.
+ */
+export async function eraseBooking(ctx: Ctx, id: string): Promise<EraseResult> {
+  if (!isStorageId(id)) throw new HttpError(404, 'not_found', 'That booking no longer exists.');
+  const nowMs = ctx.now().getTime();
+  const [booking, allJobs] = await Promise.all([getBooking(ctx, id), listJobs(ctx)]);
+  const jobs = allJobs.filter((j) => j.bookingId === id);
+  if (booking) {
+    const refusal = eraseRefusal(booking, jobs, nowMs);
+    if (refusal) throw refusal;
+  }
+
+  await Promise.all(jobs.map((j) => deleteJob(ctx, j.key)));
+  const calls = await deleteCallsOfBooking(ctx, id);
+  if (booking) await deleteBooking(ctx, id);
+  const unlisted = await mutateBookingIndex(ctx, (entries) => {
+    const entry = entries.find((e) => e.id === id);
+    if (!entry) return { abort: 'not_listed' };
+    // Without a record, an entry for a meeting that is still ahead may be a booking being made this very
+    // moment (the index is written before the record). That one is left for reconcileBookings to judge.
+    if (!booking && entry.status === 'confirmed' && Date.parse(entry.end) > nowMs) return { abort: 'not_ours' };
+    return entries.filter((e) => e.id !== id);
+  });
+  if (!unlisted.ok && unlisted.reason === 'contention') throw new HttpError(503, 'busy', 'The booking was deleted, but the list could not be updated. Please try again.');
+  ctx.log('info', 'bookings: booking deleted', { bookingId: id, found: !!booking, jobs: jobs.length, calls });
+  return { found: !!booking, jobs: jobs.length, calls };
 }
 
 // ───────────────────────── CSV ─────────────────────────

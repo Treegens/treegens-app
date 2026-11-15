@@ -15,11 +15,21 @@
  *                                                           finished later by reconcileBookings)
  *   reconcileBookings (run from the scheduled function) heals all three leftovers.
  *
+ *   Never lose the work after a change. The save that commits a booking, a move or a cancellation also
+ *   writes a `followUp` marker; it comes off once the calendar, the reminders and the notices are taken
+ *   care of. Whatever still carries a marker after ten minutes is finished by reconcileBookings (and a
+ *   repeated cancellation finishes its own at once). Each notice is claimed by name, so none goes twice.
+ *
+ *   Lost answers. The storage client re-sends a write whose answer got lost, and the copy then fails its
+ *   own condition. The repo recognises its own writes (a rev on bookings, an owner mark on claims, the
+ *   exact list on the index), and a retried booking request carries a key that makes it the same booking.
+ *
  *   Fail closed on calendars. A host whose external calendar cannot be read is never treated as free.
  *
  *   Google is best effort. A slow or failing Google call never costs the booking: the problem is noted
  *   on booking.google.error and a gcal_sync job repeats the work.
  */
+import { smsOnlyConsentText } from '../../shared/defaults';
 import { sanitizeCustomCss } from '../../shared/theme';
 import type {
   Booking,
@@ -42,11 +52,12 @@ import type {
   SlotsResponse,
   Theme,
 } from '../../shared/types';
-import { rateLimit } from './auth';
+import { getAdminAuth, rateLimit } from './auth';
 import { forgetHostBusy, getBusyForHosts } from './busy';
 import { hmacHex, randomId, safeEqual, sha256Hex } from './crypto';
-import type { Ctx } from './ctx';
-import { GoogleApiError, GoogleAuthError, googleCreateEvent, googleDeleteEvent, googleUpdateEvent, type CalendarEventInput } from './google';
+import type { Ctx, KV } from './ctx';
+import { resolveEmailProvider } from './email';
+import { GoogleApiError, GoogleAuthError, googleCreateEvent, googleDeleteEvent, googleGetEventLinks, googleUpdateEvent, type CalendarEventInput } from './google';
 import { HttpError } from './http';
 import { calendarLinks } from './ics';
 import { cancelBookingJobs, enqueueJob, registerJobHandler, runDueJobs, scheduleBookingJobs } from './jobs';
@@ -55,6 +66,7 @@ import {
   cacheGet,
   cacheSet,
   claim,
+  createBookingRecord,
   getBooking,
   getBookingIndex,
   getEventType,
@@ -63,7 +75,7 @@ import {
   listEventTypes,
   listHosts,
   mutateBookingIndex,
-  saveBooking,
+  releaseClaim,
   updateBooking,
 } from './repo';
 import { checkSlot, computeSlots, pickRoundRobinHost, type HostAvailabilityInput, type SlotQuery, type SlotRejection } from './slots';
@@ -75,8 +87,29 @@ import { FieldErrors, cleanLine, cleanText, isEmail, isHttpsUrl, isIsoInstant, i
 // ───────────────────────── limits ─────────────────────────
 
 const HOUR_SEC = 3600;
+const DAY_SEC = 24 * HOUR_SEC;
 const BOOKINGS_PER_IP_PER_HOUR = 10;
 const BOOKINGS_PER_EMAIL_PER_HOUR = 6;
+/**
+ * Bookings a day that may send texts or calls to one phone number. Phone numbers are not verified, so
+ * this is what keeps a stranger's number from being texted again and again (book, cancel, book again).
+ * The window stays at one day: rate limit counters are pruned after two.
+ */
+const TEXTED_BOOKINGS_PER_PHONE_PER_DAY = 3;
+/** Upcoming meetings one email address may hold at the same time. */
+const MAX_UPCOMING_PER_EMAIL = 5;
+/**
+ * Moves from the booking page. The lifetime cap lives on the booking itself (rate limit counters are
+ * pruned after two days); the hourly one keeps a single link from flooding inboxes and phones.
+ */
+const MAX_SELF_SERVICE_MOVES = 5;
+const MOVES_PER_BOOKING_PER_HOUR = 3;
+/** Work left over after a change (calendar, reminders, notices) is finished by reconcileBookings once it is this old. */
+const FOLLOW_UP_GRACE_MS = 10 * 60_000;
+/** No request runs longer than this (the platform cuts it off at about 25 s): older work is not in flight any more. */
+const REQUEST_CEILING_MS = 30_000;
+/** How many cancelled, still upcoming bookings one reconcile run looks at (calendar clean-up). */
+const RECONCILE_CANCELLED_LIMIT = 100;
 /** Requests without a client address share one counter, so that counter is wider. */
 const UNKNOWN_IP_FACTOR = 12;
 /** A person needs longer than this to fill in the form. */
@@ -96,8 +129,14 @@ const MAX_UTM_VALUE = 200;
 export const MAX_SLOT_RANGE_MS = 62 * DAY_MS;
 /** How long the response waits for Google before the work moves to the background. */
 export const CALENDAR_BUDGET_MS = 7000;
-/** How long a request waits for the hosts' calendars to say when they are busy. After that it fails closed. */
+/** How long the list of available times waits for the hosts' calendars. A slower answer is cached in the background. */
 export const CALENDAR_READ_BUDGET_MS = 6000;
+/**
+ * How long a new booking or a move waits for the calendars before failing closed. Longer than any reader
+ * gives itself (a calendar feed 8 s, a Google free/busy request 3.5 s plus one retry), so a feed that is
+ * slow but works can be booked, not only shown. The request stays far below the platform's 25 s ceiling.
+ */
+export const BOOKING_READ_BUDGET_MS = 8500;
 /** A request aims to answer within this time, so the calendar write gets what the earlier steps left over. */
 const REQUEST_BUDGET_MS = 9000;
 const MIN_CALENDAR_BUDGET_MS = 1000;
@@ -109,6 +148,9 @@ const GENERIC_REFUSAL = 'Could not complete the booking. Please try again.';
 const BOOKING_NOT_FOUND = 'We could not find that booking. Check the link in your confirmation email.';
 const CALENDAR_PENDING = 'Google Calendar did not answer in time. Trying again shortly.';
 const CALENDAR_RECONNECT = 'Google Calendar needs to be reconnected.';
+const MEET_PENDING = 'Google has not finished creating the Meet link yet. Trying again shortly.';
+/** Tries a gcal_sync job gets (MAX_ATTEMPTS in jobs.ts). A Meet link still missing after the last one is reported to the owner. */
+const GCAL_JOB_TRIES = 4;
 
 // ───────────────────────── small helpers ─────────────────────────
 
@@ -205,6 +247,62 @@ function runImmediateJobs(ctx: Ctx, bookingId: string, after?: Promise<unknown>)
   );
 }
 
+// ───────────────────────── open for bookings ─────────────────────────
+
+/** Stores already seen with their admin record. First-run setup cannot be undone, so a yes stays a yes. */
+const SET_UP = new WeakSet<KV>();
+
+/**
+ * Whether first-run setup is done. Until the owner has set a password, nobody has chosen the hours, the
+ * zone or where notices go, so the booking page lists nothing and takes no bookings. One small read per
+ * request in production (each request opens its own store), none after the first yes on a long-lived one.
+ */
+async function siteIsOpen(ctx: Ctx): Promise<boolean> {
+  if (SET_UP.has(ctx.kv)) return true;
+  const admin = await getAdminAuth(ctx);
+  if (admin) SET_UP.add(ctx.kv);
+  return !!admin;
+}
+
+function notOpenYet(): HttpError {
+  return new HttpError(503, 'not_open', 'This booking page is not taking bookings yet. Please check back soon.');
+}
+
+/**
+ * Whether this site emails the invitee at all. In development and the browser tests nothing is set up and
+ * mail goes to the mock outbox instead, unless email was switched off on purpose (as sendEmail does).
+ * A failed read counts as yes: it must not turn a booking that went through into an error.
+ */
+async function emailGoesOut(ctx: Ctx, site: SiteSettings): Promise<boolean> {
+  if (site.email?.provider === 'none') return false;
+  if (ctx.env.mockProviders) return true;
+  try {
+    return (await resolveEmailProvider(ctx)) !== 'none';
+  } catch (err) {
+    ctx.log('warn', 'booking: could not tell whether email is set up', { error: shortError(err) });
+    return true;
+  }
+}
+
+/**
+ * Whether a booking of this event gets a Google event (and with it a Meet link): an assigned host has a
+ * working Google connection. A round robin can land on any of its hosts, so each of them needs one.
+ */
+function calendarReachable(et: EventType, assigned: Host[]): boolean {
+  if (assigned.length === 0) return false;
+  return et.kind === 'round_robin' ? assigned.every(usable) : assigned.some(usable);
+}
+
+/** Whether Google sends the invitee, and any guests, an invitation for a booking of this event. */
+function invitationsReachInvitee(et: EventType, assigned: Host[]): boolean {
+  return et.googleInvite !== false && calendarReachable(et, assigned);
+}
+
+/** Whether this event has a reminder call for the invitee. Only then is a call offered, and agreed to. */
+function hasReminderCall(et: EventType): boolean {
+  return (et.reminders ?? []).some((r) => r?.enabled === true && r.channel === 'call' && r.audience !== 'host' && r.trigger !== 'after_end');
+}
+
 // ───────────────────────── manage token ─────────────────────────
 
 /** hmacHex(ctx, 'manage', bookingId) */
@@ -239,11 +337,12 @@ export function toPublicHost(ctx: Ctx, host: Host): PublicHost {
  * What a visitor may know about a location before booking. Links and phone numbers the owner typed in
  * are only handed out with a booking, so the public page never becomes a way to collect them.
  */
-function publicLocation(loc: LocationConfig, leadFirstName: string): PublicEventType['locations'][number] {
+function publicLocation(loc: LocationConfig, leadFirstName: string, meetLink: boolean): PublicEventType['locations'][number] {
   const custom = cleanLine(loc?.label, 80);
   switch (loc?.type) {
     case 'google_meet':
-      return { type: 'google_meet', label: custom || 'Google Meet', detail: 'You get the link when you book' };
+      // The link comes from Google: without a connected calendar there is none to promise.
+      return meetLink ? { type: 'google_meet', label: custom || 'Google Meet', detail: 'You get the link when you book' } : { type: 'google_meet', label: custom || 'Google Meet' };
     case 'phone_host_calls':
       return { type: 'phone_host_calls', label: custom || 'Phone call', detail: `${leadFirstName || 'Your host'} calls you` };
     case 'phone_invitee_calls':
@@ -279,6 +378,9 @@ function locationsOf(et: EventType): LocationConfig[] {
 export function toPublicEventType(ctx: Ctx, et: EventType, hosts: Host[]): PublicEventType {
   const assigned = pickHosts(et.hostIds, hostsById(hosts));
   const lead = firstName(assigned[0]?.name ?? '');
+  const invites = invitationsReachInvitee(et, assigned);
+  // Guests hear about the meeting only through Google's invitation, so they are only offered when it goes out.
+  const guests = et.allowGuests === true && invites;
   const out: PublicEventType = {
     id: et.id,
     slug: et.slug,
@@ -289,25 +391,32 @@ export function toPublicEventType(ctx: Ctx, et: EventType, hosts: Host[]): Publi
     hosts: assigned.map((h) => toPublicHost(ctx, h)),
     durations: [...(et.durations ?? [])],
     defaultDuration: et.defaultDuration,
-    locations: locationsOf(et).map((l) => publicLocation(l, lead)),
+    locations: locationsOf(et).map((l) => publicLocation(l, lead, calendarReachable(et, assigned))),
     questions: (et.questions ?? []).slice(0, MAX_QUESTIONS).map(publicQuestion),
-    allowGuests: et.allowGuests === true,
-    maxGuests: et.allowGuests === true ? Math.max(0, Math.min(MAX_GUESTS, Math.trunc(positive(et.maxGuests)))) : 0,
+    allowGuests: guests,
+    maxGuests: guests ? Math.max(0, Math.min(MAX_GUESTS, Math.trunc(positive(et.maxGuests)))) : 0,
     phone: et.phone,
     minNoticeMinutes: positive(et.scheduling?.minNoticeMinutes),
     maxDaysAhead: positive(et.scheduling?.maxDaysAhead),
     themeOverride: et.themeOverride ? publicThemePart(et.themeOverride) : null,
+    calendarInvite: invites,
+    reminderChannels: { call: hasReminderCall(et) },
   };
   if (et.emoji) out.emoji = et.emoji;
   if (et.color) out.color = et.color;
   return out;
 }
 
-function buildPublicSite(ctx: Ctx, p: { site: SiteSettings; hosts: Host[]; eventTypes: EventType[]; features: { sms: boolean; calls: boolean } }): PublicSite {
+function buildPublicSite(
+  ctx: Ctx,
+  p: { site: SiteSettings; hosts: Host[]; eventTypes: EventType[]; features: { sms: boolean; calls: boolean }; email: boolean; open: boolean },
+): PublicSite {
   const { site, hosts } = p;
+  const consentText = site.booking?.consentText ?? '';
   const booking: PublicSite['booking'] = {
     reminderOptInDefault: site.booking?.reminderOptInDefault === true,
-    consentText: site.booking?.consentText ?? '',
+    consentText,
+    consentTextSms: smsOnlyConsentText(consentText),
   };
   if (site.booking?.privacyUrl) booking.privacyUrl = site.booking.privacyUrl;
   return {
@@ -324,36 +433,52 @@ function buildPublicSite(ctx: Ctx, p: { site: SiteSettings; hosts: Host[]; event
       logoUrl: assetUrl(ctx, site.theme.logoAssetId),
       backgroundUrl: assetUrl(ctx, site.theme.background?.imageAssetId),
     },
-    eventTypes: p.eventTypes.filter((et) => et.active === true && et.visibility === 'public').map((et) => toPublicEventType(ctx, et, hosts)),
+    // Before first-run setup nothing is on offer (see siteIsOpen).
+    eventTypes: p.open ? p.eventTypes.filter((et) => et.active === true && et.visibility === 'public').map((et) => toPublicEventType(ctx, et, hosts)) : [],
     booking,
     assistantName: site.assistant?.name ?? '',
-    features: { sms: p.features.sms === true, calls: p.features.calls === true },
+    features: { sms: p.features.sms === true, calls: p.features.calls === true, email: p.email },
     ownerTimezone: ownerZoneOf(ctx, site, hosts),
   };
 }
 
-export async function toPublicSite(ctx: Ctx): Promise<PublicSite> {
-  const site = await getSite(ctx);
-  const [hosts, eventTypes, features] = await Promise.all([listHosts(ctx), listEventTypes(ctx), twilioFeatures(ctx)]);
-  return buildPublicSite(ctx, { site, hosts, eventTypes, features });
+/** Everything the public site is built from, read in one go. */
+async function loadPublicSite(ctx: Ctx): Promise<{ site: SiteSettings; hosts: Host[]; eventTypes: EventType[]; features: { sms: boolean; calls: boolean }; email: boolean; open: boolean }> {
+  const [site, open] = await Promise.all([getSite(ctx), siteIsOpen(ctx)]);
+  const [hosts, eventTypes, features, email] = await Promise.all([listHosts(ctx), listEventTypes(ctx), twilioFeatures(ctx), emailGoesOut(ctx, site)]);
+  return { site, hosts, eventTypes, features, email, open };
 }
 
-/** The site plus one event type by its link. Unlisted event types resolve here; paused or unknown ones give null. */
+export async function toPublicSite(ctx: Ctx): Promise<PublicSite> {
+  return buildPublicSite(ctx, await loadPublicSite(ctx));
+}
+
+/** The site plus one event type by its link. Unlisted event types resolve here; paused or unknown ones give null, and so does every one before first-run setup. */
 export async function getPublicEvent(ctx: Ctx, slug: string): Promise<{ site: PublicSite; eventType: PublicEventType } | null> {
-  const site = await getSite(ctx);
-  const [hosts, eventTypes, features] = await Promise.all([listHosts(ctx), listEventTypes(ctx), twilioFeatures(ctx)]);
+  const loaded = await loadPublicSite(ctx);
+  if (!loaded.open) return null;
   const wanted = typeof slug === 'string' ? slug.toLowerCase() : '';
-  const et = wanted === '' ? undefined : eventTypes.find((e) => e.slug.toLowerCase() === wanted);
+  const et = wanted === '' ? undefined : loaded.eventTypes.find((e) => e.slug.toLowerCase() === wanted);
   if (!et || et.active !== true) return null;
-  return { site: buildPublicSite(ctx, { site, hosts, eventTypes, features }), eventType: toPublicEventType(ctx, et, hosts) };
+  return { site: buildPublicSite(ctx, loaded), eventType: toPublicEventType(ctx, et, loaded.hosts) };
 }
 
 function selfServiceOpen(b: Booking, nowMs: number): boolean {
   return b.status === 'confirmed' && Date.parse(b.start) > nowMs;
 }
 
-function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventType | null): PublicBooking {
-  const assigned = pickHosts(b.hostIds, hostsById(hosts));
+/**
+ * Whether Google has sent (or is about to send) the invitee an invitation for this booking: the event type
+ * asks for one and the booking has a Google event, or one that is still being written to a calendar that works.
+ */
+function invitationSent(b: Booking, byId: Map<string, Host>, eventType: EventType | null): boolean {
+  if (b.status !== 'confirmed' || !b.google || eventType?.googleInvite === false) return false;
+  return b.google.eventId !== '' || usable(byId.get(b.google.hostId));
+}
+
+function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventType | null, email: boolean): PublicBooking {
+  const byId = hostsById(hosts);
+  const assigned = pickHosts(b.hostIds, byId);
   const open = selfServiceOpen(b, ctx.now().getTime());
   const invitee: PublicBooking['invitee'] = { name: b.invitee.name, email: b.invitee.email, timezone: b.invitee.timezone };
   if (b.invitee.phone) invitee.phone = b.invitee.phone;
@@ -379,6 +504,8 @@ function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventTy
     cancellation: b.cancellation ? { at: b.cancellation.at, by: b.cancellation.by, ...(b.cancellation.reason ? { reason: b.cancellation.reason } : {}) } : null,
     rescheduledFromStart: b.rescheduledFromStart ?? null,
     attendanceConfirmed: !!b.attendance?.confirmedAt,
+    // What the page may promise: an email from us, an invitation from Google, both or neither.
+    delivery: { email: email && isEmail(b.invitee.email), calendarInvite: invitationSent(b, byId, eventType) },
   };
   const message = eventType?.confirmation?.message?.trim();
   if (message) out.confirmationMessage = message;
@@ -389,8 +516,9 @@ function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventTy
 
 /** The booking as its invitee may see it. Only ever hand this to someone who holds the manage token. */
 export async function toPublicBooking(ctx: Ctx, b: Booking): Promise<PublicBooking> {
-  const [hosts, eventType] = await Promise.all([listHosts(ctx), getEventType(ctx, b.eventTypeId)]);
-  return publicBookingOf(ctx, b, hosts, eventType);
+  const site = await getSite(ctx);
+  const [hosts, eventType, email] = await Promise.all([listHosts(ctx), getEventType(ctx, b.eventTypeId), emailGoesOut(ctx, site)]);
+  return publicBookingOf(ctx, b, hosts, eventType, email);
 }
 
 /** Everything the manage page needs, or null when the booking does not exist. The caller checks the token. */
@@ -400,13 +528,13 @@ export async function getManageView(
 ): Promise<{ booking: PublicBooking; site: PublicSite; eventType: PublicEventType | null } | null> {
   const record = await getBooking(ctx, bookingId);
   if (!record) return null;
-  const site = await getSite(ctx);
-  const [hosts, eventTypes, features] = await Promise.all([listHosts(ctx), listEventTypes(ctx), twilioFeatures(ctx)]);
-  const eventType = eventTypes.find((e) => e.id === record.eventTypeId) ?? null;
+  const loaded = await loadPublicSite(ctx);
+  const eventType = loaded.eventTypes.find((e) => e.id === record.eventTypeId) ?? null;
   return {
-    booking: publicBookingOf(ctx, record, hosts, eventType),
-    site: buildPublicSite(ctx, { site, hosts, eventTypes, features }),
-    eventType: eventType ? toPublicEventType(ctx, eventType, hosts) : null,
+    booking: publicBookingOf(ctx, record, loaded.hosts, eventType, loaded.email),
+    // A booking exists, so setup was done (a store restored by hand without its admin record still shows it).
+    site: buildPublicSite(ctx, { ...loaded, open: true }),
+    eventType: eventType ? toPublicEventType(ctx, eventType, loaded.hosts) : null,
   };
 }
 
@@ -438,6 +566,10 @@ interface ExternalBusy {
   failed: CalendarFailure[];
   /** true when the event cannot be offered at all because of calendar trouble */
   blocked: boolean;
+  /** true when the calendars did not answer within the budget (blocked is then true as well) */
+  timedOut?: boolean;
+  /** with timedOut: the hosts whose calendars had not answered */
+  slow?: Host[];
 }
 
 /**
@@ -446,13 +578,23 @@ interface ExternalBusy {
  * is required); a round robin carries on with the hosts that can be read.
  */
 async function loadExternalBusy(ctx: Ctx, kind: EventKind, hosts: Host[], range: Interval, fresh: boolean, budgetMs: number = CALENDAR_READ_BUDGET_MS): Promise<ExternalBusy> {
-  const reading = getBusyForHosts(ctx, hosts, range, fresh ? { fresh: true } : undefined);
+  // One read per host (the same work getBusyForHosts does), so a timeout can say whose calendar was slow.
+  const answered = hosts.map(() => false);
+  const reading = Promise.all(
+    hosts.map((host, i) =>
+      getBusyForHosts(ctx, [host], range, fresh ? { fresh: true } : undefined).then((found) => {
+        answered[i] = true;
+        return found[0];
+      }),
+    ),
+  );
   const results = await withinBudget(reading, budgetMs);
   if (results === TIMED_OUT) {
-    // Slow is not the same as broken, so nobody is alerted. But without an answer nothing can be offered.
-    ctx.log('warn', 'booking: the calendars did not answer in time', { hosts: hosts.map((h) => h.id) });
+    // Slow is not the same as broken, so nobody is alerted here. But without an answer nothing can be offered.
+    const slow = hosts.filter((_, i) => !answered[i]);
+    ctx.log('warn', 'booking: the calendars did not answer in time', { hosts: hosts.map((h) => h.id), slow: slow.map((h) => h.id) });
     ctx.waitUntil(reading);
-    return { inputs: [], failed: [], blocked: true };
+    return { inputs: [], failed: [], blocked: true, timedOut: true, slow };
   }
   const inputs: HostAvailabilityInput[] = [];
   const failed: CalendarFailure[] = [];
@@ -492,21 +634,60 @@ export async function alertCalendarTrouble(ctx: Ctx, failures: { host: Host; err
     literal(`Until the calendar can be read again, times that depend on it are not offered on your booking page.\n\nWhat we saw:\n${seen}`),
     'Open your dashboard to reconnect the calendar. You get this email at most once a day for each calendar.',
   ].join('\n\n');
-  await enqueueJob(ctx, {
-    type: 'message',
-    kind: 'host_alert',
-    bookingId: '',
-    channel: 'email',
-    audience: 'host',
-    subject: literal(`A calendar needs attention: ${names}`),
-    body,
-    dueAt: nowIso(ctx),
-  });
+  try {
+    await enqueueJob(ctx, {
+      type: 'message',
+      kind: 'host_alert',
+      bookingId: '',
+      channel: 'email',
+      audience: 'host',
+      subject: literal(`A calendar needs attention: ${names}`),
+      body,
+      dueAt: nowIso(ctx),
+    });
+  } catch (err) {
+    // Nothing was queued: give the day's claims back so the next failed read can still raise the alert.
+    await Promise.all(fresh.map((f) => releaseClaim(ctx, `alert-calendar-${f.host.id}-${day}`).catch(() => undefined)));
+    throw err;
+  }
   return fresh.length;
 }
 
-function calendarUnavailable(): HttpError {
-  return new HttpError(503, 'calendar_unavailable', 'We could not check the calendar just now, so nothing was booked. Please try again in a minute.');
+/**
+ * A booking or a move was turned away because calendars were too slow to answer. Once is noise and stays in
+ * the log. The second time in a day for the same host the owner is told (alertCalendarTrouble keeps that to
+ * one email a day), so a calendar that is always too slow does not keep visitors out in silence.
+ */
+async function reportSlowCalendars(ctx: Ctx, slow: Host[], during: { eventTitle: string; bookingId?: string }): Promise<void> {
+  ctx.log('error', 'booking: turned away because the calendars did not answer in time', { bookingId: during.bookingId, hosts: slow.map((h) => h.id) });
+  const day = nowIso(ctx).slice(0, 10);
+  const repeated: { host: Host; error: string }[] = [];
+  for (const host of slow) {
+    if (!(await claim(ctx, `calendar-slow-${host.id}-${day}`))) repeated.push({ host, error: 'The calendar took too long to answer, more than once today.' });
+  }
+  if (repeated.length > 0) await alertCalendarTrouble(ctx, repeated, { eventTitle: during.eventTitle });
+}
+
+function calendarUnavailable(what: 'book' | 'move' = 'book'): HttpError {
+  return new HttpError(
+    503,
+    'calendar_unavailable',
+    what === 'move'
+      ? 'We could not check the calendar just now, so your meeting was not moved. Please try again in a minute.'
+      : 'We could not check the calendar just now, so nothing was booked. Please try again in a minute.',
+  );
+}
+
+/** Reasons that depend on a host's hours or calendar, as opposed to the time alone (too soon, off the grid). */
+const HOST_REASONS = new Set<SlotRejection>(['outside_hours', 'busy', 'daily_limit']);
+
+/**
+ * A round robin carries on without a host whose calendar could not be read. When the time is then not free
+ * for the others, it may well be free for that host: nobody knows, so the visitor is asked to try again in a
+ * minute rather than told the time was taken.
+ */
+function unknownBecauseUnread(external: ExternalBusy, reason: SlotRejection): boolean {
+  return external.failed.length > 0 && HOST_REASONS.has(reason);
 }
 
 function slotTaken(reason: SlotRejection | 'conflict'): HttpError {
@@ -534,7 +715,8 @@ export async function getSlots(
   ctx: Ctx,
   p: { slug: string; durationMin: number; fromMs: number; toMs: number; rescheduleBookingId?: string },
 ): Promise<SlotsResponse> {
-  const s = await loadScheduling(ctx);
+  const [s, open] = await Promise.all([loadScheduling(ctx), siteIsOpen(ctx)]);
+  if (!open) throw notOpenYet();
   const wanted = typeof p.slug === 'string' ? p.slug.toLowerCase() : '';
   const eventType = wanted === '' ? undefined : s.eventTypes.find((e) => e.slug.toLowerCase() === wanted);
   if (!eventType) throw new HttpError(404, 'not_found', 'This meeting type does not exist.');
@@ -628,6 +810,33 @@ function looksLikeLink(text: string): boolean {
   }
 }
 
+/**
+ * Top-level domains that phones and mail apps turn into links by themselves, and that spam likes. Short on
+ * purpose: a test for any "word.word" would turn away names like J.R.R. Tolkien or J.Smith.
+ */
+const LINK_TLDS = [
+  'com', 'net', 'org', 'io', 'co', 'app', 'xyz', 'ru', 'cn', 'top', 'info', 'link', 'biz', 'online', 'site', 'shop', 'store', 'club',
+  'live', 'vip', 'icu', 'click', 'support', 'help', 'page', 'dev', 'me', 'ly', 'cc', 'tk', 'ml', 'ga', 'cf', 'gq', 'pw', 'ws', 'su',
+  'zip', 'mov', 'uk', 'us', 'eu', 'de', 'fr', 'nl', 'ai', 'gg', 'tv', 'ink', 'work', 'win', 'bid', 'loan', 'sbs', 'cfd', 'rest', 'bond',
+];
+/** A host name on one of those domains: two letters or more, a dot, the domain, and nothing glued after it. */
+const DOMAIN_TOKEN = new RegExp(`(?<![\\p{L}\\p{N}-])[\\p{L}\\p{N}][\\p{L}\\p{N}-]*[\\p{L}\\p{N}](?:\\.[\\p{L}\\p{N}-]+)*\\.(?:${LINK_TLDS.join('|')})(?![\\p{L}\\p{N}-])`, 'iu');
+/** "something.something/": the start of a web address with a path, whatever its domain. */
+const ADDRESS_WITH_PATH = /[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+\//u;
+
+/**
+ * Whether visitor text carries a link. The name and the place a visitor types end up in emails and texts
+ * sent to whatever address and number they typed, so neither may smuggle a link in (mail apps and phones
+ * link bare addresses themselves). A name has no use for slashes or an @ either; a street address can.
+ */
+function carriesLink(raw: string, kind: 'name' | 'place'): boolean {
+  // Wide and ideographic full stops count as dots: browsers read them as dots in addresses.
+  const text = raw.normalize('NFKC').replace(/[。．｡]/g, '.');
+  if (/:\/\/|www\./i.test(text) || DOMAIN_TOKEN.test(text)) return true;
+  if (kind === 'name') return /[/\\@]/.test(text);
+  return ADDRESS_WITH_PATH.test(text);
+}
+
 /** One stored answer per question that was answered. Problems are recorded under "answers.<question id>". */
 function readAnswers(raw: unknown, questions: Question[], errors: FieldErrors): Booking['answers'] {
   if (raw !== undefined && raw !== null && !isPlainObject(raw)) errors.add('answers', 'The answers could not be read.');
@@ -699,7 +908,8 @@ function readAnswers(raw: unknown, questions: Question[], errors: FieldErrors): 
   return out;
 }
 
-function readGuests(raw: unknown, eventType: EventType, inviteeEmail: string, errors: FieldErrors): string[] {
+/** `reachable`: Google's invitation will reach guests (see invitationsReachInvitee). Nothing else tells them, so without it none are taken. */
+function readGuests(raw: unknown, eventType: EventType, inviteeEmail: string, reachable: boolean, errors: FieldErrors): string[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
     errors.add('guests', 'The guest list could not be read.');
@@ -723,7 +933,7 @@ function readGuests(raw: unknown, eventType: EventType, inviteeEmail: string, er
     guests.push(email);
   }
   if (guests.length === 0) return [];
-  const allowed = eventType.allowGuests === true ? Math.max(0, Math.min(MAX_GUESTS, Math.trunc(positive(eventType.maxGuests)))) : 0;
+  const allowed = eventType.allowGuests === true && reachable ? Math.max(0, Math.min(MAX_GUESTS, Math.trunc(positive(eventType.maxGuests)))) : 0;
   if (allowed === 0) {
     errors.add('guests', 'Guests cannot be added to this meeting.');
     return [];
@@ -802,8 +1012,11 @@ interface BookingInput {
   utm?: Record<string, string>;
 }
 
-/** Every field of a booking request, cleaned. Throws one 422 that lists all problems by field. */
-function readBookingInput(raw: Record<string, unknown>, eventType: EventType, leadFirstName: string): BookingInput {
+/**
+ * Every field of a booking request, cleaned. Throws one 422 that lists all problems by field.
+ * `allow.guests`: whether guests can be told about the meeting at all (see readGuests).
+ */
+function readBookingInput(raw: Record<string, unknown>, eventType: EventType, leadFirstName: string, allow: { guests: boolean }): BookingInput {
   const errors = new FieldErrors();
 
   const nameRaw = typeof raw.name === 'string' ? raw.name : '';
@@ -811,6 +1024,7 @@ function readBookingInput(raw: Record<string, unknown>, eventType: EventType, le
   if (name === '') errors.add('name', 'Please enter your name.');
   else if (name.length < 2) errors.add('name', 'Please enter your full name.');
   else if (name.length > MAX_NAME) errors.add('name', `Please keep your name under ${MAX_NAME} characters.`);
+  else if (carriesLink(name, 'name')) errors.add('name', 'Please enter your name, without links.');
 
   const email = normalizeEmail(raw.email);
   if (email === '') errors.add('email', 'Please enter your email address.');
@@ -845,6 +1059,7 @@ function readBookingInput(raw: Record<string, unknown>, eventType: EventType, le
       locationText = cleanLine(text, MAX_LOCATION_TEXT + 1);
       if (locationText === '') errors.add('locationText', 'Please tell us where you would like to meet.');
       else if (locationText.length > MAX_LOCATION_TEXT) errors.add('locationText', `Please keep this under ${MAX_LOCATION_TEXT} characters.`);
+      else if (carriesLink(locationText, 'place')) errors.add('locationText', 'Please give an address or a phone number, without links.');
     }
   }
 
@@ -869,7 +1084,7 @@ function readBookingInput(raw: Record<string, unknown>, eventType: EventType, le
     }
   }
 
-  const guests = readGuests(raw.guests, eventType, email, errors);
+  const guests = readGuests(raw.guests, eventType, email, allow.guests, errors);
   const answers = readAnswers(raw.answers, eventType.questions ?? [], errors);
 
   errors.throwIfAny();
@@ -902,12 +1117,69 @@ function clientAddress(ctx: Ctx): { id: string; factor: number } {
   return ip !== '' ? { id: ip, factor: 1 } : { id: 'unknown', factor: UNKNOWN_IP_FACTOR };
 }
 
+/** The form's request key when it has a usable shape (at least 128 bits written out), otherwise null. */
+function readRequestKey(raw: unknown): string | null {
+  return typeof raw === 'string' && /^[A-Za-z0-9_-]{22,128}$/.test(raw) ? raw : null;
+}
+
+/**
+ * The booking id that belongs to a request: the form's key, the meeting type and the time. A retry of the
+ * same request therefore lands on the same id, which the booking index never holds twice; the same form
+ * sent for another time is another booking (and its own retry is recognised in turn). Keyed with the site
+ * secret, so the id says nothing about the key.
+ */
+function bookingIdForKey(ctx: Ctx, key: string, eventTypeId: string, startMs: number): string {
+  return `bkg_${hmacHex(ctx, 'booking-request', `${key}|${eventTypeId}|${startMs}`).slice(0, 26)}`;
+}
+
+/** Whether a stored booking is the one this request asked for: same meeting, same person, same time. */
+function sameRequest(b: Booking, eventType: EventType, input: BookingInput): boolean {
+  return b.eventTypeId === eventType.id && b.invitee.email.toLowerCase() === input.email.toLowerCase() && Date.parse(b.start) === input.startMs;
+}
+
+function upcomingForEmail(entries: BookingIndexEntry[], email: string, nowMs: number): number {
+  const wanted = email.toLowerCase();
+  return entries.filter((e) => e.status === 'confirmed' && Date.parse(e.end) > nowMs && (e.inviteeEmail ?? '').toLowerCase() === wanted).length;
+}
+
+function tooManyUpcoming(): HttpError {
+  return new HttpError(
+    409,
+    'booking_limit',
+    `This email address already has ${MAX_UPCOMING_PER_EMAIL} upcoming meetings booked. Please cancel one you no longer need before booking another.`,
+  );
+}
+
+/** Texts and calls go to numbers nobody has verified, so one number can only be given on a few bookings a day. */
+async function limitTextedBookings(ctx: Ctx, phone: string): Promise<void> {
+  try {
+    await rateLimit(ctx, 'book-phone', phone, TEXTED_BOOKINGS_PER_PHONE_PER_DAY, DAY_SEC);
+  } catch (err) {
+    if (!(err instanceof HttpError) || err.status !== 429) throw err;
+    throw new HttpError(
+      429,
+      'phone_limit',
+      'This phone number already has several bookings with text or call reminders today. Untick the text and call reminders to book without them, or try again tomorrow.',
+    );
+  }
+}
+
+/** The booking this request already made, when its first try went through and only the answer was lost. */
+function alreadyBooked(ctx: Ctx, booking: Booking): { booking: Booking; manageToken: string } {
+  ctx.log('info', 'booking: a repeated request got the booking its first try made', { bookingId: booking.id });
+  return { booking, manageToken: manageToken(ctx, booking.id) };
+}
+
+function stillSaving(): HttpError {
+  return new HttpError(409, 'in_progress', 'Your booking is still being saved. Please wait a moment, then check your email for the confirmation.');
+}
+
 // ───────────────────────── create ─────────────────────────
 
 export interface BookingActionOptions {
   /** how long to wait for Google to take the event before answering (default: up to 7 s). The work then finishes in the background. */
   calendarBudgetMs?: number;
-  /** how long to wait for the hosts' calendars to report their busy time (default 6 s). After that the request fails closed. */
+  /** how long to wait for the hosts' calendars to report their busy time (default 8.5 s, BOOKING_READ_BUDGET_MS). After that the request fails closed. */
   calendarReadBudgetMs?: number;
 }
 
@@ -934,13 +1206,26 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   const tooFast = raw.elapsedMs !== undefined && raw.elapsedMs !== null && !(typeof raw.elapsedMs === 'number' && raw.elapsedMs >= MIN_FORM_MS);
   if (trapped || tooFast) throw new HttpError(422, 'invalid', GENERIC_REFUSAL);
 
-  const s = await loadScheduling(ctx);
+  const [s, open] = await Promise.all([loadScheduling(ctx), siteIsOpen(ctx)]);
+  // Nothing is set up yet: no hours chosen, nobody to tell. The page lists nothing, and a direct request gets this.
+  if (!open) throw notOpenYet();
   const slug = typeof raw.slug === 'string' ? raw.slug.trim().toLowerCase() : '';
   const eventType = slug === '' ? undefined : s.eventTypes.find((e) => e.slug.toLowerCase() === slug);
   if (!eventType || eventType.active !== true) throw new HttpError(404, 'not_found', 'This meeting type is no longer available.');
 
   const eventHosts = pickHosts(eventType.hostIds, s.byId);
-  const input = readBookingInput(raw, eventType, firstName(eventHosts[0]?.name ?? ''));
+  const input = readBookingInput(raw, eventType, firstName(eventHosts[0]?.name ?? ''), { guests: invitationsReachInvitee(eventType, eventHosts) });
+
+  // A retry of a request that did go through (only its answer got lost) gets that booking back. The key is
+  // what makes it the same request: an email address and a time alone would hand the manage link to anyone
+  // who knows them.
+  const requestKey = readRequestKey(raw.requestKey);
+  const keyedId = requestKey ? bookingIdForKey(ctx, requestKey, eventType.id, input.startMs) : null;
+  const earlier = keyedId ? await getBooking(ctx, keyedId) : null;
+  if (earlier && sameRequest(earlier, eventType, input)) return alreadyBooked(ctx, earlier);
+  // That id already holds somebody else's booking (a key that was not random after all): a new id then.
+  const id = keyedId && !earlier ? keyedId : randomId('bkg');
+
   await rateLimit(ctx, 'book-email', input.email.toLowerCase(), BOOKINGS_PER_EMAIL_PER_HOUR, HOUR_SEC);
 
   const nowMs = ctx.now().getTime();
@@ -950,10 +1235,11 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
 
   // Step 2: what the hosts' own calendars say right now. Unknown is never read as free.
   const pad = Math.max(DAY_MS, bufferPadMs(eventType));
-  const external = await loadExternalBusy(ctx, eventType.kind, eventHosts, { start: startMs - pad, end: endMs + pad }, true, opts?.calendarReadBudgetMs);
+  const external = await loadExternalBusy(ctx, eventType.kind, eventHosts, { start: startMs - pad, end: endMs + pad }, true, opts?.calendarReadBudgetMs ?? BOOKING_READ_BUDGET_MS);
   if (external.failed.length > 0) {
     await quietly(ctx, 'the calendar alert', '', () => alertCalendarTrouble(ctx, external.failed, { eventTitle: eventType.title }));
   }
+  if (external.timedOut) await quietly(ctx, 'the slow calendar note', '', () => reportSlowCalendars(ctx, external.slow ?? [], { eventTitle: eventType.title }));
   if (external.blocked) throw calendarUnavailable();
 
   // Step 3: is the time free?
@@ -967,23 +1253,35 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
     index: await getBookingIndex(ctx),
     ownBookingBuffers: s.buffers,
   };
+  // Its first try took the time a moment ago and is still saving the record.
+  if (query.index.some((e) => e.id === id)) throw stillSaving();
   const first = checkSlot(query, startMs);
   if (!first.ok) {
     // The page offered this time from a calendar answer that can be a minute old. It is wrong now: drop it,
     // so the list the visitor goes back to (and anyone else's) is built from the calendars as they are.
     if (first.reason === 'busy') await forgetHostBusy(ctx, eventHosts.map((h) => h.id));
+    if (unknownBecauseUnread(external, first.reason)) throw calendarUnavailable();
     throw slotTaken(first.reason);
   }
+  if (upcomingForEmail(query.index, input.email, nowMs) >= MAX_UPCOMING_PER_EMAIL) throw tooManyUpcoming();
 
   // Everything the record needs is read before the time is taken, so nothing sits between the two writes below.
   const features = await twilioFeatures(ctx).catch(() => ({ sms: false, calls: false }));
+  const sms = input.wantsSms && features.sms;
+  // A call is only agreed to on a meeting that has one: the form does not offer it otherwise.
+  const call = input.wantsCall && features.calls && hasReminderCall(eventType);
+  // Counted only for a request that is about to take a free time: a visitor who was unlucky with a time
+  // keeps their allowance, and only bookings that really text or call a number use it up.
+  if (input.phone && (sms || call)) await limitTextedBookings(ctx, input.phone);
 
   // Step 4: take it. The check runs again inside the swap, on the index as it is at that instant.
-  const id = randomId('bkg');
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(endMs).toISOString();
   let assigned: string[] = [];
   const taken = await mutateBookingIndex(ctx, (entries) => {
+    // The same request, a moment earlier (a double submit, a retry racing its first try).
+    if (entries.some((e) => e.id === id)) return { abort: 'duplicate' };
+    if (upcomingForEmail(entries, input.email, nowMs) >= MAX_UPCOMING_PER_EMAIL) return { abort: 'booking_limit' };
     const again = checkSlot({ ...query, index: entries }, startMs);
     if (!again.ok) return { abort: again.reason };
     assigned = eventType.kind === 'round_robin' ? [pickRoundRobinHost(again.hostIds, entries, nowMs)] : [...again.hostIds];
@@ -1002,17 +1300,23 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   });
   if (!taken.ok) {
     if (taken.reason === 'contention') throw new HttpError(503, 'busy', 'The server is busy right now. Please try again in a moment.');
+    if (taken.reason === 'booking_limit') throw tooManyUpcoming();
+    if (taken.reason === 'duplicate') {
+      const twin = await getBooking(ctx, id);
+      if (twin && sameRequest(twin, eventType, input)) return alreadyBooked(ctx, twin);
+      throw stillSaving();
+    }
     throw slotTaken(taken.reason as SlotRejection);
   }
 
   // Step 5: the booking itself.
   const assignedHosts = pickHosts(assigned, s.byId);
-  const sms = input.wantsSms && features.sms;
-  const call = input.wantsCall && features.calls;
   const consentHost = eventHosts[0] ?? ownerOf(s.site, s.hosts);
+  // The words the visitor saw under the switches: texts alone get the wording without the call.
+  const siteConsent = s.site.booking?.consentText ?? '';
   const consentText =
     sms || call
-      ? renderTemplate(s.site.booking?.consentText ?? '', {
+      ? renderTemplate(call ? siteConsent : smsOnlyConsentText(siteConsent), {
           host_first_name: firstName(consentHost?.name ?? s.site.profile.name),
           host_name: consentHost?.name ?? s.site.profile.name,
           assistant_name: s.site.assistant?.name ?? '',
@@ -1024,6 +1328,7 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   const invitee: Booking['invitee'] = { name: input.name, email: input.email, timezone: input.timezone };
   if (input.phone) invitee.phone = input.phone;
   if (input.locale) invitee.locale = input.locale;
+  const marker = newFollowUp(ctx, 'created');
   const record: Booking = {
     id,
     eventTypeId: eventType.id,
@@ -1045,6 +1350,7 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
     cancellation: null,
     rescheduledFromStart: null,
     rescheduleCount: 0,
+    followUp: marker,
     source: input.source,
     timeline: [{ at, type: 'created', detail: input.source === 'embed' ? 'Booked through an embedded page' : 'Booked from the booking page' }],
     createdAt: at,
@@ -1052,8 +1358,11 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   };
   if (input.utm) record.utm = input.utm;
 
+  let written: { created: boolean; booking: Booking };
   try {
-    await saveBooking(ctx, record);
+    // Create-only: two tries of the same request (same key, same id) that both got through the index
+    // write one record between them, and the second hands back the first one's booking.
+    written = await createBookingRecord(ctx, record);
   } catch (err) {
     // Without the record the time would stay blocked for nobody: give it back before reporting the failure.
     await quietly(ctx, 'releasing the time of a booking that could not be saved', id, () =>
@@ -1061,21 +1370,17 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
     );
     throw err;
   }
-
-  // Step 6: the calendar. From here on nothing may fail the request: the booking exists.
-  const calendar = await calendarStep(ctx, id, 'reconcile', calendarBudget(ctx, startedMs, opts));
-
-  // Step 7: confirmation and reminders.
-  const current = (await getBooking(ctx, id).catch(() => null)) ?? record;
-  const scheduled = await quietly(ctx, 'scheduling the messages', id, () => scheduleBookingJobs(ctx, current, eventType, 'created'));
-  if (!scheduled) {
-    // Storage hiccup: one more try, then the booking stands without its messages and says so.
-    const retried = await quietly(ctx, 'scheduling the messages again', id, () => scheduleBookingJobs(ctx, current, eventType, 'created'));
-    if (!retried) await quietly(ctx, 'the timeline note', id, () => addTimeline(ctx, id, 'messages_not_scheduled', 'The confirmation and reminders could not be queued.'));
+  if (!written.created) {
+    if (sameRequest(written.booking, eventType, input)) return alreadyBooked(ctx, written.booking);
+    throw stillSaving();
   }
-  runImmediateJobs(ctx, id, calendar.pending);
 
-  return { booking: (await getBooking(ctx, id).catch(() => null)) ?? current, manageToken: manageToken(ctx, id) };
+  // Steps 6 and 7: the calendar, then the confirmation and the reminders. From here on nothing may fail the
+  // request: the booking exists. What does not get done now is finished later (the record says so).
+  const followed = await followUpBooking(ctx, id, marker, eventType, { calendarMode: 'reconcile', calendarBudgetMs: calendarBudget(ctx, startedMs, opts), fallback: record, note: true });
+  runImmediateJobs(ctx, id, followed.pending);
+
+  return { booking: (await getBooking(ctx, id).catch(() => null)) ?? followed.booking, manageToken: manageToken(ctx, id) };
 }
 
 async function addTimeline(ctx: Ctx, bookingId: string, type: string, detail?: string): Promise<void> {
@@ -1083,32 +1388,137 @@ async function addTimeline(ctx: Ctx, bookingId: string, type: string, detail?: s
   await updateBooking(ctx, bookingId, (b) => ({ ...b, timeline: [...(b.timeline ?? []), entry] }));
 }
 
+// ───────────────────────── follow-up work ─────────────────────────
+//
+// A change is committed in one save (the record says created, moved or cancelled). What has to happen
+// after it (the calendar, the reminders, the notices) can be cut off by a storage error or the end of the
+// request. So the same save writes a `followUp` marker, the marker comes off once that work is done, and
+// reconcileBookings (or a repeated cancellation) finishes whatever still carries one. Every step can run
+// twice: the calendar sync adopts or re-applies its own event, and each message is guarded by a claim.
+
+type FollowUp = NonNullable<Booking['followUp']>;
+
+function newFollowUp(ctx: Ctx, kind: FollowUp['kind'], by?: FollowUp['by'], newHostIds?: string[]): FollowUp {
+  return { kind, id: randomId('fu'), at: nowIso(ctx), ...(by ? { by } : {}), ...(newHostIds?.length ? { newHostIds: [...newHostIds] } : {}) };
+}
+
+/** Hosts a move hands the meeting to: on the booking now, not before. */
+function joinedHosts(before: string[], after: string[]): string[] {
+  return after.filter((id) => !before.includes(id));
+}
+
+/** Takes the marker off once its work is done. A newer marker (a later change) stays. */
+async function clearFollowUp(ctx: Ctx, bookingId: string, marker: FollowUp): Promise<void> {
+  await updateBooking(ctx, bookingId, (b) => {
+    if (b.followUp?.id !== marker.id) return b;
+    const { followUp: _done, ...rest } = b;
+    return rest;
+  });
+}
+
+function followUpIsStale(marker: FollowUp | undefined, nowMs: number): marker is FollowUp {
+  const at = Date.parse(marker?.at ?? '');
+  return !!marker && Number.isFinite(at) && at <= nowMs - FOLLOW_UP_GRACE_MS;
+}
+
+/** Reminders and the messages that go out right away. One more try after a storage hiccup. */
+async function scheduleMessages(ctx: Ctx, booking: Booking, eventType: EventType, kind: 'created' | 'rescheduled', by?: FollowUp['by'], newHostIds?: string[]): Promise<boolean> {
+  const options = by || newHostIds?.length ? { ...(by ? { by } : {}), ...(newHostIds?.length ? { newHostIds } : {}) } : undefined;
+  if (await quietly(ctx, 'scheduling the messages', booking.id, () => scheduleBookingJobs(ctx, booking, eventType, kind, options))) return true;
+  return quietly(ctx, 'scheduling the messages again', booking.id, () => scheduleBookingJobs(ctx, booking, eventType, kind, options));
+}
+
+/**
+ * The work after a booking was made or moved: the calendar, then the reminders and the messages that go
+ * out right away. With `note`, a failure to queue the messages is written on the timeline.
+ */
+async function followUpBooking(
+  ctx: Ctx,
+  bookingId: string,
+  marker: FollowUp,
+  eventType: EventType | null,
+  p: { calendarMode: SyncMode; calendarBudgetMs: number; fallback: Booking; note: boolean },
+): Promise<{ pending?: Promise<unknown>; booking: Booking; done: boolean }> {
+  const calendar = await calendarStep(ctx, bookingId, p.calendarMode, p.calendarBudgetMs);
+  const current = (await getBooking(ctx, bookingId).catch(() => null)) ?? p.fallback;
+  // The event type is gone: there are no rules to plan reminders from, and nothing more can be done.
+  if (eventType && current.status === 'confirmed') {
+    const kind = marker.kind === 'created' ? 'created' : 'rescheduled';
+    if (!(await scheduleMessages(ctx, current, eventType, kind, marker.by, marker.newHostIds))) {
+      if (p.note) {
+        const detail = kind === 'created' ? 'The confirmation and reminders could not be queued yet. They are tried again shortly.' : 'The messages about the new time could not be queued yet. They are tried again shortly.';
+        await quietly(ctx, 'the timeline note', bookingId, () => addTimeline(ctx, bookingId, 'messages_not_scheduled', detail));
+      }
+      return { ...calendar, booking: current, done: false };
+    }
+  }
+  await quietly(ctx, 'clearing the follow-up marker', bookingId, () => clearFollowUp(ctx, bookingId, marker));
+  return { ...calendar, booking: current, done: true };
+}
+
+/**
+ * The work after a cancellation: give the time back, take the event out of Google Calendar, drop the
+ * reminders, tell people. Everything is read from the record, so a later run does exactly what the first
+ * one would have done. Returns whether all of it is done.
+ */
+async function followUpCancellation(ctx: Ctx, booking: Booking, marker: FollowUp, p: { calendarMode: SyncMode; calendarBudgetMs: number }): Promise<boolean> {
+  const id = booking.id;
+  const freed = await quietly(ctx, 'freeing the time of a cancelled booking', id, async () => {
+    const done = await mutateBookingIndex(ctx, (entries) =>
+      entries.some((e) => e.id === id && e.status !== 'cancelled') ? entries.map((e) => (e.id === id ? { ...e, status: 'cancelled' as const } : e)) : { abort: 'already_free' },
+    );
+    if (!done.ok && done.reason !== 'already_free') throw new Error(`index update failed (${done.reason})`);
+  });
+  if (booking.google) await calendarStep(ctx, id, p.calendarMode, p.calendarBudgetMs);
+  const unplanned = await quietly(ctx, 'removing the reminders of a cancelled booking', id, () => cancelBookingJobs(ctx, id));
+  const told = await quietly(ctx, 'queueing the cancellation messages', id, () => queueCancelledMessages(ctx, booking));
+  if (!(freed && unplanned && told)) return false;
+  await quietly(ctx, 'clearing the follow-up marker', id, () => clearFollowUp(ctx, id, marker));
+  return true;
+}
+
 // ───────────────────────── cancel ─────────────────────────
 
-const CANCELLED_BY: Record<'invitee' | 'host' | 'assistant', string> = {
+const CANCELLED_BY: Record<'invitee' | 'host' | 'assistant' | 'host_link', string> = {
   invitee: 'Cancelled by the invitee',
   host: 'Cancelled by the host',
   assistant: 'Cancelled by the invitee on the reminder call',
+  host_link: 'Cancelled by a host, from the booking page',
 };
 
 /**
- * Cancels a booking. Calling it again changes nothing and sends nothing. The invitee can cancel until
- * the meeting starts and the assistant (acting for the invitee on a call) until it ends; a host always can.
- * Whoever calls this has already checked the manage token or the admin session.
+ * Cancels a booking. Calling it again changes nothing and sends nothing, except that work the first call
+ * did not get to (it was cut off) is finished then. The invitee can cancel until the meeting starts and the
+ * assistant (acting for the invitee on a call) until it ends; a host always can. Whoever calls this has
+ * already checked the manage token or the admin session.
+ *
+ * `actor: 'host'` comes from the booking page opened through a host's link. The invitee holds the same
+ * link, so it grants nothing: the invitee's deadline still applies. It only decides how the cancellation is
+ * recorded and announced (by a host, and the invitee is told by text as well).
  */
 export async function cancelBooking(
   ctx: Ctx,
   bookingId: string,
-  p: { by: 'invitee' | 'host' | 'assistant'; reason?: string },
+  p: { by: 'invitee' | 'host' | 'assistant'; reason?: string; actor?: 'invitee' | 'host' },
   opts?: BookingActionOptions,
 ): Promise<Booking> {
   registerBookingJobHandlers();
   const nowMs = ctx.now().getTime();
   const existing = await getBooking(ctx, bookingId);
   if (!existing) throw notFound();
-  if (existing.status === 'cancelled') return existing;
+  if (existing.status === 'cancelled') {
+    // Work the first request left behind is finished now, unless that request may still be running.
+    const marker = existing.followUp;
+    if (marker?.kind !== 'cancelled' || !(Date.parse(marker.at) <= nowMs - REQUEST_CEILING_MS)) return existing;
+    await followUpCancellation(ctx, existing, marker, { calendarMode: 'push', calendarBudgetMs: calendarBudget(ctx, nowMs, opts) });
+    runImmediateJobs(ctx, bookingId);
+    return (await getBooking(ctx, bookingId).catch(() => null)) ?? existing;
+  }
 
   const by = p.by === 'host' || p.by === 'assistant' ? p.by : 'invitee';
+  const viaHostLink = by === 'invitee' && p.actor === 'host';
+  const recordedBy = viaHostLink ? 'host' : by;
+  const timelineText = CANCELLED_BY[viaHostLink ? 'host_link' : by];
   const deadline = by === 'invitee' ? Date.parse(existing.start) : by === 'assistant' ? Date.parse(existing.end) : Number.POSITIVE_INFINITY;
   if (!(nowMs < deadline)) {
     throw new HttpError(
@@ -1120,6 +1530,7 @@ export async function cancelBooking(
 
   const at = nowIso(ctx);
   const reason = cleanText(p.reason, MAX_REASON);
+  const marker = newFollowUp(ctx, 'cancelled', recordedBy);
   let changed = false;
   const saved = await updateBooking(ctx, bookingId, (b) => {
     if (b.status === 'cancelled') {
@@ -1127,46 +1538,68 @@ export async function cancelBooking(
       return b;
     }
     changed = true;
+    const cancellation: NonNullable<Booking['cancellation']> = { at, by: recordedBy };
+    if (reason) cancellation.reason = reason;
+    if (viaHostLink) cancellation.via = 'host_link';
     return {
       ...b,
       status: 'cancelled',
-      cancellation: reason ? { at, by, reason } : { at, by },
-      timeline: [...(b.timeline ?? []), { at, type: 'cancelled', detail: reason ? `${CANCELLED_BY[by]}: ${reason}`.slice(0, 400) : CANCELLED_BY[by] }],
+      cancellation,
+      // Until Google has been told, the booking says so. A request cut off before that is then still
+      // repaired: reconcileBookings requeues the calendar work of every booking that carries a problem.
+      google: b.google ? { ...b.google, error: CALENDAR_PENDING } : b.google,
+      followUp: marker,
+      timeline: [...(b.timeline ?? []), { at, type: 'cancelled', detail: reason ? `${timelineText}: ${reason}`.slice(0, 400) : timelineText }],
     };
   });
   if (!saved) throw notFound();
-  // Someone else cancelled it a moment ago: they do the follow-up work, once.
+  // Someone else cancelled it a moment ago: they do the follow-up work, once (or reconcileBookings does).
   if (!changed) return saved;
 
   // The record says cancelled. Only now is the time given back.
-  await quietly(ctx, 'freeing the time of a cancelled booking', bookingId, async () => {
-    const freed = await mutateBookingIndex(ctx, (entries) => entries.map((e) => (e.id === bookingId ? { ...e, status: 'cancelled' as const } : e)));
-    if (!freed.ok) throw new Error(`index update failed (${freed.reason})`);
-  });
-
-  if (saved.google) await calendarStep(ctx, bookingId, 'push', calendarBudget(ctx, nowMs, opts));
-  await quietly(ctx, 'removing the reminders of a cancelled booking', bookingId, () => cancelBookingJobs(ctx, bookingId));
-  await quietly(ctx, 'queueing the cancellation messages', bookingId, () => queueCancelledMessages(ctx, saved, by));
+  await followUpCancellation(ctx, saved, marker, { calendarMode: 'push', calendarBudgetMs: calendarBudget(ctx, nowMs, opts) });
   runImmediateJobs(ctx, bookingId);
 
   return (await getBooking(ctx, bookingId).catch(() => null)) ?? saved;
 }
 
-async function queueCancelledMessages(ctx: Ctx, booking: Booking, by: 'invitee' | 'host' | 'assistant'): Promise<void> {
+/**
+ * Queues the cancellation notices. Each one is claimed by name before it is queued (and the claim is given
+ * back when the write fails), so a second run after an interruption sends nothing twice.
+ */
+async function queueCancelledMessages(ctx: Ctx, booking: Booking): Promise<void> {
+  const by = booking.cancellation?.by ?? 'invitee';
+  const fromDashboard = by === 'host' && booking.cancellation?.via !== 'host_link';
   const site = await getSite(ctx);
   const assigned = pickHosts(booking.hostIds, hostsById(await listHosts(ctx)));
   const base = { type: 'message' as const, kind: 'cancelled' as const, bookingId: booking.id, dueAt: nowIso(ctx) };
   const work: Promise<unknown>[] = [];
+  const queue = (target: { channel: 'email' | 'sms'; audience: 'invitee' | 'host'; hostId?: string }): void => {
+    work.push(
+      (async () => {
+        const once = `sched-${booking.id}-cancelled-${target.channel}-${target.audience}-${target.hostId ?? 'invitee'}`;
+        if (!(await claim(ctx, once))) return;
+        try {
+          // The id comes from the claim, so a copy queued again after an unclear failed write is the same job.
+          await enqueueJob(ctx, { ...base, ...target }, { id: `job_${sha256Hex(once).slice(0, 20)}` });
+        } catch (err) {
+          await releaseClaim(ctx, once).catch(() => undefined);
+          throw err;
+        }
+      })(),
+    );
+  };
 
-  if (isEmail(booking.invitee.email)) work.push(enqueueJob(ctx, { ...base, channel: 'email', audience: 'invitee' }));
+  if (isEmail(booking.invitee.email)) queue({ channel: 'email', audience: 'invitee' });
   // Someone who cancelled on the page a second ago does not need a text about it as well.
-  if (by !== 'invitee' && booking.invitee.phone && booking.consent?.sms === true) work.push(enqueueJob(ctx, { ...base, channel: 'sms', audience: 'invitee' }));
+  if (by !== 'invitee' && booking.invitee.phone && booking.consent?.sms === true) queue({ channel: 'sms', audience: 'invitee' });
 
   for (const host of assigned) {
-    // The dashboard belongs to the owner: when a host cancels there, the owner already knows.
-    if (by === 'host' && host.id === site.ownerHostId) continue;
-    if (isEmail(host.email) && host.notify?.email !== false) work.push(enqueueJob(ctx, { ...base, channel: 'email', audience: 'host', hostId: host.id }));
-    if (host.phone?.trim() && host.notify?.sms === true) work.push(enqueueJob(ctx, { ...base, channel: 'sms', audience: 'host', hostId: host.id }));
+    // The dashboard belongs to the owner: when a host cancels there, the owner already knows. A cancellation
+    // through a host's link may have been made by any host (or by the invitee, who holds the same link).
+    if (fromDashboard && host.id === site.ownerHostId) continue;
+    if (isEmail(host.email) && host.notify?.email !== false) queue({ channel: 'email', audience: 'host', hostId: host.id });
+    if (host.phone?.trim() && host.notify?.sms === true) queue({ channel: 'sms', audience: 'host', hostId: host.id });
   }
   const failed = (await Promise.allSettled(work)).find((r): r is PromiseRejectedResult => r.status === 'rejected');
   if (failed) throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
@@ -1177,12 +1610,17 @@ async function queueCancelledMessages(ctx: Ctx, booking: Booking, by: 'invitee' 
 /**
  * Moves a booking to a new start time, keeping its length and its hosts. The same checks as a new
  * booking apply, except that the booking's own time counts as free. The invitee can move a meeting
- * until it starts. Whoever calls this has already checked the manage token or the admin session.
+ * until it starts, a limited number of times. Whoever calls this has already checked the manage token
+ * or the admin session.
+ *
+ * `actor: 'host'` comes from the booking page opened through a host's link. The invitee holds the same
+ * link, so it grants nothing (the invitee's deadline and limits still apply). It only keeps the host's
+ * own time zone off the invitee, words the timeline, and has the invitee told by text as well.
  */
 export async function rescheduleBooking(
   ctx: Ctx,
   bookingId: string,
-  p: { startIso: string; by: 'invitee' | 'host'; timezone?: IanaZone },
+  p: { startIso: string; by: 'invitee' | 'host'; timezone?: IanaZone; actor?: 'invitee' | 'host' },
   opts?: BookingActionOptions,
 ): Promise<Booking> {
   registerBookingJobHandlers();
@@ -1192,8 +1630,18 @@ export async function rescheduleBooking(
 
   const nowMs = ctx.now().getTime();
   const by = p.by === 'host' ? 'host' : 'invitee';
+  const actor = by === 'host' || p.actor === 'host' ? 'host' : 'invitee';
   if (by === 'invitee' && !(Date.parse(booking.start) > nowMs)) {
     throw new HttpError(410, 'too_late', 'This meeting has already started, so it can no longer be moved.');
+  }
+  if (by === 'invitee' && (booking.rescheduleCount ?? 0) >= MAX_SELF_SERVICE_MOVES) {
+    throw new HttpError(
+      409,
+      'move_limit',
+      actor === 'host'
+        ? `This meeting has been moved ${MAX_SELF_SERVICE_MOVES} times already, so it cannot be moved again from this page. You can cancel it and ask the invitee to book a new time.`
+        : `This meeting has been moved ${MAX_SELF_SERVICE_MOVES} times already, so it cannot be moved again from this page. Please get in touch with your host to change it.`,
+    );
   }
   if (!isIsoInstant(p.startIso)) throw new HttpError(422, 'invalid', 'Please pick a new time.', { start: 'Please pick a time.' });
   const startMs = Date.parse(p.startIso);
@@ -1211,11 +1659,12 @@ export async function rescheduleBooking(
   if (plan.hosts.length === 0) throw slotTaken('outside_hours');
 
   const pad = Math.max(DAY_MS, bufferPadMs(eventType));
-  const external = await loadExternalBusy(ctx, plan.eventType.kind, plan.hosts, { start: startMs - pad, end: endMs + pad }, true, opts?.calendarReadBudgetMs);
+  const external = await loadExternalBusy(ctx, plan.eventType.kind, plan.hosts, { start: startMs - pad, end: endMs + pad }, true, opts?.calendarReadBudgetMs ?? BOOKING_READ_BUDGET_MS);
   if (external.failed.length > 0) {
     await quietly(ctx, 'the calendar alert', bookingId, () => alertCalendarTrouble(ctx, external.failed, { eventTitle: eventType.title }));
   }
-  if (external.blocked) throw calendarUnavailable();
+  if (external.timedOut) await quietly(ctx, 'the slow calendar note', bookingId, () => reportSlowCalendars(ctx, external.slow ?? [], { eventTitle: eventType.title, bookingId }));
+  if (external.blocked) throw calendarUnavailable('move');
 
   const query: SlotQuery = {
     eventType: plan.eventType,
@@ -1232,12 +1681,28 @@ export async function rescheduleBooking(
   if (!first.ok) {
     // As in createBooking: the list this time came from is out of date.
     if (first.reason === 'busy') await forgetHostBusy(ctx, plan.hosts.map((h) => h.id));
+    if (unknownBecauseUnread(external, first.reason)) throw calendarUnavailable('move');
     throw slotTaken(first.reason);
   }
 
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(endMs).toISOString();
   const seen = query.index.find((e) => e.id === booking.id) ?? null;
+  // The record was read before the index. When they disagree, another move of this booking is in flight
+  // (or waits for reconcileBookings to finish it): step aside now, before this request changes anything.
+  // Two requests that both read before either swapped are kept apart by the check inside the swap.
+  if (seen && seen.status === 'confirmed' && (seen.start !== booking.start || seen.end !== booking.end)) throw changedElsewhere();
+
+  if (by === 'invitee') {
+    // Counted here, once the new time has been found free: a visitor who picked a time that turned out to be
+    // taken does not lose a move. Every move sends emails (and changes the Google event for every guest).
+    try {
+      await rateLimit(ctx, 'move-booking', booking.id, MOVES_PER_BOOKING_PER_HOUR, HOUR_SEC);
+    } catch (err) {
+      if (!(err instanceof HttpError) || err.status !== 429) throw err;
+      throw new HttpError(429, 'move_limit', 'This meeting has been moved a few times in the last hour. Please wait an hour before moving it again.', undefined, err.headers);
+    }
+  }
   let assigned: string[] = [];
 
   // The index is the commit point. It only moves an entry that is still where this request found it,
@@ -1265,14 +1730,19 @@ export async function rescheduleBooking(
   if (!moved.ok) {
     if (moved.reason === 'contention') throw new HttpError(503, 'busy', 'The server is busy right now. Please try again in a moment.');
     if (moved.reason === 'cancelled') throw new HttpError(410, 'cancelled', 'This booking was cancelled, so it cannot be moved. Please book a new time.');
-    if (moved.reason === 'changed') throw new HttpError(409, 'changed', 'This booking was just changed somewhere else. Reload the page to see where it stands.');
+    if (moved.reason === 'changed') throw changedElsewhere();
     throw slotTaken(moved.reason as SlotRejection);
   }
 
   const at = nowIso(ctx);
-  const timezone = typeof p.timezone === 'string' && isZone(p.timezone.trim()) ? p.timezone.trim() : null;
-  const movedFrom = `Moved from ${formatInZone(Date.parse(booking.start), s.ownerTimezone, 'full')} by the ${by === 'host' ? 'host' : 'invitee'}`;
+  // Only the invitee's own device says where the invitee is. A host moving the meeting is somewhere else.
+  const timezone = actor === 'invitee' && typeof p.timezone === 'string' && isZone(p.timezone.trim()) ? p.timezone.trim() : null;
+  const who = by === 'host' ? 'by the host' : actor === 'host' ? 'by a host, from the booking page' : 'by the invitee';
+  const movedFrom = `Moved from ${formatInZone(Date.parse(booking.start), s.ownerTimezone, 'full')} ${who}`;
+  // A round robin booking whose host has left goes to a colleague: for them it is a new booking.
+  const marker = newFollowUp(ctx, 'rescheduled', actor, joinedHosts(booking.hostIds, assigned));
   let applied = false;
+  let twin = false;
   let saved: Booking | null = null;
   try {
     saved = await updateBooking(ctx, bookingId, (b) => {
@@ -1281,6 +1751,10 @@ export async function rescheduleBooking(
         return b;
       }
       applied = true;
+      // A second request that asked for the very same move at the same moment, and was let through by the
+      // index because the list it wanted was already in place: the move is done, it is not counted twice.
+      twin = b.start === startIso && b.end === endIso && b.rescheduledFromStart === booking.start;
+      if (twin) return b;
       return {
         ...b,
         start: startIso,
@@ -1290,6 +1764,7 @@ export async function rescheduleBooking(
         rescheduledFromStart: b.start,
         rescheduleCount: (b.rescheduleCount ?? 0) + 1,
         attendance: {},
+        followUp: marker,
         timeline: [...(b.timeline ?? []), { at, type: 'rescheduled', detail: movedFrom }],
       };
     });
@@ -1307,12 +1782,16 @@ export async function rescheduleBooking(
     );
     throw new HttpError(410, 'cancelled', 'This booking was cancelled, so it cannot be moved. Please book a new time.');
   }
+  // The request that made the move does the follow-up work (or reconcileBookings does).
+  if (twin) return saved;
 
-  const calendar = await calendarStep(ctx, bookingId, 'push', calendarBudget(ctx, nowMs, opts));
-  const current = (await getBooking(ctx, bookingId).catch(() => null)) ?? saved;
-  await quietly(ctx, 'rescheduling the messages', bookingId, () => scheduleBookingJobs(ctx, current, eventType, 'rescheduled'));
-  runImmediateJobs(ctx, bookingId, calendar.pending);
-  return (await getBooking(ctx, bookingId).catch(() => null)) ?? current;
+  const followed = await followUpBooking(ctx, bookingId, marker, eventType, { calendarMode: 'push', calendarBudgetMs: calendarBudget(ctx, nowMs, opts), fallback: saved, note: true });
+  runImmediateJobs(ctx, bookingId, followed.pending);
+  return (await getBooking(ctx, bookingId).catch(() => null)) ?? followed.booking;
+}
+
+function changedElsewhere(): HttpError {
+  return new HttpError(409, 'changed', 'This booking was just changed somewhere else. Please wait a few minutes, then reload the page to see where it stands.');
 }
 
 // ───────────────────────── attendance ─────────────────────────
@@ -1391,7 +1870,39 @@ function whereLine(location: BookingLocation): string {
   return value && value !== label ? `${label}: ${value}` : label;
 }
 
-function calendarDescription(ctx: Ctx, booking: Booking): string {
+/** The booking in the dashboard. Only the signed-in owner can open it; from the calendar it is one click to the answers. */
+function dashboardLink(ctx: Ctx, bookingId: string): string {
+  return `${ctx.env.publicBaseUrl.replace(/\/+$/, '')}/admin/bookings?b=${encodeURIComponent(bookingId)}`;
+}
+
+/**
+ * Where, in words the owner chose: the join link, the owner's address or number, or only the kind of place.
+ * A host calling the invitee carries the invitee's number, and a place the invitee named is their own text.
+ */
+function neutralWhere(location: BookingLocation): string {
+  if (location.joinUrl) return location.joinUrl;
+  if (location.type === 'phone_host_calls' || location.type === 'ask_invitee') return (location.label ?? '').trim();
+  return whereLine(location);
+}
+
+/**
+ * The event's description. Google emails it to every attendee, from the organiser's own account.
+ *
+ * With guests, those are addresses the visitor chose, so the description holds facts nobody but the owner
+ * wrote (the meeting, the hosts, where) and the dashboard link: no answers, no phone number, no manage link.
+ * Without guests it says who booked, the phone number, the answers and the manage link, for the hosts and the
+ * invitee, who are the only people Google writes to.
+ */
+function calendarDescription(ctx: Ctx, booking: Booking, assigned: Host[]): string {
+  const dashboard = `Booking details in the dashboard: ${dashboardLink(ctx, booking.id)}`;
+  if (booking.guests.length > 0) {
+    const hosts = joinNames(assigned.map((h) => h.name.trim()).filter(Boolean));
+    const lines = [escapeForCalendar(hosts ? `${booking.eventTitle} with ${hosts}` : booking.eventTitle)];
+    const where = booking.location.type === 'google_meet' && !booking.location.joinUrl ? '' : neutralWhere(booking.location);
+    if (where) lines.push(`Where: ${escapeForCalendar(where)}`);
+    lines.push('', dashboard);
+    return lines.join('\n');
+  }
   const lines = [`Booked by ${escapeForCalendar(booking.invitee.name)} (${escapeForCalendar(booking.invitee.email)})`];
   if (booking.invitee.phone) lines.push(`Phone: ${escapeForCalendar(booking.invitee.phone)}`);
   if (booking.guests.length > 0) lines.push(`Guests: ${escapeForCalendar(booking.guests.join(', '))}`);
@@ -1405,11 +1916,13 @@ function calendarDescription(ctx: Ctx, booking: Booking): string {
     }
   }
   const base = ctx.env.publicBaseUrl.replace(/\/+$/, '');
-  lines.push('', `Reschedule or cancel: ${base}/booking/${encodeURIComponent(booking.id)}?t=${manageToken(ctx, booking.id)}`);
+  lines.push('', `Reschedule or cancel: ${base}/booking/${encodeURIComponent(booking.id)}?t=${manageToken(ctx, booking.id)}`, dashboard);
   return lines.join('\n');
 }
 
 function calendarEventInput(ctx: Ctx, booking: Booking, eventType: EventType | null, organizer: Host, assigned: Host[]): CalendarEventInput {
+  // With guests Google writes to addresses the visitor chose: nothing they typed goes into what it sends (see calendarDescription).
+  const withGuests = booking.guests.length > 0;
   const attendees: CalendarEventInput['attendees'] = [];
   for (const host of assigned) {
     if (host.id === organizer.id) continue;
@@ -1418,13 +1931,13 @@ function calendarEventInput(ctx: Ctx, booking: Booking, eventType: EventType | n
   }
   // The invitee and guests are only put on the event (and emailed by Google) when the event type says so.
   if (eventType?.googleInvite !== false) {
-    attendees.push({ email: booking.invitee.email, name: booking.invitee.name, accepted: true });
+    attendees.push(withGuests ? { email: booking.invitee.email, accepted: true } : { email: booking.invitee.email, name: booking.invitee.name, accepted: true });
     for (const guest of booking.guests) attendees.push({ email: guest });
   }
-  const people = joinNames([booking.invitee.name, ...assigned.map((h) => h.name)]);
+  const people = joinNames(withGuests ? assigned.map((h) => h.name) : [booking.invitee.name, ...assigned.map((h) => h.name)]);
   const input: CalendarEventInput = {
     summary: people ? `${booking.eventTitle}: ${people}` : booking.eventTitle,
-    description: calendarDescription(ctx, booking),
+    description: calendarDescription(ctx, booking, assigned),
     startIso: booking.start,
     endIso: booking.end,
     timezone: isValidZone(organizer.timezone) ? organizer.timezone : 'UTC',
@@ -1433,7 +1946,7 @@ function calendarEventInput(ctx: Ctx, booking: Booking, eventType: EventType | n
     bookingId: booking.id,
     notifyAttendees: true,
   };
-  if (booking.location.type !== 'google_meet') input.location = whereLine(booking.location);
+  if (booking.location.type !== 'google_meet') input.location = withGuests ? neutralWhere(booking.location) : whereLine(booking.location);
   return input;
 }
 
@@ -1479,15 +1992,49 @@ function movedOn(saved: Booking | null, synced: Booking): boolean {
   return !!saved && (saved.status !== synced.status || saved.start !== synced.start || saved.end !== synced.end);
 }
 
+/**
+ * The event of a booking sits on the calendar of a host who no longer has the meeting (a round robin booking
+ * whose host has left went to a colleague when it was moved). It comes off that calendar, with notice to the
+ * attendees, and the booking forgets it, so the caller writes it to a host who has the meeting now. A calendar
+ * that cannot be reached any more is noted on the timeline. Returns a failure only when trying again can help.
+ */
+async function leaveCalendarOf(ctx: Ctx, booking: Booking, g: NonNullable<Booking['google']>, holder: Host | null, at: string): Promise<SyncOutcome | null> {
+  const name = holder?.name.trim() || 'a host';
+  let entry: { at: string; type: string; detail: string } = {
+    at,
+    type: 'calendar_event_left',
+    detail: holder?.google ? `The event could not be taken off the calendar of ${name}, which needs to be reconnected.` : 'The event could not be taken off the calendar of a host who is no longer connected.',
+  };
+  if (holder?.google?.status === 'ok') {
+    try {
+      await googleDeleteEvent(ctx, holder, g.calendarId || holder.google.writeCalendarId || 'primary', g.eventId || calendarEventIdFor(booking.id), true);
+      entry = { at, type: 'calendar_event_removed', detail: `Taken off the Google Calendar of ${name}, who no longer hosts this meeting` };
+    } catch (err) {
+      // Waiting for a reconnect would keep the meeting off the new host's calendar for good: carry on without it.
+      if (!(err instanceof GoogleAuthError)) return failSync(ctx, booking.id, holder, err);
+    }
+  }
+  await updateBooking(ctx, booking.id, (b) => (b.google?.hostId === g.hostId ? { ...b, google: null, timeline: [...(b.timeline ?? []), entry] } : b));
+  return null;
+}
+
 async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<SyncOutcome & { again?: boolean }> {
   const booking = await getBooking(ctx, bookingId);
   if (!booking) return { status: 'skipped' };
   const site = await getSite(ctx);
   const [hosts, eventType] = await Promise.all([listHosts(ctx), getEventType(ctx, booking.eventTypeId)]);
   const byId = hostsById(hosts);
-  const g = booking.google ?? null;
-  const known = g ? (byId.get(g.hostId) ?? null) : null;
+  let g = booking.google ?? null;
+  let known = g ? (byId.get(g.hostId) ?? null) : null;
   const at = nowIso(ctx);
+
+  // ── a confirmed booking whose event is with a host who no longer has it: off that calendar, onto the right one ──
+  if (booking.status === 'confirmed' && g && !booking.hostIds.includes(g.hostId)) {
+    const stuck = await leaveCalendarOf(ctx, booking, g, known, at);
+    if (stuck) return stuck;
+    g = null;
+    known = null;
+  }
 
   // ── a cancelled booking: its event has to go ──
   if (booking.status === 'cancelled') {
@@ -1522,22 +2069,48 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
       return { status: 'skipped' };
     }
     if (known.google.status !== 'ok') return failSync(ctx, bookingId, known, new GoogleAuthError(CALENDAR_RECONNECT));
+    const linkMissing = booking.location.type === 'google_meet' && !booking.location.joinUrl;
+    // Only the Meet link is outstanding: read it and change nothing, since every change emails each attendee.
+    const onlyTheLink = mode === 'reconcile' && g.error === MEET_PENDING;
     let gone = false;
-    try {
-      await googleUpdateEvent(ctx, known, g.calendarId, g.eventId, {
-        startIso: booking.start,
-        endIso: booking.end,
-        timezone: isValidZone(known.timezone) ? known.timezone : 'UTC',
-        notifyAttendees: true,
-      });
-    } catch (err) {
-      if (err instanceof GoogleApiError && (err.status === 404 || err.status === 410)) gone = true;
-      else return failSync(ctx, bookingId, known, err);
+    if (!onlyTheLink) {
+      try {
+        await googleUpdateEvent(ctx, known, g.calendarId, g.eventId, {
+          startIso: booking.start,
+          endIso: booking.end,
+          timezone: isValidZone(known.timezone) ? known.timezone : 'UTC',
+          notifyAttendees: true,
+        });
+      } catch (err) {
+        if (err instanceof GoogleApiError && (err.status === 404 || err.status === 410)) gone = true;
+        else return failSync(ctx, bookingId, known, err);
+      }
+    }
+    let meetUrl: string | undefined;
+    if (!gone && linkMissing) {
+      try {
+        meetUrl = (await googleGetEventLinks(ctx, known, g.calendarId, g.eventId)).meetUrl;
+      } catch (err) {
+        if (err instanceof GoogleApiError && (err.status === 404 || err.status === 410)) gone = true;
+        else return failSync(ctx, bookingId, known, err);
+      }
     }
     if (!gone) {
-      const saved = await updateBooking(ctx, bookingId, (b) =>
-        b.google ? { ...b, google: { ...withoutError(b.google), syncedAt: at }, timeline: [...(b.timeline ?? []), { at, type: 'calendar_updated' }] } : b,
-      );
+      const stillMissing = linkMissing && !meetUrl;
+      const saved = await updateBooking(ctx, bookingId, (b) => {
+        if (!b.google) return b;
+        const timeline = [...(b.timeline ?? [])];
+        if (!onlyTheLink) timeline.push({ at, type: 'calendar_updated' });
+        if (meetUrl) timeline.push({ at, type: 'meet_link_added', detail: 'Google finished creating the Meet link.' });
+        return {
+          ...b,
+          google: { ...withoutError(b.google), syncedAt: at, ...(meetUrl ? { meetUrl } : {}), ...(stillMissing ? { error: MEET_PENDING } : {}) },
+          location: b.location.type === 'google_meet' && meetUrl ? { ...b.location, joinUrl: meetUrl } : b.location,
+          timeline,
+        };
+      });
+      // Still no link: the retry job asks again (and tells the owner when it gives up, see gcalSyncJob).
+      if (stillMissing) return { status: 'failed', error: MEET_PENDING, retry: true, again: movedOn(saved, booking) };
       return { status: 'synced', again: movedOn(saved, booking) };
     }
     // Someone deleted the event in Google. Creating it again below brings it back under the same id.
@@ -1576,17 +2149,24 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
 
   const organizerId = organizer.id;
   const organizerName = organizer.name;
+  // Google creates Meet links asynchronously. One it has not finished yet is read again by the retry job.
+  const linkPending = input.createMeet && !created.meetUrl;
   const saved = await updateBooking(ctx, bookingId, (b) => {
     const google: NonNullable<Booking['google']> = { hostId: organizerId, calendarId: created.calendarId, eventId: created.eventId, syncedAt: at };
     if (created.htmlLink) google.htmlLink = created.htmlLink;
     if (created.meetUrl) google.meetUrl = created.meetUrl;
+    if (linkPending) google.error = MEET_PENDING;
+    const timeline = [...(b.timeline ?? []), { at, type: 'calendar_synced', detail: `Added to the Google Calendar of ${organizerName}` }];
+    if (linkPending && b.google?.error !== MEET_PENDING) timeline.push({ at, type: 'meet_link_pending', detail: MEET_PENDING });
     return {
       ...b,
       google,
       location: b.location.type === 'google_meet' && created.meetUrl ? { ...b.location, joinUrl: created.meetUrl } : b.location,
-      timeline: [...(b.timeline ?? []), { at, type: 'calendar_synced', detail: `Added to the Google Calendar of ${organizerName}` }],
+      timeline,
     };
   });
+  // The event is there, so this counts as synced; the link alone is fetched by a job of its own.
+  if (linkPending) await quietly(ctx, 'queueing the Meet link check', bookingId, () => queueCalendarRetry(ctx, bookingId, RETRY_AFTER_FAILURE_MS));
   return { status: 'synced', again: movedOn(saved, booking) };
 }
 
@@ -1672,12 +2252,49 @@ export async function syncBookingToCalendar(ctx: Ctx, bookingId: string): Promis
   await syncCalendar(ctx, bookingId, 'reconcile');
 }
 
-async function gcalSyncJob(ctx: Ctx, job: { bookingId: string }): Promise<SendResult> {
+/**
+ * Google never finished the Meet link of a booking: the owner is told, once per booking, so the invitee is
+ * not left without a way in. The checks go on (reconcileBookings) and the link is added once Google has it.
+ */
+async function alertMeetLinkMissing(ctx: Ctx, bookingId: string): Promise<void> {
+  const booking = await getBooking(ctx, bookingId);
+  if (!booking || booking.status !== 'confirmed' || booking.location.joinUrl) return;
+  const once = `alert-meet-${bookingId}`;
+  if (!(await claim(ctx, once))) return;
+  const site = await getSite(ctx);
+  const owner = ownerOf(site, await listHosts(ctx));
+  const when = formatInZone(Date.parse(booking.start), owner && isValidZone(owner.timezone) ? owner.timezone : 'UTC', 'full');
+  const body = [
+    'Hi {{host_first_name}},',
+    literal(`Google did not finish creating the Meet link for "${booking.eventTitle}" with ${booking.invitee.name} on ${when}. Until it does, the booking page, the emails and the reminders have no link to give.`),
+    'Open the event in Google Calendar and add a Meet link, or send the invitee a link yourself. We keep checking, and the link is added to the booking as soon as Google has one.',
+  ].join('\n\n');
+  try {
+    await enqueueJob(ctx, {
+      type: 'message',
+      kind: 'host_alert',
+      bookingId: '',
+      channel: 'email',
+      audience: 'host',
+      subject: literal(`No Meet link yet: ${booking.eventTitle} with ${booking.invitee.name}`),
+      body,
+      dueAt: nowIso(ctx),
+    });
+  } catch (err) {
+    await releaseClaim(ctx, once).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function gcalSyncJob(ctx: Ctx, job: { bookingId: string; attempt?: number }): Promise<SendResult> {
   const outcome = await syncCalendar(ctx, job.bookingId, 'reconcile');
   if (outcome.status === 'synced' || outcome.status === 'unchanged') return { ok: true, provider: 'google' };
   if (outcome.status === 'skipped') return { ok: false, provider: 'google', skipped: 'nothing_to_sync' };
   // Waiting for a person to reconnect: the periodic check queues a new attempt, so this one can go.
   if (outcome.retry === false) return { ok: false, provider: 'google', skipped: 'needs_reconnect' };
+  if (outcome.error === MEET_PENDING && (job.attempt ?? 0) + 1 >= GCAL_JOB_TRIES) {
+    await quietly(ctx, 'the missing Meet link alert', job.bookingId, () => alertMeetLinkMissing(ctx, job.bookingId));
+  }
   return { ok: false, provider: 'google', error: outcome.error ?? 'Google Calendar could not be updated.' };
 }
 
@@ -1703,23 +2320,11 @@ export interface ReconcileResult {
   moved: number;
   /** calendar repairs queued again */
   requeued: number;
+  /** follow-up work (calendar, reminders, notices) finished for a change whose request was cut off; only present when there was some */
+  finished?: number;
 }
 
-/**
- * Heals what an interrupted request can leave behind (see the top of this file). It only ever acts in
- * the safe direction, and it only removes or moves something it has seen in the same odd state on two
- * runs, so a request that is still in flight is never disturbed.
- */
-export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Promise<ReconcileResult> {
-  registerBookingJobHandlers();
-  const result: ReconcileResult = { checked: 0, removed: 0, freed: 0, moved: 0, requeued: 0 };
-  const nowMs = ctx.now().getTime();
-  const limit = Math.max(1, opts?.limit ?? 300);
-  const entries = (await getBookingIndex(ctx))
-    .filter((e) => e.status === 'confirmed' && Date.parse(e.end) > nowMs)
-    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
-    .slice(0, limit);
-
+async function readRecords(ctx: Ctx, entries: BookingIndexEntry[]): Promise<(Booking | null)[]> {
   const records = new Array<Booking | null>(entries.length);
   let cursor = 0;
   const reader = async (): Promise<void> => {
@@ -1729,6 +2334,37 @@ export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Pr
     }
   };
   await Promise.all(Array.from({ length: Math.min(RECONCILE_READS, entries.length) }, reader));
+  return records;
+}
+
+/** Queues the calendar work again for a booking that still carries a problem, at most every two hours. */
+async function requeueCalendarRepair(ctx: Ctx, record: Booking, nowMs: number): Promise<boolean> {
+  if (!record.google?.error || (await cacheGet(ctx, `gcal-requeue-${record.id}`))) return false;
+  await cacheSet(ctx, `gcal-requeue-${record.id}`, { at: nowMs }, REQUEUE_TTL_SEC);
+  await queueCalendarRetry(ctx, record.id, 0);
+  return true;
+}
+
+/**
+ * Heals what an interrupted request can leave behind (see the top of this file). It only ever acts in
+ * the safe direction, and it only removes or moves something it has seen in the same odd state on two
+ * runs, so a request that is still in flight is never disturbed. Follow-up work a request left behind
+ * (its marker is on the record) is finished once the marker is ten minutes old.
+ *
+ * Cancelled meetings that are still ahead get their own, smaller pass: their calendar event has to go,
+ * and a reconnect-needed or failing Google may have stopped that the first time.
+ */
+export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Promise<ReconcileResult> {
+  registerBookingJobHandlers();
+  const result: ReconcileResult = { checked: 0, removed: 0, freed: 0, moved: 0, requeued: 0 };
+  const nowMs = ctx.now().getTime();
+  const limit = Math.max(1, opts?.limit ?? 300);
+  const index = await getBookingIndex(ctx);
+  const ahead = (status: BookingIndexEntry['status']) =>
+    index.filter((e) => e.status === status && Date.parse(e.end) > nowMs).sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const entries = ahead('confirmed').slice(0, limit);
+  const records = await readRecords(ctx, entries);
+  let finished = 0;
 
   const before = (await cacheGet<Record<string, string>>(ctx, SUSPECTS_CACHE)) ?? {};
   const suspects: Record<string, string> = {};
@@ -1754,6 +2390,14 @@ export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Pr
     }
 
     if (record.status === 'cancelled') {
+      if (record.followUp?.kind === 'cancelled' && followUpIsStale(record.followUp, nowMs)) {
+        // The cancellation was cut off before its follow-up: give the time back and do the rest of it too.
+        if (await finishFollowUp(ctx, record)) {
+          finished++;
+          result.freed++;
+        }
+        continue;
+      }
       const done = await mutateBookingIndex(ctx, (list) => list.map((e) => (e.id === entry.id ? { ...e, status: 'cancelled' as const } : e)));
       if (done.ok) result.freed++;
       continue;
@@ -1771,14 +2415,28 @@ export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Pr
       continue;
     }
 
-    if (record.google?.error && !(await cacheGet(ctx, `gcal-requeue-${record.id}`))) {
-      await cacheSet(ctx, `gcal-requeue-${record.id}`, { at: nowMs }, REQUEUE_TTL_SEC);
-      await queueCalendarRetry(ctx, record.id, 0);
-      result.requeued++;
+    if (followUpIsStale(record.followUp, nowMs)) {
+      if (await finishFollowUp(ctx, record)) finished++;
+      continue;
     }
+
+    if (await requeueCalendarRepair(ctx, record, nowMs)) result.requeued++;
+  }
+
+  // Cancelled meetings still ahead: finish what a cut-off cancellation left, and keep removing the event.
+  const cancelled = ahead('cancelled').slice(0, RECONCILE_CANCELLED_LIMIT);
+  const cancelledRecords = await readRecords(ctx, cancelled);
+  for (const record of cancelledRecords) {
+    if (!record || record.status !== 'cancelled') continue;
+    if (record.followUp?.kind === 'cancelled' && followUpIsStale(record.followUp, nowMs)) {
+      if (await finishFollowUp(ctx, record)) finished++;
+      continue;
+    }
+    if (await requeueCalendarRepair(ctx, record, nowMs)) result.requeued++;
   }
 
   await cacheSet(ctx, SUSPECTS_CACHE, suspects, SUSPECTS_TTL_SEC);
+  if (finished > 0) result.finished = finished;
   return result;
 }
 
@@ -1786,6 +2444,9 @@ async function completeInterruptedMove(ctx: Ctx, entry: BookingIndexEntry): Prom
   const still = (await getBookingIndex(ctx)).find((e) => e.id === entry.id);
   if (!still || still.status !== 'confirmed' || still.start !== entry.start || still.end !== entry.end) return false;
   const at = nowIso(ctx);
+  // Who made the move is not known any more, so everybody is told the usual way.
+  const base = newFollowUp(ctx, 'rescheduled');
+  let marker = base;
   let applied = false;
   const saved = await updateBooking(ctx, entry.id, (b) => {
     if (b.status !== 'confirmed' || (b.start === entry.start && b.end === entry.end)) {
@@ -1793,6 +2454,8 @@ async function completeInterruptedMove(ctx: Ctx, entry: BookingIndexEntry): Prom
       return b;
     }
     applied = true;
+    const joined = joinedHosts(b.hostIds, entry.hostIds);
+    marker = joined.length ? { ...base, newHostIds: joined } : base;
     return {
       ...b,
       start: entry.start,
@@ -1801,18 +2464,41 @@ async function completeInterruptedMove(ctx: Ctx, entry: BookingIndexEntry): Prom
       rescheduledFromStart: b.start,
       rescheduleCount: (b.rescheduleCount ?? 0) + 1,
       attendance: {},
+      followUp: marker,
       timeline: [...(b.timeline ?? []), { at, type: 'rescheduled', detail: `Moved from ${b.start} (finished after an interruption)` }],
     };
   });
   if (!saved || !applied) return false;
   ctx.log('warn', 'booking: completed a move that was interrupted', { bookingId: entry.id, start: entry.start });
-  await calendarStep(ctx, entry.id, 'push', CALENDAR_BUDGET_MS);
   const eventType = await getEventType(ctx, saved.eventTypeId);
-  if (eventType) {
-    const current = (await getBooking(ctx, entry.id)) ?? saved;
-    await quietly(ctx, 'rescheduling the messages', entry.id, () => scheduleBookingJobs(ctx, current, eventType, 'rescheduled'));
-  }
+  const followed = await followUpBooking(ctx, entry.id, marker, eventType, { calendarMode: 'push', calendarBudgetMs: CALENDAR_BUDGET_MS, fallback: saved, note: true });
+  runImmediateJobs(ctx, entry.id, followed.pending);
   return true;
+}
+
+/** Finishes the work a request left behind on a booking that still carries a follow-up marker. */
+async function finishFollowUp(ctx: Ctx, booking: Booking): Promise<boolean> {
+  const marker = booking.followUp;
+  if (!marker) return false;
+  ctx.log('warn', 'booking: finishing the work after a change that was cut off', { bookingId: booking.id, kind: marker.kind, since: marker.at });
+  if (marker.kind === 'cancelled') {
+    if (booking.status !== 'cancelled') return false;
+    // 'push': the event is removed again whatever the record says (Google answers "already gone" quietly).
+    const done = await followUpCancellation(ctx, booking, marker, { calendarMode: 'push', calendarBudgetMs: CALENDAR_BUDGET_MS });
+    runImmediateJobs(ctx, booking.id);
+    return done;
+  }
+  if (booking.status !== 'confirmed') return false;
+  const eventType = await getEventType(ctx, booking.eventTypeId);
+  // A new booking may still need its event; a move has to be told to Google again (the first try may never have run).
+  const followed = await followUpBooking(ctx, booking.id, marker, eventType, {
+    calendarMode: marker.kind === 'created' ? 'reconcile' : 'push',
+    calendarBudgetMs: CALENDAR_BUDGET_MS,
+    fallback: booking,
+    note: false,
+  });
+  runImmediateJobs(ctx, booking.id, followed.pending);
+  return followed.done;
 }
 
 // Registered as soon as this module is loaded, wherever that happens. Inside the import cycle

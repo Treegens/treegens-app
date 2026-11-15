@@ -72,7 +72,7 @@ describe('buildBookingIcs', () => {
     expect(lines).toContain('VERSION:2.0');
     expect(lines).toContain('METHOD:REQUEST');
     expect(lines).toContain('UID:bkg_abc123@jimicohen.com');
-    expect(lines).toContain('DTSTAMP:20261116T090507Z');
+    expect(lines).toContain('DTSTAMP:20261116T090000Z'); // when the booking was made, not its last save
     expect(lines).toContain('DTSTART:20261117T203000Z');
     expect(lines).toContain('DTEND:20261117T210000Z');
     expect(lines).toContain('SEQUENCE:0');
@@ -180,6 +180,21 @@ describe('buildBookingIcs', () => {
     expect(lines).toContain('SUMMARY:Intro call: Sam Rivera\\, Jimi Cohen and Alex Mwangi');
   });
 
+  it('keeps DTSTAMP still while only notes change, and moves it with a reschedule or a cancellation', () => {
+    const stamp = (b: Booking) => prop(buildBookingIcs({ booking: b, hosts: [jimi], site, method: 'REQUEST', baseUrl: TEST_BASE_URL }), 'DTSTAMP');
+    const made = booking({ timeline: [{ at: '2026-11-16T09:00:00.000Z', type: 'created' }] });
+    expect(stamp(made)).toBe('20261116T090000Z');
+    // a retry of the same email after a timeline note (which changes updatedAt) carries the same file
+    const noted = { ...made, updatedAt: '2026-11-16T09:12:00.000Z', timeline: [...made.timeline, { at: '2026-11-16T09:12:00.000Z', type: 'confirmation_email_failed' }] };
+    expect(buildBookingIcs({ booking: noted, hosts: [jimi], site, method: 'REQUEST', baseUrl: TEST_BASE_URL })).toBe(
+      buildBookingIcs({ booking: made, hosts: [jimi], site, method: 'REQUEST', baseUrl: TEST_BASE_URL }),
+    );
+    const moved = { ...noted, rescheduleCount: 1, timeline: [...noted.timeline, { at: '2026-11-16T10:30:00.000Z', type: 'rescheduled' }] };
+    expect(stamp(moved)).toBe('20261116T103000Z');
+    const cancelled = { ...moved, status: 'cancelled' as const, timeline: [...moved.timeline, { at: '2026-11-16T11:00:00.000Z', type: 'cancelled' }, { at: '2026-11-16T11:01:00.000Z', type: 'cancelled_email_sent' }] };
+    expect(stamp(cancelled)).toBe('20261116T110000Z');
+  });
+
   it('carries the reschedule count as SEQUENCE', () => {
     const moved = booking({ rescheduleCount: 3 });
     expect(unfold(buildBookingIcs({ booking: moved, hosts: [jimi], site, method: 'REQUEST', baseUrl: TEST_BASE_URL }))).toContain('SEQUENCE:3');
@@ -271,9 +286,18 @@ describe('calendarLinks', () => {
     expect(url.searchParams.get('body')).toContain('Intro call with Jimi Cohen.');
   });
 
+  it('builds the same link for Microsoft 365 work and school calendars', () => {
+    const work = new URL(links.office365);
+    const personal = new URL(links.outlook);
+    expect(work.origin + work.pathname).toBe('https://outlook.office.com/calendar/0/action/compose');
+    expect(work.search).toBe(personal.search);
+    expect(work.searchParams.get('subject')).toBe('Intro call: Sam Rivera and Jimi Cohen');
+  });
+
   it('writes spaces as %20 so no client shows plus signs', () => {
     expect(links.google).not.toContain('+');
     expect(links.outlook).not.toContain('+');
+    expect(links.office365).not.toContain('+');
     expect(links.google).toContain('Intro%20call');
   });
 

@@ -8,7 +8,7 @@ import type { Env, KV } from '../../server/lib/ctx';
 import { enqueueJob } from '../../server/lib/jobs';
 import { cacheSet, claim, getBooking, getBookingIndex, getHost, getSite, listJobs, mutateBookingIndex, saveCall, saveHost, saveSite, updateBooking, updateHost } from '../../server/lib/repo';
 import { memoryKV } from '../../server/lib/store';
-import { makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
 
 // ───────────────────────── fixtures ─────────────────────────
 
@@ -68,6 +68,8 @@ async function setup(opts: { kv?: KV; env?: Partial<Env> } = {}): Promise<TestCt
   const site = await getSite(ctx);
   await saveSite(ctx, { ...site, email: { ...site.email, fromEmail: 'meetings@jimicohen.com' } });
   await updateHost(ctx, OWNER, (h) => ({ ...h, email: 'jimi@example.com' }));
+  // First-run setup is done, so the booking page takes bookings (booking.ts siteIsOpen).
+  await markSetUp(ctx);
   net(ctx);
   return ctx;
 }
@@ -259,16 +261,81 @@ describe('runScheduled: housekeeping', () => {
     const freshWindow = Math.floor(ctx.now().getTime() / 60_000) * 60_000;
     await ctx.kv.setJSON(`rl/slots/abc/${freshWindow}`, { n: 1 });
     await cacheSet(ctx, 'fresh-cache', { v: 1 }, 60);
+    // Expired a moment ago: an expired cache entry is never read again, so it goes at once.
+    await cacheSet(ctx, 'just-expired', { v: 1 }, 0);
 
     const summary = await runScheduled(ctx);
-    expect(housekeeping(summary).pruned).toBe(3);
+    expect(housekeeping(summary).pruned).toBe(4);
     const keys = await ctx.kv.list('');
     expect(keys).not.toContain('claims/old-claim');
     expect(keys).not.toContain('rl/slots/abc/1000');
     expect(keys).not.toContain('cache/old-cache');
+    expect(keys).not.toContain('cache/just-expired');
     expect(keys).toContain('claims/fresh-claim');
     expect(keys).toContain(`rl/slots/abc/${freshWindow}`);
     expect(keys).toContain('cache/fresh-cache');
+  });
+
+  it('repairs the booking index before it prunes, so a pruning backlog cannot hold the repair up', async () => {
+    const inner = memoryKV();
+    let indexAtPruneStart: BookingIndexEntry[] | null = null;
+    const kv: KV = {
+      ...inner,
+      async list(prefix) {
+        // The first listing of a pruned prefix is where pruning starts.
+        if (indexAtPruneStart === null && ['rl/', 'claims/', 'cache/'].includes(prefix)) indexAtPruneStart = (await inner.getJSON<BookingIndexEntry[]>('index/bookings')) ?? [];
+        return inner.list(prefix);
+      },
+    };
+    const ctx = await setup({ kv });
+    const { booking } = await createBooking(ctx, { slug: 'intro', start: '2026-11-18T14:00:00.000Z', durationMin: 15, name: 'Ada Lovelace', email: 'ada@example.com', timezone: 'UTC' });
+    await ctx.settle();
+    // A cancellation whose second write (the index) never happened: the time is still held.
+    await updateBooking(ctx, booking.id, (b) => ({ ...b, status: 'cancelled', cancellation: { at: NOW, by: 'invitee' } }));
+    indexAtPruneStart = null;
+
+    const done = housekeeping(await runScheduled(ctx));
+    expect(done.bookings).toMatchObject({ freed: 1 });
+    // When pruning began, the held time had already been given back.
+    expect(indexAtPruneStart).not.toBeNull();
+    expect(indexAtPruneStart!).toEqual([expect.objectContaining({ id: booking.id, status: 'cancelled' })]);
+  });
+
+  it('leaves the cleanup to a later run when the run is out of time, and still repairs bookings first', async () => {
+    const inner = memoryKV();
+    let slowIndex = false;
+    let ctxRef: TestCtx | null = null;
+    const kv: KV = {
+      ...inner,
+      async getJSON<T>(key: string) {
+        // Slow storage: the run has used 24.5 of its 25 seconds by the time the booking check has read the index.
+        if (slowIndex && key === 'index/bookings') {
+          slowIndex = false;
+          ctxRef?.clock.advance(24_500);
+        }
+        return inner.getJSON<T>(key);
+      },
+    };
+    const ctx = await setup({ kv });
+    ctxRef = ctx;
+    await claim(ctx, 'old-claim');
+    await ctx.kv.setJSON('calls/call_old1', call('call_old1', '2026-08-10T09:00:00.000Z'));
+    ctx.clock.advance(3 * DAY);
+    slowIndex = true;
+
+    const done = housekeeping(await runScheduled(ctx));
+    expect(done.bookings).toMatchObject({ checked: 0 });
+    expect(done.pruned).toEqual({ skipped: 'out_of_time' });
+    expect(done.calls).toEqual({ skipped: 'out_of_time' });
+    expect(await ctx.kv.list('claims/')).toContain('claims/old-claim');
+
+    // The next run with time to spare does it, the daily call check included.
+    expect(slowIndex).toBe(false);
+    ctx.clock.advance(31 * MINUTE);
+    const next = housekeeping(await runScheduled(ctx));
+    expect(next.pruned).toBeGreaterThanOrEqual(1);
+    expect(next.calls).toMatchObject({ removed: 1 });
+    expect(await ctx.kv.list('claims/')).not.toContain('claims/old-claim');
   });
 
   it('deletes call records older than 90 days, once a day', async () => {

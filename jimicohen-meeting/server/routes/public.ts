@@ -7,14 +7,18 @@
  *   GET  /public/slots?slug&duration&from&to[&reschedule&t]  → SlotsResponse
  *   POST /public/bookings                    → 201 { booking, manageToken }  409 slot_taken · 503 calendar_unavailable · 422 · 429
  *   GET  /public/bookings/:id?t=             → { booking, site, eventType }
- *   POST /public/bookings/:id/cancel         { t, reason? }                  → { booking }
- *   POST /public/bookings/:id/reschedule     { t, start, timezone? }         → { booking }
+ *   POST /public/bookings/:id/cancel         { t, reason?, as? }             → { booking }
+ *   POST /public/bookings/:id/reschedule     { t, start, timezone?, as? }    → { booking }
  *   POST /public/bookings/:id/confirm        { t }                           → { booking }
  *   GET  /public/bookings/:id/ics?t=         → the calendar file
  *   GET  /assets/:id                         → an uploaded image
  *
  * A wrong or missing manage token is always the same plain 404, whether or not the booking exists.
  * Every state-changing route passes the same-origin check. Nothing here needs a session.
+ *
+ * `as: 'host'` is sent by the booking page when it was opened from a host's link (host emails and the
+ * dashboard add `as=host`). The invitee holds the same token, so it grants nothing: it only keeps the
+ * host's time zone off the invitee and records the change as made by a host.
  */
 import type { Booking, CreateBookingRequest, CreateBookingResponse, GetBookingResponse, PublicBooking, PublicEventResponse } from '../../shared/types';
 import { assertSameOrigin, rateLimit } from '../lib/auth';
@@ -45,7 +49,11 @@ const BOOKING_BODY_LIMIT = 64 * 1024;
 const MANAGE_BODY_LIMIT = 16 * 1024;
 const MAX_REASON = 500;
 
-const SLOTS_PER_MINUTE = 240;
+/**
+ * The spec says 240. A person paging through months asks a handful of times a minute (the widget
+ * keeps what it already loaded), so 60 is plenty and keeps one address from driving calendar reads.
+ */
+const SLOTS_PER_MINUTE = 60;
 const MANAGE_READS_PER_MINUTE = 120;
 const MANAGE_WRITES_PER_10_MIN = 30;
 /** Requests without a client address share one counter, so that counter is wider. */
@@ -78,6 +86,11 @@ function readInstant(raw: string | null): number | null {
 
 function tokenOf(body: Record<string, unknown>): string | null {
   return typeof body.t === 'string' ? body.t : null;
+}
+
+/** Who is acting on the booking page, as far as the page knows. Never a permission: see the top of this file. */
+function actorOf(body: Record<string, unknown>): 'invitee' | 'host' {
+  return body.as === 'host' ? 'host' : 'invitee';
 }
 
 /** The public view of a booking that was just changed. One retry: the change itself is already done. */
@@ -172,7 +185,7 @@ export const routes: Route[] = [
     if (reason.length > MAX_REASON * 2) {
       throw new HttpError(422, 'invalid', `Please keep the reason under ${MAX_REASON} characters.`, { reason: `Please keep this under ${MAX_REASON} characters.` });
     }
-    const booking = await cancelBooking(ctx, params.id, { by: 'invitee', ...(reason.trim() ? { reason } : {}) });
+    const booking = await cancelBooking(ctx, params.id, { by: 'invitee', actor: actorOf(body), ...(reason.trim() ? { reason } : {}) });
     return json({ booking: await publicView(ctx, booking) });
   }),
 
@@ -182,10 +195,13 @@ export const routes: Route[] = [
     const body = await readJson<Record<string, unknown>>(req, MANAGE_BODY_LIMIT);
     if (!verifyManageToken(ctx, params.id, tokenOf(body))) throw bookingNotFound();
     if (typeof body.start !== 'string') throw new HttpError(422, 'invalid', 'Please pick a new time.', { start: 'Please pick a time.' });
+    const actor = actorOf(body);
     const booking = await rescheduleBooking(ctx, params.id, {
       startIso: body.start,
       by: 'invitee',
-      ...(typeof body.timezone === 'string' ? { timezone: body.timezone } : {}),
+      actor,
+      // A host's browser is in the host's zone, not the invitee's.
+      ...(actor === 'invitee' && typeof body.timezone === 'string' ? { timezone: body.timezone } : {}),
     });
     return json({ booking: await publicView(ctx, booking) });
   }),

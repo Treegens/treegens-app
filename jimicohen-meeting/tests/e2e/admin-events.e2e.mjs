@@ -3,7 +3,7 @@
  * real backend. Every edit is checked twice: in what is stored, and in the page after a reload.
  */
 import { defineSuite } from './lib.mjs';
-import { MONDAY, clearToasts, expectFieldProblem, expectToast, offeredTimes, openBookingPage, openDays, openPage, saveBar, timeRange, wallTime } from './admin-helpers.mjs';
+import { MONDAY, clearToasts, expectFieldProblem, expectToast, offeredTimes, openBookingPage, openDays, openPage, pngFile, saveBar, timeRange, wallTime } from './admin-helpers.mjs';
 
 const CO_HOST = { name: 'Alex Rivera', email: 'alex@example.com' };
 
@@ -67,6 +67,7 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
     const page = await s.newPage({ signedIn: true });
     await page.goto(s.url('/admin'));
     const ids = {};
+    let eventCover = null;
 
     await s.step('create one of each kind through the dashboard', async () => {
       ids.solo = await createThroughUi(s, page, /^Just me/, 'Strategy session');
@@ -107,6 +108,15 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
       await panel.getByRole('button', { name: 'Add another place' }).click();
       await panel.getByRole('combobox', { name: 'Location 3' }).selectOption({ label: 'Video link' });
       await panel.getByRole('textbox', { name: 'Link', exact: true }).last().fill('https://video.example.com/room/jimi');
+      // A cover image of its own, instead of the one from Design.
+      const cover = panel.locator('.x-image').filter({ hasText: 'Cover image' });
+      const answer = page.waitForResponse((r) => r.url().endsWith('/api/admin/assets') && r.request().method() === 'POST');
+      await cover.locator('input[type="file"]').setInputFiles(pngFile('event-cover.png', 600, 200, [40, 160, 90]));
+      const response = await answer;
+      s.expect(response.status(), 'upload status of the cover').toBe(201);
+      eventCover = (await response.json()).id;
+      await cover.locator('img').waitFor();
+      await s.eventually(async () => s.expect(await cover.locator('img').evaluate((img) => img.naturalWidth), 'the cover shown on Basics').toBe(600));
     });
 
     await s.step('hosts: turn it into a together meeting with the co-host', async () => {
@@ -140,6 +150,11 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
     await s.step('questions: phone required, fewer guests, one question of every type', async () => {
       const panel = await openTab(page, 'Questions');
       await panel.getByRole('radiogroup', { name: 'Phone number' }).getByRole('radio', { name: 'Required' }).click();
+      // Guests are off on a new event type (Google invites them from the host's account): the owner turns them on.
+      const guests = panel.getByRole('switch', { name: 'Let people bring guests' });
+      s.expect(await guests.getAttribute('aria-checked'), 'guests on a new event type').toBe('false');
+      await panel.getByText("Guests get a calendar invitation from the host's Google account").waitFor();
+      await guests.click();
       await panel.getByRole('textbox', { name: 'Guests per booking' }).fill('2');
       const add = async (n, label, type, { choices, hint, required } = {}) => {
         await panel.getByRole('button', { name: 'Add a question' }).click();
@@ -209,6 +224,14 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
       await dialog.getByLabel('Before or after').selectOption({ label: 'after it ends' });
       await dialog.getByRole('button', { name: 'Add reminder' }).click();
       await panel.getByText(/^Email the hosts 2 hours after/).waitFor();
+
+      // A text to the hosts can be chosen, and says plainly who it would not reach and where that is fixed.
+      dialog = await addMenu(/^Text message/);
+      await dialog.getByRole('radiogroup', { name: 'Who gets it' }).getByRole('radio', { name: 'The hosts' }).click();
+      await dialog.getByText('You and Alex have no mobile number saved, so this text does not reach you or them. Add yours under Settings', { exact: false }).waitFor();
+      s.expect(await dialog.getByRole('link', { name: 'Open Settings' }).getAttribute('href'), 'where it is fixed').toBe('/meeting/admin/settings#notices');
+      await dialog.getByRole('button', { name: 'Cancel' }).click();
+      await dialog.waitFor({ state: 'hidden' });
 
       await panel.getByRole('switch', { name: 'Email the invitee 1 hour before: on' }).click();
       await panel.getByRole('listitem').filter({ hasText: 'Text the invitee 15 minutes before' }).getByRole('button', { name: 'Remove this reminder' }).click();
@@ -295,6 +318,7 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
       // Wording that was not written stays empty, so the standard text is used.
       s.expect(stored.reminders[1].body ?? '', 'body of the call rule').toBe('');
       s.expect(stored.reminders[5].subject ?? '', 'subject of the host follow-up').toBe('');
+      s.expect(stored.coverAssetId, 'the cover image').toBe(eventCover);
     });
 
     await s.step('reload: every tab shows what was saved', async () => {
@@ -316,6 +340,7 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
       s.expect(await value(panel.getByRole('textbox', { name: 'Address' })), 'address').toBe('12 Garden Lane, Nairobi');
       s.expect(await value(panel.getByRole('combobox', { name: 'Location 3' })), 'location 3').toBe('custom_link');
       s.expect(await value(panel.getByRole('textbox', { name: 'Link', exact: true }).last()), 'video link').toBe('https://video.example.com/room/jimi');
+      s.expect(await panel.locator('.x-image').filter({ hasText: 'Cover image' }).locator('img').getAttribute('src'), 'cover image').toBe(`/meeting/api/assets/${eventCover}`);
 
       panel = await openTab(page, 'Hosts');
       s.expect(await panel.getByRole('radio', { name: /^Together/ }).isChecked(), 'together').toBe(true);
@@ -395,16 +420,23 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
         durations: [30, 45, 50, 60],
         defaultDuration: 45,
         phone: 'required',
-        maxGuests: 2,
+        // Guests are switched on (two at most), but no calendar is connected here, so Google would invite
+        // nobody: the page does not offer guests it cannot tell.
+        allowGuests: false,
+        maxGuests: 0,
+        calendarInvite: false,
         themeOverride: { layout: 'stacked', calendarStyle: 'minimal', slotStyle: 'chips' },
       });
       s.expect(eventType.hosts.map((h) => h.name), 'hosts on the public page').toEqual(['Jimi Cohen', 'Alex Rivera']);
+      s.expect(eventType.coverUrl, 'the cover of this event').toBe(`/meeting/api/assets/${eventCover}`);
       s.expect(eventType.locations.map((l) => l.type), 'places on the public page').toEqual(['google_meet', 'in_person', 'custom_link']);
       s.expect(eventType.questions.map((q) => q.label), 'questions on the public page').toEqual(expected.questions.map((q) => q.label));
       // Two days of notice from Monday 09:00, no Fridays, Mondays only from 13:00, hourly starts, 45 minutes by default.
       const visitor = await s.newPage({ timezoneId: 'UTC' });
       await openBookingPage(s, visitor, 'strategy-session');
       await visitor.getByRole('heading', { name: 'Strategy session', level: 1 }).waitFor();
+      await visitor.locator('.bw__cover img').waitFor();
+      await s.eventually(async () => s.expect(await visitor.locator('.bw__cover img').evaluate((img) => img.naturalWidth), 'the cover on the page').toBe(600));
       const days = await openDays(visitor);
       s.expect(days.slice(0, 4), 'first days on offer').toEqual(['2026-11-18', '2026-11-19', '2026-11-23', '2026-11-24']);
       const wednesday = (await offeredTimes(visitor, '2026-11-18')).map((iso) => wallTime(iso, 'UTC'));
@@ -652,6 +684,26 @@ export default defineSuite('admin-events', { mockCreds: true }, async (t) => {
       await saveBar(page).getByText('Working hours, Tuesday: These times overlap.').waitFor();
       s.expect(await saveBar(page).getByRole('button', { name: 'Save hours' }).isDisabled(), 'save is blocked while ranges overlap').toBe(true);
       await week.getByRole('combobox', { name: 'Tuesday, range 3, start' }).selectOption('17:00');
+      await week.getByRole('alert').waitFor({ state: 'detached' });
+
+      // A row stays where it is while it is being changed. The day is put in order once the focus moves on.
+      const pick = async (name, value) => {
+        const select = week.getByRole('combobox', { name });
+        await select.focus();
+        await select.selectOption(value);
+      };
+      const tuesdayStarts = () => Promise.all([1, 2, 3].map((n) => week.getByRole('combobox', { name: `Tuesday, range ${n}, start` }).inputValue()));
+      await pick('Tuesday, range 3, start', '12:00');
+      await pick('Tuesday, range 3, end', '13:00');
+      s.expect(await tuesdayStarts(), 'the edited row did not jump while it was being changed').toEqual(['09:00', '14:00', '12:00']);
+      await page.getByRole('heading', { name: 'Availability', level: 1 }).click();
+      await s.eventually(async () => s.expect(await tuesdayStarts(), 'in order once the focus left the day').toEqual(['09:00', '12:00', '14:00']));
+      // And back to 17:00 to 18:00, for the rest of this test.
+      await pick('Tuesday, range 2, end', '18:00');
+      await pick('Tuesday, range 2, start', '17:00');
+      s.expect(await tuesdayStarts(), 'still where it was while being changed').toEqual(['09:00', '17:00', '14:00']);
+      await page.getByRole('heading', { name: 'Availability', level: 1 }).click();
+      await s.eventually(async () => s.expect(await tuesdayStarts(), 'in order again').toEqual(['09:00', '14:00', '17:00']));
       await week.getByRole('alert').waitFor({ state: 'detached' });
 
       await week.getByRole('button', { name: "Copy Tuesday's hours to other days" }).click();

@@ -8,7 +8,7 @@ import { alertCalendarTrouble, reconcileBookings, registerBookingJobHandlers } f
 import { getHostBusy, syncHostTimezone } from './lib/busy';
 import type { Ctx } from './lib/ctx';
 import { runDueJobs } from './lib/jobs';
-import { KEYS, cacheGet, cacheSet, listHosts, pruneEphemeral } from './lib/repo';
+import { KEYS, PRUNE_BUDGET_MS, PRUNE_LIMIT_PER_PREFIX, cacheGet, cacheSet, listHosts, pruneEphemeral } from './lib/repo';
 import { DAY_MS } from './lib/time';
 
 const HOUSEKEEPING_MARK = 'housekeeping-ran';
@@ -22,6 +22,15 @@ const JOBS_BUDGET_WITH_HOUSEKEEPING_MS = 8_000;
 /** Steps that talk to calendars stop being waited for after this long; they finish in the background. */
 const NETWORK_STEP_MS = 6_000;
 const RECONCILE_STEP_MS = 5_000;
+/**
+ * Netlify ends a scheduled run at 30 seconds. The cleanup steps after the booking check only use what
+ * is left of this much, counted from the start of the run; what they do not get to waits for the next run.
+ */
+const RUN_DEADLINE_MS = 25_000;
+/** How much longer than its own budget a pruning step is waited for (a delete that is slow to answer). */
+const PRUNE_GRACE_MS = 1_500;
+/** Less time than this left: a cleanup step is not started at all. */
+const MIN_CLEANUP_MS = 1_000;
 
 const EPHEMERAL_MAX_AGE_MS = 2 * DAY_MS;
 const CALL_MAX_AGE_MS = 90 * DAY_MS;
@@ -105,15 +114,19 @@ async function probeCalendars(ctx: Ctx, hosts: Host[]): Promise<{ checked: numbe
   return { checked: connected.length, broken: failures.length, alerted };
 }
 
-/** Call records (transcripts included) are kept for 90 days. Checked once a day. */
-async function pruneOldCalls(ctx: Ctx): Promise<{ checked: number; removed: number } | 'not_due'> {
+/** Call records (transcripts included) are kept for 90 days. Checked once a day; stops starting new reads at `untilMs`. */
+async function pruneOldCalls(ctx: Ctx, untilMs: number): Promise<{ checked: number; removed: number } | 'not_due'> {
   if (await cacheGet(ctx, CALLS_MARK)) return 'not_due';
   await cacheSet(ctx, CALLS_MARK, { at: ctx.now().toISOString() }, CALLS_EVERY_SEC);
 
   const cutoff = ctx.now().getTime() - CALL_MAX_AGE_MS;
   const keys = (await ctx.kv.list(KEYS.callPrefix)).slice(0, CALL_SCAN_LIMIT);
+  let checked = 0;
   let removed = 0;
   await eachLimited(keys, READ_CONCURRENCY, async (key) => {
+    // Out of time: the rest is looked at tomorrow.
+    if (ctx.now().getTime() >= untilMs) return;
+    checked++;
     const record = await ctx.kv.getJSON<Partial<CallRecord>>(key);
     if (!record) return;
     // The last change counts: a call that was touched recently is not old. A record without a readable date stays.
@@ -122,11 +135,12 @@ async function pruneOldCalls(ctx: Ctx): Promise<{ checked: number; removed: numb
     await ctx.kv.delete(key);
     removed++;
   });
-  return { checked: keys.length, removed };
+  return { checked, removed };
 }
 
-async function housekeeping(ctx: Ctx, waitMs: { network: number; reconcile: number }): Promise<Record<string, unknown>> {
+async function housekeeping(ctx: Ctx, waitMs: { network: number; reconcile: number }, deadlineMs: number): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
+  const left = (): number => deadlineMs - ctx.now().getTime();
   const loaded = await step(ctx, 'loading the hosts', () => listHosts(ctx));
   const hosts = Array.isArray(loaded) ? loaded : [];
   if (!Array.isArray(loaded)) out.hosts = loaded;
@@ -138,9 +152,21 @@ async function housekeeping(ctx: Ctx, waitMs: { network: number; reconcile: numb
   ]);
   out.timezones = timezones;
   out.calendars = calendars;
-  out.pruned = await step(ctx, 'pruning old claims and rate limit counters', () => pruneEphemeral(ctx, EPHEMERAL_MAX_AGE_MS));
-  out.calls = await step(ctx, 'pruning old call records', () => pruneOldCalls(ctx));
+  // The repair comes before the cleanup: it gives back times held by interrupted bookings and re-queues
+  // failed calendar writes, and a backlog of old keys must never keep it from running.
   out.bookings = await networkStep(ctx, 'the booking check', waitMs.reconcile, () => reconcileBookings(ctx));
+
+  const pruneBudget = Math.min(PRUNE_BUDGET_MS, left() - PRUNE_GRACE_MS);
+  out.pruned =
+    pruneBudget >= MIN_CLEANUP_MS
+      ? await networkStep(ctx, 'pruning old claims and rate limit counters', pruneBudget + PRUNE_GRACE_MS, () =>
+          pruneEphemeral(ctx, EPHEMERAL_MAX_AGE_MS, PRUNE_LIMIT_PER_PREFIX, pruneBudget),
+        )
+      : { skipped: 'out_of_time' };
+  out.calls =
+    left() >= MIN_CLEANUP_MS
+      ? await networkStep(ctx, 'pruning old call records', left(), () => pruneOldCalls(ctx, deadlineMs - PRUNE_GRACE_MS))
+      : { skipped: 'out_of_time' };
   return out;
 }
 
@@ -156,6 +182,7 @@ export interface ScheduledRunOptions {
 export async function runScheduled(ctx: Ctx, opts?: ScheduledRunOptions): Promise<Record<string, unknown>> {
   // The job runner needs every handler in place, whichever module happened to be loaded first.
   registerBookingJobHandlers();
+  const startedMs = ctx.now().getTime();
   const summary: Record<string, unknown> = { at: ctx.now().toISOString() };
 
   const lastRun = await step(ctx, 'reading the housekeeping marker', () => cacheGet<{ at: string }>(ctx, HOUSEKEEPING_MARK));
@@ -178,6 +205,6 @@ export async function runScheduled(ctx: Ctx, opts?: ScheduledRunOptions): Promis
     return summary;
   }
   const wait = typeof opts?.stepWaitMs === 'number' && opts.stepWaitMs >= 0 ? opts.stepWaitMs : null;
-  summary.housekeeping = await housekeeping(ctx, { network: wait ?? NETWORK_STEP_MS, reconcile: wait ?? RECONCILE_STEP_MS });
+  summary.housekeeping = await housekeeping(ctx, { network: wait ?? NETWORK_STEP_MS, reconcile: wait ?? RECONCILE_STEP_MS }, startedMs + RUN_DEADLINE_MS);
   return summary;
 }

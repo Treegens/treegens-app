@@ -5,7 +5,7 @@
  */
 import { createHash } from 'node:crypto';
 import { defineSuite } from './lib.mjs';
-import { MONDAY, clearToasts, expectFieldProblem, expectToast, offeredTimes, openBookingPage, openPage, wallTime } from './admin-helpers.mjs';
+import { MONDAY, clearToasts, expectFieldProblem, expectToast, offeredTimes, openBookingPage, openPage, pngFile, wallTime } from './admin-helpers.mjs';
 
 const OWNER_GOOGLE = 'jimi@example.com';
 const CO_HOST = { name: 'Alex Rivera', email: 'alex@example.com' };
@@ -32,6 +32,10 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       s.expect(google.result.status, `owner connect result (${google.result.reason ?? 'no reason'})`).toBe('connected');
       await owner.getByRole('heading', { name: 'Team', level: 1 }).waitFor();
       await owner.getByRole('listitem').filter({ hasText: 'Jimi Cohen' }).getByText('Calendar connected').waitFor();
+      // Team says what happened and takes the result off the address, as Integrations does.
+      await expectToast(owner, 'Google is connected');
+      await owner.waitForURL((url) => !url.searchParams.has('google'));
+      s.expect(new URL(owner.url()).pathname + new URL(owner.url()).search, 'address after coming back to Team').toBe('/meeting/admin/team');
       await clearToasts(owner);
     });
 
@@ -120,6 +124,12 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       const result = await google.done();
       s.expect(result.status, `co-host connect result (${result.reason ?? 'no reason'})`).toBe('connected');
       await expectToast(alex, 'Your calendar is connected');
+      // Their hours now follow the calendar's zone (Nairobi), not the device's (New York): said, not done in silence.
+      s.expect(new URL(result.url).searchParams.get('zone'), 'zone reported by the return from Google').toBe('Africa/Nairobi');
+      await expectToast(alex, 'Your time zone is now');
+      const zoneCard = alex.getByRole('region', { name: 'Your time zone' });
+      await zoneCard.getByText(/^This device is in .*New York.*Your hours follow Google Calendar: .*Nairobi/).waitFor();
+      await zoneCard.getByRole('button', { name: 'Follow this device instead' }).waitFor();
       await alex.getByRole('heading', { name: 'You are all set, Alex.', level: 1 }).waitFor();
       const calendar = alex.getByRole('region', { name: 'Your calendar' });
       await calendar.getByText(`Connected as ${CO_HOST.email}`).waitFor();
@@ -353,14 +363,37 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       await expectFieldProblem(s, email, 'Someone with this email is already on the team.', 'problem on a taken email');
       s.expect(await alexHost(), 'co-host after the refused saves').toMatchObject({ name: CO_HOST.name, title: 'Co-founder', email: CO_HOST.email });
 
+      // Texts about their bookings need a mobile number to go to.
+      const mobile = dialog.getByLabel('Mobile number');
+      const texts = dialog.getByRole('switch', { name: 'Text Alex about bookings' });
+      s.expect(await texts.getAttribute('aria-checked'), 'texts to the co-host, out of the box').toBe('false');
+      await dialog.getByText('New, moved and cancelled bookings, and any reminder texts set up for the hosts.').waitFor();
+      await texts.click();
+      await dialog.getByRole('button', { name: 'Save' }).click();
+      await expectFieldProblem(s, mobile, 'Add a mobile number for the texts, or switch them off.', 'problem on the mobile number');
+      await mobile.fill('+1 415 555 2690');
+
       await title.fill('Head of Partnerships');
       await email.fill('alex.rivera@example.com');
+      // A photo for the booking pages, so Alex is not just initials next to the owner's photo.
+      const photo = dialog.locator('.x-image').filter({ hasText: 'Photo' });
+      const uploaded = owner.waitForResponse((r) => r.url().endsWith('/api/admin/assets') && r.request().method() === 'POST');
+      await photo.locator('input[type="file"]').setInputFiles(pngFile('alex.png', 96, 96, [180, 120, 60]));
+      const answer = await uploaded;
+      s.expect(answer.status(), 'upload status of the photo').toBe(201);
+      const photoId = (await answer.json()).id;
+      await photo.locator('img').waitFor();
+      // Nothing is stored until Save.
+      s.expect((await alexHost()).avatarAssetId ?? null, 'photo before saving').toBeNull();
       await dialog.getByRole('button', { name: 'Save' }).click();
       await expectToast(owner, 'Details saved');
       await dialog.waitFor({ state: 'hidden' });
-      await row.getByText('Head of Partnerships · alex.rivera@example.com').waitFor();
+      s.expect(await row.locator('.tm-host__part').allTextContents(), 'the line under the name').toEqual(['Head of Partnerships', 'alex.rivera@example.com']);
       const stored = (await s.kv('hosts')).find((h) => h.id === hostId);
-      s.expect(stored, 'the stored co-host').toMatchObject({ name: CO_HOST.name, title: 'Head of Partnerships', email: 'alex.rivera@example.com' });
+      s.expect(stored, 'the stored co-host').toMatchObject({ name: CO_HOST.name, title: 'Head of Partnerships', email: 'alex.rivera@example.com', phone: '+14155552690', notify: { email: true, sms: true }, avatarAssetId: photoId });
+      s.expect(await row.locator('img').first().getAttribute('src'), 'the photo on the Team page').toBe(`/meeting/api/assets/${photoId}`);
+      const { eventType: jointPage } = await s.apiOk('GET', '/public/event/jimi-and-alex');
+      s.expect(jointPage.hosts.find((h) => h.name === CO_HOST.name)?.avatarUrl, 'the photo on the joint booking page').toBe(`/meeting/api/assets/${photoId}`);
       // Their calendar and their private link are untouched by it.
       s.expect(stored.google.email, 'their Google account').toBe(CO_HOST.email);
       s.expect((await s.visitor().request('GET', `/host/${hostId}`, { query: { t: new URL(inviteUrl).searchParams.get('t') } })).status, 'their private link').toBe(200);
@@ -377,6 +410,8 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       await expectToast(owner, "Alex's calendar was disconnected");
       // Google is gone; the feed they linked themselves is still theirs, and the card says which one is left.
       await row.getByText('Calendar feed linked').waitFor();
+      // A feed can only be read: the card says plainly that meetings no longer reach Alex's calendar.
+      await row.getByText("Work. Busy times are checked, but meetings are not added to Alex's calendar until Google Calendar is connected.").waitFor();
       s.expect(await row.getByText('Calendar connected').count(), '"Calendar connected" after the disconnect').toBe(0);
       const left = (await s.kv('hosts')).find((h) => h.id === hostId);
       s.expect(left.google, 'the stored connection').toBe(null);
@@ -395,6 +430,10 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       await alex.reload();
       await alex.getByRole('region', { name: 'Your calendar' }).getByText('Not connected').waitFor();
       await alex.getByRole('region', { name: 'Another calendar' }).getByText('Work', { exact: true }).waitFor();
+      // Not "You are all set": with only a feed, booked meetings are not added to their calendar, and the page says so.
+      await alex.getByRole('heading', { name: 'Your busy times are checked, Alex.', level: 1 }).waitFor();
+      await alex.getByText(/a calendar feed can only be read, so meetings booked with you are not added to your calendar/).waitFor();
+      await alex.getByRole('region', { name: 'Your calendar' }).getByText(/meetings booked with you are not added to your calendar\. Connect Google Calendar to have them added\./).waitFor();
       const google = await s.connectGoogle(alex, CO_HOST.email, 'Africa/Nairobi');
       await alex.getByRole('button', { name: 'Connect Google Calendar' }).click();
       const result = await google.done();
@@ -409,6 +448,39 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       s.expect(await offered('jimi-and-alex'), 'Tuesday with the calendar back').toEqual(['11:00', '13:30', '14:00']);
       await owner.reload();
       await owner.getByRole('listitem').filter({ hasText: CO_HOST.name }).getByText('Calendar connected').waitFor();
+    });
+
+    await s.step('the co-host picks another Google account, then disconnects it, from their own page', async () => {
+      const calendar = alex.getByRole('region', { name: 'Your calendar' });
+      // By id: the owner has changed Alex's email address by now.
+      const stored = async () => (await s.kv('hosts')).find((h) => h.id === hostId);
+      // The owner typed Alex's work address, so Google was hinted at that one. Alex wants their personal account.
+      const personal = 'alex.personal@example.com';
+      const google = await s.connectGoogle(alex, personal, 'Asia/Dubai');
+      await calendar.getByRole('button', { name: 'Use a different Google account' }).click();
+      const result = await google.done();
+      s.expect(result.status, `switch result (${result.reason ?? 'no reason'})`).toBe('connected');
+      s.expect(result.request, 'what was asked of Google').toMatchObject({ accountChooser: true, loginHint: null });
+      await calendar.getByText(`Connected as ${personal}`).waitFor();
+      s.expect((await stored()).google, 'the connection now').toMatchObject({ email: personal, status: 'ok' });
+      await clearToasts(alex);
+
+      await calendar.getByRole('button', { name: 'Disconnect' }).click();
+      const confirm = alex.getByRole('dialog', { name: 'Disconnect Google Calendar?' });
+      await confirm.getByText(`Your busy times in ${personal} will no longer be checked`, { exact: false }).waitFor();
+      await confirm.getByRole('button', { name: 'Disconnect' }).click();
+      await expectToast(alex, 'Google Calendar is disconnected');
+      await calendar.getByText('Not connected').waitFor();
+      await calendar.getByRole('button', { name: 'Connect Google Calendar' }).waitFor();
+      const after = await stored();
+      s.expect(after.google, 'the stored connection after disconnecting').toBe(null);
+      s.expect(after.icsFeeds.map((f) => f.label), 'their feed is kept').toEqual(['Work']);
+      // A zone they fixed by hand is theirs to keep.
+      s.expect([after.timezone, after.timezoneMode], 'their zone after disconnecting').toEqual(['Asia/Dubai', 'fixed']);
+      // The owner's Team page agrees.
+      await owner.reload();
+      await owner.getByRole('listitem').filter({ hasText: CO_HOST.name }).getByText('Calendar feed linked').waitFor();
+      await clearToasts(alex);
     });
 
     await s.step('removing the co-host is refused while an event type uses them', async () => {
@@ -442,6 +514,79 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       s.expect((await s.visitor().request('GET', `/host/${hostId}`, { query: { t: token } })).status, 'the link of a removed co-host').toBe(404);
       await alex.reload();
       await alex.getByRole('heading', { name: 'This link does not work any more' }).waitFor();
+    });
+  });
+
+  await t.scenario('a joint meeting whose hours never meet: said when it is made, in the editor and on Home, and the public page promises nothing', { reset: true }, async (s) => {
+    await s.setClock(MONDAY);
+    // Jimi in Los Angeles, Alex in Berlin, both on the 9 to 5 every co-host starts with: nine hours apart, never both at work.
+    await s.setupAdmin({ timezone: 'America/Los_Angeles' });
+    await s.apiOk('PUT', '/admin/hosts/host_owner', { body: { email: OWNER_GOOGLE } });
+    const { host, inviteUrl } = await s.apiOk('POST', '/admin/hosts', { body: CO_HOST });
+    const owner = await s.newPage({ signedIn: true, timezoneId: 'America/Los_Angeles', viewport: { width: 1440, height: 900 } });
+    const alex = await s.newPage({ timezoneId: 'Europe/Berlin', viewport: { width: 1280, height: 900 }, ip: '10.99.0.8' });
+    let joint = null;
+
+    await s.step('the co-host opens their link in Berlin, and adds a number for texts about bookings', async () => {
+      await alex.goto(inviteUrl);
+      await alex.getByRole('heading', { name: 'Hi Alex. One step to go.', level: 1 }).waitFor();
+      await s.eventually(async () => s.expect((await s.kv('hosts')).find((h) => h.id === host.id).timezone, 'co-host zone').toBe('Europe/Berlin'));
+      await clearToasts(alex);
+      const details = alex.getByRole('region', { name: 'Your details' });
+      const texts = details.getByRole('switch', { name: 'Text me about bookings' });
+      s.expect(await texts.isDisabled(), 'texts before a number is saved').toBe(true);
+      await details.getByText(/Save your mobile number above first\.$/).waitFor();
+      await details.getByLabel('Mobile number').fill('+49 151 1234 5678');
+      await details.getByRole('button', { name: 'Save details' }).click();
+      await expectToast(alex, 'Saved');
+      await texts.click();
+      await s.eventually(async () => s.expect((await s.kv('hosts')).find((h) => h.id === host.id), 'co-host contact details').toMatchObject({ phone: '+4915112345678', notify: { email: true, sms: true } }));
+      await s.eventually(async () => s.expect(await texts.getAttribute('aria-checked'), 'texts once switched on').toBe('true'));
+      await details.getByText('New, moved and cancelled meetings, and any reminder texts Jimi set up for the hosts, sent to +4915112345678.').waitFor();
+    });
+
+    await s.step('"Create a joint meeting" says straight away that nobody can book it, and why', async () => {
+      await owner.goto(s.url('/admin/team'));
+      await owner.getByRole('heading', { name: 'Team', level: 1 }).waitFor();
+      const row = owner.getByRole('listitem').filter({ hasText: CO_HOST.name });
+      await row.getByRole('button', { name: 'Create a joint meeting' }).click();
+      const toast = await expectToast(owner, 'Joint meeting created, but nobody can book it yet');
+      const said = await toast.textContent();
+      s.expect(said, 'why').toContain('"Meet Jimi and Alex" cannot be booked: there is no time when you and Alex are both working.');
+      s.expect(said, 'the two zones').toContain("Your hours are in Los Angeles time and Alex's hours are in Berlin time.");
+      s.expect(said, 'no long dashes').not.toContain('—');
+      joint = (await s.kv('event-types')).find((e) => e.slug === 'jimi-and-alex');
+      s.expect(joint, 'the joint event type').toMatchObject({ kind: 'collective', hostIds: ['host_owner', host.id] });
+      await clearToasts(owner);
+    });
+
+    await s.step('Home says so too, and links to where it is fixed', async () => {
+      await owner.goto(s.url('/admin'));
+      const warning = owner.locator('.adm-home__warnings .adm-notice').filter({ hasText: '"Meet Jimi and Alex" cannot be booked' });
+      await warning.waitFor();
+      s.expect(await warning.getByRole('link', { name: 'Fix this' }).getAttribute('href'), 'where it is fixed').toBe('/meeting/admin/availability');
+      const { warnings } = await s.apiOk('GET', '/admin/overview');
+      s.expect(warnings.map((w) => w.key), 'warnings on Home').toContain(`shared_hours_${joint.id}`);
+    });
+
+    await s.step('the editor shows it on the Hosts tab, and only for a together meeting', async () => {
+      await owner.goto(s.url(`/admin/event-types/${joint.id}?tab=hosts`));
+      const panel = owner.getByRole('tabpanel');
+      const notice = panel.locator('.adm-notice').filter({ hasText: 'Nobody can book this meeting' });
+      await notice.getByText(/there is no time when you and Alex are both working/).waitFor();
+      await panel.getByRole('radio', { name: /^Round robin/ }).check();
+      await notice.waitFor({ state: 'detached' });
+      await panel.getByRole('radio', { name: /^Together/ }).check();
+      await notice.waitFor();
+      await s.screenshot(owner, 'joint meeting whose hours never meet');
+    });
+
+    await s.step('the public page does not tell visitors to come back for times that will never open', async () => {
+      const visitor = await s.newPage({ timezoneId: 'UTC' });
+      await visitor.goto(s.url('/jimi-and-alex'));
+      await visitor.getByRole('heading', { name: 'No open times right now' }).waitFor();
+      await visitor.getByText('There is no time in the next 60 days when Jimi Cohen and Alex Rivera are both free. If someone sent you this link, let them know.').waitFor();
+      s.expect(await visitor.getByText(/check back soon/).count(), 'a promise of new times').toBe(0);
     });
   });
 });

@@ -58,6 +58,11 @@ export interface DetailsFormProps {
 
 type Errors = Record<string, string>;
 
+/** Whether the form offers a reminder call: the site can place calls and this meeting has one. */
+export function callOffered(site: PublicSite, eventType: PublicEventType): boolean {
+  return site.features.calls && eventType.reminderChannels?.call !== false;
+}
+
 /** Who is booking: contact details, guests, the owner's questions, reminder choices. */
 export function DetailsForm({ site, eventType, location, values, onChange, onSubmit, onBack, submitting, serverErrors, notice, zone, hour12, start, duration, locale, ctaLabel, headingRef }: DetailsFormProps) {
   const formRef = useRef<HTMLFormElement>(null);
@@ -83,20 +88,26 @@ export function DetailsForm({ site, eventType, location, values, onChange, onSub
   const showPhone = eventType.phone !== 'hidden' || phoneNeeded;
   const hasPhone = values.phone.trim().length > 0;
   const showSms = showPhone && site.features.sms;
-  const showCall = showPhone && site.features.calls;
+  // Only a meeting with a reminder call offers one (and asks to agree to it).
+  const showCall = showPhone && callOffered(site, eventType);
   const asksLocation = location?.type === 'ask_invitee';
+  const agreesToCall = showCall && values.call;
 
   const consentText = useMemo(
     () =>
-      fillTemplate(site.booking.consentText, {
+      fillTemplate(agreesToCall ? site.booking.consentText : (site.booking.consentTextSms ?? site.booking.consentText), {
         host_first_name: hostFirst,
         host_name: eventType.hosts[0]?.name ?? site.profile.name,
         assistant_name: site.assistantName,
         site_name: site.profile.name,
         event_name: eventType.title,
       }),
-    [site, eventType, hostFirst],
+    [site, eventType, hostFirst, agreesToCall],
   );
+  // The email hint says only what really goes to that address.
+  const emailed = site.features.email !== false;
+  const invited = eventType.calendarInvite !== false;
+  const emailHint = emailed && invited ? 'Your confirmation and calendar invitation go here.' : emailed ? 'Your confirmation goes here.' : invited ? 'Your calendar invitation goes here.' : 'So your host can reach you about the meeting.';
 
   const errorOf = (key: string): string | undefined => errors[key] || (!dismissed.has(key) ? serverErrors[key] : undefined) || undefined;
 
@@ -203,7 +214,7 @@ export function DetailsForm({ site, eventType, location, values, onChange, onSub
           />
         </Field>
 
-        <Field label="Email" required error={errorOf('email')} hint="Your confirmation and calendar invite go here.">
+        <Field label="Email" required error={errorOf('email')} hint={emailHint}>
           <Input
             name="email"
             type="email"
@@ -228,7 +239,7 @@ export function DetailsForm({ site, eventType, location, values, onChange, onSub
               required={phoneNeeded}
               optional={!phoneNeeded}
               error={errorOf('phone')}
-              hint={phoneNeeded ? undefined : showSms || showCall ? 'Add a number if you would like a reminder by text or phone.' : undefined}
+              hint={phoneNeeded ? undefined : showCall ? 'Add a number if you would like a reminder by text or phone.' : showSms ? 'Add a number if you would like a reminder by text.' : undefined}
             >
               <PhoneField
                 value={values.phone}
@@ -247,7 +258,7 @@ export function DetailsForm({ site, eventType, location, values, onChange, onSub
 
             {hasPhone && (showSms || showCall) ? (
               <div className="bw-reminders">
-                {showSms ? <Switch checked={values.sms} onChange={(sms) => onChange({ sms })} label="Text me reminders" size="sm" /> : null}
+                {showSms ? <Switch checked={values.sms} onChange={(sms) => onChange({ sms })} label="Text me the confirmation and reminders" size="sm" /> : null}
                 {showCall ? (
                   <Switch
                     checked={values.call}
@@ -264,7 +275,7 @@ export function DetailsForm({ site, eventType, location, values, onChange, onSub
         ) : null}
 
         {asksLocation ? (
-          <Field label="Where would you like to meet?" required error={errorOf('locationText')} hint="An address, a video link or a phone number.">
+          <Field label="Where would you like to meet?" required error={errorOf('locationText')} hint="An address or a phone number.">
             <Input
               name="location"
               value={values.locationText}

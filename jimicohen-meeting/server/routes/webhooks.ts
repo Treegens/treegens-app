@@ -6,7 +6,7 @@
  */
 import { registerBookingJobHandlers } from '../lib/booking';
 import { HttpError, route, type Route } from '../lib/http';
-import { handleInboundSms } from '../lib/sms';
+import { handleInboundSms, handleSmsStatus } from '../lib/sms';
 import { handleVoiceWebhook } from '../lib/voice';
 
 // A call can end with a queued message being sent straight away: the job runner needs its handlers.
@@ -22,4 +22,7 @@ export const routes: Route[] = [
   }),
 
   route('POST', '/twilio/sms', async ({ ctx, req }) => handleInboundSms(ctx, req)),
+
+  // What became of a text we sent: Twilio reports it here after the carrier has had its say.
+  route('POST', '/twilio/sms/status', async ({ ctx, req }) => handleSmsStatus(ctx, req)),
 ];

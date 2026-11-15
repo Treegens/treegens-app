@@ -35,6 +35,7 @@ import { detectZone, zoneLabel } from '../lib/tz';
 import { Avatar, Button, ButtonLink, Drawer, EmptyState, LoadingBlock, Menu, Skeleton, cx, useLatest, useToast } from '../ui';
 import type { MenuItem } from '../ui';
 import { UnsavedGuardProvider, useUnsavedGuard } from './components/UnsavedGuard';
+import { announceGoogleReturn, withoutGoogleReturn } from './googleReturn';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
@@ -216,6 +217,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     >
       <UnsavedGuardProvider>
         <DeviceZoneSync />
+        <GoogleReturnSync />
         <ShellFrame onSignedOut={onSignedOut} />
       </UnsavedGuardProvider>
     </AdminProvider>
@@ -454,6 +456,31 @@ function DeviceZoneSync() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  return null;
+}
+
+/**
+ * Back from Google on any dashboard page (a connection can return to Team, Home or anywhere it was
+ * started): say what happened, then take the result off the address so it is not left there or
+ * said again on a reload. Integrations does this itself, as it also opens its Google card.
+ */
+function GoogleReturnSync() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const announced = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (location.pathname.replace(/\/+$/, '') === '/admin/integrations') return;
+    if (!new URLSearchParams(location.search).has('google')) return;
+    if (announced.current !== location.search) {
+      announced.current = location.search;
+      announceGoogleReturn(toast, location.search);
+    }
+    navigate({ pathname: location.pathname, search: withoutGoogleReturn(location.search), hash: location.hash }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, location.search]);
 
   return null;
 }

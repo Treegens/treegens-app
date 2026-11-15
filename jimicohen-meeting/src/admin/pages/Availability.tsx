@@ -143,6 +143,19 @@ export default function Availability() {
             </div>
           ) : mode === 'device' && deviceZone !== zone ? (
             <p className="adm-zone__note">This device is in {zoneLabel(deviceZone)}. Reload the page to switch to it.</p>
+          ) : mode === 'google' && deviceZone !== zone ? (
+            // Google Calendar keeps its zone when you travel, and it may never have been set: say when the two differ.
+            <p className="adm-zone__note">
+              This device is in {zoneLabel(deviceZone)}. Your hours follow Google Calendar: {zoneLabel(zone)}.{' '}
+              <button
+                type="button"
+                className="adm-textbtn"
+                disabled={zoneBusy}
+                onClick={() => void saveZone({ timezoneMode: 'device', deviceTimezone: deviceZone }, (h) => `Following this device: ${zoneLabel(h.timezone)}`)}
+              >
+                Follow this device instead
+              </button>
+            </p>
           ) : !ownerHost.google ? (
             <p className="adm-zone__note">
               <Link className="adm-textlink" to="/admin/integrations">

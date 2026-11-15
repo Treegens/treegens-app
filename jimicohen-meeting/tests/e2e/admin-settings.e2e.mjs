@@ -166,6 +166,16 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       });
     });
 
+    await s.step('Home asks where booking notices should go, and its link opens that field', async () => {
+      await page.goto(s.url('/admin'));
+      const warning = page.locator('.adm-home__warnings .adm-notice').filter({ hasText: 'You have not said where your booking notices should go' });
+      await warning.getByRole('link', { name: 'Fix this' }).click();
+      await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
+      s.expect(new URL(page.url()).hash, 'where the link lands').toBe('#notices');
+      const notices = section(page, 'Email identity').getByLabel('Send my booking notices to');
+      await s.eventually(async () => s.expect(await notices.evaluate((el) => el === document.activeElement), 'the notice address has the focus').toBe(true));
+    });
+
     await s.step('email identity: sender name and where replies go', async () => {
       const identity = section(page, 'Email identity');
       await identity.getByLabel('Sender name').fill('Jimi at Treegens');
@@ -190,9 +200,16 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect((await site()).email.fromName, 'the sender name after the refusal').not.toBe('Jimi at Treegens');
       await clearToasts(page);
       await notices.fill('jimi@jimicohen.com');
+      // Texts about bookings, right next to it: they need a mobile number.
+      const textMe = identity.getByRole('switch', { name: 'Text me about bookings' });
+      s.expect(await textMe.getAttribute('aria-checked'), 'texts to the owner, out of the box').toBe('false');
+      await identity.getByText('New, moved and cancelled bookings, and any reminder texts you set up for the host.').waitFor();
+      await textMe.click();
+      await saveBar(page).getByText('Add your mobile number to get texts about bookings, or switch the texts off.').waitFor();
+      await identity.getByLabel('Your mobile number').fill('+1 (415) 555-2680');
       await save();
       s.expect((await site()).email, 'stored email identity').toMatchObject({ fromName: 'Jimi at Treegens', replyTo: 'hello@jimicohen.com', fromEmail: 'meetings@example.com' });
-      s.expect((await s.kv('hosts'))[0].email, "the owner's own address").toBe('jimi@jimicohen.com');
+      s.expect((await s.kv('hosts'))[0], "the owner's own details").toMatchObject({ email: 'jimi@jimicohen.com', phone: '+14155552680', notify: { email: true, sms: true } });
       // A reload shows everything that was saved.
       await page.reload();
       await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
@@ -200,6 +217,8 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect(await section(page, 'AI assistant').getByRole('combobox', { name: 'Voice' }).inputValue(), 'voice after a reload').toBe(voice.id);
       s.expect(await section(page, 'Email identity').getByLabel('Sender name').inputValue(), 'sender name after a reload').toBe('Jimi at Treegens');
       s.expect(await section(page, 'Email identity').getByLabel('Send my booking notices to').inputValue(), 'notice address after a reload').toBe('jimi@jimicohen.com');
+      s.expect(await section(page, 'Email identity').getByLabel('Your mobile number').inputValue(), 'mobile number after a reload').toBe('+14155552680');
+      s.expect(await section(page, 'Email identity').getByRole('switch', { name: 'Text me about bookings' }).getAttribute('aria-checked'), 'texts after a reload').toBe('true');
       s.expect(await section(page, 'Profile').getByRole('textbox', { name: 'Link 2, label' }).inputValue(), 'second link after a reload').toBe('LinkedIn');
       s.expect(await saveBar(page).count(), 'save bar after a reload').toBe(0);
       await s.screenshot(page, 'settings after saving');
@@ -212,7 +231,7 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       await visitor.locator('button.bw-slot').first().click();
       const form = visitor.getByRole('form', { name: 'Your details' });
       await form.getByLabel('Phone').fill(MOBILE);
-      const texts = form.getByRole('switch', { name: 'Text me reminders' });
+      const texts = form.getByRole('switch', { name: 'Text me the confirmation and reminders' });
       const calls = form.getByRole('switch', { name: "Reminder call from Nia, Jimi's AI assistant" });
       await texts.waitFor();
       s.expect(await texts.getAttribute('aria-checked'), 'text reminders start off').toBe('false');
@@ -229,7 +248,8 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       // 16:00 UTC is 5 PM in Berlin: the reminder call two hours before falls inside Nia's hours there.
       const berlin = await s.book({ slug: 'intro', start: tue('16:00'), name: 'Lise Meitner', email: 'lise@example.com', timezone: 'Europe/Berlin', phone: '+4915112345678', consent: { sms: true, call: true } });
       s.expect(berlin.status, 'booking status').toBe(201);
-      // 15:00 UTC is 10 AM in New York: two hours before is 8 AM there, before Nia may call.
+      // 15:00 UTC is 10 AM in New York: two hours before is 8 AM there, before Nia may call, and 10 AM
+      // leaves no time that morning, so the call goes out the evening before.
       const newYork = await s.book({ slug: 'intro', start: tue('15:00'), name: 'Ada Lovelace', email: 'ada@example.com', timezone: 'America/New_York', phone: MOBILE, consent: { sms: true, call: true } });
       s.expect(newYork.status, 'booking status').toBe(201);
       await s.settle();
@@ -245,19 +265,22 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect(stored.consent, 'consent kept with the booking').toMatchObject({ sms: true, call: true, text: 'By adding your number you agree that Jimi may text or call you about this meeting.' });
     });
 
-    await s.step('a reminder call outside the calling hours is skipped', async () => {
-      await s.setClock(tue('13:00'));
-      await s.runJobs();
-      s.expect(await s.calls(), 'calls placed at 8 AM New York time').toEqual([]);
+    await s.step('a reminder call that would come before the calling hours rings in the last calling hour the day before', async () => {
       const [ada] = await s.bookings({ invitee: { email: 'ada@example.com' } });
-      const skipped = ada.timeline.find((entry) => /call_skipped$/.test(entry.type));
-      s.expect(skipped, 'the timeline says the call was skipped').toMatchObject({ type: 'reminder_call_skipped', detail: /outside calling hours/ });
+      // Nia may call from 10 AM to 6 PM: 5 PM on Monday in New York is 22:00 UTC.
+      await s.setClock('2026-11-16T21:59:00.000Z');
+      await s.runJobs();
+      s.expect(await s.calls(), 'calls placed before 5 PM New York time').toEqual([]);
+      await s.setClock('2026-11-16T22:00:00.000Z');
+      await s.runJobs();
+      s.expect((await s.calls()).map((c) => c.to), 'calls placed at 5 PM New York time the day before').toEqual([MOBILE]);
+      s.expect((await s.bookings({ id: ada.id }))[0].timeline.some((entry) => entry.type === 'reminder_call_sent'), 'the timeline says the call went out').toBe(true);
     });
 
     await s.step('a reminder call inside them uses the assistant name, voice and language', async () => {
       await s.setClock(tue('14:00'));
       await s.runJobs();
-      const calls = await s.calls();
+      const calls = (await s.calls()).filter((c) => c.to !== MOBILE);
       s.expect(calls.map((c) => c.to), 'calls placed at 3 PM Berlin time').toEqual(['+4915112345678']);
       const spoken = await s.voice(calls[0], 'start');
       s.expect(spoken.status, 'status of the voice webhook').toBe(200);
@@ -285,7 +308,11 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
         s.expect(res.status, `status of the booking for ${body.name}`).toBe(201);
         made[key] = { id: res.data.booking.id, token: res.data.manageToken };
       };
-      await book('ada', { slug: 'intro', start: tue('10:00'), name: 'Ada Lovelace', email: 'ada@example.com', timezone: 'America/New_York', phone: MOBILE, consent: { sms: true, call: true }, guests: ['grace@example.com'], answers: { q_topic: 'Planting trees together.' } });
+      const ada = { slug: 'intro', start: tue('10:00'), name: 'Ada Lovelace', email: 'ada@example.com', timezone: 'America/New_York', phone: MOBILE, consent: { sms: true, call: true }, answers: { q_topic: 'Planting trees together.' } };
+      // No calendar is connected here, so Google would invite nobody: a guest Ada brings would never hear of it.
+      const withGuest = await s.book({ ...ada, guests: ['grace@example.com'] });
+      s.expect([withGuest.status, withGuest.data.error.fields], 'a guest without a calendar to invite them').toEqual([422, { guests: 'Guests cannot be added to this meeting.' }]);
+      await book('ada', ada);
       await book('alan', { slug: 'intro', start: tue('11:00'), name: 'Alan Turing', email: 'alan@example.com', timezone: 'Europe/London' });
       await book('katherine', { slug: 'meeting', start: '2026-11-18T13:00:00.000Z', durationMin: 30, name: 'Katherine Johnson', email: 'katherine@example.com', timezone: 'America/Chicago' });
       await book('mary', { slug: 'intro', start: '2026-11-16T14:00:00.000Z', name: 'Mary Jackson', email: 'mary@example.com', timezone: 'UTC' });
@@ -364,7 +391,7 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       await drawer.getByRole('link', { name: 'ada@example.com' }).waitFor();
       await drawer.getByRole('link', { name: MOBILE }).waitFor();
       await drawer.getByText('Agreed to texts and reminder calls').waitFor();
-      await drawer.getByText('grace@example.com').waitFor();
+      s.expect(await drawer.getByText('grace@example.com').count(), 'guests (none could be added without a calendar)').toBe(0);
       const answers = drawer.getByRole('region', { name: 'Answers' });
       await answers.getByText('What would you like to talk about?').waitFor();
       await answers.getByText('Planting trees together.').waitFor();
@@ -372,6 +399,9 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect(await timeline.getByRole('listitem').count(), 'timeline entries').toBeGreaterThanOrEqual(2);
       s.expect((await timeline.textContent()).toLowerCase(), 'the timeline').toMatch(/booked/);
       s.expect((await timeline.textContent()).toLowerCase(), 'the timeline').toMatch(/confirmation/);
+      // Services by the names people know, never the ids stored with each entry.
+      s.expect(await timeline.textContent(), 'provider names in the timeline').not.toMatch(/via (mock|resend|gmail|twilio)\b/);
+      s.expect(await timeline.textContent(), 'provider names in the timeline').toMatch(/via (the test outbox|Resend|Gmail)/);
       s.expect(new URL(page.url()).searchParams.get('b'), 'the open booking is in the address').toBe(made.ada.id);
       [adaBooking] = await s.bookings({ id: made.ada.id });
       await s.screenshot(page, 'booking drawer', { fullPage: false });
@@ -380,10 +410,12 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
     await s.step('the reschedule link opens the public reschedule page for that booking', async () => {
       const link = drawer.getByRole('link', { name: 'Reschedule' });
       const href = await link.getAttribute('href');
-      s.expect(href, 'reschedule link').toBe(`${s.url(`/booking/${made.ada.id}/reschedule`)}?t=${made.ada.token}`);
+      // Opened from the dashboard, the page knows a host is acting.
+      s.expect(href, 'reschedule link').toBe(`${s.url(`/booking/${made.ada.id}/reschedule`)}?t=${made.ada.token}&as=host`);
       s.expect(await link.getAttribute('target'), 'opens in a new tab').toBe('_blank');
       const manage = drawer.getByRole('region', { name: 'Manage link' });
-      s.expect(await manage.locator('input, a').evaluateAll((nodes) => nodes.map((n) => n.value || n.getAttribute('href')).filter(Boolean)), 'the manage link shown').toContain(adaBooking.manageUrl);
+      // "Open" carries the host mark too; "Copy" hands out the plain link, which is the one for the invitee.
+      s.expect(await manage.locator('input, a').evaluateAll((nodes) => nodes.map((n) => n.value || n.getAttribute('href')).filter(Boolean)), 'the manage link shown').toContain(`${adaBooking.manageUrl}&as=host`);
       const [opened] = await Promise.all([page.context().waitForEvent('page'), link.click()]);
       await opened.waitForLoadState();
       s.expect(opened.url(), 'address of the new tab').toBe(href);
@@ -485,7 +517,7 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
         'Something came up, sorry. Please pick another time.',
         // A cell that starts with "+" would be run as a formula by a spreadsheet, so it is written as text.
         `'${MOBILE}`,
-        'grace@example.com',
+        '',
         'What would you like to talk about?: Planting trees together.',
       ]);
       // With a search, only what matches.
@@ -515,7 +547,9 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       // The calendar is not connected in this scenario, and Home says so with a way to fix it.
       const warning = page.getByRole('note').filter({ hasText: 'Your calendar is not connected yet' });
       s.expect(await warning.getByRole('link', { name: 'Fix this' }).getAttribute('href'), 'where "Fix this" leads').toBe('/meeting/admin/integrations#google');
-      s.expect(overview.warnings.map((w) => w.key), 'warnings').toEqual(['google_not_connected']);
+      // Nor has the owner said where booking notices go, so nobody tells them about these bookings.
+      s.expect(overview.warnings.map((w) => w.key), 'warnings').toEqual(['google_not_connected', 'owner_no_email']);
+      s.expect(overview.warnings.find((w) => w.key === 'owner_no_email').href, 'where that is fixed').toBe('/admin/settings#notices');
       await s.screenshot(page, 'home with bookings');
       // A meeting on Home opens its details on the bookings page.
       await coming.getByRole('link', { name: /Alan Turing/ }).click();
@@ -528,8 +562,41 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       await page.reload();
       const open = page.getByRole('dialog').filter({ has: page.locator('.adm-bk__body') });
       await open.getByText('Confirmed', { exact: true }).waitFor();
+      // An upcoming meeting cannot be deleted: it is cancelled first.
+      s.expect(await open.getByRole('button', { name: 'Delete booking' }).count(), 'delete button on an upcoming meeting').toBe(0);
       await page.keyboard.press('Escape');
       await page.getByRole('link', { name: /Alan Turing/ }).getByText('Confirmed').waitFor();
+    });
+
+    await s.step('a cancelled booking is deleted for good, only after asking, and nothing of it is left', async () => {
+      await clearToasts(page);
+      await tab('Cancelled').click();
+      await page.getByRole('link', { name: /Dorothy Vaughan/ }).click();
+      await drawer.getByRole('heading', { name: 'Dorothy Vaughan' }).waitFor();
+      await drawer.getByRole('button', { name: 'Delete booking' }).click();
+      const confirm = page.getByRole('dialog', { name: 'Delete this booking for good?' });
+      await confirm.getByText(/This cannot be undone\./).waitFor();
+      await s.screenshot(page, 'delete a booking, confirm', { fullPage: false });
+      // "Keep it" changes nothing.
+      await confirm.getByRole('button', { name: 'Keep it' }).click();
+      await confirm.waitFor({ state: 'hidden' });
+      s.expect(await s.bookings({ id: made.dorothy.id }), 'still stored after "Keep it"').toHaveLength(1);
+
+      await drawer.getByRole('button', { name: 'Delete booking' }).click();
+      await confirm.getByRole('button', { name: 'Delete booking' }).click();
+      await expectToast(page, 'Booking deleted');
+      await drawer.waitFor({ state: 'hidden' });
+      s.expect(new URL(page.url()).searchParams.get('b'), 'the address no longer names it').toBeNull();
+      s.expect(await s.bookings({ id: made.dorothy.id }), 'stored after deleting').toEqual([]);
+      s.expect(await s.jobs({ bookingId: made.dorothy.id }), 'jobs left for it').toEqual([]);
+      s.expect(JSON.stringify(await s.kv('index/bookings')), 'the booking index').not.toContain(made.dorothy.id);
+      await s.eventually(async () => s.expect(await counts(), 'tab counts after deleting').toEqual({ Upcoming: '2', Past: '1', Cancelled: '1' }));
+      s.expect(await names(), 'cancelled after deleting').toEqual(['Ada Lovelace']);
+      // The server refuses an upcoming meeting as well, and says what to do instead.
+      const refused = await s.api('DELETE', `/admin/bookings/${made.alan.id}`);
+      s.expect(refused.status, 'deleting an upcoming meeting').toBe(409);
+      s.expect(refused.data.error.message, 'what the server says').toBe('This meeting has not happened yet. Cancel it first, then you can delete it.');
+      s.expect(await s.bookings({ id: made.alan.id }), 'the upcoming meeting is still there').toHaveLength(1);
     });
   });
 
@@ -612,9 +679,13 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
 
     await s.step('"On a web page": the snippet frames the page from the embed address and loads embed.js from there', async () => {
       await dialog.getByRole('tab', { name: 'On a web page' }).click();
-      const expected = `<div data-meeting-url="${embedBase}/intro"></div>\n<script src="${embedBase}/embed.js" async></script>`;
+      const expected = `<div data-meeting-url="${embedBase}/intro"><a href="${publicBase}/intro" data-meeting-fallback>Book a meeting</a></div>\n<script src="${embedBase}/embed.js" async></script>`;
       const code = dialog.getByLabel('Embed code for "Intro call"');
       s.expect(await code.textContent(), 'inline snippet').toBe(expected);
+      // The main site (here localhost, in real life jimicohen.com) does not let the embed in: the panel says so.
+      s.expect(await dialog.getByRole('note').textContent(), 'note about the main site').toBe(
+        `Not for pages on localhost:${s.server.port} itself: that site does not allow embedded calendars, so the code shows only a plain link there. Use the link from the Link tab on those pages.`,
+      );
       await dialog.getByRole('button', { name: 'Copy code' }).click();
       await s.eventually(async () => s.expect(await clipboard(), 'clipboard after "Copy code"').toBe(expected));
       await s.screenshot(page, 'share panel, inline snippet', { fullPage: false });
@@ -633,6 +704,7 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       const snippet = (text) => `<a href="${publicBase}/intro" data-meeting-popup="${embedBase}/intro">${text}</a>\n<script src="${embedBase}/embed.js" async></script>`;
       const code = dialog.getByLabel('Popup button code for "Intro call"');
       s.expect(await code.textContent(), 'popup snippet').toBe(snippet('Book a meeting'));
+      s.expect(await dialog.getByRole('note').textContent(), 'note about the main site').toContain(`Not for pages on localhost:${s.server.port} itself`);
       // The words on the button are the owner's, and anything typed there is escaped.
       await dialog.getByLabel('Text on the button').fill('Talk to <Jimi> & co');
       s.expect(await code.textContent(), 'popup snippet with other words').toBe(snippet('Talk to &lt;Jimi&gt; &amp; co'));

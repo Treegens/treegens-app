@@ -180,4 +180,26 @@ describe('zone names and search', () => {
     expect(searchZones('qqqq', T, 'en-US')).toHaveLength(0);
     expect(searchZones('', T, 'en-US').length).toBeGreaterThan(200);
   });
+
+  it('puts matches on the city name first, and the start of a word before the inside of one', () => {
+    const ids = (q: string): string[] => searchZones(q, T, 'en-US').map((z) => z.id);
+    // "new" is also a word in Sydney's "new south wales" and Auckland's "new zealand": the city named New York comes first.
+    const typedNew = ids('new');
+    expect(typedNew[0]).toBe('America/New_York');
+    expect(typedNew.indexOf('America/New_York')).toBeLessThan(typedNew.indexOf('Australia/Sydney'));
+    expect(typedNew.indexOf('America/New_York')).toBeLessThan(typedNew.indexOf('Pacific/Auckland'));
+    // Every city that has "new" as a word comes before every zone that only has it elsewhere.
+    const cityHits = searchZones('new', T, 'en-US').map((z) => /(^|[^a-z])new([^a-z]|$)/i.test(z.city));
+    expect(cityHits.indexOf(false)).toBeGreaterThan(cityHits.lastIndexOf(true));
+    // Half a word.
+    expect(ids('syd')[0]).toBe('Australia/Sydney');
+    expect(ids('york')[0]).toBe('America/New_York');
+    expect(ids('ber')[0]).toBe('Europe/Berlin');
+    // The start of a word before the inside of one: "lin" starts no big city, so the first hits are cities that start with it.
+    const lin = searchZones('lin', T, 'en-US');
+    const firstInside = lin.findIndex((z) => !/(^|[^a-z])lin/i.test(z.city));
+    expect(firstInside).toBeGreaterThan(0);
+    expect(lin.slice(0, firstInside).every((z) => /(^|[^a-z])lin/i.test(z.city))).toBe(true);
+    expect(lin.slice(firstInside).some((z) => z.id === 'Europe/Berlin')).toBe(true);
+  });
 });

@@ -83,6 +83,15 @@ export function makeTestCtx(opts: TestCtxOptions = {}): TestCtx {
   };
 }
 
+/**
+ * First-run setup, done: the admin record exists. Until then the booking page lists nothing and takes no
+ * bookings (booking.ts siteIsOpen), so every test that books through a store of its own starts here.
+ * The hash is not a real one: tests that sign in go through POST /auth/setup instead.
+ */
+export async function markSetUp(ctx: Pick<Ctx, 'kv' | 'now'>): Promise<void> {
+  await ctx.kv.setJSON('auth/admin', { passwordHash: 'not-a-real-hash', passwordVersion: 1, setupUsedAt: ctx.now().toISOString(), setupCodeHash: '' });
+}
+
 /** Builds a Request against the API. `path` is relative to the API prefix, e.g. "/public/site". */
 export function apiRequest(
   method: string,

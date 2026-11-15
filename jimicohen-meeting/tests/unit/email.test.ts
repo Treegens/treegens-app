@@ -212,6 +212,77 @@ describe('sendEmail with Resend', () => {
     expect(result.error).not.toContain('re_secret');
   });
 
+  it('sends a changed message under a key of its own when Resend already holds the key for another version', async () => {
+    const seen = new Map<string, string>();
+    const { calls, fetchImpl } = fakeFetch((call) => {
+      // Resend's documented rule: same key and body is a replay, same key and a different body is a 409.
+      const key = call.headers['Idempotency-Key'];
+      const body = String(call.init.body);
+      if (seen.has(key) && seen.get(key) !== body) {
+        return Response.json({ statusCode: 409, name: 'invalid_idempotent_request', message: 'Same idempotency key used with a different request payload.' }, { status: 409 });
+      }
+      seen.set(key, body);
+      return Response.json({ id: `email_${seen.size}` });
+    });
+    const ctx = makeTestCtx({ fetch: fetchImpl });
+    await configure(ctx, { resendKey: 're_secret', fromEmail: 'meet@jimicohen.com' });
+    expect(await sendEmail(ctx, { ...MESSAGE, idempotencyKey: 'job_1-invitee' })).toEqual({ ok: true, provider: 'resend', id: 'email_1' });
+
+    const changed = { ...MESSAGE, html: '<p>HTML body, now with the Meet link</p>', idempotencyKey: 'job_1-invitee' };
+    const result = await sendEmail(ctx, changed);
+    expect(result).toEqual({ ok: true, provider: 'resend', id: 'email_2' });
+    expect(calls.map((c) => c.headers['Idempotency-Key'])).toEqual(['job_1-invitee', 'job_1-invitee', expect.stringMatching(/^job_1-invitee-[0-9a-f]{12}$/)]);
+    // a retry of that same changed version is still a repeat, not a third email
+    expect(await sendEmail(ctx, changed)).toEqual({ ok: true, provider: 'resend', id: 'email_2' });
+    expect(calls[4].headers['Idempotency-Key']).toBe(calls[2].headers['Idempotency-Key']);
+  });
+
+  it('keeps a request that is still in progress at Resend as a failure to retry later', async () => {
+    const { calls, fetchImpl } = fakeFetch(() =>
+      Response.json({ statusCode: 409, name: 'concurrent_idempotent_requests', message: 'Same idempotency key used while original request is still in progress.' }, { status: 409 }),
+    );
+    const ctx = makeTestCtx({ fetch: fetchImpl });
+    await configure(ctx, { resendKey: 're_secret', fromEmail: 'meet@jimicohen.com' });
+    const result = await sendEmail(ctx, { ...MESSAGE, idempotencyKey: 'job_1-invitee' });
+    expect(result).toMatchObject({ ok: false, provider: 'resend' });
+    expect(result.skipped).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('sends an owner alert through Resend whenever it is set up, whatever email is set to', async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const ctx = makeTestCtx({ fetch: fetchImpl });
+    await configure(ctx, { provider: 'gmail', gmail: true, resendKey: 're_secret', fromEmail: 'meet@jimicohen.com' });
+    gmailSend.mockResolvedValue({ id: 'gmail_1' });
+    expect(await sendEmail(ctx, MESSAGE)).toMatchObject({ ok: true, provider: 'gmail' }); // ordinary mail follows the setting
+    expect(await sendEmail(ctx, MESSAGE, { preferResend: true })).toEqual({ ok: true, provider: 'resend', id: 'email_123' });
+    expect(calls).toHaveLength(1);
+
+    // without a Resend key the setting still decides
+    const bare = makeTestCtx({ fetch: fetchImpl });
+    await configure(bare, { provider: 'gmail', gmail: true });
+    expect(await sendEmail(bare, MESSAGE, { preferResend: true })).toMatchObject({ ok: true, provider: 'gmail' });
+  });
+
+  it('still sends an owner alert through the Gmail chosen in the settings when Resend refuses it', async () => {
+    // A Resend key left from an earlier try whose domain was never verified, with Gmail chosen instead.
+    const { calls, fetchImpl } = fakeFetch(() => Response.json({ name: 'validation_error', message: 'The jimicohen.com domain is not verified.' }, { status: 403 }));
+    const ctx = makeTestCtx({ fetch: fetchImpl });
+    await configure(ctx, { provider: 'gmail', gmail: true, resendKey: 're_secret', fromEmail: 'meet@jimicohen.com' });
+    gmailSend.mockResolvedValue({ id: 'gmail_7' });
+    expect(await sendEmail(ctx, MESSAGE, { preferResend: true })).toEqual({ ok: true, provider: 'gmail', id: 'gmail_7' });
+    expect(calls).toHaveLength(1);
+    expect(gmailSend).toHaveBeenCalledTimes(1);
+
+    // Both down: the answer is the Resend failure, so the alert is tried again later.
+    gmailSend.mockReset();
+    gmailSend.mockRejectedValue(new Error('Google Calendar needs to be reconnected.'));
+    const failed = await sendEmail(ctx, MESSAGE, { preferResend: true });
+    expect(failed).toMatchObject({ ok: false, provider: 'resend' });
+    expect(failed.error).toContain('403');
+    expect(failed.skipped).toBeUndefined();
+  });
+
   it('turns a network failure or a non-JSON answer into a failed result', async () => {
     const down = makeTestCtx({
       fetch: (async () => {
@@ -433,6 +504,20 @@ describe('buildMime', () => {
   it('is deterministic for the same message', () => {
     expect(buildMime(MESSAGE, FROM)).toBe(buildMime(MESSAGE, FROM));
   });
+
+  it('gives every attempt at one message the same Message-ID, taken from the idempotency key', () => {
+    const header = (raw: string) => parseEntity(raw).headers['message-id'];
+    const first = header(buildMime({ ...MESSAGE, idempotencyKey: 'job_abc-invitee' }, FROM, { date: new Date('2026-11-17T12:00:00Z') }));
+    expect(first).toMatch(/^<[0-9a-f]{32}@jimicohen\.com>$/);
+    // A retry minutes later, even with changed wording, is recognised as the same message by Gmail.
+    const retry = header(buildMime({ ...MESSAGE, html: '<p>now with the Meet link</p>', idempotencyKey: 'job_abc-invitee' }, FROM, { date: new Date('2026-11-17T12:02:00Z') }));
+    expect(retry).toBe(first);
+    // Another message, or the same job to someone else, is a message of its own.
+    expect(header(buildMime({ ...MESSAGE, idempotencyKey: 'job_abc-host_owner' }, FROM))).not.toBe(first);
+    expect(header(buildMime({ ...MESSAGE, to: 'alex@example.com', idempotencyKey: 'job_abc-invitee' }, FROM))).not.toBe(first);
+    // Without a key there is nothing to tie attempts together.
+    expect(header(buildMime(MESSAGE, FROM))).toBeUndefined();
+  });
 });
 
 // ───────────────────────── HTML ─────────────────────────
@@ -570,6 +655,23 @@ describe('renderEmailHtml', () => {
     const html = renderEmailHtml({ ...base, paragraphs: ['Join at https://meet.google.com/abc?x=1&y=2. See you there (or at https://example.com/b).'] });
     expect(html).toMatch(/<a href="https:\/\/meet\.google\.com\/abc\?x=1&amp;y=2" class="m-link" style="[^"]*">https:\/\/meet\.google\.com\/abc\?x=1&amp;y=2<\/a>\. See you/);
     expect(html).toMatch(/<a href="https:\/\/example\.com\/b" [^>]*>https:\/\/example\.com\/b<\/a>\)\./);
+  });
+
+  it('links only the addresses it is told to, and shows any other one as plain text', () => {
+    const html = renderEmailHtml({
+      ...base,
+      paragraphs: ['Hi https://evil.example/verify-account,', 'Manage it at https://jimicohen.com/meeting/booking/b1?t=abc.'],
+      details: [
+        { label: 'Link', value: 'https://meet.google.com/abc-defg-hij' },
+        { label: 'Where', value: 'Their idea: https://evil.example/office' },
+      ],
+      linkUrls: ['https://meet.google.com/abc-defg-hij', 'https://jimicohen.com/meeting/booking/b1?t=abc'],
+    });
+    expect(html).toContain('>Hi https://evil.example/verify-account,</p>');
+    expect(html).not.toMatch(/href="https:\/\/evil\.example/);
+    expect(html).toContain('Their idea: https://evil.example/office');
+    expect(html).toMatch(/<a href="https:\/\/jimicohen\.com\/meeting\/booking\/b1\?t=abc" class="m-link"[^>]*>https:\/\/jimicohen\.com\/meeting\/booking\/b1\?t=abc<\/a>\./);
+    expect(html).toMatch(/<a href="https:\/\/meet\.google\.com\/abc-defg-hij" class="m-link"/);
   });
 
   it('shows the profile picture only from an https address', () => {

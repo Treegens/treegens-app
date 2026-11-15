@@ -172,7 +172,7 @@ export async function fillDetails(page, { name, email, phone, sms, call, guests 
     await field.click();
     await field.pressSequentially(phone);
     for (const [wanted, label] of [
-      [sms, 'Text me reminders'],
+      [sms, 'Text me the confirmation and reminders'],
       [call, /^Reminder call from /],
     ]) {
       if (wanted === undefined) continue;

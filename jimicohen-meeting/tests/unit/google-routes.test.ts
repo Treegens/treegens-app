@@ -89,6 +89,9 @@ interface ConnectOptions {
   browser?: boolean;
   /** the address the request arrives at (behind the proxy this is not the public one) */
   baseUrl?: string;
+  /** switch=1: "Use a different Google account" */
+  switchAccount?: boolean;
+  headers?: Record<string, string>;
 }
 
 function connect(ctx: TestCtx, o: ConnectOptions = {}): Promise<Response> {
@@ -97,19 +100,27 @@ function connect(ctx: TestCtx, o: ConnectOptions = {}): Promise<Response> {
   if (o.gmail !== undefined) query.set('gmail', o.gmail);
   if (o.returnTo !== undefined) query.set('return', o.returnTo);
   if (o.t !== undefined) query.set('t', o.t);
-  const headers: Record<string, string> = o.browser ? { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' } : {};
+  if (o.switchAccount) query.set('switch', '1');
+  const headers: Record<string, string> = { ...(o.browser ? { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' } : {}), ...o.headers };
   return handle(apiRequest('GET', `/google/connect?${query.toString()}`, { cookie: o.cookie, headers, baseUrl: o.baseUrl }), ctx);
 }
 
-/** Starts a connection and returns the `state` Google would send back. */
+/** The cookie each started connection left in "its" browser, by state. */
+const browserOf = new Map<string, string>();
+
+/** Starts a connection and returns the `state` Google would send back. The browser's cookie is remembered for callback(). */
 async function begin(ctx: TestCtx, o: ConnectOptions): Promise<string> {
   const res = await connect(ctx, o);
   expect(res.status, await res.clone().text()).toBe(302);
-  return new URL(res.headers.get('location')!).searchParams.get('state')!;
+  const state = new URL(res.headers.get('location')!).searchParams.get('state')!;
+  browserOf.set(state, cookiePair(res.headers.get('set-cookie')!));
+  return state;
 }
 
-function callback(ctx: TestCtx, params: Record<string, string>, baseUrl?: string): Promise<Response> {
-  return handle(apiRequest('GET', `/google/callback?${new URLSearchParams(params).toString()}`, { baseUrl }), ctx);
+/** Google sending the browser back. By default the browser that started the connection, with its cookie. */
+function callback(ctx: TestCtx, params: Record<string, string>, baseUrl?: string, cookie?: string | null): Promise<Response> {
+  const sent = cookie === undefined ? browserOf.get(params.state ?? '') : (cookie ?? undefined);
+  return handle(apiRequest('GET', `/google/callback?${new URLSearchParams(params).toString()}`, { baseUrl, cookie: sent }), ctx);
 }
 
 function b64url(value: unknown): string {
@@ -281,7 +292,8 @@ describe('GET /google/callback', () => {
     const state = await begin(w.ctx, { cookie: w.cookie, returnTo: '/meeting/admin/integrations' });
     const google = fakeGoogle(w.ctx);
     const res = await callback(w.ctx, { state, code: 'auth-code-1', scope: 'ignored' });
-    expect(locationOf(res).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected`);
+    // The page is told the zone changed with it: every hour the owner offers moved.
+    expect(locationOf(res).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York`);
 
     expect(google.tokenForms).toHaveLength(1);
     expect(Object.fromEntries(google.tokenForms[0])).toEqual({ code: 'auth-code-1', client_id: CLIENT_ID, client_secret: CLIENT_SECRET, redirect_uri: `${TEST_BASE_URL}/api/google/callback`, grant_type: 'authorization_code' });
@@ -293,9 +305,9 @@ describe('GET /google/callback', () => {
     expect(owner.timezoneMode).toBe('google');
     expect(owner.timezone).toBe('America/New_York');
     expect(google.calls.filter((u) => u.endsWith('/settings/timezone'))).toHaveLength(1);
-    // Nothing secret travels in the redirect.
+    // Nothing secret travels in the redirect, and the only cookie is the browser's connection mark, removed.
     expect(res.headers.get('location')).not.toContain('refresh');
-    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(res.headers.get('set-cookie')).toMatch(/^mtg_gstate=; Path=\/meeting\/api\/google; HttpOnly; Secure; SameSite=Lax; Max-Age=0/);
   });
 
   it('brings a co-host back to their own page, link and all', async () => {
@@ -307,7 +319,8 @@ describe('GET /google/callback', () => {
     expect(`${to.origin}${to.pathname}`).toBe(`${TEST_BASE_URL}/host/host_alex`);
     expect(to.searchParams.get('t')).toBe(w.alexToken);
     expect(to.searchParams.get('google')).toBe('connected');
-    expect([...to.searchParams.keys()].sort()).toEqual(['google', 't']);
+    expect(to.searchParams.get('zone')).toBe('Europe/Berlin');
+    expect([...to.searchParams.keys()].sort()).toEqual(['google', 't', 'zone']);
 
     const alex = (await repo.getHost(w.ctx, 'host_alex'))!;
     expect(alex.google).toMatchObject({ email: 'alex@gmail.example', status: 'ok' });
@@ -322,10 +335,12 @@ describe('GET /google/callback', () => {
     const w = await world();
     fakeGoogle(w.ctx);
     const admin = await begin(w.ctx, { cookie: w.cookie });
-    expect(locationOf(await callback(w.ctx, { state: admin, code: 'c1' })).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected`);
+    expect(locationOf(await callback(w.ctx, { state: admin, code: 'c1' })).href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York`);
     const cohost = await begin(w.ctx, { host: 'host_alex', t: w.alexToken });
-    fakeGoogle(w.ctx, { email: 'alex@gmail.example' });
+    fakeGoogle(w.ctx, { email: 'alex@gmail.example', zone: 'UTC' });
+    // Alex's zone was UTC already: following the calendar changed nothing, so nothing is said about it.
     expect(locationOf(await callback(w.ctx, { state: cohost, code: 'c2' })).href).toBe(`${TEST_BASE_URL}/host/host_alex?t=${w.alexToken}&google=connected`);
+    expect((await repo.getHost(w.ctx, 'host_alex'))!.timezoneMode).toBe('google');
   });
 
   it('leaves a chosen zone mode alone, and does not switch again on a reconnect', async () => {
@@ -476,7 +491,7 @@ describe('GET /google/callback', () => {
     fakeGoogle(w.ctx);
     const state = await begin(w.ctx, { cookie: w.cookie, baseUrl: APP_HOST });
     const ok = locationOf(await callback(w.ctx, { state, code: 'c1' }, APP_HOST));
-    expect(ok.href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected`);
+    expect(ok.href).toBe(`${TEST_BASE_URL}/admin/integrations?google=connected&zone=America%2FNew_York`);
     const bad = locationOf(await callback(w.ctx, { state: 'garbage' }, APP_HOST));
     expect(bad.origin).toBe('https://jimicohen.com');
     const hostile = await handle(new Request('https://evil.example/meeting/api/google/callback?state=garbage', { headers: { host: 'evil.example' } }), w.ctx);
@@ -501,6 +516,138 @@ describe('GET /google/callback', () => {
     expect(res.status).toBe(500);
     expect(res.headers.get('location')).toBeNull();
     expect((await res.json()).error.code).toBe('not_configured');
+  });
+});
+
+// ───────────────────────── one browser, start to finish ─────────────────────────
+
+describe('a connection belongs to the browser that started it', () => {
+  it('marks the browser on the way to Google, briefly and out of reach of scripts', async () => {
+    const w = await world();
+    const res = await connect(w.ctx, { host: 'host_alex', t: w.alexToken });
+    const state = new URL(res.headers.get('location')!).searchParams.get('state')!;
+    const set = res.headers.get('set-cookie')!;
+    expect(set).toMatch(/^mtg_gstate=[A-Za-z0-9_-]{16,}; Path=\/meeting\/api\/google; HttpOnly; Secure; SameSite=Lax; Max-Age=600$/);
+    // The cookie holds the state's nonce, nothing else.
+    expect(set).not.toContain(state.slice(0, 20));
+    // The dev origin is plain http, where a Secure cookie would never come back.
+    const dev = await world({ env: { publicBaseUrl: 'http://localhost:8850/meeting' } });
+    const devSet = (await connect(dev.ctx, { host: 'host_alex', t: dev.alexToken })).headers.get('set-cookie')!;
+    expect(devSet).not.toContain('Secure');
+  });
+
+  it('refuses to finish a co-host connection in another browser (the reviewer\'s case), before any code is exchanged', async () => {
+    const w = await world();
+    const returnTo = `/meeting/host/host_alex?t=${encodeURIComponent(w.alexToken)}`;
+    // The co-host starts for their own record and forwards Google's page to someone else.
+    const state = await begin(w.ctx, { host: 'host_alex', t: w.alexToken, returnTo });
+    const google = fakeGoogle(w.ctx, { email: 'victim.owner@gmail.com' });
+    for (const cookie of [null, 'mtg_gstate=AAAAAAAAAAAAAAAAAAAAAA', 'mtg_session=whatever']) {
+      const to = locationOf(await callback(w.ctx, { state, code: 'auth-code-victim' }, undefined, cookie));
+      expect(`${to.origin}${to.pathname}`).toBe(`${TEST_BASE_URL}/host/host_alex`);
+      expect(to.searchParams.get('google')).toBe('error');
+      expect(to.searchParams.get('reason')).toBe('This Google sign-in was not started in this browser, or it took too long. Please press Connect Google Calendar again on this page.');
+    }
+    expect(google.tokenForms).toHaveLength(0);
+    expect((await repo.getHost(w.ctx, 'host_alex'))!.google ?? null).toBeNull();
+    // The browser that started it still can.
+    expect(locationOf(await callback(w.ctx, { state, code: 'auth-code-alex' })).searchParams.get('google')).toBe('connected');
+    expect((await repo.getHost(w.ctx, 'host_alex'))!.google?.email).toBe('victim.owner@gmail.com');
+  });
+
+  it('sends the owner back to the dashboard with a plain sentence when the cookie went missing', async () => {
+    const w = await world();
+    const state = await begin(w.ctx, { cookie: w.cookie, returnTo: '/meeting/admin/team' });
+    fakeGoogle(w.ctx);
+    const to = locationOf(await callback(w.ctx, { state, code: 'c1' }, undefined, null));
+    expect(`${to.origin}${to.pathname}`).toBe(`${TEST_BASE_URL}/admin/team`);
+    expect(to.searchParams.get('reason')).toBe('This Google sign-in was not started in this browser, or it took too long. Please start the connection again from the dashboard.');
+    expect((await repo.getHost(w.ctx, 'host_owner'))!.google ?? null).toBeNull();
+  });
+
+  it('lets two connections started in two tabs of one browser both finish', async () => {
+    const w = await world();
+    const first = await connect(w.ctx, { cookie: w.cookie });
+    const firstState = new URL(first.headers.get('location')!).searchParams.get('state')!;
+    const second = await connect(w.ctx, { cookie: `${w.cookie}; ${cookiePair(first.headers.get('set-cookie')!)}` });
+    const secondState = new URL(second.headers.get('location')!).searchParams.get('state')!;
+    const jar = cookiePair(second.headers.get('set-cookie')!);
+    fakeGoogle(w.ctx);
+    const done = await callback(w.ctx, { state: firstState, code: 'c1' }, undefined, jar);
+    expect(locationOf(done).searchParams.get('google')).toBe('connected');
+    // The finished one leaves the cookie, the other stays in it.
+    const left = cookiePair(done.headers.get('set-cookie')!);
+    fakeGoogle(w.ctx);
+    expect(locationOf(await callback(w.ctx, { state: secondState, code: 'c2' }, undefined, left)).searchParams.get('google')).toBe('connected');
+    expect(locationOf(await callback(w.ctx, { state: firstState, code: 'c1' }, undefined, left)).searchParams.get('reason')).toMatch(/not started in this browser/);
+  });
+
+  it('does not let a link on another site start a dashboard connection', async () => {
+    const w = await world();
+    const crossSite = await connect(w.ctx, { cookie: w.cookie, host: 'host_alex', headers: { 'sec-fetch-site': 'cross-site' } });
+    expect(crossSite.status).toBe(403);
+    expect((await crossSite.json()).error.code).toBe('start_from_dashboard');
+    // A browser navigating gets the page, with a sentence.
+    const page = locationOf(await connect(w.ctx, { cookie: w.cookie, host: 'host_alex', browser: true, headers: { 'sec-fetch-site': 'cross-site' } }));
+    expect(`${page.origin}${page.pathname}`).toBe(`${TEST_BASE_URL}/admin/integrations`);
+    expect(page.searchParams.get('reason')).toMatch(/only be connected from your dashboard/);
+    // Older browsers without Sec-Fetch-Site are judged by where they say they came from.
+    expect((await connect(w.ctx, { cookie: w.cookie, headers: { referer: 'https://evil.example/page' } })).status).toBe(403);
+    // From our own pages, a bookmark or a typed address it works.
+    const ours: Record<string, string>[] = [{ 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }, { referer: `${TEST_BASE_URL}/admin/team` }, {}];
+    for (const headers of ours) {
+      expect((await connect(w.ctx, { cookie: w.cookie, host: 'host_alex', headers })).status, JSON.stringify(headers)).toBe(302);
+    }
+    // A co-host's private link only ever opens their own record, so where it was clicked does not matter.
+    expect((await connect(w.ctx, { host: 'host_alex', t: w.alexToken, headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(302);
+  });
+
+  it("turns a connection started on the app's own address away with a sentence, on the public address", async () => {
+    const w = await world({ env: { embedBaseUrl: APP_HOST } });
+    // The dashboard opened on the netlify.app address: the cookie would land there, but Google only comes back to the public one.
+    // Before, this went on to Google and failed on the way back with "not started in this browser".
+    const fromApp = { referer: `${APP_HOST}/admin/integrations`, 'sec-fetch-site': 'same-origin' };
+    const owner = await connect(w.ctx, { cookie: w.cookie, browser: true, baseUrl: APP_HOST, headers: fromApp });
+    expect(owner.headers.get('set-cookie')).toBeNull();
+    const page = locationOf(owner);
+    expect(`${page.origin}${page.pathname}`).toBe(`${TEST_BASE_URL}/admin/integrations`);
+    expect(page.searchParams.get('google')).toBe('error');
+    expect(page.searchParams.get('reason')).toMatch(/started on another one\. Please press Connect again on this page\./);
+    // A co-host goes back to their own page on the public address, where Connect then works.
+    const cohost = locationOf(await connect(w.ctx, { host: 'host_alex', t: w.alexToken, browser: true, baseUrl: APP_HOST, headers: { referer: `${APP_HOST}/host/host_alex?t=${w.alexToken}` } }));
+    expect(`${cohost.origin}${cohost.pathname}`).toBe(`${TEST_BASE_URL}/host/host_alex`);
+    expect(cohost.searchParams.get('t')).toBe(w.alexToken);
+    expect(cohost.searchParams.get('reason')).toMatch(/press Connect again/);
+    // Opened on the public address (behind the proxy the request itself still names the app's address), it goes to Google.
+    const proxied = await connect(w.ctx, { cookie: w.cookie, baseUrl: APP_HOST, headers: { referer: `${TEST_BASE_URL}/admin/integrations`, 'sec-fetch-site': 'same-origin' } });
+    expect(new URL(proxied.headers.get('location')!).origin).toBe('https://accounts.google.com');
+    expect(proxied.headers.get('set-cookie')).toMatch(/^mtg_gstate=/);
+  });
+});
+
+describe('another Google account', () => {
+  it('asks Google for its account chooser and leaves out the hint for the old account', async () => {
+    const w = await world();
+    await repo.updateHost(w.ctx, 'host_alex', (h) => ({ ...h, google: { email: 'alex.wrong@gmail.example', refreshTokenEnc: 'v1.x', scopes: [], busyCalendarIds: ['primary'], writeCalendarId: 'primary', gmailSend: false, status: 'ok', connectedAt: TEST_NOW } }));
+    const usual = locationOf(await connect(w.ctx, { host: 'host_alex', t: w.alexToken }));
+    expect(usual.searchParams.get('prompt')).toBe('consent');
+    expect(usual.searchParams.get('login_hint')).toBe('alex.wrong@gmail.example');
+    const other = locationOf(await connect(w.ctx, { host: 'host_alex', t: w.alexToken, switchAccount: true }));
+    expect(other.searchParams.get('prompt')).toBe('consent select_account');
+    expect(other.searchParams.get('login_hint')).toBeNull();
+    expect(other.searchParams.get('access_type')).toBe('offline');
+  });
+
+  it('replaces the connected account with the one picked, keeping the zone mode', async () => {
+    const w = await world();
+    fakeGoogle(w.ctx, { email: 'alex.wrong@gmail.example', zone: 'Europe/Berlin' });
+    await callback(w.ctx, { state: await begin(w.ctx, { host: 'host_alex', t: w.alexToken }), code: 'c1' });
+    expect((await repo.getHost(w.ctx, 'host_alex'))!).toMatchObject({ timezoneMode: 'google', timezone: 'Europe/Berlin', google: { email: 'alex.wrong@gmail.example' } });
+    fakeGoogle(w.ctx, { email: 'alex.right@gmail.example', zone: 'Europe/Berlin' });
+    const to = locationOf(await callback(w.ctx, { state: await begin(w.ctx, { host: 'host_alex', t: w.alexToken, switchAccount: true }), code: 'c2' }));
+    expect(to.searchParams.get('google')).toBe('connected');
+    expect(to.searchParams.get('zone')).toBeNull();
+    expect((await repo.getHost(w.ctx, 'host_alex'))!.google).toMatchObject({ email: 'alex.right@gmail.example', busyCalendarIds: ['primary'], writeCalendarId: 'primary' });
   });
 });
 

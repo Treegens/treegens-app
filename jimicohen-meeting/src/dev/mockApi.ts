@@ -467,7 +467,8 @@ function publicBooking(b: Booking): PublicBooking {
     canCancel: upcoming,
     calendarLinks: {
       google: `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${compact(b.start)}/${compact(b.end)}&location=${encodeURIComponent(where)}`,
-      outlook: `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(title)}&startdt=${encodeURIComponent(b.start)}&enddt=${encodeURIComponent(b.end)}&location=${encodeURIComponent(where)}`,
+      outlook: `https://outlook.live.com/calendar/0/action/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(title)}&startdt=${encodeURIComponent(b.start)}&enddt=${encodeURIComponent(b.end)}&location=${encodeURIComponent(where)}`,
+      office365: `https://outlook.office.com/calendar/0/action/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(title)}&startdt=${encodeURIComponent(b.start)}&enddt=${encodeURIComponent(b.end)}&location=${encodeURIComponent(where)}`,
       ics: icsDataUrl(b),
     },
     cancellation: b.cancellation ? { at: b.cancellation.at, by: b.cancellation.by, reason: b.cancellation.reason } : null,
@@ -1006,6 +1007,9 @@ on(
   { write: true },
 );
 
+// The real server runs the slot engine for this. The demo data's hosts always share some hours.
+on('POST', '/admin/event-types-check', () => (requireAdmin(), { ok: true }));
+
 on('GET', '/admin/hosts', () => (requireAdmin(), { hosts: clone(state.hosts) }));
 
 on(
@@ -1177,7 +1181,22 @@ on(
   { write: true },
 );
 
-on('GET', '/admin/integrations', (): IntegrationsStatus => (requireAdmin(), clone(state.integrations)));
+on(
+  'DELETE',
+  '/admin/bookings/:id',
+  ({ params }) => {
+    requireAdmin();
+    const b = state.bookings.find((x) => x.id === params[0]);
+    if (!b) return { ok: true };
+    if (b.status === 'confirmed' && Date.parse(b.end) > Date.now()) fail(409, 'upcoming', 'This meeting has not happened yet. Cancel it first, then you can delete it.');
+    state.bookings = state.bookings.filter((x) => x.id !== b.id);
+    save();
+    return { ok: true };
+  },
+  { write: true },
+);
+
+on('GET', '/admin/integrations',(): IntegrationsStatus => (requireAdmin(), clone(state.integrations)));
 
 on(
   'PUT',
@@ -1282,6 +1301,20 @@ on('PUT', '/host/:id', ({ params, query, body }) => {
 });
 
 on('GET', '/host/:id/calendars', ({ params, query }) => ({ calendars: calendarsOf(hostByToken(params[0], query.t)) }));
+
+on(
+  'POST',
+  '/host/:id/google/disconnect',
+  ({ params, query }) => {
+    const host = hostByToken(params[0], query.t);
+    host.google = null;
+    host.calendarHealth = null;
+    if (host.timezoneMode === 'google') host.timezoneMode = 'device';
+    save();
+    return { ok: true, host: clone(host) };
+  },
+  { write: true },
+);
 
 // ───────────── entry point ─────────────
 

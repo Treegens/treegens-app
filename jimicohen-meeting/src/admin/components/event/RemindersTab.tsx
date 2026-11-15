@@ -13,6 +13,7 @@ import { CHANNEL_LABEL, TEMPLATE_VARIABLES_FALLBACK, localId, reminderSentence }
 import { useAdmin } from '../../state';
 import { OffsetInput } from '../Fields';
 import { FieldGroup, Notice, Section } from '../Page';
+import { type HostGap, hostGap, unreachableHosts } from './reach';
 import type { TabProps } from './shared';
 
 const MAX_OFFSET = 43200;
@@ -35,6 +36,10 @@ interface ChannelState {
   ready: boolean;
   /** one short line under the channel name */
   detail: string;
+  /** when not ready: what is missing, as a whole sentence */
+  missing: string;
+  /** when not ready: where to fix it */
+  href: string;
 }
 
 function hourLabel(h: number): string {
@@ -43,26 +48,51 @@ function hourLabel(h: number): string {
 }
 
 export function RemindersTab({ draft, update, errors }: TabProps) {
-  const { data } = useAdmin();
+  const { data, ownerHost } = useAdmin();
   const integ = data.integrations;
   const assistant = data.site.assistant;
   const [editing, setEditing] = useState<{ rule: ReminderRule; isNew: boolean } | null>(null);
   const rules = useMemo(() => sortRules(draft.reminders), [draft.reminders]);
   const hostCount = draft.hostIds.length;
+  const hosts = useMemo(() => data.hosts.filter((h) => draft.hostIds.includes(h.id)), [data.hosts, draft.hostIds]);
+  const gapOf = (rule: ReminderRule) => (rule.audience === 'host' ? hostGap(rule.channel, unreachableHosts(rule.channel, hosts), ownerHost.id) : null);
 
+  // A Messaging Service sends texts but cannot call: calls need a Twilio number of their own.
+  const calls = integ.twilio.calls ?? (integ.twilio.configured && !!integ.twilio.fromNumber);
+  const gmail = integ.email.gmailProblem;
   const channels: Record<ReminderChannel, ChannelState> = {
     email: {
       ready: integ.email.resolved !== 'none',
-      detail: integ.email.resolved === 'gmail' ? 'Sent from your Gmail' : integ.email.resolved === 'resend' ? `Sent from ${integ.email.fromEmail || 'your domain'}` : 'Not connected yet',
+      detail:
+        integ.email.resolved === 'gmail'
+          ? 'Sent from your Gmail'
+          : integ.email.resolved === 'resend'
+            ? `Sent from ${integ.email.fromEmail || 'your domain'}`
+            : gmail === 'needs_reconnect'
+              ? 'Gmail cannot send until you reconnect Google'
+              : gmail === 'keys_missing'
+                ? 'Gmail cannot send without the Google keys'
+                : 'Not connected yet',
+      missing: gmail ? 'Email cannot be sent right now' : 'Email is not connected yet',
+      href: gmail ? '/admin/integrations#google' : '/admin/integrations#email',
     },
-    sms: { ready: integ.twilio.configured, detail: integ.twilio.configured ? `Sent from ${integ.twilio.fromNumber || 'your Twilio number'}` : 'Not connected yet' },
-    call: {
+    sms: {
       ready: integ.twilio.configured,
+      detail: integ.twilio.configured ? `Sent from ${integ.twilio.fromNumber || 'your Twilio number'}` : 'Not connected yet',
+      missing: 'Texts are not connected yet',
+      href: '/admin/integrations#twilio',
+    },
+    call: {
+      ready: calls,
       detail: !integ.twilio.configured
         ? 'Not connected yet'
-        : integ.anthropic.configured
-          ? `${assistant.name} calls between ${hourLabel(assistant.callWindowStartHour)} and ${hourLabel(assistant.callWindowEndHour)}, their time`
-          : 'Uses a simple script until you add an Anthropic key',
+        : !calls
+          ? 'Needs a Twilio phone number'
+          : integ.anthropic.configured
+            ? `${assistant.name} calls between ${hourLabel(assistant.callWindowStartHour)} and ${hourLabel(assistant.callWindowEndHour)}, their time`
+            : 'Uses a simple script until you add an Anthropic key',
+      missing: integ.twilio.configured ? 'Calls need a Twilio phone number' : 'Calls are not connected yet',
+      href: '/admin/integrations#twilio',
     },
   };
 
@@ -101,8 +131,8 @@ export function RemindersTab({ draft, update, errors }: TabProps) {
                   Ready
                 </Badge>
               ) : (
-                <ButtonLink variant="secondary" size="sm" to="/admin/integrations" iconRight={<ChevronRight size={14} />}>
-                  Connect
+                <ButtonLink variant="secondary" size="sm" to={channels[c].href} iconRight={<ChevronRight size={14} />}>
+                  {c === 'call' && integ.twilio.configured ? 'Add a number' : c === 'email' && gmail ? 'Fix this' : 'Connect'}
                 </ButtonLink>
               )}
             </li>
@@ -138,6 +168,7 @@ export function RemindersTab({ draft, update, errors }: TabProps) {
               const index = draft.reminders.findIndex((r) => r.id === rule.id);
               const err = Object.keys(errors).find((k) => k.startsWith(`reminders.${index}.`));
               const custom = !!rule.body?.trim() || !!rule.subject?.trim();
+              const gap = rule.enabled ? gapOf(rule) : null;
               return (
                 <li key={rule.id} className={cx('adm-rule', !rule.enabled && 'is-off')}>
                   <span className={cx('adm-rule__icon', `adm-rule__icon--${rule.channel}`)} aria-hidden="true">
@@ -150,12 +181,24 @@ export function RemindersTab({ draft, update, errors }: TabProps) {
                       {!state.ready ? (
                         <>
                           {' · '}
-                          <Link className="adm-rule__warn" to="/admin/integrations">
-                            {CHANNEL_LABEL[rule.channel]} is not connected yet
+                          <Link className="adm-rule__warn" to={state.href}>
+                            {state.missing}
+                          </Link>
+                        </>
+                      ) : gap ? (
+                        <>
+                          {' · '}
+                          <Link className="adm-rule__warn" to={gap.href}>
+                            {gap.short}
                           </Link>
                         </>
                       ) : null}
                     </p>
+                    {rule.channel === 'call' ? (
+                      <p className="adm-rule__meta">
+                        Rings only between {hourLabel(assistant.callWindowStartHour)} and {hourLabel(assistant.callWindowEndHour)} their time. A call that would fall outside moves inside those hours.
+                      </p>
+                    ) : null}
                     {err ? (
                       <p className="adm-fielderror" role="alert">
                         {errors[err]}
@@ -185,7 +228,7 @@ export function RemindersTab({ draft, update, errors }: TabProps) {
             items={[
               { label: 'Email', icon: <Mail size={16} />, hint: channels.email.ready ? undefined : 'Not connected', onSelect: () => startNew('email') },
               { label: 'Text message', icon: <MessageSquareText size={16} />, hint: channels.sms.ready ? undefined : 'Not connected', onSelect: () => startNew('sms') },
-              { label: 'AI phone call', icon: <PhoneCall size={16} />, hint: channels.call.ready ? undefined : 'Not connected', onSelect: () => startNew('call') },
+              { label: 'AI phone call', icon: <PhoneCall size={16} />, hint: channels.call.ready ? undefined : integ.twilio.configured ? 'Needs a number' : 'Not connected', onSelect: () => startNew('call') },
             ]}
           />
         </div>
@@ -195,6 +238,7 @@ export function RemindersTab({ draft, update, errors }: TabProps) {
         editing={editing}
         channels={channels}
         hostCount={hostCount}
+        gapOf={gapOf}
         assistantName={assistant.name}
         variables={data.templateVariables?.length ? data.templateVariables : TEMPLATE_VARIABLES_FALLBACK}
         onClose={() => setEditing(null)}
@@ -212,13 +256,15 @@ interface RuleDialogProps {
   editing: { rule: ReminderRule; isNew: boolean } | null;
   channels: Record<ReminderChannel, ChannelState>;
   hostCount: number;
+  /** for a reminder to the hosts: who it does not reach, and where that is fixed */
+  gapOf: (rule: ReminderRule) => HostGap | null;
   assistantName: string;
   variables: { key: string; description: string }[];
   onClose: () => void;
   onSave: (rule: ReminderRule) => void;
 }
 
-function RuleDialog({ editing, channels, hostCount, assistantName, variables, onClose, onSave }: RuleDialogProps) {
+function RuleDialog({ editing, channels, hostCount, gapOf, assistantName, variables, onClose, onSave }: RuleDialogProps) {
   const [rule, setRule] = useState<ReminderRule | null>(editing?.rule ?? null);
   const [custom, setCustom] = useState(false);
   const [allVars, setAllVars] = useState(false);
@@ -247,6 +293,7 @@ function RuleDialog({ editing, channels, hostCount, assistantName, variables, on
   const patch = (p: Partial<ReminderRule>) => setRule((r) => (r ? { ...r, ...p } : r));
   const isCall = rule.channel === 'call';
   const state = channels[rule.channel];
+  const gap = gapOf(rule);
   const tooFar = rule.offsetMinutes > MAX_OFFSET;
 
   const setChannel = (channel: ReminderChannel) => {
@@ -312,12 +359,12 @@ function RuleDialog({ editing, channels, hostCount, assistantName, variables, on
           <Notice
             tone="warning"
             action={
-              <Link className="adm-textlink" to="/admin/integrations">
+              <Link className="adm-textlink" to={state.href}>
                 Set it up
               </Link>
             }
           >
-            {CHANNEL_LABEL[rule.channel]} is not connected yet. You can add this reminder now and it starts working once you connect it.
+            {state.missing}. You can add this reminder now, and it starts working once that is fixed.
           </Notice>
         ) : null}
 
@@ -332,6 +379,19 @@ function RuleDialog({ editing, channels, hostCount, assistantName, variables, on
             ]}
           />
         </FieldGroup>
+
+        {gap ? (
+          <Notice
+            tone="warning"
+            action={
+              <Link className="adm-textlink" to={gap.href}>
+                {gap.place}
+              </Link>
+            }
+          >
+            {gap.text}
+          </Notice>
+        ) : null}
 
         <div className="adm-grid2">
           <FieldGroup label="When" error={tooFar ? 'At most 30 days away from the meeting.' : undefined}>

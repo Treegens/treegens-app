@@ -7,7 +7,7 @@ import { getBooking, getSite, listJobs, updateHost } from '../../server/lib/repo
 import { computeTwilioSignature } from '../../server/lib/twilio';
 import { startReminderCall } from '../../server/lib/voice';
 import { routes } from '../../server/routes/webhooks';
-import { apiRequest, makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { apiRequest, makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
 
 // ───────────────────────── fixtures ─────────────────────────
 
@@ -44,6 +44,8 @@ async function setup(env: Partial<Env> = TWILIO_ENV): Promise<{ ctx: TestCtx; tw
   });
   await getSite(ctx);
   await updateHost(ctx, 'host_owner', (h) => ({ ...h, email: 'jimi@example.com' }));
+  // First-run setup is done, so the booking page takes bookings (booking.ts siteIsOpen).
+  await markSetUp(ctx);
   return { ctx, twilio };
 }
 
@@ -85,15 +87,15 @@ const texted = (xml: string): string => unescapeXml(/<Message>([\s\S]*?)<\/Messa
 // ───────────────────────── tests ─────────────────────────
 
 describe('webhook route table', () => {
-  it('holds exactly the two Twilio entry points', () => {
-    expect(routes.map((r) => `${r.method} ${r.pattern}`)).toEqual(['POST /twilio/voice/:step', 'POST /twilio/sms']);
+  it('holds exactly the three Twilio entry points', () => {
+    expect(routes.map((r) => `${r.method} ${r.pattern}`)).toEqual(['POST /twilio/voice/:step', 'POST /twilio/sms', 'POST /twilio/sms/status']);
   });
 
   it('answers 404 for an unknown call step and 405 for anything but POST', async () => {
     const { ctx } = await setup();
     const unknown = await handle(twilioPost('/twilio/voice/bogus?c=call_x', { CallSid: CALL_SID }), ctx);
     expect(unknown.status).toBe(404);
-    for (const path of ['/twilio/voice/start', '/twilio/sms']) {
+    for (const path of ['/twilio/voice/start', '/twilio/sms', '/twilio/sms/status']) {
       const res = await handle(apiRequest('GET', path), ctx);
       expect(res.status).toBe(405);
       expect(res.headers.get('allow')).toBe('POST');
@@ -165,6 +167,101 @@ describe('POST /twilio/sms', () => {
     const dev = (await setup({ ...TWILIO_ENV, mockProviders: true })).ctx;
     const res = await handle(twilioPost('/twilio/sms', { From: '+14155550123', Body: 'hi' }, 'mock'), dev);
     expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /twilio/sms/status', () => {
+  /** The confirmation text the booking sent, and the address Twilio was told to report back to. */
+  async function bookedWithText(ctx: TestCtx, twilio: Sent[]) {
+    const booking = await book(ctx);
+    const text = twilio.find((t) => t.url.endsWith('/Messages.json') && t.params.get('To') === PHONE);
+    expect(text, 'confirmation text').toBeDefined();
+    const callback = new URL(text!.params.get('StatusCallback')!);
+    expect(callback.origin + callback.pathname).toBe(`${PUBLIC_API}/twilio/sms/status`);
+    expect(Object.fromEntries(callback.searchParams)).toEqual({ b: booking.id, k: 'confirmation' });
+    return { booking, path: `/twilio/sms/status${callback.search}` };
+  }
+
+  const report = (status: string, extra: Record<string, string> = {}) => ({
+    MessageSid: 'SM' + 'a'.repeat(32),
+    MessageStatus: status,
+    To: PHONE,
+    From: '+15005550006',
+    AccountSid: SID,
+    ...extra,
+  });
+
+  const alerts = async (ctx: TestCtx) => (await listJobs(ctx)).filter((j) => j.kind === 'host_alert');
+
+  it('notes an undelivered text on the booking and tells the owner what to fix, once', async () => {
+    const { ctx, twilio } = await setup();
+    const { booking, path } = await bookedWithText(ctx, twilio);
+    const before = (await getBooking(ctx, booking.id))!.timeline.length;
+
+    const res = await handle(twilioPost(path, report('undelivered', { ErrorCode: '30034' })), ctx);
+    expect(res.status).toBe(204);
+    const timeline = (await getBooking(ctx, booking.id))!.timeline;
+    expect(timeline.slice(before)).toEqual([
+      {
+        at: NOW,
+        type: 'confirmation_sms_undelivered',
+        detail: `Not delivered to ${PHONE}: the number it was sent from is not registered for texting US numbers (A2P 10DLC). Twilio error 30034.`,
+      },
+    ]);
+    const [alert] = await alerts(ctx);
+    expect(alert).toMatchObject({ type: 'message', bookingId: '', channel: 'email', audience: 'host', kind: 'host_alert', subject: 'Texts from your booking page are not being delivered' });
+    expect(alert.body).toContain('A text from your booking page was not delivered: the number it was sent from is not registered for texting US numbers (A2P 10DLC). Twilio error 30034.');
+    expect(alert.body).toContain('Register your number in the Twilio console');
+    expect(alert.body).not.toMatch(/[\u2012-\u2015]/);
+
+    // The same report again, and a failure of another text the same day: no second note, no second alert.
+    await handle(twilioPost(path, report('undelivered', { ErrorCode: '30034' })), ctx);
+    await handle(twilioPost(path, report('failed', { ErrorCode: '30034', MessageSid: 'SM' + 'b'.repeat(32) })), ctx);
+    expect((await getBooking(ctx, booking.id))!.timeline.filter((e) => e.type === 'confirmation_sms_undelivered')).toHaveLength(2);
+    expect(await alerts(ctx)).toHaveLength(1);
+  });
+
+  it('only notes a problem with one recipient, without alerting the owner', async () => {
+    const { ctx, twilio } = await setup();
+    const { booking, path } = await bookedWithText(ctx, twilio);
+    expect((await handle(twilioPost(path, report('undelivered', { ErrorCode: '30003' })), ctx)).status).toBe(204);
+    expect((await getBooking(ctx, booking.id))!.timeline.at(-1)).toMatchObject({
+      type: 'confirmation_sms_undelivered',
+      detail: `Not delivered to ${PHONE}: the phone was switched off or out of reach. Twilio error 30003.`,
+    });
+    expect(await alerts(ctx)).toEqual([]);
+  });
+
+  it('ignores every other step of a text\'s journey', async () => {
+    const { ctx, twilio } = await setup();
+    const { booking, path } = await bookedWithText(ctx, twilio);
+    const before = await getBooking(ctx, booking.id);
+    for (const status of ['queued', 'sending', 'sent', 'delivered', 'read', '']) {
+      const res = await handle(twilioPost(path, report(status)), ctx);
+      expect(res.status, status).toBe(204);
+    }
+    expect(await getBooking(ctx, booking.id)).toEqual(before);
+    expect(await alerts(ctx)).toEqual([]);
+  });
+
+  it('alerts the owner about a dashboard test text, which has no booking', async () => {
+    const { ctx } = await setup();
+    const res = await handle(twilioPost('/twilio/sms/status', report('failed', { ErrorCode: '30032' })), ctx);
+    expect(res.status).toBe(204);
+    const [alert] = await alerts(ctx);
+    expect(alert.body).toContain('Verify your toll-free number');
+  });
+
+  it('refuses a report without a valid signature, and one signed for another booking', async () => {
+    const { ctx, twilio } = await setup();
+    const { booking, path } = await bookedWithText(ctx, twilio);
+    const before = await getBooking(ctx, booking.id);
+    const form = report('undelivered', { ErrorCode: '30034' });
+    for (const signature of [null, 'mock', computeTwilioSignature(TOKEN, `${PUBLIC_API}/twilio/sms/status?b=bk_other&k=reminder`, form)]) {
+      expect((await handle(twilioPost(path, form, signature), ctx)).status).toBe(403);
+    }
+    expect(await getBooking(ctx, booking.id)).toEqual(before);
+    expect(await alerts(ctx)).toEqual([]);
   });
 });
 

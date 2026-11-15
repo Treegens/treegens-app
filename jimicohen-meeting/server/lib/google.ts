@@ -36,9 +36,19 @@ const ACCESS_PURPOSE = 'google-access';
 const STATE_TTL_SEC = 600;
 
 const REQUEST_TIMEOUT_MS = 6_000;
+/**
+ * A free/busy read gives up sooner, so that its one retry still fits inside the time a booking waits for
+ * the calendars (BOOKING_READ_BUDGET_MS in booking.ts, 8.5 s). With the full 6 s a retry could never land.
+ */
+const FREEBUSY_TIMEOUT_MS = 3_500;
 const RETRY_PAUSE_MS = 150;
+/** A Gmail send is not repeated after an unclear failure, so it gets longer to answer than other requests. */
+const GMAIL_SEND_TIMEOUT_MS = 15_000;
 /** Access tokens are dropped from the cache this long before Google expires them. */
 const TOKEN_EXPIRY_MARGIN_SEC = 60;
+/** A Meet link Google is still creating: how often to look again right after the insert, and how long to wait each time. */
+const MEET_LOOKS = 3;
+const MEET_LOOK_PAUSE_MS = 600;
 
 const FREEBUSY_CHUNK_MS = 60 * 86_400_000;
 /** freeBusy expands at most 50 calendars per request. */
@@ -176,7 +186,11 @@ interface StatePayload {
   n: string;
 }
 
-export async function buildGoogleAuthUrl(ctx: Ctx, p: { hostId: string; returnTo: string; gmail?: boolean; loginHint?: string }): Promise<string> {
+/**
+ * `selectAccount`: Google shows its account chooser as well as the consent screen (and no login hint
+ * is sent), for someone who connected the wrong account and wants to pick another one.
+ */
+export async function buildGoogleAuthUrl(ctx: Ctx, p: { hostId: string; returnTo: string; gmail?: boolean; loginHint?: string; selectAccount?: boolean }): Promise<string> {
   const creds = await clientCredentials(ctx);
   if (!creds) {
     throw new HttpError(400, 'google_not_configured', 'Add the Google client ID and client secret under Integrations before connecting a calendar.');
@@ -194,13 +208,25 @@ export async function buildGoogleAuthUrl(ctx: Ctx, p: { hostId: string; returnTo
     scope: scopes.join(' '),
     // offline + consent: Google only hands out a refresh token when the user sees the consent screen
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: p.selectAccount === true ? 'consent select_account' : 'consent',
     include_granted_scopes: 'true',
     state: signPayload(ctx, STATE_PURPOSE, payload, STATE_TTL_SEC),
   });
-  const hint = oneLine(p.loginHint, 254);
+  const hint = p.selectAccount === true ? '' : oneLine(p.loginHint, 254);
   if (hint.includes('@') && !/\s/.test(hint)) query.set('login_hint', hint);
   return `${AUTH_ENDPOINT}?${query.toString()}`;
+}
+
+/**
+ * What a `state` says, for the callback route to check before anything else happens: whose
+ * connection it is, where it returns to, and its single-use nonce (the connect route ties that to
+ * the browser with a cookie). Null for a state that is not ours, was altered or has expired.
+ * Spends nothing: completeGoogleAuth still claims the nonce.
+ */
+export function readGoogleState(ctx: Ctx, state: string): { hostId: string; returnTo: string; nonce: string } | null {
+  const payload = verifyPayload<Partial<StatePayload>>(ctx, STATE_PURPOSE, state);
+  if (!payload || typeof payload.hostId !== 'string' || typeof payload.n !== 'string' || payload.n === '' || typeof payload.returnTo !== 'string') return null;
+  return { hostId: payload.hostId, returnTo: safeReturnTo(open(ctx, RETURN_PURPOSE, payload.returnTo)) ?? DEFAULT_RETURN, nonce: payload.n };
 }
 
 // ───────────────────────── OAuth: token endpoint ─────────────────────────
@@ -317,6 +343,8 @@ export interface GoogleAuthResult {
   email?: string;
   /** true when this host had no Google connection before */
   firstConnect?: boolean;
+  /** when the new connection stops working, if Google said so (consent screen still in "Testing") */
+  expiresAt?: string;
 }
 
 /**
@@ -395,8 +423,14 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
         'Google did not provide long-term access. Open myaccount.google.com/permissions, remove this app from the list, then connect again.',
       );
     }
+    // Google only says when the refresh token runs out while the consent screen is still in "Testing",
+    // where a connection lasts 7 days. It is stored so the dashboard can say so in time. The record is
+    // rebuilt on every connect, so a later connect without the field (a published app) clears it.
+    const expiresInSec = Number(body.refresh_token_expires_in);
+    const refreshExpiresAt =
+      Number.isFinite(expiresInSec) && expiresInSec > 0 ? new Date(ctx.now().getTime() + Math.floor(expiresInSec) * 1000).toISOString() : undefined;
     if (body.refresh_token_expires_in !== undefined) {
-      ctx.log('warn', 'google oauth: the refresh token expires. Publish the OAuth consent screen ("In production") to keep the connection alive.');
+      ctx.log('warn', 'google oauth: the refresh token expires. Publish the OAuth consent screen ("In production") to keep the connection alive.', { refreshExpiresAt });
     }
 
     const connection: HostGoogle = {
@@ -408,11 +442,12 @@ export async function completeGoogleAuth(ctx: Ctx, params: URLSearchParams): Pro
       gmailSend: scopes.includes(GMAIL_SEND_SCOPE),
       status: 'ok',
       connectedAt: ctx.now().toISOString(),
+      ...(refreshExpiresAt ? { refreshExpiresAt } : {}),
     };
     const saved = await updateHost(ctx, hostId, (h) => ({ ...h, google: connection, calendarHealth: null }));
     if (!saved) return fail('This team member no longer exists.');
     await cacheAccessToken(ctx, hostId, refreshTokenEnc, accessToken, body.expires_in);
-    return { ok: true, hostId, returnTo, email, firstConnect: previous === null };
+    return { ok: true, hostId, returnTo, email, firstConnect: previous === null, ...(refreshExpiresAt ? { expiresAt: refreshExpiresAt } : {}) };
   } catch (err) {
     ctx.log('error', 'google oauth: callback failed', { error: err instanceof Error ? err.name : 'unknown' });
     return fail(err instanceof GoogleApiError && err.reason === 'network' ? 'Google could not be reached. Please try again.' : 'Something went wrong while connecting Google. Please try again.');
@@ -495,12 +530,21 @@ interface ApiRequest {
   body?: unknown;
   /** non-2xx statuses the caller wants back instead of an exception */
   allow?: number[];
+  /** how long one attempt may take (default REQUEST_TIMEOUT_MS) */
+  timeoutMs?: number;
+  /**
+   * false for a request that must never be sent twice. A Gmail send carries no idempotency key, so after a
+   * network failure, a timeout or a 5xx (when Google may have sent the message anyway) it is not posted again
+   * here: the job runner decides about a later attempt. A 429 or a rate-limit 403 is a refusal, nothing was
+   * done, so that is still tried once more, and a 401 still gets one fresh token.
+   */
+  repeatable?: boolean;
 }
 
 /**
- * One Google API call as the host. Retries once on a network failure, a 5xx or a rate limit,
- * and once more with a fresh token after a 401. Everything else becomes GoogleApiError,
- * or GoogleAuthError when only a new consent can fix it.
+ * One Google API call as the host. Retries once on a network failure, a 5xx or a rate limit
+ * (only on a rate limit when `repeatable` is false), and once more with a fresh token after a 401.
+ * Everything else becomes GoogleApiError, or GoogleAuthError when only a new consent can fix it.
  */
 async function googleApi<T>(ctx: Ctx, host: Host, req: ApiRequest): Promise<{ status: number; data: T | null }> {
   let token = await getGoogleAccessToken(ctx, host);
@@ -515,10 +559,10 @@ async function googleApi<T>(ctx: Ctx, host: Host, req: ApiRequest): Promise<{ st
         method: req.method,
         headers,
         body: req.body === undefined ? undefined : JSON.stringify(req.body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(req.timeoutMs ?? REQUEST_TIMEOUT_MS),
       });
     } catch {
-      if (!retried) {
+      if (!retried && req.repeatable !== false) {
         retried = true;
         await pause(RETRY_PAUSE_MS);
         continue;
@@ -537,7 +581,8 @@ async function googleApi<T>(ctx: Ctx, host: Host, req: ApiRequest): Promise<{ st
     }
 
     const reason = apiErrorReason(await readJsonBody(res));
-    const transient = res.status >= 500 || res.status === 429 || (res.status === 403 && RATE_LIMIT_REASONS.has(reason));
+    const refused = res.status === 429 || (res.status === 403 && RATE_LIMIT_REASONS.has(reason));
+    const transient = refused || (res.status >= 500 && req.repeatable !== false);
     if (transient && !retried) {
       retried = true;
       await pause(RETRY_PAUSE_MS);
@@ -591,6 +636,7 @@ export async function googleFreeBusy(ctx: Ctx, host: Host, range: Interval): Pro
           method: 'POST',
           url: `${CALENDAR_BASE}/freeBusy`,
           body: { timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), items: group.map((id) => ({ id })) },
+          timeoutMs: FREEBUSY_TIMEOUT_MS,
         }).then(({ data }) => {
           const calendars = isRecord(data) && isRecord(data.calendars) ? data.calendars : null;
           if (!calendars) throw new GoogleApiError('Google sent an unreadable free/busy answer.', 200, 'bad_response');
@@ -802,19 +848,38 @@ export async function googleCreateEvent(
   }
 
   let meetUrl = meetUrlOf(event);
-  if (input.createMeet && !meetUrl && event.conferenceData?.createRequest?.status?.statusCode === 'pending') {
-    // Meet links are normally there at once; when Google is still creating one, look again once.
+  // Meet links are normally there at once. Google creates them asynchronously, though: while it says
+  // "pending", look again a few times, with a short pause. "failure" will not change by asking again.
+  let pending = event.conferenceData?.createRequest?.status?.statusCode === 'pending';
+  for (let look = 0; input.createMeet && !meetUrl && pending && look < MEET_LOOKS; look++) {
+    await new Promise((resolve) => setTimeout(resolve, MEET_LOOK_PAUSE_MS));
     try {
       const again = (await googleApi<GoogleEvent>(ctx, host, { method: 'GET', url: eventsUrl(calendarId, event.id) })).data;
       meetUrl = meetUrlOf(again);
+      pending = again?.conferenceData?.createRequest?.status?.statusCode === 'pending';
     } catch {
-      // the event exists; a missing link is not worth failing the booking for
+      // the event exists; a missing link is not worth failing the booking for (the caller asks again later)
+      break;
     }
   }
   const result: { eventId: string; calendarId: string; htmlLink?: string; meetUrl?: string } = { eventId: event.id, calendarId };
   if (typeof event.htmlLink === 'string' && event.htmlLink.startsWith('https://')) result.htmlLink = event.htmlLink;
   if (meetUrl) result.meetUrl = meetUrl;
   return result;
+}
+
+/**
+ * The links of an existing event, read again: the Meet link of an event whose conference Google was still
+ * creating when it was inserted. Nothing is changed, so nobody is notified.
+ */
+export async function googleGetEventLinks(ctx: Ctx, host: Host, calendarId: string, eventId: string): Promise<{ meetUrl?: string; htmlLink?: string }> {
+  requireGoogle(host);
+  const event = (await googleApi<GoogleEvent>(ctx, host, { method: 'GET', url: eventsUrl(calendarId || 'primary', eventId) })).data;
+  const out: { meetUrl?: string; htmlLink?: string } = {};
+  const meetUrl = meetUrlOf(event);
+  if (meetUrl) out.meetUrl = meetUrl;
+  if (typeof event?.htmlLink === 'string' && event.htmlLink.startsWith('https://')) out.htmlLink = event.htmlLink;
+  return out;
 }
 
 /**
@@ -852,6 +917,9 @@ export async function gmailSendRaw(ctx: Ctx, host: Host, rawMime: string): Promi
     method: 'POST',
     url: GMAIL_SEND_ENDPOINT,
     body: { raw: Buffer.from(rawMime, 'utf8').toString('base64url') },
+    // Sent at most once per attempt, with time to answer, so "timed out but sent" stays rare.
+    repeatable: false,
+    timeoutMs: GMAIL_SEND_TIMEOUT_MS,
   });
   const id = isRecord(data) ? str(data.id) : '';
   if (!id) throw new GoogleApiError('Gmail did not confirm the message.', 200, 'bad_response');

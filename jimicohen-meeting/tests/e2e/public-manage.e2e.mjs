@@ -100,7 +100,7 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       await s.setClock(plus(START, -24 * HOUR));
       await s.runJobs();
       const [reminder] = await s.waitForOutbox({ kind: 'email', to: ADA.email });
-      s.expect(reminder.subject, 'subject').toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 11:00 AM');
+      s.expect(reminder.subject, 'subject').toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 11:00 AM EST');
       const confirm = `${booking.manageUrl}&confirm=1`;
       s.expect(reminder.links, 'links in the reminder').toContain(confirm);
       s.expect(reminder.html, 'the button').toMatch(/I(&#39;|&apos;|')ll be there/);
@@ -210,7 +210,8 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
     await s.step('old reminders are gone, new ones wait at the new instants', async () => {
       s.expect(await jobLines(s), 'reminders after').toEqual([
         `${plus(NEW_START, -24 * HOUR)} reminder email invitee`,
-        `${plus(NEW_START, -2 * HOUR)} reminder call invitee`,
+        // 9:30 AM in New York: two hours before is before calling hours, so the call rings when they open at 8:00
+        `${plus(NEW_START, -90 * MINUTE)} reminder call invitee`,
         `${plus(NEW_START, -1 * HOUR)} reminder email invitee`,
         `${plus(NEW_START, -15 * MINUTE)} reminder sms invitee`,
       ]);
@@ -220,8 +221,8 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
     await s.step('the invitee and the host each get one "moved" message', async () => {
       const emails = await s.outbox({ kind: 'email' });
       s.expect(emails.map((e) => `${e.to.join(',')} | ${e.subject}`).sort(), 'emails').toEqual([
-        `${ADA.email} | New time: Intro call with Jimi Cohen, Thu, Nov 19, 9:30 AM`,
-        `${OWNER_GOOGLE} | Rescheduled: Ada Lovelace for Intro call, now Thu, Nov 19, 2:30 PM`,
+        `${ADA.email} | New time: Intro call with Jimi Cohen, Thu, Nov 19, 9:30 AM EST`,
+        `${OWNER_GOOGLE} | Rescheduled: Ada Lovelace for Intro call, now Thu, Nov 19, 2:30 PM GMT`,
       ]);
       const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
       s.expect(mail.text, 'invitee text').toContain('9:30 AM to 9:45 AM (Eastern Standard Time)');
@@ -229,9 +230,8 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'PUBLISH' });
       s.expect(mail.ics.content, 'calendar file').toContain('DTSTART:20261119T143000Z');
       s.expect(mail.ics.content, 'calendar file sequence').toContain('SEQUENCE:1');
-      const texts = await s.outbox({ kind: 'sms' });
-      s.expect(texts.map((x) => x.to), 'texts').toEqual([PHONE]);
-      s.expect(texts[0].body, 'text').toContain('9:30 AM');
+      // She moved it herself a moment ago: the email carries the new calendar file, a text on top is not needed.
+      s.expect(await s.outbox({ kind: 'sms' }), 'texts').toEqual([]);
       await s.screenshotEmail(mail, 'rescheduled email');
     });
 
@@ -332,8 +332,8 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
     await s.step('cancellation emails: one to her, one to the host with the reason', async () => {
       const emails = await s.outbox({ kind: 'email' });
       s.expect(emails.map((e) => `${e.to.join(',')} | ${e.subject}`).sort(), 'emails').toEqual([
-        `${ADA.email} | Cancelled: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM`,
-        `${OWNER_GOOGLE} | Cancelled: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM`,
+        `${ADA.email} | Cancelled: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST`,
+        `${OWNER_GOOGLE} | Cancelled: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM GMT`,
       ]);
       const [host] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
       s.expect(host.text, 'host text').toContain('My flight was moved, sorry!');
@@ -454,6 +454,105 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       s.expect([move.status, move.data.error.code], 'moving a cancelled booking').toEqual([410, 'cancelled']);
       const confirm = await visitor.request('POST', `/public/bookings/${second.id}/confirm`, { body: { t: second.manageToken } });
       s.expect([confirm.status, confirm.data.error.code], 'confirming a cancelled booking').toEqual([410, 'cancelled']);
+    });
+  });
+
+  await t.scenario('a host moves and then cancels the meeting from the link in their own email', { reset: true }, async (s) => {
+    await s.step('prepare', () => prepare(s));
+    const booking = await s.step('Ada books from New York', () => bookForAda(s));
+    const [notice] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
+    const hostLink = `${booking.manageUrl}&as=host`;
+    s.expect(notice.links, 'the host notice carries the marked manage link').toContain(hostLink);
+    await s.clearOutbox();
+
+    // The host is travelling: their browser is in Nairobi.
+    const page = await s.newPage({ timezoneId: 'Africa/Nairobi', locale: 'en-US' });
+    await s.step('the link keeps saying a host is acting on every page it leads to', async () => {
+      await page.goto(hostLink);
+      const reschedule = page.getByRole('link', { name: 'Reschedule' });
+      s.expect(await reschedule.getAttribute('href'), 'reschedule link').toBe(`/meeting/booking/${booking.id}/reschedule?t=${booking.manageToken}&as=host`);
+      await reschedule.click();
+      await page.getByRole('heading', { name: 'Pick a new time' }).waitFor();
+      await calendarReady(page);
+    });
+
+    await s.step('the host picks Thursday and confirms: Ada keeps her own zone and is told by email and text', async () => {
+      await pickDay(page, '2026-11-19');
+      await pickSlot(page, NEW_START);
+      await page.locator('.bw-confirmbar').getByRole('button', { name: 'Confirm new time' }).click();
+      await page.getByText('Your meeting has moved').waitFor();
+      await s.settle();
+      const stored = (await s.bookings({ id: booking.id }))[0];
+      s.expect(stored, 'booking').toMatchObject({ start: NEW_START, rescheduleCount: 1, invitee: { timezone: NEW_YORK } });
+      s.expect(stored.timeline.filter((e) => e.type === 'rescheduled').at(-1).detail, 'timeline').toMatch(/by a host, from the booking page$/);
+      const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
+      s.expect(mail.text, 'her email, in her zone').toContain('9:30 AM to 9:45 AM (Eastern Standard Time)');
+      s.expect((await s.outbox({ kind: 'sms' })).map((x) => x.to), 'texts').toEqual([PHONE]);
+    });
+
+    await s.step('the host cancels from the same link: recorded as a host\'s, Ada and the owner are told', async () => {
+      await s.clearOutbox();
+      await page.goto(`${s.url(`/booking/${booking.id}/cancel`)}?t=${booking.manageToken}&as=host`);
+      await page.getByRole('heading', { name: 'Cancel this meeting?', level: 1 }).waitFor();
+      await page.getByRole('textbox').fill('Something came up on my side.');
+      await page.getByRole('button', { name: 'Cancel meeting' }).click();
+      await page.getByRole('heading', { name: 'This meeting was cancelled', level: 1 }).waitFor();
+      await s.settle();
+      const stored = (await s.bookings({ id: booking.id }))[0];
+      s.expect(stored.cancellation, 'cancellation').toMatchObject({ by: 'host', via: 'host_link', reason: 'Something came up on my side.' });
+      s.expect(stored.timeline.find((e) => e.type === 'cancelled').detail, 'timeline').toBe('Cancelled by a host, from the booking page: Something came up on my side.');
+      s.expect(await s.outbox({ kind: 'email', to: ADA.email }), 'email to Ada').toHaveLength(1);
+      s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'email to the owner').toHaveLength(1);
+      s.expect((await s.outbox({ kind: 'sms' })).map((x) => x.to), 'texts').toEqual([PHONE]);
+    });
+  });
+
+  await t.scenario('a meeting that now lies past a shorter booking window can still be moved to the weeks before it', { reset: true }, async (s) => {
+    await s.step('prepare', () => prepare(s));
+    const booking = await s.step('Ada books Monday, December 7', async () => {
+      const res = await s.book({ start: '2026-12-07T10:00:00.000Z', ...ADA, timezone: 'Europe/London' });
+      s.expect(res.status, 'booking').toBe(201);
+      await s.settle();
+      return (await s.bookings({ id: res.data.booking.id }))[0];
+    });
+    await s.step('the owner then lets people book only ten days ahead', () => s.apiOk('PUT', '/admin/event-types/evt_intro', { body: { scheduling: { maxDaysAhead: 10 } } }));
+
+    const page = await s.newPage({ timezoneId: 'Europe/London', locale: 'en-US' });
+    await s.step('the reschedule page opens on the weeks that have times, not on "No open times"', async () => {
+      await page.goto(s.url(`/booking/${booking.id}/reschedule?t=${booking.manageToken}`));
+      await page.getByRole('heading', { name: 'Pick a new time' }).waitFor();
+      await page.getByRole('grid', { name: 'November 2026' }).waitFor();
+      await calendarReady(page);
+      s.expect(await page.getByText('No open times right now').count(), 'the dead end').toBe(0);
+      s.expect((await page.locator('.bw-day.is-open').evaluateAll((nodes) => nodes.map((n) => n.dataset.day)))[0], 'first day with times').toBe('2026-11-16');
+      await s.screenshot(page, 'reschedule inside the shorter window');
+    });
+
+    await s.step('while Google cannot be asked, the move waits: "try again in a minute", and the time stays chosen', async () => {
+      s.allowConsoleErrors(/status of 503/);
+      await pickDay(page, '2026-11-18');
+      await pickSlot(page, '2026-11-18T10:00:00.000Z');
+      await s.failService('google-freebusy');
+      await s.linger(page);
+      await page.getByRole('button', { name: 'Confirm new time' }).click();
+      const notice = page.getByRole('alert').filter({ hasText: 'The calendar is not answering right now' });
+      await notice.waitFor();
+      s.expect((await notice.innerText()).replace(/\s+/g, ' '), 'notice').toBe('The calendar is not answering right now Your meeting has not been moved. Please try again in a minute.');
+      s.expect(await page.getByText('That time was just taken').count(), 'told the time was taken').toBe(0);
+      s.expect(await page.locator('.bw-slot.is-selected').getAttribute('data-start'), 'the chosen time').toBe(String(Date.parse('2026-11-18T10:00:00.000Z')));
+      s.expect((await s.bookings({ id: booking.id }))[0].start, 'the booking').toBe('2026-12-07T10:00:00.000Z');
+    });
+
+    await s.step('and once Google answers again, the meeting moves', async () => {
+      await s.clearFailures();
+      // A failed calendar read is remembered for a few seconds.
+      await s.advanceClock({ seconds: 20 });
+      await s.linger(page);
+      await page.getByRole('button', { name: 'Confirm new time' }).click();
+      await page.getByText('Your meeting has moved').waitFor();
+      await page.getByText(`An updated invitation is on its way to ${ADA.email}.`).waitFor();
+      await s.settle();
+      s.expect((await s.bookings({ id: booking.id }))[0], 'the booking').toMatchObject({ start: '2026-11-18T10:00:00.000Z', rescheduleCount: 1 });
     });
   });
 });

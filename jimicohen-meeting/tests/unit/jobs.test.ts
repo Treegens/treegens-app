@@ -1,3 +1,4 @@
+import { DateTime } from 'luxon';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { newEventType } from '../../shared/defaults';
 import type { Booking, EventType, Host, Job, ReminderRule } from '../../shared/types';
@@ -6,6 +7,7 @@ import type { KV } from '../../server/lib/ctx';
 import { memoryKV } from '../../server/lib/store';
 import {
   claim,
+  deleteEventType,
   getBooking,
   getSite,
   listJobs,
@@ -47,8 +49,12 @@ import {
   composeSms,
   deliverMessage,
   enqueueJob,
+  insideCallHours,
   planBookingJobs,
+  planCallTime,
   registerJobHandler,
+  removeReminderJobs,
+  replanBookingReminders,
   runDueJobs,
   scheduleBookingJobs,
   SMS_MAX_LENGTH,
@@ -229,7 +235,8 @@ describe('scheduleBookingJobs', () => {
         `confirmation/sms/invitee @ ${TEST_NOW}`,
         `host_new/email/host/host_owner @ ${TEST_NOW}`,
         `reminder/email/invitee @ ${at(START, -24 * HOUR)}`,
-        `reminder/call/invitee @ ${at(START, -2 * HOUR)}`,
+        // the 2 hour call would ring at 9:30 PM in Nairobi, after calling hours: it rings at 8 PM instead
+        `reminder/call/invitee @ ${at(START, -3.5 * HOUR)}`,
         `reminder/email/invitee @ ${at(START, -1 * HOUR)}`,
         `reminder/sms/invitee @ ${at(START, -15 * MIN)}`,
       ].sort(),
@@ -337,7 +344,7 @@ describe('scheduleBookingJobs', () => {
         `rescheduled/sms/invitee @ ${TEST_NOW}`,
         `rescheduled/email/host/host_owner @ ${TEST_NOW}`,
         `reminder/email/invitee @ ${at(newStart, -24 * HOUR)}`,
-        `reminder/call/invitee @ ${at(newStart, -2 * HOUR)}`,
+        `reminder/call/invitee @ ${at(newStart, -3.5 * HOUR)}`,
         `reminder/email/invitee @ ${at(newStart, -1 * HOUR)}`,
         `reminder/sms/invitee @ ${at(newStart, -15 * MIN)}`,
       ].sort(),
@@ -347,7 +354,7 @@ describe('scheduleBookingJobs', () => {
 
     await runDueJobs(world.ctx);
     const notice = world.emails.find((e) => e.subject.startsWith('New time:'))!;
-    expect(notice.subject).toBe('New time: Intro call with Jimi Cohen, Wed, Nov 18, 11:30 PM');
+    expect(notice.subject).toBe('New time: Intro call with Jimi Cohen, Wed, Nov 18, 11:30 PM GMT+3');
     expect(notice.text).toContain('The old time was Tuesday, November 17, 2026 at 11:30 PM GMT+3.');
     expect(icsOf(notice)).toContain('SEQUENCE:1');
   });
@@ -371,7 +378,7 @@ describe('planBookingJobs', () => {
     expect(plan).toEqual(planBookingJobs(input));
     expect(plan.map((p) => [p.kind, p.channel, p.dueMs - START_MS])).toEqual([
       ['reminder', 'email', -24 * HOUR],
-      ['reminder', 'call', -2 * HOUR],
+      ['reminder', 'call', -3.5 * HOUR], // moved inside calling hours (8 AM to 9 PM Nairobi time)
       ['reminder', 'email', -1 * HOUR],
       ['reminder', 'sms', -15 * MIN],
     ]);
@@ -426,7 +433,7 @@ describe('runDueJobs: delivery', () => {
     await runDueJobs(world.ctx);
     const email = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
     const token = hmacHex(world.ctx, 'manage', 'bkg_test1');
-    expect(email.subject).toBe('Confirmed: Intro call with Jimi Cohen, Tue, Nov 17, 11:30 PM');
+    expect(email.subject).toBe('Confirmed: Intro call with Jimi Cohen, Tue, Nov 17, 11:30 PM GMT+3');
     expect(email.reply_to).toBe('jimi@example.com');
     expect(email.text).toContain("You're all set. Your Intro call with Jimi Cohen is confirmed for Tuesday, November 17, 2026 at 11:30 PM GMT+3.");
     expect(email.text).toContain('When: Tuesday, November 17, 2026\n  11:30 PM to 12:00 AM (East Africa Time)');
@@ -456,7 +463,7 @@ describe('runDueJobs: delivery', () => {
     await book(world, { invitee: { name: 'Sam <i>Rivera</i>', email: 'sam@example.com', phone: '+254700000001', timezone: 'Africa/Nairobi' } });
     await runDueJobs(world.ctx);
     const email = world.emails.find((e) => e.to[0].includes('jimi@example.com'))!;
-    expect(email.subject).toBe('New booking: Sam <i>Rivera</i> for Intro call, Tue, Nov 17, 3:30 PM');
+    expect(email.subject).toBe('New booking: Sam <i>Rivera</i> for Intro call, Tue, Nov 17, 3:30 PM EST');
     expect(email.reply_to).toBe('sam@example.com'); // the host answers the invitee directly
     expect(email.text).toContain('Hi Jimi,');
     expect(email.text).toContain('When: Tuesday, November 17, 2026\n  3:30 PM to 4:00 PM (Eastern Standard Time)');
@@ -495,7 +502,7 @@ describe('runDueJobs: delivery', () => {
     world.ctx.clock.set(at(START, -24 * HOUR));
     expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
     expect(world.emails).toHaveLength(1);
-    expect(world.emails[0].subject).toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 11:30 PM');
+    expect(world.emails[0].subject).toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 11:30 PM GMT+3');
     expect(world.emails[0].text).toContain('A quick reminder that your Intro call with Jimi Cohen is tomorrow at 11:30 PM (East Africa Time).');
     expect(world.emails[0].attachments).toBeUndefined();
 
@@ -506,7 +513,7 @@ describe('runDueJobs: delivery', () => {
 
     world.ctx.clock.set(at(START, -1 * HOUR));
     await runDueJobs(world.ctx);
-    expect(world.emails[1].subject).toBe('Reminder: Intro call with Jimi Cohen is today at 11:30 PM');
+    expect(world.emails[1].subject).toBe('Reminder: Intro call with Jimi Cohen is today at 11:30 PM GMT+3');
 
     world.ctx.clock.set(at(START, -15 * MIN));
     await runDueJobs(world.ctx);
@@ -619,7 +626,7 @@ describe('runDueJobs: never twice', () => {
     world.ctx.clock.advance(2 * MIN);
     await runDueJobs(world.ctx);
     expect(world.emails).toHaveLength(2);
-    expect(world.emails[0].idempotencyKey).toMatch(/^job_[a-z2-7]{16}-invitee$/);
+    expect(world.emails[0].idempotencyKey).toMatch(/^job_[0-9a-f]{20}-invitee$/); // a confirmation's id comes from its once-only claim
     expect(world.emails[1].idempotencyKey).toBe(world.emails[0].idempotencyKey);
   });
 });
@@ -643,7 +650,7 @@ describe('runDueJobs: things that must not be sent', () => {
     await book(world, {}, null);
     world.ctx.clock.set(at(START, -3 * HOUR)); // the cron was down for 21 hours
     await runDueJobs(world.ctx);
-    expect(world.emails[0].subject).toBe('Reminder: Intro call with Jimi Cohen is today at 11:30 PM');
+    expect(world.emails[0].subject).toBe('Reminder: Intro call with Jimi Cohen is today at 11:30 PM GMT+3');
   });
 
   it('drops everything but the cancellation notice once a booking is cancelled', async () => {
@@ -657,8 +664,8 @@ describe('runDueJobs: things that must not be sent', () => {
     const result = await runDueJobs(world.ctx);
     expect(result).toEqual({ processed: 9, failed: 0, remaining: 0 });
     expect(world.emails.map((e) => e.subject).sort()).toEqual([
-      'Cancelled: Intro call with Jimi Cohen, Tue, Nov 17, 11:30 PM',
-      'Cancelled: Sam Rivera for Intro call, Tue, Nov 17, 3:30 PM',
+      'Cancelled: Intro call with Jimi Cohen, Tue, Nov 17, 11:30 PM GMT+3',
+      'Cancelled: Sam Rivera for Intro call, Tue, Nov 17, 3:30 PM EST',
     ]);
     expect(smsSpy).not.toHaveBeenCalled();
     expect(callSpy).not.toHaveBeenCalled();
@@ -773,7 +780,7 @@ describe('runDueJobs: things that must not be sent', () => {
     world.ctx.clock.set(at(START, -1 * HOUR));
     await runDueJobs(world.ctx);
     expect(world.emails).toEqual([]);
-    expect(await timelineDetail(world.ctx, 'reminder_email_skipped')).toEqual(['this reminder was switched off']);
+    expect(await timelineDetail(world.ctx, 'reminder_email_skipped')).toEqual(['this reminder was switched off or removed']);
   });
 
   it('reports email that is not set up as skipped, not as an endless failure', async () => {
@@ -1045,6 +1052,27 @@ describe('runDueJobs: interrupted runs', () => {
     expect((await timeline(world.ctx)).filter((t) => t === 'confirmation_email_sent')).toHaveLength(1);
   });
 
+  it('retires a stale attempt quietly when the next attempt has already run', async () => {
+    const world = await makeWorld({ rules: [] });
+    world.failEmail = (_sent, attempt) => attempt === 1;
+    await book(world, { hostIds: [], consent: { sms: false, call: false, at: TEST_NOW, text: '' } });
+    const [original] = await listJobs(world.ctx);
+    await runDueJobs(world.ctx); // attempt 0 fails, attempt 1 is queued
+    world.ctx.clock.advance(3 * MIN);
+    await runDueJobs(world.ctx); // attempt 1 is sent
+    expect(world.emails).toHaveLength(2);
+    await putJob(world.ctx, original); // attempt 0 reappears (a late write from a dead run)
+    const before = await timeline(world.ctx);
+
+    for (const wait of [0, 11, 45, 45]) {
+      world.ctx.clock.advance(wait * MIN);
+      await runDueJobs(world.ctx);
+    }
+    expect(world.emails).toHaveLength(2);
+    expect(await listJobs(world.ctx)).toEqual([]);
+    expect(await timeline(world.ctx)).toEqual(before); // no "interrupted" note, no second "sent"
+  });
+
   it('drops an abandoned reminder call instead of ringing twice', async () => {
     const world = await makeWorld({ rules: [DEFAULT_RULES[1]] });
     await book(world, {}, null);
@@ -1125,7 +1153,7 @@ describe('deliverMessage', () => {
     await updateHost(world.ctx, 'host_alex', (h) => ({ ...h, notify: { email: true, sms: true } }));
     const sent = await deliverMessage(world.ctx, job({ id: 'job_direct2', channel: 'sms', audience: 'host', kind: 'host_new', hostId: 'host_alex' }));
     expect(sent).toMatchObject({ ok: true, provider: 'twilio' });
-    expect(smsSpy.mock.calls[0][1]).toEqual({ to: '+447700900123', body: 'New booking: Sam Rivera for Intro call, Tue, Nov 17, 8:30 PM GMT.' });
+    expect(smsSpy.mock.calls[0][1]).toEqual({ to: '+447700900123', body: 'New booking: Sam Rivera for Intro call, Tue, Nov 17, 8:30 PM GMT.', bookingId: 'bkg_test1', kind: 'host_new' });
   });
 
   it('never phones a host and only phones invitees for reminders', async () => {
@@ -1211,5 +1239,521 @@ describe('composeSms', () => {
     expect(out.length).toBeLessThanOrEqual(300);
     expect(out.endsWith('...')).toBe(true);
     expect(composeSms('short', [], { max: 160 })).toBe('short');
+  });
+});
+
+// ───────────────────────── reminder calls inside calling hours ─────────────────────────
+
+describe('planCallTime', () => {
+  const NY = 'America/New_York';
+  const local = (text: string, tz = NY) => DateTime.fromISO(text, { zone: tz }).toMillis();
+  const plan = (startText: string, offsetMin: number, opts: { now?: string; tz?: string; hours?: { callWindowStartHour: number; callWindowEndHour: number } } = {}) => {
+    const tz = opts.tz ?? NY;
+    const startMs = local(startText, tz);
+    const ms = planCallTime({ idealMs: startMs - offsetMin * MIN, startMs, nowMs: opts.now ? local(opts.now, tz) : Date.parse(TEST_NOW), timezone: tz, hours: opts.hours });
+    return ms === null ? null : DateTime.fromMillis(ms, { zone: tz }).toFormat("yyyy-MM-dd'T'HH:mm");
+  };
+
+  it('keeps the rule time when it is already inside calling hours', () => {
+    expect(plan('2026-11-18T14:00', 120)).toBe('2026-11-18T12:00');
+    expect(plan('2026-11-18T10:00', 120)).toBe('2026-11-18T08:00'); // the opening hour counts
+  });
+
+  it('rings when calling hours open when that still leaves half an hour before the meeting', () => {
+    expect(plan('2026-11-18T09:00', 120)).toBe('2026-11-18T08:00');
+    expect(plan('2026-11-18T09:30', 120)).toBe('2026-11-18T08:00');
+    expect(plan('2026-11-18T08:30', 120)).toBe('2026-11-18T08:00');
+  });
+
+  it('rings in the last calling hour of the evening before when the morning is too tight', () => {
+    expect(plan('2026-11-18T08:15', 120)).toBe('2026-11-17T20:00');
+    expect(plan('2026-11-18T06:00', 60)).toBe('2026-11-17T20:00');
+  });
+
+  it('moves a call that would come after calling hours close back into the last hour', () => {
+    expect(plan('2026-11-18T23:30', 120)).toBe('2026-11-18T20:00');
+  });
+
+  it('plans no call when no time inside calling hours is left before the meeting', () => {
+    expect(plan('2026-11-18T08:15', 120, { now: '2026-11-18T06:00' })).toBeNull();
+    expect(plan('2026-11-18T14:00', 120, { hours: { callWindowStartHour: 9, callWindowEndHour: 9 } })).toBeNull();
+    expect(planCallTime({ idealMs: local('2026-11-18T07:00'), startMs: local('2026-11-18T09:00'), nowMs: 0, timezone: 'Mars/Olympus' })).toBeNull();
+  });
+
+  it('follows the calling hours from settings, including a window that runs past midnight', () => {
+    expect(plan('2026-11-18T09:00', 120, { hours: { callWindowStartHour: 9, callWindowEndHour: 17 } })).toBe('2026-11-17T16:00');
+    expect(plan('2026-11-18T12:00', 120, { hours: { callWindowStartHour: 20, callWindowEndHour: 2 } })).toBe('2026-11-18T01:00');
+    expect(plan('2026-11-18T21:00', 120, { hours: { callWindowStartHour: 20, callWindowEndHour: 2 } })).toBe('2026-11-18T20:00');
+    expect(plan('2026-11-18T03:00', 60, { hours: { callWindowStartHour: 20, callWindowEndHour: 2 } })).toBe('2026-11-18T01:00');
+    expect(plan('2026-11-18T07:00', 60, { hours: { callWindowStartHour: 8, callWindowEndHour: 24 } })).toBe('2026-11-17T23:00');
+  });
+
+  it('works on the invitee clock across daylight saving changes', () => {
+    expect(plan('2027-03-14T09:00', 120)).toBe('2027-03-14T08:00'); // clocks go forward at 2 AM
+    expect(plan('2027-03-14T08:15', 120)).toBe('2027-03-13T20:00');
+    expect(plan('2027-11-07T09:00', 120)).toBe('2027-11-07T08:00'); // clocks go back at 2 AM
+    expect(plan('2027-11-07T08:15', 120)).toBe('2027-11-06T20:00');
+    expect(plan('2026-11-18T09:00', 120, { tz: 'America/Los_Angeles' })).toBe('2026-11-18T08:00');
+    expect(plan('2026-11-18T07:00', 120, { tz: 'America/Los_Angeles' })).toBe('2026-11-17T20:00');
+  });
+
+  it('only ever returns a time inside calling hours', () => {
+    const hours = [
+      { callWindowStartHour: 8, callWindowEndHour: 21 },
+      { callWindowStartHour: 21, callWindowEndHour: 6 },
+      { callWindowStartHour: 0, callWindowEndHour: 24 },
+      { callWindowStartHour: 12, callWindowEndHour: 13 },
+    ];
+    for (const h of hours) {
+      for (let hour = 0; hour < 48; hour++) {
+        const startMs = local('2026-11-18T00:00') + hour * HOUR + 15 * MIN;
+        const ms = planCallTime({ idealMs: startMs - 2 * HOUR, startMs, nowMs: Date.parse(TEST_NOW), timezone: NY, hours: h });
+        if (ms !== null) {
+          expect(insideCallHours(ms, NY, h), `${JSON.stringify(h)} start ${hour}`).toBe(true);
+          expect(ms).toBeLessThan(startMs);
+        }
+      }
+    }
+  });
+});
+
+describe('scheduleBookingJobs: reminder calls', () => {
+  const NY = 'America/New_York';
+  const iso = (text: string, tz = NY) => DateTime.fromISO(text, { zone: tz }).toUTC().toISO()!;
+  const callOnly = () => makeWorld({ rules: [DEFAULT_RULES[1]] });
+
+  it('plans the default call for a 9 AM meeting at 8 AM and places it then', async () => {
+    const world = await callOnly();
+    const start = iso('2026-11-18T09:00');
+    await book(world, { start, end: at(start, 30 * MIN), invitee: { ...makeBooking().invitee, timezone: NY } }, null);
+    expect(await queue(world.ctx)).toEqual([`reminder/call/invitee @ ${iso('2026-11-18T08:00')}`]);
+    world.ctx.clock.set(iso('2026-11-18T08:00'));
+    expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
+    expect(callSpy).toHaveBeenCalledTimes(1);
+    expect(await timeline(world.ctx)).toContain('reminder_call_sent');
+  });
+
+  it('uses the invitee zone and the calling hours from settings', async () => {
+    const world = await callOnly();
+    const site = await getSite(world.ctx);
+    await saveSite(world.ctx, { ...site, assistant: { ...site.assistant, callWindowStartHour: 9, callWindowEndHour: 18 } });
+    const start = iso('2026-11-18T09:15', 'America/Los_Angeles'); // 9 AM opening is too close: the evening before
+    await book(world, { start, end: at(start, 30 * MIN), invitee: { ...makeBooking().invitee, timezone: 'America/Los_Angeles' } }, null);
+    expect(await queue(world.ctx)).toEqual([`reminder/call/invitee @ ${iso('2026-11-17T17:00', 'America/Los_Angeles')}`]);
+  });
+
+  it('notes once on the booking when a call has no time left before the meeting', async () => {
+    const world = await callOnly();
+    const start = iso('2026-11-16T08:15'); // TEST_NOW is 4 AM in New York that day
+    const booking = await book(world, { start, end: at(start, 30 * MIN), invitee: { ...makeBooking().invitee, timezone: NY } }, null);
+    expect(await queue(world.ctx)).toEqual([]);
+    await scheduleBookingJobs(world.ctx, booking, world.eventType, null);
+    expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['there is no time inside calling hours before the meeting']);
+  });
+});
+
+// ───────────────────────── daily limits on texts ─────────────────────────
+
+describe('deliverMessage: daily limit on texts to invitees', () => {
+  const textJob = (n: number, over: Partial<StoredJob> = {}): StoredJob => ({
+    key: `jobs/x_job_text${n}`,
+    id: `job_text${n}`,
+    type: 'message',
+    bookingId: 'bkg_test1',
+    dueAt: TEST_NOW,
+    attempt: 0,
+    createdAt: TEST_NOW,
+    channel: 'sms',
+    audience: 'invitee',
+    kind: 'reminder',
+    ...over,
+  });
+
+  it('stops after six texts a day to one number, as a skip that is not retried', async () => {
+    const world = await makeWorld({ rules: [] });
+    await saveBooking(world.ctx, makeBooking());
+    for (let n = 0; n < 6; n++) expect(await deliverMessage(world.ctx, textJob(n))).toMatchObject({ ok: true });
+    expect(await deliverMessage(world.ctx, textJob(6))).toMatchObject({ ok: false, provider: 'none', skipped: 'daily_limit' });
+    expect(smsSpy).toHaveBeenCalledTimes(6);
+
+    // another invitee's number has its own allowance, and the host's own texts are not counted
+    await saveBooking(world.ctx, makeBooking({ id: 'bkg_other', invitee: { ...makeBooking().invitee, phone: '+254700000002' } }));
+    expect(await deliverMessage(world.ctx, textJob(7, { bookingId: 'bkg_other' }))).toMatchObject({ ok: true });
+    await saveBooking(world.ctx, makeBooking({ hostIds: ['host_alex'] }));
+    await updateHost(world.ctx, 'host_alex', (h) => ({ ...h, phone: '+254700000001', notify: { email: true, sms: true } }));
+    expect(await deliverMessage(world.ctx, textJob(8, { audience: 'host', hostId: 'host_alex', kind: 'host_new' }))).toMatchObject({ ok: true });
+
+    // a new day, a new allowance
+    world.ctx.clock.advance(24 * HOUR);
+    expect(await deliverMessage(world.ctx, textJob(9))).toMatchObject({ ok: true });
+  });
+
+  it('records the capped text on the timeline and does not retry it', async () => {
+    const world = await makeWorld({ rules: [] });
+    await saveBooking(world.ctx, makeBooking());
+    for (let n = 0; n < 6; n++) await deliverMessage(world.ctx, textJob(n));
+    await enqueueJob(world.ctx, { type: 'message', bookingId: 'bkg_test1', dueAt: TEST_NOW, channel: 'sms', audience: 'invitee', kind: 'reminder' });
+    expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
+    expect(await queue(world.ctx)).toEqual([]);
+    expect(await timelineDetail(world.ctx, 'reminder_sms_skipped')).toEqual(['the daily limit of texts or calls was reached']);
+  });
+});
+
+// ───────────────────────── a text Twilio did not answer for ─────────────────────────
+
+describe('deliverMessage: a text Twilio may have sent', () => {
+  const timedOut = { ok: false, provider: 'twilio', error: 'Twilio did not answer in time', uncertain: true };
+
+  it('tells Twilio which booking and which message a text is, for its delivery report', async () => {
+    const world = await makeWorld({ rules: [] });
+    await saveBooking(world.ctx, makeBooking());
+    await enqueueJob(world.ctx, { type: 'message', bookingId: 'bkg_test1', dueAt: TEST_NOW, channel: 'sms', audience: 'invitee', kind: 'reminder' });
+    await runDueJobs(world.ctx);
+    expect(smsSpy).toHaveBeenCalledWith(world.ctx, expect.objectContaining({ to: '+254700000001', bookingId: 'bkg_test1', kind: 'reminder' }));
+  });
+
+  it('counts a reminder as sent and never texts it a second time', async () => {
+    const world = await makeWorld({ rules: [] });
+    await saveBooking(world.ctx, makeBooking());
+    smsSpy.mockResolvedValue(timedOut);
+    await enqueueJob(world.ctx, { type: 'message', bookingId: 'bkg_test1', dueAt: TEST_NOW, channel: 'sms', audience: 'invitee', kind: 'reminder' });
+    expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
+    expect(await queue(world.ctx)).toEqual([]);
+    expect(await timelineDetail(world.ctx, 'reminder_sms_sent')).toEqual([
+      'to +254700000001 via twilio. Twilio did not confirm it in time, so it may not have arrived. It is not sent again, so nobody gets it twice.',
+    ]);
+    expect(await timeline(world.ctx)).not.toContain('reminder_sms_failed');
+    world.ctx.clock.advance(30 * MIN);
+    await runDueJobs(world.ctx);
+    expect(smsSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries a confirmation again, because a second copy is better than none', async () => {
+    const world = await makeWorld({ rules: [] });
+    await saveBooking(world.ctx, makeBooking());
+    smsSpy.mockResolvedValueOnce(timedOut);
+    await enqueueJob(world.ctx, { type: 'message', bookingId: 'bkg_test1', dueAt: TEST_NOW, channel: 'sms', audience: 'invitee', kind: 'confirmation' });
+    expect(await runDueJobs(world.ctx)).toMatchObject({ processed: 1, failed: 1 });
+    expect(await timelineDetail(world.ctx, 'confirmation_sms_failed')).toEqual(['Twilio did not answer in time (will try again in 2 min)']);
+    world.ctx.clock.advance(3 * MIN);
+    await runDueJobs(world.ctx);
+    expect(smsSpy).toHaveBeenCalledTimes(2);
+    expect(await timeline(world.ctx)).toContain('confirmation_sms_sent');
+  });
+});
+
+// ───────────────────────── a write that fails after its claim ─────────────────────────
+
+describe('scheduleBookingJobs and retries: a failed job write', () => {
+  const noPhone = { consent: { sms: false, call: false, at: TEST_NOW, text: '' } };
+
+  function flakyKV(fails: (key: string, value: Job) => 'throw' | 'write-then-throw' | null) {
+    const kv = memoryKV();
+    const flaky: KV = {
+      ...kv,
+      setJSON: async (key, value, opts) => {
+        const mode = key.startsWith('jobs/') ? fails(key, value as Job) : null;
+        if (mode === 'throw') throw new Error('storage is down');
+        const written = await kv.setJSON(key, value, opts);
+        if (mode === 'write-then-throw') throw new Error('storage answered with an error');
+        return written;
+      },
+    };
+    return flaky;
+  }
+
+  it('lets the second try queue a confirmation whose first write failed', async () => {
+    let failures = 0;
+    const world = await makeWorld({ rules: [], kv: flakyKV((_k, job) => (failures > 0 && job.kind === 'confirmation' ? (failures--, 'throw') : null)) });
+    const booking = await saveBooking(world.ctx, makeBooking(noPhone));
+    failures = 1;
+    await expect(scheduleBookingJobs(world.ctx, booking, world.eventType, 'created')).rejects.toThrow('storage is down');
+    await scheduleBookingJobs(world.ctx, booking, world.eventType, 'created'); // createBooking tries once more
+    await runDueJobs(world.ctx);
+    expect(world.emails.map((e) => e.subject).sort()).toEqual([
+      'Confirmed: Intro call with Jimi Cohen, Tue, Nov 17, 11:30 PM GMT+3',
+      'New booking: Sam Rivera for Intro call, Tue, Nov 17, 3:30 PM EST',
+    ]);
+  });
+
+  it('still sends once when the failed write had in fact been stored', async () => {
+    let failures = 0;
+    const world = await makeWorld({ rules: [], kv: flakyKV((_k, job) => (failures > 0 && job.kind === 'confirmation' ? (failures--, 'write-then-throw') : null)) });
+    const booking = await saveBooking(world.ctx, makeBooking({ ...noPhone, hostIds: [] }));
+    failures = 1;
+    await expect(scheduleBookingJobs(world.ctx, booking, world.eventType, 'created')).rejects.toThrow();
+    world.ctx.clock.advance(1000);
+    await scheduleBookingJobs(world.ctx, booking, world.eventType, 'created');
+    expect(await listJobs(world.ctx)).toHaveLength(2); // two copies of one message, under one id
+    for (const minutes of [0, 1, 11, 2, 30]) {
+      world.ctx.clock.advance(minutes * MIN);
+      await runDueJobs(world.ctx);
+    }
+    expect(world.emails).toHaveLength(1);
+    expect(await listJobs(world.ctx)).toEqual([]);
+  });
+
+  it('retries an attempt whose successor could not be written', async () => {
+    let failures = 0;
+    const world = await makeWorld({ rules: [], kv: flakyKV((_k, job) => (failures > 0 && job.attempt === 1 ? (failures--, 'throw') : null)) });
+    world.failEmail = (_sent, attempt) => attempt === 1;
+    await book(world, { ...noPhone, hostIds: [] });
+    failures = 1;
+    await runDueJobs(world.ctx); // the send fails, and so does queueing the next try
+    for (const minutes of [2, 11, 2, 2]) {
+      world.ctx.clock.advance(minutes * MIN);
+      await runDueJobs(world.ctx);
+    }
+    expect(world.emails).toHaveLength(2); // the failed send, then the delivery
+    expect(await listJobs(world.ctx)).toEqual([]);
+    expect((await timeline(world.ctx)).at(-1)).toBe('confirmation_email_sent');
+  });
+
+  it('counts the next try from when the failed attempt started, so a late recovery adds no second copy', async () => {
+    const world = await makeWorld({ rules: [] });
+    world.failEmail = (_sent, attempt) => attempt === 1;
+    await book(world, { ...noPhone, hostIds: [] });
+    const [first] = await listJobs(world.ctx);
+    await runDueJobs(world.ctx);
+    const [retry] = await listJobs(world.ctx);
+    expect([retry.attempt, retry.dueAt]).toEqual([1, at(TEST_NOW, 2 * MIN)]);
+    // the failed attempt shows up again later (a late write): moving it on lands on the same key
+    await putJob(world.ctx, first);
+    world.ctx.clock.advance(MIN);
+    await runDueJobs(world.ctx);
+    world.ctx.clock.advance(11 * MIN);
+    await runDueJobs(world.ctx);
+    world.ctx.clock.advance(MIN);
+    await runDueJobs(world.ctx);
+    expect(world.emails).toHaveLength(2);
+    expect(await listJobs(world.ctx)).toEqual([]);
+  });
+
+  it('keeps the calendar file byte for byte the same on a retry, so the provider sees a repeat', async () => {
+    const world = await makeWorld({ rules: [] });
+    world.failEmail = (_sent, attempt) => attempt === 1;
+    await book(world, { ...noPhone, hostIds: [] });
+    world.ctx.clock.advance(10_000); // the failure is noted on the booking ten seconds after it was made
+    await runDueJobs(world.ctx);
+    world.ctx.clock.advance(2 * MIN);
+    await runDueJobs(world.ctx);
+    expect(world.emails).toHaveLength(2);
+    expect(world.emails[1].idempotencyKey).toBe(world.emails[0].idempotencyKey);
+    expect(world.emails[1].attachments![0].content).toBe(world.emails[0].attachments![0].content);
+  });
+});
+
+// ───────────────────────── rules that changed ─────────────────────────
+
+describe('reminders whose rule changed', () => {
+  it('does not send a reminder whose rule was removed, but still sends one whose event type is gone', async () => {
+    const world = await makeWorld({ rules: [DEFAULT_RULES[2], DEFAULT_RULES[3]] });
+    await book(world, {}, null);
+    await saveEventType(world.ctx, { ...world.eventType, reminders: [DEFAULT_RULES[3]] }); // the 1 hour email rule is deleted
+    world.ctx.clock.set(at(START, -1 * HOUR));
+    await runDueJobs(world.ctx);
+    expect(world.emails).toEqual([]);
+    expect(await timelineDetail(world.ctx, 'reminder_email_skipped')).toEqual(['this reminder was switched off or removed']);
+
+    await deleteEventType(world.ctx, world.eventType.id);
+    world.ctx.clock.set(at(START, -15 * MIN));
+    await runDueJobs(world.ctx);
+    expect(smsSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the reminders of many bookings with one read of the queue', async () => {
+    const kv = memoryKV();
+    let reads = 0;
+    const counting: KV = {
+      ...kv,
+      getJSON: async (key) => {
+        if (key.startsWith('jobs/')) reads++;
+        return kv.getJSON(key);
+      },
+    };
+    const world = await makeWorld({ kv: counting });
+    for (const id of ['bkg_a', 'bkg_b', 'bkg_c']) await book(world, { id });
+    const total = (await listJobs(world.ctx)).length;
+    reads = 0;
+    const cleared = await removeReminderJobs(world.ctx, ['bkg_a', 'bkg_b']);
+    expect([...cleared].sort()).toEqual(['bkg_a', 'bkg_b']);
+    expect(reads).toBe(total);
+    const left = (await listJobs(world.ctx)) as StoredJob[];
+    expect(left.filter((j) => j.kind === 'reminder').map((j) => j.bookingId)).toEqual(['bkg_c', 'bkg_c', 'bkg_c', 'bkg_c']);
+    expect(left.filter((j) => j.kind === 'confirmation' && j.channel === 'email').map((j) => j.bookingId).sort()).toEqual(['bkg_a', 'bkg_b', 'bkg_c']);
+
+    // re-planning one of them after that adds its reminders back without another scan
+    reads = 0;
+    await scheduleBookingJobs(world.ctx, (await getBooking(world.ctx, 'bkg_a'))!, world.eventType, null, { remindersCleared: true });
+    expect(reads).toBe(0);
+    expect(((await listJobs(world.ctx)) as StoredJob[]).filter((j) => j.kind === 'reminder' && j.bookingId === 'bkg_a')).toHaveLength(4);
+  });
+
+  it('re-plans many bookings with one read of the queue, and a run cut off part-way leaves the rest their old reminders', async () => {
+    const kv = memoryKV();
+    let listings = 0;
+    let siteReads = 0;
+    let hangAtSiteRead = 0;
+    const watched: KV = {
+      ...kv,
+      list: async (prefix) => {
+        if (prefix.startsWith('jobs/')) listings++;
+        return kv.list(prefix);
+      },
+      // The re-plan of one booking reads the site settings once; a function that is stopped there never goes on.
+      getJSON: async (key) => {
+        if (key === 'site' && ++siteReads === hangAtSiteRead) return new Promise<never>(() => undefined);
+        return kv.getJSON(key);
+      },
+    };
+    const world = await makeWorld({ kv: watched, rules: [DEFAULT_RULES[0], DEFAULT_RULES[2]] });
+    for (const id of ['bkg_a', 'bkg_b', 'bkg_c']) await book(world, { id });
+    const dues = async (id: string) =>
+      ((await listJobs(world.ctx)) as StoredJob[])
+        .filter((j) => j.kind === 'reminder' && j.bookingId === id)
+        .map((j) => (START_MS - Date.parse(j.dueAt)) / MIN)
+        .sort((x, y) => x - y);
+    expect(await dues('bkg_c')).toEqual([60, 1440]);
+
+    // The 1 hour email becomes a 2 hour one.
+    const changed: EventType = { ...world.eventType, reminders: [DEFAULT_RULES[0], { ...DEFAULT_RULES[2], offsetMinutes: 120 }] };
+    await saveEventType(world.ctx, changed);
+    const bookings = await Promise.all(['bkg_a', 'bkg_b', 'bkg_c'].map(async (id) => (await getBooking(world.ctx, id))!));
+
+    listings = 0;
+    siteReads = 0;
+    hangAtSiteRead = 2; // stopped while it re-plans the second booking
+    void replanBookingReminders(world.ctx, bookings, changed);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(listings).toBe(1);
+    expect(await dues('bkg_a')).toEqual([120, 1440]);
+    expect(await dues('bkg_c')).toEqual([60, 1440]); // not reached: the old reminders still go out
+
+    hangAtSiteRead = 0;
+    listings = 0;
+    expect(await replanBookingReminders(world.ctx, bookings, changed)).toBe(0);
+    expect(listings).toBe(1);
+    for (const id of ['bkg_a', 'bkg_b', 'bkg_c']) expect(await dues(id)).toEqual([120, 1440]);
+  });
+});
+
+// ───────────────────────── invitations, links and alerts ─────────────────────────
+
+describe('composeBookingEmail: what the invitee receives', () => {
+  it('sends no second invitation while Google is still retrying a failed write, and no CANCEL later', async () => {
+    const world = await makeWorld();
+    const google = { hostId: 'host_owner', calendarId: 'primary', eventId: '', error: 'Google request failed (503 backendError).' };
+    const booking = await book(world, { google });
+    await runDueJobs(world.ctx);
+    const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(invitee.attachments![0].content_type).toContain('method=PUBLISH');
+    expect(icsOf(invitee)).not.toContain('ATTENDEE');
+
+    await saveBooking(world.ctx, { ...booking, status: 'cancelled', google });
+    await enqueueJob(world.ctx, { type: 'message', bookingId: booking.id, dueAt: TEST_NOW, channel: 'email', audience: 'invitee', kind: 'cancelled' });
+    await runDueJobs(world.ctx);
+    expect(world.emails.at(-1)!.subject.startsWith('Cancelled:')).toBe(true);
+    expect(world.emails.at(-1)!.attachments).toBeUndefined();
+  });
+
+  it('offers Outlook.com and Office 365 separately', async () => {
+    const world = await makeWorld();
+    await book(world);
+    await runDueJobs(world.ctx);
+    const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(invitee.html).toContain('>Outlook.com</a>');
+    expect(invitee.html).toContain('>Office 365</a>');
+    expect(invitee.html).toContain('href="https://outlook.office.com/calendar/0/action/compose?');
+    expect(invitee.html).toContain('href="https://outlook.live.com/calendar/0/action/compose?');
+  });
+
+  it('never turns a web address someone typed into a link, while our own links keep working', async () => {
+    const world = await makeWorld({ rules: [] });
+    await book(world, {
+      invitee: { ...makeBooking().invitee, name: 'https://evil.example/verify-account now', email: 'third.party@example.org' },
+      answers: [{ questionId: 'q_topic', label: 'Topic', value: 'see https://evil.example/agenda' }],
+    });
+    await runDueJobs(world.ctx);
+    const invitee = world.emails.find((e) => e.to[0].includes('third.party@example.org'))!;
+    expect(invitee.html).not.toMatch(/href="https:\/\/evil\.example/);
+    expect(invitee.text).toContain('Hi there,');
+    expect(invitee.html).toMatch(new RegExp(`<a href="${MEET.replace(/[.]/g, '\\.')}" class="m-link"`)); // the join link in the details
+    const host = world.emails.find((e) => e.to[0].includes('jimi@example.com'))!;
+    expect(host.html).toContain('see https://evil.example/agenda');
+    expect(host.html).not.toMatch(/href="https:\/\/evil\.example/);
+  });
+
+  it("still links web addresses in the owner's own wording", async () => {
+    const world = await makeWorld({
+      rules: [{ id: 'r_prep', enabled: true, channel: 'email', audience: 'invitee', trigger: 'before_start', offsetMinutes: 60, body: 'Hi {{invitee_first_name}},\n\nPlease read https://jimicohen.com/prep before we meet.' }],
+    });
+    await book(world, {}, null);
+    world.ctx.clock.set(at(START, -1 * HOUR));
+    await runDueJobs(world.ctx);
+    expect(world.emails[0].html).toMatch(/<a href="https:\/\/jimicohen\.com\/prep" class="m-link"[^>]*>https:\/\/jimicohen\.com\/prep<\/a> before we meet\./);
+  });
+});
+
+describe('deliverMessage: alerts to the owner', () => {
+  const alert = async (world: World) =>
+    enqueueJob(world.ctx, {
+      type: 'message',
+      bookingId: '',
+      dueAt: TEST_NOW,
+      channel: 'email',
+      audience: 'host',
+      kind: 'host_alert',
+      subject: 'A calendar needs attention: Jimi Cohen',
+      body: 'Hi {{host_first_name}},\n\nThe calendar of Jimi Cohen could not be read.',
+    });
+
+  it('goes through Resend even when email is set to the Gmail that may be the thing that broke', async () => {
+    const world = await makeWorld();
+    await saveSite(world.ctx, { ...(await getSite(world.ctx)), email: { provider: 'gmail', fromName: 'Jimi Cohen', fromEmail: 'meet@jimicohen.com', replyTo: '' } });
+    await alert(world);
+    expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
+    expect(world.emails.map((e) => e.subject)).toEqual(['A calendar needs attention: Jimi Cohen']);
+  });
+
+  it('texts the owner when the alert email cannot go out', async () => {
+    const world = await makeWorld();
+    world.failEmail = () => true;
+    await updateHost(world.ctx, 'host_owner', (h) => ({ ...h, phone: '+12025550143', notify: { email: true, sms: false } }));
+    await alert(world);
+    expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
+    expect(smsSpy).toHaveBeenCalledTimes(1);
+    const [, sms] = smsSpy.mock.calls[0];
+    expect(sms.to).toBe('+12025550143');
+    expect(sms.body).toBe(
+      `Jimi Cohen: A calendar needs attention: Jimi Cohen. We could not email you about it, so this is a text instead. Open your dashboard: ${TEST_BASE_URL}/admin`,
+    );
+    expect(sms.body).not.toContain('\u2014');
+    expect(await listJobs(world.ctx)).toEqual([]);
+
+    // with neither email nor a text working, it is tried again later
+    const stuck = await makeWorld();
+    stuck.failEmail = () => true;
+    await updateHost(stuck.ctx, 'host_owner', (h) => ({ ...h, phone: '+12025550143' }));
+    smsSpy.mockResolvedValue({ ok: false, provider: 'twilio', error: 'Twilio answered 500' });
+    await alert(stuck);
+    expect(await runDueJobs(stuck.ctx)).toEqual({ processed: 1, failed: 1, remaining: 0 });
+    expect((await listJobs(stuck.ctx)).map((j) => j.attempt)).toEqual([1]);
+  });
+
+  it('texts the owner when email is not set up at all, and does not text when the email went out', async () => {
+    const world = await makeWorld();
+    await saveSecrets(world.ctx, {});
+    await saveSite(world.ctx, { ...(await getSite(world.ctx)), email: { provider: 'auto', fromName: '', fromEmail: '', replyTo: '' } });
+    await updateHost(world.ctx, 'host_owner', (h) => ({ ...h, phone: '+12025550143' }));
+    await alert(world);
+    await runDueJobs(world.ctx);
+    expect(smsSpy).toHaveBeenCalledTimes(1);
+
+    const fine = await makeWorld();
+    await updateHost(fine.ctx, 'host_owner', (h) => ({ ...h, phone: '+12025550143' }));
+    await alert(fine);
+    await runDueJobs(fine.ctx);
+    expect(fine.emails).toHaveLength(1);
+    expect(smsSpy).toHaveBeenCalledTimes(1);
   });
 });

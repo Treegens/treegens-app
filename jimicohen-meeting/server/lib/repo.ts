@@ -174,10 +174,12 @@ type ListStep<T, R> = { next: T[]; result: R } | { keep: R };
  * Compare-and-swap on a bootstrapped list blob. `step` may run several times and must not have side effects.
  *
  * A swap that is refused always runs `step` again on the fresh list, also in the rare case where the
- * refusal is wrong (see the note on lost answers at updateBooking). Every list change here sets or removes
- * one entry by id, so a second run on top of its own first write ends in the same list. Recognising the
- * own write by comparing lists would not be safe: two callers who make the same change at the same instant
- * write identical lists, and one of them would be told its change is in when it never was applied.
+ * refusal is wrong (see the note on lost answers at updateBooking). So every `step` must be idempotent:
+ * run a second time on top of its own write, it has to end in the same list. They all set or remove
+ * entries by id (an added calendar feed is only added when its id is not there yet). Recognising the own
+ * write by comparing lists would not be safe: two callers who make the same change at the same instant
+ * write identical lists, and one of them would be told its change is in when it never was applied
+ * (an increment would be lost).
  */
 async function mutateList<T, R>(ctx: Ctx, key: string, step: (list: T[]) => ListStep<T, R>): Promise<R> {
   for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
@@ -306,6 +308,26 @@ export async function saveBooking(ctx: Ctx, b: Booking): Promise<Booking> {
   return saved;
 }
 
+/** Removes a booking record. Does NOT touch the index, the jobs or the call records (admin/bookings eraseBooking does it all). */
+export async function deleteBooking(ctx: Ctx, id: string): Promise<void> {
+  await ctx.kv.delete(bookingKey(requireId(id, 'booking')));
+}
+
+/**
+ * Writes a new booking record, create-only. `created: false` hands back the record that was already on
+ * file under that id (a repeated request that saved first). A write whose answer got lost is still
+ * recognised as this call's own, by its `rev`.
+ */
+export async function createBookingRecord(ctx: Ctx, b: Booking): Promise<{ created: boolean; booking: Booking }> {
+  requireId(b.id, 'booking');
+  const saved: Booking = { ...b, updatedAt: nowIso(ctx), rev: randomToken(16) };
+  const written = await ctx.kv.setJSON(bookingKey(b.id), saved, { onlyIfNew: true });
+  if (written.modified) return { created: true, booking: saved };
+  const stored = await ctx.kv.getJSON<Booking>(bookingKey(b.id));
+  if (!stored) throw new Error('A booking record was refused as existing, but none is stored');
+  return stored.rev === saved.rev ? { created: true, booking: saved } : { created: false, booking: stored };
+}
+
 /**
  * Read-modify-write on the freshest copy. `fn` may run more than once. Returns null when the booking does not exist.
  *
@@ -398,8 +420,10 @@ function dueMsOfJobKey(key: string): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-export async function putJob(ctx: Ctx, job: Job): Promise<void> {
-  await ctx.kv.setJSON(requireJobKey(job.key), job);
+/** With `onlyIfNew`, an existing entry under the same key is left alone; the answer says whether this call wrote it. */
+export async function putJob(ctx: Ctx, job: Job, opts?: { onlyIfNew?: boolean }): Promise<boolean> {
+  const written = await ctx.kv.setJSON(requireJobKey(job.key), job, opts?.onlyIfNew ? { onlyIfNew: true } : undefined);
+  return written.modified;
 }
 
 /**
@@ -478,6 +502,14 @@ export async function replaceClaimValue(ctx: Ctx, name: string, value: string): 
   await ctx.kv.setJSON(claimKey(name), { at: nowIso(ctx), owner: randomToken(16), value } satisfies ClaimRecord);
 }
 
+/**
+ * Gives a claim back, so the next caller can take it. For a winner whose guarded work failed
+ * before anything happened (the write it was guarding threw), never for work that may have run.
+ */
+export async function releaseClaim(ctx: Ctx, name: string): Promise<void> {
+  await ctx.kv.delete(claimKey(name));
+}
+
 // ───────────────────────── calls ─────────────────────────
 
 export async function getCall(ctx: Ctx, id: string): Promise<CallRecord | null> {
@@ -488,6 +520,19 @@ export async function getCall(ctx: Ctx, id: string): Promise<CallRecord | null> 
 export async function saveCall(ctx: Ctx, c: CallRecord): Promise<void> {
   requireId(c.id, 'call');
   await ctx.kv.setJSON(`${KEYS.callPrefix}${c.id}`, { ...c, updatedAt: nowIso(ctx) });
+}
+
+/**
+ * Removes every call record (transcript included) about one booking. Calls are filed by their own id,
+ * so this reads them all; there are only the last 90 days of them (cron prunes older ones).
+ * Returns how many were removed.
+ */
+export async function deleteCallsOfBooking(ctx: Ctx, bookingId: string): Promise<number> {
+  const keys = await ctx.kv.list(KEYS.callPrefix);
+  const found = await mapLimit(keys, READ_CONCURRENCY, async (key) => ((await ctx.kv.getJSON<Partial<CallRecord>>(key))?.bookingId === bookingId ? key : null));
+  const mine = found.filter((key): key is string => key !== null);
+  await mapLimit(mine, READ_CONCURRENCY, (key) => ctx.kv.delete(key));
+  return mine.length;
 }
 
 // ───────────────────────── assets ─────────────────────────
@@ -537,39 +582,92 @@ export async function cacheSet(ctx: Ctx, name: string, value: unknown, ttlSec: n
 
 // ───────────────────────── housekeeping ─────────────────────────
 
-/**
- * Deletes short-lived keys that are past use: claims and rate-limit windows older than
- * `maxAgeMs`, and cache entries that expired at least `maxAgeMs` ago. Stops after `limit`
- * deletions so a cron run stays inside its time budget. Returns how many keys were removed.
- */
-export async function pruneEphemeral(ctx: Ctx, maxAgeMs: number, limit = 500): Promise<number> {
-  const cutoff = ctx.now().getTime() - maxAgeMs;
-  let removed = 0;
+/** How many keys one prefix may lose per run (each prefix has its own allowance). */
+export const PRUNE_LIMIT_PER_PREFIX = 1000;
+/** How long one pruning run may take, measured with ctx.now(). The rest waits for the next run. */
+export const PRUNE_BUDGET_MS = 5_000;
 
-  const sweep = async (prefix: string, isStale: (key: string) => Promise<boolean>): Promise<void> => {
-    if (removed >= limit) return;
+/**
+ * Deletes short-lived keys that are past use: claims and rate-limit windows older than `maxAgeMs`,
+ * and cache entries that have expired (an expired entry is never read again). Returns how many
+ * keys were removed.
+ *
+ * Bounded twice, so a scheduled run stays inside its time: every prefix may remove at most `limit`
+ * keys, and the whole run stops after `budgetMs`. Each prefix has its own slice of that time (time a
+ * prefix does not use passes on to the next), so a backlog in one cannot starve the others. Checks
+ * and deletes run in parallel. A prefix that fails does not stop the others; the first failure is
+ * thrown once all of them had their turn.
+ */
+export async function pruneEphemeral(ctx: Ctx, maxAgeMs: number, limit = PRUNE_LIMIT_PER_PREFIX, budgetMs = PRUNE_BUDGET_MS): Promise<number> {
+  const startMs = ctx.now().getTime();
+  const cutoff = startMs - maxAgeMs;
+  const cap = Math.max(0, Math.floor(limit));
+  const budget = Number.isFinite(budgetMs) ? Math.max(0, budgetMs) : PRUNE_BUDGET_MS;
+
+  const sweep = async (prefix: string, until: number, isStale: (key: string) => Promise<boolean>): Promise<number> => {
+    const outOfTime = (): boolean => ctx.now().getTime() >= until;
+    if (cap === 0 || outOfTime()) return 0;
     const keys = await ctx.kv.list(prefix);
-    const stale = await mapLimit(keys, READ_CONCURRENCY, isStale);
-    for (let i = 0; i < keys.length && removed < limit; i++) {
-      if (!stale[i]) continue;
-      await ctx.kv.delete(keys[i]);
-      removed++;
-    }
+    let taken = 0;
+    let removed = 0;
+    let failed: { error: unknown } | null = null;
+    await mapLimit(keys, READ_CONCURRENCY, async (key) => {
+      if (failed || taken >= cap || outOfTime()) return;
+      try {
+        if (!(await isStale(key))) return;
+        // Checked again: the read may have used up the time, or another worker the allowance.
+        if (failed || taken >= cap || outOfTime()) return;
+        taken++;
+        await ctx.kv.delete(key);
+        removed++;
+      } catch (error) {
+        // The storage is in trouble: stop this prefix, report it once the others had their turn.
+        failed ??= { error };
+      }
+    });
+    if (failed) throw (failed as { error: unknown }).error;
+    return removed;
   };
 
-  // rl/<bucket>/<idHash>/<windowStartMs>: the age is in the key, no read needed.
-  await sweep(KEYS.rateLimitPrefix, async (key) => {
-    const windowStart = Number(key.slice(key.lastIndexOf('/') + 1));
-    return Number.isFinite(windowStart) && windowStart < cutoff;
-  });
-  await sweep(KEYS.claimPrefix, async (key) => {
-    const record = await ctx.kv.getJSON<{ at?: string }>(key);
-    const at = Date.parse(record?.at ?? '');
-    return Number.isFinite(at) && at < cutoff;
-  });
-  await sweep(KEYS.cachePrefix, async (key) => {
-    const record = await ctx.kv.getJSON<CacheRecord>(key);
-    return !!record && typeof record.exp === 'number' && record.exp < cutoff;
-  });
+  const sweeps: [string, (key: string) => Promise<boolean>][] = [
+    [
+      KEYS.claimPrefix,
+      async (key) => {
+        const record = await ctx.kv.getJSON<{ at?: string }>(key);
+        const at = Date.parse(record?.at ?? '');
+        return Number.isFinite(at) && at < cutoff;
+      },
+    ],
+    [
+      KEYS.cachePrefix,
+      async (key) => {
+        const record = await ctx.kv.getJSON<CacheRecord>(key);
+        // cacheGet treats an entry as gone from the moment it expires.
+        return !!record && typeof record.exp === 'number' && record.exp <= ctx.now().getTime();
+      },
+    ],
+    // rl/<bucket>/<idHash>/<windowStartMs>: the age is in the key, no read needed. Last, because the
+    // biggest backlog builds up here and it then gets the time the others left over.
+    [
+      KEYS.rateLimitPrefix,
+      async (key) => {
+        const windowStart = Number(key.slice(key.lastIndexOf('/') + 1));
+        return Number.isFinite(windowStart) && windowStart < cutoff;
+      },
+    ],
+  ];
+
+  let removed = 0;
+  let failure: unknown = null;
+  for (let i = 0; i < sweeps.length; i++) {
+    const [prefix, isStale] = sweeps[i];
+    const until = startMs + (budget * (i + 1)) / sweeps.length;
+    try {
+      removed += await sweep(prefix, until, isStale);
+    } catch (err) {
+      failure ??= err;
+    }
+  }
+  if (failure) throw failure;
   return removed;
 }

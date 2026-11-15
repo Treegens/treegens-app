@@ -3,6 +3,7 @@
  * fetch, the wall clock and Netlify Blobs. It builds the `Ctx` for a Netlify invocation.
  */
 import { randomUUID } from 'node:crypto';
+import { isIPv4, isIPv6 } from 'node:net';
 import { BASE_PATH, type Ctx, type Env, type LogLevel } from './ctx';
 import { blobsKV } from './store';
 
@@ -11,6 +12,22 @@ function readEnv(name: string): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed === '' ? undefined : trimmed;
+}
+
+/**
+ * ANTHROPIC_API_KEY, but only when it is a real Anthropic key that the site set itself.
+ * Netlify's AI Gateway writes its own credential into ANTHROPIC_API_KEY (and its own address into
+ * ANTHROPIC_BASE_URL) in every function unless the site defines them. That value is not an
+ * Anthropic key: taken as an override it would beat the key saved in the dashboard and every call
+ * to api.anthropic.com would be refused. Same shape rule as a key pasted in the dashboard.
+ */
+function anthropicKeyFromEnv(): string | undefined {
+  const key = readEnv('ANTHROPIC_API_KEY');
+  if (!key) return undefined;
+  const gatewayKey = readEnv('NETLIFY_AI_GATEWAY_KEY');
+  if (gatewayKey && key === gatewayKey) return undefined;
+  if (!key.startsWith('sk-ant-') || key.length < 20 || key.length > 300 || /\s/.test(key)) return undefined;
+  return key;
 }
 
 /**
@@ -40,7 +57,8 @@ export function envFromProcess(): Env {
     // URL is Netlify's own variable for the site's main address; PUBLIC_BASE_URL is needed when the app is proxied under another domain.
     publicBaseUrl: normalizeBaseUrl(readEnv('PUBLIC_BASE_URL')) || normalizeBaseUrl(readEnv('URL')),
     // The app's own origin. Embeds on other websites must load from here because the proxying domain forbids framing.
-    embedBaseUrl: normalizeBaseUrl(readEnv('EMBED_BASE_URL')) || undefined,
+    // Netlify's URL is exactly that origin, so it is the fallback; EMBED_BASE_URL stays an override.
+    embedBaseUrl: normalizeBaseUrl(readEnv('EMBED_BASE_URL')) || normalizeBaseUrl(readEnv('URL')) || undefined,
     // Never taken from the environment: it would expose the dev-only routes (data reset, fake clock) in production.
     mockProviders: false,
     overrides: {
@@ -49,7 +67,7 @@ export function envFromProcess(): Env {
       twilioAccountSid: readEnv('TWILIO_ACCOUNT_SID'),
       twilioAuthToken: readEnv('TWILIO_AUTH_TOKEN'),
       twilioFromNumber: readEnv('TWILIO_FROM_NUMBER'),
-      anthropicApiKey: readEnv('ANTHROPIC_API_KEY'),
+      anthropicApiKey: anthropicKeyFromEnv(),
       resendApiKey: readEnv('RESEND_API_KEY'),
     },
   };
@@ -91,18 +109,62 @@ export function consoleLogger(requestId: string): Ctx['log'] {
   };
 }
 
+/** The eight 16-bit groups of a valid IPv6 address (an IPv4 tail such as ::ffff:1.2.3.4 becomes the last two). */
+function ipv6Groups(address: string): number[] {
+  let text = address.toLowerCase();
+  const lastColon = text.lastIndexOf(':');
+  const tail = text.slice(lastColon + 1);
+  if (tail.includes('.')) {
+    const [a, b, c, d] = tail.split('.').map(Number);
+    text = `${text.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, rest] = text.split('::');
+  const parse = (part: string | undefined): number[] => (part ? part.split(':').filter((g) => g !== '').map((g) => parseInt(g, 16)) : []);
+  const front = parse(head);
+  if (rest === undefined) return front;
+  const back = parse(rest);
+  return [...front, ...new Array<number>(8 - front.length - back.length).fill(0), ...back];
+}
+
+/**
+ * The form of a client address that rate limits count by. One IPv6 customer is handed a whole /64
+ * and can send every request from a new address inside it, so IPv6 counts by its /64. An IPv4
+ * address written as IPv6 (::ffff:a.b.c.d) counts as that IPv4 address. Anything else is kept as given.
+ */
+export function rateLimitAddress(raw: string): string {
+  let value = raw.trim();
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(value);
+  if (bracketed) value = bracketed[1];
+  const withPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$/.exec(value);
+  if (withPort) value = withPort[1];
+  const zone = value.indexOf('%');
+  if (zone !== -1 && value.includes(':')) value = value.slice(0, zone);
+  if (isIPv4(value)) return value;
+  if (!isIPv6(value)) return raw.trim();
+  const groups = ipv6Groups(value);
+  if (groups.length !== 8 || groups.some((g) => !Number.isInteger(g) || g < 0 || g > 0xffff)) return value.toLowerCase();
+  if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+    return [groups[6] >> 8, groups[6] & 0xff, groups[7] >> 8, groups[7] & 0xff].join('.');
+  }
+  return `${groups
+    .slice(0, 4)
+    .map((g) => g.toString(16))
+    .join(':')}::/64`;
+}
+
 /**
  * Client address used for rate limiting. Netlify's `context.ip` by default. When the app is
  * reached through another proxy, set MEETING_CLIENT_IP_HEADER to the header that proxy fills
  * with the visitor's address (first entry of a comma separated list is used).
+ * Only rate limits read ctx.ip, so it carries the counting form (see rateLimitAddress).
  */
 function clientIp(req: Request, contextIp: string | undefined): string | null {
   const header = readEnv('MEETING_CLIENT_IP_HEADER');
   if (header) {
     const first = (req.headers.get(header) ?? '').split(',')[0].trim();
-    if (first && first.length <= 64) return first;
+    if (first && first.length <= 64) return rateLimitAddress(first);
   }
-  return contextIp && contextIp.trim() !== '' ? contextIp.trim() : null;
+  return contextIp && contextIp.trim() !== '' ? rateLimitAddress(contextIp) : null;
 }
 
 export function netlifyCtx(

@@ -3,11 +3,11 @@ import { newEventType } from '../../shared/defaults';
 import type { CreateBookingRequest, CreateBookingResponse, EventType, GetBookingResponse, PublicEventResponse, PublicSite, SlotsResponse } from '../../shared/types';
 import { handle } from '../../server/api';
 import { manageToken } from '../../server/lib/booking';
-import { seal } from '../../server/lib/crypto';
+import { seal, sha256Hex } from '../../server/lib/crypto';
 import type { Env } from '../../server/lib/ctx';
 import { getBooking, getBookingIndex, getEventType, getSite, listJobs, putAsset, saveEventType, updateHost } from '../../server/lib/repo';
 import * as client from '../../src/lib/api';
-import { apiRequest, makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { apiRequest, makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
 
 // ───────────────────────── fixtures ─────────────────────────
 
@@ -17,10 +17,12 @@ const NOW = '2026-11-16T09:00:00.000Z';
 const WED_14 = '2026-11-18T14:00:00.000Z';
 const BOOKING_NOT_FOUND = { error: { code: 'not_found', message: 'We could not find that booking. Check the link in your confirmation email.' } };
 
-async function setup(opts: { env?: Partial<Env>; ip?: string | null } = {}): Promise<TestCtx> {
+async function setup(opts: { env?: Partial<Env>; ip?: string | null; setUp?: boolean } = {}): Promise<TestCtx> {
   const ctx = makeTestCtx({ now: NOW, env: opts.env, ip: opts.ip });
   await getSite(ctx);
   await updateHost(ctx, OWNER, (h) => ({ ...h, email: 'jimi@example.com' }));
+  // The owner has been through first-run setup, unless the test is about the time before it.
+  if (opts.setUp !== false) await markSetUp(ctx);
   return ctx;
 }
 
@@ -60,9 +62,35 @@ describe('GET /public/site and /public/event/:slug', () => {
     const site = (await res.json()) as PublicSite;
     expect(site.eventTypes.map((e) => e.slug)).toEqual(['intro', 'meeting']);
     expect(site.profile.name).toBe('Jimi Cohen');
-    expect(site.features).toEqual({ sms: false, calls: false });
+    expect(site.features).toEqual({ sms: false, calls: false, email: false });
     expect(site.ownerTimezone).toBe('UTC');
     expect(JSON.stringify(site)).not.toContain('jimi@example.com');
+  });
+
+  it('is closed until the owner has been through first-run setup', async () => {
+    const code = 'first-run-code-123';
+    const ctx = await setup({ setUp: false, env: { setupCodeHash: sha256Hex(code) } });
+    const slotsPath = '/public/slots?slug=intro&duration=15&from=2026-11-18T00:00:00Z&to=2026-11-19T00:00:00Z';
+    const notOpen = { error: { code: 'not_open', message: 'This booking page is not taking bookings yet. Please check back soon.' } };
+
+    const site = (await (await get(ctx, '/public/site')).json()) as PublicSite;
+    expect(site.eventTypes).toEqual([]);
+    expect((await get(ctx, '/public/event/intro')).status).toBe(404);
+    const slots = await get(ctx, slotsPath);
+    expect(slots.status).toBe(503);
+    expect(await slots.json()).toEqual(notOpen);
+    const booked = await post(ctx, '/public/bookings', bookingBody());
+    expect(booked.status).toBe(503);
+    expect(await booked.json()).toEqual(notOpen);
+    expect(await getBookingIndex(ctx)).toEqual([]);
+
+    // The owner sets up: the page opens at once.
+    expect((await post(ctx, '/auth/setup', { code, password: 'a long enough password 1', deviceTimezone: 'Europe/London' })).status).toBe(200);
+    expect(((await (await get(ctx, '/public/site')).json()) as PublicSite).eventTypes.map((e) => e.slug)).toEqual(['intro', 'meeting']);
+    expect((await get(ctx, '/public/event/intro')).status).toBe(200);
+    expect((await get(ctx, slotsPath)).status).toBe(200);
+    expect((await post(ctx, '/public/bookings', bookingBody())).status).toBe(201);
+    await ctx.settle();
   });
 
   it('answers HEAD without a body and refuses other methods', async () => {
@@ -169,10 +197,10 @@ describe('GET /public/slots', () => {
     }
   });
 
-  it('allows 240 requests a minute per visitor', async () => {
+  it('allows 60 requests a minute per visitor', async () => {
     const ctx = await setup();
     const path = `/public/slots?slug=intro&duration=15&from=${Date.parse(NOW)}&to=${Date.parse(NOW) + 3_600_000}`;
-    for (let i = 0; i < 240; i++) expect((await get(ctx, path)).status).toBe(200);
+    for (let i = 0; i < 60; i++) expect((await get(ctx, path)).status).toBe(200);
     const limited = await get(ctx, path);
     expect(limited.status).toBe(429);
     expect(limited.headers.get('retry-after')).toMatch(/^\d+$/);
@@ -189,7 +217,7 @@ describe('GET /public/slots', () => {
 describe('POST /public/bookings', () => {
   it('creates the booking and answers 201 with the public view and the manage token', async () => {
     const ctx = await setup();
-    const res = await handle(apiRequest('POST', '/public/bookings', { body: bookingBody({ guests: ['grace@example.com'], utm: { utm_source: 'news' } }) }), ctx);
+    const res = await handle(apiRequest('POST', '/public/bookings', { body: bookingBody({ utm: { utm_source: 'news' } }) }), ctx);
     expect(res.status).toBe(201);
     expect(res.headers.get('cache-control')).toBe('no-store');
     const body = (await res.json()) as CreateBookingResponse;
@@ -204,13 +232,15 @@ describe('POST /public/bookings', () => {
       durationMin: 15,
       hosts: [{ id: OWNER, name: 'Jimi Cohen', avatarUrl: null }],
       invitee: { name: 'Ada Lovelace', email: 'ada@example.com', timezone: 'Europe/London' },
-      guests: ['grace@example.com'],
+      guests: [],
       canReschedule: true,
       canCancel: true,
       attendanceConfirmed: false,
+      // Nothing is set up to send email, and no calendar is connected: the page must promise neither.
+      delivery: { email: false, calendarInvite: false },
     });
     expect(Object.keys(body.booking).sort()).toEqual(
-      ['attendanceConfirmed', 'calendarLinks', 'canCancel', 'canReschedule', 'cancellation', 'durationMin', 'end', 'eventSlug', 'eventTitle', 'guests', 'hosts', 'id', 'invitee', 'location', 'rescheduledFromStart', 'start', 'status'].sort(),
+      ['attendanceConfirmed', 'calendarLinks', 'canCancel', 'canReschedule', 'cancellation', 'delivery', 'durationMin', 'end', 'eventSlug', 'eventTitle', 'guests', 'hosts', 'id', 'invitee', 'location', 'rescheduledFromStart', 'start', 'status'].sort(),
     );
     expect((await getBooking(ctx, body.booking.id))?.utm).toEqual({ utm_source: 'news' });
     expect(await getBookingIndex(ctx)).toHaveLength(1);
@@ -444,6 +474,51 @@ describe('manage link routes', () => {
     expect(await getBooking(ctx, booking.id)).toMatchObject({ status: 'confirmed', start: WED_14, attendance: {} });
   });
 
+  it('keeps a host\'s zone off the invitee when the page was opened from a host link, and records the move as a host\'s', async () => {
+    const ctx = await setup();
+    const { booking, manageToken: token } = await book(ctx, { timezone: 'America/New_York' });
+
+    const byHost = await post(ctx, `/public/bookings/${booking.id}/reschedule`, { t: token, start: '2026-11-19T11:00:00.000Z', timezone: 'Africa/Nairobi', as: 'host' });
+    expect(byHost.status).toBe(200);
+    expect((await byHost.json()).booking.invitee.timezone).toBe('America/New_York');
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.invitee.timezone).toBe('America/New_York');
+    expect(stored.timeline.filter((t) => t.type === 'rescheduled').at(-1)?.detail).toMatch(/by a host, from the booking page$/);
+
+    // Anything else in that field is the invitee's own page.
+    const own = await post(ctx, `/public/bookings/${booking.id}/reschedule`, { t: token, start: '2026-11-19T12:00:00.000Z', timezone: 'Europe/Paris', as: 'admin' });
+    expect(own.status).toBe(200);
+    expect((await own.json()).booking.invitee.timezone).toBe('Europe/Paris');
+    expect((await getBooking(ctx, booking.id))!.timeline.filter((t) => t.type === 'rescheduled').at(-1)?.detail).toMatch(/by the invitee$/);
+    await ctx.settle();
+  });
+
+  it('records a cancellation from a host link as made by a host, with the invitee\'s deadline', async () => {
+    const ctx = await setup();
+    const { booking, manageToken: token } = await book(ctx);
+    const res = await post(ctx, `/public/bookings/${booking.id}/cancel`, { t: token, as: 'host' });
+    expect(res.status).toBe(200);
+    expect((await res.json()).booking.cancellation).toMatchObject({ by: 'host' });
+    expect((await getBooking(ctx, booking.id))!.cancellation).toMatchObject({ by: 'host', via: 'host_link' });
+
+    const later = await book(ctx, { start: '2026-11-18T15:00:00.000Z' });
+    ctx.clock.set('2026-11-18T15:01:00.000Z');
+    const tooLate = await post(ctx, `/public/bookings/${later.booking.id}/cancel`, { t: later.manageToken, as: 'host' });
+    expect(tooLate.status).toBe(410);
+    await ctx.settle();
+  });
+
+  it('answers a booking request sent again with the booking its first try made', async () => {
+    const ctx = await setup();
+    const requestKey = 'form-key-' + 'Q'.repeat(24);
+    const first = await book(ctx, { requestKey });
+    const again = await book(ctx, { requestKey });
+    expect(again.booking.id).toBe(first.booking.id);
+    expect(again.manageToken).toBe(first.manageToken);
+    expect(await getBookingIndex(ctx)).toHaveLength(1);
+    await ctx.settle();
+  });
+
   it('limits how often one visitor can change bookings', async () => {
     const ctx = await setup();
     const { booking, manageToken: token } = await book(ctx);
@@ -609,7 +684,11 @@ describe('src/lib/api.ts against the real routes', () => {
     const whileMoving = await client.getSlots({ slug: 'intro', durationMin: 15, from, to: from + 86_400_000, rescheduleBookingId: id, token });
     expect(whileMoving.slots.map((s) => s.start)).toContain(WED_14);
     const moved = await client.rescheduleBooking(id, token, '2026-11-18T15:00:00.000Z', 'Africa/Nairobi');
-    expect(moved).toMatchObject({ id, start: '2026-11-18T15:00:00.000Z', rescheduledFromStart: WED_14 });
+    expect(moved).toMatchObject({ id, start: '2026-11-18T15:00:00.000Z', rescheduledFromStart: WED_14, invitee: { timezone: 'Africa/Nairobi' } });
+    // The page opened from a host's link says so, and the host's zone stays out of it.
+    const byHost = await client.rescheduleBooking(id, token, '2026-11-18T16:00:00.000Z', undefined, 'host');
+    expect(byHost).toMatchObject({ start: '2026-11-18T16:00:00.000Z', invitee: { timezone: 'Africa/Nairobi' } });
+    expect((await getBooking(ctx, id))!.timeline.filter((t) => t.type === 'rescheduled').at(-1)?.detail).toMatch(/by a host, from the booking page$/);
 
     const confirmed = await client.confirmBooking(id, token);
     expect(confirmed.attendanceConfirmed).toBe(true);

@@ -548,6 +548,37 @@
   margin: -4px -8px 0 0;
 }
 
+/*
+ * A head with an action ("All bookings"): the title shares its line with the action and the description
+ * gets the full width below, so on a phone it does not wrap into a narrow column next to the button.
+ */
+.adm-panel__head:has(> .ui-btn) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 12px;
+  row-gap: 0;
+}
+
+.adm-panel__head:has(> .ui-btn) > div {
+  display: contents;
+}
+
+.adm-panel__head:has(> .ui-btn) .adm-panel__title {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.adm-panel__head:has(> .ui-btn) > .ui-btn {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.adm-panel__head:has(> .ui-btn) .adm-panel__desc {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
 .adm-panel__title {
   font-size: var(--a-text-md);
   font-weight: 650;
@@ -2495,6 +2526,11 @@ a.adm-checklist__item:hover {
   justify-content: space-between;
   gap: 10px;
   width: 100%;
+}
+
+/* Erasing is rare and final: a quiet button, in the danger colour. */
+.adm-bk__footer .adm-bk__delete {
+  color: var(--a-danger-text);
 }
 
 .adm-bk__loading {

@@ -18,7 +18,8 @@
  * Conventions a test can rely on:
  *   - OAuth code `mock:<email>:<zone>[:flag...]` signs in as that Google account with that
  *     Calendar time zone. Flags: gmail (grant gmail.send), norefresh (no refresh token),
- *     nocalendar (calendar scopes not granted), noidtoken (identity only through userinfo).
+ *     nocalendar (calendar scopes not granted), noidtoken (identity only through userinfo),
+ *     testing (the consent screen is in "Testing": the refresh token ends after 7 days).
  *   - A credential that starts with "invalid" (client secret, API key, auth token) is turned
  *     down the way the real provider turns down a wrong one.
  *   - KV `dev/google-busy/<email>` holds extra busy intervals of an account. Events created
@@ -445,6 +446,8 @@ function planGoogleToken(call: Call): Plan {
           token_type: 'Bearer',
         };
         if (!code.flags.has('norefresh')) body.refresh_token = mintToken('mock-rt', claims);
+        // What Google adds while the OAuth consent screen is still in "Testing": the grant ends after 7 days.
+        if (code.flags.has('testing') && !code.flags.has('norefresh')) body.refresh_token_expires_in = 604_799;
         if (!code.flags.has('noidtoken')) body.id_token = idToken(code.email, clientId, mock);
         return { status: 200, json: body, entry: { grant, scopes, refreshTokenIssued: !code.flags.has('norefresh'), timezone: code.zone } };
       }
@@ -1124,14 +1127,25 @@ function planResend(call: Call): Plan {
         attachments: attachments.map((a) => ({ filename: str(a.filename) || null, contentType: headerParams(str(a.content_type) || 'application/octet-stream').value })),
       };
 
-      // The same Idempotency-Key is the same email: Resend answers with the first id and sends nothing new.
+      // The same Idempotency-Key with the same request is the same email: Resend answers with the first
+      // id and sends nothing new. The same key with a different request is refused with a 409.
       const idempotencyKey = call.headers.get('idempotency-key') ?? '';
       const id = `${hex(4)}-${hex(2)}-${hex(2)}-${hex(2)}-${hex(6)}`;
       if (idempotencyKey) {
         const slot = `${RESEND_IDEMPOTENCY_PREFIX}${sha(idempotencyKey).slice(0, 32)}`;
-        const written = await mock.kv.setJSON(slot, { id }, { onlyIfNew: true });
+        const bodyHash = sha(call.body ?? '').slice(0, 32);
+        const written = await mock.kv.setJSON(slot, { id, bodyHash }, { onlyIfNew: true });
         if (!written.modified) {
-          const first = (await mock.kv.getJSON<{ id: string }>(slot))?.id ?? id;
+          const stored = await mock.kv.getJSON<{ id: string; bodyHash?: string }>(slot);
+          if (stored?.bodyHash && stored.bodyHash !== bodyHash) {
+            return {
+              status: 409,
+              json: { statusCode: 409, name: 'invalid_idempotent_request', message: 'Same idempotency key used with a different request payload.' },
+              kind: 'email_conflict',
+              entry: { error: 'invalid_idempotent_request', idempotencyKey },
+            };
+          }
+          const first = stored?.id ?? id;
           return { status: 200, json: { id: first }, kind: 'email_duplicate', entry: { messageId: first, idempotencyKey, ...email } };
         }
       }
@@ -1223,7 +1237,7 @@ function planTwilio(call: Call): Plan | null {
           date_created: mock.at ? new Date(mock.at).toUTCString() : null,
           uri: `/2010-04-01/Accounts/${accountSid}/Messages/${sid}.json`,
         },
-        entry: { sid, to, from: from || null, messagingServiceSid: service || null, body: text, text },
+        entry: { sid, to, from: from || null, messagingServiceSid: service || null, body: text, text, statusCallback: form.get('StatusCallback') },
       };
     });
   }

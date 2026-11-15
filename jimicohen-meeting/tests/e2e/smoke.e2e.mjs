@@ -155,7 +155,8 @@ export default defineSuite('smoke', { mockCreds: true }, async (t) => {
       s.expect(notice.subject, 'host notice subject').toContain(INVITEE.name);
       // Shown in the host's zone: 2:00 PM in London. The reply goes to the invitee.
       s.expect(notice.text, 'host notice text').toContain('2:00 PM to 2:15 PM (Greenwich Mean Time)');
-      s.expect(notice.links, 'links in the host notice').toContain(booking.manageUrl);
+      // The host's copy of the manage link says a host is acting (their zone then stays off the invitee).
+      s.expect(notice.links, 'links in the host notice').toContain(`${booking.manageUrl}&as=host`);
       s.expect(notice.replyTo, 'reply-to of the host notice').toBe(INVITEE.email);
 
       // Nothing failed on the way, and nothing unknown was called.

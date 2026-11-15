@@ -16,7 +16,7 @@ import { confirmAttendance } from '../../server/lib/booking';
 import { enqueueJob } from '../../server/lib/jobs';
 import { getBooking, indexEntryOf, mutateBookingIndex, saveBooking, saveSecrets } from '../../server/lib/repo';
 import { handleInboundSms, sendSms, SMS_BODY_LIMIT } from '../../server/lib/sms';
-import { computeTwilioSignature, isNumberBlocked } from '../../server/lib/twilio';
+import { blockNumber, computeTwilioSignature, isNumberBlocked } from '../../server/lib/twilio';
 import { makeTestCtx, TEST_NOW, type TestCtx } from '../helpers/ctx';
 
 const confirm = vi.mocked(confirmAttendance);
@@ -104,7 +104,42 @@ describe('sendSms', () => {
     expect(result).toEqual({ ok: true, provider: 'twilio', id: 'SM0001' });
     expect(net.calls).toHaveLength(1);
     expect(net.calls[0].url).toBe(`https://api.twilio.com/2010-04-01/Accounts/${SID}/Messages.json`);
-    expect(Object.fromEntries(net.calls[0].params)).toEqual({ To: '+14155552671', Body: 'Reminder: Intro call at 3:30 PM.', From: '+15005550006' });
+    expect(Object.fromEntries(net.calls[0].params)).toEqual({
+      To: '+14155552671',
+      Body: 'Reminder: Intro call at 3:30 PM.',
+      From: '+15005550006',
+      // A 201 only means "queued": Twilio reports later whether the carrier delivered it.
+      StatusCallback: 'https://jimicohen.com/meeting/api/twilio/sms/status',
+    });
+  });
+
+  it('asks for the delivery report with the booking and the kind of message, when it knows them', async () => {
+    const net = fakeTwilio();
+    const ctx = await configured({ fetch: net.impl });
+    await sendSms(ctx, { to: '+14155552671', body: 'Hi', bookingId: 'bk_next', kind: 'reminder' });
+    expect(net.calls[0].params.get('StatusCallback')).toBe('https://jimicohen.com/meeting/api/twilio/sms/status?b=bk_next&k=reminder');
+    // Anything that is not a plain id or kind is left out of the address.
+    await sendSms(ctx, { to: '+14155552671', body: 'Hi', bookingId: '../x?y', kind: 'Reminder!' });
+    expect(net.calls[1].params.get('StatusCallback')).toBe('https://jimicohen.com/meeting/api/twilio/sms/status');
+  });
+
+  it('asks for no delivery report when Twilio could not reach the address', async () => {
+    const net = fakeTwilio();
+    const ctx = await configured({ fetch: net.impl, env: { publicBaseUrl: 'http://localhost:8888/meeting' } });
+    expect(await sendSms(ctx, { to: '+14155552671', body: 'Hi', bookingId: 'bk_next' })).toMatchObject({ ok: true });
+    expect(net.calls[0].params.has('StatusCallback')).toBe(false);
+  });
+
+  it('says a send may have gone through when Twilio did not answer in time', async () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = await configured({ fetch: (() => new Promise<Response>(() => undefined)) as typeof fetch });
+      const pending = sendSms(ctx, { to: '+14155552671', body: 'Reminder' });
+      await vi.advanceTimersByTimeAsync(8100);
+      expect(await pending).toEqual({ ok: false, provider: 'twilio', error: 'Twilio did not answer in time', uncertain: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uses the messaging service instead of From when one is set', async () => {
@@ -305,6 +340,24 @@ describe('handleInboundSms', () => {
 
     await handleInboundSms(ctx, inbound({ From: '+14155552671', Body: 'START' }));
     expect(await sendSms(ctx, { to: '+14155552671', body: 'Reminder' })).toMatchObject({ ok: true });
+  });
+
+  it('keeps a do-not-call request when the number later answers a text with "Yes"', async () => {
+    const ctx = await configured();
+    await store(ctx, makeBooking('bk_next'));
+    // What the call flow does when someone says "stop calling me", plus an earlier text STOP.
+    await blockNumber(ctx, '+14155552671', ['sms', 'call']);
+
+    const res = await handleInboundSms(ctx, inbound({ From: '+14155552671', Body: 'Yes' }));
+    expect(res.status).toBe(200);
+    // Carriers read YES as "resume texts", so texts may go out again, but the call block stays.
+    expect(await isNumberBlocked(ctx, '+14155552671', 'sms')).toBe(false);
+    expect(await isNumberBlocked(ctx, '+14155552671', 'call')).toBe(true);
+    expect(confirm).toHaveBeenCalledWith(ctx, 'bk_next', 'sms');
+
+    // START is the explicit way back in, for calls too.
+    await handleInboundSms(ctx, inbound({ From: '+14155552671', Body: 'START' }));
+    expect(await isNumberBlocked(ctx, '+14155552671', 'call')).toBe(false);
   });
 
   it('leaves HELP and START to the carrier', async () => {

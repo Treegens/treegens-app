@@ -29,6 +29,21 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/**
+ * The main site's host ("jimicohen.com") when embeds come from another origin. That is the case
+ * exactly because the main site does not let other origins frame its pages or run their scripts,
+ * so the embed code cannot work on that site's own pages. Null when both are the same origin.
+ */
+function mainSiteHost(publicUrl: string | undefined, embedBaseUrl: string | undefined): string | null {
+  if (!publicUrl || !embedBaseUrl) return null;
+  try {
+    const main = new URL(publicUrl);
+    return main.origin === new URL(embedBaseUrl).origin ? null : main.host;
+  } catch {
+    return null;
+  }
+}
+
 /** The same page on the origin that may be framed, plus where embed.js lives. */
 function embedTargets(url: string, publicUrl: string | undefined, embedBaseUrl: string | undefined): { frameUrl: string; scriptUrl: string } {
   const pub = publicUrl ? trimSlash(publicUrl) : null;
@@ -52,8 +67,11 @@ export function SharePanel({ url, title }: SharePanelProps) {
 
   const { frameUrl, scriptUrl } = useMemo(() => embedTargets(url, admin?.data.publicUrl, admin?.data.embedBaseUrl), [url, admin?.data.publicUrl, admin?.data.embedBaseUrl]);
 
-  const inlineSnippet = `<div data-meeting-url="${escapeHtml(frameUrl)}"></div>\n<script src="${escapeHtml(scriptUrl)}" async></script>`;
+  // The link inside the box is what shows where the script cannot run (a site that blocks it, or
+  // scripts switched off). embed.js takes it out when it puts the calendar in.
+  const inlineSnippet = `<div data-meeting-url="${escapeHtml(frameUrl)}"><a href="${escapeHtml(url)}" data-meeting-fallback>Book a meeting</a></div>\n<script src="${escapeHtml(scriptUrl)}" async></script>`;
   const popupSnippet = `<a href="${escapeHtml(url)}" data-meeting-popup="${escapeHtml(frameUrl)}">${escapeHtml(buttonText.trim() || 'Book a meeting')}</a>\n<script src="${escapeHtml(scriptUrl)}" async></script>`;
+  const mainHost = mainSiteHost(admin?.data.publicUrl, admin?.data.embedBaseUrl);
 
   const what = title ? `"${title}"` : 'your booking page';
 
@@ -98,9 +116,15 @@ export function SharePanel({ url, title }: SharePanelProps) {
         <div className="sp__pane">
           <p className="sp__lead">Paste this where the calendar should appear on your site. It fits the width it is given and grows and shrinks with its content, so there are no scrollbars.</p>
           <CopyField multiline label={`Embed code for ${what}`} value={inlineSnippet} copyLabel="Copy code" />
+          {mainHost ? (
+            <p className="sp__warn" role="note">
+              Not for pages on {mainHost} itself: that site does not allow embedded calendars, so the code shows only a plain link there. Use the link from the Link tab on those pages.
+            </p>
+          ) : null}
           <ul className="sp__notes">
             <li>Works in any site builder that accepts custom HTML (Webflow, Squarespace, WordPress, Framer).</li>
             <li>The booking card keeps your design and sits on your page's own background.</li>
+            <li>If the script cannot load, a plain link to your booking page shows instead.</li>
           </ul>
         </div>
       ) : null}
@@ -112,6 +136,11 @@ export function SharePanel({ url, title }: SharePanelProps) {
             <Input id={textId} value={buttonText} maxLength={60} onChange={(e) => setButtonText(e.target.value)} />
           </Field>
           <CopyField multiline label={`Popup button code for ${what}`} value={popupSnippet} copyLabel="Copy code" />
+          {mainHost ? (
+            <p className="sp__warn" role="note">
+              Not for pages on {mainHost} itself: that site does not allow embedded calendars, so the button only opens your booking page there. Use the plain link on those pages.
+            </p>
+          ) : null}
           <ul className="sp__notes">
             <li>Style the link like any other on your site, or add the attribute to a button you already have.</li>
             <li>If the script cannot load, the link simply opens your booking page.</li>

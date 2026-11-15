@@ -4,7 +4,7 @@
  * assistant's call two hours before (with Twilio's side of the conversation played here), the
  * email an hour before and the text 15 minutes before. Each exactly once, in the invitee's own
  * time zone. Then everything a call can turn into: a reschedule request, a cancellation that
- * needs a second yes, voicemail, a call that would ring at night, and a "C" sent by text.
+ * needs a second yes, voicemail, a call that would ring at night (it rings earlier instead), and a "C" sent by text.
  */
 import { defineSuite } from './lib.mjs';
 import { HOUR, MINUTE, OWNER_GOOGLE, PHONE, jobLines, plus, prepare } from './public-helpers.mjs';
@@ -66,7 +66,7 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       await s.setClock(T.dayBefore);
       await s.runJobs();
       await s.runJobs();
-      s.expect(await sent(s), 'sent').toEqual([`email to ${ADA.email}: Reminder: Intro call with Jimi Cohen is tomorrow at 11:00 AM`]);
+      s.expect(await sent(s), 'sent').toEqual([`email to ${ADA.email}: Reminder: Intro call with Jimi Cohen is tomorrow at 11:00 AM EST`]);
       const [mail] = await s.outbox({ kind: 'email' });
       s.expect(mail, 'reminder').toMatchObject({ service: 'resend', status: 200, at: T.dayBefore, replyTo: OWNER_GOOGLE });
       s.expect(mail.text, 'wording').toContain('Hi Ada,');
@@ -141,7 +141,11 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       const ended = b.timeline.find((e) => e.type === 'call_completed');
       s.expect(ended.detail, 'call summary').toContain('They confirmed they are coming.');
       s.expect(ended.detail, 'call summary').toContain('Call length: 24 seconds.');
-      s.expect(ended.detail, 'transcript').toContain('Yes, I will be there.');
+      // What she said stays on the call record (kept 90 days); the booking holds the outcome and the call id.
+      s.expect(ended.callId, 'call id on the timeline').toBe(call.callId);
+      s.expect(JSON.stringify(b.timeline), 'no transcript on the booking').not.toContain('Yes, I will be there.');
+      const { booking: view } = await s.apiOk('GET', `/admin/bookings/${b.id}`);
+      s.expect(view.timeline.find((e) => e.type === 'call_completed').transcript, 'transcript in the dashboard').toContain('Ada: Yes, I will be there.');
       s.expect((await s.calls())[0].record, 'call record').toMatchObject({ status: 'completed', outcome: 'confirmed', pendingCancel: false });
       // Her own booking page agrees.
       const page = await s.newPage({ timezoneId: NEW_YORK, locale: 'en-US' });
@@ -158,7 +162,7 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       await s.setClock(T.hourBefore);
       await s.runJobs();
       await s.runJobs();
-      s.expect(await sent(s), 'sent').toEqual([`email to ${ADA.email}: Reminder: Intro call with Jimi Cohen is today at 11:00 AM`]);
+      s.expect(await sent(s), 'sent').toEqual([`email to ${ADA.email}: Reminder: Intro call with Jimi Cohen is today at 11:00 AM EST`]);
       const [mail] = await s.outbox({ kind: 'email' });
       s.expect(mail.text, 'wording').toContain('is today at 11:00 AM (Eastern Standard Time)');
       // She already said she is coming: the reminder does not ask again.
@@ -166,13 +170,17 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       await s.clearOutbox();
     });
 
+    let reminderText;
     await s.step('15 minutes before: the text, once', async () => {
       await s.setClock(T.text);
       await s.runJobs();
       await s.runJobs();
       s.expect(await sent(s), 'sent').toEqual([`sms to ${PHONE}`]);
       const [text] = await s.outbox({ kind: 'sms' });
+      reminderText = text;
       s.expect(text, 'text').toMatchObject({ service: 'twilio', status: 201, to: PHONE, from: '+15005550006', at: T.text });
+      // Twilio is asked to say later what the carrier made of it.
+      s.expect(text.statusCallback, 'delivery report address').toBe(`${s.url('/api/twilio/sms/status')}?b=${booking.id}&k=reminder`);
       s.expect(text.body, 'wording').toMatch(/^Hi Ada, .*Intro call with Jimi Cohen.*11:00 AM/);
       s.expect(text.body, 'join link first, this close to the start').toContain(`Join: ${booking.location.joinUrl}`);
       s.expect(text.body, 'manage link').toContain(`Change or cancel: ${booking.manageUrl}`);
@@ -188,6 +196,25 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       await s.runJobs();
       s.expect(await sent(s), 'sent after the meeting').toEqual([]);
       s.expect((await timelineOf(s)).filter((type) => /^reminder_/.test(type)), 'reminder entries on the timeline').toEqual(['reminder_email_sent', 'reminder_call_sent', 'reminder_email_sent', 'reminder_sms_sent']);
+    });
+
+    await s.step('the carrier reports the text as not delivered: the timeline says why, and the owner is told once', async () => {
+      const callback = new URL(reminderText.statusCallback);
+      const path = callback.pathname.slice(callback.pathname.indexOf('/api/') + 4);
+      const report = (sid) => ({ MessageSid: sid, MessageStatus: 'undelivered', ErrorCode: '30034', To: PHONE, From: '+15005550006' });
+      const twilio = s.visitor('54.172.60.1');
+      const delivered = await twilio.request('POST', path, { query: Object.fromEntries(callback.searchParams), form: { ...report(reminderText.sid), MessageStatus: 'delivered', ErrorCode: '' } });
+      s.expect(delivered.status, 'a delivered report').toBe(204);
+      const first = await twilio.request('POST', path, { query: Object.fromEntries(callback.searchParams), form: report(reminderText.sid) });
+      s.expect(first.status, 'the undelivered report').toBe(204);
+      await twilio.request('POST', path, { query: Object.fromEntries(callback.searchParams), form: report(reminderText.sid) });
+      const notes = (await stored(s)).timeline.filter((e) => e.type === 'reminder_sms_undelivered');
+      s.expect(notes, 'one note, however often Twilio reports it').toHaveLength(1);
+      s.expect(notes[0].detail, 'why').toBe(`Not delivered to ${PHONE}: the number it was sent from is not registered for texting US numbers (A2P 10DLC). Twilio error 30034.`);
+      await s.runJobs();
+      const alerts = (await s.outbox({ kind: 'email' })).filter((m) => m.subject === 'Texts from your booking page are not being delivered');
+      s.expect(alerts, 'alert to the owner').toHaveLength(1);
+      s.expect(alerts[0].text, 'what to do').toContain('Register your number in the Twilio console');
     });
   });
 
@@ -275,10 +302,10 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       s.expect(deletes, 'calendar deletes').toHaveLength(1);
       s.expect(deletes[0], 'delete').toMatchObject({ status: 204, account: OWNER_GOOGLE, eventId: booking.google.eventId, sendUpdates: 'all' });
       const lines = await sent(s);
-      s.expect(lines.filter((l) => l.startsWith(`email to ${ADA.email}`)), 'emails to the invitee').toEqual([`email to ${ADA.email}: Cancelled: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM`]);
+      s.expect(lines.filter((l) => l.startsWith(`email to ${ADA.email}`)), 'emails to the invitee').toEqual([`email to ${ADA.email}: Cancelled: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST`]);
       s.expect(lines.filter((l) => l.startsWith('sms to')), 'texts').toEqual([`sms to ${PHONE}`]);
       const hostMail = (await s.outbox({ kind: 'email', to: OWNER_GOOGLE })).map((e) => e.subject).sort();
-      s.expect(hostMail, 'emails to the host').toEqual(['Ada Lovelace cancelled Intro call by phone', 'Cancelled: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM']);
+      s.expect(hostMail, 'emails to the host').toEqual(['Ada Lovelace cancelled Intro call by phone', 'Cancelled: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM GMT']);
     });
 
     await s.step('no reminder is left, and the hour and the quarter hour before pass in silence', async () => {
@@ -370,12 +397,14 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
     });
   });
 
-  await t.scenario('a call that would ring outside calling hours is skipped, the other reminders still go', async (s) => {
+  await t.scenario('a call that would ring outside calling hours rings in the last calling hour instead, the other reminders still go', async (s) => {
     await s.step('prepare', () => prepare(s));
-    // The same instant for someone in Tokyo: the meeting is at 1:00 AM, two hours before is 11:00 PM.
+    // The same instant for someone in Tokyo: the meeting is at 1:00 AM, two hours before is 11:00 PM,
+    // after calling hours (8 AM to 9 PM). The call is planned for 8:00 PM her time, five hours before.
+    const callAt = plus(START, -5 * HOUR);
     const booking = await s.step('Yuki in Tokyo books Wednesday 16:00 UTC', async () => {
       const made = await bookWithReminders(s, { name: 'Yuki Tanaka', email: 'yuki@example.com', timezone: 'Asia/Tokyo', phone: '+14155552673' });
-      s.expect(await jobLines(s), 'queued').toEqual([`${T.dayBefore} reminder email invitee`, `${T.call} reminder call invitee`, `${T.hourBefore} reminder email invitee`, `${T.text} reminder sms invitee`]);
+      s.expect(await jobLines(s), 'queued').toEqual([`${T.dayBefore} reminder email invitee`, `${callAt} reminder call invitee`, `${T.hourBefore} reminder email invitee`, `${T.text} reminder sms invitee`]);
       return made;
     });
 
@@ -384,28 +413,31 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       await s.setClock(T.dayBefore);
       await s.runJobs();
       const [mail] = await s.outbox({ kind: 'email', to: 'yuki@example.com' });
-      s.expect(mail.subject, 'subject').toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 1:00 AM');
+      s.expect(mail.subject, 'subject').toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 1:00 AM GMT+9');
       await s.clearOutbox();
     });
 
-    await s.step('at 11:00 PM her time the call is not placed, and not tried again later', async () => {
+    await s.step('at 8:00 PM her time the call rings, once, and nothing rings at 11:00 PM', async () => {
+      await s.setClock(plus(callAt, -MINUTE));
+      await s.runJobs();
+      s.expect(await s.calls(), 'calls placed a minute early').toEqual([]);
+      await s.setClock(callAt);
+      await s.runJobs();
+      s.expect((await s.calls()).map((c) => c.to), 'calls placed at 8:00 PM in Tokyo').toEqual(['+14155552673']);
+      const b = (await s.bookings({ id: booking.id }))[0];
+      s.expect(b.timeline.find((e) => e.type === 'reminder_call_sent'), 'timeline').toMatchObject({ at: callAt });
+      s.expect(b.timeline.some((e) => e.type === 'reminder_call_skipped'), 'a skipped call').toBe(false);
+      s.expect(await jobLines(s), 'queue').toEqual([`${T.hourBefore} reminder email invitee`, `${T.text} reminder sms invitee`]);
       await s.setClock(T.call);
       await s.runJobs();
-      s.expect(await s.calls(), 'calls placed').toEqual([]);
-      s.expect(await s.outbox({ kind: 'call' }), 'Calls requests').toEqual([]);
-      const b = (await s.bookings({ id: booking.id }))[0];
-      s.expect(b.timeline.find((e) => e.type === 'reminder_call_skipped'), 'timeline').toMatchObject({ at: T.call, detail: /outside calling hours/ });
-      s.expect(await jobLines(s), 'queue').toEqual([`${T.hourBefore} reminder email invitee`, `${T.text} reminder sms invitee`]);
-      await s.setClock(plus(T.call, 30 * MINUTE));
-      await s.runJobs();
-      s.expect(await s.calls(), 'calls placed half an hour later').toEqual([]);
+      s.expect(await s.calls(), 'calls placed by 11:00 PM').toHaveLength(1);
     });
 
     await s.step('the email and the text still arrive, in Tokyo time', async () => {
       await s.setClock(T.hourBefore);
       await s.runJobs();
       const [mail] = await s.outbox({ kind: 'email', to: 'yuki@example.com' });
-      s.expect(mail.subject, 'subject').toBe('Reminder: Intro call with Jimi Cohen is today at 1:00 AM');
+      s.expect(mail.subject, 'subject').toBe('Reminder: Intro call with Jimi Cohen is today at 1:00 AM GMT+9');
       s.expect(mail.text, 'text').toContain('Thursday, November 19, 2026\n  1:00 AM to 1:15 AM (Japan Standard Time)');
       await s.setClock(T.text);
       await s.runJobs();
@@ -413,20 +445,23 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       s.expect(text.body, 'text').toContain('1:00 AM');
     });
 
-    await s.step('the edges of the window: 8:00 AM rings, 9:00 PM does not', async () => {
+    await s.step('the edges of the window: 8:00 AM rings, and a call due at 9:00 PM rings at 8:00 PM instead', async () => {
       await s.setClock('2026-11-16T09:00:00.000Z');
       // Thursday 15:00 UTC is 10:00 AM in New York: the call is due at 8:00 AM sharp.
       const early = await s.book({ start: '2026-11-19T15:00:00.000Z', name: 'Early Bird', email: 'early@example.com', timezone: NEW_YORK, phone: '+14155552674', consent: { sms: false, call: true } });
-      // Friday 16:00 UTC is 11:00 PM in Jakarta (UTC+7): the call would be due at 9:00 PM sharp, which is already outside.
+      // Friday 16:00 UTC is 11:00 PM in Jakarta (UTC+7): the call would be due at 9:00 PM sharp, which is already
+      // outside, so it is planned for 8:00 PM there (13:00 UTC).
       const late = await s.book({ start: '2026-11-20T16:00:00.000Z', name: 'Night Owl', email: 'late@example.com', timezone: 'Asia/Jakarta', phone: '+14155552675', consent: { sms: false, call: true } });
       s.expect([early.status, late.status], 'bookings').toEqual([201, 201]);
       await s.settle();
       await s.setClock('2026-11-19T13:00:00.000Z');
       await s.runJobs();
-      s.expect((await s.calls()).map((c) => c.to), 'calls at 8:00 AM New York time').toEqual(['+14155552674']);
-      await s.setClock('2026-11-20T14:00:00.000Z');
+      const before = (await s.calls()).map((c) => c.to);
+      s.expect(before.filter((to) => to === '+14155552674'), 'calls at 8:00 AM New York time').toEqual(['+14155552674']);
+      s.expect(before.includes('+14155552675'), 'no call to Jakarta yet').toBe(false);
+      await s.setClock('2026-11-20T13:00:00.000Z');
       await s.runJobs();
-      s.expect((await s.calls()).map((c) => c.to), 'calls at 9:00 PM Jakarta time').toEqual(['+14155552674']);
+      s.expect((await s.calls()).filter((c) => c.to === '+14155552675'), 'calls at 8:00 PM Jakarta time').toHaveLength(1);
     });
   });
 

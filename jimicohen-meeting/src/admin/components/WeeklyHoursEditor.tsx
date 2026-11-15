@@ -47,10 +47,25 @@ export interface RangeListProps {
   problem?: string | null;
 }
 
-/** The start/end pickers for one day (or one set of override dates). */
+export function isSorted(ranges: TimeRange[]): boolean {
+  const sorted = sortRanges(ranges);
+  return ranges.every((r, i) => r.start === sorted[i].start && r.end === sorted[i].end);
+}
+
+/**
+ * The start/end pickers for one day (or one set of override dates). The ranges are put in order
+ * once the person is done with them (the focus leaves the list), not on every change: a row that
+ * jumped while it was being edited would move away from under the pointer.
+ */
 export function RangeList({ ranges, onChange, context, problem }: RangeListProps) {
   return (
-    <div className="sch-ranges">
+    <div
+      className="sch-ranges"
+      onBlur={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        if (!isSorted(ranges)) onChange(sortRanges(ranges));
+      }}
+    >
       {ranges.map((range, i) => (
         <div className="sch-range" key={i}>
           <TimeSelect
@@ -58,7 +73,7 @@ export function RangeList({ ranges, onChange, context, problem }: RangeListProps
             aria-label={`${context}, range ${i + 1}, start`}
             value={range.start}
             invalid={!!problem}
-            onChange={(start) => onChange(sortRanges(ranges.map((r, j) => (j === i ? { ...r, start } : r))))}
+            onChange={(start) => onChange(ranges.map((r, j) => (j === i ? { ...r, start } : r)))}
           />
           <span className="sch-range__dash" aria-hidden="true">
             to
@@ -69,7 +84,7 @@ export function RangeList({ ranges, onChange, context, problem }: RangeListProps
             aria-label={`${context}, range ${i + 1}, end`}
             value={range.end}
             invalid={!!problem}
-            onChange={(end) => onChange(sortRanges(ranges.map((r, j) => (j === i ? { ...r, end } : r))))}
+            onChange={(end) => onChange(ranges.map((r, j) => (j === i ? { ...r, end } : r)))}
           />
           <IconButton size="sm" label={`Remove this range from ${context}`} icon={<X />} onClick={() => onChange(ranges.filter((_, j) => j !== i))} />
         </div>

@@ -8,17 +8,17 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { CalendarCheck, CalendarDays, CalendarPlus, Check, CircleCheck, Clock, Globe, LinkIcon, Lock, MonitorSmartphone, ShieldCheck, Trash2, TriangleAlert, Unlink, UserRound } from 'lucide-react';
+import { CalendarCheck, CalendarDays, CalendarPlus, Check, CircleCheck, Clock, Globe, LinkIcon, Lock, MonitorSmartphone, RefreshCw, ShieldCheck, Trash2, TriangleAlert, Unlink, Unplug, UserRound } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DEFAULT_THEME } from '../../shared/defaults';
 import { NO_ASSETS } from '../../shared/theme';
 import type { ThemeAssets } from '../../shared/theme';
 import type { AdminHost, GoogleCalendarListItem, HostSelfResponse, HostUpdate, Schedule } from '../../shared/types';
 import { ScheduleEditor, scheduleProblem } from '../admin/components/ScheduleEditor';
-import { APP_BASE, ApiFailure, assetUrl, errorMessage, getHostSelf, getHostSelfCalendars, googleConnectUrl, reportDeviceZoneSelf, updateHostSelf } from '../lib/api';
+import { APP_BASE, ApiFailure, assetUrl, disconnectGoogleSelf, errorMessage, getHostSelf, getHostSelfCalendars, googleConnectUrl, reportDeviceZoneSelf, updateHostSelf } from '../lib/api';
 import { ThemeScope, cachedTheme } from '../lib/theme';
-import { detectZone, formatOffset, formatTime, zoneLabel, zoneOffsetMinutes } from '../lib/tz';
-import { Avatar, Button, Checkbox, EmptyState, Field, IconButton, Input, RadioGroup, Select, Skeleton, Switch, TimezoneSelect, cx, useToast } from '../ui';
+import { detectZone, formatOffset, formatTime, isValidZone, zoneLabel, zoneOffsetMinutes } from '../lib/tz';
+import { Avatar, Button, Checkbox, ConfirmDialog, EmptyState, Field, IconButton, Input, RadioGroup, Select, Skeleton, Switch, TimezoneSelect, cx, useToast } from '../ui';
 import '../styles/adminx.css';
 
 type ZoneMode = AdminHost['timezoneMode'];
@@ -115,7 +115,9 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
   const needsReconnect = google?.status === 'needs_reconnect';
   const connected = !!google && !needsReconnect;
   const hasFeed = host.icsFeeds.length > 0;
-  const ready = connected || hasFeed;
+  // A feed only tells us when someone is busy: meetings booked with them cannot be written into it.
+  const feedOnly = !google && hasFeed;
+  const ready = connected || feedOnly;
 
   const update = useCallback(
     async (patch: HostUpdate): Promise<AdminHost> => {
@@ -163,8 +165,25 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
   };
 
   // ── calendars
-  const connect = () => {
-    window.location.assign(googleConnectUrl({ hostId: id, token, returnTo: `${APP_BASE}/host/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}` }));
+  /** `switchAccount`: Google shows its account chooser, for someone who connected the wrong account. */
+  const connect = (switchAccount = false) => {
+    window.location.assign(googleConnectUrl({ hostId: id, token, switchAccount, returnTo: `${APP_BASE}/host/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}` }));
+  };
+
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const disconnect = async () => {
+    try {
+      const next = await disconnectGoogleSelf(id, token);
+      onHost(next);
+      onCalendars(null);
+      toast.success(
+        'Google Calendar is disconnected',
+        next.icsFeeds.length > 0 ? 'Your calendar feed is still checked, so times when you are busy are not offered.' : 'Your busy times are no longer checked. You can connect again at any time.',
+      );
+    } catch (e) {
+      toast.error('Google Calendar is still connected', errorMessage(e));
+      throw e;
+    }
   };
 
   const [calBusy, setCalBusy] = useState(false);
@@ -282,14 +301,24 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
   // ── details
   const [name, setName] = useState(host.name);
   const [title, setTitle] = useState(host.title ?? '');
+  const [mobile, setMobile] = useState(host.phone ?? '');
   const [detailsBusy, setDetailsBusy] = useState(false);
-  const detailsDirty = name.trim() !== host.name || title.trim() !== (host.title ?? '');
+  const mobileClean = mobile.trim().replace(/[\s().-]/g, '');
+  const mobileInvalid = mobileClean !== '' && !/^\+[1-9]\d{6,14}$/.test(mobileClean);
+  const detailsDirty = name.trim() !== host.name || title.trim() !== (host.title ?? '') || mobileClean !== (host.phone ?? '');
   const saveDetails = async (e: FormEvent) => {
     e.preventDefault();
-    if (detailsBusy || !detailsDirty || !name.trim()) return;
+    if (detailsBusy || !detailsDirty || !name.trim() || mobileInvalid) return;
     setDetailsBusy(true);
     try {
-      await update({ name: name.trim(), title: title.trim() });
+      const patch: HostUpdate = { name: name.trim(), title: title.trim() };
+      if (mobileClean !== (host.phone ?? '')) {
+        patch.phone = mobileClean;
+        // No number, no texts: switch them off with it, so the switch never says on for nothing.
+        if (mobileClean === '' && host.notify.sms) patch.notify = { ...host.notify, sms: false };
+      }
+      const saved = await update(patch);
+      setMobile(saved.phone ?? '');
       toast.success('Saved');
     } catch (err) {
       toast.error('Your details were not saved', errorMessage(err));
@@ -305,11 +334,17 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
           <Avatar name={host.name} src={host.avatarUrl} size={56} decorative />
           <p className="hp-hero__eyebrow">Co-host page · meetings with {siteName}</p>
         </div>
-        <h1 className="hp-hero__title">{ready ? `You are all set, ${me}.` : `Hi ${me}. One step to go.`}</h1>
+        <h1 className="hp-hero__title">
+          {connected ? `You are all set, ${me}.` : needsReconnect ? `${me}, please reconnect Google Calendar.` : feedOnly ? `Your busy times are checked, ${me}.` : `Hi ${me}. One step to go.`}
+        </h1>
         <p className="hp-hero__lead">
-          {ready
+          {connected
             ? `People can now book time with you and ${owner}, and only when you are both free. Come back to this page whenever your hours or calendars change.`
-            : `${owner} added you as a co-host. Connect your calendar and people will only be offered times when you are really free.`}
+            : needsReconnect
+              ? `Google asked you to sign in again. Until you do, your busy times cannot be checked, so no times with you are offered.`
+              : feedOnly
+                ? `People can book time with you and ${owner} only when you are both free. But a calendar feed can only be read, so meetings booked with you are not added to your calendar. Connect Google Calendar below to have them added.`
+                : `${owner} added you as a co-host. Connect your calendar and people will only be offered times when you are really free.`}
         </p>
         <ol className="hp-track" aria-label="Setup">
           <li className={cx('hp-track__step', ready && 'is-done')}>
@@ -317,7 +352,7 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
               {ready ? <Check size={13} strokeWidth={3} /> : '1'}
             </span>
             Calendar
-            <span className="u-vh">{ready ? ': connected' : ': not connected yet'}</span>
+            <span className="u-vh">{connected ? ': connected' : feedOnly ? ': feed linked, read only' : needsReconnect ? ': needs reconnecting' : ': not connected yet'}</span>
           </li>
           <li className="hp-track__step is-done">
             <span className="hp-track__mark" aria-hidden="true">
@@ -407,6 +442,16 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
                 <p className="hp-quiet">Changes here save on their own.</p>
               </>
             )}
+            <div className="hp-save">
+              {googleConfigured ? (
+                <Button variant="secondary" size="sm" iconLeft={<RefreshCw size={15} />} onClick={() => connect(true)}>
+                  Use a different Google account
+                </Button>
+              ) : null}
+              <Button variant="ghost" size="sm" iconLeft={<Unplug size={15} />} onClick={() => setConfirmDisconnect(true)}>
+                Disconnect
+              </Button>
+            </div>
           </>
         ) : (
           <>
@@ -415,13 +460,33 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
                 <TriangleAlert size={15} aria-hidden="true" />
                 <span>Google asked you to sign in again. Until you do, your busy times are not checked.</span>
               </p>
+            ) : feedOnly ? (
+              <p className="hp-note" role="status">
+                <CalendarPlus size={16} aria-hidden="true" />
+                <span>Your calendar feed is checked, so times when you are busy are not offered. A feed can only be read, though, so meetings booked with you are not added to your calendar. Connect Google Calendar to have them added.</span>
+              </p>
             ) : null}
             {googleConfigured ? (
               <div className="hp-connect">
-                <Button variant="primary" size="lg" iconLeft={<CalendarCheck size={18} />} onClick={connect}>
+                <Button variant="primary" size="lg" iconLeft={<CalendarCheck size={18} />} onClick={() => connect()}>
                   {needsReconnect ? 'Reconnect Google Calendar' : 'Connect Google Calendar'}
                 </Button>
                 <p className="hp-quiet">You will be taken to Google to allow access, then brought straight back here.</p>
+                {needsReconnect && google ? (
+                  <>
+                    <p className="hp-quiet">
+                      It was connected as <strong>{google.email}</strong>.
+                    </p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <Button variant="secondary" size="sm" iconLeft={<RefreshCw size={15} />} onClick={() => connect(true)}>
+                        Use a different Google account
+                      </Button>
+                      <Button variant="ghost" size="sm" iconLeft={<Unplug size={15} />} onClick={() => setConfirmDisconnect(true)}>
+                        Disconnect
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : (
               <p className="hp-note">
@@ -443,6 +508,18 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
             </ul>
           </>
         )}
+        {google ? (
+          <ConfirmDialog
+            open={confirmDisconnect}
+            onClose={() => setConfirmDisconnect(false)}
+            onConfirm={disconnect}
+            tone="danger"
+            title="Disconnect Google Calendar?"
+            description={`Your busy times in ${google.email} will no longer be checked, and new meetings will not be added to it. You can connect again, with this account or another one, at any time.`}
+            confirmLabel="Disconnect"
+            cancelLabel="Keep it"
+          />
+        ) : null}
       </Card>
 
       <Card id="hp-hours" icon={<Clock size={20} />} title="Your hours" description={`When you are open to meetings. A joint meeting with ${owner} is only offered when it fits both of you.`} status={hoursDirty ? <Pill tone="wait">Not saved yet</Pill> : undefined}>
@@ -506,6 +583,16 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
           </div>
         ) : host.timezoneMode === 'device' && deviceZone !== host.timezone ? (
           <p className="hp-quiet">This device is in {zoneLabel(deviceZone)}. Reload the page to switch to it.</p>
+        ) : host.timezoneMode === 'google' && deviceZone !== host.timezone ? (
+          // Google Calendar keeps its zone when you travel, and it may never have been set: say when the two differ.
+          <div className="hp-connect">
+            <p className="hp-quiet">
+              This device is in {zoneLabel(deviceZone)}. Your hours follow Google Calendar: {zoneLabel(host.timezone)}.
+            </p>
+            <Button variant="secondary" size="sm" iconLeft={<MonitorSmartphone size={15} />} disabled={zoneBusy} onClick={() => setMode('device')}>
+              Follow this device instead
+            </Button>
+          </div>
         ) : null}
       </Card>
 
@@ -576,9 +663,18 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
               <Input value={title} maxLength={80} placeholder="Head of Partnerships" autoComplete="organization-title" onChange={(e) => setTitle(e.target.value)} />
             </Field>
           </div>
+          <Field
+            label="Mobile number"
+            optional
+            error={mobileInvalid ? 'Use the international format, for example +14155550123.' : undefined}
+            hint="For texts about your bookings. With the country code, like +14155550123. Visitors never see it."
+            className="hp-narrow"
+          >
+            <Input type="tel" inputMode="tel" value={mobile} maxLength={32} placeholder="+14155550123" autoComplete="tel" onChange={(e) => setMobile(e.target.value)} />
+          </Field>
           {detailsDirty ? (
             <div>
-              <Button type="submit" variant="secondary" loading={detailsBusy} loadingLabel="Saving" disabled={!name.trim()}>
+              <Button type="submit" variant="secondary" loading={detailsBusy} loadingLabel="Saving" disabled={!name.trim() || mobileInvalid}>
                 Save details
               </Button>
             </div>
@@ -590,6 +686,18 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
           onChange={(email) => void update({ notify: { ...host.notify, email } }).catch((e: unknown) => toast.error('Not saved', errorMessage(e)))}
           label="Email me about bookings"
           description={host.email ? `New, moved and cancelled meetings, sent to ${host.email}.` : 'New, moved and cancelled meetings.'}
+        />
+        <Switch
+          labelSide="start"
+          checked={host.notify.sms && !!host.phone}
+          disabled={!host.phone}
+          onChange={(sms) => void update({ notify: { ...host.notify, sms } }).catch((e: unknown) => toast.error('Not saved', errorMessage(e)))}
+          label="Text me about bookings"
+          description={
+            host.phone
+              ? `New, moved and cancelled meetings, and any reminder texts ${owner} set up for the hosts, sent to ${host.phone}.`
+              : `New, moved and cancelled meetings, and any reminder texts ${owner} set up for the hosts. Save your mobile number above first.`
+          }
         />
       </Card>
 
@@ -728,8 +836,12 @@ function GoogleReturn({ onDone }: { onDone: () => void }) {
     const result = params.get('google');
     if (!result || handled.current) return;
     handled.current = true;
-    if (result === 'connected') toast.success('Your calendar is connected', 'Times when you are busy are no longer offered.');
-    else toast.error('Google did not connect', googleReason(params.get('reason')));
+    if (result === 'connected') {
+      toast.success('Your calendar is connected', 'Times when you are busy are no longer offered.');
+      // Connecting moved the hours onto the calendar's zone: that shifts every time offered, so say it.
+      const zone = params.get('zone');
+      if (isValidZone(zone)) toast.info(`Your time zone is now ${zoneLabel(zone)}`, 'It was taken from your Google Calendar, and your hours are read in it. You can change it under Your time zone below.');
+    } else toast.error('Google did not connect', googleReason(params.get('reason')));
     onDone();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);

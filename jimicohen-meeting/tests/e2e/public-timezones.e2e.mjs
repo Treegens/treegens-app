@@ -295,7 +295,7 @@ export default defineSuite('public-timezones', { mockCreds: true }, async (t) =>
 
     await s.step('email, calendar and reminders agree on the instant, each in its own zone', async () => {
       const [mail] = await s.outbox({ kind: 'email', to: 'ada@example.com' });
-      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Mon, Mar 15, 10:00 AM');
+      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Mon, Mar 15, 10:00 AM EDT');
       s.expect(mail.text, 'invitee email').toContain('10:00 AM to 10:15 AM (Eastern Daylight Time)');
       s.expect(mail.ics.content, 'calendar file').toContain('DTSTART:20270315T140000Z');
       const [notice] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
@@ -313,7 +313,7 @@ export default defineSuite('public-timezones', { mockCreds: true }, async (t) =>
       await s.setClock('2027-03-14T14:00:00.000Z');
       await s.runJobs();
       const [reminder] = await s.waitForOutbox({ kind: 'email', to: 'ada@example.com' });
-      s.expect(reminder.subject, 'reminder subject').toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 10:00 AM');
+      s.expect(reminder.subject, 'reminder subject').toBe('Reminder: Intro call with Jimi Cohen is tomorrow at 10:00 AM EDT');
       s.expect(reminder.text, 'reminder text').toContain('10:00 AM to 10:15 AM (Eastern Daylight Time)');
     });
 

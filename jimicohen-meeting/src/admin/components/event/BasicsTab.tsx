@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { LocationConfig, LocationType } from '../../../../shared/types';
+import { assetUrl } from '../../../lib/api';
 import { Button, ColorInput, Field, IconButton, Input, Select, Textarea, cx } from '../../../ui';
 import { LOCATION_LABEL, displayUrl, slugify } from '../../format';
 import { useAdmin } from '../../state';
 import { NumberField } from '../Fields';
 import { FieldGroup, Notice, Section } from '../Page';
+import { ImageField } from '../x/bits';
 import { errorFor } from './shared';
 import type { TabProps } from './shared';
 
@@ -30,6 +32,9 @@ const LOCATION_NOTE: Partial<Record<LocationType, string>> = {
 export function BasicsTab({ draft, update, errors, isNew, slugTouched, onSlugTouched }: TabProps & { slugTouched: boolean; onSlugTouched: () => void }) {
   const { data, ownerHost } = useAdmin();
   const [custom, setCustom] = useState(25);
+  // A picture just uploaded is shown from the file itself, so it appears at once.
+  const [justUploaded, setJustUploaded] = useState<Record<string, string>>({});
+  const coverUrl = draft.coverAssetId ? (justUploaded[draft.coverAssetId] ?? assetUrl(draft.coverAssetId)) : null;
   const base = displayUrl(data.publicUrl);
   const durations = draft.durations.slice().sort((a, b) => a - b);
   const chips = Array.from(new Set([...PRESET_DURATIONS, ...durations])).sort((a, b) => a - b);
@@ -103,6 +108,32 @@ export function BasicsTab({ draft, update, errors, isNew, slugTouched, onSlugTou
             <ColorInput aria-label="Event colour" value={draft.color || data.site.theme.colors.primary} presets={COLOR_PICKS} onChange={(color) => update({ color })} />
           </FieldGroup>
         </div>
+        <ImageField
+          label="Cover image"
+          shape="wide"
+          purpose="event-cover"
+          url={coverUrl}
+          hint={
+            <>
+              A banner across the top of this event's page. Without one, the cover from{' '}
+              <Link className="adm-textlink" to="/admin/design">
+                Design
+              </Link>{' '}
+              is used. Up to 3 MB.
+            </>
+          }
+          uploadLabel={coverUrl ? 'Replace cover' : 'Upload a cover'}
+          onUploaded={(asset) => {
+            setJustUploaded((prev) => ({ ...prev, [asset.id]: asset.dataUrl || asset.url }));
+            update({ coverAssetId: asset.id });
+          }}
+          onRemove={() => update({ coverAssetId: null })}
+        />
+        {errors.coverAssetId ? (
+          <p className="adm-fielderror" role="alert">
+            {errors.coverAssetId}
+          </p>
+        ) : null}
       </Section>
 
       <Section title="Length" description="Offer one length, or several and let people choose.">

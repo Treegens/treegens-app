@@ -596,23 +596,47 @@ export function listZones(now: Instant = Date.now(), locale?: string): ZoneGroup
     .map(([region, zones]) => ({ region, zones: zones.slice().sort((a, b) => a.city.localeCompare(b.city)) }));
 }
 
+const MAJOR_ZONES = new Set(FALLBACK_ZONES);
+
+/** How well `q` matches inside `text`: 0 as whole words, 1 at the start of a word, 2 inside a word, null not at all. */
+function matchQuality(text: string, q: string): 0 | 1 | 2 | null {
+  const at = text.indexOf(q);
+  if (at === -1) return null;
+  const isWordChar = (ch: string | undefined): boolean => !!ch && /[\p{L}\p{N}]/u.test(ch);
+  let best: 0 | 1 | 2 = 2;
+  for (let i = at; i !== -1 && best > 0; i = text.indexOf(q, i + 1)) {
+    if (isWordChar(text[i - 1])) continue;
+    best = isWordChar(text[i + q.length]) ? 1 : 0;
+  }
+  return best;
+}
+
 /**
  * Zones matching a query (city, country, zone name, "GMT+3", "pst", ...), best matches first.
  * Every word of the query has to match somewhere. An empty query returns everything.
+ *
+ * Order: the city itself; then by how well the query matches (whole words, then the start of a
+ * word, then inside a word), and at each of those a match on the city name before one elsewhere.
+ * So "new" lists New York before Sydney ("new south wales"), and "india" finds Kolkata (the whole
+ * word "india") before Indianapolis (only the start of a word). Ties: big cities first.
  */
 export function searchZones(query: string, now: Instant = Date.now(), locale?: string): ZoneInfo[] {
-  const q = query.trim().toLowerCase();
+  const q = query.trim().toLowerCase().replace(/\s+/g, ' ');
   const zones = allZones(now, locale);
   if (!q) return zones;
-  const words = q.split(/\s+/);
-  const scored: { z: ZoneInfo; score: number }[] = [];
+  const words = q.split(' ');
+  const scored: { z: ZoneInfo; score: number; major: number }[] = [];
   for (const z of zones) {
     if (!words.every((w) => z.search.includes(w))) continue;
     const city = z.city.toLowerCase();
-    // "india" should find Kolkata before Indianapolis: a whole-word alias hit beats a city prefix.
-    const alias = ` ${ALIASES[z.id] ?? ''} `;
-    const score = city === q ? 0 : alias.includes(` ${q} `) ? 1 : city.startsWith(q) ? 2 : z.name.toLowerCase().includes(q) ? 3 : city.includes(q) ? 4 : 5;
-    scored.push({ z, score });
+    const inCity = matchQuality(city, q);
+    const anywhere = matchQuality(z.search, q);
+    const score =
+      city === q ? 0 : inCity !== null && (anywhere === null || inCity <= anywhere) ? 1 + inCity * 2 : anywhere !== null ? 2 + anywhere * 2 : 7;
+    // Big cities: the short list, and every zone that has search words of its own (some browsers use old ids, like Asia/Calcutta).
+    scored.push({ z, score, major: MAJOR_ZONES.has(z.id) || ALIASES[z.id] !== undefined ? 0 : 1 });
   }
-  return scored.sort((a, b) => a.score - b.score || a.z.offsetMin - b.z.offsetMin || a.z.city.localeCompare(b.z.city)).map((s) => s.z);
+  return scored
+    .sort((a, b) => a.score - b.score || a.major - b.major || a.z.offsetMin - b.z.offsetMin || a.z.city.localeCompare(b.z.city))
+    .map((s) => s.z);
 }

@@ -8,18 +8,23 @@ import type { FormEvent } from 'react';
 import { ArrowRight, CalendarCheck, CalendarX2, ChevronRight, Clock, Globe, Link2, Mail, MoreHorizontal, Pencil, RefreshCw, Trash2, Unplug, UserPlus, Users } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { RESERVED_SLUGS } from '../../../shared/defaults';
-import type { AdminBootstrap, AdminHost, EventType } from '../../../shared/types';
-import { ApiFailure, createEventType, createHost, deleteHost, disconnectGoogle, errorMessage, regenerateInvite, updateHost } from '../../lib/api';
+import type { AdminBootstrap, AdminHost, EventType, HostUpdate } from '../../../shared/types';
+import { ApiFailure, assetUrl, checkSharedHours, createEventType, createHost, deleteHost, disconnectGoogle, errorMessage, regenerateInvite, updateHost } from '../../lib/api';
 import { formatTime, zoneLabel } from '../../lib/tz';
-import { Avatar, Badge, Button, ButtonLink, ConfirmDialog, Field, IconButton, Input, Menu, Modal, useToast } from '../../ui';
+import { Avatar, Badge, Button, ButtonLink, ConfirmDialog, Field, IconButton, Input, Menu, Modal, Switch, useToast } from '../../ui';
 import type { BadgeTone, MenuItem } from '../../ui';
 import { Page, PageHeader } from '../components/Page';
-import { CopyField } from '../components/x/bits';
+import { CopyField, ImageField } from '../components/x/bits';
 import { firstName, slugify } from '../format';
 import { useAdmin } from '../state';
 import '../../styles/adminx.css';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const E164 = /^\+[1-9]\d{6,14}$/;
+
+function cleanPhone(input: string): string {
+  return input.replace(/[\s().-]/g, '');
+}
 
 function useNow(everyMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -42,7 +47,15 @@ function calendarState(host: AdminHost, self: boolean): CalendarState {
   if (host.google?.status === 'needs_reconnect') return { tone: 'warning', label: 'Needs reconnecting', detail: `Google asked ${self ? 'you' : firstName(host.name)} to sign in again.`, connected: false };
   if (host.calendarHealth && !host.calendarHealth.ok) return { tone: 'danger', label: 'Calendar problem', detail: host.calendarHealth.message || `We could not read ${who} calendar.`, connected: !!host.google };
   if (host.google) return { tone: 'success', label: 'Calendar connected', detail: host.google.email, connected: true };
-  if (host.icsFeeds.length) return { tone: 'success', label: 'Calendar feed linked', detail: host.icsFeeds.map((f) => f.label).join(', '), connected: true };
+  // A feed can only be read: busy times are checked, but booked meetings never reach that calendar.
+  if (host.icsFeeds.length) {
+    return {
+      tone: 'warning',
+      label: 'Calendar feed linked',
+      detail: `${host.icsFeeds.map((f) => f.label).join(', ')}. Busy times are checked, but meetings are not added to ${who} calendar until Google Calendar is connected.`,
+      connected: true,
+    };
+  }
   return { tone: 'neutral', label: 'No calendar yet', detail: self ? 'Only your weekly hours are used.' : `Only ${who} weekly hours are used until a calendar is connected.`, connected: false };
 }
 
@@ -225,9 +238,15 @@ interface EditDialogProps {
 }
 
 function EditDialog({ host, onClose, onSaved }: EditDialogProps) {
+  const { data } = useAdmin();
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [texts, setTexts] = useState(false);
+  const [photoId, setPhotoId] = useState<string | null>(null);
+  /** photos uploaded while the dialog is open, shown from the file itself */
+  const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -241,11 +260,16 @@ function EditDialog({ host, onClose, onSaved }: EditDialogProps) {
       setName(host.name);
       setTitle(host.title ?? '');
       setEmail(host.email);
+      setPhone(host.phone ?? '');
+      setTexts(host.notify.sms);
+      setPhotoId(host.avatarAssetId ?? null);
       setFields({});
       setError(null);
       setBusy(false);
     }
   }
+  const isOwner = host?.role === 'owner';
+  const photoUrl = photoId ? (photoPreviews[photoId] ?? (photoId === host?.avatarAssetId ? host.avatarUrl : null) ?? assetUrl(photoId)) : null;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -253,12 +277,20 @@ function EditDialog({ host, onClose, onSaved }: EditDialogProps) {
     const next: Record<string, string> = {};
     if (!name.trim()) next.name = 'Please enter a name.';
     if (!EMAIL.test(email.trim())) next.email = 'Please enter a full email address.';
+    const mobile = cleanPhone(phone.trim());
+    if (mobile && !E164.test(mobile)) next.phone = 'Use the international format, for example +14155550123.';
+    else if (texts && !mobile) next.phone = 'Add a mobile number for the texts, or switch them off.';
     setFields(next);
     setError(null);
     if (Object.keys(next).length) return;
     setBusy(true);
     try {
-      onSaved(await updateHost(host.id, { name: name.trim(), title: title.trim(), email: email.trim() }));
+      const update: HostUpdate = { name: name.trim(), title: title.trim(), email: email.trim() };
+      if (mobile !== (host.phone ?? '')) update.phone = mobile;
+      if (texts !== host.notify.sms) update.notify = { ...host.notify, sms: texts };
+      // The owner's photo is the profile photo in Settings, which keeps the two in step.
+      if (!isOwner && photoId !== (host.avatarAssetId ?? null)) update.avatarAssetId = photoId;
+      onSaved(await updateHost(host.id, update));
     } catch (err) {
       const failure = err instanceof ApiFailure ? err : null;
       if (failure?.fields && Object.keys(failure.fields).length) setFields(failure.fields);
@@ -286,6 +318,36 @@ function EditDialog({ host, onClose, onSaved }: EditDialogProps) {
       }
     >
       <form id="tm-edit-form" className="tm-form" onSubmit={submit} noValidate>
+        {host && isOwner ? (
+          <p className="tm-form__note">
+            Your photo is the one on your profile.{' '}
+            <Link className="adm-textlink" to="/admin/settings" onClick={onClose}>
+              Change it in Settings
+            </Link>
+          </p>
+        ) : host ? (
+          <>
+            <ImageField
+              label="Photo"
+              shape="round"
+              purpose="host-avatar"
+              url={photoUrl}
+              hint={`Shown next to ${firstName(host.name) || 'their name'} on booking pages. Up to 3 MB.`}
+              uploadLabel={photoUrl ? 'Change photo' : 'Upload a photo'}
+              disabled={busy}
+              onUploaded={(asset) => {
+                setPhotoPreviews((prev) => ({ ...prev, [asset.id]: asset.dataUrl || asset.url }));
+                setPhotoId(asset.id);
+              }}
+              onRemove={() => setPhotoId(null)}
+            />
+            {fields.avatarAssetId ? (
+              <p className="adm-fielderror" role="alert">
+                {fields.avatarAssetId}
+              </p>
+            ) : null}
+          </>
+        ) : null}
         <Field label="Name" error={fields.name}>
           <Input value={name} autoComplete="off" onChange={(e) => setName(e.target.value)} />
         </Field>
@@ -295,6 +357,20 @@ function EditDialog({ host, onClose, onSaved }: EditDialogProps) {
         <Field label="Email" error={fields.email}>
           <Input type="email" inputMode="email" value={email} autoComplete="off" onChange={(e) => setEmail(e.target.value)} />
         </Field>
+        <Field label="Mobile number" optional error={fields.phone} hint={fields.phone ? undefined : 'For texts about their bookings. With the country code, like +14155550123.'}>
+          <Input type="tel" inputMode="tel" value={phone} autoComplete="off" maxLength={32} placeholder="+14155550123" onChange={(e) => setPhone(e.target.value)} />
+        </Field>
+        <Switch
+          labelSide="start"
+          checked={texts}
+          onChange={setTexts}
+          label={`Text ${host ? firstName(host.name) || 'them' : 'them'} about bookings`}
+          description={
+            data.integrations.twilio.configured
+              ? 'New, moved and cancelled bookings, and any reminder texts set up for the hosts.'
+              : 'New, moved and cancelled bookings, and any reminder texts set up for the hosts. Texts go out once Twilio is connected.'
+          }
+        />
         {error ? (
           <p className="adm-fielderror" role="alert">
             {error}
@@ -350,13 +426,25 @@ export default function TeamPage() {
       });
       patch((p) => ({ ...p, eventTypes: [...p.eventTypes.filter((e) => e.id !== eventType.id), eventType].sort((a, b) => a.position - b.position) }));
       setInvite(null);
-      toast.show({
-        tone: 'success',
-        title: 'Joint meeting created',
-        description: `"${eventType.title}" only offers times when you are both free.`,
-        action: { label: 'Open it', onClick: () => navigate(`/admin/event-types/${eventType.id}`) },
-        duration: 9000,
-      });
+      // Both on 9 to 5, eight or more hours apart, and nobody can ever book it. Say so now, not later.
+      const hours = await checkSharedHours({ id: eventType.id }).catch(() => null);
+      if (hours && !hours.ok) {
+        toast.show({
+          tone: 'warning',
+          title: 'Joint meeting created, but nobody can book it yet',
+          description: hours.message,
+          action: { label: hours.href === '/admin/availability' ? 'Change your hours' : 'Open it', onClick: () => navigate(hours.href === '/admin/availability' ? hours.href : `/admin/event-types/${eventType.id}`) },
+          duration: 20000,
+        });
+      } else {
+        toast.show({
+          tone: 'success',
+          title: 'Joint meeting created',
+          description: `"${eventType.title}" only offers times when you are both free.`,
+          action: { label: 'Open it', onClick: () => navigate(`/admin/event-types/${eventType.id}`) },
+          duration: 9000,
+        });
+      }
     } catch (e) {
       toast.error('The joint meeting was not created', errorMessage(e));
     } finally {
@@ -435,7 +523,18 @@ export default function TeamPage() {
                 </Badge>
               ) : null}
             </h2>
-            <p className="tm-host__sub">{[host.title, host.email].filter(Boolean).join(' · ') || 'No email yet'}</p>
+            {/* One span per part: the dot between them belongs to the part after it and is cut off when that part starts a new line. */}
+            <p className="tm-host__sub">
+              {[host.title, host.email].some(Boolean) ? (
+                [host.title, host.email].filter(Boolean).map((part) => (
+                  <span key={part} className="tm-host__part">
+                    {part}
+                  </span>
+                ))
+              ) : (
+                <span className="tm-host__part">No email yet</span>
+              )}
+            </p>
           </div>
           {self ? null : <Menu label={`Actions for ${host.name}`} trigger={<IconButton label={`More actions for ${host.name}`} icon={<MoreHorizontal size={18} />} />} items={items} />}
         </div>

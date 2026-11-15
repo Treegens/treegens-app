@@ -3,6 +3,9 @@
  * the real backend: first-run setup, sign out, sign in, change password, and the three ways
  * the owner's zone is kept (this device, Google Calendar, fixed).
  */
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { DEFAULT_PASSWORD, SETUP_CODE, defineSuite } from './lib.mjs';
 import { MONDAY, clearToasts, expectFieldProblem, expectToast, fieldProblem, openPage, timesOn, toasts } from './admin-helpers.mjs';
 
@@ -12,6 +15,8 @@ const OWNER_GOOGLE = 'jimi@example.com';
 export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
   await t.scenario('first run: setup, sign out, sign in, change password', { reset: true }, async (s) => {
     await s.setClock(MONDAY);
+    // Chosen at random when the dashboard is set up; every password change adds one.
+    let firstVersion = 0;
     // Refusals are part of this story: wrong code (403), a second setup (409), wrong passwords (401, 403), an ended session (401).
     s.allowConsoleErrors(/status of 40[139]/, /status of 422/);
     const page = await s.newPage({ timezoneId: 'Europe/Berlin' });
@@ -58,6 +63,11 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
 
     await s.step('the right code signs in and shows the checklist', async () => {
       await page.getByLabel('Repeat password').fill(DEFAULT_PASSWORD);
+      // Optional: where booking notices go, asked for here so they arrive from the first booking on.
+      await page.getByLabel('Your email').fill('jimi-at-home');
+      await page.getByRole('button', { name: 'Create my dashboard' }).click();
+      await expectFieldProblem(s, page.getByLabel('Your email'), 'Please enter a full email address, or leave this empty.', 'problem on the email field');
+      await page.getByLabel('Your email').fill('jimi@jimicohen.com');
       await page.getByRole('button', { name: 'Create my dashboard' }).click();
       await page.getByRole('heading', { name: /^Good (morning|afternoon|evening), Jimi$/, level: 1 }).waitFor();
       const checklist = page.getByRole('region', { name: 'Finish setting up' });
@@ -66,8 +76,9 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
       await checklist.getByRole('progressbar', { name: 'Setup progress' }).waitFor();
       s.expect(new URL(page.url()).pathname, 'address after setup').toBe('/meeting/admin');
       // Stored: an admin record, and the owner in the zone of the device that ran the setup.
-      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version').toBe(1);
-      s.expect((await s.kv('hosts'))[0], 'owner host').toMatchObject({ id: 'host_owner', role: 'owner', timezone: 'Europe/Berlin', timezoneMode: 'device' });
+      firstVersion = (await s.kv('auth/admin')).passwordVersion;
+      s.expect(Number.isInteger(firstVersion) && firstVersion >= 1, `password version (${firstVersion})`).toBe(true);
+      s.expect((await s.kv('hosts'))[0], 'owner host').toMatchObject({ id: 'host_owner', role: 'owner', timezone: 'Europe/Berlin', timezoneMode: 'device', email: 'jimi@jimicohen.com' });
       const cookies = await page.context().cookies();
       s.expect(cookies.find((c) => c.name === 'mtg_session'), 'session cookie').toMatchObject({ httpOnly: true, path: '/meeting', sameSite: 'Lax' });
       // A reload keeps the session.
@@ -84,7 +95,7 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
       const direct = await s.visitor().request('POST', '/auth/setup', { body: { code: SETUP_CODE, password: 'somebody else was here' } });
       s.expect(direct.status, 'status of a second setup').toBe(409);
       s.expect(direct.data.error.code, 'error code of a second setup').toBe('already_set_up');
-      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version is untouched').toBe(1);
+      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version is untouched').toBe(firstVersion);
       // The notice offers the way out.
       await late.getByRole('button', { name: 'Go to sign in' }).click();
       await late.getByRole('heading', { name: 'Sign in', level: 1 }).waitFor();
@@ -130,7 +141,7 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
       await form.getByLabel('New password, once more').fill(NEW_PASSWORD);
       await form.getByRole('button', { name: 'Change password' }).click();
       await expectFieldProblem(s, form.getByLabel('Current password'), 'That is not your current password.', 'problem on the current password');
-      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version after a refused change').toBe(1);
+      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version after a refused change').toBe(firstVersion);
       await form.getByLabel('Current password').fill(DEFAULT_PASSWORD);
       await form.getByLabel('New password, once more').fill(`${NEW_PASSWORD}?`);
       await form.getByRole('button', { name: 'Change password' }).click();
@@ -142,7 +153,7 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
       await form.getByLabel('New password, once more').fill(NEW_PASSWORD);
       await form.getByRole('button', { name: 'Change password' }).click();
       await expectToast(page, 'Password changed');
-      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version').toBe(2);
+      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version').toBe(firstVersion + 1);
       s.expect(await form.getByLabel('Current password').inputValue(), 'current password field after the change').toBe('');
 
       // This browser carries on: a reload still shows the dashboard.
@@ -159,6 +170,64 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
       await late.getByLabel('Password', { exact: true }).fill(NEW_PASSWORD);
       await late.getByRole('button', { name: 'Sign in' }).click();
       await late.getByRole('heading', { name: 'Bookings', level: 1 }).waitFor();
+    });
+  });
+
+  await t.scenario('forgot your password: a new setup code replaces it and signs the other devices out', { reset: true }, async (s) => {
+    await s.setClock(MONDAY);
+    // A used code (409), the old password (401) and the ended session of the other browser (401) are part of this story.
+    s.allowConsoleErrors(/status of 40[19]/);
+    await s.setupAdmin();
+    const setUpVersion = (await s.kv('auth/admin')).passwordVersion;
+    const other = await s.newPage({ signedIn: true });
+    await other.goto(s.url('/admin/bookings'));
+    await other.getByRole('heading', { name: 'Bookings', level: 1 }).waitFor();
+    const page = await s.newPage({ ip: '10.250.1.1' });
+
+    await s.step('the sign-in screen offers a way back in', async () => {
+      await page.goto(s.url('/admin'));
+      await page.getByRole('heading', { name: 'Sign in', level: 1 }).waitFor();
+      await page.getByRole('button', { name: 'Forgot your password?' }).click();
+      await page.getByRole('heading', { name: 'Choose a new password', level: 1 }).waitFor();
+      const steps = page.getByRole('note').filter({ hasText: 'First, give this site a new setup code' });
+      await steps.getByText('MEETING_SETUP_CODE_HASH').waitFor();
+      s.expect(await steps.locator('li').count(), 'steps on screen').toBe(3);
+      s.expect(await page.getByLabel('Your email').count(), 'no email field when resetting').toBe(0);
+      await s.screenshot(page, 'forgot password');
+      await page.getByRole('button', { name: 'Back to sign in' }).click();
+      await page.getByRole('heading', { name: 'Sign in', level: 1 }).waitFor();
+      await page.getByRole('button', { name: 'Forgot your password?' }).click();
+      await page.getByRole('heading', { name: 'Choose a new password', level: 1 }).waitFor();
+    });
+
+    await s.step('the code that set the password does not work again', async () => {
+      await page.getByLabel('New setup code').fill(SETUP_CODE);
+      await page.getByLabel('New password').fill(NEW_PASSWORD);
+      await page.getByLabel('Repeat password').fill(NEW_PASSWORD);
+      await page.getByRole('button', { name: 'Save my new password' }).click();
+      await page.getByRole('alert').filter({ hasText: 'This setup code was already used. Deploy the hash of a new code first, then try again.' }).waitFor();
+      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version').toBe(setUpVersion);
+    });
+
+    await s.step('after a new code is deployed, it sets the new password', async () => {
+      // As if MEETING_SETUP_CODE_HASH had been changed and the site deployed again: the record now says an
+      // older code set the password, so the code this server has deployed is a new one.
+      const file = path.join(s.server.dataDir, `${encodeURIComponent('auth/admin')}.json`);
+      const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+      fs.writeFileSync(file, JSON.stringify({ ...record, setupCodeHash: createHash('sha256').update('the code from before').digest('hex') }));
+
+      await page.getByRole('button', { name: 'Save my new password' }).click();
+      await page.getByRole('heading', { name: /^Good (morning|afternoon|evening), Jimi$/, level: 1 }).waitFor();
+      s.expect((await s.kv('auth/admin')).passwordVersion, 'password version').toBe(setUpVersion + 1);
+      const cookies = await page.context().cookies();
+      s.expect(cookies.find((c) => c.name === 'mtg_device'), 'device cookie').toMatchObject({ httpOnly: true, path: '/meeting', sameSite: 'Lax' });
+    });
+
+    await s.step('the other browser is signed out, and only the new password works', async () => {
+      await other.getByRole('tab', { name: /Past/ }).click();
+      await other.getByRole('heading', { name: 'Sign in', level: 1 }).waitFor();
+      s.expect((await s.visitor().request('POST', '/auth/login', { body: { password: DEFAULT_PASSWORD } })).status, 'old password').toBe(401);
+      s.expect((await s.visitor().request('POST', '/auth/login', { body: { password: NEW_PASSWORD } })).status, 'new password').toBe(200);
     });
   });
 
@@ -233,10 +302,16 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
       s.expect(result.status, `google connect result (${result.reason ?? 'no reason'})`).toBe('connected');
       await newYork.getByText(`Connected as ${OWNER_GOOGLE}`).waitFor();
       s.expect(await ownerZone(), 'owner zone').toEqual({ timezone: 'Africa/Nairobi', timezoneMode: 'google' });
+      // Every hour offered just moved by eight hours: the page says so, it does not happen in silence.
+      s.expect(new URL(result.url).searchParams.get('zone'), 'zone reported by the return from Google').toBe('Africa/Nairobi');
+      await expectToast(newYork, 'Your time zone is now East Africa Time (Nairobi)');
       await openPage(newYork, 'Availability');
       const zone = newYork.getByRole('region', { name: 'Your time zone' });
       await zone.getByText('East Africa Time (Nairobi)').first().waitFor();
       await zone.getByRole('radio', { name: 'Follow Google Calendar' }).and(newYork.locator(':checked')).waitFor();
+      // And while this device is elsewhere, Availability keeps saying it, with a way back to the device.
+      await zone.getByText(/This device is in Eastern Time \(New York\)\. Your hours follow Google Calendar: East Africa Time \(Nairobi\)\./).waitFor();
+      await zone.getByRole('button', { name: 'Follow this device instead' }).waitFor();
       const times = await tuesdayIn('Africa/Nairobi');
       s.expect(times[0], 'first time on Tuesday (Nairobi)').toBe('09:00');
       s.expect((await tuesdayIn('UTC'))[0], 'the same first time in UTC').toBe('06:00');

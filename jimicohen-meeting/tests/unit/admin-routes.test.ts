@@ -38,7 +38,7 @@ import * as repo from '../../server/lib/repo';
 import { TEMPLATE_VARIABLES } from '../../server/lib/templates';
 import { VOICE_OPTIONS } from '../../server/lib/voice';
 import { routes as adminRoutes } from '../../server/routes/admin';
-import type { AdminBooking, AdminBootstrap, AdminHost, AdminOverview, Booking, EventType, Host, HostGoogle, SiteSettings } from '../../shared/types';
+import type { AdminBooking, AdminBootstrap, AdminHost, AdminOverview, Booking, CallRecord, EventType, Host, HostGoogle, IntegrationsStatus, Job, SharedHoursCheck, SiteSettings } from '../../shared/types';
 import { apiRequest, cookiePair, makeTestCtx, TEST_BASE_URL, TEST_NOW, type TestCtx, type TestCtxOptions } from '../helpers/ctx';
 
 // ───────────────────────── helpers ─────────────────────────
@@ -190,6 +190,7 @@ const EVERY_ROUTE: [method: string, path: string, body?: unknown][] = [
   ['DELETE', '/admin/event-types/evt_intro'],
   ['POST', '/admin/event-types/evt_intro/duplicate', {}],
   ['PUT', '/admin/event-types-order', { ids: ['evt_meeting', 'evt_intro'] }],
+  ['POST', '/admin/event-types-check', { kind: 'collective', hostIds: ['host_owner', 'host_someone'] }],
   ['GET', '/admin/hosts'],
   ['POST', '/admin/hosts', { name: 'Mallory', email: 'mallory@example.com' }],
   ['PUT', '/admin/hosts/host_owner', { name: 'Mallory' }],
@@ -202,6 +203,7 @@ const EVERY_ROUTE: [method: string, path: string, body?: unknown][] = [
   ['GET', '/admin/bookings/bk_1'],
   ['POST', '/admin/bookings/bk_1/cancel', { reason: 'no' }],
   ['POST', '/admin/bookings/bk_1/no-show', { noShow: true }],
+  ['DELETE', '/admin/bookings/bk_1'],
   ['GET', '/admin/integrations'],
   ['PUT', '/admin/integrations', { resend: { apiKey: 're_stolen_key_123' } }],
   ['POST', '/admin/integrations/test', { channel: 'email' }],
@@ -783,6 +785,17 @@ describe('event types', () => {
     expect(s.ctx.logs.filter((l) => l.level === 'error')).toEqual([]);
   });
 
+  it('reads the job queue once when it re-plans many bookings, not once for each', async () => {
+    const s = await signIn();
+    for (let i = 0; i < 5; i++) await seedBooking(s.ctx, `bk_up${i}`, { start: hoursFromNow(72 + i) });
+    const rule = { id: 'rem_new', enabled: true, channel: 'email', audience: 'invitee', trigger: 'before_start', offsetMinutes: 120 };
+    const listJobs = vi.spyOn(repo, 'listJobs');
+    await ok(call(s, 'PUT', '/admin/event-types/evt_intro', { reminders: [rule] }));
+    await s.ctx.settle();
+    expect(listJobs).toHaveBeenCalledTimes(1);
+    expect((await repo.listJobs(s.ctx)).map((j) => j.bookingId).sort()).toEqual(['bk_up0', 'bk_up1', 'bk_up2', 'bk_up3', 'bk_up4']);
+  });
+
   it('a failing re-plan never fails the save', async () => {
     const s = await signIn();
     await seedBooking(s.ctx, 'bk_up', { start: hoursFromNow(72) });
@@ -1202,6 +1215,139 @@ describe('bookings', () => {
     expect((await errorOf(call(s, 'POST', '/admin/bookings/bk_missing/no-show', { noShow: true }), 404)).code).toBe('not_found');
   });
 
+  describe('delete', () => {
+    function job(id: string, bookingId: string, patch: Partial<Job> = {}): Job {
+      const dueAt = patch.dueAt ?? hoursFromNow(1);
+      return { key: repo.jobKey(dueAt, id), id, type: 'message', bookingId, dueAt, channel: 'email', audience: 'invitee', kind: 'followup', attempt: 0, createdAt: TEST_NOW, ...patch };
+    }
+
+    function callRecord(id: string, bookingId: string, said = 'Yes, I will be there. My door code is 4411.'): CallRecord {
+      return {
+        id,
+        bookingId,
+        to: '+14155552671',
+        status: 'completed',
+        turns: [{ role: 'caller', text: said, at: TEST_NOW }],
+        pendingCancel: false,
+        outcome: 'confirmed',
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      };
+    }
+
+    const jobsOf = async (s: Session, bookingId: string): Promise<string[]> => (await repo.listJobs(s.ctx)).filter((j) => j.bookingId === bookingId).map((j) => j.id);
+    const indexIds = async (s: Session): Promise<string[]> => (await repo.getBookingIndex(s.ctx)).map((e) => e.id).sort();
+
+    it('erases a past booking with its index entry, pending jobs and call records, and nothing else', async () => {
+      const s = await seeded();
+      await repo.putJob(s.ctx, job('job_thanks', 'bk_yesterday'));
+      await repo.putJob(s.ctx, job('job_other', 'bk_soon', { kind: 'reminder' }));
+      await repo.saveCall(s.ctx, callRecord('call_a', 'bk_yesterday'));
+      await repo.saveCall(s.ctx, callRecord('call_b', 'bk_yesterday'));
+      await repo.saveCall(s.ctx, callRecord('call_c', 'bk_soon', 'Yes, see you then.'));
+
+      expect(await ok(call(s, 'DELETE', '/admin/bookings/bk_yesterday'))).toEqual({ ok: true });
+
+      expect(await repo.getBooking(s.ctx, 'bk_yesterday')).toBeNull();
+      expect(await indexIds(s)).toEqual(['bk_cancelled', 'bk_lastweek', 'bk_later', 'bk_now', 'bk_soon']);
+      expect(await jobsOf(s, 'bk_yesterday')).toEqual([]);
+      expect(await jobsOf(s, 'bk_soon')).toEqual(['job_other']);
+      expect(await s.ctx.kv.list('calls/')).toEqual(['calls/call_c']);
+      // Nothing of what the invitee said on the call is left anywhere in storage.
+      for (const key of await s.ctx.kv.list('')) expect(JSON.stringify(await s.ctx.kv.getJSON(key).catch(() => null)), key).not.toContain('door code');
+      const listed = await ok<{ total: number; counts: Record<string, number> }>(call(s, 'GET', '/admin/bookings?scope=past'));
+      expect(listed.total).toBe(1);
+      expect(listed.counts).toEqual({ upcoming: 3, past: 1, cancelled: 1 });
+      expect((await errorOf(call(s, 'GET', '/admin/bookings/bk_yesterday'), 404)).code).toBe('not_found');
+
+      // Asking again changes nothing and is not an error: the booking is gone either way.
+      expect(await ok(call(s, 'DELETE', '/admin/bookings/bk_yesterday'))).toEqual({ ok: true });
+      expect((await errorOf(call(s, 'DELETE', '/admin/bookings/..%2Fsite'), 404)).code).toBe('not_found');
+      expect(await repo.getSite(s.ctx)).toBeTruthy();
+    });
+
+    it('refuses an upcoming or running meeting: it is cancelled first', async () => {
+      const s = await seeded();
+      await repo.putJob(s.ctx, job('job_reminder', 'bk_soon', { kind: 'reminder' }));
+      const soon = await errorOf(call(s, 'DELETE', '/admin/bookings/bk_soon'), 409);
+      expect(soon).toEqual({ code: 'upcoming', message: 'This meeting has not happened yet. Cancel it first, then you can delete it.' });
+      expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_now'), 409)).code).toBe('in_progress');
+      // Nothing was touched.
+      expect(await repo.getBooking(s.ctx, 'bk_soon')).toMatchObject({ id: 'bk_soon', status: 'confirmed' });
+      expect(await jobsOf(s, 'bk_soon')).toEqual(['job_reminder']);
+      expect(await indexIds(s)).toContain('bk_now');
+
+      // Once it is over, it can go.
+      s.ctx.clock.advance(3 * 3_600_000);
+      await ok(call(s, 'DELETE', '/admin/bookings/bk_soon'));
+      expect(await repo.getBooking(s.ctx, 'bk_soon')).toBeNull();
+      expect(await jobsOf(s, 'bk_soon')).toEqual([]);
+    });
+
+    it('waits for a cancellation that is still being finished, so no calendar event or notice is left behind', async () => {
+      const s = await seeded();
+      // bk_cancelled is ahead (in 30 hours). The email telling the invitee is still queued.
+      await repo.putJob(s.ctx, job('job_told', 'bk_cancelled', { kind: 'cancelled', dueAt: TEST_NOW }));
+      expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409)).code).toBe('still_cancelling');
+      await repo.deleteJob(s.ctx, repo.jobKey(TEST_NOW, 'job_told'));
+
+      // The calendar retry is queued, or the cancellation marker is still on the record.
+      await repo.putJob(s.ctx, job('job_gcal', 'bk_cancelled', { type: 'gcal_sync', kind: undefined, channel: undefined, audience: undefined }));
+      expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409)).code).toBe('still_cancelling');
+      await repo.deleteJob(s.ctx, repo.jobKey(hoursFromNow(1), 'job_gcal'));
+      await repo.updateBooking(s.ctx, 'bk_cancelled', (b) => ({ ...b, followUp: { kind: 'cancelled', id: 'fu_1', at: TEST_NOW, by: 'invitee' } }));
+      expect((await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409)).code).toBe('still_cancelling');
+
+      // Google could not take the event off: say why, and keep the booking until it is gone.
+      await repo.updateBooking(s.ctx, 'bk_cancelled', ({ followUp: _done, ...b }) => ({
+        ...b,
+        google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'ev_1', error: 'Google Calendar needs to be reconnected.' },
+      }));
+      const left = await errorOf(call(s, 'DELETE', '/admin/bookings/bk_cancelled'), 409);
+      expect(left.code).toBe('calendar_event_left');
+      expect(left.message).toBe(
+        'The event for this meeting is still on Google Calendar, because it could not be removed yet. Google Calendar needs to be reconnected. Once the event is gone, you can delete the booking.',
+      );
+      expect(await repo.getBooking(s.ctx, 'bk_cancelled')).not.toBeNull();
+
+      await repo.updateBooking(s.ctx, 'bk_cancelled', (b) => ({ ...b, google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'ev_1', syncedAt: TEST_NOW } }));
+      await ok(call(s, 'DELETE', '/admin/bookings/bk_cancelled'));
+      expect(await repo.getBooking(s.ctx, 'bk_cancelled')).toBeNull();
+      expect(await indexIds(s)).not.toContain('bk_cancelled');
+    });
+
+    it('lets a cancelled meeting whose time has passed go, whatever is left of its cancellation', async () => {
+      const s = await signIn();
+      await seedBooking(s.ctx, 'bk_gone', {
+        start: hoursFromNow(-5),
+        status: 'cancelled',
+        cancellation: { at: TEST_NOW, by: 'host' },
+        followUp: { kind: 'cancelled', id: 'fu_2', at: hoursFromNow(-48) },
+        google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'ev_2', error: 'Google Calendar needs to be reconnected.' },
+      });
+      await repo.putJob(s.ctx, job('job_late', 'bk_gone', { kind: 'cancelled' }));
+      await ok(call(s, 'DELETE', '/admin/bookings/bk_gone'));
+      expect(await repo.getBooking(s.ctx, 'bk_gone')).toBeNull();
+      expect(await jobsOf(s, 'bk_gone')).toEqual([]);
+    });
+
+    it('finishes a delete that was cut off after the record went, but never touches a booking that is being made', async () => {
+      const s = await seeded();
+      // The record went, the index entry stayed (an earlier delete was cut off).
+      await repo.deleteBooking(s.ctx, 'bk_lastweek');
+      await repo.saveCall(s.ctx, callRecord('call_left', 'bk_lastweek'));
+      await ok(call(s, 'DELETE', '/admin/bookings/bk_lastweek'));
+      expect(await indexIds(s)).not.toContain('bk_lastweek');
+      expect(await s.ctx.kv.list('calls/')).toEqual([]);
+
+      // An index entry ahead without a record is a booking being created right now: it stays.
+      const entry = { ...repo.indexEntryOf(makeBooking('bk_new', { start: hoursFromNow(5) })) };
+      await repo.mutateBookingIndex(s.ctx, (entries) => [...entries, entry]);
+      await ok(call(s, 'DELETE', '/admin/bookings/bk_new'));
+      expect(await indexIds(s)).toContain('bk_new');
+    });
+  });
+
   describe('CSV export', () => {
     /** A small RFC 4180 reader, so the test checks what a spreadsheet would actually see. */
     function parseCsv(text: string): string[][] {
@@ -1326,7 +1472,7 @@ describe('integrations', () => {
     expect(await ok(call(s, 'GET', '/admin/integrations'))).toEqual({
       baseUrl: TEST_BASE_URL,
       google: { configured: false, redirectUri: `${TEST_BASE_URL}/api/google/callback`, ownerConnected: false },
-      twilio: { configured: false },
+      twilio: { configured: false, calls: false },
       anthropic: { configured: false, model: 'claude-opus-5-5' },
       email: { setting: 'auto', resolved: 'none', resendConfigured: false, gmailAvailable: false, fromEmail: '' },
       environment: {
@@ -1384,7 +1530,7 @@ describe('integrations', () => {
     );
     expect(cleared.anthropic.configured).toBe(false);
     expect(cleared.email.resendConfigured).toBe(false);
-    expect(cleared.twilio).toEqual({ configured: false });
+    expect(cleared.twilio).toEqual({ configured: false, calls: false });
     expect(await repo.getStoredSecrets(s.ctx)).toEqual({ google: { clientId: 'old.apps.googleusercontent.com', clientSecret: 'new-google-secret' } });
   });
 
@@ -1445,6 +1591,40 @@ describe('integrations', () => {
     expect(JSON.stringify(stored)).not.toContain('sk-ant-from-the-environment');
     // Together with the environment's SID, Twilio is now complete.
     expect((await ok<{ twilio: { configured: boolean } }>(call(s, 'GET', '/admin/integrations'))).twilio.configured).toBe(true);
+  });
+
+  it('a Messaging Service sends texts but cannot place calls', async () => {
+    const s = await signIn();
+    const service = `MG${'f'.repeat(32)}`;
+    const texts = await ok<IntegrationsStatus>(call(s, 'PUT', '/admin/integrations', { twilio: { accountSid: SID, authToken: TWILIO.authToken, messagingServiceSid: service } }));
+    expect(texts.twilio).toMatchObject({ configured: true, calls: false, messagingServiceSid: service });
+    expect(texts.twilio.fromNumber).toBeUndefined();
+    const both = await ok<IntegrationsStatus>(call(s, 'PUT', '/admin/integrations', { twilio: { fromNumber: TWILIO.fromNumber } }));
+    expect(both.twilio).toMatchObject({ configured: true, calls: true, fromNumber: TWILIO.fromNumber });
+  });
+
+  it('shows Gmail as not sending while the owner\'s Google connection cannot be used', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { google: { clientId: '123456789-abcdef.apps.googleusercontent.com', clientSecret: 'GOCSPX-super-secret-value' } });
+    await connectGoogle(s.ctx, 'host_owner', { gmailSend: true });
+    const email = async () => (await ok<IntegrationsStatus>(call(s, 'GET', '/admin/integrations'))).email;
+    expect(await email()).toEqual({ setting: 'auto', resolved: 'gmail', resendConfigured: false, gmailAvailable: true, fromEmail: '' });
+
+    // Google asked for a new sign-in, for example after a password change.
+    await connectGoogle(s.ctx, 'host_owner', { gmailSend: true, status: 'needs_reconnect' });
+    expect(await email()).toEqual({ setting: 'auto', resolved: 'none', resendConfigured: false, gmailAvailable: false, fromEmail: '', gmailProblem: 'needs_reconnect' });
+
+    // The keys the connection was made with were removed.
+    await connectGoogle(s.ctx, 'host_owner', { gmailSend: true });
+    await ok(call(s, 'PUT', '/admin/integrations', { google: { clientId: '', clientSecret: '' } }));
+    expect(await email()).toMatchObject({ resolved: 'none', gmailAvailable: false, gmailProblem: 'keys_missing' });
+
+    // With Resend there is another way out, so email is not down. Gmail itself still is.
+    await repo.saveSecrets(s.ctx, { resend: { apiKey: 're_secret_resend_key_value' } });
+    await ok(call(s, 'PUT', '/admin/site', { email: { fromEmail: 'meet@jimicohen.com' } }));
+    const withResend = await email();
+    expect(withResend).toMatchObject({ resolved: 'resend', gmailAvailable: false });
+    expect(withResend.gmailProblem).toBeUndefined();
   });
 
   describe('POST /admin/integrations/test', () => {
@@ -1743,8 +1923,12 @@ describe('GET /admin/overview', () => {
     expect(o.stats).toEqual({ upcomingCount: 0, last30Count: 0, cancelledLast30: 0, confirmedByAssistant: 0 });
     expect(o.publicUrl).toBe(TEST_BASE_URL);
     expect(done(o)).toEqual({ google: false, availability: true, event: true, email: false, sms: false, assistant: false, design: false });
-    expect(keys(o)).toEqual(['google_not_connected', 'no_email', 'twilio_missing']);
+    expect(keys(o)).toEqual(['google_not_connected', 'no_email', 'owner_no_email', 'bookings_reach_nobody', 'twilio_missing']);
     expect(o.warnings.find((w) => w.key === 'twilio_missing')!.message).toMatch(/"Intro call" and "Meeting" have reminders by text or phone call/);
+    // Without email and without a calendar, a booking reaches nobody.
+    expect(o.warnings.find((w) => w.key === 'bookings_reach_nobody')!.message).toBe(
+      'People can book "Intro call" and "Meeting", but nobody hears about it: no email is sent, and no Google Calendar is connected to put the booking on. Set up email or connect Google Calendar.',
+    );
     // Links are routes inside the dashboard, for its own router.
     for (const link of [...o.checklist.map((c) => c.href), ...o.warnings.map((w) => w.href)]) {
       if (link !== undefined) expect(link).toMatch(/^\/admin(\/[a-z-]+)?(#[a-z]+)?$/);
@@ -1755,7 +1939,14 @@ describe('GET /admin/overview', () => {
   it('ticks things off as they get done', async () => {
     const s = await signIn();
     await connectGoogle(s.ctx, 'host_owner', { gmailSend: true });
-    await repo.saveSecrets(s.ctx, { twilio: { accountSid: `AC${'a'.repeat(32)}`, authToken: 'twilio-auth-token-secret-value-1', fromNumber: '+15005550006' }, anthropic: { apiKey: 'sk-ant-api03-very-secret-key-value' } });
+    // Notices need an address to go to.
+    await ok(call(s, 'PUT', '/admin/hosts/host_owner', { email: 'jimi@example.com' }));
+    // A Google connection only works with the keys it was made with.
+    await repo.saveSecrets(s.ctx, {
+      google: { clientId: '123456789-abcdef.apps.googleusercontent.com', clientSecret: 'GOCSPX-super-secret-value' },
+      twilio: { accountSid: `AC${'a'.repeat(32)}`, authToken: 'twilio-auth-token-secret-value-1', fromNumber: '+15005550006' },
+      anthropic: { apiKey: 'sk-ant-api03-very-secret-key-value' },
+    });
     await ok(call(s, 'PUT', '/admin/site', { theme: { colors: { primary: '#123456' } } }));
     const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     expect(done(o)).toEqual({ google: true, availability: true, event: true, email: true, sms: true, assistant: true, design: true });
@@ -1787,6 +1978,7 @@ describe('GET /admin/overview', () => {
 
   it('warns when Google needs a new sign-in or a calendar cannot be read', async () => {
     const s = await signIn();
+    await repo.saveSecrets(s.ctx, { google: { clientId: '123456789-abcdef.apps.googleusercontent.com', clientSecret: 'GOCSPX-super-secret-value' } });
     const { host } = await addCoHost(s);
     await connectGoogle(s.ctx, 'host_owner', { status: 'needs_reconnect' });
     await connectGoogle(s.ctx, host.id, { email: 'alex@example.com', status: 'needs_reconnect' });
@@ -1807,6 +1999,36 @@ describe('GET /admin/overview', () => {
 
     await repo.updateHost(s.ctx, host.id, (h) => ({ ...h, calendarHealth: { ok: true, at: TEST_NOW } }));
     expect(keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview'))).filter((k) => k.startsWith('calendar_health'))).toEqual([]);
+  });
+
+  it('warns ahead when a Google connection made in Testing will end, and shows the date on the host', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { google: { clientId: '123456789-abcdef.apps.googleusercontent.com', clientSecret: 'GOCSPX-super-secret-value' } });
+    const { host } = await addCoHost(s);
+    const ends = new Date(Date.parse(TEST_NOW) + 7 * 86_400_000).toISOString();
+    await connectGoogle(s.ctx, 'host_owner', { refreshExpiresAt: ends });
+    await connectGoogle(s.ctx, host.id, { email: 'alex@example.com', refreshExpiresAt: ends });
+    await repo.updateHost(s.ctx, 'host_owner', (h) => ({ ...h, timezone: 'America/New_York' }));
+
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    const mine = o.warnings.find((w) => w.key === 'google_expiry_host_owner')!;
+    expect(mine.href).toBe('/admin/integrations#google');
+    expect(mine.message).toMatch(/^Your Google connection ends on \w+day, \w+ \d+, 20\d\d, because the consent screen in Google Cloud is still in Testing\./);
+    expect(mine.message).toContain('Publish the consent screen in Google Cloud, then reconnect.');
+    const theirs = o.warnings.find((w) => w.key === `google_expiry_${host.id}`)!;
+    expect(theirs).toMatchObject({ href: '/admin/team', message: expect.stringMatching(/^Alex's Google connection ends on .* then ask Alex to connect again from their private link\.$/) });
+    for (const w of o.warnings) expect(w.message).not.toMatch(/[‒-―]/);
+
+    // The host view carries the date, so the Google card can say it too.
+    const { hosts } = await ok<{ hosts: AdminHost[] }>(call(s, 'GET', '/admin/hosts'));
+    expect(hosts.find((h) => h.id === 'host_owner')?.google?.refreshExpiresAt).toBe(ends);
+
+    // Reconnected after publishing: no end, no warning. A connection that already needs reconnecting says that instead.
+    await connectGoogle(s.ctx, 'host_owner');
+    await connectGoogle(s.ctx, host.id, { email: 'alex@example.com', refreshExpiresAt: ends, status: 'needs_reconnect' });
+    const after = keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview')));
+    expect(after.filter((k) => k.startsWith('google_expiry'))).toEqual([]);
+    expect(after).toContain(`google_reconnect_${host.id}`);
   });
 
   it('warns about a joint meeting whose co-host has no calendar yet', async () => {
@@ -1831,7 +2053,43 @@ describe('GET /admin/overview', () => {
       await ok(call(s, 'PUT', `/admin/event-types/${et.id}`, { reminders: et.reminders.map((r) => ({ ...r, enabled: r.channel === 'email' })) }));
     }
     const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
-    expect(keys(o)).toEqual(['google_not_connected']);
+    // Email off on purpose is not nagged about, but with no calendar either, a booking reaches nobody.
+    expect(keys(o)).toEqual(['google_not_connected', 'bookings_reach_nobody']);
+  });
+
+  it('says when a booking would reach nobody, until a calendar is connected for every host it can land on', async () => {
+    const s = await signIn();
+    await ok(call(s, 'PUT', '/admin/site', { email: { provider: 'none' } }));
+    await connectGoogle(s.ctx);
+    expect(keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview')))).not.toContain('bookings_reach_nobody');
+
+    // A round robin can land on a co-host without a calendar: that booking would reach nobody.
+    const { host } = await addCoHost(s);
+    await ok(call(s, 'POST', '/admin/event-types', { title: 'Either of us', kind: 'round_robin', hostIds: ['host_owner', host.id] }), 201);
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(o.warnings.find((w) => w.key === 'bookings_reach_nobody')?.message).toMatch(/^People can book "Either of us", but nobody hears about it/);
+    await connectGoogle(s.ctx, host.id, { email: 'alex.calendar@example.com' });
+    expect(keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview')))).not.toContain('bookings_reach_nobody');
+  });
+
+  it('does not say people can book a meeting whose calendar cannot be read, but still names one that stays open', async () => {
+    const s = await signIn();
+    await ok(call(s, 'PUT', '/admin/site', { email: { provider: 'none' } }));
+    await repo.saveSecrets(s.ctx, { google: { clientId: ['4242', 'test.apps.googleusercontent.com'].join('-'), clientSecret: ['test', 'client', 'secret'].join('-') } });
+    await connectGoogle(s.ctx, 'host_owner', { status: 'needs_reconnect' });
+    // Solo meetings with the owner offer no times at all now: the reconnect warning says so, alone.
+    let o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(keys(o)).toContain('google_reconnect_host_owner');
+    expect(keys(o)).not.toContain('bookings_reach_nobody');
+
+    // A round robin still offers the co-host's times, and with no calendar and no email that booking reaches nobody.
+    const { host } = await addCoHost(s);
+    await ok(call(s, 'POST', '/admin/event-types', { title: 'Either of us', kind: 'round_robin', hostIds: ['host_owner', host.id] }), 201);
+    o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(o.warnings.find((w) => w.key === 'bookings_reach_nobody')?.message).toMatch(/^People can book "Either of us", but nobody hears about it/);
+    // Once the co-host's calendar takes the booking, it is heard about.
+    await connectGoogle(s.ctx, host.id, { email: 'alex.calendar@example.com' });
+    expect(keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview')))).not.toContain('bookings_reach_nobody');
   });
 
   it('warns when links would point at the wrong address', async () => {
@@ -1850,5 +2108,137 @@ describe('GET /admin/overview', () => {
     const dev = await signIn({ env: { publicBaseUrl: 'http://localhost:8788/meeting', mockProviders: true } });
     const o3 = await ok<AdminOverview>(handle(apiRequest('GET', '/admin/overview', { cookie: dev.cookie, baseUrl: 'http://localhost:8788/meeting' }), dev.ctx));
     expect(keys(o3)).not.toContain('public_base_url');
+  });
+
+  it('says where to add the address for booking notices when there is none', async () => {
+    const s = await signIn();
+    const warning = (await ok<AdminOverview>(call(s, 'GET', '/admin/overview'))).warnings.find((w) => w.key === 'owner_no_email')!;
+    expect(warning.href).toBe('/admin/settings#notices');
+    expect(warning.message).toMatch(/you are not emailed when someone books, moves or cancels a meeting/);
+    expect(warning.message).not.toContain('—');
+
+    await ok(call(s, 'PUT', '/admin/hosts/host_owner', { email: 'jimi@example.com' }));
+    expect(keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview')))).not.toContain('owner_no_email');
+  });
+
+  it('says plainly what stops when the Google connection behind Gmail dies', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { google: { clientId: '123456789-abcdef.apps.googleusercontent.com', clientSecret: 'GOCSPX-super-secret-value' } });
+    await ok(call(s, 'PUT', '/admin/hosts/host_owner', { email: 'jimi@example.com' }));
+    await connectGoogle(s.ctx, 'host_owner', { gmailSend: true, status: 'needs_reconnect' });
+    let o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    const reconnect = o.warnings.find((w) => w.key === 'google_reconnect_host_owner')!;
+    expect(reconnect.message).toBe(
+      'Your Google Calendar needs to be reconnected. Until then, no times are offered for meetings with you and new bookings cannot reach your calendar. No emails are going out either, because they are sent from your Gmail.',
+    );
+    expect(reconnect.href).toBe('/admin/integrations#google');
+    // One warning for one cause: not a second one that blames a missing email provider, or that says
+    // people "can book" meetings that offer no times while the calendar cannot be read.
+    expect(keys(o)).not.toContain('no_email');
+    expect(keys(o)).not.toContain('bookings_reach_nobody');
+    expect(done(o)).toMatchObject({ google: false, email: false });
+
+    // The keys behind the connection were removed: the connection cannot work at all.
+    await connectGoogle(s.ctx, 'host_owner', { gmailSend: true });
+    await ok(call(s, 'PUT', '/admin/integrations', { google: { clientId: '', clientSecret: '' } }));
+    o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    const keysGone = o.warnings.find((w) => w.key === 'google_keys_missing')!;
+    expect(keysGone.message).toBe(
+      'The Google keys were removed, so your Google Calendar cannot be read and no times are offered for meetings with you. No emails are going out either, because they are sent from your Gmail. Add the same client ID and client secret again under Integrations.',
+    );
+    expect(keysGone.href).toBe('/admin/integrations#google');
+    expect(keys(o).filter((k) => k === 'no_email' || k === 'bookings_reach_nobody' || k.startsWith('google_reconnect') || k.startsWith('calendar_health'))).toEqual([]);
+    expect(done(o)).toMatchObject({ google: false, email: false });
+  });
+
+  it('names a co-host whose calendar is cut off when the Google keys go', async () => {
+    const s = await signIn();
+    const { host } = await addCoHost(s);
+    await connectGoogle(s.ctx, host.id, { email: 'alex@example.com' });
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(o.warnings.find((w) => w.key === 'google_keys_missing')!.message).toBe(
+      "The Google keys were removed, so Alex's Google Calendar cannot be read and times that include Alex are not offered. Add the same client ID and client secret again under Integrations.",
+    );
+  });
+
+  it('tells reminder calls apart from texts when Twilio has only a Messaging Service', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { twilio: { accountSid: `AC${'a'.repeat(32)}`, authToken: 'twilio-auth-token-secret-value-1', fromNumber: '', messagingServiceSid: `MG${'f'.repeat(32)}` } });
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(o.warnings.find((w) => w.key === 'twilio_missing')!.message).toBe(
+      '"Intro call" and "Meeting" have reminder calls, but reminder calls need a Twilio phone number and none is saved, so those calls are skipped. Texts still go out.',
+    );
+    expect(done(o).sms).toBe(false);
+
+    // Texts alone do not need a number.
+    for (const et of await repo.listEventTypes(s.ctx)) {
+      await ok(call(s, 'PUT', `/admin/event-types/${et.id}`, { reminders: et.reminders.filter((r) => r.channel !== 'call') }));
+    }
+    expect(keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview')))).not.toContain('twilio_missing');
+  });
+
+  /** Owner in Los Angeles, Alex in Berlin, both on the default 9 to 5. Those hours never meet. */
+  async function apartJoint(s: Session): Promise<{ host: AdminHost; eventType: EventType }> {
+    const { host } = await addCoHost(s);
+    await ok(call(s, 'PUT', '/admin/hosts/host_owner', { timezoneMode: 'fixed', timezone: 'America/Los_Angeles' }));
+    await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { timezoneMode: 'fixed', timezone: 'Europe/Berlin' }));
+    const { eventType } = await ok<{ eventType: EventType }>(call(s, 'POST', '/admin/event-types', { title: 'Together', kind: 'collective', hostIds: ['host_owner', host.id], reminders: [] }), 201);
+    return { host, eventType };
+  }
+
+  it('warns about a joint meeting whose hosts are never working at the same time', async () => {
+    const s = await signIn();
+    const { host, eventType } = await apartJoint(s);
+    let o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    const warning = o.warnings.find((w) => w.key === `shared_hours_${eventType.id}`)!;
+    expect(warning.message).toBe(
+      '"Together" cannot be booked: there is no time when you and Alex are both working. Your hours are in Los Angeles time and Alex\'s hours are in Berlin time. Change your hours under Availability, or ask Alex to change theirs on their private page.',
+    );
+    expect(warning.href).toBe('/admin/availability');
+
+    // Someone with no hours at all is a different problem, and said so.
+    await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { schedules: [{ id: 'sch_default', name: 'Working hours', weekly: {}, overrides: [] }] }));
+    o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(o.warnings.find((w) => w.key === `shared_hours_${eventType.id}`)).toEqual({
+      key: `shared_hours_${eventType.id}`,
+      message: '"Together" cannot be booked: Alex has no working hours for it in the next 60 days. Ask Alex to set their hours on their private page.',
+      href: '/admin/team',
+    });
+
+    // Hours that meet for part of the day are enough.
+    await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { timezone: 'America/New_York', schedules: [{ id: 'sch_default', name: 'Working hours', weekly: { 1: [{ start: '09:00', end: '17:00' }] }, overrides: [] }] }));
+    o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(keys(o).filter((k) => k.startsWith('shared_hours'))).toEqual([]);
+  });
+
+  describe('POST /admin/event-types-check', () => {
+    it('checks a joint meeting on screen, saved or not, and stores nothing', async () => {
+      const s = await signIn();
+      const { host, eventType } = await apartJoint(s);
+      const before = JSON.stringify(await repo.listEventTypes(s.ctx));
+
+      const draft = await ok<SharedHoursCheck>(call(s, 'POST', '/admin/event-types-check', { title: 'Late night', kind: 'collective', hostIds: ['host_owner', host.id], durations: [30] }));
+      expect(draft).toMatchObject({ ok: false, reason: 'no_overlap', href: '/admin/availability' });
+      expect(draft.message).toMatch(/^"Late night" cannot be booked: there is no time when you and Alex are both working\./);
+
+      // The saved event, with what is on screen now: a round robin offers either person's hours.
+      expect(await ok<SharedHoursCheck>(call(s, 'POST', '/admin/event-types-check', { id: eventType.id }))).toMatchObject({ ok: false, reason: 'no_overlap' });
+      expect(await ok<SharedHoursCheck>(call(s, 'POST', '/admin/event-types-check', { id: eventType.id, kind: 'round_robin' }))).toEqual({ ok: true });
+      // Limited hours on the Scheduling tab count. With Alex in New York the two overlap from 9 to 2
+      // Los Angeles time, but not from 6 to 7 (Alex only) or from 3 to 4 (the owner only).
+      await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { timezone: 'America/New_York' }));
+      const joint = { kind: 'collective', hostIds: ['host_owner', host.id] };
+      expect(await ok<SharedHoursCheck>(call(s, 'POST', '/admin/event-types-check', joint))).toEqual({ ok: true });
+      const apart = [{ start: '06:00', end: '07:00' }, { start: '15:00', end: '16:00' }];
+      const limited = await ok<SharedHoursCheck>(call(s, 'POST', '/admin/event-types-check', { ...joint, scheduling: { ...eventType.scheduling, restrictHours: { 0: [], 1: apart, 2: [], 3: [], 4: [], 5: [], 6: [] } } }));
+      expect(limited).toMatchObject({ ok: false, reason: 'no_overlap' });
+      expect(limited.message).toContain('The limited hours on its Scheduling tab count too.');
+
+      // A draft that does not add up yet has nothing to say: saving it reports the problem.
+      expect(await ok<SharedHoursCheck>(call(s, 'POST', '/admin/event-types-check', { kind: 'collective', hostIds: ['host_owner'] }))).toEqual({ ok: true });
+      expect(await ok<SharedHoursCheck>(call(s, 'POST', '/admin/event-types-check', { kind: 'solo', hostIds: ['host_owner'] }))).toEqual({ ok: true });
+      expect((await errorOf(call(s, 'POST', '/admin/event-types-check', ['not', 'an', 'event']), 400)).code).toBe('invalid_json');
+      expect(JSON.stringify(await repo.listEventTypes(s.ctx))).toBe(before);
+    });
   });
 });

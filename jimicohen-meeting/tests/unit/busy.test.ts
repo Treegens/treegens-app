@@ -145,7 +145,7 @@ describe('getHostBusy', () => {
     expect((await getHostBusy(ctx, host, WEEK)).busy).toEqual([iv('2026-11-18T08:00:00Z', '2026-11-19T08:00:00Z')]);
   });
 
-  it('serves a cached answer for 60 seconds and refetches when asked for a fresh one', async () => {
+  it('serves a cached answer for 60 seconds, and a fresh read asks the calendar itself', async () => {
     const host = await setHost(ctx, (h) => ({ ...h, icsFeeds: [feed(ctx, 'f1', 'Work', WORK_FEED)] }));
     let block: [string, string] = ['20261117T100000Z', '20261117T110000Z'];
     const calls = useFetch(ctx, () => icsResponse(ics(block)));
@@ -159,44 +159,117 @@ describe('getHostBusy', () => {
     expect(await getHostBusy(ctx, host, WEEK)).toEqual(first);
     expect(calls).toHaveLength(1);
 
-    // another range is another cache entry
-    await getHostBusy(ctx, host, { start: WEEK.start, end: WEEK.end + 86_400_000 });
-    expect(calls).toHaveLength(2);
+    // Another range inside the same fixed block is the same cache entry.
+    expect((await getHostBusy(ctx, host, { start: WEEK.start, end: WEEK.end + 86_400_000 })).busy).toEqual(first.busy);
+    expect(calls).toHaveLength(1);
 
+    // A booking reads its own range afresh.
     const fresh = await getHostBusy(ctx, host, WEEK, { fresh: true });
     expect(fresh.busy).toEqual([iv('2026-11-17T14:00:00Z', '2026-11-17T15:00:00Z')]);
-    expect(calls).toHaveLength(3);
-    // the fresh answer replaced the cached one
-    expect((await getHostBusy(ctx, host, WEEK)).busy).toEqual(fresh.busy);
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
 
+    ctx.clock.advance(2_000);
+    expect((await getHostBusy(ctx, host, WEEK)).busy).toEqual(fresh.busy);
+    // The download the fresh read made was kept, so the expired block was rebuilt without a new request.
+    expect(calls).toHaveLength(2);
     ctx.clock.advance(61_000);
     await getHostBusy(ctx, host, WEEK);
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(3);
   });
 
-  it('forgets every cached range of a host on request, and only of that host', async () => {
+  it('cuts every answer out of the same fixed blocks, so varied ranges cost the calendars nothing more', async () => {
+    const host = await setHost(ctx, (h) => ({
+      ...h,
+      google: googleConnection(ctx),
+      icsFeeds: [feed(ctx, 'f1', 'Work', WORK_FEED)],
+    }));
+    const calls = useFetch(
+      ctx,
+      network({
+        google: [['2026-11-20T10:00:00Z', '2026-11-20T11:00:00Z'], ['2026-12-28T10:00:00Z', '2026-12-28T11:00:00Z']],
+        work: [['20261125T080000Z', '20261125T090000Z'], ['20270105T080000Z', '20270105T090000Z']],
+      }),
+    );
+    const DAY = 86_400_000;
+    const start = ms('2026-11-15T00:00:00Z');
+    // What the security review did: one visitor, 240 different day ranges in a minute, up to 62 days long.
+    for (let i = 0; i < 240; i++) {
+      const from = start + (i % 40) * DAY;
+      const result = await getHostBusy(ctx, host, { start: from, end: from + (1 + ((i * 7) % 62)) * DAY });
+      expect(result.ok).toBe(true);
+      // Always exactly what lies inside the range asked for.
+      for (const b of result.busy) {
+        expect(b.start).toBeGreaterThanOrEqual(from);
+        expect(b.end).toBeLessThanOrEqual(from + (1 + ((i * 7) % 62)) * DAY);
+      }
+      ctx.clock.advance(200);
+    }
+    const blocks = Math.ceil((40 + 62) / 31) + 1;
+    expect(calls.filter((c) => c.url === FREEBUSY_URL).length).toBeLessThanOrEqual(blocks);
+    // The feed's server is asked once, however many blocks were read from it.
+    expect(calls.filter((c) => c.url === WORK_FEED)).toHaveLength(1);
+    // Storage holds a handful of entries for the host, not one per range.
+    const keys = await ctx.kv.list(`cache/busy-${OWNER}-`);
+    expect(keys.length).toBeLessThanOrEqual(blocks + 1);
+
+    // A range that spans several blocks is stitched together from them.
+    const wide = await getHostBusy(ctx, host, { start: ms('2026-11-16T00:00:00Z'), end: ms('2027-01-10T00:00:00Z') });
+    expect(wide.busy).toEqual([
+      iv('2026-11-20T10:00:00Z', '2026-11-20T11:00:00Z'),
+      iv('2026-11-25T08:00:00Z', '2026-11-25T09:00:00Z'),
+      iv('2026-12-28T10:00:00Z', '2026-12-28T11:00:00Z'),
+      iv('2027-01-05T08:00:00Z', '2027-01-05T09:00:00Z'),
+    ]);
+  });
+
+  it('reads the blocks a range needs in one go, and asks Google for the whole block', async () => {
+    const host = await setHost(ctx, (h) => ({ ...h, google: googleConnection(ctx) }));
+    const calls = useFetch(ctx, network({ google: [['2026-11-17T10:00:00Z', '2026-11-17T11:00:00Z']] }));
+    expect((await getHostBusy(ctx, host, WEEK)).busy).toEqual([iv('2026-11-17T10:00:00Z', '2026-11-17T11:00:00Z')]);
+    const asked = calls.filter((c) => c.url === FREEBUSY_URL).map((c) => JSON.parse(c.body));
+    expect(asked).toHaveLength(1);
+    // Block 670 since 1 January 1970: 13 November to 14 December 2026, the same for every visitor.
+    expect(asked[0]).toMatchObject({ timeMin: '2026-11-13T00:00:00.000Z', timeMax: '2026-12-14T00:00:00.000Z' });
+  });
+
+  it('keeps a downloaded feed for a minute whatever range it is read for, sealed', async () => {
+    const host = await setHost(ctx, (h) => ({ ...h, icsFeeds: [feed(ctx, 'f1', 'Work', WORK_FEED)] }));
+    const calls = useFetch(ctx, network({ work: [['20261117T100000Z', '20261117T110000Z']] }));
+    await getHostBusy(ctx, host, WEEK);
+    // A range in another block needs that block read, but not the feed downloaded again.
+    await getHostBusy(ctx, host, { start: ms('2027-02-01T00:00:00Z'), end: ms('2027-02-08T00:00:00Z') });
+    expect(calls.filter((c) => c.url === WORK_FEED)).toHaveLength(1);
+    const stored = JSON.stringify(await Promise.all((await ctx.kv.list('cache/')).map((k) => ctx.kv.getJSON(k))));
+    expect(stored).not.toContain('VCALENDAR');
+    expect(stored).not.toContain('WORK-FEED-SECRET');
+    expect((await ctx.kv.list('cache/')).join(' ')).not.toContain('WORK-FEED-SECRET');
+    ctx.clock.advance(61_000);
+    await getHostBusy(ctx, host, { start: ms('2027-03-01T00:00:00Z'), end: ms('2027-03-08T00:00:00Z') });
+    expect(calls.filter((c) => c.url === WORK_FEED)).toHaveLength(2);
+  });
+
+  it('forgets every cached block and kept feed of a host on request, and only of that host', async () => {
     const host = await setHost(ctx, (h) => ({ ...h, icsFeeds: [feed(ctx, 'f1', 'Work', WORK_FEED)] }));
     await saveHost(ctx, { ...host, id: 'host_other', role: 'member', icsFeeds: [feed(ctx, 'f2', 'Home', HOME_FEED)] });
     const other = (await getHost(ctx, 'host_other')) as Host;
     let block: [string, string] = ['20261117T100000Z', '20261117T110000Z'];
     const calls = useFetch(ctx, () => icsResponse(ics(block)));
-    const longer: Interval = { start: WEEK.start, end: WEEK.end + 86_400_000 };
+    const later: Interval = { start: ms('2027-01-04T00:00:00Z'), end: ms('2027-01-11T00:00:00Z') };
 
     await getHostBusy(ctx, host, WEEK);
-    await getHostBusy(ctx, host, longer);
+    await getHostBusy(ctx, host, later);
     await getHostBusy(ctx, other, WEEK);
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
 
     // The calendar changed, and a booking found out the hard way.
     block = ['20261117T140000Z', '20261117T150000Z'];
     await forgetHostBusy(ctx, [OWNER, OWNER, '']);
+    expect(await ctx.kv.list(`cache/busy-${OWNER}-`)).toEqual([]);
     expect((await getHostBusy(ctx, host, WEEK)).busy).toEqual([iv('2026-11-17T14:00:00Z', '2026-11-17T15:00:00Z')]);
-    expect((await getHostBusy(ctx, host, longer)).busy).toEqual([iv('2026-11-17T14:00:00Z', '2026-11-17T15:00:00Z')]);
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(3);
     // The other host's remembered answer was left alone.
     expect((await getHostBusy(ctx, other, WEEK)).busy).toEqual([iv('2026-11-17T10:00:00Z', '2026-11-17T11:00:00Z')]);
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(3);
   });
 
   it('never throws when the remembered answers cannot be dropped', async () => {
@@ -213,7 +286,27 @@ describe('getHostBusy', () => {
     expect((await getHostBusy(ctx, host, WEEK)).busy).toHaveLength(1);
     const changed = await setHost(ctx, (h) => ({ ...h, icsFeeds: [...h.icsFeeds, feed(ctx, 'f2', 'Home', HOME_FEED)] }));
     expect((await getHostBusy(ctx, changed, WEEK)).busy).toHaveLength(2);
-    expect(calls).toHaveLength(3);
+    // Only the new feed had to be downloaded: the other one was kept from a moment ago.
+    expect(calls.map((c) => c.url)).toEqual([WORK_FEED, HOME_FEED]);
+    // A host who moved to another zone gets an answer for that zone (all-day and floating times depend on it).
+    const moved = await setHost(ctx, (h) => ({ ...h, timezone: 'Pacific/Auckland' }));
+    expect(await getHostBusy(ctx, moved, WEEK)).toMatchObject({ ok: true });
+    expect((await ctx.kv.list(`cache/busy-${OWNER}-b`)).length).toBe(3);
+  });
+
+  it('reads floating feed times in the host\'s zone', async () => {
+    const host = await setHost(ctx, (h) => ({ ...h, timezone: 'Africa/Nairobi', icsFeeds: [feed(ctx, 'f1', 'Work', WORK_FEED)] }));
+    useFetch(ctx, () => icsResponse('BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261118T090000\r\nDTEND:20261118T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n'));
+    expect((await getHostBusy(ctx, host, WEEK)).busy).toEqual([iv('2026-11-18T06:00:00Z', '2026-11-18T07:00:00Z')]);
+  });
+
+  it('fails closed for a feed with a busy repeating event it could not read', async () => {
+    const host = await setHost(ctx, (h) => ({ ...h, icsFeeds: [feed(ctx, 'f1', 'Work', WORK_FEED)] }));
+    useFetch(ctx, () => icsResponse('BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261116T090000Z\r\nDTEND:20261116T100000Z\r\nRRULE:FREQ=WEEKLY;BYDAY=XX\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n'));
+    const result = await getHostBusy(ctx, host, WEEK);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Calendar feed "Work": The calendar feed has a repeating event that could not be read.');
+    expect((await getHost(ctx, OWNER))?.calendarHealth).toMatchObject({ ok: false, message: result.error });
   });
 
   it('reports a failing feed, keeps what it could read and records the health once', async () => {

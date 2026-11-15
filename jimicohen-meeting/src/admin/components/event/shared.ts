@@ -16,7 +16,7 @@ export const TAB_ORDER: TabId[] = ['basics', 'hosts', 'scheduling', 'questions',
 
 /** Which tab shows the field a validation key points at ("scheduling.maxDaysAhead" → scheduling). */
 const TAB_OF: [RegExp, TabId][] = [
-  [/^(title|slug|emoji|color|description|durations|defaultDuration|locations)\b/, 'basics'],
+  [/^(title|slug|emoji|color|description|durations|defaultDuration|locations|coverAssetId)\b/, 'basics'],
   [/^(kind|hostIds)\b/, 'hosts'],
   [/^scheduling\b/, 'scheduling'],
   [/^(questions|phone|allowGuests|maxGuests)\b/, 'questions'],

@@ -9,7 +9,7 @@ import { confirmAttendance, manageToken } from './booking';
 import type { Ctx } from './ctx';
 import { HttpError, readForm } from './http';
 import { enqueueJob } from './jobs';
-import { getBooking, getBookingIndex, updateBooking } from './repo';
+import { claim, getBooking, getBookingIndex, isStorageId, releaseClaim, updateBooking } from './repo';
 import { formatInZone } from './time';
 import {
   blockNumber,
@@ -24,6 +24,7 @@ import {
   verifyTwilioRequest,
   webhookRefusal,
   xmlEscape,
+  type TwilioAccount,
 } from './twilio';
 
 /** Twilio refuses longer bodies outright. */
@@ -48,7 +49,29 @@ function cleanBody(body: unknown): string {
     .slice(0, SMS_BODY_LIMIT);
 }
 
-export async function sendSms(ctx: Ctx, p: { to: string; body: string }): Promise<SendResult> {
+const MESSAGE_KIND = /^[a-z_]{1,32}$/;
+
+/**
+ * Where Twilio reports what became of a text (POST /twilio/sms/status). A 201 from Twilio only means
+ * "queued": the carrier's verdict comes later. Twilio has to reach the address, so outside local
+ * development it needs a public https one. `b` and `k` say which booking and which kind of message it was.
+ */
+function statusCallbackUrl(ctx: Ctx, account: TwilioAccount, p: { bookingId?: string; kind?: string }): string | null {
+  const base = ctx.env.publicBaseUrl.replace(/\/+$/, '');
+  if (account.provider !== 'mock' && !/^https:\/\//i.test(base)) return null;
+  const query = new URLSearchParams();
+  if (p.bookingId && isStorageId(p.bookingId)) query.set('b', p.bookingId);
+  if (p.kind && MESSAGE_KIND.test(p.kind)) query.set('k', p.kind);
+  const q = query.toString();
+  return `${base}/api/twilio/sms/status${q ? `?${q}` : ''}`;
+}
+
+/**
+ * `bookingId` and `kind` (for example "reminder") tie Twilio's later delivery report to the booking's
+ * timeline. A text Twilio took but did not answer for in time comes back with `uncertain`: it may have
+ * gone out, so the caller decides whether a second copy is worse than none.
+ */
+export async function sendSms(ctx: Ctx, p: { to: string; body: string; bookingId?: string; kind?: string }): Promise<SendResult> {
   let provider = 'none';
   try {
     const account = await getTwilioAccount(ctx);
@@ -64,11 +87,15 @@ export async function sendSms(ctx: Ctx, p: { to: string; body: string }): Promis
     const params: Record<string, string> = { To: to, Body: body };
     if (account.messagingServiceSid) params.MessagingServiceSid = account.messagingServiceSid;
     else params.From = account.fromNumber;
+    const callback = statusCallbackUrl(ctx, account, p);
+    if (callback) params.StatusCallback = callback;
 
     const sent = await twilioRequestAs(ctx, account, 'POST', '/Messages.json', params);
     return { ok: true, provider, ...(typeof sent?.sid === 'string' ? { id: sent.sid } : {}) };
   } catch (err) {
     if (err instanceof TwilioError) {
+      // Sent, but no answer came back in time: Twilio may well have taken it.
+      if (err.timedOut) return { ok: false, provider, error: err.message, uncertain: true };
       const permanent = err.code !== null ? PERMANENT_SMS_ERRORS[err.code] : undefined;
       if (permanent) return { ok: false, provider, skipped: permanent, error: err.message };
       return { ok: false, provider, error: err.message };
@@ -184,6 +211,124 @@ function message(text: string): Response {
   return twimlResponse(`<Message>${xmlEscape(text)}</Message>`);
 }
 
+// ───────────────────────── delivery reports ─────────────────────────
+
+/** What Twilio's delivery error codes mean, in words the owner can act on. */
+const DELIVERY_ERRORS: Record<number, string> = {
+  30002: 'the Twilio account is suspended',
+  30003: 'the phone was switched off or out of reach',
+  30004: 'the recipient or their carrier blocked it',
+  30005: 'the number does not exist or is no longer in use',
+  30006: 'the number is a landline or cannot receive texts',
+  30007: "the recipient's carrier filtered it as spam",
+  30008: 'the carrier did not say why',
+  30032: 'the toll-free number it was sent from is not verified yet',
+  30034: 'the number it was sent from is not registered for texting US numbers (A2P 10DLC)',
+};
+
+/** Codes about the sending account or number, not one recipient: every text fails the same way until the owner acts. */
+const OWNER_FIXES: Record<number, string> = {
+  30002: 'Sign in to the Twilio console and check your account.',
+  30007: 'Carriers are filtering your texts. Check the wording of your text reminders, and register your number for A2P 10DLC if you text US numbers.',
+  30032: 'Verify your toll-free number in the Twilio console. Until then, carriers do not deliver its texts.',
+  30034: 'US carriers block texts from numbers that are not registered for A2P 10DLC. Register your number in the Twilio console, or send through a messaging service that is registered. Until then, texts to US numbers are not delivered.',
+};
+
+const TWILIO_MESSAGE_SID = /^(SM|MM)[0-9A-Za-z]{4,64}$/;
+
+function noContent(): Response {
+  return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+}
+
+/** At most one alert a day about texts not getting through, however many fail. */
+async function alertOwnerAboutDelivery(ctx: Ctx, code: number, reason: string): Promise<void> {
+  const name = `alert-sms-undelivered-${ctx.now().toISOString().slice(0, 10)}`;
+  if (!(await claim(ctx, name))) return;
+  try {
+    await enqueueJob(ctx, {
+      type: 'message',
+      kind: 'host_alert',
+      bookingId: '',
+      channel: 'email',
+      audience: 'host',
+      subject: 'Texts from your booking page are not being delivered',
+      body: [
+        'Hi {{host_first_name}},',
+        `A text from your booking page was not delivered: ${reason}. Twilio error ${code}.`,
+        OWNER_FIXES[code] ?? '',
+        'You get this message at most once a day.',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      dueAt: ctx.now().toISOString(),
+    });
+  } catch (err) {
+    // Nothing was queued: give the claim back so the next report tries again.
+    await releaseClaim(ctx, name).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
+ * Twilio's report on a text it took earlier (the StatusCallback set by sendSms). It reports every step
+ * (queued, sent, delivered, ...); only `undelivered` and `failed` need anything from us: a timeline note
+ * on the booking, and an alert to the owner when the cause is on their side. A dashboard test text has
+ * no booking, so it only alerts. Answers 204, or 403 without a valid signature.
+ */
+export async function handleSmsStatus(ctx: Ctx, req: Request): Promise<Response> {
+  let form: URLSearchParams;
+  try {
+    form = await readForm(req);
+  } catch (err) {
+    return webhookRefusal(err instanceof HttpError && err.status === 413 ? 413 : 400);
+  }
+  if (!(await verifyTwilioRequest(ctx, req, form))) return webhookRefusal(403);
+
+  const status = (form.get('MessageStatus') ?? form.get('SmsStatus') ?? '').trim().toLowerCase();
+  if (status !== 'undelivered' && status !== 'failed') return noContent();
+
+  let bookingId = '';
+  let kind = '';
+  try {
+    const query = new URL(req.url).searchParams;
+    bookingId = query.get('b') ?? '';
+    kind = query.get('k') ?? '';
+  } catch {
+    // no query: a text that belongs to no booking
+  }
+  const rawCode = Number(form.get('ErrorCode'));
+  const code = Number.isInteger(rawCode) && rawCode > 0 && rawCode < 1_000_000 ? rawCode : null;
+  const reason = (code !== null ? DELIVERY_ERRORS[code] : undefined) ?? 'the carrier did not deliver it';
+  const sid = form.get('MessageSid') ?? form.get('SmsSid') ?? '';
+  ctx.log('warn', 'sms: a text was not delivered', { status, code, bookingId: isStorageId(bookingId) ? bookingId : undefined });
+
+  // Twilio can send the same report more than once: one note per message.
+  const once = TWILIO_MESSAGE_SID.test(sid) ? `sms-undelivered-${sid}` : null;
+  try {
+    if (once && !(await claim(ctx, once))) return noContent();
+    if (isStorageId(bookingId)) {
+      const to = normalizePhone(form.get('To') ?? '');
+      const label = MESSAGE_KIND.test(kind) ? `${kind}_sms_undelivered` : 'sms_undelivered';
+      const detail = `${to ? `Not delivered to ${to}` : 'Not delivered'}: ${reason}.${code !== null ? ` Twilio error ${code}.` : ''}`;
+      const at = ctx.now().toISOString();
+      await updateBooking(ctx, bookingId, (b) => ({ ...b, timeline: [...(b.timeline ?? []), { at, type: label, detail }] }));
+    }
+  } catch (err) {
+    ctx.log('error', 'sms: could not record a delivery report', { error: err instanceof Error ? err.message : String(err) });
+    // Nothing was noted: a repeat of this report may try again.
+    if (once) await releaseClaim(ctx, once).catch(() => undefined);
+    return new Response(null, { status: 500, headers: { 'Cache-Control': 'no-store' } });
+  }
+  if (code !== null && OWNER_FIXES[code]) {
+    try {
+      await alertOwnerAboutDelivery(ctx, code, reason);
+    } catch (err) {
+      ctx.log('error', 'sms: could not queue the alert about texts not being delivered', { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return noContent();
+}
+
 /**
  * Twilio's webhook for a text sent to our number. "C", "YES" or "CONFIRM" confirms the sender's
  * next meeting, anything else gets the link to manage it. Always answers with TwiML.
@@ -222,8 +367,12 @@ export async function handleInboundSms(ctx: Ctx, req: Request): Promise<Response
       }
       return twimlResponse('');
     }
-    // START (and YES, which carriers also read as "resume") comes from the number itself, so it lifts an earlier stop.
-    if (OPT_IN_WORDS.has(word) || word === 'yes') await unblockNumber(ctx, from, ['sms', 'call']);
+    // START comes from the number itself, so it lifts an earlier stop, calls included (the call flow
+    // promises exactly that). YES is also what people answer a reminder with ("I am coming"). Carriers
+    // read it as "resume texts", so it lifts the text block only: someone who told the assistant on a
+    // call never to ring again is not phoned again because they confirmed a meeting by text.
+    if (OPT_IN_WORDS.has(word)) await unblockNumber(ctx, from, ['sms', 'call']);
+    else if (word === 'yes') await unblockNumber(ctx, from, ['sms']);
     if (CARRIER_HANDLED_WORDS.has(word)) return twimlResponse('');
 
     const next = bookings[0];

@@ -3,7 +3,7 @@
  * raw MIME message for Gmail, and sending. sendEmail never throws: every outcome is a SendResult.
  */
 import { ensureContrast, normalizeHex, readableOn } from '../../shared/theme';
-import type { Host, Secrets, SendResult, SiteSettings } from '../../shared/types';
+import type { Host, HostGoogle, Secrets, SendResult, SiteSettings } from '../../shared/types';
 import { sha256Hex } from './crypto';
 import type { Ctx } from './ctx';
 import { gmailSendRaw } from './google';
@@ -49,16 +49,19 @@ interface EmailSetup {
   secrets: Secrets;
   owner: Host | null;
   provider: EmailProvider;
+  /** a Resend key and a from address exist, whatever the provider setting says */
+  resendReady: boolean;
 }
 
 async function loadEmailSetup(ctx: Ctx): Promise<EmailSetup> {
   const [site, secrets, hosts] = await Promise.all([getSite(ctx), getSecrets(ctx), listHosts(ctx)]);
   const owner = hosts.find((h) => h.id === site.ownerHostId) ?? hosts.find((h) => h.role === 'owner') ?? null;
+  const resendReady = !!secrets.resend?.apiKey && isEmail(site.email?.fromEmail);
   const provider = pickEmailProvider(site.email?.provider ?? 'auto', {
-    resend: !!secrets.resend?.apiKey && isEmail(site.email?.fromEmail),
+    resend: resendReady,
     gmail: !!owner?.google?.gmailSend && isEmail(owner.google.email),
   });
-  return { site, secrets, owner, provider };
+  return { site, secrets, owner, provider, resendReady };
 }
 
 export async function resolveEmailProvider(ctx: Ctx): Promise<EmailProvider> {
@@ -175,6 +178,18 @@ function crlf(text: string): string {
 // ───────────────────────── MIME ─────────────────────────
 
 /**
+ * "<hex@sender-domain>", the same for every attempt at one message to one recipient, or null without an
+ * idempotency key. Hashed, so the header only ever holds characters a Message-ID may contain.
+ */
+function gmailMessageId(idempotencyKey: string | undefined, to: string, sender: string): string | null {
+  const key = typeof idempotencyKey === 'string' ? idempotencyKey.trim() : '';
+  if (!key) return null;
+  const domain = sender.slice(sender.lastIndexOf('@') + 1).toLowerCase();
+  if (!/^[a-z0-9.-]+$/.test(domain)) return null;
+  return `<${sha256Hex(`${key}\n${to.toLowerCase()}`).slice(0, 32)}@${domain}>`;
+}
+
+/**
  * A complete RFC 5322 message. Layout:
  *   multipart/alternative: text/plain, text/html [, text/calendar when the invite needs an answer]
  *   wrapped in multipart/mixed with the .ics file attached when there is one.
@@ -197,6 +212,10 @@ export function buildMime(msg: EmailMessage, from: { name: string; email: string
   if (replyTo) headers.push(`Reply-To: ${replyTo}`);
   headers.push(unstructuredHeader('Subject', subject));
   if (opts?.date && Number.isFinite(opts.date.getTime())) headers.push(`Date: ${rfc5322Date(opts.date)}`);
+  // Gmail has no idempotency key. A Message-ID that comes from ours lets mail systems that collapse
+  // equal Message-IDs (Gmail does) show a resent copy only once.
+  const messageId = gmailMessageId(msg.idempotencyKey, to, sender);
+  if (messageId) headers.push(`Message-ID: ${messageId}`);
   headers.push('MIME-Version: 1.0');
 
   const part = (contentType: string, body: string, extra: string[] = []): string =>
@@ -260,17 +279,12 @@ async function sendWithResend(
       },
     ];
   }
-  const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+  const body = JSON.stringify(payload);
   const key = headerText(msg.idempotencyKey, 200);
-  if (key && isAscii(key)) headers['Idempotency-Key'] = key;
-
-  try {
-    const res = await ctx.fetch(RESEND_ENDPOINT, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-    });
+  const post = async (idempotencyKey: string | null) => {
+    const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    const res = await ctx.fetch(RESEND_ENDPOINT, { method: 'POST', headers, body, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) });
     const raw = await res.text();
     let data: unknown = null;
     try {
@@ -278,7 +292,19 @@ async function sendWithResend(
     } catch {
       data = null;
     }
-    const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+    return { res, raw, record: data && typeof data === 'object' ? (data as Record<string, unknown>) : ({} as Record<string, unknown>) };
+  };
+
+  try {
+    const firstKey = key && isAscii(key) ? key : null;
+    let { res, raw, record } = await post(firstKey);
+    if (res.status === 409 && firstKey && record.name === 'invalid_idempotent_request') {
+      // Resend already holds this key for a different version of the message (a retry whose content
+      // changed, for example because a meeting link arrived meanwhile). It is not known whether that
+      // version was delivered, so the current one is sent under a key of its own. The suffix comes
+      // from the content, so a retry of this exact message is still recognised as a repeat.
+      ({ res, raw, record } = await post(`${firstKey}-${sha256Hex(body).slice(0, 12)}`));
+    }
     if (!res.ok) {
       const reason = typeof record.message === 'string' ? record.message : typeof record.name === 'string' ? record.name : raw.slice(0, 200);
       return { ok: false, provider, error: shortError(`Resend answered ${res.status}${reason ? `: ${reason}` : ''}`) };
@@ -294,7 +320,14 @@ async function sendWithResend(
  * Sends one email through the configured provider. `skipped` (instead of `error`) means there is
  * no point retrying: nothing is configured or the recipient address is unusable.
  */
-export async function sendEmail(ctx: Ctx, msg: EmailMessage): Promise<SendResult> {
+export async function sendEmail(
+  ctx: Ctx,
+  msg: EmailMessage,
+  opts?: {
+    /** alerts to the owner: try Resend first whenever a key and a from address exist, whatever email is set to, then the chosen Gmail */
+    preferResend?: boolean;
+  },
+): Promise<SendResult> {
   const to = cleanAddress(msg.to);
   if (!to) return { ok: false, provider: 'none', skipped: 'invalid_recipient' };
   const subject = headerText(msg.subject, MAX_SUBJECT) || '(no subject)';
@@ -305,24 +338,33 @@ export async function sendEmail(ctx: Ctx, msg: EmailMessage): Promise<SendResult
   } catch (err) {
     return { ok: false, provider: 'none', error: shortError(err) };
   }
-  const { site, secrets, owner, provider } = setup;
+  const { site, secrets, owner } = setup;
+  const provider: EmailProvider = opts?.preferResend && setup.resendReady ? 'resend' : setup.provider;
   const fromName = headerText(site.email?.fromName, MAX_NAME) || headerText(site.profile?.name, MAX_NAME) || 'Meetings';
   const replyTo = cleanAddress(msg.replyTo) ?? cleanAddress(site.email?.replyTo) ?? cleanAddress(owner?.email);
 
-  if (provider === 'resend') {
-    const from = displayAddress(fromName, site.email.fromEmail.trim());
-    return sendWithResend(ctx, secrets.resend!.apiKey, 'resend', msg, { to, subject, from, replyTo });
-  }
-
-  if (provider === 'gmail' && owner?.google) {
+  const viaGmail = async (host: Host, google: HostGoogle): Promise<SendResult> => {
     try {
-      const mime = buildMime({ ...msg, to, subject, replyTo: replyTo ?? undefined }, { name: fromName, email: owner.google.email }, { date: ctx.now() });
-      const sent = await gmailSendRaw(ctx, owner, mime);
+      const mime = buildMime({ ...msg, to, subject, replyTo: replyTo ?? undefined }, { name: fromName, email: google.email }, { date: ctx.now() });
+      const sent = await gmailSendRaw(ctx, host, mime);
       return { ok: true, provider: 'gmail', id: sent.id };
     } catch (err) {
       return { ok: false, provider: 'gmail', error: shortError(err) };
     }
+  };
+
+  if (provider === 'resend') {
+    const from = displayAddress(fromName, site.email.fromEmail.trim());
+    const sent = await sendWithResend(ctx, secrets.resend!.apiKey, 'resend', msg, { to, subject, from, replyTo });
+    // An owner alert tries Resend first because Gmail may be the very thing that broke. When Resend
+    // fails instead (a domain that was never verified, a revoked key), the Gmail chosen in the settings
+    // still gets its turn: an alert that reaches the owner twice beats one that never does.
+    if (sent.ok || setup.provider !== 'gmail' || !owner?.google) return sent;
+    const usual = await viaGmail(owner, owner.google);
+    return usual.ok ? usual : sent;
   }
+
+  if (provider === 'gmail' && owner?.google) return viaGmail(owner, owner.google);
 
   if (ctx.env.mockProviders && site.email?.provider !== 'none') {
     // Local development and end-to-end tests: nothing is configured, so hand the message to the
@@ -352,6 +394,11 @@ export interface EmailContent {
   avatarUrl?: string | null;
   /** overrides the theme's brand colour (per-event colour) */
   accentColor?: string | null;
+  /**
+   * When given, only these web addresses become links inside the paragraphs and details; any other
+   * address there (one a visitor typed into their name, say) is shown as plain text.
+   */
+  linkUrls?: string[];
 }
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
@@ -376,14 +423,27 @@ export function safeUrl(value: unknown): string | null {
 
 const URL_IN_TEXT = /https?:\/\/[^\s<>"']+/g;
 
-/** Escapes text, turns bare web addresses into links and line breaks into <br>. */
-function richText(text: string, linkStyle: string): string {
+/** Punctuation after a link belongs to the sentence. */
+function trimLink(found: string): string {
+  return found.replace(/[.,;:!?)\]]+$/, '');
+}
+
+/** The web addresses in a piece of text, as richText would see them. */
+export function urlsIn(text: string): string[] {
+  return Array.from(String(text ?? '').matchAll(URL_IN_TEXT), (m) => trimLink(m[0])).filter(Boolean);
+}
+
+/**
+ * Escapes text, turns bare web addresses into links and line breaks into <br>. With `allowed`, only
+ * those addresses become links and any other one stays plain text.
+ */
+function richText(text: string, linkStyle: string, allowed?: ReadonlySet<string> | null): string {
   let out = '';
   let last = 0;
   for (const match of text.matchAll(URL_IN_TEXT)) {
     const start = match.index ?? 0;
-    const shown = match[0].replace(/[.,;:!?)\]]+$/, ''); // punctuation after a link belongs to the sentence
-    const href = safeUrl(shown);
+    const shown = trimLink(match[0]);
+    const href = !allowed || allowed.has(shown) ? safeUrl(shown) : null;
     out += escapeHtml(text.slice(last, start));
     out += href ? `<a href="${escapeHtml(href)}" class="m-link" style="${linkStyle}">${escapeHtml(shown)}</a>` : escapeHtml(shown);
     last = start + shown.length;
@@ -418,6 +478,7 @@ export function renderEmailHtml(p: EmailContent): string {
   const linkDark = ensureContrast(brand, DARK.card, 4.5);
   const radius = buttonRadius(p.site);
   const linkStyle = `color:${link};text-decoration:underline;word-break:break-word;`;
+  const allowed = Array.isArray(p.linkUrls) ? new Set(p.linkUrls.map((u) => String(u ?? '').trim()).filter(Boolean)) : null;
 
   const heading = clean(p.heading);
   const siteName = clean(p.site.profile?.name);
@@ -454,7 +515,7 @@ export function renderEmailHtml(p: EmailContent): string {
   }
   for (const paragraph of paragraphs) {
     row(
-      `<p class="m-ink" style="margin:0;font-family:${FONT};font-size:16px;line-height:25px;color:${LIGHT.ink};">${richText(paragraph, linkStyle)}</p>`,
+      `<p class="m-ink" style="margin:0;font-family:${FONT};font-size:16px;line-height:25px;color:${LIGHT.ink};">${richText(paragraph, linkStyle, allowed)}</p>`,
       '14px 32px 0 32px',
     );
   }
@@ -469,12 +530,12 @@ export function renderEmailHtml(p: EmailContent): string {
           return (
             `<tr><td class="m-line" colspan="2" valign="top" style="padding:11px 16px;${border}">` +
             `<div class="m-muted" style="${labelStyle}">${escapeHtml(d.label)}</div>` +
-            `<div class="m-ink" style="padding-top:2px;${valueStyle}">${richText(d.value, linkStyle)}</div></td></tr>`
+            `<div class="m-ink" style="padding-top:2px;${valueStyle}">${richText(d.value, linkStyle, allowed)}</div></td></tr>`
           );
         }
         return (
           `<tr><td class="m-muted m-line" valign="top" width="84" style="padding:11px 10px 11px 16px;${labelStyle}${border}">${escapeHtml(d.label)}</td>` +
-          `<td class="m-ink m-line" valign="top" style="padding:11px 16px 11px 0;${valueStyle}${border}">${richText(d.value, linkStyle)}</td></tr>`
+          `<td class="m-ink m-line" valign="top" style="padding:11px 16px 11px 0;${valueStyle}${border}">${richText(d.value, linkStyle, allowed)}</td></tr>`
         );
       })
       .join('');

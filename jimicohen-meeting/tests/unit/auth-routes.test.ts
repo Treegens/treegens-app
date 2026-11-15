@@ -23,10 +23,16 @@ vi.mock('../../server/routes/webhooks', () => ({ routes: [] }));
 vi.mock('../../server/cron', () => ({ runScheduled: async () => ({}) }));
 
 import { handle } from '../../server/api';
-import { getAdminAuth, rateLimitKey, SESSION_COOKIE } from '../../server/lib/auth';
+import { DEVICE_COOKIE, getAdminAuth, rateLimitKey, SESSION_COOKIE } from '../../server/lib/auth';
 import { sha256Hex } from '../../server/lib/crypto';
 import { getHost, getSite, updateHost } from '../../server/lib/repo';
+import { LOGIN_FAILURES_OVERALL } from '../../server/routes/auth';
 import { apiRequest, cookiePair, makeTestCtx, type TestCtx } from '../helpers/ctx';
+
+/** "mtg_device=..." from a sign-in answer, ready to send back. */
+function deviceCookieOf(res: Response): string {
+  return cookiePair(res.headers.getSetCookie().find((c) => c.startsWith(`${DEVICE_COOKIE}=`)) ?? '');
+}
 
 const SETUP_CODE = 'first-run-code-123';
 const PASSWORD = 'correct horse battery';
@@ -109,13 +115,31 @@ describe('POST /auth/setup', () => {
     expect(setCookie).toContain('Path=/meeting');
 
     const admin = await getAdminAuth(ctx);
-    expect(admin?.passwordVersion).toBe(1);
+    // Random, so a record made again never matches sessions of an earlier one.
+    expect(Number.isInteger(admin?.passwordVersion) && admin!.passwordVersion >= 1).toBe(true);
     expect(admin?.passwordHash).not.toContain(PASSWORD);
     const site = await getSite(ctx);
     expect((await getHost(ctx, site.ownerHostId))?.timezone).toBe('Africa/Nairobi');
 
     const bootstrap = await handle(apiRequest('GET', '/admin/bootstrap', { cookie: cookiePair(setCookie) }), ctx);
     expect(bootstrap.status).toBe(200);
+  });
+
+  it('takes the address for booking notices when one is given, and refuses one that is not an address', async () => {
+    const given = newCtx();
+    expect((await post(given, '/auth/setup', { code: SETUP_CODE, password: PASSWORD, email: ' jimi@jimicohen.com ' })).status).toBe(200);
+    expect((await getHost(given, 'host_owner'))?.email).toBe('jimi@jimicohen.com');
+
+    const none = newCtx();
+    expect((await post(none, '/auth/setup', { code: SETUP_CODE, password: PASSWORD, email: '' })).status).toBe(200);
+    expect((await getHost(none, 'host_owner'))?.email).toBe('');
+
+    const wrong = newCtx();
+    const res = await post(wrong, '/auth/setup', { code: SETUP_CODE, password: PASSWORD, email: 'jimi at home' });
+    expect(res.status).toBe(422);
+    expect((await res.json()).error.fields).toEqual({ email: 'That email address does not look right.' });
+    // Nothing was set up, so the owner can simply try again.
+    expect(await getAdminAuth(wrong)).toBeNull();
   });
 
   it('ignores a device time zone it cannot use, and one for an owner who fixed their zone', async () => {
@@ -164,6 +188,89 @@ describe('POST /auth/setup', () => {
     // The window passes and the real owner gets in.
     ctx.clock.advance(10 * 60_000 + 1000);
     expect((await post(ctx, '/auth/setup', { code: SETUP_CODE, password: PASSWORD })).status).toBe(200);
+  });
+
+  it('cannot be blocked for the owner by strangers guessing codes from many addresses', async () => {
+    const ctx = newCtx();
+    // Before: a ceiling of 40 for everyone together, and the owner was refused from the 41st request on.
+    for (let i = 1; i <= 45; i++) {
+      const res = await post(makeTestCtx({ kv: ctx.kv, ip: `198.51.100.${i}`, env: ctx.env }), '/auth/setup', { code: `guess-${i}`, password: PASSWORD });
+      expect(res.status, `guess ${i}`).toBe(403);
+    }
+    expect((await post(makeTestCtx({ kv: ctx.kv, ip: '203.0.113.200', env: ctx.env }), '/auth/setup', { code: SETUP_CODE, password: PASSWORD })).status).toBe(200);
+  });
+});
+
+describe('a forgotten password', () => {
+  const NEW_CODE = 'a-brand-new-setup-code-456';
+  const NEW_PASSWORD = 'my new password after a reset';
+
+  it('is replaced by a new setup code, which signs every other session out', async () => {
+    const ctx = newCtx();
+    const oldSession = await setUp(ctx);
+    const v0 = (await getAdminAuth(ctx))!.passwordVersion;
+    const owner = await getSite(ctx).then((s) => getHost(ctx, s.ownerHostId));
+    // The owner deploys the hash of a new code. Same data, new deployment.
+    const later = makeTestCtx({ kv: ctx.kv, env: { ...ctx.env, setupCodeHash: sha256Hex(NEW_CODE) } });
+
+    // The old code no longer matches what is deployed.
+    const oldCode = await post(later, '/auth/setup', { code: SETUP_CODE, password: NEW_PASSWORD });
+    expect(oldCode.status).toBe(403);
+    expect((await oldCode.json()).error.fields).toEqual({ code: 'That setup code is not right.' });
+
+    const reset = await post(later, '/auth/setup', { code: NEW_CODE, password: NEW_PASSWORD, deviceTimezone: 'Asia/Tokyo' });
+    expect(reset.status).toBe(200);
+    const fresh = cookiePair(reset.headers.get('set-cookie') ?? '');
+    expect(await getAdminAuth(ctx)).toMatchObject({ passwordVersion: v0 + 1, setupCodeHash: sha256Hex(NEW_CODE) });
+    // Nothing else changed: the owner is who they were, in the zone they had.
+    expect(await getHost(ctx, 'host_owner')).toEqual(owner);
+    expect((await state(later, fresh)).authenticated).toBe(true);
+
+    // Sessions from before the reset are over, and so is the old password.
+    expect((await handle(apiRequest('GET', '/admin/bootstrap', { cookie: oldSession }), later)).status).toBe(401);
+    expect((await post(later, '/auth/login', { password: PASSWORD })).status).toBe(401);
+    expect((await post(later, '/auth/login', { password: NEW_PASSWORD })).status).toBe(200);
+  });
+
+  it('needs a code that has not been used: the one that set the password is refused', async () => {
+    const ctx = newCtx();
+    await setUp(ctx);
+    const v0 = (await getAdminAuth(ctx))!.passwordVersion;
+    const later = makeTestCtx({ kv: ctx.kv, env: { ...ctx.env, setupCodeHash: sha256Hex(NEW_CODE) } });
+    expect((await post(later, '/auth/setup', { code: NEW_CODE, password: NEW_PASSWORD })).status).toBe(200);
+    const again = await post(later, '/auth/setup', { code: NEW_CODE, password: 'yet another new password' });
+    expect(again.status).toBe(409);
+    expect((await again.json()).error.code).toBe('already_set_up');
+    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0 + 1);
+    expect((await post(later, '/auth/login', { password: NEW_PASSWORD })).status).toBe(200);
+  });
+
+  it('works for a dashboard set up before setup codes were remembered', async () => {
+    const ctx = newCtx();
+    await setUp(ctx);
+    // What such a record looks like: no setupCodeHash.
+    const { setupCodeHash: _dropped, ...legacy } = (await getAdminAuth(ctx))!;
+    const v0 = legacy.passwordVersion;
+    await ctx.kv.setJSON('auth/admin', legacy);
+    // The first look at it (any visit to the dashboard) takes the deployed code as the one that was used.
+    await state(ctx);
+    expect((await getAdminAuth(ctx))?.setupCodeHash).toBe(sha256Hex(SETUP_CODE));
+    expect((await post(ctx, '/auth/setup', { code: SETUP_CODE, password: NEW_PASSWORD })).status).toBe(409);
+
+    const later = makeTestCtx({ kv: ctx.kv, env: { ...ctx.env, setupCodeHash: sha256Hex(NEW_CODE) } });
+    expect((await post(later, '/auth/setup', { code: NEW_CODE, password: NEW_PASSWORD })).status).toBe(200);
+    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0 + 1);
+  });
+
+  it('is not possible while no setup code is deployed', async () => {
+    const ctx = newCtx();
+    await setUp(ctx);
+    const v0 = (await getAdminAuth(ctx))!.passwordVersion;
+    const none = makeTestCtx({ kv: ctx.kv, env: { ...ctx.env, setupCodeHash: null } });
+    const res = await post(none, '/auth/setup', { code: SETUP_CODE, password: NEW_PASSWORD });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe('already_set_up');
+    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0);
   });
 });
 
@@ -221,13 +328,95 @@ describe('POST /auth/login and /auth/logout', () => {
     expect((await post(ctx, '/auth/login', { password: PASSWORD })).status).toBe(200);
   });
 
-  it('stops everyone once 40 attempts were made in an hour', async () => {
+  it('cannot be closed for the owner by strangers guessing from many addresses', async () => {
     const ctx = newCtx();
     await setUp(ctx);
-    // 40 earlier attempts from all over the place.
+    // A few wrong guesses, each from another address, and they are counted.
+    for (let i = 1; i <= 3; i++) {
+      const res = await post(makeTestCtx({ kv: ctx.kv, ip: `198.51.100.${i}`, env: ctx.env }), '/auth/login', { password: `guess number ${i}` });
+      expect(res.status, `guess ${i}`).toBe(401);
+    }
+    expect(await ctx.kv.getJSON(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key)).toEqual({ n: 3 });
+    // As if 40 had come in within the first seconds of the hour. Before, every sign-in was refused from here on
+    // for the rest of the hour, the owner's included.
     await ctx.kv.setJSON(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key, { n: 40 });
-    const res = await post(makeTestCtx({ kv: ctx.kv, ip: '198.51.100.77', env: ctx.env }), '/auth/login', { password: PASSWORD });
-    expect(res.status).toBe(429);
+    expect((await post(makeTestCtx({ kv: ctx.kv, ip: '198.51.100.41', env: ctx.env }), '/auth/login', { password: 'guess number 41' })).status).toBe(401);
+    // The owner, on a brand new device and a fresh address, with the right password.
+    const owner = await post(makeTestCtx({ kv: ctx.kv, ip: '203.0.113.200', env: ctx.env }), '/auth/login', { password: PASSWORD });
+    expect(owner.status).toBe(200);
+    // Just under the ceiling still lets a new browser try.
+    await ctx.kv.setJSON(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key, { n: LOGIN_FAILURES_OVERALL - 1 });
+    expect((await post(makeTestCtx({ kv: ctx.kv, ip: '203.0.113.201', env: ctx.env }), '/auth/login', { password: PASSWORD })).status).toBe(200);
+  });
+
+  it('counts only failed sign-ins against the ceiling for everyone', async () => {
+    const ctx = newCtx();
+    await setUp(ctx);
+    for (let i = 1; i <= 5; i++) expect((await post(makeTestCtx({ kv: ctx.kv, ip: `198.51.100.${i}`, env: ctx.env }), '/auth/login', { password: PASSWORD })).status).toBe(200);
+    // A sign-in takes its place before the password is checked and gives it back once it was right.
+    const counted = async () => (await ctx.kv.getJSON<{ n: number }>(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key))?.n ?? 0;
+    expect(await counted()).toBe(0);
+    expect((await post(ctx, '/auth/login', { password: 'not it' })).status).toBe(401);
+    expect(await counted()).toBe(1);
+  });
+
+  it('lets no more guesses through than the ceiling allows when they all arrive at once', async () => {
+    const ctx = newCtx();
+    await setUp(ctx);
+    // Five places left under the ceiling, then 40 wrong guesses at the same moment from 10 addresses.
+    // Before, every one of them was checked: they all looked at the counter before any failure was counted.
+    await ctx.kv.setJSON(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key, { n: LOGIN_FAILURES_OVERALL - 5 });
+    const answers = await Promise.all(
+      Array.from({ length: 40 }, (_, i) => post(makeTestCtx({ kv: ctx.kv, ip: `198.51.100.${(i % 10) + 1}`, env: ctx.env }), '/auth/login', { password: `guess ${i}` })),
+    );
+    const statuses = answers.map((r) => r.status);
+    expect(statuses.filter((s) => s === 401)).toHaveLength(5);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(35);
+    expect(await ctx.kv.getJSON(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key)).toEqual({ n: LOGIN_FAILURES_OVERALL });
+  });
+
+  it(`stops new browsers once ${LOGIN_FAILURES_OVERALL} sign-ins failed in an hour, but not one that signed in before`, async () => {
+    const ctx = newCtx();
+    await setUp(ctx);
+    const earlier = await post(ctx, '/auth/login', { password: PASSWORD });
+    const device = deviceCookieOf(earlier);
+    expect(device).toMatch(new RegExp(`^${DEVICE_COOKIE}=`));
+    // Signing out keeps the device cookie: only the session goes.
+    const out = await post(ctx, '/auth/logout', {}, { cookie: device });
+    expect(out.headers.getSetCookie().join('\n')).not.toContain(`${DEVICE_COOKIE}=`);
+
+    // Many failures from all over the place.
+    await ctx.kv.setJSON(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key, { n: LOGIN_FAILURES_OVERALL });
+    const stranger = await post(makeTestCtx({ kv: ctx.kv, ip: '198.51.100.77', env: ctx.env }), '/auth/login', { password: PASSWORD });
+    expect(stranger.status).toBe(429);
+    expect(Number(stranger.headers.get('retry-after'))).toBeGreaterThan(0);
+
+    // The owner's own browser, from another address, still gets in.
+    const known = await post(makeTestCtx({ kv: ctx.kv, ip: '198.51.100.78', env: ctx.env }), '/auth/login', { password: PASSWORD }, { cookie: device });
+    expect(known.status).toBe(200);
+    // It still has its own allowance per visitor.
+    const visitor = makeTestCtx({ kv: ctx.kv, ip: '198.51.100.79', env: ctx.env });
+    for (let i = 0; i < 8; i++) expect((await post(visitor, '/auth/login', { password: `wrong ${i}` }, { cookie: device })).status).toBe(401);
+    expect((await post(visitor, '/auth/login', { password: PASSWORD }, { cookie: device })).status).toBe(429);
+  });
+
+  it('sets a long-lived device cookie next to the session, and retires it with the password', async () => {
+    const ctx = newCtx();
+    const first = await post(ctx, '/auth/setup', { code: SETUP_CODE, password: PASSWORD });
+    const cookies = first.headers.getSetCookie();
+    expect(cookies).toHaveLength(2);
+    expect(cookies[0]).toMatch(new RegExp(`^${SESSION_COOKIE}=`));
+    expect(cookies[1]).toMatch(new RegExp(`^${DEVICE_COOKIE}=.+; Path=/meeting; HttpOnly; Secure; SameSite=Lax; Max-Age=34560000$`));
+    const session = cookiePair(cookies[0]);
+    const oldDevice = cookiePair(cookies[1]);
+
+    const changed = await post(ctx, '/auth/password', { current: PASSWORD, next: 'a brand new password' }, { cookie: session });
+    expect(changed.status).toBe(200);
+    const newDevice = deviceCookieOf(changed);
+    await ctx.kv.setJSON(rateLimitKey(ctx, 'login-all', 'everyone', 3600).key, { n: LOGIN_FAILURES_OVERALL });
+    const elsewhere = () => makeTestCtx({ kv: ctx.kv, ip: '198.51.100.90', env: ctx.env });
+    expect((await post(elsewhere(), '/auth/login', { password: 'a brand new password' }, { cookie: oldDevice })).status).toBe(429);
+    expect((await post(elsewhere(), '/auth/login', { password: 'a brand new password' }, { cookie: newDevice })).status).toBe(200);
   });
 });
 
@@ -242,6 +431,7 @@ describe('POST /auth/password', () => {
   it('checks the current password and the new one', async () => {
     const ctx = newCtx();
     const cookie = await setUp(ctx);
+    const v0 = (await getAdminAuth(ctx))!.passwordVersion;
 
     const wrong = await post(ctx, '/auth/password', { current: 'not my password', next: 'a brand new password' }, { cookie });
     expect(wrong.status).toBe(403);
@@ -255,12 +445,13 @@ describe('POST /auth/password', () => {
     expect(same.status).toBe(422);
     expect((await same.json()).error.fields.next).toMatch(/not using now/);
 
-    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(1);
+    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0);
   });
 
   it('keeps this session signed in and signs every older one out', async () => {
     const ctx = newCtx();
     const first = await setUp(ctx);
+    const v0 = (await getAdminAuth(ctx))!.passwordVersion;
     const login = await post(ctx, '/auth/login', { password: PASSWORD });
     const other = cookiePair(login.headers.get('set-cookie') ?? '');
 
@@ -268,7 +459,7 @@ describe('POST /auth/password', () => {
     expect(res.status).toBe(200);
     const fresh = cookiePair(res.headers.get('set-cookie') ?? '');
     expect(fresh).not.toBe(first);
-    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(2);
+    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0 + 1);
 
     expect((await handle(apiRequest('GET', '/admin/bootstrap', { cookie: fresh }), ctx)).status).toBe(200);
     for (const stale of [first, other]) {
@@ -284,6 +475,7 @@ describe('cross-site requests', () => {
   it('are refused on every auth POST', async () => {
     const ctx = newCtx();
     const cookie = await setUp(ctx);
+    const v0 = (await getAdminAuth(ctx))!.passwordVersion;
     const cases: [string, unknown][] = [
       ['/auth/setup', { code: SETUP_CODE, password: PASSWORD }],
       ['/auth/login', { password: PASSWORD }],
@@ -302,7 +494,7 @@ describe('cross-site requests', () => {
       expect(noOrigin.status, `${path} without an origin`).toBe(403);
     }
     // Nothing happened: the password is unchanged and the session still works.
-    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(1);
+    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0);
     expect((await state(ctx, cookie)).authenticated).toBe(true);
   });
 });

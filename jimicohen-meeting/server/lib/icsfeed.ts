@@ -4,7 +4,8 @@
  *   assertSafeFeedUrl : decides which URLs we are willing to fetch at all (SSRF guard)
  *   parseIcsBusy      : text in, busy intervals out; never throws, whatever the feed looks like
  *   fetchIcsBusy      : guarded download (https only, every redirect hop re-checked, size and time
- *                       limits) followed by the parser
+ *                       limits) followed by the parser; downloadIcsFeed and busyFromIcsText are
+ *                       its two halves, for callers that keep the downloaded text for a while
  */
 import { isIP } from 'node:net';
 import ICAL from 'ical.js';
@@ -113,7 +114,11 @@ export function assertSafeFeedUrl(url: string): URL {
 // ───────────────────────── parsing ─────────────────────────
 
 export interface IcsParseOptions {
-  /** Zone in which all-day events block "the whole day" (the host's zone). Default UTC. */
+  /**
+   * The host's zone. All-day events block "the whole day" in it, and times without a usable zone
+   * (floating, or a TZID nobody can place) are read in it when the feed names no zone of its own
+   * (X-WR-TIMEZONE). Default UTC.
+   */
   timezone?: IanaZone;
 }
 
@@ -125,6 +130,11 @@ export interface IcsParseResult {
   skipped: number;
   /** true when the feed was too large or too dense to expand completely: `busy` is then incomplete */
   truncated: boolean;
+  /**
+   * true when a repeating event that blocks time could not be expanded (its rule is unreadable, or
+   * expanding it failed): its later occurrences are unknown, so `busy` is incomplete
+   */
+  incomplete: boolean;
 }
 
 /** Above this the text is not parsed at all (fetchIcsBusy never hands over more than 5 MB). */
@@ -137,14 +147,174 @@ const ZONE_SLACK_MS = 2 * DAY_MS;
 
 interface ParseState {
   range: Interval;
+  /** the host's zone */
   allDayZone: string;
+  /** where floating and unplaceable times are read: the calendar's X-WR-TIMEZONE, else the host's zone */
+  floatingZone: string;
   out: Interval[];
   steps: number;
   events: number;
   skipped: number;
   truncated: boolean;
+  incomplete: boolean;
   usableZones: WeakMap<object, boolean>;
   ianaNames: Map<string, string | null>;
+  /** jCal of events the salvage parser could only keep without their RRULE / RDATE lines */
+  lostSeries: WeakSet<object>;
+}
+
+/**
+ * Windows time zone names (what Outlook and Exchange write as TZID) to IANA zones, after the CLDR
+ * windowsZones table ("001" territory). Only used when the feed carries no usable VTIMEZONE.
+ */
+const WINDOWS_ZONES: Record<string, string> = {
+  'dateline standard time': 'Etc/GMT+12',
+  'utc-11': 'Etc/GMT+11',
+  'aleutian standard time': 'America/Adak',
+  'hawaiian standard time': 'Pacific/Honolulu',
+  'marquesas standard time': 'Pacific/Marquesas',
+  'alaskan standard time': 'America/Anchorage',
+  'utc-09': 'Etc/GMT+9',
+  'pacific standard time (mexico)': 'America/Tijuana',
+  'utc-08': 'Etc/GMT+8',
+  'pacific standard time': 'America/Los_Angeles',
+  'us mountain standard time': 'America/Phoenix',
+  'mountain standard time (mexico)': 'America/Mazatlan',
+  'mountain standard time': 'America/Denver',
+  'yukon standard time': 'America/Whitehorse',
+  'central america standard time': 'America/Guatemala',
+  'central standard time': 'America/Chicago',
+  'easter island standard time': 'Pacific/Easter',
+  'central standard time (mexico)': 'America/Mexico_City',
+  'canada central standard time': 'America/Regina',
+  'sa pacific standard time': 'America/Bogota',
+  'eastern standard time (mexico)': 'America/Cancun',
+  'eastern standard time': 'America/New_York',
+  'haiti standard time': 'America/Port-au-Prince',
+  'cuba standard time': 'America/Havana',
+  'us eastern standard time': 'America/Indiana/Indianapolis',
+  'turks and caicos standard time': 'America/Grand_Turk',
+  'paraguay standard time': 'America/Asuncion',
+  'atlantic standard time': 'America/Halifax',
+  'venezuela standard time': 'America/Caracas',
+  'central brazilian standard time': 'America/Cuiaba',
+  'sa western standard time': 'America/La_Paz',
+  'pacific sa standard time': 'America/Santiago',
+  'newfoundland standard time': 'America/St_Johns',
+  'tocantins standard time': 'America/Araguaina',
+  'e. south america standard time': 'America/Sao_Paulo',
+  'sa eastern standard time': 'America/Cayenne',
+  'argentina standard time': 'America/Argentina/Buenos_Aires',
+  'montevideo standard time': 'America/Montevideo',
+  'magallanes standard time': 'America/Punta_Arenas',
+  'saint pierre standard time': 'America/Miquelon',
+  'bahia standard time': 'America/Bahia',
+  'utc-02': 'Etc/GMT+2',
+  'azores standard time': 'Atlantic/Azores',
+  'cape verde standard time': 'Atlantic/Cape_Verde',
+  utc: 'UTC',
+  'gmt standard time': 'Europe/London',
+  'greenwich standard time': 'Atlantic/Reykjavik',
+  'sao tome standard time': 'Africa/Sao_Tome',
+  'morocco standard time': 'Africa/Casablanca',
+  'w. europe standard time': 'Europe/Berlin',
+  'central europe standard time': 'Europe/Budapest',
+  'romance standard time': 'Europe/Paris',
+  'central european standard time': 'Europe/Warsaw',
+  'w. central africa standard time': 'Africa/Lagos',
+  'jordan standard time': 'Asia/Amman',
+  'gtb standard time': 'Europe/Bucharest',
+  'middle east standard time': 'Asia/Beirut',
+  'egypt standard time': 'Africa/Cairo',
+  'e. europe standard time': 'Europe/Chisinau',
+  'syria standard time': 'Asia/Damascus',
+  'west bank standard time': 'Asia/Hebron',
+  'south africa standard time': 'Africa/Johannesburg',
+  'fle standard time': 'Europe/Kiev',
+  'israel standard time': 'Asia/Jerusalem',
+  'south sudan standard time': 'Africa/Juba',
+  'kaliningrad standard time': 'Europe/Kaliningrad',
+  'sudan standard time': 'Africa/Khartoum',
+  'libya standard time': 'Africa/Tripoli',
+  'namibia standard time': 'Africa/Windhoek',
+  'arabic standard time': 'Asia/Baghdad',
+  'turkey standard time': 'Europe/Istanbul',
+  'arab standard time': 'Asia/Riyadh',
+  'belarus standard time': 'Europe/Minsk',
+  'russian standard time': 'Europe/Moscow',
+  'e. africa standard time': 'Africa/Nairobi',
+  'volgograd standard time': 'Europe/Volgograd',
+  'iran standard time': 'Asia/Tehran',
+  'arabian standard time': 'Asia/Dubai',
+  'astrakhan standard time': 'Europe/Astrakhan',
+  'azerbaijan standard time': 'Asia/Baku',
+  'russia time zone 3': 'Europe/Samara',
+  'mauritius standard time': 'Indian/Mauritius',
+  'saratov standard time': 'Europe/Saratov',
+  'georgian standard time': 'Asia/Tbilisi',
+  'caucasus standard time': 'Asia/Yerevan',
+  'afghanistan standard time': 'Asia/Kabul',
+  'west asia standard time': 'Asia/Tashkent',
+  'ekaterinburg standard time': 'Asia/Yekaterinburg',
+  'pakistan standard time': 'Asia/Karachi',
+  'india standard time': 'Asia/Kolkata',
+  'sri lanka standard time': 'Asia/Colombo',
+  'nepal standard time': 'Asia/Kathmandu',
+  'bangladesh standard time': 'Asia/Dhaka',
+  'omsk standard time': 'Asia/Omsk',
+  'myanmar standard time': 'Asia/Yangon',
+  'se asia standard time': 'Asia/Bangkok',
+  'altai standard time': 'Asia/Barnaul',
+  'w. mongolia standard time': 'Asia/Hovd',
+  'north asia standard time': 'Asia/Krasnoyarsk',
+  'n. central asia standard time': 'Asia/Novosibirsk',
+  'tomsk standard time': 'Asia/Tomsk',
+  'china standard time': 'Asia/Shanghai',
+  'north asia east standard time': 'Asia/Irkutsk',
+  'singapore standard time': 'Asia/Singapore',
+  'w. australia standard time': 'Australia/Perth',
+  'taipei standard time': 'Asia/Taipei',
+  'ulaanbaatar standard time': 'Asia/Ulaanbaatar',
+  'aus central w. standard time': 'Australia/Eucla',
+  'transbaikal standard time': 'Asia/Chita',
+  'tokyo standard time': 'Asia/Tokyo',
+  'north korea standard time': 'Asia/Pyongyang',
+  'korea standard time': 'Asia/Seoul',
+  'yakutsk standard time': 'Asia/Yakutsk',
+  'cen. australia standard time': 'Australia/Adelaide',
+  'aus central standard time': 'Australia/Darwin',
+  'e. australia standard time': 'Australia/Brisbane',
+  'aus eastern standard time': 'Australia/Sydney',
+  'west pacific standard time': 'Pacific/Port_Moresby',
+  'tasmania standard time': 'Australia/Hobart',
+  'vladivostok standard time': 'Asia/Vladivostok',
+  'lord howe standard time': 'Australia/Lord_Howe',
+  'bougainville standard time': 'Pacific/Bougainville',
+  'russia time zone 10': 'Asia/Srednekolymsk',
+  'magadan standard time': 'Asia/Magadan',
+  'norfolk standard time': 'Pacific/Norfolk',
+  'sakhalin standard time': 'Asia/Sakhalin',
+  'central pacific standard time': 'Pacific/Guadalcanal',
+  'russia time zone 11': 'Asia/Kamchatka',
+  'new zealand standard time': 'Pacific/Auckland',
+  'utc+12': 'Etc/GMT-12',
+  'fiji standard time': 'Pacific/Fiji',
+  'chatham islands standard time': 'Pacific/Chatham',
+  'utc+13': 'Etc/GMT-13',
+  'tonga standard time': 'Pacific/Tongatapu',
+  'samoa standard time': 'Pacific/Apia',
+  'line islands standard time': 'Pacific/Kiritimati',
+};
+
+/** The IANA zone a Windows zone name stands for, or null. Exported for tests. */
+export function windowsZoneToIana(name: string): string | null {
+  const key = String(name ?? '')
+    .trim()
+    .replace(/^"+|"+$/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  const iana = Object.prototype.hasOwnProperty.call(WINDOWS_ZONES, key) ? WINDOWS_ZONES[key] : null;
+  return iana && IANAZone.isValidZone(iana) ? iana : null;
 }
 
 interface TimeValue {
@@ -172,7 +342,10 @@ function vtimezoneUsable(zone: IcalTimezone, st: ParseState): boolean {
   return usable;
 }
 
-/** Maps a TZID to an IANA zone name luxon knows, including prefixed forms such as "/mozilla.org/20050126_1/Europe/Berlin". */
+/**
+ * Maps a TZID to an IANA zone name luxon knows, including prefixed forms such as
+ * "/mozilla.org/20050126_1/Europe/Berlin" and Windows names such as "Pacific Standard Time".
+ */
 function ianaNameOf(tzid: string, st: ParseState): string | null {
   const cached = st.ianaNames.get(tzid);
   if (cached !== undefined) return cached;
@@ -189,8 +362,25 @@ function ianaNameOf(tzid: string, st: ParseState): string | null {
       break;
     }
   }
+  if (!found && cleaned.length <= 64) found = windowsZoneToIana(cleaned);
   st.ianaNames.set(tzid, found);
   return found;
+}
+
+/** The time a wall-clock value names in `zone`, or null when the zone cannot be used. */
+function wallClockIn(t: IcalTime, zone: string): number | null {
+  const dt = DateTime.fromObject({ year: t.year, month: t.month, day: t.day, hour: t.hour, minute: t.minute, second: t.second }, { zone });
+  return dt.isValid ? dt.toMillis() : null;
+}
+
+/** The zone a calendar says its times are in (X-WR-TIMEZONE), when it names one we can place. */
+function calendarZone(calendar: IcalComponent, st: ParseState): string | null {
+  try {
+    const value = calendar.getFirstPropertyValue('x-wr-timezone');
+    return typeof value === 'string' && value.trim() !== '' ? ianaNameOf(value, st) : null;
+  } catch {
+    return null;
+  }
 }
 
 function dayStartMs(year: number, month: number, day: number, zone: string): number {
@@ -200,11 +390,13 @@ function dayStartMs(year: number, month: number, day: number, zone: string): num
 
 /**
  * Absolute instant of an iCalendar time.
- *   DATE value            : start of that day in the all-day zone
+ *   DATE value            : start of that day in the all-day zone (the host's)
  *   UTC ("Z")             : as written
  *   TZID with VTIMEZONE   : the feed's own definition
- *   TZID without one      : luxon, when the name is an IANA zone
- *   anything else         : floating, read as UTC
+ *   TZID without one      : luxon, when the name is an IANA zone or a Windows zone name
+ *   anything else         : floating (RFC 5545: the local time of whoever reads it), and TZIDs
+ *                           nobody can place: the calendar's X-WR-TIMEZONE when it names a zone,
+ *                           else the host's zone. Reading them as UTC would put them hours off.
  */
 function toMs(t: IcalTime, tzid: string | null, st: ParseState): number {
   if (t.isDate) return dayStartMs(t.year, t.month, t.day, st.allDayZone);
@@ -222,10 +414,10 @@ function toMs(t: IcalTime, tzid: string | null, st: ParseState): number {
   const name = tzid ?? (zone && zone !== ICAL.Timezone.localTimezone ? zone.tzid : null);
   const iana = name ? ianaNameOf(name, st) : null;
   if (iana) {
-    const dt = DateTime.fromObject({ year: t.year, month: t.month, day: t.day, hour: t.hour, minute: t.minute, second: t.second }, { zone: iana });
-    if (dt.isValid) return dt.toMillis();
+    const placed = wallClockIn(t, iana);
+    if (placed !== null) return placed;
   }
-  return wall;
+  return wallClockIn(t, st.floatingZone) ?? wall;
 }
 
 function readTime(comp: IcalComponent, name: string): TimeValue | null {
@@ -376,6 +568,36 @@ function walkStart(master: IcalComponent, span: EventSpan, horizonWallMs: number
   return shifted;
 }
 
+/** Whether occurrences of a series that starts here can fall inside the window at all. */
+function mayReachWindow(span: EventSpan, st: ParseState): boolean {
+  return span.startMs < st.range.end + ZONE_SLACK_MS;
+}
+
+interface PeriodValue {
+  start: TimeValue;
+  end: TimeValue;
+}
+
+/**
+ * RDATE;VALUE=PERIOD values carry their own end (or length), which the recurrence expander cannot
+ * handle. They are taken off the event here and placed on their own.
+ */
+function takeRdatePeriods(master: IcalComponent, start: TimeValue): PeriodValue[] {
+  const out: PeriodValue[] = [];
+  for (const prop of master.getAllProperties('rdate')) {
+    const values = prop.getValues();
+    if (!values.some((v) => v instanceof ICAL.Period)) continue;
+    const raw = prop.getFirstParameter('tzid');
+    const tzid = typeof raw === 'string' && raw !== '' ? raw : null;
+    for (const v of values) {
+      if (!(v instanceof ICAL.Period)) continue;
+      out.push({ start: inContextOf({ time: v.start, tzid }, start), end: inContextOf({ time: v.getEnd(), tzid }, start) });
+    }
+    master.removeProperty(prop);
+  }
+  return out;
+}
+
 function expandMaster(master: IcalComponent, overrides: IcalComponent[], st: ParseState): void {
   const span = spanOf(master, st);
   if (!span) {
@@ -383,7 +605,16 @@ function expandMaster(master: IcalComponent, overrides: IcalComponent[], st: Par
     return;
   }
   const blocking = isBlocking(master);
-  if (!master.hasProperty('rrule') && !master.hasProperty('rdate')) {
+  // The salvage parser could only keep the first instance: the rest of the series is unknown.
+  if (st.lostSeries.has(master.jCal) && blocking && mayReachWindow(span, st)) st.incomplete = true;
+  let periods: PeriodValue[];
+  try {
+    periods = takeRdatePeriods(master, span.start);
+  } catch (err) {
+    if (blocking && mayReachWindow(span, st)) st.incomplete = true;
+    throw err;
+  }
+  if (!master.hasProperty('rrule') && !master.hasProperty('rdate') && periods.length === 0) {
     if (blocking) addBusy(st, span.startMs, span.endMs);
     return;
   }
@@ -419,13 +650,15 @@ function expandMaster(master: IcalComponent, overrides: IcalComponent[], st: Par
         for (const key of exclusionKeys(v, st)) excluded.add(key);
       }
     } catch {
-      // an unreadable exclusion list leaves its dates blocked, which errs on the safe side
+      // An unreadable exclusion list leaves its dates blocked, which errs on the safe side. It is
+      // taken off the event, or the expander below would trip over it and lose the whole series.
       st.skipped++;
+      master.removeProperty(prop);
     }
   }
 
-  const emit = (occ: IcalTime): void => {
-    const occMs = toMs(occ, span.start.tzid, st);
+  /** One occurrence starting at occ (occMs), unless it was excluded, replaced or moved by THISANDFUTURE. */
+  const place = (occ: IcalTime, occMs: number, endMs: () => number): void => {
     if (isExcluded(occ, occMs, excluded)) return;
     let moved: RangeOverride | null = null;
     for (const r of rangeOverrides) {
@@ -436,14 +669,20 @@ function expandMaster(master: IcalComponent, overrides: IcalComponent[], st: Par
       if (moved.blocking) addBusy(st, occMs + moved.shiftMs, occMs + moved.shiftMs + moved.durationMs);
       return;
     }
-    if (!blocking) return;
-    const end = occ.clone();
-    end.addDuration(span.duration);
-    addBusy(st, occMs, toMs(end, span.start.tzid, st));
+    if (blocking) addBusy(st, occMs, endMs());
+  };
+  const emit = (occ: IcalTime): void => {
+    place(occ, toMs(occ, span.start.tzid, st), () => {
+      const end = occ.clone();
+      end.addDuration(span.duration);
+      return toMs(end, span.start.tzid, st);
+    });
   };
 
   // DTSTART is the first instance of the set even when a rule or the RDATE list does not repeat it.
   emit(span.start.time);
+  for (const p of periods) place(p.start.time, toMs(p.start.time, p.start.tzid, st), () => toMs(p.end.time, p.end.tzid, st));
+  if (!master.hasProperty('rrule') && !master.hasProperty('rdate')) return;
 
   let longestMs = Math.max(0, span.endMs - span.startMs);
   let latestShift = 0;
@@ -457,21 +696,28 @@ function expandMaster(master: IcalComponent, overrides: IcalComponent[], st: Par
   const notBefore = st.range.start - longestMs - latestShift - ZONE_SLACK_MS;
   const notAfter = st.range.end - earliestShift + ZONE_SLACK_MS;
 
-  const from = walkStart(master, span, notBefore - DAY_MS);
-  if (from === 'none') return;
-  const expansion = new ICAL.RecurExpansion({ component: master, dtstart: from ?? span.start.time });
-  for (let steps = 0; ; steps++) {
-    if (steps >= MAX_STEPS_PER_EVENT || st.steps >= MAX_STEPS_PER_FEED) {
-      st.truncated = true;
-      return;
+  try {
+    const from = walkStart(master, span, notBefore - DAY_MS);
+    if (from === 'none') return;
+    const expansion = new ICAL.RecurExpansion({ component: master, dtstart: from ?? span.start.time });
+    for (let steps = 0; ; steps++) {
+      if (steps >= MAX_STEPS_PER_EVENT || st.steps >= MAX_STEPS_PER_FEED) {
+        st.truncated = true;
+        return;
+      }
+      const next = expansion.next();
+      if (!next) return;
+      st.steps++;
+      const wall = utcFieldsMs(next);
+      if (wall > notAfter) return;
+      if (wall < notBefore) continue;
+      emit(next);
     }
-    const next = expansion.next();
-    if (!next) return;
-    st.steps++;
-    const wall = utcFieldsMs(next);
-    if (wall > notAfter) return;
-    if (wall < notBefore) continue;
-    emit(next);
+  } catch (err) {
+    // A series that blocks time and could not be walked: its later occurrences are unknown, and
+    // reading them as free would offer times the host is busy. An event that blocks nothing costs nothing.
+    if ((blocking || rangeOverrides.some((r) => r.blocking)) && mayReachWindow(span, st)) st.incomplete = true;
+    throw err;
   }
 }
 
@@ -485,6 +731,7 @@ function uidOf(comp: IcalComponent, fallback: string): string {
 }
 
 function collectBusy(calendar: IcalComponent, st: ParseState): void {
+  st.floatingZone = calendarZone(calendar, st) ?? st.allDayZone;
   const groups = new Map<string, { masters: IcalComponent[]; overrides: IcalComponent[] }>();
   calendar.getAllSubcomponents('vevent').forEach((ev, i) => {
     st.events++;
@@ -533,6 +780,8 @@ function unfoldLines(text: string): string[] {
 
 const TIMING_LINE = /^(?:BEGIN|END|UID|DTSTART|DTEND|DURATION|STATUS|TRANSP|RECURRENCE-ID|RRULE|RDATE|EXDATE|X-MICROSOFT-CDO-BUSYSTATUS)[;:]/i;
 const RECURRENCE_LINE = /^(?:RRULE|RDATE|EXDATE)[;:]/i;
+const SERIES_LINE = /^(?:RRULE|RDATE)[;:]/i;
+const EXDATE_LINE = /^EXDATE[;:]/i;
 
 /** Parses one component on its own and returns it as jCal, or null when the strict parser refuses it. */
 function parseBlock(lines: string[]): unknown[] | null {
@@ -552,12 +801,15 @@ function parseBlock(lines: string[]): unknown[] | null {
 function salvage(text: string, st: ParseState): IcalComponent[] {
   const blocks: string[][] = [];
   let current: { kind: string; lines: string[]; depth: number; skipDepth: number } | null = null;
+  // The calendar's own zone is a property of VCALENDAR itself, outside every block.
+  let calendarZoneName = '';
   for (const line of unfoldLines(text)) {
     const marker = /^(BEGIN|END):\s*([A-Za-z0-9-]+)\s*$/i.exec(line);
     const name = marker ? marker[2].toUpperCase() : '';
     const isBegin = !!marker && marker[1].toUpperCase() === 'BEGIN';
     if (!current) {
       if (isBegin && (name === 'VEVENT' || name === 'VTIMEZONE')) current = { kind: name, lines: [`BEGIN:${name}`], depth: 0, skipDepth: 0 };
+      else if (calendarZoneName === '' && /^X-WR-TIMEZONE[;:]/i.test(line)) calendarZoneName = line.slice(line.indexOf(':') + 1).trim().slice(0, 64);
       continue;
     }
     if (marker && isBegin) {
@@ -597,19 +849,28 @@ function salvage(text: string, st: ParseState): IcalComponent[] {
   for (const lines of blocks) {
     let parsed = parseBlock(lines);
     if (!parsed && lines[0] === 'BEGIN:VEVENT') {
-      // Second try with only the lines that decide busy time, third try without the recurrence
-      // (that keeps at least the first instance of a series whose rule is unreadable).
+      // Second try with only the lines that decide busy time. Third try without the exclusions,
+      // which only ever adds busy time. Last try without the recurrence: that keeps the first
+      // instance of a series whose rule is unreadable, and the series is marked as lost.
       const timing = lines.filter((l) => TIMING_LINE.test(l));
       parsed = parseBlock(timing);
+      if (!parsed && timing.some((l) => EXDATE_LINE.test(l))) {
+        parsed = parseBlock(timing.filter((l) => !EXDATE_LINE.test(l)));
+        if (parsed) st.skipped++;
+      }
       if (!parsed) {
         parsed = parseBlock(timing.filter((l) => !RECURRENCE_LINE.test(l)));
-        if (parsed) st.skipped++;
+        if (parsed) {
+          st.skipped++;
+          if (timing.some((l) => SERIES_LINE.test(l))) for (const c of parsed) if (typeof c === 'object' && c !== null) st.lostSeries.add(c);
+        }
       }
     }
     if (parsed) subcomponents.push(...parsed);
     else st.skipped++;
   }
-  return subcomponents.length > 0 ? [new ICAL.Component(['vcalendar', [], subcomponents])] : [];
+  const properties = calendarZoneName === '' ? [] : [['x-wr-timezone', {}, 'text', calendarZoneName]];
+  return subcomponents.length > 0 ? [new ICAL.Component(['vcalendar', properties, subcomponents])] : [];
 }
 
 function loadCalendars(text: string, st: ParseState): IcalComponent[] {
@@ -639,18 +900,22 @@ function loadCalendars(text: string, st: ParseState): IcalComponent[] {
  */
 export function parseIcsDetailed(icsText: string, range: Interval, opts?: IcsParseOptions): IcsParseResult {
   const zone = opts?.timezone;
+  const hostZone = typeof zone === 'string' && zone.length <= 64 && IANAZone.isValidZone(zone) ? zone : 'UTC';
   const st: ParseState = {
     range: { start: Number(range?.start), end: Number(range?.end) },
-    allDayZone: typeof zone === 'string' && zone.length <= 64 && IANAZone.isValidZone(zone) ? zone : 'UTC',
+    allDayZone: hostZone,
+    floatingZone: hostZone,
     out: [],
     steps: 0,
     events: 0,
     skipped: 0,
     truncated: false,
+    incomplete: false,
     usableZones: new WeakMap(),
     ianaNames: new Map(),
+    lostSeries: new WeakSet(),
   };
-  const result = (): IcsParseResult => ({ busy: mergeBusy(st.out), events: st.events, skipped: st.skipped, truncated: st.truncated });
+  const result = (): IcsParseResult => ({ busy: mergeBusy(st.out), events: st.events, skipped: st.skipped, truncated: st.truncated, incomplete: st.incomplete });
 
   if (typeof icsText !== 'string' || !Number.isFinite(st.range.start) || !Number.isFinite(st.range.end) || st.range.end <= st.range.start) return result();
   if (icsText.length > MAX_ICS_CHARS) {
@@ -754,7 +1019,12 @@ async function readLimited(res: Response, maxBytes: number, guard: <T>(p: Promis
   return new TextDecoder('utf-8').decode(bytes);
 }
 
-async function downloadFeed(ctx: Ctx, url: string, opts?: IcsFetchOptions): Promise<string> {
+/**
+ * The text of a calendar feed: guarded download (https only, every redirect hop re-checked, size
+ * and time limits). Throws HttpError (422) for an address that is not allowed and IcsFeedError when
+ * the feed cannot be loaded. Callers that cache the text use this with busyFromIcsText.
+ */
+export async function downloadIcsFeed(ctx: Ctx, url: string, opts?: IcsFetchOptions): Promise<string> {
   const timeoutMs = opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : FETCH_TIMEOUT_MS;
   const maxBytes = opts?.maxBytes && opts.maxBytes > 0 ? opts.maxBytes : MAX_FEED_BYTES;
   let current = assertSafeFeedUrl(url);
@@ -835,9 +1105,19 @@ async function downloadFeed(ctx: Ctx, url: string, opts?: IcsFetchOptions): Prom
  * expand completely: callers must treat that as "availability unknown", not as "free".
  */
 export async function fetchIcsBusy(ctx: Ctx, url: string, range: Interval, opts?: IcsFetchOptions): Promise<Interval[]> {
-  const text = await downloadFeed(ctx, url, opts);
+  return busyFromIcsText(ctx, await downloadIcsFeed(ctx, url, opts), range, opts);
+}
+
+/**
+ * Busy intervals of a downloaded feed inside `range`. Throws IcsFeedError when the answer would be
+ * incomplete in a way that hides busy time: the feed is too large or too dense to expand, or a
+ * repeating event that blocks time could not be expanded. Other unreadable events (no start, say)
+ * are left out and logged, so one stray entry does not close the whole booking page.
+ */
+export function busyFromIcsText(ctx: Ctx, text: string, range: Interval, opts?: IcsParseOptions): Interval[] {
   const parsed = parseIcsDetailed(text, range, opts);
   if (parsed.truncated) throw new IcsFeedError('The calendar feed is too large to read completely.');
+  if (parsed.incomplete) throw new IcsFeedError('The calendar feed has a repeating event that could not be read.');
   if (parsed.skipped > 0) ctx.log('warn', 'calendar feed: some events could not be read', { skipped: parsed.skipped, events: parsed.events });
   return parsed.busy;
 }

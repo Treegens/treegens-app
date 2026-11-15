@@ -115,6 +115,8 @@ export default defineSuite('public-look', { mockCreds: true }, async (t) => {
 
       await s.step(`prepare: a site with real data in the ${preset.label} look`, async () => {
         const owner = await prepare(s);
+        // The form is shown with a guest added: the owner lets people bring guests (Google invites them).
+        await s.apiOk('PUT', '/admin/event-types/evt_intro', { body: { allowGuests: true } });
         await s.apiOk('PUT', '/admin/site', {
           body: {
             theme: preset.theme,
@@ -253,4 +255,35 @@ export default defineSuite('public-look', { mockCreds: true }, async (t) => {
       }
     });
   }
+
+  await t.scenario('every preset: on a 360 px phone each day of the month and each clock button is a 44 px target', async (s) => {
+    await s.step('prepare', () => prepare(s));
+    for (const preset of presets) {
+      for (const density of ['comfortable', 'compact']) {
+        await s.step(`${preset.label}, ${density}`, async () => {
+          await s.apiOk('PUT', '/admin/site', { body: { theme: { ...preset.theme, density } } });
+          const page = await s.newPage({ ...PHONE_VIEWPORT, viewport: { width: 360, height: 740 }, timezoneId: NEW_YORK, locale: 'en-US' });
+          await openEvent(s, page, 'meeting');
+          const sizes = await page.evaluate(() => {
+            const box = (el) => el.getBoundingClientRect();
+            const card = box(document.querySelector('.bw__card'));
+            const days = [...document.querySelectorAll('.bw-day')].map(box);
+            return {
+              dayWidth: Math.min(...days.map((d) => d.width)),
+              dayHeight: Math.min(...days.map((d) => d.height)),
+              clock: Math.min(...[...document.querySelectorAll('.bw-tz__clock .ui-seg__item')].map((b) => box(b).width)),
+              inside: days.every((d) => d.left >= card.left - 0.5 && d.right <= card.right + 0.5),
+            };
+          });
+          s.expect(sizes.dayWidth, 'narrowest day').toBeGreaterThanOrEqual(44);
+          s.expect(sizes.dayHeight, 'lowest day').toBeGreaterThanOrEqual(44);
+          s.expect(sizes.clock, 'narrowest 12/24 hour button').toBeGreaterThanOrEqual(44);
+          s.expect(sizes.inside, 'every day inside the card').toBe(true);
+          s.expect(await overflowReport(page), 'sideways overflow').toMatchObject({ scrolls: false, offenders: [] });
+          if (density === 'comfortable') await s.screenshot(page, `${preset.key} 360 calendar`, { fullPage: false });
+          await page.context().close();
+        });
+      }
+    }
+  });
 });

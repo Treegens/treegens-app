@@ -4,8 +4,9 @@
  * How a job is kept from running twice or getting lost:
  *   1. One attempt, one runner. Before running attempt N of a job a runner must win
  *      claim("job-<id>-<N>"). Overlapping cron runs therefore never run the same attempt twice.
- *   2. One attempt, one successor. Moving on to attempt N+1 (retry) is guarded by
- *      claim("job-<id>-<N>-next"), so a job can never fork into two copies.
+ *   2. One attempt, one successor. Attempt N+1 (retry) is due a fixed backoff after attempt N was
+ *      claimed, so everybody who moves the job on computes the same queue key, and it is written
+ *      create-only. A job can never fork into two copies, and a write that failed can be repeated.
  *   3. One recipient, one delivery. After a message is accepted by a provider, a "sent" marker is
  *      stored for that job and recipient. A later attempt of the same job skips recipients that
  *      already have one, so a retry after a half-finished run does not send again.
@@ -14,7 +15,10 @@
  *      the job to its next attempt (phone calls are dropped instead: ringing someone twice is
  *      worse than not ringing).
  */
+import { DateTime, IANAZone } from 'luxon';
+import { DEFAULT_ASSISTANT } from '../../shared/defaults';
 import type {
+  AssistantSettings,
   Booking,
   EventType,
   Host,
@@ -25,11 +29,26 @@ import type {
   SendResult,
   SiteSettings,
 } from '../../shared/types';
-import { hmacHex, randomId } from './crypto';
+import { hmacHex, randomId, sha256Hex } from './crypto';
 import type { Ctx } from './ctx';
-import { renderEmailHtml, renderEmailText, sendEmail, type EmailMessage } from './email';
+import { renderEmailHtml, renderEmailText, sendEmail, urlsIn, type EmailMessage } from './email';
 import { buildBookingIcs, calendarLinks } from './ics';
-import { cacheGet, cacheSet, claim, deleteJob, getBooking, getEventType, getSite, listHosts, listJobs, putJob, updateBooking } from './repo';
+import { outboundAllowed } from './outbound';
+import {
+  cacheGet,
+  cacheSet,
+  claim,
+  deleteJob,
+  getBooking,
+  getEventType,
+  getSite,
+  listHosts,
+  listJobs,
+  putJob,
+  readClaim,
+  releaseClaim,
+  updateBooking,
+} from './repo';
 import { sendSms } from './sms';
 import { buildVars, defaultMessage, firstName, renderTemplate, type TemplateVars } from './templates';
 import { isEmail } from './validate';
@@ -69,6 +88,8 @@ const LOST_MARKER_TTL_SEC = 86_400;
 const SENT_MARKER_TTL_SEC = 3 * 86_400;
 /** A reminder set to "0 minutes before" still has to leave before the meeting begins. */
 const REMINDER_MIN_LEAD_MS = 2 * 60_000;
+/** A reminder call moved later, to when calling hours open, must still ring at least this long before the start. */
+const CALL_MIN_LEAD_MS = 30 * 60_000;
 export const SMS_MAX_LENGTH = 300;
 
 // ───────────────────────── handlers ─────────────────────────
@@ -126,8 +147,10 @@ const SKIP_REASONS: Record<string, string> = {
   invalid_recipient: 'the address is not valid',
   email_not_configured: 'email sending is not set up yet',
   outside_call_window: 'it was outside calling hours',
+  no_call_time: 'there is no time inside calling hours before the meeting',
+  daily_limit: 'the daily limit of texts or calls was reached',
   host_notifications_off: 'the host has these notifications switched off',
-  rule_disabled: 'this reminder was switched off',
+  rule_disabled: 'this reminder was switched off or removed',
   unsupported_channel: 'this kind of message cannot be sent on this channel',
   host_missing: 'the host no longer exists',
 };
@@ -138,11 +161,16 @@ function skipText(reason: string): string {
 
 // ───────────────────────── enqueue ─────────────────────────
 
-export async function enqueueJob(ctx: Ctx, j: Omit<StoredJob, 'key' | 'id' | 'attempt' | 'createdAt'>): Promise<Job> {
+/**
+ * Queues a job. `opts.id` gives it a fixed id instead of a fresh one: a job queued again under the
+ * same id after an unclear failure shares its attempt claims and "sent" markers with the first
+ * copy, so at most one of them delivers.
+ */
+export async function enqueueJob(ctx: Ctx, j: Omit<StoredJob, 'key' | 'id' | 'attempt' | 'createdAt'>, opts?: { id?: string }): Promise<Job> {
   const dueMs = Date.parse(j.dueAt);
   if (!Number.isFinite(dueMs)) throw new Error('enqueueJob: dueAt is not a valid time');
   const dueAt = new Date(dueMs).toISOString();
-  const id = randomId('job');
+  const id = opts?.id && /^job_[A-Za-z0-9_-]{1,76}$/.test(opts.id) ? opts.id : randomId('job');
   const job: StoredJob = { ...j, dueAt, id, key: keyFor(dueAt, id), attempt: 0, createdAt: ctx.now().toISOString() };
   await putJob(ctx, job);
   return job;
@@ -156,6 +184,61 @@ async function removeBookingJobs(ctx: Ctx, bookingId: string, match: (job: Job) 
 
 function isRuleJob(job: Job): boolean {
   return job.type === 'message' && (job.kind === 'reminder' || job.kind === 'followup');
+}
+
+/** The reminders and follow-ups of the given bookings, grouped by booking, from one read of the queue. */
+async function ruleJobsByBooking(ctx: Ctx, bookingIds: string[]): Promise<Map<string, Job[]>> {
+  const wanted = new Set(bookingIds);
+  const byBooking = new Map<string, Job[]>();
+  for (const job of await listJobs(ctx)) {
+    if (!job.bookingId || !wanted.has(job.bookingId) || !isRuleJob(job)) continue;
+    byBooking.set(job.bookingId, [...(byBooking.get(job.bookingId) ?? []), job]);
+  }
+  return byBooking;
+}
+
+/** Deletes the jobs. True when every one of them is gone. */
+async function deleteAllJobs(ctx: Ctx, jobs: Job[]): Promise<boolean> {
+  const results = await Promise.allSettled(jobs.map((j) => deleteJob(ctx, j.key)));
+  return results.every((r) => r.status === 'fulfilled');
+}
+
+/**
+ * Removes the reminders and follow-ups of many bookings with one read of the queue. Returns the
+ * bookings whose jobs were all removed; pass `remindersCleared` to scheduleBookingJobs for those only.
+ */
+export async function removeReminderJobs(ctx: Ctx, bookingIds: string[]): Promise<Set<string>> {
+  const byBooking = await ruleJobsByBooking(ctx, bookingIds);
+  const cleared = new Set<string>();
+  for (const id of new Set(bookingIds)) if (await deleteAllJobs(ctx, byBooking.get(id) ?? [])) cleared.add(id);
+  return cleared;
+}
+
+/**
+ * Rebuilds the reminders of many bookings after their event type's rules changed, with one read of
+ * the queue for all of them. Each booking's old reminders are removed just before its new ones are
+ * queued, so a run that is cut off part-way leaves the bookings it did not reach with their old
+ * reminders: one at the old time is better than none. Returns how many bookings failed.
+ */
+export async function replanBookingReminders(
+  ctx: Ctx,
+  bookings: Booking[],
+  eventType: EventType,
+  onError?: (bookingId: string, err: unknown) => void,
+): Promise<number> {
+  const byBooking = await ruleJobsByBooking(ctx, bookings.map((b) => b.id));
+  let failed = 0;
+  for (const booking of bookings) {
+    try {
+      // A booking whose old reminders could not all be removed gets the usual per-booking clean-up.
+      const cleared = await deleteAllJobs(ctx, byBooking.get(booking.id) ?? []);
+      await scheduleBookingJobs(ctx, booking, eventType, null, { remindersCleared: cleared });
+    } catch (err) {
+      failed++;
+      onError?.(booking.id, err);
+    }
+  }
+  return failed;
 }
 
 /** Removes every pending message for the booking except the ones that announce or follow a cancellation. */
@@ -189,6 +272,74 @@ export interface PlannedJob {
   immediate: boolean;
 }
 
+// ───────────────────────── calling hours ─────────────────────────
+
+export type CallHours = Pick<AssistantSettings, 'callWindowStartHour' | 'callWindowEndHour'>;
+
+function hourSetting(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(24, Math.max(0, Math.floor(value))) : fallback;
+}
+
+function callHoursOf(a: Partial<CallHours> | null | undefined): { open: number; close: number } {
+  return {
+    open: hourSetting(a?.callWindowStartHour, DEFAULT_ASSISTANT.callWindowStartHour),
+    close: hourSetting(a?.callWindowEndHour, DEFAULT_ASSISTANT.callWindowEndHour),
+  };
+}
+
+function validZone(tz: unknown): tz is string {
+  return typeof tz === 'string' && tz !== '' && tz.length <= 64 && IANAZone.isValidZone(tz);
+}
+
+/**
+ * The same rule as withinCallWindow in voice.ts, which checks again when the call is placed: the
+ * opening hour counts, the closing hour does not, a window may run past midnight (opening later
+ * than closing), and an empty window or an unknown zone never allows a call.
+ */
+export function insideCallHours(ms: number, tz: string, hours?: Partial<CallHours> | null): boolean {
+  if (!Number.isFinite(ms) || !validZone(tz)) return false;
+  const { open, close } = callHoursOf(hours);
+  if (open === close) return false;
+  const local = DateTime.fromMillis(ms, { zone: tz });
+  if (!local.isValid) return false;
+  return open < close ? local.hour >= open && local.hour < close : local.hour >= open || local.hour < close;
+}
+
+/** `hour` o'clock on the local day that starts at `day`; 24 is the following midnight. */
+function atLocalHour(day: DateTime, hour: number): DateTime {
+  return hour >= 24 ? day.plus({ days: 1 }).startOf('day') : day.set({ hour, minute: 0, second: 0, millisecond: 0 });
+}
+
+/**
+ * When a reminder call should ring, on the invitee's clock, or null for no call at all. Pure.
+ *   1. the rule's own moment (`idealMs`) when that is inside calling hours
+ *   2. otherwise the moment calling hours next open, when that still leaves 30 minutes before the start
+ *      (a 9:00 meeting with a "2 hours before" call rings at 8:00, not at 7:00)
+ *   3. otherwise the start of the last calling hour before the rule's moment, when that is still
+ *      ahead (an 8:15 meeting rings the evening before)
+ * The call is placed only when the result is still inside calling hours at that moment, so a
+ * daylight saving jump can never move it outside them.
+ */
+export function planCallTime(p: { idealMs: number; startMs: number; nowMs: number; timezone: string; hours?: Partial<CallHours> | null }): number | null {
+  const { idealMs, startMs, nowMs, timezone: tz, hours } = p;
+  if (!Number.isFinite(idealMs) || !Number.isFinite(startMs) || !validZone(tz)) return null;
+  const { open, close } = callHoursOf(hours);
+  if (open === close) return null;
+  if (insideCallHours(idealMs, tz, hours)) return idealMs;
+
+  const day = DateTime.fromMillis(idealMs, { zone: tz }).startOf('day');
+  let opening = atLocalHour(day, open);
+  if (opening.toMillis() <= idealMs) opening = atLocalHour(day.plus({ days: 1 }), open);
+  const openingMs = opening.toMillis();
+  if (openingMs > nowMs && openingMs <= startMs - CALL_MIN_LEAD_MS && insideCallHours(openingMs, tz, hours)) return openingMs;
+
+  let closing = atLocalHour(day, close);
+  if (closing.toMillis() > idealMs) closing = atLocalHour(day.minus({ days: 1 }), close);
+  const lastHourMs = closing.toMillis() - 3_600_000;
+  if (lastHourMs > nowMs && lastHourMs < startMs && insideCallHours(lastHourMs, tz, hours)) return lastHourMs;
+  return null;
+}
+
 /** Pure: which messages a booking needs, given its reminder rules and who can be reached how. */
 export function planBookingJobs(p: {
   booking: Booking;
@@ -197,6 +348,14 @@ export function planBookingJobs(p: {
   hosts: Host[];
   nowMs: number;
   immediate: 'created' | 'rescheduled' | null;
+  /** calling hours (site.assistant); the defaults when left out */
+  callHours?: Partial<CallHours> | null;
+  /** told about each call rule that finds no time inside calling hours before the meeting */
+  onNoCallTime?: (ruleId: string) => void;
+  /** who made the change. An invitee who just moved the meeting on the page gets no text about it (the email carries the new calendar file). */
+  by?: 'invitee' | 'host' | 'assistant' | 'system';
+  /** with 'rescheduled': hosts the move handed the meeting to (a round robin whose host left). For them it is a new booking. */
+  newHostIds?: string[];
 }): PlannedJob[] {
   const { booking, hosts, nowMs } = p;
   const startMs = Date.parse(booking.start);
@@ -208,10 +367,20 @@ export function planBookingJobs(p: {
     if (!rule || rule.enabled !== true) continue;
     const offsetMs = Math.max(0, Number(rule.offsetMinutes) || 0) * 60_000;
     const before = rule.trigger !== 'after_end';
-    const dueMs = before ? Math.min(startMs - offsetMs, startMs - REMINDER_MIN_LEAD_MS) : endMs + offsetMs;
+    let dueMs = before ? Math.min(startMs - offsetMs, startMs - REMINDER_MIN_LEAD_MS) : endMs + offsetMs;
     if (!(dueMs > nowMs)) continue;
     if (rule.channel === 'call' && !before) continue; // a reminder call after the meeting makes no sense
     const kind: MessageKind = before ? 'reminder' : 'followup';
+    if (rule.channel === 'call' && rule.audience !== 'host' && inviteeReachable(booking, 'call')) {
+      // Calls only ring inside calling hours on the invitee's clock, so the time is chosen inside them now
+      // rather than finding out at the last moment that the call cannot be made.
+      const callMs = planCallTime({ idealMs: dueMs, startMs, nowMs, timezone: booking.invitee.timezone, hours: p.callHours });
+      if (callMs === null) {
+        p.onNoCallTime?.(rule.id);
+        continue;
+      }
+      dueMs = callMs;
+    }
     const base = { dueMs, channel: rule.channel, kind, ruleId: rule.id, immediate: false };
     if (rule.audience === 'host') {
       for (const host of hosts) if (hostReachable(host, rule.channel, kind)) planned.push({ ...base, audience: 'host', hostId: host.id });
@@ -224,9 +393,11 @@ export function planBookingJobs(p: {
     const inviteeKind: MessageKind = p.immediate === 'created' ? 'confirmation' : 'rescheduled';
     const hostKind: MessageKind = p.immediate === 'created' ? 'host_new' : 'rescheduled';
     for (const channel of ['email', 'sms'] as const) {
-      if (inviteeReachable(booking, channel)) planned.push({ dueMs: nowMs, channel, audience: 'invitee', kind: inviteeKind, immediate: true });
+      const selfMadeMove = p.immediate === 'rescheduled' && channel === 'sms' && p.by === 'invitee';
+      if (!selfMadeMove && inviteeReachable(booking, channel)) planned.push({ dueMs: nowMs, channel, audience: 'invitee', kind: inviteeKind, immediate: true });
       for (const host of hosts) {
-        if (hostReachable(host, channel, hostKind)) planned.push({ dueMs: nowMs, channel, audience: 'host', kind: hostKind, hostId: host.id, immediate: true });
+        const kind: MessageKind = p.immediate === 'rescheduled' && p.newHostIds?.includes(host.id) ? 'host_new' : hostKind;
+        if (hostReachable(host, channel, kind)) planned.push({ dueMs: nowMs, channel, audience: 'host', kind, hostId: host.id, immediate: true });
       }
     }
   }
@@ -238,35 +409,90 @@ export function planBookingJobs(p: {
  * messages that go out right away. Safe to call again for the same event: reminders are rebuilt,
  * and each immediate message is queued at most once per booking, start time and reschedule count.
  */
-export async function scheduleBookingJobs(ctx: Ctx, booking: Booking, eventType: EventType, immediate: 'created' | 'rescheduled' | null): Promise<void> {
+export async function scheduleBookingJobs(
+  ctx: Ctx,
+  booking: Booking,
+  eventType: EventType,
+  immediate: 'created' | 'rescheduled' | null,
+  opts?: {
+    /** the caller already removed this booking's reminders (re-planning many bookings with one read of the queue) */
+    remindersCleared?: boolean;
+    /** who made the change (see planBookingJobs) */
+    by?: 'invitee' | 'host' | 'assistant' | 'system';
+    /** hosts a move handed the meeting to (see planBookingJobs) */
+    newHostIds?: string[];
+  },
+): Promise<void> {
   // A booking scheduled for the very first time cannot have reminders yet, which saves reading the whole queue.
-  const brandNew = immediate === 'created' && (await claim(ctx, `sched-created-${booking.id}`));
-  if (!brandNew) await removeBookingJobs(ctx, booking.id, isRuleJob);
+  const brandNew = !opts?.remindersCleared && immediate === 'created' && (await claim(ctx, `sched-created-${booking.id}`));
+  if (!brandNew && !opts?.remindersCleared) await removeBookingJobs(ctx, booking.id, isRuleJob);
   if (booking.status !== 'confirmed') return;
 
-  const byId = new Map((await listHosts(ctx)).map((h) => [h.id, h]));
+  const [allHosts, site] = await Promise.all([listHosts(ctx), getSite(ctx)]);
+  const byId = new Map(allHosts.map((h) => [h.id, h]));
   const hosts = booking.hostIds.map((id) => byId.get(id)).filter((h): h is Host => !!h);
-  const planned = planBookingJobs({ booking, eventType, hosts, nowMs: ctx.now().getTime(), immediate });
+  const noCallTime: string[] = [];
+  const planned = planBookingJobs({
+    booking,
+    eventType,
+    hosts,
+    nowMs: ctx.now().getTime(),
+    immediate,
+    callHours: { ...DEFAULT_ASSISTANT, ...(site.assistant ?? {}) },
+    onNoCallTime: (ruleId) => noCallTime.push(ruleId),
+    ...(opts?.by ? { by: opts.by } : {}),
+    ...(opts?.newHostIds?.length ? { newHostIds: opts.newHostIds } : {}),
+  });
 
-  const results = await Promise.allSettled(
-    planned.map(async (plan) => {
-      if (plan.immediate) {
-        const once = `sched-${booking.id}-${booking.rescheduleCount ?? 0}-${Date.parse(booking.start)}-${plan.kind}-${plan.channel}-${plan.audience}-${plan.hostId ?? 'invitee'}`;
-        if (!(await claim(ctx, once))) return;
+  const results = await Promise.allSettled([
+    ...planned.map(async (plan) => {
+      if (!plan.immediate) {
+        await enqueueJob(ctx, {
+          type: 'message',
+          bookingId: booking.id,
+          dueAt: new Date(plan.dueMs).toISOString(),
+          channel: plan.channel,
+          audience: plan.audience,
+          kind: plan.kind,
+          ...(plan.ruleId ? { ruleId: plan.ruleId } : {}),
+          ...(plan.hostId ? { hostId: plan.hostId } : {}),
+          forStart: booking.start,
+        });
+        return;
       }
-      await enqueueJob(ctx, {
-        type: 'message',
-        bookingId: booking.id,
-        dueAt: new Date(plan.dueMs).toISOString(),
-        channel: plan.channel,
-        audience: plan.audience,
-        kind: plan.kind,
-        ...(plan.ruleId ? { ruleId: plan.ruleId } : {}),
-        ...(plan.hostId ? { hostId: plan.hostId } : {}),
-        ...(plan.immediate ? {} : { forStart: booking.start }),
-      });
+      const once = `sched-${booking.id}-${booking.rescheduleCount ?? 0}-${Date.parse(booking.start)}-${plan.kind}-${plan.channel}-${plan.audience}-${plan.hostId ?? 'invitee'}`;
+      if (!(await claim(ctx, once))) return;
+      try {
+        // The id comes from the claim, so a copy queued again after an unclear failed write shares
+        // its "sent" marker and attempt claims with the first one and the message goes out once.
+        await enqueueJob(
+          ctx,
+          {
+            type: 'message',
+            bookingId: booking.id,
+            dueAt: new Date(plan.dueMs).toISOString(),
+            channel: plan.channel,
+            audience: plan.audience,
+            kind: plan.kind,
+            ...(plan.hostId ? { hostId: plan.hostId } : {}),
+          },
+          { id: `job_${sha256Hex(once).slice(0, 20)}` },
+        );
+      } catch (err) {
+        // Not queued: give the claim back so the next try (createBooking tries twice) can queue it.
+        await releaseClaim(ctx, once).catch((releaseErr) =>
+          ctx.log('error', 'jobs: could not release the claim of a message that was not queued', { bookingId: booking.id, error: shortError(releaseErr) }),
+        );
+        throw err;
+      }
     }),
-  );
+    ...noCallTime.map(async (ruleId) => {
+      // Once per rule and start time, however often the booking is planned again.
+      if (await claim(ctx, `call-unplanned-${booking.id}-${Date.parse(booking.start)}-${ruleId}`)) {
+        await addTimeline(ctx, booking.id, 'reminder_call_skipped', skipText('no_call_time'));
+      }
+    }),
+  ]);
   const failure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
   if (failure) throw failure.reason instanceof Error ? failure.reason : new Error(String(failure.reason));
 }
@@ -305,7 +531,11 @@ function dropReason(ctx: Ctx, job: StoredJob, booking: Booking | null): { reason
 async function retryOrGiveUp(ctx: Ctx, job: StoredJob, booking: Booking | null, error: string): Promise<Outcome> {
   const attemptsMade = job.attempt + 1;
   const delayMin = BACKOFF_MINUTES[Math.min(job.attempt, BACKOFF_MINUTES.length - 1)];
-  const nextDueMs = ctx.now().getTime() + delayMin * 60_000;
+  const nowMs = ctx.now().getTime();
+  // Counted from when this attempt was claimed, not from now: the runner itself and a later run that
+  // recovers the attempt then arrive at the same queue key, and the create-only write keeps one copy.
+  const claimedMs = Date.parse((await readClaim(ctx, claimName(job)))?.at ?? '');
+  const nextDueMs = (Number.isFinite(claimedMs) && claimedMs <= nowMs ? claimedMs : nowMs) + delayMin * 60_000;
   let gaveUp = attemptsMade >= MAX_ATTEMPTS ? `gave up after ${attemptsMade} tries` : '';
   if (!gaveUp && job.type === 'message' && messageKind(job) === 'reminder' && booking && nextDueMs >= Date.parse(booking.start)) {
     gaveUp = 'not retried: the meeting starts before the next try';
@@ -320,10 +550,14 @@ async function retryOrGiveUp(ctx: Ctx, job: StoredJob, booking: Booking | null, 
 
   const dueAt = new Date(nextDueMs).toISOString();
   const next: StoredJob = { ...job, attempt: job.attempt + 1, dueAt, key: keyFor(dueAt, job.id) };
-  if (await claim(ctx, `${claimName(job)}-next`)) await putJob(ctx, next);
+  // Written before the current attempt leaves the queue: if this write throws, the attempt stays
+  // queued and the interrupted-job recovery arrives here again with the same key.
+  await putJob(ctx, next, { onlyIfNew: true });
   if (next.key !== job.key) await deleteJob(ctx, job.key);
   ctx.log('warn', 'jobs: attempt failed, will retry', { id: job.id, type: job.type, kind: job.kind, channel: job.channel, attempt: job.attempt, error });
-  if (job.type === 'message') await addTimeline(ctx, booking?.id, `${timelineLabel(job)}_failed`, `${error} (will try again in ${delayMin} min)`);
+  const waitMin = Math.ceil((nextDueMs - nowMs) / 60_000);
+  const when = waitMin >= 1 ? `will try again in ${waitMin} min` : 'will try again shortly';
+  if (job.type === 'message') await addTimeline(ctx, booking?.id, `${timelineLabel(job)}_failed`, `${error} (${when})`);
   return 'failed';
 }
 
@@ -389,6 +623,11 @@ async function recoverIfAbandoned(ctx: Ctx, job: StoredJob): Promise<Outcome> {
   }
   if (now - seen.at < ORPHAN_AFTER_MS) return 'waiting';
 
+  if (await readClaim(ctx, claimName({ ...job, attempt: job.attempt + 1 }))) {
+    // The next attempt already ran: this one was moved on and only its removal from the queue was lost.
+    await deleteJob(ctx, job.key);
+    return 'gone';
+  }
   ctx.log('warn', 'jobs: recovering a job whose run never finished', { id: job.id, type: job.type, kind: job.kind, channel: job.channel, attempt: job.attempt });
   const booking = job.bookingId ? await getBooking(ctx, job.bookingId) : null;
   if (job.type === 'message' && job.channel === 'call') {
@@ -546,9 +785,14 @@ function assignedTo(booking: Booking, hosts: Host[]): Host[] {
   return booking.hostIds.map((id) => byId.get(id)).filter((h): h is Host => !!h);
 }
 
-/** True when Google Calendar already emailed the invitee a real invitation for this booking. */
-function googleInviteWentOut(booking: Booking, eventType: EventType | null): boolean {
-  return !!booking.google?.eventId && eventType?.googleInvite !== false;
+/**
+ * True when Google Calendar sends the invitee the real invitation for this booking: it already did,
+ * or it is about to (`booking.google` is set as soon as a host with working Google organises the
+ * event, also while a failed or slow write is still being retried). Our own email must then not
+ * carry a second invitation with a different UID, which would leave the invitee with two entries.
+ */
+function googleSendsInvite(booking: Booking, eventType: EventType | null): boolean {
+  return eventType?.googleInvite !== false && !!booking.google;
 }
 
 function emailDetails(p: MessageParts, vars: TemplateVars): { label: string; value: string }[] {
@@ -621,6 +865,22 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
   const wording = defaultMessage(kind, 'email', audience);
   const subject = oneLine(renderTemplate(p.subjectTemplate?.trim() || wording.subject, vars)) || oneLine(renderTemplate(wording.subject, vars));
   const body = tidy(renderTemplate(p.bodyTemplate?.trim() || wording.body, vars)) || tidy(renderTemplate(wording.body, vars));
+  // Only addresses we wrote become links: our own pages, the meeting link, links in the owner's wording
+  // and in a place the owner set. A web address inside something a visitor typed (their name, an
+  // answer, a place they suggested) stays plain text, so our mail never turns it into a link.
+  const ownPlace = booking.location && booking.location.type !== 'ask_invitee' && booking.location.type !== 'phone_host_calls';
+  const linkUrls = [
+    vars.join_url,
+    vars.manage_url,
+    vars.reschedule_url,
+    vars.cancel_url,
+    vars.confirm_url,
+    vars.book_url,
+    vars.admin_url,
+    ...urlsIn(p.bodyTemplate ?? ''),
+    ...urlsIn(wording.body),
+    ...(ownPlace ? urlsIn(`${booking.location.label ?? ''} ${booking.location.value ?? ''}`) : []),
+  ].filter(Boolean);
   const paragraphs = body.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
   const heading = oneLine(renderTemplate(wording.heading, vars));
   const details = emailDetails(p, vars);
@@ -635,7 +895,8 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
     linksLabel = 'Add to your calendar:';
     links = [
       { label: 'Google', url: cal.google },
-      { label: 'Outlook', url: cal.outlook },
+      { label: 'Outlook.com', url: cal.outlook },
+      { label: 'Office 365', url: cal.office365 },
       { label: 'Apple or other', url: cal.ics },
     ];
   } else if (audience === 'invitee' && kind === 'reminder' && vars.join_url && !booking.attendance?.confirmedAt) {
@@ -646,7 +907,7 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
     audience === 'invitee'
       ? `You are getting this email because a meeting was booked with ${site.profile.name} using this address.`
       : `Sent by the ${site.profile.name} booking page.`;
-  const content = { heading, paragraphs, details, actions, links, linksLabel, footer };
+  const content = { heading, paragraphs, details, actions, links, linksLabel, footer, linkUrls };
   // Plain text keeps to the one short calendar link: the Google and Outlook ones are a wall of characters there.
   const textLinks = linksLabel ? links.filter((l) => l.label === 'Apple or other').map((l) => ({ label: 'Calendar file', url: l.url })) : links;
   const avatarId = site.profile.avatarAssetId;
@@ -664,7 +925,7 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
 
   const withCalendarFile = kind === 'confirmation' || kind === 'host_new' || kind === 'rescheduled' || kind === 'cancelled';
   if (withCalendarFile) {
-    const invited = googleInviteWentOut(booking, eventType);
+    const invited = googleSendsInvite(booking, eventType);
     let method: 'REQUEST' | 'CANCEL' | 'PUBLISH' | null;
     if (audience === 'invitee') method = kind === 'cancelled' ? (invited ? null : 'CANCEL') : invited ? 'PUBLISH' : 'REQUEST';
     else method = booking.google?.eventId ? null : kind === 'cancelled' ? 'CANCEL' : 'PUBLISH'; // hosts with Google already have the event
@@ -727,9 +988,13 @@ async function markSent(ctx: Ctx, job: Job, recipient: Recipient): Promise<void>
 async function deliverSiteAlert(ctx: Ctx, job: StoredJob, site: SiteSettings, hosts: Host[]): Promise<DeliveryResult> {
   if ((job.channel ?? 'email') !== 'email') return { ok: false, provider: 'none', skipped: 'unsupported_channel' };
   const owner = hosts.find((h) => h.id === (job.hostId ?? site.ownerHostId)) ?? hosts.find((h) => h.role === 'owner') ?? null;
-  if (!owner || !isEmail(owner.email)) return { ok: false, provider: 'none', skipped: 'no_email' };
-  const recipient: Recipient = { key: owner.id, name: owner.name, email: owner.email, phone: owner.phone ?? '', host: owner };
-  if (await cacheGet(ctx, sentMarker(job, recipient))) return { ok: false, provider: 'none', skipped: 'already_sent' };
+  const phone = owner?.phone?.trim() ?? '';
+  if (!owner || (!isEmail(owner.email) && !phone)) return { ok: false, provider: 'none', skipped: 'no_email' };
+  const recipient: Recipient = { key: owner.id, name: owner.name, email: owner.email, phone, host: owner };
+  const byText: Recipient = { ...recipient, key: `${owner.id}-sms` };
+  if ((await cacheGet(ctx, sentMarker(job, recipient))) || (await cacheGet(ctx, sentMarker(job, byText)))) {
+    return { ok: false, provider: 'none', skipped: 'already_sent' };
+  }
 
   const base = ctx.env.publicBaseUrl.replace(/\/+$/, '');
   const vars: TemplateVars = {
@@ -751,16 +1016,43 @@ async function deliverSiteAlert(ctx: Ctx, job: StoredJob, site: SiteSettings, ho
     actions: [{ label: 'Open your dashboard', url: vars.admin_url, primary: true }],
     footer: `Sent by the ${site.profile.name} booking page.`,
   };
-  const result = await sendEmail(ctx, {
-    to: owner.email,
-    toName: owner.name,
-    subject,
-    text: renderEmailText(content),
-    html: renderEmailHtml({ ...content, site, preheader: clip(paragraphs[1] ?? paragraphs[0] ?? '', 140) }),
-    idempotencyKey: `${job.id}-${owner.id}`,
-  });
-  if (result.ok) await markSent(ctx, job, recipient);
-  return { ...result, detail: `to ${owner.email}${result.provider !== 'none' ? ` via ${result.provider}` : ''}` };
+  let emailed: DeliveryResult = { ok: false, provider: 'none', skipped: 'no_email' };
+  if (isEmail(owner.email)) {
+    // Resend whenever it is set up, whatever email is set to: an alert is often about the very thing
+    // that stopped Gmail (the owner's Google connection), and must not depend on it.
+    const result = await sendEmail(
+      ctx,
+      {
+        to: owner.email,
+        toName: owner.name,
+        subject,
+        text: renderEmailText(content),
+        html: renderEmailHtml({ ...content, site, preheader: clip(paragraphs[1] ?? paragraphs[0] ?? '', 140) }),
+        idempotencyKey: `${job.id}-${owner.id}`,
+      },
+      { preferResend: true },
+    );
+    emailed = { ...result, detail: `to ${owner.email}${result.provider !== 'none' ? ` via ${result.provider}` : ''}` };
+    if (result.ok) {
+      await markSent(ctx, job, recipient);
+      return emailed;
+    }
+  }
+
+  // The email could not go out. The owner still has to hear about it: text them when Twilio works
+  // and they gave a number (their own texts are not subject to the invitee limits).
+  if (phone) {
+    const prose = `${site.profile.name}: ${subject.replace(/[.!?]+$/, '')}. We could not email you about it, so this is a text instead.`;
+    const texted = await sendSms(ctx, { to: phone, body: composeSms(prose, [{ label: 'Open your dashboard:', url: vars.admin_url }]) });
+    if (texted.ok) {
+      await markSent(ctx, job, byText);
+      return { ...texted, detail: `to ${phone} by text, because the email could not be sent` };
+    }
+    ctx.log('warn', 'jobs: an alert could not be sent by email or by text', { id: job.id, sms: texted.skipped ?? texted.error ?? 'failed' });
+    // Email cannot work at all but the text failed for a passing reason: that is the one worth retrying.
+    if (emailed.skipped && !texted.skipped) return { ...texted, detail: `to ${phone} by text` };
+  }
+  return emailed;
 }
 
 function combine(results: DeliveryResult[]): DeliveryResult {
@@ -799,7 +1091,9 @@ export async function deliverMessage(ctx: Ctx, job: Job, extra?: JobRunExtra): P
   const eventType = await getEventType(ctx, booking.eventTypeId);
 
   const rule = stored.ruleId ? eventType?.reminders?.find((r) => r.id === stored.ruleId) : undefined;
-  if (rule && rule.enabled === false) return { ok: false, provider: 'none', skipped: 'rule_disabled' };
+  // A reminder from a rule that was switched off or removed is not sent. (When the event type itself
+  // is gone there is nothing to check against, and the reminder still goes out.)
+  if (stored.ruleId && eventType && (!rule || rule.enabled !== true)) return { ok: false, provider: 'none', skipped: 'rule_disabled' };
   const ruleFits = !!rule && rule.channel === channel && rule.audience === audience;
   const subjectTemplate = (ruleFits && rule?.subject?.trim()) || stored.subject?.trim() || undefined;
   const bodyTemplate = (ruleFits && rule?.body?.trim()) || stored.body?.trim() || undefined;
@@ -845,7 +1139,23 @@ export async function deliverMessage(ctx: Ctx, job: Job, extra?: JobRunExtra): P
       result = await sendEmail(ctx, { ...message, idempotencyKey: `${stored.id}-${recipient.key}` });
     } else if (channel === 'sms') {
       address = recipient.phone;
-      result = await sendSms(ctx, { to: recipient.phone, body: composeBookingSms(ctx, parts(recipient)) });
+      // Texts to invitees go to whatever number was typed on the booking page, so they have a daily
+      // ceiling. Hosts' own texts do not: they chose the number.
+      if (!recipient.host && !(await outboundAllowed(ctx, 'sms', recipient.phone))) {
+        return { ok: false, provider: 'none', skipped: 'daily_limit', detail: `to ${address}` };
+      }
+      result = await sendSms(ctx, { to: recipient.phone, body: composeBookingSms(ctx, parts(recipient)), bookingId: booking.id, kind });
+      if (result.uncertain && kind === 'reminder') {
+        // Twilio got the request but did not answer in time, so the text may well be on the phone.
+        // A second reminder is worse than a missing one: it counts as sent and is not tried again.
+        // (A confirmation or notice is worth the risk of a second copy, so those are retried.)
+        await markSent(ctx, stored, recipient);
+        return {
+          ok: true,
+          provider: result.provider,
+          detail: `to ${address} via ${result.provider}. Twilio did not confirm it in time, so it may not have arrived. It is not sent again, so nobody gets it twice.`,
+        };
+      }
     } else {
       address = recipient.phone;
       result = await startReminderCall(ctx, { booking, purpose: 'reminder' });

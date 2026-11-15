@@ -1,8 +1,9 @@
 /*!
  * Meeting embed. No dependencies, no inline handlers, no injected <style>: safe under a strict CSP.
  *
- *   Inline calendar (resizes itself to its content):
- *     <div data-meeting-url="https://example.com/meeting/intro"></div>
+ *   Inline calendar (resizes itself to its content). The link inside is what shows where this
+ *   script cannot run; it is taken out when the calendar goes in:
+ *     <div data-meeting-url="https://example.com/meeting/intro"><a href="https://example.com/meeting/intro" data-meeting-fallback>Book a meeting</a></div>
  *
  *   Popup (closes with Escape, the close button or a click outside):
  *     <a href="https://example.com/meeting/intro" data-meeting-popup="https://example.com/meeting/intro">Book a meeting</a>
@@ -145,6 +146,9 @@
       frame.style.setProperty('height', height + 'px');
     });
     el.__meetingFrame = frame;
+    // The plain link for pages where this script cannot run: the calendar takes its place.
+    var children = el.children;
+    for (var i = children.length - 1; i >= 0; i--) if (children[i].hasAttribute('data-meeting-fallback')) el.removeChild(children[i]);
     el.appendChild(frame);
   }
 

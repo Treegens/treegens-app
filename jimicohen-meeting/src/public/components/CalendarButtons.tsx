@@ -8,7 +8,10 @@ export interface CalendarButtonsProps {
   inert?: boolean;
 }
 
-/** Add the meeting to Google Calendar, Outlook, or any calendar through an .ics file. */
+/**
+ * Add the meeting to Google Calendar, Outlook.com, Office 365 (work and school accounts), or any
+ * calendar through an .ics file.
+ */
 export function CalendarButtons({ links, inert = false }: CalendarButtonsProps) {
   const stop = inert ? (e: { preventDefault: () => void }) => e.preventDefault() : undefined;
   return (
@@ -17,8 +20,13 @@ export function CalendarButtons({ links, inert = false }: CalendarButtonsProps) 
         Google
       </ButtonLink>
       <ButtonLink href={inert ? '#' : links.outlook} external={!inert} variant="secondary" size="sm" iconLeft={<CalendarPlus size={16} />} onClick={stop}>
-        Outlook
+        Outlook.com
       </ButtonLink>
+      {links.office365 ? (
+        <ButtonLink href={inert ? '#' : links.office365} external={!inert} variant="secondary" size="sm" iconLeft={<CalendarPlus size={16} />} onClick={stop}>
+          Office 365
+        </ButtonLink>
+      ) : null}
       <ButtonLink href={inert ? '#' : links.ics} download="meeting.ics" variant="secondary" size="sm" iconLeft={<Download size={16} />} onClick={stop}>
         Apple or other
       </ButtonLink>

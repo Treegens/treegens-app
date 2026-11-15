@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultOwnerHost, newEventType } from '../../shared/defaults';
+import { DEFAULT_CONSENT_TEXT, DEFAULT_SMS_CONSENT_TEXT, defaultOwnerHost, newEventType, starterEventTypes } from '../../shared/defaults';
 import type { Booking, BookingIndexEntry, CreateBookingRequest, EventType, Host, HostGoogle, Job } from '../../shared/types';
 // The job module first, on purpose: booking.ts is then loaded from inside the import cycle
 // jobs > sms > booking, which is the order that could leave the gcal_sync handler unregistered.
@@ -27,6 +27,7 @@ import { hmacHex, seal } from '../../server/lib/crypto';
 import type { Env, KV } from '../../server/lib/ctx';
 import { HttpError } from '../../server/lib/http';
 import {
+  deleteHost,
   getBooking,
   getBookingIndex,
   getEventType,
@@ -42,7 +43,7 @@ import {
   updateHost,
 } from '../../server/lib/repo';
 import { memoryKV } from '../../server/lib/store';
-import { makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
 
 // ───────────────────────── fixtures ─────────────────────────
 
@@ -65,10 +66,12 @@ const GOOGLE_ENV: Partial<Env> = { overrides: { googleClientId: 'client-id.apps.
 const TWILIO_ENV: Partial<Env> = { overrides: { twilioAccountSid: 'AC' + '0'.repeat(32), twilioAuthToken: 'twilio-token', twilioFromNumber: '+15005550006' } };
 const RESEND_ENV: Partial<Env> = { overrides: { resendApiKey: 're_test_key' } };
 
-async function setup(opts: { now?: string; env?: Partial<Env>; kv?: KV; ip?: string | null } = {}): Promise<TestCtx> {
+async function setup(opts: { now?: string; env?: Partial<Env>; kv?: KV; ip?: string | null; setUp?: boolean } = {}): Promise<TestCtx> {
   const ctx = makeTestCtx({ now: opts.now ?? NOW, env: opts.env, kv: opts.kv, ip: opts.ip });
   await getSite(ctx);
   await updateHost(ctx, OWNER, (h) => ({ ...h, email: 'jimi@example.com' }));
+  // The owner has been through first-run setup, unless the test is about the time before it.
+  if (opts.setUp !== false) await markSetUp(ctx);
   return ctx;
 }
 
@@ -107,6 +110,15 @@ async function connectGoogle(ctx: TestCtx, hostId: string, over: Partial<HostGoo
 async function useResend(ctx: TestCtx): Promise<void> {
   const site = await getSite(ctx);
   await saveSite(ctx, { ...site, email: { ...site.email, fromEmail: 'meetings@jimicohen.com' } });
+}
+
+/**
+ * Lets people bring guests to an event. Guests only hear about a meeting through Google's invitation, so
+ * they are only taken while the owner's calendar is connected (the ctx needs GOOGLE_ENV and a net()).
+ */
+async function allowGuests(ctx: TestCtx, eventId = 'evt_intro', maxGuests = 5): Promise<void> {
+  await connectGoogle(ctx, OWNER);
+  await editEvent(ctx, eventId, (et) => ({ ...et, allowGuests: true, maxGuests }));
 }
 
 function request(over: Partial<CreateBookingRequest> = {}): CreateBookingRequest {
@@ -256,7 +268,8 @@ describe('public views', () => {
     const site = await toPublicSite(ctx);
 
     expect(site.eventTypes.map((e) => e.slug)).toEqual(['intro', 'meeting']);
-    expect(site.features).toEqual({ sms: true, calls: true });
+    // No email provider is set up in this store, so nobody is emailed.
+    expect(site.features).toEqual({ sms: true, calls: true, email: false });
     expect(site.ownerTimezone).toBe('UTC');
     expect(site.assistantName).toBe('Ava');
     expect(site.profile.name).toBe('Jimi Cohen');
@@ -266,7 +279,44 @@ describe('public views', () => {
 
   it('reports no text or call reminders without Twilio', async () => {
     const ctx = await setup();
-    expect((await toPublicSite(ctx)).features).toEqual({ sms: false, calls: false });
+    expect((await toPublicSite(ctx)).features).toEqual({ sms: false, calls: false, email: false });
+  });
+
+  it('says whether invitees are emailed: only with a provider, and in development through the mock outbox', async () => {
+    const resend = await setup({ env: RESEND_ENV });
+    expect((await toPublicSite(resend)).features.email).toBe(false);
+    await useResend(resend);
+    expect((await toPublicSite(resend)).features.email).toBe(true);
+    // Switched off on purpose: nothing goes out, also in development.
+    const site = await getSite(resend);
+    await saveSite(resend, { ...site, email: { ...site.email, provider: 'none' } });
+    expect((await toPublicSite(resend)).features.email).toBe(false);
+
+    const dev = await setup({ env: { mockProviders: true } });
+    expect((await toPublicSite(dev)).features.email).toBe(true);
+  });
+
+  it('lists nothing and offers no event before first-run setup, and opens once the owner is set up', async () => {
+    const ctx = await setup({ setUp: false });
+    const site = await toPublicSite(ctx);
+    expect(site.eventTypes).toEqual([]);
+    expect(site.profile.name).toBe('Jimi Cohen');
+    expect(await getPublicEvent(ctx, 'intro')).toBeNull();
+    expect(await failure(getSlots(ctx, { slug: 'intro', durationMin: 15, fromMs: Date.parse('2026-11-18T00:00:00Z'), toMs: Date.parse('2026-11-19T00:00:00Z') }))).toMatchObject({
+      status: 503,
+      code: 'not_open',
+      message: 'This booking page is not taking bookings yet. Please check back soon.',
+    });
+    const refused = await failure(createBooking(ctx, request()));
+    expect(refused).toMatchObject({ status: 503, code: 'not_open' });
+    expect(await getBookingIndex(ctx)).toEqual([]);
+    expect(await ctx.kv.list('bookings/')).toEqual([]);
+    expect(await listJobs(ctx)).toEqual([]);
+
+    await markSetUp(ctx);
+    expect((await toPublicSite(ctx)).eventTypes.map((e) => e.slug)).toEqual(['intro', 'meeting']);
+    expect((await getPublicEvent(ctx, 'intro'))?.eventType.slug).toBe('intro');
+    expect((await createBooking(ctx, request())).booking.status).toBe('confirmed');
   });
 
   it('never carries host emails, calendar connections or other private fields', async () => {
@@ -313,7 +363,8 @@ describe('public views', () => {
       { id: ALEX, name: 'Alex Kim', title: 'Partnerships', avatarUrl: null },
     ]);
     expect(view.locations).toEqual([
-      { type: 'google_meet', label: 'Google Meet', detail: 'You get the link when you book' },
+      // Nobody has Google connected, so there will be no Meet link to promise.
+      { type: 'google_meet', label: 'Google Meet' },
       { type: 'custom_link', label: 'Video call', detail: 'You get the link when you book' },
       { type: 'phone_invitee_calls', label: 'Phone call', detail: 'You get the number when you book' },
       { type: 'phone_host_calls', label: 'Phone call', detail: 'Jimi calls you' },
@@ -326,6 +377,10 @@ describe('public views', () => {
     expect(text).not.toContain('alex@example.com');
     expect(view.minNoticeMinutes).toBe(240);
     expect(view.maxDaysAhead).toBe(60);
+
+    // With a calendar connected Google makes the link.
+    await connectGoogle(ctx, OWNER);
+    expect(toPublicEventType(ctx, et, await listHosts(ctx)).locations[0]).toEqual({ type: 'google_meet', label: 'Google Meet', detail: 'You get the link when you book' });
   });
 
   it('resolves an unlisted event type by its link, and neither a paused nor an unknown one', async () => {
@@ -342,7 +397,9 @@ describe('public views', () => {
   });
 
   it('shows the invitee their booking without the internal parts', async () => {
-    const ctx = await setup();
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await allowGuests(ctx);
+    net(ctx);
     await editEvent(ctx, 'evt_intro', (et) => ({ ...et, confirmation: { message: 'See you soon, {{invitee_first_name}}.', redirectUrl: 'https://jimicohen.com/thanks' } }));
     const { booking } = await createBooking(ctx, request({ utm: { utm_source: 'newsletter' }, guests: ['grace@example.com'] }));
     const view = await toPublicBooking(ctx, booking);
@@ -366,6 +423,8 @@ describe('public views', () => {
       cancellation: null,
       rescheduledFromStart: null,
       attendanceConfirmed: false,
+      // No email provider here; Google sends the invitation.
+      delivery: { email: false, calendarInvite: true },
     });
     const token = manageToken(ctx, booking.id);
     expect(view.calendarLinks.ics).toBe(`https://jimicohen.com/meeting/api/public/bookings/${booking.id}/ics?t=${token}`);
@@ -532,8 +591,49 @@ describe('createBooking: a solo event', () => {
     await withTwilio.settle();
   });
 
+  it('only asks for and records a reminder call on a meeting that has one, and words text consent without the call', async () => {
+    const ctx = await setup({ env: TWILIO_ENV });
+    net(ctx);
+    // The owner drops the call from the intro call; texts stay.
+    const noCall = await editEvent(ctx, 'evt_intro', (et) => ({ ...et, reminders: et.reminders.filter((r) => r.channel !== 'call') }));
+    expect(toPublicEventType(ctx, noCall, await listHosts(ctx)).reminderChannels).toEqual({ call: false });
+    const meeting = await getEventType(ctx, 'evt_meeting');
+    expect(toPublicEventType(ctx, meeting!, await listHosts(ctx)).reminderChannels).toEqual({ call: true });
+    // A call rule that is off, for the host, or after the meeting is no call for the invitee.
+    for (const rule of [
+      { id: 'r', enabled: false, channel: 'call', audience: 'invitee', trigger: 'before_start', offsetMinutes: 60 },
+      { id: 'r', enabled: true, channel: 'call', audience: 'host', trigger: 'before_start', offsetMinutes: 60 },
+      { id: 'r', enabled: true, channel: 'call', audience: 'invitee', trigger: 'after_end', offsetMinutes: 60 },
+    ] as EventType['reminders']) {
+      expect(toPublicEventType(ctx, { ...noCall, reminders: [rule] }, await listHosts(ctx)).reminderChannels, JSON.stringify(rule)).toEqual({ call: false });
+    }
+
+    const site = await toPublicSite(ctx);
+    expect(site.booking.consentText).toBe(DEFAULT_CONSENT_TEXT);
+    expect(site.booking.consentTextSms).toBe(DEFAULT_SMS_CONSENT_TEXT);
+
+    // A request that still says yes to a call (an old tab, a script) gets no call consent on this meeting.
+    const { booking } = await createBooking(ctx, request({ phone: '+14155552671', consent: { sms: true, call: true } }));
+    expect(booking.consent).toMatchObject({ sms: true, call: false, text: DEFAULT_SMS_CONSENT_TEXT });
+    expect(booking.consent.text).not.toContain('call');
+    expect((await listJobs(ctx)).filter((j) => j.channel === 'call')).toEqual([]);
+    // Texts alone on a meeting that has a call: the same texts-only wording.
+    const textsOnly = await createBooking(ctx, request({ slug: 'meeting', durationMin: 30, start: '2026-11-18T15:00:00.000Z', email: 'grace@example.com', phone: '+14155552672', consent: { sms: true, call: false } }));
+    expect(textsOnly.booking.consent).toMatchObject({ sms: true, call: false, text: DEFAULT_SMS_CONSENT_TEXT });
+
+    // Wording the owner wrote is theirs, and is shown and kept as written.
+    const own = await getSite(ctx);
+    await saveSite(ctx, { ...own, booking: { ...own.booking, consentText: 'You agree to hear from {{host_first_name}} about this meeting.' } });
+    expect((await toPublicSite(ctx)).booking.consentTextSms).toBe('You agree to hear from {{host_first_name}} about this meeting.');
+    const custom = await createBooking(ctx, request({ start: '2026-11-18T16:00:00.000Z', email: 'alan@example.com', phone: '+14155552673', consent: { sms: true, call: false } }));
+    expect(custom.booking.consent.text).toBe('You agree to hear from Jimi about this meeting.');
+    await ctx.settle();
+  });
+
   it('keeps answers with their question, cleans guests and tracking fields', async () => {
-    const ctx = await setup();
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await allowGuests(ctx);
+    net(ctx);
     await editEvent(ctx, 'evt_intro', (et) => ({
       ...et,
       questions: [
@@ -716,7 +816,6 @@ describe('createBooking: validation', () => {
     ['a phone number that is not one', { phone: '12345' }, 'phone'],
     ['a phone number without a country code', { phone: '0712 345678' }, 'phone'],
     ['a phone number of the wrong type', { phone: 4155552671 as unknown as string }, 'phone'],
-    ['too many guests', { guests: ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com', 'f@example.com'] }, 'guests'],
     ['a guest that is not an email', { guests: ['grace@example.com', 'not-an-email'] }, 'guests'],
     ['guests that are not a list', { guests: 'grace@example.com' as unknown as string[] }, 'guests'],
     ['answers that are not an object', { answers: ['x'] as unknown as CreateBookingRequest['answers'] }, 'answers'],
@@ -782,6 +881,107 @@ describe('createBooking: validation', () => {
     await editEvent(ctx, 'evt_intro', (et) => ({ ...et, phone: 'hidden', locations: [{ type: 'phone_host_calls' }] }));
     const toCall = await failure(createBooking(ctx, request()));
     expect(toCall.fields).toEqual({ phone: 'Jimi needs a number to call you on.' });
+  });
+
+  it('refuses a name or a place that carries a link, and keeps ordinary names with dots', async () => {
+    const ctx = await setup();
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, locations: [{ type: 'google_meet' }, { type: 'ask_invitee' }] }));
+    // Many tries in a row: each from its own address, so the hourly limit per address stays out of the way.
+    let visitor = 0;
+    const book = (over: Partial<CreateBookingRequest>) => {
+      ctx.ip = `198.51.100.${++visitor}`;
+      return createBooking(ctx, request(over));
+    };
+    const name = async (value: string) => (await failure(book({ name: value }))).fields;
+    const noLinks = { name: 'Please enter your name, without links.' };
+    for (const value of [
+      'https://evil.example/verify-account now',
+      'evil.example/verify-account now',
+      'www.evil.example',
+      'Visit evil.com today',
+      'PAY AT EVIL.RU',
+      'acme.co billing',
+      'Acme Billing (billing.acme.io)',
+      'mail me at ada@example.org',
+      'evil\\path',
+      'evil。com',
+    ]) {
+      expect(await name(value), value).toEqual(noLinks);
+    }
+    const place = await failure(book({ locationIndex: 1, locationText: 'Join at zoom.us/j/123' }));
+    expect(place.fields).toEqual({ locationText: 'Please give an address or a phone number, without links.' });
+    for (const text of ['https://meet.example/abc', 'www.cafe.example', 'cafe-roma.com', 'room.example/42']) {
+      expect((await failure(book({ locationIndex: 1, locationText: text }))).fields, text).toEqual(place.fields);
+    }
+    expect(await getBookingIndex(ctx)).toEqual([]);
+
+    // Real names and addresses pass, dots, apostrophes and slashes in a street number included.
+    const fine: [string, string][] = [
+      ['J.R.R. Tolkien', 'Flat 3/12 High St, London'],
+      ["Mary-Jane O'Neil Jr.", 'Cafe Roma @ Main Street'],
+      ['J.Smith', 'Office 4.2, Westlands, Nairobi'],
+      ['Dr. Ngozi Okonjo-Iweala', '+254 712 345678'],
+    ];
+    for (const [i, [who, where]] of fine.entries()) {
+      const { booking } = await book({ name: who, locationIndex: 1, locationText: where, email: `ok${i}@example.com`, start: `2026-11-18T1${i}:00:00.000Z` });
+      expect([booking.invitee.name, booking.location.value]).toEqual([who, where]);
+    }
+  });
+
+  it('refuses more guests than the meeting takes', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await allowGuests(ctx, 'evt_intro', 5);
+    net(ctx);
+    const six = ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com', 'f@example.com'];
+    expect((await failure(createBooking(ctx, request({ guests: six })))).fields).toEqual({ guests: 'You can add up to 5 guests.' });
+    expect(await getBookingIndex(ctx)).toEqual([]);
+    expect((await createBooking(ctx, request({ guests: six.slice(0, 5) }))).booking.guests).toEqual(six.slice(0, 5));
+    await ctx.settle();
+  });
+
+  it('only takes guests when Google will invite them, since nothing else tells them', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await addAlex(ctx);
+    await addEvent(ctx, { id: 'evt_team', slug: 'team', title: 'Team call', kind: 'round_robin', hostIds: [OWNER, ALEX], durations: [30], defaultDuration: 30, allowGuests: true, maxGuests: 3 });
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, allowGuests: true, maxGuests: 3 }));
+    net(ctx);
+    const offered = async (id: string) => {
+      const et = await getEventType(ctx, id);
+      const view = toPublicEventType(ctx, et!, await listHosts(ctx));
+      return { allowGuests: view.allowGuests, maxGuests: view.maxGuests, calendarInvite: view.calendarInvite };
+    };
+    const refused = { guests: 'Guests cannot be added to this meeting.' };
+    const withGuest = (over: Partial<CreateBookingRequest> = {}) => request({ guests: ['grace@example.com'], ...over });
+
+    // Nobody brings guests until the owner says so: every starter event and every new one keeps them off.
+    expect(starterEventTypes(NOW).map((et) => et.allowGuests)).toEqual([false, false]);
+    expect(newEventType(NOW, { id: 'evt_new', slug: 'new', title: 'New' }).allowGuests).toBe(false);
+
+    // No calendar connected: Google sends nothing, so guests are neither offered nor taken.
+    expect(await offered('evt_intro')).toEqual({ allowGuests: false, maxGuests: 0, calendarInvite: false });
+    expect((await failure(createBooking(ctx, withGuest()))).fields).toEqual(refused);
+
+    // Connected, but the event keeps the invitee off the calendar event: nobody is invited.
+    await connectGoogle(ctx, OWNER);
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, googleInvite: false }));
+    expect(await offered('evt_intro')).toEqual({ allowGuests: false, maxGuests: 0, calendarInvite: false });
+    expect((await failure(createBooking(ctx, withGuest()))).fields).toEqual(refused);
+
+    // A round robin can land on Alex, who has no calendar connected.
+    expect(await offered('evt_team')).toEqual({ allowGuests: false, maxGuests: 0, calendarInvite: false });
+    expect((await failure(createBooking(ctx, withGuest({ slug: 'team', durationMin: 30 })))).fields).toEqual(refused);
+
+    // A calendar that needs reconnecting invites nobody either.
+    await connectGoogle(ctx, ALEX, { email: 'alex.calendar@gmail.test', status: 'needs_reconnect' });
+    expect(await offered('evt_team')).toEqual({ allowGuests: false, maxGuests: 0, calendarInvite: false });
+
+    // Everything in place: offered and taken.
+    await connectGoogle(ctx, ALEX, { email: 'alex.calendar@gmail.test' });
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, googleInvite: true }));
+    expect(await offered('evt_intro')).toEqual({ allowGuests: true, maxGuests: 3, calendarInvite: true });
+    expect(await offered('evt_team')).toEqual({ allowGuests: true, maxGuests: 3, calendarInvite: true });
+    expect((await createBooking(ctx, withGuest())).booking.guests).toEqual(['grace@example.com']);
+    await ctx.settle();
   });
 
   it('asks where to meet when the invitee chooses the place, and refuses guests the event does not allow', async () => {
@@ -1075,8 +1275,17 @@ describe('createBooking: calendars fail closed', () => {
     const first = await createBooking(ctx, request({ slug: 'team', durationMin: 30 }));
     expect(first.booking.hostIds).toEqual([OWNER]);
     expect(await jobsOf(ctx, (j) => j.kind === 'host_alert')).toHaveLength(1);
-    // Alex would be free by our own records, but nobody knows what his calendar says.
-    expect(await failure(createBooking(ctx, request({ slug: 'team', durationMin: 30, email: 'grace@example.com' })))).toMatchObject({ status: 409, code: 'slot_taken' });
+    // Alex would be free by our own records, but nobody knows what his calendar says. So the visitor is not
+    // told the time was taken (it may well be free): they are asked to try again in a minute.
+    const unknown = await failure(createBooking(ctx, request({ slug: 'team', durationMin: 30, email: 'grace@example.com' })));
+    expect(unknown).toMatchObject({ status: 503, code: 'calendar_unavailable' });
+    expect(unknown.message).toBe('We could not check the calendar just now, so nothing was booked. Please try again in a minute.');
+    expect(await confirmedIndex(ctx)).toHaveLength(1);
+    // A time that is wrong whoever hosts it (inside the notice period) is still refused as such.
+    expect(await failure(createBooking(ctx, request({ slug: 'team', durationMin: 30, start: '2026-11-16T10:00:00.000Z', email: 'soon@example.com' })))).toMatchObject({
+      status: 409,
+      code: 'slot_taken',
+    });
 
     // With every host unreadable the event is closed.
     await connectGoogle(ctx, OWNER, { status: 'needs_reconnect' });
@@ -1190,7 +1399,7 @@ describe('createBooking: calendars fail closed', () => {
 // ───────────────────────── Google Calendar ─────────────────────────
 
 describe('Google Calendar sync', () => {
-  it('writes the event with a Meet link, the co-host, the invitee and guests, and stores what came back', async () => {
+  it('writes the event with a Meet link, the co-host and the invitee, and stores what came back', async () => {
     const ctx = await setup({ env: GOOGLE_ENV });
     await connectGoogle(ctx, OWNER);
     await addAlex(ctx);
@@ -1198,10 +1407,7 @@ describe('Google Calendar sync', () => {
     await updateHost(ctx, OWNER, (h) => ({ ...h, timezone: 'Africa/Nairobi', schedules: [{ ...h.schedules[0], weekly: { ...h.schedules[0].weekly, 3: [{ start: '09:00', end: '20:00' }] } }] }));
     const calls = net(ctx);
 
-    const { booking } = await createBooking(
-      ctx,
-      request({ slug: 'joint', durationMin: 30, phone: '+14155552671', guests: ['grace@example.com'], answers: { q_topic: 'Trees <b>and</b> more' }, name: 'Ada <i>L</i>' }),
-    );
+    const { booking } = await createBooking(ctx, request({ slug: 'joint', durationMin: 30, phone: '+14155552671', answers: { q_topic: 'Trees <b>and</b> more' }, name: 'Ada <i>L' }));
 
     const posts = eventCalls(calls, 'POST');
     expect(posts).toHaveLength(1);
@@ -1211,22 +1417,22 @@ describe('Google Calendar sync', () => {
     const body = posts[0].json;
     // The id google.ts derives from the booking: a later cancellation relies on knowing it.
     expect(body.id).toBe(calendarEventIdFor(booking.id));
-    expect(body.summary).toBe('Joint call: Ada <i>L</i>, Alex Kim and Jimi Cohen');
+    expect(body.summary).toBe('Joint call: Ada <i>L, Alex Kim and Jimi Cohen');
     expect(body.start).toEqual({ dateTime: WED_14, timeZone: 'Africa/Nairobi' });
     expect(body.end).toEqual({ dateTime: '2026-11-18T14:30:00.000Z', timeZone: 'Africa/Nairobi' });
     expect(body.attendees).toEqual([
       { email: 'alex@example.com', displayName: 'Alex Kim', responseStatus: 'accepted' },
-      { email: 'ada@example.com', displayName: 'Ada <i>L</i>', responseStatus: 'accepted' },
-      { email: 'grace@example.com' },
+      { email: 'ada@example.com', displayName: 'Ada <i>L', responseStatus: 'accepted' },
     ]);
     expect(body.conferenceData.createRequest).toMatchObject({ requestId: booking.id, conferenceSolutionKey: { type: 'hangoutsMeet' } });
     expect(body.location).toBeUndefined();
     expect(body.extendedProperties.private.meetingBookingId).toBe(booking.id);
-    expect(body.description).toContain('Booked by Ada &lt;i&gt;L&lt;/i&gt; (ada@example.com)');
+    // Without guests Google writes to the hosts and the invitee only: the full picture, as before.
+    expect(body.description).toContain('Booked by Ada &lt;i&gt;L (ada@example.com)');
     expect(body.description).toContain('Phone: +14155552671');
-    expect(body.description).toContain('Guests: grace@example.com');
     expect(body.description).toContain('What would you like to talk about? Trees &lt;b&gt;and&lt;/b&gt; more');
     expect(body.description).toContain(`Reschedule or cancel: https://jimicohen.com/meeting/booking/${booking.id}?t=${manageToken(ctx, booking.id)}`);
+    expect(body.description).toContain(`Booking details in the dashboard: https://jimicohen.com/meeting/admin/bookings?b=${booking.id}`);
 
     // The owner is preferred as organiser even though Alex is listed first.
     expect(booking.google).toEqual({
@@ -1243,12 +1449,65 @@ describe('Google Calendar sync', () => {
     await ctx.settle();
   });
 
+  it('puts nothing a visitor typed into what Google sends to the guests they chose', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await addAlex(ctx);
+    await addEvent(ctx, { id: 'evt_joint', slug: 'joint', title: 'Joint call', kind: 'collective', hostIds: [ALEX, OWNER], durations: [30], defaultDuration: 30 });
+    await allowGuests(ctx, 'evt_joint');
+    const calls = net(ctx);
+
+    // The shape of the reported abuse: a business-like name, strangers as guests, a pitch in the answer.
+    const guests = ['victim1@example.org', 'v2@example.org', 'v3@example.org'];
+    const { booking } = await createBooking(
+      ctx,
+      request({
+        slug: 'joint',
+        durationMin: 30,
+        name: 'Acme Billing Dept',
+        phone: '+14155552671',
+        guests,
+        answers: { q_topic: 'Your invoice is overdue. Pay now at https://evil.example/pay to avoid suspension.' },
+      }),
+    );
+
+    const body = eventCalls(calls, 'POST')[0].json;
+    expect(body.summary).toBe('Joint call: Alex Kim and Jimi Cohen');
+    expect(body.attendees).toEqual([
+      { email: 'alex@example.com', displayName: 'Alex Kim', responseStatus: 'accepted' },
+      { email: 'ada@example.com', responseStatus: 'accepted' },
+      ...guests.map((email) => ({ email })),
+    ]);
+    // Facts the owner wrote, and the way from the calendar to the answers for the host.
+    expect(body.description).toBe(['Joint call with Alex Kim and Jimi Cohen', '', `Booking details in the dashboard: https://jimicohen.com/meeting/admin/bookings?b=${booking.id}`].join('\n'));
+    const sent = JSON.stringify(body);
+    for (const visitorText of ['Acme', 'invoice', 'evil.example', '+14155552671', manageToken(ctx, booking.id)]) expect(sent).not.toContain(visitorText);
+    // The hosts still have everything, in the booking itself.
+    expect(booking.answers[0].value).toContain('invoice');
+    await ctx.settle();
+  });
+
+  it('with guests, says where in words only the owner chose', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await allowGuests(ctx);
+    await editEvent(ctx, 'evt_intro', (et) => ({ ...et, phone: 'optional', locations: [{ type: 'ask_invitee' }, { type: 'phone_host_calls' }, { type: 'in_person', value: '12 Garden Lane, Nairobi' }] }));
+    const calls = net(ctx);
+    const where = async (over: Partial<CreateBookingRequest>, start: string) => {
+      await createBooking(ctx, request({ guests: ['grace@example.com'], start, email: `${start.slice(11, 13)}@example.com`, ...over }));
+      const body = eventCalls(calls, 'POST').at(-1)!.json;
+      return { location: body.location, description: body.description.split('\n')[1] };
+    };
+    expect(await where({ locationIndex: 0, locationText: 'My office, 3rd floor' }, '2026-11-18T10:00:00.000Z')).toEqual({ location: 'Location', description: 'Where: Location' });
+    expect(await where({ locationIndex: 1, phone: '+14155552671' }, '2026-11-18T11:00:00.000Z')).toEqual({ location: 'Phone call', description: 'Where: Phone call' });
+    expect(await where({ locationIndex: 2 }, '2026-11-18T12:00:00.000Z')).toEqual({ location: '12 Garden Lane, Nairobi', description: 'Where: 12 Garden Lane, Nairobi' });
+    await ctx.settle();
+  });
+
   it('leaves the invitee off the event when the event type says so, and writes the place for meetings without Meet', async () => {
     const ctx = await setup({ env: GOOGLE_ENV });
     await connectGoogle(ctx, OWNER);
     await editEvent(ctx, 'evt_intro', (et) => ({ ...et, googleInvite: false, locations: [{ type: 'in_person', value: '12 Garden Lane, Nairobi' }] }));
     const calls = net(ctx);
-    const { booking } = await createBooking(ctx, request({ guests: ['grace@example.com'] }));
+    const { booking } = await createBooking(ctx, request());
 
     const body = eventCalls(calls, 'POST')[0].json;
     expect(body.attendees).toEqual([]);
@@ -1309,6 +1568,86 @@ describe('Google Calendar sync', () => {
     expect(repaired.location.joinUrl).toBe(MEET_LINK);
     expect(await jobsOf(ctx, (j) => j.type === 'gcal_sync')).toEqual([]);
     expect(eventCalls(calls, 'POST').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('picks up a Meet link Google was still creating, without changing the event again', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    let ready = false;
+    const pendingEvent = (id: string) => ({ id, status: 'confirmed', htmlLink: 'https://calendar.google.com/calendar/event?eid=abc', conferenceData: { createRequest: { status: { statusCode: 'pending' } } } });
+    const calls = net(ctx, (call) => {
+      if (!call.url.startsWith(EVENTS_URL)) return undefined;
+      if (call.method === 'POST') return jsonResponse(pendingEvent(call.json.id));
+      const id = decodeURIComponent(call.url.slice(EVENTS_URL.length + 1).split('?')[0]);
+      if (call.method === 'GET') return jsonResponse(ready ? { id, status: 'confirmed', hangoutLink: MEET_LINK } : pendingEvent(id));
+      return undefined;
+    });
+
+    const { booking } = await createBooking(ctx, request());
+    // Looked again three times right away, then left it to a job: the booking stands, without a link for now.
+    expect(eventCalls(calls, 'GET')).toHaveLength(3);
+    expect(booking.google).toMatchObject({ hostId: OWNER, eventId: calendarEventIdFor(booking.id), error: 'Google has not finished creating the Meet link yet. Trying again shortly.' });
+    expect(booking.location.joinUrl).toBeUndefined();
+    expect(booking.timeline.map((t) => t.type)).toEqual(['created', 'calendar_synced', 'meet_link_pending']);
+    expect((await jobsOf(ctx, (j) => j.type === 'gcal_sync')).map((j) => j.dueAt)).toEqual(['2026-11-16T09:02:00.000Z']);
+    await ctx.settle();
+
+    // Google has the link by the time the job runs. It is read, and nothing on the event changes (no update emails).
+    ready = true;
+    calls.length = 0;
+    ctx.clock.advance(2 * 60_000);
+    expect(await runDueJobs(ctx)).toMatchObject({ processed: 1, failed: 0 });
+    expect(calls.filter((c) => c.url.startsWith(EVENTS_URL)).map((c) => c.method)).toEqual(['GET']);
+    const repaired = (await getBooking(ctx, booking.id))!;
+    expect(repaired.location.joinUrl).toBe(MEET_LINK);
+    expect(repaired.google).toMatchObject({ meetUrl: MEET_LINK });
+    expect(repaired.google?.error).toBeUndefined();
+    expect(repaired.timeline.map((t) => t.type)).toContain('meet_link_added');
+    expect(await jobsOf(ctx, (j) => j.type === 'gcal_sync')).toEqual([]);
+    expect((await toPublicBooking(ctx, repaired)).location.joinUrl).toBe(MEET_LINK);
+  });
+
+  it('takes a Meet link that arrives while it looks again right after the insert', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    let looks = 0;
+    net(ctx, (call) => {
+      if (!call.url.startsWith(EVENTS_URL)) return undefined;
+      if (call.method === 'POST') return jsonResponse({ id: call.json.id, status: 'confirmed', conferenceData: { createRequest: { status: { statusCode: 'pending' } } } });
+      if (call.method === 'GET') return jsonResponse(++looks >= 2 ? { id: 'x', hangoutLink: MEET_LINK } : { id: 'x', conferenceData: { createRequest: { status: { statusCode: 'pending' } } } });
+      return undefined;
+    });
+    const { booking } = await createBooking(ctx, request());
+    expect(looks).toBe(2);
+    expect(booking.location.joinUrl).toBe(MEET_LINK);
+    expect(booking.google?.error).toBeUndefined();
+    expect(await jobsOf(ctx, (j) => j.type === 'gcal_sync')).toEqual([]);
+    await ctx.settle();
+  });
+
+  it('tells the owner once when the Meet link never comes, and keeps looking', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    const pending = { status: 'confirmed', conferenceData: { createRequest: { status: { statusCode: 'pending' } } } };
+    net(ctx, (call) => (call.url.startsWith(EVENTS_URL) && call.method !== 'DELETE' ? jsonResponse({ id: call.json?.id ?? 'x', ...pending }) : undefined));
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+
+    // The job's four tries: now plus 2, 10 and 30 minutes. Only the last one, still without a link, alerts.
+    for (const [minutes, alerts] of [[2, 0], [2, 0], [10, 0], [30, 1]] as const) {
+      ctx.clock.advance(minutes * 60_000);
+      await runDueJobs(ctx, { onlyBookingId: booking.id });
+      expect(await jobsOf(ctx, (j) => j.kind === 'host_alert'), `after ${minutes} more minutes`).toHaveLength(alerts);
+    }
+    const [alert] = await jobsOf(ctx, (j) => j.kind === 'host_alert');
+    expect(alert).toMatchObject({ channel: 'email', audience: 'host', subject: 'No Meet link yet: Intro call with Ada Lovelace' });
+    expect(alert.body).toContain('Google did not finish creating the Meet link for "Intro call" with Ada Lovelace on Wednesday, November 18, 2026 at 2:00 PM UTC.');
+    expect(alert.body).not.toContain('—');
+    // The booking still says what is missing, so the periodic check asks Google again later, without a second alert.
+    expect((await getBooking(ctx, booking.id))?.google?.error).toBe('Google has not finished creating the Meet link yet. Trying again shortly.');
+    ctx.clock.advance(3 * 60 * 60_000);
+    expect((await reconcileBookings(ctx)).requeued).toBe(1);
+    await ctx.settle();
   });
 
   it('does not wait for a slow Google: the booking answers in time and the event arrives in the background', async () => {
@@ -1755,12 +2094,84 @@ describe('rescheduleBooking', () => {
     expect(moved).toMatchObject({ hostIds: [ALEX], durationMin: 60, end: '2026-11-19T15:00:00.000Z' });
   });
 
+  it('puts a moved round robin booking on the calendar of the host who now holds it, and tells that host it is new to them', async () => {
+    const ctx = await setup({ env: { overrides: { ...GOOGLE_ENV.overrides, ...RESEND_ENV.overrides } } });
+    await useResend(ctx);
+    await addAlex(ctx);
+    await connectGoogle(ctx, OWNER);
+    await connectGoogle(ctx, ALEX, { email: 'alex.calendar@gmail.test' });
+    await addEvent(ctx, { id: 'evt_team', slug: 'team', title: 'Team call', kind: 'round_robin', hostIds: [OWNER, ALEX], durations: [30], defaultDuration: 30 });
+    const calls = net(ctx);
+    // Jimi already has the intro call at 10:00 on Wednesday, so the team call at 10:00 goes to Alex, on Alex's calendar.
+    await createBooking(ctx, request({ start: '2026-11-18T10:00:00.000Z', email: 'grace@example.com' }));
+    const team = (await createBooking(ctx, request({ slug: 'team', durationMin: 30, start: '2026-11-18T10:00:00.000Z' }))).booking;
+    expect(team.hostIds).toEqual([ALEX]);
+    expect(team.google?.hostId).toBe(ALEX);
+    await ctx.settle();
+
+    // Alex leaves: taken off the event type, then removed from the team (which disconnects his Google).
+    await editEvent(ctx, 'evt_team', (et) => ({ ...et, hostIds: [OWNER] }));
+    await updateHost(ctx, ALEX, (h) => ({ ...h, google: null }));
+    await deleteHost(ctx, ALEX);
+    calls.length = 0;
+
+    // Ada moves her meeting. Nobody is left but Jimi, so it is Jimi's now.
+    const moved = await rescheduleBooking(ctx, team.id, { startIso: '2026-11-18T14:00:00.000Z', by: 'invitee', timezone: 'Europe/London' });
+    expect(moved.hostIds).toEqual([OWNER]);
+    // The event is written to Jimi's calendar with the new time; Alex's calendar cannot be reached any more.
+    const posts = eventCalls(calls, 'POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].json.start.dateTime).toBe('2026-11-18T14:00:00.000Z');
+    expect(posts[0].json.attendees.map((a: { email: string }) => a.email)).toEqual(['ada@example.com']);
+    expect(moved.google).toMatchObject({ hostId: OWNER, eventId: calendarEventIdFor(team.id), meetUrl: MEET_LINK });
+    expect(moved.google?.error).toBeUndefined();
+    expect(moved.location.joinUrl).toBe(MEET_LINK);
+    expect(moved.timeline.filter((t) => t.type.startsWith('calendar_')).map((t) => `${t.type}: ${t.detail ?? ''}`).slice(-2)).toEqual([
+      'calendar_event_left: The event could not be taken off the calendar of a host who is no longer connected.',
+      'calendar_synced: Added to the Google Calendar of Jimi Cohen',
+    ]);
+
+    // Jimi hears about a meeting that is new to him; Ada gets the new time.
+    await ctx.settle();
+    expect(emailsTo(calls, 'jimi@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^New booking: Ada Lovelace for Team call/)]);
+    expect(emailsTo(calls, 'ada@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^New time: Team call with Jimi Cohen/)]);
+  });
+
+  it('moves the event off the calendar of a host who is no longer on the booking when that calendar can still be reached', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await addAlex(ctx);
+    await connectGoogle(ctx, OWNER);
+    await connectGoogle(ctx, ALEX, { email: 'alex.calendar@gmail.test' });
+    await addEvent(ctx, { id: 'evt_team', slug: 'team', title: 'Team call', kind: 'round_robin', hostIds: [OWNER, ALEX], durations: [30], defaultDuration: 30 });
+    const calls = net(ctx);
+    await createBooking(ctx, request({ start: '2026-11-18T10:00:00.000Z', email: 'grace@example.com' }));
+    const team = (await createBooking(ctx, request({ slug: 'team', durationMin: 30, start: '2026-11-18T10:00:00.000Z' }))).booking;
+    expect(team.google?.hostId).toBe(ALEX);
+    await ctx.settle();
+    // Whatever handed the meeting to Jimi (only the record says so), the calendar has to follow.
+    await updateBooking(ctx, team.id, (b) => ({ ...b, hostIds: [OWNER], google: b.google ? { ...b.google, error: 'moved to another host' } : b.google }));
+    calls.length = 0;
+
+    await syncBookingToCalendar(ctx, team.id);
+    expect(eventCalls(calls, 'DELETE').map((c) => c.url.split('?')[0])).toEqual([`${EVENTS_URL}/${calendarEventIdFor(team.id)}`]);
+    expect(eventCalls(calls, 'POST')).toHaveLength(1);
+    const after = await getBooking(ctx, team.id);
+    expect(after?.google).toMatchObject({ hostId: OWNER, eventId: calendarEventIdFor(team.id) });
+    expect(after?.google?.error).toBeUndefined();
+    expect(after?.timeline.map((t) => t.type)).toContain('calendar_event_removed');
+  });
+
   it('fails closed on an unreadable calendar and keeps the booking where it was', async () => {
     const ctx = await setup({ env: GOOGLE_ENV });
     const { booking } = await createBooking(ctx, request());
     await connectGoogle(ctx, OWNER, { status: 'needs_reconnect' });
     net(ctx);
-    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: NEW_START, by: 'invitee' }))).toMatchObject({ status: 503, code: 'calendar_unavailable' });
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: NEW_START, by: 'invitee' }))).toMatchObject({
+      status: 503,
+      code: 'calendar_unavailable',
+      // A move books nothing new: it says what did not happen, and when to try again.
+      message: 'We could not check the calendar just now, so your meeting was not moved. Please try again in a minute.',
+    });
     expect((await getBooking(ctx, booking.id))).toMatchObject({ start: WED_14, rescheduleCount: 0 });
     expect((await getBookingIndex(ctx))[0].start).toBe(WED_14);
     expect(await jobsOf(ctx, (j) => j.kind === 'host_alert')).toHaveLength(1);
@@ -2014,12 +2425,12 @@ describe('getSlots', () => {
     const first = await getSlots(ctx, { slug: 'intro', durationMin: 15, ...day('2026-11-18') });
     expect(first.slots.map((s) => s.start.slice(11, 16))).toEqual(['16:00', '16:15', '16:30', '16:45']);
 
-    // Another visitor in another zone asks for a slightly different range: the calendar is asked in whole
-    // days, so both share one answer and Google is not asked again.
+    // Another visitor in another zone asks for a different range: the calendar is read in fixed 31 day
+    // blocks counted from 1970 (busy.ts), so both share one answer and Google is not asked again.
     ctx.clock.advance(20_000);
     await getSlots(ctx, { slug: 'intro', durationMin: 15, fromMs: Date.parse('2026-11-17T22:00:00Z'), toMs: Date.parse('2026-11-19T10:00:00Z') });
     expect(calls.filter((c) => c.url === FREEBUSY_URL)).toHaveLength(1);
-    expect(calls.filter((c) => c.url === FREEBUSY_URL)[0].json).toMatchObject({ timeMin: '2026-11-17T00:00:00.000Z', timeMax: '2026-11-20T00:00:00.000Z' });
+    expect(calls.filter((c) => c.url === FREEBUSY_URL)[0].json).toMatchObject({ timeMin: '2026-11-13T00:00:00.000Z', timeMax: '2026-12-14T00:00:00.000Z' });
 
     ctx.clock.advance(61_000);
     await getSlots(ctx, { slug: 'intro', durationMin: 15, ...day('2026-11-18') });
@@ -2199,12 +2610,21 @@ describe('reconcileBookings', () => {
     expect(await reconcileBookings(ctx)).toEqual({ checked: 1, removed: 0, freed: 0, moved: 0, requeued: 0 });
   });
 
-  it('lets the invitee simply try the move again while it waits to be healed', async () => {
+  it('asks the invitee to wait while an unfinished move is pending, and lets them move it once that is healed', async () => {
     const ctx = await setup();
     const { booking } = await createBooking(ctx, request());
     await mutateBookingIndex(ctx, (entries) => entries.map((e) => (e.id === booking.id ? { ...e, start: '2026-11-19T10:00:00.000Z', end: '2026-11-19T10:15:00.000Z' } : e)));
+    // Record and index disagree: from here that looks exactly like another move still in flight, which
+    // a second move must not overtake (it could leave the record on a time the index does not protect).
+    const refused = await failure(rescheduleBooking(ctx, booking.id, { startIso: '2026-11-19T11:00:00.000Z', by: 'invitee' }));
+    expect(refused).toMatchObject({ status: 409, code: 'changed' });
+    expect((await getBookingIndex(ctx))[0].start).toBe('2026-11-19T10:00:00.000Z');
+    expect(await reconcileBookings(ctx)).toMatchObject({ moved: 0 });
+    ctx.clock.advance(30 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ moved: 1 });
+
     const moved = await rescheduleBooking(ctx, booking.id, { startIso: '2026-11-19T11:00:00.000Z', by: 'invitee' });
-    expect(moved).toMatchObject({ start: '2026-11-19T11:00:00.000Z', rescheduledFromStart: WED_14, rescheduleCount: 1 });
+    expect(moved).toMatchObject({ start: '2026-11-19T11:00:00.000Z', rescheduledFromStart: '2026-11-19T10:00:00.000Z', rescheduleCount: 2 });
     expect((await getBookingIndex(ctx))[0].start).toBe('2026-11-19T11:00:00.000Z');
     expect(await reconcileBookings(ctx)).toEqual({ checked: 1, removed: 0, freed: 0, moved: 0, requeued: 0 });
   });
@@ -2231,5 +2651,552 @@ describe('reconcileBookings', () => {
     expect((await reconcileBookings(ctx)).checked).toBe(1);
     ctx.clock.set('2026-11-20T00:00:00.000Z');
     expect((await reconcileBookings(ctx)).checked).toBe(0);
+  });
+});
+
+// ───────────────────────── storage that loses answers, fails, or stalls ─────────────────────────
+
+type SetOptions = Parameters<KV['setJSON']>[2];
+
+/**
+ * A store whose next armed, matching conditional write is applied but answered "not modified": what the
+ * storage client returns when it re-sends a write whose first answer got lost on the way back.
+ */
+function lossyKV(match: (key: string, value: unknown) => boolean): KV & { arm(): void; lost: string[] } {
+  const inner = memoryKV();
+  let armed = false;
+  const lost: string[] = [];
+  return {
+    ...inner,
+    lost,
+    arm() {
+      armed = true;
+    },
+    async setJSON(key: string, value: unknown, opts?: SetOptions) {
+      const result = await inner.setJSON(key, value, opts);
+      if (armed && result.modified && (opts?.onlyIfMatch || opts?.onlyIfNew) && match(key, value)) {
+        armed = false;
+        lost.push(key);
+        return { modified: false };
+      }
+      return result;
+    },
+  };
+}
+
+/** A store whose writes to matching keys throw while `failing` is on. */
+function failingKV(match: (key: string) => boolean): KV & { failing: boolean; failures: number } {
+  const inner = memoryKV();
+  const kv = {
+    ...inner,
+    failing: false,
+    failures: 0,
+    async setJSON(key: string, value: unknown, opts?: SetOptions) {
+      if (kv.failing && match(key)) {
+        kv.failures++;
+        throw new Error('storage write failed');
+      }
+      return inner.setJSON(key, value, opts);
+    },
+  };
+  return kv;
+}
+
+const followUpOf = async (ctx: TestCtx, id: string) => (await getBooking(ctx, id))?.followUp;
+
+describe('answers lost on the way back from storage', () => {
+  it('a cancellation whose save went through without an answer still frees the time, removes the event and tells people', async () => {
+    const kv = lossyKV((key, value) => key.startsWith('bookings/') && (value as Booking).status === 'cancelled');
+    const ctx = await setup({ kv, env: { overrides: { ...GOOGLE_ENV.overrides, ...RESEND_ENV.overrides } } });
+    await useResend(ctx);
+    await connectGoogle(ctx, OWNER);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+
+    kv.arm();
+    const cancelled = await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    await ctx.settle();
+    expect(kv.lost).toEqual([`bookings/${booking.id}`]);
+    expect(cancelled.status).toBe('cancelled');
+    expect((await getBookingIndex(ctx))[0]).toMatchObject({ id: booking.id, status: 'cancelled' });
+    expect(eventCalls(calls, 'DELETE')).toHaveLength(1);
+    expect(emailsTo(calls, 'ada@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^Cancelled: Intro call/)]);
+    expect(emailsTo(calls, 'jimi@example.com')).toHaveLength(1);
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.followUp).toBeUndefined();
+    expect(stored.google?.error).toBeUndefined();
+    expect(stored.timeline.filter((t) => t.type === 'cancelled')).toHaveLength(1);
+  });
+
+  it('a new booking whose index write went through without an answer is booked, not turned away as taken', async () => {
+    const kv = lossyKV((key) => key === 'index/bookings');
+    const ctx = await setup({ kv });
+    kv.arm();
+    const { booking } = await createBooking(ctx, request());
+    expect(kv.lost).toEqual(['index/bookings']);
+    expect(booking.status).toBe('confirmed');
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([booking.id]);
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation')).toHaveLength(1);
+  });
+
+  it('a move whose save went through without an answer is counted once', async () => {
+    const kv = lossyKV((key, value) => key.startsWith('bookings/') && (value as Booking).rescheduleCount === 1);
+    const ctx = await setup({ kv });
+    const { booking } = await createBooking(ctx, request());
+    kv.arm();
+    const moved = await rescheduleBooking(ctx, booking.id, { startIso: '2026-11-19T10:00:00.000Z', by: 'invitee' });
+    expect(kv.lost).toHaveLength(1);
+    expect(moved).toMatchObject({ start: '2026-11-19T10:00:00.000Z', rescheduledFromStart: WED_14, rescheduleCount: 1 });
+    expect(moved.timeline.filter((t) => t.type === 'rescheduled')).toHaveLength(1);
+    expect(await jobsOf(ctx, (j) => j.kind === 'rescheduled' && j.audience === 'invitee')).toHaveLength(1);
+  });
+});
+
+// ───────────────────────── moving a meeting: limits and who is acting ─────────────────────────
+
+describe('moving a meeting from the booking page', () => {
+  const THU = (hour: number) => `2026-11-19T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+  it('allows five moves of one meeting, then asks the invitee to get in touch with the host', async () => {
+    const ctx = await setup();
+    const { booking } = await createBooking(ctx, request());
+    for (let i = 0; i < 5; i++) {
+      if (i === 3) ctx.clock.advance(HOUR); // three an hour
+      await rescheduleBooking(ctx, booking.id, { startIso: THU(10 + i), by: 'invitee' });
+    }
+    ctx.clock.advance(HOUR);
+    const refused = await failure(rescheduleBooking(ctx, booking.id, { startIso: THU(16), by: 'invitee' }));
+    expect(refused).toMatchObject({ status: 409, code: 'move_limit' });
+    expect(refused.message).toMatch(/get in touch with your host/);
+    // The page opened from a host's link is held to the same limit: the invitee has that link too.
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: THU(16), by: 'invitee', actor: 'host' }))).toMatchObject({ status: 409, code: 'move_limit' });
+    expect((await getBooking(ctx, booking.id))?.rescheduleCount).toBe(5);
+  });
+
+  it('allows three moves an hour, and an attempt at a time that is taken does not count', async () => {
+    const ctx = await setup();
+    const { booking } = await createBooking(ctx, request());
+    await createBooking(ctx, request({ start: THU(12), email: 'grace@example.com' }));
+    for (let i = 0; i < 3; i++) {
+      expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: THU(12), by: 'invitee' }))).toMatchObject({ code: 'slot_taken' });
+    }
+    for (const hour of [10, 11, 13]) await rescheduleBooking(ctx, booking.id, { startIso: THU(hour), by: 'invitee' });
+    const fourth = await failure(rescheduleBooking(ctx, booking.id, { startIso: THU(14), by: 'invitee' }));
+    expect(fourth).toMatchObject({ status: 429, code: 'move_limit' });
+    expect(fourth.headers?.['Retry-After']).toBeTruthy();
+    expect((await getBooking(ctx, booking.id))?.start).toBe(THU(13));
+    ctx.clock.advance(HOUR);
+    expect((await rescheduleBooking(ctx, booking.id, { startIso: THU(14), by: 'invitee' })).start).toBe(THU(14));
+  });
+
+  it('does not text invitees about a move they just made themselves, but does when a host moved it, and keeps their zone', async () => {
+    const ctx = await setup({ env: { overrides: { ...RESEND_ENV.overrides, ...TWILIO_ENV.overrides } } });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request({ timezone: 'America/New_York', phone: '+14155552671', consent: { sms: true, call: false } }));
+    await ctx.settle();
+    const texts = () => calls.filter((c) => c.url.startsWith(TWILIO_ROOT) && c.url.includes('/Messages'));
+    calls.length = 0;
+
+    const own = await rescheduleBooking(ctx, booking.id, { startIso: THU(15), by: 'invitee', timezone: 'America/Chicago' });
+    await ctx.settle();
+    expect(own.invitee.timezone).toBe('America/Chicago');
+    expect(texts()).toEqual([]);
+    expect(emailsTo(calls, 'ada@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^New time: Intro call/)]);
+    calls.length = 0;
+
+    // The same page opened from a host's link, in a Nairobi browser.
+    const byHost = await rescheduleBooking(ctx, booking.id, { startIso: THU(16), by: 'invitee', actor: 'host', timezone: 'Africa/Nairobi' });
+    await ctx.settle();
+    expect(byHost.invitee.timezone).toBe('America/Chicago');
+    expect(byHost.timeline.filter((t) => t.type === 'rescheduled').at(-1)?.detail).toBe('Moved from Thursday, November 19, 2026 at 3:00 PM UTC by a host, from the booking page');
+    expect(texts()).toHaveLength(1);
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
+  });
+
+  it('gives a host link no more rights than the invitee has: a meeting that started cannot be moved or cancelled with it', async () => {
+    const ctx = await setup();
+    const { booking } = await createBooking(ctx, request());
+    ctx.clock.set('2026-11-18T14:05:00.000Z');
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: THU(10), by: 'invitee', actor: 'host' }))).toMatchObject({ status: 410, code: 'too_late' });
+    expect(await failure(cancelBooking(ctx, booking.id, { by: 'invitee', actor: 'host' }))).toMatchObject({ status: 410, code: 'too_late' });
+  });
+
+  it('records a cancellation through a host link as a host\'s, tells the owner and texts the invitee', async () => {
+    const ctx = await setup({ env: { overrides: { ...RESEND_ENV.overrides, ...TWILIO_ENV.overrides } } });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request({ phone: '+14155552671', consent: { sms: true, call: false } }));
+    await ctx.settle();
+    calls.length = 0;
+    const cancelled = await cancelBooking(ctx, booking.id, { by: 'invitee', actor: 'host', reason: 'Clash' });
+    await ctx.settle();
+    expect(cancelled.cancellation).toEqual({ at: NOW, by: 'host', reason: 'Clash', via: 'host_link' });
+    expect(cancelled.timeline.find((t) => t.type === 'cancelled')?.detail).toBe('Cancelled by a host, from the booking page: Clash');
+    // Any host (or the invitee) may hold that link: the owner is told, unlike a cancellation in the dashboard.
+    expect(emailsTo(calls, 'jimi@example.com')).toHaveLength(1);
+    expect(calls.filter((c) => c.url.startsWith(TWILIO_ROOT) && c.url.includes('/Messages'))).toHaveLength(1);
+  });
+
+  // The two interleavings of overlapping moves that matter. R1 (to Thursday) stalls at the marked point,
+  // R2 (to Friday) runs completely, then R1 carries on. Record and index must agree afterwards.
+  async function overlapping(stallAt: 'after the index swap' | 'before reading the index') {
+    const inner = memoryKV();
+    let armed = false;
+    let stalled: Promise<void> | null = null;
+    let resume: () => void = () => undefined;
+    const stall = async () => {
+      armed = false;
+      stalled = new Promise<void>((resolve) => (resume = resolve));
+      await stalled;
+    };
+    const kv: KV = {
+      ...inner,
+      async getJSONWithEtag<T>(key: string) {
+        if (armed && stallAt === 'after the index swap' && key.startsWith('bookings/')) await stall();
+        return inner.getJSONWithEtag<T>(key);
+      },
+      async getJSON<T>(key: string) {
+        if (armed && stallAt === 'before reading the index' && key === 'index/bookings') await stall();
+        return inner.getJSON<T>(key);
+      },
+    };
+    const ctx = await setup({ kv });
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    armed = true;
+    const outcome = (work: Promise<Booking>) => work.then((b) => `moved to ${b.start}`, (e: HttpError) => `${e.status} ${e.code}`);
+    const first = outcome(rescheduleBooking(ctx, booking.id, { startIso: THU(10), by: 'invitee' }));
+    while (!stalled) await new Promise((resolve) => setTimeout(resolve, 1));
+    const second = await outcome(rescheduleBooking(ctx, booking.id, { startIso: '2026-11-20T11:00:00.000Z', by: 'invitee' }));
+    resume();
+    const firstAnswer = await first;
+    await ctx.settle();
+    const record = (await getBooking(ctx, booking.id))!;
+    const entry = (await getBookingIndex(ctx)).find((e) => e.id === booking.id)!;
+    return { first: firstAnswer, second, record: record.start, index: entry.start };
+  }
+
+  it('refuses a second move that starts while the first one has taken the index but not yet saved the record', async () => {
+    expect(await overlapping('after the index swap')).toEqual({ first: `moved to ${THU(10)}`, second: '409 changed', record: THU(10), index: THU(10) });
+  });
+
+  it('refuses a move whose reads straddle another move, before it changes anything', async () => {
+    const fri = '2026-11-20T11:00:00.000Z';
+    expect(await overlapping('before reading the index')).toEqual({ first: '409 changed', second: `moved to ${fri}`, record: fri, index: fri });
+  });
+
+  it('counts the very same move once when two requests ask for it at the same moment', async () => {
+    const kv = racingKV(2);
+    const ctx = await setup({ kv, env: RESEND_ENV });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+    kv.arm();
+    const [a, b] = await Promise.all([
+      rescheduleBooking(ctx, booking.id, { startIso: THU(10), by: 'invitee' }),
+      rescheduleBooking(ctx, booking.id, { startIso: THU(10), by: 'invitee' }),
+    ]);
+    await ctx.settle();
+    expect([a.start, b.start]).toEqual([THU(10), THU(10)]);
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored).toMatchObject({ start: THU(10), rescheduledFromStart: WED_14, rescheduleCount: 1 });
+    expect(stored.timeline.filter((t) => t.type === 'rescheduled')).toHaveLength(1);
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
+  });
+});
+
+// ───────────────────────── follow-up work that survives a failure ─────────────────────────
+
+describe('follow-up work after a change', () => {
+  const NEW_START = '2026-11-19T10:00:00.000Z';
+
+  it('finishes the reminders and notices of a move whose messages could not be queued', async () => {
+    const kv = failingKV((key) => key.startsWith('jobs/'));
+    const ctx = await setup({ kv, env: RESEND_ENV });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+    kv.failing = true;
+    const moved = await rescheduleBooking(ctx, booking.id, { startIso: NEW_START, by: 'invitee' });
+    kv.failing = false;
+    expect(kv.failures).toBeGreaterThan(0);
+    expect(moved.start).toBe(NEW_START);
+    expect(moved.followUp).toMatchObject({ kind: 'rescheduled', by: 'invitee' });
+    expect(moved.timeline.map((t) => t.type)).toContain('messages_not_scheduled');
+    expect(await jobsOf(ctx, (j) => j.kind === 'rescheduled')).toEqual([]);
+
+    // A request might still be busy with it: nothing happens for ten minutes.
+    ctx.clock.advance(5 * 60_000);
+    expect((await reconcileBookings(ctx)).finished).toBeUndefined();
+    ctx.clock.advance(6 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ finished: 1 });
+    await ctx.settle();
+    expect(await followUpOf(ctx, booking.id)).toBeUndefined();
+    expect(emailsTo(calls, 'ada@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^New time: Intro call/)]);
+    expect(emailsTo(calls, 'jimi@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^Rescheduled: Ada Lovelace/)]);
+    const reminders = await jobsOf(ctx, (j) => j.kind === 'reminder');
+    expect(reminders.length).toBeGreaterThan(0);
+    expect(reminders.every((j) => (j as Job & { forStart?: string }).forStart === NEW_START)).toBe(true);
+    // Done is done.
+    ctx.clock.advance(30 * 60_000);
+    expect((await reconcileBookings(ctx)).finished).toBeUndefined();
+  });
+
+  it('finishes the confirmation of a new booking whose messages could not be queued', async () => {
+    const kv = failingKV((key) => key.startsWith('jobs/'));
+    const ctx = await setup({ kv });
+    kv.failing = true;
+    const { booking } = await createBooking(ctx, request());
+    kv.failing = false;
+    expect(booking.followUp).toMatchObject({ kind: 'created' });
+    expect(booking.timeline.map((t) => t.type)).toContain('messages_not_scheduled');
+    ctx.clock.advance(11 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ finished: 1 });
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation')).toHaveLength(1);
+    expect(await followUpOf(ctx, booking.id)).toBeUndefined();
+  });
+
+  it('finishes a cancellation whose notices could not be queued when it is asked again, sending each notice once', async () => {
+    const kv = failingKV((key) => key.startsWith('jobs/'));
+    const ctx = await setup({ kv, env: RESEND_ENV });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+    kv.failing = true;
+    const first = await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    kv.failing = false;
+    await ctx.settle();
+    expect(first.status).toBe('cancelled');
+    expect(first.followUp).toMatchObject({ kind: 'cancelled' });
+    expect((await getBookingIndex(ctx))[0].status).toBe('cancelled');
+    expect(emailsTo(calls, 'ada@example.com')).toEqual([]);
+
+    // Asked again while the first request may still be running: left to that request.
+    expect((await cancelBooking(ctx, booking.id, { by: 'invitee' })).followUp).toMatchObject({ kind: 'cancelled' });
+    ctx.clock.advance(60_000);
+    const again = await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    await ctx.settle();
+    expect(again.followUp).toBeUndefined();
+    expect(again.timeline.filter((t) => t.type === 'cancelled')).toHaveLength(1);
+    expect(emailsTo(calls, 'ada@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^Cancelled/)]);
+    expect(emailsTo(calls, 'jimi@example.com')).toHaveLength(1);
+
+    // A third time really changes nothing and sends nothing.
+    const sent = calls.length;
+    await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    await ctx.settle();
+    expect(calls.length).toBe(sent);
+  });
+
+  it('finishes a cancellation that was cut off right after it was saved: time, calendar event and notices', async () => {
+    const ctx = await setup({ env: { overrides: { ...GOOGLE_ENV.overrides, ...RESEND_ENV.overrides } } });
+    await useResend(ctx);
+    await connectGoogle(ctx, OWNER);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    calls.length = 0;
+    // What the cancellation's one save leaves when the request dies right after it.
+    await updateBooking(ctx, booking.id, (b) => ({
+      ...b,
+      status: 'cancelled',
+      cancellation: { at: NOW, by: 'invitee' },
+      google: b.google ? { ...b.google, error: 'Google Calendar did not answer in time. Trying again shortly.' } : b.google,
+      followUp: { kind: 'cancelled', id: 'fu_cutoff', at: NOW, by: 'invitee' },
+    }));
+
+    // The time is given back at once, the rest waits until no request can still be working on it.
+    expect(await reconcileBookings(ctx)).toMatchObject({ freed: 1 });
+    expect(eventCalls(calls, 'DELETE')).toEqual([]);
+    ctx.clock.advance(11 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ finished: 1 });
+    await ctx.settle();
+    expect(eventCalls(calls, 'DELETE')).toHaveLength(1);
+    expect(emailsTo(calls, 'ada@example.com').map((c) => c.json.subject)).toEqual([expect.stringMatching(/^Cancelled/)]);
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.followUp).toBeUndefined();
+    expect(stored.google?.error).toBeUndefined();
+  });
+
+  it('removes the calendar event of a meeting cancelled while Google needed a reconnect, once it is reconnected', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request());
+    await ctx.settle();
+    await updateHost(ctx, OWNER, (h) => ({ ...h, google: { ...h.google!, status: 'needs_reconnect' } }));
+    calls.length = 0;
+
+    await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    ctx.clock.advance(5 * 60_000);
+    await runDueJobs(ctx);
+    await ctx.settle();
+    expect(eventCalls(calls, 'DELETE')).toEqual([]);
+    expect((await getBooking(ctx, booking.id))?.google?.error).toBe('Google Calendar needs to be reconnected.');
+
+    await updateHost(ctx, OWNER, (h) => ({ ...h, google: { ...h.google!, status: 'ok' } }));
+    ctx.clock.advance(30 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ requeued: 1 });
+    await runDueJobs(ctx);
+    await ctx.settle();
+    expect(eventCalls(calls, 'DELETE')).toHaveLength(1);
+    expect((await getBooking(ctx, booking.id))?.google?.error).toBeUndefined();
+    // Nothing left to repair.
+    ctx.clock.advance(3 * HOUR);
+    expect(await reconcileBookings(ctx)).toMatchObject({ requeued: 0 });
+  });
+});
+
+// ───────────────────────── one request, one booking ─────────────────────────
+
+describe('createBooking: a request sent again', () => {
+  const KEY = 'form-key-' + 'a1B2c3D4e5F6g7H8i9J0';
+
+  it('gives a retry of a request that went through the booking it made, and nothing to anyone without the key', async () => {
+    const ctx = await setup();
+    const first = await createBooking(ctx, request({ requestKey: KEY }));
+    const again = await createBooking(ctx, request({ requestKey: KEY }));
+    expect(again.booking.id).toBe(first.booking.id);
+    expect(again.manageToken).toBe(first.manageToken);
+    expect(await getBookingIndex(ctx)).toHaveLength(1);
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation')).toHaveLength(1);
+
+    // Knowing the email address and the time is not enough to be handed the booking.
+    expect(await failure(createBooking(ctx, request()))).toMatchObject({ status: 409, code: 'slot_taken' });
+    expect(await failure(createBooking(ctx, request({ requestKey: 'someone-else-' + 'x'.repeat(20) })))).toMatchObject({ status: 409, code: 'slot_taken' });
+    // The same form sent again for another time is a new booking, and its own retry is recognised in turn.
+    const later = await createBooking(ctx, request({ requestKey: KEY, start: '2026-11-18T15:00:00.000Z' }));
+    expect(later.booking.id).not.toBe(first.booking.id);
+    expect(later.booking.start).toBe('2026-11-18T15:00:00.000Z');
+    expect((await createBooking(ctx, request({ requestKey: KEY, start: '2026-11-18T15:00:00.000Z' }))).booking.id).toBe(later.booking.id);
+    expect(await getBookingIndex(ctx)).toHaveLength(2);
+  });
+
+  it('makes one booking when the same request arrives twice at the same moment', async () => {
+    const kv = racingKV(2);
+    const ctx = await setup({ kv, env: RESEND_ENV });
+    await useResend(ctx);
+    const calls = net(ctx);
+    kv.arm();
+    const [a, b] = await Promise.all([createBooking(ctx, request({ requestKey: KEY })), createBooking(ctx, request({ requestKey: KEY }))]);
+    await ctx.settle();
+    expect(a.booking.id).toBe(b.booking.id);
+    expect(await getBookingIndex(ctx)).toHaveLength(1);
+    expect(emailsTo(calls, 'ada@example.com')).toHaveLength(1);
+    expect((await getBooking(ctx, a.booking.id))!.timeline.filter((t) => t.type === 'created')).toHaveLength(1);
+  });
+
+  it('ignores a key that is too short to be random', async () => {
+    const ctx = await setup();
+    await createBooking(ctx, request({ requestKey: 'short' }));
+    expect(await failure(createBooking(ctx, request({ requestKey: 'short' })))).toMatchObject({ code: 'slot_taken' });
+  });
+});
+
+// ───────────────────────── limits per phone number and per email address ─────────────────────────
+
+describe('createBooking: limits per phone number and email address', () => {
+  const PHONE = '+14155552671';
+  const withTexts = { phone: PHONE, consent: { sms: true, call: true } };
+
+  it('lets one phone number get text and call reminders on three bookings a day, however often they are cancelled', async () => {
+    const ctx = await setup({ env: TWILIO_ENV });
+    net(ctx);
+    for (let i = 0; i < 3; i++) {
+      const { booking } = await createBooking(ctx, request({ ...withTexts, email: `p${i}@example.com` }));
+      await cancelBooking(ctx, booking.id, { by: 'invitee' });
+    }
+    const fourth = await failure(createBooking(ctx, request({ ...withTexts, email: 'p3@example.com' })));
+    expect(fourth).toMatchObject({ status: 429, code: 'phone_limit' });
+    expect(fourth.message).toMatch(/Untick the text and call reminders/);
+    // Without reminders the same number can still book.
+    expect((await createBooking(ctx, request({ phone: PHONE, email: 'p4@example.com' }))).booking.consent).toMatchObject({ sms: false, call: false });
+    await ctx.settle();
+  });
+
+  it('does not count a number when texts and calls are not set up, nor an attempt at a time that is taken', async () => {
+    const ctx = await setup();
+    for (let i = 0; i < 4; i++) await createBooking(ctx, request({ ...withTexts, email: `q${i}@example.com`, start: `2026-11-18T1${i}:00:00.000Z` }));
+    const twilio = await setup({ env: TWILIO_ENV });
+    net(twilio);
+    await createBooking(twilio, request({ email: 'grace@example.com' }));
+    for (let i = 0; i < 4; i++) expect(await failure(createBooking(twilio, request({ ...withTexts, email: `r${i}@example.com` })))).toMatchObject({ code: 'slot_taken' });
+    expect((await createBooking(twilio, request({ ...withTexts, email: 'r9@example.com', start: '2026-11-18T15:00:00.000Z' }))).booking.consent.sms).toBe(true);
+    await twilio.settle();
+  });
+
+  it('lets one email address hold five upcoming meetings at a time', async () => {
+    const ctx = await setup();
+    const made: string[] = [];
+    for (let i = 0; i < 5; i++) made.push((await createBooking(ctx, request({ start: `2026-11-19T1${i}:00:00.000Z` }))).booking.id);
+    const sixth = await failure(createBooking(ctx, request({ start: '2026-11-19T15:00:00.000Z', email: 'ADA@example.com' })));
+    expect(sixth).toMatchObject({ status: 409, code: 'booking_limit' });
+    expect(sixth.message).toMatch(/already has 5 upcoming meetings/);
+    await cancelBooking(ctx, made[0], { by: 'invitee' });
+    ctx.clock.advance(HOUR); // six attempts an hour per email address
+    expect((await createBooking(ctx, request({ start: '2026-11-19T15:00:00.000Z' }))).booking.status).toBe('confirmed');
+  });
+});
+
+// ───────────────────────── calendar read budget ─────────────────────────
+
+describe('waiting for the calendars', () => {
+  it('lets a free/busy request that hangs try again inside the time the list of times waits', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    let freeBusyCalls = 0;
+    ctx.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === TOKEN_URL) return jsonResponse({ access_token: 'access-1', expires_in: 3599, token_type: 'Bearer' });
+      if (url === FREEBUSY_URL) {
+        freeBusyCalls++;
+        if (freeBusyCalls === 1) {
+          return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation timed out.', 'TimeoutError'))));
+        }
+        return jsonResponse({ calendars: { primary: { busy: [] } } });
+      }
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    const started = Date.now();
+    const answer = await getSlots(ctx, { slug: 'intro', durationMin: 15, fromMs: Date.parse('2026-11-18T00:00:00Z'), toMs: Date.parse('2026-11-19T00:00:00Z') });
+    expect(answer.unavailableReason).toBeUndefined();
+    expect(answer.slots.map((s) => s.start)).toContain(WED_14);
+    expect(freeBusyCalls).toBe(2);
+    expect(Date.now() - started).toBeLessThan(6000);
+  }, 15_000);
+
+  it('books a host whose calendar feed is slow but answers, instead of only listing its times', async () => {
+    const ctx = await setup();
+    await updateHost(ctx, OWNER, (h) => ({ ...h, icsFeeds: [{ id: 'ics_work', label: 'Work', urlEnc: seal(ctx, 'ics-url', 'https://calendar.example.com/work.ics') }] }));
+    ctx.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (!url.startsWith('https://calendar.example.com/')) return new Response('not found', { status: 404 });
+      await new Promise((resolve) => setTimeout(resolve, 6_500));
+      return new Response('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n', { status: 200, headers: { 'content-type': 'text/calendar' } });
+    }) as typeof fetch;
+    const { booking } = await createBooking(ctx, request());
+    expect(booking.status).toBe('confirmed');
+  }, 20_000);
+
+  it('tells the owner when bookings keep being turned away because a calendar is too slow', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    net(ctx, (call) => (call.url === FREEBUSY_URL ? new Promise<Response>(() => undefined) : undefined));
+    expect(await failure(createBooking(ctx, request(), { calendarReadBudgetMs: 20 }))).toMatchObject({ code: 'calendar_unavailable' });
+    expect(await jobsOf(ctx, (j) => j.kind === 'host_alert')).toEqual([]);
+    expect(await failure(createBooking(ctx, request({ email: 'grace@example.com' }), { calendarReadBudgetMs: 20 }))).toMatchObject({ code: 'calendar_unavailable' });
+    const alerts = await jobsOf(ctx, (j) => j.kind === 'host_alert');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].body).toContain('took too long to answer');
+    expect(ctx.logs.some((l) => l.level === 'error' && /did not answer in time/.test(l.msg))).toBe(true);
   });
 });

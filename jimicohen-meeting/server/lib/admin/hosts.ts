@@ -257,7 +257,8 @@ export async function applyHostUpdate(ctx: Ctx, host: Host, body: unknown, opts:
       next.google = { ...h.google, ...(busyCalendarIds !== undefined ? { busyCalendarIds } : {}), ...(writeCalendarId !== undefined ? { writeCalendarId } : {}) };
       sourcesChanged = busyCalendarIds !== undefined;
     }
-    if (newFeed && (h.icsFeeds ?? []).length < MAX_ICS_FEEDS) {
+    // Only when it is not there yet: a second run on top of the store's own write must not add it twice.
+    if (newFeed && !(h.icsFeeds ?? []).some((f) => f.id === newFeed.id) && (h.icsFeeds ?? []).length < MAX_ICS_FEEDS) {
       next.icsFeeds = [...(h.icsFeeds ?? []), newFeed];
       sourcesChanged = true;
     }

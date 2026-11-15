@@ -2151,6 +2151,17 @@
   line-height: 1.5;
 }
 
+/* Where the code will not work: the owner's own site is the first place they will try. */
+.sp__warn {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--c-warning-soft);
+  color: var(--c-warning-text);
+  font-size: var(--c-text-sm);
+  line-height: 1.5;
+}
+
 @media (max-width: 479.98px) {
   .sp__link {
     flex-direction: column;
@@ -2204,9 +2215,36 @@
 }
 
 .tm-host__sub {
+  display: flex;
+  flex-wrap: wrap;
+  /* Clips the separator of a part that starts a line, so no line begins or ends with a lone dot. */
+  overflow: hidden;
   color: var(--a-muted);
   font-size: var(--a-text-base);
   overflow-wrap: anywhere;
+}
+
+/*
+ * Each part brings its own dot, in a 1em slot before its text. The slot is pulled 1em to the left: at
+ * the start of a line it falls outside the box and is clipped; in the middle of a line it sits in the
+ * 1em the part before keeps free on its right.
+ */
+.tm-host__part {
+  position: relative;
+  min-width: 0;
+  margin-left: -1em;
+  padding: 0 1em;
+}
+
+.tm-host__part::before {
+  content: '\00B7';
+  /* Only a visual separator: screen readers get the parts as they are. */
+  content: '\00B7' / '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1em;
+  text-align: center;
 }
 
 .tm-facts {
@@ -2351,6 +2389,13 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.tm-form__note {
+  margin: 0;
+  color: var(--a-muted);
+  font-size: var(--a-text-sm);
+  line-height: 1.5;
 }
 
 .tm-invite {

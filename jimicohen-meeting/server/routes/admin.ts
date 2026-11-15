@@ -11,6 +11,7 @@
  *   DELETE /admin/event-types/:id
  *   POST   /admin/event-types/:id/duplicate     { eventType }
  *   PUT    /admin/event-types-order             { ids }
+ *   POST   /admin/event-types-check             SharedHoursCheck (body: an event type, saved or not)
  *   GET    /admin/hosts                         { hosts }
  *   POST   /admin/hosts                         { host, inviteUrl }
  *   PUT    /admin/hosts/:id                     { host, timezone, timezoneChanged }
@@ -23,6 +24,7 @@
  *   GET    /admin/bookings/:id                  { booking }
  *   POST   /admin/bookings/:id/cancel           { booking }
  *   POST   /admin/bookings/:id/no-show          { booking }
+ *   DELETE /admin/bookings/:id                  { ok } (cancelled or past bookings only)
  *   GET    /admin/integrations                  IntegrationsStatus
  *   PUT    /admin/integrations                  IntegrationsStatus
  *   POST   /admin/integrations/test             { ok, detail }
@@ -32,20 +34,20 @@
 import { newEventType } from '../../shared/defaults';
 import type { AdminBootstrap, AssetUploadResponse, Booking, EventType, Host, HostInviteResponse, SiteSettings } from '../../shared/types';
 import { cleanPurpose, MAX_ASSET_REQUEST_BYTES, parseImageDataUrl } from '../lib/admin/assets';
-import { exportBookingsCsv, listAdminBookings } from '../lib/admin/bookings';
+import { eraseBooking, exportBookingsCsv, listAdminBookings } from '../lib/admin/bookings';
 import { buildEventType, freeSlug, MAX_TITLE_LENGTH, remindersChanged } from '../lib/admin/event-types';
 import { applyHostUpdate, createCoHost, loadCalendars, rotateInvite } from '../lib/admin/hosts';
 import { integrationsStatus, runIntegrationTest, updateIntegrations } from '../lib/admin/integrations';
-import { buildOverview } from '../lib/admin/overview';
+import { buildOverview, checkSharedHours } from '../lib/admin/overview';
 import { applySitePatch } from '../lib/admin/site';
-import { hostMap, ownerOf, toAdminBooking, toAdminHost } from '../lib/admin/view';
+import { hostMap, ownerOf, toAdminBooking, toAdminHost, withCallTranscripts } from '../lib/admin/view';
 import { rateLimit, requireAdmin } from '../lib/auth';
 import { cancelBooking } from '../lib/booking';
 import { randomId } from '../lib/crypto';
 import type { Ctx } from '../lib/ctx';
 import { disconnectGoogle } from '../lib/google';
 import { type Handler, HttpError, json, readJson, route, type Route } from '../lib/http';
-import { scheduleBookingJobs } from '../lib/jobs';
+import { replanBookingReminders } from '../lib/jobs';
 import {
   assetUrl,
   deleteAsset,
@@ -97,7 +99,8 @@ async function requireBooking(ctx: Ctx, id: string): Promise<Booking> {
 }
 
 async function adminBookingResponse(ctx: Ctx, booking: Booking): Promise<Response> {
-  return json({ booking: toAdminBooking(ctx, booking, hostMap(await listHosts(ctx))) });
+  // Call transcripts come from the call records while they are kept; the booking stores only the outcome.
+  return json({ booking: await withCallTranscripts(ctx, toAdminBooking(ctx, booking, hostMap(await listHosts(ctx)))) });
 }
 
 // ───────────────────────── event types ─────────────────────────
@@ -133,16 +136,12 @@ async function upcomingBookingIds(ctx: Ctx, eventTypeId: string): Promise<string
  */
 async function replanReminders(ctx: Ctx, eventType: EventType): Promise<void> {
   const ids = (await upcomingBookingIds(ctx, eventType.id)).slice(0, MAX_REPLANNED_BOOKINGS);
-  let failed = 0;
-  for (const booking of await getBookings(ctx, ids)) {
-    if (booking.status !== 'confirmed') continue;
-    try {
-      await scheduleBookingJobs(ctx, booking, eventType, null);
-    } catch (err) {
-      failed++;
-      ctx.log('warn', 'event types: could not re-plan the reminders of a booking', { bookingId: booking.id, error: err instanceof Error ? err.name : 'unknown' });
-    }
-  }
+  const bookings = (await getBookings(ctx, ids)).filter((b) => b.status === 'confirmed');
+  // One read of the queue for all of them, instead of one per booking. Each booking's old reminders go
+  // only when its new ones are queued, so a run cut off part-way leaves the rest with their old ones.
+  const failed = await replanBookingReminders(ctx, bookings, eventType, (bookingId, err) =>
+    ctx.log('warn', 'event types: could not re-plan the reminders of a booking', { bookingId, error: err instanceof Error ? err.name : 'unknown' }),
+  );
   ctx.log('info', 'event types: reminders re-planned', { eventTypeId: eventType.id, bookings: ids.length, failed });
 }
 
@@ -302,6 +301,28 @@ export const routes: Route[] = [
     return json({ ok: true, eventTypes: await listEventTypes(ctx) });
   }),
 
+  // For the editor and for "Create a joint meeting": do the hosts' working hours ever line up?
+  // The body is the event type as it is on screen, saved or not. Nothing is stored.
+  admin('POST', '/admin/event-types-check', async ({ ctx, req }) => {
+    const draft = await readJson<Record<string, unknown>>(req);
+    const [site, hosts, all] = await Promise.all([getSite(ctx), listHosts(ctx), listEventTypes(ctx)]);
+    const saved = typeof draft.id === 'string' ? all.find((e) => e.id === draft.id) : undefined;
+    const base = saved ?? newEventType(ctx.now().toISOString(), { id: 'evt_draft', slug: 'draft', title: 'This meeting', hostIds: [site.ownerHostId], position: 0 });
+    // Only what decides when people can be booked: the rest of a draft may still be half typed.
+    const relevant = Object.fromEntries(['kind', 'hostIds', 'durations', 'scheduling'].filter((key) => key in draft).map((key) => [key, draft[key]]));
+    let eventType: EventType;
+    try {
+      eventType = await buildEventType(ctx, relevant, base, { hosts, others: [], creating: false });
+    } catch (err) {
+      // A draft that does not add up yet has nothing to check. Saving it says what is wrong.
+      if (err instanceof HttpError && err.status === 422) return json({ ok: true });
+      throw err;
+    }
+    const title = typeof draft.title === 'string' ? draft.title.trim().slice(0, MAX_TITLE_LENGTH) : '';
+    if (title !== '') eventType.title = title;
+    return json(checkSharedHours({ eventType, hosts, owner: ownerOf(hosts, site), nowMs: ctx.now().getTime() }));
+  }),
+
   // ── team
 
   admin('GET', '/admin/hosts', async ({ ctx }) => json({ hosts: (await listHosts(ctx)).map((h) => toAdminHost(ctx, h)) })),
@@ -395,6 +416,13 @@ export const routes: Route[] = [
       };
     });
     return adminBookingResponse(ctx, updated ?? booking);
+  }),
+
+  // Erases a cancelled or past booking for good (a request to delete someone's data). An upcoming
+  // meeting is refused: cancel it first. Deleting one that is already gone answers ok as well.
+  admin('DELETE', '/admin/bookings/:id', async ({ ctx, params }) => {
+    await eraseBooking(ctx, params.id);
+    return json({ ok: true });
   }),
 
   // ── integrations

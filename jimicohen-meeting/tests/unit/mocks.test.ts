@@ -43,7 +43,7 @@ import {
   parseFailSpec,
   readOutbox,
 } from '../../server/routes/dev';
-import { TEST_BASE_URL, apiRequest, makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { TEST_BASE_URL, apiRequest, makeTestCtx, markSetUp, type TestCtx } from '../helpers/ctx';
 
 // ───────────────────────── fixtures ─────────────────────────
 
@@ -81,6 +81,8 @@ async function world(opts: { overrides?: Env['overrides']; now?: string } = {}):
   ctx.fetch = createMockFetch({ kv: ctx.kv, now: ctx.now });
   await getSite(ctx);
   await updateHost(ctx, OWNER, (h) => ({ ...h, email: JIMI }));
+  // First-run setup is done, so the booking page takes bookings (booking.ts siteIsOpen).
+  await markSetUp(ctx);
   return ctx;
 }
 
@@ -416,11 +418,31 @@ describe('mock email', () => {
     expect(email.ics).toMatchObject({ filename: 'invite.ics', method: 'REQUEST', contentType: 'text/calendar' });
     expect(email.ics.content).toContain('UID:bk_1@jimicohen.com');
 
-    // The same idempotency key is the same email: nothing new is delivered.
-    const repeat = await sendEmail(ctx, { to: 'ada@example.com', subject: 'Confirmed: Intro call', text: 'x', html: '<p>x</p>', idempotencyKey: 'job_1-invitee' });
+    // The same idempotency key with the same message is the same email: nothing new is delivered.
+    const again = {
+      to: 'ada@example.com',
+      toName: 'Ada Lovelace',
+      subject: 'Confirmed: Intro call',
+      text: 'See you there.\nManage: https://jimicohen.com/meeting/booking/bk_1?t=abc',
+      html: '<p>See you there.</p><a href="https://jimicohen.com/meeting/booking/bk_1?t=abc&amp;x=1">Manage</a>',
+      ics: { filename: 'invite.ics', content: ICS, method: 'REQUEST' as const },
+      idempotencyKey: 'job_1-invitee',
+    };
+    const repeat = await sendEmail(ctx, again);
     expect(repeat).toMatchObject({ ok: true, id: sent.id });
     expect(await outbox(ctx, 'email')).toHaveLength(1);
     expect(await outbox(ctx, 'email_duplicate')).toHaveLength(1);
+
+    // The same key with a different message is refused, as Resend does; the sender then sends the
+    // new version under a key of its own, and a repeat of that version is a duplicate again.
+    const changed = { ...again, text: 'x', html: '<p>x</p>' };
+    const resent = await sendEmail(ctx, changed);
+    expect(resent).toMatchObject({ ok: true });
+    expect(resent.id).not.toBe(sent.id);
+    expect((await outbox(ctx, 'email_conflict')).map((e) => [e.status, e.error])).toEqual([[409, 'invalid_idempotent_request']]);
+    expect(await outbox(ctx, 'email')).toHaveLength(2);
+    expect(await sendEmail(ctx, changed)).toMatchObject({ ok: true, id: resent.id });
+    expect(await outbox(ctx, 'email')).toHaveLength(2);
   });
 
   it('Resend: a wrong key is refused, and the dev fallback works with nothing configured', async () => {

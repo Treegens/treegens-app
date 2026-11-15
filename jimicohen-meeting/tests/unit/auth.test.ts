@@ -3,12 +3,20 @@ import {
   assertSameOrigin,
   changeAdminPassword,
   createAdminAuth,
+  DEVICE_COOKIE,
+  DEVICE_TTL_SEC,
+  deviceSetCookie,
   getAdminAuth,
   hostFromToken,
   isAdmin,
+  isKnownDevice,
+  noteSetupCode,
   rateLimit,
+  rateLimitCount,
   rateLimitKey,
+  rateLimitPeek,
   requireAdmin,
+  resetAdminPassword,
   SESSION_COOKIE,
   sessionClearCookie,
   sessionSetCookie,
@@ -50,13 +58,33 @@ describe('admin record', () => {
     const ctx = makeTestCtx();
     expect(await getAdminAuth(ctx)).toBeNull();
     const created = await createAdminAuth(ctx, PASSWORD);
-    expect(created).toMatchObject({ passwordVersion: 1, setupUsedAt: TEST_NOW });
+    expect(created).toMatchObject({ passwordVersion: expect.any(Number), setupUsedAt: TEST_NOW });
     expect(created!.passwordHash).not.toContain(PASSWORD);
     expect(await verifyPassword(PASSWORD, created!.passwordHash)).toBe(true);
     expect(await getAdminAuth(ctx)).toEqual(created);
 
     expect(await createAdminAuth(ctx, 'someone else tries later')).toBeNull();
     expect(await getAdminAuth(ctx)).toEqual(created);
+  });
+
+  it('starts at a random password version, so a record made again never takes the sessions of an earlier one', async () => {
+    const versions = new Set<number>();
+    for (let i = 0; i < 4; i++) {
+      const ctx = makeTestCtx();
+      const created = (await createAdminAuth(ctx, PASSWORD))!;
+      expect(Number.isInteger(created.passwordVersion) && created.passwordVersion >= 1 && created.passwordVersion < 2 ** 31).toBe(true);
+      versions.add(created.passwordVersion);
+    }
+    expect(versions.size).toBeGreaterThan(1);
+
+    // The record is deleted by hand and setup is run again: the session from before does not open the new one.
+    const ctx = makeTestCtx();
+    const before = (await createAdminAuth(ctx, PASSWORD))!;
+    const oldSession = cookiePair(sessionSetCookie(ctx, before.passwordVersion));
+    await ctx.kv.delete('auth/admin');
+    const again = (await createAdminAuth(ctx, 'a password after starting over'))!;
+    expect(again.passwordVersion).not.toBe(before.passwordVersion);
+    expect(await isAdmin(ctx, apiRequest('GET', '/admin/bootstrap', { cookie: oldSession }))).toBe(false);
   });
 
   it('lets only one of two racing setups win', async () => {
@@ -69,6 +97,88 @@ describe('admin record', () => {
 
   it('changeAdminPassword is a no-op before setup', async () => {
     expect(await changeAdminPassword(makeTestCtx(), 'whatever password')).toBeNull();
+  });
+
+  it('remembers which setup code set the password, and only a different one can replace it', async () => {
+    const first = sha256Hex('the first setup code');
+    const second = sha256Hex('the second setup code');
+    const ctx = makeTestCtx({ env: { setupCodeHash: first } });
+    expect(await resetAdminPassword(ctx, 'too early to reset', first)).toBeNull();
+    const created = await createAdminAuth(ctx, PASSWORD, first);
+    expect(created).toMatchObject({ setupCodeHash: first });
+    const v0 = created!.passwordVersion;
+
+    // The code that created the dashboard does not work a second time.
+    expect(await resetAdminPassword(ctx, 'a password from the same code', first)).toBe('code_used');
+    expect(await getAdminAuth(ctx)).toEqual(created);
+
+    ctx.clock.advance(DAY_MS);
+    const reset = await resetAdminPassword(ctx, 'a password after the reset', second);
+    expect(reset).toMatchObject({ passwordVersion: v0 + 1, setupCodeHash: second, setupUsedAt: TEST_NOW, passwordResetAt: new Date(Date.parse(TEST_NOW) + DAY_MS).toISOString() });
+    const stored = (await getAdminAuth(ctx))!;
+    expect(stored).toEqual(reset);
+    expect(await verifyPassword('a password after the reset', stored.passwordHash)).toBe(true);
+    expect(await verifyPassword(PASSWORD, stored.passwordHash)).toBe(false);
+    // And the new code is used up too.
+    expect(await resetAdminPassword(ctx, 'once more with the second', second.toUpperCase())).toBe('code_used');
+    expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0 + 1);
+  });
+
+  it('a record from before setup codes were remembered takes the code deployed when it is first seen as used', async () => {
+    const original = sha256Hex('the original code');
+    const ctx = makeTestCtx({ env: { setupCodeHash: original } });
+    await seedAdmin(ctx); // no setupCodeHash
+    await noteSetupCode(ctx, await getAdminAuth(ctx));
+    expect((await getAdminAuth(ctx))?.setupCodeHash).toBe(original);
+    // Never overwritten once known.
+    await noteSetupCode(makeTestCtx({ kv: ctx.kv, env: { setupCodeHash: sha256Hex('something else') } }), await getAdminAuth(ctx));
+    expect((await getAdminAuth(ctx))?.setupCodeHash).toBe(original);
+    expect(await resetAdminPassword(ctx, 'the original code again', original)).toBe('code_used');
+
+    // Seen first while no code was deployed: any code deployed later is a new one.
+    const bare = makeTestCtx();
+    await seedAdmin(bare);
+    await noteSetupCode(bare, await getAdminAuth(bare));
+    expect((await getAdminAuth(bare))?.setupCodeHash).toBe('');
+    expect(await resetAdminPassword(bare, 'a new password for bare', sha256Hex('deployed later'))).toMatchObject({ passwordVersion: 2 });
+
+    // A reset straight away (nothing looked at the record before) refuses the code that is deployed now.
+    const direct = makeTestCtx({ env: { setupCodeHash: original } });
+    await seedAdmin(direct);
+    expect(await resetAdminPassword(direct, 'a password for direct', original)).toBe('code_used');
+    expect((await getAdminAuth(direct))?.passwordVersion).toBe(1);
+  });
+});
+
+describe('known device cookie', () => {
+  it('is long-lived, HttpOnly and on the app path', () => {
+    const ctx = makeTestCtx();
+    const setCookie = deviceSetCookie(ctx, 1);
+    expect(setCookie.startsWith(`${DEVICE_COOKIE}=`)).toBe(true);
+    expect(setCookie.split('; ').slice(1)).toEqual(['Path=/meeting', 'HttpOnly', 'Secure', 'SameSite=Lax', `Max-Age=${DEVICE_TTL_SEC}`]);
+    expect(DEVICE_TTL_SEC).toBe(400 * 86_400);
+    expect(deviceSetCookie(makeTestCtx({ env: { publicBaseUrl: 'http://localhost:8788/meeting' } }), 1)).not.toContain('Secure');
+  });
+
+  it('counts only for the current password, and only when it is ours', async () => {
+    const ctx = makeTestCtx();
+    const admin = await seedAdmin(ctx, 3);
+    const withCookie = (cookie: string) => apiRequest('POST', '/auth/login', { cookie });
+    expect(isKnownDevice(ctx, withCookie(cookiePair(deviceSetCookie(ctx, 3))), admin)).toBe(true);
+    expect(isKnownDevice(ctx, withCookie(`theme=dark; ${cookiePair(deviceSetCookie(ctx, 3))}`), admin)).toBe(true);
+    // Issued before the password changed.
+    expect(isKnownDevice(ctx, withCookie(cookiePair(deviceSetCookie(ctx, 2))), admin)).toBe(false);
+    // A session token under the device name, a forged value, nothing at all, no dashboard yet.
+    expect(isKnownDevice(ctx, withCookie(`${DEVICE_COOKIE}=${cookiePair(sessionSetCookie(ctx, 3)).split('=')[1]}`), admin)).toBe(false);
+    expect(isKnownDevice(ctx, withCookie(`${DEVICE_COOKIE}=not.valid`), admin)).toBe(false);
+    expect(isKnownDevice(ctx, apiRequest('POST', '/auth/login'), admin)).toBe(false);
+    expect(isKnownDevice(ctx, withCookie(cookiePair(deviceSetCookie(ctx, 3))), null)).toBe(false);
+    // Signed with another secret.
+    const other = makeTestCtx({ env: { secretKey: Buffer.alloc(32, 9).toString('base64') } });
+    expect(isKnownDevice(ctx, withCookie(cookiePair(deviceSetCookie(other, 3))), admin)).toBe(false);
+    // About 400 days later it has run out.
+    const later = makeTestCtx({ kv: ctx.kv, now: Date.parse(TEST_NOW) + DEVICE_TTL_SEC * 1000 + 1000 });
+    expect(isKnownDevice(later, withCookie(cookiePair(deviceSetCookie(ctx, 3))), admin)).toBe(false);
   });
 });
 
@@ -341,6 +451,22 @@ describe('rateLimit', () => {
     // Not a plain SHA-256 either: an IP address would be trivial to recover from one.
     expect(keys.join(' ')).not.toContain(sha256Hex('203.0.113.7'));
     expect(keys.join(' ')).not.toContain(sha256Hex('ada@example.com'));
+  });
+
+  it('rateLimitPeek refuses like rateLimit without counting, rateLimitCount counts without refusing', async () => {
+    const ctx = makeTestCtx({ now: '2026-11-16T09:00:20.000Z' });
+    for (let i = 0; i < 5; i++) await rateLimitPeek(ctx, 'login-all', 'everyone', 2, 60);
+    expect(await ctx.kv.getJSON(rateLimitKey(ctx, 'login-all', 'everyone', 60).key)).toBeNull();
+
+    for (let i = 0; i < 3; i++) await rateLimitCount(ctx, 'login-all', 'everyone', 60);
+    expect(await ctx.kv.getJSON(rateLimitKey(ctx, 'login-all', 'everyone', 60).key)).toEqual({ n: 3 });
+    const blocked = rateLimitPeek(ctx, 'login-all', 'everyone', 3, 60);
+    await expect(blocked).rejects.toMatchObject({ status: 429, code: 'rate_limited', headers: { 'Retry-After': '40' } });
+    await expect(rateLimitPeek(ctx, 'login-all', 'everyone', 4, 60)).resolves.toBeUndefined();
+
+    // Parallel counts are not lost.
+    await Promise.all(Array.from({ length: 5 }, () => rateLimitCount(ctx, 'burst-count', 'same-id', 60)));
+    expect(await ctx.kv.getJSON(rateLimitKey(ctx, 'burst-count', 'same-id', 60).key)).toEqual({ n: 5 });
   });
 
   it('rejects bucket names that could reshape the key', async () => {

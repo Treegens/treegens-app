@@ -6,9 +6,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { KeyRound, Plus, Quote, Trash2 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { DEFAULT_CONSENT_TEXT } from '../../../shared/defaults';
-import type { AssistantSettings, SiteSettings } from '../../../shared/types';
+import type { AssistantSettings, HostUpdate, SiteSettings } from '../../../shared/types';
 import { ApiFailure, changePassword, errorMessage, saveSite, updateHost } from '../../lib/api';
 import { Button, Field, IconButton, Input, Select, Switch, Textarea, useToast } from '../../ui';
 import { FieldGroup, Notice, Page, PageHeader, SaveBar, Section } from '../components/Page';
@@ -27,9 +27,18 @@ interface Draft {
   email: { fromName: string; replyTo: string };
   /** where the owner's own booking notices go (the owner's host record, not the site) */
   noticesTo: string;
+  /** the owner's mobile number for texts about bookings, as typed */
+  phone: string;
+  /** texts about bookings to the owner: new, moved and cancelled ones, and reminder texts set for hosts */
+  textMe: boolean;
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const E164 = /^\+[1-9]\d{6,14}$/;
+
+function cleanPhone(input: string): string {
+  return input.replace(/[\s().-]/g, '');
+}
 const MAX_LINKS = 6;
 
 const LANGUAGES: { value: string; label: string }[] = [
@@ -45,11 +54,13 @@ const LANGUAGES: { value: string; label: string }[] = [
   { value: 'nl-NL', label: 'Dutch' },
 ];
 
-function toDraft(site: SiteSettings, ownerEmail: string): Draft {
+function toDraft(site: SiteSettings, owner: { email: string; phone?: string; textMe: boolean }): Draft {
   const { model: _model, ...assistant } = site.assistant;
   void _model;
   return {
-    noticesTo: ownerEmail,
+    noticesTo: owner.email,
+    phone: owner.phone ?? '',
+    textMe: owner.textMe,
     profile: { ...site.profile, avatarAssetId: site.profile.avatarAssetId ?? null, links: site.profile.links.map((l) => ({ ...l })) },
     assistant,
     booking: { reminderOptInDefault: site.booking.reminderOptInDefault, consentText: site.booking.consentText, privacyUrl: site.booking.privacyUrl ?? '' },
@@ -96,6 +107,8 @@ function problemOf(d: Draft): string | null {
   if (d.booking.privacyUrl.trim() && !/^https:\/\//i.test(d.booking.privacyUrl.trim())) return 'The privacy link must start with https://';
   if (d.email.replyTo.trim() && !EMAIL.test(d.email.replyTo.trim())) return 'The reply-to address is not a full email address.';
   if (d.noticesTo.trim() && !EMAIL.test(d.noticesTo.trim())) return 'The address for your booking notices is not a full email address.';
+  if (d.phone.trim() && !E164.test(cleanPhone(d.phone))) return 'Write your mobile number in the international format, for example +14155550123.';
+  if (d.textMe && !d.phone.trim()) return 'Add your mobile number to get texts about bookings, or switch the texts off.';
   return null;
 }
 
@@ -169,7 +182,23 @@ export default function SettingsPage() {
   const latest = useRef(data);
   latest.current = data;
 
-  const base = useMemo(() => toDraft(data.site, ownerHost.email), [data.site, ownerHost.email]);
+  const textMe = ownerHost.notify.sms;
+  const base = useMemo(() => toDraft(data.site, { email: ownerHost.email, phone: ownerHost.phone, textMe }), [data.site, ownerHost.email, ownerHost.phone, textMe]);
+  const location = useLocation();
+  const noticesRef = useRef<HTMLDivElement>(null);
+
+  // Links like /admin/settings#notices (from a warning on Home) bring the notice settings into view.
+  useEffect(() => {
+    if (location.hash !== '#notices') return;
+    const frame = window.requestAnimationFrame(() => {
+      const box = noticesRef.current;
+      if (!box) return;
+      box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const empty = Array.from(box.querySelectorAll<HTMLInputElement>('input[type="email"], input[type="tel"]')).find((input) => input.value === '');
+      (empty ?? box.querySelector<HTMLInputElement>('input'))?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.hash]);
   const [draft, setDraft] = useState<Draft>(base);
   const [saving, setSaving] = useState(false);
   const [serverProblem, setServerProblem] = useState<string | null>(null);
@@ -179,7 +208,10 @@ export default function SettingsPage() {
 
   // When the site changes underneath (another page saved, a refresh), follow it unless there are edits.
   useEffect(() => {
-    setDraft((prev) => (sameJson(prev, baseRef.current) ? base : prev));
+    // Read now: the updater may run later, after the line below has moved the ref on. A value the
+    // server tidied (a phone number typed with spaces) would then never be adopted after a save.
+    const before = baseRef.current;
+    setDraft((prev) => (sameJson(prev, before) ? base : prev));
     baseRef.current = base;
   }, [base]);
 
@@ -189,8 +221,13 @@ export default function SettingsPage() {
   const noticesProblem = base.noticesTo && !draft.noticesTo.trim() ? 'Enter the address your booking notices should go to.' : null;
   const problem = dirty ? (problemOf(draft) ?? noticesProblem ?? serverProblem) : null;
 
-  const set = <K extends Exclude<keyof Draft, 'noticesTo'>>(key: K, patch: Partial<Draft[K]>) => {
+  const set = <K extends Exclude<keyof Draft, 'noticesTo' | 'phone' | 'textMe'>>(key: K, patch: Partial<Draft[K]>) => {
     setDraft((d) => ({ ...d, [key]: { ...d[key], ...patch } }));
+    setServerProblem(null);
+  };
+  /** The owner's own contact details: they live on the owner's host record. */
+  const setOwn = (patch: Partial<Pick<Draft, 'noticesTo' | 'phone' | 'textMe'>>) => {
+    setDraft((d) => ({ ...d, ...patch }));
     setServerProblem(null);
   };
 
@@ -214,10 +251,15 @@ export default function SettingsPage() {
       const cleanLinks = draft.profile.links.map((l) => ({ label: l.label.trim(), url: l.url.trim() })).filter((l) => l.label && l.url);
       const avatarChanged = (draft.profile.avatarAssetId ?? null) !== (data.site.profile.avatarAssetId ?? null);
       const nameChanged = draft.profile.name.trim() !== data.site.profile.name;
-      // The owner's own address first: it is the one thing here the server may refuse (someone on the team already has it).
+      // The owner's own details first: the address is the one thing here the server may refuse (someone on the team already has it).
       const noticesTo = draft.noticesTo.trim();
-      if (noticesTo && noticesTo !== ownerHost.email) {
-        const host = await updateHost(ownerHost.id, { email: noticesTo });
+      const phone = cleanPhone(draft.phone.trim());
+      const own: HostUpdate = {};
+      if (noticesTo && noticesTo !== ownerHost.email) own.email = noticesTo;
+      if (phone !== (ownerHost.phone ?? '')) own.phone = phone;
+      if (draft.textMe !== ownerHost.notify.sms) own.notify = { ...ownerHost.notify, sms: draft.textMe };
+      if (Object.keys(own).length > 0) {
+        const host = await updateHost(ownerHost.id, own);
         setData({ ...latest.current, hosts: latest.current.hosts.map((h) => (h.id === host.id ? host : h)) });
       }
       const site = await saveSite({
@@ -357,7 +399,7 @@ export default function SettingsPage() {
         <Field label="Personality" hint="A sentence or two about tone. The assistant always says it is an AI and stays on the subject of the meeting.">
           <Textarea value={draft.assistant.persona} rows={3} maxLength={500} autoGrow onChange={(e) => set('assistant', { persona: e.target.value })} />
         </Field>
-        <FieldGroup label="Calling hours" hint="In the time zone of the person being called, so nobody is phoned at night. A reminder that falls outside these hours is skipped.">
+        <FieldGroup label="Calling hours" hint="In the time zone of the person being called, so nobody is phoned at night. A call that would fall outside these hours moves inside them, or is skipped when no time is left before the meeting.">
           <div className="st-hours">
             <Select
               aria-label="Earliest call"
@@ -445,29 +487,51 @@ export default function SettingsPage() {
             <Input type="email" inputMode="email" value={draft.email.replyTo} maxLength={254} placeholder={ownerHost.email || 'you@example.com'} onChange={(e) => set('email', { replyTo: e.target.value })} />
           </Field>
         </div>
-        <Field
-          label="Send my booking notices to"
-          hint={
-            ownerHost.email
-              ? 'New, moved and cancelled bookings are emailed to you here. Visitors never see this address.'
-              : 'Without an address you are not emailed about new bookings. Connecting Google Calendar fills this in for you.'
-          }
-          className="adm-w-lg"
-        >
-          <Input
-            type="email"
-            inputMode="email"
-            autoComplete="email"
-            value={draft.noticesTo}
-            maxLength={254}
-            placeholder="you@example.com"
-            invalid={draft.noticesTo.trim() !== '' && !EMAIL.test(draft.noticesTo.trim())}
-            onChange={(e) => {
-              setDraft((d) => ({ ...d, noticesTo: e.target.value }));
-              setServerProblem(null);
-            }}
+        <div id="notices" ref={noticesRef} className="adm-stack st-notices" style={{ gap: 20 }}>
+          <Field
+            label="Send my booking notices to"
+            hint={
+              ownerHost.email
+                ? 'New, moved and cancelled bookings are emailed to you here. Visitors never see this address.'
+                : 'Without an address you are not emailed about new bookings. Connecting Google Calendar fills this in for you.'
+            }
+            className="adm-w-lg"
+          >
+            <Input
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              value={draft.noticesTo}
+              maxLength={254}
+              placeholder="you@example.com"
+              invalid={draft.noticesTo.trim() !== '' && !EMAIL.test(draft.noticesTo.trim())}
+              onChange={(e) => setOwn({ noticesTo: e.target.value })}
+            />
+          </Field>
+          <Field label="Your mobile number" optional hint="For texts about your bookings. With the country code, like +14155550123. Visitors never see it." className="adm-w-lg">
+            <Input
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              value={draft.phone}
+              maxLength={32}
+              placeholder="+14155550123"
+              invalid={draft.phone.trim() !== '' && !E164.test(cleanPhone(draft.phone))}
+              onChange={(e) => setOwn({ phone: e.target.value })}
+            />
+          </Field>
+          <Switch
+            labelSide="start"
+            checked={draft.textMe}
+            onChange={(on) => setOwn({ textMe: on })}
+            label="Text me about bookings"
+            description={
+              data.integrations.twilio.configured
+                ? 'New, moved and cancelled bookings, and any reminder texts you set up for the host.'
+                : 'New, moved and cancelled bookings, and any reminder texts you set up for the host. Texts go out once Twilio is connected under Integrations.'
+            }
           />
-        </Field>
+        </div>
       </Section>
 
       <Section title="Password" description="The password for this dashboard. Changing it signs out every other device.">

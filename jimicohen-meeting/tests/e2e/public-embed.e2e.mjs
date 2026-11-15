@@ -82,15 +82,18 @@ ${body}
 function serveHost(dir, port, appOrigin) {
   const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
   const csp = `default-src 'none'; script-src 'self' ${appOrigin}; frame-src ${appOrigin}; style-src 'self'; base-uri 'none'; form-action 'none'`;
+  // Pages named strict-*: a site that lets in nothing from the app, the way jimicohen.com itself does.
+  const strict = `default-src 'none'; script-src 'self'; frame-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'`;
   const server = http.createServer((req, res) => {
     const name = path.basename(new URL(req.url, 'http://localhost').pathname) || 'inline.html';
+    const policy = name.startsWith('strict-') ? strict : csp;
     const file = path.join(dir, name);
     if (!file.startsWith(dir) || !fs.existsSync(file)) {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('Not found');
       return;
     }
-    res.writeHead(200, { 'content-type': types[path.extname(file)] ?? 'application/octet-stream', 'content-security-policy': csp, 'cache-control': 'no-store', 'referrer-policy': 'strict-origin-when-cross-origin' });
+    res.writeHead(200, { 'content-type': types[path.extname(file)] ?? 'application/octet-stream', 'content-security-policy': policy, 'cache-control': 'no-store', 'referrer-policy': 'strict-origin-when-cross-origin' });
     res.end(fs.readFileSync(file));
   });
   return new Promise((resolve, reject) => {
@@ -121,7 +124,9 @@ async function readSnippets(s, owner) {
 
 /** The two pages of the other website: the snippets pasted in as they are, plus an id to find them by. */
 function writeHostPages(dir, snippets) {
-  fs.writeFileSync(path.join(dir, 'inline.html'), hostPage('Acme Trees: book a call', `<section id="calendar">\n${snippets.inline.replace('<div ', '<div id="widget" ')}\n</section>`));
+  const inline = hostPage('Acme Trees: book a call', `<section id="calendar">\n${snippets.inline.replace('<div ', '<div id="widget" ')}\n</section>`);
+  fs.writeFileSync(path.join(dir, 'inline.html'), inline);
+  fs.writeFileSync(path.join(dir, 'strict-inline.html'), inline);
   fs.writeFileSync(path.join(dir, 'popup.html'), hostPage('Acme Trees: contact', `<p>Questions? ${snippets.popup.replace('<a ', '<a id="trigger" ')}</p>\n<div class="tall"></div>`));
 }
 
@@ -172,7 +177,9 @@ export default defineSuite('public-embed', { mockCreds: true }, async (t) => {
 
       await s.step('the code points at the app for both the script and the page', async () => {
         const app = s.url('');
-        s.expect(snippets.inline, 'inline code').toBe(`<div data-meeting-url="${app}intro"></div>\n<script src="${app}embed.js" async></script>`);
+        s.expect(snippets.inline, 'inline code').toBe(
+          `<div data-meeting-url="${app}intro"><a href="${app}intro" data-meeting-fallback>Book a meeting</a></div>\n<script src="${app}embed.js" async></script>`,
+        );
         s.expect(snippets.popup, 'popup code').toBe(`<a href="${app}intro" data-meeting-popup="${app}intro">Book a meeting</a>\n<script src="${app}embed.js" async></script>`);
         // The script is a plain static file, cacheable, and served as JavaScript.
         const res = await fetch(s.url('/embed.js'));
@@ -208,6 +215,8 @@ export default defineSuite('public-embed', { mockCreds: true }, async (t) => {
         s.expect(src.searchParams.get('embed'), 'embed mode').toBe('1');
         s.expect(src.searchParams.get('utm_source'), 'campaign tag of the host page is passed along').toBe('acme-site');
         s.expect(await iframe.getAttribute('title'), 'frame title').toBe('Book a meeting');
+        // The plain link in the code is only for pages where the script cannot run.
+        s.expect(await page.locator('#widget a').count(), 'the fallback link was replaced by the calendar').toBe(0);
         await frame.getByRole('heading', { name: 'Intro call', level: 1 }).waitFor();
         await frame.locator('.bw-cal:not(.is-loading)').waitFor();
       });
@@ -285,6 +294,31 @@ export default defineSuite('public-embed', { mockCreds: true }, async (t) => {
         s.expect(await phone.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), 'the host page does not scroll sideways').toBe(true);
         s.expect(h.outer, 'stacked layout is taller than the desktop one').toBeGreaterThan(heights.pick.outer);
         await s.screenshot(phone, 'inline embed on a phone');
+      });
+    });
+
+    await t.scenario('inline embed on a site that lets nothing in from the app: a plain link instead of an empty box', async (s) => {
+      const owner = await s.step('prepare', () => prepare(s));
+      if (!snippets) writeHostPages(dir, (snippets = await readSnippets(s, owner)));
+      s.allowLocalOrigin(hostOrigin);
+      // The browser reports the refused script as a console error: that refusal is the point here.
+      s.allowConsoleErrors(/Content Security Policy|Refused to load/);
+      const page = await s.newPage({ viewport: { width: 1280, height: 900 }, timezoneId: NEW_YORK, locale: 'en-US' });
+
+      await s.step('the script is refused, the link in the code stays and opens the booking page', async () => {
+        await page.goto(`${hostOrigin}/strict-inline.html`);
+        const link = page.locator('#widget').getByRole('link', { name: 'Book a meeting' });
+        await link.waitFor();
+        s.expect(await link.getAttribute('href'), 'where the link goes').toBe(s.url('/intro'));
+        // Give the (refused) script time it would have needed to run.
+        await page.waitForTimeout(500);
+        s.expect(await page.evaluate(() => typeof window.MeetingEmbed), 'the embed script did not run').toBe('undefined');
+        s.expect(await page.locator('iframe').count(), 'frames').toBe(0);
+        s.expect(await link.isVisible(), 'the link is visible').toBe(true);
+        await s.screenshot(page, 'inline embed refused, plain link');
+        await link.click();
+        await page.waitForURL(s.url('/intro'));
+        await page.getByRole('heading', { name: 'Intro call', level: 1 }).waitFor();
       });
     });
 

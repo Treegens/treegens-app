@@ -11,7 +11,7 @@ import type { Ctx } from '../ctx';
 import { getBookingIndex, getBookings, getSite, listEventTypes, listHosts } from '../repo';
 import { computeSlots } from '../slots';
 import { firstName, joinNames } from '../templates';
-import { type Interval, isValidZone, zonedToUtcMs } from '../time';
+import { formatInZone, type Interval, isValidZone, zonedToUtcMs } from '../time';
 import { twilioFeatures } from '../twilio';
 import { isEmail } from '../validate';
 import { integrationsStatus } from './integrations';
@@ -41,6 +41,8 @@ const LINK = {
 const HOURS_CHECK_STEP_DAYS = 14;
 /** The longest booking window an event type can have. */
 const HOURS_CHECK_MAX_DAYS = 730;
+/** A length short enough to fit any shared working time: it tells "never at the same time" from "never for long enough". */
+const SHORTEST_PROBE_MIN = 15;
 
 /** "America/Los_Angeles" → "Los Angeles" */
 function zoneCity(zone: string): string {
@@ -94,7 +96,7 @@ function hasWorkingTime(eventType: EventType, hosts: Host[], ownerTimezone: stri
  * The answer comes from the same slot engine the booking page uses, so the hosts' schedules for
  * this event, date overrides and the event's limited hours all count.
  */
-export function checkSharedHours(p: { eventType: EventType; hosts: Host[]; owner: Host | null; nowMs: number }): SharedHoursCheck & { href?: string } {
+export function checkSharedHours(p: { eventType: EventType; hosts: Host[]; owner: Host | null; nowMs: number }): SharedHoursCheck {
   const { eventType, owner, nowMs } = p;
   if (eventType.kind !== 'collective') return { ok: true };
   const byId = hostMap(p.hosts);
@@ -106,6 +108,8 @@ export function checkSharedHours(p: { eventType: EventType; hosts: Host[]; owner
 
   let span: Interval | null;
   let idle: Host[];
+  let tooShort = false;
+  const shortest = Array.isArray(eventType.durations) && eventType.durations.length > 0 ? Math.min(...eventType.durations) : 0;
   try {
     span = bookableSpan(eventType, ownerTimezone, nowMs);
     // Dates that have passed leave nothing to check.
@@ -114,6 +118,10 @@ export function checkSharedHours(p: { eventType: EventType; hosts: Host[]; owner
     if (hasWorkingTime(eventType, hosts, ownerTimezone, days, nowMs)) return { ok: true };
     // Nobody can book it. Is that because the hours never meet, or because someone has none at all?
     idle = hosts.filter((host) => !hasWorkingTime({ ...eventType, kind: 'solo', hostIds: [host.id] }, [host], ownerTimezone, days, nowMs));
+    // Or do they meet, only never for as long as the shortest length on offer?
+    if (idle.length === 0 && shortest > SHORTEST_PROBE_MIN) {
+      tooShort = hasWorkingTime({ ...eventType, durations: [SHORTEST_PROBE_MIN], defaultDuration: SHORTEST_PROBE_MIN }, hosts, ownerTimezone, days, nowMs);
+    }
   } catch {
     // A check that cannot run has nothing to say. The booking page reports its own problems.
     return { ok: true };
@@ -123,7 +131,9 @@ export function checkSharedHours(p: { eventType: EventType; hosts: Host[]; owner
   const called = (host: Host): string => (isOwner(host) ? 'you' : firstName(host.name) || host.name || 'a co-host');
   const others = hosts.filter((host) => !isOwner(host));
   const pages = (count: number): string => (count === 1 ? 'private page' : 'private pages');
-  const limited = eventType.scheduling?.restrictHours ? ' The limited hours on its Scheduling tab count too.' : '';
+  // What else on the event narrows the time: its limited hours, and its fixed dates.
+  const narrowing = [eventType.scheduling?.restrictHours ? 'limited hours' : '', eventType.scheduling?.dateRange ? 'dates' : ''].filter(Boolean);
+  const limited = narrowing.length > 0 ? ` The ${narrowing.join(' and ')} on its Scheduling tab count too.` : '';
 
   if (idle.length > 0) {
     const mine = idle.some(isOwner);
@@ -150,12 +160,22 @@ export function checkSharedHours(p: { eventType: EventType; hosts: Host[]; owner
   const fix = withOwner
     ? `Change your hours under Availability, or ask ${joinNames(others.map(called))} to change theirs on their ${pages(others.length)}.`
     : `Ask ${joinNames(others.map(called))} to change their hours on their ${pages(others.length)}.`;
+  const together = `${joinNames(hosts.map(called))} are ${hosts.length === 2 ? 'both' : 'all'} working`;
+  const cause = tooShort
+    ? `the times when ${together} are never as long as its shortest length, ${lengthText(shortest)}.`
+    : `there is no time when ${together}.`;
   return {
     ok: false,
     reason: 'no_overlap',
-    message: `"${eventType.title}" cannot be booked: there is no time when ${joinNames(hosts.map(called))} are ${hosts.length === 2 ? 'both' : 'all'} working.${zones} ${fix}${limited}`,
+    message: `"${eventType.title}" cannot be booked: ${cause}${zones} ${fix}${limited}`,
     href: withOwner ? LINK.availability : LINK.team,
   };
+}
+
+/** 90 → "90 minutes", 120 → "2 hours" */
+function lengthText(minutes: number): string {
+  if (minutes % 60 === 0) return minutes === 60 ? '1 hour' : `${minutes / 60} hours`;
+  return `${minutes} minutes`;
 }
 
 function hasHours(host: Host | null): boolean {
@@ -188,11 +208,13 @@ function quoted(titles: string[]): string {
 export function buildChecklist(p: { site: SiteSettings; owner: Host | null; eventTypes: EventType[]; integrations: IntegrationsStatus }): AdminOverview['checklist'] {
   const { site, owner, eventTypes, integrations } = p;
   return [
-    { key: 'google', label: 'Connect your Google Calendar', done: owner?.google?.status === 'ok', href: LINK.google },
+    // A connection only works while the Google keys it was made with are there.
+    { key: 'google', label: 'Connect your Google Calendar', done: owner?.google?.status === 'ok' && integrations.google.configured, href: LINK.google },
     { key: 'availability', label: 'Set your weekly hours', done: hasHours(owner), href: LINK.availability },
     { key: 'event', label: 'Create your first event type', done: eventTypes.some((e) => e.active), href: LINK.events },
     { key: 'email', label: 'Choose how emails are sent', done: integrations.email.resolved !== 'none', href: LINK.email },
-    { key: 'sms', label: 'Add Twilio for texts and reminder calls', done: integrations.twilio.configured, href: LINK.twilio },
+    // Texts and calls: a Messaging Service alone sends texts but cannot place a call.
+    { key: 'sms', label: 'Add Twilio for texts and reminder calls', done: integrations.twilio.configured && integrations.twilio.calls !== false, href: LINK.twilio },
     { key: 'assistant', label: 'Add an Anthropic key for the voice assistant', done: integrations.anthropic.configured, href: LINK.assistant },
     { key: 'design', label: 'Make the booking page yours', done: madeTheirOwn(site), href: LINK.design },
   ];
@@ -227,14 +249,45 @@ export function buildWarnings(
     warnings.push({ key: 'google_not_connected', message: 'Your calendar is not connected yet, so your busy times are not checked and bookings are not added to it.', href: LINK.google });
   }
 
+  // Gmail sends through the owner's Google connection: when that is down, so is email.
+  const gmailProblem = integrations.email.gmailProblem;
+  const noGmail = ' No emails are going out either, because they are sent from your Gmail.';
+
+  // Every Google connection needs the keys it was made with. Without them no calendar can be
+  // read, and a calendar that cannot be read closes the times of everyone it belongs to.
+  const keysMissing = !integrations.google.configured;
+  const cutOff = keysMissing ? hosts.filter((h) => !!h.google) : [];
+  if (cutOff.length > 0) {
+    const ownerCut = cutOff.some((h) => h.id === owner?.id);
+    const others = cutOff.filter((h) => h.id !== owner?.id).map((h) => firstName(h.name) || h.name || 'a co-host');
+    const theirs = joinNames(others.map((name) => `${name}'s`));
+    const whose = ownerCut
+      ? others.length > 0
+        ? `your Google Calendar and ${theirs} cannot be read`
+        : 'your Google Calendar cannot be read'
+      : `${theirs} Google ${others.length === 1 ? 'Calendar' : 'Calendars'} cannot be read`;
+    const effect = ownerCut ? 'no times are offered for meetings with you' : `times that include ${joinNames(others)} are not offered`;
+    warnings.push({
+      key: 'google_keys_missing',
+      message: `The Google keys were removed, so ${whose} and ${effect}.${gmailProblem === 'keys_missing' ? noGmail : ''} Add the same client ID and client secret again under Integrations.`,
+      href: LINK.google,
+    });
+  }
+
   for (const host of hosts) {
     const mine = host.id === owner?.id;
     const first = firstName(host.name) || 'A co-host';
+    // Said once, above, for everyone it affects.
+    if (keysMissing && host.google) continue;
     if (host.google?.status === 'needs_reconnect') {
       warnings.push(
         mine
-          ? { key: `google_reconnect_${host.id}`, message: 'Your Google Calendar needs to be reconnected. Until then, new bookings are not reaching it.', href: LINK.google }
-          : { key: `google_reconnect_${host.id}`, message: `${first}'s Google Calendar needs to be reconnected. Ask them to open their private link and connect again.`, href: LINK.team },
+          ? {
+              key: `google_reconnect_${host.id}`,
+              message: `Your Google Calendar needs to be reconnected. Until then, no times are offered for meetings with you and new bookings cannot reach your calendar.${gmailProblem === 'needs_reconnect' ? noGmail : ''}`,
+              href: LINK.google,
+            }
+          : { key: `google_reconnect_${host.id}`, message: `${first}'s Google Calendar needs to be reconnected. Until then, times that include ${first} are not offered. Ask them to open their private link and connect again.`, href: LINK.team },
       );
     } else if (host.calendarHealth && host.calendarHealth.ok === false) {
       const reason = (host.calendarHealth.message ?? '').trim();
@@ -242,24 +295,95 @@ export function buildWarnings(
       const effect = mine ? 'so times are not being offered until this is fixed.' : `so times that include ${first} are not being offered until this is fixed.`;
       warnings.push({ key: `calendar_health_${host.id}`, message: `${what}, ${effect}${reason ? ` ${reason}` : ''}`, href: mine ? LINK.google : LINK.team });
     }
+    // Made while the consent screen was in "Testing": Google ends the connection after 7 days (google.ts completeGoogleAuth).
+    const ends = host.google?.status === 'ok' ? Date.parse(host.google.refreshExpiresAt ?? '') : Number.NaN;
+    if (Number.isFinite(ends)) {
+      const day = formatInZone(ends, owner?.timezone ?? host.timezone, 'date');
+      const when = ends <= ctx.now().getTime() ? `stopped working on ${day}` : `ends on ${day}`;
+      const why = 'because the consent screen in Google Cloud is still in Testing';
+      warnings.push(
+        mine
+          ? {
+              key: `google_expiry_${host.id}`,
+              message: `Your Google connection ${when}, ${why}. After that, no times are offered until you reconnect. Publish the consent screen in Google Cloud, then reconnect.`,
+              href: LINK.google,
+            }
+          : {
+              key: `google_expiry_${host.id}`,
+              message: `${first}'s Google connection ${when}, ${why}. Publish the consent screen in Google Cloud, then ask ${first} to connect again from their private link.`,
+              href: LINK.team,
+            },
+      );
+    }
   }
 
-  if (integrations.email.resolved === 'none' && site.email.provider !== 'none') {
+  // A Gmail that cannot send is said in the Google warning above, with its cause.
+  if (integrations.email.resolved === 'none' && site.email.provider !== 'none' && !gmailProblem) {
     warnings.push({ key: 'no_email', message: 'No email provider is set up, so confirmations and reminders are not being emailed.', href: LINK.email });
   }
 
-  const needsTwilio = active.filter((e) => e.reminders.some((r) => r.enabled && ((r.channel === 'sms' && !features.sms) || (r.channel === 'call' && !features.calls))));
-  if (needsTwilio.length > 0) {
+  // New, moved and cancelled bookings, and alerts about calendar trouble, go to this address.
+  if (owner && !isEmail(owner.email) && site.email.provider !== 'none') {
     warnings.push({
-      key: 'twilio_missing',
-      message: `${quoted(needsTwilio.map((e) => e.title))} ${needsTwilio.length === 1 ? 'has' : 'have'} reminders by text or phone call, but Twilio is not connected, so those reminders are skipped.`,
-      href: LINK.twilio,
+      key: 'owner_no_email',
+      message: 'You have not said where your booking notices should go, so you are not emailed when someone books, moves or cancels a meeting, or when your calendar has a problem. Add your address under Settings.',
+      href: LINK.notices,
     });
   }
 
+  // Without email and without a Google calendar to put it on, a booking reaches nobody: not the invitee, not
+  // the hosts. A round robin can land on any of its hosts, so each one needs Google (as in booking.ts).
+  if (integrations.email.resolved === 'none') {
+    const byHost = hostMap(hosts);
+    const googleOk = (host: Host) => host.google?.status === 'ok';
+    // A Google Calendar that cannot be read offers no times (booking.ts fails closed). A meeting that
+    // needs one cannot be booked at all, and the Google warnings above already say so: telling the
+    // owner here that "people can book" it would contradict them. This is also how a Gmail that went
+    // down with the owner's Google connection empties `resolved`.
+    const unreadable = (host: Host) => !!host.google && (host.google.status !== 'ok' || keysMissing);
+    const unheard = active.filter((e) => {
+      const assigned = e.hostIds.map((id) => byHost.get(id)).filter((h): h is Host => !!h);
+      // A round robin still offers the times of the hosts whose calendars can be read; the others close it.
+      const open = e.kind === 'round_robin' ? assigned.filter((h) => !unreadable(h)) : assigned.some(unreadable) ? [] : assigned;
+      return open.length > 0 && !(e.kind === 'round_robin' ? open.every(googleOk) : open.some(googleOk));
+    });
+    if (unheard.length > 0) {
+      warnings.push({
+        key: 'bookings_reach_nobody',
+        message: `People can book ${quoted(unheard.map((e) => e.title))}, but nobody hears about it: no email is sent, and no Google Calendar is connected to put the booking on. Set up email or connect Google Calendar.`,
+        href: LINK.email,
+      });
+    }
+  }
+
+  if (!features.sms) {
+    const needsTwilio = active.filter((e) => e.reminders.some((r) => r.enabled && (r.channel === 'sms' || r.channel === 'call')));
+    if (needsTwilio.length > 0) {
+      warnings.push({
+        key: 'twilio_missing',
+        message: `${quoted(needsTwilio.map((e) => e.title))} ${needsTwilio.length === 1 ? 'has' : 'have'} reminders by text or phone call, but Twilio is not connected, so those reminders are skipped.`,
+        href: LINK.twilio,
+      });
+    }
+  } else if (!features.calls) {
+    // Texts work (a Messaging Service), calls do not: a call needs a Twilio number of its own.
+    const needsNumber = active.filter((e) => e.reminders.some((r) => r.enabled && r.channel === 'call'));
+    if (needsNumber.length > 0) {
+      warnings.push({
+        key: 'twilio_missing',
+        message: `${quoted(needsNumber.map((e) => e.title))} ${needsNumber.length === 1 ? 'has' : 'have'} reminder calls, but reminder calls need a Twilio phone number and none is saved, so those calls are skipped. Texts still go out.`,
+        href: LINK.twilio,
+      });
+    }
+  }
+
   const byId = hostMap(hosts);
+  const nowMs = ctx.now().getTime();
   for (const event of active) {
     if (event.kind !== 'collective') continue;
+    // Hours that never line up close the page for good, whatever the calendars say.
+    const hours = checkSharedHours({ eventType: event, hosts, owner, nowMs });
+    if (!hours.ok && hours.message) warnings.push({ key: `shared_hours_${event.id}`, message: hours.message, href: hours.href ?? LINK.team });
     const waiting = event.hostIds
       .map((id) => byId.get(id))
       .filter((h): h is Host => !!h && h.id !== owner?.id && !hasCalendar(h));

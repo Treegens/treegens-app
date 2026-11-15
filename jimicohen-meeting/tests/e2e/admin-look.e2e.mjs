@@ -125,6 +125,8 @@ export default defineSuite('admin-look', { mockCreds: true }, async (t) => {
           defaultScheduleId: 'sch_default',
         },
       });
+      // Ada brings a guest: guests are the owner's choice, and Google invites them (the calendar is connected above).
+      await s.apiOk('PUT', '/admin/event-types/evt_intro', { body: { allowGuests: true } });
       const book = async (body) => {
         const res = await s.book(body);
         s.expect(res.status, `booking for ${body.name}`).toBe(201);

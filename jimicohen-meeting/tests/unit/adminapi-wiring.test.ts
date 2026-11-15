@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { allRoutes, handle } from '../../server/api';
 import { sessionSetCookie } from '../../server/lib/auth';
 import { verifyManageToken } from '../../server/lib/booking';
+import { runDueJobs } from '../../server/lib/jobs';
 import { getBooking, getBookingIndex, getSite, indexEntryOf, listJobs, mutateBookingIndex, saveBooking } from '../../server/lib/repo';
 import type { AdminBooking, Booking } from '../../shared/types';
 import { apiRequest, cookiePair, makeTestCtx, TEST_BASE_URL, TEST_NOW } from '../helpers/ctx';
@@ -86,5 +87,41 @@ describe('dashboard routes with the real booking engine', () => {
     expect(lists.counts).toEqual({ upcoming: 0, past: 0, cancelled: 1 });
     // With its only upcoming booking gone, the event type can be deleted.
     expect((await handle(apiRequest('DELETE', '/admin/event-types/evt_intro', { cookie }), ctx)).status).toBe(200);
+  });
+
+  it('deletes a booking only after it was cancelled, with nothing of it left behind', async () => {
+    const ctx = makeTestCtx({ env: { mockProviders: true } });
+    await getSite(ctx);
+    await ctx.kv.setJSON('auth/admin', { passwordHash: 'not-used-here', passwordVersion: 1, setupUsedAt: TEST_NOW });
+    const cookie = cookiePair(sessionSetCookie(ctx, 1));
+    const saved = await saveBooking(ctx, booking('bkg_wiring0000000002', 48));
+    await mutateBookingIndex(ctx, (entries) => [...entries, indexEntryOf(saved)]);
+    const del = () => handle(apiRequest('DELETE', '/admin/bookings/bkg_wiring0000000002', { cookie }), ctx);
+
+    const refused = await del();
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error.code).toBe('upcoming');
+
+    expect((await handle(apiRequest('POST', '/admin/bookings/bkg_wiring0000000002/cancel', { cookie, body: {} }), ctx)).status).toBe(200);
+    await ctx.settle();
+    const pending = async () => (await listJobs(ctx)).filter((j) => j.bookingId === 'bkg_wiring0000000002');
+    // With no email set up here, the email telling the invitee failed once and waits for its retry.
+    // Deleting now would take that retry with it, so it is refused.
+    expect((await pending()).map((j) => j.kind)).toEqual(['cancelled']);
+    const early = await del();
+    expect(early.status).toBe(409);
+    expect((await early.json()).error.code).toBe('still_cancelling');
+
+    // Once the retries are over (sent or given up), the booking can go.
+    for (let round = 0; round < 6 && (await pending()).length > 0; round++) {
+      ctx.clock.advance(60 * 60_000);
+      await runDueJobs(ctx);
+    }
+    expect(await pending()).toEqual([]);
+    const res = await del();
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await getBooking(ctx, 'bkg_wiring0000000002')).toBeNull();
+    expect((await getBookingIndex(ctx)).some((e) => e.id === 'bkg_wiring0000000002')).toBe(false);
+    expect((await listJobs(ctx)).filter((j) => j.bookingId === 'bkg_wiring0000000002')).toEqual([]);
   });
 });

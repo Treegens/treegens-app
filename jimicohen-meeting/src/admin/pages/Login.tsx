@@ -5,12 +5,17 @@ import { ApiFailure, errorMessage, login } from '../../lib/api';
 import { Button, Field } from '../../ui';
 import { AuthLayout, PasswordInput } from '../components/AuthLayout';
 import { Notice } from '../components/Page';
+import Setup from './Setup';
 
 export default function Login({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  // "Forgot your password?": a new setup code replaces it (POST /auth/setup on a dashboard that exists).
+  const [resetting, setResetting] = useState(false);
+
+  if (resetting) return <Setup mode="reset" onDone={onDone} onBack={() => setResetting(false)} />;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -45,6 +50,9 @@ export default function Login({ onDone }: { onDone: () => void }) {
         </Field>
         <Button type="submit" variant="primary" size="lg" block loading={busy} loadingLabel="Signing in" iconRight={<ArrowRight size={18} />}>
           Sign in
+        </Button>
+        <Button variant="link" onClick={() => setResetting(true)} disabled={busy}>
+          Forgot your password?
         </Button>
       </form>
     </AuthLayout>

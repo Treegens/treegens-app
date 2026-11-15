@@ -20,7 +20,7 @@ import { SuccessMark } from './components/SuccessMark';
 import { TimezoneBar } from './components/TimezoneBar';
 import { isEmbedSearch, postToParent, withEmbed } from './lib/embed';
 import { useVisitorPrefs } from './lib/prefs';
-import { firstName, hostNames } from './lib/text';
+import { deliveryLine, firstName, hostNames } from './lib/text';
 
 export interface BookingManageProps {
   view?: 'details' | 'reschedule' | 'cancel';
@@ -38,12 +38,14 @@ function phaseOf(b: PublicBooking): Phase {
 interface ViewProps {
   data: GetBookingResponse;
   token: string;
+  /** opened from a host's link (`as=host`): a host is acting, so their zone is not the invitee's */
+  asHost: boolean;
   embed: boolean;
   view: 'details' | 'reschedule' | 'cancel';
   onUpdated: (booking: PublicBooking) => void;
 }
 
-function ManageViews({ data, token, embed, view, onUpdated }: ViewProps) {
+function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps) {
   const { booking, site, eventType } = data;
   const { hour12: themeHour12 } = useTheme();
   const { zone, setZone, hour12, setHour12 } = useVisitorPrefs({ defaultHour12: themeHour12 });
@@ -54,7 +56,8 @@ function ManageViews({ data, token, embed, view, onUpdated }: ViewProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   const base = `/booking/${encodeURIComponent(booking.id)}`;
-  const tq = `?t=${encodeURIComponent(token)}`;
+  // A host's link keeps saying so on every page it leads to.
+  const tq = `?t=${encodeURIComponent(token)}${asHost ? '&as=host' : ''}`;
   const detailsHref = withEmbed(`${base}${tq}`, embed);
   const rescheduleHref = withEmbed(`${base}/reschedule${tq}`, embed);
   const cancelHref = withEmbed(`${base}/cancel${tq}`, embed);
@@ -118,7 +121,7 @@ function ManageViews({ data, token, embed, view, onUpdated }: ViewProps) {
     setCancelling(true);
     setProblem('');
     try {
-      const next = await cancelBooking(booking.id, token, reason.trim() || undefined);
+      const next = await cancelBooking(booking.id, token, reason.trim() || undefined, asHost ? 'host' : undefined);
       clearAttendToast();
       onUpdated(next);
       if (embed) postToParent({ type: 'meeting:cancelled', bookingId: booking.id });
@@ -149,7 +152,7 @@ function ManageViews({ data, token, embed, view, onUpdated }: ViewProps) {
         site={site}
         eventType={eventType}
         mode="live"
-        reschedule={{ bookingId: booking.id, token, currentStart: booking.start, durationMin: booking.durationMin }}
+        reschedule={{ bookingId: booking.id, token, currentStart: booking.start, durationMin: booking.durationMin, asHost }}
         onBooked={onMoved}
         onCancelReschedule={() => navigate(detailsHref)}
         source={embed ? 'embed' : 'page'}
@@ -228,7 +231,7 @@ function ManageViews({ data, token, embed, view, onUpdated }: ViewProps) {
             <CircleCheck size={18} aria-hidden="true" />
             <div className="bw-notice__body">
               <p className="bw-notice__title">Your meeting has moved</p>
-              <p className="bw-notice__text">An updated invitation is on its way to {booking.invitee.email}.</p>
+              <p className="bw-notice__text">{deliveryLine(booking, true)}</p>
             </div>
           </div>
         ) : null}
@@ -389,6 +392,7 @@ export default function BookingManage({ view = 'details' }: BookingManageProps) 
   const { search } = useLocation();
   const embed = isEmbedSearch(search);
   const token = useMemo(() => new URLSearchParams(search).get('t') ?? '', [search]);
+  const asHost = useMemo(() => new URLSearchParams(search).get('as') === 'host', [search]);
   const [state, setState] = useState<State>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
 
@@ -447,7 +451,7 @@ export default function BookingManage({ view = 'details' }: BookingManageProps) 
 
   return (
     <PublicPage theme={theme} assets={data.site.themeAssets} embed={embed} width={widgetView ? 'wide' : 'narrow'}>
-      <ManageViews data={data} token={token} embed={embed} view={view} onUpdated={onUpdated} />
+      <ManageViews data={data} token={token} asHost={asHost} embed={embed} view={view} onUpdated={onUpdated} />
     </PublicPage>
   );
 }

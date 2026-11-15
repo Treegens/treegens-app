@@ -16,13 +16,14 @@ import {
   MessageSquareText,
   PhoneCall,
   RefreshCw,
+  Trash2,
   UserX,
 } from 'lucide-react';
 import type { AdminBooking, TimelineEntry } from '../../../shared/types';
-import { adminCancelBooking, errorMessage, getAdminBooking, setNoShow } from '../../lib/api';
+import { adminCancelBooking, deleteAdminBooking, errorMessage, getAdminBooking, setNoShow } from '../../lib/api';
 import { formatDateLong, formatDateMedium, formatRange, formatTime, zoneCity, zoneLabel } from '../../lib/tz';
 import { Avatar, Badge, Button, ButtonLink, ConfirmDialog, CopyButton, Drawer, EmptyState, Field, Skeleton, Textarea, cx, useToast } from '../../ui';
-import { describeTimeline, namesList, rescheduleUrlOf } from '../format';
+import { describeTimeline, describeTimelineDetail, namesList, rescheduleUrlOf } from '../format';
 import type { TimelineIcon } from '../format';
 import { locationIcon } from './BookingRow';
 
@@ -39,6 +40,11 @@ const ICONS: Record<TimelineIcon, ReactNode> = {
   dot: <CircleDot size={14} />,
 };
 
+/** The manage link as a host opens it: the booking page then keeps the host's zone off the invitee and records changes as a host's. */
+function asHostUrl(manageUrl: string): string {
+  return /[?&]as=host(?:&|$)/.test(manageUrl) ? manageUrl : `${manageUrl}${manageUrl.includes('?') ? '&' : '?'}as=host`;
+}
+
 export interface BookingDrawerProps {
   /** id of the booking to show; null closes the drawer */
   bookingId: string | null;
@@ -49,14 +55,17 @@ export interface BookingDrawerProps {
   onClose: () => void;
   /** called with the fresh record after cancel / no-show so the list can update */
   onChanged: (booking: AdminBooking) => void;
+  /** called after the booking was deleted for good: close the drawer and drop it from the list */
+  onDeleted?: (id: string) => void;
 }
 
-export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged }: BookingDrawerProps) {
+export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, onDeleted }: BookingDrawerProps) {
   const toast = useToast();
   const [booking, setBooking] = useState<AdminBooking | null>(preview ?? null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -78,6 +87,26 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged }: 
   const b = booking && booking.id === bookingId ? booking : null;
   const upcoming = !!b && b.status === 'confirmed' && Date.parse(b.start) > now;
   const past = !!b && b.status === 'confirmed' && Date.parse(b.end) <= now;
+  // Only what is over or cancelled can be erased. An upcoming meeting is cancelled first (the server says so too).
+  const deletable = !!b && (b.status === 'cancelled' || past);
+
+  const remove = async () => {
+    if (!b) return;
+    try {
+      await deleteAdminBooking(b.id);
+      toast.success('Booking deleted', `${b.invitee.name}'s details, answers and call records are gone from this app.`);
+      onDeleted?.(b.id);
+    } catch (e) {
+      toast.error('Could not delete the booking', errorMessage(e));
+      throw e;
+    }
+  };
+
+  const deleteButton = (
+    <Button variant="ghost" className="adm-bk__delete" iconLeft={<Trash2 size={16} />} onClick={() => setDeleteOpen(true)}>
+      Delete booking
+    </Button>
+  );
 
   const cancel = async () => {
     if (!b) return;
@@ -125,17 +154,25 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged }: 
                   <Button variant="danger-soft" onClick={() => setCancelOpen(true)}>
                     Cancel meeting
                   </Button>
-                  <ButtonLink variant="secondary" href={rescheduleUrlOf(b.manageUrl)} external iconRight={<ArrowUpRight size={16} />}>
+                  <ButtonLink variant="secondary" href={rescheduleUrlOf(asHostUrl(b.manageUrl))} external iconRight={<ArrowUpRight size={16} />}>
                     Reschedule
                   </ButtonLink>
                 </>
               ) : past ? (
-                <Button variant="secondary" loading={busy} iconLeft={<UserX size={16} />} onClick={() => void toggleNoShow()}>
-                  {b.attendance.noShow ? 'Clear no-show' : 'Mark as a no-show'}
-                </Button>
+                <>
+                  <Button variant="secondary" loading={busy} iconLeft={<UserX size={16} />} onClick={() => void toggleNoShow()}>
+                    {b.attendance.noShow ? 'Clear no-show' : 'Mark as a no-show'}
+                  </Button>
+                  {deleteButton}
+                </>
               ) : (
                 <span className="adm-quiet">This meeting is happening now.</span>
               )}
+            </div>
+          ) : b && deletable ? (
+            <div className="adm-bk__footer">
+              <span className="adm-quiet">This meeting was cancelled.</span>
+              {deleteButton}
             </div>
           ) : undefined
         }
@@ -180,6 +217,21 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged }: 
           <Textarea rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Something came up, sorry. Please pick another time." />
         </Field>
       </ConfirmDialog>
+
+      <ConfirmDialog
+        open={deleteOpen && deletable}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={remove}
+        tone="danger"
+        title="Delete this booking for good?"
+        description={
+          b
+            ? `Everything this app keeps about ${b.invitee.name}'s booking goes: their details, answers and consent, the timeline, and any reminder call records. This cannot be undone. Calendar events and messages that were already sent are not changed.`
+            : undefined
+        }
+        confirmLabel="Delete booking"
+        cancelLabel="Keep it"
+      />
     </>
   );
 }
@@ -221,7 +273,15 @@ function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) 
         {b.rescheduledFromStart ? <p className="adm-bk__theirs">Moved from {formatDateMedium(b.rescheduledFromStart, zone)} at {formatTime(b.rescheduledFromStart, zone)}</p> : null}
         {b.cancellation ? (
           <p className="adm-bk__cancel">
-            Cancelled by {b.cancellation.by === 'host' ? 'you' : b.cancellation.by === 'assistant' ? 'the invitee, on a reminder call' : 'the invitee'} on {formatDateMedium(b.cancellation.at, zone)}
+            Cancelled by{' '}
+            {b.cancellation.by === 'host'
+              ? b.cancellation.via === 'host_link'
+                ? 'a host, from the booking page'
+                : 'you'
+              : b.cancellation.by === 'assistant'
+                ? 'the invitee, on a reminder call'
+                : 'the invitee'}{' '}
+            on {formatDateMedium(b.cancellation.at, zone)}
             {b.cancellation.reason ? `: "${b.cancellation.reason}"` : '.'}
           </p>
         ) : null}
@@ -340,7 +400,8 @@ function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) 
         </div>
         <div className="adm-bk__manageactions">
           <CopyButton value={b.manageUrl} label="Copy" size="sm" />
-          <ButtonLink variant="ghost" size="sm" href={b.manageUrl} external iconRight={<ArrowUpRight size={15} />}>
+          {/* Opened from here, the page knows a host is acting. The copied link is for the invitee, so it stays plain. */}
+          <ButtonLink variant="ghost" size="sm" href={asHostUrl(b.manageUrl)} external iconRight={<ArrowUpRight size={15} />}>
             Open
           </ButtonLink>
         </div>
@@ -359,7 +420,9 @@ function TimelineRow({ entry, zone }: { entry: TimelineEntry; zone: string }) {
       </span>
       <div className="adm-timeline__text">
         <p className="adm-timeline__label">{view.label}</p>
-        {entry.detail && entry.detail.trim().toLowerCase() !== view.label.toLowerCase() ? <p className="adm-timeline__detail">{entry.detail}</p> : null}
+        {entry.detail && entry.detail.trim().toLowerCase() !== view.label.toLowerCase() ? <p className="adm-timeline__detail">{describeTimelineDetail(entry.detail)}</p> : null}
+        {/* Read from the call record while it is kept (90 days). The booking stores only the outcome. */}
+        {entry.transcript ? <p className="adm-timeline__detail">Transcript: {entry.transcript}</p> : null}
       </div>
       <time className="adm-timeline__time" dateTime={entry.at}>
         {formatDateMedium(entry.at, zone)}, {formatTime(entry.at, zone)}

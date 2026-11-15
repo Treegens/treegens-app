@@ -1375,6 +1375,38 @@ a.pf__credit:hover {
   padding-top: 6px;
 }
 
+/*
+ * Phones: every day of the month is a touch target of at least 44 px. Inside the card's side padding
+ * a day gets only 40 to 43 px at 360 px wide, so the month uses most of that padding (the heading
+ * and everything else keep it). A ruled grid goes edge to edge, with the card's border as its frame.
+ * The 14 px is the side padding .bw__main has at this width.
+ */
+@container bw (max-width: 419.98px) {
+  .bw__main .bw-cal__grid {
+    width: calc(100% + 20px);
+    margin-inline: -10px;
+  }
+
+  .m-scope[data-calendar='grid'] .bw__main .bw-cal__grid {
+    width: calc(100% + 28px);
+    margin-inline: -14px;
+    border-inline-start: 0;
+    border-radius: 0;
+  }
+
+  .m-scope[data-calendar='grid'] .bw__main .bw-cal__weekday:last-child,
+  .m-scope[data-calendar='grid'] .bw__main .bw-cal__cell:last-child {
+    border-inline-end: 0;
+  }
+
+  .m-scope[data-calendar='grid'] .bw__main .bw-cal__weekday:first-child,
+  .m-scope[data-calendar='grid'] .bw__main .bw-cal__grid thead th:last-child,
+  .m-scope[data-calendar='grid'] .bw__main .bw-cal__grid tbody tr:last-child td:first-child,
+  .m-scope[data-calendar='grid'] .bw__main .bw-cal__grid tbody tr:last-child td:last-child {
+    border-radius: 0;
+  }
+}
+
 /* ═════════════ time zone bar ═════════════ */
 
 .bw-tz {
@@ -1429,6 +1461,7 @@ a.pf__credit:hover {
 }
 
 .bw-tz__clock .ui-seg__item {
+  min-width: 44px;
   padding: 0 11px;
 }
 

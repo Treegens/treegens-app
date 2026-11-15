@@ -21,7 +21,7 @@ async function formValues(page) {
     phone: await form.locator('input[type="tel"]').inputValue(),
     topic: await form.getByRole('textbox', { name: 'What would you like to talk about?' }).inputValue(),
     guests: await form.getByRole('list', { name: 'Guests added' }).getByRole('listitem').allInnerTexts(),
-    sms: await form.getByRole('switch', { name: 'Text me reminders' }).getAttribute('aria-checked'),
+    sms: await form.getByRole('switch', { name: 'Text me the confirmation and reminders' }).getAttribute('aria-checked'),
   };
 }
 
@@ -36,7 +36,11 @@ async function expectJustTaken(s, page) {
 
 export default defineSuite('public-conflicts', { mockCreds: true }, async (t) => {
   await t.scenario('two visitors pick the same time: the second is told kindly and books another', async (s) => {
-    await s.step('prepare', () => prepare(s));
+    await s.step('prepare', async () => {
+      await prepare(s);
+      // Bob brings a guest: the owner lets people do that on the intro call.
+      await s.apiOk('PUT', '/admin/event-types/evt_intro', { body: { allowGuests: true } });
+    });
     s.allowConsoleErrors(/status of 409/);
     const ada = await s.newPage({ timezoneId: NEW_YORK, locale: 'en-US' });
     const bob = await s.newPage({ timezoneId: 'Europe/Paris', locale: 'en-US', ip: '203.0.113.77' });
@@ -115,7 +119,7 @@ export default defineSuite('public-conflicts', { mockCreds: true }, async (t) =>
       s.expect(all.map((b) => `${b.invitee.email} ${b.start}`).sort(), 'bookings').toEqual([`ada@example.com ${WED_2PM}`, `bob@example.com ${WED_230PM}`]);
       s.expect(all.find((b) => b.invitee.email === 'bob@example.com'), "Bob's booking").toMatchObject({ guests: ['wendy@example.com'], consent: { sms: false, call: true }, invitee: { timezone: 'Europe/Paris', phone: '+14155552671' } });
       s.expect((await s.outbox({ kind: 'calendar_insert' })).map((e) => e.event.start.dateTime).map((d) => new Date(d).toISOString()), 'calendar events').toEqual([WED_2PM, WED_230PM]);
-      s.expect((await s.outbox({ kind: 'email', to: 'bob@example.com' })).map((e) => e.subject), "Bob's emails").toEqual(['Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 3:30 PM']);
+      s.expect((await s.outbox({ kind: 'email', to: 'bob@example.com' })).map((e) => e.subject), "Bob's emails").toEqual(['Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 3:30 PM GMT+1']);
     });
   });
 

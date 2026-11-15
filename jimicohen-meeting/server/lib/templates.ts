@@ -98,6 +98,17 @@ export function firstName(name: string): string {
   return (name ?? '').trim().split(/\s+/)[0] ?? '';
 }
 
+// Endings that make a word read as a web address. A short list on purpose: a generic "word.word"
+// test would also catch real names such as "J.R.R." or "Anne-Marie.S".
+const LINK_ENDINGS =
+  'com|net|org|info|biz|io|co|app|dev|ai|me|ly|to|gg|so|sh|cc|tv|ws|xyz|top|link|click|online|site|website|shop|store|live|club|vip|win|work|page|email|zip|mov|ru|cn|tk|ml|ga|cf|gq|us|uk|de|in|ng|ke';
+const LINKISH = new RegExp(`(?::\\/\\/|www\\.|[\\/\\\\@]|[A-Za-z0-9-]{2,}\\.(?:${LINK_ENDINGS})(?![A-Za-z0-9]))`, 'i');
+
+/** True when a piece of visitor-typed text would show up as a link or an address on a phone or in a mail program. */
+export function looksLikeLink(text: string): boolean {
+  return LINKISH.test(String(text ?? ''));
+}
+
 /** "Jimi", "Jimi and Alex", "Jimi, Alex and Sam" */
 export function joinNames(names: string[]): string {
   const list = names.map((n) => n.trim()).filter(Boolean);
@@ -252,7 +263,11 @@ export function buildVars(
   const endMs = Date.parse(booking.end);
   const nowMs = ctx.now().getTime();
   const names = zoneNames(startMs, zone);
-  const inviteeFirst = firstName(booking.invitee.name) || 'there';
+  // The greeting is the one piece of the visitor's own typing that every message repeats. A "name"
+  // that reads as a web address would arrive as a link from the owner's address and number, so
+  // those messages greet "there" instead (and a host reads "the invitee").
+  const typedFirst = firstName(booking.invitee.name);
+  const inviteeFirst = typedFirst && !looksLikeLink(typedFirst) ? typedFirst : audience === 'host' ? 'the invitee' : 'there';
   const namedHost = audience === 'host' ? reader : primaryHost;
   const hostName = namedHost?.name?.trim() || site.profile.name;
   const hostNames = hosts.length > 1 ? joinNames(hosts.map((h) => firstName(h.name))) : hostName;
@@ -260,6 +275,9 @@ export function buildVars(
   const base = ctx.env.publicBaseUrl.replace(/\/+$/, '');
   const id = encodeURIComponent(booking.id);
   const token = manageTokenFor(ctx, booking.id);
+  // Host copies of the manage links say so: the booking page then keeps the host's zone off the invitee
+  // and records a change as made by a host. It grants nothing (the invitee holds the same token).
+  const asHost = audience === 'host' ? '&as=host' : '';
   const previousMs = booking.rescheduledFromStart ? Date.parse(booking.rescheduledFromStart) : NaN;
 
   return {
@@ -287,9 +305,9 @@ export function buildVars(
     previous_datetime: Number.isFinite(previousMs) ? formatInZone(previousMs, zone, 'full', locale) : '',
     location: describeLocation(booking, audience, firstName(primaryHost?.name ?? ''), firstName(booking.invitee.name)),
     join_url: booking.location?.joinUrl || booking.google?.meetUrl || '',
-    manage_url: `${base}/booking/${id}?t=${token}`,
-    reschedule_url: `${base}/booking/${id}/reschedule?t=${token}`,
-    cancel_url: `${base}/booking/${id}/cancel?t=${token}`,
+    manage_url: `${base}/booking/${id}?t=${token}${asHost}`,
+    reschedule_url: `${base}/booking/${id}/reschedule?t=${token}${asHost}`,
+    cancel_url: `${base}/booking/${id}/cancel?t=${token}${asHost}`,
     confirm_url: `${base}/booking/${id}?t=${token}&confirm=1`,
     book_url: `${base}/${encodeURIComponent(booking.eventSlug)}`,
     admin_url: `${base}/admin/bookings`,
@@ -326,7 +344,7 @@ function text(body: string): DefaultMessage {
 
 const INVITEE_EMAIL: Wording = {
   confirmation: {
-    subject: 'Confirmed: {{event_name}} with {{host_names}}, {{datetime_short}}',
+    subject: 'Confirmed: {{event_name}} with {{host_names}}, {{datetime_short}} {{timezone_short}}',
     heading: "You're booked",
     body: [
       'Hi {{invitee_first_name}},',
@@ -336,7 +354,7 @@ const INVITEE_EMAIL: Wording = {
   },
   host_new: { subject: '', heading: '', body: '' }, // filled from `confirmation` below
   rescheduled: {
-    subject: 'New time: {{event_name}} with {{host_names}}, {{datetime_short}}',
+    subject: 'New time: {{event_name}} with {{host_names}}, {{datetime_short}} {{timezone_short}}',
     heading: 'Your meeting has a new time',
     body: [
       'Hi {{invitee_first_name}},',
@@ -345,7 +363,7 @@ const INVITEE_EMAIL: Wording = {
     ].join('\n\n'),
   },
   cancelled: {
-    subject: 'Cancelled: {{event_name}} with {{host_names}}, {{datetime_short}}',
+    subject: 'Cancelled: {{event_name}} with {{host_names}}, {{datetime_short}} {{timezone_short}}',
     heading: 'This meeting is cancelled',
     body: [
       'Hi {{invitee_first_name}},',
@@ -354,7 +372,7 @@ const INVITEE_EMAIL: Wording = {
     ].join('\n\n'),
   },
   reminder: {
-    subject: 'Reminder: {{event_name}} with {{host_names}} is {{relative_day}} at {{time}}',
+    subject: 'Reminder: {{event_name}} with {{host_names}} is {{relative_day}} at {{time}} {{timezone_short}}',
     heading: 'Your meeting is {{relative_day}}',
     body: [
       'Hi {{invitee_first_name}},',
@@ -393,7 +411,7 @@ INVITEE_EMAIL.host_new = INVITEE_EMAIL.confirmation;
 
 const HOST_EMAIL: Wording = {
   host_new: {
-    subject: 'New booking: {{invitee_name}} for {{event_name}}, {{datetime_short}}',
+    subject: 'New booking: {{invitee_name}} for {{event_name}}, {{datetime_short}} {{timezone_short}}',
     heading: 'New booking',
     body: [
       'Hi {{host_first_name}},',
@@ -403,7 +421,7 @@ const HOST_EMAIL: Wording = {
   },
   confirmation: { subject: '', heading: '', body: '' }, // filled from `host_new` below
   rescheduled: {
-    subject: 'Rescheduled: {{invitee_name}} for {{event_name}}, now {{datetime_short}}',
+    subject: 'Rescheduled: {{invitee_name}} for {{event_name}}, now {{datetime_short}} {{timezone_short}}',
     heading: 'A meeting has moved',
     body: [
       'Hi {{host_first_name}},',
@@ -411,7 +429,7 @@ const HOST_EMAIL: Wording = {
     ].join('\n\n'),
   },
   cancelled: {
-    subject: 'Cancelled: {{invitee_name}} for {{event_name}}, {{datetime_short}}',
+    subject: 'Cancelled: {{invitee_name}} for {{event_name}}, {{datetime_short}} {{timezone_short}}',
     heading: 'A meeting was cancelled',
     body: [
       'Hi {{host_first_name}},',
@@ -420,7 +438,7 @@ const HOST_EMAIL: Wording = {
     ].join('\n\n'),
   },
   reminder: {
-    subject: 'Reminder: {{event_name}} with {{invitee_name}} is {{relative_day}} at {{time}}',
+    subject: 'Reminder: {{event_name}} with {{invitee_name}} is {{relative_day}} at {{time}} {{timezone_short}}',
     heading: 'Coming up {{relative_day}}',
     body: ['Hi {{host_first_name}},', 'Your {{event_name}} with {{invitee_name}} is {{relative_day}} at {{time}} ({{timezone}}).'].join('\n\n'),
   },

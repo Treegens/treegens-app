@@ -7,7 +7,7 @@ import { appUrl } from '../../lib/api';
 import { useTheme } from '../../lib/theme';
 import { formatDateLong, formatDuration, formatRange, zoneLabel } from '../../lib/tz';
 import { withEmbed } from '../lib/embed';
-import { fillTemplate, firstName, hostNames, hostnameOf, isHttpsUrl, paragraphs } from '../lib/text';
+import { deliveryLine, deliveryOf, fillTemplate, firstName, hostNames, hostnameOf, isHttpsUrl, paragraphs } from '../lib/text';
 import { BookingFacts } from './BookingFacts';
 import { CalendarButtons } from './CalendarButtons';
 import { Confetti } from './Confetti';
@@ -108,10 +108,10 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
   const vars = useMemo(() => confirmationVars(site, booking, manageToken, zone, hour12, locale), [site, booking, manageToken, zone, hour12, locale]);
 
   const title = variant === 'rescheduled' ? 'Your meeting has moved' : fillTemplate(theme.texts.confirmationTitle, vars) || "You're booked";
-  const body =
-    variant === 'rescheduled'
-      ? [`An updated invitation is on its way to ${booking.invitee.email}.`]
-      : paragraphs(fillTemplate(theme.texts.confirmationBody, vars)).concat([]);
+  // The owner's words, then what is really on its way: an email, an invitation from Google, both or neither.
+  const body = variant === 'rescheduled' ? [] : paragraphs(fillTemplate(theme.texts.confirmationBody, vars));
+  const delivery = deliveryLine(booking, variant === 'rescheduled');
+  const emailed = deliveryOf(booking).email;
   const note = booking.confirmationMessage ? paragraphs(fillTemplate(booking.confirmationMessage, vars)) : [];
 
   const manageBase = `/booking/${encodeURIComponent(booking.id)}`;
@@ -132,6 +132,7 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
           {p}
         </p>
       ))}
+      <p className="bw-done__body bw-done__delivery">{delivery}</p>
 
       <div className="bw-done__card">
         <p className="bw-done__event">{booking.eventTitle}</p>
@@ -169,7 +170,7 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
             </Link>
           </>
         )}{' '}
-        any time before the meeting. The same links are in your email.
+        any time before the meeting.{emailed ? ' The same links are in your email.' : ' These links are not emailed to you, so keep one of them to find your booking again.'}
       </p>
 
       {redirect ? <RedirectNotice url={redirect} embed={embed} /> : null}

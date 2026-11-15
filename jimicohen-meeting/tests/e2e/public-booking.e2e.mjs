@@ -21,6 +21,7 @@ import {
   manageView,
   offeredDays,
   offeredSlots,
+  openEvent,
   overflowReport,
   pickDay,
   pickSlot,
@@ -39,7 +40,11 @@ const NEW_YORK = 'America/New_York';
 
 export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
   await t.scenario('desktop: a visitor books the intro call with a phone number, a guest and a question', async (s) => {
-    await s.step('prepare: owner set up, Google connected, mail through the real provider path', () => prepare(s));
+    await s.step('prepare: owner set up, Google connected, mail through the real provider path, guests allowed', async () => {
+      await prepare(s);
+      // Guests are the owner's choice (off on new event types): Google invites them from the owner's account.
+      await s.apiOk('PUT', '/admin/event-types/evt_intro', { body: { allowGuests: true } });
+    });
     const page = await s.newPage({ viewport: { width: 1280, height: 800 }, timezoneId: NEW_YORK, locale: 'en-US' });
 
     await s.step('the landing page lists the meeting types', async () => {
@@ -96,7 +101,9 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       const form = await fillDetails(page, { ...ADA, phone: PHONE_TYPED, guests: [GUEST], topic: TOPIC });
       // The number is formatted while typing and both reminder switches start on, with the consent wording under them.
       s.expect(await form.locator('input[type="tel"]').inputValue(), 'phone as shown').toBe('(415) 555-2671');
-      s.expect(await form.getByRole('switch', { name: 'Text me reminders' }).getAttribute('aria-checked'), 'text reminders').toBe('true');
+      s.expect(await form.getByRole('switch', { name: 'Text me the confirmation and reminders' }).getAttribute('aria-checked'), 'text reminders').toBe('true');
+      // Email is set up and Google is connected, so the hint promises both.
+      await form.getByText('Your confirmation and calendar invitation go here.').waitFor();
       s.expect(await form.getByRole('switch', { name: "Reminder call from Ava, Jimi's AI assistant" }).getAttribute('aria-checked'), 'reminder call').toBe('true');
       await form.getByText("By adding your number you agree to receive reminder texts and an automated reminder call from Jimi's AI assistant about this meeting.").waitFor();
       // The summary beside the form repeats the choice in the visitor's zone.
@@ -112,7 +119,9 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       await page.getByRole('heading', { name: "You're booked" }).waitFor();
       await s.settle();
       const done = page.locator('.bw-done');
-      await done.getByText(`A calendar invitation is on its way to ${ADA.email}.`).waitFor();
+      await done.getByText('Thanks, Ada. Here are the details of your meeting.').waitFor();
+      await done.getByText(`A confirmation email and a calendar invitation are on their way to ${ADA.email}.`).waitFor();
+      await done.getByText(/any time before the meeting\. The same links are in your email\./).waitFor();
       const facts = (await done.locator('.bk-facts').innerText()).replace(/\s+/g, ' ');
       s.expect(facts, 'when').toContain(`${longDate(START, NEW_YORK)} 11:00 – 11:15 AM Eastern Time (New York)`);
       s.expect(facts, 'where').toContain('Google Meet');
@@ -156,8 +165,12 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       const google = new URL(await done.getByRole('link', { name: 'Google' }).getAttribute('href'));
       s.expect(google.origin + google.pathname, 'Google calendar link').toBe('https://calendar.google.com/calendar/render');
       s.expect(google.searchParams.get('dates'), 'Google calendar dates').toBe('20261118T160000Z/20261118T161500Z');
-      const outlook = new URL(await done.getByRole('link', { name: 'Outlook' }).getAttribute('href'));
+      const outlook = new URL(await done.getByRole('link', { name: 'Outlook.com' }).getAttribute('href'));
       s.expect(outlook.searchParams.get('startdt'), 'Outlook start').toBe('2026-11-18T16:00:00Z');
+      // Work and school Microsoft 365 calendars have their own button with the same event.
+      const office = new URL(await done.getByRole('link', { name: 'Office 365' }).getAttribute('href'));
+      s.expect(office.origin + office.pathname, 'Office 365 link').toBe('https://outlook.office.com/calendar/0/action/compose');
+      s.expect(office.searchParams.get('startdt'), 'Office 365 start').toBe('2026-11-18T16:00:00Z');
       const icsHref = await done.getByRole('link', { name: 'Apple or other' }).getAttribute('href');
       s.expect(icsHref, 'calendar file link').toBe(`${s.url(`/api/public/bookings/${booking.id}/ics`)}?t=${booking.manageToken}`);
       const file = await s.visitor().request('GET', `/public/bookings/${booking.id}/ics`, { query: { t: booking.manageToken } });
@@ -209,7 +222,8 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       });
       const event = insert.event;
       s.expect(event.organizer, 'organizer').toBe(OWNER_GOOGLE);
-      s.expect(event.summary, 'event title').toBe('Intro call: Ada Lovelace and Jimi Cohen');
+      // A guest is on the event, so Google writes to an address the visitor chose: nothing the visitor typed goes in.
+      s.expect(event.summary, 'event title').toBe('Intro call: Jimi Cohen');
       s.expect(Date.parse(event.start.dateTime), 'event start').toBe(Date.parse(START));
       s.expect(Date.parse(event.end.dateTime), 'event end').toBe(Date.parse(END));
       s.expect(event.start.timeZone, 'event time zone').toBe('Europe/London');
@@ -217,16 +231,12 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       s.expect(event.hangoutLink, 'Meet link').toBe(booking.location.joinUrl);
       s.expect(event.extendedProperties, 'booking id on the event').toEqual({ private: { meetingBookingId: booking.id } });
       s.expect(event.guestsCanModify, 'guests can modify').toBe(false);
-      // The description: who booked, phone, guests, the answer (escaped, Google renders HTML), and the manage link.
-      s.expect(event.description.split('\n'), 'description').toEqual([
-        `Booked by ${ADA.name} (${ADA.email})`,
-        `Phone: ${PHONE}`,
-        `Guests: ${GUEST}`,
-        '',
-        'What would you like to talk about? Planting 10,000 trees &lt;together&gt; &amp; what it costs.',
-        '',
-        `Reschedule or cancel: ${booking.manageUrl}`,
-      ]);
+      // The description: the meeting and its host, and the way to the booking in the dashboard. No name, phone,
+      // answers or manage link: those stay in the host email and the dashboard.
+      const base = booking.manageUrl.replace(/\/booking\/.*$/, '');
+      s.expect(event.description.split('\n'), 'description').toEqual(['Intro call with Jimi Cohen', '', `Booking details in the dashboard: ${base}/admin/bookings?b=${booking.id}`]);
+      s.expect(JSON.stringify(event), 'visitor text on the event').not.toContain(ADA.name);
+      s.expect(JSON.stringify(event), 'phone on the event').not.toContain(PHONE);
       s.expect(await s.googleEvents(OWNER_GOOGLE), 'events on the mock calendar').toMatchObject([{ account: OWNER_GOOGLE, event: { id: booking.google.eventId, status: 'confirmed' } }]);
       s.expect(booking.google, 'calendar link on the booking').toMatchObject({ hostId: 'host_owner', calendarId: /./, meetUrl: booking.location.joinUrl });
       s.expect(booking.google.error, 'calendar error').toBe(undefined);
@@ -237,7 +247,7 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       s.expect(emails.map((e) => `${e.service} ${e.to.join(',')}`).sort(), 'emails sent').toEqual([`resend ${ADA.email}`, `resend ${OWNER_GOOGLE}`]);
       const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
       s.expect(mail, 'confirmation').toMatchObject({ status: 200, fromEmail: FROM_EMAIL, from: /^Jimi Cohen </, replyTo: OWNER_GOOGLE, at: '2026-11-16T09:00:00.000Z' });
-      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM');
+      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST');
       s.expect(mail.text, 'text body').toContain('Wednesday, November 18, 2026');
       s.expect(mail.text, 'text body').toContain('11:00 AM to 11:15 AM (Eastern Standard Time)');
       s.expect(mail.text, 'text body').not.toContain('4:00 PM');
@@ -269,13 +279,13 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
 
     await s.step('the host notification, in the host zone, answering to the invitee', async () => {
       const [notice] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
-      s.expect(notice.subject, 'subject').toBe('New booking: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM');
+      s.expect(notice.subject, 'subject').toBe('New booking: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM GMT');
       s.expect(notice.replyTo, 'reply-to').toBe(ADA.email);
       s.expect(notice.text, 'text body').toContain('4:00 PM to 4:15 PM (Greenwich Mean Time)');
       s.expect(notice.text, 'their time').toContain('11:00 AM (Eastern Standard Time)');
       for (const piece of [ADA.email, PHONE, GUEST, 'Planting 10,000 trees <together> & what it costs.']) s.expect(notice.text, 'text body').toContain(piece);
       s.expect(notice.html, 'answer is escaped in HTML').toContain('Planting 10,000 trees &lt;together&gt; &amp; what it costs.');
-      s.expect(notice.links, 'links').toContain(booking.manageUrl);
+      s.expect(notice.links, 'links').toContain(`${booking.manageUrl}&as=host`);
       // The host has the event from Google already: no calendar file.
       s.expect(notice.hasIcs, 'calendar file for the host').toBe(false);
       await s.screenshotEmail(notice, 'host notification');
@@ -368,7 +378,7 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       s.expect(insert.event.attendees.map((a) => a.email), 'attendees').toEqual(['grace@example.com']);
       s.expect(insert.meetUrl, 'meet link').toBe(booking.location.joinUrl);
       const [mail] = await s.outbox({ kind: 'email', to: 'grace@example.com' });
-      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Thu, Nov 19, 10:30 AM');
+      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Thu, Nov 19, 10:30 AM EST');
       s.expect(mail.text, 'text').toContain('10:30 AM to 10:45 AM (Eastern Standard Time)');
       s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'host notices').toHaveLength(1);
       s.expect(await s.outbox({ kind: 'sms' }), 'texts').toEqual([]);
@@ -393,6 +403,36 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
         `${plus('2026-11-16T15:00:00.000Z', -1 * HOUR)} reminder email invitee`,
         `${plus('2026-11-16T15:00:00.000Z', -15 * MINUTE)} reminder sms invitee`,
       ]);
+    });
+  });
+
+  await t.scenario('another length chosen in an empty month: back to the first month with times, not "No open times"', async (s) => {
+    await s.step('prepare: the owner works Mondays only, and the meeting can be booked 20 days ahead', async () => {
+      await prepare(s);
+      const mondays = { 0: [], 1: [{ start: '09:00', end: '17:00' }], 2: [], 3: [], 4: [], 5: [], 6: [] };
+      await s.apiOk('PUT', '/admin/hosts/host_owner', { body: { schedules: [{ id: 'sch_default', name: 'Working hours', weekly: mondays, overrides: [] }], defaultScheduleId: 'sch_default' } });
+      await s.apiOk('PUT', '/admin/event-types/evt_meeting', { body: { scheduling: { maxDaysAhead: 20 } } });
+    });
+    const page = await s.newPage({ timezoneId: 'Europe/London', locale: 'en-US' });
+
+    await s.step('the visitor pages ahead to December, where nothing is free', async () => {
+      await openEvent(s, page, 'meeting');
+      await page.getByRole('grid', { name: 'November 2026' }).waitFor();
+      await page.getByRole('button', { name: 'Next month' }).click();
+      await page.getByRole('grid', { name: 'December 2026' }).waitFor();
+      await calendarReady(page);
+      await page.getByText('No open times in December 2026').waitFor();
+    });
+
+    await s.step('and picks 45 minutes there: the calendar goes back to November, arrows and all', async () => {
+      await page.getByRole('radio', { name: '45 min' }).click();
+      await page.getByRole('grid', { name: 'November 2026' }).waitFor();
+      s.expect((await offeredDays(page)).map((d) => d.day), 'days with times').toEqual(['2026-11-16', '2026-11-23', '2026-11-30']);
+      s.expect(await page.getByText('No open times right now').count(), 'the dead end').toBe(0);
+      s.expect(await page.getByRole('button', { name: 'Next month' }).isEnabled(), 'the way forward').toBe(true);
+      await pickDay(page, '2026-11-23');
+      s.expect((await offeredSlots(page)).length, 'times of 45 minutes on the 23rd').toBeGreaterThan(0);
+      await s.screenshot(page, 'back to the month with times');
     });
   });
 });

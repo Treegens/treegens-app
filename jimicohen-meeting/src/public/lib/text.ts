@@ -1,7 +1,7 @@
 /**
  * Small text helpers shared by the public screens.
  */
-import type { PublicEventType, PublicHost } from '../../../shared/types';
+import type { PublicBooking, PublicEventType, PublicHost } from '../../../shared/types';
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -72,6 +72,26 @@ export function paragraphs(text: string): string[] {
 /** "1 time", "3 times" */
 export function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/** What reaches the invitee. An answer without the flags (an older server, the design preview) promises both, as before. */
+export function deliveryOf(booking: PublicBooking): { email: boolean; calendarInvite: boolean } {
+  return booking.delivery ?? { email: true, calendarInvite: true };
+}
+
+/** One sentence on what is on its way to the invitee, from what really goes out. */
+export function deliveryLine(booking: PublicBooking, moved: boolean): string {
+  const { email, calendarInvite } = deliveryOf(booking);
+  const to = booking.invitee.email;
+  if (moved) {
+    if (calendarInvite) return `An updated invitation is on its way to ${to}.`;
+    if (email) return `An email with the new time is on its way to ${to}.`;
+    return 'No email is sent about this change, so please update your calendar with the buttons below.';
+  }
+  if (email && calendarInvite) return `A confirmation email and a calendar invitation are on their way to ${to}.`;
+  if (email) return `A confirmation email is on its way to ${to}.`;
+  if (calendarInvite) return `A calendar invitation is on its way to ${to}.`;
+  return 'No confirmation email is sent for this booking, so please add it to your calendar with the buttons below.';
 }
 
 /** Stable 32 bit hash for deterministic preview data. */

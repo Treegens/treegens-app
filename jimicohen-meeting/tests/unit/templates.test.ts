@@ -219,6 +219,23 @@ describe('buildVars', () => {
     expect(buildVars(ctx, { ...shared, audience: 'host' }).time).toBe('5:30 PM');
   });
 
+  it('never greets with a "name" that reads as a link, and keeps real names that have dots or dashes', () => {
+    const greet = (name: string, audience: 'invitee' | 'host' = 'invitee') =>
+      buildVars(ctx, { booking: booking({ invitee: { name, email: 'third.party@example.org', timezone: 'Africa/Nairobi' } }), eventType: null, hosts: [jimi], site: site(), audience })
+        .invitee_first_name;
+    for (const name of ['https://evil.example/verify-account now', 'evil.example/verify-account now', 'www.evil.example', 'evil.com', 'Win-prize.xyz today', 'me@evil.example']) {
+      expect(greet(name), name).toBe('there');
+    }
+    expect(greet('evil.com', 'host')).toBe('the invitee');
+    for (const [name, first] of [['J.R.R. Tolkien', 'J.R.R.'], ["Mary-Jane O'Neil Jr.", 'Mary-Jane'], ['J.Smith', 'J.Smith'], ['Zoë Ångström', 'Zoë']]) {
+      expect(greet(name), name).toBe(first);
+    }
+    // what the person typed is still shown as it is where it is not a greeting
+    expect(buildVars(ctx, { booking: booking({ invitee: { name: 'evil.com', email: 'a@example.org', timezone: 'UTC' } }), eventType: null, hosts: [jimi], site: site(), audience: 'host' }).invitee_name).toBe(
+      'evil.com',
+    );
+  });
+
   it('follows daylight saving in the reader zone', () => {
     const summer = booking({ start: '2026-07-01T14:00:00.000Z', end: '2026-07-01T14:30:00.000Z' });
     const v = buildVars(ctx, { booking: summer, eventType: null, hosts: [jimi], site: site(), audience: 'host', recipientHost: jimi });
@@ -263,6 +280,14 @@ describe('buildVars', () => {
     expect(v.confirm_url).toBe(`${TEST_BASE_URL}/booking/bkg_abc123?t=${token}&confirm=1`);
     expect(v.book_url).toBe(`${TEST_BASE_URL}/intro`);
     expect(v.join_url).toBe('https://meet.google.com/abc-defg-hij');
+  });
+
+  it('marks the manage links in host messages, so the booking page knows a host is acting', () => {
+    const v = buildVars(ctx, { booking: booking(), eventType: null, hosts: [jimi], site: site(), audience: 'host', recipientHost: jimi });
+    const token = hmacHex(ctx, 'manage', 'bkg_abc123');
+    expect(v.manage_url).toBe(`${TEST_BASE_URL}/booking/bkg_abc123?t=${token}&as=host`);
+    expect(v.reschedule_url).toBe(`${TEST_BASE_URL}/booking/bkg_abc123/reschedule?t=${token}&as=host`);
+    expect(v.cancel_url).toBe(`${TEST_BASE_URL}/booking/bkg_abc123/cancel?t=${token}&as=host`);
   });
 
   it('describes the rest of the booking', () => {
@@ -407,20 +432,20 @@ describe('defaultMessage', () => {
   it('reads naturally once filled in', () => {
     const invitee = varsFor('invitee');
     const confirmation = defaultMessage('confirmation', 'email', 'invitee');
-    expect(renderTemplate(confirmation.subject, invitee)).toBe('Confirmed: Quarterly partnership review with Jimi Cohen, Tue, Nov 17, 2:30 PM');
+    expect(renderTemplate(confirmation.subject, invitee)).toBe('Confirmed: Quarterly partnership review with Jimi Cohen, Tue, Nov 17, 2:30 PM PST');
     expect(renderTemplate(confirmation.heading, invitee)).toBe("You're booked");
     expect(renderTemplate(confirmation.body, invitee)).toContain(
       "You're all set. Your Quarterly partnership review with Jimi Cohen is confirmed for Tuesday, November 17, 2026 at 2:30 PM PST.",
     );
 
     const reminder = defaultMessage('reminder', 'email', 'invitee');
-    expect(renderTemplate(reminder.subject, invitee)).toBe('Reminder: Quarterly partnership review with Jimi Cohen is today at 2:30 PM');
+    expect(renderTemplate(reminder.subject, invitee)).toBe('Reminder: Quarterly partnership review with Jimi Cohen is today at 2:30 PM PST');
     expect(renderTemplate(reminder.heading, invitee)).toBe('Your meeting is today');
 
     const hostVars = varsFor('host');
     const hostNew = defaultMessage('host_new', 'email', 'host');
     expect(renderTemplate(hostNew.subject, hostVars)).toBe(
-      'New booking: Alexandria Montgomery-Fitzgerald for Quarterly partnership review, Tue, Nov 17, 5:30 PM',
+      'New booking: Alexandria Montgomery-Fitzgerald for Quarterly partnership review, Tue, Nov 17, 5:30 PM EST',
     );
     expect(renderTemplate(hostNew.body, hostVars)).toContain('Hi Jimi,');
     expect(renderTemplate(hostNew.body, hostVars)).toContain(
@@ -442,6 +467,24 @@ describe('defaultMessage', () => {
     const line = renderTemplate(defaultMessage('reminder', 'call', 'invitee').body, varsFor('invitee'));
     expect(line).toBe(
       'Hi Alexandria, this is Ava, an AI assistant calling for Jimi Cohen. A quick reminder about your Quarterly partnership review today at 2:30 PM your time. Are you still able to make it?',
+    );
+  });
+
+  it("names the reader's zone wherever a subject gives a time, and keeps subjects short", () => {
+    const kinds = ['confirmation', 'host_new', 'rescheduled', 'cancelled', 'reminder', 'followup', 'manage_link', 'host_alert'] as const;
+    for (const audience of AUDIENCES) {
+      const vars = varsFor(audience);
+      for (const kind of kinds) {
+        const subject = renderTemplate(defaultMessage(kind, 'email', audience).subject, vars);
+        if (subject.includes(vars.time)) expect(subject, `${kind}/${audience}`).toContain(`${vars.time} ${vars.timezone_short}`);
+        expect(subject.length, `${kind}/${audience}: ${subject}`).toBeLessThan(120);
+      }
+    }
+    expect(renderTemplate(defaultMessage('rescheduled', 'email', 'host').subject, varsFor('host'))).toBe(
+      'Rescheduled: Alexandria Montgomery-Fitzgerald for Quarterly partnership review, now Tue, Nov 17, 5:30 PM EST',
+    );
+    expect(renderTemplate(defaultMessage('cancelled', 'email', 'invitee').subject, varsFor('invitee'))).toBe(
+      'Cancelled: Quarterly partnership review with Jimi Cohen, Tue, Nov 17, 2:30 PM PST',
     );
   });
 

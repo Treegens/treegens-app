@@ -370,6 +370,62 @@ describe('GET /host/:id/calendars', () => {
   });
 });
 
+describe('POST /host/:id/google/disconnect', () => {
+  function post(ctx: TestCtx, path: string, extra: { origin?: string | null } = {}): Promise<Response> {
+    return handle(apiRequest('POST', path, { body: {}, ...extra }), ctx);
+  }
+
+  it('lets a co-host take their own Google account off, and gives the zone back to their device', async () => {
+    const t = await team();
+    await connectGoogle(t.ctx, 'host_alex');
+    await repo.updateHost(t.ctx, 'host_alex', (h) => ({ ...h, timezoneMode: 'google', timezone: 'Europe/Berlin', calendarHealth: { ok: false, message: 'old', at: TEST_NOW } }));
+    await t.ctx.kv.setJSON('cache/busy-host_alex-b670-abc', { value: { b: [], ok: true }, exp: Date.parse(TEST_NOW) + 60_000 });
+    const revoked: string[] = [];
+    t.ctx.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === 'https://oauth2.googleapis.com/revoke') {
+        revoked.push(String(init?.body ?? ''));
+        return new Response(null, { status: 200 });
+      }
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+
+    const res = await ok<{ ok: boolean; host: AdminHost }>(post(t.ctx, link('host_alex', t.alexToken, '/google/disconnect')));
+    expect(res.ok).toBe(true);
+    expect(res.host.google).toBeNull();
+    expect(res.host.timezoneMode).toBe('device');
+    expect(JSON.stringify(res)).not.toContain('refresh-token-very-secret');
+    const stored = (await repo.getHost(t.ctx, 'host_alex'))!;
+    expect(stored).toMatchObject({ google: null, calendarHealth: null, timezoneMode: 'device', timezone: 'Europe/Berlin' });
+    // Google is told the grant is no longer wanted, and nothing read from it is offered from the cache.
+    expect(revoked).toHaveLength(1);
+    expect(await t.ctx.kv.list('cache/busy-host_alex-')).toEqual([]);
+  });
+
+  it('touches nobody else, needs the right link, and refuses cross-site requests', async () => {
+    const t = await team();
+    await connectGoogle(t.ctx, 'host_alex');
+    await connectGoogle(t.ctx, 'host_sam');
+    await connectGoogle(t.ctx, 'host_owner');
+    t.ctx.fetch = (async () => new Response(null, { status: 200 })) as typeof fetch;
+    for (const path of [link('host_sam', t.alexToken, '/google/disconnect'), link('host_owner', t.alexToken, '/google/disconnect'), link('host_alex', null, '/google/disconnect'), link('host_alex', 'x'.repeat(40), '/google/disconnect')]) {
+      expect((await post(t.ctx, path)).status, path).toBe(404);
+    }
+    for (const origin of ['https://evil.example', null]) {
+      const res = await post(t.ctx, link('host_alex', t.alexToken, '/google/disconnect'), { origin });
+      expect(res.status).toBe(403);
+    }
+    for (const id of ['host_alex', 'host_sam', 'host_owner']) expect((await repo.getHost(t.ctx, id))!.google?.status, id).toBe('ok');
+  });
+
+  it('is harmless when nothing is connected', async () => {
+    const t = await team();
+    const res = await ok<{ host: AdminHost }>(post(t.ctx, link('host_alex', t.alexToken, '/google/disconnect')));
+    expect(res.host.google).toBeNull();
+    expect(res.host.timezoneMode).toBe('device');
+  });
+});
+
 describe('what a co-host link cannot reach', () => {
   it('no dashboard route answers to it', async () => {
     const t = await team();

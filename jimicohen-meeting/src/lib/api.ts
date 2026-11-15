@@ -37,6 +37,7 @@ import type {
   PublicBooking,
   PublicEventResponse,
   PublicSite,
+  SharedHoursCheck,
   SiteSettings,
   SlotsResponse,
 } from '../../shared/types';
@@ -186,7 +187,10 @@ export function getSlots(q: SlotsQuery, opts?: CallOptions): Promise<SlotsRespon
 
 /**
  * POST /public/bookings. Errors worth handling by code:
- * 409 `slot_taken` (refresh slots, keep the form), 503 `calendar_unavailable`, 422 `invalid` (see `fields`), 429.
+ * 409 `slot_taken` (refresh slots, keep the form), 409 `booking_limit` (too many upcoming meetings for the
+ * email), 409 `in_progress` (the same request is still being saved), 503 `calendar_unavailable`,
+ * 422 `invalid` (see `fields`), 429 (`phone_limit`: too many bookings with reminders for the number today).
+ * Send the same `requestKey` on every retry of one form: a retry whose first try went through gets that booking back.
  */
 export function createBooking(body: CreateBookingRequest): Promise<CreateBookingResponse> {
   return request('POST', '/public/bookings', { body });
@@ -197,14 +201,21 @@ export function getBooking(id: string, token: string, opts?: CallOptions): Promi
   return request('GET', `/public/bookings/${enc(id)}`, { query: { t: token }, signal: opts?.signal });
 }
 
-/** POST /public/bookings/:id/cancel */
-export async function cancelBooking(id: string, token: string, reason?: string): Promise<PublicBooking> {
-  return unwrap(await request('POST', `/public/bookings/${enc(id)}/cancel`, { body: { t: token, reason: reason || undefined } }), 'booking');
+/**
+ * POST /public/bookings/:id/cancel. `as: 'host'` when the page was opened from a host's link: the
+ * cancellation is then recorded as made by a host.
+ */
+export async function cancelBooking(id: string, token: string, reason?: string, as?: 'host'): Promise<PublicBooking> {
+  return unwrap(await request('POST', `/public/bookings/${enc(id)}/cancel`, { body: { t: token, reason: reason || undefined, as } }), 'booking');
 }
 
-/** POST /public/bookings/:id/reschedule. 409 `slot_taken` when the new time is gone. */
-export async function rescheduleBooking(id: string, token: string, start: string, timezone?: string): Promise<PublicBooking> {
-  return unwrap(await request('POST', `/public/bookings/${enc(id)}/reschedule`, { body: { t: token, start, timezone } }), 'booking');
+/**
+ * POST /public/bookings/:id/reschedule. 409 `slot_taken` when the new time is gone, 409 / 429 `move_limit`
+ * when the meeting has been moved too often. `timezone` is the invitee's own zone; with `as: 'host'` (the
+ * page was opened from a host's link) leave it out, the server ignores it then anyway.
+ */
+export async function rescheduleBooking(id: string, token: string, start: string, timezone?: string, as?: 'host'): Promise<PublicBooking> {
+  return unwrap(await request('POST', `/public/bookings/${enc(id)}/reschedule`, { body: { t: token, start, timezone, as } }), 'booking');
 }
 
 /** POST /public/bookings/:id/confirm: the invitee says "I'll be there". */
@@ -236,7 +247,7 @@ export function getAuthState(opts?: CallOptions): Promise<AuthState> {
 }
 
 /** POST /auth/setup: first run only. Creates the admin password and signs in. */
-export async function setup(input: { code: string; password: string; deviceTimezone?: string }): Promise<void> {
+export async function setup(input: { code: string; password: string; deviceTimezone?: string; email?: string }): Promise<void> {
   await request('POST', '/auth/setup', { body: input });
 }
 
@@ -298,6 +309,14 @@ export async function duplicateEventType(id: string): Promise<EventType> {
 /** PUT /admin/event-types-order: ids in the order they should appear. */
 export async function reorderEventTypes(ids: string[]): Promise<void> {
   await request('PUT', '/admin/event-types-order', { body: { ids } });
+}
+
+/**
+ * POST /admin/event-types-check: for a joint meeting, whether its hosts' working hours ever line
+ * up. Takes the event type as it is on screen, saved or not. Nothing is stored.
+ */
+export function checkSharedHours(draft: Partial<EventType>, opts?: CallOptions): Promise<SharedHoursCheck> {
+  return request('POST', '/admin/event-types-check', { body: draft, signal: opts?.signal });
 }
 
 /** GET /admin/hosts */
@@ -383,6 +402,11 @@ export async function setNoShow(id: string, noShow: boolean): Promise<AdminBooki
   return unwrap(await request('POST', `/admin/bookings/${enc(id)}/no-show`, { body: { noShow } }), 'booking');
 }
 
+/** DELETE /admin/bookings/:id : erases a cancelled or past booking for good (refused with 409 for an upcoming one). */
+export async function deleteAdminBooking(id: string): Promise<void> {
+  await request('DELETE', `/admin/bookings/${enc(id)}`);
+}
+
 /** URL of the CSV export (GET /admin/bookings.csv). Use it as a download link. */
 export function bookingsCsvUrl(query?: { scope?: BookingsQuery['scope']; q?: string }): string {
   return `${API_BASE}/admin/bookings.csv${queryString(query)}`;
@@ -451,6 +475,11 @@ export async function getHostSelfCalendars(id: string, token: string, opts?: Cal
   return unwrap(await request('GET', `/host/${enc(id)}/calendars`, { query: { t: token }, signal: opts?.signal }), 'calendars');
 }
 
+/** POST /host/:id/google/disconnect?t=: the co-host disconnects their own Google Calendar. Returns the host as it is now. */
+export async function disconnectGoogleSelf(id: string, token: string): Promise<AdminHost> {
+  return unwrap(await request('POST', `/host/${enc(id)}/google/disconnect`, { query: { t: token }, body: {} }), 'host');
+}
+
 // ═════════════════════════════ google ═════════════════════════════
 
 export interface GoogleConnectParams {
@@ -461,17 +490,23 @@ export interface GoogleConnectParams {
   gmail?: boolean;
   /** co-host invite token when a co-host connects their own calendar */
   token?: string;
+  /** "Use a different Google account": Google shows its account chooser */
+  switchAccount?: boolean;
 }
 
 /**
  * URL that starts the Google OAuth redirect (GET /google/connect). Navigate the whole page to it
  * (`window.location.assign(url)`): popups are blocked by policy. The person comes back to
- * `returnTo` with `?google=connected` or `?google=error&reason=...`.
+ * `returnTo` with `?google=connected` (and `&zone=<IANA zone>` when their time zone changed with
+ * it) or `?google=error&reason=...`.
  */
-export function googleConnectUrl({ hostId, returnTo, gmail = false, token }: GoogleConnectParams): string {
+export function googleConnectUrl({ hostId, returnTo, gmail = false, token, switchAccount = false }: GoogleConnectParams): string {
   if (import.meta.env.DEV && import.meta.env.VITE_MOCK_API) {
     const sep = returnTo.includes('?') ? '&' : '?';
     return `${returnTo}${sep}google=connected&mock_google_host=${enc(hostId)}${gmail ? '&mock_google_gmail=1' : ''}`;
   }
-  return `${API_BASE}/google/connect${queryString({ host: hostId, gmail: gmail ? 1 : 0, return: returnTo, t: token })}`;
+  return `${API_BASE}/google/connect${queryString({ host: hostId, gmail: gmail ? 1 : 0, return: returnTo, t: token, switch: switchAccount ? 1 : undefined })}`;
 }
+
+/** The query parameters a return from Google leaves on the page it lands on. Read them, then remove them. */
+export const GOOGLE_RETURN_PARAMS = ['google', 'reason', 'zone'] as const;

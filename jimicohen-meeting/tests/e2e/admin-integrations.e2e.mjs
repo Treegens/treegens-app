@@ -4,7 +4,7 @@
  * badges follow, each "Send test" reaches the mocked provider, and no secret ever comes back.
  */
 import { defineSuite } from './lib.mjs';
-import { MONDAY, clearToasts, expectFieldProblem, expectToast } from './admin-helpers.mjs';
+import { MONDAY, clearToasts, expectFieldProblem, expectToast, fieldProblem } from './admin-helpers.mjs';
 
 // Made up here, at run time, in the shapes the real ones have.
 const GOOGLE_ID = `1234567890-${'e2eclient'}abc123.apps.googleusercontent.com`;
@@ -17,6 +17,8 @@ const ANTHROPIC_KEY = ['sk', 'ant', 'e2eAnthropicKeyValue0042'].join('-');
 const SECRETS = { GOOGLE_SECRET, RESEND_KEY, TWILIO_TOKEN, ANTHROPIC_KEY };
 const OWNER_GOOGLE = 'jimi@example.com';
 const MOBILE = '+14155552671';
+/** The reminder channels the public site offers. (Its `email` flag says whether mail goes out: in development, to the mock outbox.) */
+const reminderChannels = ({ sms, calls }) => ({ sms, calls });
 
 export default defineSuite('admin-integrations', { mockCreds: false }, async (t) => {
   await t.scenario('integrations from nothing: paste credentials, test each one, remove them again', { reset: true }, async (s) => {
@@ -60,7 +62,7 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
         email: { resolved: 'none', resendConfigured: false, gmailAvailable: false, fromEmail: '' },
       });
       s.expect((await status()).twilio.accountSidMasked, 'a masked Twilio SID before anything is saved').toBe(undefined);
-      s.expect((await s.apiOk('GET', '/public/site')).features, 'reminder channels offered to visitors').toEqual({ sms: false, calls: false });
+      s.expect(reminderChannels((await s.apiOk('GET', '/public/site')).features), 'reminder channels offered to visitors').toEqual({ sms: false, calls: false });
 
       await open('Google Calendar');
       s.expect(await card('Google Calendar').getByRole('button', { name: 'Connect Google Calendar' }).isDisabled(), 'connect before keys are saved').toBe(true);
@@ -75,7 +77,8 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       // The same on Home: the checklist still has every connection open.
       const { checklist, warnings } = await s.apiOk('GET', '/admin/overview');
       s.expect(Object.fromEntries(checklist.map((c) => [c.key, c.done])), 'setup checklist').toMatchObject({ google: false, email: false, sms: false, assistant: false });
-      s.expect(warnings.map((w) => w.key).sort(), 'warnings on Home').toEqual(['google_not_connected', 'no_email', 'twilio_missing']);
+      // With no email and no calendar, a booking reaches nobody: Home says so too.
+      s.expect(warnings.map((w) => w.key).sort(), 'warnings on Home').toEqual(['bookings_reach_nobody', 'google_not_connected', 'no_email', 'owner_no_email', 'twilio_missing']);
     });
 
     await s.step('a test email before anything is set up says plainly that it only reached the local outbox', async () => {
@@ -201,6 +204,9 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       const number = twilio.getByLabel('Your Twilio number');
       await sid.fill('AC123');
       await expectFieldProblem(s, sid, 'An Account SID starts with AC and has 34 characters.', 'problem on the SID');
+      // The browser takes what the server takes: AC and 32 letters or digits, not only hex.
+      await sid.fill(`AC${'Zx9'.repeat(10)}Qq`);
+      await s.eventually(async () => s.expect(await fieldProblem(sid), 'problem on a SID with letters beyond f').toBe(''));
       await number.fill('555 0100');
       await expectFieldProblem(s, number, 'Use the international format, for example +14155550123.', 'problem on the number');
       s.expect(await twilio.getByRole('button', { name: 'Save Twilio details' }).isDisabled(), 'save with bad values').toBe(true);
@@ -209,7 +215,7 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       await token.fill('too-short');
       await twilio.getByRole('button', { name: 'Save Twilio details' }).click();
       await expectFieldProblem(s, token, 'This does not look like a Twilio auth token.', 'problem on the token');
-      s.expect((await status()).twilio, 'Twilio status after a refused save').toEqual({ configured: false });
+      s.expect((await status()).twilio, 'Twilio status after a refused save').toEqual({ configured: false, calls: false });
     });
 
     await s.step('Twilio: a token Twilio refuses gives a clear result, the right one texts and calls', async () => {
@@ -219,7 +225,7 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       await expectToast(page, 'Twilio saved');
       await s.eventually(async () => s.expect(await badge('Texts and reminder calls'), 'Twilio badge').toBe('Connected'));
       // The number was typed with spaces and brackets, and is kept in the international form.
-      s.expect((await status()).twilio, 'Twilio status').toEqual({ configured: true, accountSidMasked: 'AC01…cdef', fromNumber: TWILIO_NUMBER });
+      s.expect((await status()).twilio, 'Twilio status').toEqual({ configured: true, calls: true, accountSidMasked: 'AC01…cdef', fromNumber: TWILIO_NUMBER });
       s.expect(await twilio.getByLabel('Your Twilio number').inputValue(), 'number shown after saving').toBe(TWILIO_NUMBER);
       await twilio.getByText('AC01…cdef').waitFor();
       await clearToasts(page);
@@ -251,7 +257,7 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       s.expect(spoken.said, 'what the assistant says').toMatch(/Ava/);
       s.expect(spoken.said, 'what the assistant says').toMatch(/test/i);
       s.expect(await progress(), 'connections').toBe('3 of 4 connected');
-      s.expect((await s.apiOk('GET', '/public/site')).features, 'reminder channels offered to visitors').toEqual({ sms: true, calls: true });
+      s.expect(reminderChannels((await s.apiOk('GET', '/public/site')).features), 'reminder channels offered to visitors').toEqual({ sms: true, calls: true });
     });
 
     await s.step('assistant: a bad key lands on its field, a good key and a model are saved and tested', async () => {
@@ -348,9 +354,9 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       await page.getByRole('dialog', { name: 'Remove Twilio?' }).getByRole('button', { name: 'Remove Twilio' }).click();
       await expectToast(page, 'Twilio removed');
       await s.eventually(async () => s.expect(await badge('Texts and reminder calls'), 'Twilio badge').toBe('Not set up'));
-      s.expect((await status()).twilio, 'Twilio status').toEqual({ configured: false });
+      s.expect((await status()).twilio, 'Twilio status').toEqual({ configured: false, calls: false });
       s.expect(await twilio.getByLabel('Your Twilio number').inputValue(), 'number box after removing').toBe('');
-      s.expect((await s.apiOk('GET', '/public/site')).features, 'reminder channels offered to visitors').toEqual({ sms: false, calls: false });
+      s.expect(reminderChannels((await s.apiOk('GET', '/public/site')).features), 'reminder channels offered to visitors').toEqual({ sms: false, calls: false });
 
       const email = card('Email');
       await email.getByRole('button', { name: 'Remove', exact: true }).click();
@@ -501,6 +507,124 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       const toast = await expectToast(page, 'Google did not connect');
       s.expect(await toast.textContent(), 'the reason').toContain('Google sign-in was cancelled, so nothing was connected.');
       s.expect((await s.kv('hosts'))[0].google ?? null, "the owner's Google connection").toBeNull();
+      await clearToasts(page);
+    });
+
+    await s.step('connected while the consent screen is still in Testing: the card and the dashboard say when it ends', async () => {
+      const consent = await s.connectGoogle(page, OWNER_GOOGLE, 'UTC', { flags: ['testing'] });
+      await google.getByRole('button', { name: 'Connect Google Calendar' }).click();
+      s.expect((await consent.done()).status, 'connect result').toBe('connected');
+      await clearToasts(page);
+      // Google gave the grant 7 days: Monday 16 November, 9:00, plus 604,799 seconds.
+      s.expect((await s.kv('hosts'))[0].google.refreshExpiresAt, 'stored end').toBe('2026-11-23T08:59:59.000Z');
+      const notice = google.getByText('This connection ends on Monday, November 23, 2026');
+      await notice.waitFor();
+      s.expect(await google.getByText('Publish the consent screen in Google Cloud (step 3 of the setup steps), then reconnect.').count(), 'what to do').toBe(1);
+      await s.screenshot(page, 'google connection that ends in 7 days');
+      const { warnings } = await s.apiOk('GET', '/admin/overview');
+      const warning = warnings.find((w) => w.key === 'google_expiry_host_owner');
+      s.expect(warning?.href, 'dashboard warning link').toBe('/admin/integrations#google');
+      s.expect(warning?.message, 'dashboard warning').toContain('Your Google connection ends on Monday, November 23, 2026');
+
+      // Published, and connected again: Google names no end, and nothing is said about one.
+      const again = await s.connectGoogle(page, OWNER_GOOGLE, 'UTC');
+      await google.getByRole('button', { name: 'Reconnect' }).first().click();
+      s.expect((await again.done()).status, 'reconnect result').toBe('connected');
+      await google.getByText(`Connected as ${OWNER_GOOGLE}`).waitFor();
+      s.expect(await google.getByText('This connection ends on').count(), 'no end any more').toBe(0);
+      s.expect('refreshExpiresAt' in (await s.kv('hosts'))[0].google, 'an end is stored').toBe(false);
+      s.expect((await s.apiOk('GET', '/admin/overview')).warnings.some((w) => w.key.startsWith('google_expiry')), 'dashboard warning').toBe(false);
+    });
+  });
+
+  await t.scenario('half working: texts with no number to call from, and Google keys removed while connected', { reset: true }, async (s) => {
+    await s.setClock(MONDAY);
+    await s.setupAdmin({ timezone: 'UTC' });
+    const page = await s.newPage({ signedIn: true, viewport: { width: 1440, height: 900 } });
+    const card = (name) => page.getByRole('region', { name, exact: true });
+    const badge = async (name) => (await card(name).locator('.ix-card__status').textContent()).trim();
+    const open = async (name) => {
+      const toggle = card(name).getByRole('button', { name, exact: true });
+      if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    };
+    const status = async () => s.apiOk('GET', '/admin/integrations');
+    const SERVICE_SID = `MG${'fedcba9876543210'.repeat(2)}`;
+
+    await s.step('Twilio with only a Messaging Service: texts work, and calls are said to need a number', async () => {
+      await page.goto(s.url('/admin/integrations'));
+      await open('Texts and reminder calls');
+      const twilio = card('Texts and reminder calls');
+      await twilio.getByLabel('Account SID').fill(TWILIO_SID);
+      await twilio.getByLabel('Auth token').fill(TWILIO_TOKEN);
+      await twilio.getByLabel('Messaging Service SID').fill(SERVICE_SID);
+      await twilio.getByRole('button', { name: 'Save Twilio details' }).click();
+      await expectToast(page, 'Twilio saved');
+      await s.eventually(async () => s.expect(await badge('Texts and reminder calls'), 'Twilio badge').toBe('Texts only'));
+      await twilio.getByText('Add a phone number to place calls').waitFor();
+      s.expect(await status(), 'Twilio status').toMatchObject({ twilio: { configured: true, calls: false, messagingServiceSid: SERVICE_SID } });
+      await twilio.getByLabel('Your mobile number').fill(MOBILE);
+      s.expect(await twilio.getByRole('button', { name: 'Send test text' }).isDisabled(), 'test text with a Messaging Service').toBe(false);
+      s.expect(await twilio.getByRole('button', { name: 'Call me' }).isDisabled(), 'test call with no number').toBe(true);
+      await twilio.getByText('A test call needs a Twilio phone number. Texts can be tested now.').waitFor();
+
+      const { checklist, warnings } = await s.apiOk('GET', '/admin/overview');
+      s.expect(checklist.find((c) => c.key === 'sms').done, 'texts and calls on the checklist').toBe(false);
+      s.expect(warnings.find((w) => w.key === 'twilio_missing')?.message, 'the warning on Home').toMatch(/reminder calls need a Twilio phone number and none is saved/);
+
+      await page.goto(s.url('/admin/event-types/evt_intro?tab=reminders'));
+      const call = page.locator('ul.adm-channels li').filter({ hasText: 'AI phone call' });
+      await call.getByText('Needs a Twilio phone number').waitFor();
+      await call.getByRole('link', { name: 'Add a number' }).waitFor();
+      const sms = page.locator('ul.adm-channels li').filter({ hasText: 'Text message' });
+      await sms.getByText('Ready', { exact: true }).waitFor();
+      s.expect(await call.getByText('Ready', { exact: true }).count(), 'calls shown as ready').toBe(0);
+      await page.locator('ul.adm-rules').getByText('Calls need a Twilio phone number').first().waitFor();
+      await s.screenshot(page, 'reminders with texts but no number to call from');
+    });
+
+    await s.step('Google keys removed while the calendar is connected: the card says it cannot work, and what to do', async () => {
+      await s.apiOk('PUT', '/admin/integrations', { body: { google: { clientId: GOOGLE_ID, clientSecret: GOOGLE_SECRET } } });
+      await s.connectGoogle(page, OWNER_GOOGLE, 'UTC', { gmail: true, start: { hostId: 'host_owner', gmail: true } });
+      await clearToasts(page);
+      await s.eventually(async () => s.expect(await badge('Google Calendar'), 'Google badge').toBe('Connected'));
+      s.expect((await status()).email, 'email while Gmail works').toMatchObject({ resolved: 'gmail', gmailAvailable: true });
+
+      const google = card('Google Calendar');
+      await open('Google Calendar');
+      await google.getByRole('button', { name: 'Show the setup steps and keys' }).click();
+      await google.getByRole('button', { name: 'Remove', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Remove the Google keys?' });
+      await dialog.getByText(/^Every connected Google Calendar stops working until you add the same keys again/).waitFor();
+      await dialog.getByRole('button', { name: 'Remove keys' }).click();
+      await expectToast(page, 'Google keys removed');
+      await s.eventually(async () => s.expect(await badge('Google Calendar'), 'Google badge').toBe('Keys missing'));
+      await google.getByText('Your calendar connection needs the Google keys').waitFor();
+      await google.getByText(/Paste the same two keys again in step 5 below/).waitFor();
+      await page.getByText('The Google keys are missing').waitFor();
+      s.expect(await badge('Email'), 'email badge').toBe('Gmail cannot send');
+      s.expect((await status()).email, 'email without the keys').toMatchObject({ resolved: 'none', gmailAvailable: false, gmailProblem: 'keys_missing' });
+
+      const { checklist, warnings } = await s.apiOk('GET', '/admin/overview');
+      s.expect(Object.fromEntries(checklist.map((c) => [c.key, c.done])), 'setup checklist').toMatchObject({ google: false, email: false });
+      const keys = warnings.map((w) => w.key);
+      s.expect(keys, 'warnings on Home').toContain('google_keys_missing');
+      s.expect(keys, 'warnings on Home').not.toContain('no_email');
+      // No times are offered, so Home must not say people "can book" these meetings.
+      s.expect(keys, 'warnings on Home').not.toContain('bookings_reach_nobody');
+      s.expect(warnings.find((w) => w.key === 'google_keys_missing').message, 'the warning').toContain('No emails are going out either, because they are sent from your Gmail.');
+      await s.screenshot(page, 'google keys removed while connected');
+      await clearToasts(page);
+    });
+
+    await s.step('pasting the same keys again brings the connection and Gmail back', async () => {
+      const google = card('Google Calendar');
+      await google.getByLabel('Client ID').fill(GOOGLE_ID);
+      await google.getByLabel('Client secret').fill(GOOGLE_SECRET);
+      await google.getByRole('button', { name: 'Save keys' }).click();
+      await expectToast(page, 'Google keys saved');
+      await s.eventually(async () => s.expect(await badge('Google Calendar'), 'Google badge').toBe('Connected'));
+      s.expect(await badge('Email'), 'email badge').toBe('Sending from Gmail');
+      s.expect((await page.getByText('The Google keys are missing').count()), 'the page notice').toBe(0);
     });
   });
 });

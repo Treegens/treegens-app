@@ -38,9 +38,11 @@ import {
   VOICE_OPTIONS,
   whenPhrase,
   withinCallWindow,
+  callTranscript,
   type Move,
   type StoredCall,
 } from '../../server/lib/voice';
+import { hostMap, toAdminBooking, withCallTranscripts } from '../../server/lib/admin/view';
 import type { Env } from '../../server/lib/ctx';
 import { makeTestCtx, type TestCtx } from '../helpers/ctx';
 
@@ -654,6 +656,18 @@ describe('startReminderCall', () => {
     expect(net.twilio).toHaveLength(1);
   });
 
+  it('rings one number at most twice a day, whatever the bookings, but a test call is not counted', async () => {
+    const { ctx, net, booking } = await setup();
+    const second = await saveBooking(ctx, makeBooking('bk_2'));
+    const third = await saveBooking(ctx, makeBooking('bk_3', { invitee: { ...booking.invitee, phone: '+1 415 555 2671' } }));
+    expect(await startReminderCall(ctx, { booking, purpose: 'reminder' })).toMatchObject({ ok: true });
+    expect(await startReminderCall(ctx, { booking: second, purpose: 'reminder' })).toMatchObject({ ok: true });
+    expect(await startReminderCall(ctx, { booking: third, purpose: 'reminder' })).toEqual({ ok: false, provider: 'none', skipped: 'daily_limit' });
+    expect(net.twilio).toHaveLength(2);
+    expect(await startReminderCall(ctx, { booking: third, purpose: 'test', to: '+14155552671' })).toMatchObject({ ok: true });
+    expect(net.twilio).toHaveLength(3);
+  });
+
   it('does not call when Twilio is missing, has no number to call from, or cannot reach us', async () => {
     const bare = makeTestCtx({ now: NOW });
     expect(await startReminderCall(bare, { booking: makeBooking('bk_1'), purpose: 'reminder' })).toEqual({ ok: false, provider: 'none', skipped: 'calls_not_configured' });
@@ -1159,7 +1173,7 @@ describe('answering machines', () => {
 
     await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '19' });
     const booking = await getBooking(ctx, 'bk_1');
-    expect(booking?.timeline).toEqual([{ at: NOW, type: 'call_voicemail', detail: 'Reached voicemail and left a reminder message.' }]);
+    expect(booking?.timeline).toEqual([{ at: NOW, type: 'call_voicemail', callId, detail: 'Reached voicemail and left a reminder message.' }]);
     expect(jobsOfKind('host_alert')).toHaveLength(0);
     expect((await record(ctx, callId)).status).toBe('voicemail');
   });
@@ -1222,7 +1236,7 @@ describe('answering machines', () => {
 });
 
 describe('status', () => {
-  it('writes the outcome and a compact transcript to the booking, once', async () => {
+  it('writes the outcome and the call id to the booking, once, and keeps what was said on the call record', async () => {
     const { ctx, callId } = await answered();
     await hook(ctx, 'turn', callId, { SpeechResult: "Yes, I'll be there" });
     expect((await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '27' })).status).toBe(204);
@@ -1231,15 +1245,44 @@ describe('status', () => {
     const booking = await getBooking(ctx, 'bk_1');
     expect(booking?.timeline).toHaveLength(1);
     const entry = booking!.timeline[0];
-    expect(entry.type).toBe('call_completed');
-    expect(entry.at).toBe(NOW);
-    expect(entry.detail).toContain('They confirmed they are coming.');
-    expect(entry.detail).toContain('Call length: 27 seconds.');
-    expect(entry.detail).toContain("Transcript: Ava: Hi Sam, this is Ava, an AI assistant calling for Jimi.");
-    expect(entry.detail).toContain("| Sam: Yes, I'll be there | Ava: Wonderful, I have you down as confirmed");
-    expect(entry.detail!.length).toBeLessThan(1300);
+    expect(entry).toEqual({ at: NOW, type: 'call_completed', callId, detail: 'They confirmed they are coming. Call length: 27 seconds.' });
+    // Nothing the invitee said is copied onto the booking, which outlives the call record (pruned after 90 days).
+    expect(JSON.stringify(booking)).not.toContain("I'll be there");
+    expect(JSON.stringify(booking)).not.toContain('Transcript');
     expect(enqueue).not.toHaveBeenCalled();
     expect(await record(ctx, callId)).toMatchObject({ status: 'completed', outcome: 'confirmed', ended: true, durationSec: 27 });
+    expect(callTranscript(await record(ctx, callId))).toBe(
+      "Ava: Hi Sam, this is Ava, an AI assistant calling for Jimi. A quick reminder about your Intro call today at 3:30 PM your time. Are you still able to make it? | Sam: Yes, I'll be there | Ava: Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you, and goodbye.",
+    );
+  });
+
+  it('shows the transcript in the dashboard view of the booking while the call record exists, and not after', async () => {
+    const { ctx, callId } = await answered();
+    await hook(ctx, 'turn', callId, { SpeechResult: "Yes, I'll be there" });
+    await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '27' });
+    const view = async () => withCallTranscripts(ctx, toAdminBooking(ctx, (await getBooking(ctx, 'bk_1'))!, hostMap(await listHosts(ctx))));
+
+    const entry = (await view()).timeline.find((e) => e.type === 'call_completed')!;
+    expect(entry.callId).toBe(callId);
+    expect(entry.detail).toBe('They confirmed they are coming. Call length: 27 seconds.');
+    expect(entry.transcript).toContain('Ava: Hi Sam, this is Ava, an AI assistant calling for Jimi.');
+    expect(entry.transcript).toContain("| Sam: Yes, I'll be there | Ava: Wonderful, I have you down as confirmed");
+    expect(entry.transcript!.length).toBeLessThanOrEqual(1000);
+    // The view adds it; the stored booking still does not carry it.
+    expect((await getBooking(ctx, 'bk_1'))!.timeline[0]).not.toHaveProperty('transcript');
+
+    // The 90 day clean-up removes the call record: the outcome stays, the words are gone.
+    await ctx.kv.delete(`calls/${callId}`);
+    const later = (await view()).timeline.find((e) => e.type === 'call_completed')!;
+    expect(later).toEqual({ at: NOW, type: 'call_completed', callId, detail: 'They confirmed they are coming. Call length: 27 seconds.' });
+  });
+
+  it('never attaches the transcript of a call that belongs to another booking', async () => {
+    const { ctx, callId } = await answered();
+    await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '5' });
+    const other = await saveBooking(ctx, makeBooking('bk_2', { timeline: [{ at: NOW, type: 'call_completed', callId, detail: 'x' }] }));
+    const view = await withCallTranscripts(ctx, toAdminBooking(ctx, other, hostMap(await listHosts(ctx))));
+    expect(view.timeline[0]).not.toHaveProperty('transcript');
   });
 
   it('alerts the host when the invitee asked to reschedule', async () => {
@@ -1285,7 +1328,7 @@ describe('status', () => {
     const { ctx, net, booking } = await setup();
     const { callId } = await ring(ctx, net, booking);
     await hook(ctx, 'status', callId, { CallStatus: status });
-    expect((await getBooking(ctx, 'bk_1'))?.timeline).toEqual([{ at: NOW, type: 'call_no_answer', detail }]);
+    expect((await getBooking(ctx, 'bk_1'))?.timeline).toEqual([{ at: NOW, type: 'call_no_answer', callId, detail }]);
     expect(await record(ctx, callId)).toMatchObject({ status: 'no_answer', ended: true });
     expect((await record(ctx, callId)).outcome).toBeUndefined();
     expect(enqueue).not.toHaveBeenCalled();
@@ -1442,10 +1485,44 @@ describe('the conversation with Claude', () => {
     net.onClaude(() => claudeMessage({ say: 'All right, your meeting is cancelled. Goodbye, Sam.', action: 'confirm_cancel' }));
     const fourth = await hook(ctx, 'turn', callId, { SpeechResult: 'Yes, please cancel it' });
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(cancel).toHaveBeenCalledWith(ctx, 'bk_1', { by: 'assistant', reason: expect.stringContaining('after confirming twice') });
+    expect(cancel).toHaveBeenCalledWith(ctx, 'bk_1', { by: 'assistant', reason: expect.stringContaining('after confirming twice') }, { calendarBudgetMs: 7000 });
     expect(said(fourth.xml)).toBe('All right, your meeting is cancelled. Goodbye, Sam.');
     expect(hangsUp(fourth.xml)).toBe(true);
     expect(net.claude[3].body.messages[0].content).toContain('cancellation_waiting_for_confirmation: yes');
+  });
+
+  it.each([
+    // [how long Claude takes on the final yes, how long Google may then hold up the answer]
+    [500, 7000],
+    [4000, 7000],
+    [6500, 4500],
+    [8800, 2200],
+    [9250, 1750],
+    // Slower still (the turn's own reads were slow too): never less than a second, never 0.
+    [10_500, 1000],
+    [30_000, 1000],
+  ])('gives Google only what is left of the turn when Claude took %i ms, so Twilio hears back in time', async (modelMs, budget) => {
+    const { ctx, net, callId } = await answered({ anthropic: true });
+    net.onClaude(() => claudeMessage({ say: 'Shall I cancel it for you?', action: 'request_cancel' }));
+    await hook(ctx, 'turn', callId, { SpeechResult: 'I need to cancel' });
+    net.onClaude(() => {
+      ctx.clock.advance(modelMs);
+      return claudeMessage({ say: 'All right, your meeting is cancelled. Goodbye.', action: 'confirm_cancel' });
+    });
+    const started = ctx.now().getTime();
+    const last = await hook(ctx, 'turn', callId, { SpeechResult: 'Yes, cancel it' });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel.mock.calls[0][3]).toEqual({ calendarBudgetMs: budget });
+    // What was spent before the delete plus what the delete may take stays inside the turn's 11 s (or 1 s past a slow model).
+    expect(ctx.now().getTime() - started + budget).toBeLessThanOrEqual(Math.max(11_000, modelMs + 1000));
+    expect(hangsUp(last.xml)).toBe(true);
+  });
+
+  it('gives Google the usual time on a quick scripted cancel', async () => {
+    const { ctx, callId } = await answered();
+    await hook(ctx, 'turn', callId, { Digits: '3' });
+    await hook(ctx, 'turn', callId, { Digits: '1' });
+    expect(cancel.mock.calls[0][3]).toEqual({ calendarBudgetMs: 7000 });
   });
 
   it('does not cancel on an unclear answer, even when Claude reads it as a yes', async () => {

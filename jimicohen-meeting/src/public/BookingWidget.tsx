@@ -19,7 +19,7 @@ import { addMonths, dayKey, detectLocale, formatDayKey, formatMonthYear, formatT
 import { Button, EmptyState, cx } from '../ui';
 import '../styles/public.css';
 import { Confirmation } from './components/Confirmation';
-import { DetailsForm } from './components/DetailsForm';
+import { DetailsForm, callOffered } from './components/DetailsForm';
 import type { FormNotice, FormValues } from './components/DetailsForm';
 import { EventSummary } from './components/EventSummary';
 import { MonthCalendar } from './components/MonthCalendar';
@@ -29,7 +29,7 @@ import { TimezoneBar } from './components/TimezoneBar';
 import { guessCountry } from './lib/phone';
 import { useVisitorPrefs } from './lib/prefs';
 import { SlotStore, useMonthSlots } from './lib/slots';
-import { plural } from './lib/text';
+import { hostNames, plural } from './lib/text';
 
 export interface BookingWidgetPrefill {
   name?: string;
@@ -52,8 +52,11 @@ export interface BookingWidgetProps {
   eventType: PublicEventType;
   /** live = talks to the API. preview = generated fake slots, never calls the API (design editor). */
   mode: 'live' | 'preview';
-  /** set when moving an existing booking instead of creating one. durationMin keeps the booked length. */
-  reschedule?: { bookingId: string; token: string; currentStart: string; durationMin?: number };
+  /**
+   * set when moving an existing booking instead of creating one. durationMin keeps the booked length.
+   * asHost: the page was opened from a host's link, so this browser's zone is not the invitee's.
+   */
+  reschedule?: { bookingId: string; token: string; currentStart: string; durationMin?: number; asHost?: boolean };
   /** called after a booking was created (or moved, with the same manage token) */
   onBooked?: (result: CreateBookingResponse) => void;
   prefill?: BookingWidgetPrefill;
@@ -81,7 +84,18 @@ const viewOfKey = (key: string): View => {
   const p = parseDayKey(key);
   return { year: p.year, month: p.month };
 };
+/** "2026-11": months compare as text. */
+const keyOfView = (v: View): string => `${String(v.year).padStart(4, '0')}-${String(v.month).padStart(2, '0')}`;
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+/** 128 random bits, URL safe. Made once per booking form and sent with every try of it. */
+function newRequestKey(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let text = '';
+  for (const b of bytes) text += String.fromCharCode(b);
+  return btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
 function validDayKey(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
@@ -175,26 +189,33 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
     setLocating(true);
     setExhausted(false);
     void (async () => {
-      let cursor = start;
-      let found = false;
-      let failed = false;
-      for (let i = 0; i < 14; i++) {
-        const range = monthRange(cursor.year, cursor.month, zoneRef.current);
-        if (range.from > horizon) break;
-        const status = await store.ensure(duration, range.from, range.to);
-        if (!alive) return;
-        if (status.state === 'error') {
-          failed = true;
-          break;
+      /** Months from `from` on, up to the horizon (and before `until` when given). null once this search is stale. */
+      const search = async (from: View, until: View | null): Promise<{ view: View; found: boolean; failed: boolean } | null> => {
+        let cursor = from;
+        for (let i = 0; i < 14; i++) {
+          if (until && keyOfView(cursor) >= keyOfView(until)) break;
+          const range = monthRange(cursor.year, cursor.month, zoneRef.current);
+          if (range.from > horizon) break;
+          const status = await store.ensure(duration, range.from, range.to);
+          if (!alive) return null;
+          if (status.state === 'error') return { view: cursor, found: false, failed: true };
+          if (store.slots(duration, range.from, range.to).length) return { view: cursor, found: true, failed: false };
+          cursor = addMonths(cursor.year, cursor.month, 1);
         }
-        if (store.slots(duration, range.from, range.to).length) {
-          found = true;
-          break;
-        }
-        cursor = addMonths(cursor.year, cursor.month, 1);
+        return { view: cursor, found: false, failed: false };
+      };
+      let result = await search(start, null);
+      if (!result) return;
+      // Nothing from the month on screen onwards. When that month is later than this one (the visitor paged
+      // ahead, or a booking being moved opened on its own month), the weeks before it may still have times.
+      const thisMonth = viewOfKey(todayKey(zoneRef.current, now));
+      if (!result.found && !result.failed && keyOfView(start) > keyOfView(thisMonth)) {
+        const earlier = await search(thisMonth, start);
+        if (!earlier) return;
+        if (earlier.found || earlier.failed) result = earlier;
       }
       if (!alive) return;
-      if (found || failed) setView(cursor);
+      if (result.found || result.failed) setView(result.view);
       else setExhausted(true);
       setLocating(false);
     })();
@@ -254,6 +275,8 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
   const [pickNotice, setPickNotice] = useState<{ tone: 'warning' | 'error'; title: string; message?: string } | null>(null);
   const [result, setResult] = useState<CreateBookingResponse | null>(null);
   const formOpenedAt = useRef<number | null>(null);
+  // The same key on every try of this form: a try whose answer got lost then comes back as that booking, not a second one.
+  const requestKey = useRef<string | null>(null);
 
   const previewResult = useCallback(
     (start: number): CreateBookingResponse => ({
@@ -277,7 +300,7 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
         },
         canReschedule: true,
         canCancel: true,
-        calendarLinks: { google: '#', outlook: '#', ics: '#' },
+        calendarLinks: { google: '#', outlook: '#', office365: '#', ics: '#' },
         cancellation: null,
         rescheduledFromStart: null,
         attendanceConfirmed: false,
@@ -429,11 +452,12 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
       answers,
       locationIndex,
       locationText: location?.type === 'ask_invitee' ? values.locationText.trim() : undefined,
-      consent: phoneE164 ? { sms: site.features.sms && values.sms, call: site.features.calls && values.call } : undefined,
+      consent: phoneE164 ? { sms: site.features.sms && values.sms, call: callOffered(site, eventType) && values.call } : undefined,
       source,
       utm: prefill?.utm && Object.keys(prefill.utm).length ? prefill.utm : undefined,
       website: values.website,
       elapsedMs: Date.now() - opened,
+      requestKey: (requestKey.current ??= newRequestKey()),
     };
 
     try {
@@ -442,19 +466,26 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
       setStep('done');
       onBooked?.(res);
     } catch (e) {
-      if (isApiFailure(e) && (e.code === 'slot_taken' || e.status === 409)) {
+      if (isApiFailure(e) && (e.code === 'booking_limit' || e.code === 'phone_limit' || e.code === 'in_progress')) {
+        setFormNotice({ title: e.code === 'in_progress' ? 'Your booking is on its way' : 'We could not complete the booking', message: e.message });
+      } else if (isApiFailure(e) && (e.code === 'slot_taken' || e.status === 409)) {
         slotGone(start, e.message, true);
       } else if (isApiFailure(e) && e.status === 422 && e.fields && Object.keys(e.fields).length) {
         const known = ['name', 'email', 'phone', 'guests', 'locationText'];
         const usable = Object.keys(e.fields).some((k) => known.includes(k) || k.startsWith('answers.'));
         setServerErrors(e.fields);
         setFormNotice(usable ? { title: 'Please check the highlighted fields' } : { title: 'We could not complete the booking', message: Object.values(e.fields)[0] || e.message });
-      } else if (isApiFailure(e) && (e.code === 'calendar_unavailable' || e.status === 503)) {
+      } else if (isApiFailure(e) && e.code === 'calendar_unavailable') {
         setFormNotice({ title: 'The calendar is not answering right now', message: 'Nothing was booked. Please try again in a minute, your details are still here.' });
       } else if (isApiFailure(e) && e.status === 429) {
         setFormNotice({ title: 'Too many attempts', message: 'Please wait a minute and try again.' });
-      } else if (isApiFailure(e) && e.isNetwork) {
-        setFormNotice({ title: 'You seem to be offline', message: 'Nothing was booked. Check your connection and try again.' });
+      } else if (isApiFailure(e) && (e.isNetwork || (e.status >= 500 && e.code !== 'busy'))) {
+        // The request may have reached us and been booked before the answer got lost. Trying again is safe:
+        // the same form sends the same key, so a booking that went through comes back instead of a second one.
+        setFormNotice({
+          title: e.isNetwork ? 'The connection dropped' : 'We could not confirm the booking',
+          message: 'It may have gone through. Please try again: you will not be booked twice, and you will see your booking if it is already made.',
+        });
       } else {
         setFormNotice({ title: 'We could not complete the booking', message: isApiFailure(e) && e.message ? e.message : 'Please try again in a moment.' });
       }
@@ -475,13 +506,24 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
         setStep('done');
         return;
       }
-      const booking = await rescheduleBooking(reschedule.bookingId, reschedule.token, new Date(start).toISOString(), zone);
+      // A host moving the meeting is in their own zone, which must not become the invitee's.
+      const booking = await rescheduleBooking(
+        reschedule.bookingId,
+        reschedule.token,
+        new Date(start).toISOString(),
+        reschedule.asHost ? undefined : zone,
+        reschedule.asHost ? 'host' : undefined,
+      );
       const res: CreateBookingResponse = { booking, manageToken: reschedule.token };
       setResult(res);
       setStep('done');
       onBooked?.(res);
     } catch (e) {
-      if (isApiFailure(e) && (e.code === 'slot_taken' || e.status === 409)) slotGone(start, e.message, false);
+      if (isApiFailure(e) && e.code === 'move_limit') setPickNotice({ tone: 'warning', title: 'This meeting cannot be moved again right now', message: e.message });
+      // The time may well be free: the calendar could not be asked. Keep it chosen so trying again is one tap.
+      else if (isApiFailure(e) && e.code === 'calendar_unavailable')
+        setPickNotice({ tone: 'warning', title: 'The calendar is not answering right now', message: 'Your meeting has not been moved. Please try again in a minute.' });
+      else if (isApiFailure(e) && (e.code === 'slot_taken' || e.status === 409)) slotGone(start, e.message, false);
       else setPickNotice({ tone: 'error', title: 'We could not move your meeting', message: isApiFailure(e) && e.message ? e.message : 'Nothing has changed. Please try again in a moment.' });
     } finally {
       setSubmitting(false);
@@ -579,7 +621,12 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
             as="h3"
             icon={<CalendarX2 />}
             title="No open times right now"
-            description={`Nothing is free in the next ${plural(eventType.maxDaysAhead, 'day', 'days')}. Please check back soon, new times open up every day.`}
+            description={
+              // A joint meeting may have no time at all when everyone is working, so it promises nothing.
+              eventType.kind === 'collective' && eventType.hosts.length > 1
+                ? `There is no time in the next ${plural(eventType.maxDaysAhead, 'day', 'days')} when ${hostNames(eventType.hosts, 'collective')} are ${eventType.hosts.length === 2 ? 'both' : 'all'} free. If someone sent you this link, let them know.`
+                : `Nothing is free in the next ${plural(eventType.maxDaysAhead, 'day', 'days')}. Please check back soon, new times open up every day.`
+            }
           />
         </div>
       ) : (

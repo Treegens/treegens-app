@@ -316,6 +316,33 @@ describe('completeGoogleAuth', () => {
     expect((await getHost(ctx, OWNER))?.google ?? null).toBeNull();
   });
 
+  it('remembers when Google says the connection will end (consent screen in Testing), and forgets it after a connect without an end', async () => {
+    const tokens = (extra: Record<string, unknown>) => () =>
+      jsonResponse({ access_token: 'access-A', expires_in: 3599, refresh_token: 'refresh-A', scope: ALL_SCOPES, id_token: idToken(GOOD_CLAIMS), ...extra });
+
+    const first = stateOf(await buildGoogleAuthUrl(ctx, { hostId: OWNER, returnTo: '/meeting/admin/integrations' }));
+    useFetch(ctx, tokens({ refresh_token_expires_in: 604799 }));
+    const result = await completeGoogleAuth(ctx, callbackParams(first));
+    const ends = new Date(ctx.now().getTime() + 604_799_000).toISOString();
+    expect(result).toMatchObject({ ok: true, expiresAt: ends });
+    expect((await getHost(ctx, OWNER))?.google?.refreshExpiresAt).toBe(ends);
+    expect(ctx.logs.some((l) => l.level === 'warn' && l.msg.includes('Publish the OAuth consent screen'))).toBe(true);
+
+    // The owner published the consent screen and connected again: Google no longer names an end.
+    const second = stateOf(await buildGoogleAuthUrl(ctx, { hostId: OWNER, returnTo: '/meeting/admin/integrations' }));
+    useFetch(ctx, tokens({}));
+    const again = await completeGoogleAuth(ctx, callbackParams(second));
+    expect(again.ok).toBe(true);
+    expect(again).not.toHaveProperty('expiresAt');
+    expect((await getHost(ctx, OWNER))?.google).not.toHaveProperty('refreshExpiresAt');
+
+    // A value that is not a positive number of seconds is not stored.
+    const third = stateOf(await buildGoogleAuthUrl(ctx, { hostId: OWNER, returnTo: '/meeting/admin/integrations' }));
+    useFetch(ctx, tokens({ refresh_token_expires_in: 'soon' }));
+    await completeGoogleAuth(ctx, callbackParams(third));
+    expect((await getHost(ctx, OWNER))?.google).not.toHaveProperty('refreshExpiresAt');
+  });
+
   it('keeps the stored refresh token and calendar choices when a re-consent omits the token', async () => {
     const before = await connect(ctx, { busyCalendarIds: ['primary', 'team@group.calendar.google.com'], writeCalendarId: 'team@group.calendar.google.com' });
     const state = stateOf(await buildGoogleAuthUrl(ctx, { hostId: OWNER, returnTo: '/meeting/admin', gmail: true }));
@@ -919,6 +946,50 @@ describe('gmailSendRaw', () => {
     await expect(gmailSendRaw(ctx, host, mime)).rejects.toBeInstanceOf(GoogleAuthError);
     expect(calls).toHaveLength(0);
   });
+
+  // Gmail has no idempotency key: a message it took but did not confirm must not be posted a second time.
+  it.each([
+    ['the network fails after Gmail took the message', () => Promise.reject(new TypeError('fetch failed'))],
+    ['the answer does not come in time', () => Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))],
+    ['Gmail answers with a 5xx', () => Promise.resolve(jsonResponse({ error: { code: 503, message: 'Backend Error', errors: [{ reason: 'backendError' }] } }, 503))],
+  ])('posts once and reports a failure when %s', async (_name, answer) => {
+    const host = await connect(ctx, { gmailSend: true });
+    const calls = useFetch(ctx, withTokens(() => answer()));
+    await expect(gmailSendRaw(ctx, host, mime)).rejects.toBeInstanceOf(GoogleApiError);
+    expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(1);
+  });
+
+  it.each([
+    ['a 429', 429, 'rateLimitExceeded'],
+    ['a rate-limit 403', 403, 'userRateLimitExceeded'],
+  ])('tries once more after %s, which is a refusal and sent nothing', async (_name, status, reason) => {
+    const host = await connect(ctx, { gmailSend: true });
+    let apiCalls = 0;
+    const calls = useFetch(
+      ctx,
+      withTokens(() => {
+        apiCalls++;
+        return apiCalls === 1 ? jsonResponse({ error: { code: status, message: 'Rate Limit Exceeded', errors: [{ reason }] } }, status) : jsonResponse({ id: 'msg-2' });
+      }),
+    );
+    expect(await gmailSendRaw(ctx, host, mime)).toEqual({ id: 'msg-2' });
+    expect(calls.filter((c) => c.url !== TOKEN_URL)).toHaveLength(2);
+  });
+
+  it('still gets a fresh token after a 401 and sends then', async () => {
+    const host = await connect(ctx, { gmailSend: true });
+    let apiCalls = 0;
+    const calls = useFetch(
+      ctx,
+      withTokens(() => {
+        apiCalls++;
+        return apiCalls === 1 ? jsonResponse({ error: { code: 401, message: 'Invalid Credentials' } }, 401) : jsonResponse({ id: 'msg-3' });
+      }),
+    );
+    expect(await gmailSendRaw(ctx, host, mime)).toEqual({ id: 'msg-3' });
+    expect(calls.map((c) => (c.url === TOKEN_URL ? 'token' : c.headers.get('authorization')))).toEqual(['token', 'Bearer access-1', 'token', 'Bearer access-2']);
+  });
+
 });
 
 describe('disconnectGoogle', () => {

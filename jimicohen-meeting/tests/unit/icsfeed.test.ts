@@ -1,7 +1,8 @@
-import { DateTime } from 'luxon';
-import { describe, expect, it } from 'vitest';
+import ICAL from 'ical.js';
+import { DateTime, IANAZone } from 'luxon';
+import { describe, expect, it, vi } from 'vitest';
 import { HttpError } from '../../server/lib/http';
-import { IcsFeedError, assertSafeFeedUrl, fetchIcsBusy, mergeBusy, parseIcsBusy, parseIcsDetailed } from '../../server/lib/icsfeed';
+import { IcsFeedError, assertSafeFeedUrl, fetchIcsBusy, mergeBusy, parseIcsBusy, parseIcsDetailed, windowsZoneToIana } from '../../server/lib/icsfeed';
 import type { Interval } from '../../server/lib/time';
 import { makeTestCtx } from '../helpers/ctx';
 
@@ -129,18 +130,52 @@ describe('assertSafeFeedUrl', () => {
 // ───────────────────────── parsing ─────────────────────────
 
 describe('parseIcsBusy: single events', () => {
-  it('reads UTC, zoned and floating times', () => {
+  it('reads UTC, zoned and floating times, floating ones in the host\'s zone', () => {
     const text = calendar(
       TZ_NEW_YORK,
       vevent('UID:utc', 'DTSTART:20261103T100000Z', 'DTEND:20261103T110000Z'),
       vevent('UID:zoned', 'DTSTART;TZID=America/New_York:20261104T090000', 'DTEND;TZID=America/New_York:20261104T093000'),
       vevent('UID:floating', 'DTSTART:20261105T120000', 'DTEND:20261105T130000'),
     );
-    expect(parseIcsBusy(text, NOVEMBER)).toEqual([
+    expect(parseIcsBusy(text, NOVEMBER, { timezone: 'Africa/Nairobi' })).toEqual([
       iv('2026-11-03T10:00:00Z', '2026-11-03T11:00:00Z'),
       iv('2026-11-04T14:00:00Z', '2026-11-04T14:30:00Z'), // EST, UTC-5
-      iv('2026-11-05T12:00:00Z', '2026-11-05T13:00:00Z'), // floating is read as UTC
+      iv('2026-11-05T09:00:00Z', '2026-11-05T10:00:00Z'), // floating: the host's local time, Nairobi is UTC+3
     ]);
+    // Without a host zone the reader's local time is UTC.
+    expect(parseIcsBusy(text, NOVEMBER)[2]).toEqual(iv('2026-11-05T12:00:00Z', '2026-11-05T13:00:00Z'));
+  });
+
+  it('reads floating times in the zone the calendar names (X-WR-TIMEZONE), as league and school feeds write them', () => {
+    // The reviewer's case: an 18:00 to 19:30 event in a New York feed, for a host in New York.
+    const text = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'X-WR-TIMEZONE:America/New_York', vevent('UID:game', 'DTSTART:20261110T180000', 'DTEND:20261110T193000'), 'END:VCALENDAR', ''].join('\r\n');
+    const evening = iv('2026-11-10T23:00:00Z', '2026-11-11T00:30:00Z'); // 18:00 EST
+    expect(parseIcsBusy(text, NOVEMBER, { timezone: 'America/New_York' })).toEqual([evening]);
+    // The calendar's zone wins over the host's: the feed says where its times are.
+    expect(parseIcsBusy(text, NOVEMBER, { timezone: 'Europe/London' })).toEqual([evening]);
+    expect(parseIcsBusy(text, NOVEMBER)).toEqual([evening]);
+    // A Windows name works there too; a zone nobody knows falls back to the host's zone.
+    expect(parseIcsBusy(text.replace('America/New_York', 'Eastern Standard Time'), NOVEMBER)).toEqual([evening]);
+    expect(parseIcsBusy(text.replace('America/New_York', 'Atlantis/Central'), NOVEMBER, { timezone: 'Africa/Nairobi' })).toEqual([iv('2026-11-10T15:00:00Z', '2026-11-10T16:30:00Z')]);
+    // UTC and zoned times are not touched by it, and all-day events still block the host's day.
+    const mixed = [
+      'BEGIN:VCALENDAR',
+      'X-WR-TIMEZONE:America/New_York',
+      vevent('UID:utc', 'DTSTART:20261103T100000Z', 'DTEND:20261103T110000Z'),
+      vevent('UID:berlin', 'DTSTART;TZID=Europe/Berlin:20261104T100000', 'DTEND;TZID=Europe/Berlin:20261104T110000'),
+      vevent('UID:day', 'DTSTART;VALUE=DATE:20261117', 'DTEND;VALUE=DATE:20261118'),
+      'END:VCALENDAR',
+    ].join('\r\n');
+    expect(parseIcsBusy(mixed, NOVEMBER, { timezone: 'Africa/Nairobi' })).toEqual([
+      iv('2026-11-03T10:00:00Z', '2026-11-03T11:00:00Z'),
+      iv('2026-11-04T09:00:00Z', '2026-11-04T10:00:00Z'),
+      iv('2026-11-16T21:00:00Z', '2026-11-17T21:00:00Z'),
+    ]);
+  });
+
+  it('keeps the calendar zone when the strict parser rejects the feed and events are salvaged', () => {
+    const text = ['BEGIN:VCALENDAR', 'X-WR-TIMEZONE:America/New_York', 'BEGIN:VEVENT', 'UID:a', 'this line is not a property', 'DTSTART:20261110T180000', 'DTEND:20261110T193000', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+    expect(parseIcsBusy(text, NOVEMBER, { timezone: 'Europe/London' })).toEqual([iv('2026-11-10T23:00:00Z', '2026-11-11T00:30:00Z')]);
   });
 
   it('uses the VTIMEZONE of the feed, including zones no database knows', () => {
@@ -169,8 +204,35 @@ describe('parseIcsBusy: single events', () => {
       iv('2026-07-15T08:00:00Z', '2026-07-15T09:00:00Z'),
       iv('2026-11-03T09:00:00Z', '2026-11-03T10:00:00Z'),
       iv('2026-11-04T04:30:00Z', '2026-11-04T05:30:00Z'),
-      iv('2026-11-05T10:00:00Z', '2026-11-05T11:00:00Z'), // nothing known about the zone: read as UTC
+      iv('2026-11-05T10:00:00Z', '2026-11-05T11:00:00Z'), // nothing known about the zone, and no host zone: UTC
     ]);
+    // With a host zone, a zone nobody can place is read like a floating time: in the host's zone.
+    expect(parseIcsBusy(text, range('2026-11-05T00:00:00Z', '2026-12-01T00:00:00Z'), { timezone: 'America/Chicago' })).toEqual([iv('2026-11-05T16:00:00Z', '2026-11-05T17:00:00Z')]);
+  });
+
+  it('places Windows zone names that come without a VTIMEZONE', () => {
+    // Read as UTC this used to come out 8 hours early.
+    const text = calendar(
+      vevent('UID:pst', 'DTSTART;TZID=Pacific Standard Time:20261103T100000', 'DTEND;TZID=Pacific Standard Time:20261103T110000'),
+      vevent('UID:summer', 'DTSTART;TZID="W. Europe Standard Time":20260715T100000', 'DTEND;TZID="W. Europe Standard Time":20260715T110000'),
+      vevent('UID:india', 'DTSTART;TZID=India Standard Time:20261104T100000', 'DTEND;TZID=India Standard Time:20261104T110000'),
+    );
+    expect(parseIcsBusy(text, range('2026-07-01T00:00:00Z', '2026-12-01T00:00:00Z'), { timezone: 'Europe/London' })).toEqual([
+      iv('2026-07-15T08:00:00Z', '2026-07-15T09:00:00Z'), // CEST, UTC+2
+      iv('2026-11-03T18:00:00Z', '2026-11-03T19:00:00Z'), // PST, UTC-8
+      iv('2026-11-04T04:30:00Z', '2026-11-04T05:30:00Z'), // IST, UTC+5:30
+    ]);
+  });
+
+  it('maps every Windows zone in its table to a zone the zone database knows', () => {
+    for (const name of ['Pacific Standard Time', 'eastern standard time', ' GMT Standard Time ', 'E. Africa Standard Time', 'AUS Eastern Standard Time', 'UTC', 'UTC+12', 'Dateline Standard Time']) {
+      const iana = windowsZoneToIana(name);
+      expect(iana, name).not.toBeNull();
+      expect(IANAZone.isValidZone(iana!), name).toBe(true);
+    }
+    expect(windowsZoneToIana('Pacific Standard Time')).toBe('America/Los_Angeles');
+    expect(windowsZoneToIana('Not A Zone')).toBeNull();
+    expect(windowsZoneToIana('constructor')).toBeNull();
   });
 
   it('handles events that start in one zone and end in another', () => {
@@ -329,6 +391,38 @@ describe('parseIcsBusy: recurring events', () => {
       iv('2026-11-03T10:00:00Z', '2026-11-03T11:00:00Z'),
       iv('2026-11-05T10:00:00Z', '2026-11-05T11:00:00Z'),
       iv('2026-11-07T14:00:00Z', '2026-11-07T15:00:00Z'),
+    ]);
+  });
+
+  it('reads RDATE periods, each with its own end or length', () => {
+    // The reviewer's case: only Monday came back before, Wednesday and Friday were read as free.
+    const text = calendar(vevent('UID:p1', 'DTSTART:20261102T140000Z', 'DTEND:20261102T150000Z', 'RDATE;VALUE=PERIOD:20261104T140000Z/20261104T160000Z,20261106T140000Z/PT1H'));
+    const result = parseIcsDetailed(text, NOVEMBER);
+    expect(result.busy).toEqual([iv('2026-11-02T14:00:00Z', '2026-11-02T15:00:00Z'), iv('2026-11-04T14:00:00Z', '2026-11-04T16:00:00Z'), iv('2026-11-06T14:00:00Z', '2026-11-06T15:00:00Z')]);
+    expect(result).toMatchObject({ skipped: 0, incomplete: false });
+  });
+
+  it('reads RDATE periods next to a rule and plain RDATEs, in their zone, honouring EXDATE and replaced instances', () => {
+    const text = calendar(
+      TZ_NEW_YORK,
+      vevent(
+        'UID:mix',
+        'DTSTART;TZID=America/New_York:20261102T090000',
+        'DTEND;TZID=America/New_York:20261102T100000',
+        'RRULE:FREQ=WEEKLY;COUNT=2',
+        'RDATE;TZID=America/New_York:20261104T090000',
+        'RDATE;TZID=America/New_York;VALUE=PERIOD:20261106T130000/PT30M,20261113T130000/PT30M,20261120T130000/20261120T150000',
+        'EXDATE;TZID=America/New_York:20261113T130000',
+      ),
+      // the 20 November period was moved to the afternoon
+      vevent('UID:mix', 'RECURRENCE-ID;TZID=America/New_York:20261120T130000', 'DTSTART;TZID=America/New_York:20261120T160000', 'DTEND;TZID=America/New_York:20261120T170000'),
+    );
+    expect(parseIcsBusy(text, NOVEMBER)).toEqual([
+      iv('2026-11-02T14:00:00Z', '2026-11-02T15:00:00Z'),
+      iv('2026-11-04T14:00:00Z', '2026-11-04T15:00:00Z'),
+      iv('2026-11-06T18:00:00Z', '2026-11-06T18:30:00Z'),
+      iv('2026-11-09T14:00:00Z', '2026-11-09T15:00:00Z'),
+      iv('2026-11-20T21:00:00Z', '2026-11-20T22:00:00Z'),
     ]);
   });
 
@@ -527,6 +621,42 @@ describe('parseIcsBusy: bad input', () => {
     expect(result.events).toBe(5);
     expect(result.skipped).toBe(3);
     expect(result.truncated).toBe(false);
+    // Every later instance of that series is unknown, so the answer is incomplete.
+    expect(result.incomplete).toBe(true);
+  });
+
+  it('marks the answer incomplete only for a series that blocks time and could not be expanded', () => {
+    const lost = (...extra: string[]) => calendar(vevent('UID:series', 'DTSTART:20261102T140000Z', 'DTEND:20261102T150000Z', 'RRULE:FREQ=WEEKLY;BYDAY=XX', ...extra), vevent('UID:fine', 'DTSTART:20261103T140000Z', 'DTEND:20261103T150000Z'));
+    // The reviewer's case: an unreadable rule kept only its first instance.
+    const busy = parseIcsDetailed(lost(), NOVEMBER);
+    expect(busy.busy).toEqual([iv('2026-11-02T14:00:00Z', '2026-11-02T15:00:00Z'), iv('2026-11-03T14:00:00Z', '2026-11-03T15:00:00Z')]);
+    expect(busy).toMatchObject({ skipped: 1, incomplete: true });
+    // A series marked free, or cancelled, blocks nothing: losing its rule loses nothing.
+    expect(parseIcsDetailed(lost('TRANSP:TRANSPARENT'), NOVEMBER)).toMatchObject({ skipped: 1, incomplete: false });
+    expect(parseIcsDetailed(lost('STATUS:CANCELLED'), NOVEMBER)).toMatchObject({ skipped: 1, incomplete: false });
+    // A series that only starts after the window cannot reach into it.
+    expect(parseIcsDetailed(lost(), range('2026-10-01T00:00:00Z', '2026-10-20T00:00:00Z'))).toMatchObject({ incomplete: false });
+    // Events that are simply unreadable (no start) are left out without failing the feed.
+    expect(parseIcsDetailed(calendar(vevent('UID:no-start', 'DTEND:20261106T110000Z'), vevent('UID:bad', 'DTSTART:whenever')), NOVEMBER)).toMatchObject({ incomplete: false });
+    // An unreadable exclusion list is dropped, not the series: that only adds busy time.
+    const exdate = parseIcsDetailed(calendar(vevent('UID:weekly', 'DTSTART:20261102T140000Z', 'DTEND:20261102T150000Z', 'RRULE:FREQ=WEEKLY;COUNT=3', 'EXDATE:not a date')), NOVEMBER);
+    expect(exdate.busy).toHaveLength(3);
+    expect(exdate).toMatchObject({ skipped: 1, incomplete: false });
+  });
+
+  it('marks the answer incomplete when walking a busy series fails half way', () => {
+    const spy = vi.spyOn(ICAL.RecurExpansion.prototype, 'next').mockImplementation(() => {
+      throw new Error('broken rule');
+    });
+    try {
+      const result = parseIcsDetailed(calendar(vevent('UID:weekly', 'DTSTART:20261102T140000Z', 'DTEND:20261102T150000Z', 'RRULE:FREQ=WEEKLY')), NOVEMBER);
+      expect(result.busy).toEqual([iv('2026-11-02T14:00:00Z', '2026-11-02T15:00:00Z')]);
+      expect(result).toMatchObject({ skipped: 1, incomplete: true });
+      const free = parseIcsDetailed(calendar(vevent('UID:weekly', 'DTSTART:20261102T140000Z', 'DTEND:20261102T150000Z', 'RRULE:FREQ=WEEKLY', 'TRANSP:TRANSPARENT')), NOVEMBER);
+      expect(free).toMatchObject({ busy: [], incomplete: false });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('salvages events from a feed the strict parser rejects as a whole', () => {
@@ -784,6 +914,12 @@ describe('fetchIcsBusy', () => {
     const dense = calendar(vevent('UID:every-minute', 'DTSTART:20200101T000000Z', 'DTEND:20200101T000030Z', 'RRULE:FREQ=MINUTELY'));
     const net = feedFetch(() => icsResponse(dense));
     await expect(fetchIcsBusy(makeTestCtx({ fetch: net.fetch }), FEED_URL, NOVEMBER)).rejects.toThrow(/too large/);
+  });
+
+  it('fails instead of reading a busy series it could not expand as free', async () => {
+    const lost = calendar(vevent('UID:series', 'DTSTART:20261102T140000Z', 'DTEND:20261102T150000Z', 'RRULE:FREQ=WEEKLY;BYDAY=XX'));
+    const net = feedFetch(() => icsResponse(lost));
+    await expect(fetchIcsBusy(makeTestCtx({ fetch: net.fetch }), FEED_URL, NOVEMBER)).rejects.toThrow(/repeating event that could not be read/);
   });
 
   it('logs how many events were unreadable, never the address', async () => {

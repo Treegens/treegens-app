@@ -18,6 +18,13 @@
   to = "/meeting/"
   status = 302
 
+# A hashed file that is not there (an open tab asking for a chunk of an older deploy) is a real 404,
+# never the HTML shell with status 200 handed out as a script. Not forced, so files that exist win.
+[[redirects]]
+  from = "/meeting/assets/*"
+  to = "/meeting/index.html"
+  status = 404
+
 # SPA fallback. Not forced, so real files (assets) and the API function win.
 [[redirects]]
   from = "/meeting/*"
@@ -39,14 +46,24 @@
   Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
 
 # The dashboard must never be framed. Public booking pages may be embedded.
+# Search engines stay away from the dashboard, the co-host pages and the manage links (which carry
+# their token in the address). These headers also reach visitors through the jimicohen.com proxy.
+# Never add noindex for all of /meeting/*: it would take the real booking pages out of search too.
 [[headers]]
   for = "/meeting/admin/*"
   [headers.values]
   X-Frame-Options = "DENY"
   Cache-Control = "no-store"
+  X-Robots-Tag = "noindex, nofollow"
 
 [[headers]]
   for = "/meeting/host/*"
   [headers.values]
   X-Frame-Options = "DENY"
   Cache-Control = "no-store"
+  X-Robots-Tag = "noindex, nofollow"
+
+[[headers]]
+  for = "/meeting/booking/*"
+  [headers.values]
+  X-Robots-Tag = "noindex, nofollow"

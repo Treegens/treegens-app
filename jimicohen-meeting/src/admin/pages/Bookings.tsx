@@ -240,6 +240,10 @@ export default function Bookings() {
         zone={zone}
         onClose={() => patchParams((p) => p.delete('b'))}
         onChanged={() => setReload((n) => n + 1)}
+        onDeleted={() => {
+          patchParams((p) => p.delete('b'));
+          setReload((n) => n + 1);
+        }}
       />
     </Page>
   );

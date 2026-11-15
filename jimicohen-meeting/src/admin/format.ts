@@ -197,19 +197,36 @@ const KIND_WORDS: Record<string, string> = {
 export function describeTimeline(entry: Pick<TimelineEntry, 'type'>): TimelineView {
   const exact = EXACT[entry.type];
   if (exact) return exact;
-  const m = /^([a-z_]+?)_(email|sms|call)_(sent|failed|skipped)$/.exec(entry.type);
+  // "undelivered": Twilio took the text, then the carrier did not deliver it (sms.ts handleSmsStatus).
+  const m = /^([a-z_]+?)_(email|sms|call)_(sent|failed|skipped|undelivered)$/.exec(entry.type);
   if (m) {
     const kind = KIND_WORDS[m[1]] ?? sentenceCase(m[1]);
     const channel = m[2] === 'email' ? 'email' : m[2] === 'sms' ? 'text' : 'call';
-    const status = m[3] === 'sent' ? (m[2] === 'call' ? 'placed' : 'sent') : m[3] === 'failed' ? 'failed' : 'skipped';
+    const status = m[3] === 'sent' ? (m[2] === 'call' ? 'placed' : 'sent') : m[3] === 'failed' ? 'failed' : m[3] === 'undelivered' ? 'not delivered' : 'skipped';
     return {
       label: `${kind} ${channel} ${status}`,
       icon: m[2] === 'email' ? 'mail' : m[2] === 'sms' ? 'sms' : 'call',
-      tone: m[3] === 'failed' ? 'danger' : m[3] === 'skipped' ? 'warning' : 'neutral',
+      tone: m[3] === 'failed' || m[3] === 'undelivered' ? 'danger' : m[3] === 'skipped' ? 'warning' : 'neutral',
     };
   }
   const icon: TimelineIcon = /call/.test(entry.type) ? 'call' : /sms|text/.test(entry.type) ? 'sms' : /email|mail/.test(entry.type) ? 'mail' : /calendar|gcal/.test(entry.type) ? 'calendar' : 'dot';
   return { label: sentenceCase(entry.type), icon, tone: /fail|error/.test(entry.type) ? 'danger' : 'neutral' };
+}
+
+const PROVIDER_NAMES: Record<string, string> = {
+  resend: 'Resend',
+  gmail: 'Gmail',
+  twilio: 'Twilio',
+  google: 'Google',
+  mock: 'the test outbox',
+};
+
+/**
+ * The detail line of a timeline entry, for people. The server notes which service carried a
+ * message by its id ("to sam@example.com via resend"); this writes the name people know.
+ */
+export function describeTimelineDetail(detail: string): string {
+  return detail.replace(/\bvia (resend|gmail|twilio|google|mock)\b/gi, (_match, id: string) => `via ${PROVIDER_NAMES[id.toLowerCase()]}`);
 }
 
 function sentenceCase(raw: string): string {

@@ -5,7 +5,7 @@
  *   start   the person picked up: greet them inside a <Gather> that listens for speech or a key
  *   turn    they said or pressed something: decide the next move, act on it, answer with TwiML
  *   amd     Twilio's answering machine detection finished in the background: leave a voicemail
- *   status  the call is over: write the outcome and a short transcript to the booking
+ *   status  the call is over: write the outcome to the booking (the transcript stays on the call record)
  *
  * Who decides the next move: Claude when an Anthropic key is configured, otherwise (and whenever
  * Claude is slow, refuses, errors or answers with something unusable) a scripted keyword and
@@ -29,6 +29,7 @@ import { randomId } from './crypto';
 import type { Ctx } from './ctx';
 import { HttpError, readForm } from './http';
 import { enqueueJob, runDueJobs } from './jobs';
+import { outboundAllowed } from './outbound';
 import { cacheGet, cacheSet, claim, getBooking, getCall, getSecrets, getSite, listHosts, saveCall, updateBooking } from './repo';
 import { addDays, formatInZone, isValidZone, localDateOf } from './time';
 import {
@@ -72,6 +73,15 @@ const MAX_EMPTY_INPUTS = 2;
 /** How long Claude gets for one reply. Twilio itself gives a webhook 15 seconds. */
 export const MODEL_TIMEOUT_MS = 9000;
 const MODEL_DEADLINE_SLACK_MS = 250;
+/**
+ * A turn that cancels the meeting aims to have its answer ready this long after the webhook arrived,
+ * leaving room for the storage writes that follow inside Twilio's 15 seconds. What the model left over
+ * is what Google gets for the delete; a slower delete finishes in the background (booking.ts calendarStep).
+ */
+const TURN_BUDGET_MS = 11_000;
+/** The most and the least a phone cancellation waits for Google (the most is booking.ts CALENDAR_BUDGET_MS). */
+const CANCEL_CALENDAR_MAX_MS = 7000;
+const CANCEL_CALENDAR_MIN_MS = 1000;
 const MODEL_MAX_TOKENS = 2000;
 const DEFAULT_MODEL = 'claude-opus-5-5';
 const REFUSAL_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -960,8 +970,8 @@ async function queueHostAlert(ctx: Ctx, bookingId: string, kind: HostAlert): Pro
   });
 }
 
-async function addTimeline(ctx: Ctx, bookingId: string, type: string, detail: string): Promise<void> {
-  const entry = { at: ctx.now().toISOString(), type, ...(detail ? { detail } : {}) };
+async function addTimeline(ctx: Ctx, bookingId: string, type: string, detail: string, callId?: string): Promise<void> {
+  const entry = { at: ctx.now().toISOString(), type, ...(detail ? { detail } : {}), ...(callId ? { callId } : {}) };
   await updateBooking(ctx, bookingId, (b) => ({ ...b, timeline: [...(b.timeline ?? []), entry] }));
 }
 
@@ -1008,6 +1018,9 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
     if (!withinCallWindow(now, booking.invitee.timezone, { ...DEFAULT_ASSISTANT, ...(site.assistant ?? {}) })) return skip('outside_call_window');
     if (await isNumberBlocked(ctx, to, 'call')) return skip('opted_out');
     if (await cacheGet(ctx, `call-recent-${booking.id}`)) return skip('already_called');
+    // A daily ceiling per number and for the whole site (server/lib/outbound.ts). Counted last, so only
+    // a call that is really about to be placed uses up the allowance.
+    if (!(await outboundAllowed(ctx, 'call', to))) return skip('daily_limit');
   }
 
   const nowIso = ctx.now().toISOString();
@@ -1166,8 +1179,19 @@ interface TurnResult {
   patch: Partial<StoredCall>;
 }
 
+/**
+ * How long the Google delete of a phone cancellation may hold up the answer: what is left of the turn's
+ * budget, measured from when the webhook arrived (the model may already have used most of it), never more
+ * than a normal request waits and never under a second. A budget of 0 would push every phone cancellation
+ * into the background and queue a retry for it.
+ */
+export function cancelCalendarBudget(elapsedMs: number): number {
+  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  return Math.max(CANCEL_CALENDAR_MIN_MS, Math.min(CANCEL_CALENDAR_MAX_MS, TURN_BUDGET_MS - elapsed));
+}
+
 /** Carries out what a move promises. When that fails, the caller is told the truth instead. */
-async function carryOut(ctx: Ctx, call: StoredCall, booking: Booking | null, move: Move, p: CallPhrases): Promise<TurnResult> {
+async function carryOut(ctx: Ctx, call: StoredCall, booking: Booking | null, move: Move, p: CallPhrases, turnStartedMs: number): Promise<TurnResult> {
   const real = call.purpose === 'reminder' && booking !== null;
   const patch: Partial<StoredCall> = {};
 
@@ -1219,7 +1243,12 @@ async function carryOut(ctx: Ctx, call: StoredCall, booking: Booking | null, mov
     case 'confirm_cancel': {
       if (real) {
         try {
-          await cancelBooking(ctx, booking.id, { by: 'assistant', reason: cancelReason(call) });
+          await cancelBooking(
+            ctx,
+            booking.id,
+            { by: 'assistant', reason: cancelReason(call) },
+            { calendarBudgetMs: cancelCalendarBudget(ctx.now().getTime() - turnStartedMs) },
+          );
         } catch (err) {
           ctx.log('error', 'voice: could not cancel the booking', { bookingId: booking.id, error: shortError(err) });
           patch.cancelFailed = true;
@@ -1253,7 +1282,7 @@ function cleanCallerSpeech(value: string | null): string {
   );
 }
 
-async function stepTurn(ctx: Ctx, call: StoredCall, form: URLSearchParams): Promise<Response> {
+async function stepTurn(ctx: Ctx, call: StoredCall, form: URLSearchParams, arrivedMs: number): Promise<Response> {
   const s = call.script;
   const now = ctx.now();
   const at = now.toISOString();
@@ -1332,7 +1361,7 @@ async function stepTurn(ctx: Ctx, call: StoredCall, form: URLSearchParams): Prom
     else move = { ...move, hangup: true };
   }
 
-  const done = await carryOut(ctx, call, booking, move, p);
+  const done = await carryOut(ctx, call, booking, move, p, arrivedMs);
   move = done.move;
   const say = speakable(move.say) || p.unclear;
 
@@ -1424,13 +1453,25 @@ const OUTCOME_TEXT: Record<NonNullable<CallRecord['outcome']>, string> = {
   voicemail: 'Reached voicemail.',
 };
 
-function transcriptOf(call: StoredCall): string {
-  const them = call.script.inviteeFirstName || 'Caller';
-  const lines = call.turns.map((t) => `${t.role === 'assistant' ? call.script.assistantName : them}: ${clip(t.text, 160)}`);
+/**
+ * The compact transcript the dashboard shows next to a call (spec §4.4). It is built from the call
+ * record whenever a booking is opened, never copied onto the booking: what someone said on the phone
+ * is kept only as long as the call record (pruned after 90 days, server/cron.ts).
+ */
+export function callTranscript(call: CallRecord): string {
+  const script = (call as Partial<StoredCall>).script;
+  const them = script?.inviteeFirstName || 'Caller';
+  const assistant = script?.assistantName || DEFAULT_ASSISTANT.name;
+  const turns = Array.isArray(call.turns) ? call.turns : [];
+  const lines = turns.map((t) => `${t.role === 'assistant' ? assistant : them}: ${clip(String(t.text ?? ''), 160)}`);
   const joined = lines.join(' | ');
   return joined.length <= 1000 ? joined : `${joined.slice(0, 997).trimEnd()}...`;
 }
 
+/**
+ * The booking's timeline entry for a finished call: the outcome in plain words and the call id. The
+ * conversation itself stays on the call record (see callTranscript).
+ */
 function timelineFor(call: StoredCall): { type: string; detail: string } {
   if (call.status === 'voicemail') {
     return { type: 'call_voicemail', detail: call.voicemailLeft ? 'Reached voicemail and left a reminder message.' : 'Reached voicemail. No message could be left.' };
@@ -1445,8 +1486,6 @@ function timelineFor(call: StoredCall): { type: string; detail: string } {
   else if (call.pendingCancel && call.outcome !== 'cancelled') parts.push('They started to cancel, but the call ended before they confirmed.');
   if (call.optedOut) parts.push('They asked not to be called again.');
   if (typeof call.durationSec === 'number') parts.push(`Call length: ${call.durationSec} seconds.`);
-  const transcript = transcriptOf(call);
-  if (transcript) parts.push(`Transcript: ${transcript}`);
   return { type: 'call_completed', detail: parts.join(' ') };
 }
 
@@ -1477,7 +1516,7 @@ async function stepStatus(ctx: Ctx, call: StoredCall, form: URLSearchParams): Pr
 
   const note = timelineFor(finished);
   try {
-    await addTimeline(ctx, finished.bookingId, note.type, note.detail);
+    await addTimeline(ctx, finished.bookingId, note.type, note.detail, finished.id);
   } catch (err) {
     ctx.log('error', 'voice: could not write the call to the booking timeline', { callId: call.id, error: shortError(err) });
   }
@@ -1512,6 +1551,8 @@ async function stepStatus(ctx: Ctx, call: StoredCall, form: URLSearchParams): Pr
  * person on the phone hears something sensible even when things go wrong on our side.
  */
 export async function handleVoiceWebhook(ctx: Ctx, req: Request, step: 'start' | 'turn' | 'status' | 'amd'): Promise<Response> {
+  // Twilio's 15 second limit runs from here, so a turn's time budget does too.
+  const arrivedMs = ctx.now().getTime();
   let form: URLSearchParams;
   try {
     form = await readForm(req);
@@ -1536,7 +1577,7 @@ export async function handleVoiceWebhook(ctx: Ctx, req: Request, step: 'start' |
       case 'start':
         return await stepStart(ctx, call, form);
       case 'turn':
-        return await stepTurn(ctx, call, form);
+        return await stepTurn(ctx, call, form, arrivedMs);
       case 'amd':
         return await stepAmd(ctx, call, form);
       case 'status':

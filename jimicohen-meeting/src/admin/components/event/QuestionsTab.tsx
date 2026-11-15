@@ -81,7 +81,13 @@ export function QuestionsTab({ draft, update, errors }: TabProps) {
             ]}
           />
         </FieldGroup>
-        <Switch labelSide="start" checked={draft.allowGuests} onChange={(allowGuests) => update({ allowGuests })} label="Let people bring guests" description="They can add email addresses, and those guests get the invitation too." />
+        <Switch
+          labelSide="start"
+          checked={draft.allowGuests}
+          onChange={(allowGuests) => update({ allowGuests })}
+          label="Let people bring guests"
+          description="They can add email addresses. Guests get a calendar invitation from the host's Google account, so they are only offered while Google Calendar is connected and the invitee is invited on the event (under Advanced)."
+        />
         {draft.allowGuests ? (
           <Field label="Guests per booking" error={errors.maxGuests}>
             <NumberField value={draft.maxGuests} min={1} max={20} suffix="at most" onChange={(maxGuests) => update({ maxGuests })} className="adm-w-md" />
@@ -89,7 +95,10 @@ export function QuestionsTab({ draft, update, errors }: TabProps) {
         ) : null}
       </Section>
 
-      <Section title="Your questions" description="Anything you want to know before the meeting. Answers arrive with the booking and in the calendar event.">
+      <Section
+        title="Your questions"
+        description="Anything you want to know before the meeting. Answers arrive with the booking and in the calendar event. When the invitee brings guests, the calendar event leaves the answers out and links to the booking instead."
+      >
         {questions.length === 0 ? (
           <div className="adm-well">
             <EmptyState compact align="start" icon={<MessageSquarePlus />} title="No questions yet" description="Ask what they want to talk about, where they work, or anything that helps you prepare." />

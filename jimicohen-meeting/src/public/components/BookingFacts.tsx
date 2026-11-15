@@ -3,7 +3,7 @@ import { CalendarCheck, ExternalLink, UserPlus, UserRound, UsersRound } from 'lu
 import type { PublicBooking } from '../../../shared/types';
 import { formatDateLong, formatRange, zoneLabel } from '../../lib/tz';
 import { cx } from '../../ui';
-import { hostNames, isWebUrl } from '../lib/text';
+import { deliveryOf, hostNames, isWebUrl } from '../lib/text';
 import { LocationIcon } from './LocationIcon';
 
 export interface BookingFactsProps {
@@ -52,7 +52,9 @@ export function BookingFacts({ booking, zone, hour12, locale, struck = false, cl
             <ExternalLink size={14} aria-hidden="true" />
           </a>
         ) : null}
-        {location.type === 'google_meet' && !join && !struck ? <p className="bk-fact__sub">The link is in your calendar invitation.</p> : null}
+        {location.type === 'google_meet' && !join && !struck ? (
+          <p className="bk-fact__sub">{deliveryOf(booking).calendarInvite ? 'The link is in your calendar invitation.' : 'The meeting link is not ready yet.'}</p>
+        ) : null}
       </Fact>
       {booking.hosts.length ? (
         <Fact icon={several ? <UsersRound size={18} /> : <UserRound size={18} />} label="With">

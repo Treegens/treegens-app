@@ -5,7 +5,7 @@
  * that fill the form in, and the redirect after booking.
  */
 import { defineSuite } from './lib.mjs';
-import { FROM_EMAIL, MINUTE, OWNER_GOOGLE, PHONE, calendarReady, confirmBooking, fillDetails, jobLines, manageView, offeredSlots, openEvent, pickDay, pickSlot, plus, prepare } from './public-helpers.mjs';
+import { FROM_EMAIL, MINUTE, MONDAY, OWNER_GOOGLE, PHONE, calendarReady, confirmBooking, fillDetails, jobLines, manageView, offeredSlots, openEvent, pickDay, pickSlot, plus, prepare } from './public-helpers.mjs';
 
 const NEW_YORK = 'America/New_York';
 const ADA = { name: 'Ada Lovelace', email: 'ada@example.com' };
@@ -21,6 +21,57 @@ async function toTheForm(s, page, { slug = 'intro', start = START, details = ADA
 const noticeText = async (page) => (await page.getByRole('form', { name: 'Your details' }).getByRole('alert').innerText()).replace(/\s+/g, ' ');
 
 export default defineSuite('public-resilience', { mockCreds: true }, async (t) => {
+  await t.scenario('a fresh deployment: closed until first-run setup, then it promises only what really goes out', { reset: true }, async (s) => {
+    s.allowConsoleErrors(/status of 404/);
+    await s.setClock(MONDAY);
+    const page = await s.newPage({ timezoneId: NEW_YORK, locale: 'en-US' });
+
+    await s.step('before setup: nothing on offer, and a booking sent anyway is refused', async () => {
+      await page.goto(s.url('/'));
+      await page.getByRole('heading', { name: 'Nothing to book just yet' }).waitFor();
+      s.expect((await s.visitor().ok('GET', '/public/site')).eventTypes, 'event types on offer').toEqual([]);
+      await page.goto(s.url('/intro'));
+      await page.getByRole('heading', { name: 'This meeting type is not available', level: 1 }).waitFor();
+      const notOpen = { code: 'not_open', message: 'This booking page is not taking bookings yet. Please check back soon.' };
+      const booked = await s.book({ start: START, ...ADA });
+      s.expect([booked.status, booked.data.error], 'a booking before setup').toEqual([503, notOpen]);
+      const slots = await s.visitor().request('GET', '/public/slots', { query: { slug: 'intro', duration: 15, from: '2026-11-18T00:00:00Z', to: '2026-11-19T00:00:00Z' } });
+      s.expect([slots.status, slots.data.error], 'times before setup').toEqual([503, notOpen]);
+      s.expect(await s.bookings(), 'bookings').toEqual([]);
+      s.expect(await s.outbox({ kind: 'email' }), 'emails').toEqual([]);
+      await s.screenshot(page, 'closed before setup');
+    });
+
+    await s.step('the owner sets up, switches email off and connects no calendar', async () => {
+      await s.setupAdmin({ timezone: 'Europe/London' });
+      await s.apiOk('PUT', '/admin/site', { body: { email: { provider: 'none' } } });
+    });
+
+    await s.step('the page opens, and promises no Meet link, no email and no invitation', async () => {
+      await openEvent(s, page, 'intro');
+      s.expect(await page.getByText('You get the link when you book').count(), 'a Meet link promised').toBe(0);
+      await pickDay(page, '2026-11-18');
+      await pickSlot(page, START);
+      const form = await fillDetails(page, ADA);
+      await form.getByText('So your host can reach you about the meeting.').waitFor();
+      await confirmBooking(s, page);
+      await page.getByRole('heading', { name: "You're booked" }).waitFor();
+      await s.settle();
+      const done = page.locator('.bw-done');
+      await done.getByText('No confirmation email is sent for this booking, so please add it to your calendar with the buttons below.').waitFor();
+      s.expect(await done.getByText(/is on its way|are on their way/).count(), 'something promised to be on its way').toBe(0);
+      s.expect((await done.locator('.bk-facts').innerText()).replace(/\s+/g, ' '), 'where').toContain('Google Meet The meeting link is not ready yet.');
+      await done.getByText(/These links are not emailed to you, so keep one of them to find your booking again\./).waitFor();
+      s.expect(await s.outbox({ kind: 'email' }), 'emails').toEqual([]);
+      await s.screenshot(page, 'a confirmation that promises only what goes out');
+    });
+
+    await s.step('and Home tells the owner that a booking reaches nobody', async () => {
+      const { warnings } = await s.apiOk('GET', '/admin/overview');
+      s.expect(warnings.find((w) => w.key === 'bookings_reach_nobody')?.message, 'the warning').toMatch(/^People can book "Intro call" and "Meeting", but nobody hears about it/);
+    });
+  });
+
   await t.scenario('Google is down while booking: nothing is booked, the visitor is told, and it works again later', async (s) => {
     await s.step('prepare', () => prepare(s));
     s.allowConsoleErrors(/status of 503/);
@@ -116,9 +167,11 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
 
     await s.step('the invitee still got a confirmation, with a calendar file that works on its own', async () => {
       const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
-      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM');
-      // No Google invitation went out, so this file is the invitation.
-      s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'REQUEST' });
+      s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST');
+      // Google sends the real invitation once the repair job creates the event, so this file only adds
+      // the event and must not be a second invitation (two entries with different ids on her calendar).
+      s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'PUBLISH' });
+      s.expect(mail.ics.content, 'no attendees to answer for').not.toContain('ATTENDEE');
       const [notice] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
       s.expect(notice.subject, 'host notice').toMatch(/^New booking: Ada Lovelace/);
     });
@@ -166,10 +219,11 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
       const [stored] = await s.bookings();
       s.expect(stored, 'booking').toMatchObject({ status: 'confirmed', google: { hostId: 'host_owner', eventId: '', error: /Google/ } });
       s.expect(await s.outbox({ kind: 'calendar_insert', status: 200 }), 'events created so far').toEqual([]);
-      // The confirmation went out after the attempt, without a link it does not have, and with a calendar file of its own.
+      // The confirmation went out after the attempt, without a link it does not have, and with a plain calendar
+      // file: the invitation itself comes from Google once the job creates the event.
       const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
-      s.expect(mail.subject, 'confirmation').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM');
-      s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'REQUEST' });
+      s.expect(mail.subject, 'confirmation').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST');
+      s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'PUBLISH' });
       s.expect(mail.text, 'no meeting link invented').not.toContain('meet.google.com');
       s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'host notice').toHaveLength(1);
     });
@@ -231,8 +285,8 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
       await s.runJobs();
       const delivered = await s.outbox({ kind: 'email', status: 200 });
       s.expect(delivered.map((e) => `${e.to.join(',')} | ${e.subject}`).sort(), 'delivered').toEqual([
-        `${ADA.email} | Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM`,
-        `${OWNER_GOOGLE} | New booking: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM`,
+        `${ADA.email} | Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST`,
+        `${OWNER_GOOGLE} | New booking: Ada Lovelace for Intro call, Wed, Nov 18, 4:00 PM GMT`,
       ]);
       s.expect(delivered[0].fromEmail, 'from').toBe(FROM_EMAIL);
       s.expect(await s.jobs((j) => j.kind === 'confirmation' || j.kind === 'host_new'), 'nothing left to retry').toEqual([]);

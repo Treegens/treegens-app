@@ -19,6 +19,8 @@ import { IntegrationCard, IxBlock, useIntegrationTest } from '../components/x/In
 import type { IntegrationStatus } from '../components/x/IntegrationCard';
 import { CopyField, Ext, SecretField, Step, Steps, TestResult } from '../components/x/bits';
 import { firstName } from '../format';
+import { announceGoogleReturn } from '../googleReturn';
+import { formatDateLong } from '../../lib/tz';
 import { useAdmin } from '../state';
 import '../../styles/adminx.css';
 
@@ -35,6 +37,18 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function cleanPhone(input: string): string {
   return input.replace(/[\s().-]/g, '');
+}
+
+/** A call needs a Twilio number of its own: a Messaging Service only sends texts. */
+function canCall(t: IntegrationsStatus['twilio']): boolean {
+  return t.calls ?? (t.configured && !!t.fromNumber);
+}
+
+/** Why Gmail cannot send right now, whichever sender is chosen. Null when it can, or was never allowed. */
+function gmailTrouble(owner: AdminHost, keysSaved: boolean): 'needs_reconnect' | 'keys_missing' | null {
+  if (!owner.google?.gmailSend) return null;
+  if (!keysSaved) return 'keys_missing';
+  return owner.google.status === 'needs_reconnect' ? 'needs_reconnect' : null;
 }
 
 function googleReason(reason: string | null): string {
@@ -92,14 +106,47 @@ interface CardProps {
 
 // ═════════════════════════════ Google Calendar ═════════════════════════════
 
+/**
+ * Google said, when this connection was made, that it ends on a set day: the consent screen is still in
+ * "Testing", where a connection lasts 7 days. Publishing the screen and connecting again removes the end.
+ */
+function ExpiryNotice({ endsAt, zone, onReconnect }: { endsAt: string; zone: string; onReconnect: () => void }) {
+  const ms = Date.parse(endsAt);
+  if (!Number.isFinite(ms)) return null;
+  let day: string;
+  try {
+    day = formatDateLong(ms, zone);
+  } catch {
+    day = formatDateLong(ms, 'UTC');
+  }
+  const ended = ms <= Date.now();
+  return (
+    <Notice
+      tone="warning"
+      title={ended ? `This connection stopped working on ${day}` : `This connection ends on ${day}`}
+      action={
+        <Button size="sm" variant="secondary" onClick={onReconnect}>
+          Reconnect
+        </Button>
+      }
+    >
+      Your consent screen in Google Cloud is still in "Testing", so Google ends the connection after 7 days. After that, no times are offered until you reconnect. Publish
+      the consent screen in Google Cloud (step 3 of the setup steps), then reconnect.
+    </Notice>
+  );
+}
+
 function GoogleCard({ open, onToggle }: CardProps) {
   const { data, refresh, ownerHost } = useAdmin();
   const apply = useApply();
   const toast = useToast();
   const g = data.integrations.google;
   const hostGoogle = ownerHost.google;
+  // A connection is made with the keys below and only works while they are there.
+  const keysGone = !!hostGoogle && !g.configured;
   const needsReconnect = hostGoogle?.status === 'needs_reconnect';
-  const connected = g.ownerConnected && !!hostGoogle && !needsReconnect;
+  const connected = g.ownerConnected && !!hostGoogle && !needsReconnect && !keysGone;
+  const teamConnected = data.hosts.some((h) => !!h.google);
 
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
@@ -118,11 +165,13 @@ function GoogleCard({ open, onToggle }: CardProps) {
 
   const status: IntegrationStatus = connected
     ? { tone: 'success', label: 'Connected' }
-    : needsReconnect
-      ? { tone: 'warning', label: 'Needs reconnecting' }
-      : g.configured
-        ? { tone: 'warning', label: 'Keys saved, not connected' }
-        : { tone: 'neutral', label: 'Not set up' };
+    : keysGone
+      ? { tone: 'danger', label: 'Keys missing' }
+      : needsReconnect
+        ? { tone: 'warning', label: 'Needs reconnecting' }
+        : g.configured
+          ? { tone: 'warning', label: 'Keys saved, not connected' }
+          : { tone: 'neutral', label: 'Not set up' };
 
   const hostId = ownerHost.id;
   useEffect(() => {
@@ -153,7 +202,7 @@ function GoogleCard({ open, onToggle }: CardProps) {
       apply.integrations(await saveIntegrations(update));
       setClientId('');
       setClientSecret('');
-      toast.success('Google keys saved', 'One step left: connect your calendar.');
+      toast.success('Google keys saved', keysGone ? 'Your calendar connection can be used again.' : 'One step left: connect your calendar.');
     } catch (e) {
       const refused = refusal(e, ['google.clientId', 'google.clientSecret'], 'The keys could not be saved. Please try again.');
       setFields(refused.fields);
@@ -166,7 +215,8 @@ function GoogleCard({ open, onToggle }: CardProps) {
   const removeKeys = async () => {
     try {
       apply.integrations(await saveIntegrations({ google: { clientId: '', clientSecret: '' } }));
-      toast.success('Google keys removed');
+      if (teamConnected) toast.warning('Google keys removed', 'Connected calendars stop working until you add the same keys again.');
+      else toast.success('Google keys removed');
     } catch (e) {
       toast.error('The keys were not removed', errorMessage(e));
       throw e;
@@ -284,6 +334,7 @@ function GoogleCard({ open, onToggle }: CardProps) {
             </div>
           </div>
           <TestResult state={test} />
+          {hostGoogle.refreshExpiresAt ? <ExpiryNotice endsAt={hostGoogle.refreshExpiresAt} zone={ownerHost.timezone} onReconnect={() => connect()} /> : null}
 
           <IxBlock title="Calendars to check for conflicts">
             {calError ? (
@@ -340,15 +391,21 @@ function GoogleCard({ open, onToggle }: CardProps) {
         </>
       ) : null}
 
-      {needsReconnect ? (
+      {keysGone && hostGoogle ? (
+        <Notice tone="danger" title="Your calendar connection needs the Google keys">
+          The client ID and client secret were removed, so your calendar cannot be read and no times are offered for meetings with you{hostGoogle.gmailSend ? '. No emails go out from your Gmail either' : ''}. Paste the same
+          two keys again in step 5 below and the connection works again. If you use new keys, connect your calendar again after saving them.
+        </Notice>
+      ) : needsReconnect ? (
         <Notice tone="warning" title="Google asked us to sign in again" action={<Button size="sm" variant="primary" onClick={() => connect()}>Reconnect</Button>}>
-          New bookings are not reaching your calendar right now. Reconnecting takes a few seconds. If this keeps happening, check step 3 below: the app must be published.
+          Until you do, no times are offered for meetings with you and new bookings cannot reach your calendar{hostGoogle?.gmailSend ? '. No emails go out from your Gmail either' : ''}. Reconnecting takes a
+          few seconds. If this keeps happening, check step 3 below: the app must be published.
         </Notice>
       ) : null}
 
       {stepsVisible ? (
         <>
-          {!g.configured ? (
+          {!g.configured && !keysGone ? (
             <p className="ix-lead">
               Google asks every site that reads a calendar to register itself once. It is free and takes about five minutes. You do this in Google Cloud, with the Google account that owns your calendar.
             </p>
@@ -417,7 +474,11 @@ function GoogleCard({ open, onToggle }: CardProps) {
         onConfirm={removeKeys}
         tone="danger"
         title="Remove the Google keys?"
-        description="Nobody on your team will be able to connect or reconnect a Google Calendar until you add keys again."
+        description={
+          teamConnected
+            ? 'Every connected Google Calendar stops working until you add the same keys again, and no times are offered for the meetings they are on. Nobody can connect or reconnect a calendar either.'
+            : 'Nobody on your team will be able to connect or reconnect a Google Calendar until you add keys again.'
+        }
         confirmLabel="Remove keys"
       />
     </IntegrationCard>
@@ -452,6 +513,7 @@ function EmailCard({ open, onToggle }: CardProps) {
     setFromEmail(site.email.fromEmail);
   }, [site.email.provider, site.email.fromEmail]);
 
+  const trouble = email.gmailProblem ?? gmailTrouble(ownerHost, google.configured);
   const status: IntegrationStatus =
     email.resolved === 'resend'
       ? { tone: 'success', label: 'Sending with Resend' }
@@ -459,7 +521,9 @@ function EmailCard({ open, onToggle }: CardProps) {
         ? { tone: 'success', label: 'Sending from Gmail' }
         : site.email.provider === 'none'
           ? { tone: 'neutral', label: 'Turned off' }
-          : { tone: 'warning', label: 'Not sending yet' };
+          : email.gmailProblem
+            ? { tone: 'danger', label: 'Gmail cannot send' }
+            : { tone: 'warning', label: 'Not sending yet' };
 
   const fromInvalid = fromEmail.trim() !== '' && !EMAIL.test(fromEmail.trim());
   const dirty = provider !== site.email.provider || fromEmail.trim() !== site.email.fromEmail || key.trim() !== '';
@@ -522,6 +586,22 @@ function EmailCard({ open, onToggle }: CardProps) {
               <Check size={15} aria-hidden="true" />
               <span>Allowed. Emails go out as {google.ownerEmail ?? 'your Google account'}.</span>
             </p>
+          ) : trouble === 'keys_missing' ? (
+            <Notice tone={email.resolved === 'none' ? 'danger' : 'warning'} title="Gmail cannot send right now">
+              The Google keys were removed, and Gmail sends through your Google connection. Paste the same keys again in the Google Calendar card above.
+            </Notice>
+          ) : trouble === 'needs_reconnect' ? (
+            <Notice
+              tone={email.resolved === 'none' ? 'danger' : 'warning'}
+              title="Gmail cannot send right now"
+              action={
+                <Button size="sm" variant="primary" onClick={allowGmail}>
+                  Reconnect
+                </Button>
+              }
+            >
+              Google asked you to sign in again, so no emails go out from {google.ownerEmail ?? 'your Gmail'} until you reconnect.
+            </Notice>
           ) : google.ownerConnected ? (
             <>
               <p className="ix-text">Your calendar is connected, but sending email needs one more permission from Google. Make sure the Gmail API is enabled (step 2 under Google Calendar).</p>
@@ -660,11 +740,19 @@ function TwilioCard({ open, onToggle }: CardProps) {
   }, [t.fromNumber, t.messagingServiceSid]);
 
   const hasKeys = !!t.accountSidMasked;
-  const status: IntegrationStatus = t.configured ? { tone: 'success', label: 'Connected' } : hasKeys ? { tone: 'warning', label: 'Needs a phone number' } : { tone: 'neutral', label: 'Not set up' };
+  const calls = canCall(t);
+  const status: IntegrationStatus = t.configured
+    ? calls
+      ? { tone: 'success', label: 'Connected' }
+      : { tone: 'warning', label: 'Texts only' }
+    : hasKeys
+      ? { tone: 'warning', label: 'Needs a phone number' }
+      : { tone: 'neutral', label: 'Not set up' };
 
   const fromClean = cleanPhone(from);
   const fromInvalid = fromClean !== '' && !E164.test(fromClean);
-  const sidOff = sid.trim() !== '' && !/^AC[0-9a-fA-F]{32}$/.test(sid.trim());
+  // The same rule as the server: AC and 32 letters or digits.
+  const sidOff = sid.trim() !== '' && !/^AC[0-9a-zA-Z]{32}$/.test(sid.trim());
   const dirty = sid.trim() !== '' || token.trim() !== '' || fromClean !== (t.fromNumber ?? '') || service.trim() !== (t.messagingServiceSid ?? '');
   const firstTime = !hasKeys;
   const complete = firstTime ? sid.trim() !== '' && token.trim() !== '' && (fromClean !== '' || service.trim() !== '') : true;
@@ -718,13 +806,18 @@ function TwilioCard({ open, onToggle }: CardProps) {
       onToggle={onToggle}
     >
       {!t.configured ? <p className="ix-lead">Until this is connected, reminders go out by email only. Twilio charges a small amount per text and per minute of calling.</p> : null}
+      {t.configured && !calls ? (
+        <Notice tone="warning" title="Add a phone number to place calls">
+          Texts go out through your Messaging Service, but reminder calls need a Twilio phone number of their own. Until you add one under "Your Twilio number" below, reminder calls are skipped.
+        </Notice>
+      ) : null}
       <Steps>
         <Step title="Create a Twilio account" done={hasKeys}>
           <p>
             Sign up at <Ext href="https://www.twilio.com/try-twilio">twilio.com</Ext> and add a payment method. A trial account can only text and call numbers you have verified yourself.
           </p>
         </Step>
-        <Step title="Get a phone number" done={t.configured}>
+        <Step title="Get a phone number" done={t.configured && calls}>
           <p>
             Under <Ext href="https://console.twilio.com/us1/develop/phone-numbers/manage/search">Phone Numbers, Buy a number</Ext>, pick one that can do both <strong>SMS</strong> and <strong>Voice</strong>.
           </p>
@@ -784,11 +877,11 @@ function TwilioCard({ open, onToggle }: CardProps) {
           <Button variant="secondary" iconLeft={<MessageSquareText size={15} />} disabled={!t.configured || !toValid || test.status === 'running'} onClick={() => void runTest({ channel: 'sms', to: toClean })}>
             Send test text
           </Button>
-          <Button variant="secondary" iconLeft={<PhoneCall size={15} />} disabled={!t.configured || !toValid || test.status === 'running'} onClick={() => void runTest({ channel: 'call', to: toClean })}>
+          <Button variant="secondary" iconLeft={<PhoneCall size={15} />} disabled={!calls || !toValid || test.status === 'running'} onClick={() => void runTest({ channel: 'call', to: toClean })}>
             Call me
           </Button>
         </div>
-        {!t.configured ? <p className="ix-text">Save your Twilio details first.</p> : null}
+        {!t.configured ? <p className="ix-text">Save your Twilio details first.</p> : !calls ? <p className="ix-text">A test call needs a Twilio phone number. Texts can be tested now.</p> : null}
         <TestResult state={test} />
       </IxBlock>
 
@@ -888,8 +981,8 @@ function AssistantCard({ open, onToggle }: CardProps) {
         </div>
       </div>
 
-      {!twilio.configured ? (
-        <Notice tone="info">Reminder calls also need Twilio, in the card above. You can add this key now and it will be used as soon as calls are on.</Notice>
+      {!canCall(twilio) ? (
+        <Notice tone="info">Reminder calls also need Twilio with a phone number, in the card above. You can add this key now and it will be used as soon as calls are on.</Notice>
       ) : null}
 
       <Steps>
@@ -1009,9 +1102,10 @@ export default function IntegrationsPage() {
   const location = useLocation();
   const integ = data.integrations;
 
-  const googleDone = integ.google.ownerConnected && ownerHost.google?.status !== 'needs_reconnect';
+  const googleDone = integ.google.ownerConnected && ownerHost.google?.status !== 'needs_reconnect' && integ.google.configured;
   const emailDone = integ.email.resolved !== 'none';
-  const done: Record<CardId, boolean> = { google: googleDone, email: emailDone, twilio: integ.twilio.configured, assistant: integ.anthropic.configured };
+  const twilioDone = integ.twilio.configured && canCall(integ.twilio);
+  const done: Record<CardId, boolean> = { google: googleDone, email: emailDone, twilio: twilioDone, assistant: integ.anthropic.configured };
 
   const [open, setOpen] = useState<Set<CardId>>(() => {
     const hash = window.location.hash.replace('#', '') as CardId;
@@ -1031,12 +1125,10 @@ export default function IntegrationsPage() {
   // Back from Google: say what happened, then tidy the address bar.
   const handledReturn = useRef(false);
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const result = params.get('google');
-    if (!result || handledReturn.current) return;
+    if (!new URLSearchParams(location.search).has('google') || handledReturn.current) return;
     handledReturn.current = true;
-    if (result === 'connected') toast.success('Google is connected', 'Your busy times are now checked and bookings land on your calendar.');
-    else toast.error('Google did not connect', googleReason(params.get('reason')));
+    // Also says when the time zone changed with the connection (it then follows Google Calendar).
+    announceGoogleReturn(toast, location.search, googleReason);
     setOpen((prev) => new Set(prev).add('google'));
     navigate('/admin/integrations', { replace: true });
     void refresh().catch(() => undefined);
@@ -1051,7 +1143,8 @@ export default function IntegrationsPage() {
     window.requestAnimationFrame(() => document.getElementById(hash)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
   }, [location.hash]);
 
-  const reconnect = ownerHost.google?.status === 'needs_reconnect';
+  const keysGone = !!ownerHost.google && !integ.google.configured;
+  const reconnect = ownerHost.google?.status === 'needs_reconnect' && !keysGone;
 
   return (
     <Page width="narrow">
@@ -1066,9 +1159,13 @@ export default function IntegrationsPage() {
         ]}
       />
 
-      {reconnect ? (
+      {keysGone ? (
+        <Notice tone="danger" title="The Google keys are missing">
+          Your calendar is still connected, but it cannot be used without the keys, so no times are offered for meetings with you. Open the Google Calendar card and paste the same keys again.
+        </Notice>
+      ) : reconnect ? (
         <Notice tone="warning" title="Your Google Calendar needs to be reconnected">
-          New bookings are not reaching your calendar. Open the Google Calendar card and press Reconnect.
+          Until then, no times are offered for meetings with you and new bookings cannot reach your calendar. Open the Google Calendar card and press Reconnect.
         </Notice>
       ) : null}
 

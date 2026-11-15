@@ -440,6 +440,59 @@ describe('bookings', () => {
     expect(timeline).toEqual(Array.from({ length: 12 }, (_, i) => `event_${i}`).sort());
   });
 
+  it('updateBooking recognises its own write when the answer was lost, and does not apply the change twice', async () => {
+    const inner = memoryKV();
+    let lose = false;
+    const kv = wrapKV(inner, {
+      setJSON: async (key, value, opts) => {
+        const result = await inner.setJSON(key, value, opts);
+        if (lose && opts?.onlyIfMatch && key === 'bookings/bkg_1' && result.modified) {
+          lose = false;
+          return { modified: false };
+        }
+        return result;
+      },
+    });
+    const ctx = makeTestCtx({ kv });
+    await saveBooking(ctx, makeBooking('bkg_1', { timeline: [] }));
+    lose = true;
+    let runs = 0;
+    const saved = await updateBooking(ctx, 'bkg_1', (b) => {
+      runs++;
+      return { ...b, rescheduleCount: b.rescheduleCount + 1, timeline: [...b.timeline, { at: TEST_NOW, type: 'rescheduled' }] };
+    });
+    expect(runs).toBe(1);
+    expect(saved).toMatchObject({ rescheduleCount: 1 });
+    const stored = await getBooking(ctx, 'bkg_1');
+    expect(stored).toMatchObject({ rescheduleCount: 1, rev: saved!.rev });
+    expect(stored!.timeline.map((t) => t.type)).toEqual(['rescheduled']);
+  });
+
+  it('updateBooking still runs the change again when somebody else really wrote in between', async () => {
+    const inner = memoryKV();
+    let intrude = false;
+    const kv = wrapKV(inner, {
+      setJSON: async (key, value, opts) => {
+        if (intrude && opts?.onlyIfMatch && key === 'bookings/bkg_1') {
+          intrude = false;
+          const current = (await inner.getJSON<Booking>(key))!;
+          await inner.setJSON(key, { ...current, timeline: [...current.timeline, { at: TEST_NOW, type: 'other_writer' }], rev: 'theirs' });
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    });
+    const ctx = makeTestCtx({ kv });
+    await saveBooking(ctx, makeBooking('bkg_1', { timeline: [] }));
+    intrude = true;
+    let runs = 0;
+    await updateBooking(ctx, 'bkg_1', (b) => {
+      runs++;
+      return { ...b, timeline: [...b.timeline, { at: TEST_NOW, type: 'mine' }] };
+    });
+    expect(runs).toBe(2);
+    expect((await getBooking(ctx, 'bkg_1'))!.timeline.map((t) => t.type)).toEqual(['other_writer', 'mine']);
+  });
+
   it('indexEntryOf copies the fields the index needs', () => {
     const booking = makeBooking('bkg_1', { hostIds: ['host_owner', 'host_alex'], status: 'cancelled' });
     const entry = indexEntryOf(booking);
@@ -586,6 +639,56 @@ describe('booking index compare-and-swap', () => {
     expect(await getBookingIndex(ctx)).toEqual([]);
   });
 
+  it('takes a new booking whose write landed although its answer was lost, instead of finding its own entry in the way', async () => {
+    const inner = memoryKV();
+    await inner.setJSON('index/bookings', []);
+    let lose = true;
+    const kv = wrapKV(inner, {
+      setJSON: async (key, value, opts) => {
+        const result = await inner.setJSON(key, value, opts);
+        if (lose && key === 'index/bookings' && result.modified) {
+          lose = false;
+          return { modified: false };
+        }
+        return result;
+      },
+    });
+    const ctx = makeTestCtx({ kv });
+    let runs = 0;
+    const result = await mutateBookingIndex(ctx, (entries) => {
+      runs++;
+      return takeSlot(indexEntryOf(makeBooking('bkg_mine', slot)))(entries);
+    });
+    expect(result).toEqual({ ok: true });
+    expect(runs).toBe(1);
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual(['bkg_mine']);
+  });
+
+  it('adds a calendar feed once when the store re-runs the host change on top of its own write', async () => {
+    const inner = memoryKV();
+    let lose = false;
+    const kv = wrapKV(inner, {
+      // The host list write is applied, but its answer is lost: the list step then runs again on the fresh list.
+      setJSON: async (key, value, opts) => {
+        const result = await inner.setJSON(key, value, opts);
+        if (lose && key === 'hosts' && opts?.onlyIfMatch && result.modified) {
+          lose = false;
+          return { modified: false };
+        }
+        return result;
+      },
+    });
+    const ctx = makeTestCtx({ kv });
+    await getSite(ctx);
+    await saveHost(ctx, makeHost('host_alex'));
+    lose = true;
+    const { applyHostUpdate } = await import('../../server/lib/admin/hosts');
+    const host = (await getHost(ctx, 'host_alex'))!;
+    await applyHostUpdate(ctx, host, { addIcsFeed: { label: 'Work', url: 'https://calendar.example.com/private-abc123/basic.ics' } }, { self: false });
+    expect(lose).toBe(false);
+    expect((await getHost(ctx, 'host_alex'))!.icsFeeds).toHaveLength(1);
+  });
+
   it('list blobs answer 503 "busy" when a swap can never succeed', async () => {
     const inner = memoryKV();
     const kv = wrapKV(inner, {
@@ -662,7 +765,26 @@ describe('claim', () => {
     expect(await claim(ctx, 'job-job_1-0')).toBe(true);
     expect(await claim(ctx, 'job-job_1-0')).toBe(false);
     expect(await claim(ctx, 'job-job_1-1')).toBe(true);
-    expect(await ctx.kv.getJSON('claims/job-job_1-0')).toEqual({ at: TEST_NOW });
+    expect(await ctx.kv.getJSON('claims/job-job_1-0')).toEqual({ at: TEST_NOW, owner: expect.stringMatching(/^[A-Za-z0-9_-]{16,}$/) });
+  });
+
+  it('is still ours when the storage client re-sent the write and the copy was refused', async () => {
+    const inner = memoryKV();
+    let lose = true;
+    const kv = wrapKV(inner, {
+      // The first create-only write is applied, but its answer is lost: the client's re-send then fails its own condition.
+      setJSON: async (key, value, opts) => {
+        const result = await inner.setJSON(key, value, opts);
+        if (lose && key.startsWith('claims/') && result.modified) {
+          lose = false;
+          return { modified: false };
+        }
+        return result;
+      },
+    });
+    const ctx = makeTestCtx({ kv });
+    expect(await claim(ctx, 'sched-bkg_1-confirmation')).toBe(true);
+    expect(await claim(ctx, 'sched-bkg_1-confirmation')).toBe(false);
   });
 
   it('lets exactly one of many racing callers win', async () => {
@@ -796,5 +918,98 @@ describe('pruneEphemeral', () => {
     expect(await pruneEphemeral(ctx, 86_400_000, 4)).toBe(4);
     expect(await ctx.kv.list('claims/')).toHaveLength(6);
     expect(await pruneEphemeral(ctx, 86_400_000)).toBe(6);
+  });
+
+  it('removes a cache entry as soon as it has expired, without the two day wait', async () => {
+    const ctx = makeTestCtx();
+    await cacheSet(ctx, 'expired-a-minute-ago', 1, 60);
+    await cacheSet(ctx, 'expires-now', 1, 120);
+    await cacheSet(ctx, 'still-good', 1, 600);
+    ctx.clock.advance(2 * 60_000);
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000)).toBe(2);
+    expect(await ctx.kv.list('cache/')).toEqual(['cache/still-good']);
+  });
+
+  it('gives every prefix its own allowance, so a rate limit backlog cannot starve claims and cache', async () => {
+    const ctx = makeTestCtx();
+    const old = ctx.now().getTime();
+    for (let i = 0; i < 30; i++) await ctx.kv.setJSON(`rl/slots/${i.toString(16).padStart(64, '0')}/${old}`, { n: 1 });
+    for (let i = 0; i < 3; i++) await claim(ctx, `old-claim-${i}`);
+    await cacheSet(ctx, 'old-cache-1', 1, 60);
+    await cacheSet(ctx, 'old-cache-2', 1, 60);
+    ctx.clock.advance(3 * 86_400_000);
+    // Before: one shared limit of 10, used up by rl/ alone, and claims/ and cache/ never looked at.
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000, 10)).toBe(15);
+    expect(await ctx.kv.list('claims/')).toEqual([]);
+    expect(await ctx.kv.list('cache/')).toEqual([]);
+    expect(await ctx.kv.list('rl/')).toHaveLength(20);
+  });
+
+  it('deletes in parallel', async () => {
+    const inner = memoryKV();
+    let inFlight = 0;
+    let most = 0;
+    const kv: KV = {
+      ...inner,
+      async delete(key) {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await inner.delete(key);
+        inFlight--;
+      },
+    };
+    const ctx = makeTestCtx({ kv });
+    for (let i = 0; i < 40; i++) await kv.setJSON(`rl/slots/${'c'.repeat(63)}${i % 10}/${ctx.now().getTime() - 3 * 86_400_000 - i}`, { n: 1 });
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000)).toBe(40);
+    expect(most).toBeGreaterThan(1);
+  });
+
+  it('stops when its time is used up, and a slow prefix cannot take the time of the others', async () => {
+    const inner = memoryKV();
+    const slow = async <T>(work: () => Promise<T>): Promise<T> => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return work();
+    };
+    const kv: KV = { ...inner, getJSON: (key) => slow(() => inner.getJSON(key)), delete: (key) => slow(() => inner.delete(key)) };
+    const ctx = makeTestCtx({ kv });
+    const old = ctx.now().getTime();
+    for (let i = 0; i < 400; i++) await inner.setJSON(`claims/old-${i}`, { at: new Date(old).toISOString() });
+    for (let i = 0; i < 5; i++) await inner.setJSON(`cache/old-${i}`, { value: 1, exp: old });
+    for (let i = 0; i < 5; i++) await inner.setJSON(`rl/login/${'d'.repeat(63)}${i}/${old}`, { n: 1 });
+    // Real time from here on, starting three days later.
+    const realStart = Date.now();
+    const base = old + 3 * 86_400_000;
+    ctx.now = () => new Date(base + (Date.now() - realStart));
+
+    const removed = await pruneEphemeral(ctx, 2 * 86_400_000, 1000, 1500);
+    const elapsed = Date.now() - realStart;
+    // 400 claims need 800 slow calls (more than their third of the time); the others still got theirs.
+    expect(await inner.list('cache/')).toEqual([]);
+    expect(await inner.list('rl/')).toEqual([]);
+    const claimsLeft = (await inner.list('claims/')).length;
+    expect(claimsLeft).toBeGreaterThan(0);
+    expect(removed).toBe(400 - claimsLeft + 10);
+    expect(elapsed).toBeLessThan(1500 + 500);
+    // The next run carries on where this one stopped.
+    expect(await pruneEphemeral(ctx, 2 * 86_400_000, 1000, 60_000)).toBe(claimsLeft);
+  });
+
+  it('a prefix that cannot be read does not stop the others, and the failure is reported', async () => {
+    const inner = memoryKV();
+    const kv: KV = {
+      ...inner,
+      async list(prefix) {
+        if (prefix === 'claims/') throw new Error('cannot list claims/');
+        return inner.list(prefix);
+      },
+    };
+    const ctx = makeTestCtx({ kv });
+    await cacheSet(ctx, 'old-cache', 1, 60);
+    await kv.setJSON(`rl/login/${'e'.repeat(64)}/${ctx.now().getTime()}`, { n: 1 });
+    ctx.clock.advance(3 * 86_400_000);
+    await expect(pruneEphemeral(ctx, 2 * 86_400_000)).rejects.toThrow('cannot list claims/');
+    expect(await inner.list('cache/')).toEqual([]);
+    expect(await inner.list('rl/')).toEqual([]);
   });
 });

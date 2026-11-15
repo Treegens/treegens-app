@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { KV } from '../../server/lib/ctx';
-import { blobsKV, fileKV, kvSelfTest, memoryKV, type BlobStoreLike } from '../../server/lib/store';
+import { BLOBS_READ_DEADLINE_MS, blobsKV, fileKV, kvSelfTest, memoryKV, type BlobStoreLike } from '../../server/lib/store';
 
 const tempDirs: string[] = [];
 function tempDir(): string {
@@ -438,6 +438,58 @@ describe('blobsKV adapter', () => {
     const read = await kv.getJSONWithEtag('hosts');
     expect(read?.etag).toBe('"etag-1"');
     expect((await kv.setJSON('hosts', [1, 2], { onlyIfMatch: read!.etag })).modified).toBe(true);
+  });
+
+  it('gives up on a read that hangs (the client retrying a failing store), with a plain error', async () => {
+    expect(BLOBS_READ_DEADLINE_MS).toBe(8000);
+    const fake = fakeBlobStore();
+    await fake.store.setJSON('k', { a: 1 });
+    // Like @netlify/blobs during an outage: it keeps retrying, five seconds apart, and answers much later.
+    const slow = <T>(work: () => Promise<T>): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(work()), 400));
+    const kv = blobsKV(
+      'meeting',
+      () => ({
+        ...fake.store,
+        get: (key, options) => slow(() => fake.store.get(key, options)),
+        getWithMetadata: (key, options) => slow(() => fake.store.getWithMetadata(key, options)),
+        list: (options) =>
+          (async function* () {
+            await slow(async () => undefined);
+            yield* fake.store.list(options);
+          })(),
+      }),
+      { readDeadlineMs: 40 },
+    );
+    for (const [name, read] of [
+      ['getJSON', () => kv.getJSON('k')],
+      ['getJSONWithEtag', () => kv.getJSONWithEtag('k')],
+      ['getBlob', () => kv.getBlob('assets/x')],
+      ['list', () => kv.list('')],
+    ] as const) {
+      const started = Date.now();
+      await expect(read(), name).rejects.toThrow(/did not answer within/);
+      expect(Date.now() - started, name).toBeLessThan(300);
+    }
+  });
+
+  it('never puts a deadline on a write: a conditional write that lands late must not look failed', async () => {
+    const fake = fakeBlobStore();
+    const late = <T>(work: () => Promise<T>): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(work()), 120));
+    const kv = blobsKV(
+      'meeting',
+      () => ({
+        ...fake.store,
+        setJSON: (key, data, options) => late(() => fake.store.setJSON(key, data, options)),
+        delete: (key) => late(() => fake.store.delete(key)),
+      }),
+      { readDeadlineMs: 20 },
+    );
+    await expect(kv.setJSON('claims/x', { at: 'now' }, { onlyIfNew: true })).resolves.toMatchObject({ modified: true });
+    await expect(kv.setJSON('claims/x', { at: 'again' }, { onlyIfNew: true })).resolves.toEqual({ modified: false });
+    // A quick read is not affected by the deadline.
+    expect(await kv.getJSON('claims/x')).toEqual({ at: 'now' });
+    await expect(kv.delete('claims/x')).resolves.toBeUndefined();
+    expect(await kv.getJSON('claims/x')).toBeNull();
   });
 
   it('returns null for missing JSON and deletes through the store', async () => {

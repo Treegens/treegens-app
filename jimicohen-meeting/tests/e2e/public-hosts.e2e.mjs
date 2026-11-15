@@ -183,19 +183,19 @@ export default defineSuite('public-hosts', { mockCreds: true }, async (t) => {
       const emails = await s.outbox({ kind: 'email' });
       s.expect(emails.map((e) => e.to.join(',')).sort(), 'recipients').toEqual([ALEX_GOOGLE, OWNER_GOOGLE, 'nia@example.com']);
       const [jimi] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
-      s.expect(jimi.subject, 'Jimi subject').toBe('New booking: Nia Okafor for Joint session, Wed, Nov 18, 10:30 AM');
+      s.expect(jimi.subject, 'Jimi subject').toBe('New booking: Nia Okafor for Joint session, Wed, Nov 18, 10:30 AM GMT');
       s.expect(jimi.text, 'Jimi text').toContain('10:30 AM to 11:00 AM (Greenwich Mean Time)');
       s.expect(jimi.text, 'Jimi text').toContain('Hi Jimi');
       s.expect(jimi.text, 'Jimi text, also hosting').toContain('Alex Kimani');
       s.expect(jimi.text, 'Jimi text, their time').toContain('11:30 AM (Central European Standard Time)');
       const [alexMail] = await s.outbox({ kind: 'email', to: ALEX_GOOGLE });
-      s.expect(alexMail.subject, 'Alex subject').toBe('New booking: Nia Okafor for Joint session, Wed, Nov 18, 1:30 PM');
+      s.expect(alexMail.subject, 'Alex subject').toBe('New booking: Nia Okafor for Joint session, Wed, Nov 18, 1:30 PM GMT+3');
       s.expect(alexMail.text, 'Alex text').toContain('1:30 PM to 2:00 PM (East Africa Time)');
       s.expect(alexMail.text, 'Alex text').toContain('Hi Alex');
       s.expect(alexMail.text, 'Alex text, also hosting').toContain('Jimi Cohen');
       s.expect(alexMail.text, 'Alex text').toContain('A joint project.');
       const [nia] = await s.outbox({ kind: 'email', to: 'nia@example.com' });
-      s.expect(nia.subject, 'invitee subject').toBe('Confirmed: Joint session with Jimi and Alex, Wed, Nov 18, 11:30 AM');
+      s.expect(nia.subject, 'invitee subject').toBe('Confirmed: Joint session with Jimi and Alex, Wed, Nov 18, 11:30 AM GMT+1');
       s.expect(nia.text, 'invitee text').toContain('11:30 AM to 12:00 PM (Central European Standard Time)');
       s.expect(nia.text, 'invitee text, with').toContain('Jimi Cohen, Alex Kimani');
       await s.screenshotEmail(alexMail, 'host notice for the co-host');
@@ -289,7 +289,7 @@ export default defineSuite('public-hosts', { mockCreds: true }, async (t) => {
       const notices = await s.outbox({ kind: 'email', subject: /^New booking/ });
       s.expect(notices.map((e) => e.to.join(',')), 'host notices').toEqual([emailOf[stored.hostIds[0]]]);
       const [mail] = await s.outbox({ kind: 'email', to: 'robin@example.com' });
-      s.expect(mail.subject, 'invitee subject').toBe(`Confirmed: Talk to the team with ${hostName}, Mon, Nov 23, 10:00 AM`);
+      s.expect(mail.subject, 'invitee subject').toBe(`Confirmed: Talk to the team with ${hostName}, Mon, Nov 23, 10:00 AM GMT+1`);
       await s.screenshot(page, 'round robin confirmation');
     });
 

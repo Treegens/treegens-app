@@ -296,25 +296,55 @@ function openNetlifyStore(name: string): BlobStoreLike {
 }
 
 /**
+ * How long one read may take. The Blobs client retries a 429, any 5xx and network errors five times,
+ * five seconds apart, so a single failing call would otherwise hold a request for 25 seconds before
+ * any error appears (the platform cuts requests off at 30, Twilio's webhooks at 15).
+ */
+export const BLOBS_READ_DEADLINE_MS = 8_000;
+
+/**
+ * Rejects when `work` has not settled after `ms`. The work itself is left to finish (or fail) on its
+ * own, which is harmless for a read. Never used on writes: a conditional write that the client is
+ * still retrying can land after its caller gave up, and then a slot or a claim would be held for
+ * nothing.
+ */
+function readWithin<T>(ms: number, what: string, work: () => Promise<T>): Promise<T> {
+  if (!(ms > 0) || !Number.isFinite(ms)) return work();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const running = work();
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Netlify Blobs did not answer within ${Math.round(ms / 1000)} s (${what})`)), ms);
+  });
+  return Promise.race([running, late]).finally(() => clearTimeout(timer));
+}
+
+export interface BlobsKVOptions {
+  /** deadline for each read (getJSON, getJSONWithEtag, getBlob, list); default BLOBS_READ_DEADLINE_MS */
+  readDeadlineMs?: number;
+}
+
+/**
  * `storeFactory` exists for tests. The store is opened on first use, not at construction:
  * Netlify only provides the Blobs credentials once an invocation is running.
  */
-export function blobsKV(storeName = 'meeting', storeFactory?: () => BlobStoreLike): KV {
+export function blobsKV(storeName = 'meeting', storeFactory?: () => BlobStoreLike, opts?: BlobsKVOptions): KV {
   let cached: BlobStoreLike | null = null;
   const store = (): BlobStoreLike => {
     if (!cached) cached = storeFactory ? storeFactory() : openNetlifyStore(storeName);
     return cached;
   };
+  const deadlineMs = opts?.readDeadlineMs ?? BLOBS_READ_DEADLINE_MS;
+  const read = <T>(what: string, work: () => Promise<T>): Promise<T> => readWithin(deadlineMs, what, work);
 
   return {
     async getJSON<T>(key: string): Promise<T | null> {
       assertKey(key);
-      const value = await store().get(key, { type: 'json' });
+      const value = await read(`read ${key}`, () => store().get(key, { type: 'json' }));
       return value === undefined || value === null ? null : (value as T);
     },
     async getJSONWithEtag<T>(key: string): Promise<{ value: T; etag: string } | null> {
       assertKey(key);
-      const found = await store().getWithMetadata(key, { type: 'json' });
+      const found = await read(`read ${key}`, () => store().getWithMetadata(key, { type: 'json' }));
       if (!found || found.data === null || found.data === undefined) return null;
       // Netlify's edge sends an ETag with every read. Without one a compare-and-swap cannot be trusted,
       // so fail loudly (the local emulation in `netlify dev` is the known case: use scripts/dev-server.ts).
@@ -336,14 +366,18 @@ export function blobsKV(storeName = 'meeting', storeFactory?: () => BlobStoreLik
     async list(prefix: string): Promise<string[]> {
       const keys: string[] = [];
       // `paginate: true` hands back one page per iteration; walking the iterator to its end reads every page.
-      for await (const page of store().list(prefix ? { prefix, paginate: true } : { paginate: true })) {
-        for (const blob of page.blobs) keys.push(blob.key);
+      // The deadline is per page (one request each), so a long listing that is making progress is never cut off.
+      const pages = store().list(prefix ? { prefix, paginate: true } : { paginate: true })[Symbol.asyncIterator]();
+      for (;;) {
+        const page = await read(`list ${prefix || '(everything)'}`, () => pages.next());
+        if (page.done) break;
+        for (const blob of page.value.blobs) keys.push(blob.key);
       }
       return [...new Set(keys)].sort();
     },
     async getBlob(key: string): Promise<{ data: Uint8Array; metadata: Record<string, string> } | null> {
       assertKey(key);
-      const found = await store().getWithMetadata(key, { type: 'arrayBuffer' });
+      const found = await read(`read ${key}`, () => store().getWithMetadata(key, { type: 'arrayBuffer' }));
       if (!found || found.data === null || found.data === undefined) return null;
       return { data: new Uint8Array(found.data as ArrayBuffer), metadata: cleanMetadata(found.metadata) };
     },

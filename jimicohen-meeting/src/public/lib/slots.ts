@@ -172,7 +172,8 @@ export class SlotStore {
         if (generation !== this.generation) return this.status(duration, from, to);
         const network = isApiFailure(e) && e.isNetwork;
         const message = isApiFailure(e) && e.message ? e.message : 'We could not load the available times. Please try again.';
-        const problem: SlotProblem = network ? 'network' : 'error';
+        // A site that is not set up yet takes no bookings: that is no fault to try again on.
+        const problem: SlotProblem = network ? 'network' : isApiFailure(e) && e.code === 'not_open' ? 'inactive' : 'error';
         this.errors.set(key, { problem, message });
         return { state: 'error', problem, message };
       })

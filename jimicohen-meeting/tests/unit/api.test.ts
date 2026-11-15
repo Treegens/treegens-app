@@ -61,6 +61,43 @@ describe('handle()', () => {
   });
 });
 
+describe('co-host routes', () => {
+  it('are exactly the self-service ones, the Google disconnect included', () => {
+    const coHost = allRoutes(makeTestCtx())
+      .filter((r) => r.pattern.startsWith('/host/'))
+      .map((r) => `${r.method} ${r.pattern}`)
+      .sort();
+    expect(coHost).toEqual(['GET /host/:id', 'GET /host/:id/calendars', 'POST /host/:id/google/disconnect', 'PUT /host/:id']);
+  });
+});
+
+describe('Twilio routes', () => {
+  it('are exactly the call steps, texts sent to us, and reports on texts we sent', () => {
+    const twilio = allRoutes(makeTestCtx())
+      .filter((r) => r.pattern.startsWith('/twilio/'))
+      .map((r) => `${r.method} ${r.pattern}`)
+      .sort();
+    expect(twilio).toEqual(['POST /twilio/sms', 'POST /twilio/sms/status', 'POST /twilio/voice/:step']);
+  });
+});
+
+describe('dashboard booking routes', () => {
+  it('are exactly the list, the export, one booking, cancel, no-show and delete', () => {
+    const bookings = allRoutes(makeTestCtx())
+      .filter((r) => r.pattern.startsWith('/admin/bookings'))
+      .map((r) => `${r.method} ${r.pattern}`)
+      .sort();
+    expect(bookings).toEqual([
+      'DELETE /admin/bookings/:id',
+      'GET /admin/bookings',
+      'GET /admin/bookings.csv',
+      'GET /admin/bookings/:id',
+      'POST /admin/bookings/:id/cancel',
+      'POST /admin/bookings/:id/no-show',
+    ]);
+  });
+});
+
 describe('dev routes', () => {
   it('outbox: lists what the mocks recorded, in order, and can be cleared', async () => {
     const ctx = makeTestCtx({ env: { mockProviders: true } });

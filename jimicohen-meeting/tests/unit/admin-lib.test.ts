@@ -10,18 +10,21 @@ vi.mock('../../server/lib/booking', async () => {
 });
 
 import { cleanPurpose, MAX_ASSET_BYTES, parseImageDataUrl, sniffImageType } from '../../server/lib/admin/assets';
-import { countScopes, csvCell, scopeOf, searchTerms, selectEntries, toCsv } from '../../server/lib/admin/bookings';
+import { countScopes, csvCell, eraseRefusal, scopeOf, searchTerms, selectEntries, toCsv } from '../../server/lib/admin/bookings';
 import { freeSlug, slugify } from '../../server/lib/admin/event-types';
 import { assetExists, isWebUrl } from '../../server/lib/admin/fields';
 import { parseRanges, parseSchedules, parseWeekly } from '../../server/lib/admin/schedules';
 import { cleanCustomCss, compactOverride, mergeTheme } from '../../server/lib/admin/theme';
+import { checkSharedHours } from '../../server/lib/admin/overview';
 import { maskMiddle, toAdminHost } from '../../server/lib/admin/view';
 import { seal } from '../../server/lib/crypto';
 import { HttpError } from '../../server/lib/http';
 import { putAsset } from '../../server/lib/repo';
 import { FieldErrors } from '../../server/lib/validate';
-import { DEFAULT_THEME, defaultOwnerHost } from '../../shared/defaults';
-import type { BookingIndexEntry, Host } from '../../shared/types';
+import { DEFAULT_THEME, defaultOwnerHost, newEventType } from '../../shared/defaults';
+import type { AdminHost, Booking, BookingIndexEntry, EventType, Host, Job } from '../../shared/types';
+import { hostGap, unreachableHosts } from '../../src/admin/components/event/reach';
+import { describeTimelineDetail } from '../../src/admin/format';
 import { makeTestCtx, TEST_NOW } from '../helpers/ctx';
 
 describe('csv', () => {
@@ -276,5 +279,175 @@ describe('links, slugs, css, masks', () => {
     expect(view.icsFeeds).toEqual([{ id: 'ics_1', label: 'Work' }]);
     expect(Object.keys(view.google!).sort()).toEqual(['busyCalendarIds', 'email', 'gmailSend', 'status', 'writeCalendarId']);
     expect(toAdminHost(ctx, { ...host, inviteTokenHash: null, google: null, phone: undefined })).toMatchObject({ hasInviteLink: false, google: null });
+  });
+});
+
+describe('joint meeting hours', () => {
+  const owner: Host = { ...defaultOwnerHost(TEST_NOW, 'America/Los_Angeles'), email: 'jimi@example.com' };
+  const coHost = (id: string, name: string, timezone: string, patch: Partial<Host> = {}): Host => ({ ...defaultOwnerHost(TEST_NOW, timezone), id, role: 'member', name, email: `${id}@example.com`, ...patch });
+  const joint = (hostIds: string[], patch: Partial<EventType> = {}): EventType => ({ ...newEventType(TEST_NOW, { id: 'evt_joint', slug: 'joint', title: 'Together', hostIds }), kind: 'collective', ...patch });
+  const nowMs = Date.parse(TEST_NOW);
+
+  it('passes when the hours meet, and for every other kind of meeting', () => {
+    const alex = coHost('host_alex', 'Alex Rivera', 'America/New_York');
+    expect(checkSharedHours({ eventType: joint([owner.id, alex.id]), hosts: [owner, alex], owner, nowMs })).toEqual({ ok: true });
+    const berlin = coHost('host_alex', 'Alex Rivera', 'Europe/Berlin');
+    expect(checkSharedHours({ eventType: joint([owner.id, berlin.id], { kind: 'round_robin' }), hosts: [owner, berlin], owner, nowMs })).toEqual({ ok: true });
+    // Someone no longer on the team is a problem the editor reports itself.
+    expect(checkSharedHours({ eventType: joint([owner.id, 'host_gone']), hosts: [owner], owner, nowMs })).toEqual({ ok: true });
+    // Dates that are over leave nothing to check.
+    expect(checkSharedHours({ eventType: joint([owner.id, berlin.id], { scheduling: { ...joint([]).scheduling, dateRange: { start: '2026-01-05', end: '2026-01-09' } } }), hosts: [owner, berlin], owner, nowMs })).toEqual({ ok: true });
+  });
+
+  it('says why nobody can book a joint meeting, by name and zone', () => {
+    const berlin = coHost('host_alex', 'Alex Rivera', 'Europe/Berlin');
+    const sam = coHost('host_sam', 'Sam Lee', 'Asia/Tokyo');
+    const three = checkSharedHours({ eventType: joint([owner.id, berlin.id, sam.id]), hosts: [owner, berlin, sam], owner, nowMs });
+    expect(three).toEqual({
+      ok: false,
+      reason: 'no_overlap',
+      message:
+        '"Together" cannot be booked: there is no time when you, Alex and Sam are all working. Your hours are in Los Angeles time, Alex\'s hours are in Berlin time and Sam\'s hours are in Tokyo time. Change your hours under Availability, or ask Alex and Sam to change theirs on their private pages.',
+      href: '/admin/availability',
+    });
+    for (const text of [three.message ?? '']) expect(text).not.toContain('—');
+
+    // Two co-hosts without the owner: only they can fix it.
+    const apart = checkSharedHours({ eventType: joint([berlin.id, coHost('host_la', 'Lee Park', 'America/Los_Angeles').id]), hosts: [owner, berlin, coHost('host_la', 'Lee Park', 'America/Los_Angeles')], owner, nowMs });
+    expect(apart).toMatchObject({ ok: false, reason: 'no_overlap', href: '/admin/team' });
+    expect(apart.message).toContain('Ask Alex and Lee to change their hours on their private pages.');
+
+    // The owner has no hours at all.
+    const idle = { ...owner, schedules: [{ id: 'sch_default', name: 'Working hours', weekly: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] }, overrides: [] }] };
+    const alex = coHost('host_alex', 'Alex Rivera', 'America/Los_Angeles');
+    expect(checkSharedHours({ eventType: joint([idle.id, alex.id]), hosts: [idle, alex], owner: idle, nowMs })).toEqual({
+      ok: false,
+      reason: 'no_hours',
+      message: '"Together" cannot be booked: you have no working hours for it in the next 60 days. Set your hours under Availability.',
+      href: '/admin/availability',
+    });
+  });
+
+  it('tells hours that meet too briefly apart from hours that never meet, and names the fixed dates', () => {
+    // Los Angeles and New York share five working hours a day: a 6 hour meeting never fits in them.
+    const ny = coHost('host_sam', 'Sam Lee', 'America/New_York');
+    const long = checkSharedHours({ eventType: joint([owner.id, ny.id], { durations: [360, 480], defaultDuration: 360 }), hosts: [owner, ny], owner, nowMs });
+    expect(long).toMatchObject({ ok: false, reason: 'no_overlap', href: '/admin/availability' });
+    expect(long.message).toBe(
+      '"Together" cannot be booked: the times when you and Sam are both working are never as long as its shortest length, 6 hours. Your hours are in Los Angeles time and Sam\'s hours are in New York time. Change your hours under Availability, or ask Sam to change theirs on their private page.',
+    );
+    // A length that fits is fine.
+    expect(checkSharedHours({ eventType: joint([owner.id, ny.id], { durations: [240], defaultDuration: 240 }), hosts: [owner, ny], owner, nowMs })).toEqual({ ok: true });
+
+    // Fixed dates on a weekend: the dates are part of the answer, so the message says so.
+    const weekend = joint([owner.id, ny.id], { scheduling: { ...joint([]).scheduling, dateRange: { start: '2026-12-05', end: '2026-12-06' } } });
+    expect(checkSharedHours({ eventType: weekend, hosts: [owner, ny], owner, nowMs }).message).toBe(
+      '"Together" cannot be booked: you and Sam have no working hours for it on the dates it can be booked. Set your hours under Availability, and ask Sam to set theirs on their private page. The dates on its Scheduling tab count too.',
+    );
+  });
+});
+
+describe('reminders to the hosts', () => {
+  const adminHost = (id: string, name: string, patch: Partial<AdminHost> = {}): AdminHost => ({
+    ...toAdminHost(makeTestCtx(), { ...defaultOwnerHost(TEST_NOW), id, role: id === 'host_owner' ? 'owner' : 'member', name, email: `${id}@example.com` }),
+    ...patch,
+  });
+
+  it('knows who a text or an email to the hosts does not reach', () => {
+    const owner = adminHost('host_owner', 'Jimi Cohen');
+    const alex = adminHost('host_alex', 'Alex Rivera', { phone: '+14155552671', notify: { email: true, sms: true } });
+    const sam = adminHost('host_sam', 'Sam Lee', { phone: '+14155552672', notify: { email: false, sms: false } });
+    expect(unreachableHosts('sms', [owner, alex, sam]).map((h) => h.id)).toEqual(['host_owner', 'host_sam']);
+    expect(unreachableHosts('email', [owner, alex, sam]).map((h) => h.id)).toEqual(['host_sam']);
+    expect(unreachableHosts('email', [{ ...owner, email: '' }]).map((h) => h.id)).toEqual(['host_owner']);
+    expect(unreachableHosts('call', [owner])).toEqual([]);
+  });
+
+  it('says so, and where it is fixed', () => {
+    const owner = adminHost('host_owner', 'Jimi Cohen');
+    const alex = adminHost('host_alex', 'Alex Rivera');
+    expect(hostGap('sms', [], 'host_owner')).toBeNull();
+    expect(hostGap('sms', [owner], 'host_owner')).toEqual({
+      text: 'You have no mobile number saved, so this text does not reach you. Add it under Settings, next to where your booking notices go.',
+      short: 'Does not reach you yet',
+      href: '/admin/settings#notices',
+      place: 'Open Settings',
+    });
+    expect(hostGap('sms', [alex], 'host_owner')).toMatchObject({ short: 'Does not reach Alex yet', href: '/admin/team', place: 'Open Team' });
+    expect(hostGap('email', [owner, alex], 'host_owner')).toMatchObject({ short: 'Does not reach you and Alex yet', href: '/admin/settings#notices' });
+    for (const gap of [hostGap('sms', [owner], 'host_owner'), hostGap('sms', [alex], 'host_owner'), hostGap('email', [owner, alex], 'host_owner')]) expect(gap!.text).not.toContain('—');
+  });
+
+  it('says what is actually missing: the number or address, or only the switch', () => {
+    const owner = adminHost('host_owner', 'Jimi Cohen');
+    const alex = adminHost('host_alex', 'Alex Rivera');
+    const withNumber = (h: AdminHost): AdminHost => ({ ...h, phone: '+14155552671', notify: { ...h.notify, sms: false } });
+    // The address for booking notices is the very field to fill in, not something "next to" it.
+    expect(hostGap('email', [{ ...owner, email: '' }], 'host_owner')!.text).toBe(
+      'You have no email address saved, so this email does not reach you. Add the address for your booking notices under Settings.',
+    );
+    // A number is saved, only the texts are off: nothing needs adding.
+    expect(hostGap('sms', [withNumber(owner)], 'host_owner')!.text).toBe(
+      'You have texts about bookings switched off, so this text does not reach you. Switch texts on under Settings, next to where your booking notices go.',
+    );
+    expect(hostGap('sms', [withNumber(alex)], 'host_owner')!.text).toBe(
+      'Alex has texts about bookings switched off, so this text does not reach them. Switch their texts on in their details on the Team page, or ask them to on their private page.',
+    );
+    // A co-host's email switch is only on their own page.
+    expect(hostGap('email', [{ ...alex, notify: { email: false, sms: false } }], 'host_owner')!.text).toBe(
+      'Alex has emails about bookings switched off, so this email does not reach them. Ask them to switch emails about bookings on, on their private page.',
+    );
+    // Several people, for different reasons.
+    const sam = adminHost('host_sam', 'Sam Lee');
+    expect(hostGap('sms', [withNumber(alex), sam], 'host_owner')!.text).toBe(
+      'Alex and Sam have no mobile number saved, or texts switched off, so this text does not reach those hosts. Add what is missing in their details on the Team page, or ask them to on their private page.',
+    );
+  });
+});
+
+describe('booking timeline wording', () => {
+  it('names the service that carried a message the way people know it', () => {
+    expect(describeTimelineDetail('to sam@example.com via resend')).toBe('to sam@example.com via Resend');
+    expect(describeTimelineDetail('to sam@example.com via gmail')).toBe('to sam@example.com via Gmail');
+    expect(describeTimelineDetail('to +14155552671 via twilio')).toBe('to +14155552671 via Twilio');
+    expect(describeTimelineDetail('via mock')).toBe('via the test outbox');
+    expect(describeTimelineDetail('to jimi@example.com via mock. Twilio did not confirm it in time.')).toBe('to jimi@example.com via the test outbox. Twilio did not confirm it in time.');
+    // Anything else is left alone.
+    expect(describeTimelineDetail('Booked through an embedded page')).toBe('Booked through an embedded page');
+    expect(describeTimelineDetail('via mockingbird lane')).toBe('via mockingbird lane');
+  });
+});
+
+describe('deleting a booking', () => {
+  const at = Date.parse(TEST_NOW);
+  const booking = (patch: Partial<Booking>): Booking =>
+    ({
+      id: 'bk_1',
+      status: 'confirmed',
+      start: new Date(at + 3_600_000).toISOString(),
+      end: new Date(at + 5_400_000).toISOString(),
+      google: null,
+      timeline: [],
+      ...patch,
+    }) as Booking;
+  const job = (patch: Partial<Job>): Job => ({ key: 'jobs/x', id: 'job_x', type: 'message', bookingId: 'bk_1', dueAt: TEST_NOW, attempt: 0, createdAt: TEST_NOW, ...patch });
+
+  it('only lets go of what is over or cancelled and finished', () => {
+    expect(eraseRefusal(booking({}), [], at)?.code).toBe('upcoming');
+    expect(eraseRefusal(booking({ start: new Date(at - 60_000).toISOString() }), [], at)?.code).toBe('in_progress');
+    expect(eraseRefusal(booking({ start: new Date(at - 7_200_000).toISOString(), end: new Date(at - 3_600_000).toISOString() }), [job({ kind: 'followup' })], at)).toBeNull();
+    // Cancelled and still ahead: only once the cancellation is done.
+    const cancelled = booking({ status: 'cancelled' });
+    expect(eraseRefusal(cancelled, [], at)).toBeNull();
+    expect(eraseRefusal(cancelled, [job({ kind: 'reminder' })], at)).toBeNull();
+    expect(eraseRefusal(cancelled, [job({ kind: 'cancelled' })], at)?.code).toBe('still_cancelling');
+    expect(eraseRefusal(cancelled, [job({ type: 'gcal_sync' })], at)?.code).toBe('still_cancelling');
+    expect(eraseRefusal({ ...cancelled, followUp: { kind: 'cancelled', id: 'f', at: TEST_NOW } }, [], at)?.code).toBe('still_cancelling');
+    const left = eraseRefusal({ ...cancelled, google: { hostId: 'h', calendarId: 'primary', eventId: 'e', error: 'Google Calendar did not answer in time. Trying again shortly.' } }, [], at);
+    expect(left?.code).toBe('calendar_event_left');
+    expect(left?.message).not.toContain('—');
+    // Cancelled and in the past: whatever is left of the cancellation no longer matters.
+    const past = { start: new Date(at - 7_200_000).toISOString(), end: new Date(at - 3_600_000).toISOString() };
+    expect(eraseRefusal({ ...cancelled, ...past, followUp: { kind: 'cancelled', id: 'f', at: TEST_NOW } }, [job({ kind: 'cancelled' })], at)).toBeNull();
   });
 });

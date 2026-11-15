@@ -103,6 +103,11 @@ export interface HostGoogle {
   gmailSend: boolean; // gmail.send scope granted
   status: 'ok' | 'needs_reconnect';
   connectedAt: ISODateTime;
+  /**
+   * When Google said the refresh token runs out: it only says so while the OAuth consent screen is in
+   * "Testing", where a connection lasts 7 days. Absent for a connection that does not expire.
+   */
+  refreshExpiresAt?: ISODateTime;
 }
 
 export interface IcsFeed {
@@ -232,6 +237,10 @@ export interface TimelineEntry {
   at: ISODateTime;
   type: string; // "created", "reminder_email_sent", "call_completed", ...
   detail?: string;
+  /** the reminder call this entry is about (calls/<id>). What was said stays on the call record, which is pruned after 90 days. */
+  callId?: string;
+  /** dashboard view only: the call's transcript, read from the call record while it is kept. Never stored on the booking. */
+  transcript?: string;
 }
 
 export interface Booking {
@@ -262,9 +271,28 @@ export interface Booking {
     error?: string;
   } | null;
   attendance: { confirmedAt?: ISODateTime; confirmedVia?: 'call' | 'sms' | 'link'; noShow?: boolean };
-  cancellation?: { at: ISODateTime; by: 'invitee' | 'host' | 'assistant'; reason?: string } | null;
+  cancellation?: {
+    at: ISODateTime;
+    by: 'invitee' | 'host' | 'assistant';
+    reason?: string;
+    /** 'host_link': cancelled on the booking page opened from a host's link (a host email or the dashboard), not from the dashboard itself */
+    via?: 'host_link';
+  } | null;
   rescheduledFromStart?: ISODateTime | null;
   rescheduleCount: number;
+  /**
+   * Work after a change that is not finished yet: the calendar, the reminders and the notices. Written in
+   * the same save that makes the change, removed once that work is done. reconcileBookings finishes it
+   * when the request that started it was cut off.
+   */
+  followUp?: {
+    kind: 'created' | 'rescheduled' | 'cancelled';
+    id: string;
+    at: ISODateTime;
+    by?: 'invitee' | 'host' | 'assistant';
+    /** with 'rescheduled': hosts the move handed the meeting to (a round robin whose host left); they are told of a new booking */
+    newHostIds?: string[];
+  };
   source: 'page' | 'embed' | 'admin';
   utm?: Record<string, string>;
   timeline: TimelineEntry[];
@@ -319,6 +347,8 @@ export interface SendResult {
   id?: string;
   error?: string;
   skipped?: string; // reason when deliberately not sent (no consent, outside call window, not configured)
+  /** with ok false: the request went out but no answer came back in time, so it may have been delivered */
+  uncertain?: boolean;
 }
 
 // ───────────────────────────── Voice calls ─────────────────────────────
@@ -416,6 +446,13 @@ export interface PublicEventType {
   minNoticeMinutes: number;
   maxDaysAhead: number;
   themeOverride?: Partial<Theme> | null;
+  /**
+   * Google Calendar sends the invitee (and any guests) an invitation for a booking of this meeting: the event
+   * type asks for it and the host who will organise it has Google connected. Absent: not known (treat as yes).
+   */
+  calendarInvite?: boolean;
+  /** Reminder channels this meeting really uses. `call`: it has a reminder call. Absent: as site.features says. */
+  reminderChannels?: { call: boolean };
 }
 
 export interface PublicSite {
@@ -424,9 +461,11 @@ export interface PublicSite {
   /** resolved asset URLs for theme images */
   themeAssets: { coverUrl: string | null; logoUrl: string | null; backgroundUrl: string | null };
   eventTypes: PublicEventType[]; // public + active only
-  booking: { reminderOptInDefault: boolean; consentText: string; privacyUrl?: string };
+  /** consentTextSms: the wording shown when only texts are agreed to (no reminder call). Absent: consentText. */
+  booking: { reminderOptInDefault: boolean; consentText: string; consentTextSms?: string; privacyUrl?: string };
   assistantName: string;
-  features: { sms: boolean; calls: boolean };
+  /** email: the site emails invitees (a confirmation, reminders). Absent: not known (treat as yes). */
+  features: { sms: boolean; calls: boolean; email?: boolean };
   ownerTimezone: IanaZone;
 }
 
@@ -443,6 +482,7 @@ export interface SlotsResponse {
   hostTimezone: IanaZone;
   /** set when availability could not be computed (calendar connection problem) */
   unavailableReason?: 'calendar_error' | 'inactive';
+  // Before first-run setup GET /public/slots and POST /public/bookings answer 503 `not_open`.
 }
 
 export interface CreateBookingRequest {
@@ -465,6 +505,11 @@ export interface CreateBookingRequest {
   website?: string;
   /** ms the form was open; bots submit instantly */
   elapsedMs?: number;
+  /**
+   * Random key made once per booking form and sent again on every retry. A retry whose first try did
+   * go through (only the answer got lost) gets that booking back instead of a second one.
+   */
+  requestKey?: string;
 }
 
 export interface PublicBooking {
@@ -483,7 +528,13 @@ export interface PublicBooking {
   redirectUrl?: string;
   canReschedule: boolean;
   canCancel: boolean;
-  calendarLinks: { google: string; outlook: string; ics: string };
+  /**
+   * What reaches the invitee, so the page promises nothing else. email: this site emails them (confirmation,
+   * reminders). calendarInvite: Google sends them an invitation for the event. Absent: not known (treat both as yes).
+   */
+  delivery?: { email: boolean; calendarInvite: boolean };
+  /** outlook: Outlook.com (personal accounts); office365: Microsoft 365 work and school calendars */
+  calendarLinks: { google: string; outlook: string; office365?: string; ics: string };
   cancellation?: { at: ISODateTime; by: string; reason?: string } | null;
   rescheduledFromStart?: ISODateTime | null;
   attendanceConfirmed: boolean;
@@ -545,6 +596,8 @@ export interface AdminHost {
     busyCalendarIds: string[];
     writeCalendarId: string;
     gmailSend: boolean;
+    /** the connection stops working then (consent screen still in "Testing"); see HostGoogle */
+    refreshExpiresAt?: ISODateTime;
   } | null;
   icsFeeds: { id: string; label: string }[];
   hasInviteLink: boolean;
@@ -676,6 +729,8 @@ export interface SharedHoursCheck {
   message?: string;
   /** when not ok: 'no_overlap' = everyone has hours but never at the same time, 'no_hours' = someone has none at all */
   reason?: 'no_overlap' | 'no_hours';
+  /** when not ok: the dashboard page where it is fixed (Availability for the owner's hours, Team for a co-host's) */
+  href?: string;
 }
 
 /** GET /admin/bootstrap — everything the dashboard needs on load */
