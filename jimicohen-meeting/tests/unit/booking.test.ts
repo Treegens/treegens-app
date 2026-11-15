@@ -22,6 +22,7 @@ import {
   toPublicEventType,
   toPublicSite,
   verifyManageToken,
+  type ReconcileResult,
 } from '../../server/lib/booking';
 import { hmacHex, seal } from '../../server/lib/crypto';
 import type { Env, KV } from '../../server/lib/ctx';
@@ -3748,6 +3749,38 @@ describe('a booking whose writes ran into storage trouble', () => {
     const { booking } = await createBooking(ctx, keyed());
     expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([booking.id]);
     expect(await jobsOf(ctx, (j) => j.kind === 'confirmation' && j.bookingId === booking.id)).toHaveLength(1);
+  });
+
+  it('does not let reconcile remove the entry a retry took over, when it reads the index after the take-over', async () => {
+    const trouble = indexTroubleKV();
+    let beforeRecord: (() => Promise<void>) | null = null;
+    const kv: KV & { arm(): void } = {
+      ...trouble,
+      arm: () => trouble.arm(),
+      async setJSON(key, value, opts) {
+        // Between the retry's index write and its record write: the half-hourly housekeeping runs right then.
+        if (beforeRecord && key.startsWith('bookings/') && opts?.onlyIfNew) {
+          const run = beforeRecord;
+          beforeRecord = null;
+          await run();
+        }
+        return trouble.setJSON(key, value, opts);
+      },
+    };
+    const ctx = await setup({ kv });
+    kv.arm();
+    expect(await createBooking(ctx, keyed()).then(() => 'booked', () => 'failed')).toBe('failed');
+    expect(await reconcileBookings(ctx)).toMatchObject({ removed: 0 }); // the entry without a record is noted
+    ctx.clock.advance(30 * 60_000);
+    let housekeeping: ReconcileResult | null = null;
+    beforeRecord = async () => {
+      housekeeping = await reconcileBookings(ctx);
+    };
+    const retry = await createBooking(ctx, keyed());
+    expect(housekeeping).toMatchObject({ checked: 1, removed: 0 });
+    // The retry's booking keeps its time: the owner sees it and nobody else can book it.
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([retry.booking.id]);
+    expect(await failure(createBooking(ctx, request(GRACE)))).toMatchObject({ code: 'slot_taken' });
   });
 
   it('does not let reconcile remove an entry a retry has just taken over', async () => {

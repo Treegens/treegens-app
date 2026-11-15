@@ -1463,6 +1463,41 @@ describe('scheduleBookingJobs: reminder calls', () => {
     ]);
   });
 
+  it('keeps the evening call of a booking made days ago when the rules are planned again in the hour before it', async () => {
+    // Booked at 4 AM (TEST_NOW) for 7 AM the next day: the call goes in the last calling hour, 8 PM the evening before.
+    const world = await callOnly();
+    const start = iso('2026-11-17T07:00');
+    const booking = await book(world, { start, end: at(start, 30 * MIN), invitee: inNewYork }, 'created');
+    expect(await calls(world.ctx)).toEqual([`reminder/call/invitee @ ${iso('2026-11-16T20:00')}`]);
+    // 7:15 PM: the owner changes a reminder of the meeting type, so every reminder is planned again.
+    world.ctx.clock.set(iso('2026-11-16T19:15'));
+    await scheduleBookingJobs(world.ctx, booking, world.eventType, null);
+    expect(await calls(world.ctx)).toEqual([`reminder/call/invitee @ ${iso('2026-11-16T20:00')}`]);
+    expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual([]);
+  });
+
+  it('still keeps the call off a booking made minutes before the evening call when the rules are planned again', async () => {
+    const world = await callOnly();
+    world.ctx.clock.set(iso('2026-11-16T19:15'));
+    const start = iso('2026-11-17T07:00');
+    const booking = await book(world, { start, end: at(start, 30 * MIN), invitee: inNewYork, createdAt: iso('2026-11-16T19:15'), timeline: [] }, 'created');
+    expect(await calls(world.ctx)).toEqual([]);
+    world.ctx.clock.set(iso('2026-11-16T19:20'));
+    await scheduleBookingJobs(world.ctx, booking, world.eventType, null);
+    expect(await calls(world.ctx)).toEqual([]);
+    expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['the only time inside calling hours before the meeting was right after booking']);
+
+    // A rule added after a move names the move.
+    const moved = await callOnly();
+    moved.ctx.clock.set(iso('2026-11-16T19:20'));
+    const later = { ...moved.eventType, reminders: [DEFAULT_RULES[1]] };
+    const movedBooking = makeBooking({ start, end: at(start, 30 * MIN), invitee: inNewYork, rescheduleCount: 1, timeline: [{ at: TEST_NOW, type: 'created' }, { at: iso('2026-11-16T19:10'), type: 'rescheduled' }] });
+    await saveBooking(moved.ctx, movedBooking);
+    await scheduleBookingJobs(moved.ctx, movedBooking, later, null);
+    expect(await calls(moved.ctx)).toEqual([]);
+    expect(await timelineDetail(moved.ctx, 'reminder_call_skipped')).toEqual(['the only time inside calling hours before the meeting was right after the meeting was moved']);
+  });
+
   it('says nothing when the booking is planned again after its call already rang', async () => {
     const world = await callOnly();
     const start = iso('2026-11-17T08:15');
@@ -1533,6 +1568,34 @@ describe('planMissedReminderCalls', () => {
     expect(await planMissedReminderCalls(world.ctx, WIDE)).toEqual({ planned: 0, failed: 0, left: 0 });
     expect(await callJobs(world.ctx)).toHaveLength(1);
   });
+
+  it('plans no second call for a booking whose call was cut off while it was being placed', async () => {
+    // A 7 AM meeting, its call (2 hours before) in the last calling hour the evening before, at 8 PM.
+    const world = await makeWorld({ rules: [DEFAULT_RULES[1]], now: iso('2026-11-17T12:00') });
+    const start = iso('2026-11-18T07:00');
+    const booking = await book(world, { start, end: at(start, 30 * MIN), invitee: inNewYork }, null);
+    await mutateBookingIndex(world.ctx, (entries) => [...entries, indexEntryOf(booking)]);
+    const [call] = await callJobs(world.ctx);
+    expect(call.dueAt).toBe(iso('2026-11-17T20:00'));
+    // 8 PM: a run takes the call and is cut off while placing it. The phone may have rung, so the runner
+    // gives it up rather than ring again.
+    world.ctx.clock.set(iso('2026-11-17T20:00'));
+    expect(await claim(world.ctx, `job-${call.id}-0`)).toBe(true);
+    await runDueJobs(world.ctx);
+    world.ctx.clock.set(iso('2026-11-17T20:11'));
+    await runDueJobs(world.ctx);
+    expect(await callJobs(world.ctx)).toEqual([]);
+    expect(await timelineDetail(world.ctx, 'reminder_call_failed', booking.id)).toEqual(['interrupted before it finished (not retried, so nobody is called twice)']);
+    // 8:30 PM: the owner opens calling hours at 5 AM. The 5 AM time now fits, but this booking may have been called.
+    world.ctx.clock.set(iso('2026-11-17T20:30'));
+    const site = await getSite(world.ctx);
+    await saveSite(world.ctx, { ...site, assistant: { ...site.assistant, ...WIDE } });
+    expect(await planMissedReminderCalls(world.ctx, WIDE)).toEqual({ planned: 0, failed: 0, left: 0 });
+    expect(await callJobs(world.ctx)).toEqual([]);
+    world.ctx.clock.set(iso('2026-11-18T05:00'));
+    await runDueJobs(world.ctx);
+    expect(callSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('replanReminderCalls', () => {
@@ -1565,6 +1628,18 @@ describe('replanReminderCalls', () => {
     world.ctx.clock.set(iso('2026-11-18T09:00'));
     expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
     expect(callSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves a call of a booking made days ago to the evening before, also when the hours change in the hour before it', async () => {
+    // An 8:45 AM meeting: its call (2 hours before, 6:45) waits for calling hours to open at 8.
+    const world = await withCalls(['2026-11-18T08:45']);
+    const [before] = await listJobs(world.ctx);
+    expect(before.dueAt).toBe(iso('2026-11-18T08:00'));
+    // 7:15 PM the evening before, calling hours change to 9 AM to 9 PM: 9 AM is too close to the start, so the
+    // call goes to the last calling hour before it, 8 PM, as it would have if the hours had changed earlier.
+    world.ctx.clock.set(iso('2026-11-17T19:15'));
+    expect(await replanReminderCalls(world.ctx, NINE_TO_NINE)).toEqual({ moved: 1, failed: 0, left: 0 });
+    expect(await callJobs(world.ctx)).toEqual([['bkg_call0', before.id, iso('2026-11-17T20:00')]]);
   });
 
   it('moves calls back out again, and leaves calls the new hours do not change', async () => {

@@ -97,7 +97,8 @@ const REMINDER_MIN_LEAD_MS = 2 * 60_000;
 const CALL_MIN_LEAD_MS = 30 * 60_000;
 /**
  * A reminder call moved earlier, to the last calling hour before the rule's moment, must ring at least this
- * long after the booking (or the change) it is planned for: a call straight after booking reminds nobody.
+ * long after the booking was made or moved: a call straight after booking reminds nobody. Counted from the
+ * booking, not from a later change to the rules or the calling hours, which the invitee knows nothing of.
  */
 const CALL_MIN_GAP_MS = 60 * 60_000;
 export const SMS_MAX_LENGTH = 300;
@@ -311,7 +312,7 @@ export async function replanReminderCalls(
       }
       const oldMs = Date.parse(job.dueAt);
       const idealMs = ruleDueMs(rule, startMs, Date.parse(booking.end));
-      const nextMs = planCallTime({ idealMs, startMs, nowMs, timezone: booking.invitee.timezone, hours });
+      const nextMs = planCallTime({ idealMs, startMs, nowMs, madeMs: lastChangeOf(booking).ms, timezone: booking.invitee.timezone, hours });
       // The rule's own moment has gone by (the old hours had moved the call later). Moving it would make
       // saving the settings ring people straight away, so a time the new hours still allow is kept.
       const keep = nextMs !== null && nextMs < nowMs && insideCallHours(oldMs, booking.invitee.timezone, hours);
@@ -398,8 +399,9 @@ export async function planMissedReminderCalls(
     try {
       const eventType = withCalls.get(booking.eventTypeId);
       if (!eventType || booking.status !== 'confirmed' || !inviteeReachable(booking, 'call')) continue;
-      // Called once already (or a call is on its way): never a second one from here.
-      if ((booking.timeline ?? []).some((t) => t.type === 'reminder_call_sent')) continue;
+      // Called once already, or a try that may have rung (one cut off while it was placed, one Twilio did not
+      // answer in time): never a second one from here. Only a call that was never tried is planned.
+      if ((booking.timeline ?? []).some((t) => t.type === 'reminder_call_sent' || t.type === 'reminder_call_failed')) continue;
       const missing = planBookingJobs({ booking, eventType, hosts: [], nowMs, immediate: null, callHours }).filter(
         (plan) => isInviteeCall(plan) && !queued.has(`${booking.id}|${plan.ruleId}`),
       );
@@ -432,7 +434,7 @@ export async function planMissedReminderCalls(
   return result;
 }
 
-/** Removes every pending message for the booking except the ones that announce or follow a cancellation. *//** Removes every pending message for the booking except the ones that announce or follow a cancellation. */
+/** Removes every pending message for the booking except the ones that announce or follow a cancellation. */
 export async function cancelBookingJobs(ctx: Ctx, bookingId: string): Promise<void> {
   await removeBookingJobs(ctx, bookingId, (j) => j.type === 'message' && j.kind !== 'cancelled' && j.kind !== 'host_alert');
 }
@@ -512,9 +514,9 @@ function atLocalHour(day: DateTime, hour: number): DateTime {
  *   1. the rule's own moment (`idealMs`) when that is inside calling hours
  *   2. otherwise the moment calling hours next open, when that still leaves 30 minutes before the start
  *      (a 9:00 meeting with a "2 hours before" call rings at 8:00, not at 7:00)
- *   3. otherwise the start of the last calling hour before the rule's moment, when that is still at
- *      least an hour ahead (an 8:15 meeting rings the evening before, but not a few minutes after it was
- *      booked that evening)
+ *   3. otherwise the start of the last calling hour before the rule's moment, when that is still ahead
+ *      and at least an hour after the booking was made or moved (an 8:15 meeting rings the evening before,
+ *      but not a few minutes after it was booked that evening)
  * The call is placed only when the result is still inside calling hours at that moment, so a
  * daylight saving jump can never move it outside them.
  */
@@ -527,7 +529,7 @@ export function planCallTime(p: CallPlanInput): number | null {
 
   const { openingMs, lastHourMs } = fallbackCallTimes(idealMs, tz, open, close);
   if (openingMs > nowMs && openingMs <= startMs - CALL_MIN_LEAD_MS && insideCallHours(openingMs, tz, hours)) return openingMs;
-  if (lastHourMs >= nowMs + CALL_MIN_GAP_MS && lastHourMs < startMs && insideCallHours(lastHourMs, tz, hours)) return lastHourMs;
+  if (lastHourMs > nowMs && lastHourMs >= (p.madeMs ?? nowMs) + CALL_MIN_GAP_MS && lastHourMs < startMs && insideCallHours(lastHourMs, tz, hours)) return lastHourMs;
   return null;
 }
 
@@ -536,9 +538,32 @@ export interface CallPlanInput {
   idealMs: number;
   startMs: number;
   nowMs: number;
+  /**
+   * When the booking was made or last moved (see CALL_MIN_GAP_MS). Left out, it is `nowMs`: the plan is for
+   * a booking or a move being made right now.
+   */
+  madeMs?: number;
   /** the invitee's zone */
   timezone: string;
   hours?: Partial<CallHours> | null;
+}
+
+/**
+ * When the booking was made or last moved, and which of the two: what a reminder call must not follow too
+ * closely. -Infinity when the record does not say.
+ */
+function lastChangeOf(b: Pick<Booking, 'createdAt' | 'timeline'>): { ms: number; kind: 'created' | 'rescheduled' } {
+  let ms = Date.parse(b.createdAt ?? '');
+  let kind: 'created' | 'rescheduled' = 'created';
+  for (const t of b.timeline ?? []) {
+    if (t?.type !== 'rescheduled') continue;
+    const at = Date.parse(t.at);
+    if (Number.isFinite(at) && !(at <= ms)) {
+      ms = at;
+      kind = 'rescheduled';
+    }
+  }
+  return { ms: Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY, kind };
 }
 
 /** planCallTime's two fall-backs: when calling hours next open after `idealMs`, and the start of their last hour before it. */
@@ -555,21 +580,25 @@ function fallbackCallTimes(idealMs: number, tz: string, open: number, close: num
  * Why planCallTime found no time for a call, in facts the note on the booking can be built from. Pure.
  *   passed        planned earlier, the call would have rung at a moment that has already gone by
  *   rightAway     the last calling hour before the rule's moment has begun already, or begins less than an
- *                 hour from now: a call then would come straight after the booking, which reminds nobody
+ *                 hour after the booking was made or moved: a call then would come straight after it, which
+ *                 reminds nobody
+ *   afterChange   rightAway, because of a booking or a move made before this plan (`madeMs`): the note names that
  *   lastHalfHour  calling hours open before the meeting, but less than half an hour before it starts
  */
-export function noCallTimeFacts(p: CallPlanInput): { passed: boolean; rightAway: boolean; lastHalfHour: boolean } {
+export function noCallTimeFacts(p: CallPlanInput): { passed: boolean; rightAway: boolean; afterChange: boolean; lastHalfHour: boolean } {
   const { idealMs, startMs, nowMs, timezone: tz, hours } = p;
-  const none = { passed: false, rightAway: false, lastHalfHour: false };
+  const none = { passed: false, rightAway: false, afterChange: false, lastHalfHour: false };
   if (!Number.isFinite(idealMs) || !Number.isFinite(startMs) || !Number.isFinite(nowMs) || !validZone(tz)) return none;
   const { open, close } = callHoursOf(hours);
   if (open === close) return none;
-  const earlier = planCallTime({ ...p, nowMs: Number.NEGATIVE_INFINITY });
+  const earlier = planCallTime({ ...p, nowMs: Number.NEGATIVE_INFINITY, madeMs: Number.NEGATIVE_INFINITY });
   const { openingMs, lastHourMs } = fallbackCallTimes(idealMs, tz, open, close);
-  const lastHourSoon = lastHourMs > nowMs && lastHourMs < nowMs + CALL_MIN_GAP_MS && lastHourMs < startMs && insideCallHours(lastHourMs, tz, hours);
+  const madeMs = p.madeMs ?? nowMs;
+  const lastHourSoon = lastHourMs > nowMs && lastHourMs < madeMs + CALL_MIN_GAP_MS && lastHourMs < startMs && insideCallHours(lastHourMs, tz, hours);
   return {
     passed: earlier !== null && earlier <= nowMs,
     rightAway: nowMs < startMs && (insideCallHours(nowMs, tz, hours) || lastHourSoon),
+    afterChange: nowMs < startMs && lastHourSoon && madeMs < nowMs,
     lastHalfHour: openingMs > nowMs && openingMs < startMs && openingMs > startMs - CALL_MIN_LEAD_MS && insideCallHours(openingMs, tz, hours),
   };
 }
@@ -620,11 +649,14 @@ export function planBookingJobs(p: {
     const kind: MessageKind = before ? 'reminder' : 'followup';
     if (rule.channel === 'call' && rule.audience !== 'host' && inviteeReachable(booking, 'call')) {
       // Calls only ring inside calling hours on the invitee's clock, so the time is chosen inside them now
-      // rather than finding out at the last moment that the call cannot be made.
-      const call = { idealMs: dueMs, startMs, nowMs, timezone: booking.invitee.timezone, hours: p.callHours };
+      // rather than finding out at the last moment that the call cannot be made. A booking planned again (the
+      // rules or the calling hours changed) counts the gap after booking from when it was made or moved.
+      const made = p.immediate ? { ms: nowMs, kind: p.immediate } : lastChangeOf(booking);
+      const call = { idealMs: dueMs, startMs, nowMs, madeMs: made.ms, timezone: booking.invitee.timezone, hours: p.callHours };
       const callMs = planCallTime(call);
       if (callMs === null) {
-        const note = noCallTimeNote(noCallTimeFacts(call), p.immediate);
+        const facts = noCallTimeFacts(call);
+        const note = noCallTimeNote(facts, p.immediate ?? (facts.afterChange ? made.kind : null));
         if (note) p.onNoCallTime?.(rule.id, note);
         continue;
       }

@@ -2632,9 +2632,12 @@ export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Pr
     result.checked++;
 
     if (!record) {
-      // Created in the index, never saved: the visitor saw an error and holds nothing.
-      if (before[entry.id] !== 'missing') {
-        suspects[entry.id] = 'missing';
+      // Created in the index, never saved: the visitor saw an error and holds nothing. The entry itself is
+      // what was seen on two runs, not just its id: a retry of the same request (same id) may take the time
+      // over for its record, and its new entry is a different one, still in flight.
+      const missing = entry.req || entry.takenAt !== undefined ? `missing:${entry.req ?? ''}:${entry.takenAt ?? ''}` : 'missing';
+      if (before[entry.id] !== missing) {
+        suspects[entry.id] = missing;
         continue;
       }
       if (await getBooking(ctx, entry.id)) continue;
