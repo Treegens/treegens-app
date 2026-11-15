@@ -461,6 +461,29 @@ describe('manage link routes', () => {
     expect((await getBooking(ctx, booking.id))?.attendance).toEqual({ confirmedAt: NOW, confirmedVia: 'link' });
   });
 
+  it('does not take "I\'ll be there" from a host\'s link: only the invitee can say it', async () => {
+    const ctx = await setup();
+    const { booking, manageToken: token } = await book(ctx);
+    const res = await post(ctx, `/public/bookings/${booking.id}/confirm`, { t: token, as: 'host' });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe('host_link');
+    expect((await getBooking(ctx, booking.id))?.attendance).toEqual({});
+  });
+
+  it('tells the page why a meeting of a paused event type cannot be moved, and when the owner is looking', async () => {
+    const ctx = await setup();
+    const ownerCookie = (c: TestCtx) => cookiePair(sessionSetCookie(c, 1));
+    const { booking, manageToken: token } = await book(ctx);
+    const view = async (query: string, cookie?: string) =>
+      ((await (await handle(apiRequest('GET', `/public/bookings/${booking.id}?t=${token}${query}`, cookie ? { cookie } : {}), ctx)).json()) as GetBookingResponse).booking;
+    expect(await view('')).not.toHaveProperty('rescheduleBlocked');
+    expect(await view('')).not.toHaveProperty('ownerView');
+    await saveEventType(ctx, { ...(await getEventType(ctx, 'evt_intro'))!, active: false });
+    expect(await view('')).toMatchObject({ canReschedule: false, canCancel: true, rescheduleBlocked: 'paused' });
+    expect(await view('&as=host')).not.toHaveProperty('ownerView');
+    expect(await view('&as=host', ownerCookie(ctx))).toMatchObject({ canReschedule: false, rescheduleBlocked: 'paused', ownerView: true });
+  });
+
   it('requires the CSRF header and a matching origin on every state-changing manage route', async () => {
     const ctx = await setup();
     const { booking, manageToken: token } = await book(ctx);

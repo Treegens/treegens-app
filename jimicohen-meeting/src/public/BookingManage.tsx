@@ -54,6 +54,9 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
   const toast = useToast();
   const phase = phaseOf(booking);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const hostFirst = firstName(booking.hosts[0]?.name ?? site.profile.name);
+  // Opened from a host's link, the page speaks to a host about the invitee, not to the invitee.
+  const inviteeFirst = firstName(booking.invitee.name);
 
   const base = `/booking/${encodeURIComponent(booking.id)}`;
   // A host's link keeps saying so on every page it leads to.
@@ -88,12 +91,14 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
   };
 
   const confirmAttendance = async () => {
+    // Only the invitee can say they will be there: a host's view of the page shows whether they have.
+    if (asHost) return;
     setConfirming(true);
     setProblem('');
     try {
       const next = await confirmBooking(booking.id, token);
       onUpdated(next);
-      attendToast.current = toast.success('Thank you', `${firstName(booking.hosts[0]?.name ?? site.profile.name)} knows you will be there.`);
+      attendToast.current = toast.success('Thank you', `${hostFirst} knows you will be there.`);
     } catch (e) {
       setProblem(isApiFailure(e) && e.message ? e.message : 'We could not record that. Please try again.');
     } finally {
@@ -112,7 +117,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
     const params = new URLSearchParams(routerLocation.search);
     params.delete('confirm');
     navigate({ pathname: routerLocation.pathname, search: `?${params.toString()}` }, { replace: true, state: routerLocation.state });
-    if (phase === 'upcoming' && !booking.attendanceConfirmed) void confirmAttendance();
+    if (phase === 'upcoming' && !booking.attendanceConfirmed && !asHost) void confirmAttendance();
     // Runs once per page load: the ref guards against a second run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantsConfirm, view]);
@@ -163,15 +168,28 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
 
   const title = phase === 'cancelled' ? 'This meeting was cancelled' : phase === 'past' ? 'This meeting has taken place' : booking.eventTitle;
   const who = hostNames(booking.hosts) || site.profile.name;
+  const theInvitee = inviteeFirst || 'the invitee';
   // A host's link may be used by any host: only a name the server knows for sure is shown.
   const cancelledBy =
     booking.cancellation?.by === 'invitee'
-      ? 'you'
+      ? asHost
+        ? theInvitee
+        : 'you'
       : booking.cancellation?.by === 'assistant'
-        ? 'you, on the reminder call'
+        ? asHost
+          ? `${theInvitee}, on the reminder call`
+          : 'you, on the reminder call'
         : booking.cancellation?.byName
           ? firstName(booking.cancellation.byName)
           : 'the host';
+  // Who reads the reason written below. The invitee's goes to the hosts. The owner's (signed in) goes to the
+  // invitee. One written through a host's link goes to the hosts only: the invitee holds that link too, so
+  // what is typed there is never mailed to the address on the booking.
+  const reasonHint = !asHost
+    ? `${hostFirst} will see this with the cancellation.`
+    : booking.ownerView
+      ? `${inviteeFirst || 'The invitee'} will see this with the cancellation.`
+      : `Only the hosts see this. ${inviteeFirst || 'The invitee'} is told that the meeting is cancelled.`;
 
   // ───────────── cancel ─────────────
 
@@ -196,7 +214,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
               void doCancel();
             }}
           >
-            <Field label="Anything you would like to say?" optional hint={`${firstName(booking.hosts[0]?.name ?? site.profile.name)} will see this with the cancellation.`}>
+            <Field label="Anything you would like to say?" optional hint={reasonHint}>
               <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} maxLength={500} autoGrow placeholder="A short reason helps, but it is up to you" />
             </Field>
             {problem ? (
@@ -229,7 +247,27 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
 
   // ───────────── details ─────────────
 
-  const blocked = view === 'reschedule' ? 'This meeting can no longer be rescheduled from here.' : view === 'cancel' ? 'This meeting can no longer be cancelled from here.' : '';
+  const paused = view === 'reschedule' && booking.rescheduleBlocked === 'paused';
+  const blocked = paused
+    ? asHost
+      ? `"${booking.eventTitle}" is paused, so this meeting cannot be moved.`
+      : 'This meeting can no longer be rescheduled from here.'
+    : view === 'reschedule'
+      ? 'This meeting can no longer be rescheduled from here.'
+      : view === 'cancel'
+        ? 'This meeting can no longer be cancelled from here.'
+        : '';
+  // What to do instead. A host is never told to contact the host.
+  const blockedNext =
+    phase === 'past'
+      ? 'It has already taken place.'
+      : !asHost
+        ? `Please contact ${hostFirst} directly.`
+        : paused
+          ? booking.ownerView
+            ? 'Turn it back on under Event types in your dashboard to move it, or cancel the meeting.'
+            : 'The owner can turn it back on under Event types, or cancel the meeting.'
+          : 'It has already started. The owner can still change it from the dashboard.';
 
   return (
     <div className="bm">
@@ -248,7 +286,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
             <CircleAlert size={18} aria-hidden="true" />
             <div className="bw-notice__body">
               <p className="bw-notice__title">{blocked}</p>
-              <p className="bw-notice__text">{phase === 'past' ? 'It has already taken place.' : `Please contact ${firstName(booking.hosts[0]?.name ?? site.profile.name)} directly.`}</p>
+              <p className="bw-notice__text">{blockedNext}</p>
             </div>
           </div>
         ) : null}
@@ -271,7 +309,7 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
             )}
             {phase === 'upcoming' && booking.attendanceConfirmed ? (
               <Badge tone="primary" icon={<ThumbsUp size={12} />}>
-                You said you will be there
+                {asHost ? `${inviteeFirst || 'The invitee'} said they will be there` : 'You said you will be there'}
               </Badge>
             ) : null}
           </div>
@@ -280,9 +318,13 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
           </h1>
           <p className="bm__lead">
             {phase === 'upcoming' ? (
-              <>
-                {firstName(booking.invitee.name)}, here is your meeting with {who}.
-              </>
+              asHost ? (
+                <>{inviteeFirst ? `${inviteeFirst}'s` : 'The'} meeting with {who}.</>
+              ) : (
+                <>
+                  {inviteeFirst}, here is your meeting with {who}.
+                </>
+              )
             ) : phase === 'past' ? (
               <>
                 {booking.eventTitle} with {who}.
@@ -329,11 +371,13 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
 
         {phase === 'upcoming' ? (
           <>
-            {booking.attendanceConfirmed ? null : (
+            {asHost ? (
+              booking.attendanceConfirmed ? null : <p className="bm__hint">{inviteeFirst || 'The invitee'} has not said yet whether they will be there.</p>
+            ) : booking.attendanceConfirmed ? null : (
               <div className="bm__attend">
                 <div className="bm__attendtext">
                   <p className="bm__attendtitle">Still coming?</p>
-                  <p className="bm__attendhint">Let {firstName(booking.hosts[0]?.name ?? site.profile.name)} know with one tap.</p>
+                  <p className="bm__attendhint">Let {hostFirst} know with one tap.</p>
                 </div>
                 <Button variant="primary" iconLeft={<ThumbsUp size={16} />} loading={confirming} loadingLabel="Saving" onClick={confirmAttendance}>
                   I'll be there

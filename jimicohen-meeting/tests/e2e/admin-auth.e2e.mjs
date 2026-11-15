@@ -211,14 +211,16 @@ export default defineSuite('admin-auth', { mockCreds: true }, async (t) => {
 
     await s.step('after a new code is deployed, it sets the new password', async () => {
       // As if MEETING_SETUP_CODE_HASH had been changed and the site deployed again: the record now says an
-      // older code set the password, so the code this server has deployed is a new one.
+      // older code set the password (and is the only one ever used), so the code this server has deployed is a new one.
       const file = path.join(s.server.dataDir, `${encodeURIComponent('auth/admin')}.json`);
       const record = JSON.parse(fs.readFileSync(file, 'utf8'));
-      fs.writeFileSync(file, JSON.stringify({ ...record, setupCodeHash: createHash('sha256').update('the code from before').digest('hex') }));
+      const before = createHash('sha256').update('the code from before').digest('hex');
+      fs.writeFileSync(file, JSON.stringify({ ...record, setupCodeHash: before, usedSetupCodeHashes: [before] }));
 
       await page.getByRole('button', { name: 'Save my new password' }).click();
       await page.getByRole('heading', { name: /^Good (morning|afternoon|evening), Jimi$/, level: 1 }).waitFor();
       s.expect((await s.kv('auth/admin')).passwordVersion, 'password version').toBe(setUpVersion + 1);
+      s.expect((await s.kv('auth/admin')).usedSetupCodeHashes, 'codes that may never set a password again').toEqual([before, createHash('sha256').update(SETUP_CODE).digest('hex')]);
       const cookies = await page.context().cookies();
       s.expect(cookies.find((c) => c.name === 'mtg_device'), 'device cookie').toMatchObject({ httpOnly: true, path: '/meeting', sameSite: 'Lax' });
     });

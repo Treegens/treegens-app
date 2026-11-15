@@ -105,6 +105,8 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, on
   const past = !!b && b.status === 'confirmed' && Date.parse(b.end) <= now;
   // Only what is over or cancelled can be erased. An upcoming meeting is cancelled first (the server says so too).
   const deletable = !!b && (b.status === 'cancelled' || past);
+  // A meeting of a paused event type cannot be moved (the booking page would only say so): say why here instead.
+  const pausedType = b ? data.eventTypes.find((e) => e.id === b.eventTypeId && e.active !== true) : undefined;
 
   // Whose Google Calendar the event of this booking is on, for the question about leaving it there.
   const holder = b?.google ? data.hosts.find((h) => h.id === b.google?.hostId) : undefined;
@@ -181,9 +183,15 @@ export function BookingDrawer({ bookingId, preview, zone, onClose, onChanged, on
                   <Button variant="danger-soft" onClick={() => setCancelOpen(true)}>
                     Cancel meeting
                   </Button>
-                  <ButtonLink variant="secondary" href={rescheduleUrlOf(asHostUrl(b.manageUrl))} external iconRight={<ArrowUpRight size={16} />}>
-                    Reschedule
-                  </ButtonLink>
+                  {pausedType ? (
+                    <span className="adm-quiet adm-bk__paused">
+                      &quot;{pausedType.title}&quot; is paused, so this meeting cannot be moved. Turn it back on under Event types to move it.
+                    </span>
+                  ) : (
+                    <ButtonLink variant="secondary" href={rescheduleUrlOf(asHostUrl(b.manageUrl))} external iconRight={<ArrowUpRight size={16} />}>
+                      Reschedule
+                    </ButtonLink>
+                  )}
                 </>
               ) : past ? (
                 <>
@@ -391,13 +399,17 @@ function Details({ booking: b, zone }: { booking: AdminBooking; zone: string }) 
           <dt>Calendar</dt>
           <dd>
             {b.status === 'cancelled' ? (
-              // A cancelled meeting's event should be gone: say so when it is still there.
-              leftOnCalendar ? (
+              // A cancelled meeting's event should be gone: say so while it is on its way off, and when it is still there.
+              b.calendarRemoving ? (
+                <span className="adm-quiet">Being removed</span>
+              ) : leftOnCalendar ? (
                 <span className="adm-bk__warn">
                   <CircleAlert size={14} aria-hidden="true" /> Still on Google Calendar: {leftOnCalendar}
                 </span>
-              ) : (
+              ) : b.google ? (
                 <span className="adm-quiet">Removed</span>
+              ) : (
+                <span className="adm-quiet">Not connected</span>
               )
             ) : b.google?.error ? (
               <span className="adm-bk__warn">

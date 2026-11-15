@@ -23,7 +23,7 @@ vi.mock('../../server/cron', () => ({ runScheduled: async () => ({}) }));
 import { handle } from '../../server/api';
 import { rateLimitKey, sessionSetCookie } from '../../server/lib/auth';
 import { open, randomToken, sha256Hex } from '../../server/lib/crypto';
-import { GMAIL_SEND_SCOPE, GOOGLE_CALENDAR_SCOPES } from '../../server/lib/google';
+import { GMAIL_SEND_SCOPE, GOOGLE_CALENDAR_SCOPES, readGoogleState } from '../../server/lib/google';
 import * as repo from '../../server/lib/repo';
 import { absoluteReturnUrl } from '../../server/routes/google';
 import type { Host } from '../../shared/types';
@@ -101,7 +101,9 @@ function connect(ctx: TestCtx, o: ConnectOptions = {}): Promise<Response> {
   if (o.returnTo !== undefined) query.set('return', o.returnTo);
   if (o.t !== undefined) query.set('t', o.t);
   if (o.switchAccount) query.set('switch', '1');
-  const headers: Record<string, string> = { ...(o.browser ? { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' } : {}), ...o.headers };
+  // A Connect button on one of the app's own pages, unless the test says where the click came from.
+  const from = o.headers ?? { 'sec-fetch-site': 'same-origin' };
+  const headers: Record<string, string> = { ...(o.browser ? { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' } : {}), ...from };
   return handle(apiRequest('GET', `/google/connect?${query.toString()}`, { cookie: o.cookie, headers, baseUrl: o.baseUrl }), ctx);
 }
 
@@ -593,13 +595,35 @@ describe('a connection belongs to the browser that started it', () => {
     expect(page.searchParams.get('reason')).toMatch(/only be connected from your dashboard/);
     // Older browsers without Sec-Fetch-Site are judged by where they say they came from.
     expect((await connect(w.ctx, { cookie: w.cookie, headers: { referer: 'https://evil.example/page' } })).status).toBe(403);
-    // From our own pages, a bookmark or a typed address it works.
-    const ours: Record<string, string>[] = [{ 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }, { referer: `${TEST_BASE_URL}/admin/team` }, {}];
+    // From our own pages it works.
+    const ours: Record<string, string>[] = [{ 'sec-fetch-site': 'same-origin' }, { referer: `${TEST_BASE_URL}/admin/team` }];
     for (const headers of ours) {
       expect((await connect(w.ctx, { cookie: w.cookie, host: 'host_alex', headers })).status, JSON.stringify(headers)).toBe(302);
     }
-    // A co-host's private link only ever opens their own record, so where it was clicked does not matter.
-    expect((await connect(w.ctx, { host: 'host_alex', t: w.alexToken, headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(302);
+    // A link opened from a mail app or typed in ("none"), or with nothing to say where it came from, is not one of our pages.
+    for (const headers of [{ 'sec-fetch-site': 'none' }, {}] as Record<string, string>[]) {
+      expect((await connect(w.ctx, { cookie: w.cookie, host: 'host_alex', headers })).status, JSON.stringify(headers)).toBe(403);
+    }
+  });
+
+  it("does not let a co-host's connect link, sent to someone else, put that person's calendar on the co-host's record", async () => {
+    const w = await world();
+    // Whoever clicks goes through Google's consent screen with their own account, so where the click came from matters here too.
+    for (const headers of [{ 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }, { 'sec-fetch-site': 'none' }, { referer: 'https://evil.example/page' }, {}] as Record<string, string>[]) {
+      const res = await connect(w.ctx, { host: 'host_alex', t: w.alexToken, switchAccount: true, headers });
+      expect(res.status, JSON.stringify(headers)).toBe(403);
+      expect((await res.json()).error.code).toBe('start_from_your_page');
+      expect(res.headers.get('set-cookie')).toBeNull();
+    }
+    // A browser is sent to the co-host's own page (which names them), with a sentence.
+    const page = locationOf(await connect(w.ctx, { host: 'host_alex', t: w.alexToken, browser: true, returnTo: '/meeting/admin/integrations', headers: { 'sec-fetch-site': 'cross-site' } }));
+    expect(`${page.origin}${page.pathname}`).toBe(`${TEST_BASE_URL}/host/host_alex`);
+    expect(page.searchParams.get('reason')).toMatch(/only be connected from this page/);
+    // Pressing Connect on that page works, and the way back always leads to it, whatever the link asked for.
+    const started = await connect(w.ctx, { host: 'host_alex', t: w.alexToken, returnTo: '/meeting/admin/integrations' });
+    expect(started.status).toBe(302);
+    const state = new URL(started.headers.get('location')!).searchParams.get('state')!;
+    expect(readGoogleState(w.ctx, state)?.returnTo).toBe(`/meeting/host/host_alex?t=${encodeURIComponent(w.alexToken)}`);
   });
 
   it("turns a connection started on the app's own address away with a sentence, on the public address", async () => {

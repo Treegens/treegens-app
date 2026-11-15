@@ -29,6 +29,7 @@
  *   Google is best effort. A slow or failing Google call never costs the booking: the problem is noted
  *   on booking.google.error and a gcal_sync job repeats the work.
  */
+import { CALENDAR_PENDING } from '../../shared/calendar';
 import { smsOnlyConsentText } from '../../shared/defaults';
 import { sanitizeCustomCss } from '../../shared/theme';
 import type {
@@ -67,6 +68,7 @@ import {
   cacheSet,
   claim,
   createBookingRecord,
+  deleteBooking,
   getBooking,
   getBookingIndex,
   getEventType,
@@ -151,7 +153,6 @@ const IMMEDIATE_JOBS_BUDGET_MS = 8000;
 
 const GENERIC_REFUSAL = 'Could not complete the booking. Please try again.';
 const BOOKING_NOT_FOUND = 'We could not find that booking. Check the link in your confirmation email.';
-const CALENDAR_PENDING = 'Google Calendar did not answer in time. Trying again shortly.';
 const CALENDAR_RECONNECT = 'Google Calendar needs to be reconnected.';
 const MEET_PENDING = 'Google has not finished creating the Meet link yet. Trying again shortly.';
 /** Tries a gcal_sync job gets (MAX_ATTEMPTS in jobs.ts). A Meet link still missing after the last one is reported to the owner. */
@@ -533,6 +534,9 @@ function publicBookingOf(ctx: Ctx, b: Booking, hosts: Host[], eventType: EventTy
     // What the page may promise: an email from us, an invitation from Google, both or neither.
     delivery: { email: email && isEmail(b.invitee.email), calendarInvite: invitationSent(b, byId, eventType) },
   };
+  // Why the page cannot offer a move it would otherwise offer, so it can say so to whoever is looking.
+  if (open && eventType && eventType.active !== true) out.rescheduleBlocked = 'paused';
+  if (rules === 'owner') out.ownerView = true;
   const message = eventType?.confirmation?.message?.trim();
   if (message) out.confirmationMessage = message;
   const redirectUrl = eventType?.confirmation?.redirectUrl?.trim();
@@ -1180,10 +1184,13 @@ function tooManyUpcoming(): HttpError {
   );
 }
 
-/** Texts and calls go to numbers nobody has verified, so one number can only be given on a few bookings a day. */
-async function limitTextedBookings(ctx: Ctx, phone: string): Promise<void> {
+/**
+ * Texts and calls go to numbers nobody has verified, so one number can only be given on a few bookings a
+ * day. The place is taken before the booking is made and given back when it is not made after all.
+ */
+async function limitTextedBookings(ctx: Ctx, phone: string): Promise<RateLimitHit> {
   try {
-    await rateLimit(ctx, 'book-phone', phone, TEXTED_BOOKINGS_PER_PHONE_PER_DAY, DAY_SEC);
+    return await rateLimitTake(ctx, 'book-phone', phone, TEXTED_BOOKINGS_PER_PHONE_PER_DAY, DAY_SEC);
   } catch (err) {
     if (!(err instanceof HttpError) || err.status !== 429) throw err;
     throw new HttpError(
@@ -1234,6 +1241,35 @@ async function takeDailyBooking(ctx: Ctx, email: string, hostFirstName: string):
 function alreadyBooked(ctx: Ctx, booking: Booking): { booking: Booking; manageToken: string } {
   ctx.log('info', 'booking: a repeated request got the booking its first try made', { bookingId: booking.id });
   return { booking, manageToken: manageToken(ctx, booking.id) };
+}
+
+/**
+ * alreadyBooked for the record a retry found. When the try that saved it was cut off before its follow-up
+ * (the record still carries the 'created' marker, and that try is surely over), the follow-up is done now,
+ * so the visitor is not shown a booking that nobody was told about.
+ */
+async function handBack(ctx: Ctx, booking: Booking, eventType: EventType, startedMs: number, opts?: BookingActionOptions): Promise<{ booking: Booking; manageToken: string }> {
+  const marker = booking.followUp;
+  if (booking.status !== 'confirmed' || marker?.kind !== 'created' || !(Date.parse(marker.at) <= ctx.now().getTime() - REQUEST_CEILING_MS)) return alreadyBooked(ctx, booking);
+  const followed = await followUpBooking(ctx, booking.id, marker, eventType, { calendarMode: 'reconcile', calendarBudgetMs: calendarBudget(ctx, startedMs, opts), fallback: booking, note: true });
+  runImmediateJobs(ctx, booking.id, followed.pending);
+  return alreadyBooked(ctx, (await getBooking(ctx, booking.id).catch(() => null)) ?? followed.booking);
+}
+
+/**
+ * An index entry of this very request (its id comes from the form's key, the meeting and the time) whose
+ * booking record was never written, from a try that is surely over: it failed after taking the time. A
+ * retry takes such an entry over instead of being asked to wait for a first try that no longer runs.
+ */
+function leftoverOfThisRequest(entry: BookingIndexEntry, eventType: EventType, input: BookingInput, nowMs: number): boolean {
+  return (
+    entry.status === 'confirmed' &&
+    entry.eventTypeId === eventType.id &&
+    Date.parse(entry.start) === input.startMs &&
+    (entry.inviteeEmail ?? '').toLowerCase() === input.email.toLowerCase() &&
+    typeof entry.takenAt === 'number' &&
+    entry.takenAt <= nowMs - REQUEST_CEILING_MS
+  );
 }
 
 function stillSaving(): HttpError {
@@ -1290,9 +1326,17 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   const requestKey = readRequestKey(raw.requestKey);
   const keyedId = requestKey ? bookingIdForKey(ctx, requestKey, eventType.id, input.startMs) : null;
   const earlier = keyedId ? await getBooking(ctx, keyedId) : null;
-  if (earlier && sameRequest(earlier, eventType, input)) return alreadyBooked(ctx, earlier);
+  // A record of this request that is not in the index holds no time: an earlier try wrote it, then failed
+  // and gave the time back. It is a booking only once the time is taken again, below. (Its follow-up never
+  // ran, so it still carries the 'created' marker: nobody was told of it, it has no calendar event.)
+  let orphan: Booking | null = null;
+  if (earlier && sameRequest(earlier, eventType, input)) {
+    const unlisted = earlier.status === 'confirmed' && earlier.followUp?.kind === 'created' && !(await getBookingIndex(ctx)).some((e) => e.id === earlier.id);
+    if (!unlisted) return handBack(ctx, earlier, eventType, startedMs, opts);
+    orphan = earlier;
+  }
   // That id already holds somebody else's booking (a key that was not random after all): a new id then.
-  const id = keyedId && !earlier ? keyedId : randomId('bkg');
+  const id = keyedId && (!earlier || orphan) ? keyedId : randomId('bkg');
 
   await rateLimit(ctx, 'book-email', mailboxOf(input.email), BOOKINGS_PER_EMAIL_PER_HOUR, HOUR_SEC);
 
@@ -1321,17 +1365,33 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
     index: await getBookingIndex(ctx),
     ownBookingBuffers: s.buffers,
   };
-  // Its first try took the time a moment ago and is still saving the record.
-  if (query.index.some((e) => e.id === id)) throw stillSaving();
-  const first = checkSlot(query, startMs);
+  const own = query.index.find((e) => e.id === id);
+  // Another retry of this request has just taken the time again for its record.
+  if (own && orphan) return alreadyBooked(ctx, orphan);
+  // Its first try took the time a moment ago and is still saving the record. Or it took the time and then
+  // failed before the record was written: once that try is surely over, this one takes the entry over.
+  const leftover = own && leftoverOfThisRequest(own, eventType, input, nowMs) ? own : null;
+  if (own && !leftover) throw stillSaving();
+  const others = leftover ? query.index.filter((e) => e.id !== id) : query.index;
+  // What is left of this request when the time turns out to be gone: an entry or a record that holds nothing.
+  const letGo = async (): Promise<void> => {
+    if (leftover) {
+      await quietly(ctx, 'releasing the time of a booking that was never saved', id, () =>
+        mutateBookingIndex(ctx, (entries) => (entries.some((e) => e.id === id && e.req === leftover.req) ? entries.filter((e) => !(e.id === id && e.req === leftover.req)) : { abort: 'gone' })),
+      );
+    }
+    if (orphan) await quietly(ctx, 'removing a booking record that lost its time', id, () => deleteBooking(ctx, id));
+  };
+  const first = checkSlot({ ...query, index: others }, startMs);
   if (!first.ok) {
     // The page offered this time from a calendar answer that can be a minute old. It is wrong now: drop it,
     // so the list the visitor goes back to (and anyone else's) is built from the calendars as they are.
     if (first.reason === 'busy') await forgetHostBusy(ctx, eventHosts.map((h) => h.id));
     if (unknownBecauseUnread(external, first.reason)) throw calendarUnavailable();
+    await letGo();
     throw slotTaken(first.reason);
   }
-  if (upcomingForEmail(query.index, input.email, nowMs) >= MAX_UPCOMING_PER_EMAIL) throw tooManyUpcoming();
+  if (upcomingForEmail(others, input.email, nowMs) >= MAX_UPCOMING_PER_EMAIL) throw tooManyUpcoming();
 
   // Everything the record needs is read before the time is taken, so nothing sits between the two writes below.
   const features = await twilioFeatures(ctx).catch(() => ({ sms: false, calls: false }));
@@ -1341,13 +1401,19 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   // The day's bookings for this email address. Its place is taken now, so requests sent together cannot
   // pass the limit, and given back on every way out below that does not end in a new booking.
   const daily = await takeDailyBooking(ctx, input.email, firstName(eventHosts[0]?.name ?? ''));
-  const notMade = async (err: unknown): Promise<never> => {
+  let phonePlace: RateLimitHit | null = null;
+  // Every way out below that does not end in a new booking gives both places back.
+  const refundAll = async (): Promise<void> => {
     await daily.refund();
+    await phonePlace?.refund();
+  };
+  const notMade = async (err: unknown): Promise<never> => {
+    await refundAll();
     throw err;
   };
   // Counted only for a request that is about to take a free time: a visitor who was unlucky with a time
   // keeps their allowance, and only bookings that really text or call a number use it up.
-  if (input.phone && (sms || call)) await limitTextedBookings(ctx, input.phone).catch(notMade);
+  if (input.phone && (sms || call)) phonePlace = await limitTextedBookings(ctx, input.phone).catch(notMade);
 
   // Step 4: take it. The check runs again inside the swap, on the index as it is at that instant.
   const startIso = new Date(startMs).toISOString();
@@ -1363,13 +1429,21 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
         assigned = [...present.hostIds];
         return { abort: 'ours' };
       }
-      // The same request, a moment earlier (a double submit, a retry racing its first try).
-      return { abort: 'duplicate' };
+      // The same request, a moment earlier (a double submit, a retry racing its first try). Unless it is
+      // the leftover this request takes over: then the time is checked again without it.
+      if (!(leftover && present.req === leftover.req && present.takenAt === leftover.takenAt)) return { abort: 'duplicate' };
     }
-    if (upcomingForEmail(entries, input.email, nowMs) >= MAX_UPCOMING_PER_EMAIL) return { abort: 'booking_limit' };
-    const again = checkSlot({ ...query, index: entries }, startMs);
+    const rest = present ? entries.filter((e) => e.id !== id) : entries;
+    if (upcomingForEmail(rest, input.email, nowMs) >= MAX_UPCOMING_PER_EMAIL) return { abort: 'booking_limit' };
+    const again = checkSlot({ ...query, index: rest }, startMs);
     if (!again.ok) return { abort: again.reason };
-    assigned = eventType.kind === 'round_robin' ? [pickRoundRobinHost(again.hostIds, entries, nowMs)] : [...again.hostIds];
+    if (orphan) {
+      // The record already names its hosts: the time is only this request's again when they are free.
+      if (!orphan.hostIds.every((h) => again.hostIds.includes(h))) return { abort: 'busy' };
+      assigned = [...orphan.hostIds];
+    } else {
+      assigned = eventType.kind === 'round_robin' ? [pickRoundRobinHost(again.hostIds, rest, nowMs)] : [...again.hostIds];
+    }
     const entry: BookingIndexEntry = {
       id,
       start: startIso,
@@ -1381,12 +1455,19 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
       inviteeEmail: input.email,
       eventTitle: eventType.title,
       req: mark,
+      takenAt: nowMs,
     };
-    return [...entries, entry];
-  }).catch(notMade);
+    return [...rest, entry];
+  }).catch(async (err: unknown) => {
+    // The swap failed on the read that checks a refused write: the write may have gone through. Look once more.
+    const mine = (await getBookingIndex(ctx).catch(() => [] as BookingIndexEntry[])).find((e) => e.id === id && e.req === mark);
+    if (!mine) return notMade(err);
+    assigned = [...mine.hostIds];
+    return { ok: false as const, reason: 'ours' };
+  });
   if (!taken.ok && taken.reason !== 'ours') {
-    // Not made by this request: its place among the day's bookings goes back (an earlier try that did make it counted itself).
-    await daily.refund();
+    // Not made by this request: its places among the day's bookings go back (an earlier try that did make it counted itself).
+    await refundAll();
     if (taken.reason === 'contention') throw new HttpError(503, 'busy', 'The server is busy right now. Please try again in a moment.');
     if (taken.reason === 'booking_limit') throw tooManyUpcoming();
     if (taken.reason === 'duplicate') {
@@ -1394,6 +1475,7 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
       if (twin && sameRequest(twin, eventType, input)) return alreadyBooked(ctx, twin);
       throw stillSaving();
     }
+    await letGo();
     throw slotTaken(taken.reason as SlotRejection);
   }
 
@@ -1416,7 +1498,8 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   const invitee: Booking['invitee'] = { name: input.name, email: input.email, timezone: input.timezone };
   if (input.phone) invitee.phone = input.phone;
   if (input.locale) invitee.locale = input.locale;
-  const marker = newFollowUp(ctx, 'created');
+  // A record that got its time back keeps its own marker: the follow-up below is the one it never had.
+  const marker = orphan?.followUp ?? newFollowUp(ctx, 'created');
   const record: Booking = {
     id,
     eventTypeId: eventType.id,
@@ -1447,19 +1530,35 @@ export async function createBooking(ctx: Ctx, req: CreateBookingRequest, opts?: 
   if (input.utm) record.utm = input.utm;
 
   let written: { created: boolean; booking: Booking };
-  try {
-    // Create-only: two tries of the same request (same key, same id) that both got through the index
-    // write one record between them, and the second hands back the first one's booking.
-    written = await createBookingRecord(ctx, record);
-  } catch (err) {
-    // Without the record the time would stay blocked for nobody: give it back before reporting the failure.
-    await quietly(ctx, 'releasing the time of a booking that could not be saved', id, () =>
-      mutateBookingIndex(ctx, (entries) => entries.filter((e) => e.id !== id)),
-    );
-    return notMade(err);
+  if (orphan) {
+    written = { created: true, booking: orphan };
+  } else {
+    try {
+      // Create-only: two tries of the same request (same key, same id) that both got through the index
+      // write one record between them, and the second hands back the first one's booking.
+      written = await createBookingRecord(ctx, record);
+    } catch (err) {
+      // The write may have gone through with only its answer lost (and the read that checks for that failed
+      // too). A record that is on file keeps its time. Only one that is surely not there gives the time back,
+      // and when even that cannot be told the entry stays: reconcileBookings removes one that never gets a
+      // record, and finishes the follow-up of one that has it.
+      const onFile = await getBooking(ctx, id).catch(() => undefined);
+      if (onFile && sameRequest(onFile, eventType, input) && onFile.followUp?.id === marker.id) {
+        written = { created: true, booking: onFile };
+      } else if (onFile && sameRequest(onFile, eventType, input)) {
+        written = { created: false, booking: onFile };
+      } else {
+        if (onFile === null) {
+          await quietly(ctx, 'releasing the time of a booking that could not be saved', id, () =>
+            mutateBookingIndex(ctx, (entries) => (entries.some((e) => e.id === id && e.req === mark) ? entries.filter((e) => !(e.id === id && e.req === mark)) : { abort: 'gone' })),
+          );
+        }
+        return notMade(err);
+      }
+    }
   }
   if (!written.created) {
-    await daily.refund();
+    await refundAll();
     if (sameRequest(written.booking, eventType, input)) return alreadyBooked(ctx, written.booking);
     throw stillSaving();
   }
@@ -1571,7 +1670,7 @@ async function followUpCancellation(ctx: Ctx, booking: Booking, marker: FollowUp
 const CANCELLED_BY: Record<'invitee' | 'host' | 'assistant' | 'host_link' | 'owner_page', string> = {
   invitee: 'Cancelled by the invitee',
   host: 'Cancelled by the host',
-  assistant: 'Cancelled by the invitee on the reminder call',
+  assistant: 'Cancelled by the invitee on the reminder call, after confirming twice',
   host_link: 'Cancelled by a host, from the booking page',
   owner_page: 'Cancelled by the owner, from the booking page',
 };
@@ -1628,7 +1727,9 @@ export async function cancelBooking(
   let changed = false;
   const saved = await updateBooking(ctx, bookingId, (b) => {
     if (b.status === 'cancelled') {
-      changed = false;
+      // Already cancelled: by somebody else, or by this very request (its save went through, its answer was
+      // lost and something else wrote to the record meanwhile). Its own marker tells the two apart.
+      changed = b.followUp?.id === marker.id;
       return b;
     }
     changed = true;
@@ -1732,7 +1833,7 @@ export async function rescheduleBooking(
   if (by === 'invitee' && !(Date.parse(booking.start) > nowMs)) {
     throw new HttpError(410, 'too_late', 'This meeting has already started, so it can no longer be moved.');
   }
-  if (by === 'invitee' && (booking.rescheduleCount ?? 0) >= MAX_SELF_SERVICE_MOVES) {
+  if (by === 'invitee' && movesOnThePage(booking) >= MAX_SELF_SERVICE_MOVES) {
     throw new HttpError(
       409,
       'move_limit',
@@ -1745,7 +1846,8 @@ export async function rescheduleBooking(
   const startMs = Date.parse(p.startIso);
   const endMs = startMs + booking.durationMin * MINUTE_MS;
   if (startMs === Date.parse(booking.start)) {
-    throw new HttpError(422, 'invalid', 'That is the time you already have. Pick a different one to move your meeting.', { start: 'This is your current time.' });
+    // Its own code: a retry of a move whose answer was lost lands here, and the page then shows the move as made.
+    throw new HttpError(422, 'same_time', 'That is the time you already have. Pick a different one to move your meeting.', { start: 'This is your current time.' });
   }
 
   const s = await loadScheduling(ctx);
@@ -1808,6 +1910,13 @@ export async function rescheduleBooking(
   const moved = await mutateBookingIndex(ctx, (entries) => {
     const mine = entries.find((e) => e.id === booking.id) ?? null;
     if (mine && mine.status !== 'confirmed') return { abort: 'cancelled' };
+    // The entry already holds this very move, from where this request found it: its own write, whose answer
+    // was lost while somebody else wrote to the index, or a twin request asking for the same move. The move
+    // is in place; the record below follows it (and a twin is not counted twice there).
+    if (mine && seen && mine.start === startIso && mine.end === endIso && seen.start === booking.start && seen.end === booking.end) {
+      assigned = [...mine.hostIds];
+      return { abort: 'in_place' };
+    }
     if (!!mine !== !!seen || (mine && seen && (mine.start !== seen.start || mine.end !== seen.end))) return { abort: 'changed' };
     const again = checkSlot({ ...query, index: entries }, startMs);
     if (!again.ok) return { abort: again.reason };
@@ -1825,7 +1934,7 @@ export async function rescheduleBooking(
     };
     return mine ? entries.map((e) => (e.id === booking.id ? entry : e)) : [...entries, entry];
   });
-  if (!moved.ok) {
+  if (!moved.ok && moved.reason !== 'in_place') {
     if (moved.reason === 'contention') throw new HttpError(503, 'busy', 'The server is busy right now. Please try again in a moment.');
     if (moved.reason === 'cancelled') throw new HttpError(410, 'cancelled', 'This booking was cancelled, so it cannot be moved. Please book a new time.');
     if (moved.reason === 'changed') throw changedElsewhere();
@@ -1849,10 +1958,17 @@ export async function rescheduleBooking(
         return b;
       }
       applied = true;
+      // Our own write, run again because its answer was lost while something else wrote to the record: the
+      // move is ours, and so is its follow-up.
+      if (b.followUp?.id === marker.id) {
+        twin = false;
+        return b;
+      }
       // A second request that asked for the very same move at the same moment, and was let through by the
       // index because the list it wanted was already in place: the move is done, it is not counted twice.
       twin = b.start === startIso && b.end === endIso && b.rescheduledFromStart === booking.start;
       if (twin) return b;
+      const pageMoves = movesOnThePage(b);
       return {
         ...b,
         start: startIso,
@@ -1860,7 +1976,10 @@ export async function rescheduleBooking(
         hostIds: [...assigned],
         invitee: timezone ? { ...b.invitee, timezone } : b.invitee,
         rescheduledFromStart: b.start,
+        // Every move, for the calendar files (SEQUENCE). The moves made on the booking page are counted
+        // apart: the owner's own moves do not use up the ones the page allows.
         rescheduleCount: (b.rescheduleCount ?? 0) + 1,
+        inviteeMoves: by === 'invitee' ? pageMoves + 1 : pageMoves,
         attendance: {},
         followUp: marker,
         timeline: [...(b.timeline ?? []), { at, type: 'rescheduled', detail: movedFrom }],
@@ -1886,6 +2005,16 @@ export async function rescheduleBooking(
   const followed = await followUpBooking(ctx, bookingId, marker, eventType, { calendarMode: 'push', calendarBudgetMs: calendarBudget(ctx, nowMs, opts), fallback: saved, note: true });
   runImmediateJobs(ctx, bookingId, followed.pending);
   return (await getBooking(ctx, bookingId).catch(() => null)) ?? followed.booking;
+}
+
+/**
+ * Moves made on the booking page (by the invitee, or through a host's link, which the invitee holds as
+ * well), which the cap of MAX_SELF_SERVICE_MOVES counts. A booking saved before they were counted apart
+ * reads as all of its moves, which is the safe side.
+ */
+function movesOnThePage(b: Booking): number {
+  const n = Number.isFinite(b.inviteeMoves) ? (b.inviteeMoves as number) : (b.rescheduleCount ?? 0);
+  return Math.max(0, Math.trunc(n));
 }
 
 function changedElsewhere(): HttpError {
@@ -2509,7 +2638,10 @@ export async function reconcileBookings(ctx: Ctx, opts?: { limit?: number }): Pr
         continue;
       }
       if (await getBooking(ctx, entry.id)) continue;
-      const done = await mutateBookingIndex(ctx, (list) => list.filter((e) => e.id !== entry.id));
+      // Only the entry as it was seen: a retry of the same request may have just taken it over for its record.
+      const done = await mutateBookingIndex(ctx, (list) =>
+        list.some((e) => e.id === entry.id && e.req === entry.req && e.takenAt === entry.takenAt) ? list.filter((e) => e.id !== entry.id) : { abort: 'changed' },
+      );
       if (done.ok) {
         result.removed++;
         ctx.log('warn', 'booking: removed an index entry that never got its booking record', { bookingId: entry.id, start: entry.start });
@@ -2591,6 +2723,8 @@ async function completeInterruptedMove(ctx: Ctx, entry: BookingIndexEntry): Prom
       hostIds: [...entry.hostIds],
       rescheduledFromStart: b.start,
       rescheduleCount: (b.rescheduleCount ?? 0) + 1,
+      // Who moved it is not known: counted as a move made on the booking page, which is the safe side.
+      inviteeMoves: movesOnThePage(b) + 1,
       attendance: {},
       followUp: marker,
       timeline: [...(b.timeline ?? []), { at, type: 'rescheduled', detail: `Moved from ${b.start} (finished after an interruption)` }],

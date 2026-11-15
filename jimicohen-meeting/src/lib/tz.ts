@@ -553,6 +553,11 @@ function zoneIds(): string[] {
   return Array.from(set);
 }
 
+/** The words for a zone's offset in its search text: "gmt-10 utc-10". */
+function offsetWords(offset: string): string {
+  return `${offset} ${offset.replace('GMT', 'UTC')}`.toLowerCase();
+}
+
 /** Display data for one zone at an instant. Works for ids that are not in the list too. */
 export function zoneInfo(zone: string, now: Instant = Date.now(), locale?: string): ZoneInfo {
   const offsetMin = zoneOffsetMinutes(zone, now);
@@ -561,7 +566,8 @@ export function zoneInfo(zone: string, now: Instant = Date.now(), locale?: strin
   const region = REGION_LABELS[top] ?? top;
   const name = zoneName(zone, now, locale);
   const offset = formatOffset(offsetMin);
-  const search = [city, zone.replace(/[_/]/g, ' '), region, name, offset, offset.replace('GMT', 'UTC'), ALIASES[zone] ?? ''].join(' ').toLowerCase();
+  // The offset goes last: searchZones tells a match on the zone's own words from one on its offset alone.
+  const search = [city, zone.replace(/[_/]/g, ' '), region, name, ALIASES[zone] ?? '', offsetWords(offset)].join(' ').toLowerCase();
   return { id: zone, city, region, offsetMin, offset, name, search };
 }
 
@@ -630,9 +636,21 @@ export function searchZones(query: string, now: Instant = Date.now(), locale?: s
     if (!words.every((w) => z.search.includes(w))) continue;
     const city = z.city.toLowerCase();
     const inCity = matchQuality(city, q);
+    // Every zone's search words hold its offset ("gmt-10", "utc-10"), so "gmt" alone would be a whole-word
+    // match for all of them. A match only there ranks after a match on the zone's own words.
+    const tail = ` ${offsetWords(z.offset)}`;
+    const own = matchQuality(z.search.endsWith(tail) ? z.search.slice(0, -tail.length) : z.search, q);
     const anywhere = matchQuality(z.search, q);
     const score =
-      city === q ? 0 : inCity !== null && (anywhere === null || inCity <= anywhere) ? 1 + inCity * 2 : anywhere !== null ? 2 + anywhere * 2 : 7;
+      city === q
+        ? 0
+        : inCity !== null && (own === null || inCity <= own)
+          ? 1 + inCity * 2
+          : own !== null
+            ? 2 + own * 2
+            : anywhere !== null
+              ? 7 + anywhere
+              : 10;
     // Big cities: the short list, and every zone that has search words of its own (some browsers use old ids, like Asia/Calcutta).
     scored.push({ z, score, major: MAJOR_ZONES.has(z.id) || ALIASES[z.id] !== undefined ? 0 : 1 });
   }

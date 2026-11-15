@@ -38,6 +38,7 @@ import {
   getTwilioAccount,
   isNumberBlocked,
   isRestrictedNumber,
+  noConsentReason,
   normalizePhone,
   TwilioError,
   twilioRequestAs,
@@ -1011,7 +1012,7 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
   if (purpose === 'reminder') {
     // A reminder only ever goes to the number the invitee gave together with their consent.
     if (!booking.invitee.phone?.trim()) return skip('no_phone');
-    if (booking.consent?.call !== true) return skip('no_consent');
+    if (booking.consent?.call !== true) return skip(noConsentReason(booking, 'call'));
     if (booking.status !== 'confirmed') return skip('booking_cancelled');
     if (!(Date.parse(booking.start) > now)) return skip('meeting_started');
     to = normalizePhone(booking.invitee.phone);
@@ -1261,12 +1262,9 @@ async function carryOut(ctx: Ctx, call: StoredCall, booking: Booking | null, mov
     case 'confirm_cancel': {
       if (real) {
         try {
-          await cancelBooking(
-            ctx,
-            booking.id,
-            { by: 'assistant', reason: cancelReason(call) },
-            { calendarBudgetMs: cancelCalendarBudget(ctx.now().getTime() - turnStartedMs) },
-          );
+          // No reason: what the caller said stays on the call record only (pruned with it), not on the
+          // booking for good and not in the notices. The booking's timeline says how it was cancelled.
+          await cancelBooking(ctx, booking.id, { by: 'assistant' }, { calendarBudgetMs: cancelCalendarBudget(ctx.now().getTime() - turnStartedMs) });
         } catch (err) {
           ctx.log('error', 'voice: could not cancel the booking', { bookingId: booking.id, error: shortError(err) });
           patch.cancelFailed = true;
@@ -1280,14 +1278,6 @@ async function carryOut(ctx: Ctx, call: StoredCall, booking: Booking | null, mov
     default:
       return { move, patch };
   }
-}
-
-/** Why the meeting was cancelled, in words the host can read: includes what the caller said when they first asked. */
-function cancelReason(call: StoredCall): string {
-  const said = call.turns.filter((t) => t.role === 'caller' && !t.text.startsWith('(pressed ')).map((t) => t.text);
-  const asked = said[said.length - 1];
-  const base = `Cancelled by ${call.script.inviteeFirstName || 'the invitee'} on a reminder call with ${call.script.assistantName}, after confirming twice.`;
-  return asked ? `${base} They said: "${clip(asked.replace(/"/g, "'"), 140)}"` : base;
 }
 
 function cleanCallerSpeech(value: string | null): string {

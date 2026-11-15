@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarX2, CircleAlert, CloudOff, RefreshCw, TriangleAlert, WifiOff } from 'lucide-react';
 import type { CreateBookingRequest, CreateBookingResponse, PublicEventType, PublicSite } from '../../shared/types';
-import { createBooking, isApiFailure, rescheduleBooking } from '../lib/api';
+import { createBooking, getBooking, isApiFailure, rescheduleBooking } from '../lib/api';
 import { useTheme } from '../lib/theme';
 import { addMonths, dayKey, detectLocale, formatDayKey, formatMonthYear, formatTime, monthRange, parseDayKey, todayKey } from '../lib/tz';
 import { Button, EmptyState, cx } from '../ui';
@@ -519,6 +519,36 @@ export function BookingWidget({ site, eventType, mode, reschedule, onBooked, pre
       setStep('done');
       onBooked?.(res);
     } catch (e) {
+      // The answer got lost, or a second try is told this already is the meeting's time: the move may well have
+      // gone through. The booking is looked at before the page says anything about it.
+      // A 5xx the server sends on purpose (busy, calendars that did not answer) says the move did not happen.
+      const unclear = isApiFailure(e) && (e.isNetwork || (e.status >= 500 && e.code !== 'busy' && e.code !== 'calendar_unavailable'));
+      const alreadyThere = isApiFailure(e) && e.code === 'same_time' && Date.parse(reschedule.currentStart) !== start;
+      if (unclear || alreadyThere) {
+        const now = await getBooking(reschedule.bookingId, reschedule.token, reschedule.asHost ? { as: 'host' } : undefined).then(
+          (data) => data.booking,
+          () => null,
+        );
+        if (now && now.status === 'confirmed' && Date.parse(now.start) === start) {
+          const res: CreateBookingResponse = { booking: now, manageToken: reschedule.token };
+          setResult(res);
+          setStep('done');
+          onBooked?.(res);
+          return;
+        }
+        if (now === null) {
+          setPickNotice({
+            tone: 'warning',
+            title: 'The connection dropped',
+            message: 'Your meeting may have moved. Please reload the page to see where it stands before you try again.',
+          });
+          return;
+        }
+        if (unclear) {
+          setPickNotice({ tone: 'warning', title: 'The connection dropped', message: 'We checked, and your meeting has not moved. Please try again.' });
+          return;
+        }
+      }
       if (isApiFailure(e) && e.code === 'move_limit') setPickNotice({ tone: 'warning', title: 'This meeting cannot be moved again right now', message: e.message });
       // Another change of this booking is still being saved. The time picked may well be free, so it stays.
       else if (isApiFailure(e) && e.code === 'changed') setPickNotice({ tone: 'warning', title: 'This booking was just changed', message: e.message });

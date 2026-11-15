@@ -1031,7 +1031,10 @@ class Scenario extends DevTools {
     } else {
       const query = new URLSearchParams({ host: start.hostId, gmail: start.gmail ? '1' : '0', return: start.returnTo ?? `${BASE_PATH}/admin/integrations` });
       if (start.token) query.set('t', start.token);
-      await page.goto(`${this.server.api}/google/connect?${query}`);
+      // As a Connect button does: from one of the app's own pages (the server refuses a link opened from anywhere
+      // else). A page of the app without an earlier ?google= answer in its address, so done() waits for this one.
+      await page.goto(`${this.server.origin}${BASE_PATH}/`);
+      await page.evaluate((target) => window.location.assign(target), `${this.server.api}/google/connect?${query}`);
     }
     return { ...handle, result: await done() };
   }

@@ -955,8 +955,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     const second = await hook(ctx, 'turn', callId, { SpeechResult: 'Yes.' });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(cancel.mock.calls[0][1]).toBe('bk_1');
-    expect(cancel.mock.calls[0][2]).toMatchObject({ by: 'assistant' });
-    expect(cancel.mock.calls[0][2].reason).toContain('after confirming twice');
+    expect(cancel.mock.calls[0][2]).toEqual({ by: 'assistant' });
     expect(said(second.xml)).toBe('Okay, your Intro call is cancelled, and I will let Jimi know. Goodbye.');
     expect(hangsUp(second.xml)).toBe(true);
     const call = await record(ctx, callId);
@@ -964,11 +963,12 @@ describe('the scripted conversation (no Anthropic key)', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('quotes what the caller said in the cancellation reason', async () => {
+  it('keeps what the caller said off the booking: the cancellation carries no reason', async () => {
     const { ctx, callId } = await answered();
-    await hook(ctx, 'turn', callId, { SpeechResult: 'I need to cancel, my flight got moved' });
+    await hook(ctx, 'turn', callId, { SpeechResult: 'I need to cancel, my mother is in hospital' });
     await hook(ctx, 'turn', callId, { Digits: '1' });
-    expect(cancel.mock.calls[0][2].reason).toBe('Cancelled by Sam on a reminder call with Ava, after confirming twice. They said: "I need to cancel, my flight got moved"');
+    expect(cancel.mock.calls[0][2]).toEqual({ by: 'assistant' });
+    expect(JSON.stringify(cancel.mock.calls[0])).not.toContain('hospital');
   });
 
   it.each([
@@ -1081,7 +1081,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     expect(booking?.consent.sms).toBe(true);
     expect(booking?.timeline.at(-1)?.type).toBe('call_opt_out');
     ctx.clock.advance(11 * 60_000);
-    expect(await startReminderCall(ctx, { booking: booking!, purpose: 'reminder' })).toMatchObject({ skipped: 'no_consent' });
+    expect(await startReminderCall(ctx, { booking: booking!, purpose: 'reminder' })).toMatchObject({ skipped: 'opted_out_call' });
   });
 
   it('stops calling the number, not just this booking, until its owner opts back in', async () => {
@@ -1543,7 +1543,7 @@ describe('the conversation with Claude', () => {
     net.onClaude(() => claudeMessage({ say: 'All right, your meeting is cancelled. Goodbye, Sam.', action: 'confirm_cancel' }));
     const fourth = await hook(ctx, 'turn', callId, { SpeechResult: 'Yes, please cancel it' });
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(cancel).toHaveBeenCalledWith(ctx, 'bk_1', { by: 'assistant', reason: expect.stringContaining('after confirming twice') }, { calendarBudgetMs: 7000 });
+    expect(cancel).toHaveBeenCalledWith(ctx, 'bk_1', { by: 'assistant' }, { calendarBudgetMs: 7000 });
     expect(said(fourth.xml)).toBe('All right, your meeting is cancelled. Goodbye, Sam.');
     expect(hangsUp(fourth.xml)).toBe(true);
     expect(net.claude[3].body.messages[0].content).toContain('cancellation_waiting_for_confirmation: yes');

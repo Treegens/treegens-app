@@ -4,7 +4,7 @@
  * means that trying again cannot help.
  */
 import type { Booking, SendResult } from '../../shared/types';
-import { rateLimit } from './auth';
+import { isRateLimitBusy, rateLimit } from './auth';
 import { confirmAttendance, manageToken } from './booking';
 import type { Ctx } from './ctx';
 import { HttpError, readForm } from './http';
@@ -127,7 +127,8 @@ async function mayReply(ctx: Ctx, from: string, known: boolean): Promise<boolean
     if (!known) await rateLimit(ctx, 'sms-in-unknown', 'all', REPLIES_TO_STRANGERS_PER_HOUR, 3600);
     return true;
   } catch (err) {
-    if (err instanceof HttpError && err.status === 429) return false;
+    // A counter too busy to count this reply errs on the side of silence, like a reached limit.
+    if ((err instanceof HttpError && err.status === 429) || isRateLimitBusy(err)) return false;
     throw err;
   }
 }

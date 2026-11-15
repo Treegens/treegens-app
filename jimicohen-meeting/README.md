@@ -35,7 +35,7 @@ when that is set, and otherwise Netlify's own `URL` for the site, which is the s
 | Name | Required | Purpose |
 | --- | --- | --- |
 | `MEETING_SECRET_KEY` | yes | Master secret (base64, 32 bytes). Sessions, sealed keys and manage links derive from it. Changing it signs everyone out and makes saved provider keys unreadable. |
-| `MEETING_SETUP_CODE_HASH` | first run, and to reset a forgotten password | SHA-256 (hex) of a setup code. Each code works once: the first one creates the dashboard password, and a new one deployed later replaces a forgotten password (see below). It can stay set. |
+| `MEETING_SETUP_CODE_HASH` | first run, and to reset a forgotten password | SHA-256 (hex) of a setup code. Each code works once: the first one creates the dashboard password, and a new one deployed later replaces a forgotten password (see below). A code that has set a password never works again. It can stay set. |
 | `PUBLIC_BASE_URL` | yes | `https://jimicohen.com/meeting`. Every link in emails and texts is built from it. |
 | `EMBED_BASE_URL` | no | `https://jimicohen-meeting.netlify.app/meeting`. Used for embed snippets. Without it, Netlify's `URL` for the site is used, which is the same address. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `ANTHROPIC_API_KEY`, `RESEND_API_KEY` | no | Optional. Provider keys are normally pasted in the dashboard under Integrations, where they are stored encrypted. A value set here wins over the dashboard. |
@@ -61,8 +61,12 @@ No secrets live in this repository.
   3. Deploy again (see Deploying below). The new value only reaches the functions with a new deploy.
   4. Open `https://jimicohen.com/meeting/admin`, choose **Forgot your password?**, enter the new code and a new
      password. You are signed in, and every other browser is signed out.
-  The new code then works once. "This setup code was already used" means the new hash has not reached the
-  functions yet: check the variable and deploy again.
+  The new code then works once. The dashboard remembers every code that has set a password, so none of them
+  works again, also not on an older deploy. "This setup code was already used" means the new hash has not
+  reached the functions yet: check the variable and deploy again.
+  5. Deploys made before this list was kept (before the final review fixes) do not know about it: on such a deploy
+     an older code that was used before still works once more after a reset. After a reset, delete those older
+     deploys (`netlify api deleteDeploy --data '{"deploy_id": "<id>"}'`), and never roll back to one of them.
 - Do not delete the `auth/admin` record by hand to get back in. The steps above keep everything, remember which
   code was used, and sign every older session out. (Should the record ever be made again anyway, it starts from a
   new random password version, so sessions from before do not open it.)

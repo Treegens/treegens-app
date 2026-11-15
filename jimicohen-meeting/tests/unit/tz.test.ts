@@ -181,6 +181,19 @@ describe('zone names and search', () => {
     expect(searchZones('', T, 'en-US').length).toBeGreaterThan(200);
   });
 
+  it('finds London and UTC first for "GMT", which every zone has in its offset', () => {
+    for (const locale of ['en-GB', 'en-US']) {
+      for (const q of ['gmt', 'GMT', ' Gmt ']) {
+        expect(searchZones(q, T, locale).slice(0, 2).map((z) => z.id), `${locale} ${q}`).toEqual(['Europe/London', 'UTC']);
+      }
+    }
+    // The offset itself still finds every zone that has it.
+    const plusThree = searchZones('gmt+3', T, 'en-GB');
+    expect(plusThree.length).toBeGreaterThan(3);
+    expect(plusThree.every((z) => z.offset.startsWith('GMT+3'))).toBe(true);
+    expect(searchZones('utc-5', T, 'en-GB').some((z) => z.id === 'America/New_York')).toBe(true);
+  });
+
   it('puts matches on the city name first, and the start of a word before the inside of one', () => {
     const ids = (q: string): string[] => searchZones(q, T, 'en-US').map((z) => z.id);
     // "new" is also a word in Sydney's "new south wales" and Auckland's "new zealand": the city named New York comes first.

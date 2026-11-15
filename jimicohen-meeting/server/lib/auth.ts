@@ -31,8 +31,23 @@ export interface AdminAuth {
    * no code was deployed when it was first looked at (any code deployed later is then a new one).
    */
   setupCodeHash?: string;
+  /**
+   * Every MEETING_SETUP_CODE_HASH that has ever set a password here, lower case. None of them works again,
+   * also not on an older deploy that still carries one (every deploy reads this one record). Missing on a
+   * record made before it was kept: setupCodeHash stands for the list then.
+   */
+  usedSetupCodeHashes?: string[];
   /** when a new setup code last replaced the password */
   passwordResetAt?: string;
+}
+
+/** The setup code hashes that may never set a password again. */
+function spentSetupCodes(admin: AdminAuth): Set<string> {
+  const spent = new Set<string>();
+  for (const hash of [...(Array.isArray(admin.usedSetupCodeHashes) ? admin.usedSetupCodeHashes : []), admin.setupCodeHash]) {
+    if (typeof hash === 'string' && hash !== '') spent.add(hash.toLowerCase());
+  }
+  return spent;
 }
 
 export async function getAdminAuth(ctx: Ctx): Promise<AdminAuth | null> {
@@ -46,13 +61,15 @@ export async function getAdminAuth(ctx: Ctx): Promise<AdminAuth | null> {
  */
 export async function createAdminAuth(ctx: Ctx, password: string, setupCodeHash?: string | null): Promise<AdminAuth | null> {
   if (await getAdminAuth(ctx)) return null;
+  const used = (setupCodeHash ?? ctx.env.setupCodeHash ?? '').toLowerCase();
   const record: AdminAuth = {
     passwordHash: await hashPassword(password),
     // Random, not 1: should the record ever be made again (deleted by hand, restored from an old copy),
     // sessions signed for the earlier record must not match the new one.
     passwordVersion: randomInt(1, 2 ** 31),
     setupUsedAt: ctx.now().toISOString(),
-    setupCodeHash: (setupCodeHash ?? ctx.env.setupCodeHash ?? '').toLowerCase(),
+    setupCodeHash: used,
+    usedSetupCodeHashes: used ? [used] : [],
   };
   const written = await ctx.kv.setJSON(KEYS.adminAuth, record, { onlyIfNew: true });
   return written.modified ? record : null;
@@ -92,10 +109,11 @@ export async function noteSetupCode(ctx: Ctx, admin: AdminAuth | null): Promise<
 }
 
 /**
- * Forgotten password: a setup code whose hash differs from the one that set the current password
- * replaces it. Bumps the version, which signs every existing session out. `setupCodeHash` is the
- * deployed hash the presented code was checked against. 'code_used' when that hash already set the
- * current password; null before setup.
+ * Forgotten password: a setup code whose hash has never set a password here replaces it. Bumps the
+ * version, which signs every existing session out. `setupCodeHash` is the deployed hash the presented
+ * code was checked against. 'code_used' when that hash has set a password before (the current one or
+ * any earlier one: an older deploy, or a rollback, still carries the hash it was built with); null
+ * before setup.
  */
 export async function resetAdminPassword(ctx: Ctx, newPassword: string, setupCodeHash: string): Promise<AdminAuth | 'code_used' | null> {
   const wanted = setupCodeHash.toLowerCase();
@@ -104,8 +122,17 @@ export async function resetAdminPassword(ctx: Ctx, newPassword: string, setupCod
   await noteSetupCode(ctx, before);
   const passwordHash = await hashPassword(newPassword);
   const outcome = await mutateAdminAuth(ctx, (current) => {
-    if (typeof current.setupCodeHash !== 'string' || current.setupCodeHash.toLowerCase() === wanted) return null;
-    return { ...current, passwordHash, passwordVersion: current.passwordVersion + 1, setupCodeHash: wanted, passwordResetAt: ctx.now().toISOString() };
+    if (typeof current.setupCodeHash !== 'string' || wanted === '') return null;
+    const spent = spentSetupCodes(current);
+    if (spent.has(wanted)) return null;
+    return {
+      ...current,
+      passwordHash,
+      passwordVersion: current.passwordVersion + 1,
+      setupCodeHash: wanted,
+      usedSetupCodeHashes: [...spent, wanted],
+      passwordResetAt: ctx.now().toISOString(),
+    };
   });
   if (!outcome) return null;
   return outcome.after ?? 'code_used';
@@ -283,21 +310,42 @@ function tooManyRequests(ctx: Ctx, windowStartMs: number, windowMs: number): Htt
   });
 }
 
+/**
+ * A counter that every try lost to other requests counting at the same moment. Not a reached limit: the
+ * window still has room. A counter shared by many honest requests (the site's daily ceiling on texts) can
+ * get there, so it is answered as a busy server, which a caller may try again later, never as 429.
+ */
+export const RATE_LIMIT_BUSY = 'busy';
+
+function busyCounter(): HttpError {
+  return new HttpError(503, RATE_LIMIT_BUSY, 'The server is busy right now. Please try again in a moment.');
+}
+
+/** True for the error countHit throws when it lost every try to other requests (see busyCounter). */
+export function isRateLimitBusy(err: unknown): boolean {
+  return err instanceof HttpError && err.status === 503 && err.code === RATE_LIMIT_BUSY;
+}
+
+/** A short wait between two tries of a counter, longer each time and different for each request, so the ones that collided spread out. */
+function backOff(attempt: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 2 + Math.random() * 10 * (attempt + 1)));
+}
+
 /** Counts one hit and answers the key it was counted under (see rateLimit). */
 async function countHit(ctx: Ctx, bucket: string, id: string, limit: number, windowSec: number): Promise<string> {
   const { key, windowStartMs, windowMs } = rateLimitKey(ctx, bucket, id, windowSec);
   const tooMany = tooManyRequests(ctx, windowStartMs, windowMs);
 
   for (let attempt = 0; attempt < RATE_LIMIT_ATTEMPTS; attempt++) {
+    if (attempt > 0) await backOff(attempt);
     const found = await ctx.kv.getJSONWithEtag<{ n: number }>(key);
     const n = found ? (Number.isFinite(found.value?.n) ? found.value.n : 0) : await legacyCount(ctx, key, windowStartMs, windowMs);
     if (n >= limit) throw tooMany;
     const written = await ctx.kv.setJSON(key, { n: n + 1 }, found ? { onlyIfMatch: found.etag } : { onlyIfNew: true });
     if (written.modified) return key;
-    await Promise.resolve();
   }
-  // Only reachable when many requests for the same id collide at once, which is itself the thing being limited.
-  throw tooMany;
+  // Every try lost to other requests counting at the same moment, and the window still had room.
+  throw busyCounter();
 }
 
 /**
@@ -353,7 +401,7 @@ export async function rateLimitCount(ctx: Ctx, bucket: string, id: string, windo
   try {
     await rateLimit(ctx, bucket, id, Number.MAX_SAFE_INTEGER, windowSec);
   } catch (err) {
-    if (!(err instanceof HttpError && err.status === 429)) throw err;
+    if (!(err instanceof HttpError && err.status === 429) && !isRateLimitBusy(err)) throw err;
   }
 }
 
@@ -370,11 +418,11 @@ export async function rateLimitRefund(ctx: Ctx, bucket: string, id: string, wind
 
 async function refundKey(ctx: Ctx, key: string): Promise<void> {
   for (let attempt = 0; attempt < RATE_LIMIT_ATTEMPTS; attempt++) {
+    if (attempt > 0) await backOff(attempt);
     const found = await ctx.kv.getJSONWithEtag<{ n: number }>(key);
     const n = found && Number.isFinite(found.value?.n) ? found.value.n : 0;
     if (!found || n <= 0) return;
     const written = await ctx.kv.setJSON(key, { n: n - 1 }, { onlyIfMatch: found.etag });
     if (written.modified) return;
-    await Promise.resolve();
   }
 }

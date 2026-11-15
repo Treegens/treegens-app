@@ -336,6 +336,12 @@ export function buildWarnings(
     });
   }
 
+  // A joint meeting whose hosts' weekly hours never overlap cannot be booked at all (its own warning below says
+  // so). The warnings that speak of people booking it leave it out rather than contradict that one.
+  const nowMs = ctx.now().getTime();
+  const sharedHours = new Map(active.filter((e) => e.kind === 'collective').map((e) => [e.id, checkSharedHours({ eventType: e, hosts, owner, nowMs })]));
+  const bookable = (e: EventType) => sharedHours.get(e.id)?.ok !== false;
+
   // Without email and without a Google calendar to put it on, a booking reaches nobody: not the invitee, not
   // the hosts. A round robin can land on any of its hosts, so each one needs Google (as in booking.ts).
   if (integrations.email.resolved === 'none') {
@@ -347,6 +353,7 @@ export function buildWarnings(
     // down with the owner's Google connection empties `resolved`.
     const unreadable = (host: Host) => !!host.google && (host.google.status !== 'ok' || keysMissing);
     const unheard = active.filter((e) => {
+      if (!bookable(e)) return false;
       const assigned = e.hostIds.map((id) => byHost.get(id)).filter((h): h is Host => !!h);
       // A round robin still offers the times of the hosts whose calendars can be read; the others close it.
       const open = e.kind === 'round_robin' ? assigned.filter((h) => !unreadable(h)) : assigned.some(unreadable) ? [] : assigned;
@@ -362,7 +369,7 @@ export function buildWarnings(
   }
 
   if (!features.sms) {
-    const needsTwilio = active.filter((e) => e.reminders.some((r) => r.enabled && (r.channel === 'sms' || r.channel === 'call')));
+    const needsTwilio = active.filter((e) => bookable(e) && e.reminders.some((r) => r.enabled && (r.channel === 'sms' || r.channel === 'call')));
     if (needsTwilio.length > 0) {
       warnings.push({
         key: 'twilio_missing',
@@ -372,7 +379,7 @@ export function buildWarnings(
     }
   } else if (!features.calls) {
     // Texts work (a Messaging Service), calls do not: a call needs a Twilio number of its own.
-    const needsNumber = active.filter((e) => e.reminders.some((r) => r.enabled && r.channel === 'call'));
+    const needsNumber = active.filter((e) => bookable(e) && e.reminders.some((r) => r.enabled && r.channel === 'call'));
     if (needsNumber.length > 0) {
       warnings.push({
         key: 'twilio_missing',
@@ -383,11 +390,10 @@ export function buildWarnings(
   }
 
   const byId = hostMap(hosts);
-  const nowMs = ctx.now().getTime();
   for (const event of active) {
     if (event.kind !== 'collective') continue;
     // Hours that never line up close the page for good, whatever the calendars say.
-    const hours = checkSharedHours({ eventType: event, hosts, owner, nowMs });
+    const hours = sharedHours.get(event.id) ?? checkSharedHours({ eventType: event, hosts, owner, nowMs });
     if (!hours.ok && hours.message) warnings.push({ key: `shared_hours_${event.id}`, message: hours.message, href: hours.href ?? LINK.team });
     const waiting = event.hostIds
       .map((id) => byId.get(id))

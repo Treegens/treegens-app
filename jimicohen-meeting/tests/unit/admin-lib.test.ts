@@ -10,7 +10,7 @@ vi.mock('../../server/lib/booking', async () => {
 });
 
 import { cleanPurpose, MAX_ASSET_BYTES, parseImageDataUrl, sniffImageType } from '../../server/lib/admin/assets';
-import { countScopes, csvCell, eraseRefusal, scopeOf, searchTerms, selectEntries, toCsv } from '../../server/lib/admin/bookings';
+import { calendarBeingRemoved, countScopes, csvCell, eraseRefusal, scopeOf, searchTerms, selectEntries, toCsv } from '../../server/lib/admin/bookings';
 import { freeSlug, slugify } from '../../server/lib/admin/event-types';
 import { assetExists, isWebUrl } from '../../server/lib/admin/fields';
 import { parseRanges, parseSchedules, parseWeekly } from '../../server/lib/admin/schedules';
@@ -19,9 +19,9 @@ import { checkSharedHours } from '../../server/lib/admin/overview';
 import { maskMiddle, toAdminHost } from '../../server/lib/admin/view';
 import { seal } from '../../server/lib/crypto';
 import { HttpError } from '../../server/lib/http';
-import { putAsset } from '../../server/lib/repo';
+import { putAsset, putJob } from '../../server/lib/repo';
 import { FieldErrors } from '../../server/lib/validate';
-import { calendarEventLeft } from '../../shared/calendar';
+import { CALENDAR_PENDING, calendarEventLeft } from '../../shared/calendar';
 import { DEFAULT_THEME, defaultOwnerHost, newEventType } from '../../shared/defaults';
 import type { AdminHost, Booking, BookingIndexEntry, EventType, Host, Job } from '../../shared/types';
 import { hostGap, unreachableHosts } from '../../src/admin/components/event/reach';
@@ -545,5 +545,29 @@ describe('deleting a booking', () => {
     // Cancelled and in the past: whatever is left of the cancellation no longer matters.
     const past = { start: new Date(at - 7_200_000).toISOString(), end: new Date(at - 3_600_000).toISOString() };
     expect(eraseRefusal({ ...cancelled, ...past, followUp: { kind: 'cancelled', id: 'f', at: TEST_NOW } }, [job({ kind: 'cancelled' })], at)).toBeNull();
+  });
+
+  it('says a cancelled meeting\'s event is being removed until it is gone, and removed only after', async () => {
+    const ctx = makeTestCtx();
+    const g = { hostId: 'h', calendarId: 'primary', eventId: 'e' };
+    const cancelled = booking({ status: 'cancelled', cancellation: { at: TEST_NOW, by: 'invitee' } });
+    // The cancellation has not reached Google yet (cancelBooking marks the record until it has).
+    const marked = { ...cancelled, google: { ...g, error: CALENDAR_PENDING } };
+    expect(await calendarBeingRemoved(ctx, marked)).toBe(true);
+    // A removal that went wrong is said as such, not as on its way.
+    expect(await calendarBeingRemoved(ctx, { ...cancelled, google: { ...g, error: 'Google request failed' } })).toBe(false);
+    // No mark and nothing queued: done, or there was never an event.
+    const unmarked = { ...cancelled, google: g };
+    expect(await calendarBeingRemoved(ctx, unmarked)).toBe(false);
+    expect(await calendarBeingRemoved(ctx, { ...cancelled, google: null })).toBe(false);
+    // A calendar sync still queued for it, with no word yet that the event is gone.
+    await putJob(ctx, job({ key: `jobs/${TEST_NOW}_job_sync`, id: 'job_sync', type: 'gcal_sync' }));
+    expect(await calendarBeingRemoved(ctx, unmarked)).toBe(true);
+    expect(await calendarBeingRemoved(ctx, { ...unmarked, timeline: [{ at: TEST_NOW, type: 'calendar_event_removed' }] })).toBe(false);
+    expect(await calendarBeingRemoved(ctx, { ...unmarked, timeline: [{ at: TEST_NOW, type: 'calendar_event_left', detail: 'Google Calendar is no longer connected, so the event was not removed.' }] })).toBe(false);
+    // Only for cancelled meetings.
+    expect(await calendarBeingRemoved(ctx, { ...marked, status: 'confirmed' })).toBe(false);
+    // The delete itself is not changed by it.
+    expect(eraseRefusal(marked, [], at)?.code).toBe('calendar_event_left');
   });
 });

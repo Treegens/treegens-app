@@ -8,6 +8,8 @@ import { memoryKV } from '../../server/lib/store';
 import {
   claim,
   deleteEventType,
+  indexEntryOf,
+  mutateBookingIndex,
   getBooking,
   getSite,
   listJobs,
@@ -53,6 +55,7 @@ import {
   insideCallHours,
   planBookingJobs,
   planCallTime,
+  planMissedReminderCalls,
   registerJobHandler,
   removeReminderJobs,
   replanBookingReminders,
@@ -688,7 +691,9 @@ describe('runDueJobs: things that must not be sent', () => {
     expect(callSpy).not.toHaveBeenCalled();
     expect(await queue(world.ctx)).toEqual([]);
     const invitee = world.emails.find((e) => e.to[0].includes('sam@'))!;
-    expect(invitee.text).toContain('Reason given: Plans changed');
+    // The invitee's own words are not mailed back to them; the host reads them.
+    expect(invitee.text).not.toContain('Plans changed');
+    expect(world.emails.find((e) => !e.to[0].includes('sam@'))!.text).toContain('Reason given: Plans changed');
     expect(invitee.text).toContain(`Book a new time: ${TEST_BASE_URL}/intro`);
     expect(invitee.text).not.toContain('Reschedule:');
     expect(invitee.attachments![0].filename).toBe('cancelled.ics');
@@ -778,6 +783,36 @@ describe('runDueJobs: things that must not be sent', () => {
     expect(await queue(world.ctx)).toEqual([]);
     expect(await timelineDetail(world.ctx, 'reminder_sms_skipped')).toEqual(['the invitee did not agree to this kind of reminder']);
     expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['the invitee did not agree to this kind of reminder']);
+  });
+
+  it('says the invitee asked to stop when a text or call is skipped after a stop word, not that they never agreed', async () => {
+    const world = await makeWorld({ rules: [DEFAULT_RULES[1], DEFAULT_RULES[3]] });
+    const booking = await book(world, {}, null);
+    // What a stop word by text leaves on the booking (sms.ts recordOptOut): consent off, and the reason on the timeline.
+    await saveBooking(world.ctx, {
+      ...booking,
+      consent: { ...booking.consent, sms: false, call: false },
+      timeline: [...booking.timeline, { at: TEST_NOW, type: 'sms_opt_out', detail: 'Replied with a stop word. Reminder texts and calls are switched off.' }],
+    });
+    world.ctx.clock.set(at(START, -10 * MIN));
+    expect(await runDueJobs(world.ctx)).toEqual({ processed: 2, failed: 0, remaining: 0 });
+    expect(smsSpy).not.toHaveBeenCalled();
+    expect(callSpy).not.toHaveBeenCalled();
+    expect(await timelineDetail(world.ctx, 'reminder_sms_skipped')).toEqual(['the invitee asked for no more texts']);
+    expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['the invitee asked not to be called again']);
+  });
+
+  it('says the invitee asked not to be called when a call is skipped after "do not call me" on an earlier call', async () => {
+    const world = await makeWorld({ rules: [DEFAULT_RULES[1]] });
+    const booking = await book(world, {}, null);
+    await saveBooking(world.ctx, {
+      ...booking,
+      consent: { ...booking.consent, call: false },
+      timeline: [...booking.timeline, { at: TEST_NOW, type: 'call_opt_out', detail: 'Asked on a reminder call not to be called again. Reminder calls are switched off.' }],
+    });
+    world.ctx.clock.set(at(START, -10 * MIN));
+    await runDueJobs(world.ctx);
+    expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['the invitee asked not to be called again']);
   });
 
   it('drops a call that falls outside calling hours without retrying it', async () => {
@@ -1389,6 +1424,28 @@ describe('scheduleBookingJobs: reminder calls', () => {
     expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['the only time inside calling hours before the meeting was right after booking']);
   });
 
+  it('does not call a minute after an evening booking for an early meeting either, while an earlier booking still gets its call', async () => {
+    // Calling hours 8 AM to 9 PM in New York: the last calling hour before a 7 AM meeting starts at 8 PM the evening before.
+    const start = iso('2026-11-17T07:00');
+    const justBefore = await callOnly();
+    justBefore.ctx.clock.set(iso('2026-11-16T19:59'));
+    await book(justBefore, { start, end: at(start, 30 * MIN), invitee: inNewYork }, 'created');
+    expect(await calls(justBefore.ctx)).toEqual([]);
+    expect(await timelineDetail(justBefore.ctx, 'reminder_call_skipped')).toEqual(['the only time inside calling hours before the meeting was right after booking']);
+
+    const justAfter = await callOnly();
+    justAfter.ctx.clock.set(iso('2026-11-16T20:00:30'));
+    await book(justAfter, { start, end: at(start, 30 * MIN), invitee: inNewYork }, 'created');
+    expect(await calls(justAfter.ctx)).toEqual([]);
+    expect(await timelineDetail(justAfter.ctx, 'reminder_call_skipped')).toEqual(['the only time inside calling hours before the meeting was right after booking']);
+
+    const earlier = await callOnly();
+    earlier.ctx.clock.set(iso('2026-11-16T18:59'));
+    await book(earlier, { start, end: at(start, 30 * MIN), invitee: inNewYork }, 'created');
+    expect(await calls(earlier.ctx)).toEqual([`reminder/call/invitee @ ${iso('2026-11-16T20:00')}`]);
+    expect(await timelineDetail(earlier.ctx, 'reminder_call_skipped')).toEqual([]);
+  });
+
   it('words the note for a move, and for a meeting that also starts just after calling hours open', async () => {
     const moved = await callOnly();
     moved.ctx.clock.set(iso('2026-11-16T20:30'));
@@ -1422,6 +1479,61 @@ describe('scheduleBookingJobs: reminder calls', () => {
 });
 
 // ───────────────────────── calls move with the calling hours ─────────────────────────
+
+describe('planMissedReminderCalls', () => {
+  const NY = 'America/New_York';
+  const iso = (text: string, tz = NY) => DateTime.fromISO(text, { zone: tz }).toUTC().toISO()!;
+  const inNewYork = { ...makeBooking().invitee, timezone: NY };
+  const NARROW = { callWindowStartHour: 9, callWindowEndHour: 10 };
+  const WIDE = { callWindowStartHour: 5, callWindowEndHour: 21 };
+  const callJobs = async (ctx: TestCtx) => (await listJobs(ctx)).filter((j) => j.channel === 'call');
+
+  /** A 7 AM meeting booked at noon the day before, while calling hours are 9 to 10: its call (2 hours before) gets no time. */
+  async function skippedCall(over: Partial<Booking> = {}): Promise<{ world: World; booking: Booking }> {
+    const world = await makeWorld({ rules: [DEFAULT_RULES[1]], now: iso('2026-11-17T12:00') });
+    const site = await getSite(world.ctx);
+    await saveSite(world.ctx, { ...site, assistant: { ...site.assistant, ...NARROW } });
+    const start = iso('2026-11-18T07:00');
+    const booking = await book(world, { start, end: at(start, 30 * MIN), invitee: inNewYork, ...over }, 'created');
+    await mutateBookingIndex(world.ctx, (entries) => [...entries, indexEntryOf(booking)]);
+    expect(await callJobs(world.ctx)).toEqual([]);
+    return { world, booking };
+  }
+
+  it('plans the call once wider calling hours leave a time for it, and it rings once', async () => {
+    const { world, booking } = await skippedCall();
+    expect(await timelineDetail(world.ctx, 'reminder_call_skipped', booking.id)).toHaveLength(1);
+    const site = await getSite(world.ctx);
+    await saveSite(world.ctx, { ...site, assistant: { ...site.assistant, ...WIDE } });
+    expect(await planMissedReminderCalls(world.ctx, WIDE)).toEqual({ planned: 1, failed: 0, left: 0 });
+    // A second pass for the same hours finds it in place.
+    expect(await planMissedReminderCalls(world.ctx, WIDE)).toEqual({ planned: 0, failed: 0, left: 0 });
+    const calls = await callJobs(world.ctx);
+    expect(calls.map((j) => [j.bookingId, j.ruleId, j.dueAt])).toEqual([[booking.id, 'rem_call_2h', iso('2026-11-18T05:00')]]);
+    world.ctx.clock.set(iso('2026-11-18T05:00'));
+    await runDueJobs(world.ctx);
+    expect(callSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('plans nothing for a booking that was called already, has no consent to calls, or has its call queued', async () => {
+    const called = await skippedCall({ timeline: [{ at: TEST_NOW, type: 'created' }, { at: TEST_NOW, type: 'reminder_call_sent' }] });
+    expect(await planMissedReminderCalls(called.world.ctx, WIDE)).toEqual({ planned: 0, failed: 0, left: 0 });
+    expect(await callJobs(called.world.ctx)).toEqual([]);
+
+    const noConsent = await skippedCall({ consent: { sms: true, call: false, at: TEST_NOW, text: 'consent text' } });
+    expect(await planMissedReminderCalls(noConsent.world.ctx, WIDE)).toEqual({ planned: 0, failed: 0, left: 0 });
+    expect(await callJobs(noConsent.world.ctx)).toEqual([]);
+
+    // A booking whose call is queued is the move pass's (replanReminderCalls), never planned a second time here.
+    const world = await makeWorld({ rules: [DEFAULT_RULES[1]] });
+    const start = iso('2026-11-18T10:00');
+    const queued = await book(world, { start, end: at(start, 30 * MIN), invitee: inNewYork }, null);
+    await mutateBookingIndex(world.ctx, (entries) => [...entries, indexEntryOf(queued)]);
+    expect(await callJobs(world.ctx)).toHaveLength(1);
+    expect(await planMissedReminderCalls(world.ctx, WIDE)).toEqual({ planned: 0, failed: 0, left: 0 });
+    expect(await callJobs(world.ctx)).toHaveLength(1);
+  });
+});
 
 describe('replanReminderCalls', () => {
   const NY = 'America/New_York';

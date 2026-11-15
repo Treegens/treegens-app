@@ -2528,6 +2528,15 @@ a.adm-checklist__item:hover {
   width: 100%;
 }
 
+/* Why a meeting of a paused event type has no Reschedule button: one line, wrapping on a phone. */
+.adm-bk__footer .adm-bk__paused {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: right;
+}
+
 /* Erasing is rare and final: a quiet button, in the danger colour. */
 .adm-bk__footer .adm-bk__delete {
   color: var(--a-danger-text);

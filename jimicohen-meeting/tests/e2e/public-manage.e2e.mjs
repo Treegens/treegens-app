@@ -466,7 +466,23 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
     await s.clearOutbox();
 
     // The host is travelling: their browser is in Nairobi.
-    const page = await s.newPage({ timezoneId: 'Africa/Nairobi', locale: 'en-US' });
+    const page = await s.newPage({ timezoneId: 'Africa/Nairobi', locale: 'en-US', allowConsoleErrors: [/status of 409/] });
+    await s.step('the page speaks to the host about Ada, and offers no "I\'ll be there" that would be taken as hers', async () => {
+      await page.goto(hostLink);
+      await page.getByText("Ada's meeting with Jimi Cohen.").waitFor();
+      await page.getByText('Ada has not said yet whether they will be there.').waitFor();
+      s.expect(await page.getByRole('button', { name: "I'll be there" }).count(), 'no attendance button for a host').toBe(0);
+      s.expect(await page.getByText('Still coming?').count(), 'no question for Ada').toBe(0);
+      // The reminder email's one-tap link opened as a host's does not answer for her either.
+      await page.goto(`${hostLink}&confirm=1`);
+      await page.getByText("Ada's meeting with Jimi Cohen.").waitFor();
+      await s.settle();
+      s.expect((await s.bookings({ id: booking.id }))[0].attendance, 'attendance').toEqual({});
+      const asHost = await s.visitor().request('POST', `/public/bookings/${booking.id}/confirm`, { body: { t: booking.manageToken, as: 'host' } });
+      s.expect([asHost.status, asHost.data.error.code], 'confirm from a host link').toEqual([409, 'host_link']);
+      await s.screenshot(page, 'booking page from a host link');
+    });
+
     await s.step('the link keeps saying a host is acting on every page it leads to', async () => {
       await page.goto(hostLink);
       const reschedule = page.getByRole('link', { name: 'Reschedule' });
@@ -494,6 +510,8 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       await s.clearOutbox();
       await page.goto(`${s.url(`/booking/${booking.id}/cancel`)}?t=${booking.manageToken}&as=host`);
       await page.getByRole('heading', { name: 'Cancel this meeting?', level: 1 }).waitFor();
+      // Typed through a host's link, the reason goes to the hosts only (the invitee holds the same link).
+      await page.getByText('Only the hosts see this. Ada is told that the meeting is cancelled.').waitFor();
       await page.getByRole('textbox').fill('Something came up on my side.');
       await page.getByRole('button', { name: 'Cancel meeting' }).click();
       await page.getByRole('heading', { name: 'This meeting was cancelled', level: 1 }).waitFor();
@@ -503,8 +521,12 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       const stored = (await s.bookings({ id: booking.id }))[0];
       s.expect(stored.cancellation, 'cancellation').toMatchObject({ by: 'host', via: 'host_link', reason: 'Something came up on my side.' });
       s.expect(stored.timeline.find((e) => e.type === 'cancelled').detail, 'timeline').toBe('Cancelled by a host, from the booking page: Something came up on my side.');
-      s.expect(await s.outbox({ kind: 'email', to: ADA.email }), 'email to Ada').toHaveLength(1);
-      s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'email to the owner').toHaveLength(1);
+      const toAda = await s.outbox({ kind: 'email', to: ADA.email });
+      s.expect(toAda, 'email to Ada').toHaveLength(1);
+      s.expect(toAda[0].text, 'what Ada is sent').not.toContain('Something came up on my side.');
+      const toOwner = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
+      s.expect(toOwner, 'email to the owner').toHaveLength(1);
+      s.expect(toOwner[0].text, 'what the owner is sent').toContain('Something came up on my side.');
       s.expect((await s.outbox({ kind: 'sms' })).map((x) => x.to), 'texts').toEqual([PHONE]);
     });
   });
@@ -567,6 +589,9 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       await s.setClock('2026-11-19T14:35:00.000Z');
       await tab.goto(`${s.url(`/booking/${booking.id}/cancel`)}?t=${booking.manageToken}&as=host`);
       await tab.getByRole('heading', { name: 'Cancel this meeting?', level: 1 }).waitFor();
+      // The owner's reason goes to Ada, and the hint says so (not that the host will see it).
+      await tab.getByText('Ada will see this with the cancellation.').waitFor();
+      s.expect(await tab.getByText('Jimi will see this with the cancellation.').count(), 'the hint for an invitee').toBe(0);
       await tab.getByRole('textbox').fill('I have to stop early today.');
       await tab.getByRole('button', { name: 'Cancel meeting' }).click();
       await tab.getByRole('heading', { name: 'This meeting was cancelled', level: 1 }).waitFor();
@@ -575,7 +600,9 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       const stored = (await s.bookings({ id: booking.id }))[0];
       s.expect(stored.cancellation, 'cancellation').toEqual({ at: '2026-11-19T14:35:00.000Z', by: 'host', reason: 'I have to stop early today.' });
       s.expect(stored.timeline.find((e) => e.type === 'cancelled').detail, 'timeline').toBe('Cancelled by the owner, from the booking page: I have to stop early today.');
-      s.expect(await s.outbox({ kind: 'email', to: ADA.email }), 'email to Ada').toHaveLength(1);
+      const toAda = await s.outbox({ kind: 'email', to: ADA.email });
+      s.expect(toAda, 'email to Ada').toHaveLength(1);
+      s.expect(toAda[0].text, "the owner's reason, sent to Ada").toContain('Reason given: I have to stop early today.');
       s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'no email to the owner about their own cancellation').toHaveLength(0);
     });
   });
@@ -661,6 +688,65 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       await page.getByText('Your meeting has moved').waitFor();
       await s.settle();
       s.expect((await s.bookings({ id: booking.id }))[0], 'the booking').toMatchObject({ start: NEW_START, rescheduleCount: 1 });
+    });
+  });
+
+  await t.scenario('a meeting of a paused event type: the owner is told why it cannot be moved, not to contact themselves', { reset: true }, async (s) => {
+    await s.step('prepare', () => prepare(s));
+    const booking = await s.step('Ada books, then the owner pauses Intro call', async () => {
+      const made = await bookForAda(s);
+      await s.apiOk('PUT', '/admin/event-types/evt_intro', { body: { active: false } });
+      return made;
+    });
+    const owner = await s.newPage({ signedIn: true, timezoneId: 'Europe/London', locale: 'en-US' });
+    await s.step('the drawer says the meeting cannot be moved while its event type is paused, instead of offering Reschedule', async () => {
+      await owner.goto(s.url(`/admin/bookings?b=${booking.id}`));
+      const drawer = owner.getByRole('dialog').filter({ has: owner.locator('.adm-bk__body') });
+      await drawer.getByText('"Intro call" is paused, so this meeting cannot be moved. Turn it back on under Event types to move it.').waitFor();
+      s.expect(await drawer.getByRole('link', { name: 'Reschedule' }).count(), 'Reschedule in the drawer').toBe(0);
+      await drawer.getByRole('button', { name: 'Cancel meeting' }).waitFor();
+      await s.screenshot(owner, 'drawer for a booking of a paused event type');
+    });
+    await s.step("the booking page opened as the owner names the pause, and never says to contact the owner", async () => {
+      await owner.goto(`${s.url(`/booking/${booking.id}/reschedule`)}?t=${booking.manageToken}&as=host`);
+      await owner.getByText('"Intro call" is paused, so this meeting cannot be moved.').waitFor();
+      await owner.getByText('Turn it back on under Event types in your dashboard to move it, or cancel the meeting.').waitFor();
+      s.expect(await owner.getByText(/Please contact Jimi/).count(), 'told to contact Jimi').toBe(0);
+    });
+    await s.step('Ada herself is still asked to get in touch with Jimi', async () => {
+      const page = await s.newPage({ timezoneId: NEW_YORK, locale: 'en-US' });
+      await page.goto(`${s.url(`/booking/${booking.id}/reschedule`)}?t=${booking.manageToken}`);
+      await page.getByText('This meeting can no longer be rescheduled from here.').waitFor();
+      await page.getByText('Please contact Jimi directly.').waitFor();
+    });
+  });
+
+  await t.scenario('the answer to a move is lost on the way back: the page shows the meeting as moved', { reset: true }, async (s) => {
+    await s.step('prepare', () => prepare(s));
+    const booking = await s.step('Ada books from New York', () => bookForAda(s));
+    const page = await s.newPage({ timezoneId: NEW_YORK, locale: 'en-US', allowConsoleErrors: [/ERR_FAILED/, /ERR_CONNECTION_RESET/, /Failed to load resource/] });
+    let dropped = false;
+    await page.route('**/public/bookings/*/reschedule', async (route) => {
+      if (dropped) return route.continue();
+      dropped = true;
+      await route.fetch(); // the server gets it and moves the meeting
+      await route.abort('connectionreset'); // the phone loses the answer
+    });
+    await s.step('she confirms Thursday; the answer is lost, and the page looks before it says anything', async () => {
+      await page.goto(`${s.url(`/booking/${booking.id}/reschedule`)}?t=${booking.manageToken}`);
+      await page.getByRole('heading', { name: 'Pick a new time' }).waitFor();
+      await calendarReady(page);
+      await pickDay(page, '2026-11-19');
+      await pickSlot(page, NEW_START);
+      await s.linger(page);
+      await page.locator('.bw-confirmbar').getByRole('button', { name: 'Confirm new time' }).click();
+      await page.getByText('Your meeting has moved').waitFor();
+      s.expect(dropped, 'the answer was dropped').toBe(true);
+      s.expect(await page.getByText('We could not move your meeting').count(), 'told the move failed').toBe(0);
+      await s.settle();
+      const [stored] = await s.bookings({ id: booking.id });
+      s.expect(stored, 'the booking').toMatchObject({ start: NEW_START, rescheduleCount: 1 });
+      await s.screenshot(page, 'a move whose answer was lost');
     });
   });
 });

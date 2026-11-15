@@ -222,9 +222,9 @@ export async function rescheduleBooking(id: string, token: string, start: string
   return unwrap(await request('POST', `/public/bookings/${enc(id)}/reschedule`, { body: { t: token, start, timezone, as } }), 'booking');
 }
 
-/** POST /public/bookings/:id/confirm: the invitee says "I'll be there". */
-export async function confirmBooking(id: string, token: string): Promise<PublicBooking> {
-  return unwrap(await request('POST', `/public/bookings/${enc(id)}/confirm`, { body: { t: token } }), 'booking');
+/** POST /public/bookings/:id/confirm: the invitee says "I'll be there". With `as: 'host'` the server refuses (409 `host_link`). */
+export async function confirmBooking(id: string, token: string, as?: 'host'): Promise<PublicBooking> {
+  return unwrap(await request('POST', `/public/bookings/${enc(id)}/confirm`, { body: { t: token, as } }), 'booking');
 }
 
 /** URL of the .ics download for a booking (GET /public/bookings/:id/ics?t=). */

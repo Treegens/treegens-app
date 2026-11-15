@@ -9,7 +9,7 @@
  * page are loaded in full.
  */
 import { DateTime, IANAZone } from 'luxon';
-import { calendarEventLeft } from '../../../shared/calendar';
+import { CALENDAR_PENDING, calendarEventLeft } from '../../../shared/calendar';
 import type { AdminBookingsResponse, Booking, BookingIndexEntry, Host, Job } from '../../../shared/types';
 import { calendarEventIdFor } from '../booking';
 import { forgetHostBusy } from '../busy';
@@ -187,6 +187,24 @@ async function removeLeftEvent(ctx: Ctx, b: Booking): Promise<boolean> {
     return false;
   }
   return removed;
+}
+
+/**
+ * A cancelled meeting whose event still has to come off Google Calendar, with nothing gone wrong yet: the
+ * cancellation has not reached Google (cancelBooking marks the record until it has, and a slow Google
+ * leaves that mark while it finishes in the background), or a calendar sync is queued for a booking whose
+ * last word from the calendar is not that the event was removed or left. Read for the drawer, which says
+ * "Being removed" until the removal has happened. The delete is not changed by it (see eraseRefusal).
+ */
+export async function calendarBeingRemoved(ctx: Ctx, b: Booking): Promise<boolean> {
+  if (b.status !== 'cancelled' || !b.google) return false;
+  if (b.google.error === CALENDAR_PENDING) return true;
+  // A real failure is said as one ("Still on Google Calendar: ...").
+  if (b.google.error) return false;
+  const cancelledAt = b.cancellation?.at ?? '';
+  const settled = (b.timeline ?? []).some((t) => (t.type === 'calendar_event_removed' || t.type === 'calendar_event_left') && t.at >= cancelledAt);
+  if (settled) return false;
+  return (await listJobs(ctx)).some((j) => j.bookingId === b.id && j.type === 'gcal_sync');
 }
 
 export interface EraseOptions {

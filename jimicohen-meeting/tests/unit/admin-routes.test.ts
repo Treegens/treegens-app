@@ -555,6 +555,19 @@ describe('PUT /admin/site', () => {
     expect(s.ctx.logs.filter((l) => l.level === 'error' || l.level === 'warn')).toEqual([]);
   });
 
+  it('plans the reminder call of a booking that the old calling hours had left without one', async () => {
+    const s = await signIn();
+    const rule = { id: 'rem_call_2h', enabled: true, channel: 'call' as const, audience: 'invitee' as const, trigger: 'before_start' as const, offsetMinutes: 120 };
+    await repo.saveEventType(s.ctx, { ...(await repo.getEventType(s.ctx, 'evt_intro'))!, reminders: [rule] });
+    // A 10 AM meeting in New York with no call queued: the hours it was booked under had no time for it.
+    const booking = await seedBooking(s.ctx, 'bk_nocall', { start: '2026-11-18T15:00:00.000Z', consent: { sms: false, call: true, at: TEST_NOW, text: 'ok' } });
+    await ok(call(s, 'PUT', '/admin/site', { assistant: { callWindowStartHour: 9 } }));
+    await s.ctx.settle();
+    const calls = (await repo.listJobs(s.ctx)).filter((j) => j.channel === 'call');
+    expect(calls.map((j) => [j.bookingId, j.ruleId, j.dueAt])).toEqual([[booking.id, rule.id, '2026-11-18T14:00:00.000Z']]); // 9 AM in New York
+    expect(s.ctx.logs.filter((l) => l.level === 'error' || l.level === 'warn')).toEqual([]);
+  });
+
   it('a failing move of the reminder calls never fails the save', async () => {
     const s = await signIn();
     vi.spyOn(repo, 'listJobs').mockRejectedValue(new Error('storage hiccup'));
@@ -2365,6 +2378,20 @@ describe('GET /admin/overview', () => {
     await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { timezone: 'America/New_York', schedules: [{ id: 'sch_default', name: 'Working hours', weekly: { 1: [{ start: '09:00', end: '17:00' }] }, overrides: [] }] }));
     o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     expect(keys(o).filter((k) => k.startsWith('shared_hours'))).toEqual([]);
+  });
+
+  it('does not say people can book a joint meeting that cannot be booked, next to the warning that says so', async () => {
+    const s = await signIn();
+    await ok(call(s, 'PUT', '/admin/site', { email: { provider: 'none' } }));
+    const { eventType } = await apartJoint(s);
+    await ok(call(s, 'PUT', `/admin/event-types/${eventType.id}`, { reminders: [{ id: 'rem_sms', channel: 'sms', audience: 'invitee', trigger: 'before_start', offsetMinutes: 60, enabled: true }] }));
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(keys(o)).toContain(`shared_hours_${eventType.id}`);
+    // The other meetings can still be booked and are still named; the joint one is not.
+    const unheard = o.warnings.find((w) => w.key === 'bookings_reach_nobody')!;
+    expect(unheard.message).toMatch(/^People can book "Intro call" and "Meeting", but nobody hears about it/);
+    expect(unheard.message).not.toContain('Together');
+    expect(o.warnings.find((w) => w.key === 'twilio_missing')?.message ?? '').not.toContain('Together');
   });
 
   describe('POST /admin/event-types-check', () => {

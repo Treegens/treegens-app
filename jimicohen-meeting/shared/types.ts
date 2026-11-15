@@ -286,7 +286,14 @@ export interface Booking {
     via?: 'host_link';
   } | null;
   rescheduledFromStart?: ISODateTime | null;
+  /** every move, by anyone (the SEQUENCE of the calendar files) */
   rescheduleCount: number;
+  /**
+   * Moves made on the booking page by the invitee or through a host's link (the invitee holds the same
+   * link), which the page's cap counts. Not the owner's own moves. Missing on bookings saved before it was
+   * kept: read as rescheduleCount then.
+   */
+  inviteeMoves?: number;
   /**
    * Work after a change that is not finished yet: the calendar, the reminders and the notices. Written in
    * the same save that makes the change, removed once that work is done. reconcileBookings finishes it
@@ -323,6 +330,12 @@ export interface BookingIndexEntry {
    * when the storage client lost the answer and somebody else wrote to the index in between.
    */
   req?: string;
+  /**
+   * When that request took the time (epoch ms). A retry of the same request (same key, so the same id)
+   * finds the entry; once it is older than any request can run, the retry takes it over instead of
+   * waiting for a first try that is no longer running.
+   */
+  takenAt?: number;
 }
 
 // ───────────────────────────── Jobs (outbound messages + sync) ─────────────────────────────
@@ -551,6 +564,10 @@ export interface PublicBooking {
   cancellation?: { at: ISODateTime; by: string; reason?: string; byName?: string } | null;
   rescheduledFromStart?: ISODateTime | null;
   attendanceConfirmed: boolean;
+  /** 'paused': the meeting cannot be moved because its event type is paused (canReschedule is false then) */
+  rescheduleBlocked?: 'paused';
+  /** the signed-in owner opened the page from a host's link: the page then has the dashboard's rights (see the public routes) */
+  ownerView?: boolean;
 }
 
 /** POST /public/bookings → 201 */
@@ -713,6 +730,11 @@ export interface IntegrationTestResponse {
 export interface AdminBooking extends Booking {
   hosts: PublicHost[];
   manageUrl: string; // manage link the host can open or forward
+  /**
+   * GET /admin/bookings/:id only: a cancelled meeting whose event has not come off Google Calendar yet,
+   * with nothing gone wrong so far (the removal is on its way or queued). The drawer says "Being removed".
+   */
+  calendarRemoving?: boolean;
 }
 
 /** GET /admin/bookings?scope=upcoming|past|cancelled&q=&limit=&offset= */

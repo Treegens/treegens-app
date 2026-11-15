@@ -628,5 +628,18 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       s.expect(await badge('Email'), 'email badge').toBe('Sending from Gmail');
       s.expect((await page.getByText('The Google keys are missing').count()), 'the page notice').toBe(0);
     });
+
+    await s.step('disconnecting Google says, before it is done, that the emails sent from Gmail stop too', async () => {
+      await clearToasts(page);
+      const google = card('Google Calendar');
+      await google.getByRole('button', { name: 'Disconnect' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Disconnect Google Calendar?' });
+      await dialog.getByText(/Your emails are sent from this Gmail, so confirmations and reminders stop too until you connect again or set up Resend\./).waitFor();
+      await s.screenshot(page, 'disconnect google while gmail sends the emails');
+      await dialog.getByRole('button', { name: 'Disconnect' }).click();
+      await expectToast(page, 'Google Calendar disconnected');
+      await page.getByText('no emails go out until you connect again or set up Resend').first().waitFor();
+      s.expect((await status()).email, 'email after disconnecting').toMatchObject({ resolved: 'none', gmailAvailable: false });
+    });
   });
 });

@@ -34,7 +34,7 @@
 import { newEventType } from '../../shared/defaults';
 import type { AdminBootstrap, AssetUploadResponse, Booking, EventType, Host, HostInviteResponse, SiteSettings } from '../../shared/types';
 import { cleanPurpose, MAX_ASSET_REQUEST_BYTES, parseImageDataUrl } from '../lib/admin/assets';
-import { eraseBooking, exportBookingsCsv, listAdminBookings } from '../lib/admin/bookings';
+import { calendarBeingRemoved, eraseBooking, exportBookingsCsv, listAdminBookings } from '../lib/admin/bookings';
 import { buildEventType, freeSlug, MAX_TITLE_LENGTH, remindersChanged } from '../lib/admin/event-types';
 import { applyHostUpdate, createCoHost, loadCalendars, rotateInvite } from '../lib/admin/hosts';
 import { integrationsStatus, runIntegrationTest, updateIntegrations } from '../lib/admin/integrations';
@@ -47,7 +47,7 @@ import { randomId } from '../lib/crypto';
 import type { Ctx } from '../lib/ctx';
 import { disconnectGoogle } from '../lib/google';
 import { type Handler, HttpError, json, readJson, route, type Route } from '../lib/http';
-import { replanBookingReminders, replanReminderCalls } from '../lib/jobs';
+import { planMissedReminderCalls, replanBookingReminders, replanReminderCalls } from '../lib/jobs';
 import {
   assetUrl,
   deleteAsset,
@@ -100,7 +100,9 @@ async function requireBooking(ctx: Ctx, id: string): Promise<Booking> {
 
 async function adminBookingResponse(ctx: Ctx, booking: Booking): Promise<Response> {
   // Call transcripts come from the call records while they are kept; the booking stores only the outcome.
-  return json({ booking: await withCallTranscripts(ctx, toAdminBooking(ctx, booking, hostMap(await listHosts(ctx)))) });
+  const view = await withCallTranscripts(ctx, toAdminBooking(ctx, booking, hostMap(await listHosts(ctx))));
+  if (await calendarBeingRemoved(ctx, booking).catch(() => false)) view.calendarRemoving = true;
+  return json({ booking: view });
 }
 
 // ───────────────────────── event types ─────────────────────────
@@ -147,16 +149,21 @@ async function replanReminders(ctx: Ctx, eventType: EventType): Promise<void> {
 
 /**
  * After the calling hours changed: moves the reminder calls already waiting in the queue inside the
- * new hours, as the Settings hint says. Runs after the response and never fails the save.
+ * new hours, as the Settings hint says, then plans the calls the old hours had left no time for when
+ * the new ones do. Runs after the response and never fails the save.
  */
 function replanCallsInBackground(ctx: Ctx, hours: SiteSettings['assistant']): void {
-  ctx.waitUntil(
-    replanReminderCalls(ctx, hours, {
+  const work = async (): Promise<void> => {
+    const moved = await replanReminderCalls(ctx, hours, {
       onError: (jobId, err) => ctx.log('warn', 'settings: could not move a reminder call into the new calling hours', { jobId, error: err instanceof Error ? err.name : 'unknown' }),
-    })
-      .then((r) => ctx.log('info', 'settings: reminder calls re-planned for the new calling hours', r))
-      .catch((err) => ctx.log('error', 'settings: re-planning reminder calls failed', { error: err instanceof Error ? err.name : 'unknown' })),
-  );
+    });
+    ctx.log('info', 'settings: reminder calls re-planned for the new calling hours', moved);
+    const planned = await planMissedReminderCalls(ctx, hours, {
+      onError: (bookingId, err) => ctx.log('warn', 'settings: could not plan a reminder call in the new calling hours', { bookingId, error: err instanceof Error ? err.name : 'unknown' }),
+    });
+    ctx.log('info', 'settings: reminder calls planned that the old calling hours had no time for', planned);
+  };
+  ctx.waitUntil(work().catch((err) => ctx.log('error', 'settings: re-planning reminder calls failed', { error: err instanceof Error ? err.name : 'unknown' })));
 }
 
 function replanInBackground(ctx: Ctx, eventType: EventType): void {

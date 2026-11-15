@@ -10,6 +10,7 @@ import { isSupportedCountry, parsePhoneNumberFromString, type CountryCode } from
 import { parsePhoneNumberFromString as parseWithNumberTypes } from 'libphonenumber-js/max';
 import { hmacHex, safeEqual } from './crypto';
 import { API_PREFIX, BASE_PATH, type Ctx } from './ctx';
+import type { Booking } from '../../shared/types';
 import { cacheGet, cacheSet, getSecrets } from './repo';
 
 // ───────────────────────── account ─────────────────────────
@@ -369,4 +370,17 @@ export function twimlResponse(verbs: string, status = 200): Response {
 export function webhookRefusal(status: number): Response {
   const text = status === 403 ? 'Forbidden' : status === 404 ? 'Not found' : 'Bad request';
   return new Response(text, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+
+// ───────────────────────── consent ─────────────────────────
+
+/**
+ * Why a text or call the invitee agreed to when booking does not go out now. Agreement is only ever taken
+ * back by the invitee (a stop word by text, or "do not call me" on a call), and that is on the timeline in
+ * the same save. Without such an entry they did not agree to this kind of message.
+ */
+export function noConsentReason(booking: Booking, channel: 'sms' | 'call'): 'opted_out_sms' | 'opted_out_call' | 'no_consent' {
+  const stopped = (booking.timeline ?? []).some((t) => t.type === 'sms_opt_out' || (channel === 'call' && t.type === 'call_opt_out'));
+  if (!stopped) return 'no_consent';
+  return channel === 'sms' ? 'opted_out_sms' : 'opted_out_call';
 }

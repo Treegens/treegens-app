@@ -667,6 +667,27 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect((await eventNamed(made.adaEvent)).event.status, 'the event, left as the owner was told').toBe('confirmed');
     });
 
+    await s.step('while the removal of a cancelled meeting\'s event is still on its way, the drawer says "Being removed", not "Removed"', async () => {
+      // The server's own answer, with its flag for a removal that has not happened yet (unit-tested on the server).
+      const detail = `**/api/admin/bookings/${made.alan}`;
+      await page.route(detail, async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.booking.google = { ...body.booking.google, error: undefined };
+        body.booking.calendarRemoving = true;
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(s.url(`/admin/bookings?scope=cancelled&b=${made.alan}`));
+      await drawer.getByRole('heading', { name: 'Alan Turing' }).waitFor();
+      const calendar = drawer.locator('.adm-bk__facts div').filter({ has: page.locator('dt', { hasText: 'Calendar' }) }).locator('dd');
+      await calendar.getByText('Being removed', { exact: true }).waitFor();
+      s.expect(await calendar.getByText('Removed', { exact: true }).count(), '"Removed" while it is still on its way').toBe(0);
+      await page.unroute(detail);
+      // Without the flag the real state shows again: Google still refuses.
+      await page.goto(s.url(`/admin/bookings?scope=cancelled&b=${made.alan}`));
+      await drawer.getByText(/Still on Google Calendar: Google request failed/).waitFor();
+    });
+
     await s.step('once Google works again, a delete takes the event off first and asks nothing more', async () => {
       await s.clearFailures();
       await clearToasts(page);

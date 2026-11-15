@@ -230,6 +230,8 @@ export const routes: Route[] = [
     await limitByVisitor(ctx, 'manage-write', MANAGE_WRITES_PER_10_MIN, 600);
     const body = await readJson<Record<string, unknown>>(req, MANAGE_BODY_LIMIT);
     if (!verifyManageToken(ctx, params.id, tokenOf(body))) throw bookingNotFound();
+    // "I'll be there" is the invitee's own answer. A host looking at the page through a host's link cannot give it for them.
+    if (body.as === 'host') throw new HttpError(409, 'host_link', "Only the invitee can say they will be there. A host's link shows whether they have.");
     const booking = await confirmAttendance(ctx, params.id, 'link');
     return json({ booking: await publicView(ctx, booking) });
   }),

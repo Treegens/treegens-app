@@ -510,6 +510,7 @@ describe('createBooking: a solo event', () => {
         inviteeEmail: 'Ada.L@example.com',
         eventTitle: 'Intro call',
         req: expect.stringMatching(/^[A-Za-z0-9_-]{12}$/),
+        takenAt: Date.parse(NOW),
       },
     ]);
   });
@@ -2108,7 +2109,7 @@ describe('rescheduleBooking', () => {
       expect(await failure(rescheduleBooking(ctx, booking.id, { startIso, by: 'invitee' }))).toMatchObject({ status: 409, code: 'slot_taken' });
     }
     expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: 'tomorrow', by: 'invitee' }))).toMatchObject({ status: 422, fields: { start: 'Please pick a time.' } });
-    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: WED_14, by: 'invitee' }))).toMatchObject({ status: 422, code: 'invalid' });
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: WED_14, by: 'invitee' }))).toMatchObject({ status: 422, code: 'same_time' });
     expect((await getBooking(ctx, booking.id))).toMatchObject({ start: WED_14, rescheduleCount: 0 });
   });
 
@@ -3532,5 +3533,499 @@ describe('waiting for the calendars', () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0].body).toContain('took too long to answer');
     expect(ctx.logs.some((l) => l.level === 'error' && /did not answer in time/.test(l.msg))).toBe(true);
+  });
+});
+
+// ───────────────────────── storage trouble between two writes (final review) ─────────────────────────
+
+describe('a booking whose writes ran into storage trouble', () => {
+  const KEY = 'form-key-' + 'Z9y8X7w6V5u4T3s2R1q0';
+  const keyed = (over: Partial<CreateBookingRequest> = {}) => request({ requestKey: KEY, ...over });
+  const GRACE = { email: 'grace@example.com', name: 'Grace Hopper', requestKey: 'other-key-' + 'g'.repeat(20) };
+
+  /**
+   * The create-only write of the booking record lands, but its answer is lost (`modified: false`), and every
+   * read of that record fails while `readsFail` is on: the same storage trouble that lost the answer.
+   */
+  function recordTroubleKV(): KV & { arm(failedReads: number): void; readsFail: number } {
+    const inner = memoryKV();
+    let armed = 0;
+    const kv = {
+      ...inner,
+      readsFail: 0,
+      arm(failedReads: number) {
+        armed = failedReads;
+      },
+      async setJSON(key: string, value: unknown, opts?: SetOptions) {
+        if (armed > 0 && key.startsWith('bookings/') && opts?.onlyIfNew) {
+          kv.readsFail = armed;
+          armed = 0;
+          await inner.setJSON(key, value, opts);
+          return { modified: false };
+        }
+        return inner.setJSON(key, value, opts);
+      },
+      async getJSON<T>(key: string) {
+        if (kv.readsFail > 0 && key.startsWith('bookings/')) {
+          kv.readsFail--;
+          throw new Error('Netlify Blobs did not answer within 8 s (read)');
+        }
+        return inner.getJSON<T>(key);
+      },
+    };
+    return kv;
+  }
+
+  it('keeps the time of a record that was saved although every check of it failed, and finishes its work later', async () => {
+    const kv = recordTroubleKV();
+    const ctx = await setup({ kv });
+    kv.arm(2); // the check in createBookingRecord, and the look createBooking takes after it
+    const lost = await createBooking(ctx, keyed()).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(lost).toBeInstanceOf(Error);
+    // The record is on file, so its time stays taken.
+    expect((await getBookingIndex(ctx)).map((e) => e.start)).toEqual([WED_14]);
+    // The retry the page asks for gets that booking, and nobody else can book its time.
+    const retry = await createBooking(ctx, keyed());
+    expect(retry.booking).toMatchObject({ start: WED_14, status: 'confirmed', invitee: { email: 'ada@example.com' } });
+    expect(await failure(createBooking(ctx, request(GRACE)))).toMatchObject({ code: 'slot_taken' });
+    // The owner sees it, and its confirmation and reminders follow once reconcile picks the marker up.
+    ctx.clock.advance(11 * 60_000);
+    expect(await reconcileBookings(ctx)).toMatchObject({ finished: 1 });
+    await ctx.settle();
+    expect(await followUpOf(ctx, retry.booking.id)).toBeUndefined();
+    expect((await getBooking(ctx, retry.booking.id))!.timeline.filter((t) => t.type === 'confirmation_email_skipped')).toHaveLength(1);
+  });
+
+  it('carries on with a record that was saved although its answer and the check were lost', async () => {
+    const kv = recordTroubleKV();
+    const ctx = await setup({ kv });
+    kv.arm(1); // only the check in createBookingRecord
+    const { booking } = await createBooking(ctx, keyed());
+    expect(booking).toMatchObject({ start: WED_14, status: 'confirmed' });
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([booking.id]);
+    expect(await followUpOf(ctx, booking.id)).toBeUndefined();
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation' && j.bookingId === booking.id)).toHaveLength(1);
+    expect(await failure(createBooking(ctx, request(GRACE)))).toMatchObject({ code: 'slot_taken' });
+  });
+
+  it('carries on with a record whose save threw after it landed', async () => {
+    const inner = memoryKV();
+    let armed = false;
+    const kv: KV = {
+      ...inner,
+      async setJSON(key, value, opts) {
+        if (armed && key.startsWith('bookings/') && opts?.onlyIfNew) {
+          armed = false;
+          await inner.setJSON(key, value, opts);
+          throw new Error('storage write failed');
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    const ctx = await setup({ kv });
+    armed = true;
+    const { booking } = await createBooking(ctx, keyed());
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([booking.id]);
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation' && j.bookingId === booking.id)).toHaveLength(1);
+  });
+
+  /** A record of a keyed request that is not in the index, as the earlier code left one behind. */
+  async function orphanOf(ctx: TestCtx, kv: ReturnType<typeof recordTroubleKV>): Promise<string> {
+    kv.arm(2);
+    await createBooking(ctx, keyed()).catch(() => undefined);
+    const [entry] = await getBookingIndex(ctx);
+    await mutateBookingIndex(ctx, (entries) => entries.filter((e) => e.id !== entry.id));
+    expect((await getBooking(ctx, entry.id))?.followUp?.kind).toBe('created');
+    return entry.id;
+  }
+
+  it('takes the time again for a record that lost its place in the index, and then tells everyone', async () => {
+    const kv = recordTroubleKV();
+    const ctx = await setup({ kv });
+    const id = await orphanOf(ctx, kv);
+    const retry = await createBooking(ctx, keyed());
+    expect(retry.booking.id).toBe(id);
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([id]);
+    expect(await followUpOf(ctx, id)).toBeUndefined();
+    expect(await failure(createBooking(ctx, request(GRACE)))).toMatchObject({ code: 'slot_taken' });
+    // Once more: the same booking, nothing sent twice.
+    expect((await createBooking(ctx, keyed())).booking.id).toBe(id);
+    await ctx.settle();
+    expect((await getBooking(ctx, id))!.timeline.filter((t) => t.type === 'confirmation_email_skipped')).toHaveLength(1);
+    expect(await jobsOf(ctx, (j) => j.kind === 'reminder' && j.bookingId === id)).not.toHaveLength(0);
+  });
+
+  it('does not hand back a record whose time somebody else has booked since, and removes it', async () => {
+    const kv = recordTroubleKV();
+    const ctx = await setup({ kv });
+    const id = await orphanOf(ctx, kv);
+    const grace = await createBooking(ctx, request(GRACE));
+    expect(await failure(createBooking(ctx, keyed()))).toMatchObject({ code: 'slot_taken' });
+    expect(await getBooking(ctx, id)).toBeNull();
+    expect((await confirmedIndex(ctx)).map((e) => e.id)).toEqual([grace.booking.id]);
+  });
+
+  /** The index write of a new booking lands, its answer is lost, and the reads that would show it fail. */
+  function indexTroubleKV(): KV & { arm(): void } {
+    const inner = memoryKV();
+    let armed = false;
+    let failReads = 0;
+    return {
+      ...inner,
+      arm() {
+        armed = true;
+      },
+      async setJSON(key, value, opts) {
+        if (armed && key === 'index/bookings') {
+          armed = false;
+          await inner.setJSON(key, value, opts);
+          failReads = 2; // the re-read inside the swap, and the look createBooking takes after it
+          return { modified: false };
+        }
+        return inner.setJSON(key, value, opts);
+      },
+      async getJSONWithEtag<T>(key: string) {
+        if (failReads > 0 && key === 'index/bookings') {
+          failReads--;
+          throw new Error('Netlify Blobs did not answer within 8 s (read index/bookings)');
+        }
+        return inner.getJSONWithEtag<T>(key);
+      },
+      async getJSON<T>(key: string) {
+        if (failReads > 0 && key === 'index/bookings') {
+          failReads--;
+          throw new Error('Netlify Blobs did not answer within 8 s (read index/bookings)');
+        }
+        return inner.getJSON<T>(key);
+      },
+    };
+  }
+
+  it('lets a retry take over the time its failed first try left in the index, once that try is surely over', async () => {
+    const kv = indexTroubleKV();
+    const ctx = await setup({ kv });
+    kv.arm();
+    expect(await createBooking(ctx, keyed()).then(() => 'booked', () => 'failed')).toBe('failed');
+    expect(await getBookingIndex(ctx)).toHaveLength(1);
+    // Right away the first try could still be saving: the retry is asked to wait.
+    expect(await failure(createBooking(ctx, keyed()))).toMatchObject({ status: 409, code: 'in_progress' });
+    ctx.clock.advance(60_000);
+    const retry = await createBooking(ctx, keyed());
+    expect(retry.booking).toMatchObject({ start: WED_14, status: 'confirmed' });
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([retry.booking.id]);
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation' && j.bookingId === retry.booking.id)).toHaveLength(1);
+    expect(await failure(createBooking(ctx, request(GRACE)))).toMatchObject({ code: 'slot_taken' });
+  });
+
+  it('books a first try whose index write lost its answer when only the check inside the swap failed', async () => {
+    const inner = memoryKV();
+    let armed = false;
+    let failRead = false;
+    const kv: KV = {
+      ...inner,
+      async setJSON(key, value, opts) {
+        if (armed && key === 'index/bookings') {
+          armed = false;
+          await inner.setJSON(key, value, opts);
+          failRead = true;
+          return { modified: false };
+        }
+        return inner.setJSON(key, value, opts);
+      },
+      async getJSONWithEtag<T>(key: string) {
+        if (failRead && key === 'index/bookings') {
+          failRead = false;
+          throw new Error('Netlify Blobs did not answer within 8 s (read index/bookings)');
+        }
+        return inner.getJSONWithEtag<T>(key);
+      },
+    };
+    const ctx = await setup({ kv });
+    armed = true;
+    const { booking } = await createBooking(ctx, keyed());
+    expect((await getBookingIndex(ctx)).map((e) => e.id)).toEqual([booking.id]);
+    expect(await jobsOf(ctx, (j) => j.kind === 'confirmation' && j.bookingId === booking.id)).toHaveLength(1);
+  });
+
+  it('does not let reconcile remove an entry a retry has just taken over', async () => {
+    const inner = memoryKV();
+    let takeOver: (() => Promise<void>) | null = null;
+    const kv: KV = {
+      ...inner,
+      async getJSON<T>(key: string) {
+        const value = await inner.getJSON<T>(key);
+        // Reconcile's last look at the record, which is still missing: a retry takes the entry over right then.
+        if (takeOver && key.startsWith('bookings/') && value === null) {
+          const run = takeOver;
+          takeOver = null;
+          await run();
+        }
+        return value;
+      },
+    };
+    const ctx = await setup({ kv });
+    const entry: BookingIndexEntry = {
+      id: 'bkg_leftover0000000000000000',
+      start: WED_14,
+      end: '2026-11-18T14:15:00.000Z',
+      hostIds: [OWNER],
+      eventTypeId: 'evt_intro',
+      status: 'confirmed',
+      inviteeName: 'Ada Lovelace',
+      inviteeEmail: 'ada@example.com',
+      eventTitle: 'Intro call',
+      req: 'first-try-01',
+      takenAt: Date.parse(NOW),
+    };
+    await mutateBookingIndex(ctx, () => [entry]);
+    expect(await reconcileBookings(ctx)).toMatchObject({ removed: 0 });
+    ctx.clock.advance(30 * 60_000);
+    let reads = 0;
+    takeOver = async () => {
+      reads++;
+      // the second read of the record (the check right before removing) is where the retry lands
+      if (reads === 1) {
+        takeOver = async () => {
+          await mutateBookingIndex(ctx, (entries) => entries.map((e) => ({ ...e, req: 'retry-mark01', takenAt: ctx.now().getTime() })));
+        };
+      }
+    };
+    expect(await reconcileBookings(ctx)).toMatchObject({ removed: 0 });
+    expect((await getBookingIndex(ctx)).map((e) => e.req)).toEqual(['retry-mark01']);
+    // An entry left as reconcile saw it is still removed.
+    ctx.clock.advance(30 * 60_000);
+    await reconcileBookings(ctx);
+    expect(await reconcileBookings(ctx)).toMatchObject({ removed: 1 });
+    expect(await getBookingIndex(ctx)).toEqual([]);
+  });
+
+  it('answers a move whose index write lost its answer, while another booking landed, as moved', async () => {
+    const inner = memoryKV();
+    let armed = false;
+    const kv: KV = {
+      ...inner,
+      async setJSON(key, value, opts) {
+        if (armed && key === 'index/bookings' && opts?.onlyIfMatch) {
+          armed = false;
+          const first = await inner.setJSON(key, value, opts);
+          await createBooking(ctx, request(GRACE).start ? request({ ...GRACE, start: '2026-11-19T10:00:00.000Z' }) : request());
+          return first.modified ? { modified: false } : first;
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    const ctx = await setup({ kv });
+    const { booking } = await createBooking(ctx, request());
+    armed = true;
+    const moved = await rescheduleBooking(ctx, booking.id, { startIso: '2026-11-18T15:00:00.000Z', by: 'invitee' });
+    expect(moved).toMatchObject({ start: '2026-11-18T15:00:00.000Z', rescheduleCount: 1, rescheduledFromStart: WED_14 });
+    expect((await getBookingIndex(ctx)).find((e) => e.id === booking.id)?.start).toBe('2026-11-18T15:00:00.000Z');
+    expect(await followUpOf(ctx, booking.id)).toBeUndefined();
+    expect(await jobsOf(ctx, (j) => j.kind === 'rescheduled' && j.bookingId === booking.id && j.audience === 'invitee')).toHaveLength(1);
+  });
+
+  /** The next armed write of a record lands, then something else writes to it, then the lost answer comes back. */
+  function interleavedRecordKV(match: (value: Booking) => boolean, between: () => Promise<void>): KV & { arm(): void } {
+    const inner = memoryKV();
+    let armed = false;
+    return {
+      ...inner,
+      arm() {
+        armed = true;
+      },
+      async setJSON(key, value, opts) {
+        if (armed && key.startsWith('bookings/') && opts?.onlyIfMatch && match(value as Booking)) {
+          armed = false;
+          const first = await inner.setJSON(key, value, opts);
+          await between();
+          return first.modified ? { modified: false } : first;
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+  }
+
+  it('does the follow-up of a cancellation whose save lost its answer while a job wrote to the record', async () => {
+    let id = '';
+    let ctx: TestCtx | null = null;
+    const kv = interleavedRecordKV(
+      (b) => b.status === 'cancelled',
+      async () => {
+        await updateBooking(ctx!, id, (b) => ({ ...b, timeline: [...b.timeline, { at: ctx!.now().toISOString(), type: 'reminder_email_sent' }] }));
+      },
+    );
+    ctx = await setup({ kv });
+    const { booking } = await createBooking(ctx, request());
+    id = booking.id;
+    kv.arm();
+    const cancelled = await cancelBooking(ctx, id, { by: 'invitee' });
+    await ctx.settle();
+    expect(cancelled.followUp).toBeUndefined();
+    expect((await getBookingIndex(ctx)).find((e) => e.id === id)?.status).toBe('cancelled');
+    expect(await jobsOf(ctx, (j) => j.kind === 'reminder' && j.bookingId === id)).toEqual([]);
+    // The cancellation notice was queued and run (no email provider in this test, so it is noted as skipped).
+    expect((await getBooking(ctx, id))!.timeline.map((t) => t.type)).toContain('cancelled_email_skipped');
+  });
+
+  it('does the follow-up of a move whose save lost its answer while a job wrote to the record', async () => {
+    let id = '';
+    let ctx: TestCtx | null = null;
+    const kv = interleavedRecordKV(
+      (b) => b.rescheduleCount === 1,
+      async () => {
+        await updateBooking(ctx!, id, (b) => ({ ...b, timeline: [...b.timeline, { at: ctx!.now().toISOString(), type: 'reminder_email_sent' }] }));
+      },
+    );
+    ctx = await setup({ kv });
+    const { booking } = await createBooking(ctx, request());
+    id = booking.id;
+    kv.arm();
+    const moved = await rescheduleBooking(ctx, id, { startIso: '2026-11-19T10:00:00.000Z', by: 'invitee' });
+    await ctx.settle();
+    expect(moved).toMatchObject({ start: '2026-11-19T10:00:00.000Z', rescheduleCount: 1 });
+    expect(moved.followUp).toBeUndefined();
+    expect((await getBooking(ctx, id))!.timeline.map((t) => t.type)).toContain('rescheduled_email_skipped');
+    const reminders = await jobsOf(ctx, (j) => j.kind === 'reminder' && j.bookingId === id);
+    expect(reminders.length).toBeGreaterThan(0);
+    expect(reminders.every((j) => (j as Job & { forStart?: string }).forStart === '2026-11-19T10:00:00.000Z')).toBe(true);
+  });
+
+  it('gives a phone number its place back when a second press of the button finds the booking already made', async () => {
+    const PHONE = '+14155552671';
+    const inner = memoryKV();
+    let gate: Promise<void> | null = null;
+    let open: () => void = () => undefined;
+    let armed = false;
+    const kv: KV = {
+      ...inner,
+      async setJSON(key, value, opts) {
+        if (armed && key === 'index/bookings') {
+          armed = false;
+          gate = new Promise<void>((resolve) => (open = resolve));
+          await gate;
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    const ctx = await setup({ kv, env: TWILIO_ENV });
+    net(ctx);
+    const texted = (over: Partial<CreateBookingRequest> = {}) => keyed({ phone: PHONE, consent: { sms: true, call: false }, ...over });
+    armed = true;
+    const first = createBooking(ctx, texted());
+    while (!gate) await new Promise((resolve) => setTimeout(resolve, 1));
+    const second = createBooking(ctx, texted());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    open();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.booking.id).toBe(b.booking.id);
+    // Two more bookings with texts on that number today: three in all.
+    for (const [i, start] of ['2026-11-18T15:00:00.000Z', '2026-11-18T16:00:00.000Z'].entries()) {
+      const made = await createBooking(ctx, texted({ start, email: `ada${i}@example.com`, requestKey: `other-${i}-` + 'k'.repeat(20) }));
+      expect(made.booking.consent.sms).toBe(true);
+    }
+    expect(await failure(createBooking(ctx, texted({ start: '2026-11-19T10:00:00.000Z', email: 'ada9@example.com', requestKey: 'other-9-' + 'k'.repeat(20) })))).toMatchObject({ code: 'phone_limit' });
+    await ctx.settle();
+  });
+});
+
+// ───────────────────────── what a cancellation reason reaches (final review) ─────────────────────────
+
+describe('the reason given with a cancellation', () => {
+  const REASON = 'Your account is on hold. Restore access at https://evil.example/restore';
+  const textOf = (call: Call): string => String(call.json?.text ?? '');
+
+  async function cancelled(p: Parameters<typeof cancelBooking>[2]) {
+    const ctx = await setup({ env: RESEND_ENV });
+    await useResend(ctx);
+    const calls = net(ctx);
+    const { booking } = await createBooking(ctx, request({ email: 'stranger@example.org', name: 'Billing Team' }));
+    await ctx.settle();
+    calls.length = 0;
+    await cancelBooking(ctx, booking.id, p);
+    await ctx.settle();
+    return { ctx, calls, booking };
+  }
+
+  it('is not mailed back to the invitee when it was typed on the booking page, but the host reads it', async () => {
+    const { calls } = await cancelled({ by: 'invitee', reason: REASON });
+    const invitee = emailsTo(calls, 'stranger@example.org');
+    expect(invitee).toHaveLength(1);
+    expect(textOf(invitee[0])).not.toContain('evil.example');
+    expect(textOf(invitee[0])).not.toContain('Reason given');
+    expect(String(invitee[0].json?.html ?? '')).not.toContain('evil.example');
+    const host = emailsTo(calls, 'jimi@example.com');
+    expect(host).toHaveLength(1);
+    expect(textOf(host[0])).toContain(`Reason given: ${REASON}`);
+  });
+
+  it('is not mailed to the invitee either when it came through a host link, which the invitee holds too', async () => {
+    const { calls } = await cancelled({ by: 'invitee', actor: 'host', reason: REASON });
+    const invitee = emailsTo(calls, 'stranger@example.org');
+    expect(invitee).toHaveLength(1);
+    expect(textOf(invitee[0])).not.toContain('evil.example');
+    expect(textOf(emailsTo(calls, 'jimi@example.com')[0])).toContain('Reason given');
+  });
+
+  it('reaches the invitee when the owner wrote it', async () => {
+    const { calls } = await cancelled({ by: 'host', reason: 'I am ill, sorry. Please book another day.' });
+    expect(textOf(emailsTo(calls, 'stranger@example.org')[0])).toContain('Reason given: I am ill, sorry. Please book another day.');
+  });
+
+  it("is not made up of the caller's words for a cancellation on a reminder call", async () => {
+    const { ctx, calls, booking } = await cancelled({ by: 'assistant' });
+    const stored = (await getBooking(ctx, booking.id))!;
+    expect(stored.cancellation).toEqual({ at: NOW, by: 'assistant' });
+    expect(stored.timeline.find((t) => t.type === 'cancelled')?.detail).toBe('Cancelled by the invitee on the reminder call, after confirming twice');
+    const invitee = emailsTo(calls, 'stranger@example.org');
+    expect(textOf(invitee[0])).not.toContain('Reason given');
+  });
+});
+
+// ───────────────────────── whose moves the page's cap counts (final review) ─────────────────────────
+
+describe('the five moves the booking page allows', () => {
+  const slots = ['2026-11-19T10:00:00.000Z', '2026-11-19T11:00:00.000Z', '2026-11-19T12:00:00.000Z', '2026-11-20T10:00:00.000Z', '2026-11-20T11:00:00.000Z', '2026-11-20T12:00:00.000Z', '2026-11-20T13:00:00.000Z', '2026-11-20T14:00:00.000Z'];
+
+  it('are not used up by the owner: two owner moves, then five by the invitee, and the calendar files count all seven', async () => {
+    const ctx = await setup();
+    const { booking } = await createBooking(ctx, request());
+    await rescheduleBooking(ctx, booking.id, { startIso: slots[0], by: 'host' });
+    await rescheduleBooking(ctx, booking.id, { startIso: slots[1], by: 'host', actor: 'owner' });
+    for (let i = 0; i < 5; i++) {
+      if (i === 3) ctx.clock.advance(HOUR); // three an hour for the invitee
+      const moved = await rescheduleBooking(ctx, booking.id, { startIso: slots[2 + i], by: 'invitee' });
+      expect(moved.start).toBe(slots[2 + i]);
+    }
+    const sixth = await failure(rescheduleBooking(ctx, booking.id, { startIso: slots[7], by: 'invitee' }));
+    expect(sixth).toMatchObject({ status: 409, code: 'move_limit' });
+    expect(await getBooking(ctx, booking.id)).toMatchObject({ start: slots[6], rescheduleCount: 7, inviteeMoves: 5 });
+    // The owner can still move it.
+    expect((await rescheduleBooking(ctx, booking.id, { startIso: slots[7], by: 'host' })).rescheduleCount).toBe(8);
+  });
+
+  it('count moves through a host link, which the invitee holds too', async () => {
+    const ctx = await setup();
+    const { booking } = await createBooking(ctx, request());
+    for (let i = 0; i < 5; i++) {
+      if (i === 3) ctx.clock.advance(HOUR);
+      await rescheduleBooking(ctx, booking.id, { startIso: slots[i], by: 'invitee', actor: i % 2 ? 'host' : 'invitee' });
+    }
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: slots[5], by: 'invitee', actor: 'host' }))).toMatchObject({ code: 'move_limit' });
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: slots[5], by: 'invitee' }))).toMatchObject({ code: 'move_limit' });
+  });
+
+  it('read a booking saved before they were counted apart as all of its moves', async () => {
+    const ctx = await setup();
+    const { booking } = await createBooking(ctx, request());
+    await updateBooking(ctx, booking.id, (b) => {
+      const { inviteeMoves: _none, ...rest } = b;
+      return { ...rest, rescheduleCount: 5 };
+    });
+    expect(await failure(rescheduleBooking(ctx, booking.id, { startIso: slots[0], by: 'invitee' }))).toMatchObject({ code: 'move_limit' });
+    // An owner move keeps that count for the page's cap.
+    expect(await rescheduleBooking(ctx, booking.id, { startIso: slots[0], by: 'host' })).toMatchObject({ rescheduleCount: 6, inviteeMoves: 5 });
   });
 });

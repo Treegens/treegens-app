@@ -40,7 +40,11 @@ function numberId(phone: string): string {
   return digits ? `+${digits}` : String(phone ?? '').trim() || 'unknown';
 }
 
-/** The counted hit, or null when the limit was already reached. Storage trouble is thrown. */
+/**
+ * The counted hit, or null when the limit was already reached. Storage trouble is thrown, and so is a
+ * counter that was too busy to count (many sends at the same moment): that is no reached limit, so the
+ * send fails and its job is tried again later, instead of being skipped for the day.
+ */
 async function countHit(ctx: Ctx, bucket: string, id: string, limit: number): Promise<RateLimitHit | null> {
   try {
     return await rateLimitTake(ctx, bucket, id, limit, DAY_SEC);

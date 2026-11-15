@@ -76,18 +76,19 @@ function originOf(value: string | null | undefined): string | null {
 }
 
 /**
- * True when a dashboard connection was started from another site: a link elsewhere must not walk
- * the signed-in owner into Google's consent screen for somebody else's record. Browsers say where
- * a navigation came from (Sec-Fetch-Site); older ones are judged by the Referer when they send one.
- * Typing the address or opening a bookmark ("none") is fine.
+ * True only when a connection was started from one of this app's own pages (the Connect buttons on
+ * Integrations and on a co-host's page, which send the browser here). Whoever goes through Google's
+ * consent screen attaches their own calendar, so a link sent from anywhere else (another site, a mail
+ * app, a chat) must not start one: the person clicking it would put their calendar on the record the
+ * link names, which may be somebody else's. Browsers say where a navigation came from (Sec-Fetch-Site:
+ * a mail app or a typed address is "none", which is not ours either); older ones are judged by the Referer.
  */
-function startedElsewhere(ctx: Ctx, req: Request): boolean {
+function startedOnOurPages(ctx: Ctx, req: Request): boolean {
   const site = (req.headers.get('sec-fetch-site') ?? '').toLowerCase();
-  if (site === 'cross-site' || site === 'same-site') return true;
-  if (site !== '') return false;
+  if (site !== '') return site === 'same-origin';
   const from = originOf(req.headers.get('referer'));
   if (!from) return false;
-  return ![originOf(ctx.env.publicBaseUrl), originOf(ctx.env.embedBaseUrl), originOf(req.url)].includes(from);
+  return [originOf(ctx.env.publicBaseUrl), originOf(ctx.env.embedBaseUrl), originOf(req.url)].includes(from);
 }
 
 /**
@@ -220,8 +221,11 @@ export const routes: Route[] = [
       // A valid private link is used first: it opens one host, its own, whoever is signed in.
       const linked = byToken ? await hostFromToken(ctx, hostId, token) : null;
       const admin = !linked && (await isAdmin(ctx, req));
-      // The owner's session opens any host, but only from the owner's own pages.
-      if (admin && startedElsewhere(ctx, req)) {
+      // Either way only from this app's own pages, where the person can see whose calendar is being connected.
+      if (linked && !startedOnOurPages(ctx, req)) {
+        throw new HttpError(403, 'start_from_your_page', 'For your safety, Google can only be connected from this page. Press Connect here to go on.');
+      }
+      if (admin && !startedOnOurPages(ctx, req)) {
         throw new HttpError(403, 'start_from_dashboard', 'For your safety, Google can only be connected from your dashboard. Open Integrations or Team and connect from there.');
       }
       const host = linked ?? (admin ? await getHost(ctx, hostId) : null);
@@ -231,7 +235,8 @@ export const routes: Route[] = [
       }
 
       const site = await getSite(ctx);
-      const returnTo = url.searchParams.get('return') ?? refusalPage;
+      // A co-host's link always comes back to that co-host's own page, which names them, never to the dashboard.
+      const returnTo = linked ? refusalPage : (url.searchParams.get('return') ?? refusalPage);
       // Sending mail from Gmail only ever happens from the owner's account, and only the owner can ask for it.
       const gmail = admin && host.id === site.ownerHostId && url.searchParams.get('gmail') === '1';
       // "Use a different Google account": the account chooser, and no hint pointing at the old one.

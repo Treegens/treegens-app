@@ -229,12 +229,16 @@ function GoogleCard({ open, onToggle }: CardProps) {
     window.location.assign(googleConnectUrl({ hostId: ownerHost.id, returnTo: `${APP_BASE}/admin/integrations`, gmail: gmail || !!hostGoogle?.gmailSend }));
   };
 
+  // Emails go out from this Gmail: disconnecting stops them too, which the owner has to hear before deciding.
+  const sendsFromGmail = data.integrations.email.resolved === 'gmail';
   const disconnect = async () => {
+    const stoppedEmail = sendsFromGmail;
     try {
       await disconnectGoogle(ownerHost.id);
       await refresh();
       setCalendars(null);
-      toast.success('Google Calendar disconnected', 'Bookings will no longer be added to your calendar.');
+      if (stoppedEmail) toast.warning('Google Calendar disconnected', 'Bookings will no longer be added to your calendar, and no emails go out until you connect again or set up Resend.');
+      else toast.success('Google Calendar disconnected', 'Bookings will no longer be added to your calendar.');
     } catch (e) {
       toast.error('Could not disconnect', errorMessage(e));
       throw e;
@@ -467,7 +471,11 @@ function GoogleCard({ open, onToggle }: CardProps) {
         onConfirm={disconnect}
         tone="danger"
         title="Disconnect Google Calendar?"
-        description="Your busy times will no longer be checked and new bookings will not be added to your calendar. Meetings already booked stay where they are."
+        description={
+          sendsFromGmail
+            ? 'Your busy times will no longer be checked and new bookings will not be added to your calendar. Meetings already booked stay where they are. Your emails are sent from this Gmail, so confirmations and reminders stop too until you connect again or set up Resend.'
+            : 'Your busy times will no longer be checked and new bookings will not be added to your calendar. Meetings already booked stay where they are.'
+        }
         confirmLabel="Disconnect"
       />
       <ConfirmDialog

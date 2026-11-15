@@ -262,6 +262,43 @@ describe('a forgotten password', () => {
     expect((await getAdminAuth(ctx))?.passwordVersion).toBe(v0 + 1);
   });
 
+  it('never takes a code that set a password before, also not on an older deploy that still carries it', async () => {
+    // Every deploy reads the same stored data, and each keeps the setup code hash it was built with.
+    const first = newCtx();
+    await setUp(first);
+    const second = makeTestCtx({ kv: first.kv, env: { ...first.env, setupCodeHash: sha256Hex(NEW_CODE) } });
+    const reset = await post(second, '/auth/setup', { code: NEW_CODE, password: NEW_PASSWORD });
+    expect(reset.status).toBe(200);
+    const ownerSession = cookiePair(reset.headers.get('set-cookie') ?? '');
+    const v1 = (await getAdminAuth(first))!.passwordVersion;
+
+    // The first deploy (its permalink, or production rolled back to it) with the first, spent code.
+    const replay = await post(first, '/auth/setup', { code: SETUP_CODE, password: 'someone else took over' });
+    expect(replay.status).toBe(409);
+    expect((await replay.json()).error.code).toBe('already_set_up');
+    // And the second code stays spent as well.
+    expect((await post(second, '/auth/setup', { code: NEW_CODE, password: 'yet another new password' })).status).toBe(409);
+    expect((await getAdminAuth(first))?.passwordVersion).toBe(v1);
+    expect((await state(second, ownerSession)).authenticated).toBe(true);
+    expect((await post(second, '/auth/login', { password: NEW_PASSWORD })).status).toBe(200);
+    expect((await getAdminAuth(first))?.usedSetupCodeHashes).toEqual([sha256Hex(SETUP_CODE), sha256Hex(NEW_CODE)]);
+
+    // A third, new code still works.
+    const third = makeTestCtx({ kv: first.kv, env: { ...first.env, setupCodeHash: sha256Hex('a third setup code, new') } });
+    expect((await post(third, '/auth/setup', { code: 'a third setup code, new', password: 'the third password here' })).status).toBe(200);
+  });
+
+  it('remembers the code of a record from before the list was kept, once a new code replaces it', async () => {
+    const first = newCtx();
+    await setUp(first);
+    // What a record from before looks like: the one hash that set the password, no list.
+    const { usedSetupCodeHashes: _dropped, ...older } = (await getAdminAuth(first))!;
+    await first.kv.setJSON('auth/admin', older);
+    const second = makeTestCtx({ kv: first.kv, env: { ...first.env, setupCodeHash: sha256Hex(NEW_CODE) } });
+    expect((await post(second, '/auth/setup', { code: NEW_CODE, password: NEW_PASSWORD })).status).toBe(200);
+    expect((await post(first, '/auth/setup', { code: SETUP_CODE, password: 'someone else took over' })).status).toBe(409);
+  });
+
   it('is not possible while no setup code is deployed', async () => {
     const ctx = newCtx();
     await setUp(ctx);

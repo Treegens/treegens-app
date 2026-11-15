@@ -233,6 +233,11 @@ export function assignedHosts(booking: Booking, hosts: Host[], site: SiteSetting
   return owner ? [owner] : hosts.slice(0, 1);
 }
 
+/** A cancellation the owner made, with the session checked: the dashboard, or the booking page while signed in. */
+function ownersReason(booking: Booking): boolean {
+  return booking.cancellation?.by === 'host' && booking.cancellation.via !== 'host_link';
+}
+
 function cancelledBy(booking: Booking, site: SiteSettings): string {
   const by = booking.cancellation?.by;
   if (by === 'invitee') return booking.invitee.name;
@@ -327,7 +332,10 @@ export function buildVars(
       .map((a) => `${a.label.trim()}${/[?!.:]$/.test(a.label.trim()) ? '' : ':'} ${a.value.trim()}`)
       .join('\n'),
     guests: booking.guests.join(', '),
-    cancel_reason: booking.cancellation?.reason?.trim() ?? '',
+    // Hosts always read the reason. The invitee only reads one the owner wrote (the dashboard, or the booking
+    // page while signed in): a reason typed on the booking page (by the invitee, or through a host's link,
+    // which the invitee holds too) would go, from the owner's own address, to an address nobody has checked.
+    cancel_reason: audience === 'host' || ownersReason(booking) ? (booking.cancellation?.reason?.trim() ?? '') : '',
     cancelled_by: cancelledBy(booking, site),
     site_name: site.profile.name,
     assistant_name: site.assistant.name,

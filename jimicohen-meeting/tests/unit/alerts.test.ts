@@ -120,6 +120,48 @@ describe('reserveOutbound', () => {
   });
 });
 
+describe('a counter that is busy is not a reached limit', () => {
+  /** A store on which the next `refusals` conditional writes of the site's text counter are turned down, as when other sends win every race. */
+  function contestedSiteCounter(refusals: number) {
+    const inner = memoryKV();
+    const state = { refusals };
+    const kv: KV = {
+      ...inner,
+      setJSON: async (key, value, opts) => {
+        if (key.startsWith('rl/out-sms-all/') && state.refusals > 0 && (opts?.onlyIfMatch || opts?.onlyIfNew)) {
+          state.refusals--;
+          return { modified: false };
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    return { kv, state };
+  }
+
+  it('gives every one of many texts sent at the same moment its place, with no alert', async () => {
+    const ctx = makeTestCtx();
+    const passes = await Promise.all(Array.from({ length: 20 }, (_, i) => reserveOutbound(ctx, 'sms', `+1415555${String(1000 + i)}`)));
+    expect(passes.every((p) => p !== null)).toBe(true);
+    expect(await alerts(ctx)).toEqual([]);
+  });
+
+  it('fails a send whose counter lost every race, so it is tried again, instead of skipping it as the daily limit', async () => {
+    const { kv } = contestedSiteCounter(8);
+    const ctx = makeTestCtx({ kv });
+    await expect(reserveOutbound(ctx, 'sms', '+14155552671')).rejects.toMatchObject({ status: 503, code: 'busy' });
+    expect(await alerts(ctx)).toEqual([]);
+    expect(ctx.logs.some((l) => l.msg.includes('daily limit for the whole site'))).toBe(false);
+    // The number was not charged for it: all six of its texts are still there.
+    for (let i = 0; i < TEXTS_PER_NUMBER_PER_DAY; i++) expect(await outboundAllowed(ctx, 'sms', '+14155552671')).toBe(true);
+  });
+
+  it('still counts a send that lost a few races', async () => {
+    const { kv } = contestedSiteCounter(5);
+    const ctx = makeTestCtx({ kv });
+    expect(await reserveOutbound(ctx, 'sms', '+14155552671')).not.toBeNull();
+  });
+});
+
 // ───────────────────────── only what really goes out counts ─────────────────────────
 
 describe('daily limits count the texts and calls that really go out', () => {
@@ -188,6 +230,30 @@ describe('daily limits count the texts and calls that really go out', () => {
   });
 
   const failure = (): Response => Response.json({ code: 20500, message: 'Internal Server Error' }, { status: 500 });
+
+  it('a text whose counter was too busy fails, to be tried again, and goes out on the retry', async () => {
+    const { ctx, requests } = await world();
+    const inner = ctx.kv;
+    let refusals = 8;
+    ctx.kv = {
+      ...inner,
+      setJSON: async (key, value, opts) => {
+        if (key.startsWith('rl/out-sms-all/') && refusals > 0 && (opts?.onlyIfMatch || opts?.onlyIfNew)) {
+          refusals--;
+          return { modified: false };
+        }
+        return inner.setJSON(key, value, opts);
+      },
+    };
+    const first = await deliverMessage(ctx, textJob(1));
+    expect(first.ok).toBe(false);
+    expect(first.skipped).toBeUndefined();
+    expect(first.error).toMatch(/busy/);
+    expect(requests).toEqual([]);
+    expect(await alerts(ctx)).toEqual([]);
+    expect(await deliverMessage(ctx, textJob(1))).toMatchObject({ ok: true });
+    expect(requests).toEqual(['/Messages.json']);
+  });
 
   it('a text skipped because Twilio is not set up or the number opted out does not count', async () => {
     const { ctx, requests } = await world({ twilio: false });
