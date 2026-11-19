@@ -1,0 +1,3174 @@
+From ecfae110f4257e50ec6c53c38ed75f8056eac65b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 08:03:20 +0000
+Subject: [PATCH] feat(track): /api/track for treegens.app/track, tree tracking
+ with no crypto
+
+A public route for the planting capture with the crypto taken out: a
+phone films a tree's land and plant clips through the same resumable
+upload sessions as a planting, and they are stored as TrackClip rows,
+never as Submissions. Nothing here touches users, verifiers, rewards,
+OTC or MGRO.
+
+- TrackClip model: one row per clip; the land clip's _id is the tree id.
+- trackService: store a clip, link a plant to its land (same phone only),
+  dashboard list and totals, CSV manifest, URL list, admin delete.
+- routes/track.ts: upload sessions behind an x-track-device phone id
+  (buildUploadSessionRouter), GET /trees, /trees/:id, /totals,
+  /trees.csv, /urls.txt, /config, DELETE /trees/:id (TRACK_ADMIN_KEY).
+- uploadSessionService: a session made on the track route gets channel
+  'track' and is stored by trackService; it never guesses a land by
+  filming time.
+- gwrAiCountService: the sweeps take a target collection. GWR behaves as
+  before; /track counts mangrove plant clips only, like plantings.
+- Tests: 13 route tests through the real session protocol, including the
+  AI sweep over track clips. Full suite passes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EcBvAJyTd5ct9C7KChV2Rs
+---
+ src/config/gcs.ts                    |   6 +-
+ src/models/GwrVideo.ts               |  96 ++--
+ src/models/TrackClip.ts              |  82 +++
+ src/models/UploadSession.ts          |  10 +
+ src/routes/track.routes.test.ts      | 517 ++++++++++++++++++
+ src/routes/track.ts                  | 198 +++++++
+ src/routes/uploadSessions.ts         | 692 ++++++++++++------------
+ src/server.ts                        |   7 +
+ src/services/gwrAiCountService.ts    | 259 +++++----
+ src/services/trackService.ts         | 782 +++++++++++++++++++++++++++
+ src/services/uploadSessionService.ts |  51 +-
+ 11 files changed, 2210 insertions(+), 490 deletions(-)
+ create mode 100644 src/models/TrackClip.ts
+ create mode 100644 src/routes/track.routes.test.ts
+ create mode 100644 src/routes/track.ts
+ create mode 100644 src/services/trackService.ts
+
+diff --git a/src/config/gcs.ts b/src/config/gcs.ts
+index 992bfa7..9582047 100644
+--- a/src/config/gcs.ts
++++ b/src/config/gcs.ts
+@@ -1,5 +1,5 @@
+-import { Storage } from '@google-cloud/storage'
+ import fs from 'fs'
++import { Storage } from '@google-cloud/storage'
+ 
+ /**
+  * Google Cloud Storage video store.
+@@ -106,6 +106,8 @@ export async function uploadGwrClipToGcs(
+   objectName: string,
+   mimeType: string,
+   downloadFilename: string,
++  /** The object's `collection` label: 'gwr', or 'track' for /track clips. */
++  collection = 'gwr',
+ ): Promise<GcsUploadResult> {
+   const bucketName = process.env.GCS_BUCKET?.trim()
+   if (!bucketName) {
+@@ -125,7 +127,7 @@ export async function uploadGwrClipToGcs(
+         // max-age runs out even after the delete.
+         cacheControl: 'public, max-age=3600',
+         contentDisposition: `attachment; filename="${safeName}"`,
+-        metadata: { collection: 'gwr' },
++        metadata: { collection },
+       },
+     })
+     readStream.on('error', err => {
+diff --git a/src/models/GwrVideo.ts b/src/models/GwrVideo.ts
+index f374cde..ebebb57 100644
+--- a/src/models/GwrVideo.ts
++++ b/src/models/GwrVideo.ts
+@@ -8,7 +8,7 @@ import mongoose from 'mongoose'
+  * collected from everyone on site at treegens.app/gwr and pulled down in one
+  * place at treegens.app/gwr-vids.
+  */
+-const gpsSchema = new mongoose.Schema(
++export const gpsSchema = new mongoose.Schema(
+   {
+     latitude: { type: Number, required: true, min: -90, max: 90 },
+     longitude: { type: Number, required: true, min: -180, max: 180 },
+@@ -18,6 +18,56 @@ const gpsSchema = new mongoose.Schema(
+   { _id: false },
+ )
+ 
++/**
++ * The AI-count fields, shared with the /track clips (models/TrackClip.ts):
++ * services/gwrAiCountService.ts runs the same sweeps over both collections.
++ */
++export const clipAiFields = {
++  /**
++   * The AI tree count of this clip, made by the same counting service that
++   * counts planting clips (services/gwrAiCountService.ts). `pending` rows
++   * are picked up by a background sweep; `counting` is one in progress;
++   * `done` carries the figure and, once mirrored into our bucket, the clip
++   * with the boxes drawn on it; `failed` gave up; `skipped` means counting
++   * was off when the clip landed (the sweep queues such rows, and rows
++   * from before counting existed, as soon as counting is on). A re-render
++   * puts a row back to `pending` and keeps the old figure on screen until
++   * the new one lands.
++   */
++  aiStatus: {
++    type: String,
++    enum: ['pending', 'counting', 'done', 'failed', 'skipped'],
++    default: 'skipped',
++    index: true,
++  },
++  aiTreeCount: { type: Number, min: 0, required: false },
++  aiConfidence: { type: Number, min: 0, max: 1, required: false },
++  aiModelVersion: { type: String, required: false },
++  /** The AI-annotated clip: ours once mirrored, the counting host's until. */
++  aiVideoUrl: { type: String, required: false },
++  aiVideoMirrorPending: { type: Boolean, required: false },
++  aiMirrorAttempts: { type: Number, required: false },
++  aiCountAttempts: { type: Number, required: false },
++  /** Tries that ran out of time (the service slow), kept apart from
++   * aiCountAttempts: they have an allowance of their own. */
++  aiSlowAttempts: { type: Number, required: false },
++  aiError: { type: String, required: false },
++  /** When the count (or re-render) was asked for: the sweep's queue order. */
++  aiRequestedAt: { type: Date, required: false },
++  /** Not before this moment: the wait after a failed attempt, doubling
++   * each time, so a clip the service keeps refusing does not hold the
++   * queue and an outage does not burn every attempt in minutes. */
++  aiNextAttemptAt: { type: Date, required: false },
++  aiCountStartedAt: { type: Date, required: false },
++  aiCountedAt: { type: Date, required: false },
++  /** The mirrored overlay's object in our bucket (`gwr/ai/<uuid>.mp4`),
++   * so deleting the clip, or re-rendering it, takes the overlay out of the
++   * bucket as well instead of leaving a public copy behind. */
++  aiVideoObjectName: { type: String, required: false },
++  /** The mirror sweep's claim on the row, retaken after a stuck window. */
++  aiMirrorStartedAt: { type: Date, required: false },
++}
++
+ const gwrVideoSchema = new mongoose.Schema(
+   {
+     /** Object path in the GCS bucket (`gwr/<uuid>.<ext>`). */
+@@ -61,49 +111,7 @@ const gwrVideoSchema = new mongoose.Schema(
+     videoCreatedAt: { type: Date, required: false },
+     uploadedAt: { type: Date, default: Date.now, index: true },
+ 
+-    /**
+-     * The AI tree count of this clip, made by the same counting service that
+-     * counts planting clips (services/gwrAiCountService.ts). `pending` rows
+-     * are picked up by a background sweep; `counting` is one in progress;
+-     * `done` carries the figure and, once mirrored into our bucket, the clip
+-     * with the boxes drawn on it; `failed` gave up; `skipped` means counting
+-     * was off when the clip landed (the sweep queues such rows, and rows
+-     * from before counting existed, as soon as counting is on). A re-render
+-     * puts a row back to `pending` and keeps the old figure on screen until
+-     * the new one lands.
+-     */
+-    aiStatus: {
+-      type: String,
+-      enum: ['pending', 'counting', 'done', 'failed', 'skipped'],
+-      default: 'skipped',
+-      index: true,
+-    },
+-    aiTreeCount: { type: Number, min: 0, required: false },
+-    aiConfidence: { type: Number, min: 0, max: 1, required: false },
+-    aiModelVersion: { type: String, required: false },
+-    /** The AI-annotated clip: ours once mirrored, the counting host's until. */
+-    aiVideoUrl: { type: String, required: false },
+-    aiVideoMirrorPending: { type: Boolean, required: false },
+-    aiMirrorAttempts: { type: Number, required: false },
+-    aiCountAttempts: { type: Number, required: false },
+-    /** Tries that ran out of time (the service slow), kept apart from
+-     * aiCountAttempts: they have an allowance of their own. */
+-    aiSlowAttempts: { type: Number, required: false },
+-    aiError: { type: String, required: false },
+-    /** When the count (or re-render) was asked for: the sweep's queue order. */
+-    aiRequestedAt: { type: Date, required: false },
+-    /** Not before this moment: the wait after a failed attempt, doubling
+-     * each time, so a clip the service keeps refusing does not hold the
+-     * queue and an outage does not burn every attempt in minutes. */
+-    aiNextAttemptAt: { type: Date, required: false },
+-    aiCountStartedAt: { type: Date, required: false },
+-    aiCountedAt: { type: Date, required: false },
+-    /** The mirrored overlay's object in our bucket (`gwr/ai/<uuid>.mp4`),
+-     * so deleting the clip, or re-rendering it, takes the overlay out of the
+-     * bucket as well instead of leaving a public copy behind. */
+-    aiVideoObjectName: { type: String, required: false },
+-    /** The mirror sweep's claim on the row, retaken after a stuck window. */
+-    aiMirrorStartedAt: { type: Date, required: false },
++    ...clipAiFields,
+   },
+   { timestamps: true },
+ )
+diff --git a/src/models/TrackClip.ts b/src/models/TrackClip.ts
+new file mode 100644
+index 0000000..f8c637d
+--- /dev/null
++++ b/src/models/TrackClip.ts
+@@ -0,0 +1,82 @@
++import mongoose from 'mongoose'
++import { clipAiFields, gpsSchema } from './GwrVideo'
++
++/**
++ * One clip of a tree filmed at treegens.app/track: the land ("before") or
++ * the plant ("after") clip, filmed with the same screen and sent through the
++ * same resumable upload as a planting.
++ *
++ * Deliberately not a Submission: no wallet, no verifier vote, no MGRO and no
++ * OTC deal ever touch these rows. They exist so a team can count what it
++ * planted and pull both videos of every tree down from one dashboard.
++ *
++ * A tree is its land clip and the plant clip filmed after it. The land
++ * clip's own _id is the tree's id (`treeId` on both rows); the phone is given
++ * it as the "submissionId" its upload queue already knows how to wait for.
++ */
++const trackClipSchema = new mongoose.Schema(
++  {
++    /** The upload session's id: a resend of the same clip finds this row. */
++    uploadId: { type: String, required: true, unique: true, index: true },
++    /** The phone that filmed it (`track:<device id>`, never a wallet). */
++    device: { type: String, required: true, index: true },
++    kind: { type: String, enum: ['land', 'plant'], required: true },
++    /** The land clip's _id, on the land row too. */
++    treeId: {
++      type: mongoose.Schema.Types.ObjectId,
++      required: true,
++      index: true,
++    },
++    /** The phone's id for the tree, linking its two clips. */
++    clientGroupId: { type: String, required: false },
++    /** Free text, as typed on the phone. No account behind it. */
++    planterName: { type: String, required: false, maxlength: 120 },
++
++    /** Object path in the GCS bucket (`track/<uuid>.<ext>`). */
++    objectName: { type: String, required: true },
++    /** Public https URL. Serves with Content-Disposition: attachment. */
++    publicUrl: { type: String, required: true },
++    downloadFilename: { type: String, required: true },
++    originalFilename: { type: String, required: false },
++    mimeType: { type: String, required: false },
++    sizeBytes: { type: Number, required: false, min: 0 },
++    /** MD5 of the bytes, hex: the same clip sent again is answered with the
++     * first copy instead of a second tree. */
++    contentMd5: { type: String, required: false, index: true },
++
++    gpsCoordinates: { type: gpsSchema, required: false },
++    /** "lat,lng" or "lat,lng,accuracy" where filming ended. */
++    gpsEnd: { type: String, required: false, maxlength: 200 },
++    /** JSON [[lat,lng(,accuracy)],…] heard while filming. */
++    gpsPath: { type: String, required: false },
++    reverseGeocode: { type: String, required: false, maxlength: 500 },
++
++    /** Plant clip only: the planter's own count (none for mangroves, where
++     * the AI count is the figure, exactly as in the planting app). */
++    treesPlanted: { type: Number, required: false, min: 0 },
++    treeType: { type: String, required: false, maxlength: 100 },
++    isMangrove: { type: Boolean, required: false },
++    /** Queued for the AI count: a mangrove plant clip. */
++    aiEligible: { type: Boolean, default: false, index: true },
++
++    /** The phone's word on when filming ended. */
++    recordedAt: { type: Date, required: false },
++    /** The clip's own header time, when it has one. */
++    videoCreatedAt: { type: Date, required: false },
++    uploadedAt: { type: Date, default: Date.now, index: true },
++
++    ...clipAiFields,
++  },
++  { timestamps: true },
++)
++
++trackClipSchema.index({ treeId: 1, kind: 1 })
++trackClipSchema.index({ device: 1, clientGroupId: 1, kind: 1 })
++
++export type TrackClipDoc = mongoose.InferSchemaType<typeof trackClipSchema> & {
++  _id: mongoose.Types.ObjectId
++}
++
++const TrackClip = mongoose.model('TrackClip', trackClipSchema)
++
++export default TrackClip
+diff --git a/src/models/UploadSession.ts b/src/models/UploadSession.ts
+index fbd065d..1e39fc1 100644
+--- a/src/models/UploadSession.ts
++++ b/src/models/UploadSession.ts
+@@ -53,6 +53,14 @@ export interface IUploadSession {
+   gpsEndSource?: 'filming' | 'submit'
+   gpsAccuracy?: number
+   gpsPath?: string
++  /**
++   * 'track': a treegens.app/track clip (wallet is then `track:<device>`),
++   * stored as a TrackClip by services/trackService.ts, never a Submission.
++   * Set by the server from the route the session was created on.
++   */
++  channel?: 'track'
++  /** Track only: the name typed on the phone. */
++  planterName?: string
+   state: UploadSessionState
+   error?: { code: string; message: string }
+   /** The legacy upload's 201 `data`, once the clip is stored. */
+@@ -94,6 +102,8 @@ const UploadSessionSchema = new Schema<IUploadSession>(
+     gpsEndSource: { type: String, enum: ['filming', 'submit'] },
+     gpsAccuracy: { type: Number },
+     gpsPath: { type: String },
++    channel: { type: String, enum: ['track'], required: false },
++    planterName: { type: String, maxlength: 120 },
+     state: {
+       type: String,
+       enum: ['receiving', 'processing', 'done', 'refused', 'failed'],
+diff --git a/src/routes/track.routes.test.ts b/src/routes/track.routes.test.ts
+new file mode 100644
+index 0000000..42759f0
+--- /dev/null
++++ b/src/routes/track.routes.test.ts
+@@ -0,0 +1,517 @@
++import assert from 'node:assert/strict'
++import fs from 'node:fs'
++import type { AddressInfo } from 'node:net'
++import os from 'node:os'
++import path from 'node:path'
++import { after, afterEach, before, beforeEach, test } from 'node:test'
++import express from 'express'
++import Submission from '../models/Submission'
++import TrackClip from '../models/TrackClip'
++import UploadSession from '../models/UploadSession'
++import {
++  resetGwrAiPauseForTests,
++  sweepGwrAiCounts,
++} from '../services/gwrAiCountService'
++import SubmissionService from '../services/submissionService'
++import { trackService, TRACK_AI_TARGET } from '../services/trackService'
++import { processingSettled } from '../services/uploadSessionService'
++import { installFakeModel } from '../testing/fakeModel'
++import '../testing/routeEnv'
++import trackRoutes from './track'
++import { isUploadChunkRequest } from './uploadSessions'
++
++/**
++ * treegens.app/track end to end through the real session protocol: a phone
++ * films a land and a plant clip, they go up in chunks to /api/track/uploads,
++ * and the dashboard lists the tree with both videos and its count. What has
++ * to hold: nothing ever reaches submissions; the plant finds its own land
++ * by the phone's group id; a phone can never attach a plant to another
++ * phone's tree; a resend is the same tree, not a second one; mangroves are
++ * counted by the AI sweep and anything else by the planter's figure.
++ */
++
++const saved = {
++  uploadClip: SubmissionService.prototype.uploadClip,
++  deps: trackService.deps,
++  error: console.error,
++  warn: console.warn,
++  log: console.log,
++  dir: process.env.UPLOAD_SESSION_DIR,
++}
++
++let base = ''
++let server: ReturnType<express.Express['listen']>
++let sessions: ReturnType<typeof installFakeModel>
++let clips: ReturnType<typeof installFakeModel>
++let submissions: ReturnType<typeof installFakeModel>
++let stored: { objectName: string; downloadFilename: string; bytes: Buffer }[] =
++  []
++let tmpDir = ''
++let counter = 0
++let device = ''
++let plantingUploads = 0
++
++const uuid = (n: number, tail = 4) =>
++  `00000000-0000-${tail}000-8000-${String(n).padStart(12, '0')}`
++const nextId = () => uuid(++counter)
++
++before(() => {
++  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'treegens-track-test-'))
++  process.env.UPLOAD_SESSION_DIR = tmpDir
++  console.error = () => {}
++  console.warn = () => {}
++  console.log = () => {}
++  const app = express()
++  app.use(express.json())
++  app.use('/api/track', trackRoutes)
++  server = app.listen(0)
++  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
++})
++
++after(() => {
++  server?.close()
++  console.error = saved.error
++  console.warn = saved.warn
++  console.log = saved.log
++  process.env.UPLOAD_SESSION_DIR = saved.dir
++  fs.rmSync(tmpDir, { recursive: true, force: true })
++})
++
++beforeEach(() => {
++  device = uuid(++counter)
++  sessions = installFakeModel(UploadSession, {
++    unique: ['uploadId'],
++    defaults: () => ({ createdAt: new Date(), updatedAt: new Date() }),
++  })
++  clips = installFakeModel(TrackClip, {
++    unique: ['uploadId'],
++    defaults: () => ({ createdAt: new Date() }),
++  })
++  submissions = installFakeModel(Submission)
++  stored = []
++  plantingUploads = 0
++  SubmissionService.prototype.uploadClip = (async () => {
++    plantingUploads++
++    throw new Error('a track clip must never be stored as a planting')
++  }) as never
++  trackService.deps = {
++    configured: () => true,
++    upload: async (filePath, objectName, _mime, downloadFilename) => {
++      stored.push({
++        objectName,
++        downloadFilename,
++        bytes: fs.readFileSync(filePath),
++      })
++      return {
++        videoCID: objectName,
++        publicUrl: `https://storage.example/${objectName}`,
++      }
++    },
++    remove: async () => undefined,
++  }
++})
++
++afterEach(async () => {
++  await processingSettled()
++  sessions.restore()
++  clips.restore()
++  submissions.restore()
++  SubmissionService.prototype.uploadClip = saved.uploadClip
++  trackService.deps = saved.deps
++})
++
++async function api(
++  method: string,
++  route: string,
++  opts: { json?: unknown; body?: Buffer; device?: string | null } = {},
++) {
++  const headers: Record<string, string> = {}
++  const who = opts.device === undefined ? device : opts.device
++  if (who) headers['x-track-device'] = who
++  if (opts.json !== undefined) headers['content-type'] = 'application/json'
++  if (opts.body) headers['content-type'] = 'application/octet-stream'
++  const res = await fetch(`${base}/api/track${route}`, {
++    method,
++    headers,
++    body:
++      opts.json !== undefined ? JSON.stringify(opts.json) : (opts.body as any),
++  })
++  const text = await res.text()
++  let json: any = null
++  try {
++    json = JSON.parse(text)
++  } catch {
++    json = text
++  }
++  return { status: res.status, json, headers: res.headers }
++}
++
++function clipBody(type: 'land' | 'plant', uploadId: string, size: number) {
++  return {
++    uploadId,
++    type,
++    size,
++    mimeType: 'video/mp4',
++    fileName: `${type}.mp4`,
++    latitude: -4.57227,
++    longitude: 39.28056,
++    gpsAccuracy: 8,
++    clientGroupId: 'tree-1',
++    planterName: 'Amina Hassan',
++    recordedAt: new Date().toISOString(),
++  }
++}
++
++/** Create, send in one chunk, complete; wait for the server to store it. */
++async function send(
++  body: Record<string, unknown>,
++  bytes: Buffer,
++  who: string = device,
++) {
++  const created = await api('POST', '/uploads', {
++    json: { ...body, size: bytes.length },
++    device: who,
++  })
++  assert.ok([200, 201].includes(created.status), JSON.stringify(created.json))
++  const id = String(body.uploadId)
++  await api('PUT', `/uploads/${id}/chunks?offset=0`, {
++    body: bytes,
++    device: who,
++  })
++  await api('POST', `/uploads/${id}/complete`, { json: {}, device: who })
++  await processingSettled()
++  return api('GET', `/uploads/${id}`, { device: who })
++}
++
++const landBytes = () => Buffer.from(`land footage ${counter}-${Math.random()}`)
++const plantBytes = () =>
++  Buffer.from(`plant footage ${counter}-${Math.random()}`)
++
++test('chunks to /api/track/uploads skip the app body parsers too', () => {
++  const req = {
++    method: 'PUT',
++    originalUrl: `/api/track/uploads/${nextId()}/chunks`,
++  }
++  assert.equal(isUploadChunkRequest(req as any), true)
++})
++
++test('an upload with no tracking id is turned away before anything is kept', async () => {
++  const r = await api('POST', '/uploads', {
++    json: clipBody('land', nextId(), 10),
++    device: null,
++  })
++  assert.equal(r.status, 400)
++  assert.equal(r.json.code, 'TRACK_DEVICE_MISSING')
++  assert.equal(sessions.store.docs.length, 0)
++})
++
++test('a land then a plant clip make one tree with both videos, no planting', async () => {
++  const land = await send(clipBody('land', nextId(), 0), landBytes())
++  assert.equal(land.json.data.state, 'done')
++  const treeId = land.json.data.result.submissionId
++  assert.match(treeId, /^[a-f0-9]{24}$/)
++  assert.equal(land.json.data.result.status, 'awaiting_plant')
++
++  const plant = await send(
++    { ...clipBody('plant', nextId(), 0), treeType: 'Neem', treesPlanted: 3 },
++    plantBytes(),
++  )
++  assert.equal(plant.json.data.state, 'done', JSON.stringify(plant.json))
++  assert.equal(plant.json.data.result.submissionId, treeId)
++  assert.equal(plant.json.data.result.status, 'tracked')
++
++  assert.equal(plantingUploads, 0)
++  assert.equal(submissions.store.docs.length, 0)
++  assert.equal(clips.store.docs.length, 2)
++  assert.ok(
++    sessions.store.docs.every(
++      s => s.channel === 'track' && s.wallet === `track:${device}`,
++    ),
++  )
++
++  const list = await api('GET', '/trees', { device: null })
++  assert.equal(list.status, 200)
++  const [tree] = list.json.data.trees
++  assert.equal(tree.id, treeId)
++  assert.equal(tree.number, 1)
++  assert.equal(tree.planterName, 'Amina Hassan')
++  assert.equal(tree.complete, true)
++  assert.equal(tree.treeType, 'Neem')
++  assert.equal(tree.count, 3)
++  assert.equal(tree.countSource, 'planter')
++  assert.match(
++    tree.land.downloadFilename,
++    /^treegens-track-.*-amina-hassan-.*-before\.mp4$/,
++  )
++  assert.match(tree.plant.downloadFilename, /-after\.mp4$/)
++  assert.ok(tree.land.downloadUrl.startsWith('https://storage.example/track/'))
++  assert.deepEqual(tree.gps, {
++    latitude: -4.57227,
++    longitude: 39.28056,
++    accuracyMeters: 8,
++  })
++  // The phone's id never leaves the server.
++  assert.equal(JSON.stringify(list.json).includes(device), false)
++  const totals = list.json.data.totals
++  assert.equal(totals.trees, 1)
++  assert.equal(totals.planted, 3)
++  assert.equal(totals.awaitingPlant, 0)
++  assert.deepEqual(totals.planters, [
++    { name: 'Amina Hassan', trees: 1, planted: 3 },
++  ])
++})
++
++test('a mangrove plant clip is queued for the AI count and counts by it', async () => {
++  const land = await send(clipBody('land', nextId(), 0), landBytes())
++  const treeId = land.json.data.result.submissionId
++  await send(
++    { ...clipBody('plant', nextId(), 0), treeType: 'mangrove' },
++    plantBytes(),
++  )
++  const plantRow = clips.store.docs.find(d => d.kind === 'plant')!
++  assert.equal(plantRow.isMangrove, true)
++  assert.equal(plantRow.aiEligible, true)
++  assert.equal(plantRow.treesPlanted, undefined)
++  const landRow = clips.store.docs.find(d => d.kind === 'land')!
++  assert.equal(landRow.aiEligible, false)
++
++  let tree = (await api('GET', `/trees/${treeId}`)).json.data
++  assert.equal(
++    tree.countSource,
++    process.env.GWR_AI_COUNT === 'false' ? 'none' : tree.countSource,
++  )
++  assert.equal(tree.count, 0)
++
++  // The sweep's figure lands on the row: the tree counts by it.
++  plantRow.aiStatus = 'done'
++  plantRow.aiTreeCount = 41
++  tree = (await api('GET', `/trees/${treeId}`)).json.data
++  assert.equal(tree.count, 41)
++  assert.equal(tree.countSource, 'ai')
++  assert.equal(tree.ai.treeCount, 41)
++  assert.deepEqual(TRACK_AI_TARGET.scope, { aiEligible: true })
++})
++
++test('a plant clip waits for its land when the land is still on its way', async () => {
++  const landId = nextId()
++  const lb = landBytes()
++  await api('POST', '/uploads', {
++    json: { ...clipBody('land', landId, 0), size: lb.length },
++  })
++  // The plant arrives whole first; its land has a session but no bytes yet.
++  const plantId = nextId()
++  const pb = plantBytes()
++  await api('POST', '/uploads', {
++    json: {
++      ...clipBody('plant', plantId, 0),
++      size: pb.length,
++      treeType: 'Neem',
++      treesPlanted: 1,
++      landQueued: true,
++    },
++  })
++  await api('PUT', `/uploads/${plantId}/chunks?offset=0`, { body: pb })
++  const early = await api('POST', `/uploads/${plantId}/complete`, {
++    json: { landQueued: true },
++  })
++  assert.equal(early.status, 409)
++  assert.equal(early.json.code, 'LAND_NOT_READY')
++
++  await api('PUT', `/uploads/${landId}/chunks?offset=0`, { body: lb })
++  await api('POST', `/uploads/${landId}/complete`, { json: {} })
++  await processingSettled()
++  await api('POST', `/uploads/${plantId}/complete`, { json: {} })
++  await processingSettled()
++  const plant = await api('GET', `/uploads/${plantId}`)
++  assert.equal(plant.json.data.state, 'done')
++  const land = await api('GET', `/uploads/${landId}`)
++  assert.equal(
++    plant.json.data.result.submissionId,
++    land.json.data.result.submissionId,
++  )
++})
++
++test("a phone cannot put its plant clip on another phone's tree", async () => {
++  const land = await send(clipBody('land', nextId(), 0), landBytes())
++  const theirs = land.json.data.result.submissionId
++  const other = uuid(++counter)
++  const plant = await send(
++    {
++      ...clipBody('plant', nextId(), 0),
++      submissionId: theirs,
++      clientGroupId: 'their-tree',
++      treeType: 'Neem',
++      treesPlanted: 2,
++    },
++    plantBytes(),
++    other,
++  )
++  assert.equal(plant.json.data.state, 'refused')
++  assert.equal(plant.json.data.error.code, 'LAND_NOT_FOUND')
++  assert.equal(clips.store.docs.filter(d => d.kind === 'plant').length, 0)
++  // And another phone cannot read this phone's session either.
++  const peek = await api('GET', `/uploads/${land.json.data.uploadId}`, {
++    device: other,
++  })
++  assert.equal(peek.status, 404)
++})
++
++test('the same clip sent again is the same tree, not a second one', async () => {
++  const bytes = landBytes()
++  const first = await send(clipBody('land', nextId(), 0), bytes)
++  const again = await send(clipBody('land', nextId(), 0), bytes)
++  assert.equal(
++    again.json.data.result.submissionId,
++    first.json.data.result.submissionId,
++  )
++  assert.equal(clips.store.docs.length, 1)
++  assert.equal(stored.length, 1)
++})
++
++test('a tree takes one plant clip', async () => {
++  await send(clipBody('land', nextId(), 0), landBytes())
++  const plant = {
++    ...clipBody('plant', nextId(), 0),
++    treeType: 'Neem',
++    treesPlanted: 1,
++  }
++  assert.equal((await send(plant, plantBytes())).json.data.state, 'done')
++  const second = await send({ ...plant, uploadId: nextId() }, plantBytes())
++  assert.equal(second.json.data.state, 'refused')
++  assert.equal(second.json.data.error.code, 'PLANT_NOT_ALLOWED')
++})
++
++test('a land still waiting for its plant is listed, and counts nothing yet', async () => {
++  await send(clipBody('land', nextId(), 0), landBytes())
++  const list = (await api('GET', '/trees')).json.data
++  assert.equal(list.trees[0].complete, false)
++  assert.equal(list.trees[0].plant, undefined)
++  assert.equal(list.totals.trees, 0)
++  assert.equal(list.totals.awaitingPlant, 1)
++})
++
++test('the CSV and URL list carry both clips of every tree', async () => {
++  const land = await send(
++    { ...clipBody('land', nextId(), 0), planterName: '=HYPERLINK("x")' },
++    landBytes(),
++  )
++  await send(
++    { ...clipBody('plant', nextId(), 0), treeType: 'Neem', treesPlanted: 5 },
++    plantBytes(),
++  )
++  const csv = await api('GET', '/trees.csv', { device: null })
++  assert.equal(csv.status, 200)
++  assert.match(String(csv.headers.get('content-type')), /text\/csv/)
++  const lines = String(csv.json).trim().split('\r\n')
++  assert.equal(lines.length, 2)
++  assert.ok(lines[1].includes(land.json.data.result.submissionId))
++  // A name typed as a formula is shown as text in a spreadsheet.
++  assert.ok(lines[1].includes(`'=HYPERLINK`))
++  const urls = String((await api('GET', '/urls.txt')).json)
++    .trim()
++    .split('\n')
++  assert.equal(urls.length, 2)
++  assert.ok(urls.every(u => u.startsWith('https://storage.example/track/')))
++})
++
++test('the list filters by planter, any case', async () => {
++  await send(clipBody('land', nextId(), 0), landBytes())
++  await send(
++    {
++      ...clipBody('land', nextId(), 0),
++      planterName: 'Juma',
++      clientGroupId: 'tree-2',
++    },
++    landBytes(),
++  )
++  const juma = (await api('GET', '/trees?planter=juma')).json.data
++  assert.equal(juma.trees.length, 1)
++  assert.equal(juma.trees[0].planterName, 'Juma')
++})
++
++test('deleting a tree needs the admin key, and takes both clips', async () => {
++  const saved = process.env.TRACK_ADMIN_KEY
++  try {
++    const land = await send(clipBody('land', nextId(), 0), landBytes())
++    await send(
++      { ...clipBody('plant', nextId(), 0), treeType: 'Neem', treesPlanted: 1 },
++      plantBytes(),
++    )
++    const id = land.json.data.result.submissionId
++    delete process.env.TRACK_ADMIN_KEY
++    assert.equal((await api('DELETE', `/trees/${id}`)).status, 403)
++    process.env.TRACK_ADMIN_KEY = 'a-long-enough-admin-key'
++    const wrong = await fetch(`${base}/api/track/trees/${id}`, {
++      method: 'DELETE',
++      headers: { 'x-track-admin-key': 'nope' },
++    })
++    assert.equal(wrong.status, 403)
++    const right = await fetch(`${base}/api/track/trees/${id}`, {
++      method: 'DELETE',
++      headers: { 'x-track-admin-key': 'a-long-enough-admin-key' },
++    })
++    assert.equal(right.status, 200)
++    assert.equal(clips.store.docs.length, 0)
++  } finally {
++    if (saved === undefined) delete process.env.TRACK_ADMIN_KEY
++    else process.env.TRACK_ADMIN_KEY = saved
++  }
++})
++
++test('the AI sweep counts only the mangrove plant clips of /track', async () => {
++  resetGwrAiPauseForTests()
++  const now = new Date()
++  clips.store.docs.push(
++    {
++      _id: 'a'.repeat(24),
++      kind: 'land',
++      aiEligible: false,
++      aiStatus: 'skipped',
++      publicUrl: 'https://storage.example/track/land.mp4',
++      sizeBytes: 10,
++    },
++    {
++      _id: 'b'.repeat(24),
++      kind: 'plant',
++      aiEligible: true,
++      aiStatus: 'pending',
++      aiRequestedAt: now,
++      aiNextAttemptAt: now,
++      publicUrl: 'https://storage.example/track/plant.mp4',
++      sizeBytes: 10,
++    },
++    {
++      _id: 'c'.repeat(24),
++      kind: 'plant',
++      aiEligible: false,
++      aiStatus: 'skipped',
++      publicUrl: 'https://storage.example/track/neem.mp4',
++      sizeBytes: 10,
++    },
++  )
++  const counted: string[] = []
++  await sweepGwrAiCounts(
++    {
++      count: async clip => {
++        counted.push(String(clip.publicUrl))
++        return {
++          aiTreeCount: 12,
++          aiConfidence: 0.9,
++          aiModelVersion: 'test',
++          aiVideoUrl: 'https://storage.example/track/ai/x.mp4',
++        } as any
++      },
++      mirror: async () => null,
++      removeObject: async () => undefined,
++      diskRoomFor: async () => true,
++      now: () => new Date(),
++    },
++    TRACK_AI_TARGET,
++  )
++  assert.deepEqual(counted, ['https://storage.example/track/plant.mp4'])
++  const byId = (id: string) => clips.store.docs.find(d => d._id === id)!
++  assert.equal(byId('b'.repeat(24)).aiStatus, 'done')
++  assert.equal(byId('b'.repeat(24)).aiTreeCount, 12)
++  assert.equal(byId('a'.repeat(24)).aiStatus, 'skipped')
++  assert.equal(byId('c'.repeat(24)).aiStatus, 'skipped')
++})
+diff --git a/src/routes/track.ts b/src/routes/track.ts
+new file mode 100644
+index 0000000..7af7d0a
+--- /dev/null
++++ b/src/routes/track.ts
+@@ -0,0 +1,198 @@
++import { timingSafeEqual } from 'node:crypto'
++import express, { NextFunction, Request, Response } from 'express'
++import { gwrAdminLimiter, gwrReadLimiter } from '../middleware/rateLimits'
++import {
++  getTrackTree,
++  listTrackTrees,
++  trackConfig,
++  trackManifestCsv,
++  trackService,
++  trackTotals,
++  trackUrlList,
++  TRACK_DEVICE_PREFIX,
++} from '../services/trackService'
++import {
++  sendBadRequest,
++  sendError,
++  sendNotFound,
++  sendSuccess,
++} from '../utils/responseHelpers'
++import { buildUploadSessionRouter } from './uploadSessions'
++
++/**
++ * treegens.app/track: the planting app's capture with no crypto, and a
++ * public dashboard of every tree with both of its videos.
++ *
++ * Public on purpose, like /api/gwr: no account and no wallet. A phone names
++ * itself with a random id it minted (`x-track-device`) so its land and plant
++ * clips can find each other, and its planter types a name. Nothing here
++ * touches submissions, users, verifiers, rewards, OTC or MGRO.
++ */
++const router = express.Router()
++
++const DEVICE_HEADER = 'x-track-device'
++const ADMIN_KEY_HEADER = 'x-track-admin-key'
++const DEVICE_RE =
++  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
++
++/**
++ * The phone's own id, as the session owner. Not a secret and not an
++ * account: it only scopes a phone's upload sessions to that phone, exactly
++ * as a wallet scopes a planter's.
++ */
++export const trackDevice = (
++  req: Request,
++  res: Response,
++  next: NextFunction,
++) => {
++  const id = String(req.header(DEVICE_HEADER) ?? '').trim()
++  if (!DEVICE_RE.test(id)) {
++    return res.status(400).json({
++      error: 'This phone has no tracking id yet. Reload the page.',
++      code: 'TRACK_DEVICE_MISSING',
++    })
++  }
++  req.user = {
++    userId: `${TRACK_DEVICE_PREFIX}${id.toLowerCase()}`,
++    walletAddress: `${TRACK_DEVICE_PREFIX}${id.toLowerCase()}`,
++  }
++  next()
++}
++
++// The resumable upload, the same protocol as plantings.
++router.use('/uploads', buildUploadSessionRouter(trackDevice))
++
++router.get('/config', gwrReadLimiter, (_req, res) =>
++  sendSuccess(res, 'Track config', trackConfig()),
++)
++
++const instant = (v: unknown): Date | undefined => {
++  if (typeof v !== 'string' || !v.trim()) return undefined
++  const d = new Date(v)
++  return Number.isNaN(d.getTime()) ? undefined : d
++}
++
++/**
++ * @swagger
++ * /api/track/trees:
++ *   get:
++ *     summary: Every tree tracked at treegens.app/track, newest first, with both videos
++ *     tags: [Track]
++ *     parameters:
++ *       - { in: query, name: page, schema: { type: integer, default: 1 } }
++ *       - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 200 } }
++ *       - { in: query, name: planter, schema: { type: string } }
++ *       - { in: query, name: from, schema: { type: string, format: date-time } }
++ *       - { in: query, name: to, schema: { type: string, format: date-time } }
++ *     responses:
++ *       200:
++ *         description: '{ trees, pagination, totals }'
++ */
++router.get('/trees', gwrReadLimiter, async (req: Request, res: Response) => {
++  try {
++    const data = await listTrackTrees({
++      page: parseInt(String(req.query.page ?? '1'), 10),
++      limit: parseInt(String(req.query.limit ?? '50'), 10),
++      planter: typeof req.query.planter === 'string' ? req.query.planter : '',
++      from: instant(req.query.from),
++      to: instant(req.query.to),
++    })
++    return sendSuccess(res, 'Tracked trees', data)
++  } catch (error: any) {
++    return sendError(res, error.message || 'Failed to list trees')
++  }
++})
++
++router.get('/totals', gwrReadLimiter, async (_req, res) => {
++  try {
++    return sendSuccess(res, 'Track totals', await trackTotals())
++  } catch (error: any) {
++    return sendError(res, error.message || 'Failed to count trees')
++  }
++})
++
++router.get('/trees.csv', gwrReadLimiter, async (_req, res) => {
++  try {
++    const csv = await trackManifestCsv()
++    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
++    res.setHeader(
++      'Content-Disposition',
++      'attachment; filename="treegens-track-trees.csv"',
++    )
++    return res.status(200).send(csv)
++  } catch (error: any) {
++    return sendError(res, error.message || 'Failed to build the CSV')
++  }
++})
++
++router.get('/urls.txt', gwrReadLimiter, async (_req, res) => {
++  try {
++    const txt = await trackUrlList()
++    res.setHeader('Content-Type', 'text/plain; charset=utf-8')
++    res.setHeader(
++      'Content-Disposition',
++      'attachment; filename="treegens-track-urls.txt"',
++    )
++    return res.status(200).send(txt)
++  } catch (error: any) {
++    return sendError(res, error.message || 'Failed to build the URL list')
++  }
++})
++
++router.get('/trees/:id', gwrReadLimiter, async (req, res) => {
++  try {
++    const tree = await getTrackTree(String(req.params.id ?? ''))
++    if (!tree) return sendNotFound(res, 'Tree')
++    return sendSuccess(res, 'Tracked tree', tree)
++  } catch (error: any) {
++    return sendError(res, error.message || 'Failed to read the tree')
++  }
++})
++
++const safeEqual = (a: string, b: string) => {
++  const ab = Buffer.from(a)
++  const bb = Buffer.from(b)
++  return ab.length === bb.length && timingSafeEqual(ab, bb)
++}
++
++/** Deleting a tree needs TRACK_ADMIN_KEY; closed while it is unset. */
++const requireAdminKey = (req: Request, res: Response, next: NextFunction) => {
++  const expected = process.env.TRACK_ADMIN_KEY?.trim()
++  if (!expected) {
++    return res.status(403).json({
++      error: 'Track admin actions are disabled (TRACK_ADMIN_KEY not set)',
++      code: 'ADMIN_DISABLED',
++    })
++  }
++  const given = String(req.header(ADMIN_KEY_HEADER) ?? '').trim()
++  if (!given || !safeEqual(given, expected)) {
++    console.warn('Track admin key rejected', { path: req.path, ip: req.ip })
++    return res
++      .status(403)
++      .json({ error: 'Admin key is wrong', code: 'ADMIN_KEY_INVALID' })
++  }
++  next()
++}
++
++router.get('/admin/check', gwrAdminLimiter, requireAdminKey, (_req, res) =>
++  res.status(204).end(),
++)
++
++router.delete(
++  '/trees/:id',
++  gwrAdminLimiter,
++  requireAdminKey,
++  async (req: Request, res: Response) => {
++    try {
++      const id = String(req.params.id ?? '')
++      if (!/^[a-fA-F0-9]{24}$/.test(id))
++        return sendBadRequest(res, 'Invalid id')
++      if (!(await trackService.removeTree(id))) return sendNotFound(res, 'Tree')
++      return sendSuccess(res, 'Tree removed', { id })
++    } catch (error: any) {
++      return sendError(res, error.message || 'Failed to remove the tree')
++    }
++  },
++)
++
++export default router
+diff --git a/src/routes/uploadSessions.ts b/src/routes/uploadSessions.ts
+index d3d62d9..8b0ba9d 100644
+--- a/src/routes/uploadSessions.ts
++++ b/src/routes/uploadSessions.ts
+@@ -21,9 +21,10 @@ import { sendError, sendSuccess } from '../utils/responseHelpers'
+  * The rate limiters sit after `authenticate`, so they count per planter: a
+  * planting group shares one hotspot, and therefore one IP.
+  */
+-const router = express.Router()
+-
+-const CHUNK_PATH_RE = /^\/api\/submissions\/uploads\/[^/]+\/chunks\/?$/
++// Plantings at /api/submissions/uploads; treegens.app/track's clips at
++// /api/track/uploads (routes/track.ts), the same protocol for another owner.
++const CHUNK_PATH_RE =
++  /^\/api\/(?:submissions|track)\/uploads\/[^/]+\/chunks\/?$/
+ 
+ /**
+  * Chunk bodies are raw video bytes this router streams straight to disk.
+@@ -34,8 +35,6 @@ const CHUNK_PATH_RE = /^\/api\/submissions\/uploads\/[^/]+\/chunks\/?$/
+ export const isUploadChunkRequest = (req: Request): boolean =>
+   req.method === 'PUT' && CHUNK_PATH_RE.test(req.originalUrl.split('?')[0])
+ 
+-const walletOf = (req: Request) => req.user!.walletAddress as string
+-
+ function contentLength(req: Request): number | null {
+   const raw = req.headers['content-length']
+   if (raw === undefined) return null
+@@ -67,345 +66,360 @@ function sendSessionError(res: Response, error: unknown, label: string) {
+ }
+ 
+ /**
+- * @swagger
+- * components:
+- *   schemas:
+- *     UploadSessionView:
+- *       type: object
+- *       properties:
+- *         uploadId: { type: string, format: uuid }
+- *         type: { type: string, enum: [land, plant] }
+- *         state:
+- *           type: string
+- *           enum: [receiving, processing, done, refused, failed]
+- *         receivedBytes:
+- *           type: integer
+- *           description: Bytes durably on the server, contiguous from 0. Resume from here.
+- *         size: { type: integer }
+- *         maxChunkBytes:
+- *           type: integer
+- *           example: 16777216
+- *           description: The RECOMMENDED chunk size. Not a limit; a chunk may carry any number of bytes that fit in the clip.
+- *         result:
+- *           $ref: '#/components/schemas/SubmissionUploadResponse'
+- *         error:
+- *           type: object
+- *           description: Present when state is refused or failed.
+- *           properties:
+- *             code: { type: string }
+- *             message: { type: string }
++ * The session routes, behind `auth`, which puts the owner on req.user:
++ * the planter's wallet here, a `track:<device>` id for /track.
+  */
++export function buildUploadSessionRouter(
++  auth: express.RequestHandler,
++): express.Router {
++  const router = express.Router()
++  const walletOf = (req: Request) => req.user!.walletAddress as string
+ 
+-/**
+- * @swagger
+- * /api/submissions/uploads:
+- *   post:
+- *     summary: Create or resume a resumable clip upload
+- *     description: |
+- *       Idempotent. A new `uploadId` (client UUID) creates a session in `receiving` (201).
+- *       The same `uploadId`, wallet, type and size answers the existing session (200); a
+- *       plant still receiving may update `submissionId` / `clientGroupId` / `landQueued`
+- *       this way. A plant refused `LAND_NOT_FOUND` or `LAND_REFUSED` is asked again with
+- *       what it sends: when its land is known now (or on its way) it goes back to
+- *       `receiving` at 0 and the clip is sent again. Another wallet's id, or a different
+- *       type or size, is 409 `UPLOAD_ID_CONFLICT`.
+- *     tags: [Submissions]
+- *     security:
+- *       - bearerAuth: []
+- *     requestBody:
+- *       required: true
+- *       content:
+- *         application/json:
+- *           schema:
+- *             type: object
+- *             required: [uploadId, type, size, mimeType, latitude, longitude]
+- *             properties:
+- *               uploadId: { type: string, format: uuid }
+- *               type: { type: string, enum: [land, plant] }
+- *               size: { type: integer, minimum: 1 }
+- *               mimeType: { type: string, example: video/mp4 }
+- *               fileName: { type: string, maxLength: 128 }
+- *               latitude: { type: number }
+- *               longitude: { type: number }
+- *               submissionId: { type: string, description: "Plant only (24-hex). Land must not send it." }
+- *               clientGroupId: { type: string, description: "The client's group id (/^[A-Za-z0-9_-]{1,64}$/); links a plant to its land." }
+- *               landQueued:
+- *                 type: boolean
+- *                 description: "Plant only. true while the phone still holds this group's land clip in its queue: the server then answers LAND_NOT_READY rather than guess the planting by filming time. Send false once no land of the group is queued. Kept on the session until changed."
+- *               treesPlanted: { type: number }
+- *               treeType: { type: string }
+- *               reverseGeocode: { type: string }
+- *               recordedAt: { type: string, format: date-time }
+- *               gpsEnd: { type: string, description: "lat,lng or lat,lng,accuracy" }
+- *               gpsEndSource: { type: string, enum: [filming, submit] }
+- *               gpsAccuracy: { type: number }
+- *               gpsPath: { type: string, description: "JSON array of [lat, lng] or [lat, lng, accuracy]" }
+- *     responses:
+- *       201: { description: Session created }
+- *       200: { description: Existing session }
+- *       400: { description: VALIDATION_ERROR (with details) }
+- *       401: { description: Unauthorized }
+- *       409: { description: UPLOAD_ID_CONFLICT }
+- *       429:
+- *         description: |
+- *           TOO_MANY_OPEN_UPLOADS with Retry-After: this planter already has many clips half-sent
+- *           (UPLOAD_WALLET_MAX_OPEN_PARTS / UPLOAD_WALLET_MAX_OPEN_BYTES of parts written in the last
+- *           6 h). Only a NEW session waits; there is no limit on a clip's size. Retry later.
+- */
+-router.post(
+-  '/',
+-  authenticate,
+-  uploadControlLimiter,
+-  async (req: Request, res: Response) => {
+-    try {
+-      const { created, view } = await createOrResumeSession(
+-        walletOf(req),
+-        req.body,
+-      )
+-      return created
+-        ? sendSuccess(res, 'Upload session created', view, 201)
+-        : sendSuccess(res, 'Upload session resumed', view)
+-    } catch (error) {
+-      return sendSessionError(res, error, 'Upload session create error')
+-    }
+-  },
+-)
++  /**
++   * @swagger
++   * components:
++   *   schemas:
++   *     UploadSessionView:
++   *       type: object
++   *       properties:
++   *         uploadId: { type: string, format: uuid }
++   *         type: { type: string, enum: [land, plant] }
++   *         state:
++   *           type: string
++   *           enum: [receiving, processing, done, refused, failed]
++   *         receivedBytes:
++   *           type: integer
++   *           description: Bytes durably on the server, contiguous from 0. Resume from here.
++   *         size: { type: integer }
++   *         maxChunkBytes:
++   *           type: integer
++   *           example: 16777216
++   *           description: The RECOMMENDED chunk size. Not a limit; a chunk may carry any number of bytes that fit in the clip.
++   *         result:
++   *           $ref: '#/components/schemas/SubmissionUploadResponse'
++   *         error:
++   *           type: object
++   *           description: Present when state is refused or failed.
++   *           properties:
++   *             code: { type: string }
++   *             message: { type: string }
++   */
+ 
+-/**
+- * @swagger
+- * /api/submissions/uploads/{uploadId}/chunks:
+- *   put:
+- *     summary: Append one chunk of the clip
+- *     description: |
+- *       Raw bytes (`application/octet-stream`) starting at `offset`, of any length as long as
+- *       `offset` + length <= `size` (`maxChunkBytes` is only the recommended size; a background
+- *       upload may send the whole rest of the clip as one request). Bodies are streamed to disk.
+- *
+- *       - `offset` = `receivedBytes`: appended.
+- *       - `offset` < `receivedBytes` (a request restarted from a stale offset): the bytes the
+- *         server already has are skipped and the rest appended; a chunk that brings nothing
+- *         new is a 200 no-op with the session.
+- *       - `offset` > `receivedBytes`: 409 `OFFSET_MISMATCH` with the session; continue from
+- *         its `receivedBytes`.
+- *
+- *       A request that dies mid-body keeps the bytes that arrived. When a chunk brings the
+- *       last byte, the clip starts processing as if `complete` had been called (200, state
+- *       `processing`), except a plant whose planting is not settled yet (its land not ready,
+- *       or only a filming-time guess left without `landQueued: false`): it stays `receiving`
+- *       for the phone's own `complete`. 0 bytes is 400 `EMPTY_CHUNK`; past the clip's end is
+- *       400 `CHUNK_OUT_OF_RANGE` (nothing written); not receiving is 409
+- *       `UPLOAD_NOT_RECEIVING`; an unknown id is 404 `UPLOAD_NOT_FOUND`. `CHUNK_TOO_LARGE`
+- *       is no longer answered.
+- *     tags: [Submissions]
+- *     security:
+- *       - bearerAuth: []
+- *     parameters:
+- *       - in: path
+- *         name: uploadId
+- *         required: true
+- *         schema: { type: string, format: uuid }
+- *       - in: header
+- *         name: x-upload-offset
+- *         required: false
+- *         description: Where this chunk starts. Preferred over the query string, which gave every chunk its own URL and so its own CORS preflight.
+- *         schema: { type: integer, minimum: 0 }
+- *       - in: query
+- *         name: offset
+- *         required: false
+- *         description: Same as x-upload-offset, for clients that send it here. Used only when the header is absent.
+- *         schema: { type: integer, minimum: 0 }
+- *     requestBody:
+- *       required: true
+- *       content:
+- *         application/octet-stream:
+- *           schema: { type: string, format: binary }
+- *     responses:
+- *       200:
+- *         description: Chunk stored (or already held); `data` is the session with its receivedBytes
+- *         content:
+- *           application/json:
+- *             schema:
+- *               type: object
+- *               properties:
+- *                 message: { type: string }
+- *                 data: { $ref: '#/components/schemas/UploadSessionView' }
+- *       400: { description: EMPTY_CHUNK or CHUNK_OUT_OF_RANGE }
+- *       404: { description: UPLOAD_NOT_FOUND }
+- *       409: { description: OFFSET_MISMATCH or UPLOAD_NOT_RECEIVING, with the session }
+- *       503: { description: "UPLOAD_STORAGE_FULL (Retry-After): the chunk would take the server's disk below its free-space floor, or the disk is full" }
+- */
+-router.put(
+-  '/:uploadId/chunks',
+-  authenticate,
+-  uploadChunkLimiter,
+-  async (req: Request, res: Response) => {
+-    // The request may be ended from our side (idle, or superseded by a
+-    // newer request for the same upload). Its stream error is expected.
+-    req.on('error', () => {})
+-    try {
+-      // The header wins. With the offset in the query string every chunk had
+-      // its own URL, and the browser's preflight cache is keyed by URL, so
+-      // each chunk paid an extra OPTIONS round trip on a rural link.
+-      const view = await receiveChunk(
+-        walletOf(req),
+-        req.params.uploadId,
+-        req.get('x-upload-offset') ?? req.query.offset,
+-        {
+-          body: req,
+-          declaredLength: contentLength(req),
+-          cancel: () => req.destroy(),
+-        },
+-      )
+-      if (!res.socket || res.socket.destroyed) return
+-      return sendSuccess(res, 'Chunk stored', view)
+-    } catch (error) {
+-      return sendSessionError(res, error, 'Upload chunk error')
+-    }
+-  },
+-)
++  /**
++   * @swagger
++   * /api/submissions/uploads:
++   *   post:
++   *     summary: Create or resume a resumable clip upload
++   *     description: |
++   *       Idempotent. A new `uploadId` (client UUID) creates a session in `receiving` (201).
++   *       The same `uploadId`, wallet, type and size answers the existing session (200); a
++   *       plant still receiving may update `submissionId` / `clientGroupId` / `landQueued`
++   *       this way. A plant refused `LAND_NOT_FOUND` or `LAND_REFUSED` is asked again with
++   *       what it sends: when its land is known now (or on its way) it goes back to
++   *       `receiving` at 0 and the clip is sent again. Another wallet's id, or a different
++   *       type or size, is 409 `UPLOAD_ID_CONFLICT`.
++   *     tags: [Submissions]
++   *     security:
++   *       - bearerAuth: []
++   *     requestBody:
++   *       required: true
++   *       content:
++   *         application/json:
++   *           schema:
++   *             type: object
++   *             required: [uploadId, type, size, mimeType, latitude, longitude]
++   *             properties:
++   *               uploadId: { type: string, format: uuid }
++   *               type: { type: string, enum: [land, plant] }
++   *               size: { type: integer, minimum: 1 }
++   *               mimeType: { type: string, example: video/mp4 }
++   *               fileName: { type: string, maxLength: 128 }
++   *               latitude: { type: number }
++   *               longitude: { type: number }
++   *               submissionId: { type: string, description: "Plant only (24-hex). Land must not send it." }
++   *               clientGroupId: { type: string, description: "The client's group id (/^[A-Za-z0-9_-]{1,64}$/); links a plant to its land." }
++   *               landQueued:
++   *                 type: boolean
++   *                 description: "Plant only. true while the phone still holds this group's land clip in its queue: the server then answers LAND_NOT_READY rather than guess the planting by filming time. Send false once no land of the group is queued. Kept on the session until changed."
++   *               treesPlanted: { type: number }
++   *               treeType: { type: string }
++   *               reverseGeocode: { type: string }
++   *               recordedAt: { type: string, format: date-time }
++   *               gpsEnd: { type: string, description: "lat,lng or lat,lng,accuracy" }
++   *               gpsEndSource: { type: string, enum: [filming, submit] }
++   *               gpsAccuracy: { type: number }
++   *               gpsPath: { type: string, description: "JSON array of [lat, lng] or [lat, lng, accuracy]" }
++   *     responses:
++   *       201: { description: Session created }
++   *       200: { description: Existing session }
++   *       400: { description: VALIDATION_ERROR (with details) }
++   *       401: { description: Unauthorized }
++   *       409: { description: UPLOAD_ID_CONFLICT }
++   *       429:
++   *         description: |
++   *           TOO_MANY_OPEN_UPLOADS with Retry-After: this planter already has many clips half-sent
++   *           (UPLOAD_WALLET_MAX_OPEN_PARTS / UPLOAD_WALLET_MAX_OPEN_BYTES of parts written in the last
++   *           6 h). Only a NEW session waits; there is no limit on a clip's size. Retry later.
++   */
++  router.post(
++    '/',
++    auth,
++    uploadControlLimiter,
++    async (req: Request, res: Response) => {
++      try {
++        const { created, view } = await createOrResumeSession(
++          walletOf(req),
++          req.body,
++        )
++        return created
++          ? sendSuccess(res, 'Upload session created', view, 201)
++          : sendSuccess(res, 'Upload session resumed', view)
++      } catch (error) {
++        return sendSessionError(res, error, 'Upload session create error')
++      }
++    },
++  )
+ 
+-/**
+- * @swagger
+- * /api/submissions/uploads/{uploadId}/complete:
+- *   post:
+- *     summary: Finish an upload and start storing the clip
+- *     description: |
+- *       All bytes must be on the server (else 409 `UPLOAD_INCOMPLETE`). Answers 202 with the
+- *       session in `processing` and stores the clip in the background; poll GET for the
+- *       outcome. A plant whose land is still on its way is 409 `LAND_NOT_READY` with
+- *       `Retry-After`. Already processing, done or refused answers 200 as it stands, except
+- *       a plant refused `LAND_NOT_FOUND` or `LAND_REFUSED`: when its land is known now (or
+- *       on its way) it goes back to `receiving` at 0 (200) and the clip is sent again. A
+- *       `failed` session is run again (202), or reset to `receiving` (200) when its bytes
+- *       are gone.
+- *
+- *       A plant's planting: its `submissionId`, else its group's land session, else (a
+- *       guess) the wallet's newest planting whose land ended before the plant clip did, in
+- *       the 24 h before it, if that one still waits for its plant. The guess is not made
+- *       while `landQueued` is true, nor onto a planting whose land session belongs to
+- *       another group (LAND_NOT_READY for up to 24 h, then refused `LAND_NOT_FOUND`).
+- *     tags: [Submissions]
+- *     security:
+- *       - bearerAuth: []
+- *     parameters:
+- *       - in: path
+- *         name: uploadId
+- *         required: true
+- *         schema: { type: string, format: uuid }
+- *     requestBody:
+- *       required: false
+- *       content:
+- *         application/json:
+- *           schema:
+- *             type: object
+- *             properties:
+- *               submissionId: { type: string }
+- *               clientGroupId: { type: string }
+- *               landQueued: { type: boolean, description: "As on create; send it on every complete." }
+- *     responses:
+- *       202: { description: Processing started }
+- *       200: { description: Session as it stands }
+- *       409: { description: UPLOAD_INCOMPLETE or LAND_NOT_READY }
+- */
+-router.post(
+-  '/:uploadId/complete',
+-  authenticate,
+-  uploadControlLimiter,
+-  async (req: Request, res: Response) => {
+-    try {
+-      const { status, view } = await completeSession(
+-        walletOf(req),
+-        req.params.uploadId,
+-        req.body,
+-      )
+-      return status === 202
+-        ? sendSuccess(res, 'Upload is being saved', view, 202)
+-        : sendSuccess(res, 'Upload session', view)
+-    } catch (error) {
+-      return sendSessionError(res, error, 'Upload complete error')
+-    }
+-  },
+-)
++  /**
++   * @swagger
++   * /api/submissions/uploads/{uploadId}/chunks:
++   *   put:
++   *     summary: Append one chunk of the clip
++   *     description: |
++   *       Raw bytes (`application/octet-stream`) starting at `offset`, of any length as long as
++   *       `offset` + length <= `size` (`maxChunkBytes` is only the recommended size; a background
++   *       upload may send the whole rest of the clip as one request). Bodies are streamed to disk.
++   *
++   *       - `offset` = `receivedBytes`: appended.
++   *       - `offset` < `receivedBytes` (a request restarted from a stale offset): the bytes the
++   *         server already has are skipped and the rest appended; a chunk that brings nothing
++   *         new is a 200 no-op with the session.
++   *       - `offset` > `receivedBytes`: 409 `OFFSET_MISMATCH` with the session; continue from
++   *         its `receivedBytes`.
++   *
++   *       A request that dies mid-body keeps the bytes that arrived. When a chunk brings the
++   *       last byte, the clip starts processing as if `complete` had been called (200, state
++   *       `processing`), except a plant whose planting is not settled yet (its land not ready,
++   *       or only a filming-time guess left without `landQueued: false`): it stays `receiving`
++   *       for the phone's own `complete`. 0 bytes is 400 `EMPTY_CHUNK`; past the clip's end is
++   *       400 `CHUNK_OUT_OF_RANGE` (nothing written); not receiving is 409
++   *       `UPLOAD_NOT_RECEIVING`; an unknown id is 404 `UPLOAD_NOT_FOUND`. `CHUNK_TOO_LARGE`
++   *       is no longer answered.
++   *     tags: [Submissions]
++   *     security:
++   *       - bearerAuth: []
++   *     parameters:
++   *       - in: path
++   *         name: uploadId
++   *         required: true
++   *         schema: { type: string, format: uuid }
++   *       - in: header
++   *         name: x-upload-offset
++   *         required: false
++   *         description: Where this chunk starts. Preferred over the query string, which gave every chunk its own URL and so its own CORS preflight.
++   *         schema: { type: integer, minimum: 0 }
++   *       - in: query
++   *         name: offset
++   *         required: false
++   *         description: Same as x-upload-offset, for clients that send it here. Used only when the header is absent.
++   *         schema: { type: integer, minimum: 0 }
++   *     requestBody:
++   *       required: true
++   *       content:
++   *         application/octet-stream:
++   *           schema: { type: string, format: binary }
++   *     responses:
++   *       200:
++   *         description: Chunk stored (or already held); `data` is the session with its receivedBytes
++   *         content:
++   *           application/json:
++   *             schema:
++   *               type: object
++   *               properties:
++   *                 message: { type: string }
++   *                 data: { $ref: '#/components/schemas/UploadSessionView' }
++   *       400: { description: EMPTY_CHUNK or CHUNK_OUT_OF_RANGE }
++   *       404: { description: UPLOAD_NOT_FOUND }
++   *       409: { description: OFFSET_MISMATCH or UPLOAD_NOT_RECEIVING, with the session }
++   *       503: { description: "UPLOAD_STORAGE_FULL (Retry-After): the chunk would take the server's disk below its free-space floor, or the disk is full" }
++   */
++  router.put(
++    '/:uploadId/chunks',
++    auth,
++    uploadChunkLimiter,
++    async (req: Request, res: Response) => {
++      // The request may be ended from our side (idle, or superseded by a
++      // newer request for the same upload). Its stream error is expected.
++      req.on('error', () => {})
++      try {
++        // The header wins. With the offset in the query string every chunk had
++        // its own URL, and the browser's preflight cache is keyed by URL, so
++        // each chunk paid an extra OPTIONS round trip on a rural link.
++        const view = await receiveChunk(
++          walletOf(req),
++          req.params.uploadId,
++          req.get('x-upload-offset') ?? req.query.offset,
++          {
++            body: req,
++            declaredLength: contentLength(req),
++            cancel: () => req.destroy(),
++          },
++        )
++        if (!res.socket || res.socket.destroyed) return
++        return sendSuccess(res, 'Chunk stored', view)
++      } catch (error) {
++        return sendSessionError(res, error, 'Upload chunk error')
++      }
++    },
++  )
+ 
+-/**
+- * @swagger
+- * /api/submissions/uploads/{uploadId}/abandon:
+- *   post:
+- *     summary: Give up on a land clip the phone will never send
+- *     description: |
+- *       For a land session in `receiving` or `failed` whose clip the planter removed (or whose
+- *       bytes are gone from the phone): it becomes `refused` with `error.code`
+- *       `LAND_ABANDONED` and its bytes are dropped, so the plant clips of its group are refused
+- *       `LAND_REFUSED` at once instead of waiting with `LAND_NOT_READY`. A plant session, or a
+- *       land already processing, done or refused, is left as it is. Answers the session (200).
+- *       Only the planter's own sessions; any other id is 404 `UPLOAD_NOT_FOUND`.
+- *     tags: [Submissions]
+- *     security:
+- *       - bearerAuth: []
+- *     parameters:
+- *       - in: path
+- *         name: uploadId
+- *         required: true
+- *         schema: { type: string, format: uuid }
+- *     responses:
+- *       200:
+- *         description: The session as it now stands
+- *         content:
+- *           application/json:
+- *             schema:
+- *               type: object
+- *               properties:
+- *                 message: { type: string }
+- *                 data: { $ref: '#/components/schemas/UploadSessionView' }
+- *       404: { description: UPLOAD_NOT_FOUND }
+- */
+-router.post(
+-  '/:uploadId/abandon',
+-  authenticate,
+-  uploadControlLimiter,
+-  async (req: Request, res: Response) => {
+-    try {
+-      const view = await abandonSession(walletOf(req), req.params.uploadId)
+-      return sendSuccess(res, 'Upload session', view)
+-    } catch (error) {
+-      return sendSessionError(res, error, 'Upload abandon error')
+-    }
+-  },
+-)
++  /**
++   * @swagger
++   * /api/submissions/uploads/{uploadId}/complete:
++   *   post:
++   *     summary: Finish an upload and start storing the clip
++   *     description: |
++   *       All bytes must be on the server (else 409 `UPLOAD_INCOMPLETE`). Answers 202 with the
++   *       session in `processing` and stores the clip in the background; poll GET for the
++   *       outcome. A plant whose land is still on its way is 409 `LAND_NOT_READY` with
++   *       `Retry-After`. Already processing, done or refused answers 200 as it stands, except
++   *       a plant refused `LAND_NOT_FOUND` or `LAND_REFUSED`: when its land is known now (or
++   *       on its way) it goes back to `receiving` at 0 (200) and the clip is sent again. A
++   *       `failed` session is run again (202), or reset to `receiving` (200) when its bytes
++   *       are gone.
++   *
++   *       A plant's planting: its `submissionId`, else its group's land session, else (a
++   *       guess) the wallet's newest planting whose land ended before the plant clip did, in
++   *       the 24 h before it, if that one still waits for its plant. The guess is not made
++   *       while `landQueued` is true, nor onto a planting whose land session belongs to
++   *       another group (LAND_NOT_READY for up to 24 h, then refused `LAND_NOT_FOUND`).
++   *     tags: [Submissions]
++   *     security:
++   *       - bearerAuth: []
++   *     parameters:
++   *       - in: path
++   *         name: uploadId
++   *         required: true
++   *         schema: { type: string, format: uuid }
++   *     requestBody:
++   *       required: false
++   *       content:
++   *         application/json:
++   *           schema:
++   *             type: object
++   *             properties:
++   *               submissionId: { type: string }
++   *               clientGroupId: { type: string }
++   *               landQueued: { type: boolean, description: "As on create; send it on every complete." }
++   *     responses:
++   *       202: { description: Processing started }
++   *       200: { description: Session as it stands }
++   *       409: { description: UPLOAD_INCOMPLETE or LAND_NOT_READY }
++   */
++  router.post(
++    '/:uploadId/complete',
++    auth,
++    uploadControlLimiter,
++    async (req: Request, res: Response) => {
++      try {
++        const { status, view } = await completeSession(
++          walletOf(req),
++          req.params.uploadId,
++          req.body,
++        )
++        return status === 202
++          ? sendSuccess(res, 'Upload is being saved', view, 202)
++          : sendSuccess(res, 'Upload session', view)
++      } catch (error) {
++        return sendSessionError(res, error, 'Upload complete error')
++      }
++    },
++  )
+ 
+-/**
+- * @swagger
+- * /api/submissions/uploads/{uploadId}:
+- *   get:
+- *     summary: Where an upload stands
+- *     description: |
+- *       The session, or 404 `UPLOAD_NOT_FOUND`. A session left `processing` by a previous
+- *       server process is restarted when its bytes are still here, or reset to `receiving`
+- *       at 0 when they are not.
+- *     tags: [Submissions]
+- *     security:
+- *       - bearerAuth: []
+- *     parameters:
+- *       - in: path
+- *         name: uploadId
+- *         required: true
+- *         schema: { type: string, format: uuid }
+- *     responses:
+- *       200: { description: The session }
+- *       404: { description: UPLOAD_NOT_FOUND }
+- */
+-router.get(
+-  '/:uploadId',
+-  authenticate,
+-  uploadControlLimiter,
+-  async (req: Request, res: Response) => {
+-    try {
+-      const view = await getSessionView(walletOf(req), req.params.uploadId)
+-      return sendSuccess(res, 'Upload session', view)
+-    } catch (error) {
+-      return sendSessionError(res, error, 'Upload session read error')
+-    }
+-  },
+-)
++  /**
++   * @swagger
++   * /api/submissions/uploads/{uploadId}/abandon:
++   *   post:
++   *     summary: Give up on a land clip the phone will never send
++   *     description: |
++   *       For a land session in `receiving` or `failed` whose clip the planter removed (or whose
++   *       bytes are gone from the phone): it becomes `refused` with `error.code`
++   *       `LAND_ABANDONED` and its bytes are dropped, so the plant clips of its group are refused
++   *       `LAND_REFUSED` at once instead of waiting with `LAND_NOT_READY`. A plant session, or a
++   *       land already processing, done or refused, is left as it is. Answers the session (200).
++   *       Only the planter's own sessions; any other id is 404 `UPLOAD_NOT_FOUND`.
++   *     tags: [Submissions]
++   *     security:
++   *       - bearerAuth: []
++   *     parameters:
++   *       - in: path
++   *         name: uploadId
++   *         required: true
++   *         schema: { type: string, format: uuid }
++   *     responses:
++   *       200:
++   *         description: The session as it now stands
++   *         content:
++   *           application/json:
++   *             schema:
++   *               type: object
++   *               properties:
++   *                 message: { type: string }
++   *                 data: { $ref: '#/components/schemas/UploadSessionView' }
++   *       404: { description: UPLOAD_NOT_FOUND }
++   */
++  router.post(
++    '/:uploadId/abandon',
++    auth,
++    uploadControlLimiter,
++    async (req: Request, res: Response) => {
++      try {
++        const view = await abandonSession(walletOf(req), req.params.uploadId)
++        return sendSuccess(res, 'Upload session', view)
++      } catch (error) {
++        return sendSessionError(res, error, 'Upload abandon error')
++      }
++    },
++  )
++
++  /**
++   * @swagger
++   * /api/submissions/uploads/{uploadId}:
++   *   get:
++   *     summary: Where an upload stands
++   *     description: |
++   *       The session, or 404 `UPLOAD_NOT_FOUND`. A session left `processing` by a previous
++   *       server process is restarted when its bytes are still here, or reset to `receiving`
++   *       at 0 when they are not.
++   *     tags: [Submissions]
++   *     security:
++   *       - bearerAuth: []
++   *     parameters:
++   *       - in: path
++   *         name: uploadId
++   *         required: true
++   *         schema: { type: string, format: uuid }
++   *     responses:
++   *       200: { description: The session }
++   *       404: { description: UPLOAD_NOT_FOUND }
++   */
++  router.get(
++    '/:uploadId',
++    auth,
++    uploadControlLimiter,
++    async (req: Request, res: Response) => {
++      try {
++        const view = await getSessionView(walletOf(req), req.params.uploadId)
++        return sendSuccess(res, 'Upload session', view)
++      } catch (error) {
++        return sendSessionError(res, error, 'Upload session read error')
++      }
++    },
++  )
++
++  return router
++}
++
++const router = buildUploadSessionRouter(authenticate)
+ 
+ export default router
+diff --git a/src/server.ts b/src/server.ts
+index 05ca895..e591a23 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -18,6 +18,7 @@ import rewardsRoutes from './routes/rewards'
+ import submissionsRoutes from './routes/submissions'
+ import distributionsRoutes from './routes/distributions'
+ import gwrRoutes, { gwrVideoService } from './routes/gwr'
++import trackRoutes from './routes/track'
+ import otcRoutes from './routes/otc'
+ import { isUploadChunkRequest } from './routes/uploadSessions'
+ import userRoutes from './routes/users'
+@@ -38,6 +39,7 @@ import { startHealthCheckReminders } from './services/healthCheckReminderService
+ import { startAudienceSnapshots } from './services/audienceSnapshotService'
+ import { startCorrectedClipSweep } from './services/correctedClipService'
+ import { startGwrAiSweeps } from './services/gwrAiCountService'
++import { TRACK_AI_TARGET } from './services/trackService'
+ import { startOtcSweep } from './services/otcService'
+ import { startVerifierPrizePayouts } from './services/verifierPrizeService'
+ import { startServerMintKeeper } from './services/serverMintKeeper'
+@@ -188,6 +190,9 @@ app.use('/api/auth', authRoutes)
+ app.use('/api/admin', adminRoutes)
+ // GWR record after-clips: public upload + gallery (treegens.app/gwr, /gwr-vids).
+ app.use('/api/gwr', gwrRoutes)
++// treegens.app/track: the planting capture with no crypto, and the public
++// dashboard of every tree. Never touches submissions, rewards or MGRO.
++app.use('/api/track', trackRoutes)
+ app.use('/health', healthRoutes)
+ 
+ /**
+@@ -265,6 +270,8 @@ if (process.env.DISABLE_UPLOAD_SESSION_SWEEP !== 'true') {
+ // sweeps themselves.
+ if (process.env.DISABLE_GWR_AI_SWEEP !== 'true') {
+   startGwrAiSweeps()
++  // The mangrove plant clips filmed at treegens.app/track, the same way.
++  startGwrAiSweeps(60_000, TRACK_AI_TARGET)
+   // Fingerprints for clips stored before they were kept, so a repeat is
+   // recognised and counted once (read from the bucket, nothing downloaded).
+   gwrVideoService.startFingerprintBackfill()
+diff --git a/src/services/gwrAiCountService.ts b/src/services/gwrAiCountService.ts
+index a7d53b6..8a530f0 100644
+--- a/src/services/gwrAiCountService.ts
++++ b/src/services/gwrAiCountService.ts
+@@ -92,6 +92,38 @@ const OUTAGE_PAUSE_MS = 5 * 60_000
+ const DISK_WAIT_MS = 5 * 60_000
+ const AI_OBJECT_PREFIX = `${GWR_STORAGE_PREFIX}ai/`
+ 
++/**
++ * Which clips a sweep counts. The GWR record clips are the original; the
++ * /track before-and-after clips (models/TrackClip.ts) run through the very
++ * same sweeps, each collection on its own, so a fault in one never holds
++ * the other and neither ever sees the other's rows.
++ */
++export interface ClipAiTarget {
++  /** The Mongoose model whose rows carry the ai* fields. */
++  model: any
++  /** Only rows matching this are queued and claimed (TrackClip: the
++   * mangrove plant clips). Empty for GWR: every clip is counted. */
++  scope: Record<string, unknown>
++  /** Where this collection's mirrored overlays live in the bucket. */
++  objectPrefix: string
++  /** The mirror's tmp-file prefix and log tag. */
++  namePrefix: string
++  /** Its download name for an overlay drawn on `downloadFilename`. */
++  overlayName: (downloadFilename: string) => string
++  /** Log prefix. */
++  tag: string
++}
++
++/** The GWR record clips: every clip counted, overlays under gwr/ai/. */
++export const GWR_AI_TARGET: ClipAiTarget = {
++  model: GwrVideo,
++  scope: {},
++  objectPrefix: AI_OBJECT_PREFIX,
++  namePrefix: 'gwr-ai',
++  overlayName: name => aiDownloadFilename(name),
++  tag: 'gwrAi',
++}
++
+ /** How long a clip waits after its n-th failed attempt. */
+ export function countBackoffMs(attempts: number): number {
+   return Math.min(
+@@ -205,50 +237,52 @@ async function tmpDiskRoomFor(bytes: number): Promise<boolean> {
+   }
+ }
+ 
+-const defaultDeps: GwrAiDeps = {
+-  count: (clip, signal, timeoutMs) =>
+-    countStoredClip(clip, { signal, timeoutMs }),
+-  mirror: async (sourceUrl, downloadFilename, signal) => {
+-    const token = env.TREEGENS_COUNT_API_TOKEN?.trim()
+-    let objectName = ''
+-    const url = await mirrorVideoToBucket(sourceUrl, {
+-      namePrefix: 'gwr-ai',
+-      tag: 'gwrAiMirror',
+-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+-      // A record clip is minutes long, not eight seconds: its overlay is
+-      // hundreds of MB and takes minutes to pull from the counting host.
+-      attempts: MIRROR_DOWNLOAD_ATTEMPTS,
+-      downloadDeadlineMs: MIRROR_DOWNLOAD_DEADLINE_MS,
+-      maxBytes: env.GWR_AI_MAX_OVERLAY_BYTES,
+-      diskRoomFor: tmpDiskRoomFor,
+-      signal,
+-      // Beside the record clips, with a download name, like the footage:
+-      // the public URL then saves the overlay under a readable name.
+-      upload: (filePath, _fileName, mimeType) => {
+-        // The sweep's deadline passed during the download or the
+-        // transcode: nothing is waiting for this copy, so it is not made.
+-        if (signal.aborted) {
+-          throw new Error('mirror abandoned: the deadline passed')
+-        }
+-        objectName = `${AI_OBJECT_PREFIX}${uuidv4()}.mp4`
+-        return uploadGwrClipToGcs(
+-          filePath,
+-          objectName,
+-          mimeType,
+-          aiDownloadFilename(downloadFilename),
+-        )
+-      },
+-    })
+-    if (url && objectName && signal.aborted) {
+-      // Uploaded just as the deadline passed: the row will never name it.
+-      await deleteFromGcs(objectName).catch(() => undefined)
+-      return null
+-    }
+-    return url && objectName ? { url, objectName } : null
+-  },
+-  removeObject: objectName => deleteFromGcs(objectName),
+-  diskRoomFor: tmpDiskRoomFor,
+-  now: () => new Date(),
++function depsFor(target: ClipAiTarget): GwrAiDeps {
++  return {
++    count: (clip, signal, timeoutMs) =>
++      countStoredClip(clip, { signal, timeoutMs }),
++    mirror: async (sourceUrl, downloadFilename, signal) => {
++      const token = env.TREEGENS_COUNT_API_TOKEN?.trim()
++      let objectName = ''
++      const url = await mirrorVideoToBucket(sourceUrl, {
++        namePrefix: target.namePrefix,
++        tag: `${target.tag}Mirror`,
++        headers: token ? { Authorization: `Bearer ${token}` } : {},
++        // A record clip is minutes long, not eight seconds: its overlay is
++        // hundreds of MB and takes minutes to pull from the counting host.
++        attempts: MIRROR_DOWNLOAD_ATTEMPTS,
++        downloadDeadlineMs: MIRROR_DOWNLOAD_DEADLINE_MS,
++        maxBytes: env.GWR_AI_MAX_OVERLAY_BYTES,
++        diskRoomFor: tmpDiskRoomFor,
++        signal,
++        // Beside the record clips, with a download name, like the footage:
++        // the public URL then saves the overlay under a readable name.
++        upload: (filePath, _fileName, mimeType) => {
++          // The sweep's deadline passed during the download or the
++          // transcode: nothing is waiting for this copy, so it is not made.
++          if (signal.aborted) {
++            throw new Error('mirror abandoned: the deadline passed')
++          }
++          objectName = `${target.objectPrefix}${uuidv4()}.mp4`
++          return uploadGwrClipToGcs(
++            filePath,
++            objectName,
++            mimeType,
++            target.overlayName(downloadFilename),
++          )
++        },
++      })
++      if (url && objectName && signal.aborted) {
++        // Uploaded just as the deadline passed: the row will never name it.
++        await deleteFromGcs(objectName).catch(() => undefined)
++        return null
++      }
++      return url && objectName ? { url, objectName } : null
++    },
++    removeObject: objectName => deleteFromGcs(objectName),
++    diskRoomFor: tmpDiskRoomFor,
++    now: () => new Date(),
++  }
+ }
+ 
+ /** Counting is on unless switched off; the API URL has a default. */
+@@ -309,9 +343,15 @@ export async function requestGwrRecount(
+  * switched off (`skipped`). Cheap: aiStatus is indexed and the collection
+  * is small. Returns how many were queued.
+  */
+-export async function backfillUncounted(now = new Date()): Promise<number> {
+-  const res = await GwrVideo.updateMany(
+-    { aiStatus: { $nin: ['pending', 'counting', 'done', 'failed'] } },
++export async function backfillUncounted(
++  now = new Date(),
++  target: ClipAiTarget = GWR_AI_TARGET,
++): Promise<number> {
++  const res = await target.model.updateMany(
++    {
++      ...target.scope,
++      aiStatus: { $nin: ['pending', 'counting', 'done', 'failed'] },
++    },
+     { $set: queuedFields(now) },
+   )
+   return Number(res.modifiedCount ?? res.matchedCount ?? 0)
+@@ -325,9 +365,13 @@ export async function backfillUncounted(now = new Date()): Promise<number> {
+  * every slow try, so a clip is never put back again and again. Returns how
+  * many were put back.
+  */
+-export async function requeueSlowFailures(now = new Date()): Promise<number> {
+-  const res = await GwrVideo.updateMany(
++export async function requeueSlowFailures(
++  now = new Date(),
++  target: ClipAiTarget = GWR_AI_TARGET,
++): Promise<number> {
++  const res = await target.model.updateMany(
+     {
++      ...target.scope,
+       aiStatus: 'failed',
+       aiError: SLOW_COUNT_ERROR,
+       $or: [
+@@ -437,7 +481,8 @@ export async function gwrAiTotals(): Promise<GwrAiTotals> {
+ }
+ 
+ let counting = false
+-let mirroring = false
++/** Mirror sweeps running, by target: each copies one overlay at a time. */
++const mirroring = new Set<string>()
+ /** The queue waits until this moment after the service was unreachable. */
+ let pausedUntil = 0
+ 
+@@ -454,46 +499,54 @@ export function resetGwrAiPauseForTests(): void {
+  * sweeps share it.
+  */
+ export async function sweepGwrAiCounts(
+-  deps: GwrAiDeps = defaultDeps,
++  given?: GwrAiDeps,
++  target: ClipAiTarget = GWR_AI_TARGET,
+ ): Promise<void> {
++  // One count at a time across every collection: they share the service.
+   if (counting) return
+   counting = true
++  const deps = given ?? depsFor(target)
++  const tag = target.tag
+   try {
+     const now = deps.now()
+     if (now.getTime() < pausedUntil) return
+-    await GwrVideo.updateMany(
++    await target.model.updateMany(
+       {
++        ...target.scope,
+         aiStatus: 'counting',
+         aiCountStartedAt: { $lt: new Date(now.getTime() - STUCK_COUNT_MS) },
+       },
+       { $set: { aiStatus: 'pending', aiNextAttemptAt: now } },
+     )
+     if (gwrAiEnabled()) {
+-      const queued = await backfillUncounted(now)
+-      if (queued) console.log(`[gwrAi] queued ${queued} uncounted clip(s)`)
+-      const again = await requeueSlowFailures(now)
++      const queued = await backfillUncounted(now, target)
++      if (queued) console.log(`[${tag}] queued ${queued} uncounted clip(s)`)
++      const again = await requeueSlowFailures(now, target)
+       if (again) {
+-        console.log(`[gwrAi] queued ${again} clip(s) that timed out, again`)
++        console.log(`[${tag}] queued ${again} clip(s) that timed out, again`)
+       }
+     }
+     for (let i = 0; i < MAX_COUNTS_PER_TICK; i++) {
+       const at = deps.now()
+-      const claimed: any = await GwrVideo.findOneAndUpdate(
+-        {
+-          aiStatus: 'pending',
+-          $or: [
+-            { aiNextAttemptAt: { $exists: false } },
+-            { aiNextAttemptAt: { $lte: at } },
+-          ],
+-        },
+-        { $set: { aiStatus: 'counting', aiCountStartedAt: at } },
+-        { sort: { aiRequestedAt: 1 }, new: true },
+-      ).lean()
++      const claimed: any = await target.model
++        .findOneAndUpdate(
++          {
++            ...target.scope,
++            aiStatus: 'pending',
++            $or: [
++              { aiNextAttemptAt: { $exists: false } },
++              { aiNextAttemptAt: { $lte: at } },
++            ],
++          },
++          { $set: { aiStatus: 'counting', aiCountStartedAt: at } },
++          { sort: { aiRequestedAt: 1 }, new: true },
++        )
++        .lean()
+       if (!claimed) return
+-      if ((await countOne(claimed, at, deps)) === 'stop') return
++      if ((await countOne(claimed, at, deps, target)) === 'stop') return
+     }
+   } catch (err) {
+-    console.error('[gwrAi] count sweep failed:', err)
++    console.error(`[${tag}] count sweep failed:`, err)
+   } finally {
+     counting = false
+   }
+@@ -510,7 +563,10 @@ async function countOne(
+   claimed: any,
+   startedAt: Date,
+   deps: GwrAiDeps,
++  target: ClipAiTarget,
+ ): Promise<'next' | 'stop'> {
++  const Model = target.model
++  const tag = target.tag
+   const own = {
+     _id: claimed._id,
+     aiStatus: 'counting',
+@@ -522,7 +578,7 @@ async function countOne(
+   if (size > cap) {
+     // The service has a ceiling of its own; a clip this big is a download
+     // for a count that never comes, four times over.
+-    await GwrVideo.updateOne(own, {
++    await Model.updateOne(own, {
+       $set: {
+         aiStatus: 'failed',
+         aiError:
+@@ -530,19 +586,19 @@ async function countOne(
+           `the ceiling is ${mb(cap)} MB, GWR_AI_MAX_CLIP_BYTES)`,
+       },
+     })
+-    console.warn(`[gwrAi] ${claimed._id}: ${mb(size)} MB is over the ceiling`)
++    console.warn(`[${tag}] ${claimed._id}: ${mb(size)} MB is over the ceiling`)
+     return 'next'
+   }
+   if (!(await deps.diskRoomFor(size))) {
+     const now = deps.now()
+-    await GwrVideo.updateOne(own, {
++    await Model.updateOne(own, {
+       $set: {
+         aiStatus: 'pending',
+         aiNextAttemptAt: new Date(now.getTime() + DISK_WAIT_MS),
+         aiError: 'waiting for room on the server disk',
+       },
+     })
+-    console.warn(`[gwrAi] ${claimed._id}: no room on disk for ${mb(size)} MB`)
++    console.warn(`[${tag}] ${claimed._id}: no room on disk for ${mb(size)} MB`)
+     return 'stop'
+   }
+ 
+@@ -604,22 +660,22 @@ async function countOne(
+     }
+     unset.aiVideoObjectName = 1
+     unset.aiMirrorStartedAt = 1
+-    const res = await GwrVideo.updateOne(own, { $set: set, $unset: unset })
++    const res = await Model.updateOne(own, { $set: set, $unset: unset })
+     if (!matched(res)) {
+-      console.warn(`[gwrAi] ${claimed._id}: count landed late; dropped`)
++      console.warn(`[${tag}] ${claimed._id}: count landed late; dropped`)
+       return 'next'
+     }
+-    if (stale.startsWith(AI_OBJECT_PREFIX)) {
++    if (stale.startsWith(target.objectPrefix)) {
+       await deps
+         .removeObject(stale)
+         .catch(err =>
+           console.warn(
+-            `[gwrAi] ${claimed._id}: old overlay not removed: ${errorText(err)}`,
++            `[${tag}] ${claimed._id}: old overlay not removed: ${errorText(err)}`,
+           ),
+         )
+     }
+     console.log(
+-      `[gwrAi] ${claimed._id}: counted ${result.aiTreeCount} trees` +
++      `[${tag}] ${claimed._id}: counted ${result.aiTreeCount} trees` +
+         ` (${result.aiModelVersion})` +
+         (overlayMissing ? ', overlay unreachable' : ''),
+     )
+@@ -655,10 +711,10 @@ async function countOne(
+             : countBackoffMs(slow ? slowAttempts : attempts)),
+       )
+     }
+-    await GwrVideo.updateOne(own, { $set: set })
++    await Model.updateOne(own, { $set: set })
+     if (outage) pausedUntil = now.getTime() + OUTAGE_PAUSE_MS
+     console.warn(
+-      `[gwrAi] ${claimed._id}: attempt ${attempts}` +
++      `[${tag}] ${claimed._id}: attempt ${attempts}` +
+         (slowAttempts ? `, slow ${slowAttempts}` : '') +
+         (exhausted
+           ? ` GAVE UP${deterministic ? ' (not retryable)' : ''}`
+@@ -676,13 +732,17 @@ async function countOne(
+  * the row still shows the overlay that was copied.
+  */
+ export async function sweepGwrAiMirrors(
+-  deps: GwrAiDeps = defaultDeps,
++  given?: GwrAiDeps,
++  target: ClipAiTarget = GWR_AI_TARGET,
+ ): Promise<void> {
+-  if (mirroring) return
+-  mirroring = true
++  if (mirroring.has(target.tag)) return
++  mirroring.add(target.tag)
++  const deps = given ?? depsFor(target)
++  const Model = target.model
++  const tag = target.tag
+   try {
+     const now = deps.now()
+-    const row: any = await GwrVideo.findOneAndUpdate(
++    const row: any = await Model.findOneAndUpdate(
+       {
+         aiVideoMirrorPending: true,
+         aiStatus: 'done',
+@@ -702,7 +762,7 @@ export async function sweepGwrAiMirrors(
+     if (!row) return
+     const url = typeof row.aiVideoUrl === 'string' ? row.aiVideoUrl : ''
+     if (!url || !needsMirroring(url)) {
+-      await GwrVideo.updateOne(
++      await Model.updateOne(
+         { _id: row._id },
+         {
+           $set: { aiVideoMirrorPending: false },
+@@ -716,7 +776,7 @@ export async function sweepGwrAiMirrors(
+     // The claim is let go whatever happens below, so the next tick can take
+     // the row again; the success write drops it in the same update.
+     const release = () =>
+-      GwrVideo.updateOne({ _id: row._id }, { $unset: { aiMirrorStartedAt: 1 } })
++      Model.updateOne({ _id: row._id }, { $unset: { aiMirrorStartedAt: 1 } })
+     try {
+       const copy = await withDeadline(
+         deps.mirror(
+@@ -731,7 +791,7 @@ export async function sweepGwrAiMirrors(
+         throw err
+       })
+       if (!copy) throw new Error('mirror returned no url')
+-      const res = await GwrVideo.updateOne(
++      const res = await Model.updateOne(
+         { _id: row._id, aiVideoUrl: url },
+         {
+           $set: {
+@@ -748,27 +808,27 @@ export async function sweepGwrAiMirrors(
+         await deps.removeObject(copy.objectName).catch(() => undefined)
+         await release()
+         console.log(
+-          `[gwrAi] ${row._id}: overlay changed during mirror; copy dropped`,
++          `[${tag}] ${row._id}: overlay changed during mirror; copy dropped`,
+         )
+         return
+       }
+-      console.log(`[gwrAi] ${row._id}: annotated clip mirrored`)
++      console.log(`[${tag}] ${row._id}: annotated clip mirrored`)
+     } catch (err) {
+       const message = errorText(err)
+       if (/no room on disk/i.test(message)) {
+         // Not the clip's fault: the attempt is not counted, and the claim is
+         // kept, so the row is looked at again after the stuck window.
+-        await GwrVideo.updateOne(
++        await Model.updateOne(
+           { _id: row._id },
+           { $set: { aiError: message }, $inc: { aiMirrorAttempts: -1 } },
+         )
+-        console.warn(`[gwrAi] ${row._id}: mirror waits for disk: ${message}`)
++        console.warn(`[${tag}] ${row._id}: mirror waits for disk: ${message}`)
+         return
+       }
+       // Too big to ever copy: give up now, not after five long downloads.
+       const giveUp =
+         attempts >= MAX_MIRROR_ATTEMPTS || /exceeds \d+ bytes/i.test(message)
+-      await GwrVideo.updateOne(
++      await Model.updateOne(
+         { _id: row._id, aiVideoUrl: url },
+         {
+           $set: {
+@@ -779,24 +839,27 @@ export async function sweepGwrAiMirrors(
+       )
+       await release()
+       console.warn(
+-        `[gwrAi] ${row._id}: mirror attempt ${attempts}` +
++        `[${tag}] ${row._id}: mirror attempt ${attempts}` +
+           `${giveUp ? ` GAVE UP` : ''}: ${message}`,
+       )
+     }
+   } catch (err) {
+-    console.error('[gwrAi] mirror sweep failed:', err)
++    console.error(`[${tag}] mirror sweep failed:`, err)
+   } finally {
+-    mirroring = false
++    mirroring.delete(target.tag)
+   }
+ }
+ 
+ /** Both sweeps on a timer. Counting first so the mirror has something to do. */
+-export function startGwrAiSweeps(intervalMs = 60_000): NodeJS.Timeout[] {
++export function startGwrAiSweeps(
++  intervalMs = 60_000,
++  target: ClipAiTarget = GWR_AI_TARGET,
++): NodeJS.Timeout[] {
+   const count = setInterval(() => {
+-    void sweepGwrAiCounts()
++    void sweepGwrAiCounts(undefined, target)
+   }, intervalMs)
+   const mirror = setInterval(() => {
+-    void sweepGwrAiMirrors()
++    void sweepGwrAiMirrors(undefined, target)
+   }, intervalMs)
+   count.unref()
+   mirror.unref()
+diff --git a/src/services/trackService.ts b/src/services/trackService.ts
+new file mode 100644
+index 0000000..681798b
+--- /dev/null
++++ b/src/services/trackService.ts
+@@ -0,0 +1,782 @@
++import fs from 'fs'
++import mongoose from 'mongoose'
++import { v4 as uuidv4 } from 'uuid'
++import {
++  deleteFromGcs,
++  isGcsConfigured,
++  uploadGwrClipToGcs,
++} from '../config/gcs'
++import TrackClip from '../models/TrackClip'
++import { isMangroveTreeType } from '../utils/effectiveTreeCount'
++import { chooseFilmedAt, mp4CreationTime } from '../utils/mp4CreationTime'
++import { UploadRefusedError } from '../utils/uploadRouteErrors'
++import {
++  initialAiFields,
++  type ClipAiTarget,
++  gwrAiEnabled,
++} from './gwrAiCountService'
++import {
++  csvCell,
++  gwrFileExtension,
++  gwrMimeForExtension,
++  slugify,
++  utcStamp,
++} from './gwrVideoNaming'
++import { md5OfFile } from './gwrVideoService'
++
++/**
++ * treegens.app/track: the planting app's filming and counting, with no
++ * crypto. A phone films the land clip and the plant clip of each tree on
++ * the same screen as a planting and sends them through the same resumable
++ * upload sessions (uploadSessionService, mounted at /api/track/uploads); a
++ * session of the 'track' channel is stored here instead of as a Submission.
++ *
++ * Nothing here reads or writes submissions, users, verifiers, rewards, OTC
++ * or MGRO. The trees are public: anyone with the link sees the dashboard.
++ *
++ * The count of a tree is the planting app's rule: the planter's own number,
++ * or for mangroves the AI count of the plant clip, made by the same
++ * background sweep that counts the GWR clips (gwrAiCountService).
++ */
++
++export const TRACK_STORAGE_PREFIX = 'track/'
++const TRACK_AI_PREFIX = `${TRACK_STORAGE_PREFIX}ai/`
++/** Session wallets of the track channel start with this. */
++export const TRACK_DEVICE_PREFIX = 'track:'
++
++/** The AI sweeps' view of the track clips: mangrove plant clips only. */
++export const TRACK_AI_TARGET: ClipAiTarget = {
++  model: TrackClip,
++  scope: { aiEligible: true },
++  objectPrefix: TRACK_AI_PREFIX,
++  namePrefix: 'track-ai',
++  overlayName: name =>
++    `${name.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/-after$/, '')}-ai.mp4`,
++  tag: 'trackAi',
++}
++
++export const isTrackDevice = (wallet: string | undefined | null) =>
++  typeof wallet === 'string' && wallet.startsWith(TRACK_DEVICE_PREFIX)
++
++/** What the session hands over for one clip. */
++export interface TrackClipInput {
++  uploadId: string
++  device: string
++  kind: 'land' | 'plant'
++  /** Plant: the tree's id (its land clip's _id), resolved by the session. */
++  treeId?: string
++  clientGroupId?: string
++  planterName?: string
++  latitude?: number
++  longitude?: number
++  gpsAccuracy?: number
++  gpsEnd?: string
++  gpsPath?: string
++  reverseGeocode?: string
++  treesPlanted?: number
++  treeType?: string
++  recordedAt?: Date
++}
++
++export interface TrackStoredFile {
++  path: string
++  originalname: string
++  mimetype: string
++  size: number
++}
++
++/** What the phone's upload queue reads back: the planting route's shape,
++ * with the tree's id where a planting's would be. */
++export type TrackUploadResult = {
++  submissionId: string
++  videoCID: string
++  publicUrl: string
++  uploadTimestamp: string
++  type: 'land' | 'plant'
++  status: 'awaiting_plant' | 'tracked'
++  treesPlanted?: number
++  treeType?: string
++  reverseGeocode?: string
++}
++
++export interface TrackStorageDeps {
++  configured: () => boolean
++  upload: typeof uploadGwrClipToGcs
++  remove: typeof deleteFromGcs
++}
++
++const OID_RE = /^[a-fA-F0-9]{24}$/
++
++const clean = (v: unknown) =>
++  typeof v === 'string' && v.trim() ? v.trim() : undefined
++
++/** The planter's name as typed, trimmed and capped; nothing for blank. */
++export function cleanPlanterName(raw: unknown): string | undefined {
++  // Control characters out: the name lands in file names and the CSV.
++  const name = [...(clean(raw) ?? '')]
++    .filter(ch => ch.charCodeAt(0) > 0x1f && ch.charCodeAt(0) !== 0x7f)
++    .join('')
++    .trim()
++  return name ? name.slice(0, 120) : undefined
++}
++
++/**
++ * `treegens-track-20261119-091500-amina-3f9a2c-before.mp4`: sortable, with
++ * the planter and the tree, and which clip it is, so a folder of downloads
++ * keeps each tree's two clips side by side.
++ */
++export function trackDownloadFilename(params: {
++  filmedAt: Date
++  planterName?: string
++  treeId: string
++  kind: 'land' | 'plant'
++  extension: string
++}): string {
++  const parts = [
++    'treegens-track',
++    utcStamp(params.filmedAt),
++    slugify(params.planterName),
++    params.treeId.slice(-6).toLowerCase(),
++    params.kind === 'land' ? 'before' : 'after',
++  ].filter(Boolean)
++  return `${parts.join('-')}.${params.extension}`
++}
++
++function resultOf(doc: any): TrackUploadResult {
++  return {
++    submissionId: String(doc.treeId),
++    videoCID: doc.objectName,
++    publicUrl: doc.publicUrl,
++    uploadTimestamp: new Date(doc.uploadedAt ?? Date.now()).toISOString(),
++    type: doc.kind,
++    status: doc.kind === 'land' ? 'awaiting_plant' : 'tracked',
++    ...(typeof doc.treesPlanted === 'number'
++      ? { treesPlanted: doc.treesPlanted }
++      : {}),
++    ...(clean(doc.treeType) ? { treeType: doc.treeType } : {}),
++    ...(clean(doc.reverseGeocode)
++      ? { reverseGeocode: doc.reverseGeocode }
++      : {}),
++  }
++}
++
++// ------------------------------------------------------------ dashboard
++
++export type TrackCountSource = 'planter' | 'ai' | 'ai_pending' | 'none'
++
++export interface TrackClipView {
++  id: string
++  kind: 'land' | 'plant'
++  publicUrl: string
++  /** Serves with Content-Disposition: attachment, so it downloads. */
++  downloadUrl: string
++  downloadFilename: string
++  mimeType?: string
++  sizeBytes?: number
++  gps?: { latitude: number; longitude: number; accuracyMeters?: number }
++  gpsEnd?: string
++  /** How many fixes were heard while filming (the path itself stays here). */
++  gpsPathPoints?: number
++  reverseGeocode?: string
++  filmedAt: string
++  uploadedAt: string
++}
++
++export interface TrackTreeView {
++  id: string
++  /** Order the trees were started in, from 1. */
++  number: number
++  planterName?: string
++  filmedAt: string
++  gps?: TrackClipView['gps']
++  reverseGeocode?: string
++  treeType?: string
++  isMangrove: boolean
++  /** The planter's own figure (not for mangroves). */
++  treesPlanted?: number
++  ai?: {
++    status: 'pending' | 'counting' | 'done' | 'failed' | 'skipped'
++    treeCount?: number
++    /** The plant clip with the AI boxes drawn on it. */
++    videoUrl?: string
++    error?: string
++  }
++  /** What this tree adds to the total, and where that comes from. */
++  count: number
++  countSource: TrackCountSource
++  /** Both clips are on the server. */
++  complete: boolean
++  land: TrackClipView
++  plant?: TrackClipView
++}
++
++export interface TrackTotals {
++  /** Trees with both clips. */
++  trees: number
++  /** Land clips still waiting for their plant clip. */
++  awaitingPlant: number
++  /** Planted, per the counting rule. */
++  planted: number
++  /** Mangrove trees whose AI count has not come yet. */
++  aiPending: number
++  clips: number
++  bytes: number
++  planters: { name: string; trees: number; planted: number }[]
++}
++
++function gpsOf(doc: any): TrackClipView['gps'] {
++  const g = doc.gpsCoordinates
++  if (!g || typeof g.latitude !== 'number' || typeof g.longitude !== 'number')
++    return undefined
++  return {
++    latitude: g.latitude,
++    longitude: g.longitude,
++    ...(typeof g.accuracyMeters === 'number'
++      ? { accuracyMeters: g.accuracyMeters }
++      : {}),
++  }
++}
++
++function pathPoints(raw: unknown): number | undefined {
++  if (typeof raw !== 'string' || !raw) return undefined
++  try {
++    const parsed = JSON.parse(raw)
++    return Array.isArray(parsed) ? parsed.length : undefined
++  } catch {
++    return undefined
++  }
++}
++
++function filmedAtOf(doc: any): Date {
++  return chooseFilmedAt({
++    videoCreatedAt: doc.videoCreatedAt,
++    recordedAt: doc.recordedAt,
++    uploadedAt: new Date(doc.uploadedAt ?? doc.createdAt ?? Date.now()),
++  }).filmedAt
++}
++
++export function toTrackClipView(doc: any): TrackClipView {
++  return {
++    id: String(doc._id),
++    kind: doc.kind,
++    publicUrl: doc.publicUrl,
++    downloadUrl: doc.publicUrl,
++    downloadFilename: doc.downloadFilename,
++    mimeType: clean(doc.mimeType),
++    sizeBytes: typeof doc.sizeBytes === 'number' ? doc.sizeBytes : undefined,
++    gps: gpsOf(doc),
++    gpsEnd: clean(doc.gpsEnd),
++    gpsPathPoints: pathPoints(doc.gpsPath),
++    reverseGeocode: clean(doc.reverseGeocode),
++    filmedAt: filmedAtOf(doc).toISOString(),
++    uploadedAt: new Date(doc.uploadedAt ?? doc.createdAt).toISOString(),
++  }
++}
++
++/** The planting app's rule: a mangrove counts by AI, anything else by the
++ * planter's own figure. */
++export function countOf(
++  land: any,
++  plant: any | undefined,
++): {
++  count: number
++  source: TrackCountSource
++} {
++  if (!plant) return { count: 0, source: 'none' }
++  if (plant.isMangrove) {
++    if (typeof plant.aiTreeCount === 'number') {
++      return { count: plant.aiTreeCount, source: 'ai' }
++    }
++    return { count: 0, source: plant.aiEligible ? 'ai_pending' : 'none' }
++  }
++  const n = Number(plant.treesPlanted)
++  return Number.isFinite(n) && n > 0
++    ? { count: n, source: 'planter' }
++    : { count: 0, source: 'none' }
++}
++
++export function toTrackTreeView(
++  land: any,
++  plant: any | undefined,
++  number: number,
++): TrackTreeView {
++  const { count, source } = countOf(land, plant)
++  const landView = toTrackClipView(land)
++  return {
++    id: String(land._id),
++    number,
++    planterName: clean(land.planterName) ?? clean(plant?.planterName),
++    filmedAt: landView.filmedAt,
++    gps: landView.gps,
++    reverseGeocode: landView.reverseGeocode ?? clean(plant?.reverseGeocode),
++    treeType: clean(plant?.treeType),
++    isMangrove: plant?.isMangrove === true,
++    treesPlanted:
++      plant && !plant.isMangrove && typeof plant.treesPlanted === 'number'
++        ? plant.treesPlanted
++        : undefined,
++    ai:
++      plant?.isMangrove === true
++        ? {
++            status: plant.aiStatus || 'skipped',
++            treeCount:
++              typeof plant.aiTreeCount === 'number'
++                ? plant.aiTreeCount
++                : undefined,
++            videoUrl: clean(plant.aiVideoUrl),
++            error:
++              plant.aiStatus === 'failed' ? clean(plant.aiError) : undefined,
++          }
++        : undefined,
++    count,
++    countSource: source,
++    complete: Boolean(plant),
++    land: landView,
++    plant: plant ? toTrackClipView(plant) : undefined,
++  }
++}
++
++export interface TrackListParams {
++  page: number
++  limit: number
++  /** Only this planter's trees (as typed, any case). */
++  planter?: string
++  /** Only trees whose land was filmed in [from, to). */
++  from?: Date
++  to?: Date
++}
++
++/** Every land clip's place in line, for the tree numbers. Light: ids only. */
++async function treeNumbers(): Promise<Map<string, number>> {
++  const lands: any[] = await TrackClip.find({ kind: 'land' }, '_id')
++    .sort({ uploadedAt: 1, _id: 1 })
++    .lean()
++  return new Map(lands.map((l, i) => [String(l._id), i + 1]))
++}
++
++const TOTALS_FIELDS =
++  '_id kind treeId planterName treesPlanted isMangrove aiEligible aiStatus aiTreeCount sizeBytes'
++
++export async function trackTotals(): Promise<TrackTotals> {
++  const rows: any[] = await TrackClip.find({}, TOTALS_FIELDS).lean()
++  const plantByTree = new Map<string, any>()
++  for (const r of rows) {
++    if (r.kind === 'plant') plantByTree.set(String(r.treeId), r)
++  }
++  const totals: TrackTotals = {
++    trees: 0,
++    awaitingPlant: 0,
++    planted: 0,
++    aiPending: 0,
++    clips: rows.length,
++    bytes: 0,
++    planters: [],
++  }
++  const planters = new Map<string, TrackTotals['planters'][number]>()
++  for (const r of rows) {
++    totals.bytes += typeof r.sizeBytes === 'number' ? r.sizeBytes : 0
++    if (r.kind !== 'land') continue
++    const plant = plantByTree.get(String(r._id))
++    if (!plant) {
++      totals.awaitingPlant++
++      continue
++    }
++    totals.trees++
++    const { count, source } = countOf(r, plant)
++    totals.planted += count
++    if (source === 'ai_pending') totals.aiPending++
++    const name = clean(r.planterName) ?? 'Unnamed'
++    const key = name.toLowerCase()
++    const p = planters.get(key) ?? { name, trees: 0, planted: 0 }
++    p.trees++
++    p.planted += count
++    planters.set(key, p)
++  }
++  totals.planters = [...planters.values()].sort(
++    (a, b) => b.planted - a.planted || b.trees - a.trees,
++  )
++  return totals
++}
++
++const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
++
++function landFilter(params: Omit<TrackListParams, 'page' | 'limit'>) {
++  const filter: Record<string, unknown> = { kind: 'land' }
++  const planter = cleanPlanterName(params.planter)
++  if (planter) {
++    filter.planterName = new RegExp(`^${escapeRegex(planter)}$`, 'i')
++  }
++  return filter
++}
++
++/** Trees newest first, each with both clips, and the totals. */
++export async function listTrackTrees(params: TrackListParams) {
++  const page = Math.max(1, Math.floor(params.page) || 1)
++  const limit = Math.min(200, Math.max(1, Math.floor(params.limit) || 50))
++  const filter = landFilter(params)
++  const ranged = Boolean(params.from || params.to)
++  // A day of filming is worked out per clip (its header, the phone, the
++  // upload), so a range is applied over the lands here, not in the query.
++  let lands: any[]
++  let total: number
++  if (ranged) {
++    const all: any[] = await TrackClip.find(filter)
++      .sort({ uploadedAt: -1, _id: -1 })
++      .lean()
++    const from = params.from?.getTime() ?? -Infinity
++    const to = params.to?.getTime() ?? Infinity
++    const inRange = all.filter(l => {
++      const t = filmedAtOf(l).getTime()
++      return t >= from && t < to
++    })
++    total = inRange.length
++    lands = inRange.slice((page - 1) * limit, page * limit)
++  } else {
++    ;[lands, total] = await Promise.all([
++      TrackClip.find(filter)
++        .sort({ uploadedAt: -1, _id: -1 })
++        .skip((page - 1) * limit)
++        .limit(limit)
++        .lean(),
++      TrackClip.countDocuments(filter),
++    ])
++  }
++  const [plants, numbers, totals] = await Promise.all([
++    lands.length
++      ? TrackClip.find({
++          kind: 'plant',
++          treeId: { $in: lands.map(l => l._id) },
++        }).lean()
++      : Promise.resolve([]),
++    treeNumbers(),
++    trackTotals(),
++  ])
++  const plantByTree = new Map((plants as any[]).map(p => [String(p.treeId), p]))
++  return {
++    trees: lands.map(l =>
++      toTrackTreeView(
++        l,
++        plantByTree.get(String(l._id)),
++        numbers.get(String(l._id)) ?? 0,
++      ),
++    ),
++    pagination: {
++      page,
++      limit,
++      total,
++      totalPages: Math.max(1, Math.ceil(total / limit)),
++    },
++    totals,
++  }
++}
++
++export async function getTrackTree(id: string): Promise<TrackTreeView | null> {
++  if (!OID_RE.test(id)) return null
++  const land: any = await TrackClip.findOne({ _id: id, kind: 'land' }).lean()
++  if (!land) return null
++  const [plant, numbers] = await Promise.all([
++    TrackClip.findOne({ kind: 'plant', treeId: land._id }).lean(),
++    treeNumbers(),
++  ])
++  return toTrackTreeView(land, plant ?? undefined, numbers.get(id) ?? 0)
++}
++
++/** Every tree, oldest first, for the CSV and the URL list. */
++async function everyTree(): Promise<TrackTreeView[]> {
++  const [lands, plants] = await Promise.all([
++    TrackClip.find({ kind: 'land' }).sort({ uploadedAt: 1, _id: 1 }).lean(),
++    TrackClip.find({ kind: 'plant' }).lean(),
++  ])
++  const plantByTree = new Map((plants as any[]).map(p => [String(p.treeId), p]))
++  return (lands as any[]).map((l, i) =>
++    toTrackTreeView(l, plantByTree.get(String(l._id)), i + 1),
++  )
++}
++
++export const TRACK_MANIFEST_HEADER = [
++  'tree_number',
++  'tree_id',
++  'planter',
++  'filmed_at_utc',
++  'latitude',
++  'longitude',
++  'gps_accuracy_m',
++  'place',
++  'tree_type',
++  'mangrove',
++  'planter_count',
++  'ai_count',
++  'ai_status',
++  'count',
++  'count_source',
++  'complete',
++  'before_filename',
++  'before_url',
++  'after_filename',
++  'after_url',
++  'ai_video_url',
++]
++
++export async function trackManifestCsv(): Promise<string> {
++  const trees = await everyTree()
++  const lines = [TRACK_MANIFEST_HEADER.join(',')]
++  for (const t of trees) {
++    lines.push(
++      [
++        t.number,
++        t.id,
++        t.planterName,
++        t.filmedAt,
++        t.gps?.latitude,
++        t.gps?.longitude,
++        t.gps?.accuracyMeters,
++        t.reverseGeocode,
++        t.treeType,
++        t.isMangrove ? 'yes' : 'no',
++        t.treesPlanted,
++        t.ai?.treeCount,
++        t.ai?.status,
++        t.count,
++        t.countSource,
++        t.complete ? 'yes' : 'no',
++        t.land.downloadFilename,
++        t.land.downloadUrl,
++        t.plant?.downloadFilename,
++        t.plant?.downloadUrl,
++        t.ai?.videoUrl,
++      ]
++        .map(csvCell)
++        .join(','),
++    )
++  }
++  return `${lines.join('\r\n')}\r\n`
++}
++
++/** One URL per line, before then after, for `wget --content-disposition -i`. */
++export async function trackUrlList(): Promise<string> {
++  const trees = await everyTree()
++  const urls: string[] = []
++  for (const t of trees) {
++    urls.push(t.land.downloadUrl)
++    if (t.plant) urls.push(t.plant.downloadUrl)
++  }
++  return urls.length ? `${urls.join('\n')}\n` : ''
++}
++
++// ------------------------------------------------------------- storing
++
++export class TrackStorageUnavailableError extends Error {
++  code = 'TRACK_STORAGE_UNAVAILABLE'
++  constructor() {
++    super(
++      'Track clips need Google Cloud Storage (GCS_BUCKET) on this deployment',
++    )
++  }
++}
++
++class TrackService {
++  deps: TrackStorageDeps = {
++    configured: isGcsConfigured,
++    upload: uploadGwrClipToGcs,
++    remove: deleteFromGcs,
++  }
++
++  /** This clip, if this phone already sent its bytes (any upload id). */
++  async findStoredClip(
++    filePath: string,
++    kind: 'land' | 'plant',
++    device: string,
++  ): Promise<TrackUploadResult | null> {
++    const contentMd5 = await md5OfFile(filePath).catch(() => null)
++    if (!contentMd5) return null
++    const same: any = await TrackClip.findOne({ device, kind, contentMd5 })
++      .sort({ uploadedAt: 1 })
++      .lean()
++    return same ? resultOf(same) : null
++  }
++
++  /**
++   * Store one clip from the session's file and record it. Refusals are
++   * UploadRefusedError (final for the phone); anything else is a fault the
++   * session retries with the bytes kept. The session deletes its file.
++   */
++  async storeClip(
++    file: TrackStoredFile,
++    input: TrackClipInput,
++  ): Promise<TrackUploadResult> {
++    const byId: any = await TrackClip.findOne({
++      uploadId: input.uploadId,
++    }).lean()
++    if (byId) return resultOf(byId)
++
++    if (!file.size || !(await fileHasBytes(file.path))) {
++      throw new UploadRefusedError('UPLOAD_EMPTY')
++    }
++    const contentMd5 = await md5OfFile(file.path)
++    // The same clip sent again from this phone under another id.
++    const same: any = await TrackClip.findOne({
++      device: input.device,
++      kind: input.kind,
++      contentMd5,
++    })
++      .sort({ uploadedAt: 1 })
++      .lean()
++    if (same) return resultOf(same)
++
++    // A hex string: Mongoose casts it to the ObjectId the schema stores.
++    let treeId: string
++    let land: any = null
++    if (input.kind === 'plant') {
++      if (!input.treeId || !OID_RE.test(input.treeId)) {
++        throw new UploadRefusedError('LAND_NOT_FOUND')
++      }
++      land = await TrackClip.findOne({
++        _id: input.treeId,
++        kind: 'land',
++        device: input.device,
++      }).lean()
++      if (!land) throw new UploadRefusedError('LAND_NOT_FOUND')
++      const taken = await TrackClip.exists({
++        kind: 'plant',
++        treeId: land._id,
++      })
++      if (taken) throw new UploadRefusedError('PLANT_NOT_ALLOWED')
++      treeId = String(land._id)
++    } else {
++      treeId = new mongoose.Types.ObjectId().toHexString()
++    }
++
++    if (!this.deps.configured()) throw new TrackStorageUnavailableError()
++
++    const videoCreatedAt = await mp4CreationTime(file.path)
++    const uploadedAt = new Date()
++    const filmedAt = chooseFilmedAt({
++      videoCreatedAt,
++      recordedAt: input.recordedAt,
++      uploadedAt,
++    }).filmedAt
++    const extension = gwrFileExtension(file.originalname, file.mimetype)
++    const objectName = `${TRACK_STORAGE_PREFIX}${uuidv4()}.${extension}`
++    const planterName =
++      cleanPlanterName(input.planterName) ?? clean(land?.planterName)
++    const downloadFilename = trackDownloadFilename({
++      filmedAt,
++      planterName,
++      treeId: String(treeId),
++      kind: input.kind,
++      extension,
++    })
++    const mimeType = gwrMimeForExtension(extension)
++    const stored = await this.deps.upload(
++      file.path,
++      objectName,
++      mimeType,
++      downloadFilename,
++      'track',
++    )
++
++    const isPlant = input.kind === 'plant'
++    const treeType = isPlant ? clean(input.treeType) : undefined
++    const isMangrove = isPlant && isMangroveTreeType(treeType)
++    const hasGps =
++      typeof input.latitude === 'number' && typeof input.longitude === 'number'
++    const ai = isMangrove
++      ? { aiEligible: true, ...initialAiFields(uploadedAt) }
++      : { aiEligible: false, aiStatus: 'skipped' as const }
++    try {
++      const doc: any = await TrackClip.create({
++        ...(isPlant ? {} : { _id: treeId }),
++        uploadId: input.uploadId,
++        device: input.device,
++        kind: input.kind,
++        treeId,
++        clientGroupId: input.clientGroupId,
++        planterName,
++        objectName: stored.videoCID,
++        publicUrl: stored.publicUrl,
++        downloadFilename,
++        originalFilename: file.originalname,
++        mimeType,
++        sizeBytes: file.size,
++        contentMd5,
++        gpsCoordinates: hasGps
++          ? {
++              latitude: input.latitude,
++              longitude: input.longitude,
++              ...(typeof input.gpsAccuracy === 'number' &&
++              input.gpsAccuracy >= 0
++                ? { accuracyMeters: input.gpsAccuracy }
++                : {}),
++            }
++          : undefined,
++        gpsEnd: clean(input.gpsEnd),
++        gpsPath: clean(input.gpsPath),
++        reverseGeocode: clean(input.reverseGeocode),
++        treesPlanted:
++          isPlant && !isMangrove && typeof input.treesPlanted === 'number'
++            ? input.treesPlanted
++            : undefined,
++        treeType,
++        isMangrove: isPlant ? isMangrove : undefined,
++        recordedAt: input.recordedAt,
++        videoCreatedAt: videoCreatedAt ?? undefined,
++        uploadedAt,
++        ...ai,
++      })
++      return resultOf(
++        typeof doc?.toObject === 'function' ? doc.toObject() : doc,
++      )
++    } catch (error) {
++      await this.deps.remove(objectName).catch(() => undefined)
++      // A twin of this very upload won the race: answer with it.
++      if ((error as { code?: number })?.code === 11000) {
++        const winner: any = await TrackClip.findOne({
++          uploadId: input.uploadId,
++        }).lean()
++        if (winner) return resultOf(winner)
++      }
++      throw error
++    }
++  }
++
++  /**
++   * Take a tree out: both clips, their objects and the AI overlay copy.
++   * Returns false when there is no such tree.
++   */
++  async removeTree(id: string): Promise<boolean> {
++    if (!OID_RE.test(id)) return false
++    const clips: any[] = await TrackClip.find({ treeId: id }).lean()
++    if (!clips.length) return false
++    for (const c of clips) {
++      await TrackClip.deleteOne({ _id: c._id })
++      for (const name of [c.objectName, c.aiVideoObjectName]) {
++        if (typeof name === 'string' && name.startsWith(TRACK_STORAGE_PREFIX)) {
++          await this.deps
++            .remove(name)
++            .catch(err =>
++              console.warn(`[track] ${c._id}: object ${name} not removed`, err),
++            )
++        }
++      }
++    }
++    return true
++  }
++}
++
++async function fileHasBytes(filePath: string): Promise<boolean> {
++  try {
++    return (await fs.promises.stat(filePath)).size > 0
++  } catch {
++    return false
++  }
++}
++
++export const trackService = new TrackService()
++
++/** What the capture page needs to know. */
++export function trackConfig() {
++  return {
++    aiCountEnabled: gwrAiEnabled(),
++    adminEnabled: Boolean(process.env.TRACK_ADMIN_KEY?.trim()),
++  }
++}
+diff --git a/src/services/uploadSessionService.ts b/src/services/uploadSessionService.ts
+index 54127b1..26047bb 100644
+--- a/src/services/uploadSessionService.ts
++++ b/src/services/uploadSessionService.ts
+@@ -13,6 +13,7 @@ import {
+   UploadRefusedError,
+ } from '../utils/uploadRouteErrors'
+ import SubmissionService from './submissionService'
++import { cleanPlanterName, isTrackDevice, trackService } from './trackService'
+ import {
+   deletePart,
+   PART_IDLE_MS,
+@@ -172,6 +173,8 @@ const createSchema = Joi.object({
+   gpsEndSource: optionalText(20),
+   gpsAccuracy: Joi.alternatives(Joi.number(), optionalText(32)).allow(null),
+   gpsPath: Joi.string().allow('', null),
++  // treegens.app/track only (ignored on a planting): who is filming.
++  planterName: optionalText(200),
+ })
+   // Unknown keys are ignored: a refusal is final for the phone, so a newer
+   // client sending one more field must not lose its clip over it.
+@@ -204,7 +207,7 @@ const createSchema = Joi.object({
+ 
+ type SessionFields = Omit<
+   IUploadSession,
+-  'wallet' | 'state' | 'createdAt' | 'updatedAt'
++  'wallet' | 'state' | 'createdAt' | 'updatedAt' | 'channel'
+ >
+ 
+ function validateCreateBody(body: unknown): SessionFields {
+@@ -240,6 +243,7 @@ function validateCreateBody(body: unknown): SessionFields {
+       value.gpsPath && value.gpsPath.length <= MAX_GPS_PATH_CHARS
+         ? value.gpsPath
+         : undefined,
++    planterName: cleanPlanterName(value.planterName),
+   }
+   return dropUndefined(fields)
+ }
+@@ -280,8 +284,11 @@ export async function createOrResumeSession(
+   wallet: string,
+   body: unknown,
+ ): Promise<{ created: boolean; view: SessionView }> {
+-  const fields = validateCreateBody(body)
+   const w = wallet.toLowerCase()
++  const track = isTrackDevice(w)
++  const fields = validateCreateBody(body)
++  // A planting has no planter name; only a /track session keeps one.
++  if (!track) delete fields.planterName
+   const existing = await UploadSession.findOne({
+     uploadId: fields.uploadId,
+   }).lean()
+@@ -291,6 +298,7 @@ export async function createOrResumeSession(
+       const created = await UploadSession.create({
+         ...fields,
+         wallet: w,
++        ...(track ? { channel: 'track' } : {}),
+         state: 'receiving',
+       })
+       return { created: true, view: await viewOf(created) }
+@@ -891,6 +899,8 @@ async function recentAwaitingLand(
+   session: IUploadSession,
+ ): Promise<LandResolution> {
+   const notFound: LandResolution = { landRefusal: 'LAND_NOT_FOUND' }
++  // A /track phone always names its tree, and has no plantings to guess.
++  if (session.channel === 'track') return notFound
+   if (!session.recordedAt) return notFound
+   const plantAt = new Date(session.recordedAt).getTime()
+   const since = new Date(plantAt - LAND_LOOKBACK_MS)
+@@ -1090,6 +1100,9 @@ async function storeClip(session: IUploadSession): Promise<Outcome> {
+   }
+   try {
+     if (session.landRefusal) return await refuseForLand(session, file.path)
++    if (session.channel === 'track') {
++      return { state: 'done', result: await storeTrackClip(session, file) }
++    }
+     const result = await submissionService.uploadClip(
+       file,
+       session.wallet,
+@@ -1124,16 +1137,40 @@ async function storeClip(session: IUploadSession): Promise<Outcome> {
+   }
+ }
+ 
++/** A /track clip: stored as a TrackClip, never as a Submission. */
++async function storeTrackClip(
++  session: IUploadSession,
++  file: { originalname: string; size: number; mimetype: string; path: string },
++): Promise<Record<string, unknown>> {
++  const result = await trackService.storeClip(file, {
++    uploadId: session.uploadId,
++    device: session.wallet,
++    kind: session.type,
++    treeId: session.submissionId,
++    clientGroupId: session.clientGroupId,
++    planterName: session.planterName,
++    latitude: session.latitude,
++    longitude: session.longitude,
++    gpsAccuracy: session.gpsAccuracy,
++    gpsEnd: session.gpsEnd,
++    gpsPath: session.gpsPath,
++    reverseGeocode: session.reverseGeocode,
++    treesPlanted: session.treesPlanted,
++    treeType: session.treeType,
++    recordedAt: session.recordedAt ? new Date(session.recordedAt) : undefined,
++  })
++  return result
++}
++
+ /** A plant with no land to go to, unless this clip already landed. */
+ async function refuseForLand(
+   session: IUploadSession,
+   path: string,
+ ): Promise<Outcome> {
+-  const stored = await submissionService.findStoredClip(
+-    path,
+-    'plant',
+-    session.wallet,
+-  )
++  const stored =
++    session.channel === 'track'
++      ? await trackService.findStoredClip(path, 'plant', session.wallet)
++      : await submissionService.findStoredClip(path, 'plant', session.wallet)
+   if (stored) return { state: 'done', result: stored }
+   throw new UploadRefusedError(session.landRefusal as UploadRefusalCode)
+ }
+-- 
+2.43.0
+
