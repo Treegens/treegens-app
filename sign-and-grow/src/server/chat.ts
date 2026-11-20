@@ -57,18 +57,20 @@ export function cleanConversation(raw: unknown): Cleaned | null {
 // Counted in the database, so they hold across a restart and across the processes of one server. The keys are keyed
 // fingerprints: the table holds no internet address, no signing link and no account id.
 const fp = (kind: string, v: string) => `${kind}:${hmac(`chat-limit:${kind}:${v}`).slice(0, 32)}`;
+/** The key a count is kept under: 'ip' with an internet address, 'link' with a recipient's id, 'account' with an account's. */
+export const countKey = (kind: 'ip' | 'link' | 'account', v: string) => fp(kind, kind === 'ip' ? addressKey(v) : v);
 type Bucket = { which: ChatLimit; key: string; slot: string; max: number; until: Date };
 export type Who = { ip: string; link?: string | null; account?: string | null };
 function bucketsFor(who: Who, t = new Date()): Bucket[] {
   const day = `d:${t.toISOString().slice(0, 10)}`, minute = `m:${t.toISOString().slice(0, 16)}`;
   const nextMinute = new Date(Math.floor(t.getTime() / 60_000) * 60_000 + 60_000);
   const nextDay = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate() + 1));
-  const ip = fp('ip', addressKey(who.ip));
+  const ip = countKey('ip', who.ip);
   return [
     { which: 'address_minute', key: ip, slot: minute, max: CHAT_PER_ADDRESS_MINUTE, until: nextMinute },
     { which: 'address_day', key: ip, slot: day, max: CHAT_PER_ADDRESS_DAY, until: nextDay },
-    ...(who.link ? [{ which: 'link_day' as const, key: fp('link', who.link), slot: day, max: CHAT_PER_LINK_DAY, until: nextDay }] : []),
-    ...(who.account ? [{ which: 'account_day' as const, key: fp('account', who.account), slot: day, max: CHAT_PER_ACCOUNT_DAY, until: nextDay }] : []),
+    ...(who.link ? [{ which: 'link_day' as const, key: countKey('link', who.link), slot: day, max: CHAT_PER_LINK_DAY, until: nextDay }] : []),
+    ...(who.account ? [{ which: 'account_day' as const, key: countKey('account', who.account), slot: day, max: CHAT_PER_ACCOUNT_DAY, until: nextDay }] : []),
     { which: 'daily', key: 'all', slot: day, max: chatDailyLimit(), until: nextDay },
   ];
 }

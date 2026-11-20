@@ -623,6 +623,9 @@ e-signature product, not all of it. Not built:
   response time and says so when it is missed. Someone still has to read the queue and answer in time.
 - Replying to a support email. Answers are written and read on the request's own page (the link in every email),
   not by replying to the email, and the emails say so.
+- A helper that acts. The help chat answers and points to the tools that do things (see "Support"); it cannot
+  see or change a document, an account or a payment, never says whether a signature is enough or valid, and can be
+  wrong: the rules on the pages are what count. It answers in the person's language, while the screens stay English.
 
 ## Scripts and fonts in the signed PDF
 

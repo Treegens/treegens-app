@@ -762,7 +762,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       if (otherPerson || otherName) {
         // Someone the request had before (renamed away and back) is that person again (personGen in credits.ts).
         const pg = personGen(old, r.name, r.email);
-        run('UPDATE recipients SET person_gen=?, person_gens=? WHERE id=?', pg.gen, pg.gens, r.id);
+        // The time zone the one before reported is theirs too: the new person starts without it.
+        run('UPDATE recipients SET person_gen=?, person_gens=?, tz=NULL, reminder_held_at=NULL WHERE id=?', pg.gen, pg.gens, r.id);
         newPeople.push(`${r.name} in the place of ${old.name}`);
       }
       if (old.status === 'completed' && old.role === 'cc') {
@@ -847,7 +848,7 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
   // what keeps "you can download what you signed" true after the pages have changed. See earlierCopy.
   for (const o of asked) {
     try {
-      const pdf = await buildPdf(e, false, o.id);
+      const pdf = await buildPdf(e, false, o.id, undefined, false);
       run('UPDATE earlier_signatures SET copy_sha256=? WHERE id=(SELECT MAX(id) FROM earlier_signatures WHERE envelope_id=? AND recipient_id=?)', saveBlob(pdf), e.id, o.id);
     } catch (err: any) {
       console.error('[pdf] could not keep a copy of what was signed before a correction', e.id, err?.message);
@@ -1433,9 +1434,11 @@ export async function advance(envelopeId: string): Promise<void> {
 }
 
 // `viewer` is the recipient a copy is made for while others are still signing. They get what their screen shows.
-export async function buildPdf(e: any, certificate: boolean, viewer?: string, notice?: { title: string; lines: string[] }): Promise<Uint8Array> {
+// `unfinished`: a copy made while the envelope is still out is marked so across every page (stamp.ts), unless the
+// caller wraps it in a mark of its own (the copy kept of what someone signed before a change, see earlierCopy).
+export async function buildPdf(e: any, certificate: boolean, viewer?: string, notice?: { title: string; lines: string[] }, unfinished = !certificate): Promise<Uint8Array> {
   // withCheckLines: how each recipient was checked before the document opened, in the words the certificate prints.
-  return renderEnvelopePdf(withCheckLines(e), auditTrail(e.id), { certificate, sender: senderOf(e), viewer, notice });
+  return renderEnvelopePdf(withCheckLines(e), auditTrail(e.id), { certificate, sender: senderOf(e), viewer, notice, unfinished });
 }
 
 // Someone who signed keeps the right to a copy of what they signed, also when the envelope was later voided,
@@ -1813,7 +1816,9 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
     // Another person is the next person on the request: their signature is their own (sigRef in credits.ts).
     // Someone the request had before (renamed away and back) is that person again (personGen in credits.ts).
     const pg = personGen(r, name, r.email);
-    run(`UPDATE recipients SET name=?, access_code=?, free=?${newCode ? `, ${fresh}` : ''}${other ? ", person_gen=?, person_gens=?, consent_at=NULL, viewed_at=NULL, muted=0, unopened_alerted_at=NULL, status=CASE WHEN status='viewed' THEN 'sent' ELSE status END" : ''} WHERE id=?`, name, code, free, ...(other ? [pg.gen, pg.gens] : []), r.id);
+    // A time zone, like answers and a signature, is the person's own: the new one starts without the old one's
+    // (it decides the date printed for them, the times on the certificate and when reminders may wake them).
+    run(`UPDATE recipients SET name=?, access_code=?, free=?${newCode ? `, ${fresh}` : ''}${other ? ", person_gen=?, person_gens=?, consent_at=NULL, viewed_at=NULL, muted=0, unopened_alerted_at=NULL, tz=NULL, reminder_held_at=NULL, status=CASE WHEN status='viewed' THEN 'sent' ELSE status END" : ''} WHERE id=?`, name, code, free, ...(other ? [pg.gen, pg.gens] : []), r.id);
     audit(e.id, actor, 'Recipient corrected', `${r.name} is now ${name}${code !== r.access_code ? ', access code changed' : ''}${other ? `. That is another person at the same address, so nothing that ${r.name} had agreed to, filled in or signed was kept` : ''}`);
     newerVersion(e.id, actor, name !== r.name ? `changed the name of ${r.name} to ${name}` : `changed the access code of ${r.name}`);
     // The person is asked to sign under their name, and others may see it printed. A screen that still shows the
@@ -1831,7 +1836,8 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   clearAnswers(r.id);
   // With an address we email them from now on, so a link the sender used to pass on is no longer theirs to pass.
   const pg = personGen(r, name, email);
-  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sent_at=?, status=?, free=?, link_by_sender=0, person_gen=?, person_gens=?, ${fresh} WHERE id=?`,
+  // The time zone the first one's device reported is theirs too, so the new person starts without one.
+  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, tz=NULL, reminder_held_at=NULL, sent_at=?, status=?, free=?, link_by_sender=0, person_gen=?, person_gens=?, ${fresh} WHERE id=?`,
     name, email, code, token(), checkCode(), r.status === 'pending' ? r.sent_at : now(), r.status === 'pending' ? 'pending' : 'sent', free, pg.gen, pg.gens, r.id);
   noteReached(e, [email]);
   audit(e.id, actor, 'Recipient corrected', `${labelOf(r)} is now ${name} <${email}>. The link ${r.email ? `sent to ${r.email}` : 'the sender had shared'} stopped working, and anything filled in through it was cleared.`);
@@ -2079,7 +2085,9 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // Another person is the next person on the request, whose signature is their own (sigRef in credits.ts). The same
   // name (or a spelling of it) at the same address stays the same person, as takeOverCost decided.
   const pg = sameSigner(r, { email, name }) ? null : personGen(r, name, email);
-  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, reassigned_from=?, free=?, link_by_sender=0${pg ? ', person_gen=?, person_gens=?' : ''} WHERE id=?`,
+  // The time zone the first one's device reported is theirs, like their answers: the new person's date of signing,
+  // certificate times and reminder hours come from their own device, or from the sender's zone until it reports one.
+  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, tz=NULL, reminder_held_at=NULL, reassigned_from=?, free=?, link_by_sender=0${pg ? ', person_gen=?, person_gens=?' : ''} WHERE id=?`,
     name, email, token(), checkCode(), now(), labelOf(r), free, ...(pg ? [pg.gen, pg.gens] : []), r.id);
   noteReached(e, [email]);
   audit(e.id, actor, 'Reassigned', `${labelOf(r)} assigned this to ${name} <${email}>${to.reason ? `: ${str(to.reason, 300)}` : ''}${/[.!?]$/.test(str(to.reason, 300).trim()) ? '' : '.'} Nothing that ${r.name} had filled in or signed was passed on.`);

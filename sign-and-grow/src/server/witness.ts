@@ -236,7 +236,7 @@ export function forgetNamedWitness(signerId: string) {
     const s = get('SELECT name FROM recipients WHERE id=?', signerId);
     // In a place the sender filled, the sender's own choice comes back. Otherwise the new person names their own.
     const chosen = !w.named_by_signer ? chosenOf(w) : null;
-    run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, sent_at=NULL, viewed_at=NULL, consent_at=NULL, witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL, witness_chosen=NULL, named_by_signer=?, person_gen=COALESCE(person_gen,0)+1 WHERE id=?",
+    run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, sent_at=NULL, viewed_at=NULL, consent_at=NULL, tz=NULL, reminder_held_at=NULL, witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL, witness_chosen=NULL, named_by_signer=?, person_gen=COALESCE(person_gen,0)+1 WHERE id=?",
       chosen ? chosen.name : openWitnessName(s), chosen ? chosen.email : '', token(), checkCode(), chosen ? 0 : 1, w.id);
     audit(w.envelope_id, SYSTEM, 'Witness cleared', `${labelOf(w)} had been named as the witness by the person whose place on the document went to ${s?.name || 'someone else'}. ${chosen ? `The witness is ${chosen.name} <${chosen.email}> again, whom the sender had chosen.` : `${s?.name || 'The new person'} names their own witness.`}`);
   }
@@ -319,7 +319,8 @@ export async function nameWitness(e: any, s: any, body: any, actor: Actor) {
   // A link a witness before was emailed stops working: their part is over.
   if (known && (w.sent_at || w.witness_absent_at)) retireToken(w, 'removed');
   clearAnswers(w.id);
-  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='pending', sent_at=NULL, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL,
+  // A time zone is the person's own (it decides their date and certificate times): the witness named now reports theirs.
+  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='pending', sent_at=NULL, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, tz=NULL, reminder_held_at=NULL,
       witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=?, witness_names=COALESCE(witness_names,0)+1,
       person_gen=COALESCE(person_gen,0)+?${senders ? ', witness_chosen=?' : ''} WHERE id=?`, name, email, token(), checkCode(), now(), known && !(sameEmail(before.email, email) && samePerson(before.name, name)) ? 1 : 0,
     ...(senders ? [JSON.stringify({ name: before.name, email: before.email })] : []), w.id);

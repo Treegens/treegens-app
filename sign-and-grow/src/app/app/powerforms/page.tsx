@@ -44,9 +44,8 @@ export default function PowerForms() {
                   {/* So do the buttons that change it, so a phone reaches them without scrolling the table sideways.
                       Pausing, changing and deleting are for the person the template belongs to and for admins. Everyone
                       else is told whose it is instead of being shown buttons that would be refused. */}
-                  <td><b>{p.name}</b><div className="muted small">{p.template || 'Template deleted'}{p.shared_device ? ' · shared device' : ''}</div>
-                    {/* Whether the envelope each visitor starts reminds them, from the template (reminderText in src/lib/policy.ts). */}
-                    {p.reminders && <div className="muted small">{p.reminders} That comes from the template.</div>}
+                  {/* Under the template's name: whether the envelope each visitor starts reminds them (reminderText in src/lib/policy.ts). */}
+                  <td><b>{p.name}</b><div className="muted small">{p.template || 'Template deleted'}{p.shared_device ? ' · shared device' : ''}</div>{p.reminders && <div className="muted small">{p.reminders} That comes from the template.</div>}
                     {p.may_change === false ? <div className="muted small">Only {p.owner || 'the owner of its template'} or an admin can pause or delete it.</div> : (
                       <div className="row wrap" style={{ gap: 4, marginTop: 6, marginLeft: -11 }}>
                         <button className="btn sm ghost" style={{ minHeight: 44 }} aria-label={`${p.shared_device ? 'Not a shared device' : 'Shared device'}: ${p.name}`} onClick={() => api(`/powerforms/${p.id}`, { method: 'PATCH', body: { shared_device: !p.shared_device } }).then(() => (toast(p.shared_device ? 'Treated as an ordinary form again' : 'Marked as used on a shared device'), reload())).catch(oops)}>{p.shared_device ? 'Not a shared device' : 'Shared device'}</button>

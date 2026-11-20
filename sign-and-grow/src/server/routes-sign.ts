@@ -237,14 +237,20 @@ route('POST', '/sign/:token/ask-code', async (c) => {
 // wording we have shown is recorded as exactly that. Looked up again after the body is in: see checkedBody.
 // The time zone the signer's device reports ("tz", sent with consent and with Finish). It decides which calendar day
 // the date of signing is, and the certificate prints this person's local time from it. It is kept on the recipient
-// and written to the audit trail the first time and whenever it changes, so the zone a date rests on is part of
-// the record. A value that is not a time zone is ignored, and the sender's zone or UTC is used as before.
-function noteZone(e: any, r: any, tz: any, actor: any) {
-  const zone = validZone(tz);
-  if (!zone || zone === r.tz || e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) return;
-  run('UPDATE recipients SET tz=? WHERE id=?', zone, r.id);
+// and written to the audit trail the first time this person reports one, and once more at Finish if the zone then
+// is not the one the record last named for them, so the zone a date rests on is part of the record. In between it
+// is kept without a line: anyone holding the link could otherwise fill the audit trail, and the certificate printed
+// from it, with one line per call. A value that is not a time zone is ignored, and the sender's zone or UTC is used.
+function noteZone(e: any, r: any, tz: any, actor: any, finish = false) {
+  // At Finish a device that says nothing leaves the zone it reported before, and that is the one the date rests on.
+  const zone = validZone(tz) || (finish ? validZone(r.tz) : null);
+  if (!zone || e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) return;
+  if (zone !== r.tz) run('UPDATE recipients SET tz=? WHERE id=?', zone, r.id);
   r.tz = zone;
-  audit(e.id, actor, 'Time zone reported', `${r.name}: ${zone} (${clockIn(now(), zone)!.offset} at this moment), as their device says. The date this person signs on is the calendar day there.`);
+  // The last zone the record names for this person, by the name and address their lines are signed with.
+  const last = get("SELECT detail FROM audit WHERE envelope_id=? AND action='Time zone reported' AND actor=? ORDER BY seq DESC LIMIT 1", e.id, actor.name)?.detail as string | undefined;
+  if (last?.startsWith(`${r.name}: ${zone} (`) || (last && !finish)) return;
+  audit(e.id, actor, 'Time zone reported', `${r.name}: ${zone} (${clockIn(now(), zone)!.offset} at this moment), as their device says${last ? ' when they finished' : ''}. The date this person signs on is the calendar day there.`);
 }
 
 route('POST', '/sign/:token/consent', async (c) => {
@@ -320,7 +326,7 @@ route('POST', '/sign/:token/upload', async (c) => {
 route('POST', '/sign/:token/complete', async (c) => {
   const body = await checkedBody(c);
   const { e, r, actor } = look(c);
-  noteZone(e, r, body?.tz, actor);
+  noteZone(e, r, body?.tz, actor, true);
   // A witness the signer names is named first, and a witness's statement is ticked first (witness.ts).
   beforeFinish(c, e, r);
   await completeRecipient(e, r, body, actor);

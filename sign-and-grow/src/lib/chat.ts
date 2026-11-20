@@ -146,7 +146,7 @@ export function redact(input: string): { text: string; removed: Removed[] } {
     const core = v.replace(/[.,!?;)]+$/, ''), tail = v.slice(core.length);
     if (!core) return m;
     const strong = /[:=]/.test(sep) || !!q || /\d/.test(core) || /[^A-Za-z]/.test(core) || /[a-z][A-Z]|[A-Z]{2}/.test(core);
-    return strong && !/^(is|was|not|for|to|the|a|an|and|or|reset|link|again|work\w*|wrong|field|box|page|screen)$/i.test(core) ? `${w}${sep}${take('password', 'password')}${q ? '' : tail}` : m;
+    return strong && !/^(is|was|not|for|to|the|a|an|and|or|reset|link|again|work\w*|wrong|field|box|page|screen)$/i.test(core) ? `${w}${sep}${take('password', 'password')}${!q && /^[.,]$/.test(tail) ? tail : ''}` : m;
   });
   return { text: t, removed: [...removed] };
 }
@@ -161,7 +161,7 @@ export type HandOver = 'not_me' | 'security' | 'locked' | 'money' | 'legal' | 'p
 const SIGNS: [HandOver, RegExp][] = [
   ['not_me', /\b(did ?n[o']?t sign|never signed|not me|was ?n[o']?t me|someone (?:else )?signed|signed (?:in|on|under) my (?:name|behalf)|forg(?:ed|ery|ing)|fake signature|impersonat\w*|dispute\w*|identity theft)\b/],
   ['security', /\b(hack\w*|phish\w*|scam\w*|breach\w*|stolen|compromised|suspicious|fraud\w*|malware|virus|someone (?:got|logged|signed) into|security (?:problem|issue|hole|bug|flaw)|vulnerab\w*|leak(?:ed)?)\b/],
-  ['locked', /\b(locked out|lock(?:ed)? me out|(?:cannot|can ?n[o']?t|unable to|could ?n[o']?t) (?:log|sign) ?in|lost (?:my )?(?:phone|authenticator|recovery codes?)|two[- ]step|2fa|account (?:is |was |got )?(?:locked|blocked|suspended|paused|closed)|reset (?:link|email) (?:does ?n[o']?t|never|did ?n[o']?t))\b/],
+  ['locked', /\b(locked out|lock(?:ed)? me out|(?:cannot|can ?not|can'?t|unable to|could ?n[o']?t) (?:log|sign) ?in|lost (?:my )?(?:phone|authenticator|recovery codes?)|two[- ]step|2fa|account (?:is |was |got )?(?:locked|blocked|suspended|paused|closed)|reset (?:link|email) (?:does ?n[o']?t|never|did ?n[o']?t))\b/],
   ['money', /\b(refund\w*|charged|overcharg\w*|double[- ]?charg\w*|chargeback|billed|money back|my money|owe[sd]?|i paid|we paid|paid for|unknown charge|(?:a|the|this|that) charge|charge on my|taken from my|took my money)\b/],
   ['legal', /\b(legal\w*|lawyer\w*|attorney\w*|court\w*|sue|suing|lawsuit|enforceab\w*|binding|hold up|stand up in|admissible|validity|(?:signature|document|contract|agreement|it|this|that) (?:is |be |still )?valid|gdpr|hipaa|notar\w*|liab\w*|jurisdiction)\b/],
   ['person', /\b(human|real person|someone real|(?:human|live|support|real) agent|representative|(?:talk|speak|chat) (?:to|with) (?:someone|somebody|a person|a human|you|support)|customer service|support team|call me)\b/],

@@ -627,3 +627,69 @@ test('nobody is greeted by a guessed first name, and a new workspace is named af
   const found = files('src').filter((f) => !/routes-billing|credits\.ts$|lib\/support\.ts$/.test(f)).filter((f) => fs.readFileSync(f, 'utf8').split('\n').some((line) => cut.test(line) && /name/i.test(line)));
   assert.deepEqual(found, []);
 });
+
+// ---- Repairs after the skeptic's report (verify:nonus) -------------------------------------------------
+
+test('a time zone belongs to its person: a hand-over, a correction to another person or a hand-back to the group starts without it', async () => {
+  const c = await signUp('Tia Sender', 'tia-zones@example.com', ip());
+  const far = otherDayZone();
+  const zoneOf = (id: string) => s.db.get('SELECT tz, reminder_held_at h FROM recipients WHERE id=?', id);
+  // 1. Passed on by the signer. Bob's device says nothing, so his date is the UTC day (the sender's zone is unknown).
+  const e = await sendTo(c, [{ name: 'Aiko Far', email: 'aiko-tz@example.com', type: 'date_signed' }], { date_format: 'D MMM YYYY', reminder_days: 1 });
+  const rid = e.recipients[0].id;
+  const a = new Client(), tok = tokenFor(e.id, 'aiko-tz@example.com');
+  assert.equal((await a.post(`/sign/${tok}/consent`, { tz: far })).status, 200);
+  s.db.run('UPDATE recipients SET reminder_held_at=? WHERE id=?', new Date().toISOString(), rid);
+  assert.equal((await a.post(`/sign/${tok}/reassign`, { name: 'Bob Elsewhere', email: 'bob-tz@example.com', reason: 'He signs' })).status, 200);
+  assert.deepEqual(zoneOf(rid), { tz: null, h: null });
+  assert.equal((await signAll(e.id, 'bob-tz@example.com')).status, 200);
+  const done = s.db.get('SELECT tz, completed_at FROM recipients WHERE id=?', rid);
+  assert.equal(done.tz, null);
+  assert.notEqual(formatDate(done.completed_at, 'D MMM YYYY', far), formatDate(done.completed_at, 'D MMM YYYY'), 'the test only means something when the two days differ');
+  const pages = await extractPages((await c.get(`/envelopes/${e.id}/download`)).data);
+  assert.ok(pages[0].includes(formatDate(done.completed_at, 'D MMM YYYY')), pages[0]);
+  assert.ok(!pages[0].includes(formatDate(done.completed_at, 'D MMM YYYY', far)));
+  const cert = pages.slice(1).join(' ');
+  assert.ok(!/Bob Elsewhere[\s\S]{0,900}Time zone [^,]+, as reported by their device/.test(cert), 'Aiko\'s zone is not printed as Bob\'s device');
+  assert.ok(!/Bob Elsewhere <bob-tz@example\.com> · [^·]+ · [0-9a-f]{16} · their time/.test(cert));
+
+  // 2. The sender corrects to another person (POST /correct): the new person's invitation names UTC only.
+  const e2 = await sendTo(c, [{ name: 'Old Person', email: 'old-tz@example.com' }], { expire_days: 30 });
+  const r2 = e2.recipients[0].id;
+  assert.equal((await new Client().post(`/sign/${tokenFor(e2.id, 'old-tz@example.com')}/consent`, { tz: 'Asia/Tokyo' })).status, 200);
+  assert.equal(zoneOf(r2).tz, 'Asia/Tokyo');
+  assert.equal((await c.post(`/envelopes/${e2.id}/correct`, { recipient_id: r2, name: 'New Person', email: 'new-tz@example.com' })).status, 200);
+  assert.equal(zoneOf(r2).tz, null);
+  const inv = mailTo('new-tz@example.com').pop()!;
+  assert.ok(inv && !/Asia\/Tokyo/.test(inv.html), 'the new person is not told the deadline in the old person\'s zone');
+
+  // 3. The same inbox under another name is another person too; a spelling fix of the same person keeps the zone.
+  const e3 = await sendTo(c, [{ name: 'Kim Shared', email: 'shared-tz@example.com' }]);
+  const r3 = e3.recipients[0].id;
+  assert.equal((await new Client().post(`/sign/${tokenFor(e3.id, 'shared-tz@example.com')}/consent`, { tz: 'Europe/Berlin' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e3.id}/correct`, { recipient_id: r3, name: 'Kim Sharred', email: 'shared-tz@example.com' })).status, 200);
+  assert.equal(zoneOf(r3).tz, 'Europe/Berlin', 'a spelling fix is the same person');
+  assert.equal((await c.post(`/envelopes/${e3.id}/correct`, { recipient_id: r3, name: 'Lee Partner', email: 'shared-tz@example.com' })).status, 200);
+  assert.equal(zoneOf(r3).tz, null);
+
+  // 4. A correction by editing the envelope (PUT) that puts another address in the place.
+  const e4 = await sendTo(c, [{ name: 'Put Person', email: 'put-tz@example.com' }]);
+  const r4 = e4.recipients[0].id;
+  assert.equal((await new Client().post(`/sign/${tokenFor(e4.id, 'put-tz@example.com')}/consent`, { tz: 'America/Lima' })).status, 200);
+  const cur = (await c.get(`/envelopes/${e4.id}`)).data.envelope;
+  const put = await c.put(`/envelopes/${e4.id}`, { subject: cur.subject, documents: cur.documents.map((d: any) => ({ id: d.id, file_id: d.file_id, name: d.name })), recipients: cur.recipients.map((r: any) => ({ id: r.id, role: r.role, name: 'Other Person', email: 'other-put-tz@example.com' })), fields: cur.fields, edit_version: cur.edit_version });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  assert.equal(zoneOf(r4).tz, null);
+
+  // 5. A member of a group hands the document back: the next member reports their own zone.
+  const members = [{ name: 'Maya Group', email: 'maya-tz@hr.example' }, { name: 'Ben Group', email: 'ben-tz@hr.example' }];
+  const g = (await c.post('/groups', { name: 'Zone team', members })).data.group;
+  const file = await upload(c, 1);
+  const ge = (await c.post('/envelopes', { subject: 'Group zone', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'g', role: 'signer', group_id: g.id }], fields: [{ id: 'f', document_id: 'd', recipient_id: 'g', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }], send: true })).data.envelope;
+  const mayaLink = s.db.get('SELECT token FROM recipient_members WHERE envelope_id=? AND email=?', ge.id, 'maya-tz@hr.example').token;
+  assert.equal((await new Client().post(`/sign/${mayaLink}/consent`, { tz: 'Africa/Nairobi' })).status, 200);
+  const grow = () => s.db.get('SELECT tz FROM recipients WHERE envelope_id=? AND group_name IS NOT NULL', ge.id);
+  assert.equal(grow().tz, 'Africa/Nairobi');
+  assert.equal((await new Client().post(`/sign/${mayaLink}/hand-back`, {})).status, 200);
+  assert.equal(grow().tz, null);
+});

@@ -697,7 +697,8 @@ export function takeOn<T extends { e: any; r: any; actor: Actor }>(x: T, why = '
 function unclaim(r: any, alsoWaiting: boolean): boolean {
   const t = now();
   return tx(() => {
-    const done = run(`UPDATE recipients SET claimed_by=NULL, claimed_at=NULL, name=group_name, email='', token=NULL, check_code=NULL, consent_at=NULL, viewed_at=NULL, muted=0,
+    // The time zone the member's device reported goes with them, like their answers: the next member reports their own.
+    const done = run(`UPDATE recipients SET claimed_by=NULL, claimed_at=NULL, name=group_name, email='', token=NULL, check_code=NULL, consent_at=NULL, viewed_at=NULL, muted=0, tz=NULL, reminder_held_at=NULL,
         sent_at=CASE WHEN status='pending' THEN NULL ELSE ? END, status=CASE WHEN status='pending' THEN 'pending' ELSE 'sent' END,
         unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sender_name=NULL, self_name=NULL, signature_png=NULL, initials_png=NULL, ip=NULL, user_agent=NULL, seen_version=NULL, signed_before=NULL,
         free=CASE WHEN ${PAID_HERE} THEN 1 ELSE 0 END

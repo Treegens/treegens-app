@@ -4,19 +4,28 @@
 //
 // The steps, in order:
 //  1. Paper goes. The paper's colour is worked out for every part of the picture on its own (paperOf), so uneven
-//     light, a shadow, grey or coloured paper count as paper too. One cut for the whole picture would take the ink
-//     out where the light is bright and leave the paper in where it is dark.
-//  2. What is left is ink, with the strength it had: a thin line stays thin and a faint edge stays faint.
+//     light, a hard shadow, grey or coloured paper (brown kraft, yellow copy paper) count as paper too. One cut for
+//     the whole picture would take the ink out where the light is bright and leave the paper in where it is dark.
+//     A desk around the sheet, a table at the edge, the ruled lines of lined paper and sensor noise go as well.
+//  2. What is left is ink. A design prints solid, as rubber does: a tinted fill becomes full ink. A photo keeps the
+//     unevenness of the real impression it shows, and a faint stamp is brought up part by part, so small print in it
+//     stays. A thin line stays thin.
 //  3. One ink colour, as a real stamp has. The likely ink is read from the picture (findInk) and offered first.
-//     Marks in another colour (printed black text beside a blue stamp in a photo) can be left out (onlyInk).
-//  4. A rubber stamp's texture: uneven density, small specks where the ink did not take, rough edges, a very slight
-//     softening. Never so much that the words in it stop being readable at the size it is printed.
-//  5. A small natural tilt.
-//  6. Trimmed to the ink, with a small margin.
+//     Marks in another colour (printed black text beside a blue stamp in a photo) can be left out (onlyInk). In a
+//     design with several colours (a logo) every mark is kept, with a thin gap of paper where two colours meet, so
+//     the shapes stay apart in one ink (colourGaps).
+//  4. A rubber stamp's impression, sized in millimetres at the size it prints, so it still shows at 150 pixels on a
+//     screen and in a PDF: one side pressed harder than the other, a few patches short of ink, paper grain, small
+//     voids, rough edges with a little ink spread, ink squeezed to the edges of each stroke so the rims are darker,
+//     and a colour that varies a little, as stamp pad ink does. Never so much that the words in it stop being
+//     readable at the size it is printed.
+//  5. Trimmed to the ink, with a small margin. A round seal photographed at a slant can be made round again.
+// The small natural tilt is not drawn into the picture: the page turns the picture when it prints it, on screen and
+// in the signed PDF (the stamp's "turn"), so the stamp keeps the exact size the sender gave its field.
 // Everything that varies comes from one seed, which is stored with the stamp: the same seed and settings give the
 // same impression every time. Nothing here uses Math.random.
 
-import { STAMP_OUT_MAX_SIDE } from './stamps.ts';
+import { STAMP_OUT_MAX_SIDE, STAMP_DEFAULT_MM } from './stamps.ts';
 
 export type Rgba = { width: number; height: number; data: Uint8ClampedArray | Uint8Array };
 /** One number from 0 to 1 per pixel: how much ink is there. */
@@ -24,13 +33,25 @@ export type Plane = { width: number; height: number; v: Float32Array };
 
 export const INKS = ['blue', 'red', 'purple', 'black', 'green'] as const;
 export type Ink = (typeof INKS)[number];
-/** Stamp pad inks, as they look on white paper. */
+/**
+ * Stamp pad inks at full strength: dull, dark colours, as a pad prints them, not screen colours. Printed at
+ * STAMP_OPACITY over white they land on blue-violet about (40,44,128), carmine (170,30,48), violet (80,40,120),
+ * blue-black (35,36,48) and a dull green.
+ */
 export const INK_RGB: Record<Ink, [number, number, number]> = {
-  blue: [32, 58, 156],
-  red: [196, 32, 44],
-  purple: [92, 40, 142],
-  black: [30, 30, 34],
-  green: [22, 116, 62],
+  blue: [33, 37, 124],
+  red: [167, 23, 42],
+  purple: [75, 33, 116],
+  black: [29, 30, 42],
+  green: [24, 88, 56],
+};
+/** The same inks where they are thin or short of ink: a little lighter and cooler, as real pad ink is. */
+const THIN_RGB: Record<Ink, [number, number, number]> = {
+  blue: [62, 74, 160],
+  red: [186, 52, 84],
+  purple: [104, 70, 156],
+  black: [58, 62, 84],
+  green: [44, 112, 96],
 };
 export const INK_WORD: Record<Ink, string> = { blue: 'Blue', red: 'Red', purple: 'Purple', black: 'Black', green: 'Green' };
 export const isInk = (s: any): s is Ink => (INKS as readonly string[]).includes(s);

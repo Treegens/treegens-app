@@ -839,3 +839,194 @@ test('Repair 5: on a database from before first opens were written, the first op
   await from().call('GET', `/sign/${tokenFor(fresh.id, 'new-opener@disputes.example')}/download`, undefined, { 'user-agent': UA });
   assert.match(auditOf(fresh.id).find((a: any) => a.action === 'Completed copy opened').detail, /downloaded the completed document for the first time, in Safari on an iPhone\./);
 });
+
+// A declined envelope: the named person declined (or someone did in their name), and disputes it.
+async function declinedAndDisputed(sender: Client, email: string, subject: string) {
+  const e = await simple(sender, email, { subject });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const c = from();
+  const tok = tokenFor(e.id, email);
+  await c.post(`/sign/${tok}/consent`);
+  assert.equal((await c.post(`/sign/${tok}/decline`, { reason: 'Somebody declined in my name' })).status, 200);
+  assert.equal((await from().post('/public/check/dispute', { code: codeOf(e.id, email), detail: 'I never declined anything.' })).status, 200);
+  return e;
+}
+
+test('Repair 2: while a dispute is open its sender cannot delete the envelope for good, only take it out of their lists', async () => {
+  const sender = await person('Eraser Sender', 'eraser@disputes.example');
+  const e = await declinedAndDisputed(sender, 'erased@disputes.example', 'Declined one');
+  assert.equal((await sender.get(`/envelopes/${e.id}`)).data.kept_on_delete, true, 'the dialog is told before');
+  const del = await sender.call('DELETE', `/envelopes/${e.id}`);
+  assert.equal(del.status, 200);
+  assert.equal(del.data.kept_for_recipients, true);
+  assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', e.id).n, 1, 'still there');
+  assert.ok(db.get('SELECT hidden_at h FROM envelopes WHERE id=?', e.id).h);
+  assert.equal(db.get('SELECT COUNT(*) n FROM disputes WHERE envelope_id=?', e.id).n, 1);
+  assert.match(auditOf(e.id).find((a: any) => a.action === 'Removed from the sender\'s lists').detail, /It is kept, because a person named on it disputes it and Sign&Grow has not closed that dispute yet/);
+  const look = (await from().get(`/public/verify/${e.id}`)).data;
+  assert.equal(look.status, 'declined');
+  assert.ok(look.disputed_at);
+  assert.equal(look.disputes_open, 1);
+  assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /keptForDispute \? 'Deleted from your account\. It is kept while the dispute about it is open\.'/);
+  // Once a person at Sign&Grow has closed it, the next one like it can be deleted for good, as before.
+  process.env.OPERATOR_EMAILS = 'ops-r2@disputes.example';
+  try {
+    const ops = await person('Olga Operator', 'ops-r2@disputes.example');
+    const other = await declinedAndDisputed(sender, 'erased2@disputes.example', 'Declined two');
+    assert.equal((await sender.post(`/operator/disputes/${other.id}`, { how: 'handled', note: 'x' })).status, 404, 'operators only');
+    assert.equal((await ops.post(`/operator/disputes/${other.id}`, { how: 'maybe', note: 'Looked at it.' })).status, 400);
+    assert.equal((await ops.post(`/operator/disputes/${other.id}`, { how: 'handled', note: '' })).status, 400);
+    const closed = await ops.post(`/operator/disputes/${other.id}`, { how: 'handled', note: 'Spoke to both; they settled it.' });
+    assert.equal(closed.status, 200, JSON.stringify(closed.data));
+    assert.match(auditOf(other.id).find((a: any) => a.action === 'Dispute closed').detail, /does not decide who is right: the envelope stays marked as disputed/);
+    assert.equal(db.get("SELECT status FROM support_requests WHERE envelope_id=? AND topic='not-me'", other.id).status, 'closed', 'its alert closes with it');
+    assert.equal((await ops.post(`/operator/disputes/${other.id}`, { how: 'handled', note: 'again' })).status, 404, 'nothing left open');
+    assert.equal((await sender.get(`/envelopes/${other.id}`)).data.kept_on_delete, false);
+    const gone = await sender.call('DELETE', `/envelopes/${other.id}`);
+    assert.equal(gone.status, 200);
+    assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', other.id).n, 0);
+  } finally {
+    delete process.env.OPERATOR_EMAILS;
+  }
+});
+
+test('Repair 2: deleting the account keeps the dispute (id, fingerprint, day, state, no names) until a person closes it, and /verify keeps saying it', async () => {
+  process.env.OPERATOR_EMAILS = 'ops-r2b@disputes.example';
+  try {
+    const ops = await person('Omar Operator', 'ops-r2b@disputes.example');
+    const sender = await person('Paula Fivesender', 'paula@disputes.example');
+    const e = await completed(sender, 'settled@disputes.example', { subject: 'Secret settlement' });
+    const pdf = (await sender.get(`/envelopes/${e.id}/download`)).data as Uint8Array;
+    assert.equal((await from().post('/public/check/dispute', { code: codeOf(e.id, 'settled@disputes.example'), detail: 'I never signed the secret settlement, my ex did.' })).status, 200);
+    const declined = await declinedAndDisputed(sender, 'declined-gone@disputes.example', 'Declined and gone');
+    assert.equal((await sender.post('/me/delete', { password: PW, now: true })).status, 200);
+    assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id IN (?,?)', e.id, declined.id).n, 0);
+    // What is kept: those columns, and none of the names, addresses, title or words.
+    const kept = db.all('SELECT * FROM forgotten_disputes WHERE envelope_id IN (?,?) ORDER BY status', e.id, declined.id);
+    assert.equal(kept.length, 2);
+    assert.deepEqual(Object.keys(kept[0]).sort(), ['at', 'disputed_on', 'envelope_id', 'file_sha256', 'status']);
+    assert.match(kept[0].disputed_on, /^\d{4}-\d\d-\d\d$/);
+    for (const word of ['Secret', 'settlement', 'Paula', 'disputes.example', 'Sam Signer', 'my ex']) assert.ok(!JSON.stringify(kept).includes(word), word);
+    // /verify by file and the lookup by ID still say it is disputed, also for the one that was never completed.
+    const v = (await verify(pdf)).data;
+    assert.equal(v.deleted.envelope_id, e.id);
+    assert.equal(v.deleted.disputed_on, kept.find((k: any) => k.envelope_id === e.id).disputed_on);
+    assert.equal(v.deleted.dispute_open, true);
+    const look = (await from().get(`/public/verify/${e.id}`)).data;
+    assert.equal(look.status, 'deleted');
+    assert.ok(look.disputed_at);
+    const never = (await from().get(`/public/verify/${declined.id}`)).data;
+    assert.equal(never.status, 'deleted');
+    assert.equal(never.was, 'declined');
+    assert.equal(never.completed_at, null);
+    assert.ok(never.disputed_at);
+    for (const res of [v, look, never]) assert.ok(!/Secret|Paula|disputes\.example|my ex/.test(JSON.stringify(res)));
+    assert.match(src('src/app/verify/page.tsx'), /res\.deleted\.disputed_on &&/);
+    assert.match(src('src/app/verify/ById.tsx'), /Never completed, deleted since/);
+    // The alert follows the support rules for deletion: kept while open (with nothing tying it to the account),
+    // then forgotten. Closing it in the queue closes the dispute, and what was kept of it goes.
+    const alert = db.get("SELECT * FROM support_requests WHERE envelope_id=? AND topic='not-me'", e.id);
+    assert.equal(alert.status, 'open');
+    assert.equal(alert.forget, 1);
+    assert.equal(alert.account_id, null);
+    const close = await ops.post(`/operator/support/${alert.id}`, { action: 'close', text: 'Told the person the account is gone; nothing more we can do.' });
+    assert.equal(close.status, 200, JSON.stringify(close.data));
+    assert.equal(db.get('SELECT COUNT(*) n FROM forgotten_disputes WHERE envelope_id=?', e.id).n, 0);
+    assert.equal((await verify(pdf)).data.deleted.disputed_on, null);
+    assert.equal((await from().get(`/public/verify/${e.id}`)).data.disputed_at, null);
+    // The never-completed one is closed from the operator route, and then nothing about it is left at all.
+    assert.equal((await ops.post(`/operator/disputes/${declined.id}`, { how: 'handled', note: 'Account gone.' })).status, 200);
+    assert.equal((await from().get(`/public/verify/${declined.id}`)).status, 404);
+    db.run("UPDATE support_requests SET updated_at=? WHERE envelope_id IN (?,?) AND topic='not-me'", ago(31), e.id, declined.id);
+    await cron.tick();
+    assert.equal(db.get("SELECT COUNT(*) n FROM support_requests WHERE envelope_id IN (?,?) AND topic='not-me'", e.id, declined.id).n, 0, 'then forgotten');
+    // The pages that list what stays after a deletion say it.
+    const { KEPT_AFTER_DELETION } = await import('../src/lib/policy.ts');
+    assert.ok(KEPT_AFTER_DELETION.some((l) => /For a document someone named on it disputes, while a person at Sign&Grow has not closed that dispute: its envelope ID, the fingerprint of its signed file, the day of the dispute and the state the document was in, with no names and no addresses/.test(l)));
+  } finally {
+    delete process.env.OPERATOR_EMAILS;
+  }
+});
+
+test('Repair 2: a dispute closed as filed in error is said next to the mark, which stays', async () => {
+  process.env.OPERATOR_EMAILS = 'ops-r2c@disputes.example';
+  try {
+    const ops = await person('Ida Operator', 'ops-r2c@disputes.example');
+    const sender = await person('Honest Sender', 'honest@disputes.example');
+    const e = await completed(sender, 'forwarded@disputes.example', { subject: 'Honest sale' });
+    assert.equal((await from().post('/public/check/dispute', { code: codeOf(e.id, 'forwarded@disputes.example') })).status, 200);
+    assert.equal((await ops.post(`/operator/disputes/${e.id}`, { how: 'in_error', note: 'The signer says a colleague used the forwarded email.' })).status, 200);
+    const look = (await from().get(`/public/verify/${e.id}`)).data;
+    assert.ok(look.disputed_at, 'the mark stays');
+    assert.equal(look.disputes_open, 0);
+    assert.match(look.dispute_in_error_on, /^\d{4}-\d\d-\d\d$/);
+    const pdf = (await sender.get(`/envelopes/${e.id}/download`)).data as Uint8Array;
+    assert.match((await verify(pdf)).data.envelope.dispute_in_error_on, /^\d{4}-\d\d-\d\d$/);
+    assert.match(auditOf(e.id).find((a: any) => a.action === 'Dispute closed').detail, /found that it was filed in error/);
+    assert.equal(env.verifyChain(e.id).ok, true);
+    assert.match(src('src/app/verify/ById.tsx'), /res\.dispute_in_error_on/);
+  } finally {
+    delete process.env.OPERATOR_EMAILS;
+  }
+});
+
+test('Repair 4: the mark covers every corner of a page, survives a black-and-white copy, and labels each signature', async () => {
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const { drawStamp, markFields, stampFor } = await import('../src/server/stamp.ts');
+  for (const [w, h, rotation] of [[612, 792, 0], [842, 595, 0], [595, 842, 90]] as const) {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([w, h]);
+    if (rotation) page.setRotation((await import('pdf-lib')).degrees(rotation));
+    const font = await doc.embedFont(StandardFonts.HelveticaBold);
+    const drawn: any[] = [];
+    const real = page.drawText.bind(page);
+    page.drawText = ((text: string, o: any) => (drawn.push({ text, ...o }), real(text, o))) as any;
+    drawStamp(page, font, stampFor('voided'));
+    // What a copier in black-and-white text mode keeps: ink over white darker than half-grey.
+    const grey = (o: any) => 255 * (1 - (o.opacity ?? 1)) + (o.opacity ?? 1) * 255 * (0.2126 * o.color.red + 0.7152 * o.color.green + 0.0722 * o.color.blue);
+    const kept = drawn.filter((o) => grey(o) < 128);
+    assert.ok(kept.length >= 30, `${kept.length} dark words`);
+    // Every one of the sixteen squares of a four-by-four grid over the page holds dark words, corners included.
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+      const inside = kept.some((o) => o.x >= (i * w) / 4 - 40 && o.x < ((i + 1) * w) / 4 && o.y >= (j * h) / 4 - 40 && o.y < ((j + 1) * h) / 4);
+      assert.ok(inside, `square ${i},${j} of a ${w}x${h} page turned ${rotation}`);
+    }
+    // A signature in the lower right is framed and labelled.
+    const before = drawn.length;
+    markFields([page], [{ page: 0, type: 'signature', value: '1', x: 0.6, y: 0.84, w: 0.3, h: 0.07 }, { page: 0, type: 'text', value: 'x', x: 0.1, y: 0.1, w: 0.2, h: 0.05 }], font, stampFor('voided'));
+    assert.equal(drawn.slice(before).length, 1, 'the word in the signature only');
+    assert.equal(drawn[before].text, 'VOIDED');
+    assert.ok(grey(drawn[before]) < 128);
+  }
+});
+
+test('Repair 4: a copy made while the envelope is still out says so on every page; the completed one and the kept earlier copy carry no such mark', async () => {
+  const sender = await person('Early Sender', 'early-copy@disputes.example');
+  const v = await halfSigned(sender, 'early');
+  const pages = await pagesOf((await sender.get(`/envelopes/${v.id}/download`)).data);
+  assert.equal(pages.length, 2);
+  for (const p of pages) {
+    assert.match(p, /NOT COMPLETED YET: not everyone has signed/);
+    assert.ok((p.match(/NOT COMPLETED YET · NOT EVERYONE HAS SIGNED/g) || []).length >= 20, 'across the whole page');
+  }
+  // Ada's own copy, downloaded after she signed while Ben has not.
+  const ada = await pagesOf((await from().get(`/sign/${tokenFor(v.id, 'ada-early@disputes.example')}/download`)).data);
+  for (const p of ada) assert.match(p, /NOT COMPLETED YET/);
+  // The evidence pack's copy of the document so far as well.
+  assert.match((await pagesOf(unzip((await sender.get(`/envelopes/${v.id}/evidence`)).data)['document-so-far.pdf']))[0], /NOT COMPLETED YET/);
+  // Voided afterwards: a fresh copy says voided, with the signature labelled.
+  assert.equal((await sender.post(`/envelopes/${v.id}/void`, { reason: 'Terms changed' })).status, 200);
+  const closed = await pagesOf((await sender.get(`/envelopes/${v.id}/download`)).data);
+  assert.ok((closed[1].match(/VOIDED · NOT A SIGNED DOCUMENT/g) || []).length >= 20);
+  assert.match(closed[1], /VOIDED: NOT A SIGNED DOCUMENT/, 'at the bottom as well as the top');
+  // The finished document is the signed file itself, unmarked.
+  const done = await completed(sender, 'early-done@disputes.example');
+  assert.ok(!(await pagesOf((await sender.get(`/envelopes/${done.id}/download`)).data)).some((p) => /NOT COMPLETED|NOT A SIGNED/.test(p)));
+  // What someone signed before a change is kept unmarked and marked once, as such, when it is handed out.
+  const { buildPdf } = await import('../src/server/envelopes.ts');
+  const out = await simple(sender, 'kept-copy@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${out.id}/send`)).status, 200);
+  const e = env.loadEnvelope(out.id);
+  assert.ok(!(await pagesOf(await buildPdf(e, false, e.recipients[0].id, undefined, false))).some((p) => /NOT COMPLETED/.test(p)));
+  assert.ok((await pagesOf(await buildPdf(e, false))).every((p) => /NOT COMPLETED YET/.test(p)), 'marked unless the caller says otherwise');
+});

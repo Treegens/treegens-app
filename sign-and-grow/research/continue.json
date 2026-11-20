@@ -4817,5 +4817,152 @@
   ],
   "notes_for_integrator": "Behaviour others will notice:\n(1) With FILE_ENCRYPTION_KEY set, files.text stays NULL. Read kept text only through keptText()/withKeptText() in src/server/searchtext.ts; any new code that reads files.text directly will see nothing. The server seals older text at start (instrumentation.ts) with secure_delete and a WAL checkpoint. My test passes even without secure_delete, because SQLite reuses the freed pages for the longer sealed text, so I kept it as a guard.\n(2) cronTick now takes signed PDFs from finalsDue() (finalretry.ts). Senders get 'Signed PDF delayed: <subject>' after 5 failed tries and 'Signed PDF ready: <subject>' when a later try succeeds. Operators get an alert per stuck envelope named 'Sign&Grow (automatic alert)'.\n(3) A final signed PDF is no longer sealed without a signer attachment that fails its check or is locked; the build waits instead.\n(4) Retried emails go without an unreadable attachment, with a note at the top, and the stored html is updated to match.\n(5) The export README names locked files apart and lists completed envelopes that have no signed PDF yet.\n(6) PdfDoc's failed() callback has a third argument, `said`; the only caller is the sign page, which I updated.\n(7) Recipients.tsx always fetches the link (Copy, QR, share, Sign now) and clears what is shown when the people change.\n\nNew copy uses 'Sign&Grow' for the rename pass, for example 'The people who run Sign&Grow have been told'.\n\nDecisions for the owner to confirm:\n- Locked attachments in retried emails go without the file, instead of waiting without counting the try.\n- After 5 tries the timer still tries once a day.\n- Download links are hidden with CSS while the server says the file is locked or damaged.\n- policy.ts NO_BAA_FIRST[2] ('it never encrypts the database') and WHO_CAN_SEE ('adds no encryption of its own to the database') are still broadly true, since only the kept text column is encrypted. You may want to say so; I did not touch policy.ts.\n\nNot mine, seen while testing: the billing*, gaps-disputes-evidence, lifecycle and gaps-nonus-words replyTo failures listed under suite. My dev server needed a restart once because another engineer's new column (seen_inputs) only exists after a process start.\n\nI could not delete my dev data folder through the safety check when I wrote it as a command substitution; I then deleted it by its literal path (/tmp/tmp.rashBf2MEV). The .next-repair-qr-encrypt folder is deleted and the two tsconfig.json lines it added are removed.",
   "needs_from_billing": "Nothing."
+ },
+ "repair:comments": {
+  "found": "The builder's comments feature was in place (src/server/comments.ts, routes-comments.ts, both Comments.tsx, tests/comments.test.ts 21 of 21 passing). I ran the skeptic's probes before any fix (output in tests/out/repair-comments/before-probe*.txt). Every finding reproduced exactly as reported:\n- In person (probe2 d1): Quinn on the host's laptop read Pat's private thread and the host's answer through Pat's link: [200,true,true].\n- Notice split over three answers (s5): [200,200,200]. All three parts were shown on Ada's page. Spaced ten minutes apart, each part went out in its own email.\n- Held batch (probe3 b1): every tick returned {mailed:0, held:1}, the news stayed \"waiting\", and a later harmless answer was never emailed.\n- Admin named \"PayPal Resolution Center\" (a10): 200. The email subject said \"Own Er wrote to you about\".\n- Public form stranger (p6): 200, From was \"PayPal Billing via Sign&Grow\", Reply-To was the stranger's address, and the lure and link were in the body. A recipient's notice for everyone (r7): 200, and Ben saw it.\n- Settle toggling (t4): 400 of 400 accepted with 400 audit lines; the sender side 200 with 199 lines. The signed PDF had 34 pages.\n- Webhook log after delete (w8): 1 delivery row still held \"HIV\" and Ada's name, and could be redelivered.\n- Burst used up by refused requests (f13): 429 on the real question.\n- Promised emails (m9): the digest said \"we email it to them\" for a spam-marked person, and a bounced signer was told answers_to = their address.\n- Removed envelope (probe4): admin got 404 on the comments, but the evidence pack held them.\n- Same answer twice (t2): [200,200] and 2 rows.\n- Finish note count (check 3): the hook only re-fetched when the dialog closed, so the stale count was confirmed by reading the code.\n- Card copy (look.cjs): \"Only Pat Present (they are emailed)\" for an in-person signer; the 60-line comment was not folded.\nNot in the report but noticed: probe g3's group row token reads the member's private thread. I checked with probe-g3: that token is emailed only to the member who took the document on, so it is not a leak.",
+  "done": [
+   {
+    "item": "Check 1 / new bug (high): second in-person signer reads the first one's private thread on the host's laptop (decision 1); overclaim in README",
+    "status": "done",
+    "how": "New file src/server/handlive.ts. A signed HttpOnly cookie ts_hand lists the in-person signers this browser was handed to, the latest last. handDevice (handover.ts) restarts the list with that person when the host's session locks for a hand-over. Unlocking with the password clears it. In a browser that is not the host's, a person whose page opens there for the first time is added; going Back never makes an earlier person the latest again. A locked browser never changes the list except through a real hand-over. In routes-comments.ts, an in-person link whose person is not the latest gets the viewer \"away\": only threads for everyone are shown, may_write is false, and \"away\" carries a plain note naming the person and what to do. Writing, /ask and settle answer 403 code handed_on. A cookie that fails the signature counts as none, and in a locked browser that shows nothing private. The dialog shows the note at the top. Recipients.tsx signNow uses location.replace for in-person links. In the browser check, Back still reached Pat's page (the host had navigated there directly), so the server-side gate is the real fix and replace only shortens the history.",
+    "test": "tests/comments-repair.test.ts tests 1-3 (laptop after Pat finished; Back to an unfinished Pat, writes, /ask and settle refused, forged cookie, handing back to Pat on purpose; a tablet that is not signed in, plus Pat's own phone). All three failed with holdsDevice forced to true. Probe2 d1 now [200,false,false]. look.cjs in tests/out/repair-comments (both SKIP_PAT and finished): apiFromLaptop [200,false,false], quinnReads false, screenshot 07b-quinn-reads-pat-thread.png shows the note.",
+    "left_open": "Someone with the in-person URL who opens it in a private window (no cookies) is a fresh browser and reads that person's private thread. The link is the credential, and it is the host's. A person handed a tablet that is not signed in, who comes back to it after someone else, cannot see their own private thread there (they are told why). They can on their own phone, or after the host hands the device over with Host signing now on a signed-in browser. The next person going Back to an earlier person's unfinished signing page can still fill in that page: that is the in-person flow, not comments."
+   },
+   {
+    "item": "New bug (high): fake-payment-notice filter bypassed by splitting it over several comments (decision 2); overclaim in README and the builder report",
+    "status": "done",
+    "how": "New file src/server/commentrules.ts, senderRefusal. A new comment from the sender's side is read with: everything sender-side written on the envelope in the last 24 hours, the names it is printed under, the new text and the writer's name. The whole day is read first in one call. Only if that reads like a notice are the separate sets checked: this writer's own day of words (decision 2), and for each reader of the new comment what they can read. So an honest office whose words no single person reads together still passes. Answers that the filter dropped at sending are left out, so later answers still go. At sending, batchRefusal reads the batch with what was already emailed to that person about the envelope that day.",
+    "test": "comments-repair tests 4 and 5 (one writer, three parts to the same person; one writer to several people; two admins and the owner for one reader; an honest office let through). Probe s5 now [200,200,422]; s5b only the first two parts go."
+   },
+   {
+    "item": "New bug (medium): a refused batch held for ever, blocks later answers, card says it waits (decision 3); overclaim newsLine",
+    "status": "done",
+    "how": "flushComments: a 403 (pause) still holds. Any other refusal drops those rows with the reason FILTERED, which the card shows as \"Not emailed to X: ... comments with words like these are not emailed ... Later answers are emailed as usual.\" The sender gets an email, \"Not emailed to <name>: comments on <subject>\", quoting what was not sent and why. Dropped rows are never read again, so later answers go. flushComments returns {mailed, held, dropped}. newsLine says \"sending is paused\" only when the account is paused (senderView.paused); otherwise it says the answer goes with the next email.",
+    "test": "comments-repair test 9 (trusted when written, trust taken back, flush gives dropped 1, the sender's note email, nothing left waiting, a harmless answer then emailed). Probe3 b1 now mails what is allowed, nothing stays held, and the harmless answer goes (3 emails)."
+   },
+   {
+    "item": "New bug (medium): an admin's own name is not read; email subject claims the sender wrote it",
+    "status": "done",
+    "how": "The writer's name (c.user.name) and the names of every comment read go into the filter. answerMail names the writers in the subject (\"Kim Helper wrote to you about: ...\"). The heading adds \", for <sender>,\" when someone else wrote, and the footer says \"Sent for <sender>\".",
+    "test": "comments-repair test 6. Probe a10 now 422, and the signing page shows only the question."
+   },
+   {
+    "item": "New bug (medium): public-form stranger's words reach the owner under their From name with their Reply-To, unfiltered; a recipient's notice for everyone shown to others (decision 4)",
+    "status": "done",
+    "how": "senderDigest never uses a visitor's name as fromName or their address as replyTo. It adds a line that the visitor typed that name and address themselves, that we have not checked them, and that the email does not come from them. signerLure reads, whatever the account's trust: a visitor's day of words together with their name, and a recipient's comments for everyone with their name. It refuses with 422 in plain words that say what set it off; for a recipient it adds \"choose Only <sender>\" as the way to ask about a payment. A visitor may no longer answer in a conversation for everyone that the owner started (403).",
+    "test": "comments-repair tests 7 and 8 (a lure for everyone, split for everyone, a private payment question still allowed; a visitor's lure, part of it in the name, an honest visitor's email has our From and no Reply-To, a visitor reply in a thread for everyone). Probes p6 and r7 now 422."
+   },
+   {
+    "item": "New bug (medium): settle/open again unlimited, each printed in the certificate (decision 5); overclaim about flooding",
+    "status": "done",
+    "how": "settle(): a change that changes nothing returns without counting. Otherwise settleLimit allows 10 changes per thread per person (signing link or user) per hour, and then 429 with plain words. noteSettle writes at most one audit line per thread per hour, using new column comment_threads.settle_noted_at in one atomic UPDATE ... RETURNING.",
+    "test": "comments-repair test 10 (14 toggles from new addresses: 10 then 429; sender side 10 changes and 20 refusals; 1 audit line; the next line only after an hour; the signed PDF at most 5 pages). Probe t4 now 1 audit line and a 4-page PDF (was 34)."
+   },
+   {
+    "item": "Check 5b / new bug (medium): comment text survives envelope deletion in the webhook log and can be redelivered (decision 6); overclaim 'everything deleted'",
+    "status": "done",
+    "how": "forgetCommentHooks(eid) in commentrules.ts is called from forgetEnvelopes (routes-trust.ts). It rewrites each comment.created delivery body with comment.text and comment.name set to null (or nulls the body if it cannot be read). The delivery stays listed, and sending it again sends no words. Documented in openapi CommentEvent and the README.",
+    "test": "comments-repair test 11 (local receiver: after delete the row and the redelivered body hold neither the words nor the name). Probe w8 now [200,1,false].",
+    "left_open": "A delivery still being retried (three tries within about 6 seconds) when the envelope is deleted is sent with the text it already holds. Other events' bodies keep the envelope subject after deletion, which is outside comments."
+   },
+   {
+    "item": "New bug (low): refused requests use up the burst",
+    "status": "done",
+    "how": "Both write routes now validate thread, for, pin and visitor rules first. They then check the 50 limit and the burst without counting, then the filter. spend() counts the burst only for a comment that is stored.",
+    "test": "comments-repair test 12 (10 refused tries of 3 kinds, then a real question 200; 31 sender 404s, then an answer 200). Probe f13 now [200]."
+   },
+   {
+    "item": "New bug (low) / overclaims: screens and emails promise an email to people never emailed; help page overclaim",
+    "status": "done",
+    "how": "reach() is now the one rule for this. senderView.people carries emailed/not_emailed. Private threads' \"with\" carries emailed/not_emailed. signerView.answers_to comes from reach() (null for bounced, spam-marked, in person, no address). digestLine words each case in the sender's digest, and it says \"we email it to them\" only when all can be emailed. The card option says \"(not emailed, they see it on their signing page)\", and the reply hint gives the reason. The help page now says when an answer is not emailed.",
+    "test": "comments-repair test 14. Probe m9 now [false,true] and answers_to null. look.cjs cardSelect shows the new option text."
+   },
+   {
+    "item": "Check 3 / new bug (low): Finish note count stale",
+    "status": "done",
+    "how": "useMyQuestions(base, on, again) re-fetches when `again` changes. The signing page passes open === 'review' (a one-line edit), so the count is fetched again when the Finish step opens.",
+    "test": "Browser check tests/out/repair-comments/finish.cjs at 390x844: the approver asks, the sender answers while the page is open, then Approve shows no note (noteShown false). The control run with NO_ANSWER=1 shows the note (08c-finish-no-answer.png). There is no server test because this is screen-only behaviour.",
+    "left_open": "I did not re-run the browser check against the old hook; that it failed before rests on reading the code, as the skeptic's did."
+   },
+   {
+    "item": "New bug (low) / check 5a: admin cannot list comments of an envelope the sender removed",
+    "status": "done",
+    "how": "senderSide uses mine(..., { removed: !writing }), like the evidence route. Writing to it stays refused (404).",
+    "test": "comments-repair test 15 (a member sends and removes; the member gets 404; the admin reads 200, may_write false; an admin write gets 404). Probe4 admin now 200. The owner also reads 200, because the owner is an admin, consistent with evidence."
+   },
+   {
+    "item": "New bug (low): same comment accepted twice",
+    "status": "done",
+    "how": "sameAgain in commentrules.ts: the same author, the same words, the same thread (or, for a new thread, the same readers and pin) within 15 seconds is answered as the first comment. Nothing more is stored, audited or emailed. The sender side's message says \"This was already sent a moment ago, so it was not sent again.\" The check and the insert have no await between them.",
+    "test": "comments-repair test 13 (two at once from a signer and from the sender: 1 row and 1 email; other words, or the same words a minute later, are new; the same words for different readers are two). Probe t2 now [[200,200],1]."
+   },
+   {
+    "item": "Check 4 screen: 60-line comment makes the card about 4,300 px; option/hint copy",
+    "status": "done",
+    "how": "New src/components/CommentBody.tsx folds a comment longer than 600 characters or 8 lines and adds a \"Show all N characters\" button (44 px, aria-expanded). It is used on the sender's card and in the signing dialog. The copy changes are under the item about promised emails.",
+    "test": "look.cjs at 390x844: no element wider than the screen (cardOverflow [390,390], wide []), fold buttons 44 px tall, card height 2332 (was about 4300). Screenshots 04-card-phone.png and 07b."
+   },
+   {
+    "item": "Overclaims in README (Questions and comments bullet, test table, bad-reviews row, Developers bullet) and the API description",
+    "status": "done",
+    "how": "README bullet rewritten to say what is now true: the in-person gate, the day of words and names, dropped answers, visitor From, who is not emailed, webhook log on delete, limits on stored comments only, duplicates, settle limit. Also a new test table row, the bad-reviews row corrected (email only when we can reach them), and the Developers bullet. openapi.ts and developers/page.tsx updated (people/with emailed, paused, removed read, the filter wording, burst counts only stored, duplicate, settle 10 per hour and one audit line, CommentEvent text/name nullable). There are no new settings, so .env.example and the config table are unchanged.",
+    "left_open": "The builder's own claims in research/continue.json were left as they are (it is their report)."
+   },
+   {
+    "item": "Stale assertion in tests/gaps-nonus-words.test.ts (failure 421 in my first full run)",
+    "status": "done",
+    "how": "Line 876 still expected `replyTo={answerComesTo(me)}` from the old AskDialog, which the comments build removed. I changed that one line to assert the comments dialog's equivalent: an email is promised only when answers_to (from reach) is set. The intent of the test is unchanged.",
+    "test": "gaps-nonus-words.test.ts passes."
+   }
+  ],
+  "files_changed": [
+   "src/server/handlive.ts (new: who holds the device, ts_hand cookie)",
+   "src/server/commentrules.ts (new: filter over a day of words and names, batch refusal at sending, recipient/visitor lure, settle limit and audit once an hour, duplicates, webhook scrub on delete)",
+   "src/components/CommentBody.tsx (new: folds long comments)",
+   "tests/comments-repair.test.ts (new, 15 tests)",
+   "src/server/routes-comments.ts (away viewer, validation before limits, spend, filters, duplicates, reach-based wording, digest From/Reply-To for visitors, writer names in answer mail, dropped batches with note to sender, settle limit, admin read of removed)",
+   "src/server/handover.ts (handDevice notes the hand-over; unlock clears it: 3 small edits)",
+   "src/server/routes-trust.ts (forgetEnvelopes calls forgetCommentHooks: import plus 2 lines)",
+   "src/server/db.ts (COLUMNS: comment_threads.settle_noted_at)",
+   "src/components/sender/Recipients.tsx (signNow: location.replace for in-person)",
+   "src/components/sender/Comments.tsx (newsLine with pause, option text and reply hint from emailed/not_emailed, CommentBody)",
+   "src/components/sign/Comments.tsx (away note at top, CommentBody, useMyQuestions `again`)",
+   "src/app/sign/[token]/page.tsx (one line: useMyQuestions(..., open === 'review'))",
+   "src/app/styles/comments.css (.cm-more)",
+   "src/app/help/page.tsx (one sentence: when an answer is not emailed)",
+   "src/app/developers/page.tsx (settle row)",
+   "src/server/openapi.ts (comments paths and schemas)",
+   "README.md (Questions and comments bullet, Developers bullet, test table row, bad-reviews row)",
+   "tests/gaps-nonus-words.test.ts (one stale assertion replaced)",
+   "tests/out/repair-comments/ (before/after probe output, look.cjs, finish.cjs, screenshots, reports)"
+  ],
+  "suite": "tests/comments-repair.test.ts: 15 of 15 pass. tests/comments.test.ts: 21 of 21 pass. tests/gaps-nonus-words.test.ts passes.\n\nFull npm test, first run: 863 tests, 850 pass, 13 fail.\n- 11 were billing tests (55-116). The payment owner was mid-work, and they passed in the second run.\n- 421 was the stale gaps-nonus-words assertion, which I updated.\n- 514 was lifecycle.test.ts:1260, a powerforms page source regex in another engineer's area.\n\nFull npm test, second run: 887 tests, 883 pass, 4 fail, none in comments:\n- 296 flow.test: \"not documented: GET /envelopes/:id/disputes\" (the disputes repair is in progress).\n- 300 and 302 gaps-disputes-evidence: a date shown as a day versus a full timestamp (the disputes repair).\n- 538 lifecycle.test.ts:1260: the powerforms page source regex.\n\nOnce during my work, every test failed to load for a few minutes because ../lib/paylink.ts did not export payLater (another engineer's half-finished edit); it cleared on its own.\n\nnpx tsc --noEmit -p .: clean.\n\nProbes after the fix are in tests/out/repair-comments/after-probe*.txt.",
+  "settings": [
+   "No new environment setting.",
+   "New cookie ts_hand (HttpOnly, SameSite=Lax, 1 day, HMAC-signed): which in-person signers a browser was handed to (src/server/handlive.ts).",
+   "New column comment_threads.settle_noted_at (COLUMNS in db.ts).",
+   "Numbers kept in src/server/commentrules.ts, because pages do not quote them: SETTLES_PER_HOUR=10 per person per thread; one settle audit line per thread per hour; filter window 24 hours; duplicate window 15 seconds.",
+   "Fold size in src/components/CommentBody.tsx: 600 characters or 8 lines."
+  ],
+  "abuse_and_stuck": [
+   "ABUSE: the next in-person signer goes Back to an earlier person's comments. Only threads for everyone are shown, nothing can be written in that name, and a forged cookie counts as none. Tested (tests 1-3).",
+   "ABUSE: a notice split over comments, over people on the sender's side, or into an admin's name. Refused when written, and checked again at sending. Tested (tests 4-6).",
+   "ABUSE: a stranger on a public form writes a notice to the owner, puts part of it in the name, uses a brand as the From name, or answers in a conversation for everyone. Refused or neutralised. Tested (test 8).",
+   "ABUSE: a recipient shows a notice for everyone to the other signers, whole or in parts. Refused. Tested (test 7).",
+   "ABUSE: flooding the certificate by toggling settled. 10 changes an hour, one audit line an hour. Tested (test 10).",
+   "ABUSE: private words kept in the webhook log after deletion, and redelivered. Scrubbed. Tested (test 11).",
+   "ABUSE: probing the filter repeatedly no longer uses up the burst. The per-link request limit in find() (600 per 10 minutes) still applies. Not separately tested.",
+   "STUCK: a person who signed in person comes back to the host's laptop. The note says to ask the host to open the page with Host signing now, and that works. Tested (test 2).",
+   "STUCK: an honest tenant asks the sender privately about paying by PayPal and gives a phone number. Allowed. Tested (test 7). The same words for everyone are refused, with \"choose Only <sender>\" as the way out.",
+   "STUCK: an honest office whose words no single reader sees together. Allowed. Tested (test 5).",
+   "STUCK: a landlord whose third message would complete a notice gets 422 naming the brand, the money words and the number, and is told to take one out or use the contact form. The 24-hour window then frees it. Named, not tested beyond test 4.",
+   "STUCK: an answer dropped at sending. The sender is told on the card and by email, the recipient still sees it on their page, and later answers go. Tested (test 9).",
+   "STUCK: a real question after ten typos. Goes. Tested (test 12).",
+   "STUCK: a double tap or a retried request. One comment, one email. Tested (test 13).",
+   "STUCK: an admin looking for a removed finished envelope's comments. Readable. Tested (test 15).",
+   "STUCK: someone answered while the page was open. The Finish note is correct. Browser check finish.cjs."
+  ],
+  "needs_from_billing": "Nothing. Comments do not touch signatures or payments. I did not edit routes-billing.ts, credits.ts, tests/billing*, tests/stripe-fake.ts or the Billing() component.",
+  "notes_for_integrator": "Behaviour others will notice:\n- **Comment filters:**\n  - What a recipient writes for everyone, and anything a public-form visitor writes, is now read by the fake-notice filter whatever the account's trust, together with that person's name and their words from the last day. A refusal is 422 in plain words.\n  - A visitor can no longer answer in a conversation for everyone (403).\n  - A recipient's private words to the sender are still not filtered. This is my choice: the sender chose that person. Please confirm.\n- **Emails about comments:**\n  - The sender's digest no longer uses a visitor's name as From or their address as Reply-To, and it says so in a line.\n  - Answer emails name the writer in the subject (\"Kim Helper wrote to you about: ...\") and add \", for <sender>,\" when it was not the sender.\n  - Answers the filter refuses at sending are dropped (comment_news.dropped = FILTERED) and the sender gets an email \"Not emailed to <name>: comments on <subject>\". flushComments now returns {mailed, held, dropped}; cron's comments result has the extra field.\n- **Repeats and settling:** The same words from the same person to the same readers within 15 s are one comment; the signer API answers with again: true. Settling is limited to 10 changes per person per thread per hour (429), with one audit line per thread per hour.\n- **In person:**\n  - Recipients.tsx \"Host signing now\" uses location.replace for in-person signers.\n  - handDevice and /auth/unlock now set and clear the ts_hand cookie.\n  - The signing page of an in-person signer who no longer holds the device gets \"away\" (a note), may_write false, and only threads for everyone.\n- **Admins:** GET /envelopes/:id/comments now works for an admin on an envelope its sender removed (like the evidence pack). The owner counts as an admin.\n\nPromises in copy I added or changed (all kept by the code and tested):\n- The help page says when an answer is not emailed.\n- The card option says \"(not emailed, they see it on their signing page)\".\n- The reply hint names the reason.\n- The in-person note says \"If you are <name>, ask <sender> to open your page for you again with \\\"Host signing now\\\"\".\n- The README bullet and the bad-reviews row were rewritten to match the code.\n\nDecisions for the owner to confirm:\n- The filter window is 24 hours, so parts a day apart pass.\n- The duplicate window is 15 s.\n- The fold is at 600 characters or 8 lines.\n- The settle limit is 10 changes an hour per person.\n\nSeen broken, out of scope:\n- The next in-person person can Back to an earlier person's unfinished signing page and fill it in (not comments).\n- tests 296, 300 and 302 (the disputes repair in progress).\n- test 538 lifecycle.test.ts:1260 (the powerforms page source regex).\n- probe-g3: a group's row token after a member takes the document on is emailed only to that member, so it is not a leak.\n\nRename: all new copy says Sign&Grow where the product is named; nothing renamed."
  }
 }

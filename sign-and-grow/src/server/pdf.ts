@@ -16,7 +16,7 @@ import { certName, certGroup } from '../lib/groups.ts';
 import { labelOf } from '../lib/bysender.ts';
 // A witness is listed under the person they witnessed, with their statement (src/server/witness.ts).
 import { witnessOrder, witnessCertLines } from './witness.ts';
-import { drawStamp, stampFor, stampForMark } from './stamp.ts';
+import { drawStamp, stampFor, stampForMark, markFields } from './stamp.ts';
 import { hiddenOf } from './logic.ts';
 // A company stamp on the page, printed like ink (src/server/stamps.ts). Not the large "VOIDED" mark of stamp.ts.
 import { BlendMode } from 'pdf-lib';
@@ -614,7 +614,8 @@ export const senderZone = (e: any): string | null => validZone(e?.sender_id ? ge
 // Builds the signed PDF: every document with field values stamped in, signer attachments, then the certificate.
 // `notice` is for a copy of an envelope that was never completed (voided, declined or out of time), made for someone
 // who had signed it: the copy opens with a page that says so and why, and every page carries the words too.
-export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any; viewer?: string; notice?: { title: string; lines: string[] } }): Promise<Uint8Array> {
+// `unfinished`: a copy of an envelope that is still out is marked as such across every page too (stamp.ts).
+export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any; viewer?: string; notice?: { title: string; lines: string[] }; unfinished?: boolean }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
@@ -633,6 +634,8 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   const seen = e.fields.map(asSeen);
   const hide = hiddenOf(seen);
   const fields = seen.filter((f: any) => !hide.has(f.id));
+  // The mark of a copy that must not pass for a signed document: closed, or still out (stamp.ts).
+  const mark = opts.notice ? stampFor(e.status) : opts.unfinished && e.status === 'sent' && !opts.certificate ? stampFor('sent') : null;
 
   for (const d of e.documents) {
     const pages = await flatPages(doc, d.sha256);
@@ -644,15 +647,16 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     for (const page of pages) {
       const m = mapper(page);
       const p = m.pt(12, 13);
-      page.drawText(`Sign&Grow Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
-      if (opts.notice) drawStamp(page, bold, stampFor(e.status)); // and large across the page (stamp.ts)
+      page.drawText(`Sign&Grow Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+      if (mark) drawStamp(page, bold, mark); // and across the whole page (stamp.ts)
     }
+    if (mark) markFields(pages, fields.filter((f: any) => f.document_id === d.id), bold, mark);
   }
   for (const f of fields.filter((f: any) => f.type === 'attachment' && f.value)) {
     const file = get('SELECT sha256 FROM files WHERE id=?', f.value);
     if (!file) continue;
     try {
-      (await flatPages(doc, file.sha256)).forEach((p) => (doc.addPage(p), opts.notice && drawStamp(p, bold, stampFor(e.status))));
+      (await flatPages(doc, file.sha256)).forEach((p) => (doc.addPage(p), mark && drawStamp(p, bold, mark)));
     } catch (err: any) {
       // The signed PDF is stored for good, so it is never sealed without a signer's attachment whose stored copy failed
       // its check or is locked: the build fails and is tried again until the file is back (finalretry.ts tells the

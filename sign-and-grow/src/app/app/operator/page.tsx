@@ -35,7 +35,9 @@ function PriceNotice() {
         <div className="notice" role="status" style={{ marginTop: 12 }}>
           <b>{out.told} {out.told === 1 ? 'account was' : 'accounts were'} told</b> that the plan costs {out.new_price} a month from {out.from_day || priceChangeDay(out.from)}. {out.already_told > 0 && `${out.already_told} had been told already. `}{out.not_affected > 0 && `${out.not_affected} already pay that much or more, so nothing changes for them. `}
           {out.withdrawn > 0 && `${out.withdrawn} had been told of a higher price before: that rise is withdrawn, and their owners and admins were emailed that it is. `}
-          {out.not_told.length > 0 && <><b>{out.not_told.length} could not be told</b> because the email did not leave the mail server for every owner and admin ({out.not_told.join('; ')}). They keep their price until they have been. Fix the email problem and run this again.</>}
+          {out.not_told.length > 0 && <><b>{out.not_told.length} could not be told</b> because the email did not leave the mail server for every owner and admin ({out.not_told.join('; ')}). They keep their price until they have been. Fix the email problem and run this again. </>}
+          {out.on_the_way?.length > 0 && <><b>{out.on_the_way.length} {out.on_the_way.length === 1 ? 'is' : 'are'} still on the way</b>: the mail server has not taken the email yet ({out.on_the_way.join('; ')}). Run this again in a few minutes: an account counts once its email has left, and nobody is emailed twice. </>}
+          {out.too_late?.length > 0 && <><b>{out.too_late.length} {out.too_late.length === 1 ? 'was' : 'were'} not told in time</b> for that day: the email would leave, or left, less than {PRICE_NOTICE_DAYS} days before it ({out.too_late.join('; ')}). They keep their price. Announce it again with a later first day for them.</>}
         </div>
       )}
     </>
