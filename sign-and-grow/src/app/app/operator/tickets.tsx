@@ -82,7 +82,7 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
         {!t.alert && <div>{t.login ? `A login exists for this address: ${t.login.name}, ${t.login.confirmed ? 'address confirmed' : 'address not confirmed'}${t.login.closing_at ? `, being closed on ${fmtDate(t.login.closing_at)}` : ''}.` : 'No login uses this address.'}</div>}
         {a ? (
           <div>
-            Account <b>{a.name}</b> ({a.via === 'written_from' ? 'the one this was written from' : 'owned by the login under this address'}) · {a.free_with ? `free with ${a.free_with}` : plan(a.plan)}
+            Account <b>{a.name}</b> ({a.via === 'alert' ? 'the account this alert is about' : a.via === 'written_from' ? 'the one this was written from' : 'owned by the login under this address'}) ·{a.free_with ? `free with ${a.free_with}` : plan(a.plan)}
             {a.cancel_at ? `, ends ${fmtDate(a.cancel_at)}` : a.renews_at ? `, renews ${fmtDate(a.renews_at)}` : ''} · created {fmtDate(a.created_at)} · {a.suspended_at ? <b>sending is paused{a.suspended_reason ? `: ${a.suspended_reason}` : ''}</b> : 'not paused'}
             {a.dispute_at ? ' · payments off after a card dispute' : ''} · {a.trusted_at ? `trusted since ${fmtDate(a.trusted_at)}` : 'not trusted'} · {pay ? `last payment ${money(pay.amount_cents, pay.currency)} on ${fmtDate(pay.at)} (${pay.kind === 'topup' ? 'extra signatures' : 'monthly plan'})${pay.refunded_cents ? `, ${money(pay.refunded_cents, pay.currency)} of it refunded` : ''}` : 'no payment on record'}
             {accountActions && <span style={{ marginLeft: 8 }}>{accountActions(a)}</span>}

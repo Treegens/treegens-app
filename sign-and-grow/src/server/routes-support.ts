@@ -120,15 +120,18 @@ function forCustomer(t: any, mine = false) {
 }
 
 // The account a request is about, read-only, for the operator: the one it was written from, or else the one owned
-// by the confirmed login under its address. Plan, paused or not, and the last payment.
+// by the confirmed login under its address. Plan, paused or not, and the last payment. An alert is filed under the
+// address of whoever answers, so for an alert that address says nothing: only the account the alert names counts,
+// and no login is shown, or an operator could trust or judge their own workspace for somebody else's.
 function accountFacts(t: any) {
-  const login = get('SELECT id, name, email_verified, closing_at, created_at FROM users WHERE email=?', t.email);
+  const alert = isAlert(t);
+  const login = alert ? null : get('SELECT id, name, email_verified, closing_at, created_at FROM users WHERE email=?', t.email);
   const viaAddress = login?.email_verified ? get("SELECT account_id FROM memberships WHERE user_id=? AND role='owner' LIMIT 1", login.id)?.account_id : null;
   const a = t.account_id || viaAddress ? get('SELECT id, name, plan, created_at, trusted_at, suspended_at, suspended_reason, subscription_status, renews_at, cancel_at, promo_code, dispute_at, closing_at FROM accounts WHERE id=?', t.account_id || viaAddress) : null;
   const pay = a ? get('SELECT amount_cents, currency, at, kind, refunded_cents FROM payments WHERE account_id=? ORDER BY at DESC LIMIT 1', a.id) : null;
   return {
     login: login ? { name: login.name, confirmed: !!login.email_verified, closing_at: login.closing_at || null, created_at: login.created_at } : null,
-    account: a ? { ...a, via: t.account_id ? 'written_from' : 'address', free_with: a.promo_code || null, promo_code: undefined, last_payment: pay || null } : null,
+    account: a ? { ...a, via: alert ? 'alert' : t.account_id ? 'written_from' : 'address', free_with: a.promo_code || null, promo_code: undefined, last_payment: pay || null } : null,
   };
 }
 

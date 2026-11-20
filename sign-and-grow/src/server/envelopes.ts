@@ -1668,7 +1668,7 @@ function takeOverCost(e: any, r: any, newEmail: string, newName: string, bySigne
   if (creditsEnabled() && ACTS(r.role) && r.role !== 'witness' && !isChargeable(r, sender) && !free) {
     const have = available(e.account_id);
     if (have < 1 && bySigner) throw bad(`This document cannot be passed on to ${newName} right now: their signature would be a new one, and ${sender.name || 'the sender'} has none free. Nothing was changed. Sign it yourself, or ask ${sender.name || 'the sender'}${sender.email ? ` (${sender.email})` : ''} to put the right person on it.`, 402);
-    if (have < 1) throw bad(`${same ? '' : `${newName} is not ${r.name} (another person, also at the same address, signs with a signature of their own), so this needs a new one. `}${outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have)}`, 402);
+    if (have < 1) throw bad(`${same ? '' : `${newName} is another person than ${r.name}${sameEmail(newEmail, r.email) ? ' (the same address, but not the same name in another spelling)' : ''}, so their signature is a new one. Nothing was changed. `}${outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have)}`, 402);
   }
   return free;
 }

@@ -499,9 +499,9 @@ test('someone who owns no account is told by email which admins can reset it, an
   const acc = db.get("SELECT account_id a FROM memberships WHERE user_id=? AND role='owner'", owner.id).a;
   const m = await person('Ivo Invited');
   // Only on the team: their own workspace is gone.
-  db.run('DELETE FROM accounts WHERE id IN (SELECT account_id FROM memberships WHERE user_id=?)', m.id);
   db.run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'member',?)", acc, m.id, new Date().toISOString());
-  await m.c.post('/auth/switch', { account_id: acc });
+  assert.equal((await m.c.post('/auth/switch', { account_id: acc })).status, 200);
+  db.run("DELETE FROM accounts WHERE id IN (SELECT account_id FROM memberships WHERE user_id=? AND role='owner')", m.id);
   await switchOn(m.c);
   const { c } = await password(m.email);
   assert.deepEqual((await c.post('/auth/two-step/lost', {})).data, { ok: true });
