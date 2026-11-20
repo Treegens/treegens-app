@@ -161,6 +161,7 @@
 .pub-plan .price small { font-family: var(--sans); font-size: 15px; font-weight: 400; color: var(--muted); }
 .pub-plan ul { padding-left: 18px; line-height: 1.7; margin: 4px 0 18px; }
 .pub-plan .btn { margin-top: auto; align-self: flex-start; }
+.pub-code-note { max-width: 860px; margin: 14px 0 0; }
 .pub-rules { max-width: 860px; margin-top: 16px; }
 .pub-rules h3 { font-size: 16px; margin-bottom: 10px; }
 .pub-rules ul { margin: 0; padding-left: 20px; line-height: 1.6; }

@@ -1,5 +1,5 @@
 'use client';
-import { IMPACT, fmtNum, fmtTrees } from '@/lib/impact';
+import { IMPACT, PRICING, fmtNum, fmtTrees } from '@/lib/impact';
 
 export function ImpactStats({ i, dark }: { i: any; dark?: boolean }) {
   return (
@@ -23,7 +23,7 @@ export function Methodology() {
         <li><b>Trees</b>: one average pulpwood tree makes about {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper (Conservatree&apos;s estimate).</li>
         <li><b>Water</b>: about {IMPACT.litresWaterPerSheet} litres to make one A4 sheet.</li>
         <li><b>Carbon</b>: about {IMPACT.gramsCo2PerSheet} g CO2e per sheet over its life cycle. Couriers and printers would add more, so we leave them out.</li>
-        <li><b>Subscriptions</b>: 100% of subscription revenue goes to Treegens tree planting. The total shown is the sum of paid invoices.</li>
+        <li><b>Mangroves</b>: everything paid to Sign&Grow, the monthly plan and top-ups alike, goes to Treegens tree planting, and every dollar plants {PRICING.treesPerUsd} mangrove trees. The total shown is what was paid, less anything refunded.</li>
       </ul>
       <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>Running servers has a footprint too. It is far smaller than paper, but it is not zero, and we will not pretend it is.</p>
     </div>

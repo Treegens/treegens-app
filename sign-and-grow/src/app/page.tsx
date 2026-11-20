@@ -164,6 +164,8 @@ export default function Landing() {
             </div>
           </div>
 
+          <p className="muted small pub-code-note">Were you given a code? Some communities get {P.planName} free. Enter it when you <Link href="/signup">sign up</Link>, or later on the Plan page.</p>
+
           <div className="card pub-rules">
             <h3>The rules, all of them</h3>
             <ul>

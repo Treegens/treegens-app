@@ -187,7 +187,7 @@ table.t tr.click:hover td { background: #fbfaf6; }
 /* Marketing */
 .nav-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1120px; margin: 0 auto; padding: 18px 20px; }
 .logo { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; color: var(--green-deep); text-decoration: none; }
-.wrap:not(.row) { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+.wrap:not(.row) { max-width: 1120px; margin-left: auto; margin-right: auto; padding-left: 20px; padding-right: 20px; }
 .hero { padding: 56px 0 40px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
 .hero h1 { font-family: var(--serif); font-size: clamp(36px, 5.2vw, 60px); line-height: 1.04; letter-spacing: -0.02em; font-weight: 600; }
 .hero h1 em { font-style: italic; color: var(--green); }

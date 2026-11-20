@@ -72,7 +72,9 @@ route('GET', '/envelopes', (c) => {
   const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, u.name sender
     FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE ${where.join(' AND ')} ORDER BY e.updated_at DESC LIMIT ? OFFSET ?`, ...p, limit, Number(c.q.get('offset')) || 0);
   for (const e of rows) {
-    e.recipients = all('SELECT name, email, role, role_name, status, sent_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
+    e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
+    // True when the latest email to someone who has not opened it yet did not leave. Lets the list flag it.
+    e.email_failed = all("SELECT m.status FROM emails m WHERE m.envelope_id=? AND m.id IN (SELECT MAX(id) FROM emails WHERE envelope_id=? GROUP BY COALESCE(recipient_id, to_email))", e.id, e.id).some((m) => m.status === 'failed');
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
   }
   const folders = all("SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND folder IS NOT NULL AND folder != ''", c.account.id, kind).map((r) => r.folder);
@@ -110,14 +112,23 @@ route('POST', '/envelopes', async (c) => {
     if (b.documents || b.recipients || b.fields) saveDraft(loadEnvelope(eid), b, c.account.id);
   }
   if (idem) run('INSERT OR IGNORE INTO idempotency_keys (account_id, key, envelope_id, at) VALUES (?,?,?,?)', c.account.id, idem, eid, now());
-  if (b.send && kind === 'envelope') await sendEnvelope(eid, c.actor);
+  if (b.send && kind === 'envelope') {
+    try {
+      await sendEnvelope(eid, c.actor);
+    } catch (e) {
+      // "Create and send" either sends or leaves nothing behind. No stray drafts after a refusal.
+      run('DELETE FROM envelopes WHERE id=?', eid);
+      if (idem) run('DELETE FROM idempotency_keys WHERE account_id=? AND key=?', c.account.id, idem);
+      throw e;
+    }
+  }
   return { envelope: publicEnvelope(loadEnvelope(eid)) };
 });
 
 route('GET', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
   // Whether each email actually left, so "I never got it" can be answered without guessing.
-  const deliveries = all('SELECT to_email, subject, status, error, at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
+  const deliveries = all('SELECT to_email, recipient_id, subject, status, error, at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
   // How far each signer has got, so the sender can help someone who is stuck without being able to sign for them.
   const env = publicEnvelope(e);
   for (const r of env.recipients) {

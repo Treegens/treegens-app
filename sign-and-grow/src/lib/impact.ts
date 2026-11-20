@@ -51,9 +51,8 @@ export const PRICING = {
 export const mangrovesFor = (usd: number) => Math.floor(usd * PRICING.treesPerUsd);
 
 // Signing is always free for recipients. Everything paid goes to tree planting.
-// (envelopesPerMonth is left over from the first pricing model and is no longer enforced anywhere.)
 export const PLANS = {
-  seedling: { name: 'Seedling', price: 0, blurb: `Try it with ${PRICING.welcomeSignatures} free signatures. Signing your own documents is always free.`, envelopesPerMonth: 0 },
-  grove: { name: PRICING.planName, price: PRICING.monthlyUsd, blurb: `${PRICING.monthlySignatures} signatures every month. Top up any time at $${PRICING.topUpUsd} each.`, envelopesPerMonth: Infinity },
+  seedling: { name: 'Seedling', price: 0, blurb: `Try it with ${PRICING.welcomeSignatures} free signatures. Signing your own documents is always free.` },
+  grove: { name: PRICING.planName, price: PRICING.monthlyUsd, blurb: `${PRICING.monthlySignatures} signatures every month. Top up any time at $${PRICING.topUpUsd} each.` },
 } as const;
 export type PlanId = keyof typeof PLANS;

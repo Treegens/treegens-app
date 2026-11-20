@@ -16,6 +16,8 @@ export default function Templates() {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const [deleting, setDeleting] = useState<any>(null);
+  // Set once the envelope exists but could not be sent yet.
+  const [draftId, setDraftId] = useState('');
 
   async function start(t: any) {
     try {
@@ -23,24 +25,36 @@ export default function Templates() {
       const open = envelope.recipients.filter((r: any) => !r.email);
       setFill(Object.fromEntries(open.map((r: any) => [r.id, { name: '', email: '' }])));
       setProblem('');
+      setDraftId('');
       setUse({ ...envelope, open });
     } catch (e) {
       fail(e);
     }
   }
   async function create(send: boolean) {
-    if (send) {
+    if (send && !draftId) {
       const gap = use.open.find((r: any) => !fill[r.id]?.name.trim() || !looksLikeEmail((fill[r.id]?.email || '').trim()));
       if (gap) return setProblem(`Add a name and a full email address for ${gap.role_name || 'every recipient'} before sending. To finish it later, choose Review first.`);
     }
     setBusy(true);
     setProblem('');
+    let id = draftId;
     try {
-      const { envelope } = await api('/envelopes', { body: { template_id: use.id, recipients: fill, send } });
-      toast(send ? 'Sent.' : 'Draft created.');
-      router.push(send ? `/app/envelopes/${envelope.id}` : `/app/envelopes/${envelope.id}/edit`);
+      // Two steps on purpose. If sending is refused, the draft is still there, we know which one it is, and trying
+      // again sends that same draft instead of quietly making another.
+      if (!id) {
+        id = (await api('/envelopes', { body: { template_id: use.id, recipients: fill } })).envelope.id as string;
+        setDraftId(id);
+      }
+      if (!send) {
+        toast('Draft created.');
+        return router.push(`/app/envelopes/${id}/edit`);
+      }
+      await api(`/envelopes/${id}/send`, { method: 'POST' });
+      toast('Sent.');
+      router.push(`/app/envelopes/${id}`);
     } catch (e) {
-      setProblem(explain(e));
+      setProblem(id ? `${explain(e)} It is saved as a draft, so nothing you typed is lost.` : explain(e));
     } finally {
       setBusy(false);
     }
@@ -105,14 +119,14 @@ export default function Templates() {
             {use.open.map((r: any, i: number) => (
               <fieldset key={r.id} className="sn-rolefill">
                 <legend>{r.role_name || `Recipient ${i + 1}`}</legend>
-                <label className="f"><span>Full name</span><input value={fill[r.id]?.name || ''} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], name: e.target.value } }))} autoComplete="off" data-autofocus={i === 0 ? '' : undefined} /></label>
-                <label className="f"><span>Email</span><input type="email" value={fill[r.id]?.email || ''} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], email: e.target.value } }))} autoComplete="off" /></label>
+                <label className="f"><span>Full name</span><input value={fill[r.id]?.name || ''} readOnly={!!draftId} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], name: e.target.value } }))} autoComplete="off" data-autofocus={i === 0 ? '' : undefined} /></label>
+                <label className="f"><span>Email</span><input type="email" value={fill[r.id]?.email || ''} readOnly={!!draftId} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], email: e.target.value } }))} autoComplete="off" /></label>
               </fieldset>
             ))}
             {problem && <div className="notice err" role="alert">{problem}</div>}
             <div className="actions">
-              <button type="button" className="btn" disabled={busy} onClick={() => create(false)}>Review first</button>
-              <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Working…' : 'Send now'}</button>
+              <button type="button" className="btn" disabled={busy} onClick={() => create(false)}>{draftId ? 'Open the draft' : 'Review first'}</button>
+              <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Working…' : draftId ? 'Try sending again' : 'Send now'}</button>
             </div>
           </form>
         </Dialog>

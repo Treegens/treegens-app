@@ -5,6 +5,9 @@ import { sendMail } from './mail.ts';
 import { billingEnabled } from './envelopes.ts';
 import { grant, creditSummary, available, findFreeCode } from './credits.ts';
 import { PRICING, mangrovesFor } from '../lib/impact.ts';
+import { refundDays, dormantStopDays } from '../lib/policy.ts';
+
+export { refundDays, dormantStopDays };
 
 // How Sign&Grow charges:
 //   - $9 a month adds 9 signatures to the balance. Extra signatures are $1 each. Every dollar plants 10 mangroves.
@@ -17,7 +20,6 @@ import { PRICING, mangrovesFor } from '../lib/impact.ts';
 //   - A charge that arrives after cancellation is refunded by the software itself.
 //   - Stopping payment never deletes or locks anything, and signatures already paid for stay usable.
 
-export const refundDays = () => Number(process.env.REFUND_DAYS) || 30;
 const money = (cents: number, currency = 'usd') => new Intl.NumberFormat('en', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
 const day = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '');
 const iso = (unix?: number | null) => (unix ? new Date(unix * 1000).toISOString() : null);
@@ -79,9 +81,6 @@ export function refundOffer(account: any): { payment_id: string; cents: number; 
   };
 }
 
-// How long a paid account can go without sending anything before its renewal is stopped for it. 0 turns this off.
-export const dormantStopDays = () => (process.env.DORMANT_AUTO_STOP_DAYS === undefined ? 90 : Number(process.env.DORMANT_AUTO_STOP_DAYS) || 0);
-
 const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', adjust: 'Adjustment' };
 
 export function billingState(account: any, user?: any) {
@@ -108,8 +107,6 @@ export function billingState(account: any, user?: any) {
     payments: all('SELECT id, amount_cents, currency, at, receipt_url, refunded_at, refunded_cents, kind, credits FROM payments WHERE account_id=? ORDER BY at DESC, rowid DESC LIMIT 60', account.id)
       .map((p) => ({ ...p, amount: money(p.amount_cents, p.currency), refunded: p.refunded_cents ? money(p.refunded_cents, p.currency) : null })),
     ledger: all('SELECT delta, reason, at FROM credits WHERE account_id=? ORDER BY id DESC LIMIT 40', account.id).map((l) => ({ ...l, label: LEDGER_LABEL[l.reason] || l.reason })),
-    // Left over from the first pricing model. Always neutral now.
-    used: 0, limit: null, resets_at: null,
   };
 }
 
@@ -304,7 +301,8 @@ route('GET', '/public/billing/stop', (c) => {
   const id = readStopToken(c.q.get('token'));
   const a = id && get('SELECT * FROM accounts WHERE id=?', id);
   if (!a) throw bad('This link has expired. Use "Find my subscription" below and we will email you a new one.', 410);
-  return { account: a.name, plan: a.plan, price: PRICING.monthlyUsd, renews_at: a.cancel_at ? null : a.renews_at, ends_at: a.cancel_at, signatures_left: Math.max(0, available(a.id)) };
+  // free_with is set when the plan costs nothing through a code: there is nothing to stop.
+  return { account: a.name, plan: a.plan, price: PRICING.monthlyUsd, free_with: a.promo_code || null, renews_at: a.cancel_at || a.promo_code ? null : a.renews_at, ends_at: a.promo_code ? null : a.cancel_at, signatures_left: Math.max(0, available(a.id)) };
 }, 'public');
 
 route('POST', '/public/billing/stop', async (c) => {

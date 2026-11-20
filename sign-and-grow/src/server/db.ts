@@ -160,6 +160,7 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['powerforms', 'alerted_at', 'TEXT'],
   ['accounts', 'promo_code', 'TEXT'],
   ['accounts', 'promo_at', 'TEXT'],
+  ['emails', 'recipient_id', 'TEXT'],
 ];
 
 function migrate(d: any) {

@@ -29,7 +29,7 @@ What the test files cover:
 | File | Covers |
 | --- | --- |
 | `tests/flow.test.ts` | Signing order, access codes, the certificate, tamper checks, isolation between accounts. |
-| `tests/billing.test.ts` | Paying, against a simulated payment provider: renewal reminders, cancelling in the app, from an email link and by card, a charge after cancelling, refunds, a card dispute, an unused plan. |
+| `tests/billing.test.ts` | Paying, against a simulated payment provider: free signatures for a new account, the monthly plan, top-ups, roll-over, renewal reminders, cancelling in the app, from an email link and by card, a charge after cancelling, refunds of unused signatures, a card dispute, an unused plan, free codes. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
 | `tests/autoplace.test.ts` | Placing fields automatically from the text of a document. |
 
@@ -120,6 +120,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 - People pay for signatures. A new account gets a few free. The monthly plan adds signatures with every
   payment, and extra ones can be bought one at a time. Signatures never expire.
 - Month to month. Cancel in the app, from an email link, or with the card. Self-serve refunds.
+- Codes that make the monthly plan free for a community (`FREE_PLAN_CODES`), entered at sign-up or on the Plan page.
 - Every number (prices, how many signatures, trees per dollar) is in `src/lib/impact.ts`.
 
 **Developers**
@@ -168,6 +169,7 @@ Copy `.env.example` to `.env.local`. Everything is optional for local use.
 | `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, receives every help request with the sender as reply-to, and gets the alerts that need a person: a payment nobody could be matched to, a card dispute. Without it, requests are still stored and shown in the operator queue. | none |
 | `ABUSE_EMAIL` | Where reports of suspicious documents go. | `SUPPORT_EMAIL` |
 | `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, and pausing or unpausing an account. | nobody |
+| `FREE_PLAN_CODES` | Comma-separated codes that make the monthly plan free for whoever enters one. Set it to an empty value to have none. | `GROWalition` |
 | `REFUND_DAYS` | How long after a payment its unused signatures are refunded on request, with no approval. | `30` |
 | `NEW_ACCOUNT_DAILY_RECIPIENTS` | How many people a free account can send to per day during its first week. | `50` |
 | `ABUSE_SUSPEND_AFTER` | How many different recipients must report an account within 30 days before its sending is paused for review. | `3` |

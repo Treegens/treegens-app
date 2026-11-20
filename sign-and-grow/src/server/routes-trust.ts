@@ -6,6 +6,7 @@ import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, HttpError } 
 import { checkPassword } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { auditTrail, emailMyLinks, resendFromRetired } from './envelopes.ts';
+import { CLOSE_GRACE_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
@@ -82,9 +83,10 @@ const csv = (cells: any[]) => cells.map((v) => `"${String(v ?? '').replace(/"/g,
 // Free on every plan, and it keeps working after a paid plan ends.
 route('GET', '/export', (c) => {
   const only = (c.q.get('ids') || '').split(',').filter(Boolean);
+  const bulk = c.q.get('bulk');
   const scope = c.admin ? '' : ' AND sender_id=?';
   const rows = all(`SELECT * FROM envelopes WHERE account_id=? AND kind='envelope' AND status!='draft'${scope} ORDER BY sent_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
-    .filter((e) => !only.length || only.includes(e.id));
+    .filter((e) => (!only.length || only.includes(e.id)) && (!bulk || e.bulk_id === bulk));
   if (!rows.length) throw bad('There is nothing to export yet.');
 
   function* entries(): Generator<ZipEntry> {
@@ -133,7 +135,7 @@ route('GET', '/me/delete', (c) => {
   return { owned, blocked: owned.filter((a) => a.members > 1).map((a) => a.name) };
 });
 
-export const CLOSE_GRACE_DAYS = 30;
+export { CLOSE_GRACE_DAYS };
 
 // Removes a user and every account they own, for good.
 export function purgeUser(userId: string) {

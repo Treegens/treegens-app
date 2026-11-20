@@ -147,6 +147,11 @@ export default function Help() {
             <p>We email you when you are down to two and when you reach none. With none left, sending pauses until you choose to add more. It never turns into a charge. Signing, downloads and export keep working, and envelopes already out can still be signed.</p>
           </QA>
 
+          <QA id="code" q="I was given a code">
+            <p>Some communities get {P.planName} free. Enter your code when you <Link href="/signup">sign up</Link>. If you already have an account, enter it under Settings, then Plan, where it says <b>Have a code?</b></p>
+            <p>With a code, the {sigs(P.monthlySignatures)} of the monthly plan arrive every month and nothing is charged. There is no card on file for it and nothing to cancel. If you were paying before, the renewal is stopped for you.</p>
+          </QA>
+
           <QA id="after-cancel" q="What happens to my documents when I cancel?">
             <p>Nothing. Cancelling or a failed payment deletes nothing and locks nothing.</p>
             <p>Every document, audit trail and receipt stays in the account. Documents that are already out can still be signed, and the signatures you have left stay yours.</p>

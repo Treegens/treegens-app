@@ -140,8 +140,7 @@ route('GET', '/me', (c) => {
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
     ...trustInfo(c),
     accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', c.user.id),
-    // used/limit are kept at their neutral values for older screens; signatures is the real balance.
-    billing: { enabled: billingEnabled(), used: 0, limit: null, signatures: billingEnabled() ? creditSummary(a.id) : null },
+    billing: { enabled: billingEnabled(), signatures: billingEnabled() ? creditSummary(a.id) : null },
     outbox: devOutbox(),
   };
 }, 'public');

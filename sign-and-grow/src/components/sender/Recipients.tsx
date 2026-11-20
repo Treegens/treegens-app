@@ -7,10 +7,13 @@ import { dayTime, howLong, neverOpened } from './lib';
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent' };
 const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view' };
 
-export type Delivery = { to_email: string; subject: string; status: 'sent' | 'outbox' | 'failed' | 'queued' | string; error?: string | null; at: string };
+export type Delivery = { to_email: string; recipient_id?: string | null; subject: string; status: 'sent' | 'outbox' | 'failed' | 'queued' | string; error?: string | null; at: string };
 
 /** The most recent email we tried to send to this address about this envelope. The list comes newest first. */
-export const lastEmailTo = (deliveries: Delivery[], email: string) => deliveries.find((d) => d.to_email.toLowerCase() === (email || '').toLowerCase()) || null;
+// Prefer the email recorded for this exact person; two people can share one address.
+export const lastEmailTo = (deliveries: Delivery[], email: string, recipientId?: string) =>
+  (recipientId && deliveries.find((d) => d.recipient_id === recipientId)) || deliveries.find((d) => !d.recipient_id && d.to_email.toLowerCase() === (email || '').toLowerCase())
+  || (!recipientId ? deliveries.find((d) => d.to_email.toLowerCase() === (email || '').toLowerCase()) : null) || null;
 
 // The badge says what is true right now. "Sent" is only shown when an email really left for them.
 function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: string; label?: string } {
@@ -118,7 +121,7 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
       {e.recipients.map((r: any, i: number) => {
         const turn = out && (r.status === 'sent' || r.status === 'viewed');
         const isMe = r.role !== 'inperson' && r.email.toLowerCase() === myEmail.toLowerCase();
-        const mail = r.status === 'pending' ? null : lastEmailTo(deliveries, r.email);
+        const mail = r.status === 'pending' ? null : lastEmailTo(deliveries, r.email, r.id);
         const stale = turn && neverOpened(r);
         // Once they have opened it they clearly have the link, however the email fared.
         const undelivered = turn && r.status === 'sent' && r.role !== 'inperson' && !!mail && (mail.status === 'outbox' || mail.status === 'failed');

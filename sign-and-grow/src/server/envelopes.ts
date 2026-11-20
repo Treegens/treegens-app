@@ -6,6 +6,7 @@ import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, grant } from './credits.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
+import { abuseSuspendAfter, newAccountDailyRecipients } from '../lib/policy.ts';
 
 export const ROLES = ['signer', 'approver', 'cc', 'viewer', 'inperson'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note'];
@@ -360,7 +361,7 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   // Anti-abuse limits apply to accounts that have not paid: the free tier and plans that are free through a code.
   const unpaid = account.plan === 'seedling' || !!account.promo_code;
   if (unpaid && Date.now() - Date.parse(account.created_at) < 7 * 864e5) {
-    const cap = Number(process.env.NEW_ACCOUNT_DAILY_RECIPIENTS) || 50;
+    const cap = newAccountDailyRecipients();
     const today = get("SELECT COUNT(*) n FROM recipients r JOIN envelopes x ON x.id=r.envelope_id WHERE x.account_id=? AND x.sent_at > ?", e.account_id, new Date(Date.now() - 864e5).toISOString()).n;
     if (today + e.recipients.length > cap) throw bad(`New accounts can send to ${cap} people a day during their first week. Need more right now? Contact support.`, 429);
   }
@@ -430,6 +431,7 @@ async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Promise<bo
     ],
     cta: { label: r.role === 'cc' ? 'View document' : r.role === 'viewer' ? 'View document' : r.role === 'approver' ? 'Review and approve' : 'Review and sign', url: signUrl(r) },
     envelopeId: e.id,
+    recipientId: r.id,
     brand: brandOf(e.account_id),
     replyTo: sender.email,
     fromName: sender.name,
@@ -767,7 +769,7 @@ export async function reportAbuse(e: any, r: any, body: any, actor: Actor) {
   audit(e.id, actor, 'Reported as suspicious', `${r.name}: ${reason}`);
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
   const n = get("SELECT COUNT(DISTINCT reporter) n FROM abuse_reports WHERE account_id=? AND status='open' AND at > ?", e.account_id, new Date(Date.now() - 30 * 864e5).toISOString()).n;
-  const limit = Number(process.env.ABUSE_SUSPEND_AFTER) || 3;
+  const limit = abuseSuspendAfter();
   let paused = false;
   if (n >= limit && !account.suspended_at) {
     run('UPDATE accounts SET suspended_at=?, suspended_reason=? WHERE id=?', now(), `${n} different recipients reported documents from this account`, account.id);

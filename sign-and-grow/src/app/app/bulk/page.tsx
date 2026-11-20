@@ -8,7 +8,7 @@ import { useAllowance, voidCostLine } from '@/components/sender/allowance';
 import { BatchView } from '@/components/sender/BatchView';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { headerFor, readRecipients, MAX_ROWS, type BulkRow, type Role } from '@/components/sender/csv';
-import { dayTime, explain, longDateUtc, plural } from '@/components/sender/lib';
+import { dayTime, explain, plural } from '@/components/sender/lib';
 
 export default function BulkPage() {
   return <Suspense fallback={<div className="muted" role="status">Loading…</div>}><Bulk /></Suspense>;
@@ -53,8 +53,8 @@ function BulkSend({ preset }: { preset: string }) {
   const tooMany = reading.rows.length > MAX_ROWS;
   // What this list would use, against what is left. Checked here so the answer comes before the send, not after.
   const signersPerRow = (loaded?.recipients || []).filter((r: any) => (r.role === 'signer' || r.role === 'inperson') && (r.email || '').toLowerCase() !== me.user.email.toLowerCase()).length;
-  const need = allowance?.kind === 'signatures' ? signersPerRow * ready.length : ready.length;
-  const left = allowance?.kind === 'signatures' ? Math.max(0, allowance.available) : allowance?.kind === 'envelopes' ? Math.max(0, allowance.limit - allowance.used) : null;
+  const need = signersPerRow * ready.length;
+  const left = allowance ? Math.max(0, allowance.available) : null;
   const overPlan = left != null && ready.length > 0 && need > left;
   const canSend = ready.length > 0 && !tooMany && !reading.missing.length;
 
@@ -169,14 +169,6 @@ function BulkSend({ preset }: { preset: string }) {
                 )}
                 {reading.rows.length > 100 && <p className="muted small">Showing the first 100 of {reading.rows.length} rows. Rows that need a fix are all listed above.</p>}
 
-                {overPlan && allowance?.kind === 'envelopes' && (
-                  <div className="notice warn" role="note">
-                    {left === 0
-                      ? <>You have used this month&rsquo;s {allowance.limit} envelopes, so these would be saved as drafts and not sent.</>
-                      : <>Your plan has <b>{plural(left!, 'envelope')}</b> left this month and this list has {ready.length}. The first {left} would be sent and the rest saved as drafts.</>}
-                    {' '}Nothing extra is ever charged. The count starts again on {longDateUtc(allowance.resets_at)}, or you can <Link href="/app/settings?tab=billing">see the plans</Link>.
-                  </div>
-                )}
                 {overPlan && allowance?.kind === 'signatures' && (
                   <div className="notice warn" role="note">
                     This list needs <b>{plural(need, 'signature')}</b>{signersPerRow > 1 ? ` (${signersPerRow} signers on each of ${plural(ready.length, 'row')})` : ''} and you have <b>{left}</b> left to send with.

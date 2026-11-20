@@ -10,6 +10,7 @@ export type Mail = {
   cta?: { label: string; url: string };
   links?: { label: string; url: string; note?: string }[]; // a list of documents, each with its own link
   envelopeId?: string;
+  recipientId?: string; // which recipient this was for, so two people sharing an address are not mixed up
   brand?: { name?: string; color?: string | null; logo?: string | null };
   footnote?: string;
   attachments?: { filename: string; content: Buffer }[];
@@ -70,8 +71,8 @@ export function renderMail(m: Mail): string {
 export async function sendMail(m: Mail): Promise<void> {
   const html = renderMail(m);
   const r = run(
-    'INSERT INTO emails (to_email, subject, html, link, envelope_id, status, at) VALUES (?,?,?,?,?,?,?)',
-    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, 'queued', now(),
+    'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at) VALUES (?,?,?,?,?,?,?,?)',
+    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(),
   );
   try {
     const t = await transport();

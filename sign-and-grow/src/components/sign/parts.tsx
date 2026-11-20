@@ -119,7 +119,7 @@ export function Impact({ impact }: { impact: any }) {
         <b>Signed without paper</b>
         <p>
           About <b>{fmtNum(impact.sheets)} sheets of paper</b>, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e were not used.
-          That is {fmtTrees(impact.trees)} of a tree. Sign&Grow gives all of its subscription revenue to planting more. <a href="/impact">How we count</a>
+          That is {fmtTrees(impact.trees)} of a tree. Everything paid to Sign&Grow goes to planting more. <a href="/impact">How we count</a>
         </p>
       </div>
     </div>

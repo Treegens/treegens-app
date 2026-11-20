@@ -63,7 +63,7 @@ export default function EnvelopeDetail() {
   const unfinished = acting.filter((r: any) => r.status !== 'completed');
   const waiting = out ? waitingOn(e.recipients, me.user.email) : null;
   const unopened = out ? e.recipients.filter((r: any) => neverOpened(r)) : [];
-  const bounced = out ? e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && lastEmailTo(deliveries, r.email)?.status === 'failed') : [];
+  const bounced = out ? e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && lastEmailTo(deliveries, r.email, r.id)?.status === 'failed') : [];
   // Reminders never go to people who turned them off, so do not offer a button that would do nothing.
   const canRemind = out && e.recipients.some((r: any) => hasTurn(r) && !r.muted);
   const allMuted = out && !canRemind && e.recipients.some((r: any) => hasTurn(r) && r.muted);
