@@ -40,7 +40,7 @@ const flip = (name: string, at = 300) => {
   fs.writeFileSync(f, b);
 };
 const tick = () => new Promise((r) => setImmediate(r));
-const alerts = () => db.all("SELECT message FROM support_requests WHERE name='Sign&Grow (automatic alert)'").map((r) => r.message as string);
+const alerts = () => db.all("SELECT message FROM support_requests WHERE name='GrowSigning (automatic alert)'").map((r) => r.message as string);
 let ipn = 10;
 const person = (name: string, email: string) => signUp(name, email, `198.19.${ipn}.${ipn++}`);
 // Everything on the disk that holds the database: the file itself, its write-ahead log and its index of that log.

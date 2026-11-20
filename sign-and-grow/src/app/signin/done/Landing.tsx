@@ -35,7 +35,7 @@ export function Landing() {
   return (
     <main className="muted center" style={{ padding: 80 }}>
       <p role="status">Signing you in…</p>
-      <p className="small"><a href="/app">Continue to Sign&Grow</a> if this page stays.</p>
+      <p className="small"><a href="/app">Continue to GrowSigning</a> if this page stays.</p>
     </main>
   );
 }

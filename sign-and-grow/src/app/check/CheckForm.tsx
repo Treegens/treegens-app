@@ -64,14 +64,14 @@ function ReportEmail({ code, startOpen, sender, dispute = true }: { code: string
       setState('sent');
     } catch (err: any) {
       setState('');
-      setError(!err?.status ? 'We could not reach Sign&Grow, so your report was not sent. Check your connection and try again.'
+      setError(!err?.status ? 'We could not reach GrowSigning, so your report was not sent. Check your connection and try again.'
         : err.status === 429 ? 'That is a lot of reports in a short time, and this one was not sent. Wait an hour and try again, or use the contact form on the help page.'
         : err.message);
     }
   }
 
   if (state === 'sent' && reason === 'not-me')
-    return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Your dispute is on record.</b> The document is now marked as disputed, for its sender and for anyone who checks it on our Verify page. {sender || 'The sender'} has been told, with what you wrote, and so have the people who run Sign&amp;Grow. Nothing was deleted. We do not decide who is right. To hear from a person, write to us on the <Link href="/help?topic=not-me#contact">help page</Link> with the topic &ldquo;I am named on a document I did not sign&rdquo;.</div>;
+    return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Your dispute is on record.</b> The document is now marked as disputed, for its sender and for anyone who checks it on our Verify page. {sender || 'The sender'} has been told, with what you wrote, and so have the people who run GrowSigning. Nothing was deleted. We do not decide who is right. To hear from a person, write to us on the <Link href="/help?topic=not-me#contact">help page</Link> with the topic &ldquo;I am named on a document I did not sign&rdquo;.</div>;
   if (state === 'sent')
     return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Thank you. Your report is in.</b> You do not need to do anything else. If the email looks like a scam, do not sign it, do not reply to it and do not call any number it gives.</div>;
   if (!open)
@@ -84,7 +84,7 @@ function ReportEmail({ code, startOpen, sender, dispute = true }: { code: string
     <form onSubmit={send} noValidate style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
       <h3 style={{ fontSize: 17, margin: '0 0 6px' }}>{reason === 'not-me' ? 'Dispute this document' : 'Report this email'}</h3>
       {/* A dispute is not a report: it goes to the sender as well, and it never pauses anyone's account. */}
-      <p className="muted small" style={{ margin: '0 0 12px' }}>{reason === 'not-me' ? 'You do not have to open the document. A dispute goes to the sender and to the people who run Sign&Grow, and it does not pause anyone\'s account. Read below what each of them gets.' : 'You do not have to open the document. The report goes to the people who run Sign&Grow, and when several people report the same sender, sending from that account is paused.'}</p>
+      <p className="muted small" style={{ margin: '0 0 12px' }}>{reason === 'not-me' ? 'You do not have to open the document. A dispute goes to the sender and to the people who run GrowSigning, and it does not pause anyone\'s account. Read below what each of them gets.' : 'You do not have to open the document. The report goes to the people who run GrowSigning, and when several people report the same sender, sending from that account is paused.'}</p>
       <label className="f"><span>What is wrong?</span>
         <select value={reason} onChange={(e) => (setReason(e.target.value), setError(''))} aria-invalid={!!error && !reason}>
           <option value="">Choose one</option>
@@ -147,7 +147,7 @@ export function CheckForm() {
       const r = await api<Answer>('/public/check', { body: { code: wanted } });
       setAnswer({ ...r, code: pretty(wanted) });
     } catch (err: any) {
-      setError(!err?.status ? 'We could not reach Sign&Grow. Check your connection and try again.'
+      setError(!err?.status ? 'We could not reach GrowSigning. Check your connection and try again.'
         : err.status === 429 ? 'That is a lot of codes in a short time. Wait an hour and try again, or use the help page to reach a person.'
         : err.message);
     } finally {
@@ -184,10 +184,10 @@ export function CheckForm() {
         <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
           <span className="badge completed">Genuine</span>
           <h2>This email was real, but its link has been replaced</h2>
-          <p>Code {answer.code} belongs to an email that Sign&Grow really sent{answer.for_name ? ` to ${answer.for_name}` : ''}{answer.subject ? `, about "${answer.subject}"` : ''}. It is not a fake.</p>
+          <p>Code {answer.code} belongs to an email that GrowSigning really sent{answer.for_name ? ` to ${answer.for_name}` : ''}{answer.subject ? `, about "${answer.subject}"` : ''}. It is not a fake.</p>
           <p>{(REPLACED_WHY[answer.why] || REPLACED_WHY.address)(answer.sender?.name || 'the sender')} That is why the link in that email no longer opens the document{answer.replaced_at ? `. It stopped working on ${fmtDate(answer.replaced_at, true)}` : ''}.</p>
           <p><b>What to do.</b> If you are still meant to sign, look for a newer email about this document and use that one. If there is none, {answer.sender?.email ? <>ask {answer.sender.name} at {answer.sender.email}</> : 'ask the person who sent it'} whether anything is still needed from you. Opening the old link is safe: it only says that it was replaced.</p>
-          {answer.paused && <div className="notice warn" style={{ marginBottom: 14 }}><b>Take care with this one.</b> Sending from this account is paused until a person at Sign&Grow has reviewed it. Check with the sender another way before you sign anything from them.</div>}
+          {answer.paused && <div className="notice warn" style={{ marginBottom: 14 }}><b>Take care with this one.</b> Sending from this account is paused until a person at GrowSigning has reviewed it. Check with the sender another way before you sign anything from them.</div>}
           <div className="pub-actions-row">
             <button type="button" className="btn primary" onClick={again}>Check another code</button>
             <Link href="/help?topic=signing#contact" className="btn">Ask us about this email</Link>
@@ -200,7 +200,7 @@ export function CheckForm() {
         <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
           <span className="badge completed">Genuine</span>
           <h2>This email was real, but the document has been deleted</h2>
-          <p>Code {answer.code} belongs to an email that Sign&Grow really sent. It is not a fake.</p>
+          <p>Code {answer.code} belongs to an email that GrowSigning really sent. It is not a fake.</p>
           <p>The document it was about was deleted on {fmtDate(answer.deleted_at, true)}, by its sender or together with the sender&apos;s account. When a document is deleted we delete what we knew about it too, so we can no longer tell you who sent it or what it was called. That is why the link in the email no longer opens anything.</p>
           <p><b>What to do.</b> There is nothing left to sign. If you were expecting this document, ask the person who sent it whether they will send it again. If you had already signed it, the copy that was emailed to you when it was completed is yours to keep.</p>
           {answer.can_report === false
@@ -218,7 +218,7 @@ export function CheckForm() {
         <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
           <span className="badge completed">Genuine</span>
           <h2>This email is real</h2>
-          <p>Code {answer.code} belongs to an email that Sign&Grow sent. Compare these details with the email you received.</p>
+          <p>Code {answer.code} belongs to an email that GrowSigning sent. Compare these details with the email you received.</p>
           <dl className="pub-facts">
             <dt>Sent by</dt>
             <dd>{answer.sender?.name || 'The sender'}{answer.sender?.email && <small>{answer.sender.email}{answer.account ? `, ${answer.account}` : ''}</small>}</dd>
@@ -230,7 +230,7 @@ export function CheckForm() {
             <dt>Right now</dt>
             <dd>{STATE[answer.status] || answer.status}</dd>
           </dl>
-          {answer.paused && <div className="notice warn" style={{ marginBottom: 14 }}><b>Take care with this one.</b> The email did come from Sign&Grow, but sending from this account is paused until a person at Sign&Grow has reviewed it. Check with the sender another way before you sign.</div>}
+          {answer.paused && <div className="notice warn" style={{ marginBottom: 14 }}><b>Take care with this one.</b> The email did come from GrowSigning, but sending from this account is paused until a person at GrowSigning has reviewed it. Check with the sender another way before you sign.</div>}
           <div className="pub-actions-row">
             <a href={answer.url} className="btn primary lg">Open the document</a>
             <button type="button" className="btn" onClick={again}>Check another code</button>

@@ -10,7 +10,7 @@ import { ClickwrapTerms } from '@/components/ClickwrapTerms';
 
 const tell = (msg: Record<string, any>) => {
   // Only to a page around this frame, and never anything secret: the receipt stays in this frame.
-  if (window.parent !== window) window.parent.postMessage({ source: 'signgrow-clickwrap', ...msg }, '*');
+  if (window.parent !== window) window.parent.postMessage({ source: 'growsigning-clickwrap', ...msg }, '*');
 };
 // The receipt is given once, in the answer to this browser's press, and the server never hands it out again. It is
 // kept in this browser so a reload still offers the copy. Storage can be missing or blocked (a private window, a frame
@@ -259,7 +259,7 @@ export default function Agree() {
         </div>
       )}
       <ReportPage slug={slug} open={report} setOpen={setReport} />
-      {!embed && <p className="cw-foot">Powered by Sign&Grow, where every dollar plants mangrove trees. <a href="/help">Get help</a></p>}
+      {!embed && <p className="cw-foot">Powered by GrowSigning, where every dollar plants mangrove trees. <a href="/help">Get help</a></p>}
     </main>
   );
 }

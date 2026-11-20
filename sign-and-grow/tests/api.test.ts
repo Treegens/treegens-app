@@ -163,7 +163,7 @@ test('a database from before this change keeps its live keys and drops the ones 
     console.log(JSON.stringify({ keys, left: get('SELECT COUNT(*) n FROM idempotency_keys').n, tables: all("SELECT name FROM sqlite_master WHERE name LIKE 'idempotency_keys%' ORDER BY name").map((t) => t.name) }));
   `;
   const out = spawnSync(process.execPath, ['--experimental-strip-types', '--no-warnings', '--input-type=module', '-e', script],
-    { cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-old-')) }, encoding: 'utf8' });
+    { cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'growsigning-old-')) }, encoding: 'utf8' });
   assert.equal(out.status, 0, out.stderr);
   const seen = JSON.parse(out.stdout.trim().split('\n').at(-1)!);
   assert.deepEqual(seen.keys, [{ account_id: 'acc_1', user_id: 'usr_1', key: 'live', envelope_id: 'env_live' }], 'the live key now belongs to the envelope\'s sender');
@@ -636,7 +636,7 @@ test('a signed PDF made from a fillable form has no broken annotation entries an
 
     // The same file read by another PDF library. A broken entry shows up there as "Syntax Error: Invalid XRef entry".
     if (!havePoppler) continue;
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-pdf-')), 'signed.pdf');
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'growsigning-pdf-')), 'signed.pdf');
     fs.writeFileSync(file, pdf);
     const text = spawnSync('pdftotext', [file, '-'], { encoding: 'utf8' });
     assert.equal(text.status, 0, text.stderr);
@@ -663,7 +663,7 @@ test('a fillable form that the signer attaches is made flat in the signed PDF, l
   assert.equal(found.filter((a) => a instanceof PDFDict && a.lookup(N('Subtype')) === N('Widget')).length, 0);
 
   if (!havePoppler) return;
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-pdf-')), 'signed.pdf');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'growsigning-pdf-')), 'signed.pdf');
   fs.writeFileSync(file, pdf);
   const text = spawnSync('pdftotext', ['-f', '2', '-l', '2', file, '-'], { encoding: 'utf8' });
   assert.equal(text.status, 0, text.stderr);
@@ -696,7 +696,7 @@ test('a page whose annotation list cannot be read does not stop the signing, and
   assert.deepEqual(await annotations(asDocument), []);
   assert.deepEqual(await annotations(asAttachment), []);
   if (!havePoppler) return;
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-pdf-')), 'signed.pdf');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'growsigning-pdf-')), 'signed.pdf');
   fs.writeFileSync(file, asAttachment);
   const text = spawnSync('pdftotext', ['-f', '2', '-l', '2', file, '-'], { encoding: 'utf8' });
   assert.equal(text.stderr, '', 'pdftotext reads it without a complaint');

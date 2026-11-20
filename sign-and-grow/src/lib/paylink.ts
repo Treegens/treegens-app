@@ -1,5 +1,5 @@
 // A link to the sender's own payment page, shown to a signer after they press Finish ("Pay the deposit"). For a
-// deposit, a retainer or a fee that is due when a document is signed, without a second tool and without Sign&Grow
+// deposit, a retainer or a fee that is due when a document is signed, without a second tool and without GrowSigning
 // taking any part in the money. The server keeps it in src/server/routes-paylink.ts. Plain constants and functions
 // with no environment in them, so the editor, the envelope page, the signing page and the server all quote them.
 //
@@ -68,7 +68,7 @@ export function checkPayUrl(raw: any, ownHost = ''): { href: string; host: strin
   if (host.length > 253 || !host.split('.').every((l) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(l))) return no(`"${host}" is not a name a site can have. Copy the address again from your payment provider.`);
   if (!/^([a-z]{2,63}|xn--[a-z0-9-]{1,59})$/.test(host.split('.').pop() || '')) return no(`"${host}" does not end in a real domain ending, such as .com or .org.`);
   const own = String(ownHost || '').toLowerCase();
-  if (own && (host === own || host.endsWith(`.${own}`))) return no('That address leads to Sign&Grow itself. Use the address of your own payment page.');
+  if (own && (host === own || host.endsWith(`.${own}`))) return no('That address leads to GrowSigning itself. Use the address of your own payment page.');
   // The button names the host it opens. A shortener or a forwarding page would make that name a lie.
   const fwd = under(host, PAY_SHORTENERS) || (FORWARDS.some(([h, p]) => h.test(host) && p.test(u.pathname)) ? `${host}${u.pathname}` : '');
   if (fwd) return no(`"${fwd}" is a link shortener or a forwarding page: it shows one name and sends people on to another, so a signer could not see where they would pay. Use the full address of the payment page itself, as your payment provider gives it.`);
@@ -89,15 +89,15 @@ export const payForSigner = (sender: string): string =>
   `${sender} asks you to pay here, on their own payment page. You have already finished: your signature does not depend on this payment, and it stays signed whether you pay now, later or not at all.`;
 /** What a signer reads with the address. A page can send people on to another page, and that cannot be checked from here. */
 export const payWhere = (sender: string): string =>
-  `The button opens exactly this address. Sign&Grow does not check where that site sends you after that: before you pay, check that the page asking for money belongs to ${sender}.`;
+  `The button opens exactly this address. GrowSigning does not check where that site sends you after that: before you pay, check that the page asking for money belongs to ${sender}.`;
 /** What a signer reads when where the payment page leads could not be checked just now (a slow or failing lookup). */
 export const payLater = (sender: string): string =>
   `${sender} also asks for a payment after signing, on their own payment page. We could not check where that page leads just now, so it is not shown yet. Open this page again in a few minutes. You have already finished, and your signature does not depend on it.`;
 /** What a signer reads below the button. */
 export const payNotUs = (sender: string): string =>
-  `Sign&Grow takes no part in this payment. We do not see what you pay, cannot confirm that it was paid and cannot refund it. Questions about it go to ${sender}. If you did not expect to pay ${sender} anything, do not pay: ask them first, or report this request.`;
+  `GrowSigning takes no part in this payment. We do not see what you pay, cannot confirm that it was paid and cannot refund it. Questions about it go to ${sender}. If you did not expect to pay ${sender} anything, do not pay: ask them first, or report this request.`;
 /** What a sender reads where they set it. */
-export const PAY_FOR_SENDER = 'For a deposit, a retainer or a fee that is due when the document is signed. After they press Finish, each person who signs sees a button to this address, with your name and the full address on it. Nobody on your own team is asked to pay. The address is never put in our emails, certificates or exports. The button opens exactly this address, and Sign&Grow does not check where that page sends people next, so give the address of the payment page itself, not a short link. The link is yours: if you leave the team, it is taken off. Sign&Grow takes no part in the payment and cannot tell you whether anyone paid: your payment provider can.';
+export const PAY_FOR_SENDER = 'For a deposit, a retainer or a fee that is due when the document is signed. After they press Finish, each person who signs sees a button to this address, with your name and the full address on it. Nobody on your own team is asked to pay. The address is never put in our emails, certificates or exports. The button opens exactly this address, and GrowSigning does not check where that page sends people next, so give the address of the payment page itself, not a short link. The link is yours: if you leave the team, it is taken off. GrowSigning takes no part in the payment and cannot tell you whether anyone paid: your payment provider can.';
 /** Why an account is not offered it yet. */
 export const payNotYet = (trustDays: number): string =>
-  `A link to your own payment page can be shown to signers once your account has a payment for the plan or a top-up that is at least ${trustDays} days old and was not refunded or disputed, or once a person on the Sign&Grow team has cleared it. That is because a Pay button from an account nobody knows yet is what scammers want.`;
+  `A link to your own payment page can be shown to signers once your account has a payment for the plan or a top-up that is at least ${trustDays} days old and was not refunded or disputed, or once a person on the GrowSigning team has cleared it. That is because a Pay button from an account nobody knows yet is what scammers want.`;

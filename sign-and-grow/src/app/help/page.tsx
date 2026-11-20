@@ -83,7 +83,7 @@ export default function Help() {
             <p className="muted small">Did the sender send you the link themselves, by WhatsApp, text message or chat, and not by email from us? Then we have no address for you and this cannot find it. Ask the sender: the envelope page shows your link to them, also after everyone has signed.</p>
           </QA>
 
-          <QA id="real" q="Is this email really from Sign&Grow?">
+          <QA id="real" q="Is this email really from GrowSigning?">
             <p>Every signing request, reminder and completion email has a 12 character security code near the bottom.</p>
             <p>Do not click anything in the email. Type our address into your browser yourself, open <b>Check an email</b> and enter the code. We tell you who sent it and open the document for you.</p>
             <p><Link href="/check" className="btn sm">Check an email</Link></p>
@@ -112,7 +112,7 @@ export default function Help() {
           <QA id="copy" q="How do I get a copy later?">
             <p>When everyone has finished, each person gets a completion email. It links to the signed document, and the PDF is attached when it is small enough to send.</p>
             <p>Lost that email? Use <a href="#find-documents">Find my documents</a>. It sends the link to the same address again, also months later.</p>
-            <p>The link works for as long as the sender keeps their Sign&Grow account. A sender who deletes a completed document only removes it from their own lists: your link and your copy stay. To be safe, download the PDF and keep it. Anyone can confirm it is unchanged at <Link href="/verify">Verify a document</Link>.</p>
+            <p>The link works for as long as the sender keeps their GrowSigning account. A sender who deletes a completed document only removes it from their own lists: your link and your copy stay. To be safe, download the PDF and keep it. Anyone can confirm it is unchanged at <Link href="/verify">Verify a document</Link>.</p>
           </QA>
 
           <QA id="while-signing" q="What else can I do on the signing page?">
@@ -140,7 +140,7 @@ export default function Help() {
               {textsOn && <li><b>The number is not yours?</b> Press <b>This is not my number</b>. We stop texting it at once, codes and links alike, and tell the sender. That holds for every document from the same sender, until they have checked the number with you.</li>}
               <li>Only the sender can change where the code goes, or take the check off. We cannot do that for you, because we cannot know who is asking.</li>
             </ul>
-            <p className="muted small">Nobody at Sign&Grow will ever ask you for this code, and neither should the sender. If a code arrives that you did not ask for, someone else has opened your link: do not pass the code on.</p>
+            <p className="muted small">Nobody at GrowSigning will ever ask you for this code, and neither should the sender. If a code arrives that you did not ask for, someone else has opened your link: do not pass the code on.</p>
           </QA>
           <ConsentWords />
         </section>
@@ -284,14 +284,14 @@ export default function Help() {
             <p>What would have to be true first:</p>
             <ul className="pub-list">{NO_BAA_FIRST.map((x) => <li key={x}>{x}</li>)}</ul>
             <p>{NO_BAA_AFTER}</p>
-            <p className="muted small">Nobody here is a lawyer and this is not legal advice. It is a statement of what Sign&Grow does not have. <Link href="/security#not">The other limits are on Security and trust</Link>.</p>
+            <p className="muted small">Nobody here is a lawyer and this is not legal advice. It is a statement of what GrowSigning does not have. <Link href="/security#not">The other limits are on Security and trust</Link>.</p>
           </QA>
 
           <QA id="payment-link" q="Can someone pay a deposit when they sign?">
-            <p>Sign&Grow does not take payments. What it can do is show a link to your own payment page, such as one from your card provider, right after a person presses Finish. {PAY_FOR_SENDER}</p>
+            <p>GrowSigning does not take payments. What it can do is show a link to your own payment page, such as one from your card provider, right after a person presses Finish. {PAY_FOR_SENDER}</p>
             <p>{payNotYet(PAID_TRUST_DAYS)} Once it is offered, it is on the last step of the editor, next to the Send button, and a template&apos;s link goes with every envelope made from it.</p>
             <p>Addresses that hide where they lead are refused: a link shortener such as bit.ly, a forwarding page, and any name that leads into a private network, which is checked again each time the link would be shown. The audit trail and the certificate name the address by a fingerprint (the start of its SHA-256), so it never travels in an email, a certificate or an export. The envelope page shows the address, who was shown which address and who pressed it. If the person who set a link leaves your team, the link is taken off, because it leads to their own page.</p>
-            <p>If you signed something and were shown a Pay button: your signature is complete whether you pay or not. The page names the person asking and the full address the button opens. Sign&Grow does not check where that site sends you next, so look at the page before you pay. Sign&Grow cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
+            <p>If you signed something and were shown a Pay button: your signature is complete whether you pay or not. The page names the person asking and the full address the button opens. GrowSigning does not check where that site sends you next, so look at the page before you pay. GrowSigning cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
           </QA>
 
           <QA id="signing-groups" q="Can I send to a team, where anyone in it can sign?">

@@ -18,13 +18,13 @@ export default function Impact() {
           <h2 className="serif" style={{ fontSize: 22 }}>Every dollar plants {PRICING.treesPerUsd} mangrove trees</h2>
           <p style={{ margin: '6px 0 0', color: '#cfe2d3' }}>
             {d.account.donatedUsd > 0 ? <>{me.account.name} has paid <b style={{ color: '#fff' }}>${fmtNum(d.account.donatedUsd, 2)}</b>, all of it sent to Treegens tree planting. That is <b style={{ color: '#fff' }}>{fmtNum(d.account.treesFunded)} mangroves</b>. Thank you.</>
-              : 'Saving paper is good. Planting trees is better. Everything paid to Sign&Grow, the monthly plan and top-ups alike, goes to Treegens tree planting.'}
+              : 'Saving paper is good. Planting trees is better. Everything paid to GrowSigning, the monthly plan and top-ups alike, goes to Treegens tree planting.'}
           </p>
         </div>
         <Link href="/app/settings?tab=billing" className="btn" style={{ background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>See the plan</Link>
       </div>
       <div>
-        <h2 style={{ marginBottom: 10 }}>Everyone on Sign&Grow, together</h2>
+        <h2 style={{ marginBottom: 10 }}>Everyone on GrowSigning, together</h2>
         <ImpactStats i={d.everyone} dark />
       </div>
       <Methodology />

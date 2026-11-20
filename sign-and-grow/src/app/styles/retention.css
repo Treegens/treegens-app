@@ -1,0 +1,22 @@
+/* Keeping closed envelopes for a set time and legal holds: the envelope page card (src/components/sender/Retention.tsx)
+   and Settings, Your data (src/components/settings/RetentionSettings.tsx). Shared tokens live in ../globals.css. */
+.ret h2 { margin-bottom: 8px; }
+.ret p { margin: 0 0 10px; }
+.ret .warn-text { color: var(--ink); }
+.ret-held { margin-bottom: 10px; }
+.ret-reason { margin-top: 6px; overflow-wrap: anywhere; }
+.ret-actions { gap: 8px; margin: 4px 0 6px; }
+.ret-actions .btn, .ret-settings .btn { min-height: 44px; }
+.ret-stays { margin-top: 8px; }
+.ret-stays summary { cursor: pointer; color: var(--green); min-height: 44px; display: flex; align-items: center; }
+.ret-sha { overflow-wrap: anywhere; word-break: break-all; }
+.ret-levels { border: 0; padding: 0; margin: 0 0 10px; }
+.ret-levels legend { font-weight: 600; margin-bottom: 6px; }
+.ret-level { min-height: 44px; align-items: flex-start !important; padding: 6px 0; }
+.ret-level input { margin-top: 3px; }
+.ret-settings label.f select, .ret-settings label.f input { width: 100%; min-height: 44px; }
+.ret-settings .ret-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 14px; }
+.ret-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.ret-list > li { padding: 10px 0; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.ret-list > li > div { min-width: 0; overflow-wrap: anywhere; }
+.ret-audit-mark { display: inline-block; margin-top: 2px; }

@@ -139,7 +139,7 @@ test('a price notice goes to every account with a subscription of ours, in any s
   assert.equal(r.status, 200, JSON.stringify(r.data));
   for (const x of [live, hold, paused]) {
     assert.equal(acct(x.id).price_notice_cents, 1200, `${x.name} was told`);
-    assert.ok(subjects(x.email).some((s) => s.startsWith('The price of your Sign&Grow plan changes on')));
+    assert.ok(subjects(x.email).some((s) => s.startsWith('The price of your GrowSigning plan changes on')));
   }
 });
 
@@ -180,7 +180,7 @@ test('a notice for the same price withdraws an announced rise, and the people wh
   assert.ok(second.data.withdrawn >= 1, JSON.stringify(second.data));
   assert.equal(acct(p.id).price_notice_cents, null);
   assert.equal((await state(p)).price_change, null);
-  const mail = lastMail(p.email, 'The price of your Sign&Grow plan is not changing after all');
+  const mail = lastMail(p.email, 'The price of your GrowSigning plan is not changing after all');
   assert.ok(mail, 'an email says the rise is withdrawn');
   assert.match(mail!, /would cost \$12\.00 a month\. That change is withdrawn: the price stays \$9\.00 a month\./);
 });
@@ -211,7 +211,7 @@ test('the day of a price change is one calendar day in UTC, the same in the emai
   db.run("UPDATE users SET tz='America/Los_Angeles' WHERE email=?", p.email);
   const r = await asOperator(p, () => p.c.post('/operator/billing/price-notice', { new_usd: 12, from: '2027-03-01' }));
   assert.equal(r.data.from_day, 'March 1, 2027 (UTC)');
-  assert.ok(subjects(p.email).includes('The price of your Sign&Grow plan changes on March 1, 2027 (UTC)'), JSON.stringify(subjects(p.email)));
+  assert.ok(subjects(p.email).includes('The price of your GrowSigning plan changes on March 1, 2027 (UTC)'), JSON.stringify(subjects(p.email)));
   assert.equal((await state(p)).price_change.from_day, 'March 1, 2027 (UTC)');
 });
 
@@ -234,10 +234,10 @@ test('a notice that has taken effect is the price: a later notice neither withdr
   assert.equal(same.status, 200);
   assert.equal(acct(p.id).price_cents, 1200, 'the price in effect is written down as the price');
   assert.equal((await state(p)).plan_price, '$12.00');
-  assert.ok(!subjects(p.email).some((s) => s.startsWith('The price of your Sign&Grow plan is not changing')));
+  assert.ok(!subjects(p.email).some((s) => s.startsWith('The price of your GrowSigning plan is not changing')));
   // A higher one: the email says what they pay today, which is the price in effect.
   await asOperator(p, () => p.c.post('/operator/billing/price-notice', { new_usd: 15, from: day(45) }));
-  assert.match(lastMail(p.email, 'The price of your Sign&Grow plan changes on')!, /pays \$12\.00 a month\. From .+ the monthly plan costs \$15\.00 a month/);
+  assert.match(lastMail(p.email, 'The price of your GrowSigning plan changes on')!, /pays \$12\.00 a month\. From .+ the monthly plan costs \$15\.00 a month/);
 });
 
 test('the stop page and the emails quote the price this account is charged, not the price for new customers', async () => {
@@ -251,7 +251,7 @@ test('the stop page and the emails quote the price this account is charged, not 
   const c = new Client();
   c.ip = '203.0.113.171';
   await c.post('/public/billing/find', { email: p.email });
-  assert.match(lastMail(p.email, 'Your Sign&Grow subscriptions')!, /\$12\.00 a month, next charge \$12\.00 on/);
+  assert.match(lastMail(p.email, 'Your GrowSigning subscriptions')!, /\$12\.00 a month, next charge \$12\.00 on/);
   // Cancelled here, then the cancellation undone on the provider's own page.
   await p.c.post('/billing/cancel');
   stripe.sub(p.sub).cancel_at_period_end = true;
@@ -355,7 +355,7 @@ test('find my subscription does not say "not charging you" while the end of a pl
   const c = new Client();
   c.ip = '203.0.113.172';
   await c.post('/public/billing/find', { email: p.email });
-  const mail = lastMail(p.email, 'Your Sign&Grow subscriptions')!;
+  const mail = lastMail(p.email, 'Your GrowSigning subscriptions')!;
   assert.doesNotMatch(mail, /not charging you/);
   assert.match(mail, /has not confirmed that yet/);
 });
@@ -371,7 +371,7 @@ test('closing an account at once while a refund is on its way: the email says it
   const ref = db.get("SELECT id FROM refunds WHERE payment_id='cs7_close'").id;
   const del = await p.c.post('/me/delete', { password: 'correct horse battery', now: true });
   assert.equal(del.data.closed, 'now', JSON.stringify(del.data));
-  const mail = text(db.get("SELECT html FROM emails WHERE to_email=? AND subject='Your Sign&Grow account is closed' ORDER BY id DESC LIMIT 1", p.email)?.html || '');
+  const mail = text(db.get("SELECT html FROM emails WHERE to_email=? AND subject='Your GrowSigning account is closed' ORDER BY id DESC LIMIT 1", p.email)?.html || '');
   assert.match(mail, /A refund of \$30\.00 \(reference rf_[\w-]+\) is still on its way to the card it was paid with\. It goes through even though the account is deleted/);
   assert.ok(mail.includes(ref));
 });

@@ -155,7 +155,7 @@ const seesVisitors = (c: Ctx) => c.admin && (c.auth?.via === 'session' || c.auth
 const forCaller = (c: Ctx, a: any) => (!a || seesVisitors(c) ? a : { ...a, ip: undefined, user_agent: undefined, page_url: undefined, given_ip: undefined, given_user_agent: undefined });
 
 // Records an acceptance the website collected itself. It is marked as recorded by the website through the API, with
-// who did it, everywhere it is shown: Sign&Grow did not see the click. Only with an API key: it is the website's server
+// who did it, everywhere it is shown: GrowSigning did not see the click. Only with an API key: it is the website's server
 // that says who accepted, never a person in a browser, who could otherwise record "acceptances" for anybody.
 route('POST', '/clickwraps/:id/acceptances', async (c) => {
   if (c.auth?.via !== 'api_key') throw bad('Acceptances are recorded through the API by your website\'s server, with an API key (Settings, API and webhooks), not from a browser. Nothing was recorded.', 403, { code: 'api_key_only' });

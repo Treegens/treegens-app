@@ -51,7 +51,7 @@ export function ById() {
   }, [res]);
 
   async function look(wanted: string) {
-    // Copied from the page with what stands around it ("Sign&Grow Envelope ID: env_... ·"): only the ID is kept.
+    // Copied from the page with what stands around it ("GrowSigning Envelope ID: env_... ·"): only the ID is kept.
     const clean = wanted.trim().replace(/^.*Envelope ID:?\s*/i, '').replace(/[\s.,;:·]+.*$/, '');
     if (!clean) return setError('Type the envelope ID first. It stands at the foot of every page, after "Envelope ID", and starts with env_.');
     setBusy(true);
@@ -61,7 +61,7 @@ export function ById() {
     try {
       setRes(await api(`/public/verify/${encodeURIComponent(clean)}`));
     } catch (e: any) {
-      setError(!e?.status ? 'We could not reach Sign&Grow, so nothing was looked up. Check your connection and try again.'
+      setError(!e?.status ? 'We could not reach GrowSigning, so nothing was looked up. Check your connection and try again.'
         : e.status === 429 ? 'That is a lot of lookups from your connection in a short time. Wait an hour and try again.' : e.message);
     } finally {
       setBusy(false);
@@ -82,7 +82,7 @@ export function ById() {
   return (
     <section className="pub-aside" aria-labelledby="byid-h">
       <h2 id="byid-h">Have a printed copy? Look it up by its envelope ID</h2>
-      <p>Every page of a signed PDF from Sign&amp;Grow has its envelope ID at the foot, after &ldquo;Envelope ID&rdquo;. It tells you whether that envelope was completed, and gives you the fingerprint of the signed file to compare a file with. It never shows names, addresses or the title.</p>
+      <p>Every page of a signed PDF from GrowSigning has its envelope ID at the foot, after &ldquo;Envelope ID&rdquo;. It tells you whether that envelope was completed, and gives you the fingerprint of the signed file to compare a file with. It never shows names, addresses or the title.</p>
       <form className="card pub-check-form" onSubmit={(e: FormEvent) => (e.preventDefault(), look(id))} noValidate>
         <label className="f" style={{ marginBottom: 12 }}>
           <span>Envelope ID</span>
@@ -96,7 +96,7 @@ export function ById() {
         <div ref={result} tabIndex={-1} role="status" className={`card pub-verdict ${s.good ? 'good' : 'bad'} pub-focus`} style={{ marginTop: 18 }}>
           <h3 style={{ margin: '0 0 6px' }}>{s.title}</h3>
           <p style={{ margin: '0 0 10px' }}>{s.text}</p>
-          {res.disputed_at && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {day(res.disputed_at)}, {res.disputes > 1 ? `${res.disputes} people` : 'a person'} named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that. Who is right is not something this page can tell you.{res.dispute_in_error_on ? ` On ${day(res.dispute_in_error_on)} a person at Sign&Grow looked into it and found that it was filed in error.` : res.dispute_open || res.disputes_open ? ' A person at Sign&Grow has not closed it yet.' : ''}</div>}
+          {res.disputed_at && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {day(res.disputed_at)}, {res.disputes > 1 ? `${res.disputes} people` : 'a person'} named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that. Who is right is not something this page can tell you.{res.dispute_in_error_on ? ` On ${day(res.dispute_in_error_on)} a person at GrowSigning looked into it and found that it was filed in error.` : res.dispute_open || res.disputes_open ? ' A person at GrowSigning has not closed it yet.' : ''}</div>}
           <dl className="pub-facts">
             <dt>Envelope</dt><dd className="mono">{res.id}</dd>
             {res.pages && <><dt>Pages</dt><dd>{res.pages.documents} in the documents{res.pages.signed_file ? <small>{res.pages.signed_file} in the signed file, with the certificate and any files signers attached</small> : null}</dd></>}
@@ -115,7 +115,7 @@ export function ById() {
                 : <div className="notice err" role="status"><b>{same.name} is not that signed file.</b> It may have been changed, saved again by a viewer, or be another document. Its fingerprint is <span className="mono">{same.hash}</span>.</div>)}
             </>
           )}
-          <p className="muted small" style={{ marginTop: 12 }}>What a fingerprint shows and does not show: <Link href="/security/certificate">How to read a Sign&amp;Grow certificate</Link>.</p>
+          <p className="muted small" style={{ marginTop: 12 }}>What a fingerprint shows and does not show: <Link href="/security/certificate">How to read a GrowSigning certificate</Link>.</p>
         </div>
       )}
     </section>

@@ -1,8 +1,8 @@
 /*
- * Sign&Grow click-to-agree, for a customer's own website. Paste:
- *   <script src="https://YOUR-SIGN-AND-GROW/clickwrap.js" data-agreement="SLUG" data-who="WHO" data-sig="SIG" async></script>
+ * GrowSigning click-to-agree, for a customer's own website. Paste:
+ *   <script src="https://YOUR-GROWSIGNING-ADDRESS/clickwrap.js" data-agreement="SLUG" data-who="WHO" data-sig="SIG" async></script>
  * It puts the terms in a frame right after itself (or into the element whose id is in data-target), makes the frame
- * as tall as the terms, and fires the event "signgrow:accepted" on the frame (it bubbles to document) when the
+ * as tall as the terms, and fires the event "growsigning:accepted" on the frame (it bubbles to document) when the
  * visitor has accepted, with { agreement, acceptance, version } in event.detail.
  *
  * Treat that event as a hint for your page. Before you rely on an acceptance, ask your own server, which asks ours:
@@ -15,7 +15,7 @@
   var origin = new URL(me.src).origin;
   var slug = me.getAttribute('data-agreement');
   if (!slug) {
-    console.error('Sign&Grow click-to-agree: add data-agreement="..." to the script tag. It is the last part of the address of your terms page.');
+    console.error('GrowSigning click-to-agree: add data-agreement="..." to the script tag. It is the last part of the address of your terms page.');
     return;
   }
   var q = 'embed=1';
@@ -32,9 +32,9 @@
   else me.parentNode.insertBefore(f, me.nextSibling);
   window.addEventListener('message', function (e) {
     // Only our own frame, and only this one, is listened to.
-    if (e.origin !== origin || e.source !== f.contentWindow || !e.data || e.data.source !== 'signgrow-clickwrap') return;
+    if (e.origin !== origin || e.source !== f.contentWindow || !e.data || e.data.source !== 'growsigning-clickwrap') return;
     if (e.data.type === 'height') f.style.height = Math.max(240, Math.min(6000, Number(e.data.height) || 520)) + 'px';
     if (e.data.type === 'accepted')
-      f.dispatchEvent(new CustomEvent('signgrow:accepted', { bubbles: true, detail: { agreement: slug, acceptance: String(e.data.acceptance || ''), version: Number(e.data.version) || null } }));
+      f.dispatchEvent(new CustomEvent('growsigning:accepted', { bubbles: true, detail: { agreement: slug, acceptance: String(e.data.acceptance || ''), version: Number(e.data.version) || null } }));
   });
 })();

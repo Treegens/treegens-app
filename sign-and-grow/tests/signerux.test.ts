@@ -422,8 +422,8 @@ test('the sender counts a radio group once, like the signer; the tab names the d
   assert.deepEqual(await progress(), { fields: 3, filled: 1, required_left: 1, ready: false }, 'one choice in the group fills the group');
 
   // The browser tab says which document this is.
-  assert.equal(pageTitle('Lease for 12 Elm Street'), 'Lease for 12 Elm Street · Sign&Grow');
-  assert.equal(pageTitle(''), 'Sign&Grow');
+  assert.equal(pageTitle('Lease for 12 Elm Street'), 'Lease for 12 Elm Street · GrowSigning');
+  assert.equal(pageTitle(''), 'GrowSigning');
 
   // "Sign here" goes above the field when nothing is there.
   const field = { x: 0.3, y: 0.4, w: 0.25, h: 0.05 }, flag = { w: 0.25, h: 0.03 }, gap = { x: 0.02, y: 0.01 };
@@ -485,7 +485,7 @@ test('a refused email is tried again with growing gaps, the record says the trut
     assert.match(d.audit.find((a: any) => a.action === 'Email sent').detail, /to Sam Signer <far@example\.com>, on try 3/);
     assert.equal(taken.length, 1);
     assert.equal(taken[0].to, 'far@example.com');
-    assert.match(taken[0].from, /Jo Sender via Sign&Grow/);
+    assert.match(taken[0].from, /Jo Sender via GrowSigning/);
     assert.equal(taken[0].replyTo, 'jo@example.com');
     assert.match(taken[0].text, new RegExp(`/sign/${tokenFor(e.id, 'far@example.com')}`));
     // With the mail server up, "Sent to recipient" is written, and only then.
@@ -642,7 +642,7 @@ test('two signers on one address each get their own completion email with their 
   assert.match(mailTo('alone@example.com').find((m) => m.subject === 'Completed: Just me')!.html, /<h1[^>]*>Your document is complete</);
   // "Signers are never sent marketing": no email about a document carries the line about what a dollar buys.
   for (const m of [...mailTo('both@example.com'), ...mailTo('alone@example.com')]) assert.doesNotMatch(m.html, /every dollar plants/);
-  assert.match(mailTo('alone@example.com')[0].html, /Sent with Sign&amp;Grow\./);
+  assert.match(mailTo('alone@example.com')[0].html, /Sent with GrowSigning\./);
   // An email to an account's own person about the account keeps it.
   assert.match(mailTo('jo@example.com')[0].html, /every dollar plants/);
 });
@@ -657,7 +657,7 @@ test('the signing screens keep what they promise in markup: new tab, labels, rea
   // The impact card on the finished screen: "How we count" opens in a new tab, and nothing there is about paying.
   const impact = read('components/sign/parts.tsx').split('export function Impact')[1].split('export ')[0];
   assert.match(impact, /href="\/impact" target="_blank" rel="noreferrer">How we count/);
-  assert.doesNotMatch(impact, /paid to Sign&Grow/);
+  assert.doesNotMatch(impact, /paid to GrowSigning/);
   // Document view: told once that Text view has the whole document as text, and the page pictures are labelled.
   assert.match(page, /className="sg-vh">The pages below are shown as pictures.*choose Text view/);
   assert.match(read('components/PdfDoc.tsx'), /<canvas ref=\{canvas\} role="img" aria-label=\{`Page \$\{index \+ 1\} of/);
@@ -1082,18 +1082,18 @@ test('the tab keeps the name of the document when the framework writes the site 
       watching = false;
     }
   }
-  const doc = { title: 'Sign&Grow · e-signatures that plant trees', head: {} };
+  const doc = { title: 'GrowSigning · e-signatures that plant trees', head: {} };
   const stop = keepTitle('Lease for 12 Elm Street', doc, Watch);
-  assert.equal(doc.title, 'Lease for 12 Elm Street · Sign&Grow');
+  assert.equal(doc.title, 'Lease for 12 Elm Street · GrowSigning');
   // A re-render (a reload of the code on a dev server, a route change) puts the site's own title back.
-  doc.title = 'Sign&Grow · e-signatures that plant trees';
+  doc.title = 'GrowSigning · e-signatures that plant trees';
   fire();
-  assert.equal(doc.title, 'Lease for 12 Elm Street · Sign&Grow');
+  assert.equal(doc.title, 'Lease for 12 Elm Street · GrowSigning');
   // Once the screen no longer shows the document, nothing is held on to.
   stop();
-  doc.title = 'Sign&Grow';
+  doc.title = 'GrowSigning';
   fire();
-  assert.equal(doc.title, 'Sign&Grow');
+  assert.equal(doc.title, 'GrowSigning');
   // No subject: the title is left alone and nothing is watched.
   keepTitle('', doc, Watch);
   assert.equal(watching, false);

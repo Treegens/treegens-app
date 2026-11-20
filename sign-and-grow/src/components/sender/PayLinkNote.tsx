@@ -62,7 +62,7 @@ export function PayLinkNote({ envelopeId, closed }: { envelopeId: string; closed
           {st.people.map((p) => <li key={p.id}><b>{p.name}</b>: {line(p, link || null)}</li>)}
         </ul>
       )}
-      <p className="muted small">Sign&Grow takes no part in the payment and cannot tell you whether anyone paid. Your payment provider can.{link ? ` The button opens exactly this address: Sign&Grow does not check where that page sends people next.${closed ? ' This envelope can no longer be edited, so the link can only be taken off now.' : ' To change it, open the editor: the link is on its last step.'}` : ''}</p>
+      <p className="muted small">GrowSigning takes no part in the payment and cannot tell you whether anyone paid. Your payment provider can.{link ? ` The button opens exactly this address: GrowSigning does not check where that page sends people next.${closed ? ' This envelope can no longer be edited, so the link can only be taken off now.' : ' To change it, open the editor: the link is on its last step.'}` : ''}</p>
       {link && <button type="button" className="btn ghost" style={{ minHeight: 44 }} disabled={busy} onClick={remove}>Remove the link</button>}
     </section>
   );

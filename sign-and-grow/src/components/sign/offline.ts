@@ -31,7 +31,7 @@ export async function finishLanded(ask: () => Promise<any>): Promise<'done' | 'o
  * sent, or the server says nothing is signed yet. `online` is what the device says about itself.
  */
 export const finishNotSent = (online: boolean, finish = 'Finish and send'): string => online
-  ? `Not sent yet. We could not reach Sign&Grow just now, and nothing is signed yet. Your answers are safe on this page. We keep trying by ourselves while this stays open, or choose ${finish} to try now.`
+  ? `Not sent yet. We could not reach GrowSigning just now, and nothing is signed yet. Your answers are safe on this page. We keep trying by ourselves while this stays open, or choose ${finish} to try now.`
   : `Not sent yet. This device seems to be offline, so nothing was signed. Your answers are safe on this page. We send it by ourselves as soon as the connection is back, or choose ${finish} to try now.`;
 
 /**
@@ -39,12 +39,12 @@ export const finishNotSent = (online: boolean, finish = 'Finish and send'): stri
  * so nothing is promised either way. Trying again is safe: a second Finish of the same person signs nothing twice.
  */
 export const finishUnknown = (online: boolean, finish = 'Finish and send'): string => online
-  ? `We did not hear back from Sign&Grow, so we cannot tell yet whether it went through. Nothing you typed is lost. We keep checking by ourselves while this stays open and send it again if it did not arrive, or choose ${finish} to try now.`
+  ? `We did not hear back from GrowSigning, so we cannot tell yet whether it went through. Nothing you typed is lost. We keep checking by ourselves while this stays open and send it again if it did not arrive, or choose ${finish} to try now.`
   : `This device seems to have lost its connection, so we cannot tell yet whether it went through. Nothing you typed is lost. We check as soon as the connection is back and send it again if it did not arrive, or choose ${finish} to try now.`;
 
 /** Said once when saving stops getting through, not again on every try. */
 export const saveNotSent = (online: boolean): string => online
-  ? 'Not saved yet. We could not reach Sign&Grow just now. Your answers are safe on this page, and we keep trying.'
+  ? 'Not saved yet. We could not reach GrowSigning just now. Your answers are safe on this page, and we keep trying.'
   : 'Not saved yet. This device seems to be offline. Your answers are safe on this page, and we save them as soon as the connection is back.';
 
 /** How often Finish is tried again while the device says it is online but the server did not answer. */

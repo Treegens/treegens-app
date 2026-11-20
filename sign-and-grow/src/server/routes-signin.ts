@@ -118,9 +118,9 @@ export async function linkProvider(userId: string, providerId: string, who: Iden
 async function tellConnected(user: any, p: Provider, who: Identity, how: 'settings' | 'address' | 'reclaimed', hadPassword = false, removed: Removed = {}) {
   const as = who.email ? ` as ${who.email}` : '';
   await sendMail({
-    to: user.email, subject: `${p.name} can now open your Sign&Grow login`, heading: `${p.name} was connected to your login`,
+    to: user.email, subject: `${p.name} can now open your GrowSigning login`, heading: `${p.name} was connected to your login`,
     lines: [
-      `Signing in with ${p.name}${as} now opens the Sign&Grow login of ${user.email}.`,
+      `Signing in with ${p.name}${as} now opens the GrowSigning login of ${user.email}.`,
       how === 'settings' ? 'It was connected under Settings, by someone who was signed in to your login.'
         : how === 'address' ? `It was connected because ${p.name} confirmed to us that ${who.email} belongs to the person who just signed in there.${hasPassword(user) ? ' Your password is unchanged.' : ''}`
         : `This login was started earlier, but its address had never been confirmed, so we could not know who started it. ${p.name} has now confirmed that the address is yours. To be safe, ${hadPassword ? 'the password that was set before no longer works, ' : ''}every browser that was signed in has been signed out. ${hadPassword ? 'You can choose a new password under Settings.' : ''} ${removedText(removed) || 'Nothing else had been set up in it.'} If you set any of it up yourself, you can set it up again under Settings.`.replace(/\s+/g, ' ').trim(),

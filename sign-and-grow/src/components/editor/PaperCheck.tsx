@@ -57,5 +57,5 @@ export function PaperCheck({ envelopeId, subject, docs, sending }: { envelopeId:
 
 /** One line under the Send button, for every envelope: what kind of signature this is, and where to check. */
 export const EnoughLink = () => (
-  <p className="muted small ed-paper-foot">Sign&Grow makes simple electronic signatures. <a href="/help#enough" target="_blank" rel="noreferrer">Is that enough for this document?<span className="ab-vh"> (opens in a new tab)</span></a></p>
+  <p className="muted small ed-paper-foot">GrowSigning makes simple electronic signatures. <a href="/help#enough" target="_blank" rel="noreferrer">Is that enough for this document?<span className="ab-vh"> (opens in a new tab)</span></a></p>
 );

@@ -41,7 +41,7 @@ export function PublicNav() {
       <a href="#main" className="pub-skip">Skip to the main content</a>
       <header className="pub-head">
         <div className="nav-top">
-          <Link href="/" className="logo"><Leaf color="#1f6f43" size={24} /> Sign&Grow</Link>
+          <Link href="/" className="logo"><Leaf color="#1f6f43" size={24} /> GrowSigning</Link>
           <nav className="pub-links" aria-label="Main">
             {LINKS.map(([href, label]) => <Link key={href} href={href} className="btn ghost sm" {...current(href)}>{label}</Link>)}
           </nav>
@@ -75,7 +75,7 @@ export function PublicFooter() {
     <footer className="foot pub-foot">
       <div className="wrap pub-foot-grid">
         <div className="pub-foot-brand">
-          <Link href="/" className="logo"><Leaf color="#1f6f43" size={20} /> Sign&Grow</Link>
+          <Link href="/" className="logo"><Leaf color="#1f6f43" size={20} /> GrowSigning</Link>
           <p>100% of what you pay goes to Treegens tree planting.</p>
           <p>Stuck? <Link href="/help#contact">Write to us</Link>{support?.email ? <> or email <a href={`mailto:${support.email}`}>{support.email}</a></> : null}. A person replies, and you do not need to log in.</p>
         </div>
@@ -113,7 +113,7 @@ export function ImpactBand() {
       <div className="wrap">
         <h2 id="impact-h">Paper has a cost. So we count it.</h2>
         <p className="pub-band-lead">
-          One tree makes roughly {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper, and each sheet takes about {IMPACT.litresWaterPerSheet} litres of water to produce. Everyone using Sign&Grow has so far kept this much out of the printer:
+          One tree makes roughly {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper, and each sheet takes about {IMPACT.litresWaterPerSheet} litres of water to produce. Everyone using GrowSigning has so far kept this much out of the printer:
         </p>
         <div className="grid g4 keep2" aria-live="polite" aria-busy={!imp}>
           <div className="stat"><div className="k">Sheets of paper saved</div><div className="v num">{v((i) => fmtNum(i.sheets))}</div></div>

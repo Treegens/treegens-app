@@ -154,7 +154,7 @@ function Use({ data, showKey, setShowKey, reload }: { data: any; showKey: boolea
       <h3 style={{ marginTop: 10 }}>1. Our page</h3>
       <p className="small">Link to it from your website or an email: <a href={u.page} target="_blank" rel="noreferrer">{u.page}</a> <button className="btn sm" onClick={() => copy(u.page, 'Link')}>Copy</button></p>
       <h3 style={{ marginTop: 10 }}>2. Inside your own page</h3>
-      <p className="small">Paste the script where the terms should appear. It makes a frame, sizes it, and fires the event &quot;signgrow:accepted&quot; when the visitor has accepted. Or paste the frame alone.</p>
+      <p className="small">Paste the script where the terms should appear. It makes a frame, sizes it, and fires the event &quot;growsigning:accepted&quot; when the visitor has accepted. Or paste the frame alone.</p>
       <div className="cw-snippet">{u.script}</div><button className="btn sm" onClick={() => copy(u.script, 'Script')}>Copy the script</button>
       <div className="cw-snippet">{u.iframe}</div><button className="btn sm" onClick={() => copy(u.iframe, 'Frame')}>Copy the frame</button>
       <p className="small" style={{ marginTop: 10 }}><b>What the frame can guarantee.</b> {u.embed_can}</p>

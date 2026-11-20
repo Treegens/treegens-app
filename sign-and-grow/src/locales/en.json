@@ -48,8 +48,8 @@
   "settings.security.webhook_label": "Address of the webhook for the security record",
   "settings.security.webhook_add": "Add webhook",
   "settings.security.webhook_secret": "Check each delivery with its signing secret, which is listed under Settings, API and webhooks.",
-  "settings.security.emails": "Include names and email addresses when the record leaves Sign&Grow",
+  "settings.security.emails": "Include names and email addresses when the record leaves GrowSigning",
   "settings.security.emails_hint": "Off: the download, the API, the webhook and the export name people by their id only. On: also by their name and email address as they are now. The record itself never stores them.",
-  "settings.security.emails_on": "Names and email addresses are now included when the record leaves Sign&Grow.",
-  "settings.security.emails_off": "People are now named by their id only when the record leaves Sign&Grow."
+  "settings.security.emails_on": "Names and email addresses are now included when the record leaves GrowSigning.",
+  "settings.security.emails_off": "People are now named by their id only when the record leaves GrowSigning."
 }

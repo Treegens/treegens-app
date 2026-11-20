@@ -424,7 +424,7 @@ test('F: with the security code, a person named on a completed document disputes
     assert.equal(ops.length, 1);
     assert.match(text(ops[0].html), /They wrote: I was abroad that day and never saw this\./);
     const queued = db.get("SELECT * FROM support_requests WHERE envelope_id=? AND topic='not-me'", e.id);
-    assert.equal(queued.name, 'Sign&Grow (automatic alert)');
+    assert.equal(queued.name, 'GrowSigning (automatic alert)');
     assert.equal(queued.status, 'open');
 
     // It shows where people look: the envelope (and so its page), /verify by file and by ID.
@@ -499,7 +499,7 @@ test('F: the screens offer it, and the help topic "I am named on a document I di
   const help = src('src/app/help/page.tsx');
   assert.match(help, /<QA id="not-me" q="I am named on a document I did not sign"><NotMeAnswer \/><\/QA>/);
   const answer = src('src/app/help/NotMe.tsx');
-  for (const who of ['Anyone with the envelope ID', 'Anyone with the signed file itself', 'Anyone holding an email we sent about it', 'The sender, and the owner and admins', 'The people who run Sign&amp;Grow']) assert.ok(answer.includes(who), who);
+  for (const who of ['Anyone with the envelope ID', 'Anyone with the signed file itself', 'Anyone holding an email we sent about it', 'The sender, and the owner and admins', 'The people who run GrowSigning']) assert.ok(answer.includes(who), who);
   assert.match(answer, /It is not passed on to the sender/);
 
   // A message under that topic about a document whose recipient writes it is not passed to the sender.
@@ -621,7 +621,7 @@ test('H: the public page explains every line the certificate prints, is dated, a
   assert.ok(labels.size >= 20, `found ${labels.size} labels`);
   const covered = (l: string) => page.toLowerCase().includes(l.toLowerCase()) || (/their time$/.test(l) && /times in their own zone/.test(page)) || (l === 'Recipients' && page.includes('<h2>Recipients</h2>'));
   for (const l of labels) assert.ok(covered(l), `the certificate prints "${l}" and /security/certificate does not explain it: revise the page and CERTIFICATE_PAGE_VERSION`);
-  for (const l of ['Signed via Sign&Grow', 'Sign&Grow Envelope ID at the foot of every page', 'Signed without paper', 'Characters this PDF could not print']) assert.ok(page.includes(l), l);
+  for (const l of ['Signed via GrowSigning', 'GrowSigning Envelope ID at the foot of every page', 'Signed without paper', 'Characters this PDF could not print']) assert.ok(page.includes(l), l);
   assert.match(page, /\{CHAIN_TRUTH\}/);
   assert.match(page, /\{WHO_WHEN_WHERE\}/);
   assert.match(page, /not a sworn statement, and not legal advice/);
@@ -799,14 +799,14 @@ test('Repair 3: every screen says, before it is sent, exactly what the sender wi
   const { disputeSenderSees, DISPUTE_DOES } = await import('../src/lib/evidence.ts');
   const sees = disputeSenderSees('Demo Sender');
   assert.match(sees, /Demo Sender will see that you dispute it, the date and time, which email or link was used \(by the name and address it was sent to\), and what you write below, word for word\./);
-  assert.match(sees, /will not see your internet address or which browser or device you use: those go only to the people who run Sign&Grow/);
+  assert.match(sees, /will not see your internet address or which browser or device you use: those go only to the people who run GrowSigning/);
   const dialogs = src('src/components/sign/dialogs.tsx');
-  assert.match(dialogs, /reason === 'not-me' \? 'A dispute goes to the sender and to the Sign&Grow team\./);
+  assert.match(dialogs, /reason === 'not-me' \? 'A dispute goes to the sender and to the GrowSigning team\./);
   assert.match(dialogs, /\{disputeSenderSees\(sender\?\.name \|\| 'The sender'\)\}/);
   assert.match(dialogs, /\{DISPUTE_DOES\}/);
   assert.doesNotMatch(dialogs, /The sender is told that you dispute it, not what you write below/);
   const check = src('src/app/check/CheckForm.tsx');
-  assert.match(check, /A dispute goes to the sender and to the people who run Sign&Grow, and it does not pause anyone\\'s account\./);
+  assert.match(check, /A dispute goes to the sender and to the people who run GrowSigning, and it does not pause anyone\\'s account\./);
   assert.match(check, /\{disputeSenderSees\(sender \|\| 'The sender'\)\}/);
   assert.match(check, /dispute=\{false\}/, 'a document deleted before any dispute offers no dispute');
   assert.doesNotMatch(check, /the sender is not shown what you wrote/);
@@ -862,13 +862,13 @@ test('Repair 2: while a dispute is open its sender cannot delete the envelope fo
   assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', e.id).n, 1, 'still there');
   assert.ok(db.get('SELECT hidden_at h FROM envelopes WHERE id=?', e.id).h);
   assert.equal(db.get('SELECT COUNT(*) n FROM disputes WHERE envelope_id=?', e.id).n, 1);
-  assert.match(auditOf(e.id).find((a: any) => a.action === 'Removed from the sender\'s lists').detail, /It is kept, because a person named on it disputes it and Sign&Grow has not closed that dispute yet/);
+  assert.match(auditOf(e.id).find((a: any) => a.action === 'Removed from the sender\'s lists').detail, /It is kept, because a person named on it disputes it and GrowSigning has not closed that dispute yet/);
   const look = (await from().get(`/public/verify/${e.id}`)).data;
   assert.equal(look.status, 'declined');
   assert.ok(look.disputed_at);
   assert.equal(look.disputes_open, 1);
   assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /keptForDispute \? 'Deleted from your account\. It is kept while the dispute about it is open\.'/);
-  // Once a person at Sign&Grow has closed it, the next one like it can be deleted for good, as before.
+  // Once a person at GrowSigning has closed it, the next one like it can be deleted for good, as before.
   process.env.OPERATOR_EMAILS = 'ops-r2@disputes.example';
   try {
     const ops = await person('Olga Operator', 'ops-r2@disputes.example');
@@ -942,7 +942,7 @@ test('Repair 2: deleting the account keeps the dispute (id, fingerprint, day, st
     assert.equal(db.get("SELECT COUNT(*) n FROM support_requests WHERE envelope_id IN (?,?) AND topic='not-me'", e.id, declined.id).n, 0, 'then forgotten');
     // The pages that list what stays after a deletion say it.
     const { KEPT_AFTER_DELETION } = await import('../src/lib/policy.ts');
-    assert.ok(KEPT_AFTER_DELETION.some((l) => /For a document someone named on it disputes, while a person at Sign&Grow has not closed that dispute: its envelope ID, the fingerprint of its signed file, the day of the dispute and the state the document was in, with no names and no addresses/.test(l)));
+    assert.ok(KEPT_AFTER_DELETION.some((l) => /For a document someone named on it disputes, while a person at GrowSigning has not closed that dispute: its envelope ID, the fingerprint of its signed file, the day of the dispute and the state the document was in, with no names and no addresses/.test(l)));
   } finally {
     delete process.env.OPERATOR_EMAILS;
   }

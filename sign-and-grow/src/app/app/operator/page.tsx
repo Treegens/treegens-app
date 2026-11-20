@@ -93,7 +93,7 @@ function BillingTools() {
 
 export default function Operator() {
   const [q, reload, error] = useLoad(() => api('/operator/queue'));
-  if (error) return <div className="card center"><h2>Not available</h2><p className="muted">This page is for the team that runs Sign&Grow.</p></div>;
+  if (error) return <div className="card center"><h2>Not available</h2><p className="muted">This page is for the team that runs GrowSigning.</p></div>;
   if (!q) return <div className="muted">Loading…</div>;
   const act = (p: Promise<any>, msg: string) => p.then(() => (toast(msg), reload())).catch(oops);
   const pause = (id: string, name: string) => {

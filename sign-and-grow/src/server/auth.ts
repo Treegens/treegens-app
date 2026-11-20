@@ -128,7 +128,7 @@ export function authenticate(req: Request, required = false): Auth | null {
   const s = found && sessionEnd(found) > Date.now() ? found : null;
   // A browser that was handed to someone to sign in person opens nothing until its owner has typed their password
   // (src/server/handover.ts). Until then it counts as nobody, and is not noted as used.
-  if (s?.locked_at) return refuse(401, 'This device was handed to someone to sign in person, so your account is locked in this browser. Open Sign&Grow here and type your password to come back.', { code: 'handed_over' });
+  if (s?.locked_at) return refuse(401, 'This device was handed to someone to sign in person, so your account is locked in this browser. Open GrowSigning here and type your password to come back.', { code: 'handed_over' });
   const m = s ? get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', s.account_id, s.user_id) : null;
   if (m) return { user: get('SELECT * FROM users WHERE id=?', s.user_id), account: get('SELECT * FROM accounts WHERE id=?', s.account_id), role: m.role, via: 'session', sessionId: s.id, slid: touch(s, req) };
   // Something was sent in place of a key, but not in the form a key has.

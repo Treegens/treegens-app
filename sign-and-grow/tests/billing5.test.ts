@@ -283,7 +283,7 @@ test('the price never goes up without thirty days of notice: a renewal above the
     assert.equal(told.status, 200, JSON.stringify(told.data));
     assert.ok(told.data.told >= 1);
     assert.deepEqual(told.data.not_told, []);
-    const notice = mailTo(p.email).slice(mailsBefore).find((m: any) => /^The price of your Sign&Grow plan changes on /.test(m.subject));
+    const notice = mailTo(p.email).slice(mailsBefore).find((m: any) => /^The price of your GrowSigning plan changes on /.test(m.subject));
     assert.ok(notice, 'the owner is told by email');
     const t = text(notice.html);
     assert.match(t, /Today Priced Tester's workspace pays \$9\.00 a month\. From .* the monthly plan costs \$12\.00 a month/);
@@ -295,7 +295,7 @@ test('the price never goes up without thirty days of notice: a renewal above the
     const again = await p.c.post('/operator/billing/price-notice', body(40));
     assert.equal(again.data.told, 0);
     assert.ok(again.data.already_told >= 1);
-    assert.equal(mailTo(p.email).filter((m: any) => /^The price of your Sign&Grow plan changes on /.test(m.subject)).length, 1);
+    assert.equal(mailTo(p.email).filter((m: any) => /^The price of your GrowSigning plan changes on /.test(m.subject)).length, 1);
   } finally {
     delete process.env.OPERATOR_EMAILS;
   }

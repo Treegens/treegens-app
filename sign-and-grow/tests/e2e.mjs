@@ -32,7 +32,7 @@ async function makePdf() {
   return file;
 }
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-e2e-'));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'growsigning-e2e-'));
 const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-p', String(PORT)], { env: { ...process.env, DATA_DIR: dataDir, DEV_OUTBOX: '1', APP_URL: BASE }, stdio: ['ignore', 'pipe', 'pipe'] });
 let log = '';
 server.stdout.on('data', (b) => (log += b));
@@ -257,7 +257,7 @@ try {
     await p.getByRole('textbox').first().fill('ada@example.org');
     await p.getByRole('button').filter({ hasText: /send|email|find/i }).first().click();
     await p.getByText(/sent|on its way|check your inbox/i).first().waitFor();
-    assert.ok(await mailFor('ada@example.org', (m) => m.subject === 'Your documents on Sign&Grow'), 'documents list emailed');
+    assert.ok(await mailFor('ada@example.org', (m) => m.subject === 'Your documents on GrowSigning'), 'documents list emailed');
     await shot(p, '13-unknown-link', true);
 
     // A second envelope whose recipient address gets corrected: the old link offers the new one.

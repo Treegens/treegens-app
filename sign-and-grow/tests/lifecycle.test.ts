@@ -89,7 +89,7 @@ test('someone removed from their only team can sign in, gets a workspace with th
   assert.equal((await owner.post('/account/invites', { email: 'pat@example.com' })).status, 200);
   const mail = mailTo('pat@example.com').at(-1)!;
   assert.match(mail.link, /\/login\?invite=/);
-  assert.match(text(mail.html), /already have a Sign&Grow login/);
+  assert.match(text(mail.html), /already have a GrowSigning login/);
   const withInvite = await from().post('/auth/signup', { name: 'Pat', email: 'pat@example.com', password: PW, invite: inviteFor('pat@example.com') });
   assert.equal(withInvite.status, 409);
   assert.match(withInvite.data.error, /Sign in with it and the invitation is accepted/);
@@ -289,7 +289,7 @@ test('deleting an account at once leaves no name, address, email copy or signer 
   assert.equal(db.get('SELECT COUNT(*) n FROM bulk_batches WHERE account_id=?', gid).n, 0);
   // Nothing we stored still names her, apart from the email that says it is done (which goes once it has left).
   const naming = db.all("SELECT subject FROM emails WHERE lower(to_email)='gone.gal@example.com' OR html LIKE '%gone.gal@example.com%' OR html LIKE '%Gone Gal%'").map((m: any) => m.subject);
-  assert.deepEqual(naming, ['Your Sign&Grow account is closed']);
+  assert.deepEqual(naming, ['Your GrowSigning account is closed']);
   const said = text(mailTo('gone.gal@example.com').at(-1)!.html);
   assert.match(said, /files signers attached, audit trails/);
   assert.match(said, /What we keep.*payments, refunds and of signatures bought and used, without your name/);
@@ -490,7 +490,7 @@ test('nobody is invited into, joins or sends from an account that is being close
   assert.equal((await cron.tick()).purged, 0);
   assert.equal(reminders().length, 1);
   const m = reminders()[0];
-  assert.equal(m.subject, `Your Sign&Grow account will be deleted on ${soon.slice(0, 10)}`);
+  assert.equal(m.subject, `Your GrowSigning account will be deleted on ${soon.slice(0, 10)}`);
   assert.match(m.link, /\/login$/);
   const said = text(m.html);
   assert.match(said, new RegExp(`${CLOSING_REMINDER_DAYS - 1} days left`));
@@ -595,7 +595,7 @@ test('a completed envelope its sender deletes leaves the sender\'s lists, and ev
   assert.equal((await signAll(e.id, 'keeper@example.com')).status, 200);
   const tok = tokenFor(e.id, 'keeper@example.com');
   const sha = db.get('SELECT final_sha256 s FROM envelopes WHERE id=?', e.id).s;
-  assert.match(text(mailTo('keeper@example.com').find((m) => m.subject === 'Completed: Keep me')!.html), /keeps working for as long as Jo Deleter keeps their Sign&Grow account/);
+  assert.match(text(mailTo('keeper@example.com').find((m) => m.subject === 'Completed: Keep me')!.html), /keeps working for as long as Jo Deleter keeps their GrowSigning account/);
   const summary = async () => (await jo.get('/reports/summary')).data;
   assert.equal((await summary()).completed, 2);
   const paper = (await jo.get('/impact')).data.account.sheets;
@@ -725,7 +725,7 @@ test('a signer who writes to the help form about a document reaches its sender t
   assert.match(said, /Someone writing from stuck\.signer@example\.com, the address of Sam Signer on this envelope/);
   assert.match(said, /copy their signing link, send it again, correct a name or an address, or give more time/);
   assert.doesNotMatch(said, /SECRET-WORDS/, 'anyone can type any address, so a stranger\'s words are not passed on');
-  assert.deepEqual(asked().map((a: any) => [a.actor, a.detail]), [['Sign&Grow help form', 'A message from stuck.signer@example.com to the Sign&Grow help form said there is a problem with signing']]);
+  assert.deepEqual(asked().map((a: any) => [a.actor, a.detail]), [['GrowSigning help form', 'A message from stuck.signer@example.com to the GrowSigning help form said there is a problem with signing']]);
   assert.equal((await jo.get(`/envelopes/${e.id}`)).data.chain.ok, true);
 
   // Asking again the same day does not email the sender again.
@@ -1167,7 +1167,7 @@ test('the help link on the signing page and in signing emails says which documen
   const said = text(told('Lease for unit 4')[0].html);
   assert.match(said, /Someone who holds the email we sent to Sam Signer \(work\.address@example\.com\) about this envelope used its help link and told our help form that there is a problem with signing "Lease for unit 4"/);
   assert.doesNotMatch(said, /PRIVATE-WORDS|private\.address/, 'neither the words nor the address of someone we do not know are passed on');
-  assert.deepEqual(asked(e.id), ['Someone who holds the email we sent to work.address@example.com told the Sign&Grow help form that there is a problem with signing']);
+  assert.deepEqual(asked(e.id), ['Someone who holds the email we sent to work.address@example.com told the GrowSigning help form that there is a problem with signing']);
   assert.equal(db.get('SELECT envelope_id e FROM support_requests WHERE ref=?', coded.data.reference).e, e.id, 'the people who answer see which document it is');
   assert.equal((await jo.get(`/envelopes/${e.id}`)).data.chain.ok, true);
   // Once a day for each recipient, whichever way they were recognised.
@@ -1201,7 +1201,7 @@ test('the help link on the signing page and in signing emails says which documen
   assert.equal(told('Moved doc').length, 0);
   await write({ email: 'new.address@example.com', code: oldCode });
   assert.equal(told('Moved doc').length, 1);
-  assert.deepEqual(asked(moved.id), ['A message from new.address@example.com to the Sign&Grow help form said there is a problem with signing']);
+  assert.deepEqual(asked(moved.id), ['A message from new.address@example.com to the GrowSigning help form said there is a problem with signing']);
 });
 
 test('an alert the software files has a reference nobody can misread, and the queue finds a request by the reference a customer gives', async () => {
@@ -1213,7 +1213,7 @@ test('an alert the software files has a reference nobody can misread, and the qu
     // Filed the way the payment code files one: no reference, nobody's login, under the alert's name. The ids end
     // in characters that are easy to misread.
     for (let i = 0; i < 30; i++)
-      db.run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'billing',?,'open',?)", `sup_alertrow${String(i).padStart(2, '0')}-_0OIl`, 'opal.ops@example.com', 'Sign&Grow (automatic alert)', `Alert number ${i}\n\nSomething for a person to look at.`, new Date().toISOString());
+      db.run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'billing',?,'open',?)", `sup_alertrow${String(i).padStart(2, '0')}-_0OIl`, 'opal.ops@example.com', 'GrowSigning (automatic alert)', `Alert number ${i}\n\nSomething for a person to look at.`, new Date().toISOString());
     const queue = async () => (await ops.get('/operator/support?filter=all')).data.requests.filter((r: any) => r.alert && /^Alert number/.test(r.message));
     const alerts = await queue();
     assert.equal(alerts.length, 30);

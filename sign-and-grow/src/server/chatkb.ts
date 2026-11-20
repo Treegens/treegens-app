@@ -21,7 +21,7 @@ import { CHAT_SCREENS, CHAT_TOOLS, type ChatScreen } from '../lib/chat.ts';
 // The helper points to these by their question.
 export const HELP_TOPICS: { id: string; q: string; about: string }[] = [
   { id: 'find-documents', q: 'I cannot find the email, or my link stopped working', about: 'Find my documents emails a link to every document sent to an address. Links do not wear out.' },
-  { id: 'real', q: 'Is this email really from Sign&Grow?', about: 'Type the 12 character security code from the email into Check an email.' },
+  { id: 'real', q: 'Is this email really from GrowSigning?', about: 'Type the 12 character security code from the email into Check an email.' },
   { id: 'unexpected', q: 'I got a request I did not expect', about: 'You do not have to sign. Report it from the email, from Check an email, or from the signing page.' },
   { id: 'not-me', q: 'I am named on a document I did not sign', about: '"I did not sign this, or this was not me" marks it as disputed. What we give out and to whom.' },
   { id: 'more-time', q: 'I ran out of time', about: 'Open the link anyway: a passed deadline offers to ask the sender for more time.' },
@@ -41,16 +41,16 @@ export const HELP_TOPICS: { id: string; q: string; about: string }[] = [
   { id: 'not-received', q: 'The recipient says they never got the email', about: 'What the envelope shows, copying the link, reminding one person, correcting the address.' },
   { id: 'bounced', q: 'An envelope says &quot;Could not be delivered&quot; or &quot;Marked as spam&quot;', about: 'What those words mean and what to do. Only on a server connected to its mail provider.' },
   { id: 'checking-signers', q: 'How can I check who is signing?', about: 'Access codes and one-time codes, and what each proves.' },
-  { id: 'witness', q: 'Can a signature be witnessed here?', about: 'A witness for one signer. Sign&Grow records what the witness states and cannot check it.' },
+  { id: 'witness', q: 'Can a signature be witnessed here?', about: 'A witness for one signer. GrowSigning records what the witness states and cannot check it.' },
   { id: 'stamps', q: 'Can a company stamp or seal go next to a signature?', about: 'A picture of a stamp printed like ink. Not an electronic seal and not stamp duty.' },
   { id: 'reminders', q: 'Are people reminded by themselves?', about: 'Reminders by default, and where to change them.' },
   { id: 'enough', q: 'Is this signature enough for my document?', about: 'What a simple electronic signature is, and when to check first. Not legal advice.' },
   { id: 'outside-us', q: 'Signing outside the United States, and documents that should not be signed here', about: 'Documents not to sign here without checking, the check before sending, notes by country.' },
   { id: 'language', q: 'Which language do my signers see?', about: 'English for now. The document can be in any language.' },
-  { id: 'cannot-open', q: 'My signer says the page will not open where they are', about: 'Send them the PDF yourself. A signature collected that way is outside Sign&Grow.' },
+  { id: 'cannot-open', q: 'My signer says the page will not open where they are', about: 'Send them the PDF yourself. A signature collected that way is outside GrowSigning.' },
   { id: 'no-email', q: 'My signer has no email address, or does not read it', about: '"I will send the link myself": a name and no address.' },
   { id: 'patient-information', q: 'Can I use it for patient forms or other health information?', about: 'No. There is no HIPAA business associate agreement.' },
-  { id: 'payment-link', q: 'Can someone pay a deposit when they sign?', about: 'Sign&Grow takes no payments. A trusted account can show a link to its own payment page after Finish.' },
+  { id: 'payment-link', q: 'Can someone pay a deposit when they sign?', about: 'GrowSigning takes no payments. A trusted account can show a link to its own payment page after Finish.' },
   { id: 'signing-groups', q: 'Can I send to a team, where anyone in it can sign?', about: 'Signing groups, made by admins under Contacts.' },
   { id: 'template-access', q: 'Who can use and change a template, and what does a locked wording mean?', about: 'Who can use a template, who can change it, and locking its wording.' },
   { id: 'cannot-send', q: 'Why can I not send?', about: 'An unconfirmed address, the daily limit, a fake payment notice, a pause, a short access code, no signatures left.' },
@@ -67,9 +67,9 @@ export const NOT_IN_IT: { lead: string; text: string }[] = [
   { lead: 'Electronic seals.', text: 'A company stamp is a picture of a stamp put on the page by a person. Nothing checks that they may use it. It is not an electronic seal, pays no stamp duty, and is not an e-stamp certificate or an e-meterai.' },
   { lead: 'Languages other than English.', text: LANGUAGE_NOTE },
   { lead: 'ID verification', text: 'No check of government ID, no knowledge-based questions, no checks by phone call. A one-time code by email or text shows that someone can read a mailbox or holds a phone, not who they are.' },
-  { lead: 'Remote online notarisation.', text: 'No notary step. Payments are not collected: a trusted account can show a link to its own payment page after Finish, and the money never passes through Sign&Grow.' },
+  { lead: 'Remote online notarisation.', text: 'No notary step. Payments are not collected: a trusted account can show a link to its own payment page after Finish, and the money never passes through GrowSigning.' },
   { lead: 'A HIPAA business associate agreement', text: 'Not at any price. US healthcare providers must not put patient information through it.' },
-  { lead: 'Google Docs and cloud drives', text: 'Download a Google Doc as Word or PDF first. Word, Excel, PowerPoint, OpenDocument, RTF, text, web page and TIFF files are turned into a PDF on upload only where the people who run the server set up a converter; elsewhere, save them as PDF first. Where they are converted, the PDF is what people sign and can look different from the file, so check every page. Documents cannot be edited in Sign&Grow.' },
+  { lead: 'Google Docs and cloud drives', text: 'Download a Google Doc as Word or PDF first. Word, Excel, PowerPoint, OpenDocument, RTF, text, web page and TIFF files are turned into a PDF on upload only where the people who run the server set up a converter; elsewhere, save them as PDF first. Where they are converted, the PDF is what people sign and can look different from the file, so check every page. Documents cannot be edited in GrowSigning.' },
   { lead: 'Contract lifecycle management', text: 'No contract management, no AI contract analysis, no document generation. The help chat does not read documents.' },
   { lead: 'Single sign-on', text: 'No SAML, and a team cannot make everyone sign in one way. No native mobile apps. Signing in with Google or Microsoft and two-step login with an authenticator app are in, where the server has them. No passkeys or security keys.' },
   { lead: 'Signing without a connection.', text: 'Opening the document and Finish need a connection.' },
@@ -87,7 +87,7 @@ type Faq = { id: string; words: string[]; answer: () => string };
 const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 export const FAQ: Faq[] = [
   { id: 'not-me', words: ['did not sign', "didn't sign", 'never signed', 'not me', 'forged', 'dispute', 'someone signed', 'in my name'],
-    answer: () => 'If you are named on a document you did not sign, open it and choose Report this request, then "I did not sign this, or this was not me". Or type the security code from our email into Check an email and choose the same. The document is then marked as disputed wherever it is shown, the sender and the people who run Sign&Grow are told, and nothing is deleted. We cannot tell who really signed. If it is a legal matter, ask a lawyer, or the police if you think a crime was committed.' },
+    answer: () => 'If you are named on a document you did not sign, open it and choose Report this request, then "I did not sign this, or this was not me". Or type the security code from our email into Check an email and choose the same. The document is then marked as disputed wherever it is shown, the sender and the people who run GrowSigning are told, and nothing is deleted. We cannot tell who really signed. If it is a legal matter, ask a lawyer, or the police if you think a crime was committed.' },
   { id: 'refund', words: ['refund', 'money back', 'charged twice', 'double charge', 'overcharged'],
     answer: () => `${refundRuleText(refundDays())} Open Settings, then Plan: your latest payment is offered at the top. A charge after you cancelled, a second charge for the plan, or more than the reminder said is refunded by the software by itself. Anything outside this rule goes to a person: choose Talk to a person.` },
   { id: 'cancel', words: ['cancel', 'stop paying', 'stop billing', 'unsubscribe', 'end my plan', 'stop the plan'],
@@ -111,7 +111,7 @@ export const FAQ: Faq[] = [
   { id: 'agree', words: ['agree', 'agreeing', 'consent', 'what am i signing', 'electronic records'],
     answer: () => `Before any field opens you are shown these words and asked to tick a box: "${consentWording('the sender', true).legal}" You can decline instead, or ask the sender for a paper copy. The help page prints the full wording with its version.` },
   { id: 'legal', words: ['legal', 'legally', 'valid', 'binding', 'enforceable', 'hold up', 'court', 'lawyer', 'law'],
-    answer: () => 'Sign&Grow makes a simple electronic signature: the signer\'s name or mark on the page and a record of when and from where they signed. It does not check identity documents and has no notary step. Whether that is enough depends on the country and the kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature. The helper gives no legal advice: ask a lawyer, and see "Is this signature enough for my document?" on the help page.' },
+    answer: () => 'GrowSigning makes a simple electronic signature: the signer\'s name or mark on the page and a record of when and from where they signed. It does not check identity documents and has no notary step. Whether that is enough depends on the country and the kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature. The helper gives no legal advice: ask a lawyer, and see "Is this signature enough for my document?" on the help page.' },
   { id: 'locked', words: ['log in', 'login', 'sign in', 'password', 'locked out', 'two-step', '2fa', 'authenticator', 'reset', 'lost my phone', 'lost the phone', 'recovery code'],
     answer: () => `Forgot the password? Use Forgot password on the sign-in page: the link works for one hour. Made your login with Google or Microsoft? Use that button. Lost the phone with your authenticator app? Type one of your recovery codes in place of the code. Without them, a team admin can switch it off, or you can start a reset by email after your password, which takes effect after ${TWO_STEP_EMAIL_RESET_DAYS} days. "I cannot log in" on the help page has every case. A person can help too, and the contact form works without signing in.` },
   { id: 'close', words: ['close my account', 'delete my account', 'delete everything', 'remove my data', 'close account', 'deleted'],
@@ -169,18 +169,18 @@ export function systemPrompt(screen: ChatScreen, env: Record<string, string | un
   const dormant = dormantStopDays();
   const reachable = supportReachable(env);
   const email = (env.SUPPORT_EMAIL || '').trim();
-  return `You are the Sign&Grow helper, an AI assistant inside Sign&Grow, an e-signature service. You answer questions from visitors, from people who were sent a document to sign, and from people who send documents. 100% of what customers pay goes to Treegens tree planting.
+  return `You are the GrowSigning helper, an AI assistant inside GrowSigning, an e-signature service. You answer questions from visitors, from people who were sent a document to sign, and from people who send documents. 100% of what customers pay goes to Treegens tree planting.
 
 How you answer:
-- You are an AI and you can be wrong. When it matters, say so. The rules printed on Sign&Grow's own pages are what count, not what you say.
+- You are an AI and you can be wrong. When it matters, say so. The rules printed on GrowSigning's own pages are what count, not what you say.
 - Answer only from the facts below. If they do not answer the question, say plainly that you do not know, and offer a person: under every answer there is a "Talk to a person" button that opens the contact form with this chat attached.
-- Never give legal advice. Never say that a signature or a document "is valid", "is legally binding", "will hold up" or "is enforceable", for any country. Say what Sign&Grow does and does not do, that the rules differ by country and by kind of document, and that a lawyer can say what applies.
+- Never give legal advice. Never say that a signature or a document "is valid", "is legally binding", "will hold up" or "is enforceable", for any country. Say what GrowSigning does and does not do, that the rules differ by country and by kind of document, and that a lawyer can say what applies.
 - Never promise a refund, a credit, an exception, a date, a reply time other than the one below, or anything else the rules below do not say. You take no action and cannot see or change any document, account or payment. Name the tool that does it, by its exact name from the list of tools, and say where it is.
 - You do not know who is asking, what is in their documents, or anything about their account, and you must not ask for it. Never ask for a password, a card number, a signing link or a code from an email. If the person typed one, tell them not to and that it was taken out.
 - Offer a person yourself, in one sentence, when: money was taken or is owed; someone says they did not sign something, or there is a dispute; there is a security problem; the person is locked out; anything legal; the person is upset; or your last answer did not help.
-- Answer in the language the person writes in. When they write in a language other than English, say once that Sign&Grow's screens and emails are in English for now.
+- Answer in the language the person writes in. When they write in a language other than English, say once that GrowSigning's screens and emails are in English for now.
 - Plain text only: no Markdown, no tables, no headings, no bold. Short, kind sentences. Two to six sentences unless the person asks for detail. Never use em dashes. Do not make up web addresses; you may name pages like the help page, Check an email or Verify a document.
-- If a question is not about Sign&Grow, say you can only help with Sign&Grow.
+- If a question is not about GrowSigning, say you can only help with GrowSigning.
 
 The person is on ${CHAT_SCREENS[screen]}.
 
@@ -228,7 +228,7 @@ ${lines(WHO_CAN_SEE.map((w) => `${w.who} ${w.what}`))}
 
 === WHAT KIND OF SIGNATURE THIS IS ===
 - The words every signer agrees to before signing: "${consentWording('the sender', true).legal}"
-- Sign&Grow makes simple electronic signatures. It does not make advanced or qualified signatures, checks no identity documents, and has no notary step.
+- GrowSigning makes simple electronic signatures. It does not make advanced or qualified signatures, checks no identity documents, and has no notary step.
 
 === HEALTH INFORMATION ===
 - ${NO_BAA_TITLE} ${NO_BAA_TEXT}
@@ -239,7 +239,7 @@ ${lines(WHO_CAN_SEE.map((w) => `${w.who} ${w.what}`))}
 === TOPICS ON THE HELP PAGE (/help, each at /help#id) ===
 ${lines(HELP_TOPICS.map((t) => `"${t.q.replace(/&quot;/g, '"')}" (/help#${t.id}): ${t.about}`))}
 
-=== WHAT SIGN&GROW DOES NOT HAVE ===
+=== WHAT GROWSIGNING DOES NOT HAVE ===
 ${lines(NOT_IN_IT.map((n) => `${n.lead.replace(/\.$/, '')}: ${n.text}`))}
 
 === FREQUENT QUESTIONS, WITH THE ANSWERS OUR PAGES GIVE ===

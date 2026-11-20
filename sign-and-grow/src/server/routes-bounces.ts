@@ -160,7 +160,7 @@ async function loginBounce(u: any, at: string, why: { plain: string }) {
     const runsIt = a.role === 'owner' || a.role === 'admin';
     for (const o of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin') AND u.id != ?", a.id, u.id))
       await sendMail({ to: o.email, about: u.id, subject: `Our emails to ${u.name} are not arriving`, heading: `Our emails to ${u.name} come back`,
-        lines: [`An email from Sign&Grow to ${u.name} (${u.email}), who is on the team of ${a.name}, could not be delivered: ${why.plain}.`,
+        lines: [`An email from GrowSigning to ${u.name} (${u.email}), who is on the team of ${a.name}, could not be delivered: ${why.plain}.`,
           `So ${u.name} is not getting our emails about documents${runsIt ? ', and not the renewal reminders, receipts and other notices about the plan that go to owners and admins' : ''}. The app tells them on every page the next time they open it, and they can move their login to an address that works from there.`,
           `You do not have to do anything. If ${u.name} no longer reads that mailbox, it is worth checking under Settings, Team who looks after this account.`],
         cta: { label: 'Open your team', url: `${baseUrl()}/app/settings?tab=team` } });
@@ -512,7 +512,7 @@ route('POST', '/sign/:token/mail-again', async (c) => {
 route('POST', '/me/email-works', async (c) => {
   rateLimit(`email-works:${c.user.id}`, 6, 86400_000);
   if (!run('UPDATE users SET email_bounced_at=NULL, email_bounce_reason=NULL WHERE id=? AND email_bounced_at IS NOT NULL', c.user.id).changes) return { ok: true, cleared: false };
-  const delivery = await sendMail({ to: c.user.email, subject: 'Emails from Sign&Grow reach you again', heading: 'This is the email you asked us to try',
+  const delivery = await sendMail({ to: c.user.email, subject: 'Emails from GrowSigning reach you again', heading: 'This is the email you asked us to try',
     lines: ['An earlier email to this address came back, and you told us that the address works again. So we sent this one to try it. If you are reading it, all is well and there is nothing more to do.',
       'If an email to this address comes back again, the app tells you on every page, as it did before.'] });
   return { ok: true, cleared: true, delivery };
@@ -535,13 +535,13 @@ route('POST', '/me/email', async (c) => {
   // With two-step login on, the address (where a reset by email would go) is changed only with a current code too.
   await needCode(c, b.code, 'move your login to another address');
   rateLimit(`email-change:${c.user.id}`, 5, 86400_000);
-  if (get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(`There is already a Sign&Grow login with ${email}, so this one cannot move there. Nothing was changed. If that login is yours too, sign in with it instead, or close it first under Settings, Your data.`, 409);
+  if (get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(`There is already a GrowSigning login with ${email}, so this one cannot move there. Nothing was changed. If that login is yours too, sign in with it instead, or close it first under Settings, Your data.`, 409);
   const t = token();
   const until = new Date(Date.now() + 3600_000).toISOString();
   run('DELETE FROM email_changes WHERE user_id=? OR expires_at < ?', c.user.id, now());
   run('INSERT INTO email_changes (token_hash, user_id, new_email, expires_at) VALUES (?,?,?,?)', sha256(t), c.user.id, email, until);
-  const delivery = await sendMail({ to: email, about: c.user.id, subject: 'Confirm your new email address for Sign&Grow', heading: 'Confirm this address', expiresAt: until,
-    lines: ['Someone who is signed in to Sign&Grow asked to use this address for their login from now on. If that was you, confirm it with the button below. The link works for one hour, in a browser in which you are signed in to Sign&Grow.',
+  const delivery = await sendMail({ to: email, about: c.user.id, subject: 'Confirm your new email address for GrowSigning', heading: 'Confirm this address', expiresAt: until,
+    lines: ['Someone who is signed in to GrowSigning asked to use this address for their login from now on. If that was you, confirm it with the button below. The link works for one hour, in a browser in which you are signed in to GrowSigning.',
       'If it was not you, ignore this email. Nothing changes without the confirmation, and nobody gets into anything of yours.'],
     cta: { label: 'Confirm this address', url: `${baseUrl()}/change-email?token=${t}` } });
   return { ok: true, sent_to: email, delivery };
@@ -551,10 +551,10 @@ route('POST', '/me/email/confirm', async (c) => {
   const t = str((await c.body()).token, 200);
   const row = t ? get('SELECT * FROM email_changes WHERE token_hash=? AND expires_at > ?', sha256(t), now()) : null;
   if (!row) throw bad('This link does not work any more. It works once, for one hour, and a newer request replaces it. Ask for a new one from the notice at the top of the app, or under Settings, Profile.', 410);
-  if (row.user_id !== c.user.id) throw bad('This link moves a different Sign&Grow login to a new address. Sign in to that login in this browser and open the link again. Nothing was changed.', 403);
+  if (row.user_id !== c.user.id) throw bad('This link moves a different GrowSigning login to a new address. Sign in to that login in this browser and open the link again. Nothing was changed.', 403);
   const old = c.user.email;
   tx(() => {
-    if (get('SELECT 1 x FROM users WHERE email=? AND id != ?', row.new_email, c.user.id)) throw bad(`In the meantime a Sign&Grow login was made with ${row.new_email}, so this one cannot move there. Nothing was changed.`, 409);
+    if (get('SELECT 1 x FROM users WHERE email=? AND id != ?', row.new_email, c.user.id)) throw bad(`In the meantime a GrowSigning login was made with ${row.new_email}, so this one cannot move there. Nothing was changed.`, 409);
     // The new address is proven, and whatever was known about the old one is not about this one.
     run('UPDATE users SET email=?, email_verified=1, email_bounced_at=NULL, email_bounce_reason=NULL WHERE id=?', row.new_email, c.user.id);
     // Our copies of what was sent to the old address about this login are now about a login with another address:
@@ -571,8 +571,8 @@ route('POST', '/me/email/confirm', async (c) => {
     record('email.changed', { c, member: c.user.id, about: ['user', c.user.id] });
   });
   // The old address is told, also when it is the one that bounces: if it still reaches someone, they should know.
-  await sendMail({ to: old, about: c.user.id, subject: 'The email address of your Sign&Grow login was changed', heading: 'Your login uses another address now',
-    lines: ['The Sign&Grow login that used this address was moved to another one. From now on our emails go there, and that address signs in.',
+  await sendMail({ to: old, about: c.user.id, subject: 'The email address of your GrowSigning login was changed', heading: 'Your login uses another address now',
+    lines: ['The GrowSigning login that used this address was moved to another one. From now on our emails go there, and that address signs in.',
       `If you did this, there is nothing more to do. If you did not, someone else has been in your login: write to us through ${baseUrl()}/help and a person will help you get it back.`] });
   return { ok: true, email: row.new_email };
 });

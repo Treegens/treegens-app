@@ -109,10 +109,10 @@ export async function deliver(hook: any, event: string, envelopeId: string | nul
       const ts = Math.floor(Date.now() / 1000);
       status = await post(target, {
         'content-type': 'application/json',
-        'user-agent': 'SignAndGrow-Webhook/1',
-        'x-signandgrow-event': event,
-        'x-signandgrow-timestamp': String(ts),
-        'x-signandgrow-signature': `sha256=${hmac(`${ts}.${body}`, hook.secret)}`,
+        'user-agent': 'GrowSigning-Webhook/1',
+        'x-growsigning-event': event,
+        'x-growsigning-timestamp': String(ts),
+        'x-growsigning-signature': `sha256=${hmac(`${ts}.${body}`, hook.secret)}`,
       }, body);
       error = null;
       if (status < 300) break;
@@ -132,7 +132,7 @@ export async function deliver(hook: any, event: string, envelopeId: string | nul
     if (last.length === 3 && last.every((d) => !d.status || d.status >= 300) && (!fresh?.alerted_at || Date.parse(fresh.alerted_at) < Date.now() - 864e5)) {
       run('UPDATE webhooks SET alerted_at=? WHERE id=?', now(), hook.id);
       for (const u of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", hook.account_id))
-        void sendMail({ to: u.email, subject: 'A Sign&Grow webhook keeps failing', heading: 'Your webhook is not receiving events',
+        void sendMail({ to: u.email, subject: 'A GrowSigning webhook keeps failing', heading: 'Your webhook is not receiving events',
           lines: [`The last three deliveries to ${hook.url} failed (${error || `HTTP ${status}`}).`,
             `The latest ${KEEP_BODIES} events for this webhook are kept in full in the delivery log. Once your side is fixed, you can send each of them again from Settings, API and webhooks.`,
             'Older events stay listed, but can no longer be sent again. The sooner this is fixed, the less there is to catch up on by hand.'],

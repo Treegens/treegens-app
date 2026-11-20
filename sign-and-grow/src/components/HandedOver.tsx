@@ -31,7 +31,7 @@ export function HandedOver({ info, onUnlocked }: { info: Locked; onUnlocked: () 
   };
   return (
     <main className="authbox ho" aria-labelledby="ho-h">
-      <div className="row" style={{ justifyContent: 'center', marginBottom: 14, fontWeight: 700 }}><Leaf color="#1f6f43" /> Sign&Grow</div>
+      <div className="row" style={{ justifyContent: 'center', marginBottom: 14, fontWeight: 700 }}><Leaf color="#1f6f43" /> GrowSigning</div>
       <div className="card">
         <h1 id="ho-h" className="serif" style={{ fontSize: 22, marginBottom: 8 }}>This device was handed to {info.signer || 'someone'} to sign</h1>
         <p className="muted">So that nobody reaches {info.name}&apos;s account by accident, it is locked in this browser. Nothing was signed out anywhere else and nothing is lost.</p>
@@ -59,7 +59,7 @@ export function HandedOver({ info, onUnlocked }: { info: Locked; onUnlocked: () 
       </div>
       <details className="ho-more">
         <summary>What this lock covers, and what it does not</summary>
-        <p className="small">It covers Sign&Grow in this browser: no envelope, contact or setting of the account opens here until the password is typed. It does not cover:</p>
+        <p className="small">It covers GrowSigning in this browser: no envelope, contact or setting of the account opens here until the password is typed. It does not cover:</p>
         <ul className="small">{IN_PERSON_LIMITS.map((l) => <li key={l}>{l}</li>)}</ul>
       </details>
       <p className="muted small center" style={{ marginTop: 14 }}>Not {info.name}? Please hand the device back to them. <a href="/help">Help</a></p>

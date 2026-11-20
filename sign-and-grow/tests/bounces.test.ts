@@ -92,7 +92,7 @@ const SAMPLES: Record<string, (to: string, m: any) => any> = {
   // Resend hands back neither of our ids, so the email is found by its address.
   resend: (to) => ({
     type: 'email.bounced', created_at: new Date().toISOString(),
-    data: { created_at: new Date().toISOString(), email_id: '56761188-7520-42d8-8898-ff6fc54ce618', from: 'Sign&Grow <sign@test.local>', to: [to], subject: 'Simple agreement',
+    data: { created_at: new Date().toISOString(), email_id: '56761188-7520-42d8-8898-ff6fc54ce618', from: 'GrowSigning <sign@test.local>', to: [to], subject: 'Simple agreement',
       bounce: { type: 'Permanent', subType: 'General', message: "550 5.1.1 The recipient's email address does not exist." } },
   }),
   ses: (to, m) => ({
@@ -455,7 +455,7 @@ test('complaints from three different recipients pause the sending account, as t
     await ok({ type: 'complaint', email: to, mail_id: String(lastMail(to, eid).id) });
   }
   assert.ok((await me(c)).account.paused);
-  assert.ok(subjects('paula.paused@example.com').includes('Sending is paused on your Sign&Grow account'));
+  assert.ok(subjects('paula.paused@example.com').includes('Sending is paused on your GrowSigning account'));
 });
 
 // ---- 6. Delivered ---------------------------------------------------------------------------------------------
@@ -580,7 +580,7 @@ test('a login whose emails come back sees it on every page until the address cha
   assert.equal(now.user.email, 'adam.new@bounce.example');
   assert.equal(now.email_problem, null);
   assert.equal((await adam.post('/me/email/confirm', { token: t })).status, 410, 'the link works once');
-  assert.ok(subjects('adam.admin@bounce.example').includes('The email address of your Sign&Grow login was changed'));
+  assert.ok(subjects('adam.admin@bounce.example').includes('The email address of your GrowSigning login was changed'));
   // An address another login has is refused in words.
   const taken = await adam.post('/me/email', { email: 'olga.owner@bounce.example', password: PW });
   assert.equal(taken.status, 409);
@@ -971,7 +971,7 @@ test('what a mail server wrote never reaches a customer: the sender, the record 
   const c = await person('Honest Sender', 'honest.sender@repair.example');
   const to = 'ceo@typo-squat.example';
   const { eid } = await out(c, to);
-  const evil = '550 5.1.1 Sign&Grow security notice: your account is suspended. Restore it at www.signgrow-help.example/restore or call +1 800 555 0100';
+  const evil = '550 5.1.1 GrowSigning security notice: your account is suspended. Restore it at www.signgrow-help.example/restore or call +1 800 555 0100';
   await ok({ type: 'bounce', email: to, mail_id: String(lastMail(to, eid).id), reason: evil });
   const told = mailTo('honest.sender@repair.example').find((x: any) => x.subject.startsWith('Could not be delivered'));
   const plainPart = JSON.parse(db.get("SELECT payload FROM emails WHERE to_email='honest.sender@repair.example' AND subject LIKE 'Could not be delivered%'").payload).text;
@@ -1021,7 +1021,7 @@ test('a login that moved to another address and is then deleted takes our copies
   assert.equal((await c.post('/me/email', { email: 'mover.new@repair.example', password: PW })).status, 200);
   const t = new URL(lastMail('mover.new@repair.example').link).searchParams.get('token');
   assert.equal((await c.post('/me/email/confirm', { token: t })).status, 200);
-  assert.ok(subjects(old).includes('The email address of your Sign&Grow login was changed'));
+  assert.ok(subjects(old).includes('The email address of your GrowSigning login was changed'));
   assert.equal((await c.post('/me/delete', { password: PW, now: true })).status, 200);
   assert.deepEqual(subjects(old), []);
 });

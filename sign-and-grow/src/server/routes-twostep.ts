@@ -117,10 +117,10 @@ async function sendWayBack(u: any): Promise<WayBack | false> {
   if (!run("INSERT INTO two_step_log (user_id, at, what) SELECT ?, ?, 'lost_asked' WHERE (SELECT COUNT(*) FROM two_step_log WHERE user_id=? AND what='lost_asked' AND at > ?) < ?", u.id, now(), u.id, new Date(Date.now() - 864e5).toISOString(), TWO_STEP_LOST_PER_DAY).changes) return false;
   const teams = adminResetTeams(u.id).map((id) => get("SELECT a.name, (SELECT group_concat(u2.name, ', ') FROM memberships m2 JOIN users u2 ON u2.id=m2.user_id WHERE m2.account_id=a.id AND m2.role IN ('owner','admin') AND m2.user_id!=?) people FROM accounts a WHERE a.id=?", u.id, id)).filter(Boolean);
   const admins = teams.length ? `An owner or an admin of your team can switch it off at once under Settings, Team. Ask one of them, best by phone or in person, so that they know it is you: ${teams.map((t) => `${t.name} (${t.people || 'its owner'})`).join('; ')}. You are emailed when they do, and it is written down who did it.` : '';
-  const said = 'Someone who typed the right password of your Sign&Grow login said they no longer have the phone with the authenticator app, nor the recovery codes.';
+  const said = 'Someone who typed the right password of your GrowSigning login said they no longer have the phone with the authenticator app, nor the recovery codes.';
   const notYou = 'If you did not ask for this, someone knows your password: change it.';
   if (!emailResetAllowed(u)) {
-    await sendMail({ to: u.email, subject: 'Getting back into your Sign&Grow login without your phone', heading: admins ? 'Ask an admin of your team' : 'Only a recovery code can help now',
+    await sendMail({ to: u.email, subject: 'Getting back into your GrowSigning login without your phone', heading: admins ? 'Ask an admin of your team' : 'Only a recovery code can help now',
       lines: [said, 'You switched the reset by email off under Settings, Profile, so it cannot be done by email.',
         admins ? `${admins} Then sign in with your password and set two-step login up again with your new phone.`
           : 'Nobody else can switch your second step off either, because you own a workspace or are an admin of more than one, and it would open those too. One of your recovery codes, or a device that is remembered for your login, is the way in that is left.',
@@ -141,7 +141,7 @@ async function sendWayBack(u: any): Promise<WayBack | false> {
   const until = new Date(Date.now() + 3600_000).toISOString();
   run('DELETE FROM two_step_resets WHERE user_id=? OR expires_at <= ?', u.id, now());
   run('INSERT INTO two_step_resets (token_hash, user_id, expires_at) VALUES (?,?,?)', sha256(t), u.id, until);
-  await sendMail({ to: u.email, subject: 'Reset two-step login of your Sign&Grow login', heading: 'Lost your phone?', expiresAt: until,
+  await sendMail({ to: u.email, subject: 'Reset two-step login of your GrowSigning login', heading: 'Lost your phone?', expiresAt: until,
     lines: [`${said} They asked for a way in.`,
       `Open the link below to start a reset by email. Your second step is then switched off ${TWO_STEP_EMAIL_RESET_DAYS} days later, and from then on signing in asks for no code until you set it up again. Every day until then we email you, with a link that stops it, and every browser where you are signed in says so. The wait is there so that someone who got into your mailbox and knows your password cannot get into your login quietly.`,
       ...(admins ? [`Faster: ${admins}`] : []),
@@ -255,7 +255,7 @@ route('POST', '/me/two-step/confirm', async (c) => {
   if (!u.two_step_new_secret || Date.now() - Date.parse(u.two_step_new_at || '') > 3600_000) throw bad('Start again with "Set up two-step login". The secret shown for setting it up is only kept for an hour, and a new one is made each time you start.', 409, { code: 'setup_first' });
   rateLimit(`two-step-confirm:${c.user.id}`, 10, 900_000);
   const typed = str(b.code, 20).replace(/[\s-]/g, '');
-  if (!/^\d{6}$/.test(typed)) throw bad('Type the 6 digits your authenticator app shows for Sign&Grow.', 400, { code: 'code_needed' });
+  if (!/^\d{6}$/.test(typed)) throw bad('Type the 6 digits your authenticator app shows for GrowSigning.', 400, { code: 'code_needed' });
   const k = matchStep(u.two_step_new_secret, typed);
   if (k < 0) throw bad('That code does not match, so nothing was switched on. Check that the app shows the entry you added from this page (each start makes a new one), that the time on your phone is set automatically, and type the newest 6 digits.', 400, { code: 'wrong_code' });
   const moving = twoStepOn(u);
@@ -271,9 +271,9 @@ route('POST', '/me/two-step/confirm', async (c) => {
     const n = Number(run('DELETE FROM sessions WHERE user_id=? AND id != ?', u.id, c.auth?.sessionId || '').changes);
     return { codes: newRecoveryCodes(u.id), signed_out: n };
   });
-  await sendMail({ to: u.email, subject: moving ? 'Two-step login of your Sign&Grow login moved to another app' : 'Two-step login is on for your Sign&Grow login', heading: moving ? 'Your second step moved' : 'Two-step login is on',
-    lines: [moving ? 'From now on, signing in to your Sign&Grow login asks for the code of the authenticator app that was just added. The app used before no longer works for it. Your recovery codes stay as they were.'
-      : `From now on, signing in to your Sign&Grow login asks for the code from your authenticator app after the password, or after Google or Microsoft. ${done.signed_out ? 'Every other browser that was signed in was signed out.' : ''}`.trim(),
+  await sendMail({ to: u.email, subject: moving ? 'Two-step login of your GrowSigning login moved to another app' : 'Two-step login is on for your GrowSigning login', heading: moving ? 'Your second step moved' : 'Two-step login is on',
+    lines: [moving ? 'From now on, signing in to your GrowSigning login asks for the code of the authenticator app that was just added. The app used before no longer works for it. Your recovery codes stay as they were.'
+      : `From now on, signing in to your GrowSigning login asks for the code from your authenticator app after the password, or after Google or Microsoft. ${done.signed_out ? 'Every other browser that was signed in was signed out.' : ''}`.trim(),
       'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'],
     cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
   return { ok: true, moved: moving, codes: done.codes, signed_out: done.signed_out };
@@ -288,8 +288,8 @@ route('POST', '/me/two-step/recovery-codes', async (c) => {
     logStep(c.user.id, 'codes');
     return l;
   });
-  await sendMail({ to: c.user.email, subject: 'New recovery codes for your Sign&Grow login', heading: 'New recovery codes',
-    lines: ['New recovery codes for two-step login were made in your Sign&Grow login, under Settings. The codes you had before no longer work.', 'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'] });
+  await sendMail({ to: c.user.email, subject: 'New recovery codes for your GrowSigning login', heading: 'New recovery codes',
+    lines: ['New recovery codes for two-step login were made in your GrowSigning login, under Settings. The codes you had before no longer work.', 'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'] });
   return { codes };
 });
 
@@ -304,8 +304,8 @@ route('POST', '/me/two-step/off', async (c) => {
     logStep(c.user.id, 'off', { id: c.user.id, name: c.user.name });
     record('two_step.off', { c, member: c.user.id, about: ['user', c.user.id] });
   });
-  await sendMail({ to: c.user.email, subject: 'Two-step login is off for your Sign&Grow login', heading: 'Two-step login is off',
-    lines: ['Two-step login was switched off under Settings, in a browser signed in to your Sign&Grow login. Signing in asks for no code now. Remembered devices and recovery codes were removed.', 'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'] });
+  await sendMail({ to: c.user.email, subject: 'Two-step login is off for your GrowSigning login', heading: 'Two-step login is off',
+    lines: ['Two-step login was switched off under Settings, in a browser signed in to your GrowSigning login. Signing in asks for no code now. Remembered devices and recovery codes were removed.', 'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'] });
   return { ok: true };
 });
 
@@ -347,8 +347,8 @@ route('POST', '/me/two-step/email-reset', async (c) => {
   }
   await sendMail({ to: c.user.email, subject: b.allowed ? 'A reset by email of your two-step login is allowed again' : 'The reset by email of your two-step login is off', heading: b.allowed ? 'Reset by email allowed' : 'Reset by email switched off',
     lines: [b.allowed
-      ? `It was allowed again under Settings, Profile, in a browser signed in to your Sign&Grow login. If you lose your phone and your recovery codes, you can ask for a reset by email after your password: it takes effect ${TWO_STEP_EMAIL_RESET_DAYS} days later, and we email you every day until then.`
-      : `It was switched off under Settings, Profile, in a browser signed in to your Sign&Grow login. If you lose your phone and your recovery codes, ${adminResetTeams(c.user.id).length ? 'only an admin of your team can switch your second step off' : 'nobody can switch your second step off: keep your recovery codes safe'}.`,
+      ? `It was allowed again under Settings, Profile, in a browser signed in to your GrowSigning login. If you lose your phone and your recovery codes, you can ask for a reset by email after your password: it takes effect ${TWO_STEP_EMAIL_RESET_DAYS} days later, and we email you every day until then.`
+      : `It was switched off under Settings, Profile, in a browser signed in to your GrowSigning login. If you lose your phone and your recovery codes, ${adminResetTeams(c.user.id).length ? 'only an admin of your team can switch your second step off' : 'nobody can switch your second step off: keep your recovery codes safe'}.`,
       'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'],
     cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
   return { ok: true, allowed: b.allowed };
@@ -383,7 +383,7 @@ route('POST', '/account/two-step', async (c) => {
     for (const m of all('SELECT u.* FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id!=?', c.account.id, c.user.id).filter((u) => !twoStepOn(u))) {
       told++;
       await sendMail({ to: m.email, about: m.id, subject: `${c.account.name} asks you to use two-step login`, heading: 'Two-step login for your team',
-        lines: [`${c.user.name}, the owner of ${c.account.name} on Sign&Grow, asks everyone on the team to sign in with two-step login: after the password, a 6-digit code from an authenticator app on your phone.`,
+        lines: [`${c.user.name}, the owner of ${c.account.name} on GrowSigning, asks everyone on the team to sign in with two-step login: after the password, a 6-digit code from an authenticator app on your phone.`,
           `The next time you open ${c.account.name}, you are asked to set it up, and until then nothing else in it opens. It takes a minute. You need an authenticator app, such as the one your phone may already have for passwords, or any app that shows 6-digit sign-in codes.`],
         cta: { label: 'Set it up now', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
     }
@@ -410,8 +410,8 @@ route('POST', '/account/members/:id/two-step/reset', async (c) => {
     logStep(m.id, 'reset_by_admin', { id: c.user.id, name: c.user.name }, c.account);
     record('two_step.reset', { c, member: m.id, about: ['user', m.id], details: { how: 'by_an_admin', account: c.account.id } });
   });
-  await sendMail({ to: m.email, subject: `${c.user.name} switched off two-step login of your Sign&Grow login`, heading: 'Your second step was reset',
-    lines: [`${c.user.name}, an admin of ${c.account.name}, switched off two-step login of your Sign&Grow login just now. Signing in asks for no code now, and your recovery codes and remembered devices were removed.`,
+  await sendMail({ to: m.email, subject: `${c.user.name} switched off two-step login of your GrowSigning login`, heading: 'Your second step was reset',
+    lines: [`${c.user.name}, an admin of ${c.account.name}, switched off two-step login of your GrowSigning login just now. Signing in asks for no code now, and your recovery codes and remembered devices were removed.`,
       `Set it up again under Settings, Profile, with the authenticator app on your phone.${c.account.two_step_required_at ? ` ${c.account.name} asks everyone for it, so you are asked to do that the next time you open it.` : ''}`,
       `If you did not ask for this, tell ${c.user.name} and change your password, because whoever knows it can now sign in with it alone.`],
     cta: { label: 'Set it up again', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });

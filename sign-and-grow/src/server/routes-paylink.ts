@@ -1,5 +1,5 @@
 // A link to the sender's own payment page, shown to a signer after they press Finish. The rules and every sentence
-// are in src/lib/paylink.ts. Sign&Grow never touches the money: it keeps an address, shows it to the right person
+// are in src/lib/paylink.ts. GrowSigning never touches the money: it keeps an address, shows it to the right person
 // at the right moment, and writes down that it did.
 //
 // The address itself is shown to the sender on the envelope page and to a signer after Finish, and nowhere else: the
@@ -164,7 +164,7 @@ route('PUT', '/envelopes/:id/pay-link', async (c: Ctx) => {
   else run('UPDATE envelopes SET pay_url=?, pay_kind=?, pay_set_by=?, pay_set_at=?, pay_gone_at=NULL, pay_gone_note=NULL, pay_told_at=NULL WHERE id=?', href, kind, c.user.id, t, e.id);
   if (e.kind === 'envelope') {
     // The address is named by its fingerprint: this line goes into the certificate, which is emailed (paydrop.ts).
-    const where = `The address is on the envelope page. It is shown to each person who signs, after they finish, and never put in an email, a certificate or an export. Sign&Grow takes no part in the payment.`;
+    const where = `The address is on the envelope page. It is shown to each person who signs, after they finish, and never put in an email, a certificate or an export. GrowSigning takes no part in the payment.`;
     if (was && was.url === href) audit(e.id, c.actor, 'Payment link changed', `The button now says "${payLabel(kind)}" (it said "${was.label}"). The address stays the same (fingerprint ${payPrint(href)}).`);
     else audit(e.id, c.actor, was ? 'Payment link changed' : 'Payment link added', `"${payLabel(kind)}" ${was ? 'now leads to another' : 'leads to the'} payment page ${c.user.name} gave (address fingerprint ${payPrint(href)}${was ? `, before ${payPrint(was.url)}` : ''}). ${where}`);
   }
@@ -217,6 +217,6 @@ route('POST', '/sign/:token/pay-opened', async (c) => {
   const t = now();
   if (!run('UPDATE pay_seen SET opened_at=? WHERE recipient_id=? AND url=? AND opened_at IS NULL', t, r.id, url).changes) return { recorded: false };
   run('UPDATE recipients SET pay_opened_url=?, pay_opened_at=? WHERE id=?', url, t, r.id);
-  audit(e.id, actor, 'Opened the payment link', `${r.name} pressed "${payLabel(e.pay_kind)}" (address fingerprint ${payPrint(url)}${url === e.pay_url ? '' : ', an address that has been changed since'}). Whether a payment was made is not known to Sign&Grow.`);
+  audit(e.id, actor, 'Opened the payment link', `${r.name} pressed "${payLabel(e.pay_kind)}" (address fingerprint ${payPrint(url)}${url === e.pay_url ? '' : ', an address that has been changed since'}). Whether a payment was made is not known to GrowSigning.`);
   return { recorded: true };
 }, 'public');

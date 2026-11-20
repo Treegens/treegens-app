@@ -132,7 +132,7 @@ test('the answer streams to the page, and the request asks for little thinking, 
   const call = calls[0];
   assert.equal(call.url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(call.headers.authorization, 'Bearer or-test-key');
-  assert.equal(call.headers['x-title'], 'Sign&Grow help');
+  assert.equal(call.headers['x-title'], 'GrowSigning help');
   assert.equal(call.body.model, 'moonshotai/kimi-k3-20260715');
   assert.equal(call.body.stream, true);
   assert.equal(call.body.max_tokens, 1200);
@@ -593,7 +593,7 @@ test('the system prompt is built from policy.ts, the help topics and README, so 
     was === undefined ? delete process.env.REFUND_DAYS : (process.env.REFUND_DAYS = was);
   }
   // The rules of answering.
-  for (const rule of ['You are an AI and you can be wrong', 'The rules printed on Sign&Grow\'s own pages are what count', 'Never give legal advice', '"is valid"', '"will hold up"',
+  for (const rule of ['You are an AI and you can be wrong', 'The rules printed on GrowSigning\'s own pages are what count', 'Never give legal advice', '"is valid"', '"will hold up"',
     'Never promise a refund', 'Answer in the language the person writes in', 'screens and emails are in English for now', 'Never use em dashes', 'say plainly that you do not know, and offer a person'])
     assert.ok(p.includes(rule), rule);
   assert.ok(!p.includes('\u2014'), 'no em dash in what the model is shown either');

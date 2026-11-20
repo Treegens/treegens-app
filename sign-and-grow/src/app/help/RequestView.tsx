@@ -10,7 +10,7 @@ import { TOPIC_LABEL, STATUS_FOR_CUSTOMER, standing, whenText, type CustomerRequ
 // help page for someone who is signed in, and by the private link from our emails for everyone else.
 
 const when = (iso: string) => whenText(iso);
-const offline = 'We could not reach Sign&Grow. Check your connection and try again. What you wrote is still in the box.';
+const offline = 'We could not reach GrowSigning. Check your connection and try again. What you wrote is still in the box.';
 
 export function RequestView({ r, reply, solved, head = true }: {
   r: CustomerRequest;
@@ -69,7 +69,7 @@ export function RequestView({ r, reply, solved, head = true }: {
         <ol className="rq-thread" aria-label="Everything written on this request, oldest first">
           {r.thread.map((m, i) => (
             <li key={i} className={`rq-msg ${m.from}${m.kind === 'question' ? ' question' : ''}`}>
-              <div className="rq-who"><b>{m.from === 'you' ? 'You' : `${m.name || 'A person on our team'}, Sign&Grow`}{m.kind === 'question' ? ' asked' : ''}</b><span>{when(m.at)}</span></div>
+              <div className="rq-who"><b>{m.from === 'you' ? 'You' : `${m.name || 'A person on our team'}, GrowSigning`}{m.kind === 'question' ? ' asked' : ''}</b><span>{when(m.at)}</span></div>
               {i === 0 && r.held
                 ? <p className="rq-body muted">The first message is with us. It is not repeated here until a person has read it, because anyone can type an email address into our form.</p>
                 : <p className="rq-body">{m.body}</p>}

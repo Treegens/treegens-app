@@ -10,7 +10,7 @@ import { boot, Client, signUp, mailTo, simple } from './helpers.ts';
 import { safeNext, signInErrorText, signInNotice, signInProviders, removedText, SIGNIN_ERRORS } from '../src/lib/signin.ts';
 
 type P = 'google' | 'microsoft';
-const G = { id: 'sign-and-grow.apps.google.test', secret: 'google-secret' };
+const G = { id: 'growsigning.apps.google.test', secret: 'google-secret' };
 const M = { id: '0f0f0f0f-aaaa-4bbb-8ccc-121212121212', secret: 'microsoft-secret' };
 const TENANT = '11111111-2222-4333-8444-555555555555'; // an organization at Microsoft
 const OTHER_TENANT = '99999999-8888-4777-8666-555555555555'; // somebody else's
@@ -535,7 +535,7 @@ test('a token that only claims the address of an existing login does not get in 
   assert.equal((await browser().post('/auth/login', { email: 'vic@corp.example', password: PW })).status, 200, 'with their password as it was');
   // The page says what to do, in the words of the brief.
   const words = signInErrorText('exists', 'microsoft');
-  assert.match(words, /^You already have a Sign&Grow login with this address\. Sign in with your password once, then connect Microsoft under Settings\./);
+  assert.match(words, /^You already have a GrowSigning login with this address\. Sign in with your password once, then connect Microsoft under Settings\./);
   assert.match(words, /does not confirm to us that this address is yours/);
   assert.match(words, /Forgot password/);
 });
@@ -550,7 +550,7 @@ test('when the provider vouches for the address, it is connected to the existing
   assert.equal(identities('ada@gmail.com').length, 1);
   assert.deepEqual([r.note.linked, r.note.reclaimed], ['Google', undefined]);
   assert.match(signInNotice(r.note), /Google is now connected to your login.*We emailed you a note/);
-  const [told] = mailTo('ada@gmail.com').filter((m) => /Google can now open your Sign&amp;Grow login|Google can now open your Sign&Grow login/.test(m.subject));
+  const [told] = mailTo('ada@gmail.com').filter((m) => /Google can now open your GrowSigning login|Google can now open your GrowSigning login/.test(m.subject));
   assert.ok(told, 'the owner gets an email');
   assert.match(told.html, /because Google confirmed to us that ada@gmail\.com belongs to the person who just signed in there\. Your password is unchanged\./);
   assert.match(told.html, /If it was not you: sign in, open Settings, Profile, and under &quot;Ways to sign in&quot; disconnect Google\. Then change your password/);
@@ -815,7 +815,7 @@ test('Settings lists the ways to sign in, and the last way in cannot be disconne
   assert.equal(ways.providers[1].connected[0].email, 'gil@work.example');
   const told = mailTo('gil@gmail.com').filter((x) => /Microsoft can now open your/.test(x.subject));
   assert.equal(told.length, 1, 'the owner is told about a way in that was connected under Settings too');
-  assert.match(told[0].html, /Signing in with Microsoft as gil@work\.example now opens the Sign&amp;Grow login of gil@gmail\.com/);
+  assert.match(told[0].html, /Signing in with Microsoft as gil@work\.example now opens the GrowSigning login of gil@gmail\.com/);
   assert.match(told[0].html, /It was connected under Settings, by someone who was signed in to your login/);
   assert.equal((await c.call('DELETE', `/me/signin/${ways.providers[0].connected[0].id}`)).status, 200);
   assert.deepEqual(identities('gil@gmail.com').map((i) => i.provider), ['microsoft']);
@@ -909,7 +909,7 @@ test('connecting under Settings ties the provider to the login that is signed in
   assert.equal(taken.to.pathname, '/app/settings');
   assert.equal(taken.to.searchParams.get('signin_error'), 'taken');
   assert.equal(identities('bea@corp.example').length, 0);
-  assert.match(signInErrorText('taken', 'google'), /already connected to another Sign&Grow login, so it was not connected to this one\. Sign in to the other login and disconnect it there first/);
+  assert.match(signInErrorText('taken', 'google'), /already connected to another GrowSigning login, so it was not connected to this one\. Sign in to the other login and disconnect it there first/);
   // Signed out, or signed in as somebody else, before the provider answered: nothing is connected to anyone.
   const gone = await connect(bea, 'microsoft', microsoft('bea@outlook.example'), () => bea.post('/auth/logout'));
   assert.equal(gone.to.pathname, '/login', 'someone who is signed out is sent to the sign-in page, where the words can be read');
@@ -921,7 +921,7 @@ test('connecting under Settings ties the provider to the login that is signed in
   const sw = await connect(swapped, 'microsoft', microsoft('bea@outlook.example'), () => swapped.post('/auth/login', { email: 'ann@corp.example', password: PW }));
   assert.equal(sw.to.searchParams.get('signin_error'), 'session');
   assert.equal(db.get('SELECT COUNT(*) n FROM identities WHERE email=?', 'bea@outlook.example').n, 0, 'the Microsoft account went to neither of them');
-  assert.match(signInErrorText('session', 'microsoft'), /no longer signed in to the same Sign&Grow login when Microsoft answered, so nothing was connected\. Sign in and try again/);
+  assert.match(signInErrorText('session', 'microsoft'), /no longer signed in to the same GrowSigning login when Microsoft answered, so nothing was connected\. Sign in and try again/);
   // Connecting a provider that vouches for the login's own address confirms the address on the way.
   const raw = browser();
   assert.equal((await raw.post('/auth/signup', { name: 'Raw Recruit', email: 'raw@gmail.com', password: PW })).status, 200);
@@ -1119,9 +1119,9 @@ test('choosing a password by email for a login nobody had confirmed removes the 
   assert.match(removedText(reset.data.removed), /Your name is now "paz\.owner"\. You can change it under Settings, Profile\./);
   assert.equal(db.get('SELECT COUNT(*) n FROM webhooks WHERE account_id=?', acc).n, 0);
   assert.equal(db.get('SELECT brand_color b FROM accounts WHERE id=?', acc).b, null);
-  const told = mailTo('paz.owner@corp.example').filter((m) => m.subject === 'What we removed from your Sign&amp;Grow login' || m.subject === 'What we removed from your Sign&Grow login');
+  const told = mailTo('paz.owner@corp.example').filter((m) => m.subject === 'What we removed from your GrowSigning login' || m.subject === 'What we removed from your GrowSigning login');
   assert.equal(told.length, 1);
-  assert.match(told[0].html, /You chose a password for your Sign&amp;Grow login with the link we emailed to you\./);
+  assert.match(told[0].html, /You chose a password for your GrowSigning login with the link we emailed to you\./);
   assert.match(told[0].html, /1 webhook \(sending to listener\.stranger\.example\)/);
   // A second reset of the same login, now confirmed, removes nothing and sends nothing more.
   await browser().post('/auth/forgot', { email: 'paz.owner@corp.example' });
@@ -1155,7 +1155,7 @@ test('a signed-in person whose Connect took too long goes back to Settings, and 
   refused(again, 'signed_in', '/app/settings');
   assert.ok(!user('slow.private@gmail.com'));
   assert.equal((await whoIs(c)).id, me);
-  assert.match(signInErrorText('signed_in', 'google'), /You are already signed in to Sign&Grow in this browser, so no new login was made\. To sign in with Google from now on, press Connect next to Google here\. To make a separate login with it instead, sign out first/);
+  assert.match(signInErrorText('signed_in', 'google'), /You are already signed in to GrowSigning in this browser, so no new login was made\. To sign in with Google from now on, press Connect next to Google here\. To make a separate login with it instead, sign out first/);
   // Not signed in, the same account makes its login as always.
   const fresh = browser();
   landed(await signIn(fresh, 'google', google('slow.private@gmail.com')));

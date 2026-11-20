@@ -92,11 +92,11 @@ export function AuthForm({ mode }: { mode: Mode }) {
 
   return (
     <div className="authbox">
-      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Leaf color="#1f6f43" size={24} /> Sign&Grow</Link>
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Leaf color="#1f6f43" size={24} /> GrowSigning</Link>
       <form className="card" onSubmit={submit}>
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{TITLE[mode]}</h1>
         {mode === 'signup' && <p className="muted small">{q?.get('invite') ? 'You were invited to join a team.' : 'Free to start. No card needed. Every subscription plants trees.'}</p>}
-        {mode === 'login' && q?.get('invite') && <p className="muted small">You were invited to join a team. Sign in and you are on it. Anything you already have on Sign&Grow stays as it is.</p>}
+        {mode === 'login' && q?.get('invite') && <p className="muted small">You were invited to join a team. Sign in and you are on it. Anything you already have on GrowSigning stays as it is.</p>}
         {mode === 'forgot' && q?.get('invite') && <p className="muted small">Your invitation stays valid while you do this. After you have chosen a new password, open the invitation email again and sign in from its button.</p>}
         {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>Your account is closed and will be deleted in 30 days. Any subscription has been stopped. Changed your mind? Sign in and it comes straight back.</div>}
         {cameBack && <div className="notice err" style={{ marginTop: 10 }} role="alert">{cameBack}</div>}
@@ -124,7 +124,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
                 <p className="muted small" style={{ margin: '10px 0 0' }}>
                   {mode === 'signup'
                     ? `You sign in at ${list(providers.map((p) => p.name))} and need no password here. We take your name, your email address and the id they know you by, and nothing else.${q?.get('invite') ? ' Choose the account with the address you were invited at.' : ''}`
-                    : `No Sign&Grow login yet? Continuing with ${list(providers.map((p) => p.name))} makes one for you.`}
+                    : `No GrowSigning login yet? Continuing with ${list(providers.map((p) => p.name))} makes one for you.`}
                 </p>
               </div>
             )}

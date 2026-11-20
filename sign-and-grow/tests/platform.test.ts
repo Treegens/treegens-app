@@ -62,7 +62,7 @@ const srv = http.createServer((req, res) => {
   let body = '';
   req.on('data', (d) => (body += d));
   req.on('end', async () => {
-    hits.push({ path: req.url!, host: String(req.headers.host), body, event: String(req.headers['x-signandgrow-event']) });
+    hits.push({ path: req.url!, host: String(req.headers.host), body, event: String(req.headers['x-growsigning-event']) });
     if (req.url === '/slow') await gate;
     if (req.url === '/redirect') {
       res.writeHead(302, { location: `http://127.0.0.1:${port}/landed` });

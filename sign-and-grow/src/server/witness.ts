@@ -351,7 +351,7 @@ export function makeStatement(e: any, w: any, shown: any, actor: Actor) {
   if (str(shown, 600) !== text) throw bad('The statement on your screen is out of date. Read it again as it is now before you tick it.', 409, { code: 'changed', statement: text });
   const s = signerOf(e, w);
   run('UPDATE recipients SET witness_said_at=?, witness_statement=?, witness_saw=? WHERE id=?', now(), text, s.completed_at, w.id);
-  audit(e.id, actor, 'Witness statement', `${labelOf(w)} ticked this statement as their own: "${text}" Sign&Grow records the statement and cannot check it.`);
+  audit(e.id, actor, 'Witness statement', `${labelOf(w)} ticked this statement as their own: "${text}" GrowSigning records the statement and cannot check it.`);
   return { said: true, statement: text };
 }
 

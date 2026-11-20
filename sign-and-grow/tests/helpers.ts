@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PDFDocument } from 'pdf-lib';
 
-process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-'));
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'growsigning-'));
 process.env.APP_URL = 'http://test.local';
 
 export type Server = {

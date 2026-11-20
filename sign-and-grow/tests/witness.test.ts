@@ -299,7 +299,7 @@ test('the witness ticks their own statement before they can sign, and cannot dec
   assert.equal(wrong.data.code, 'changed');
   const said = await b.post(`/sign/${wtok}/witness-statement`, { statement: first.recipient.witness_of.statement });
   assert.equal(said.status, 200);
-  assert.ok(auditOf(e.id).some((a: any) => a.action === 'Witness statement' && a.detail.includes(`ticked this statement as their own: "${first.recipient.witness_of.statement}" Sign&Grow records the statement and cannot check it.`)));
+  assert.ok(auditOf(e.id).some((a: any) => a.action === 'Witness statement' && a.detail.includes(`ticked this statement as their own: "${first.recipient.witness_of.statement}" GrowSigning records the statement and cannot check it.`)));
   assert.equal((await b.post(`/sign/${wtok}/complete`, { values, signature_png: PNG, version: v.version })).status, 200);
   assert.equal(auditOf(e.id).find((a: any) => a.action === 'Witnessed')?.detail, 'Will Witness <' + row(wit).email + '>');
 });
@@ -368,7 +368,7 @@ test('the certificate lists the witness under the signer, with the statement as 
   assert.match(words, /Witness for Ann Signer/);
   assert.ok(words.includes(`"${row(wit).witness_statement}"`), 'the statement exactly as ticked');
   assert.match(words, /Statement ticked \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/);
-  assert.match(words, /Sign&Grow recorded what the witness stated\. It cannot check that they were physically present\./);
+  assert.match(words, /GrowSigning recorded what the witness stated\. It cannot check that they were physically present\./);
   assert.match(words, /Role Witness/);
   assert.match(words, /Status Witnessed/);
   assert.doesNotMatch(words, /Marked /, 'nothing to mark here');

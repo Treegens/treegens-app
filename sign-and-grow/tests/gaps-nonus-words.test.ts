@@ -46,7 +46,7 @@ test('the consent text says what kind of signature this is and never that it equ
   assert.match(w.legal, /simple electronic signature/);
   assert.match(w.legal, /rules differ by country and by kind of document/);
   assert.match(w.legal, /handwritten, witnessed, notarised or qualified signature/);
-  assert.match(w.legal, /Sign&Grow does not know which kind this document is/);
+  assert.match(w.legal, /GrowSigning does not know which kind this document is/);
   assert.match(w.legal, /ask Ada Sender or a lawyer before you sign/);
   // Need 16: the parties accept the method between themselves, in so many words.
   assert.match(w.legal, /you accept this electronic method as a valid way for you and the other parties to sign this document/);
@@ -422,14 +422,14 @@ test('every country note is dated, hedged and rests on a source the research nam
   }
   // What the product does not provide is said in so many words where the research found people assume it does.
   const text = (id: string) => COUNTRY_NOTES.find((n) => n.id === id)!.text;
-  assert.match(text('eu'), /Sign&Grow makes the first/);
-  assert.match(text('de'), /qualified electronic signature, which Sign&Grow does not provide/);
+  assert.match(text('eu'), /GrowSigning makes the first/);
+  assert.match(text('de'), /qualified electronic signature, which GrowSigning does not provide/);
   // Since the witness role (tests/witness.test.ts): what it records, and that it cannot check the witness was there.
-  assert.match(text('uk'), /Sign&Grow can add a witness who states that they saw the signature, and it cannot check that they were there/);
+  assert.match(text('uk'), /GrowSigning can add a witness who states that they saw the signature, and it cannot check that they were there/);
   assert.match(text('in'), /not an Aadhaar eSign and not a digital signature certificate/);
   assert.match(text('in'), /signing here does not pay stamp duty/);
-  assert.match(text('za-ke'), /Sign&Grow is not such a provider/);
-  assert.match(text('br'), /ICP-Brasil certificate, which Sign&Grow does not provide/);
+  assert.match(text('za-ke'), /GrowSigning is not such a provider/);
+  assert.match(text('br'), /ICP-Brasil certificate, which GrowSigning does not provide/);
   assert.match(text('mx'), /We do not issue a NOM-151 conservation certificate/);
   // A source that is somebody writing about the law is not passed off as the law.
   assert.equal(COUNTRY_NOTES.find((n) => n.id === 'de')!.sources.every((s) => !s.official), true);
@@ -590,7 +590,7 @@ test('every email that asks someone to sign says what to do when the page will n
   assert.match(help, /<QA id="cannot-open" q="My signer says the page will not open where they are">/);
   assert.match(help, /\{cannotOpenLine\('you'\)\}/);
   assert.match(help, /We have not tested from which places this one can be reached, so we make no promise about any country\./);
-  assert.match(help, /A signature collected that way is outside Sign&Grow\. It is not on our certificate and not in the audit trail/);
+  assert.match(help, /A signature collected that way is outside GrowSigning\. It is not on our certificate and not in the audit trail/);
   for (const f of ['app/help/outside.tsx', 'app/help/page.tsx', 'app/page.tsx', 'app/security/page.tsx', 'lib/policy.ts']) assert.doesNotMatch(src(f), /works in China|reachable from China|VPN/i, f);
 });
 
@@ -988,7 +988,7 @@ test('an evidence pack prints the wording a signer saw before versions were reco
   assert.equal((await new Client().post(`/sign/${tokenFor(e2.id, 'new.consent@example.com')}/consent`, { wording: CONSENT_VERSION })).status, 200);
   const consentOf = async (id: string) => unzipped((await ada.get(`/envelopes/${id}/evidence`)).data)['consent.txt'].toString();
   const before = await consentOf(e.id);
-  assert.match(before, new RegExp(`Wording ${UNVERSIONED_CONSENT} \\(their audit line names no wording, because it was written before Sign&Grow recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred`));
+  assert.match(before, new RegExp(`Wording ${UNVERSIONED_CONSENT} \\(their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred`));
   assert.ok(before.includes(old.legal.replace('Ada Sender', 'Ada Sender')), 'the words that person saw');
   assert.ok(!before.includes('simple electronic signature'), 'not today\'s words');
   assert.match(before, /A line written before then names no version: see the note under it\./);
@@ -1099,7 +1099,7 @@ test('the country notes say which part of a country they are about, link the EU\
   assert.match(note('in').text, /Our research confirmed that wills and trusts are still on it after a 2022 amendment\. It did not confirm the rest of that list, which has also named powers of attorney and contracts for the sale of land/);
   // An old source says how old it is.
   assert.match(note('za-ke').sources[0].label, /^De Rebus \(2012\)/);
-  // No note tells the reader what to do; they say what the law asks and what Sign&Grow is and is not made for.
+  // No note tells the reader what to do; they say what the law asks and what GrowSigning is and is not made for.
   for (const n of COUNTRY_NOTES) assert.doesNotMatch(n.text, /\b(Do not (sign|use)|use one of those|buy the|Check your state|Add the stamped page)\b/, n.id);
   assert.doesNotMatch(stampNote('India'), /\bbuy the\b/);
   // Every note still carries its month, and the help page prints the month next to its sources.
@@ -1119,7 +1119,7 @@ test('the processing summary and /security list the time zones we keep, and the 
   const e = await simple(ada, 'finds.links@example.com');
   await ada.post(`/envelopes/${e.id}/send`);
   assert.equal((await new Client().post('/public/links/find', { email: 'finds.links@example.com' })).status, 200);
-  const list = mailTo('finds.links@example.com').find((m: any) => m.subject === 'Your documents on Sign&Grow')!;
+  const list = mailTo('finds.links@example.com').find((m: any) => m.subject === 'Your documents on GrowSigning')!;
   assert.ok(list, 'the list was emailed');
-  assert.match(list.html, /Page will not open where you are\? Reply to the email the sender sent you about that document and ask them to send it as a PDF\. This list comes from Sign&amp;Grow, not from them, so a reply to it does not reach them\./);
+  assert.match(list.html, /Page will not open where you are\? Reply to the email the sender sent you about that document and ask them to send it as a PDF\. This list comes from GrowSigning, not from them, so a reply to it does not reach them\./);
 });

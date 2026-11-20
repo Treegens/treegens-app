@@ -81,7 +81,7 @@ export default function Landing() {
           <div>
             <div className="badge completed" style={{ marginBottom: 16 }}>100% of what you pay plants trees</div>
             <h1>You sign.<br /><em>Trees grow.</em></h1>
-            <p className="lead">Sign&Grow does what you expect from an e-signature tool: send, sign, track and store agreements. The difference is where the money goes. Every cent you pay funds Treegens tree planting, and every dollar plants {P.treesPerUsd} mangrove trees.</p>
+            <p className="lead">GrowSigning does what you expect from an e-signature tool: send, sign, track and store agreements. The difference is where the money goes. Every cent you pay funds Treegens tree planting, and every dollar plants {P.treesPerUsd} mangrove trees.</p>
             <div className="row wrap">
               <Link href="/signup" className="btn primary lg">Start free</Link>
               <Link href="/impact" className="btn lg">See the impact</Link>
@@ -97,7 +97,7 @@ export default function Landing() {
                 <div>
                   <div style={{ fontFamily: "'Sig Dancing', cursive", fontSize: 34, color: '#10243a', lineHeight: 1 }}>Wangari M.</div>
                   <div style={{ borderTop: '1.5px solid #17241c', width: 'min(190px, 40vw)', marginTop: 4 }} />
-                  <div className="muted small">Signed via Sign&Grow</div>
+                  <div className="muted small">Signed via GrowSigning</div>
                 </div>
                 <div style={{ background: 'var(--green-soft)', borderRadius: 12, padding: '10px 14px', textAlign: 'center' }}>
                   <Leaf color="#1f6f43" size={22} />
@@ -136,8 +136,8 @@ export default function Landing() {
           <h2 id="compare-h">How it compares</h2>
           <div className="card pad0" style={{ marginTop: 16 }}>
             <table className="t pub-cmp">
-              <thead><tr><th scope="col"><span className="pub-vh">What</span></th><th scope="col">Sign&Grow</th><th scope="col">Typical e-signature tools</th></tr></thead>
-              <tbody>{COMPARE.map(([k, a, b]) => <tr key={k}><th scope="row">{k}</th><td data-label="Sign&Grow">{a}</td><td data-label="Elsewhere">{b}</td></tr>)}</tbody>
+              <thead><tr><th scope="col"><span className="pub-vh">What</span></th><th scope="col">GrowSigning</th><th scope="col">Typical e-signature tools</th></tr></thead>
+              <tbody>{COMPARE.map(([k, a, b]) => <tr key={k}><th scope="row">{k}</th><td data-label="GrowSigning">{a}</td><td data-label="Elsewhere">{b}</td></tr>)}</tbody>
             </table>
           </div>
         </section>
@@ -178,7 +178,7 @@ export default function Landing() {
           {/* A bare "$9" reads as local dollars in half the world, and a simple signature is not enough for every
               document in every country. Both are said here, before anyone signs up. */}
           <p className="muted small pub-code-note" id="currency">{CURRENCY_NOTE}</p>
-          <p className="muted small pub-code-note">Sign&Grow makes simple electronic signatures. Whether that is enough depends on your country and on the kind of document: <Link href="/help#enough">check before you rely on it</Link>.</p>
+          <p className="muted small pub-code-note">GrowSigning makes simple electronic signatures. Whether that is enough depends on your country and on the kind of document: <Link href="/help#enough">check before you rely on it</Link>.</p>
 
           <div className="card pub-rules">
             <h3>The rules</h3>

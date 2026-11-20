@@ -1354,7 +1354,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
         ? `${r.name} filled in everything, but Finish was not pressed, so nothing is signed yet. Open the document, let ${r.name} check it, and press Finish.`
         : `You filled in everything, and what you filled in is saved. One step is left: open the document and press Finish. Until you do, it is not signed and ${sender.name} has not received it.`] : []),
       // The second sentence is the hand-over lock (handover.ts), said before the host opens the link from this email.
-      ...(r.role === 'inperson' ? [`Open the document on your device and hand it to ${r.name} to sign in person. If that browser is signed in to Sign&Grow, your account is locked in it while they hold the device, and you type your password to come back.`] : []),
+      ...(r.role === 'inperson' ? [`Open the document on your device and hand it to ${r.name} to sign in person. If that browser is signed in to GrowSigning, your account is locked in it while they hold the device, and you type your password to come back.`] : []),
       // To a witness: whose signature, and to open it only if they were there (witness.ts).
       ...witnessMailLines(e, r, kind, sender),
       ...(e.message ? [`${sender.name} wrote:\n${e.message}`] : []),
@@ -1566,7 +1566,7 @@ async function completeEnvelope(e: any) {
     }
     sent.add(to);
     const shared = fresh.recipients.some((x: any) => x.id !== r.id && sameEmail(x.email, r.email));
-    noteCopyMailed(e, r, copy, await sendMail({ to: r.email, recipientId: r.id, subject: `Completed: ${fresh.subject}`, heading: `${shared ? `For ${r.name}: ` : ''}Your document is complete`, lines: [...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []), ...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their Sign&Grow account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code }));
+    noteCopyMailed(e, r, copy, await sendMail({ to: r.email, recipientId: r.id, subject: `Completed: ${fresh.subject}`, heading: `${shared ? `For ${r.name}: ` : ''}Your document is complete`, lines: [...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []), ...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their GrowSigning account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code }));
   }
   if (sender && !sent.has(sender.email.toLowerCase()) && notifyPrefs(sender).completed)
     noteCopyMailed(e, { name: sender.name, email: sender.email, sender: true }, copy, await sendMail({ to: sender.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, ...senderCopyLines(fresh)], cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand, attachments }));
@@ -2264,7 +2264,7 @@ export async function emailMyLinks(email: string): Promise<number> {
   const part = on && fresh.length ? ` The first ${fresh.length === 1 ? 'one' : fresh.length} below ${fresh.length === 1 ? 'is' : 'are'} new, or changed, since the last email.${carried ? ` After ${fresh.length === 1 ? 'it' : 'them'} the list carries on where that email stopped, with ${numbers}.` : ''}`
     : total > LINKS_PER_EMAIL ? ` ${carried === 1 ? 'This is' : 'These are'} ${numbers}.` : '';
   await sendMail({
-    to: email, subject: 'Your documents on Sign&Grow', heading: 'Here are your documents',
+    to: email, subject: 'Your documents on GrowSigning', heading: 'Here are your documents',
     lines: [`You asked us to find your documents. These are the ones sent to this email address.${part}`,
       ...(names.size > 1 ? ['More than one person uses this address. Each link is for the person named under it, and only for them.'] : []),
       ...(more > 0 ? [`${more} more did not fit in this email. To get them, ask again within a day: enter this address under "Find my documents" at ${baseUrl()}/help once more, and the next email carries on where this one stops.`] : []),
@@ -2272,7 +2272,7 @@ export async function emailMyLinks(email: string): Promise<number> {
     links: [...forGroups, ...rows.map((x) => ({ label: x.subject, url: `${baseUrl()}/sign/${x.token}`, note: `${names.size > 1 ? `for ${x.name} · ` : ''}from ${x.sender} · ${state(x)}` }))],
     // The line for someone whose network will not open our pages, as in every request to sign (cannotOpenLine). This
     // email is ours and can list several senders, so a reply to it would not reach any of them: it says whose to use.
-    footnote: 'If you did not ask for this, you can ignore it. Nobody else received these links. Page will not open where you are? Reply to the email the sender sent you about that document and ask them to send it as a PDF. This list comes from Sign&Grow, not from them, so a reply to it does not reach them.',
+    footnote: 'If you did not ask for this, you can ignore it. Nobody else received these links. Page will not open where you are? Reply to the email the sender sent you about that document and ask them to send it as a PDF. This list comes from GrowSigning, not from them, so a reply to it does not reach them.',
   });
   return rows.length + forGroups.length;
 }
@@ -2506,8 +2506,8 @@ export const canBeStuck = (e: any, r: any): boolean =>
   e.kind === 'envelope' && (e.status === 'sent' || e.status === 'expired') && !e.hidden_at && r.status !== 'completed' && r.status !== 'declined';
 export async function helpAsked(e: any, r: any, text: string | null, actor: Actor, byCode = false): Promise<boolean> {
   if (!canBeStuck(e, r)) return false;
-  const typed = `A message from ${r.email} to the Sign&Grow help form said there is a problem with signing`;
-  const held = `Someone who holds the email we sent to ${r.email} told the Sign&Grow help form that there is a problem with signing`;
+  const typed = `A message from ${r.email} to the GrowSigning help form said there is a problem with signing`;
+  const held = `Someone who holds the email we sent to ${r.email} told the GrowSigning help form that there is a problem with signing`;
   if (get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Help requested' AND detail IN (?,?) AND at > ?", e.id, typed, held, new Date(Date.now() - 864e5).toISOString())) return false;
   audit(e.id, actor, 'Help requested', byCode ? held : typed);
   await notifySender(e, 'problems', `Problem signing: ${e.subject}`, `${r.name} may be stuck on your document`,
@@ -2553,7 +2553,7 @@ export async function reportAbuse(e: any, r: any, body: any, actor: Actor) {
     paused = true;
     // Never pause silently: say why, what still works, and how to reach a person.
     for (const u of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", account.id))
-      await sendMail({ to: u.email, subject: 'Sending is paused on your Sign&Grow account', heading: 'Sending is paused while we review reports',
+      await sendMail({ to: u.email, subject: 'Sending is paused on your GrowSigning account', heading: 'Sending is paused while we review reports',
         lines: [`${n} different recipients reported documents sent from ${account.name} as suspicious, so sending is paused until a person has looked. ${PAUSED_MEANS}`, 'Everything else still works: you can open, download and export every document, and people who already have a document can still open, sign and download it.', 'If this is a mistake, use the contact form. A person reviews every pause.'],
         cta: { label: 'Contact us', url: `${baseUrl()}/help` } });
   }

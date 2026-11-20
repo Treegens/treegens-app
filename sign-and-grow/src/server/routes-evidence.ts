@@ -57,7 +57,7 @@ route('GET', '/envelopes/:id/evidence', async (c) => {
 });
 
 // The disputes on an envelope, for whoever may open it: when, under which name, how they reached us, what they
-// wrote, and whether a person at Sign&Grow has closed it. Never the internet address or browser (disputesFor).
+// wrote, and whether a person at GrowSigning has closed it. Never the internet address or browser (disputesFor).
 route('GET', '/envelopes/:id/disputes', (c) => {
   const e = mine(c, c.params.id, 'envelope', { removed: true });
   return { disputes: disputesFor(e.id) };
@@ -77,7 +77,7 @@ route('POST', '/sign/:token/dispute', async (c) => {
   return disputeEnvelope(e, r, b, actor, 'sign');
 }, 'public');
 
-// A person at Sign&Grow closes the disputes of an envelope, also of one deleted since: { "how": "handled" | "in_error",
+// A person at GrowSigning closes the disputes of an envelope, also of one deleted since: { "how": "handled" | "in_error",
 // "note": "what was done" }. "in_error" is for a dispute filed in error (a forwarded email, a mistake): /verify then
 // says so next to the mark, which stays. The dispute's open alerts in the queue are closed with the same note, the
 // way closing one of them from the queue closes the dispute. Only for the people in OPERATOR_EMAILS.
@@ -90,7 +90,7 @@ route('POST', '/operator/disputes/:id', async (c) => {
   if (note.length < 2) throw bad('Write a note that says what was done. It stays with the alert. Nothing was changed.');
   const n = tx(() => {
     const closed = closeDisputes(c.params.id, c.user, how, note);
-    for (const t of all("SELECT id FROM support_requests WHERE envelope_id=? AND topic='not-me' AND status!='closed' AND name='Sign&Grow (automatic alert)'", c.params.id)) {
+    for (const t of all("SELECT id FROM support_requests WHERE envelope_id=? AND topic='not-me' AND status!='closed' AND name='GrowSigning (automatic alert)'", c.params.id)) {
       for (const [kind, body] of [['note', note], ['event', how === 'in_error' ? 'Closed the dispute as filed in error' : 'Closed the dispute']])
         run('INSERT INTO support_messages (request_id, kind, by_id, by_name, body, at) VALUES (?,?,?,?,?,?)', t.id, kind, c.user.id, c.user.name, body, now());
       run("UPDATE support_requests SET status='closed', closed_at=?, closed_how='handled', due_at=NULL, updated_at=? WHERE id=?", now(), now(), t.id);

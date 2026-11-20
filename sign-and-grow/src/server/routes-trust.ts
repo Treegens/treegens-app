@@ -201,7 +201,7 @@ route('GET', '/export', (c) => {
     // The account's security record, for its admins only (seclog.ts).
     if (c.admin) yield* securityExport(c.account.id);
     yield { name: 'README.txt', data: Buffer.from([
-      `Sign&Grow export for ${c.account.name}, made ${now()}.`, '',
+      `GrowSigning export for ${c.account.name}, made ${now()}.`, '',
       'signed/        completed documents, each with its certificate of completion',
       'audit/         the full audit trail of every envelope, as JSON',
       'comments/      the questions and comments on an envelope, in full, where anyone wrote any. They are not part of what was signed.',
@@ -216,7 +216,7 @@ route('GET', '/export', (c) => {
       ...(notMade.length ? ['', `${notMade.length} completed document(s) have no signed PDF yet, because it could not be made so far. Everyone finished, and their audit trails are here. It is made by itself once it can be; export again then. Not included:`, ...notMade.map((u) => `  ${u}`)] : []),
     ].join('\r\n')) };
   }
-  return new Response(zipStream(entries()), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="sign-and-grow-export-${now().slice(0, 10)}.zip"` } });
+  return new Response(zipStream(entries()), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="growsigning-export-${now().slice(0, 10)}.zip"` } });
 });
 
 // A stored file is taken off the disk once nothing points at it any more: no uploaded file, no signed PDF, no copy
@@ -333,12 +333,12 @@ export async function tellTeamsAboutKeys(who: { id: string; name: string }, keys
     const n = one ? 'An API key' : `${theirs.length} API keys`;
     const list = keyList(theirs);
     const [state, why, lines] = {
-      off: [`${one ? 'is' : 'are'} switched off`, `${who.name} is closing their login`, [`${who.name} is closing their Sign&Grow login. The API keys ${who.name} created in ${team} were switched off at that moment:`, list,
+      off: [`${one ? 'is' : 'are'} switched off`, `${who.name} is closing their login`, [`${who.name} is closing their GrowSigning login. The API keys ${who.name} created in ${team} were switched off at that moment:`, list,
         'Anything that uses one of them now gets an error that says so. To carry on, create a new key and put it into the integration.',
         `Nothing is deleted before ${until.slice(0, 10)}. If ${who.name} signs in again before then, the keys work again. If not, they stop for good on that day. You are told by email when either happens.`]],
-      back: [`${one ? 'works' : 'work'} again`, `${who.name} kept their login`, [`${who.name} signed in again, so their Sign&Grow login is no longer being closed. The API keys ${who.name} created in ${team} work again from that moment:`, list,
+      back: [`${one ? 'works' : 'work'} again`, `${who.name} kept their login`, [`${who.name} signed in again, so their GrowSigning login is no longer being closed. The API keys ${who.name} created in ${team} work again from that moment:`, list,
         'If you put a new key into an integration in the meantime, the old one is not needed any more. You can revoke it under Settings, API and webhooks.']],
-      stopped: ['stopped working', `${who.name} closed their login`, [`${who.name} closed their Sign&Grow login, and it has now been deleted. The API keys ${who.name} created in ${team} have stopped for good:`, list,
+      stopped: ['stopped working', `${who.name} closed their login`, [`${who.name} closed their GrowSigning login, and it has now been deleted. The API keys ${who.name} created in ${team} have stopped for good:`, list,
         'Anything that still uses one of them gets an error that says the key has stopped. To carry on, create a new key and put it into the integration. The stopped keys stay on your list until you clear them.']],
     }[what] as [string, string, string[]];
     for (const a of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin') AND m.user_id!=?", accountId, who.id))
@@ -426,7 +426,7 @@ export function purgeUser(userId: string): any[] {
     // The alerts the software files (routes-billing.ts, evidence.ts, filestore.ts) are kept under the address of
     // whoever answers. They belong to the service, not to that person, and stay when an operator leaves (isAlert in
     // routes-support.ts).
-    const theirs = `((user_id=?${user.email_verified ? ' OR lower(email)=lower(?)' : ''}) AND NOT (ref IS NULL AND user_id IS NULL AND COALESCE(name, '')='Sign&Grow (automatic alert)'))`;
+    const theirs = `((user_id=?${user.email_verified ? ' OR lower(email)=lower(?)' : ''}) AND NOT (ref IS NULL AND user_id IS NULL AND COALESCE(name, '')='GrowSigning (automatic alert)'))`;
     const who = user.email_verified ? [userId, user.email] : [userId];
     run(`DELETE FROM support_requests WHERE ${theirs} AND status NOT IN ('open','waiting')`, ...who);
     run(`UPDATE support_requests SET forget=1, user_id=NULL, account_id=NULL WHERE ${theirs}`, ...who);
@@ -468,7 +468,7 @@ export function purgeUser(userId: string): any[] {
 
 // How long a file a signer uploaded but never attached to anything is kept.
 const LOOSE_UPLOAD_DAYS = 30;
-const CLOSED_SUBJECT = 'Your Sign&Grow account is closed';
+const CLOSED_SUBJECT = 'Your GrowSigning account is closed';
 
 // Run from the timer: accounts whose grace period has passed are removed, and teams hear which keys stopped.
 // A week before that, the person is told the day, how to keep the account and how to take a copy of everything
@@ -480,8 +480,8 @@ export async function purgeClosedAccounts(): Promise<number> {
     const day = u.closing_at.slice(0, 10);
     const left = Math.max(1, Math.ceil((Date.parse(u.closing_at) - Date.now()) / 864e5));
     const owns = get("SELECT COUNT(*) n FROM memberships WHERE user_id=? AND role='owner'", u.id).n;
-    await sendMail({ to: u.email, subject: `Your Sign&Grow account will be deleted on ${day}`, heading: `${left === 1 ? 'One day' : `${left} days`} left: your account is deleted on ${day}`,
-      lines: [`Hi ${u.name}, you closed your Sign&Grow account. On ${day} ${owns ? 'it is deleted for good, with its envelopes, signed documents and audit trails' : 'your login is deleted for good'}. After that day nobody can bring it back, and that includes us.`,
+    await sendMail({ to: u.email, subject: `Your GrowSigning account will be deleted on ${day}`, heading: `${left === 1 ? 'One day' : `${left} days`} left: your account is deleted on ${day}`,
+      lines: [`Hi ${u.name}, you closed your GrowSigning account. On ${day} ${owns ? 'it is deleted for good, with its envelopes, signed documents and audit trails' : 'your login is deleted for good'}. After that day nobody can bring it back, and that includes us.`,
         'To keep the account: sign in before that day. That is all it takes. Everything is there again at once, and nothing is deleted.',
         `To take a copy of everything first: sign in, go to Settings, then Your data, and choose Export everything. You get one ZIP file with every signed PDF, every audit trail and a list of all envelopes. Signing in keeps the account, so close it again afterwards if you still want it gone. That starts a new ${CLOSE_GRACE_DAYS} days.`,
         'If you do nothing, the account is deleted on that day and you will not hear from us again.'],
@@ -579,7 +579,7 @@ route('POST', '/me/delete', async (c) => {
   record('account.closing', { c, member: c.user.id, about: ['user', c.user.id], details: { deleted_now: false, deletes_at: when, accounts_closing: owned.length, keys_switched_off: keys.length } });
   run('DELETE FROM sessions WHERE user_id=?', c.user.id);
   await tellTeamsAboutKeys(c.user, keys, 'off', when);
-  await sendMail({ to: c.user.email, subject: 'Your Sign&Grow account is closing', heading: `Your account will be deleted on ${when.slice(0, 10)}`,
+  await sendMail({ to: c.user.email, subject: 'Your GrowSigning account is closing', heading: `Your account will be deleted on ${when.slice(0, 10)}`,
     lines: [confirmed ? 'Any subscription has been stopped and you will not be charged again.' : 'Your subscription is cancelled on our side. The payment provider did not confirm it straight away, so we keep trying until it does. If a payment is taken in the meantime, the software refunds it by itself.',
       `Until ${when.slice(0, 10)} nothing is deleted. Changed your mind, or closed it by mistake? Just sign in again and the account comes straight back.`,
       ...ownKeyLines(keys, `${keys.length === 1 ? 'This API key of yours is' : 'These API keys of yours are'} switched off from now. Signing in again before ${when.slice(0, 10)} switches ${keys.length === 1 ? 'it' : 'them'} back on:`),
@@ -653,14 +653,14 @@ route('POST', '/operator/accounts/:id', async (c) => {
       : `For you nothing changes: the account has a payment that is more than ${PAID_TRUST_DAYS} days old and was not refunded or disputed, so the daily limit and the check for fake payment notices do not apply to it.`;
     if (b.trusted !== !!a.trusted_at)
       for (const u of admins)
-        await sendMail({ to: u.email, subject: b.trusted ? 'A person has cleared your Sign&Grow account' : 'The sending limits apply to your Sign&Grow account again', heading: b.trusted ? 'Your account is cleared' : 'Your account is no longer marked as trusted',
-          lines: b.trusted ? [`Someone on the Sign&Grow team looked at ${a.name} and marked it as trusted. The daily limit on how many people you can send to, and the check for fake payment notices, no longer apply to it.`, 'If something you tried to send was refused, send it again now.']
-            : [`Someone on the Sign&Grow team removed the trusted mark from ${a.name}. ${again}`, mistakeLine()],
-          cta: { label: b.trusted ? 'Open Sign&Grow' : 'Contact us', url: b.trusted ? `${baseUrl()}/app` : `${baseUrl()}/help` } });
+        await sendMail({ to: u.email, subject: b.trusted ? 'A person has cleared your GrowSigning account' : 'The sending limits apply to your GrowSigning account again', heading: b.trusted ? 'Your account is cleared' : 'Your account is no longer marked as trusted',
+          lines: b.trusted ? [`Someone on the GrowSigning team looked at ${a.name} and marked it as trusted. The daily limit on how many people you can send to, and the check for fake payment notices, no longer apply to it.`, 'If something you tried to send was refused, send it again now.']
+            : [`Someone on the GrowSigning team removed the trusted mark from ${a.name}. ${again}`, mistakeLine()],
+          cta: { label: b.trusted ? 'Open GrowSigning' : 'Contact us', url: b.trusted ? `${baseUrl()}/app` : `${baseUrl()}/help` } });
     if (b.trusted) await releaseHeld(a.id);
     return { trusted: b.trusted };
   }
-  const reason = str(b.reason, 300).trim() || 'Paused by the Sign&Grow team';
+  const reason = str(b.reason, 300).trim() || 'Paused by the GrowSigning team';
   if (b.paused) run('UPDATE accounts SET suspended_at=?, suspended_reason=? WHERE id=?', now(), reason, a.id);
   else {
     // Lifting a pause means a person has looked at everything reported so far. Those reports do not count again.
@@ -670,7 +670,7 @@ route('POST', '/operator/accounts/:id', async (c) => {
   // The reason is the one the admins are emailed below.
   if (b.paused || a.suspended_at) record(b.paused ? 'operator.paused' : 'operator.resumed', { accounts: a.id, by: { type: 'operator', id: c.user.id }, details: b.paused ? { reason } : {} });
   for (const u of admins)
-    await sendMail({ to: u.email, subject: b.paused ? 'Sending is paused on your Sign&Grow account' : 'Sending is back on for your Sign&Grow account', heading: b.paused ? 'Sending is paused' : 'You can send again',
+    await sendMail({ to: u.email, subject: b.paused ? 'Sending is paused on your GrowSigning account' : 'Sending is back on for your GrowSigning account', heading: b.paused ? 'Sending is paused' : 'You can send again',
       lines: b.paused ? [`Reason: ${reason.replace(/[.\s]+$/, '')}.`, PAUSED_MEANS, 'You can still open, download and export everything in your account, and people who already have a document can still open, sign and download it.', mistakeLine()]
         : ['A person looked at it and lifted the pause. Sorry for the interruption.', 'Anyone who was waiting further down a signing order while it lasted is being asked now. Reminders start again by themselves.'],
       cta: { label: 'Contact us', url: `${baseUrl()}/help` } });

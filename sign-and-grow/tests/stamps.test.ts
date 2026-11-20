@@ -519,7 +519,7 @@ test('admins keep up to ten stamps; members use them; names are checked; anythin
   const seen = ok(await mem.get('/stamps'));
   assert.equal(seen.stamps.length, 2);
   assert.equal(seen.may_change, false);
-  assert.match(seen.what_a_stamp_is, /is a picture of a stamp that someone on your team puts on a document\. Sign&Grow does not check that they may use it, and it is not a certified electronic seal\./);
+  assert.match(seen.what_a_stamp_is, /is a picture of a stamp that someone on your team puts on a document\. GrowSigning does not check that they may use it, and it is not a certified electronic seal\./);
   assert.equal((await mem.post('/stamps', { name: 'Mine', image: stampPng(14) })).status, 403);
   assert.equal((await mem.put(`/stamps/${kept.id}`, { name: 'Mine' })).status, 403);
   assert.equal((await mem.call('DELETE', `/stamps/${kept.id}`)).status, 403);
@@ -623,7 +623,7 @@ test('a signer puts on their own stamp: kept by Finish later, never set by the a
   // Put on from a picture.
   const put = ok(await rita.post(`/sign/${tok}/stamp`, { field_id: f.id, image: stampPng(21, 'red'), ink: 'red', seed: 21, tilt: ink.tiltFor(21), texture: 0.5, from: 'camera' }), 'stamp');
   assert.match(put.value, /^[0-9a-f]{64}$/);
-  assert.match(put.what_a_stamp_is, /a picture of a stamp that you put on the document\. Sign&Grow does not check that you may use it, and it is not a certified electronic seal\./);
+  assert.match(put.what_a_stamp_is, /a picture of a stamp that you put on the document\. GrowSigning does not check that you may use it, and it is not a certified electronic seal\./);
   // Finish later, on another device: it is still there.
   ok(await rita.post(`/sign/${tok}/save`, { values: {} }));
   const again = ok(await from().get(`/sign/${tok}`));
@@ -685,7 +685,7 @@ test('the signed PDF prints the stamp like ink: multiplied in, slightly see-thro
   assert.match(text, /Sender's stamp/);
   assert.match(text, /"Pia Trading Ltd", a saved stamp of the account, on page 1\. Picture SHA-256/);
   assert.match(text, /A stamp, a picture they uploaded, on page 1, put on \d{4}-/);
-  assert.match(text.replace(/\s+/g, ' '), /A stamp here is a picture of a stamp that this person put on the document\. Sign&Grow does not check that they may use it, and it is not a certified electronic seal\./);
+  assert.match(text.replace(/\s+/g, ' '), /A stamp here is a picture of a stamp that this person put on the document\. GrowSigning does not check that they may use it, and it is not a certified electronic seal\./);
   assert.doesNotMatch(text, /verified seal|certified stamp|legally binding seal|authenticated stamp/i, 'nothing claims more');
 });
 
@@ -974,7 +974,7 @@ test('the API description has the stamp field and the stamp routes; the words ne
   assert.ok(spec.components.schemas.Field.properties.stamp_id);
   for (const p of ['/stamps', '/stamps/{id}', '/stamps/{id}/image', '/envelopes/{id}/stamp-image/{sha}', '/sign/{token}/stamp', '/sign/{token}/stamps']) assert.ok(spec.paths[p], `documented: ${p}`);
   assert.match(JSON.stringify(spec.paths['/stamps']), /not a certified electronic seal/);
-  assert.match(STAMP_IS, /^A stamp here is a picture of a stamp that this person put on the document\. Sign&Grow does not check that they may use it, and it is not a certified electronic seal\.$/);
+  assert.match(STAMP_IS, /^A stamp here is a picture of a stamp that this person put on the document\. GrowSigning does not check that they may use it, and it is not a certified electronic seal\.$/);
   for (const f of ['src/lib/stamps.ts', 'src/lib/stampink.ts', 'src/server/stamps.ts', 'src/server/routes-stamps.ts', 'src/server/png.ts', 'tests/stamps.test.ts'])
     assert.ok(!read(f).includes(String.fromCharCode(0x2014)), `no em dash in ${f}`);
 });

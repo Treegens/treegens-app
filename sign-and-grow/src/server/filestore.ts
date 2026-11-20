@@ -79,8 +79,8 @@ function fileAlert(subject: string, lines: string[]) {
   try {
     const to = [...new Set([process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
     const message = `${subject}\n\n${lines.join('\n')}`.slice(0, 5000);
-    if (get("SELECT 1 x FROM support_requests WHERE name=? AND status!='closed' AND message=?", 'Sign&Grow (automatic alert)', message)) return;
-    run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'other',?,'open',?)", id('sup'), to[0] || 'files-alert@localhost', 'Sign&Grow (automatic alert)', message, now());
+    if (get("SELECT 1 x FROM support_requests WHERE name=? AND status!='closed' AND message=?", 'GrowSigning (automatic alert)', message)) return;
+    run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'other',?,'open',?)", id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', message, now());
     if (to.length)
       import('./mail.ts').then(async ({ sendMail }) => {
         for (const t of to) await sendMail({ to: t, subject, heading: subject, lines, cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } });

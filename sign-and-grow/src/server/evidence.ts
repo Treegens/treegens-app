@@ -58,7 +58,7 @@ export function forgottenFile(o: { sha256?: string; id?: string }): { envelope_i
 
 // The owner's rule. While a dispute is open its sender cannot delete the envelope for good: deleting only takes it
 // out of their lists (keptOnDelete in deleting.ts). When the account is deleted, a minimal record of the dispute is
-// kept until a person at Sign&Grow closes it: the envelope id, the fingerprint of the signed file if there is one, the
+// kept until a person at GrowSigning closes it: the envelope id, the fingerprint of the signed file if there is one, the
 // day of the dispute and the state the envelope was in. No names, no addresses, no title, no words. The alert in the
 // operators' queue goes the way of a help request whose writer deleted their account: it is kept while it is open,
 // then forgotten (supportTick in routes-support.ts), and DISPUTE_KEPT in src/lib/evidence.ts says so to everyone.
@@ -71,7 +71,7 @@ function keepDispute(envelopeId: string) {
   run("UPDATE support_requests SET forget=1, account_id=NULL, user_id=NULL WHERE envelope_id=? AND topic='not-me' AND name=?", envelopeId, ALERT);
 }
 
-// A person at Sign&Grow closes the disputes of an envelope: 'handled' when they have looked into it (that decides
+// A person at GrowSigning closes the disputes of an envelope: 'handled' when they have looked into it (that decides
 // nothing about who is right, so the mark stays), 'in_error' when it was filed in error (a forwarded email, a
 // mistake), which /verify then says next to the mark. Either way the sender may delete the envelope again, and the
 // record kept after a deletion goes. Closing the dispute's alert in the queue closes it as 'handled'.
@@ -80,9 +80,9 @@ export function closeDisputes(envelopeId: string, by: { name: string }, how: 'ha
   const n = Number(run('UPDATE disputes SET closed_at=?, closed_how=?, closed_note=? WHERE envelope_id=? AND closed_at IS NULL', t, how, str(note, 2000) || null, envelopeId).changes);
   const gone = Number(run('DELETE FROM forgotten_disputes WHERE envelope_id=?', envelopeId).changes);
   if (n && get('SELECT 1 x FROM envelopes WHERE id=?', envelopeId))
-    audit(envelopeId, { name: `${by.name}, Sign&Grow` }, 'Dispute closed', how === 'in_error'
-      ? 'A person at Sign&Grow looked into the dispute and found that it was filed in error. The dispute stays on the record with this line.'
-      : 'A person at Sign&Grow looked into the dispute and closed it. That does not decide who is right: the envelope stays marked as disputed.');
+    audit(envelopeId, { name: `${by.name}, GrowSigning` }, 'Dispute closed', how === 'in_error'
+      ? 'A person at GrowSigning looked into the dispute and found that it was filed in error. The dispute stays on the record with this line.'
+      : 'A person at GrowSigning looked into the dispute and closed it. That does not decide who is right: the envelope stays marked as disputed.');
   return n + gone;
 }
 
@@ -291,7 +291,7 @@ async function fileDispute(e: any, p: Disputer, who: string, body: any, actor: A
     `Nothing was changed or deleted. The document, its signatures and its audit trail stay exactly as they are. From now on the envelope is marked as disputed, on its page here and for anyone who looks it up at ${baseUrl()}/verify. While the dispute is open, the envelope cannot be deleted for good.`,
     ...(e.status === 'sent' ? ['The envelope is still out for signature, and nothing about it was stopped. If you agree that it was not them, void it and send it again to the right person.'] : []),
     `We do not decide who is right. Speak to ${p.visitor ? 'them' : p.name} directly. If it becomes a legal matter, the rules differ by country and by kind of document, so ask a lawyer where you are.`,
-    'A person at Sign&Grow has been told as well.',
+    'A person at GrowSigning has been told as well.',
   ]);
   return { ok: true, already: false, disputed_at: t };
 }
@@ -316,7 +316,7 @@ async function tellOperatorsOfDispute(e: any, p: Disputer, who: string, detail: 
   if (!to.length) console.error(`[disputes] NOBODY WAS TOLD BY EMAIL (set SUPPORT_EMAIL or OPERATOR_EMAILS). Envelope ${e.id} was disputed; it is in the operator queue.`);
   return to.length > 0;
 }
-const ALERT = 'Sign&Grow (automatic alert)';
+const ALERT = 'GrowSigning (automatic alert)';
 
 // ---- The evidence pack ----------------------------------------------------------------------------------------------
 
@@ -393,7 +393,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const r = people.find((p: any) => labelOf(p) === a.actor);
       // In the language the line names (English for a line from before languages were recorded): policy.ts.
       const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
-      const how = !named ? ' (their audit line names no wording, because it was written before Sign&Grow recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
+      const how = !named ? ' (their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
         : /did not say/.test(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
       return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
     }) : ['Nobody has agreed yet.']),
@@ -404,9 +404,9 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   if (said) (add('comments.txt', said), add('comments.json', JSON.stringify({ envelope_id: e.id, not_signed: COMMENTS_NOT_SIGNED, threads: threadsOf(e, { side: 'sender' }) }, null, 2)));
   // The disputes, with what each person wrote, word for word: what the sender is given, nothing more (disputesFor).
   const disputes = disputesFor(e.id);
-  if (disputes.length) add('disputes.txt', [`What people named on "${e.subject}" (envelope ${e.id}) told us when they disputed it. Nobody has checked what they wrote. Their internet address and browser are kept by the people who run Sign&Grow and are not in this pack.`, '',
+  if (disputes.length) add('disputes.txt', [`What people named on "${e.subject}" (envelope ${e.id}) told us when they disputed it. Nobody has checked what they wrote. Their internet address and browser are kept by the people who run GrowSigning and are not in this pack.`, '',
     ...disputes.flatMap((d: any) => [`${String(d.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}, under the name ${d.name}, through ${d.via === 'sign' ? 'a signing link' : 'the security code of one of our emails'}.`, d.detail ? `They wrote: ${d.detail}` : 'They wrote nothing more.',
-      ...(d.closed_at ? [`Closed by a person at Sign&Grow on ${String(d.closed_at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${d.closed_how === 'in_error' ? ', as filed in error' : ''}.`] : ['Still open.']), '----', ''])].join('\r\n'));
+      ...(d.closed_at ? [`Closed by a person at GrowSigning on ${String(d.closed_at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${d.closed_how === 'in_error' ? ', as filed in error' : ''}.`] : ['Still open.']), '----', ''])].join('\r\n'));
   // Every stamp on the pages as its own picture, so its fingerprint in the audit trail can be checked (stamps.ts).
   const stamps = stampEvidence(e);
   for (const s of stamps) add(s.name, s.data);
@@ -415,7 +415,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   for (const o of originals) add(o.name, o.data);
 
   add('README.txt', [
-    `Sign&Grow evidence pack for envelope ${e.id}, "${e.subject}".`, `Made on ${now()} by ${madeBy}. It shows the envelope as it stood at that moment.`, '',
+    `GrowSigning evidence pack for envelope ${e.id}, "${e.subject}".`, `Made on ${now()} by ${madeBy}. It shows the envelope as it stood at that moment.`, '',
     ...(pdfName === 'signed.pdf' ? [`signed.pdf            the signed document exactly as stored when everyone had finished, with its certificate of completion. SHA-256 ${e.final_sha256}. Anyone can check a copy at ${baseUrl()}/verify, or look the envelope up there by its ID.`] : pdfName ? [`${pdfName.padEnd(22)}the document as it stands, ${e.status === 'sent' ? 'while it is still out for signature' : 'marked as not completed on every page'}. It is not a signed document and has no certificate.`] : []),
     ...(certName ? ['certificate.pdf       the certificate of completion on its own: the last pages of signed.pdf. It was sealed when everyone had finished, so it does not show what happened after that.'] : []),
     'audit-trail.txt       every line of the audit trail, to read: time in UTC, who, internet address, what, and each line\'s hash.',
@@ -425,9 +425,9 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
     ...(originals.length ? [ORIGINALS_README] : []),
     ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []),
-    ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at Sign&Grow has closed it.'] : []), '',
+    ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at GrowSigning has closed it.'] : []), '',
     'What this does and does not show.', CHAIN_TRUTH, WHO_WHEN_WHERE,
-    'Rules about electronic signatures differ by country and by kind of document. This pack is a record of what happened in Sign&Grow; it does not say that a signature is valid, and it is not legal advice.',
+    'Rules about electronic signatures differ by country and by kind of document. This pack is a record of what happened in GrowSigning; it does not say that a signature is valid, and it is not legal advice.',
     ...(e.disputed_at ? ['', `This envelope is disputed: on ${e.disputed_at} a person named on it said they did not sign it, or that it was not them. See the "Disputed" lines in the audit trail.`] : []),
     ...(notes.length ? ['', ...notes] : []),
   ].join('\r\n'));
@@ -446,8 +446,8 @@ async function certificatePages(e: any, pdf: Uint8Array): Promise<Uint8Array | n
   const out = await PDFDocument.create();
   for (const p of await out.copyPages(src, Array.from({ length: total - from }, (_, i) => from + i))) out.addPage(p);
   out.setTitle(`Certificate of completion, envelope ${e.id}`);
-  out.setProducer('Sign&Grow');
-  out.setCreator('Sign&Grow');
+  out.setProducer('GrowSigning');
+  out.setCreator('GrowSigning');
   return out.save();
 }
 

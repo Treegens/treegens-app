@@ -39,18 +39,18 @@ export function SignatureKind() {
   return (
     <>
       <QA id="enough" q="Is this signature enough for my document?">
-        <p>Sign&Grow makes a <b>simple electronic signature</b>: the signer&apos;s name or mark on the page, and a record of who was sent the link, when they agreed and signed, and from which internet address. It does not check anyone&apos;s identity document, and it has no notary step. A witness can be added for a person who signs: they state that they saw the signature being made, and Sign&Grow cannot check that they were there (<a href="#witness">how a witness works</a>).</p>
+        <p>GrowSigning makes a <b>simple electronic signature</b>: the signer&apos;s name or mark on the page, and a record of who was sent the link, when they agreed and signed, and from which internet address. It does not check anyone&apos;s identity document, and it has no notary step. A witness can be added for a person who signs: they state that they saw the signature being made, and GrowSigning cannot check that they were there (<a href="#witness">how a witness works</a>).</p>
         <p>Whether that is enough depends on the country and on the kind of document. Nobody here is a lawyer and this page is not legal advice. As a rough map, the European Union describes three levels:</p>
         <ul className="pub-list">
-          <li><b>Simple.</b> What Sign&Grow makes. In many countries it can be used for agreements that need no special form.</li>
-          <li><b>Advanced.</b> Linked to the signer alone, able to identify them, and made so that any later change to the document shows. Sign&Grow does not claim to make these.</li>
-          <li><b>Qualified.</b> An advanced signature made with a qualified certificate from a provider approved for that. In EU law only this level is given the same effect as a handwritten signature. Sign&Grow does not make these.</li>
+          <li><b>Simple.</b> What GrowSigning makes. In many countries it can be used for agreements that need no special form.</li>
+          <li><b>Advanced.</b> Linked to the signer alone, able to identify them, and made so that any later change to the document shows. GrowSigning does not claim to make these.</li>
+          <li><b>Qualified.</b> An advanced signature made with a qualified certificate from a provider approved for that. In EU law only this level is given the same effect as a handwritten signature. GrowSigning does not make these.</li>
         </ul>
         <p><b>Check before you send</b> when a law, a registry, a bank or the other side asks for written form, a handwritten signature, a witness, a notary or a qualified signature. The usual cases are wills, trusts, powers of attorney, sales and transfers of land, long leases, deeds, and in some countries parts of an employment contract. <a href="#outside-us">The notes by country and the list of documents not to sign here</a> say more.</p>
       </QA>
 
       <QA id="outside-us" q="Signing outside the United States, and documents that should not be signed here">
-        <p>Sign&Grow was built from reviews that were mostly written in the United States, and it knows nothing about your country. It cannot tell what kind of document you send, beyond looking for the few words listed below, and it has not checked the law of any country for you, the United States included. What follows is what our research found, with the month it was looked at and where it came from. It is not legal advice, laws change, and the rule for your document may differ: check with a lawyer or the office that will receive the document.</p>
+        <p>GrowSigning was built from reviews that were mostly written in the United States, and it knows nothing about your country. It cannot tell what kind of document you send, beyond looking for the few words listed below, and it has not checked the law of any country for you, the United States included. What follows is what our research found, with the month it was looked at and where it came from. It is not legal advice, laws change, and the rule for your document may differ: check with a lawyer or the office that will receive the document.</p>
         <p><b>Do not sign these here without checking first:</b></p>
         <ul className="pub-list">
           <li>A will or a codicil, a trust deed, a power of attorney.</li>
@@ -96,7 +96,7 @@ export function SignatureKind() {
         <p>Some countries and some office networks do not let a website through. We have not tested from which places this one can be reached, so we make no promise about any country. Every email we send in your name that asks someone to sign (the request, the reminders and the notices about it) therefore ends with this line, and a reply to it comes to you. The list a signer gets from Find my documents comes from us and can name several senders, so it tells them to reply to your own email about the document instead.</p>
         <blockquote className="pub-quote"><p>{cannotOpenLine('you')}</p></blockquote>
         <p>When someone writes that to you: open the envelope, choose <b>Preview PDF</b> and save the file. It is the document as it stands, with what has been filled in so far. Send it to them yourself, and collect their signature on paper or as a scan.</p>
-        <p>A signature collected that way is outside Sign&Grow. It is not on our certificate and not in the audit trail, so keep the paper or the scan yourself. The envelope here stays open until you void it or its deadline passes. If the others on it should still finish here, take that one person off with a correction instead.</p>
+        <p>A signature collected that way is outside GrowSigning. It is not on our certificate and not in the audit trail, so keep the paper or the scan yourself. The envelope here stays open until you void it or its deadline passes. If the others on it should still finish here, take that one person off with a correction instead.</p>
       </QA>
 
       <QA id="no-email" q="My signer has no email address, or does not read it">

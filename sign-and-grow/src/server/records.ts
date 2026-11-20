@@ -172,7 +172,7 @@ function lift(h: any, by: { name: string; actor: Actor; log: string }, reason: s
   return tx(() => {
     if (!run('UPDATE legal_holds SET lifted_at=?, lifted_by=?, lift_reason=? WHERE id=? AND lifted_at IS NULL', now(), by.name, reason, h.id).changes) return 0;
     const ids = holdCovers(h);
-    for (const eid of ids) audit(eid, by.actor, 'Legal hold lifted', `${h.folder ? `The hold on its folder "${h.folder}"` : 'The legal hold'} was lifted by ${by.name.endsWith('Sign&Grow') ? 'the people who run this server' : 'an admin of the account'}.${isHeld([eid]).size ? ' Another hold still covers it.' : ''}`);
+    for (const eid of ids) audit(eid, by.actor, 'Legal hold lifted', `${h.folder ? `The hold on its folder "${h.folder}"` : 'The legal hold'} was lifted by ${by.name.endsWith('GrowSigning') ? 'the people who run this server' : 'an admin of the account'}.${isHeld([eid]).size ? ' Another hold still covers it.' : ''}`);
     logLine(h.account_id, h.envelope_id, 'hold_lifted', { who: by.log, detail: `${h.folder ? `Folder "${h.folder}"` : `Envelope ${h.envelope_id}`}: hold ${h.id} lifted. Reason: ${reason}` });
     return ids.length;
   });
@@ -203,16 +203,16 @@ export async function operatorLift(holdId: string, op: { name: string; email: st
   const fresh = h.override_at && Date.parse(h.override_at) > Date.now() - 7 * DAY;
   if (!fresh || h.override_by === op.email.toLowerCase()) {
     run('UPDATE legal_holds SET override_by=?, override_reason=?, override_at=? WHERE id=?', op.email.toLowerCase(), reason, now(), h.id);
-    logLine(h.account_id, h.envelope_id, 'override_asked', { who: `${op.name}, Sign&Grow`, detail: `Asked to lift hold ${h.id}. Reason: ${reason}. A second person who runs this server has to confirm within 7 days.` });
+    logLine(h.account_id, h.envelope_id, 'override_asked', { who: `${op.name}, GrowSigning`, detail: `Asked to lift hold ${h.id}. Reason: ${reason}. A second person who runs this server has to confirm within 7 days.` });
     return { lifted: false, waiting_for_second: true };
   }
   const first = get('SELECT name FROM users WHERE lower(email)=?', h.override_by)?.name || h.override_by;
   const why = `${h.override_reason} / ${reason}`;
-  const n = lift(h, { name: `${first} and ${op.name}, Sign&Grow`, actor: { name: `${first} and ${op.name}, Sign&Grow` }, log: `${first} (asked) and ${op.name} (confirmed), Sign&Grow` }, `Lifted by the people who run this server: ${why}`);
+  const n = lift(h, { name: `${first} and ${op.name}, GrowSigning`, actor: { name: `${first} and ${op.name}, GrowSigning` }, log: `${first} (asked) and ${op.name} (confirmed), GrowSigning` }, `Lifted by the people who run this server: ${why}`);
   secLine('legal_hold.lifted', h.account_id, { operator: true, about: ['legal_hold', h.id], details: { covers: n, by_operator: true } });
   for (const a of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", h.account_id))
-    await sendMail({ to: a.email, subject: 'A legal hold on your Sign&Grow account was lifted by the people who run the service', heading: 'A legal hold was lifted',
-      lines: [`Two people who run this Sign&Grow server lifted ${holdName(h)}.`, `What they gave as the reason: ${why}`,
+    await sendMail({ to: a.email, subject: 'A legal hold on your GrowSigning account was lifted by the people who run the service', heading: 'A legal hold was lifted',
+      lines: [`Two people who run this GrowSigning server lifted ${holdName(h)}.`, `What they gave as the reason: ${why}`,
         'What it covered can be deleted and purged again by the usual rules. Envelopes the retention rule had reached get a new email 14 days before anything is purged.',
         'If you did not expect this, contact the people who run this server.'],
       cta: { label: 'Open Your data', url: `${baseUrl()}/app/settings?tab=data` } });
@@ -351,7 +351,7 @@ export async function askPurge(c: Ctx, e: any, levelIn: any) {
   if (e.purged_at) throw bad(`This envelope was already purged on ${day(e.purged_at)}.`, 409);
   if (!isClosed(e.status)) throw bad(e.status === 'draft' ? 'This is a draft. Delete it instead: a draft goes for good at once.' : 'Only a closed envelope can be purged. This one is still out for signature: void it first if it should not be signed.', 400);
   assertNotHeld([e.id], `${c.user.name} <${c.user.email}>`, 'purge it');
-  if (disputeOpen(e.id)) throw bad('A person named on this envelope disputes it, and Sign&Grow has not closed that dispute yet, so it cannot be purged until then. Nothing was changed.', 409, { code: 'disputed' });
+  if (disputeOpen(e.id)) throw bad('A person named on this envelope disputes it, and GrowSigning has not closed that dispute yet, so it cannot be purged until then. Nothing was changed.', 409, { code: 'disputed' });
   const q = queueRow(e);
   if (q.asked_at) throw bad(`A purge was already asked for on ${day(q.asked_at)}. It goes on ${day(q.goes_at)} unless it is called off. Nothing changed.`, 409);
   const goes = new Date(Date.now() + NOTICE_MS).toISOString();
@@ -413,7 +413,7 @@ async function notify(accountId: string, list: any[]) {
       heading: n === 1 ? 'An envelope will be purged in 14 days' : `${n} envelopes will be purged in 14 days`,
       lines: [
         asked.length === n ? `Someone asked to purge ${n === 1 ? 'this closed envelope' : 'these closed envelopes'}.` : `Your account's retention rule says to ${ruleText(policy, policy.days || 0)}, counted from the day each one closed.${asked.length ? ' For some of them, someone asked for it.' : ''}`,
-        'On the day given, Sign&Grow removes from each envelope what is named after it. That cannot be undone.',
+        'On the day given, GrowSigning removes from each envelope what is named after it. That cannot be undone.',
         ...p.items.map((e) => `"${e.subject || 'Untitled'}" (envelope ${e.id}): on ${day(e.goes_at)}, ${LEVEL_NAME[e.level as PurgeLevel].toLowerCase()}${e.asked_by ? `, asked for by ${e.asked_by}` : ''}${e.hidden_at ? '. Its sender removed it from their lists; the admins find it under Removed by its sender' : ''}.`),
         'To keep one: open it and choose "Keep it", with a reason. It is then kept for another period. A purge someone asked for can be called off on the envelope page. An admin can also put an envelope or a folder on legal hold: nothing held is purged.',
         'What stays after a purge:',

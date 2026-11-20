@@ -107,7 +107,7 @@ export function termsRefusal(account: any, title: string, text: string, scan = f
   if (posesAs(account.name)) return nameRefusal([account.name]);
   const brand = posesAs(title);
   if (brand) return `The name "${str(title, 120)}" reads like ${brand}. A page that seems to come from a well-known company is how people get tricked, so terms cannot be published under a name like that. Use a name of your own. If you really do write for ${brand}, use the contact form at ${baseUrl()}/help and a person will clear your account. ${paidTrustText()}`;
-  if (scan) return `We cannot read the words of this PDF: at least one page is a picture (a scan or a photo). Our page shows these terms under the Sign&Grow name to anyone with the link, and until this account has earned trust we read what it would show, to keep fake payment notices off it. Use a PDF made from a document, or write the terms as text. ${paidTrustText()}`;
+  if (scan) return `We cannot read the words of this PDF: at least one page is a picture (a scan or a photo). Our page shows these terms under the GrowSigning name to anyone with the link, and until this account has earned trust we read what it would show, to keep fake payment notices off it. Use a PDF made from a document, or write the terms as text. ${paidTrustText()}`;
   const lure = lureIn([title, text, account.name, ...words]);
   return lure ? `These terms, or the words shown with them (next to the box, on the button, in a note of what changed), read like a payment notice from a well-known brand with a phone number to call, which is how scams look. What set this off: the name ${lure.brand}, words about money ("${lure.money}") and what looks like a phone number (${lure.phone}). If that is not what you mean, take one of the three out. If it is genuine, use the contact form at ${baseUrl()}/help and a person will clear your account. ${paidTrustText()}` : null;
 }
@@ -386,7 +386,7 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
     } catch (e: any) {
       unread = e?.data?.code === 'file_locked' ? 'they are locked with an encryption key this server was not given' : e?.data?.code === 'file_damaged' ? 'the stored copy failed its check' : 'the stored copy could not be opened';
     }
-  return sheetPdf('Record of acceptance', `Sign&Grow · Record of acceptance ${r.id}`, (s) => {
+  return sheetPdf('Record of acceptance', `GrowSigning · Record of acceptance ${r.id}`, (s) => {
     s.h2('What was accepted');
     s.kv('Terms', v.title);
     s.kv('Written by', v.account_name || (account ? `${account} (the account's name now: versions published before the name was kept with them do not say what it was then)` : '-'));
@@ -475,7 +475,7 @@ export async function emailCopy(r: any): Promise<{ status: string; to: string }>
   const cw = get('SELECT * FROM clickwraps WHERE id=?', r.clickwrap_id);
   const v = get('SELECT * FROM clickwrap_versions WHERE id=?', r.version_id);
   const account = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', r.account_id);
-  const by = v.account_name || account?.name || 'a Sign&Grow customer';
+  const by = v.account_name || account?.name || 'a GrowSigning customer';
   const words = recordShows(r.identity, r.via);
   const status = await sendMail({
     to: r.email, about: `clickwrap:${cw.id}`, subject: `Your copy: ${v.title}`, heading: `What you accepted: ${v.title}`, fromName: account?.name,

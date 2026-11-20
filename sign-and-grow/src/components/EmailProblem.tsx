@@ -8,7 +8,7 @@ import { bounceDay } from '@/lib/mailnews';
 // Both take `me` from their caller, so this file needs nothing from AppShell.
 
 const TAP = { minHeight: 44 };
-const friendly = (e: any) => (e?.status ? e.message : 'We could not reach Sign&Grow, so nothing was changed. Check your connection and try again.');
+const friendly = (e: any) => (e?.status ? e.message : 'We could not reach GrowSigning, so nothing was changed. Check your connection and try again.');
 
 /** Asks for the new address (and the password, when the login has one) and emails a link there. Nothing changes before that link is opened. */
 export function EmailChangeForm({ me, onCancel }: { me: any; onCancel?: () => void }) {

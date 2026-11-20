@@ -5,7 +5,7 @@
 // What the role means everywhere: a witness belongs to one person who signs (witness_for), is asked straight after
 // that person has signed whatever the signing order says, never uses a signature, and fills in a block the sender
 // places near that person's signature. The sender names the witness, or leaves it to the signer (named_by_signer),
-// who then names them on the review screen before Finish. Sign&Grow records what the witness states. It cannot check
+// who then names them on the review screen before Finish. GrowSigning records what the witness states. It cannot check
 // that they were in the room, and no sentence here may suggest that it can.
 
 /** The month the help entry and the official guide it points to were last read. */
@@ -30,10 +30,10 @@ export const WHO_MAY_WITNESS =
 
 /** What the product does and does not do, said wherever a witness is offered: editor, signing page, certificate, help. */
 export const WITNESS_RECORDS =
-  'Sign&Grow records what the witness states, when they stated it, and from which internet address and browser. It cannot check that they were in the room. Whether a document witnessed this way is accepted depends on the law that applies to it and on whoever it is for. For a deed, check that first.';
+  'GrowSigning records what the witness states, when they stated it, and from which internet address and browser. It cannot check that they were in the room. Whether a document witnessed this way is accepted depends on the law that applies to it and on whoever it is for. For a deed, check that first.';
 
 /** The same, shorter, for the certificate of completion. */
-export const WITNESS_CERT_NOTE = 'Sign&Grow recorded what the witness stated. It cannot check that they were physically present.';
+export const WITNESS_CERT_NOTE = 'GrowSigning recorded what the witness stated. It cannot check that they were physically present.';
 
 /** The witness's own statement, ticked on their first screen and printed on the certificate exactly as ticked. */
 export const statementText = (signer: string, date: string): string => `I was physically present and saw ${signer} sign this document on ${date}.`;
@@ -97,7 +97,7 @@ export function witnessProblem(r: any, e: { recipients?: any[]; fields?: any[]; 
   if (target.group_id || target.group_name) return `${whose} is a group, so nobody knows in advance who will sign for it, and a witness watches one person sign. Remove the witness, or put the person who signs on the document by name.`;
   if (!WITNESSED_ROLES.includes(target.role)) return `${name} is the witness for ${whose}, who does not sign this document. A witness can only be there for someone who signs.`;
   const second = people.find((x) => x.id !== r.id && isWitness(x) && x.witness_for === r.witness_for);
-  if (second) return `${whose} has two witnesses here. A person who signs has one witness on Sign&Grow. Remove one of them.`;
+  if (second) return `${whose} has two witnesses here. A person who signs has one witness on GrowSigning. Remove one of them.`;
   if (r.link_by_sender) return `${name} is a witness, and a witness gets their own email straight after ${whose} signs. Untick "I will send the link myself" for them.`;
   if (r.named_by_signer && r.verify === 'sms_code') return `${whose} names the witness, so there is no mobile number for them to check a code with. Choose a code by email or no extra check for the witness.`;
   if (!waitsForName(r) && norm(r.email) === norm(target.email) && sameName(r.name, target.name)) return `${name} would be the witness of their own signature. A witness has to be somebody else.`;

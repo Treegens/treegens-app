@@ -18,7 +18,7 @@ export default function Check() {
 
         <section className="pub-aside" aria-labelledby="why-h">
           <h2 id="why-h">Why this is safe</h2>
-          <p>If you typed this address yourself, you are on the real Sign&Grow and not on a copy that a link took you to. If you came here from &quot;Report this email&quot; in the email, look at the address bar first: it should show the same address that is printed in the email&apos;s security box. The code only tells you who sent the email and where the document is, and lets you report it: we never ask for a password, a card number or a payment, here or by email.</p>
+          <p>If you typed this address yourself, you are on the real GrowSigning and not on a copy that a link took you to. If you came here from &quot;Report this email&quot; in the email, look at the address bar first: it should show the same address that is printed in the email&apos;s security box. The code only tells you who sent the email and where the document is, and lets you report it: we never ask for a password, a card number or a payment, here or by email.</p>
         </section>
         <section className="pub-aside" aria-labelledby="where-h">
           <h2 id="where-h">Where to find the code</h2>

@@ -8,7 +8,7 @@
 // ("I am ..."). Typing it takes the lock off and nothing else changes: no other browser is signed out, nothing is
 // lost. Five wrong passwords sign the browser out for good, so the lock cannot be worked on at leisure.
 //
-// What this covers is Sign&Grow in that browser. It does not cover the rest of the device (the host's email, where
+// What this covers is GrowSigning in that browser. It does not cover the rest of the device (the host's email, where
 // signing links and password resets arrive, other apps), a password the browser has saved and offers to fill in,
 // or a Google or Microsoft account that is signed in on the device when the host signs in here that way. The
 // pages that offer in-person signing say so (IN_PERSON_LOCK in src/lib/phone.ts).

@@ -178,7 +178,7 @@ export function HelpChat({ screen, link, code, onClose }: {
         }
       }
     } catch {
-      const words = 'We could not reach Sign&Grow, so nothing was sent. Check your connection and ask again.';
+      const words = 'We could not reach GrowSigning, so nothing was sent. Check your connection and ask again.';
       update(() => ({ role: 'assistant', content: words, mode: 'error' }));
       setSpoken(words);
     } finally {
@@ -211,7 +211,7 @@ export function HelpChat({ screen, link, code, onClose }: {
             <div className="hc-log" ref={logRef} role="log" aria-live="off" aria-label="Conversation with the helper" tabIndex={0}>
               {msgs.length === 0 && (
                 <div className="hc-start">
-                  <p className="muted small">Ask anything about Sign&amp;Grow, in your own words and in any language. Or choose one:</p>
+                  <p className="muted small">Ask anything about GrowSigning, in your own words and in any language. Or choose one:</p>
                   <div className="hc-starters">
                     {CHAT_STARTERS[screen].map((q) => <button key={q} type="button" className="btn sm" onClick={() => send(q)}>{q}</button>)}
                   </div>

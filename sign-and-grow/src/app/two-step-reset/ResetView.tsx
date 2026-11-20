@@ -15,7 +15,7 @@ function StopView({ token }: { token: string }) {
     setState('busy');
     api('/auth/two-step/email-reset/stop', { body: { token } })
       .then((r) => setState({ again: r.again_from ? moment(r.again_from) : null }))
-      .catch((e) => setState({ no: e?.status ? e.message : 'We could not reach Sign&Grow, so nothing was stopped. Check your connection and press the button again.' }));
+      .catch((e) => setState({ no: e?.status ? e.message : 'We could not reach GrowSigning, so nothing was stopped. Check your connection and press the button again.' }));
   };
   return (
     <div className="authbox">
@@ -23,14 +23,14 @@ function StopView({ token }: { token: string }) {
         <h1 className="serif" style={{ fontSize: 24 }}>Stop the reset of two-step login</h1>
         {state === 'ask' || state === 'busy' ? (
           <>
-            <p>A reset by email of your Sign&amp;Grow login is under way: when it takes effect, signing in asks for no code from your phone. If you did not ask for it, stop it here. You do not need to sign in.</p>
+            <p>A reset by email of your GrowSigning login is under way: when it takes effect, signing in asks for no code from your phone. If you did not ask for it, stop it here. You do not need to sign in.</p>
             <p className="muted small">If you did ask for it because your phone is lost, close this page: stopping it means a new reset can only be asked for {TWO_STEP_RESET_BLOCK_DAYS} days later.</p>
             <button className="btn primary" disabled={state === 'busy'} onClick={stop}>{state === 'busy' ? 'Stopping…' : 'Stop the reset'}</button>
           </>
         ) : 'again' in state ? (
           <div role="status">
             <p><b>The reset was stopped.</b> Two-step login of your login stays on, and we emailed you that it stopped.{state.again ? ` A new reset by email can be asked for from ${state.again}.` : ''}</p>
-            <p>Whoever asked for it typed your password and can read your email. Change both now: the password of your Sign&amp;Grow login under Settings, Profile (or with &quot;Forgot password&quot; on the sign-in page), and the password of your mailbox.</p>
+            <p>Whoever asked for it typed your password and can read your email. Change both now: the password of your GrowSigning login under Settings, Profile (or with &quot;Forgot password&quot; on the sign-in page), and the password of your mailbox.</p>
           </div>
         ) : (
           <p className="notice err" role="alert">{state.no}</p>
@@ -57,7 +57,7 @@ export function ResetView() {
     setState('busy');
     api('/auth/two-step/email-reset', { body: { token } })
       .then((r) => setState(r.off ? { off: true } : { when: moment(r.takes_effect_at) }))
-      .catch((e) => setState({ no: e?.status ? e.message : 'We could not reach Sign&Grow, so nothing was started. Check your connection and press the button again.' }));
+      .catch((e) => setState({ no: e?.status ? e.message : 'We could not reach GrowSigning, so nothing was started. Check your connection and press the button again.' }));
   };
   if (stopToken) return <StopView token={stopToken} />;
   return (

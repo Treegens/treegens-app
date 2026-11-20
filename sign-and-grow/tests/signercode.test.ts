@@ -455,7 +455,7 @@ test('a code by text message goes to the number the sender typed, masked on ever
   // the code on this site only.
   const [t] = texts(s.rid);
   const code = textCode(s.rid);
-  assert.match(t.body, new RegExp(`^${code} is your Sign&Grow code to open a document from Ada Sender\\. It works for 10 minutes\\. Did not ask for it\\? Ignore this text\\.\\n\\n@test\\.local #${code}$`));
+  assert.match(t.body, new RegExp(`^${code} is your GrowSigning code to open a document from Ada Sender\\. It works for 10 minutes\\. Did not ask for it\\? Ignore this text\\.\\n\\n@test\\.local #${code}$`));
   assert.equal(t.body.includes('Boat sale'), false);
   assert.ok(t.body.length <= 160, `one text, not two: ${t.body.length}`);
   // The number is kept on the recipient and nowhere else: the text's own row has it masked.
@@ -587,7 +587,7 @@ test('Twilio is called with the account, the token, the sender and the text, and
     assert.equal(call.headers['content-type'], 'application/x-www-form-urlencoded');
     const p = new URLSearchParams(call.body);
     assert.deepEqual([p.get('To'), p.get('From'), p.get('MessagingServiceSid')], ['+447700900123', '+15550100', null]);
-    const code = /^(\d{6}) is your Sign&Grow code/.exec(p.get('Body')!)![1];
+    const code = /^(\d{6}) is your GrowSigning code/.exec(p.get('Body')!)![1];
     // Once the provider has it: "sent" on the record, and our own row holds neither the code nor the number.
     assert.match((await line(ada, s.id, 'One-time code sent')).detail, /^Sam Signer: by text message to \+44 \*\*\* \*\*\* 0123$/);
     const [row] = texts(s.rid);
@@ -621,7 +621,7 @@ test('any other provider gets one POST with { to, text } and the bearer token', 
     const body = JSON.parse(call.body);
     assert.deepEqual(Object.keys(body).sort(), ['text', 'to']);
     assert.equal(body.to, '+447700900123');
-    assert.match(body.text, /^\d{6} is your Sign&Grow code/);
+    assert.match(body.text, /^\d{6} is your GrowSigning code/);
     assert.deepEqual([texts(s.rid)[0].status, texts(s.rid)[0].provider, texts(s.rid)[0].provider_id], ['sent', 'hook', 'msg-1']);
   } finally {
     provider({ SMS_DEV_OUTBOX: '1' });
@@ -691,13 +691,13 @@ test('a provider that fails: the signer is told at once, it is tried again by th
 
 // ---- 7. Texting the signing link -------------------------------------------------------------------------------------
 
-test('"also text the signing link" is off unless chosen, and the text names the sender, the document and Sign&Grow', async () => {
+test('"also text the signing link" is off unless chosen, and the text names the sender, the document and GrowSigning', async () => {
   const quiet = await one(ada, { phone: UK });
   assert.equal(texts(quiet.rid).length, 0, 'a number alone texts nobody');
   const s = await one(ada, { phone: UK, text_link: true }, { subject: 'Allotment rules 2026' });
   const [t] = texts(s.rid);
   assert.deepEqual([t.kind, t.status, t.to_masked, t.to_phone], ['link', 'outbox', UK_MASKED, null]);
-  assert.equal(t.body, `Sign&Grow, sent for Ada Sender: "Allotment rules 2026" is waiting for you to sign. http://test.local/sign/${s.tok}`);
+  assert.equal(t.body, `GrowSigning, sent for Ada Sender: "Allotment rules 2026" is waiting for you to sign. http://test.local/sign/${s.tok}`);
   assert.match((await line(ada, s.id, 'Not texted')).detail, /Sam Signer, to \+44 \*\*\* \*\*\* 0123\. This machine has no text message provider/);
   // With a provider the record says it was sent.
   provider({ SMS_WEBHOOK_URL: 'https://texts.provider.test/send' });
@@ -718,7 +718,7 @@ test('"also text the signing link" is off unless chosen, and the text names the 
   assert.equal((await ada.post(`/envelopes/${s.id}/remind`)).data.reminded, 1);
   const mine = texts(s.rid);
   assert.deepEqual(mine.map((x: any) => x.kind), ['link', 'reminder']);
-  assert.equal(mine[1].body, `Reminder from Sign&Grow, sent for Ada Sender: "Allotment rules 2026" is still waiting for you to sign. http://test.local/sign/${s.tok}`);
+  assert.equal(mine[1].body, `Reminder from GrowSigning, sent for Ada Sender: "Allotment rules 2026" is still waiting for you to sign. http://test.local/sign/${s.tok}`);
   assert.equal(mailTo(s.email).filter((m) => m.subject.startsWith('Reminder:')).length, 2, 'the email reminder is not held to once a day');
   // Someone who turned reminders off gets none by text either.
   db.run('UPDATE recipients SET texted_at=NULL, muted=1 WHERE id=?', s.rid);
@@ -1448,7 +1448,7 @@ test('a code by text that waited for another try is not sent once sending is pau
     const out = await retried(s.rid);
     assert.deepEqual(out.to, []);
     assert.match(out.rows[0].error, /Not sent again: sending is paused on this account\./);
-    assert.equal(out.rows[0].body.includes('is your Sign&Grow code'), false, 'the code stayed readable in our record');
+    assert.equal(out.rows[0].body.includes('is your GrowSigning code'), false, 'the code stayed readable in our record');
   } finally {
     provider({ SMS_DEV_OUTBOX: '1' });
     sms.answers.length = 0;

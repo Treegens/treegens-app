@@ -4,15 +4,20 @@ import { bad, hmac, now, id, isEmail, str, rateLimit, baseUrl, safeEqual, HttpEr
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { sendMail, recordMail, deliverQueued, type Mail } from './mail.ts';
 import { billingEnabled, hasNotPaid } from './envelopes.ts';
-import { grant, creditSummary, available, balance, findFreeCode, paidAvailable, STANDING_PAYMENT } from './credits.ts';
+import { grant, creditSummary, available, findFreeCode, STANDING_PAYMENT, addMonths } from './credits.ts';
+import { lotsOf, lotOfPayment, ledgerSums, refundFromLot, takeBackLots, restoreTaken, stillLive, markWarned, expireSignatures, type LotView } from './credits.ts';
 import { PRICING, mangrovesFor } from '../lib/impact.ts';
 import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients, PRICE_NOTICE_DAYS, priceRuleText, priceChangeDay, PAID_TRUST_DAYS } from '../lib/policy.ts';
+import { expiryRuleText, expiryMoment, HELD_EXPIRY_TEXT, TOPUP_WARN_DAYS, TOPUP_EXPIRY_MONTHS } from '../lib/policy.ts';
 
-export { refundDays, dormantStopDays };
+export { refundDays, dormantStopDays, expireSignatures };
 
-// How Sign&Grow charges:
-//   - $9 a month adds 9 signatures to the balance. Extra signatures are $1 each. Every dollar plants 10 mangroves.
-//   - Signatures never expire. One is used only when somebody actually signs.
+// How GrowSigning charges:
+//   - $9 a month adds 9 signatures. Extra signatures are $1 each. Every dollar plants 10 mangroves, used or not.
+//   - Signatures expire (expiryRuleText): a month's 9 at the end of that month, a top-up's 12 months after its
+//     payment, the trial's 3 thirty days after the account was made. The soonest to expire is used first, and the
+//     dates are shown on the Plan page and in every email that counts signatures. One is used only when somebody
+//     actually signs.
 //   - Month to month. No annual term, no notice period, and nothing is ever charged without an explicit choice.
 // And the things people most often say went wrong elsewhere, handled in code rather than in a policy page:
 //   - Cancelling is one button. It also works from an email link without logging in, and by card for people locked out.
@@ -22,7 +27,7 @@ export { refundDays, dormantStopDays };
 //   - A charge that arrives after cancellation, on a free plan, or twice for the plan, is refunded by the software
 //     itself. If the payment provider is down at that moment it is tried again on the timer until it goes through;
 //     if the provider refuses it three times, a person sends it by hand and the customer is told.
-//   - Stopping payment never deletes or locks anything, and signatures already paid for stay usable.
+//   - Stopping payment never deletes or locks anything, and signatures already paid for stay usable until their dates.
 //   - The payment provider does not promise the order of its messages, and sends several in the same second. Each
 //     account's messages are applied one at a time (see serial()), and a message that needs an earlier one (the
 //     decision on a dispute before the dispute itself) waits for it, so the outcome does not depend on their order.
@@ -244,6 +249,7 @@ const log = (accountId: string, what: string, detail = '', ref = '') => run('INS
 const HISTORY_LABEL: Record<string, string> = {
   started: 'Monthly plan started', cancelled: 'Cancelled', resumed: 'Cancellation undone', ended: 'Monthly plan ended', refund: 'Refund sent', code: 'Free code applied',
   'code-ended': 'Free code ended', reminder: 'Renewal reminder sent', 'reminder-failed': 'Renewal reminder could not be delivered','auto-stop': 'Renewal stopped for you', dispute: 'Card dispute', 'card-removed': 'Card removed', paused: 'Payment failed', price: 'Price change announced',
+  expired: 'Signatures expired', 'topup-expiry': 'Top-up expiry email sent',
 };
 
 type Cta = { label: string; url: string };
@@ -276,7 +282,7 @@ async function mailAdmins(accountId: string, subject: string, heading: string, l
 async function tellOperators(subject: string, lines: string[], accountId?: string | null) {
   const to = [...new Set([process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
   run("INSERT INTO support_requests (id, email, name, topic, message, account_id, status, at) VALUES (?,?,?,'billing',?,?,'open',?)",
-    id('sup'), to[0] || 'billing-alert@localhost', 'Sign&Grow (automatic alert)', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), accountId ?? null, now());
+    id('sup'), to[0] || 'billing-alert@localhost', 'GrowSigning (automatic alert)', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), accountId ?? null, now());
   for (const t of to) await billingMail({ to: t, subject, heading: subject, lines, cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } });
   if (!to.length) console.error('[billing] NOBODY WAS TOLD (set SUPPORT_EMAIL or OPERATOR_EMAILS):', subject, lines.join(' '));
 }
@@ -302,28 +308,27 @@ type Offer = { payment_id: string; cents: number; amount: string; signatures: nu
 // 'manual' is a refund the software owes and the provider refused three times: a person sends it by hand.
 const refundInFlight = (paymentId: string) => !!get("SELECT 1 x FROM refunds WHERE payment_id=? AND status IN ('pending','manual')", paymentId);
 
-// The refund rule, in one place: within the window, every signature a payment bought that is still unused is refunded
-// at the price paid for it. Nobody needs to approve it, and it can be done again later for signatures that come back
-// (a voided envelope, say) while the window is open.
-function offerFor(acct: any, p: any): Offer | null {
+// The refund rule, in one place: within the window, every signature a payment bought that is still unused and has
+// not expired is refunded at the price paid for it. Each payment's signatures are a lot of their own (credits.ts),
+// so this counts exactly that payment's: the soonest-expiring are used first, which uses the free ones of a new
+// account and a month's before a top-up's. Nobody needs to approve it, and it can be done again later for signatures
+// that come back (a voided envelope, say) while the window is open and their date has not passed. An expired
+// signature is not refunded. `lots` is the account's lots when the caller has them already.
+function offerFor(acct: any, p: any, lots?: LotView[]): Offer | null {
   if (!p || p.account_id !== acct.id || !p.applied_at || (p.kind !== 'plan' && p.kind !== 'topup')) return null;
   const left = p.credits - (p.credits_refunded || 0);
   const owing = p.amount_cents - p.refunded_cents;
   if (left <= 0 || owing <= 0 || refundInFlight(p.id) || p.disputed === 'open' || p.disputed === 'lost') return null;
   if ((Date.now() - Date.parse(p.at)) / 864e5 > refundDays()) return null;
-  // Free signatures (welcome, free code) count as used first (paidAvailable), so a code entered later never makes a
-  // payment whose signatures were used up refundable again.
-  const paidLeft = paidAvailable(acct.id);
-  const unused = Math.min(left, paidLeft, Math.max(0, available(acct.id)));
+  const lot = lotOfPayment(acct.id, p.id, lots);
+  const unused = Math.min(left, lot?.live ? Math.max(0, lot.left) : 0);
   if (unused <= 0) return null;
   const cents = Math.min(owing, Math.round((owing / left) * unused));
   if (cents <= 0) return null;
-  const freeToo = Math.max(0, available(acct.id)) > paidLeft;
   return {
     payment_id: p.id, cents, amount: money(cents, p.currency), signatures: unused, of: p.credits, kind: p.kind, paid_at: p.at,
-    // Said in terms of the balance, not of "these very signatures": signatures are not told apart once they are on it.
-    reason: unused === p.credits ? `you have enough unused signatures to hand back all ${p.credits} it bought`
-      : `you have ${unused} unused ${unused === 1 ? 'signature' : 'signatures'} to hand back out of the ${p.credits} it bought${freeToo ? ' (free signatures, the ones every new account gets and any from a code, count as used first)' : ''}`,
+    reason: unused === p.credits ? `none of the ${p.credits} signatures it bought has been used, and none has expired`
+      : `${unused} of the ${p.credits} signatures it bought ${unused === 1 ? 'is' : 'are'} still unused and ${unused === 1 ? 'has' : 'have'} not expired${lot && lot.held ? ` (${lot.held} more ${lot.held === 1 ? 'is' : 'are'} held for envelopes that are out, and can be refunded too if ${lot.held === 1 ? 'it comes' : 'they come'} back before ${expiryMoment(lot.expires_at)})` : ''}`,
   };
 }
 // What the Plan page offers up front: the latest payment. Earlier ones inside the window are offered next to each
@@ -342,8 +347,8 @@ export function pendingRefundLines(accountIds: string[]): string[] {
     return `A refund of ${money(r.cents, r.currency)} (reference ${r.id}) is still on its way to the card it was paid with.${sofar} It goes through even though the account is deleted: the payment provider has not confirmed it yet, and we keep asking until it has. If the provider will not take it, a person here refunds it by hand. You do not need to do anything. Banks usually show a refund within 5 to 10 working days.`;
   });
 }
-export function refundOffer(acct: any): Offer | null {
-  return offerFor(acct, get("SELECT * FROM payments WHERE account_id=? AND kind IN ('plan','topup') ORDER BY at DESC, rowid DESC LIMIT 1", acct.id));
+export function refundOffer(acct: any, lots?: LotView[]): Offer | null {
+  return offerFor(acct, get("SELECT * FROM payments WHERE account_id=? AND kind IN ('plan','topup') ORDER BY at DESC, rowid DESC LIMIT 1", acct.id), lots);
 }
 
 // Finds the card charge behind a payment. Top-ups know theirs. A monthly payment learns it when its invoice arrives;
@@ -498,14 +503,16 @@ async function tryRefund(ref: string): Promise<'done' | 'pending'> {
 }
 
 // Starts a refund: writes it down, takes its signatures off the balance (so they cannot be spent while the money is
-// on its way back), then asks the provider.
+// on its way back), then asks the provider. They are taken from that payment's own lot (refundFromLot), the unused
+// ones that have not expired, which is what the offer counted.
 function openRefund(acct: any | null, p: any, cents: number, signatures: number, why: string, auto: boolean): string {
   const ref = id('rf');
   run("INSERT INTO refunds (id, payment_id, account_id, cents, signatures, why, auto, status, at) VALUES (?,?,?,?,?,?,?,'pending',?)", ref, p.id, acct?.id ?? null, cents, signatures, why, auto ? 1 : 0, now());
-  if (acct && signatures > 0) grant(acct.id, -signatures, 'refund', ref);
+  if (acct && signatures > 0) refundFromLot(acct.id, signatures, ref, p.id);
   return ref;
 }
-// Undoes a refund the provider refused: the signatures go back on the balance.
+// Undoes a refund the provider refused: the signatures go back to the lot they came from, which makes them usable
+// again unless that lot's date has passed meanwhile (then they expire with it).
 function dropRefund(ref: string) {
   const r = get('SELECT * FROM refunds WHERE id=?', ref);
   if (!r || (r.status !== 'pending' && r.status !== 'manual')) return;
@@ -867,7 +874,7 @@ route('POST', '/billing/checkout', async (c) => {
     client_reference_id: a.id, 'metadata[sg_account]': a.id,
     // The subscription carries the account it is for, so its payments find their way home in whatever order the
     // provider reports them.
-    'subscription_data[metadata][sg_account]': a.id, 'subscription_data[description]': `Sign&Grow monthly plan for ${a.name} (${a.id})`,
+    'subscription_data[metadata][sg_account]': a.id, 'subscription_data[description]': `GrowSigning monthly plan for ${a.name} (${a.id})`,
     // The price this page shows, kept on the subscription: it is the price the account is on from its first payment.
     'subscription_data[metadata][sg_price_cents]': String(PLAN_CENTS()),
     // The commitment, in plain words, on the payment page itself. And always in US dollars, the price we show.
@@ -892,9 +899,9 @@ route('POST', '/billing/topup', async (c) => {
   const s = await withCustomer(a, c.user.email, (who) => stripe('POST', 'checkout/sessions', {
     mode: 'payment', 'line_items[0][quantity]': String(quantity),
     'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(PRICING.topUpUsd * 100),
-    'line_items[0][price_data][product_data][name]': `Sign&Grow signature (plants ${PRICING.treesPerUsd} mangrove trees)`,
+    'line_items[0][price_data][product_data][name]': `GrowSigning signature (plants ${PRICING.treesPerUsd} mangrove trees)`,
     'metadata[kind]': 'sg_topup', 'metadata[credits]': String(quantity), 'metadata[sg_account]': a.id,
-    'payment_intent_data[description]': `Sign&Grow top-up: ${sigs(quantity)} for ${a.name} (${a.id})`, 'payment_intent_data[metadata][sg_account]': a.id,
+    'payment_intent_data[description]': `GrowSigning top-up: ${sigs(quantity)} for ${a.name} (${a.id})`, 'payment_intent_data[metadata][sg_account]': a.id,
     // The provider makes an invoice for it, marked as a top-up so it is never mistaken for a monthly payment.
     'invoice_creation[enabled]': 'true', 'invoice_creation[invoice_data][metadata][kind]': 'sg_topup', 'invoice_creation[invoice_data][metadata][sg_account]': a.id,
     'custom_text[submit][message]': `One payment of ${total} for ${sigs(quantity)}. Nothing recurring, and your plan and its price do not change. ${refundRuleText(refundDays())}`,
@@ -1255,7 +1262,7 @@ route('POST', '/public/billing/find', async (c) => {
   const ending = u ? all("SELECT DISTINCT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id JOIN billing_todo t ON t.account_id=a.id AND t.kind='cancel' AND t.done_at IS NULL WHERE m.user_id=? AND m.role IN ('owner','admin')", u.id).filter((a) => !hasSub(a)) : [];
   if (rows.length || others.length || ending.length)
     await sendMail({
-      to: email, subject: 'Your Sign&Grow subscriptions', heading: 'Your monthly plans',
+      to: email, subject: 'Your GrowSigning subscriptions', heading: 'Your monthly plans',
       lines: [
         ...(rows.length ? ['You asked which paid plans are tied to this email address. Each link below stops that plan from renewing. No login needed.'] : []),
         ...ending.map((a) => `${a.name}: we have ended its monthly plan, and the payment provider has not confirmed that yet. We keep asking it until it does, and you do not need to do anything. If a charge for it comes through in the meantime, it is refunded automatically.`),
@@ -1264,7 +1271,7 @@ route('POST', '/public/billing/find', async (c) => {
       links: rows.map((a) => ({ label: `Stop renewal for ${a.name}`, url: stopUrl(a.id, u.id), note: dated(!PAID_UP.includes(a.subscription_status) ? `${money(chargePrice(a))} a month, and the last payment did not go through` : a.cancel_at ? `already cancelled, ends ${day(a.cancel_at)}` : `${money(chargePrice(a))} a month${a.renews_at ? `, next charge ${money(nextCents(a))} on ${day(a.renews_at)}` : ''}`, u.tz) })),
     });
   else
-    await sendMail({ to: email, subject: 'Your Sign&Grow subscriptions', heading: 'No paid plans found', lines: ['There is no paid Sign&Grow plan tied to this email address, so we are not charging you.', 'If you see a charge from us anyway, it may be under a different address. On the help page you can stop it with the card instead: the last four digits plus the date and amount of the charge are enough.'], cta: { label: 'Stop it with the card', url: `${baseUrl()}/help#stop-by-card` } });
+    await sendMail({ to: email, subject: 'Your GrowSigning subscriptions', heading: 'No paid plans found', lines: ['There is no paid GrowSigning plan tied to this email address, so we are not charging you.', 'If you see a charge from us anyway, it may be under a different address. On the help page you can stop it with the card instead: the last four digits plus the date and amount of the charge are enough.'], cta: { label: 'Stop it with the card', url: `${baseUrl()}/help#stop-by-card` } });
   return { ok: true };
 }, 'public');
 
@@ -1505,7 +1512,7 @@ async function applyInvoice(o: any): Promise<void> {
     // Not known to be ours: kept aside, counted nowhere. When its customer is one of ours and nothing on it says
     // what it is for, it might be ours in a shape we do not read: a person is told, once.
     if (p.kind === 'unknown' && a && run('INSERT OR IGNORE INTO stripe_events (id, at) VALUES (?,?)', `unknown-invoice:${o.id}`, now()).changes)
-      await tellOperators(`An invoice of a customer of ours could not be told apart: ${a.name}`, [`Invoice ${o.id}, ${money(cents, currency)}, customer ${customer} (account ${a.name}, ${a.id}). It names neither our monthly price nor our mark (sg_account), and no subscription of ours, so it was not counted: no signatures, no email to the customer, nothing refunded. Look it up in the provider's dashboard. If it is a Sign&Grow payment, write to the customer and sort out their signatures or a refund by hand; if it is something else sold on the same provider account, nothing needs doing.`], a.id);
+      await tellOperators(`An invoice of a customer of ours could not be told apart: ${a.name}`, [`Invoice ${o.id}, ${money(cents, currency)}, customer ${customer} (account ${a.name}, ${a.id}). It names neither our monthly price nor our mark (sg_account), and no subscription of ours, so it was not counted: no signatures, no email to the customer, nothing refunded. Look it up in the provider's dashboard. If it is a GrowSigning payment, write to the customer and sort out their signatures or a refund by hand; if it is something else sold on the same provider account, nothing needs doing.`], a.id);
     return;
   }
   if (!a) {
@@ -1999,7 +2006,7 @@ async function handleEvent(ev: any) {
     // the money went back another way (a person refunded it by hand). Anything beyond that is a refund made outside
     // the app; it is recorded too, and takes the signatures of that payment with it.
     const found = await paymentForCharge(o, byCustomer());
-    if (found.doubt) return unsure(o, 'A refund at the payment provider', 'Nothing was changed on the account. If it was a refund of a Sign&Grow payment, record it by hand: take the signatures it paid for off the balance and write to the customer.');
+    if (found.doubt) return unsure(o, 'A refund at the payment provider', 'Nothing was changed on the account. If it was a refund of a GrowSigning payment, record it by hand: take the signatures it paid for off the balance and write to the customer.');
     let p = found.p;
     if (!p) return;
     const total = Math.min(p.amount_cents, Number(o.amount_refunded ?? o.amount) || 0);
@@ -2083,7 +2090,7 @@ async function handleEvent(ev: any) {
     const byCharge = charge?.customer ? get('SELECT * FROM accounts WHERE stripe_customer_id=?', sid(charge.customer)) : null;
     const found = await paymentForCharge(charge || { id: sid(o.charge), payment_intent: sid(o.payment_intent) }, byCharge);
     // Nothing is stopped, taken or conceded on a guess: a person looks.
-    if (found.doubt) return unsure({ ...(charge || {}), id: sid(o.charge) || charge?.id, dispute: o.id }, 'A card dispute', 'Nothing was stopped, taken off the balance or conceded. If it is about a Sign&Grow payment, handle it in the provider\'s dashboard and on the operator page, and write to the customer.');
+    if (found.doubt) return unsure({ ...(charge || {}), id: sid(o.charge) || charge?.id, dispute: o.id }, 'A card dispute', 'Nothing was stopped, taken off the balance or conceded. If it is about a GrowSigning payment, handle it in the provider\'s dashboard and on the operator page, and write to the customer.');
     const p = found.p;
     if (!p || p.disputed) return;
     // Only the account the payment itself is for: never whoever holds that provider customer now.
@@ -2110,7 +2117,7 @@ async function handleEvent(ev: any) {
     run("UPDATE accounts SET dispute_at=?, plan=CASE WHEN promo_code IS NULL THEN 'seedling' ELSE plan END, subscription_status=CASE WHEN promo_code IS NULL THEN 'canceled' ELSE subscription_status END, cancel_at=NULL, renews_at=NULL, sub_event_at=? WHERE id=?", now(), unixNow(), a.id);
     log(a.id, 'dispute', `A payment of ${money(amount, p.currency)} was disputed with the bank. Payments are switched off until a person has looked.${taken ? ` ${sigs(taken)} ${accepted ? 'left the balance with it' : 'are set aside until the bank decides'}.` : ''}`, o.id || '');
     await mailAdmins(a.id, 'A payment was disputed, so we stopped billing you', 'A payment was disputed with your bank', [
-      `A payment of ${money(amount, p.currency)} to Sign&Grow was disputed with the card's bank. ${accepted ? 'We are not contesting it: the bank returns the money to the card.' : 'A person here will look at it and write to you.'}`,
+      `A payment of ${money(amount, p.currency)} to GrowSigning was disputed with the card's bank. ${accepted ? 'We are not contesting it: the bank returns the money to the card.' : 'A person here will look at it and write to you.'}`,
       ...(hadPlan ? ['Your monthly plan has ended and nothing more will be charged.'] : a.promo_code ? [`Your plan stays free with the code ${a.promo_code}.`] : []),
       taken ? (accepted ? `The ${sigs(taken)} that payment bought have left your balance, as with any refund.` : `The ${sigs(taken)} that payment bought are set aside until the bank decides. If the payment stands, they come back.`) + ` You have ${sigs(Math.max(0, available(a.id)))} to send now. Envelopes that are already out can still be signed.` : 'Your balance is unchanged.',
       'Nothing was deleted. New payments are switched off on this account for now. If the dispute was a mistake, reply to this email or use the contact form and a person will switch them back on.',
@@ -2151,7 +2158,7 @@ async function handleEvent(ev: any) {
     if (a) {
       log(a.id, 'dispute', `The bank decided the disputed payment stands.${p.dispute_taken ? ` ${sigs(p.dispute_taken)} are back on the balance.` : ''}`, o.id || '');
       await mailAdmins(a.id, 'The disputed payment stands', 'The bank has decided the dispute', [
-        `The bank decided that the payment of ${money(p.amount_cents, p.currency)} to Sign&Grow stands.${p.dispute_taken ? ` The ${sigs(p.dispute_taken)} it bought are back on your balance.` : ''}`,
+        `The bank decided that the payment of ${money(p.amount_cents, p.currency)} to GrowSigning stands.${p.dispute_taken ? ` The ${sigs(p.dispute_taken)} it bought are back on your balance.` : ''}`,
         'New payments are still switched off on this account. Reply to this email or use the contact form and a person will switch them back on.',
       ], { label: 'Contact us', url: `${baseUrl()}/help?topic=billing#contact` });
     }
@@ -2248,7 +2255,7 @@ export async function dormancyNudges(): Promise<number> {
     .filter((a) => hasSub(a) && PAID_UP.includes(a.subscription_status) && get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", a.id, cutoff).n === 0);
   for (const a of rows) {
     run('UPDATE accounts SET dormant_nudged_at=? WHERE id=?', now(), a.id);
-    await mailAdmins(a.id, 'Still using Sign&Grow?', 'You are on the monthly plan but have not sent anything in 60 days', [
+    await mailAdmins(a.id, 'Still using GrowSigning?', 'You are on the monthly plan but have not sent anything in 60 days', [
       `${a.name} pays ${money(chargePrice(a))} a month and has ${sigs(Math.max(0, available(a.id)))} saved up. Every dollar plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
       'If you are not using it, stop the renewal with the link below. You keep every document and every signature you have already paid for.',
     ], 'stop');
@@ -2319,7 +2326,7 @@ route('POST', '/operator/billing/price-notice', async (c) => {
       if (cents <= nowCents) {
         if (a.price_notice_cents) run('UPDATE accounts SET price_notice_cents=NULL, price_notice_from=NULL, price_notice_at=NULL WHERE id=?', a.id);
         if (!had) return void out.not_affected++;
-        await mailAdmins(a.id, 'The price of your Sign&Grow plan is not changing after all', 'The price change we announced is withdrawn', [
+        await mailAdmins(a.id, 'The price of your GrowSigning plan is not changing after all', 'The price change we announced is withdrawn', [
           `On ${priceChangeDay(had.at)} we told you that from ${priceChangeDay(had.from)} the monthly plan for ${a.name} would cost ${money(had.cents)} a month. That change is withdrawn: the price stays ${money(nowCents)} a month.`,
           'You do not have to do anything. Your plan, your signatures and your documents stay exactly as they are.',
           priceRuleText(),
@@ -2341,7 +2348,7 @@ route('POST', '/operator/billing/price-notice', async (c) => {
         if (!inTime(from, Date.now())) return void out.too_late.push(a.name);
         for (const m of mine) if (m.status === 'failed' && missing.some((u) => sameAddress(m.to_email, u.email))) run("UPDATE emails SET next_try_at=NULL, error=COALESCE(error || ' ', '') || 'Replaced by a new try.' WHERE id=?", m.id);
         const day_ = priceChangeDay(from);
-        const ids = await mailAdmins(a.id, `The price of your Sign&Grow plan changes on ${day_}`, 'The price of your monthly plan is changing', [
+        const ids = await mailAdmins(a.id, `The price of your GrowSigning plan changes on ${day_}`, 'The price of your monthly plan is changing', [
           `Today ${a.name} pays ${money(nowCents)} a month. From ${day_} the monthly plan costs ${money(cents)} a month. The first renewal on or after that day is the first at the new price. Until then nothing changes.`,
           ...(had ? [`This replaces what we told you on ${priceChangeDay(had.at)} (${money(had.cents)} a month from ${priceChangeDay(had.from)}).`] : []),
           `Each payment still adds ${sigs(PRICING.monthlySignatures)}, and the signatures you already have are not touched.`,

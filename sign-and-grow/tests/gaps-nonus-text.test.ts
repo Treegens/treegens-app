@@ -211,7 +211,7 @@ test('a Hebrew address with house number 42 and Arabic text with "ABC 123" are p
   assert.ok(has(pages[0], 'شركة ABC رقم 123'), pages[0]);
   // Not mirrored anywhere. (The captions under the signatures and the envelope number are random letters and
   // digits, so they are left out of this look.)
-  const typed = pages[0].replace(/Signed via Sign&Grow · \S+/g, '').replace(/Envelope ID: \S+/g, '');
+  const typed = pages[0].replace(/Signed via GrowSigning · \S+/g, '').replace(/Envelope ID: \S+/g, '');
   assert.ok(!/24|321|CBA/.test(squash(typed)), typed);
   const cert = pages.slice(1).join(' ');
   assert.ok(has(cert, 'דנה כהן') && has(cert, 'شركة ABC') && has(cert, 'عقد رقم 2026'), cert.slice(0, 600));

@@ -8,7 +8,7 @@ import { PrintButton } from './PrintButton';
 import { CHAT_KEPT_PAGE } from '@/lib/chat';
 import { fileEncryptionOn, PROCESSING_ENCRYPTED, databaseText, processingNotDone } from '@/lib/storedfiles';
 
-export const metadata = { title: 'Data processing summary', description: 'What this Sign&Grow server processes, for whom, for how long, where, and how it is deleted. One page you can save as a PDF.' };
+export const metadata = { title: 'Data processing summary', description: 'What this GrowSigning server processes, for whom, for how long, where, and how it is deleted. One page you can save as a PDF.' };
 // Where the data is and who handles it are settings. Read them when the page is asked for, not when the site is built.
 export const dynamic = 'force-dynamic';
 

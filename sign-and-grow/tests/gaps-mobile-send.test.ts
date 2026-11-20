@@ -533,7 +533,7 @@ test('hosting an in-person signing locks the host\'s account in that browser unt
     const r = await host.call(method, url, method === 'GET' ? undefined : {});
     assert.equal(r.status, 401, `${method} ${url}`);
     assert.equal(r.data.code, 'handed_over');
-    assert.match(r.data.error, /handed to someone to sign in person, so your account is locked in this browser\. Open Sign&Grow here and type your password to come back\./);
+    assert.match(r.data.error, /handed to someone to sign in person, so your account is locked in this browser\. Open GrowSigning here and type your password to come back\./);
   }
   // The app is told what to show: not the sign-in page, the screen that asks for the owner's password.
   const me = (await host.get('/me')).data;

@@ -51,7 +51,7 @@ export default function PowerForm() {
             <QrOwnPhone slug={slug} name={form.name} />
           </form>
         )}
-      <p className="muted small center" style={{ marginTop: 14 }}>Powered by Sign&Grow, where every dollar plants mangrove trees. <a href="/help?topic=signing#contact">Something not working? Get help</a></p>
+      <p className="muted small center" style={{ marginTop: 14 }}>Powered by GrowSigning, where every dollar plants mangrove trees. <a href="/help?topic=signing#contact">Something not working? Get help</a></p>
     </div>
   );
 }

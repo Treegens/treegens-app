@@ -198,7 +198,7 @@ test('a new session ends 30 days after signing in, Settings shows that day, and 
   // The words the pages print come from the same two numbers.
   const { sessionWords } = await import('../src/lib/policy.ts');
   assert.match(sessionWords(30, 30), /^A browser is signed out 30 days after you signed in on it, however often you use it in between, and then you sign in again\./);
-  assert.match(sessionWords(7, 30), /signed out 7 days after you last used Sign&Grow in it, and in any case 30 days after you signed in on it/);
+  assert.match(sessionWords(7, 30), /signed out 7 days after you last used GrowSigning in it, and in any case 30 days after you signed in on it/);
   assert.match(read('src/app/security/page.tsx'), /\{sessionWords\(\)\}/);
   assert.match(read('src/app/app/settings/SignedIn.tsx'), /\{sessionWords\(d\.days, d\.max_days\)\}/);
   for (const f of ['src/app/security/page.tsx', 'src/app/app/settings/SignedIn.tsx', 'README.md']) assert.doesNotMatch(read(f), /once a month does not ask|not after it signed in/, f);

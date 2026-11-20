@@ -218,7 +218,7 @@ function Account() {
       <p className="muted small" id="set-dates"><b>How dates are written.</b> New envelopes start with this format, and whoever sends can change it for one envelope on the first step. It is used for the date each person signs on and for dates they pick in a date field. A format with the month as a word cannot be misread: 03/04/2026 is 3 April in most of the world and 4 March in the United States.</p>
       {/* Said in full, because a new account has reminders on without anyone having chosen that. */}
       <p className="muted small" id="set-reminders"><b>New envelopes start like this.</b> {reminderText(f.default_reminder_days)} A new account starts at {DEFAULT_REMINDER_DAYS} days. Whoever sends sees the setting on the last step before sending and can change it for that envelope. Envelopes that are already out keep what they were sent with.</p>
-      <p className="muted small">Emails to your recipients come from "{me.user.name} via Sign&Grow" and replies go straight to you.</p>
+      <p className="muted small">Emails to your recipients come from "{me.user.name} via GrowSigning" and replies go straight to you.</p>
       <button className="btn primary" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (toast('Saved'), me.reload())).catch(oops)}>Save</button>
     </div>
   );
@@ -411,7 +411,7 @@ function Developers() {
       {admin && (
         <div className="card">
           <h2>Webhooks</h2>
-          <p className="muted small">We POST JSON to your URL when an envelope is sent, opened, signed, corrected, completed, declined, voided or expires. Check the <span className="mono">X-SignAndGrow-Signature</span> header with the signing secret. Each payload also carries a one-line <span className="mono">text</span> summary for tools that just want a message to show.</p>
+          <p className="muted small">We POST JSON to your URL when an envelope is sent, opened, signed, corrected, completed, declined, voided or expires. Check the <span className="mono">X-GrowSigning-Signature</span> header with the signing secret. Each payload also carries a one-line <span className="mono">text</span> summary for tools that just want a message to show.</p>
           {(hooks?.webhooks || []).map((h: any) => (
             <div key={h.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
               <div className="row between"><b className="truncate">{h.url}</b><button className="btn sm ghost danger" onClick={() => api(`/webhooks/${h.id}`, { method: 'DELETE' }).then(() => (only === h.id ? setOnly('') : reloadHooks())).catch(oops)}>Delete</button></div>
@@ -419,7 +419,7 @@ function Developers() {
             </div>
           ))}
           <form className="row" style={{ marginTop: 12 }} onSubmit={(e) => { e.preventDefault(); api('/webhooks', { body: { url } }).then(() => (setUrl(''), reloadHooks())).catch(oops); }}>
-            <input placeholder="https://example.com/hooks/sign-and-grow" value={url} onChange={(e) => setUrl(e.target.value)} required aria-label="Webhook URL" />
+            <input placeholder="https://example.com/hooks/growsigning" value={url} onChange={(e) => setUrl(e.target.value)} required aria-label="Webhook URL" />
             <button className="btn">Add webhook</button>
           </form>
           {(deliveries.length > 0 || !!only) && (
@@ -511,7 +511,7 @@ function Billing() {
         <div>
           <h2 className="serif" style={{ fontSize: 22 }}>Every dollar plants {P.treesPerUsd} mangrove trees</h2>
           <p style={{ margin: '4px 0 0' }}>
-            Everything you pay Sign&Grow goes to Treegens tree planting. {b.mangroves > 0 ? <>So far {me.account.name} has planted <b style={{ color: '#fff' }}>{b.mangroves.toLocaleString()} mangroves</b>. Thank you.</> : 'People who sign your documents never pay anything.'}
+            Everything you pay GrowSigning goes to Treegens tree planting. {b.mangroves > 0 ? <>So far {me.account.name} has planted <b style={{ color: '#fff' }}>{b.mangroves.toLocaleString()} mangroves</b>. Thank you.</> : 'People who sign your documents never pay anything.'}
           </p>
         </div>
       </div>

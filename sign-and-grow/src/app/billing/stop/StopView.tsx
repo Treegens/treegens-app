@@ -58,7 +58,7 @@ export function StopView() {
     setView({ kind: 'loading' });
     api<Info>(`/public/billing/stop?token=${encodeURIComponent(t)}`)
       .then((info) => live && setView({ kind: 'ready', info }))
-      .catch((e) => live && setView(e?.status === 410 ? { kind: 'expired' } : { kind: 'failed', message: e?.status ? e.message : 'We could not reach Sign&Grow. Check your connection and try again.' }));
+      .catch((e) => live && setView(e?.status === 410 ? { kind: 'expired' } : { kind: 'failed', message: e?.status ? e.message : 'We could not reach GrowSigning. Check your connection and try again.' }));
     return () => {
       live = false;
     };
@@ -75,7 +75,7 @@ export function StopView() {
       setDone(await api<Done>('/public/billing/stop', { body: { token } }));
     } catch (e: any) {
       if (e?.status === 410) setView({ kind: 'expired' });
-      else if (!e?.status) setError('We could not reach Sign&Grow, so nothing was changed. Check your connection and press the button again.');
+      else if (!e?.status) setError('We could not reach GrowSigning, so nothing was changed. Check your connection and press the button again.');
       else if (e.status === 429) setError('That is too many tries for now. Wait an hour, or use the help page and a person will stop it for you.');
       // The server's own words already say what to do when they can (and whether anything changed). Only a bare
       // answer from the payment provider gets ours added.

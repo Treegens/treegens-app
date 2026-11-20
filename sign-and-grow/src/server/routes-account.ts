@@ -38,10 +38,10 @@ const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image
 // with anyone's address, and a name is words a stranger typed.
 export async function sendVerification(u: any, via?: string) {
   await sendMail({
-    to: u.email, subject: 'Confirm your email for Sign&Grow', heading: 'Confirm your email',
-    lines: ['Someone signed up for Sign&Grow with this email address. Confirm it so documents sent to you show up in your inbox, and so you can send.',
-      `Only confirm if you signed up for Sign&Grow yourself just now. The link works in the browser you signed up in. Anywhere else ${hasPassword(u) ? 'it asks for the password that was chosen at sign-up' : `you are asked to sign in first${via ? ` with ${via}` : ''}`}, so nobody else can confirm the login for you.`,
-      via ? `This Sign&Grow login was made by someone who signed in with ${via} and gave this address. If it was not you, do not confirm: without that, the login cannot send anything and sees nothing that was sent to you.`
+    to: u.email, subject: 'Confirm your email for GrowSigning', heading: 'Confirm your email',
+    lines: ['Someone signed up for GrowSigning with this email address. Confirm it so documents sent to you show up in your inbox, and so you can send.',
+      `Only confirm if you signed up for GrowSigning yourself just now. The link works in the browser you signed up in. Anywhere else ${hasPassword(u) ? 'it asks for the password that was chosen at sign-up' : `you are asked to sign in first${via ? ` with ${via}` : ''}`}, so nobody else can confirm the login for you.`,
+      via ? `This GrowSigning login was made by someone who signed in with ${via} and gave this address. If it was not you, do not confirm: without that, the login cannot send anything and sees nothing that was sent to you.`
         : 'If you did not sign up, ignore this email. Without your confirmation that login cannot send anything and sees nothing that was sent to you.'],
     cta: { label: 'Confirm email', url: `${baseUrl()}/verify-email?token=${u.verify_token}` },
   });
@@ -94,7 +94,7 @@ route('POST', '/auth/signup', async (c) => {
   if (!name) throw bad('Tell us your name.');
   if (!isEmail(email)) throw bad('Enter a valid email address.');
   if (password.length < 8) throw bad('Use a password of at least 8 characters.');
-  if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a Sign&Grow login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
+  if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a GrowSigning login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
   const made = await createLogin(c, { name, email, passwordHash: hashPassword(password), invite: b.invite, code: b.code });
   return { user: publicUser(made.user) };
 }, 'public');
@@ -220,10 +220,10 @@ route('POST', '/auth/verify', async (c) => {
   if (!u) throw bad('This confirmation link is not valid any more.');
   if (u.email_verified) return { ok: true };
   if (!(c.auth?.via === 'session' && c.user.id === u.id)) {
-    if (!hasPassword(u)) throw bad('This link confirms the address of a Sign&Grow login. To show that the login is yours, sign in first, the same way you signed up, and then open this link again in the same browser. If you did not sign up for Sign&Grow, close this page: nothing was confirmed.', 401, { code: 'sign_in_first' });
-    if (b.password === undefined || b.password === null || b.password === '') throw bad('This link confirms the address of a Sign&Grow login. To show that the login is yours, type the password you chose when you signed up. If you did not sign up for Sign&Grow, close this page: nothing was confirmed.', 401, { code: 'password_needed' });
+    if (!hasPassword(u)) throw bad('This link confirms the address of a GrowSigning login. To show that the login is yours, sign in first, the same way you signed up, and then open this link again in the same browser. If you did not sign up for GrowSigning, close this page: nothing was confirmed.', 401, { code: 'sign_in_first' });
+    if (b.password === undefined || b.password === null || b.password === '') throw bad('This link confirms the address of a GrowSigning login. To show that the login is yours, type the password you chose when you signed up. If you did not sign up for GrowSigning, close this page: nothing was confirmed.', 401, { code: 'password_needed' });
     rateLimit(`confirm:${u.id}`, 10, 900_000);
-    if (!checkPassword(str(b.password, 200), u.password_hash)) throw bad('That password is not right, so nothing was confirmed. Type the password you chose when you signed up, or sign in to Sign&Grow first and open this link again.', 401, { code: 'password_needed' });
+    if (!checkPassword(str(b.password, 200), u.password_hash)) throw bad('That password is not right, so nothing was confirmed. Type the password you chose when you signed up, or sign in to GrowSigning first and open this link again.', 401, { code: 'password_needed' });
   }
   run('UPDATE users SET email_verified=1 WHERE id=?', u.id);
   return { ok: true };
@@ -253,12 +253,12 @@ export async function sendPasswordLink(u: any) {
   run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)', sha256(t), u.id, until);
   const url = `${baseUrl()}/reset?token=${t}`;
   // expiresAt: if the mail server will not take this now, it is tried again, but never once the link in it has run out.
-  if (hasPassword(u)) return void (await sendMail({ to: u.email, subject: 'Reset your Sign&Grow password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url }, expiresAt: until }));
+  if (hasPassword(u)) return void (await sendMail({ to: u.email, subject: 'Reset your GrowSigning password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url }, expiresAt: until }));
   const ways: any[] = all('SELECT provider, vouched FROM identities WHERE user_id=?', u.id).filter((i) => isProviderId(i.provider));
   const names = (list: any[]) => [...new Set(list.map((i) => PROVIDER_NAMES[i.provider as 'google' | 'microsoft']))].join(' and ');
   const cut = u.email_verified ? [] : ways.filter((i) => !i.vouched);
-  await sendMail({ to: u.email, subject: 'Choose a password for Sign&Grow', heading: 'Choose a password',
-    lines: [`This Sign&Grow login has no password yet${ways.length ? `. It is opened by signing in with ${names(ways)}` : ''}. With this link you choose a password, so that you can also sign in with this email address.`,
+  await sendMail({ to: u.email, subject: 'Choose a password for GrowSigning', heading: 'Choose a password',
+    lines: [`This GrowSigning login has no password yet${ways.length ? `. It is opened by signing in with ${names(ways)}` : ''}. With this link you choose a password, so that you can also sign in with this email address.`,
       ...(cut.length ? [`This address has not been confirmed yet, so choosing a password here also disconnects ${names(cut)} from the login. Once you are signed in you can connect it again under Settings.`] : ways.length ? [`Signing in with ${names(ways)} keeps working as before.`] : []),
       'The link works for one hour. If you did not ask for it, ignore this email and nothing changes.'],
     cta: { label: 'Choose a password', url }, expiresAt: until });
@@ -289,7 +289,7 @@ route('POST', '/auth/reset', async (c) => {
   });
   // A sign-in that typed the old password and waits for its code ends (twostep.ts).
   await passwordChanged({ id: r.user_id }, 'email');
-  await tellRemoved(get('SELECT email FROM users WHERE id=?', r.user_id), removed, 'You chose a password for your Sign&Grow login with the link we emailed to you.');
+  await tellRemoved(get('SELECT email FROM users WHERE id=?', r.user_id), removed, 'You chose a password for your GrowSigning login with the link we emailed to you.');
   // two_step: the next sign-in asks for the code as well, because a reset by email is not a second step (twostep.ts).
   // removed: what was taken out of a login that had never been confirmed, for the page to say (removedText).
   return { ok: true, disconnected: [...new Set(disconnected)].map((p) => (isProviderId(p) ? PROVIDER_NAMES[p] : p)), removed, two_step: twoStepOn(get('SELECT two_step_on_at, two_step_secret FROM users WHERE id=?', r.user_id)) };
@@ -466,8 +466,8 @@ route('POST', '/account/invites', async (c) => {
   // Someone who already has a login joins by signing in. Everyone else makes a login first. The email goes to the
   // invited address only, so it tells the person inviting nothing about who has an account.
   const known = !!get('SELECT 1 x FROM users WHERE email=?', email);
-  await sendMail({ to: email, about: c.user.id, subject: `${c.user.name} invited you to ${c.account.name} on Sign&Grow`, heading: `Join ${c.account.name}`,
-    lines: [`${c.user.name} invited you to send and sign documents together. Every subscription plants trees.`, ...(known ? ['You already have a Sign&Grow login with this address. Sign in with it and you are on the team. Anything you already have on Sign&Grow stays as it is.'] : [])],
+  await sendMail({ to: email, about: c.user.id, subject: `${c.user.name} invited you to ${c.account.name} on GrowSigning`, heading: `Join ${c.account.name}`,
+    lines: [`${c.user.name} invited you to send and sign documents together. Every subscription plants trees.`, ...(known ? ['You already have a GrowSigning login with this address. Sign in with it and you are on the team. Anything you already have on GrowSigning stays as it is.'] : [])],
     cta: { label: known ? 'Sign in to accept' : 'Accept invitation', url: `${baseUrl()}/${known ? 'login' : 'signup'}?invite=${t}&email=${encodeURIComponent(email)}` } });
   return { ok: true };
 }, 'admin');
@@ -539,7 +539,7 @@ route('DELETE', '/account/members/:id', async (c) => {
   const mine: any[] = all('SELECT a.id, a.name FROM memberships x JOIN accounts a ON a.id=x.account_id WHERE x.user_id=? ORDER BY x.created_at', c.params.id);
   const last = get('SELECT last_account_id l FROM users WHERE id=?', c.params.id)?.l;
   const lands = (mine.find((a) => a.id === last) || mine[0])?.name;
-  await sendMail({ to: m.email, subject: `You were removed from ${c.account.name} on Sign&Grow`, heading: `You are no longer on the team ${c.account.name}`,
+  await sendMail({ to: m.email, subject: `You were removed from ${c.account.name} on GrowSigning`, heading: `You are no longer on the team ${c.account.name}`,
     lines: [`${c.user.name} removed you from ${c.account.name}. You can no longer open that team's documents.`,
       handed ? `Nothing you sent there is lost: your envelopes, drafts, templates and bulk sends now belong to ${heir?.name || 'another member of the team'}, and anything out for signature carries on.` : 'You had sent nothing there, so there was nothing to hand over.',
       ...(keys.length ? [`The API keys you created there stopped working at that moment:`, keyList(keys), `If something still uses one of them, it now gets an error. Ask an admin of ${c.account.name} for a new key.`] : []),
@@ -582,7 +582,7 @@ route('POST', '/account/leave', async (c) => {
   const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
   for (const a of others.filter((o) => o.role !== 'member' || o.user_id === heir.user_id))
     await sendMail({ to: a.email, about: me.id, subject: `${me.name} left ${c.account.name}`, heading: `${me.name} left the team`,
-      lines: [`${me.name} (${me.email}) left ${c.account.name} on Sign&Grow and no longer has access to it.`,
+      lines: [`${me.name} (${me.email}) left ${c.account.name} on GrowSigning and no longer has access to it.`,
         left.handed ? `What ${me.name} sent stays with the team: ${left.handed} ${left.handed === 1 ? 'envelope, draft or template' : 'envelopes, drafts and templates'} and any bulk sends now belong to ${a.user_id === heir.user_id ? 'you' : `${heir.name}`}. Anything out for signature carries on, and each audit trail says who handed it to whom.` : `${me.name} had sent nothing, so there was nothing to hand over.`,
         ...(keys.length ? [`${n} that ${me.name} created stopped working at that moment:`, keyList(keys), 'Anything that used one of them now gets an error that says the key has stopped. To carry on, create a new key and put it into the integration.'] : []),
         'You can invite them back at any time on the Team tab.'],
@@ -753,7 +753,7 @@ route('GET', '/reports/summary', (c) => {
 
 function globalImpact() {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE kind='envelope' AND status='completed'");
-  // Only money we know was paid to Sign&Grow by one of its accounts counts: the monthly plan and top-ups.
+  // Only money we know was paid to GrowSigning by one of its accounts counts: the monthly plan and top-ups.
   const pay = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id IS NOT NULL AND kind IN ('plan','topup')");
   return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: mangrovesFor(pay.cents / 100) };
 }

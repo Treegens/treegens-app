@@ -20,7 +20,7 @@ export function CodeField({ value, onChange, label = 'Code from your authenticat
       <input id={id} value={value} onChange={(e) => onChange(e.target.value)} required autoFocus={autoFocus} className="ts-code"
         inputMode={letters ? 'text' : 'numeric'} autoComplete="one-time-code" autoCapitalize="off" spellCheck={false}
         maxLength={letters ? 14 : 8} pattern={letters ? undefined : '[0-9 ]*'} aria-describedby={id ? `${id}-hint` : undefined} />
-      {id && <span id={`${id}-hint`} className="hint">{recovery ? 'Ten letters and digits, as printed. Capitals, spaces and the dash do not matter.' : either ? 'The 6 digits your app shows for Sign&Grow now, or one of your recovery codes as printed.' : 'The 6 digits your app shows for Sign&Grow. A new one comes every 30 seconds: type the newest.'}</span>}
+      {id && <span id={`${id}-hint`} className="hint">{recovery ? 'Ten letters and digits, as printed. Capitals, spaces and the dash do not matter.' : either ? 'The 6 digits your app shows for GrowSigning now, or one of your recovery codes as printed.' : 'The 6 digits your app shows for GrowSigning. A new one comes every 30 seconds: type the newest.'}</span>}
     </label>
   );
 }
@@ -29,11 +29,11 @@ export function CodeField({ value, onChange, label = 'Code from your authenticat
 export function RecoveryCodes({ codes, onKept }: { codes: string[]; onKept: () => void }) {
   const [kept, setKept] = useState(false);
   const [copied, setCopied] = useState(false);
-  const text = `Sign&Grow recovery codes\nEach one signs you in once, in place of the code from your app.\n\n${codes.join('\n')}\n`;
+  const text = `GrowSigning recovery codes\nEach one signs you in once, in place of the code from your app.\n\n${codes.join('\n')}\n`;
   const download = () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-    a.download = 'sign-and-grow-recovery-codes.txt';
+    a.download = 'growsigning-recovery-codes.txt';
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
@@ -113,15 +113,15 @@ export function SetUpTwoStep({ hasPassword, moving = false, onDone, onCancel }: 
     }
     return (
       <form className="twostep" onSubmit={confirm}>
-        <p><b>1. Add Sign&Grow to your authenticator app.</b> Open the app on your phone, choose to add an account, and scan this picture. Any app that shows 6-digit sign-in codes works.</p>
-        {svg && <QrCode svg={svg} label="A QR code that adds your Sign&Grow login to an authenticator app" />}
+        <p><b>1. Add GrowSigning to your authenticator app.</b> Open the app on your phone, choose to add an account, and scan this picture. Any app that shows 6-digit sign-in codes works.</p>
+        {svg && <QrCode svg={svg} label="A QR code that adds your GrowSigning login to an authenticator app" />}
         <p style={{ marginTop: 12 }}>Cannot scan it? Choose to type a key in the app, and type this one (spaces do not matter). The type is &quot;time-based&quot;.</p>
         <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
           <code className="ts-secret" aria-label={`Key: ${step.secret.split('').join(' ')}`}>{group(step.secret)}</code>
           <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(step.secret).then(() => setCopied(true)).catch(() => {})}>{copied ? 'Copied' : 'Copy the key'}</button>
         </div>
         <p className="small muted">The app on this device? <a href={step.uri}>Open it in an authenticator app here</a>. Account name in the app: {step.account}. Keep this key to yourself: whoever has it can make your codes.</p>
-        <p style={{ marginTop: 14 }}><b>2. Type the code the app shows now.</b> {moving ? 'The app you used before stops working for Sign&Grow once this one is confirmed.' : 'Two-step login switches on only when this code is right.'}</p>
+        <p style={{ marginTop: 14 }}><b>2. Type the code the app shows now.</b> {moving ? 'The app you used before stops working for GrowSigning once this one is confirmed.' : 'Two-step login switches on only when this code is right.'}</p>
         <CodeField id="ts-confirm" value={code} onChange={setCode} autoFocus />
         {error && <div className="notice err" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
         <div className="row wrap" style={{ gap: 8 }}>
@@ -162,7 +162,7 @@ export function TwoStepResetBanner({ me }: { me: any }) {
     setBusy(true);
     api('/me/two-step/reset/stop', { method: 'POST' })
       .then(() => (setSaid('The reset was stopped, and two-step login stays on. We emailed you that it stopped. If you did not ask for it, change your password now under Settings, Profile, and the password of your mailbox.'), me.reload?.()))
-      .catch((e: any) => setSaid(e?.message || 'We could not reach Sign&Grow, so nothing was stopped. Check your connection and press the button again.'))
+      .catch((e: any) => setSaid(e?.message || 'We could not reach GrowSigning, so nothing was stopped. Check your connection and press the button again.'))
       .finally(() => setBusy(false));
   };
   return (

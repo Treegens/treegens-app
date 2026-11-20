@@ -4,7 +4,7 @@ import { PublicNav, PublicFooter } from '@/components/Public';
 import { PrintButton } from '../processing/PrintButton';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE, CERTIFICATE_PAGE_VERSION } from '@/lib/evidence';
 
-export const metadata = { title: 'How to read a Sign&Grow certificate', description: 'Every line of a Sign&Grow certificate of completion: where the software takes it from, what it shows and what it does not. Dated, for a lawyer to attach.' };
+export const metadata = { title: 'How to read a GrowSigning certificate', description: 'Every line of a GrowSigning certificate of completion: where the software takes it from, what it shows and what it does not. Dated, for a lawyer to attach.' };
 
 // Written from drawCertificate() and renderEnvelopePdf() in src/server/pdf.ts as they are on CERTIFICATE_PAGE_VERSION,
 // and from where each value is set (src/server/envelopes.ts, src/lib/checks.ts). When the certificate changes, this page
@@ -27,9 +27,9 @@ export default function HowToReadACertificate() {
       <PublicNav />
       <main id="main" className="wrap pub-page pub-doc">
         <header className="pub-top">
-          <h1 className="pub-h1">How to read a Sign&amp;Grow certificate</h1>
+          <h1 className="pub-h1">How to read a GrowSigning certificate</h1>
           <p className="pub-lead">Every line of the certificate of completion at the end of a signed PDF: where the software takes it from, what it shows, and what it does not.</p>
-          <p className="pub-doc-meta">Version of this page: {CERTIFICATE_PAGE_VERSION}. It describes certificates as Sign&amp;Grow prints them on that day. If yours has lines that are not here, it was made by another version: <Link href="/help#contact">ask us</Link> which.</p>
+          <p className="pub-doc-meta">Version of this page: {CERTIFICATE_PAGE_VERSION}. It describes certificates as GrowSigning prints them on that day. If yours has lines that are not here, it was made by another version: <Link href="/help#contact">ask us</Link> which.</p>
           <div className="pub-doc-actions">
             <PrintButton />
             <span className="muted small">Your browser&apos;s print window has &quot;Save as PDF&quot;. On a phone, choose Share, then Print.</span>
@@ -78,8 +78,8 @@ export default function HowToReadACertificate() {
         <Line label="Signed without paper" from="An estimate of the paper, water and CO2e not used, worked out from the number of pages." shows="An environmental estimate." not="Anything about the signatures." />
 
         <h2>On the pages of the documents</h2>
-        <Line label="Sign&Grow Envelope ID at the foot of every page" from="The envelope ID above." shows="Which envelope the page belongs to, also on a printed copy." not="That the page was not swapped or changed: compare it with the signed file." />
-        <Line label="Signed via Sign&Grow, with eight characters, under a signature" from="The last eight characters of the internal reference of the person on the envelope the signature belongs to." shows="That the signature was placed by the software." not="Who it belongs to, to a reader: the certificate does not print that reference, so only we can match it, from our records, while we hold them." />
+        <Line label="GrowSigning Envelope ID at the foot of every page" from="The envelope ID above." shows="Which envelope the page belongs to, also on a printed copy." not="That the page was not swapped or changed: compare it with the signed file." />
+        <Line label="Signed via GrowSigning, with eight characters, under a signature" from="The last eight characters of the internal reference of the person on the envelope the signature belongs to." shows="That the signature was placed by the software." not="Who it belongs to, to a reader: the certificate does not print that reference, so only we can match it, from our records, while we hold them." />
         <Line label="NOT COMPLETED BY EVERYONE, and VOIDED, DECLINED or EXPIRED across the page" from="Printed on every copy made after an envelope was voided, declined or ran out of time, which opens with a page that says why. A copy made while it was still out says NOT COMPLETED YET instead, in the same way, because voiding it later cannot change a file already downloaded. The words are large across the middle, again in small dark rows over the whole page, corners included, at the top and the bottom, and over every signature, initials and stamp, so they stay on a page that is cut up or copied in black and white." shows="That it is not a signed document, whatever signatures are on it. Such a copy has no certificate." not={<>That a copy without them is signed: someone with a PDF editor can remove drawn marks. Look the envelope ID up on <Link href="/verify">Verify a document</Link>: it says whether the envelope was ever completed.</>} />
 
         <h2>Checking a certificate</h2>

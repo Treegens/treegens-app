@@ -10,7 +10,7 @@ let cron: Server['cron'];
 let op: Client; // one of the people who run the service
 before(async () => {
   ({ db, cron } = await boot());
-  op = await person('Olive Operator', 'olive@signgrow.test');
+  op = await person('Olive Operator', 'olive@growsigning.test');
 });
 
 // Sign-ups, public forms and reports are limited per address, so everyone here comes from their own.
@@ -24,7 +24,7 @@ const full = async (c: Client, id: string) => (await c.get(`/envelopes/${id}`)).
 // The editor sends back the whole envelope; this builds that body from what the server returns.
 const asBody = (e: any) => ({ subject: e.subject, message: e.message, ordered: e.ordered, documents: e.documents, recipients: e.recipients, fields: e.fields });
 const asOperator = async <T>(fn: () => Promise<T>): Promise<T> => {
-  process.env.OPERATOR_EMAILS = 'olive@signgrow.test';
+  process.env.OPERATOR_EMAILS = 'olive@growsigning.test';
   try {
     return await fn();
   } finally {
@@ -226,7 +226,7 @@ test('the daily limit counts every person newly emailed, and an account that has
       assert.deepEqual((await op.post(`/operator/accounts/${acc}`, { trusted: true })).data, { trusted: true });
       assert.ok((await op.get('/operator/queue')).data.support.find((s: any) => s.email === 'eve@many.test').account_trusted_at, 'the queue shows it is trusted now');
     });
-    assert.ok(mailTo('eve@many.test').some((m) => m.subject === 'A person has cleared your Sign&Grow account'), 'and the account is told');
+    assert.ok(mailTo('eve@many.test').some((m) => m.subject === 'A person has cleared your GrowSigning account'), 'and the account is told');
     assert.equal((await eve.post(`/envelopes/${more.id}/send`)).status, 200, 'a trusted account skips the daily limit');
     const notice = await simple(eve, 'client-eve@example.com', { subject: 'PayPal invoice #4471', message: LURE });
     assert.equal((await eve.post(`/envelopes/${notice.id}/send`)).status, 200, 'and the filter');
@@ -351,7 +351,7 @@ test('a support message is shown only to the person who wrote it, and the form m
   const clicked = await visitor().post('/auth/verify', link);
   assert.equal(clicked.status, 401);
   assert.equal(clicked.data.code, 'password_needed');
-  assert.match(clicked.data.error, /type the password you chose when you signed up\. If you did not sign up for Sign&Grow, close this page: nothing was confirmed\./);
+  assert.match(clicked.data.error, /type the password you chose when you signed up\. If you did not sign up for GrowSigning, close this page: nothing was confirmed\./);
   assert.equal((await visitor().post('/auth/verify', { ...link, password: 'a guess at it' })).status, 401);
   assert.equal((await op.post('/auth/verify', link)).status, 401, 'a browser that is signed in to some other login is not signed in to this one');
   assert.equal(db.get("SELECT email_verified v FROM users WHERE email='victim@support.test'").v, 0);
@@ -360,8 +360,8 @@ test('a support message is shown only to the person who wrote it, and the form m
   // browser, or the link with the password anywhere else. Then they see what was sent from the address.
   assert.equal((await visitor().post('/auth/verify', { ...link, password: 'correct horse battery' })).status, 200);
   assert.equal((await squatter.get('/support/mine')).data.requests.length, 2);
-  assert.match(mailTo('victim@support.test').find((m) => m.subject === 'Confirm your email for Sign&Grow')!.html, /Only confirm if you signed up for Sign&amp;Grow yourself just now\./);
-  assert.ok(!mailTo('victim@support.test').find((m) => m.subject === 'Confirm your email for Sign&Grow')!.html.includes('Not Vic'), 'and the email does not repeat a name a stranger typed');
+  assert.match(mailTo('victim@support.test').find((m) => m.subject === 'Confirm your email for GrowSigning')!.html, /Only confirm if you signed up for GrowSigning yourself just now\./);
+  assert.ok(!mailTo('victim@support.test').find((m) => m.subject === 'Confirm your email for GrowSigning')!.html.includes('Not Vic'), 'and the email does not repeat a name a stranger typed');
 
   // Signed in and writing from your own confirmed address: you get your copy.
   const jo = await person('Jo Known', 'jo@support.test');
@@ -927,13 +927,13 @@ test('the operator route does only what it is told, and the email about removed 
     await op.post(`/operator/accounts/${acc}`, { trusted: true });
     await op.post(`/operator/accounts/${acc}`, { trusted: false });
   });
-  const again = () => mailTo('ola@oper.test').filter((m) => m.subject === 'The sending limits apply to your Sign&Grow account again').at(-1)!;
+  const again = () => mailTo('ola@oper.test').filter((m) => m.subject === 'The sending limits apply to your GrowSigning account again').at(-1)!;
   assert.match(again().html, /Until the account has a payment that is at least 14 days old and was not refunded or disputed, it can send to at most 50 people a day \(200 a day after its first week\) and is checked for fake payment notices again\./);
   // With no support address set, a reply goes to the no-reply sender and reaches nobody: only the contact form is offered.
   assert.ok(!again().html.includes('reply to this email'));
   assert.match(again().html, /If this is a mistake, use the contact form at http:\/\/test\.local\/help and a person will review it\./);
   db.run('UPDATE accounts SET created_at=? WHERE id=?', ago(30), acc);
-  process.env.SUPPORT_EMAIL = 'help@signgrow.test';
+  process.env.SUPPORT_EMAIL = 'help@growsigning.test';
   try {
     await asOperator(async () => {
       await op.post(`/operator/accounts/${acc}`, { trusted: true });
@@ -1025,7 +1025,7 @@ test('someone who has forgotten the password they just chose confirms with a new
   assert.equal((await phone.post('/auth/verify', link)).data.code, 'password_needed');
   // The confirm page offers "Choose a new password". That link goes to the same mailbox, so it shows the same thing.
   assert.equal((await phone.post('/auth/forgot', { email: 'rosa@forgot.test' })).status, 200);
-  const reset = mailTo('rosa@forgot.test').find((m) => m.subject === 'Reset your Sign&Grow password')!;
+  const reset = mailTo('rosa@forgot.test').find((m) => m.subject === 'Reset your GrowSigning password')!;
   const t = /reset\?token=([\w-]+)/.exec(reset.html)![1];
   assert.equal((await phone.post('/auth/reset', { token: t, password: 'a new one I will keep' })).status, 200);
   assert.equal(db.get("SELECT email_verified v FROM users WHERE email='rosa@forgot.test'").v, 1, 'the address is confirmed');

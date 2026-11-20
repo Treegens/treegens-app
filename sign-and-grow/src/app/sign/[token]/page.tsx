@@ -832,7 +832,7 @@ export default function SignPage() {
   const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
   const menu: MenuItem[] = [
     ...(stage === 'sign' && acts ? [{ key: 'later', label: 'Finish later', hint: 'Your answers are saved. Come back with the same link.', icon: 'clock', onClick: async () => { const ok = await flush(); setOpen(''); if (ok) toast(laterWords(!!me.link_by_sender)); } }] : []),
-    { key: 'help', label: 'Help', hint: 'Ask the Sign&Grow helper, or write to a person. Nothing on this page is lost.', icon: 'mail', onClick: go('help') },
+    { key: 'help', label: 'Help', hint: 'Ask the GrowSigning helper, or write to a person. Nothing on this page is lost.', icon: 'mail', onClick: go('help') },
     { key: 'ask', label: 'Questions and comments', hint: `Ask ${sender.name} about the document, or read what was written. It signs nothing.`, icon: 'mail', onClick: go('ask') },
     { key: 'download', label: 'Download the document', icon: 'download', href: downloadUrl, download: true },
     { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },

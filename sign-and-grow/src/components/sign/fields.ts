@@ -97,7 +97,7 @@ export function writeKept(token: string, sig: string | null, ini: string | null,
 // ---- Rules of the signing screen that are plain decisions, kept here so they can be tested without a browser ----
 
 /** The browser tab says which document this is, so it can be found again among other tabs. */
-export const pageTitle = (subject?: string | null): string => (subject && subject.trim() ? `${subject.trim()} · Sign&Grow` : 'Sign&Grow');
+export const pageTitle = (subject?: string | null): string => (subject && subject.trim() ? `${subject.trim()} · GrowSigning` : 'GrowSigning');
 
 /**
  * Keeps the tab named after the document for as long as the screen shows it. Setting the title once is not enough:

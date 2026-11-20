@@ -121,9 +121,9 @@ test('public forms are not sold for consent forms any more, and the missing heal
   assert.match(landing, /Not for patient forms/);
   // One text, kept once.
   assert.equal(policy.NO_BAA_TITLE, 'Not for patient information.');
-  assert.match(policy.NO_BAA_TEXT, /There is no HIPAA business associate agreement \(BAA\) for Sign&Grow/);
+  assert.match(policy.NO_BAA_TEXT, /There is no HIPAA business associate agreement \(BAA\) for GrowSigning/);
   assert.match(policy.NO_BAA_TEXT, /Nobody can sign one with us, on any plan, at any price/);
-  assert.match(policy.NO_BAA_TEXT, /do not put protected health information through Sign&Grow/);
+  assert.match(policy.NO_BAA_TEXT, /do not put protected health information through GrowSigning/);
   assert.match(policy.NO_BAA_TEXT, /no patient intake forms, no consent forms that name a patient/);
   assert.equal(policy.NO_BAA_FIRST.length, 4, 'what would have to be true first');
   assert.match(policy.NO_BAA_FIRST.join(' '), /written by a lawyer/);
@@ -862,7 +862,7 @@ test('a payment link is offered only to an account that has earned trust, and on
   // A new account that has not paid: not offered, and the API refuses it with the reason and the way to get it.
   const first = (await c.get(`/envelopes/${e.id}/pay-link`)).data;
   assert.deepEqual([first.pay_link, first.may], [null, false]);
-  assert.match(first.why, /once your account has a payment for the plan or a top-up that is at least 14 days old .* or once a person on the Sign&Grow team has cleared it/);
+  assert.match(first.why, /once your account has a payment for the plan or a top-up that is at least 14 days old .* or once a person on the GrowSigning team has cleared it/);
   const refused = await set('https://buy.stripe.com/test_deposit');
   assert.equal(refused.status, 403);
   assert.match(refused.data.error, /what scammers want\. Nothing was saved\.$/);
@@ -889,7 +889,7 @@ test('a payment link is offered only to an account that has earned trust, and on
       ['https://pay.example.com/a b', /a space or an invisible character/],
       ['https://pay.example.com/\u200bx', /a space or an invisible character/],
       [`https://pay.example.com/${'x'.repeat(500)}`, /the most that fits is 500/],
-      ['https://sign.example.org/sign/abc', /leads to Sign&Grow itself/],
+      ['https://sign.example.org/sign/abc', /leads to GrowSigning itself/],
       ['https://pay.example.c0m/x', /does not end in a real domain ending/],
       ['', /Paste the address of your own payment page/],
     ];
@@ -914,7 +914,7 @@ test('a payment link is offered only to an account that has earned trust, and on
   const trail = (await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => /^Payment link/.test(a.action));
   assert.deepEqual(trail.map((a: any) => a.action), ['Payment link added', 'Payment link changed']);
   // The audit trail goes into the certificate, which is emailed: it names each address by a fingerprint, never itself.
-  assert.equal(trail[1].detail, `"Pay the retainer" now leads to another payment page Pia Plumber gave (address fingerprint ${payPrint('https://buy.stripe.com/test_deposit')}, before ${payPrint('https://xn--pypal-4ve.com/deposit')}). The address is on the envelope page. It is shown to each person who signs, after they finish, and never put in an email, a certificate or an export. Sign&Grow takes no part in the payment.`);
+  assert.equal(trail[1].detail, `"Pay the retainer" now leads to another payment page Pia Plumber gave (address fingerprint ${payPrint('https://buy.stripe.com/test_deposit')}, before ${payPrint('https://xn--pypal-4ve.com/deposit')}). The address is on the envelope page. It is shown to each person who signs, after they finish, and never put in an email, a certificate or an export. GrowSigning takes no part in the payment.`);
   // Somebody else's envelope is not theirs to set a link on, or to read.
   const other = await signUp('Oz Other', 'oz-other-pay@example.com', ip());
   assert.equal((await other.put(`/envelopes/${e.id}/pay-link`, { url: 'https://evil.example.net/pay' })).status, 404);
@@ -951,7 +951,7 @@ test('the link is shown after Finish, to each person who signs, with the sender\
   assert.equal((await press()).data.recorded, false);
   const opened = (await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => a.action === 'Opened the payment link');
   assert.equal(opened.length, 1);
-  assert.match(opened[0].detail, /Whether a payment was made is not known to Sign&Grow\.$/);
+  assert.match(opened[0].detail, /Whether a payment was made is not known to GrowSigning\.$/);
   assert.equal((await new Client().post(`/sign/${tokenFor(e.id, 'bo-shown@example.com')}/pay-opened`)).data.recorded, false, 'not before they finished');
   // The sender sees who was shown it and who pressed it.
   const seen = (await c.get(`/envelopes/${e.id}/pay-link`)).data.people;
@@ -1053,7 +1053,7 @@ test('the screens show the payment link only where the rules say, and every page
   assert.match(card, /payForSigner\(pay\.sender\.name\)/);
   assert.match(card, /payNotUs\(pay\.sender\.name\)/);
   assert.match(pl.payForSigner('Gus'), /your signature does not depend on this payment, and it stays signed whether you pay now, later or not at all/);
-  assert.match(pl.payNotUs('Gus'), /^Sign&Grow takes no part in this payment\. We do not see what you pay, cannot confirm that it was paid and cannot refund it\./);
+  assert.match(pl.payNotUs('Gus'), /^GrowSigning takes no part in this payment\. We do not see what you pay, cannot confirm that it was paid and cannot refund it\./);
   assert.match(pl.payNotUs('Gus'), /If you did not expect to pay Gus anything, do not pay/);
   // The sender's screens: next to the Send button, absent for an account that may not show one, and on the envelope.
   // Not offered on an envelope whose template wording is locked: the link is part of that wording (tests/templates.test.ts).
@@ -1068,7 +1068,7 @@ test('the screens show the payment link only where the rules say, and every page
   const help = read('src/app/help/page.tsx');
   assert.match(help, /<QA id="payment-link" q="Can someone pay a deposit when they sign\?">/);
   assert.match(help, /\{payNotYet\(PAID_TRUST_DAYS\)\}/);
-  assert.match(read('src/app/security/page.tsx'), /<Point title="No payment collection\.">Sign&Grow never takes money for a sender\./);
+  assert.match(read('src/app/security/page.tsx'), /<Point title="No payment collection\.">GrowSigning never takes money for a sender\./);
   const readme = read('README.md');
   assert.doesNotMatch(readme, /payments collected during signing/, 'the README no longer lists it as missing');
   assert.match(readme, /Payments are not collected: a trusted account can\s+show a link to its own payment page after Finish/);
@@ -1251,10 +1251,10 @@ test('a link shortener or a forwarding page is refused and says why, and both si
   assert.doesNotMatch((checkPayUrl(`https://pay.example.com/${'x'.repeat(600)}`) as any).error, /short link/);
   // An open redirect on the payer's own site cannot be seen from here, so both sides are told what is and is not checked.
   const pl = await import('../src/lib/paylink.ts');
-  assert.match(pl.PAY_FOR_SENDER, /The button opens exactly this address, and Sign&Grow does not check where that page sends people next, so give the address of the payment page itself, not a short link\./);
-  assert.equal(pl.payWhere('Gus'), 'The button opens exactly this address. Sign&Grow does not check where that site sends you after that: before you pay, check that the page asking for money belongs to Gus.');
+  assert.match(pl.PAY_FOR_SENDER, /The button opens exactly this address, and GrowSigning does not check where that page sends people next, so give the address of the payment page itself, not a short link\./);
+  assert.equal(pl.payWhere('Gus'), 'The button opens exactly this address. GrowSigning does not check where that site sends you after that: before you pay, check that the page asking for money belongs to Gus.');
   assert.match(read('src/components/sign/PayLink.tsx'), /<p className="small" id="sg-pay-where"[^>]*>\{payWhere\(pay\.sender\.name\)\}<\/p>/);
-  assert.match(read('src/components/sender/PayLinkNote.tsx'), /The button opens exactly this address: Sign&Grow does not check where that page sends people next\./);
+  assert.match(read('src/components/sender/PayLinkNote.tsx'), /The button opens exactly this address: GrowSigning does not check where that page sends people next\./);
 });
 
 test('a host on a private network or at a special address is refused when the link is saved, and again each time it would be shown', async () => {

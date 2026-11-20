@@ -17,7 +17,7 @@ export type Mail = {
   footnote?: string;
   attachments?: { filename: string; content: Buffer }[];
   replyTo?: string; // replies go to a person, never to a dead no-reply box
-  fromName?: string; // shown as "<name> via Sign&Grow"
+  fromName?: string; // shown as "<name> via GrowSigning"
   code?: string; // security code the recipient can type into /check
   // The sender's name, on an email that asks someone to open a signing page and whose replies reach that sender.
   // The footer then says what to do when the page will not open where the reader is: ask the sender for a PDF.
@@ -55,12 +55,12 @@ async function transport() {
   return g.__tsmail;
 }
 
-// "Ada Lovelace via Sign&Grow" <sign@example.com>: recipients see who it is from before they open it.
+// "Ada Lovelace via GrowSigning" <sign@example.com>: recipients see who it is from before they open it.
 function fromHeader(name?: string): string {
-  const base = process.env.MAIL_FROM || '"Sign&Grow" <no-reply@localhost>';
+  const base = process.env.MAIL_FROM || '"GrowSigning" <no-reply@localhost>';
   if (!name) return base;
   const address = /<([^>]+)>/.exec(base)?.[1] || base.trim();
-  return `"${name.replace(/["\\\r\n<>]/g, '')} via Sign&Grow" <${address}>`;
+  return `"${name.replace(/["\\\r\n<>]/g, '')} via GrowSigning" <${address}>`;
 }
 
 // "Report this email": the check page with the security code filled in. Reporting from there needs no signing link.
@@ -75,7 +75,7 @@ export function renderMail(m: Mail): string {
   const color = /^#[0-9a-f]{6}$/i.test(m.brand?.color || '') ? m.brand!.color! : '#1f6f43';
   const logo = m.brand?.logo?.startsWith('data:image/')
     ? `<img src="${esc(m.brand.logo)}" alt="${esc(m.brand?.name || '')}" style="max-height:40px;max-width:200px">`
-    : `<span style="font-size:18px;font-weight:700;color:${color}">${esc(m.brand?.name || 'Sign&Grow')}</span>`;
+    : `<span style="font-size:18px;font-weight:700;color:${color}">${esc(m.brand?.name || 'GrowSigning')}</span>`;
   return `<!doctype html><html><body style="margin:0;background:#f4f1ea;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2a22">
 <div style="max-width:560px;margin:0 auto;padding:32px 16px">
   <div style="padding:0 4px 16px">${logo}</div>
@@ -89,15 +89,15 @@ export function renderMail(m: Mail): string {
   ${m.code ? `<div style="background:#fff;border:1px solid #e4dfd3;border-radius:14px;padding:16px 20px;margin-top:12px;font-size:13px;line-height:1.55;color:#1c2a22">
     <b>Not sure this email is real?</b> Do not click anything. Type <b>${esc(baseUrl().replace(/^https?:\/\//, ''))}/check</b> into your browser yourself and enter this security code:
     <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:18px;letter-spacing:1px;font-weight:700;margin:8px 0 4px">${esc(fmtCode(m.code))}</div>
-    We will tell you who sent it and open the document for you. Sign&amp;Grow never asks for a password, a card number or a payment by email.
+    We will tell you who sent it and open the document for you. GrowSigning never asks for a password, a card number or a payment by email.
     <div style="margin-top:8px">Did not expect this, or does it look wrong? <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">Report this email</a>. That opens our check page with this code filled in. You do not have to open the document to report it.</div>
   </div>` : ''}
   <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0">
-    ${m.help ? 'Sent by the people who answer help requests at Sign&amp;Grow.' : m.envelopeId || m.links
+    ${m.help ? 'Sent by the people who answer help requests at GrowSigning.' : m.envelopeId || m.links
     // Emails about a document go to people who only came to sign. The pages promise them no marketing, so these end
     // with where the email came from and nothing that sells. Emails to an account's own people keep the full line.
-    ? 'Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow.'
-    : `Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`}
+    ? 'Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning.'
+    : `Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`}
     ${m.cta ? `<br>If the button does not work, copy this link: ${esc(m.cta.url)}` : ''}
     ${m.askForPdf ? `<br>${esc(cannotOpenLine(m.askForPdf))}` : ''}
     ${m.code ? '<br>Do not forward this email. The link is personal to you.' : ''}

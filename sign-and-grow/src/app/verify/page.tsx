@@ -31,7 +31,7 @@ export default function Verify() {
     try {
       setRes({ ...(await api('/public/verify', { form: fd })), name: file.name });
     } catch (e: any) {
-      setError(!e?.status ? 'We could not reach Sign&Grow, so the file was not checked. Check your connection and choose the file again.'
+      setError(!e?.status ? 'We could not reach GrowSigning, so the file was not checked. Check your connection and choose the file again.'
         : e.status === 429 ? 'That is a lot of files in a short time. Wait an hour and try again.'
         : `${e.message} Choose the signed PDF exactly as you downloaded it and try again.`);
     } finally {
@@ -45,7 +45,7 @@ export default function Verify() {
       <main id="main" className="wrap pub-page narrow">
         <header className="pub-top">
           <h1 className="pub-h1">Verify a signed document</h1>
-          <p className="pub-lead">Got a PDF that claims to be signed with Sign&Grow? Choose it here. We compare its fingerprint with the one recorded when signing finished. If a single byte was changed, it will not match.</p>
+          <p className="pub-lead">Got a PDF that claims to be signed with GrowSigning? Choose it here. We compare its fingerprint with the one recorded when signing finished. If a single byte was changed, it will not match.</p>
         </header>
         <label className={`drop pub-drop${over ? ' over' : ''}`}
           onDragOver={(e) => (e.preventDefault(), setOver(true))} onDragLeave={() => setOver(false)} onDrop={(e) => (e.preventDefault(), setOver(false), check(e.dataTransfer.files[0]))}>
@@ -60,7 +60,7 @@ export default function Verify() {
             <h2>{res.envelope.subject}</h2>
             <div className="muted">Sent by {res.envelope.sender}. Completed {fmtDate(res.envelope.completed_at, true)}.</div>
             <p className="small" style={{ margin: '10px 0 0' }}>{MATCH_MEANS}</p>
-            {res.envelope.disputed_at && <div className="notice warn" style={{ marginTop: 12 }}><b>Disputed.</b> On {fmtDate(res.envelope.disputed_at, true)}, a person named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that, and this page cannot tell you who is right. Ask the sender.{res.envelope.dispute_in_error_on ? ` On ${longDay(res.envelope.dispute_in_error_on)} a person at Sign&Grow looked into it and found that it was filed in error.` : ''}</div>}
+            {res.envelope.disputed_at && <div className="notice warn" style={{ marginTop: 12 }}><b>Disputed.</b> On {fmtDate(res.envelope.disputed_at, true)}, a person named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that, and this page cannot tell you who is right. Ask the sender.{res.envelope.dispute_in_error_on ? ` On ${longDay(res.envelope.dispute_in_error_on)} a person at GrowSigning looked into it and found that it was filed in error.` : ''}</div>}
             <table className="t" style={{ marginTop: 12 }}>
               <caption className="pub-vh">Who took part</caption>
               <tbody>
@@ -74,10 +74,10 @@ export default function Verify() {
         {res && !res.match && res.deleted && (
           <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
             <span className="badge completed">Completed here, deleted since</span>
-            <h2>This file was completed with Sign&amp;Grow on {longDay(res.deleted.completed_at)}</h2>
+            <h2>This file was completed with GrowSigning on {longDay(res.deleted.completed_at)}</h2>
             <p>Its fingerprint matches the signed PDF of envelope <span className="mono">{res.deleted.envelope_id}</span>, which everyone had finished on that day. So the file is unchanged since then.</p>
-            {res.deleted.disputed_on && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {longDay(res.deleted.disputed_on)}, a person named on this document told us they did not sign it, or that it was not them, and a person at Sign&amp;Grow has not closed that yet. This page cannot tell you who is right.</div>}
-            <p>Its sender has since deleted it, together with their account, on {longDay(res.deleted.deleted_at)}. We deleted what we knew about it too: the document, the names on it and its audit trail{res.deleted.disputed_on ? ', apart from the alert our team works from while the dispute is open' : ''}. So we cannot tell you anything about who signed it. The certificate inside the file is what is left: read it with <Link href="/security/certificate">How to read a Sign&amp;Grow certificate</Link>.</p>
+            {res.deleted.disputed_on && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {longDay(res.deleted.disputed_on)}, a person named on this document told us they did not sign it, or that it was not them, and a person at GrowSigning has not closed that yet. This page cannot tell you who is right.</div>}
+            <p>Its sender has since deleted it, together with their account, on {longDay(res.deleted.deleted_at)}. We deleted what we knew about it too: the document, the names on it and its audit trail{res.deleted.disputed_on ? ', apart from the alert our team works from while the dispute is open' : ''}. So we cannot tell you anything about who signed it. The certificate inside the file is what is left: read it with <Link href="/security/certificate">How to read a GrowSigning certificate</Link>.</p>
             <p className="muted small">We keep only this fingerprint, the envelope ID and the day it was completed, until {longDay(res.deleted.kept_until)}{res.deleted.disputed_on ? ', and that it is disputed and since when, until the dispute is closed' : ''}. After that this check answers &ldquo;no match&rdquo; for this file.</p>
             <div className="mono muted" style={{ marginTop: 8 }}>SHA-256 {res.hash}</div>
           </div>

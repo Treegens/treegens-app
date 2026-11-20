@@ -25,8 +25,8 @@ export function Disputed({ envelope, audit }: { envelope: any; audit: any[] }) {
           <p style={{ margin: 0, whiteSpace: 'pre-wrap' }} dir="auto">{d.detail}</p>
         </blockquote>
       ))}
-      <p style={{ margin: '0 0 6px' }}>This envelope shows as disputed here and to anyone who checks it on the Verify page. We do not decide who is right: speak to the person directly, and if it becomes a legal matter, ask a lawyer where you are, because the rules differ by country and by kind of document.{open ? ' While a dispute is open you cannot delete this envelope for good: deleting only takes it out of your lists. A person at Sign&Grow closes the dispute once they have looked into it.' : ''}</p>
-      <p style={{ margin: 0 }}>To keep what you have outside Sign&amp;Grow, use <b>Download evidence pack</b> at the top of this page: the signed file, the record, our emails, the disputes and what each person agreed to.</p>
+      <p style={{ margin: '0 0 6px' }}>This envelope shows as disputed here and to anyone who checks it on the Verify page. We do not decide who is right: speak to the person directly, and if it becomes a legal matter, ask a lawyer where you are, because the rules differ by country and by kind of document.{open ? ' While a dispute is open you cannot delete this envelope for good: deleting only takes it out of your lists. A person at GrowSigning closes the dispute once they have looked into it.' : ''}</p>
+      <p style={{ margin: 0 }}>To keep what you have outside GrowSigning, use <b>Download evidence pack</b> at the top of this page: the signed file, the record, our emails, the disputes and what each person agreed to.</p>
     </section>
   );
 }

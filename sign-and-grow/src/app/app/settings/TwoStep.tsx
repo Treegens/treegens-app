@@ -101,7 +101,7 @@ export function TwoStepCard() {
         <>
           <p style={{ margin: '10px 0' }}><b>On</b> since {longMoment(d.since)}. {d.recovery_left === 0 ? 'You have no recovery codes left: make new ones now.' : `${d.recovery_left} recovery ${d.recovery_left === 1 ? 'code is' : 'codes are'} left.`}</p>
           {required.length > 0 && <p className="muted small">{required.join(', ')} {required.length === 1 ? 'asks' : 'ask'} everyone on the team for it, so it cannot be switched off while you are on {required.length === 1 ? 'that team' : 'those teams'}.</p>}
-          {doing === 'move' ? <SetUpTwoStep hasPassword={d.has_password} moving onDone={() => done('Two-step login moved to the new app. The app you used before no longer works for Sign&Grow. Your recovery codes stay as they were.')} onCancel={() => setDoing('')} />
+          {doing === 'move' ? <SetUpTwoStep hasPassword={d.has_password} moving onDone={() => done('Two-step login moved to the new app. The app you used before no longer works for GrowSigning. Your recovery codes stay as they were.')} onCancel={() => setDoing('')} />
             : doing === 'codes' ? <WithCode label="Make new recovery codes" onCancel={() => setDoing('')} onSubmit={async (code) => { const r = await api('/me/two-step/recovery-codes', { body: { code } }); setDoing(''); setCodes(r.codes); }} />
             : doing === 'off' ? <>
               <p className="notice warn" style={{ marginTop: 12 }}>Switching it off removes your recovery codes and the devices that skip the second step. From then on signing in asks for no code.</p>

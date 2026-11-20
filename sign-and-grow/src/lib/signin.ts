@@ -51,7 +51,7 @@ function errorWords(code: any, provider?: any): string {
     case 'expired':
       return `That sign-in was used already, or it took longer than ${SIGNIN_MINUTES} minutes, so we stopped it to be safe. Nothing was changed. Please start again from this page. If this keeps happening, your browser may be refusing cookies from this site: allow them, or use your email and password.`;
     case 'exists':
-      return `You already have a Sign&Grow login with this address. Sign in with your password once, then connect ${p} under Settings. We did not sign you in with ${p} because it does not confirm to us that this address is yours. No password, or you do not remember it? Use "Forgot password" below and we email you a link to choose one.`;
+      return `You already have a GrowSigning login with this address. Sign in with your password once, then connect ${p} under Settings. We did not sign you in with ${p} because it does not confirm to us that this address is yours. No password, or you do not remember it? Use "Forgot password" below and we email you a link to choose one.`;
     case 'no_email':
       return `${p} did not tell us an email address for you, so no login was created. Create one with your email and a password instead. You can connect ${p} afterwards under Settings.`;
     case 'invite':
@@ -59,11 +59,11 @@ function errorWords(code: any, provider?: any): string {
     case 'code':
       return 'We do not recognise that code, so no login was created. Check the spelling, or leave the code box empty and add the code later on the Plan page.';
     case 'taken':
-      return `That ${p} account is already connected to another Sign&Grow login, so it was not connected to this one. Sign in to the other login and disconnect it there first, or choose a different ${p} account.`;
+      return `That ${p} account is already connected to another GrowSigning login, so it was not connected to this one. Sign in to the other login and disconnect it there first, or choose a different ${p} account.`;
     case 'session':
-      return `You were no longer signed in to the same Sign&Grow login when ${p} answered, so nothing was connected. Sign in and try again under Settings, Profile.`;
+      return `You were no longer signed in to the same GrowSigning login when ${p} answered, so nothing was connected. Sign in and try again under Settings, Profile.`;
     case 'signed_in':
-      return `You are already signed in to Sign&Grow in this browser, so no new login was made. To sign in with ${p} from now on, press Connect next to ${p} here. To make a separate login with it instead, sign out first and then use "Continue with ${p}" on the sign-in page.`;
+      return `You are already signed in to GrowSigning in this browser, so no new login was made. To sign in with ${p} from now on, press Connect next to ${p} here. To make a separate login with it instead, sign out first and then use "Continue with ${p}" on the sign-in page.`;
     case 'busy':
       return 'Too many attempts. Please wait a bit and try again.';
     default:
@@ -96,8 +96,8 @@ export const SIGNIN_NOTE_COOKIE = 'sg_signin_note';
 
 export function signInNotice(r: SignInNote): string {
   const said: string[] = [];
-  if (r.created) said.push(`Welcome. Your Sign&Grow login was made with ${r.created}, so use "Continue with ${r.created}" to sign in from now on. It has no password. You can set one under Settings, Profile.${r.confirm ? ' We emailed you a link to confirm your address. Open it in this browser while you are signed in, and you can send documents.' : ''}`);
-  if (r.reclaimed) said.push(`${r.linked} confirmed that this address is yours. A Sign&Grow login had been started with it earlier, but the address was never confirmed, so we could not know who started it. To be safe${r.reclaimed === 'password' ? ' the password that was set before no longer works and' : ''} every other browser was signed out. From now on you sign in with ${r.linked}${r.reclaimed === 'password' ? ', and you can choose a new password under Settings, Profile' : ''}. ${removedText(r.removed) ? `${removedText(r.removed)} We emailed you the same list.` : 'Nothing else had been set up in it.'}`);
+  if (r.created) said.push(`Welcome. Your GrowSigning login was made with ${r.created}, so use "Continue with ${r.created}" to sign in from now on. It has no password. You can set one under Settings, Profile.${r.confirm ? ' We emailed you a link to confirm your address. Open it in this browser while you are signed in, and you can send documents.' : ''}`);
+  if (r.reclaimed) said.push(`${r.linked} confirmed that this address is yours. A GrowSigning login had been started with it earlier, but the address was never confirmed, so we could not know who started it. To be safe${r.reclaimed === 'password' ? ' the password that was set before no longer works and' : ''} every other browser was signed out. From now on you sign in with ${r.linked}${r.reclaimed === 'password' ? ', and you can choose a new password under Settings, Profile' : ''}. ${removedText(r.removed) ? `${removedText(r.removed)} We emailed you the same list.` : 'Nothing else had been set up in it.'}`);
   else if (r.linked) said.push(`${r.linked} is now connected to your login, because it confirmed your address to us. You can sign in with ${r.linked} or with your password. We emailed you a note about it.`);
   if (r.invite_error) said.push(`You are signed in, but you did not join the team. ${r.invite_error}`);
   else if (r.joined) said.push(`You have joined ${r.joined}.${r.created ? '' : ' If you have a workspace of your own, it is still there: switch between them at the bottom of the menu.'}`);

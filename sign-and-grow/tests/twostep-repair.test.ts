@@ -63,7 +63,7 @@ async function fullSignIn(email: string, secret: string, extra: any = {}, c = br
   assert.equal(done.status, 200, JSON.stringify(done.data));
   return { c, done };
 }
-const lostLink = (email: string) => mailTo(email).filter((m) => m.subject === 'Reset two-step login of your Sign&Grow login');
+const lostLink = (email: string) => mailTo(email).filter((m) => m.subject === 'Reset two-step login of your GrowSigning login');
 const tokenOf = (m: any, key = 'token') => new URL(m.link).searchParams.get(key)!;
 const user = (id: string) => db.get('SELECT * FROM users WHERE id=?', id);
 // Two-step login as an older version could leave it: switched on for a login whose address nobody confirmed.
@@ -192,7 +192,7 @@ test('Google with only the mailbox: no connection before the code, and "I lost m
   const back = await withGoogle(b, email, `thief-sub-${n}`);
   assert.equal(back.location, 'http://test.local/login/two-step');
   assert.equal(db.all('SELECT 1 FROM identities WHERE user_id=?', id).length, 0, 'no way in was added before the code');
-  assert.ok(!mailTo(email).some((m) => /can now open your Sign&Grow login/.test(m.subject)), 'nothing announced either');
+  assert.ok(!mailTo(email).some((m) => /can now open your GrowSigning login/.test(m.subject)), 'nothing announced either');
   const screen = (await b.get('/auth/two-step')).data;
   assert.equal(screen.password_asked, true, 'the second screen asks for the password before a reset by email');
   // Without the password, or with a wrong one: the same answer, and nothing is emailed.
@@ -209,7 +209,7 @@ test('Google with only the mailbox: no connection before the code, and "I lost m
   assert.equal(done.status, 200);
   assert.equal(done.data.linked, 'Google');
   assert.equal(db.all('SELECT 1 FROM identities WHERE user_id=?', id).length, 1);
-  assert.ok(mailTo(email).some((m) => m.subject === 'Google can now open your Sign&Grow login'));
+  assert.ok(mailTo(email).some((m) => m.subject === 'Google can now open your GrowSigning login'));
 });
 
 test('the reset by email under Settings asks for the password too', async () => {
@@ -235,12 +235,12 @@ test(`the reset by email waits ${TWO_STEP_EMAIL_RESET_DAYS} days, every email ha
   assert.equal(TWO_STEP_EMAIL_RESET_DAYS, 7);
   // Every browser that is signed in sees it on GET /me, which every page of the app reads (AppShell).
   for (const b of [c, other]) assert.equal((await b.get('/me')).data.two_step.reset_at, started.takes_effect_at);
-  const first = mailTo(email).find((m) => m.subject === 'Two-step login of your Sign&Grow login will be switched off')!;
+  const first = mailTo(email).find((m) => m.subject === 'Two-step login of your GrowSigning login will be switched off')!;
   assert.match(first.link, /\/two-step-reset\?stop=/, 'the start email carries a stop link');
   // A day later: the reminder, with a stop link of its own.
   db.run('UPDATE users SET two_step_reset_noticed_at=? WHERE id=?', ago(24 * 3600_000), id);
   await cron.tick();
-  const daily = mailTo(email).filter((m) => /^Reminder: two-step login of your Sign&Grow login goes off in 7 days/.test(m.subject));
+  const daily = mailTo(email).filter((m) => /^Reminder: two-step login of your GrowSigning login goes off in 7 days/.test(m.subject));
   assert.equal(daily.length, 1);
   assert.match(daily[0].link, /\/two-step-reset\?stop=/);
   assert.notEqual(tokenOf(daily[0], 'stop'), tokenOf(first, 'stop'));
@@ -347,7 +347,7 @@ test('a lost phone that is still signed in can be put out with "Forgot password"
   // Whoever has the phone could press Stop. The owner chooses a new password by email first, as the words advise.
   assert.match(TWO_STEP_LOST.join(' '), /choose a new password first with "Forgot password" on the sign-in page: that signs out every browser/);
   await browser().post('/auth/forgot', { email });
-  await browser().post('/auth/reset', { token: tokenOf(mailTo(email).filter((m) => /Reset your Sign&Grow password/.test(m.subject)).at(-1)), password: 'owner new password' });
+  await browser().post('/auth/reset', { token: tokenOf(mailTo(email).filter((m) => /Reset your GrowSigning password/.test(m.subject)).at(-1)), password: 'owner new password' });
   assert.equal((await phone.post('/me/two-step/reset/stop')).status, 401, 'the phone is signed out and cannot stop it');
   assert.ok(user(id).two_step_reset_at, 'the reset is still under way');
 });
@@ -369,7 +369,7 @@ test('when the days have passed it takes effect, and every browser is signed out
   db.run('UPDATE users SET two_step_reset_at=? WHERE id=?', ago(1000), id);
   assert.equal((await cron.tick()).two_step.switched_off, 1);
   for (const b of [c, other]) assert.equal((await b.get('/envelopes')).status, 401);
-  const mail = mailTo(email).find((m) => m.subject === 'Two-step login of your Sign&Grow login is off')!;
+  const mail = mailTo(email).find((m) => m.subject === 'Two-step login of your GrowSigning login is off')!;
   assert.match(mail.html, /every browser that was signed in was signed out/);
   assert.equal(user(id).two_step_on_at, null);
 });
@@ -394,7 +394,7 @@ test('"Allow a reset by email": on by default, needs a code to change, and switc
   const { c: x } = await password(email);
   assert.deepEqual((await x.post('/auth/two-step/lost', {})).data, { ok: true });
   assert.equal(lostLink(email).length, links);
-  assert.ok(mailTo(email).some((m) => m.subject === 'Getting back into your Sign&Grow login without your phone' && /You switched the reset by email off/.test(m.html)));
+  assert.ok(mailTo(email).some((m) => m.subject === 'Getting back into your GrowSigning login without your phone' && /You switched the reset by email off/.test(m.html)));
   assert.equal((await c.post('/me/two-step/lost', { password: PW })).data.what, 'nobody');
   // On again, with a code.
   assert.equal((await c.post('/me/two-step/email-reset', { allowed: true, code: code(secret) })).status, 200);
@@ -473,7 +473,7 @@ test('after the right password five wrong codes pause the login for everyone, an
     assert.equal((await o.post('/auth/two-step', { code: code(secret) })).status, 429);
     db.run('UPDATE users SET two_step_paused_until=? WHERE id=?', ago(1000), id);
   }
-  const mail = mailTo(email).filter((m) => m.subject === 'Wrong codes were typed for your Sign&Grow login');
+  const mail = mailTo(email).filter((m) => m.subject === 'Wrong codes were typed for your GrowSigning login');
   assert.equal(mail.length, 1, 'one email, though it happened twice');
   assert.match(mail[0].html, /They came after your correct password/);
   assert.equal(db.all("SELECT 1 FROM two_step_log WHERE user_id=? AND what='paused'", id).length, 2, 'Settings lists both');
@@ -562,7 +562,7 @@ test('a sign-in waiting for its code ends when the password is changed, reset by
   await password(email, 'owner new password');
   assert.equal(waiting(), 1);
   await browser().post('/auth/forgot', { email });
-  await browser().post('/auth/reset', { token: tokenOf(mailTo(email).filter((m) => /Reset your Sign&Grow password/.test(m.subject)).at(-1)), password: 'owner newer password' });
+  await browser().post('/auth/reset', { token: tokenOf(mailTo(email).filter((m) => /Reset your GrowSigning password/.test(m.subject)).at(-1)), password: 'owner newer password' });
   assert.equal(waiting(), 0);
   // And "Sign out every other browser".
   const fresh = browser();

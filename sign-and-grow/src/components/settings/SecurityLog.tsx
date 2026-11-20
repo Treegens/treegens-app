@@ -149,7 +149,7 @@ export function SecurityLog() {
           </ul>
         )}
         <form className="row wrap" style={{ marginTop: 8 }} onSubmit={(e) => (e.preventDefault(), act(() => api('/webhooks', { body: { url: hook, events: ['security.event'] } }).then(() => setHook('')), t(ui, 'settings.security.webhook_added')))}>
-          <input type="url" required placeholder="https://siem.example.com/hooks/sign-and-grow" value={hook} onChange={(e) => setHook(e.target.value)} aria-label={t(ui, 'settings.security.webhook_label')} style={{ flex: '1 1 240px', minHeight: 44 }} />
+          <input type="url" required placeholder="https://siem.example.com/hooks/growsigning" value={hook} onChange={(e) => setHook(e.target.value)} aria-label={t(ui, 'settings.security.webhook_label')} style={{ flex: '1 1 240px', minHeight: 44 }} />
           <button className="btn" disabled={busy}>{t(ui, 'settings.security.webhook_add')}</button>
         </form>
         <p className="muted small">{t(ui, 'settings.security.webhook_secret')}</p>

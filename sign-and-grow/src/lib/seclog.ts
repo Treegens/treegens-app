@@ -35,10 +35,10 @@ export const SECURITY_KINDS = {
   'settings.changed': 'Account settings changed',
   'account.closing': 'Closing of a login or account started',
   'account.close_undone': 'Closing undone by signing in again',
-  'operator.paused': 'Sending paused by the Sign&Grow team',
-  'operator.resumed': 'Sending resumed by the Sign&Grow team',
-  'operator.trusted': 'Marked as trusted by the Sign&Grow team',
-  'operator.untrusted': 'Trusted mark removed by the Sign&Grow team',
+  'operator.paused': 'Sending paused by the GrowSigning team',
+  'operator.resumed': 'Sending resumed by the GrowSigning team',
+  'operator.trusted': 'Marked as trusted by the GrowSigning team',
+  'operator.untrusted': 'Trusted mark removed by the GrowSigning team',
   // Keeping closed envelopes for a set time and legal holds (src/server/records.ts).
   'retention.changed': 'How long closed envelopes are kept changed',
   'legal_hold.placed': 'Legal hold placed',
@@ -60,7 +60,7 @@ export const SECURITY_GROUPS: [string, SecurityKind[]][] = [
   ['Documents', ['export.made', 'envelope.deleted', 'envelope.purged', 'envelope.restored', 'template.rules_changed']],
   ['Settings', ['settings.changed']],
   ['Keeping and holds', ['retention.changed', 'legal_hold.placed', 'legal_hold.lifted', 'purge.asked', 'purge.cancelled', 'envelope.retention_purged']],
-  ['The Sign&Grow team', ['operator.paused', 'operator.resumed', 'operator.trusted', 'operator.untrusted']],
+  ['The GrowSigning team', ['operator.paused', 'operator.resumed', 'operator.trusted', 'operator.untrusted']],
 ];
 
 /** Who did it: a person signed in, an API key, a person who runs this server, or the server on its own. */

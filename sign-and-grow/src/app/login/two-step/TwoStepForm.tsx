@@ -59,7 +59,7 @@ export function TwoStepForm() {
   const again = <Link href={`/login${nextPage ? `?next=${encodeURIComponent(nextPage)}` : ''}`}>Start again with your password</Link>;
   return (
     <div className="authbox">
-      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Leaf color="#1f6f43" size={24} /> Sign&Grow</Link>
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Leaf color="#1f6f43" size={24} /> GrowSigning</Link>
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>Two-step login</h1>
         {!state ? <p className="muted" role="status">One moment…</p> : !state.waiting ? (
@@ -94,7 +94,7 @@ export function TwoStepForm() {
                   {state.password_asked && (
                     <label className="f" htmlFor="ts-lost-pw"><span>Your password</span>
                       <input id="ts-lost-pw" type="password" autoComplete="current-password" value={lostPw} onChange={(e) => setLostPw(e.target.value)} />
-                      <span className="hint">You signed in with {state.via}, so type the password of your Sign&amp;Grow login here. If it has none yet, choose one first with &quot;Forgot password&quot; on the sign-in page.</span>
+                      <span className="hint">You signed in with {state.via}, so type the password of your GrowSigning login here. If it has none yet, choose one first with &quot;Forgot password&quot; on the sign-in page.</span>
                     </label>
                   )}
                   <button type="button" className="btn" disabled={busy || (state.password_asked && !lostPw)} onClick={sendLost}>Email me what to do</button>

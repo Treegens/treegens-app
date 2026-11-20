@@ -361,12 +361,12 @@ test('a price notice counts from when its email left, so a run that takes too lo
   assert.equal(acct(p.id).price_notice_cents, null);
   assert.ok(r.data.not_told.some((x: string) => x.startsWith(acct(p.id).name)));
   // That email leaves much later (the timer tried it again), less than 30 days before the first day.
-  db.run("UPDATE emails SET tried_at=? WHERE to_email=? AND subject LIKE 'The price of your Sign&Grow plan changes on%'", new Date(Date.parse(`${from}T00:00:00.000Z`) - 20 * 864e5).toISOString(), p.email);
+  db.run("UPDATE emails SET tried_at=? WHERE to_email=? AND subject LIKE 'The price of your GrowSigning plan changes on%'", new Date(Date.parse(`${from}T00:00:00.000Z`) - 20 * 864e5).toISOString(), p.email);
   const again = await asOperator(p, () => p.c.post('/operator/billing/price-notice', { new_usd: 12, from }));
   assert.equal(again.status, 200);
   assert.ok(again.data.too_late.includes(acct(p.id).name), JSON.stringify(again.data));
   assert.equal(acct(p.id).price_notice_cents, null, 'not recorded as notice it is not');
-  assert.equal(subjects(p.email).filter((s) => s.startsWith('The price of your Sign&Grow plan changes on')).length, 1, 'nobody is emailed twice');
+  assert.equal(subjects(p.email).filter((s) => s.startsWith('The price of your GrowSigning plan changes on')).length, 1, 'nobody is emailed twice');
   // The operator page says what that means.
   const page = readFileSync(new URL('../src/app/app/operator/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /out\.too_late\??\.length > 0/);

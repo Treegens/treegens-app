@@ -175,8 +175,8 @@ export const emailsOn = (accountId: string): boolean => !!get('SELECT security_l
 export function screenView(r: any) {
   const v = eventView(r, false);
   const nameOf = (type: string, oid: string | null): string => {
-    if (type === 'system') return 'Sign&Grow on its own';
-    if (type === 'operator') return 'The Sign&Grow team';
+    if (type === 'system') return 'GrowSigning on its own';
+    if (type === 'operator') return 'The GrowSigning team';
     if (!oid) return 'Unknown';
     if (type === 'user') return userName(oid)?.name || 'A login that no longer exists';
     if (type === 'api_key') {
@@ -271,7 +271,7 @@ async function alert(accountId: string, rule: SecurityAlert, subject: string, li
     accountId, rule, t, new Date(Date.now() - ALERT_EVERY_MINUTES * 60_000).toISOString()).changes) return;
   for (const m of admins(accountId))
     await sendMail({ to: m.email, subject: `Security alert for ${a.name}: ${subject}`, heading: subject,
-      lines: [...lines, `We send this alert at most once an hour. Every event is listed under Settings, Security, where an admin can also switch this alert off. Nobody at Sign&Grow watches the record for you: this email is the alert.`],
+      lines: [...lines, `We send this alert at most once an hour. Every event is listed under Settings, Security, where an admin can also switch this alert off. Nobody at GrowSigning watches the record for you: this email is the alert.`],
       cta: { label: 'Open Settings, Security', url: `${baseUrl()}/app/settings?tab=security` } });
 }
 
@@ -281,7 +281,7 @@ const whoSaid = (r: any): string => {
     return k ? `the API key "${k.name}"` : 'an API key';
   }
   if (r.actor_type === 'user') return userName(r.actor_id)?.name || 'someone';
-  return r.actor_type === 'operator' ? 'the Sign&Grow team' : 'Sign&Grow';
+  return r.actor_type === 'operator' ? 'the GrowSigning team' : 'GrowSigning';
 };
 const from = (r: any) => (r.ip ? ` from the internet address ${r.ip}` : '');
 const at = (r: any) => `${r.at.slice(0, 16).replace('T', ' ')} UTC`;

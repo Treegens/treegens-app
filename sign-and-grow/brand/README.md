@@ -184,25 +184,25 @@ export default function manifest(): MetadataRoute.Manifest {
 
 ### 5. Every `<Leaf>` used as the logo
 
-Import from `@/components/Brand`. Each of these is a `<Leaf>` followed by the words "Sign&Grow"; the logo replaces both.
+Import from `@/components/Brand`. Each of these is a `<Leaf>` followed by the words "GrowSigning"; the logo replaces both.
 
 | File | Now | Put |
 |---|---|---|
-| `src/components/AppShell.tsx` (~96), phone top bar on deep green | `<Leaf color="#9ed88f" /> Sign&Grow` | `<Logo height={20} tone="dark" />` |
-| `src/components/AppShell.tsx` (~103), side bar `.brand` on deep green | `<Leaf color="#9ed88f" size={22} /> Sign&Grow` | `<Logo height={24} tone="dark" />` |
-| `src/components/AuthForm.tsx` (~83), sign in and sign up | `<Leaf color="#1f6f43" size={24} /> Sign&Grow` | `<Logo height={26} />` |
-| `src/components/Public.tsx` (~43), public header | `<Leaf color="#1f6f43" size={24} /> Sign&Grow` | `<Logo height={26} />` |
-| `src/components/Public.tsx` (~73), public footer | `<Leaf color="#1f6f43" size={20} /> Sign&Grow` | `<Logo height={22} />` |
-| `src/components/HandedOver.tsx` (~34) | `<Leaf color="#1f6f43" /> Sign&Grow` | `<Logo height={22} />` |
+| `src/components/AppShell.tsx` (~96), phone top bar on deep green | `<Leaf color="#9ed88f" /> GrowSigning` | `<Logo height={20} tone="dark" />` |
+| `src/components/AppShell.tsx` (~103), side bar `.brand` on deep green | `<Leaf color="#9ed88f" size={22} /> GrowSigning` | `<Logo height={24} tone="dark" />` |
+| `src/components/AuthForm.tsx` (~83), sign in and sign up | `<Leaf color="#1f6f43" size={24} /> GrowSigning` | `<Logo height={26} />` |
+| `src/components/Public.tsx` (~43), public header | `<Leaf color="#1f6f43" size={24} /> GrowSigning` | `<Logo height={26} />` |
+| `src/components/Public.tsx` (~73), public footer | `<Leaf color="#1f6f43" size={20} /> GrowSigning` | `<Logo height={22} />` |
+| `src/components/HandedOver.tsx` (~34) | `<Leaf color="#1f6f43" /> GrowSigning` | `<Logo height={22} />` |
 | `src/components/sign/parts.tsx` (~81), signing bar, when the sender has no logo | `<Leaf size={22} color="#9ed88f" />` | `<Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />`. The bar takes the sender's colour, and `mono` follows the ink the page picks for it (`--sg-bar-ink`). |
-| `src/components/sign/parts.tsx` (~91), signing page footer | `<Leaf size={14} color="#1f6f43" /> Powered by Sign&Grow` | `<SentWith height={16} />` |
+| `src/components/sign/parts.tsx` (~91), signing page footer | `<Leaf size={14} color="#1f6f43" /> Powered by GrowSigning` | `<SentWith height={16} />` |
 | `src/app/f/[slug]/page.tsx` (~38), public form, when the sender has no logo | `<Leaf color="#1f6f43" size={24} />` | `<Mark size={28} />` |
 
 These other `<Leaf>`s are pictures of a leaf next to a paper saving, not the logo. They can stay, or become `<Mark size={...} label="" />` so the old leaf shape does not sit beside the new one (`label=""` hides it from screen readers): `sign/parts.tsx` `Impact` (~128), `editor/StepReview.tsx` (~211), `app/app/envelopes/[id]/page.tsx` (~247), `app/app/settings/page.tsx` `.plan-hero` on deep green (~498, use `tone="dark"`), `app/app/page.tsx` empty state (~119), `app/page.tsx` "6 sheets saved" (~103). Once none is left, the `Leaf` export in `src/components/ui.tsx` can go.
 
 ### 6. Email header: `src/server/mail.ts`, `renderMail()`
 
-The `logo` constant shows the sender's logo, else the sender's name, else the words "Sign&Grow". Keep the first two and replace the third with the image:
+The `logo` constant shows the sender's logo, else the sender's name, else the words "GrowSigning". Keep the first two and replace the third with the image:
 
 ```ts
 const logo = m.brand?.logo?.startsWith('data:image/')
@@ -212,13 +212,13 @@ const logo = m.brand?.logo?.startsWith('data:image/')
     : `<img src="${esc(baseUrl())}/brand/email-logo.png" width="144" height="22" alt="GrowSigning" style="display:block;border:0;width:144px;height:22px">`;
 ```
 
-The image loads from `APP_URL`, so it shows once the app is public; until then mail clients show the alt text, "GrowSigning". The footer's "Sent with Sign&amp;Grow" becomes "Sent with GrowSigning" in the text pass.
+The image loads from `APP_URL`, so it shows once the app is public; until then mail clients show the alt text, "GrowSigning". The footer's "Sent with GrowSigning" becomes "Sent with GrowSigning" in the text pass.
 
 ### 7. The certificate and signed copies: `src/server/pdf.ts`
 
 Add `import { LOGO, STAMP, TONES, COLORS, rgb01 } from '../lib/brandMark.ts';`. All three snippets below were run against pdf-lib and drawn with pdftoppm, the last one on pages rotated 0, 90 and 270 degrees.
 
-**Certificate header**, in `drawCertificate()`: replace the band, the `drawSvgPath('M0 22 C0 8 ...')` leaf, the title and the "Sign&Grow · e-signatures that plant trees" line with:
+**Certificate header**, in `drawCertificate()`: replace the band, the `drawSvgPath('M0 22 C0 8 ...')` leaf, the title and the "GrowSigning · e-signatures that plant trees" line with:
 
 ```ts
 s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: rgb(...rgb01(COLORS.deep)) });
@@ -228,7 +228,7 @@ for (const [d, part] of parts) s.page.drawSvgPath(d, { x: s.L, y: s.H - 22, scal
 s.page.drawText('Certificate of Completion', { x: s.L, y: s.H - 74, size: 20, font: ctx.bold, color: rgb(1, 1, 1) });
 ```
 
-**Certificate and notice page footer**, in `Sheet.add()`: the stamp, then the footer text on its baseline. Drop "Sign&Grow · " from the footer strings passed to `Sheet` (in `drawCertificate`, `withNotice` and `renderEnvelopePdf`), since the stamp says it.
+**Certificate and notice page footer**, in `Sheet.add()`: the stamp, then the footer text on its baseline. Drop "GrowSigning · " from the footer strings passed to `Sheet` (in `drawCertificate`, `withNotice` and `renderEnvelopePdf`), since the stamp says it.
 
 ```ts
 const ss = 14 / STAMP.height; // 14 pt tall
@@ -244,8 +244,8 @@ const o = m.pt(12, m.H - 8 - sh); // the stamp's top left corner as the page is 
 page.drawSvgPath(STAMP.d, { x: o.x, y: o.y, scale: sc, rotate: m.rotate, color: MUTED });
 ```
 
-The rest of `pdf.ts` is text: "Signed via Sign&Grow" under each signature, "Sign&Grow Envelope ID", `setProducer` and `setCreator`.
+The rest of `pdf.ts` is text: "Signed via GrowSigning" under each signature, "GrowSigning Envelope ID", `setProducer` and `setCreator`.
 
 ### 8. The words
 
-"Sign&Grow" (or `Sign&amp;Grow`) appears 252 times in 63 files under `src/`, plus the README, the `.env.example` and `MAIL_FROM`. That is the text pass, and each one becomes "GrowSigning".
+"GrowSigning" (or `GrowSigning`) appears 252 times in 63 files under `src/`, plus the README, the `.env.example` and `MAIL_FROM`. That is the text pass, and each one becomes "GrowSigning".

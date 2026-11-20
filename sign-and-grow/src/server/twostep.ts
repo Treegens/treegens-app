@@ -72,7 +72,7 @@ export function matchStep(secret: string, typed: string, after = -1, ms = Date.n
   return -1;
 }
 
-export const ISSUER = 'Sign&Grow';
+export const ISSUER = 'GrowSigning';
 export const otpauthUri = (secret: string, email: string) =>
   `otpauth://totp/${encodeURIComponent(`${ISSUER}:${email}`)}?${new URLSearchParams({ secret, issuer: ISSUER, algorithm: 'SHA1', digits: String(TOTP_DIGITS), period: String(TOTP_SECONDS) })}`;
 
@@ -229,14 +229,14 @@ export async function useCode(u: any, typed: any, o: { passwordOk?: boolean; at?
   if (login?.until || (at === 'settings' && mine?.until)) {
     logStep(me.id, 'paused');
     if (run('UPDATE users SET two_step_paused_mail_at=? WHERE id=? AND (two_step_paused_mail_at IS NULL OR two_step_paused_mail_at <= ?)', now(), me.id, new Date(Date.now() - 864e5).toISOString()).changes)
-      await sendMail({ to: me.email, subject: 'Wrong codes were typed for your Sign&Grow login', heading: 'The second step of your login is paused',
+      await sendMail({ to: me.email, subject: 'Wrong codes were typed for your GrowSigning login', heading: 'The second step of your login is paused',
         lines: [at === 'settings'
-          ? `${TWO_STEP_TRIES} codes in a row that were typed under Settings, in a browser signed in to your Sign&Grow login, were not right, so changes that need a code are paused in that browser until ${whenFor(me, till)}.`
-          : `${TWO_STEP_TRIES} codes in a row that were typed for your Sign&Grow login were not right, so its second step is paused until ${whenFor(me, till)}. They came after your correct password (or after Google or Microsoft), so whoever typed them got past the first step.`,
+          ? `${TWO_STEP_TRIES} codes in a row that were typed under Settings, in a browser signed in to your GrowSigning login, were not right, so changes that need a code are paused in that browser until ${whenFor(me, till)}.`
+          : `${TWO_STEP_TRIES} codes in a row that were typed for your GrowSigning login were not right, so its second step is paused until ${whenFor(me, till)}. They came after your correct password (or after Google or Microsoft), so whoever typed them got past the first step.`,
         'If that was not you, someone knows your password: change it under Settings, Profile. Pauses from signing in do not stop you there, in a browser where you are signed in. Or use "Forgot password" on the sign-in page.',
         'If it was you: wait, then type the newest code your authenticator app shows. Codes depend on the time, so check that the time on your phone is set automatically.',
         'We email you about this at most once a day. Settings, Profile lists every pause under "What happened to your second step".'],
-        cta: { label: 'Open Sign&Grow', url: `${baseUrl()}/login` } });
+        cta: { label: 'Open GrowSigning', url: `${baseUrl()}/login` } });
   }
   if (login?.until || mine?.until || sidePaused) throw paused(login?.until || mine?.until || sidePaused!, at);
   const left = TWO_STEP_TRIES - (mine?.n ?? login?.n ?? 1);
@@ -413,22 +413,22 @@ export async function startEmailReset(u: any): Promise<string> {
 }
 export async function mailReset(u: any, at: string, kind: 'start' | 'daily' | 'again') {
   const days = Math.max(1, Math.ceil((Date.parse(at) - Date.now()) / 864e5));
-  await sendMail({ to: u.email, subject: kind === 'start' ? 'Two-step login of your Sign&Grow login will be switched off' : kind === 'again' ? 'A reset of your two-step login is already under way' : `Reminder: two-step login of your Sign&Grow login goes off in ${days === 1 ? 'one day' : `${days} days`}`,
+  await sendMail({ to: u.email, subject: kind === 'start' ? 'Two-step login of your GrowSigning login will be switched off' : kind === 'again' ? 'A reset of your two-step login is already under way' : `Reminder: two-step login of your GrowSigning login goes off in ${days === 1 ? 'one day' : `${days} days`}`,
     heading: 'Your second step is being reset',
-    lines: [`Someone who typed the right password of your Sign&Grow login said they lost the phone with the authenticator app and the recovery codes, and opened the link we emailed here. So two-step login of your login will be switched off on ${whenFor(u, at)}. From then on signing in asks for no code, until you set it up again.`,
+    lines: [`Someone who typed the right password of your GrowSigning login said they lost the phone with the authenticator app and the recovery codes, and opened the link we emailed here. So two-step login of your login will be switched off on ${whenFor(u, at)}. From then on signing in asks for no code, until you set it up again.`,
       ...(kind === 'again' ? ['It was asked for again just now. Only one reset waits at a time, so nothing else changed.'] : []),
-      'We email you about it every day until then, and every browser where you are signed in to Sign&Grow says so on every page. If this was you, there is nothing to do but wait.',
+      'We email you about it every day until then, and every browser where you are signed in to GrowSigning says so on every page. If this was you, there is nothing to do but wait.',
       'If it was not you: stop it with the button below. It works without signing in. Signing in with your code, a recovery code or a remembered device stops it as well. Then change your password and the password of this mailbox, because someone has both.'],
     cta: { label: 'Stop the reset', url: stopUrl(u.id) } });
 }
 type StopHow = 'signed_in' | 'device' | 'settings' | 'link' | 'password' | 'off';
 const STOPPED_BY: Record<StopHow, string> = {
-  signed_in: 'Someone signed in to your Sign&Grow login with the code from your authenticator app or a recovery code',
-  device: 'Someone signed in to your Sign&Grow login on a device that is remembered for it, which skips the second step',
-  settings: 'It was stopped under Settings, in a browser that is signed in to your Sign&Grow login',
+  signed_in: 'Someone signed in to your GrowSigning login with the code from your authenticator app or a recovery code',
+  device: 'Someone signed in to your GrowSigning login on a device that is remembered for it, which skips the second step',
+  settings: 'It was stopped under Settings, in a browser that is signed in to your GrowSigning login',
   link: 'It was stopped with the link in one of our emails about it',
-  password: 'The password of your Sign&Grow login was changed in a browser that is signed in to it',
-  off: 'The reset by email was switched off under Settings, in a browser that is signed in to your Sign&Grow login',
+  password: 'The password of your GrowSigning login was changed in a browser that is signed in to it',
+  off: 'The reset by email was switched off under Settings, in a browser that is signed in to your GrowSigning login',
 };
 export async function stopEmailReset(u: any, how: StopHow): Promise<boolean> {
   // After a sign-in with the second step the phone (or a device that stands for it) is there, so nothing waits. Any
@@ -466,8 +466,8 @@ export async function resetIfDue(u: any): Promise<boolean> {
     record('two_step.reset', { by: { type: 'system' }, member: u.id, about: ['user', u.id], details: { how: 'by_email_after_waiting' } });
     return true;
   })) return false;
-  await sendMail({ to: u.email, subject: 'Two-step login of your Sign&Grow login is off', heading: 'Your second step was reset',
-    lines: [`As announced, two-step login of your Sign&Grow login was switched off ${TWO_STEP_EMAIL_RESET_DAYS} days after the reset was started. Signing in asks for no code now, and every browser that was signed in was signed out.`,
+  await sendMail({ to: u.email, subject: 'Two-step login of your GrowSigning login is off', heading: 'Your second step was reset',
+    lines: [`As announced, two-step login of your GrowSigning login was switched off ${TWO_STEP_EMAIL_RESET_DAYS} days after the reset was started. Signing in asks for no code now, and every browser that was signed in was signed out.`,
       'Set it up again under Settings, Profile, with the authenticator app on your new phone. If a team you are on asks for it, you are asked to do that the next time you sign in.',
       'If you did not ask for this, someone knows your password and can read this mailbox: change both, set two-step login up again (that signs out every other browser), and write to us through the help page.'],
     cta: { label: 'Set it up again', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });

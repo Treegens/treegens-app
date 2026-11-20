@@ -304,7 +304,7 @@ test('paying but not using it: a nudge, then the renewal is stopped for them', a
   db.run('UPDATE envelopes SET sent_at=? WHERE account_id=? AND sent_at IS NOT NULL', new Date(Date.now() - 100 * 864e5).toISOString(), accountId);
   assert.equal((await cron.tick()).nudged, 1);
   assert.equal((await cron.tick()).nudged, 0);
-  assert.ok(subjects('olive@example.com').includes('Still using Sign&Grow?'));
+  assert.ok(subjects('olive@example.com').includes('Still using GrowSigning?'));
 
   await event('invoice.upcoming', { customer: 'cus_1', amount_due: 900, next_payment_attempt: unix(3) });
   assert.ok(account().cancel_at, 'renewal turned off after 90 quiet days');
@@ -365,7 +365,7 @@ test('the code GROWalition makes the monthly plan free', async () => {
   assert.equal((await gro.post('/billing/cancel')).status, 400);
   assert.equal((await gro.post('/billing/checkout')).status, 400);
   await cron.tick();
-  assert.equal(subjects('gro@example.com').includes('Still using Sign&Grow?'), false, 'never nudged about a payment they do not make');
+  assert.equal(subjects('gro@example.com').includes('Still using GrowSigning?'), false, 'never nudged about a payment they do not make');
 
   // Entered later on the Plan page. A wrong code says so.
   const late = await signUp('Late Joiner', 'late@example.com');

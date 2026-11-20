@@ -141,7 +141,7 @@ function callModel(p: ChatProvider, screen: ChatScreen, turns: ChatTurn[], tuned
   }
   const headers: Record<string, string> = { 'content-type': 'application/json', authorization: `Bearer ${(process.env[p.keyVar] || '').trim()}` };
   // OpenRouter's optional attribution names this site, never the person.
-  if (p.style === 'openrouter') Object.assign(headers, { 'http-referer': baseUrl(), 'x-title': 'Sign&Grow help' });
+  if (p.style === 'openrouter') Object.assign(headers, { 'http-referer': baseUrl(), 'x-title': 'GrowSigning help' });
   return globalThis.fetch(`${p.baseUrl}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal });
 }
 

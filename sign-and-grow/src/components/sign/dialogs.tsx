@@ -97,7 +97,7 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
     return (
       <Dialog title="Report this request" onClose={onClose}>
         <Confirmed onClose={onClose}>
-          <b>Your dispute is on record.</b> The document is now marked as disputed, on {sender?.name || 'the sender'}&apos;s page and for anyone who checks it on our Verify page. {sender?.name || 'The sender'} has been told, with what you wrote, and so have the people who run Sign&amp;Grow. Nothing was deleted, and you can still download your copy. We do not decide who is right. To hear from a person, write to us on the help page with the topic &ldquo;I am named on a document I did not sign&rdquo;.
+          <b>Your dispute is on record.</b> The document is now marked as disputed, on {sender?.name || 'the sender'}&apos;s page and for anyone who checks it on our Verify page. {sender?.name || 'The sender'} has been told, with what you wrote, and so have the people who run GrowSigning. Nothing was deleted, and you can still download your copy. We do not decide who is right. To hear from a person, write to us on the help page with the topic &ldquo;I am named on a document I did not sign&rdquo;.
         </Confirmed>
       </Dialog>
     );
@@ -117,7 +117,7 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
         if (await send(() => (reason === 'not-me' ? api(`${base}/dispute`, { body: { detail } }) : api(`${base}/report`, { body: { reason, detail } }).then((x: any) => setStopped(!!x?.mail_stopped))), reason === 'not-me' ? '' : 'Your report was not sent. Try again in a minute.')) setSent(true);
       }}>
         {/* A dispute is not a report: it goes to the sender too, and the screen says exactly what they get before it is sent. */}
-        <p className="muted">{reason === 'not-me' ? 'A dispute goes to the sender and to the Sign&Grow team. Read below what each of them gets.' : `This goes to the Sign&Grow team, not to ${sender?.name || 'the sender'}. A person reads every report.`}</p>
+        <p className="muted">{reason === 'not-me' ? 'A dispute goes to the sender and to the GrowSigning team. Read below what each of them gets.' : `This goes to the GrowSigning team, not to ${sender?.name || 'the sender'}. A person reads every report.`}</p>
         <fieldset className="sg-choices">
           <legend>What is wrong?</legend>
           {REASONS.map(([value, label, hint], i) => (

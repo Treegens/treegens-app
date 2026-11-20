@@ -201,7 +201,7 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
     page.drawImage(img, { x: p.x, y: p.y, width: w, height: h, rotate: m.rotate });
     if (caption) {
       const c = m.pt(vx, vy + vh - 1);
-      page.drawText(`Signed via Sign&Grow · ${String(r.id).slice(-8)}`, { x: c.x, y: c.y, size: 4.5, font: ctx.font, color: GREEN, rotate: m.rotate });
+      page.drawText(`Signed via GrowSigning · ${String(r.id).slice(-8)}`, { x: c.x, y: c.y, size: 4.5, font: ctx.font, color: GREEN, rotate: m.rotate });
     }
     return;
   }
@@ -347,12 +347,12 @@ const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approv
 const ts = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '-');
 
 async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
-  const s = new Sheet(ctx.doc, ctx.font, ctx.bold, `Sign&Grow · Certificate of Completion · Envelope ${e.id}`);
+  const s = new Sheet(ctx.doc, ctx.font, ctx.bold, `GrowSigning · Certificate of Completion · Envelope ${e.id}`);
   // Header band
   s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: GREEN });
   s.page.drawSvgPath('M0 22 C0 8 10 0 24 0 C24 14 16 24 2 24 Z', { x: s.L, y: s.H - 30, color: rgb(1, 1, 1), scale: 1.2 });
   s.page.drawText('Certificate of Completion', { x: s.L + 40, y: s.H - 52, size: 20, font: ctx.bold, color: rgb(1, 1, 1) });
-  s.page.drawText('Sign&Grow · e-signatures that plant trees', { x: s.L + 40, y: s.H - 68, size: 9, font: ctx.font, color: rgb(0.85, 0.94, 0.88) });
+  s.page.drawText('GrowSigning · e-signatures that plant trees', { x: s.L + 40, y: s.H - 68, size: 9, font: ctx.font, color: rgb(0.85, 0.94, 0.88) });
   s.y = s.H - 112;
   // A name, a subject or a file name in a right-to-left script is ordered by itself inside our English line, so
   // "ABC" or a number in it stays where its writer put it. In the audit lines, which were written earlier as plain
@@ -473,7 +473,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     { x: s.L + 14, y: s.y - 36, size: 8.5, font: ctx.font, color: INK },
   );
   s.page.drawText(
-    clean(`(${fmtTrees(i.trees)} of a tree, estimated). Every dollar paid to Sign&Grow plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`),
+    clean(`(${fmtTrees(i.trees)} of a tree, estimated). Every dollar paid to GrowSigning plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`),
     { x: s.L + 14, y: s.y - 49, size: 8.5, font: ctx.font, color: INK },
   );
 }
@@ -597,7 +597,7 @@ export async function withNotice(pdf: Uint8Array, envelopeId: string, notice: { 
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
-  noticeSheet(doc, font, bold, `Sign&Grow · ${mark} · Envelope ${envelopeId}`, notice);
+  noticeSheet(doc, font, bold, `GrowSigning · ${mark} · Envelope ${envelopeId}`, notice);
   const src = await PDFDocument.load(pdf, { updateMetadata: false });
   for (const page of await doc.copyPages(src, src.getPageIndices())) {
     doc.addPage(page);
@@ -607,8 +607,8 @@ export async function withNotice(pdf: Uint8Array, envelopeId: string, notice: { 
     drawStamp(page, bold, stampForMark(mark)); // large across the page as well (stamp.ts)
   }
   doc.setTitle(notice.title);
-  doc.setProducer('Sign&Grow');
-  doc.setCreator('Sign&Grow');
+  doc.setProducer('GrowSigning');
+  doc.setCreator('GrowSigning');
   return doc.save();
 }
 
@@ -624,7 +624,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
-  if (opts.notice) noticeSheet(doc, font, bold, `Sign&Grow · Not completed · Envelope ${e.id}`, opts.notice);
+  if (opts.notice) noticeSheet(doc, font, bold, `GrowSigning · Not completed · Envelope ${e.id}`, opts.notice);
   const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format, tz: senderZone(e) };
   // A copy made for one recipient (`viewer`) while others are still at work shows the pages as that recipient's
   // screen does: everything the sender wrote, what people who have finished filled in, and what the viewer has
@@ -651,7 +651,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     for (const page of pages) {
       const m = mapper(page);
       const p = m.pt(12, 13);
-      page.drawText(`Sign&Grow Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+      page.drawText(`GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
       if (mark) drawStamp(page, bold, mark); // and across the whole page (stamp.ts)
     }
     if (mark) markFields(pages, fields.filter((f: any) => f.document_id === d.id), bold, mark);
@@ -670,8 +670,8 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   }
   if (opts.certificate) await drawCertificate(ctx, e, audit, opts.sender);
   doc.setTitle(e.subject || 'Signed document');
-  doc.setProducer('Sign&Grow');
-  doc.setCreator('Sign&Grow');
+  doc.setProducer('GrowSigning');
+  doc.setCreator('GrowSigning');
   return doc.save();
 }
 
@@ -686,12 +686,12 @@ export async function sheetPdf(title: string, footer: string, draw: (s: Sheet) =
   const s = new Sheet(doc, font, bold, footer);
   s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: GREEN });
   s.page.drawText(clean(title), { x: s.L, y: s.H - 52, size: 20, font: bold, color: rgb(1, 1, 1) });
-  s.page.drawText('Sign&Grow · e-signatures that plant trees', { x: s.L, y: s.H - 68, size: 9, font, color: rgb(0.85, 0.94, 0.88) });
+  s.page.drawText('GrowSigning · e-signatures that plant trees', { x: s.L, y: s.H - 68, size: 9, font, color: rgb(0.85, 0.94, 0.88) });
   s.y = s.H - 112;
   await draw(s);
   if (after) await after(doc);
   doc.setTitle(title);
-  doc.setProducer('Sign&Grow');
-  doc.setCreator('Sign&Grow');
+  doc.setProducer('GrowSigning');
+  doc.setCreator('GrowSigning');
   return doc.save();
 }

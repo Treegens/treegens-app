@@ -560,7 +560,7 @@ test('one access code for the whole group: every member\'s link asks for it, and
 test('Find my documents and the security code know each member by their own link', async () => {
   const { c, e, maya, ben } = await setup('find');
   await send(c, e.id);
-  const found = (to: string) => mailTo(to).filter((m: any) => m.subject === 'Your documents on Sign&Grow');
+  const found = (to: string) => mailTo(to).filter((m: any) => m.subject === 'Your documents on GrowSigning');
   ok(await from().post('/public/links/find', { email: ben }));
   const mine = found(ben);
   assert.equal(mine.length, 1);

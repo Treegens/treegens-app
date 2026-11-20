@@ -296,7 +296,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
             <div className="sg-sigpreview"><img src={saved.image} alt={`Your saved ${word}`} /></div>
             <p className="muted small">
               {saved.from === 'account'
-                ? `This is the ${word} saved on your Sign&Grow account. Nothing is on the document yet.`
+                ? `This is the ${word} saved on your GrowSigning account. Nothing is on the document yet.`
                 : `This is the ${word} you chose for this document earlier, on another device or in another tab.`}
               {' '}Use {kind === 'signature' ? 'it only if it is' : 'them only if they are'} yours and you want {kind === 'signature' ? 'it' : 'them'} here. Otherwise make a new one with Type, Draw or Upload.
             </p>

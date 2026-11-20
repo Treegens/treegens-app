@@ -72,7 +72,7 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
   helpInNewTab?: boolean;
 }) {
   const brand = data?.brand;
-  const title = data?.envelope?.subject || 'Sign&Grow';
+  const title = data?.envelope?.subject || 'GrowSigning';
   const style = brand?.brand_color ? ({ ['--brand' as any]: brand.brand_color, ['--sg-bar-ink' as any]: inkOn(brand.brand_color) }) : undefined;
   return (
     <div className="sg-shell">
@@ -88,7 +88,7 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
           {footer}
           <a href={helpHref(data)} {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Help{helpInNewTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
         </div>
-        <div className="sg-foot-by"><Leaf size={14} color="#1f6f43" /> Powered by Sign&Grow</div>
+        <div className="sg-foot-by"><Leaf size={14} color="#1f6f43" /> Powered by GrowSigning</div>
       </footer>
       {bottom && <div className="sg-bottom">{bottom}</div>}
       <div className="sg-vh" role="status" aria-live="polite">{live || ''}</div>

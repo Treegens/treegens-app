@@ -493,13 +493,13 @@ async function textHeld(e: any, r: any, what: string, why: string) {
 const clip = (s: any, max: number) => (String(s ?? '').length > max ? `${String(s).slice(0, max - 3).trimEnd()}...` : String(s ?? ''));
 const ASKS: Record<string, string> = { signer: 'is waiting for you to sign', approver: 'is waiting for you to approve', viewer: 'is waiting for you to read', cc: 'was sent to you as a copy' };
 
-// Short on purpose: who it is for, which document, that it comes from Sign&Grow for that sender, and the link.
+// Short on purpose: who it is for, which document, that it comes from GrowSigning for that sender, and the link.
 function linkText(e: any, r: any, sender: any, kind: string): string {
   const doc = `"${clip(e.subject, 60)}"`, who = clip(sender?.name || 'the sender', 40);
   const asks = ASKS[r.role] || ASKS.signer;
-  if (kind === 'reminder') return `Reminder from Sign&Grow, sent for ${who}: ${doc} ${asks.replace('is waiting', 'is still waiting')}. ${signUrl(r)}`;
-  if (kind === 'again') return `Sign&Grow, sent for ${who}: ${doc} was changed and ${asks} again. ${signUrl(r)}`;
-  return `Sign&Grow, sent for ${who}: ${doc} ${asks}. ${signUrl(r)}`;
+  if (kind === 'reminder') return `Reminder from GrowSigning, sent for ${who}: ${doc} ${asks.replace('is waiting', 'is still waiting')}. ${signUrl(r)}`;
+  if (kind === 'again') return `GrowSigning, sent for ${who}: ${doc} was changed and ${asks} again. ${signUrl(r)}`;
+  return `GrowSigning, sent for ${who}: ${doc} ${asks}. ${signUrl(r)}`;
 }
 
 /**
@@ -715,12 +715,12 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
     // The last line is the form phones read to offer the code on this site only.
     const host = baseUrl().replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
     delivery = (await sendText({ to: d.to!, kind: 'code', accountId: e.account_id, envelopeId: e.id, recipientId: r.id, expiresAt: expires,
-      text: `${code} is your Sign&Grow code to open a document from ${clip(sender.name, 40)}. It works for ${SIGNER_CODE_MINUTES} minutes. Did not ask for it? Ignore this text.\n\n@${host} #${code}` })).status;
+      text: `${code} is your GrowSigning code to open a document from ${clip(sender.name, 40)}. It works for ${SIGNER_CODE_MINUTES} minutes. Did not ask for it? Ignore this text.\n\n@${host} #${code}` })).status;
   } else {
     delivery = await sendMail({
       to: d.to!, subject: `Your code to open a document from ${sender.name}`, heading: `${code} is your code`,
       lines: [`Type this code on the page that asked for it. It works for ${SIGNER_CODE_MINUTES} minutes, and only for the document ${sender.name} sent you.`,
-        `Nobody at Sign&Grow and nobody working for ${sender.name} will ever ask you for this code. If you did not just open a document from ${sender.name}, someone else has the link that was emailed to you: do not pass the code on${sender.email ? `, and tell ${sender.name} (${sender.email})` : ''}.`],
+        `Nobody at GrowSigning and nobody working for ${sender.name} will ever ask you for this code. If you did not just open a document from ${sender.name}, someone else has the link that was emailed to you: do not pass the code on${sender.email ? `, and tell ${sender.name} (${sender.email})` : ''}.`],
       envelopeId: e.id, brand: brandOf(e.account_id), replyTo: sender.email || undefined, fromName: sender.name, expiresAt: expires,
     });
     // Once the mail server has it, our own copy of the email no longer needs to hold the code.

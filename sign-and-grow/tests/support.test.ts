@@ -320,7 +320,7 @@ test('a late request says so to the customer, the operators are emailed once for
     assert.equal((await cron.tick()).support.late, 0);
     assert.equal((await cron.tick()).support.late, 0);
     assert.equal(count(), sent);
-    assert.ok((await opView(maya, id)).thread.some((m: any) => m.kind === 'event' && m.by === 'Sign&Grow' && /^Late: no answer by the time we promised\. Everyone who answers was emailed \(3\), and the customer was told/.test(m.body)));
+    assert.ok((await opView(maya, id)).thread.some((m: any) => m.kind === 'event' && m.by === 'GrowSigning' && /^Late: no answer by the time we promised\. Everyone who answers was emailed \(3\), and the customer was told/.test(m.body)));
 
     // Somebody has it: the customer is told who, in both places.
     await act(ravi, id, { action: 'take' });
@@ -659,7 +659,7 @@ test('the payment problems the software files itself still appear in the queue, 
   const q = await queue(maya);
   const listed = q.requests.find((r: any) => r.id === filed.id);
   assert.ok(listed, 'and is in the queue');
-  assert.deepEqual([listed.alert, listed.status, listed.due_at, listed.late, listed.name], [true, 'open', null, false, 'Sign&Grow (automatic alert)']);
+  assert.deepEqual([listed.alert, listed.status, listed.due_at, listed.late, listed.name], [true, 'open', null, false, 'GrowSigning (automatic alert)']);
   assert.match(listed.message, /could not be matched/);
   assert.ok((await queue(maya, 'unowned')).requests.some((r: any) => r.id === filed.id) && (await queue(maya, 'all')).requests.some((r: any) => r.id === filed.id));
   // It comes after the requests a time was promised for, and is never late: no customer is waiting on it.
@@ -681,7 +681,7 @@ test('the payment problems the software files itself still appear in the queue, 
   assert.equal(db.get('SELECT COUNT(*) n FROM emails').n, emails);
   assert.ok(!(await queue(maya)).requests.some((r: any) => r.id === filed.id) && (await queue(maya, 'all')).requests.some((r: any) => r.id === filed.id));
   // Typing the alert's name into the form does not make a customer's request an alert.
-  const posing = await ask({ email: 'poser@cust.test', name: 'Sign&Grow (automatic alert)', topic: 'billing' });
+  const posing = await ask({ email: 'poser@cust.test', name: 'GrowSigning (automatic alert)', topic: 'billing' });
   assert.equal((await opView(maya, row(posing.reference).id)).alert, false);
   // The old queue call still lists what is waiting, for anything that reads it.
   assert.ok((await maya.get('/operator/queue')).data.support.some((s: any) => s.ref === posing.reference));
@@ -781,7 +781,7 @@ test('deleting an account removes its requests with their threads, and one still
   // The answer also says what the mail server did with the email (no mail server here, so it is in the outbox).
   assert.deepEqual(answered.data, { ok: true, deleted: true, mail: 'outbox' });
   const last = mailTo('gal@cust.test').at(-1)!;
-  assert.match(text(last.html), /OPEN-ANSWER: your 9 dollars are on their way back\. You closed your Sign&Grow account while this request was open\. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it\./);
+  assert.match(text(last.html), /OPEN-ANSWER: your 9 dollars are on their way back\. You closed your GrowSigning account while this request was open\. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it\./);
   assert.equal(last.link, null, 'the email carries no link, because there is nothing left to open');
   assert.deepEqual([db.get('SELECT COUNT(*) n FROM support_requests WHERE id=?', oid).n, thread(oid)], [0, 0]);
   assert.equal((await from().get(openLink.api)).status, 404);
@@ -947,7 +947,7 @@ test('the links sent again leave out what the address disowned or we closed as n
   // Every email about a help request ends with where it came from, and not with a line about signing documents.
   for (const m of mailTo('fay@cust.test')) {
     assert.doesNotMatch(text(m.html), /Signed digitally|every dollar plants/, m.subject);
-    assert.match(text(m.html), /Sent by the people who answer help requests at Sign&Grow\./);
+    assert.match(text(m.html), /Sent by the people who answer help requests at GrowSigning\./);
   }
 });
 
@@ -1008,7 +1008,7 @@ test('an alert is shown with the account it names, never with the account of the
   // An alert that names an account shows that one, said to be the account the alert is about.
   const cust = await person('Alerted Customer', 'alerted@cust.test');
   const acc = (await cust.get('/me')).data.account.id;
-  db.run("INSERT INTO support_requests (id, email, name, topic, message, account_id, status, at) VALUES ('sup_repairalert01', 'maya@ops.test', 'Sign&Grow (automatic alert)', 'billing', 'A refund failed for this account.', ?, 'open', ?)", acc, new Date().toISOString());
+  db.run("INSERT INTO support_requests (id, email, name, topic, message, account_id, status, at) VALUES ('sup_repairalert01', 'maya@ops.test', 'GrowSigning (automatic alert)', 'billing', 'A refund failed for this account.', ?, 'open', ?)", acc, new Date().toISOString());
   const w = await opView(maya, 'sup_repairalert01');
   assert.deepEqual([w.account.id, w.account.via, w.login], [acc, 'alert', null]);
 });
@@ -1031,7 +1031,7 @@ test('deleting a login leaves a request it wrote under somebody else\'s address 
   const ans = await act(maya, t.id, { action: 'answer', text: 'Here is the answer about your invoice.' });
   assert.equal(ans.data.request.status, 'answered');
   const last = text(mailTo('bea.mailbox@cust.test').at(-1)!.html);
-  assert.doesNotMatch(last, /You closed your Sign&Grow account/);
+  assert.doesNotMatch(last, /You closed your GrowSigning account/);
   assert.equal((await from().get(l.api)).status, 200);
 });
 
@@ -1229,7 +1229,7 @@ test('a closed request that belongs to no login is deleted 90 days after closing
   db.run('UPDATE support_requests SET closed_at=? WHERE ref IN (?, ?)', days(SUPPORT_KEEP_DAYS + 1), nobody.reference, theirs.reference);
   db.run('UPDATE support_requests SET closed_at=? WHERE ref=?', days(SUPPORT_KEEP_DAYS - 1), recent.reference);
   db.run('UPDATE support_requests SET at=? WHERE ref=?', days(400), open.reference);
-  db.run("INSERT INTO support_requests (id, email, name, topic, message, status, at, closed_at) VALUES ('sup_oldalert000001', 'maya@ops.test', 'Sign&Grow (automatic alert)', 'billing', 'An old handled alert.', 'closed', ?, ?)", days(400), days(400));
+  db.run("INSERT INTO support_requests (id, email, name, topic, message, status, at, closed_at) VALUES ('sup_oldalert000001', 'maya@ops.test', 'GrowSigning (automatic alert)', 'billing', 'An old handled alert.', 'closed', ?, ?)", days(400), days(400));
   // Our copy of an email the mail server took goes with it (in tests there is none, so make one look taken).
   db.run("UPDATE emails SET status='sent' WHERE to_email='once.signer@cust.test'");
   await cron.tick();

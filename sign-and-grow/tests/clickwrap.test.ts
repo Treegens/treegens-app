@@ -313,7 +313,7 @@ test('inside a frame on the website: marked as such, with the page the browser r
   assert.match(config, /frame-ancestors \*/);
   const script = read('public/clickwrap.js');
   assert.match(script, /e\.origin !== origin/, 'the script only listens to our own frame');
-  assert.match(script, /signgrow:accepted/);
+  assert.match(script, /growsigning:accepted/);
   assert.equal(/data\.receipt|receipt:/.test(script), false, 'the receipt never reaches the page around the frame');
   const agree = read('src/app/agree/[slug]/page.tsx');
   assert.match(agree, /trackVisibility/, 'where the browser can tell, a covered button cannot be pressed');

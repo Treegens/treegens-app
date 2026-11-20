@@ -55,7 +55,7 @@ const flip = (file: string, at: number) => {
   fs.writeFileSync(file, b);
 };
 const tick = () => new Promise((r) => setImmediate(r));
-const alerts = () => db.all("SELECT message FROM support_requests WHERE name='Sign&Grow (automatic alert)'").map((r) => r.message as string);
+const alerts = () => db.all("SELECT message FROM support_requests WHERE name='GrowSigning (automatic alert)'").map((r) => r.message as string);
 const blobs = () => path.join(process.env.DATA_DIR!, 'blobs');
 let ipn = 10;
 const person = (name: string, email: string) => signUp(name, email, `198.18.${ipn}.${ipn++}`);
@@ -698,5 +698,5 @@ test('the README, the settings example and the API description say how to switch
   for (const code of ['file_damaged', 'file_locked', 'storage_stopped']) assert.ok(api.includes(`"code": "${code}"`), code);
   for (const f of ['src/server/filecrypt.ts', 'src/server/filestore.ts', 'src/lib/storedfiles.ts', 'scripts/encrypt-files.mjs', 'tests/encrypt.test.ts']) assert.doesNotMatch(read(f), /\u2014/, f);
   // The format must not carry the product's name: the rename would change it and lock every file.
-  assert.doesNotMatch(read('src/server/filecrypt.ts').split('\nimport')[1], /Sign&Grow|growsigning/i);
+  assert.doesNotMatch(read('src/server/filecrypt.ts').split('\nimport')[1], /GrowSigning|growsigning/i);
 });

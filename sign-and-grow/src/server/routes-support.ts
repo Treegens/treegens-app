@@ -43,7 +43,7 @@ const person = (c: Ctx) => {
 
 // ---- What a request is -----------------------------------------------------------------------------
 
-const ALERT_NAME = 'Sign&Grow (automatic alert)';
+const ALERT_NAME = 'GrowSigning (automatic alert)';
 // A payment problem the software filed by itself (tellOperators in routes-billing.ts). Nobody wrote it and nobody is
 // waiting for an email, so it has no response time and is never answered by email: an operator notes what was done
 // and closes it. The form gives every request a reference and an alert has none, so typing this name into the form
@@ -331,7 +331,7 @@ route('POST', '/public/support', async (c) => {
   // only from someone signed in under their own confirmed address, as before: the form says so before sending.
   const about = topic !== 'signing' ? null : coded ? coded.e : b.envelope_id ? loadEnvelope(str(b.envelope_id, 60)) : null;
   const signer = coded?.r || about?.recipients.find((r: any) => r.email && sameEmail(r.email, email));
-  if (about && signer) await helpAsked(about, signer, known ? message : null, { name: 'Sign&Grow help form', ip: c.ip, ua: c.ua }, !!coded?.r && !sameEmail(signer.email, email));
+  if (about && signer) await helpAsked(about, signer, known ? message : null, { name: 'GrowSigning help form', ip: c.ip, ua: c.ua }, !!coded?.r && !sameEmail(signer.email, email));
   // The private link is not in this answer. It goes to the mailbox only, because having it is what proves the
   // mailbox is yours.
   return { reference: refOf(t), priority: t.priority, due_at: t.due_at, reply_hours: t.due_at ? hoursFor(t.priority) : null };
@@ -421,7 +421,7 @@ async function sendLinksAgain(email: string) {
   const since = new Date(Date.now() - 90 * 864e5).toISOString();
   const found = all("SELECT * FROM support_requests WHERE lower(email)=? AND at > ? AND COALESCE(closed_how, '') NOT IN ('disowned','spam') ORDER BY at DESC LIMIT 20", email, since).filter((t) => !isAlert(t));
   if (!found.length) return;
-  await sendMail({ to: email, subject: `Your requests to Sign&Grow: ${found.length === 1 ? 'the link' : 'the links'} again`, heading: found.length === 1 ? 'Here is the link to your request' : 'Here are the links to your requests',
+  await sendMail({ to: email, subject: `Your requests to GrowSigning: ${found.length === 1 ? 'the link' : 'the links'} again`, heading: found.length === 1 ? 'Here is the link to your request' : 'Here are the links to your requests',
     lines: ['Someone, we hope you, asked on our help page for the links to the requests written from this address. Each link opens one request without signing in: there you read everything written so far and reply.',
       'If you did not ask for this, you can ignore it: nothing was changed, and only this inbox received the links.', NO_REPLY],
     links: found.map((t) => ({ label: `Request ${refOf(t)}`, url: linkFor(t), note: `${TOPIC_LABEL[t.topic] || 'Help request'}, written ${t.at.slice(0, 10)}, ${t.status === 'open' ? 'waiting for our answer' : t.status === 'waiting' ? 'waiting for your answer' : t.status}` })), help: true });
@@ -591,7 +591,7 @@ route('POST', '/operator/support/:id', async (c) => {
     forgetNow(t);
     return { ok: true, deleted: true, mail: mailed };
   };
-  const FORGOTTEN = `You closed your Sign&Grow account while this request was open. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it. Please do not reply to this email. If you need anything else, write to us at ${baseUrl()}/help.`;
+  const FORGOTTEN = `You closed your GrowSigning account while this request was open. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it. Please do not reply to this email. If you need anything else, write to us at ${baseUrl()}/help.`;
   const first = firstName(c.user.name) || 'A person on our team';
 
   if (action === 'take') {
@@ -729,7 +729,7 @@ const said = (e: any) => (e ? ` It said: ${String(e).slice(0, 200).replace(/[\s.
 onMailOutcome('support', async (m, what) => {
   const t = requestOfMail(m);
   if (!t) return;
-  const sys: By = { name: 'Sign&Grow' };
+  const sys: By = { name: 'GrowSigning' };
   if (what === 'delayed') return void say(t, 'event', `Not delivered yet: the mail server did not take our email "${m.subject}" to ${t.email}.${said(m.error)} It is tried again by itself for about a day and a half`, sys);
   if (what === 'sent') {
     say(t, 'event', `Our email "${m.subject}" reached the mail server on a later try`, sys);
@@ -766,7 +766,7 @@ export async function supportTick(): Promise<{ late: number }> {
     late++;
     const owner = ownerOf(t);
     const team = everyone();
-    say(t, 'event', team.length ? `Late: no answer by the time we promised. Everyone who answers was emailed (${team.length}), and the customer was told` : 'Late: no answer by the time we promised. Nobody could be emailed, because no support address and no operators are set', { name: 'Sign&Grow' });
+    say(t, 'event', team.length ? `Late: no answer by the time we promised. Everyone who answers was emailed (${team.length}), and the customer was told` : 'Late: no answer by the time we promised. Nobody could be emailed, because no support address and no operators are set', { name: 'GrowSigning' });
     if (!team.length) console.error(`[support] REQUEST ${refOf(t)} IS LATE AND NOBODY WAS TOLD (set SUPPORT_EMAIL or OPERATOR_EMAILS)`);
     for (const to of team)
       await sendMail({ to, subject: `Late: help request ${refOf(t)} has no answer`, heading: `Request ${refOf(t)} is late`,

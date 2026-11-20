@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS forgotten_files (file_sha256 TEXT PRIMARY KEY, envelo
 CREATE INDEX IF NOT EXISTS forgotten_files_env ON forgotten_files(envelope_id);
 -- A dispute that was still open when its envelope was deleted with the sender's account (src/server/evidence.ts):
 -- the envelope id, the fingerprint of the signed file if there was one, the day of the dispute and the state the
--- envelope was in. No name, no address, no title, no words. It goes when a person at Sign&Grow closes the dispute.
+-- envelope was in. No name, no address, no title, no words. It goes when a person at GrowSigning closes the dispute.
 CREATE TABLE IF NOT EXISTS forgotten_disputes (envelope_id TEXT PRIMARY KEY, file_sha256 TEXT, disputed_on TEXT NOT NULL, status TEXT NOT NULL, at TEXT NOT NULL);
 -- "I did not sign this, or this was not me", from a person named on the envelope (src/server/evidence.ts). One row
 -- per person and envelope. Nothing is ever deleted because of one; the row goes with the envelope.
@@ -871,7 +871,7 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['envelopes', 'final_pages', 'INTEGER'],
   ['recipients', 'copy_opened_at', 'TEXT'],
   ['recipients', 'visit_noted_at', 'TEXT'],
-  // disputes.closed_at/closed_how/closed_note: a person at Sign&Grow closed it ('handled', or 'in_error' when it was
+  // disputes.closed_at/closed_how/closed_note: a person at GrowSigning closed it ('handled', or 'in_error' when it was
   // filed in error); until then the envelope cannot be deleted for good (src/server/evidence.ts).
   ['disputes', 'closed_at', 'TEXT'],
   ['disputes', 'closed_how', 'TEXT'],
@@ -1077,7 +1077,7 @@ export function fillPrices(d: any = db()): number {
 // no closing time and no written answer: it is closed as of the time it was written (a reply long after starts a new
 // request instead of reopening it with a new promise), and says it was closed before answers were kept with it.
 export function fillOldSupport(d: any = db()): number {
-  const alert = "(ref IS NULL AND user_id IS NULL AND COALESCE(name, '')='Sign&Grow (automatic alert)')";
+  const alert = "(ref IS NULL AND user_id IS NULL AND COALESCE(name, '')='GrowSigning (automatic alert)')";
   d.prepare(`UPDATE support_requests SET verified=1 WHERE came_by IS NULL AND verified=0 AND user_id IS NOT NULL
     AND EXISTS (SELECT 1 FROM users u WHERE u.id=support_requests.user_id AND u.email_verified=1 AND lower(u.email)=lower(support_requests.email))`).run();
   d.prepare(`UPDATE support_requests SET closed_at=COALESCE(updated_at, at), closed_how=COALESCE(closed_how, 'before') WHERE came_by IS NULL AND status='closed' AND closed_at IS NULL AND NOT ${alert}`).run();

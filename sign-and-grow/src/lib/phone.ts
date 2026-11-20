@@ -38,14 +38,14 @@ export const unlabelled = <F extends { type: string; label?: string | null; read
 // the landing page and on /security, so that none of them promises more than the lock does.
 
 /** What happens to the host's account, in one sentence. */
-export const IN_PERSON_LOCK = 'When the signing page opens for someone who signs in person, Sign&Grow locks your account in that browser. To come back you type your password, or sign in again if your login has none.';
+export const IN_PERSON_LOCK = 'When the signing page opens for someone who signs in person, GrowSigning locks your account in that browser. To come back you type your password, or sign in again if your login has none.';
 /** The same in a few words, for the landing page. */
-export const IN_PERSON_SHORT = 'Your account locks in that browser while they hold the device, and their last screen asks them to hand it back. The lock covers Sign&Grow only, not the rest of your device.';
-/** What the signer could still reach while holding the device. The lock is for Sign&Grow in one browser, no more. */
+export const IN_PERSON_SHORT = 'Your account locks in that browser while they hold the device, and their last screen asks them to hand it back. The lock covers GrowSigning only, not the rest of your device.';
+/** What the signer could still reach while holding the device. The lock is for GrowSigning in one browser, no more. */
 export const IN_PERSON_LIMITS: string[] = [
   'Everything else on the device: your email (signing links and password reset emails arrive there), other apps, other websites.',
   'A password that your browser or password manager has saved and offers to fill in on the lock screen.',
-  'A Google or Microsoft account that is signed in on the device, if that is how you sign in to Sign&Grow. Signing in again is then one tap.',
+  'A Google or Microsoft account that is signed in on the device, if that is how you sign in to GrowSigning. Signing in again is then one tap.',
   'A page of your account that is open in another tab stays on screen until that tab is brought to the front. Then it locks too.',
 ];
 

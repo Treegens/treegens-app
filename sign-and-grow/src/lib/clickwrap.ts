@@ -38,17 +38,17 @@ export const CLICK_LAW = 'Whether accepting terms with a click binds someone dep
 /** Said on the page before the click: everything the record will hold. `account` is the organisation the record is kept for. */
 export function recordedBefore(identity: 'website' | 'typed', account: string): string {
   const who = identity === 'website' ? 'the name, email address and customer number the website gave us for you' : 'the name and email address you type';
-  return `When you press the button, Sign&Grow records: these terms and their version, a fingerprint (SHA-256) of the exact terms on this page, ${who}, the date and time, your internet address, your browser, the page you came from, and how long the terms were open before you pressed. The record is kept for ${account || 'the organisation that wrote these terms'} and is never changed afterwards.`;
+  return `When you press the button, GrowSigning records: these terms and their version, a fingerprint (SHA-256) of the exact terms on this page, ${who}, the date and time, your internet address, your browser, the page you came from, and how long the terms were open before you pressed. The record is kept for ${account || 'the organisation that wrote these terms'} and is never changed afterwards.`;
 }
 
 /** What a record shows and what it does not, by how it was made. The hosted page says the first two before the click. */
 export function recordShows(identity: Identity, via: Via, embedHost = ''): { shows: string; not: string } {
   if (via === 'api' || identity === 'api')
-    return { shows: 'The website recorded this acceptance itself, through the API, with the details it sent. Sign&Grow did not show these terms to the person and did not see a click: the record shows what the website said happened, and when it said so.', not: 'It does not show that the person saw the terms or pressed anything, or who that person really was.' };
+    return { shows: 'The website recorded this acceptance itself, through the API, with the details it sent. GrowSigning did not show these terms to the person and did not see a click: the record shows what the website said happened, and when it said so.', not: 'It does not show that the person saw the terms or pressed anything, or who that person really was.' };
   const details = identity === 'website' ? 'with the name, email address and customer number the website put in a signed link' : 'with the name and email address that were typed in';
   const where = via === 'embed' ? ` The terms were shown inside a frame on ${embedHost || 'another website'}, as the browser reported it.` : '';
-  // Said as what the browser reported: Sign&Grow sees what a browser sends, never a screen or a hand.
-  return { shows: `The browser that pressed reported that the box was ticked and the button pressed, on these exact terms and at this time, ${details}.${where}`, not: `It does not show who that person really was, that they read the terms, or whether a person or a program pressed. Sign&Grow did not check the name or the email address${identity === 'website' ? ': they are what the website knows about its visitor' : ''}.` };
+  // Said as what the browser reported: GrowSigning sees what a browser sends, never a screen or a hand.
+  return { shows: `The browser that pressed reported that the box was ticked and the button pressed, on these exact terms and at this time, ${details}.${where}`, not: `It does not show who that person really was, that they read the terms, or whether a person or a program pressed. GrowSigning did not check the name or the email address${identity === 'website' ? ': they are what the website knows about its visitor' : ''}.` };
 }
 
 /** Whether the press came from where the terms were handed out, as the certificate says it. */

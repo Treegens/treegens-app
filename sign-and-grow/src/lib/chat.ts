@@ -69,9 +69,9 @@ export const CHAT_STARTERS: Record<ChatScreen, string[]> = {
   signing: ['What am I agreeing to?', 'My name is spelled wrong', 'I need more time', 'How do I get a copy later?'],
   editor: ['How do signatures work, and what is free?', 'Can I fix a document after sending?', 'Why can I not send?', 'Who can see what I send?'],
   plan: ['Can I get a refund?', 'How do I cancel?', 'What happens to my documents when I cancel?', 'Will the price go up?'],
-  help: ['I cannot find my signing link', 'Is this email really from Sign&Grow?', 'How do I cancel?', 'I cannot log in'],
+  help: ['I cannot find my signing link', 'Is this email really from GrowSigning?', 'How do I cancel?', 'I cannot log in'],
   app: ['How do signatures work, and what is free?', 'The recipient never got the email', 'How do I cancel?', 'Who can see my documents?'],
-  public: ['How much does it cost?', 'Is this email really from Sign&Grow?', 'I cannot find my signing link', 'Do signers need an account?'],
+  public: ['How much does it cost?', 'Is this email really from GrowSigning?', 'I cannot find my signing link', 'Do signers need an account?'],
 };
 
 // ---- What the person is told before they type ---------------------------------------------------------------
@@ -196,7 +196,7 @@ export const HAND_OVER_TEXT: Record<HandOver, string> = {
   security: 'A security problem goes to a person. Tell them what you saw. Do not send passwords or codes, not even to us.',
   locked: 'Being locked out is something a person can sort out with you. The form works without signing in.',
   money: 'Money is something a person should check. The helper cannot see or change payments. A person can, and they answer in writing.',
-  legal: 'The helper gives no legal advice and cannot say whether a signature is enough for your document. A person can tell you what Sign&Grow does. A lawyer can tell you what that means where you are.',
+  legal: 'The helper gives no legal advice and cannot say whether a signature is enough for your document. A person can tell you what GrowSigning does. A lawyer can tell you what that means where you are.',
   person: 'Of course. A person reads every message and answers by email.',
   upset: 'Sorry this has been hard. A person can take it from here.',
   again: 'This is not getting you anywhere, sorry. A person can take it from here.',

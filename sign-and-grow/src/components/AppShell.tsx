@@ -98,7 +98,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <MeCtx.Provider value={{ ...me, reload }}>
       <div className="mobilebar">
-        <Link href="/app" className="row" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}><Leaf color="#9ed88f" /> Sign&Grow</Link>
+        <Link href="/app" className="row" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}><Leaf color="#9ed88f" /> GrowSigning</Link>
         {/* With more than one workspace, a phone shows which one this is without opening the menu. */}
         {me.accounts?.length > 1 && <span className="truncate" style={{ flex: 1, minWidth: 0, margin: '0 10px', textAlign: 'right', fontSize: 12.5, opacity: 0.85 }} title="The workspace you are in">{me.account.name}</span>}
         <HelpChatButton className="btn sm hc-open" label="Help: ask the helper or write to a person">Help</HelpChatButton>
@@ -106,7 +106,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       <div className="shell">
         <aside className={`side${open ? ' open' : ''}`}>
-          <Link href="/app" className="brand"><Leaf color="#9ed88f" size={22} /> Sign&Grow</Link>
+          <Link href="/app" className="brand"><Leaf color="#9ed88f" size={22} /> GrowSigning</Link>
           <Link href="/app/envelopes/new" className="btn" style={{ margin: '0 4px 10px', background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>New envelope</Link>
           {NAV.map(([href, label]) => <Link key={href} href={href} className={`nav${on(href) ? ' on' : ''}`}>{label}</Link>)}
           {/* Click-to-agree terms speak for the team's website, so only its owner and admins manage them. */}

@@ -358,7 +358,7 @@ test('someone who lost every email about their help request gets its link again,
   await new Promise((r) => setTimeout(r, 50));
   const again = db.all('SELECT to_email, subject, html FROM emails WHERE id > ?', before);
   assert.equal(again.length, 1);
-  assert.match(again[0].subject, /^Your requests to Sign&Grow: the link again$/);
+  assert.match(again[0].subject, /^Your requests to GrowSigning: the link again$/);
   assert.ok(again[0].html.includes(original.replace(/&/g, '&amp;')) || again[0].html.includes(original), 'the same link as before, so older emails keep working');
   assert.match(again[0].html, new RegExp(asked.data.reference));
   const path = original.replace(/^https?:\/\/[^/]+/, '').replace('/help/request/', '/public/support/ticket/');
@@ -425,7 +425,7 @@ test('deleting a login never removes a copy that strangers\' words point at, nor
     assert.deepEqual({ carol: count("to_email='carol@words.example'"), desk: count("to_email='desk@words.example'"), nina: count("to_email='nina@words.example'") }, theirs, 'nobody else lost a copy');
     // Vic's own copies went, except the one still waiting to be delivered (and the notice that his login is gone).
     assert.equal(count("to_email='vic@words.example' AND status='failed' AND next_try_at IS NOT NULL"), 1);
-    assert.equal(count("to_email='vic@words.example' AND NOT (status='failed' AND next_try_at IS NOT NULL) AND subject NOT LIKE 'Your Sign&Grow account is closed%'"), 0);
+    assert.equal(count("to_email='vic@words.example' AND NOT (status='failed' AND next_try_at IS NOT NULL) AND subject NOT LIKE 'Your GrowSigning account is closed%'"), 0);
 
     // Someone signs up with Nina's address without being able to confirm it, and deletes that login at once. The
     // invitation Mallory sent to that address before is Mallory's record, not theirs.
@@ -433,13 +433,13 @@ test('deleting a login never removes a copy that strangers\' words point at, nor
     const eve = from();
     assert.equal((await eve.post('/auth/signup', { name: 'Not Nina', email: 'nina@words.example', password: PW })).status, 200);
     assert.equal((await eve.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
-    assert.equal(count("to_email='nina@words.example' AND subject NOT LIKE 'Your Sign&Grow account is closed%' AND subject NOT LIKE 'Confirm your email%'"), 1, 'the invitation is still there');
+    assert.equal(count("to_email='nina@words.example' AND subject NOT LIKE 'Your GrowSigning account is closed%' AND subject NOT LIKE 'Confirm your email%'"), 1, 'the invitation is still there');
 
     // When Carol herself goes, her copies go, and so does the desk's note about her request, which is marked as
     // being about her. Mallory's invitation to Nina stays.
     assert.equal((await carol.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
     assert.equal(count("to_email='desk@words.example'"), 0);
-    assert.equal(count("to_email='carol@words.example' AND subject NOT LIKE 'Your Sign&Grow account is closed%'"), 0);
+    assert.equal(count("to_email='carol@words.example' AND subject NOT LIKE 'Your GrowSigning account is closed%'"), 0);
     assert.equal(count("to_email='nina@words.example' AND subject LIKE '%invit%'"), 1);
   } finally {
     delete process.env.SUPPORT_EMAIL;

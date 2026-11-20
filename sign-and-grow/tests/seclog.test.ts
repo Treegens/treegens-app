@@ -287,7 +287,7 @@ test('two-step login: on and off, a wrong code at sign-in, and the record never 
   for (const acc of [A, ben.own]) assert.equal(one(acc, 'two_step.off').actor_id, ben.id);
 });
 
-test('the owner hands the account over, and the Sign&Grow team pauses and resumes sending without leaving an address', async () => {
+test('the owner hands the account over, and the GrowSigning team pauses and resumes sending without leaving an address', async () => {
   const B = (await person('Bea Owner', 'bea@seclog.example'));
   const zed = await joinBySignup('Zed Next', 'zed@seclog.example', await invite(B.c, B.own, 'zed@seclog.example'));
   assert.equal((await B.c.post('/account/transfer-owner', { user_id: zed.id })).status, 200);

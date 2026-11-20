@@ -41,7 +41,7 @@ export async function finalFailed(e: any, err: any) {
   await notifySender(e, 'always', `Signed PDF delayed: ${e.subject}`, 'We could not make the signed PDF yet', [
     `Everyone has finished "${e.subject}", and that stands. Every signature and every step is recorded.`,
     `What we could not make is the signed PDF with its certificate of completion: a file it is made from could not be read from our storage${damaged ? ', because the stored copy failed its check' : ''}. We tried ${tries} times.`,
-    'The people who run Sign&Grow have been told, and they can put the file back from a backup. We try again once a day, and we email you as soon as the signed PDF is ready.',
+    'The people who run GrowSigning have been told, and they can put the file back from a backup. We try again once a day, and we email you as soon as the signed PDF is ready.',
     'The people who signed were told it would follow shortly. Nothing they did is lost. If they ask, tell them it is delayed.',
   ]);
   tellOperators(e, tries, err);
@@ -67,7 +67,7 @@ function tellOperators(e: any, tries: number, err: any) {
   try {
     const to = [...new Set([process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
     run("INSERT INTO support_requests (id, email, name, topic, message, account_id, envelope_id, status, at) VALUES (?,?,?,'other',?,?,?,'open',?)",
-      id('sup'), to[0] || 'files-alert@localhost', 'Sign&Grow (automatic alert)', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), e.account_id, e.id, now());
+      id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), e.account_id, e.id, now());
     for (const t of to) sendMail({ to: t, subject, heading: subject, lines, cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } }).catch((x) => console.error('[pdf] could not email the operators', x?.message));
     if (!to.length) console.error('[pdf] NOBODY WAS TOLD BY EMAIL (set SUPPORT_EMAIL or OPERATOR_EMAILS). The alert is in the operator queue.');
   } catch (x: any) {
