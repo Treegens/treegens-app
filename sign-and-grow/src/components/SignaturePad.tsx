@@ -1,8 +1,14 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
-import { Modal } from './ui';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Dialog } from './sign/Dialog';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
+const INK = '#10243a';
+// The server stores signatures up to 700,000 characters. Stay well inside that.
+const MAX_CHARS = 600_000;
+type Point = { x: number; y: number };
+type Tab = 'type' | 'draw' | 'upload';
+const TABS: [Tab, string][] = [['type', 'Type'], ['draw', 'Draw'], ['upload', 'Upload']];
 
 // Trim transparent margins so the signature fills its field.
 function trim(src: HTMLCanvasElement): string | null {
@@ -32,7 +38,7 @@ function typed(text: string, font: string): string | null {
   c.width = 900;
   c.height = 220;
   const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#10243a';
+  ctx.fillStyle = INK;
   ctx.textBaseline = 'middle';
   let size = 110;
   do {
@@ -43,147 +49,249 @@ function typed(text: string, font: string): string | null {
   return trim(c);
 }
 
+// A photo of a signature can be large. Shrink it until it is small enough to store, so finishing never fails on size.
+function fitImage(img: HTMLImageElement): string {
+  let scale = Math.min(1, 900 / img.width, 400 / img.height);
+  for (let i = 0; i < 6; i++) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.width * scale));
+    c.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = c.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    const png = c.toDataURL('image/png');
+    if (png.length <= MAX_CHARS) return png;
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    const jpeg = c.toDataURL('image/jpeg', 0.85);
+    if (jpeg.length <= MAX_CHARS) return jpeg;
+    scale *= 0.7;
+  }
+  return '';
+}
+
+function drawStroke(ctx: CanvasRenderingContext2D, s: Point[]) {
+  if (!s.length) return;
+  ctx.beginPath();
+  if (s.length === 1) {
+    ctx.arc(s[0].x, s[0].y, 1.3, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  ctx.moveTo(s[0].x, s[0].y);
+  for (let i = 1; i < s.length - 1; i++) ctx.quadraticCurveTo(s[i].x, s[i].y, (s[i].x + s[i + 1].x) / 2, (s[i].y + s[i + 1].y) / 2);
+  ctx.lineTo(s[s.length - 1].x, s[s.length - 1].y);
+  ctx.stroke();
+}
+
 export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signature' | 'initials'; name: string; onDone: (png: string) => void; onClose: () => void }) {
   const initials = name.split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 4).toUpperCase();
-  const [tab, setTab] = useState<'type' | 'draw' | 'upload'>('type');
+  const word = kind === 'signature' ? 'signature' : 'initials';
+  const [tab, setTab] = useState<Tab>('type');
   const [text, setText] = useState(kind === 'signature' ? name : initials);
   const [font, setFont] = useState(STYLES[0]);
   const [error, setError] = useState('');
+  const [inked, setInked] = useState(false);
+  const [photo, setPhoto] = useState('');
   const pad = useRef<HTMLCanvasElement>(null);
-  const drew = useRef(false);
+  const strokes = useRef<Point[][]>([]);
+  const size = useRef({ w: 0, h: 0 });
+  const ids = useId();
 
   useEffect(() => {
     // Make sure the handwriting fonts are ready before they are drawn to a canvas.
     STYLES.forEach((f) => document.fonts?.load(`40px '${f}'`).catch(() => {}));
   }, []);
 
+  function paint() {
+    const c = pad.current;
+    if (!c) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = c.clientWidth, h = c.clientHeight;
+    // Turning the phone changes the size of the pad. Keep what was drawn, scaled to fit.
+    if (size.current.w && (w !== size.current.w || h !== size.current.h)) {
+      const k = Math.min(w / size.current.w, h / size.current.h, 1);
+      if (k < 1) strokes.current = strokes.current.map((s) => s.map((p) => ({ x: p.x * k, y: p.y * k })));
+    }
+    size.current = { w, h };
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    const ctx = c.getContext('2d')!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineWidth = 2.6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = INK;
+    ctx.fillStyle = INK;
+    strokes.current.forEach((s) => drawStroke(ctx, s));
+    return ctx;
+  }
+
   useEffect(() => {
     if (tab !== 'draw' || !pad.current) return;
     const c = pad.current;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    c.width = c.clientWidth * dpr;
-    c.height = c.clientHeight * dpr;
-    const ctx = c.getContext('2d')!;
-    ctx.scale(dpr, dpr);
-    ctx.lineWidth = 2.4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = '#10243a';
-    let last: { x: number; y: number } | null = null;
-    const pos = (e: PointerEvent) => {
+    let ctx = paint()!;
+    let live: Point[] | null = null;
+    const at = (e: PointerEvent): Point => {
       const r = c.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
     };
     const down = (e: PointerEvent) => {
+      if (e.button > 0) return;
+      e.preventDefault();
       c.setPointerCapture(e.pointerId);
-      last = pos(e);
-      ctx.beginPath();
-      ctx.arc(last.x, last.y, 1.2, 0, Math.PI * 2);
-      ctx.fillStyle = '#10243a';
-      ctx.fill();
-      drew.current = true;
+      live = [at(e)];
+      strokes.current.push(live);
+      drawStroke(ctx, live);
+      setInked(true);
+      setError('');
     };
     const move = (e: PointerEvent) => {
-      if (!last) return;
-      const p = pos(e);
-      ctx.beginPath();
-      ctx.moveTo(last.x, last.y);
-      ctx.quadraticCurveTo(last.x, last.y, (last.x + p.x) / 2, (last.y + p.y) / 2);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      last = p;
+      if (!live) return;
+      for (const ev of e.getCoalescedEvents?.().length ? e.getCoalescedEvents() : [e]) {
+        const p = at(ev), last = live[live.length - 1];
+        if (Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 0.6) continue;
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        live.push(p);
+      }
     };
-    const up = () => (last = null);
+    const up = () => {
+      if (!live) return;
+      live = null;
+      ctx = paint()!; // redraw with smoothed curves
+    };
+    const ro = new ResizeObserver(() => {
+      if (c.clientWidth && (c.clientWidth !== size.current.w || c.clientHeight !== size.current.h)) ctx = paint()!;
+    });
+    ro.observe(c);
     c.addEventListener('pointerdown', down);
     c.addEventListener('pointermove', move);
     c.addEventListener('pointerup', up);
     c.addEventListener('pointercancel', up);
     return () => {
+      ro.disconnect();
       c.removeEventListener('pointerdown', down);
       c.removeEventListener('pointermove', move);
       c.removeEventListener('pointerup', up);
       c.removeEventListener('pointercancel', up);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   const clear = () => {
-    const c = pad.current;
-    if (c) c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
-    drew.current = false;
+    strokes.current = [];
+    paint();
+    setInked(false);
+  };
+  const undo = () => {
+    strokes.current.pop();
+    paint();
+    setInked(strokes.current.length > 0);
   };
 
   async function adopt() {
     setError('');
-    let png: string | null = null;
+    let image: string | null = null;
     if (tab === 'type') {
-      if (!text.trim()) return setError('Type your name first.');
+      if (!text.trim()) return setError(kind === 'signature' ? 'Type your name first.' : 'Type your initials first.');
       await document.fonts?.load(`110px '${font}'`, text).catch(() => {});
-      png = typed(text.trim(), font);
+      image = typed(text.trim(), font);
+      if (!image) return setError('Type at least one letter or number, then try again.');
     } else if (tab === 'draw') {
-      png = drew.current && pad.current ? trim(pad.current) : null;
-      if (!png) return setError('Draw your signature in the box first.');
+      image = strokes.current.length && pad.current ? trim(pad.current) : null;
+      if (!image) return setError(`Draw your ${word} in the box first.`);
+    } else {
+      if (!photo) return setError('Choose a picture first.');
+      image = photo;
     }
-    if (png) onDone(png);
+    onDone(image);
   }
 
   function upload(file?: File) {
     if (!file) return;
+    setError('');
+    const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const s = Math.min(1, 900 / img.width, 400 / img.height);
-      const c = document.createElement('canvas');
-      c.width = Math.round(img.width * s);
-      c.height = Math.round(img.height * s);
-      c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
-      onDone(c.toDataURL('image/png'));
+      URL.revokeObjectURL(url);
+      const fitted = fitImage(img);
+      if (fitted) setPhoto(fitted);
+      else setError('That picture is too detailed to use. Try a smaller one, or draw or type instead.');
     };
-    img.onerror = () => setError('That image could not be read.');
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      setError('That file could not be read as a picture. Choose a PNG or JPEG, or draw or type instead.');
+    };
+    img.src = url;
+  }
+
+  function tabKey(e: React.KeyboardEvent) {
+    const i = TABS.findIndex(([t]) => t === tab);
+    const next = e.key === 'ArrowRight' ? (i + 1) % 3 : e.key === 'ArrowLeft' ? (i + 2) % 3 : e.key === 'Home' ? 0 : e.key === 'End' ? 2 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    setTab(TABS[next][0]);
+    setError('');
+    document.getElementById(`${ids}-${TABS[next][0]}`)?.focus();
   }
 
   return (
-    <Modal title={kind === 'signature' ? 'Adopt your signature' : 'Adopt your initials'} onClose={onClose} wide>
-      <div className="tabs">
-        {(['type', 'draw', 'upload'] as const).map((t) => (
-          <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{t === 'type' ? 'Type' : t === 'draw' ? 'Draw' : 'Upload'}</button>
+    <Dialog title={kind === 'signature' ? 'Adopt your signature' : 'Adopt your initials'} onClose={onClose} wide variant="field">
+      <div className="tabs sg-sigtabs" role="tablist" aria-label={`How to make your ${word}`} onKeyDown={tabKey}>
+        {TABS.map(([t, label]) => (
+          <button key={t} type="button" role="tab" id={`${ids}-${t}`} aria-selected={tab === t} aria-controls={`${ids}-panel`} tabIndex={tab === t ? 0 : -1} className={tab === t ? 'on' : ''} onClick={() => (setTab(t), setError(''))}>{label}</button>
         ))}
       </div>
-      {tab === 'type' && (
-        <div className="stack">
-          <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input value={text} onChange={(e) => setText(e.target.value)} autoFocus maxLength={60} /></label>
-          <div className="grid g2">
-            {STYLES.map((f) => (
-              <button key={f} type="button" className={`sigstyle${font === f ? ' on' : ''}`} style={{ fontFamily: `'${f}', cursive` }} onClick={() => setFont(f)} aria-pressed={font === f}>
-                {text || 'Your name'}
-              </button>
-            ))}
+      <div role="tabpanel" id={`${ids}-panel`} aria-labelledby={`${ids}-${tab}`}>
+        {tab === 'type' && (
+          <div className="stack">
+            <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input value={text} onChange={(e) => setText(e.target.value)} autoFocus maxLength={60} autoComplete="off" /></label>
+            <div className="grid g2 sg-sigstyles" role="group" aria-label="Choose a style">
+              {STYLES.map((f, i) => (
+                <button key={f} type="button" className={`sigstyle${font === f ? ' on' : ''}`} style={{ fontFamily: `'${f}', cursive` }} onClick={() => setFont(f)} aria-pressed={font === f} aria-label={`Style ${i + 1}: ${text || 'Your name'}`}>
+                  {text || 'Your name'}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
-      {tab === 'draw' && (
-        <div>
-          <canvas ref={pad} className="sigpad" aria-label="Draw your signature" />
-          <div className="row between" style={{ marginTop: 8 }}>
-            <span className="muted small">Use your mouse, finger or stylus.</span>
-            <button className="btn sm ghost" onClick={clear}>Clear</button>
+        )}
+        {tab === 'draw' && (
+          <div>
+            <div className="sg-padwrap">
+              <canvas ref={pad} className="sigpad" role="img" aria-label={inked ? `Your drawn ${word}` : `Empty box to draw your ${word} in`} />
+              {!inked && <span className="sg-padhint" aria-hidden="true">Draw here</span>}
+            </div>
+            <div className="row between sg-padrow">
+              <span className="muted small">Use a finger, a stylus or the mouse. Cannot draw? Use Type instead.</span>
+              <span className="row">
+                <button type="button" className="btn sm" onClick={undo} disabled={!inked}>Undo</button>
+                <button type="button" className="btn sm" onClick={clear} disabled={!inked}>Clear</button>
+              </span>
+            </div>
           </div>
-        </div>
-      )}
-      {tab === 'upload' && (
-        <label className="drop" style={{ display: 'block' }}>
-          <input type="file" accept="image/png,image/jpeg" hidden onChange={(e) => upload(e.target.files?.[0])} />
-          <b>Choose a photo or scan of your signature</b>
-          <div className="muted small">PNG or JPEG. A transparent or white background works best.</div>
-        </label>
-      )}
-      {error && <div className="notice err" style={{ marginTop: 12 }}>{error}</div>}
-      <p className="muted small" style={{ marginTop: 16, marginBottom: 0 }}>
-        By choosing Adopt and sign, I agree that this mark is the electronic representation of my {kind === 'signature' ? 'signature' : 'initials'} and is as valid as one made with pen on paper.
+        )}
+        {tab === 'upload' && (
+          <div>
+            {photo && <div className="sg-sigpreview"><img src={photo} alt={`The picture you chose for your ${word}`} /></div>}
+            <label className="drop sg-drop">
+              <input type="file" className="sg-vh" accept="image/png,image/jpeg" onChange={(e) => (upload(e.target.files?.[0]), (e.target.value = ''))} />
+              <b>{photo ? 'Choose a different picture' : `Choose a photo or scan of your ${word}`}</b>
+              <span className="muted small">PNG or JPEG. Dark ink on white paper works best.</span>
+            </label>
+          </div>
+        )}
+      </div>
+      {error && <div className="notice err sg-problem" role="alert">{error}</div>}
+      <p className="muted small sg-siglegal">
+        By choosing Adopt and sign, I agree that this mark is the electronic representation of my {word} and is as valid as one made with pen on paper.
       </p>
       <div className="actions">
-        <button className="btn" onClick={onClose}>Cancel</button>
-        {tab !== 'upload' && <button className="btn primary" onClick={adopt}>Adopt and sign</button>}
+        <button type="button" className="btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn primary" onClick={adopt}>Adopt and sign</button>
       </div>
-    </Modal>
+    </Dialog>
   );
 }
