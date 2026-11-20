@@ -9,7 +9,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { PDFDocument, PDFDict, PDFName, PDFString, PDFHexString } from 'pdf-lib';
-import { boot, Client, PNG, upload, simple, draft, signUp, mailTo, tokenFor, type Server } from './helpers.ts';
+import { boot, Client, PNG, upload, simple, draft, signUp, signAll, mailTo, tokenFor, type Server } from './helpers.ts';
 
 let db: Server['db'];
 let env: Server['env'];
@@ -41,13 +41,20 @@ const hookServer = http.createServer((req, res) => (req.resume(), req.on('end', 
 let hookUrl = '';
 
 // A stand-in for the mail server that can be made to stall on one address. That is what a slow or dead mail server
-// looks like to a bulk send: the call hangs half way through its list.
+// looks like to a bulk send: the call hangs half way through its list. Only the first email to that address
+// stalls, so a second copy of it (which is what these tests are there to catch) goes through and gets counted.
 const smtp = { stallOn: '', release: () => {} };
 function stallMailTo(email: string): Promise<void> {
   smtp.stallOn = email;
   process.env.SMTP_URL = 'smtp://stand-in.invalid';
   return new Promise<void>((reached) => {
-    (globalThis as any).__tsmail = { sendMail: (m: any) => (m.to === smtp.stallOn ? new Promise<void>((done) => ((smtp.release = done), reached())) : Promise.resolve()) };
+    (globalThis as any).__tsmail = {
+      sendMail: (m: any) => {
+        if (m.to !== smtp.stallOn) return Promise.resolve();
+        smtp.stallOn = '';
+        return new Promise<void>((done) => ((smtp.release = done), reached()));
+      },
+    };
   });
 }
 function mailBackToNormal() {
@@ -223,8 +230,8 @@ test('a repeat that arrives while the first call is still sending gets the same 
     await stalled; // the first call is now waiting for the mail server, on the second row of four
 
     const during = await keyed(owner, '/bulk', body, 'bulk-fly');
-    const bid = db.get("SELECT id FROM bulk_batches WHERE idem_key='bulk-fly'").id;
     assert.equal(during.status, 202, 'the repeat is answered while the first call is still at work');
+    const bid = db.get("SELECT id FROM bulk_batches WHERE idem_key='bulk-fly'").id;
     assert.equal(during.data.id, bid);
     assert.equal(during.data.sent, 1);
     assert.equal(during.data.pending, 3);
@@ -259,7 +266,7 @@ test('a batch whose process died half way is finished by a repeat with the same 
     const stalled = stallMailTo('gone3@example.com');
     void keyed(owner, '/bulk', body, 'bulk-gone'); // this call never answers: it is the process that dies
     await stalled;
-    bid = db.get("SELECT id FROM bulk_batches WHERE idem_key='bulk-gone'").id;
+    bid = db.get('SELECT id FROM bulk_batches WHERE account_id=?', me.account.id).id;
   } finally {
     mailBackToNormal();
   }
@@ -482,6 +489,55 @@ test('two Void requests at the same moment void once, and a void that crosses th
   assert.equal(statusOf(y.id), 'completed');
 });
 
+test('reminding or voiding a whole batch finishes its list when someone signs while it is at work', async () => {
+  const owner = await signUp('Vera Batch', 'vera.batch@example.com', newIp());
+  const tpl = await template(owner);
+  const rows = list('bv', 5);
+  const sent = await owner.post('/bulk', { template_id: tpl.id, rows });
+  assert.equal(sent.data.sent, 5, JSON.stringify(sent.data));
+  const bid = sent.data.id;
+  // The envelopes in the order the batch routes go through them, and the person each one went to.
+  const order: string[] = db.all("SELECT id FROM envelopes WHERE bulk_id=? AND status='sent'", bid).map((e: any) => e.id);
+  const who = order.map((id) => db.get('SELECT email FROM recipients WHERE envelope_id=?', id).email as string);
+  const got = (subject: string) => who.map((email) => mailTo(email).filter((m: any) => m.subject === subject).length);
+  try {
+    // The reminder for the first person is with the mail server when the second person finishes signing.
+    let stalled = stallMailTo(who[0]);
+    const reminding = owner.post(`/bulk/${bid}/remind`);
+    await stalled;
+    assert.equal((await signAll(order[1], who[1])).status, 200);
+    smtp.release();
+    const reminded = await reminding;
+    assert.equal(reminded.status, 200, JSON.stringify(reminded.data));
+    assert.equal(reminded.data.reminded, 4, 'everyone still waiting was reminded');
+    assert.deepEqual(got('Reminder: Waiver'), [1, 0, 1, 1, 1], 'and the person who had just finished was not');
+
+    // The same for a void: the first envelope is voided and its email is on its way when the third person signs.
+    stalled = stallMailTo(who[0]);
+    const voiding = owner.post(`/bulk/${bid}/void`, { reason: 'Wrong list' });
+    await stalled;
+    assert.equal((await signAll(order[2], who[2])).status, 200);
+    smtp.release();
+    const voided = await voiding;
+    assert.equal(voided.status, 200, JSON.stringify(voided.data));
+    assert.deepEqual(voided.data, { voided: 3, skipped: 1 }, 'the answer says how many were voided and how many had closed by their turn');
+    assert.deepEqual(order.map(statusOf), ['voided', 'completed', 'completed', 'voided', 'voided'], 'nothing is left out for signature');
+    assert.deepEqual(order.map((id) => auditOf(id, 'Envelope voided').length), [1, 0, 0, 1, 1]);
+    assert.deepEqual(got('Voided: Waiver'), [1, 0, 0, 1, 1], 'only the people whose envelope was voided are told so');
+  } finally {
+    mailBackToNormal();
+  }
+
+  // Void pressed twice on a batch: the two calls go through the same list, and each envelope is voided by one of them.
+  const more = list('bw', 3);
+  const second = (await owner.post('/bulk', { template_id: tpl.id, rows: more })).data;
+  const [a, b] = await Promise.all([owner.post(`/bulk/${second.id}/void`, { reason: 'Sent twice' }), owner.post(`/bulk/${second.id}/void`, { reason: 'Sent twice' })]);
+  assert.deepEqual([a.status, b.status], [200, 200], JSON.stringify([a.data, b.data]));
+  assert.equal(a.data.voided + b.data.voided, 3);
+  assert.deepEqual(second.results.map((r: any) => [statusOf(r.id), auditOf(r.id, 'Envelope voided').length]), [['voided', 1], ['voided', 1], ['voided', 1]]);
+  assert.deepEqual(emailsOf(more).map((email) => mailTo(email).filter((m: any) => m.subject === 'Voided: Waiver').length), [1, 1, 1]);
+});
+
 test('a save from the editor that crosses Send is recorded as a correction, not written over a sent envelope unseen', async () => {
   const e = await simple(racer, 'autosave@example.com', { subject: 'Before send' });
   const cur = (await racer.get(`/envelopes/${e.id}`)).data.envelope;
@@ -526,18 +582,35 @@ async function formPdf(signatureFirst: boolean) {
   if (!signatureFirst) emptySignature();
   return d.save();
 }
-async function signedPdfOf(owner: Client, source: Uint8Array, email: string) {
-  const f = new FormData();
-  f.append('file', new Blob([source], { type: 'application/pdf' }), 'Form.pdf');
-  const up = await owner.call('POST', '/files', f);
+// Uploads the source, sends it to one signer and signs it. With `attach`, the signer is also asked for a file and
+// uploads that one. Returns the signed PDF as the sender downloads it.
+async function signedPdfOf(owner: Client, source: Uint8Array, email: string, attach?: Uint8Array) {
+  const pdfForm = (bytes: Uint8Array, name: string) => {
+    const f = new FormData();
+    f.append('file', new Blob([bytes], { type: 'application/pdf' }), name);
+    return f;
+  };
+  const up = await owner.call('POST', '/files', pdfForm(source, 'Form.pdf'));
   assert.equal(up.status, 200, JSON.stringify(up.data));
-  const made = await owner.post('/envelopes', { subject: 'Flatten check', send: true, documents: [{ id: 'd', file_id: up.data.id }], recipients: [{ id: 'r', role: 'signer', name: 'Flat Signer', email }], fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.5, y: 0.5, w: 0.3, h: 0.08 }] });
+  const made = await owner.post('/envelopes', {
+    subject: 'Flatten check', send: true, documents: [{ id: 'd', file_id: up.data.id }], recipients: [{ id: 'r', role: 'signer', name: 'Flat Signer', email }],
+    fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.5, y: 0.5, w: 0.3, h: 0.08 }, ...(attach ? [{ document_id: 'd', recipient_id: 'r', type: 'attachment', page: 0, x: 0.5, y: 0.7, w: 0.3, h: 0.04 }] : [])],
+  });
   assert.equal(made.status, 200, JSON.stringify(made.data));
   const tok = tokenFor(made.data.envelope.id, email);
   const signer = new Client();
   await signer.post(`/sign/${tok}/consent`);
   const fields = (await signer.get(`/sign/${tok}`)).data.fields;
-  assert.equal((await signer.post(`/sign/${tok}/complete`, { values: { [fields[0].id]: '1' }, signature_png: PNG })).status, 200);
+  const values: Record<string, string> = {};
+  for (const field of fields) {
+    if (field.type !== 'attachment') values[field.id] = '1';
+    else {
+      const sent = await signer.call('POST', `/sign/${tok}/upload`, pdfForm(attach!, 'Attachment.pdf'));
+      assert.equal(sent.status, 200, JSON.stringify(sent.data));
+      values[field.id] = sent.data.id;
+    }
+  }
+  assert.equal((await signer.post(`/sign/${tok}/complete`, { values, signature_png: PNG })).status, 200);
   const pdf = (await owner.get(`/envelopes/${made.data.envelope.id}/download`)).data as Uint8Array;
   assert.equal(Buffer.from(pdf.slice(0, 5)).toString(), '%PDF-');
   return pdf;
@@ -574,6 +647,60 @@ test('a signed PDF made from a fillable form has no broken annotation entries an
     assert.equal(image.status, 0, image.stderr);
     assert.equal(image.stderr, '', 'pdftoppm draws it without a complaint');
   }
+});
+
+test('a fillable form that the signer attaches is made flat in the signed PDF, like the documents that were sent', async () => {
+  const owner = await signUp('Ann Attach', 'ann.attach@example.com', newIp());
+  const plain = await PDFDocument.create();
+  plain.addPage([612, 792]).drawText('Please attach your form', { x: 72, y: 720 });
+  // What signers attach is very often a form: a tax or bank form with their details typed in and a box to sign.
+  const pdf = await signedPdfOf(owner, await plain.save(), 'attach@example.com', await formPdf(false));
+  const pages = (await PDFDocument.load(pdf)).getPages();
+  assert.ok(pages.length >= 3, 'the document, the attachment and the certificate are all there');
+  assert.equal(pages[1].node.Annots()?.size() ?? 0, 0, 'the attached page has no field left to fill in or sign, the empty signature box included');
+  const found = await annotations(pdf);
+  assert.ok(found.every((a) => a instanceof PDFDict), 'every /Annots entry points at an object that exists');
+  assert.equal(found.filter((a) => a instanceof PDFDict && a.lookup(N('Subtype')) === N('Widget')).length, 0);
+
+  if (!havePoppler) return;
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-pdf-')), 'signed.pdf');
+  fs.writeFileSync(file, pdf);
+  const text = spawnSync('pdftotext', ['-f', '2', '-l', '2', file, '-'], { encoding: 'utf8' });
+  assert.equal(text.status, 0, text.stderr);
+  assert.equal(text.stderr, '', 'pdftotext reads it without a complaint');
+  assert.match(text.stdout, /Form with fillable fields/);
+  assert.match(text.stdout, /Prefilled Client Name/, 'what the signer typed into the form is now part of the page');
+  // pdfsig lists digital-signature fields. A box left waiting would show as a signature field that is not signed.
+  if (spawnSync('which', ['pdfsig']).status !== 0) return;
+  const sig = spawnSync('pdfsig', [file], { encoding: 'utf8' });
+  assert.doesNotMatch(sig.stdout + sig.stderr, /is not signed|Signature Field Name/);
+});
+
+test('a page whose annotation list cannot be read does not stop the signing, and a signer does not lose an attachment over it', async () => {
+  const owner = await signUp('Mal Formed', 'mal.formed@example.com', newIp());
+  // Some tools write /Annots as something that is not a list. No reader shows anything from it.
+  const odd = async (label: string) => {
+    const d = await PDFDocument.create();
+    const page = d.addPage([612, 792]);
+    page.drawText(label, { x: 72, y: 720 });
+    page.node.set(N('Annots'), d.context.obj({ Broken: 1 }));
+    return d.save();
+  };
+  // As the document that is sent: Finish works and the signed PDF can be downloaded (signedPdfOf checks both).
+  const asDocument = await signedPdfOf(owner, await odd('Odd document'), 'odd1@example.com');
+  // As a file the signer attaches: its page is in the signed PDF, after the document and before the certificate.
+  const asAttachment = await signedPdfOf(owner, await odd('Odd document'), 'odd2@example.com', await odd('Odd attachment'));
+  const pagesIn = async (pdf: Uint8Array) => (await PDFDocument.load(pdf)).getPageCount();
+  assert.equal(await pagesIn(asAttachment), (await pagesIn(asDocument)) + 1, 'the attached page was not left out');
+  // annotations() reads every page's list, which it could not do if the unreadable entry had been carried over.
+  assert.deepEqual(await annotations(asDocument), []);
+  assert.deepEqual(await annotations(asAttachment), []);
+  if (!havePoppler) return;
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'signgrow-pdf-')), 'signed.pdf');
+  fs.writeFileSync(file, asAttachment);
+  const text = spawnSync('pdftotext', ['-f', '2', '-l', '2', file, '-'], { encoding: 'utf8' });
+  assert.equal(text.stderr, '', 'pdftotext reads it without a complaint');
+  assert.match(text.stdout, /Odd attachment/);
 });
 
 test('a filled field that cannot be drawn stays in the signed PDF as it was, so what it says is not lost', async () => {

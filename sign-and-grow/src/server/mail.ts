@@ -38,6 +38,9 @@ function fromHeader(name?: string): string {
   return `"${name.replace(/["\\\r\n<>]/g, '')} via Sign&Grow" <${address}>`;
 }
 
+// "Report this email": the check page with the security code filled in. Reporting from there needs no signing link.
+const reportUrl = (code: string) => `${baseUrl()}/check?code=${fmtCode(code)}&report=1`;
+
 export function renderMail(m: Mail): string {
   const color = /^#[0-9a-f]{6}$/i.test(m.brand?.color || '') ? m.brand!.color! : '#1f6f43';
   const logo = m.brand?.logo?.startsWith('data:image/')
@@ -57,6 +60,7 @@ export function renderMail(m: Mail): string {
     <b>Not sure this email is real?</b> Do not click anything. Type <b>${esc(baseUrl().replace(/^https?:\/\//, ''))}/check</b> into your browser yourself and enter this security code:
     <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:18px;letter-spacing:1px;font-weight:700;margin:8px 0 4px">${esc(fmtCode(m.code))}</div>
     We will tell you who sent it and open the document for you. Sign&amp;Grow never asks for a password, a card number or a payment by email.
+    <div style="margin-top:8px">Did not expect this, or does it look wrong? <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">Report this email</a>. That opens our check page with this code filled in. You do not have to open the document to report it.</div>
   </div>` : ''}
   <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0">
     Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.
@@ -87,7 +91,8 @@ export async function sendMail(m: Mail): Promise<void> {
       subject: m.subject,
       html,
       text: [m.heading, ...m.lines, ...(m.links || []).map((l) => `${l.label}${l.note ? ` (${l.note})` : ''}: ${l.url}`), m.cta ? `${m.cta.label}: ${m.cta.url}` : '', m.footnote || '',
-        m.code ? `Not sure this email is real? Go to ${baseUrl()}/check and enter the security code ${fmtCode(m.code)}.` : ''].filter(Boolean).join('\n\n'),
+        m.code ? `Not sure this email is real? Go to ${baseUrl()}/check and enter the security code ${fmtCode(m.code)}.` : '',
+        m.code ? `Did not expect this, or does it look wrong? Report this email: ${reportUrl(m.code)}` : ''].filter(Boolean).join('\n\n'),
       attachments: m.attachments,
     });
     run("UPDATE emails SET status='sent' WHERE id=?", r.lastInsertRowid);

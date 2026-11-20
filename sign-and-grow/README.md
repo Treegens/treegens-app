@@ -31,9 +31,12 @@ What the test files cover:
 | `tests/flow.test.ts` | Signing order, access codes, the certificate, tamper checks, isolation between accounts. |
 | `tests/billing.test.ts` | Paying, against a simulated payment provider (`tests/stripe-fake.ts`): free signatures for a new account, the monthly plan, top-ups, roll-over, renewal reminders, cancelling in the app, from an email link and by card, a charge after cancelling, refunds of unused signatures, a card dispute, an unused plan, free codes. |
 | `tests/billing2.test.ts` | Paying when things go wrong: the provider's messages in any order, the provider failing half way, two refund requests at once, replayed checkouts and messages, cancelling while a payment is failing, slow payment methods, reminders on our own timer, a charge higher than the reminder said, the corners of the free code, and the ways round paying for a signature. |
+| `tests/integrity.test.ts` | What people sign is what they saw: every signer is shown everything the sender wrote, nothing printed changes after a signature unless the signer is asked to sign again, a signing page left open cannot finish on a document that was changed, the audit trail says what a correction changed, a replaced signer starts with empty fields, a save from an older copy of the editor is refused, a replaced email is still recognised as genuine, a changed signing order is enforced. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
 | `tests/autoplace.test.ts` | Placing fields automatically from the text of a document. |
-| `tests/platform.test.ts` | Platform and security: links in emails never come from a request header, the caller's address behind a proxy, what an API key may do and what it says when it cannot be used, keys when a member is removed or an account is closing, and webhooks (logged before the first try, sent to the address that was checked, sent again, paged). |
+| `tests/platform.test.ts` | Platform and security: links in emails never come from a request header, the caller's address behind a proxy, what an API key may do and what it says when it cannot be used, keys when a member is removed, closes their own login or an account is closing, and webhooks (logged before the first try, sent to the address that was checked, sent again, paged). |
+| `tests/abuse.test.ts` | Keeping scammers and strangers out: the filter for fake payment notices on every path and in every spelling, the daily limit on people newly emailed, what a paused account can and cannot do, reports that count, who may read a support message, access codes that freeze, public forms that never hand out someone else's document, and reporting an email with its security code. |
+| `tests/api.test.ts` | Calls that are repeated or cross each other: an `Idempotency-Key` that belongs to one person and goes with its envelope, a bulk send that is repeated while it runs or finished after the server stopped half way, one audit line a day for an embedded signing link, two Finish, Decline, Void or reassign requests at the same moment, a whole batch reminded or voided while someone in it signs, and signed PDFs made from fillable forms, whether the form was sent or attached by a signer. |
 
 ## What the bad reviews taught us
 
@@ -57,17 +60,17 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | Prepaid allowance disappears at renewal. | Signatures never expire. They roll over, also after cancelling. |
 | Paying for a plan nobody uses. | A nudge after 60 quiet days. After `DORMANT_AUTO_STOP_DAYS` without a send, the renewal is stopped before the next charge and the owner is told. |
 | Support is a chatbot loop, and closed to anyone who cannot log in. | `/help` works without an account: self-service tools, then a contact form that returns a reference and goes to a queue people work from (`/app/operator`, and `SUPPORT_EMAIL` if set). No chatbot. |
-| A typo after sending means void and start again. | An envelope that is out can be corrected in place: names, addresses, fields, people. Signatures already collected stay. What a finished signer signed is locked. |
+| A typo after sending means void and start again. | An envelope that is out can be corrected in place: names, addresses, fields, people. Signatures already collected stay. Once someone has finished, the pages they signed only change if the sender chooses to ask them to sign again: they are told what changed, the first signature stays on record, and it costs no extra signature. A signer whose page is open during a correction cannot finish on the old version. The audit trail says what every correction changed. |
 | Signing links expire or stop after a few opens. | A link works for as long as the envelope is open, with no limit on opens. A replaced link offers to send the current one. `/help` emails anyone their documents again. An expired envelope is reopened, not rebuilt, and signers can ask for more time. |
 | Signers are pushed to create an account. | Signers never need an account or a password, and are never sent marketing. |
-| "I cannot tell a real request from a scam." | Every signing email names the sender and carries a security code that anyone can type into `/check`. Senders must confirm their email, new free accounts have a daily recipient limit and cannot send fake payment notices, recipients can report a request, and enough reports pause the sender until a person has looked. |
+| "I cannot tell a real request from a scam." | Every signing email names the sender and carries a security code that anyone can type into `/check`. Senders must confirm their email. An account that has not paid has a daily limit on how many people it newly emails, however it reaches them, and cannot send what reads like a fake payment notice or send under the name of a well-known brand. Recipients can report a request from the email itself or from the signing page, and enough reports pause the sender until a person has looked. The filter catches the common trick, not every scam: reports and the pause are the backstop. |
 | "They say they never got the email." | The envelope shows whether each email left. The sender is told when a request sits unopened, and can copy the signing link, remind one person or correct the address. |
-| The account was locked with our contracts in it. | Cancelling, a failed payment or a pause never deletes or locks a document. Pausing only stops new sends. |
+| The account was locked with our contracts in it. | Cancelling, a failed payment or a pause never deletes or locks a document. Pausing stops what emails a recipient (new sends, new or changed recipients, reminders, reopening), and people who already have a document can still sign it. |
 | There is no way to get everything out. | One free export of every signed PDF, audit trail and a CSV index, on every plan, also after cancelling (`GET /api/export`). |
 | The account belonged to someone who left. | Ownership can be handed over. When a member is removed their envelopes pass to the team. Billing can be stopped with the card, without the mailbox. |
 | Signers cannot get their copy later. | The completion email links to the signed document and attaches it when small enough. `/help` sends it again at any time. |
 | The API costs extra and needs a go-live review. | The API is the same on every plan, and a key works as soon as it is created. Errors say what to do and carry a request id. Retries are safe with an `Idempotency-Key`. |
-| Integrations break without anyone noticing. | Every webhook delivery is in the log from before the first try, and the latest 200 of each webhook can be sent again. After three failures in a row the admins get an email. Removing a team member lists the API keys that stop with them and emails the admins. A key that cannot be used says why. |
+| Integrations break without anyone noticing. | Every webhook delivery is in the log from before the first try, and the latest 200 of each webhook can be sent again. After three failures in a row the admins get an email. Removing a team member lists the API keys that stop with them and emails the admins. A member who closes their own login is shown the same list first, and the admins get the same email. Stopped keys stay on the admins' list. A key that cannot be used says why. |
 | Closing an account by mistake loses everything. | Closing keeps everything for 30 days, and signing in again undoes it. |
 
 ## What is in it
@@ -79,7 +82,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 - Field editor: signature, initials, date signed, name, email, company, title, text, number, date, checkbox,
   radio group, dropdown, signer attachment and sender notes. Click to place, drag to move, resize, nudge with
   arrow keys, duplicate, copy to every page. Required or optional, prefilled, read only, validated.
-- Access codes, private notes per recipient, email subject and message.
+- Access codes (at least 4 characters, frozen after 10 wrong tries until the sender sets a new one), private notes
+  per recipient, email subject and message.
 - Automatic reminders, a warning before a deadline, more time in one click, reopening after expiry.
 - Correct an envelope that is already out, without voiding it. Remind one person. Void with a reason.
 - Sign a document yourself, clone an envelope, save any envelope as a template, folders, search that also
@@ -103,15 +107,19 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 **Help and trust (public pages, no login)**
 - `/help`: answers for people who sign and people who send, with the tool to fix each thing on the page: find
   my documents, find my subscription, stop billing with my card, and a contact form that reaches a person.
-- `/check`: type in the security code from a signing email to see whether it is genuine and who sent it.
+- `/check`: type in the security code from a signing email to see whether it is genuine and who sent it, and
+  report it from there without opening the document. Every signing email links to it with the code filled in.
 - `/billing/stop`: stop a renewal from the link in a billing email. One button.
 - `/security`: what the software does to protect signers, senders and documents, and what it does not do.
 - `/app/operator`: the queue of help requests, reports and paused accounts, for the people in `OPERATOR_EMAILS`.
+  Each request and report shows the account it is about (plan, age, trusted or not), with "Trust this account" to
+  lift the daily limit and the fake-notice filter for it, and "Pause this sender".
 
 **Reuse and scale**
 - Templates with named roles, shared with the team.
 - Bulk send a template to a pasted or uploaded CSV list (up to 500 per batch). Remind or void a batch as one.
-- PowerForms: a public link anyone can use to fill in and sign a template.
+- PowerForms: a public link anyone can use to fill in and sign a template. An unfinished start is only given back
+  to the browser that made it, never to whoever types the same email address, and is cleared after a quiet day.
 
 **Team and admin**
 - Accounts with owner, admin and member roles, email invitations, multiple accounts per user.
@@ -181,11 +189,13 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `ACCEPT_DISPUTES=0` | By default a card dispute is accepted with the payment provider automatically (the bank returns the money, billing stops, the customer is told in writing). Set this to `0` to stop billing but leave the decision about the dispute to a person. | accept |
 | `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, receives every help request with the sender as reply-to, and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and always appear in the operator queue, so they are seen even when this is not set. | none |
 | `ABUSE_EMAIL` | Where reports of suspicious documents go. | `SUPPORT_EMAIL` |
-| `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, and pausing or unpausing an account. | nobody |
+| `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. | nobody |
 | `FREE_PLAN_CODES` | Comma-separated codes that make the monthly plan free for whoever enters one. Set it to an empty value to have none. | `GROWalition` |
 | `REFUND_DAYS` | How long after a payment its unused signatures are refunded on request, with no approval. | `30` |
-| `NEW_ACCOUNT_DAILY_RECIPIENTS` | How many people a free account can send to per day during its first week. | `50` |
-| `ABUSE_SUSPEND_AFTER` | How many different recipients must report an account within 30 days before its sending is paused for review. | `3` |
+| `NEW_ACCOUNT_DAILY_RECIPIENTS` | How many people an account that has not paid can send to per day during its first week. "Has not paid" is the free plan or a plan free through a code, with no payment that was kept, and not marked as trusted in the operator queue. Everyone newly emailed counts: a first send, a person added or an address changed on an envelope that is out, a bulk row, a visitor to a public form. | `50` |
+| `UNPAID_DAILY_RECIPIENTS` | The same limit after the first week. Paying for anything lifts both, and so does "Trust this account" in the operator queue. | `200` |
+| `ABUSE_SUSPEND_AFTER` | How many different recipients must report an account within 30 days before its sending is paused for review. Open reports and reports an operator confirmed as abuse both count. | `3` |
+| `POWERFORM_IDLE_HOURS` | An unfinished start from a public form that nobody has touched for this long is closed, so the signature held for it comes back. The visitor can start again. | `24` |
 | `DORMANT_AUTO_STOP_DAYS` | A paid plan that has sent nothing for this long is not renewed. `0` only warns. | `90` |
 | `UNOPENED_ALERT_HOURS` | How long a request sits unopened before the sender is told. | `48` |
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |

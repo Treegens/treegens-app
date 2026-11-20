@@ -18,7 +18,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     credentials: 'same-origin',
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status });
+  // Some refusals carry a code a screen can act on (a stale copy, a change that needs a signer to sign again), next
+  // to the sentence for the person. Both travel with the error.
+  if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status, code: data.code as string | undefined, data });
   return data;
 }
 

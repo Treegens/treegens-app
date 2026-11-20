@@ -3,12 +3,15 @@ import { secret } from './db.ts';
 
 export class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // Extra facts sent with the error for a program to act on, such as "code". The message is still the whole story for a person.
+  data?: Record<string, any>;
+  constructor(status: number, message: string, data?: Record<string, any>) {
     super(message);
     this.status = status;
+    this.data = data;
   }
 }
-export const bad = (message: string, status = 400) => new HttpError(status, message);
+export const bad = (message: string, status = 400, data?: Record<string, any>) => new HttpError(status, message, data);
 
 export const id = (prefix: string) => `${prefix}_${crypto.randomBytes(12).toString('base64url')}`;
 export const token = (bytes = 32) => crypto.randomBytes(bytes).toString('base64url');
@@ -44,6 +47,12 @@ export function rateLimit(key: string, max: number, windowMs: number) {
     return;
   }
   if (++b.n > max) throw new HttpError(429, 'Too many attempts. Please wait a bit and try again.');
+}
+// For a limit that counts only some attempts (wrong access codes, say). rateWait asks without counting: it answers
+// how many milliseconds are left when the key has used up its tries, or 0. rateLimit(key, Infinity, window) counts one.
+export function rateWait(key: string, max: number): number {
+  const b = buckets.get(key);
+  return b && b.reset > Date.now() && b.n >= max ? b.reset - Date.now() : 0;
 }
 
 // Public base URL for links in emails. On a real deployment APP_URL is the only source. A Host or X-Forwarded-Host

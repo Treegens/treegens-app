@@ -173,6 +173,7 @@ test('the address of a caller is the one our proxy saw, not one the caller typed
     delete process.env.TRUSTED_PROXY_HOPS; // the default: one proxy of ours in front
     assert.equal(clientIp(req('198.51.100.7')), '198.51.100.7');
     assert.equal(clientIp(req('6.6.6.6, 198.51.100.7')), '198.51.100.7', 'what the caller put in front is ignored');
+    assert.equal(clientIp(new Request('http://test.local/api/me', { headers: { 'x-real-ip': '6.6.6.6' } })), 'unknown', 'and no other header is believed');
     process.env.TRUSTED_PROXY_HOPS = '2';
     assert.equal(clientIp(req('6.6.6.6, 198.51.100.7, 10.0.0.1')), '198.51.100.7');
     assert.equal(clientIp(req('198.51.100.7')), '198.51.100.7', 'a shorter list than expected still gives an entry a proxy wrote');
@@ -383,6 +384,109 @@ test('API keys are switched off while an account is being closed, and work again
   assert.equal(off.status, 403);
   assert.match(off.data.error, /The person who created this API key is closing their login/);
   assert.equal((await api.get('/envelopes')).status, 200, 'the rest of the team is not affected');
+});
+
+test('a member who closes their own login takes their API keys along, and the team is told as when an admin removes someone', async () => {
+  const password = 'correct horse battery';
+  const owner = await signUp('Tia Lead', 'tia.lead@example.com');
+  await join(owner, 'Sec Admin', 'sec.admin@example.com', 'admin');
+  await join(owner, 'Plain Member', 'plain.member@example.com');
+  const admins = ['tia.lead@example.com', 'sec.admin@example.com'];
+  const keyMail = (to: string) => mailTo(to).filter((m) => /API keys? /.test(m.subject));
+  const listed = async (name: string) => (await owner.get('/api-keys')).data.keys.find((k: any) => k.name === name);
+
+  // Lea has a workspace of her own with a key in it, and is a member of Tia's team with another key.
+  const lea = await signUp('Lea Ver', 'lea.ver@example.com');
+  await newKey(lea, { name: 'Own script' });
+  assert.equal((await owner.post('/account/invites', { email: 'lea.ver@example.com' })).status, 200);
+  assert.equal((await lea.post('/invites/accept', { token: db.get("SELECT token FROM invites WHERE email='lea.ver@example.com'").token })).status, 200);
+  const key = await newKey(lea, { name: 'Nightly sync' });
+  assert.equal((await withKey(key).get('/envelopes')).status, 200);
+
+  // Before she closes, she is shown which keys go off with her login, and which of them a team depends on.
+  const preview = (await lea.get('/me/delete')).data;
+  assert.deepEqual(preview.keys.map((k: any) => [k.name, k.account, k.team]), [['Own script', "Lea's workspace", false], ['Nightly sync', "Tia's workspace", true]]);
+  assert.ok(!JSON.stringify(preview).includes(key), 'never the key itself');
+
+  // She closes her login, with the usual days to change her mind. The team's integration stops at that moment.
+  const closed = (await lea.post('/me/delete', { password })).data;
+  assert.equal(closed.closed, 'scheduled');
+  const until = closed.deletes_at.slice(0, 10);
+  assert.equal((await withKey(key).get('/envelopes')).status, 403);
+  // Every admin of the team is told which key, why, and until when it can come back. A plain member is not.
+  for (const to of admins) {
+    const m = keyMail(to).at(-1);
+    assert.ok(m, `nobody told ${to} that a key of the team went off`);
+    assert.equal(m.subject, "An API key of Tia's workspace is switched off: Lea Ver is closing their login");
+    assert.ok(m.html.includes('Nightly sync') && m.html.includes(`${key.slice(0, 10)}...`), 'the key is named, with the part of it an admin can see in the list');
+    assert.ok(m.html.includes(until), 'and the day it stops for good');
+    assert.ok(!m.html.includes('Own script'), 'a key of her own workspace is not the team\'s business');
+    assert.ok(!m.html.includes(key), 'never the key itself');
+  }
+  assert.equal(keyMail('plain.member@example.com').length, 0);
+  const own = mailTo('lea.ver@example.com').at(-1)!;
+  assert.match(own.subject, /account is closing/);
+  assert.ok(own.html.includes('Nightly sync') && own.html.includes('Own script'), 'her own email names every key that went off');
+  assert.match(own.html, /admins of that team have been told/);
+  // The admins' list says the same, so nobody has to remember the email.
+  assert.deepEqual([(await listed('Nightly sync')).closing, (await listed('Nightly sync')).stopped_at], [closed.deletes_at, null]);
+
+  // She signs in again in time: the key works again, and the admins hear that too.
+  assert.equal((await lea.post('/auth/login', { email: 'lea.ver@example.com', password })).data.restored, true);
+  assert.equal((await withKey(key).get('/envelopes')).status, 200);
+  for (const to of admins) assert.equal(keyMail(to).at(-1)!.subject, "An API key of Tia's workspace works again: Lea Ver kept their login");
+  assert.equal((await listed('Nightly sync')).closing, null);
+
+  // She closes again and the days run out. The key is not wiped from the team's list: it is stopped, it still says
+  // whose it was, and what it answers is what happened, not "this key is not known here".
+  await lea.post('/me/delete', { password });
+  db.run("UPDATE users SET closing_at=? WHERE email='lea.ver@example.com'", new Date(Date.now() - 1000).toISOString());
+  assert.ok((await cron.tick()).purged >= 1);
+  assert.equal(db.get("SELECT COUNT(*) n FROM users WHERE email='lea.ver@example.com'").n, 0);
+  const gone = await withKey(key).get('/envelopes');
+  assert.equal(gone.status, 401);
+  assert.match(gone.data.error, /stopped working on \d{4}-\d\d-\d\d because the person who created it is no longer in the account/);
+  const stopped = await listed('Nightly sync');
+  assert.ok(stopped?.stopped_at, 'the key is still on the admins\' list, as stopped');
+  assert.deepEqual([stopped.owner_name, stopped.closing], ['Lea Ver', null]);
+  assert.deepEqual(keyMail('tia.lead@example.com').map((m) => m.subject.replace("An API key of Tia's workspace ", '')),
+    ['is switched off: Lea Ver is closing their login', 'works again: Lea Ver kept their login', 'is switched off: Lea Ver is closing their login', 'stopped working: Lea Ver closed their login']);
+  assert.ok(keyMail('sec.admin@example.com').at(-1)!.html.includes('Nightly sync'));
+  assert.equal((await owner.call('DELETE', `/api-keys/${stopped.id}`)).status, 200, 'an admin can clear it from the list');
+
+  // Deleting a login on the spot is the same, without the days in between.
+  const ned = await join(owner, 'Ned Now', 'ned.now@example.com', 'admin');
+  const nedKey = await newKey(ned, { name: 'Provisioning', scope: 'admin' });
+  await newKey(ned, { name: 'Reports feed' });
+  assert.equal((await ned.post('/me/delete', { password, now: true })).data.closed, 'now');
+  const dead = await withKey(nedKey).get('/envelopes');
+  assert.equal(dead.status, 401);
+  assert.match(dead.data.error, /no longer in the account/);
+  for (const to of admins) {
+    const m = keyMail(to).at(-1)!;
+    assert.equal(m.subject, "2 API keys of Tia's workspace stopped working: Ned Now closed their login");
+    assert.ok(m.html.includes('Provisioning') && m.html.includes('Reports feed') && !m.html.includes(nedKey));
+  }
+  assert.ok(mailTo('ned.now@example.com').at(-1)!.html.includes('Provisioning'), 'the person is told which keys went with the login');
+  assert.deepEqual([(await listed('Provisioning')).owner_name, !!(await listed('Provisioning')).stopped_at, !!(await listed('Reports feed')).stopped_at], ['Ned Now', true, true]);
+
+  // Told once: someone an admin removes while their login is closing is not announced a second time by the timer.
+  const rem = await join(owner, 'Rem Oved', 'rem.oved@example.com');
+  await newKey(rem, { name: 'Zap' });
+  const remId = (await rem.get('/me')).data.user.id;
+  await rem.post('/me/delete', { password });
+  assert.deepEqual((await owner.call('DELETE', `/account/members/${remId}`)).data.keys_stopped.map((k: any) => k.name), ['Zap']);
+  const told = keyMail('tia.lead@example.com').length;
+  db.run("UPDATE users SET closing_at=? WHERE email='rem.oved@example.com'", new Date(Date.now() - 1000).toISOString());
+  assert.ok((await cron.tick()).purged >= 1);
+  assert.equal(keyMail('tia.lead@example.com').length, told);
+  assert.equal((await listed('Zap')).owner_name, 'Rem Oved', 'the name stays on the stopped key after the login is gone');
+
+  // And someone without keys closes their login without a word about keys to anybody.
+  const quiet = await join(owner, 'No Keys', 'nokeys.closing@example.com');
+  await quiet.post('/me/delete', { password });
+  assert.equal(keyMail('tia.lead@example.com').length, told);
+  assert.ok(!/API key/.test(mailTo('nokeys.closing@example.com').at(-1)!.html));
 });
 
 // ---- 3. Webhooks ---------------------------------------------------------------------------------------------

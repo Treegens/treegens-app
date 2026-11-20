@@ -7,5 +7,5 @@ import { purgeClosedAccounts } from './routes-trust.ts';
 // nudge, free codes that were switched off, and removing accounts whose closing grace period has passed.
 export async function tick() {
   const r = await cronTick();
-  return { ...r, renewals: await renewalReminders(), retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: purgeClosedAccounts() };
+  return { ...r, renewals: await renewalReminders(), retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: await purgeClosedAccounts() };
 }

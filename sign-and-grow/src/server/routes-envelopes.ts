@@ -8,8 +8,11 @@ import { creditsEnabled, available, isChargeable } from './credits.ts';
 import {
   loadEnvelope, publicEnvelope, createEnvelope, saveDraft, copyEnvelope, sendEnvelope, voidEnvelope, remindEnvelope,
   correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl, outOfSignatures,
-  advance, type Actor,
+  advance, assertMayEmail, type Actor,
 } from './envelopes.ts';
+import { hmac, safeEqual } from './util.ts';
+import { cookie, readCookie } from './auth.ts';
+import { powerformIdleHours, POWERFORM_OPEN_STARTS } from '../lib/policy.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -129,7 +132,13 @@ route('POST', '/envelopes', async (c) => {
     eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: c.user.id, kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
   } else {
     eid = createEnvelope(c.account, c.user.id, kind, b);
-    if (b.documents || b.recipients || b.fields) saveDraft(loadEnvelope(eid), b, c.account.id);
+    try {
+      if (b.documents || b.recipients || b.fields) saveDraft(loadEnvelope(eid), b, c.account.id);
+    } catch (e) {
+      // A request that is turned down (a field for a recipient who is not on it, say) leaves no empty draft behind.
+      run('DELETE FROM envelopes WHERE id=?', eid);
+      throw e;
+    }
   }
   // The key row goes when its envelope goes (the database deletes it with the envelope), so a key never points at
   // nothing. REPLACE covers the one case left: a key whose envelope now belongs to somebody else.
@@ -169,8 +178,10 @@ route('GET', '/envelopes/:id', (c) => {
 route('PUT', '/envelopes/:id', async (c) => {
   const b = await c.body();
   const e = mine(c, c.params.id);
+  // A body that carries the edit_version its sender loaded is refused with 409 when someone has saved since, so a
+  // save from an older copy never wipes a colleague's work. A body without it is saved as it always was.
   if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, b, c.account.id, c.actor);
-  else saveDraft(e, b, c.account.id);
+  else saveDraft(e, b, c.account.id, c.actor);
   return { envelope: publicEnvelope(loadEnvelope(e.id)) };
 });
 
@@ -330,11 +341,15 @@ route('POST', '/bulk', async (c) => {
       if (!v || !str(v.name).trim() || !isEmail(str(v.email).trim())) throw bad(`Row ${i + 1}: "${r.role_name || 'Recipient'}" needs a name and a valid email.`);
     }
   });
+  // A pause, the fake-notice filter and the daily limit refuse the whole batch before anything is written, instead of
+  // failing it row by row. Every address in every row counts as a person emailed.
+  assertMayEmail({ ...tpl, sender_id: c.user.id }, [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))].filter(Boolean));
   // Check the whole batch against the balance first, so it never stops half way through.
   if (creditsEnabled()) {
     const perRow = tpl.recipients.filter((r: any) => isChargeable({ role: r.role, email: r.email || 'someone-else' }, c.user.email)).length;
     const have = available(c.account.id);
-    if (perRow * rows.length > have) throw bad(outOfSignatures(c.account, perRow * rows.length, have), 402);
+    // A batch that needs none (approvals, viewers, copies) goes out whatever the balance.
+    if (perRow > 0 && perRow * rows.length > have) throw bad(outOfSignatures(c.account, perRow * rows.length, have), 402);
   }
   // The batch and every one of its rows are written down together before anything is sent, so the record always
   // says what was asked for and how far it got. Nothing is waited for between the key lookup above and this.
@@ -364,22 +379,37 @@ route('GET', '/bulk/:id', (c) => {
     .map((r) => ({ position: r.position, status: r.sent_at ? 'sent' : r.error ? 'failed' : 'pending', envelope_id: r.envelope_id, sent_at: r.sent_at, error: r.error, row: r.fill ? JSON.parse(r.fill) : null }));
   return { batch: b, envelopes, rows, sending: sendingNow.has(b.id) };
 });
+// The remind and the void below work through the envelopes that are out for signature one at a time, and each one's
+// emails take a while. In that while a signer can finish or decline one further down the list, or a second call can
+// get to it first. So every envelope is read again when its turn comes, and one that is no longer out is passed
+// over. Stopping at it would leave the rest of the list untouched with part of it already emailed. Nothing is
+// waited for between that look and the change, so no envelope is acted on from a copy that is out of date.
 route('POST', '/bulk/:id/remind', async (c) => {
   const b = batch(c, c.params.id);
   let reminded = 0;
-  for (const row of all("SELECT id FROM envelopes WHERE bulk_id=? AND status='sent'", b.id)) reminded += await remindEnvelope(loadEnvelope(row.id), c.actor);
+  for (const row of all("SELECT id FROM envelopes WHERE bulk_id=? AND status='sent'", b.id)) {
+    const e = loadEnvelope(row.id);
+    if (e?.status === 'sent') reminded += await remindEnvelope(e, c.actor);
+  }
   return { reminded };
 });
 route('POST', '/bulk/:id/void', async (c) => {
   const b = batch(c, c.params.id);
   const reason = str((await c.body()).reason, 500);
   if (!reason.trim()) throw bad('Give a reason for voiding. Recipients will see it.');
+  // skipped: envelopes that were open when the call began and had closed by their turn. They stay as they are.
   let voided = 0;
+  let skipped = 0;
   for (const row of all("SELECT id FROM envelopes WHERE bulk_id=? AND status='sent'", b.id)) {
-    await voidEnvelope(loadEnvelope(row.id), reason, c.actor);
+    const e = loadEnvelope(row.id);
+    if (e?.status !== 'sent') {
+      skipped++;
+      continue;
+    }
+    await voidEnvelope(e, reason, c.actor);
     voided++;
   }
-  return { voided };
+  return { voided, skipped };
 });
 
 // ---- PowerForms: a public link anyone can use to sign a template ---------------------------
@@ -415,8 +445,14 @@ route('GET', '/public/powerforms/:slug', (c) => {
   if (!p) throw bad('This form is not available.', 404);
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', p.account_id);
   const { tpl, open } = powerformTemplate(p.template_id);
-  return { name: p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: a };
+  // Said before anyone types their name and address into a form that cannot take them.
+  return { name: p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: a, closed: formClosed(p, tpl) };
 }, 'public');
+
+// Why an owner cannot send right now (a pause, an address that was never confirmed) is the owner's business. A
+// visitor is told only that the form is closed for now, and nothing of theirs is kept.
+const FORM_CLOSED = 'This form cannot take new signatures right now. Please contact whoever gave you the link.';
+const formClosed = (p: any, tpl: any): boolean => !get('SELECT email_verified v FROM users WHERE id=?', tpl.sender_id)?.v || !!get('SELECT suspended_at s FROM accounts WHERE id=?', p.account_id)?.s;
 
 route('POST', '/public/powerforms/:slug/start', async (c) => {
   rateLimit(`pf:${c.ip}`, 20, 3600_000);
@@ -427,12 +463,28 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   const email = str(b.email, 254).trim();
   if (!name || !isEmail(email)) throw bad('Enter your name and a valid email address.');
   const { tpl, open } = powerformTemplate(p.template_id);
-  // Opening the form twice must not create two envelopes: pick up the one this person already started.
-  const again = get("SELECT r.token FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.powerform_id=? AND e.status='sent' AND r.email=? AND r.status IN ('sent','viewed') ORDER BY e.sent_at DESC LIMIT 1", p.id, email);
-  if (again) return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
+  if (formClosed(p, tpl)) throw bad(FORM_CLOSED, 503);
+  const owner = get('SELECT email FROM users WHERE id=?', tpl.sender_id);
+  // Opening the form twice must not create two envelopes. But an email address proves nothing, because anyone can
+  // type somebody else's. So an unfinished start is only handed back to the browser that made it, which has held a
+  // cookie since then, and only when the same name and address are typed again. Everyone else, and every other
+  // name at a shared address, gets a fresh, empty document.
+  const jar = `ts_pf_${p.id}`;
+  const [started, seal] = (readCookie(c.req, jar) || '').split('.');
+  if (started && seal && safeEqual(seal, hmac(`pf:${p.id}:${started}`))) {
+    const again = get("SELECT r.token FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.id=? AND e.powerform_id=? AND e.status='sent' AND r.status IN ('sent','viewed') AND r.email=? AND lower(r.name)=lower(?)", started, p.id, email, name);
+    if (again) return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
+  }
+  // Each start holds one of the owner's signatures until it is finished or cleared by the timer, so one device
+  // address may only have a few unfinished ones on a form at a time. An address we cannot tell apart is not counted.
+  if (c.ip !== 'unknown') {
+    const unfinished = get("SELECT COUNT(*) n FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=? AND e.form_ip=? AND e.status='sent' AND r.status IN ('pending','sent','viewed')", p.id, c.ip).n;
+    if (unfinished >= POWERFORM_OPEN_STARTS)
+      throw bad(`This form has been started ${POWERFORM_OPEN_STARTS} times from your internet connection and not finished yet. Finish one of those first: the link is in the email we sent each time. Ones that stay unfinished are cleared after ${powerformIdleHours()} hours, and then you can start again here.`, 429);
+  }
   // A public form uses one of its owner's signatures for each person who signs. When there are none left the form
   // says so politely, and the owner is told (once a day at most) instead of finding out from a customer.
-  if (creditsEnabled() && available(p.account_id) < 1) {
+  if (creditsEnabled() && isChargeable({ role: open.role, email }, get('SELECT email FROM users WHERE id=?', tpl.sender_id)?.email || '') && available(p.account_id) < 1) {
     if (!p.alerted_at || Date.parse(p.alerted_at) < Date.now() - 864e5) {
       run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
       const owner = get('SELECT email FROM users WHERE id=?', tpl.sender_id);
@@ -441,9 +493,28 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     throw bad('This form cannot take new signatures right now. Please try again a little later, or contact the people who sent you here.', 503);
   }
   const eid = copyEnvelope(tpl, { accountId: p.account_id, senderId: tpl.sender_id, kind: 'envelope', subject: p.name, fill: { [open.id]: { name, email } }, extra: { powerform_id: p.id } });
-  await sendEnvelope(eid, { name: `${name} <${email}> via PowerForm`, ip: c.ip, ua: c.ua });
+  // Which recipient is the visitor and which device address started it, so a later visit can be matched to this
+  // start by more than an email address, and so unfinished starts can be counted and cleared.
+  const visitor = get('SELECT id FROM recipients WHERE envelope_id=? AND position=?', eid, open.position);
+  run('UPDATE envelopes SET form_recipient_id=?, form_ip=? WHERE id=?', visitor?.id ?? null, c.ip, eid);
+  try {
+    await sendEnvelope(eid, { name: `${name} <${email}> via PowerForm`, ip: c.ip, ua: c.ua });
+  } catch (err) {
+    // Whatever stopped the send (the owner's daily limit, a rule about what may be sent), no stray draft with the
+    // visitor's name and address is left behind, the visitor gets the neutral words, and the owner gets the real
+    // reason (once a day at most).
+    run('DELETE FROM envelopes WHERE id=?', eid);
+    if (!(err instanceof HttpError)) throw err;
+    if (!p.alerted_at || Date.parse(p.alerted_at) < Date.now() - 864e5) {
+      run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
+      await sendMail({ to: owner.email, subject: `Your form "${p.name}" could not take a signature`, heading: 'Someone tried to sign your form and could not', lines: [`What stopped it: ${err.message}`, 'They were told only that the form cannot take new signatures right now, and nothing of theirs was kept.'], cta: { label: 'Open your forms', url: `${baseUrl()}/app/powerforms` } });
+    }
+    throw bad(FORM_CLOSED, 503);
+  }
   run('UPDATE powerforms SET uses=uses+1 WHERE id=?', p.id);
-  const me = get("SELECT token, status FROM recipients WHERE envelope_id=? AND email=? AND status != 'pending' LIMIT 1", eid, email);
+  // The cookie that lets this browser, and nobody else, pick this start up again. It lasts as long as the start can.
+  c.cookies.push(cookie(jar, `${eid}.${hmac(`pf:${p.id}:${eid}`)}`, Math.ceil(powerformIdleHours() * 3600), c.secure));
+  const me = visitor && get("SELECT token FROM recipients WHERE id=? AND status != 'pending'", visitor.id);
   // If someone else signs first in the routing order, the signer simply gets an email when it is their turn.
   return me ? { url: `${baseUrl()}/sign/${me.token}` } : { queued: true };
 }, 'public');

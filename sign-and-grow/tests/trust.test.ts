@@ -61,12 +61,22 @@ test('a sent envelope can be corrected without voiding it', async () => {
   assert.notEqual((await jo.put(`/envelopes/${e.id}`, swapDoc)).status, 200, 'cannot pull the document out from under a signature');
   assert.equal(((await full(jo, e.id)).envelope.fields.find((f: any) => f.type === 'text').value), 'filled in', 'a rejected correction changes nothing');
 
+  // Taking Dee and her field off the pages Ada signed changes what is printed on them. That is refused, unless the
+  // sender chooses to ask Ada to sign again. What does not touch the pages can still change for the others.
   e = (await full(jo, e.id)).envelope;
   const ok = asBody(e);
   ok.recipients = ok.recipients.filter((x: any) => x.email !== 'dee@example.com');
   ok.fields = ok.fields.filter((f: any) => ok.recipients.some((x: any) => x.id === f.recipient_id));
-  assert.equal((await jo.put(`/envelopes/${e.id}`, ok)).status, 200, 'the remaining recipients can still be changed');
+  const asked = await jo.put(`/envelopes/${e.id}`, ok);
+  assert.equal(asked.status, 409);
+  assert.equal(asked.data.code, 'sign_again');
+  const renamed = asBody(e);
+  renamed.recipients = renamed.recipients.map((x: any) => (x.email === 'dee@example.com' ? { ...x, name: 'Dee Newer' } : x));
+  assert.equal((await jo.put(`/envelopes/${e.id}`, renamed)).status, 200, 'the remaining recipients can still be changed');
+  assert.equal((await jo.put(`/envelopes/${e.id}`, { ...ok, resign: true })).status, 200, 'and the pages too, once the sender asks Ada to sign again');
   assert.ok(mailTo('dee@example.com').some((m) => m.subject.startsWith('No longer needed')));
+  assert.ok(mailTo('ada@example.com').at(-1)!.subject.startsWith('Changed after you finished:'));
+  assert.equal((await signAll(e.id, 'ada@example.com')).status, 200, 'Ada signs again');
 
   // Ben (now benjamin) signs and the corrected envelope completes normally.
   const ben = new Client();
@@ -324,8 +334,11 @@ test('public forms do not multiply envelopes, and dates follow the chosen format
   assert.equal((await jo.put(`/envelopes/${tplE.id}`, { ...body, date_format: 'DD/MM/YYYY' })).status, 200);
   await jo.post('/powerforms', { template_id: tplE.id, name: 'Sign the waiver' });
   const slug = (await jo.get('/powerforms')).data.powerforms[0].slug;
-  const a = await new Client().post(`/public/powerforms/${slug}/start`, { name: 'Walk In', email: 'walk@example.com' });
-  const b = await new Client().post(`/public/powerforms/${slug}/start`, { name: 'Walk In', email: 'walk@example.com' });
+  // The same person is whoever comes back in the same browser. An email address alone proves nothing, so someone
+  // else typing it gets a document of their own (tests/abuse.test.ts covers that).
+  const walkIn = new Client();
+  const a = await walkIn.post(`/public/powerforms/${slug}/start`, { name: 'Walk In', email: 'walk@example.com' });
+  const b = await walkIn.post(`/public/powerforms/${slug}/start`, { name: 'Walk In', email: 'walk@example.com' });
   assert.equal(a.data.url, b.data.url, 'the same person gets the same envelope back');
   assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE powerform_id IS NOT NULL').n, 1);
 
@@ -423,12 +436,18 @@ test('an editor opened earlier can never undo what a signer did', async () => {
   assert.equal((await jo.put(`/envelopes/${e0.id}`, stale)).status, 200);
   assert.equal((await full(jo, e0.id)).envelope.fields.find((f: any) => f.id === textId).value, '400 seedlings', 'what Ada typed is still there');
 
-  // Ada finishes. The same old editor state is saved again: it must not be refused just for being out of date,
-  // and it must not change Ada.
-  await ada.post(`/sign/${tok}/complete`, { values: { [textId]: '400 seedlings', [v.fields.find((f: any) => f.type === 'signature').id]: '1' }, signature_png: PNG });
-  stale.recipients.find((r: any) => r.email === 'ada@example.com').name = 'Someone Else';
-  stale.date_format = 'DD/MM/YYYY';
+  // Ada's page loads the corrected document and she finishes. The same old editor state is saved again: it must not
+  // be refused just for being out of date, and it must not change what Ada entered.
+  await ada.get(`/sign/${tok}`);
+  assert.equal((await ada.post(`/sign/${tok}/complete`, { values: { [textId]: '400 seedlings', [v.fields.find((f: any) => f.type === 'signature').id]: '1' }, signature_png: PNG })).status, 200);
   assert.equal((await jo.put(`/envelopes/${e0.id}`, stale)).status, 200);
+  // A change to Ada herself, or to how dates are printed, is another matter now that she has signed. It is refused
+  // out loud, never ignored, and changes nothing.
+  const adaRow = stale.recipients.find((r: any) => r.email === 'ada@example.com');
+  adaRow.name = 'Someone Else';
+  assert.equal((await jo.put(`/envelopes/${e0.id}`, stale)).status, 409);
+  adaRow.name = 'Ada Signer';
+  assert.equal((await jo.put(`/envelopes/${e0.id}`, { ...stale, date_format: 'DD/MM/YYYY' })).status, 409);
   const now = (await full(jo, e0.id)).envelope;
   assert.equal(now.recipients.find((r: any) => r.email === 'ada@example.com').name, 'Ada Signer');
   assert.equal(now.fields.find((f: any) => f.id === textId).value, '400 seedlings');

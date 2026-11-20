@@ -1,9 +1,9 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, COLORS, Modal, newId, toast } from './ui';
+import { api, COLORS, Modal, fmtDate, newId, toast } from './ui';
 import { useHistory } from './editor/history';
-import { finished, fingerprint, freshValues, outcomes, rebase, restoreLocked } from './editor/changes';
+import { finished, fingerprint, freshValues, outcomes, rebase, restoreLocked, signsAgain } from './editor/changes';
 import { precheck, uploadFile } from './editor/upload';
 import { StepAdd } from './editor/StepAdd';
 import { StepFields } from './editor/StepFields';
@@ -33,6 +33,12 @@ export function Editor({ id }: { id: string }) {
   const [conflict, setConflict] = useState<string[]>([]);
   const [closed, setClosed] = useState('');
   const [ask, setAsk] = useState<Confirm | null>(null);
+  // Set when someone else saved this envelope after it was opened here, so saving now would wipe their work.
+  const [stale, setStale] = useState<{ by: string; at: string } | null>(null);
+  // The edit_version this editor's copy is based on. It goes with every save, and the server refuses a save that
+  // comes from an older copy than the one it holds.
+  const loaded = useRef<number | null>(null);
+  const saving = useRef<Promise<any>>(Promise.resolve());
   const latest = useRef<any>(null);
   const live = useRef<{ docs: any[]; rcps: any[] }>({ docs: [], rcps: [] });
   const serverCopy = useRef<any>(null);
@@ -52,6 +58,9 @@ export function Editor({ id }: { id: string }) {
         toast(`This envelope is ${e.status}, so it can no longer be edited. Clone it to send a new version.`);
         return router.replace(`/app/envelopes/${id}`);
       }
+      loaded.current = e.edit_version ?? null;
+      leaving.current = false;
+      setStale(null);
       setEnv(e);
       setBase(e);
       setDocs(e.documents);
@@ -83,22 +92,33 @@ export function Editor({ id }: { id: string }) {
   live.current = { docs, rcps };
 
   const dirty = useCallback(() => setState('dirty'), []);
-  const save = useCallback(async () => {
-    if (!latest.current) return;
-    setState('saving');
-    try {
-      await api(`/envelopes/${id}`, { method: 'PUT', body: latest.current });
-      setStuck(null);
-      setState((s) => (s === 'saving' ? 'saved' : s));
-    } catch (e: any) {
-      // Connection trouble and server hiccups are retried quietly. Anything else waits for the next change.
-      setStuck((p) => ({ message: friendly(e), retry: !e?.status || e.status >= 500, tries: (p?.tries || 0) + 1 }));
-      setState((s) => (s === 'saving' ? 'stuck' : s));
-      throw e;
-    }
+  const save = useCallback(() => {
+    // One save at a time, each sent with the version the one before it came back with. Two at once would look to
+    // the server like two editors, and the second would be turned down as out of date.
+    const one = async () => {
+      if (!latest.current) return;
+      setState('saving');
+      try {
+        const r = await api(`/envelopes/${id}`, { method: 'PUT', body: { ...latest.current, ...(loaded.current != null ? { edit_version: loaded.current } : {}) } });
+        loaded.current = r.envelope?.edit_version ?? loaded.current;
+        setStuck(null);
+        setState((s) => (s === 'saving' ? 'saved' : s));
+      } catch (e: any) {
+        // Someone else saved since this copy was loaded. Nothing was written over their work: ask what to do.
+        if (e?.code === 'stale') setStale({ by: e.data?.edited_by || 'Someone', at: e.data?.edited_at || '' });
+        // Connection trouble and server hiccups are retried quietly. Anything else waits for the next change.
+        setStuck((p) => ({ message: friendly(e), retry: !e?.status || e.status >= 500, tries: (p?.tries || 0) + 1 }));
+        setState((s) => (s === 'saving' ? 'stuck' : s));
+        throw e;
+      }
+    };
+    const next = saving.current.catch(() => {}).then(one);
+    saving.current = next;
+    return next;
   }, [id]);
   useEffect(() => {
-    if (!env || correcting) return;
+    // Nothing is saved by itself while the question about someone else's newer version is open.
+    if (!env || correcting || stale) return;
     if (state === 'dirty') {
       const t = setTimeout(() => save().catch(() => {}), 1200);
       return () => clearTimeout(t);
@@ -107,14 +127,19 @@ export function Editor({ id }: { id: string }) {
       const t = setTimeout(() => save().catch(() => {}), Math.min(30000, 2000 * 2 ** stuck.tries));
       return () => clearTimeout(t);
     }
-  }, [state, stuck, env, docs, rcps, fields.value, save, correcting]);
+  }, [state, stuck, env, docs, rcps, fields.value, save, correcting, stale]);
 
-  // ---- Locks: what finished people signed can no longer change -------------------------------------------------
+  // ---- People who have finished ----------------------------------------------------------------------------------
+  // Their own row and their own fields stay as they are in this editor. Everything else on the pages (a file, a
+  // note, a field for someone who has not signed yet) can still be changed, but saving such a change means asking
+  // the people who finished to sign again, and that is asked out loud before anything is saved.
 
   const lockedIds = useMemo(() => new Set<string>(correcting && base ? finished(base.recipients).map((r: any) => r.id) : []), [correcting, base]);
   const anyLocked = lockedIds.size > 0;
   const lockedNames = listNames(rcps.filter((r) => lockedIds.has(r.id)).map(who));
-  const isLockedField = useCallback((f: any) => anyLocked && (!f.recipient_id || lockedIds.has(f.recipient_id)), [anyLocked, lockedIds]);
+  // The fields a finished person signed stay put in this editor. A field added for them here is new, and free to move.
+  const signedFields = useMemo(() => new Set<string>(correcting && base ? base.fields.filter((f: any) => f.recipient_id && lockedIds.has(f.recipient_id)).map((f: any) => f.id) : []), [correcting, base, lockedIds]);
+  const isLockedField = useCallback((f: any) => signedFields.has(f.id), [signedFields]);
 
   // ---- Changes -------------------------------------------------------------------------------------------------
 
@@ -235,12 +260,17 @@ export function Editor({ id }: { id: string }) {
       if (isTpl && !r.role_name?.trim() && !r.email) p.push('Give every open recipient a role name, such as "Client".');
       if (isTpl && r.email && !validEmail(r.email)) p.push(`${name} needs a valid email, or leave it empty to fill in later.`);
       if (SIGNS(r) && !fields.value.some((f) => f.recipient_id === r.id)) p.push(`${name} has no fields to sign yet.`);
+      // An access code that is set or changed needs a few characters, or it is guessed in a minute. The server
+      // refuses a shorter one too. A code that was already on an envelope before this rule may stay as it is.
+      const ac = (r.access_code || '').trim();
+      const was = correcting && base ? base.recipients.find((x: any) => x.id === r.id)?.access_code : null;
+      if (ac && ac.length < 4 && ac !== was) p.push(`The access code for ${name} needs at least 4 characters. Make it longer, or leave it empty for no code.`);
     }
     if (!isTpl && rcps.length > 0 && !rcps.some((r) => r.role !== 'cc')) p.push('Add at least one recipient who signs, approves or views.');
     return [...new Set(p)];
-  }, [docs, rcps, fields.value, isTpl]);
+  }, [docs, rcps, fields.value, isTpl, correcting, base]);
 
-  const mine = { ordered: env?.ordered, documents: docs, recipients: rcps, fields: fields.value };
+  const mine = { ordered: env?.ordered, date_format: env?.date_format, documents: docs, recipients: rcps, fields: fields.value };
   const changed = useMemo(() => !!base && correcting && fingerprint(env, mine) !== fingerprint(base, base), [base, correcting, env, docs, rcps, fields.value]); // eslint-disable-line react-hooks/exhaustive-deps
   const result = useMemo(() => (correcting && step === 3 ? outcomes(base, mine) : null), [correcting, step, base, env, docs, rcps, fields.value]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -333,16 +363,35 @@ export function Editor({ id }: { id: string }) {
     return { recipients: merged.recipients, fields: merged.fields, ok: !merged.conflict.length };
   }
 
-  async function saveCorrection() {
+  // The plain question behind every change that touches what someone already signed. Nothing is saved until the
+  // sender has answered it.
+  function askSignAgain(names: string[]) {
+    const all = listNames(names.length ? names : ['Someone']);
+    const signedAll = names.every((n) => SIGNS(rcps.find((r) => who(r) === n) || { role: 'signer' }));
+    confirm({
+      title: `${all} already ${signedAll ? 'signed' : 'finished'}`,
+      body: `Saving this means ${all} ${names.length > 1 ? 'have' : 'has'} to ${signedAll ? 'sign' : 'look at the document and finish'} again. They get an email that says what changed. What they ${signedAll ? 'signed' : 'did'} the first time stays on record, and it is not counted as another signature.`,
+      yes: `Ask ${all} to ${signedAll ? 'sign' : 'finish'} again`, no: 'Go back', onYes: () => saveCorrection(true),
+    });
+  }
+
+  // `again` is the sender's answer to that question: save, and ask the people who finished to sign again.
+  async function saveCorrection(again = false) {
     setBusy(true);
     setError('');
     try {
       const cur = await catchUp();
-      if (!cur.ok) return;
-      await api(`/envelopes/${id}`, { method: 'PUT', body: { ...body(cur.recipients, cur.fields), expire_days: undefined } });
-      toast('Changes saved. Nobody had to start again.');
+      if (!cur.ok && !again) return;
+      // Asked here when this editor can already see it. The server asks the same thing (409) when it cannot.
+      const now = serverCopy.current;
+      const names = again || !now ? [] : signsAgain(now, { ordered: env.ordered, date_format: env.date_format, documents: docs, recipients: cur.recipients, fields: cur.fields } as any).map(who);
+      if (names.length) return askSignAgain(names);
+      await api(`/envelopes/${id}`, { method: 'PUT', body: { ...body(cur.recipients, cur.fields), expire_days: undefined, ...(again ? { resign: true } : {}), ...(loaded.current != null ? { edit_version: loaded.current } : {}) } });
+      toast(again ? 'Changes saved. The people who had finished are asked to sign again.' : 'Changes saved. Nobody had to start again.');
       leave(`/app/envelopes/${id}`);
     } catch (e: any) {
+      if (e?.code === 'sign_again') return askSignAgain(e.data?.sign_again || []);
+      if (e?.code === 'stale') return setStale({ by: e.data?.edited_by || 'Someone', at: e.data?.edited_at || '' });
       setError(friendly(e));
       // The server turned it down because someone finished in the last moment. Find out who, so it can be put right.
       if (e?.status === 409) await catchUp().then((c) => !c.ok && setError('')).catch(() => {});
@@ -357,9 +406,29 @@ export function Editor({ id }: { id: string }) {
     setDocs(next.documents);
     setRcps(next.recipients);
     fields.reset(next.fields);
+    setEnv((e: any) => ({ ...e, date_format: serverCopy.current.date_format }));
     setConflict([]);
     setError('');
-    toast('Their part is back as they signed it.');
+    toast('The documents and fields are back as they were signed.');
+  }
+
+  // Someone else saved a newer version. Either take theirs, or keep this one as a separate copy. Nothing is lost.
+  function loadTheirs() {
+    leaving.current = true;
+    window.location.reload();
+  }
+  async function keepMineAsCopy() {
+    setBusy(true);
+    try {
+      const made = await api('/envelopes', { body: { ...body(), kind: env.kind, subject: `${env.subject || 'Untitled'} (my copy)` } });
+      toast('Your version is saved as a separate copy.');
+      setStale(null);
+      leave(`/app/${isTpl ? 'templates' : 'envelopes'}/${made.envelope.id}/edit`);
+    } catch (e) {
+      toast(friendly(e), true);
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!env) return <div className="muted center" style={{ padding: 80 }} role="status">Loading…</div>;
@@ -369,7 +438,8 @@ export function Editor({ id }: { id: string }) {
     patchEnv, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
     setFields, undo, redo, modalOpen: !!ask, go,
   };
-  const submit = correcting ? saveCorrection : send;
+  // Wrapped so a click never arrives as the answer to "ask them to sign again". Only that question says yes.
+  const submit = correcting ? () => saveCorrection() : send;
   const submitOff = busy || problems.length > 0 || !!closed || conflict.length > 0 || (correcting && !changed);
   const steps = ['Add', 'Place fields', isTpl ? 'Review' : correcting ? 'Review and save' : 'Review and send'];
   const status = correcting ? (changed ? 'Changes not saved yet' : 'No changes yet')
@@ -394,7 +464,7 @@ export function Editor({ id }: { id: string }) {
       {correcting && (
         <div className="ed-banner" role="note">
           <b>This envelope is already out.</b> Change what you need to. Nobody has to start again, and nothing changes until you save.
-          {anyLocked && <> {lockedNames} already finished, so the documents and their part are locked.</>}
+          {anyLocked && <> {lockedNames} already finished. If you change a document, a note or a field now, they have to sign again, and you are asked before anything is saved.</>}
         </div>
       )}
       {!correcting && state === 'stuck' && stuck && (
@@ -406,7 +476,26 @@ export function Editor({ id }: { id: string }) {
 
       {step === 1 && <StepAdd ed={ed} />}
       {step === 2 && <StepFields ed={ed} />}
-      {step === 3 && <StepReview ed={ed} problems={problems} busy={busy} changed={changed} error={error} conflict={conflict} closed={closed} result={result} onSubmit={submit} onRestore={restore} onDiscard={discard} />}
+      {step === 3 && <StepReview ed={ed} problems={problems} busy={busy} changed={changed} error={error} conflict={conflict} closed={closed} result={result} onSubmit={submit} onRestore={restore} onSignAgain={() => saveCorrection(true)} onDiscard={discard} />}
+
+      {stale && (
+        <Modal title={`${stale.by} saved a newer version`} onClose={() => setStale(null)}>
+          <p className="muted">
+            {stale.by} saved this {isTpl ? 'template' : correcting ? 'envelope' : 'draft'}{stale.at ? ` on ${fmtDate(stale.at, true)}` : ''}, after you opened it here. That may have been you, in another tab or window.
+            Your changes were not saved over theirs, so nothing is lost.
+          </p>
+          <p className="muted">
+            {correcting
+              ? 'Load their version to carry on from what is saved, then make your changes again. Go back if you first want to note down what you changed.'
+              : 'Load their version to carry on from what is saved, or keep what you have here as a separate copy and sort it out later.'}
+          </p>
+          <div className="actions">
+            <button type="button" className="btn" autoFocus onClick={() => setStale(null)}>Go back</button>
+            {!correcting && <button type="button" className="btn" disabled={busy} onClick={keepMineAsCopy}>Keep mine as a copy</button>}
+            <button type="button" className="btn primary" onClick={loadTheirs}>Load their version</button>
+          </div>
+        </Modal>
+      )}
 
       {ask && (
         <Modal title={ask.title} onClose={closeAsk}>

@@ -50,12 +50,15 @@ export function balance(accountId: string): number {
   return get('SELECT COALESCE(SUM(delta),0) n FROM credits WHERE account_id=?', accountId).n;
 }
 
-// Signatures held for people who have been asked to sign and have not yet finished.
+// Signatures held for people who have been asked to sign and have not yet finished. A public form holds nothing:
+// anyone can start one with a made-up address, and that must not be a way to lock up the owner's balance. A form
+// only starts while at least one signature is available, and uses one when its visitor actually signs.
 export function reserved(accountId: string): number {
   return get(
     `SELECT COUNT(*) n FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id
       WHERE e.account_id=? AND e.kind='envelope' AND e.status='sent' AND r.status IN ('pending','sent','viewed')
-        AND r.role IN ('signer','inperson') AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))`,
+        AND e.powerform_id IS NULL
+        AND (r.role = 'inperson' OR (r.role = 'signer' AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))))`,
     accountId,
   ).n;
 }
@@ -68,8 +71,10 @@ export const sameEmail = (a: any, b: any) => String(a ?? '').trim().toLowerCase(
 // so handing an envelope to another sender, or the sender changing their own address, never turns a free signature
 // into a paid one. Before that, and for requests sent before the flag existed, it is the sender's own address that
 // decides.
+// Signing in person is by definition somebody else signing on the sender's device, so it is never the sender's own
+// free signature, whatever address was typed for it.
 export const isChargeable = (r: any, senderEmail: string) =>
-  (r.role === 'signer' || r.role === 'inperson') && (r.free == null ? !sameEmail(r.email, senderEmail) : !r.free);
+  r.role === 'inperson' || (r.role === 'signer' && (r.free == null ? !sameEmail(r.email, senderEmail) : !r.free));
 
 // How many signatures an envelope still needs: its signers who have not finished, not counting the sender signing
 // their own document.

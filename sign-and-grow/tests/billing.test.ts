@@ -228,7 +228,8 @@ test('unused signatures from the latest payment are refunded on request, to the 
   const done = await pat.post('/billing/refund');
   assert.equal(done.data.refunded, '$7.00');
   assert.equal(done.data.plan_ended, true);
-  assert.deepEqual(stripe.refunds.at(-1)!.params, { charge: 'ch_p1', amount: '700' });
+  assert.equal(stripe.refunds.at(-1)!.params.charge, 'ch_p1');
+  assert.equal(stripe.refunds.at(-1)!.params.amount, '700');
   assert.equal(stripe.sub('sub_p').status, 'canceled', 'the plan was ended with the provider before any money moved');
   assert.equal((await pat.get('/billing')).data.signatures.balance, 0);
   assert.equal((await pat.get('/billing')).data.plan, 'seedling');
@@ -242,7 +243,8 @@ test('unused signatures from the latest payment are refunded on request, to the 
   assert.equal((await owner.get('/billing')).data.refund.amount, '$4.00');
   const back = await owner.post('/billing/refund');
   assert.equal(back.data.plan_ended, false);
-  assert.deepEqual(stripe.refunds.at(-1)!.params, { payment_intent: 'pi_cs_top9', amount: '400' });
+  assert.equal(stripe.refunds.at(-1)!.params.payment_intent, 'pi_cs_top9');
+  assert.equal(stripe.refunds.at(-1)!.params.amount, '400');
   assert.equal((await sig()).balance, before);
 
   // Outside the window there is no automatic refund.
@@ -295,7 +297,8 @@ test('bulk send checks the whole batch first; a public form with no signatures s
 
 test('paying but not using it: a nudge, then the renewal is stopped for them', async () => {
   await owner.post('/billing/resume');
-  db.run('UPDATE accounts SET created_at=?, cancel_at=NULL WHERE id=?', new Date(Date.now() - 120 * 864e5).toISOString(), accountId);
+  // On the plan, and quiet, for four months.
+  db.run('UPDATE accounts SET created_at=?, plan_started_at=?, cancel_at=NULL WHERE id=?', new Date(Date.now() - 120 * 864e5).toISOString(), new Date(Date.now() - 120 * 864e5).toISOString(), accountId);
   db.run('UPDATE envelopes SET sent_at=? WHERE account_id=? AND sent_at IS NOT NULL', new Date(Date.now() - 100 * 864e5).toISOString(), accountId);
   assert.equal((await cron.tick()).nudged, 1);
   assert.equal((await cron.tick()).nudged, 0);
@@ -320,12 +323,16 @@ test('back from checkout the plan is active at once; a card dispute stops all fu
   assert.equal(subjects('nina@example.com').filter((s) => s === 'Welcome to Grove').length, 1, 'the late event does not welcome them twice');
 
   await owner.post('/billing/resume');
-  stripe.charges.unshift({ id: 'ch_x', customer: 'cus_1', amount: 900, currency: 'usd' });
-  await event('charge.dispute.created', { id: 'dp_1', charge: 'ch_x' });
+  await monthly('in_disp', 'sub_2');
+  await event('charge.dispute.created', { id: 'dp_1', charge: 'ch_in_disp' });
   assert.equal(account().plan, 'seedling');
   assert.equal(stripe.sub('sub_2').status, 'canceled');
-  assert.deepEqual(stripe.disputesClosed, ['dp_1'], 'the dispute is accepted with the provider, not fought');
-  assert.match(mailTo('olive@example.com').find((m) => m.subject === 'We stopped all billing on your account')!.html, /not contesting it/);
+  assert.deepEqual(stripe.disputesClosed, ['dp_1'], 'a small dispute is accepted with the provider, not fought');
+  assert.match(mailTo('olive@example.com').find((m) => m.subject === 'A payment was disputed, so we stopped billing you')!.html, /not contesting it/);
+  // A dispute on a charge that is not one of our payments is none of our business.
+  stripe.charges.unshift({ id: 'ch_other_product', customer: 'cus_elsewhere', amount: 4900, currency: 'usd' });
+  await event('charge.dispute.created', { id: 'dp_other', charge: 'ch_other_product' });
+  assert.deepEqual(stripe.disputesClosed, ['dp_1']);
 });
 
 test('the code GROWalition makes the monthly plan free', async () => {

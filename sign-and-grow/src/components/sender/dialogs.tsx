@@ -108,8 +108,10 @@ export function VoidDialog({ title, children, confirmLabel, onClose, onVoid }: {
 }
 
 // The quick fix for one person: a typo in the name, a different address, or an access code.
-export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { envelopeId: string; recipient: { id: string; name: string; email: string; status?: string; access_code?: string | null }; onClose: () => void; onDone: () => void }) {
+export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { envelopeId: string; recipient: { id: string; name: string; email: string; status?: string; access_code?: string | null; code_frozen_at?: string | null }; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState({ name: recipient.name || '', email: recipient.email || '', access_code: recipient.access_code || '' });
+  // After too many wrong tries a code opens nothing until a different one is set here.
+  const frozen = !!recipient.access_code && !!recipient.code_frozen_at;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const newAddress = f.email.trim().toLowerCase() !== (recipient.email || '').toLowerCase();
@@ -138,7 +140,8 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
       <form onSubmit={(e) => (e.preventDefault(), save())}>
         <label className="f"><span>Name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoComplete="off" data-autofocus="" /></label>
         <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoComplete="off" /></label>
-        <label className="f"><span>Access code <span className="hint">(optional, you give it to them yourself)</span></span><input value={f.access_code} onChange={(e) => setF({ ...f, access_code: e.target.value })} autoComplete="off" /></label>
+        <label className="f"><span>Access code <span className="hint">(optional, at least 4 characters, you give it to them yourself)</span></span><input value={f.access_code} onChange={(e) => setF({ ...f, access_code: e.target.value })} autoComplete="off" /></label>
+        {frozen && <div className="notice warn" style={{ marginBottom: 12 }}><b>This code is frozen.</b> It was entered wrongly too many times, so it opens nothing now. {f.access_code.trim() === recipient.access_code ? 'Type a different code here, save, and give the new one to them yourself.' : 'Saving the new code lets them in again. Give it to them yourself.'}</div>}
         <p className="small muted" aria-live="polite">
           {waiting ? 'It is not their turn yet, so no email has gone out. They get it at the corrected address when their turn comes.'
             : newAddress ? 'Because the address changed, the old link stops working and a new email goes out to the new address.'

@@ -149,8 +149,10 @@ export function BatchView({ id }: { id: string }) {
       {voiding && (
         <VoidDialog title="Void everything still open" confirmLabel={`Void ${plural(count.open, 'envelope')}`} onClose={() => setVoiding(false)}
           onVoid={async (reason) => {
-            const { voided } = await api(`/bulk/${id}/void`, { body: { reason } });
-            toast(`${plural(voided, 'envelope')} voided. Everyone who had one has been told.`);
+            const { voided, skipped } = await api(`/bulk/${id}/void`, { body: { reason } });
+            // An envelope that someone finished or declined while the others were being voided is left alone. Say so.
+            const left = skipped ? ` ${plural(skipped, 'envelope')} ${skipped === 1 ? 'was' : 'were'} finished or closed in the meantime and ${skipped === 1 ? 'stays as it is' : 'stay as they are'}.` : '';
+            toast(voided ? `${plural(voided, 'envelope')} voided. Everyone who had one has been told.${left}` : `Nothing was voided.${left || ' No envelope in this batch is still out for signature.'}`);
             setVoiding(false);
             reload();
           }}>

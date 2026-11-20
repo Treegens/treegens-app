@@ -58,7 +58,7 @@ export default function Landing() {
     { said: 'Nobody can say whether a signing request is real.', title: 'Check any email is real', text: 'Every signing email carries a security code. Type it in on our site and we tell you who sent it, before you click anything.', href: '/check', link: 'Check an email' },
     { said: 'There is no cancel button to be found.', title: 'Month to month, cancel in one click', text: 'No yearly term and no notice period. One button on the Plan page, a stop link in every renewal reminder, and a way to stop without logging in. Signatures you paid for stay yours.', href: '/help#cancel', link: 'Three ways to cancel' },
     { said: 'A refund is refused a day after a renewal.', title: 'Refunds without asking', text: `${refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself.`, href: '/help#refunds', link: 'The refund rule' },
-    { said: 'A bill for extra documents arrives out of nowhere.', title: 'No overage charges, ever', text: 'When your signatures run out, sending pauses. It never turns into a bill. A signature is only used when someone actually signs, so voided, declined and expired envelopes cost nothing.', href: '#pricing', link: 'See pricing' },
+    { said: 'A bill for extra documents arrives out of nowhere.', title: 'No overage charges, ever', text: 'When your signatures run out, sending pauses. It never turns into a bill. A signature is only used when someone actually signs, so an envelope nobody signed costs nothing.', href: '#pricing', link: 'See pricing' },
     { said: 'The account is locked with the signed contracts inside.', title: 'Your documents stay yours', text: 'Export everything as one ZIP file, free, on any plan, also after you cancel. Cancelling or a failed payment never deletes or locks a document.', href: '/security#your-documents', link: 'What we promise about your data' },
     { said: 'Support is a chatbot going in circles.', title: 'A person answers', text: 'No chatbot. The contact form works without logging in, gives you a reference, and goes to a person.', href: '/help#contact', link: 'Write to us' },
   ];
@@ -168,10 +168,10 @@ export default function Landing() {
           <p className="muted small pub-code-note">Were you given a code? Some communities get {P.planName} free. Enter it when you <Link href="/signup">sign up</Link>, or later on the Plan page.</p>
 
           <div className="card pub-rules">
-            <h3>The rules, all of them</h3>
+            <h3>The rules</h3>
             <ul>
               <li><b>What a signature is.</b> One person signing one envelope. An envelope can hold several documents, and that is still one signature for each signer.</li>
-              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, it comes back by itself.</li>
+              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves.</li>
               <li><b>What is always free.</b> Signing your own documents. Approvers, viewers and people who get a copy. Corrections, reminders and more time. And signing, for everyone you send to.</li>
               <li><b>Signatures never expire.</b> What you do not use this month is there next month, also after you cancel.</li>
               <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at ${P.topUpUsd} a signature, with the total shown before you pay. There are no overage charges.</li>

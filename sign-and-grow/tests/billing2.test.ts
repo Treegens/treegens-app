@@ -65,7 +65,7 @@ test('the first payment counts whichever message the provider sends first', asyn
   // The same, for an invoice that does not say whose it is. It waits, a person is told, and it is picked up the
   // moment the checkout is reported.
   const b = await person('Bob');
-  await event('invoice.paid', invoice(b, 'in_b1', { lines: { data: [{ period: { start: unix(0), end: unix(30) } }] } }));
+  await event('invoice.paid', invoice(b, 'in_b1', { lines: { data: [{ period: { start: unix(0), end: unix(30) }, price: { id: 'price_grove' } }] } }));
   assert.equal(acct(b.id).plan, 'seedling');
   assert.ok(alerts().some((m) => m.includes('in_b1') && m.includes('could not be matched')), 'somebody is told even with no support address set');
   await event('checkout.session.completed', checkout(b));
@@ -219,15 +219,14 @@ test('when the payment provider fails, nothing is claimed that did not happen', 
 
   // A charge after the plan ended is refunded by itself. If the provider cannot take the refund right now it is tried
   // again on the timer, a person is told when it keeps failing, and the customer gets their money in the end.
-  stripe.fail('POST', /^refunds$/, 4);
+  stripe.fail('POST', /^refunds$/, 3);
   await event('invoice.paid', invoice(p, 'in_eve_ghost', { billing_reason: 'subscription_cycle' }));
   assert.equal(pay('in_eve_ghost').refunded_cents, 0);
   await event('invoice.paid', stripe.invoices.in_eve_ghost);
   await cron.tick();
+  assert.equal(alerts().some((m) => m.includes('has not gone through yet')), false);
   await cron.tick();
-  assert.equal(alerts().some((m) => m.includes('keeps failing')), false);
-  await cron.tick();
-  assert.ok(alerts().some((m) => m.includes('keeps failing') && m.includes('in_eve_ghost')));
+  assert.ok(alerts().some((m) => m.includes('has not gone through yet') && m.includes('in_eve_ghost')), 'a person is told at the third failure');
   await cron.tick();
   assert.equal(pay('in_eve_ghost').refunded_cents, 900);
   assert.equal(stripe.refunded('ch_in_eve_ghost'), 900);
@@ -332,7 +331,7 @@ test('the free code: typos are said out loud, nobody on it is ever charged, and 
   assert.equal(stripe.sub(p.sub).status, 'canceled');
   const told = mailTo(p.email).find((m) => m.subject === 'Code GROWalition accepted: your plan is free')!;
   assert.match(told.html, /ended today and will not be charged again\. Cancellation reference: SG-/);
-  assert.match(told.html, /card you paid with is still saved/);
+  assert.match(told.html, /card you paid with before is still saved/);
   assert.ok((await state(p)).has_customer, 'so the page can offer to remove it');
 
   // The refund of what they had paid is still theirs, and taking it does not knock them off the free plan.
@@ -377,6 +376,10 @@ test('the free code: typos are said out loud, nobody on it is ever charged, and 
   process.env.FREE_PLAN_CODES = 'SomethingElse';
   db.run("DELETE FROM credits WHERE account_id=? AND reason='code' AND ref=?", gid, new Date().toISOString().slice(0, 7));
   assert.equal((await g.get('/billing')).data.signatures.balance, 30);
+  // A code has to be gone for three days before plans end, so a slip in a deployment does not end everyone's plan.
+  assert.equal((await cron.tick()).codes_ended, 0);
+  assert.equal(acct(gid).plan, 'grove');
+  db.run('UPDATE accounts SET promo_missing_since=? WHERE promo_missing_since IS NOT NULL', new Date(Date.now() - 4 * 864e5).toISOString());
   assert.equal((await cron.tick()).codes_ended >= 1, true);
   assert.equal(acct(gid).plan, 'seedling');
   assert.equal(acct(gid).promo_code, null);
@@ -404,15 +407,17 @@ test('renewal reminders run on our own timer, a week before and the day before, 
   const inTwenty = new Date(Date.now() + 20 * 3600_000).toISOString();
   db.run('UPDATE accounts SET renews_at=?, renewal_reminded=? WHERE id=?', inTwenty, `${inTwenty.slice(0, 10)}|7`, p.id);
   assert.equal((await cron.tick()).renewals, 1);
-  assert.ok(subjects(p.email).some((s) => s.startsWith('Tomorrow: your plan renews for $9.00')));
+  assert.ok(subjects(p.email).some((s) => s.startsWith('Last reminder: your plan renews on') && s.endsWith('for $9.00')));
   assert.equal((await cron.tick()).renewals, 0);
   assert.equal((await state(p)).history.filter((h: any) => h.label === 'Renewal reminder sent').length, 2, 'every reminder is on record');
 
   // If more is charged than the reminder said, the difference goes back by itself and a person is told.
-  await event('invoice.paid', invoice(p, 'in_jem_more', { amount_paid: 1200, billing_reason: 'subscription_cycle' }));
+  const renewal = Math.floor(Date.parse(inTwenty) / 1000);
+  await event('invoice.paid', invoice(p, 'in_jem_more', { amount_paid: 1200, billing_reason: 'subscription_cycle', lines: { data: [{ period: { start: renewal, end: renewal + 30 * 86400 }, metadata: { account_id: p.id } }] } }));
   assert.equal(pay('in_jem_more').refunded_cents, 300);
   assert.ok(subjects(p.email).includes('Refund sent: $3.00'));
-  assert.ok(alerts().some((m) => m.includes('charged more than their renewal reminder said')));
+  assert.ok(alerts().some((m) => m.includes('was charged more than we told them')));
+  assert.equal(alerts().some((m) => m.includes('in_jem_more') && m.includes('without a reminder')), false, 'this renewal was reminded, so no false alarm');
   assert.equal((await bal(p)).balance, 21);
 
   // A renewal nobody was reminded of is flagged, and signatures follow the money.
@@ -473,8 +478,14 @@ test('a card dispute stops billing, is not fought, and cannot be refunded a seco
   assert.equal(s.plan, 'seedling');
   assert.equal(s.refund, null, 'the bank is returning it, so the app does not offer it again');
   assert.equal(s.mangroves, 0);
-  assert.ok(subjects(p.email).includes('We stopped all billing on your account'));
+  assert.ok(subjects(p.email).includes('A payment was disputed, so we stopped billing you'));
   assert.ok(alerts().some((m) => m.includes('Card dispute') && m.includes('accepted with the payment provider automatically')));
+  assert.equal(s.signatures.balance, 3, 'the signatures that payment bought and that were unused go with it');
+  assert.equal((await p.c.post('/billing/checkout')).status, 403, 'new payments stay off until a person has looked');
+  process.env.OPERATOR_EMAILS = p.email;
+  assert.equal((await p.c.post(`/operator/billing/accounts/${p.id}/clear-dispute`)).status, 200);
+  delete process.env.OPERATOR_EMAILS;
+  assert.equal((await p.c.post('/billing/checkout')).status, 200);
 });
 
 test('locked out and not sure which address the account is under: the card, a date and an amount are enough', async () => {

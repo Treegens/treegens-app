@@ -6,13 +6,21 @@ import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipi
 import { fieldDisplayValue } from './pdf.ts';
 import { storeUpload } from './routes-envelopes.ts';
 import { impactOf } from '../lib/impact.ts';
+import { rateWait } from './util.ts';
+import { wrongAccessCode, requestAccessCode } from './envelopes.ts';
+import { senderText, shownVersion, changedSince } from './envelopes.ts';
+import { ACCESS_CODE_TRIES } from '../lib/policy.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
 const sender = (e: any) => get('SELECT name, email FROM users WHERE id=?', e.sender_id) || { name: 'The sender', email: '' };
 
+// One address can be a whole office signing a bulk send together. So the tight limit is per link and address: one
+// person hammering a link never blocks a colleague with a document of their own. The ceiling for an address is only
+// there to stop a flood, and is far above what people signing can reach.
 function find(c: Ctx, needUnlocked = true) {
-  rateLimit(`sign:${c.ip}`, 600, 600_000);
+  rateLimit(`sign:${c.ip}`, 20_000, 600_000);
+  rateLimit(`sign:${c.ip}:${c.params.token}`, 600, 600_000);
   return look(c, needUnlocked);
 }
 
@@ -56,53 +64,89 @@ route('GET', '/sign/:token', (c) => {
     envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets) },
     recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted },
   };
-  if (locked) return { ...base, locked: true };
+  // A frozen code is said straight away, so nobody types the right code into a form that can no longer accept it.
+  if (locked) return { ...base, locked: true, code_frozen: !!r.code_frozen_at };
   if (e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${String(e.expires_at).slice(0, 10)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   if (e.status === 'sent' && r.status === 'sent') markViewed(e, r, actor);
+  // The server keeps which content version this screen was given. The screen sends the number back with every save
+  // and with Finish, and one that comes from an older version is refused: see completeRecipient.
+  if (e.status === 'sent' && r.seen_version !== e.content_version) run('UPDATE recipients SET seen_version=? WHERE id=?', e.content_version, r.id);
   const byId = new Map<string, any>(e.recipients.map((x: any) => [x.id, x]));
+  const signedBefore = String(r.signed_before || '').split('\n').filter(Boolean).pop() || null;
   return {
     ...base,
     locked: false,
+    version: e.content_version,
+    // What the sender's latest correction changed on the documents, in words, for a screen that has to say so.
+    changed: e.last_change || null,
     message: e.message,
     note: r.note,
-    recipient: { ...base.recipient, status: r.status === 'sent' ? 'viewed' : r.status, signature_png: r.signature_png, initials_png: r.initials_png },
+    recipient: { ...base.recipient, status: r.status === 'sent' ? 'viewed' : r.status, signature_png: r.signature_png, initials_png: r.initials_png, signed_before: r.status === 'completed' ? null : signedBefore },
     documents: e.documents.map((d: any) => ({ id: d.id, name: d.name, pages: d.pages })),
     fields: e.fields.filter((f: any) => f.recipient_id === r.id).map(({ envelope_id: _e, ...f }: any) => f),
-    // What others have already filled in, shown read-only so the signer sees the document as it stands.
+    // What is on the pages besides this person's own fields, shown read-only so they see the document as it stands.
+    // Everything the sender wrote is there from the first look, whoever it is assigned to: a note or a read-only
+    // value ('sender'), and a value its owner may still change ('start'). What another person filled in ('signer')
+    // appears once that person has finished.
     others: e.fields.filter((f: any) => f.recipient_id !== r.id).map((f: any) => {
       const o = f.recipient_id ? byId.get(f.recipient_id) : null;
       const done = !f.recipient_id || o?.status === 'completed';
       return {
         id: f.id, document_id: f.document_id, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h,
-        label: f.label, by: o?.name || null,
-        value: done ? fieldDisplayValue(f, o, e.date_format) : '',
+        label: f.label, by: o?.name || null, from: !f.recipient_id || f.readonly ? 'sender' : done ? 'signer' : 'start',
+        value: done ? fieldDisplayValue(f, o, e.date_format) : senderText(f),
         image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
       };
     }).filter((f: any) => f.value || f.image),
   };
 }, 'public');
 
+// What the locked screen says once a code is frozen. The same words whether it just happened or happened earlier.
+const frozenText = (e: any) => `This access code was entered wrongly ${ACCESS_CODE_TRIES} times, so it is frozen and no longer opens the document. ${sender(e).name} has been told and can set a new code. Ask them for the new one.`;
+
+// Only wrong tries count, in two ways. A device address that gets it wrong a few times waits a quarter of an hour,
+// and that touches nobody else: the right code from another device still opens the document. After
+// ACCESS_CODE_TRIES wrong tries in total the code is frozen for everyone until the sender sets a new one, so a
+// short code cannot be worked out by trying a few every day.
+const CODE_TRIES_PER_ADDRESS = 5;
+const CODE_WAIT_MS = 900_000;
 route('POST', '/sign/:token/unlock', async (c) => {
-  const { e, r, actor } = find(c, false);
-  rateLimit(`code:${r.id}`, 8, 900_000);
-  if (!r.access_code || !safeEqual(str((await c.body()).code).trim(), r.access_code)) {
-    audit(e.id, actor, 'Access code failed', r.name);
-    // After three wrong tries the sender is told, because the usual cause is that the code never reached the signer.
-    const fails = get("SELECT COUNT(*) n FROM audit WHERE envelope_id=? AND action='Access code failed' AND detail=?", e.id, r.name).n;
-    if (fails === 3) void noteDeadLink(e, r, `They entered the wrong access code three times. Check that you gave them the right one (it is ${r.access_code}), or change it from the envelope page. Their link keeps working.`).catch(() => {});
-    throw bad(`That access code is not right. ${sender(e).name} chose the code and can tell you what it is: ${sender(e).email}. It is not in the email we sent you.`, 401);
+  find(c, false);
+  const code = str((await c.body()).code).trim();
+  const { e, r, actor } = look(c, false);
+  if (!r.access_code) return; // nothing to unlock
+  if (r.code_frozen_at) throw bad(frozenText(e), 423);
+  const tries = `code:${r.id}:${c.ip}`;
+  const wait = rateWait(tries, CODE_TRIES_PER_ADDRESS);
+  if (wait) throw bad(`That was ${CODE_TRIES_PER_ADDRESS} wrong codes in a row from this device. Wait ${Math.ceil(wait / 60_000)} minutes and try again, or ask ${sender(e).name} for the code: ${sender(e).email}. Nothing you filled in is lost.`, 429);
+  if (!safeEqual(code, r.access_code)) {
+    rateLimit(tries, Infinity, CODE_WAIT_MS); // counts this wrong try for this device address
+    const left = await wrongAccessCode(e, r, actor);
+    if (!left) throw bad(frozenText(e), 423);
+    throw bad(`That access code is not right. ${sender(e).name} chose the code and can tell you what it is: ${sender(e).email}. It is not in the email we sent you.${left <= 3 ? ` After ${left} more wrong ${left === 1 ? 'try' : 'tries'} the code is frozen until ${sender(e).name} sets a new one.` : ''}`, 401);
   }
   c.cookies.push(cookie(`ts_ac_${r.id}`, hmac(`ac:${r.id}:${r.access_code}`), 86400, c.secure));
   audit(e.id, actor, 'Access code accepted', r.name);
 }, 'public');
 
+// "Ask the sender" on the locked screen: for someone who was never given the code, or whose code is frozen.
+route('POST', '/sign/:token/ask-code', async (c) => {
+  const { e, r, actor } = find(c, false);
+  rateLimit(`askcode:${r.id}`, 2, 86400_000);
+  await requestAccessCode(e, r, actor);
+}, 'public');
+
+// The screen sends the content version it shows with consent too. Agreeing is about signing on screen, not about
+// the wording, so an older version is not refused here: the answer carries the current one, and the page loads the
+// document afresh before anything can be signed.
 route('POST', '/sign/:token/consent', (c) => {
   const { e, r, actor } = find(c);
   if (!r.consent_at) {
     run('UPDATE recipients SET consent_at=? WHERE id=?', now(), r.id);
     audit(e.id, actor, 'Agreed to electronic records and signatures', r.name);
   }
+  return { ok: true, version: e.content_version };
 }, 'public');
 
 route('GET', '/sign/:token/doc/:doc', (c) => {
@@ -119,6 +163,10 @@ route('POST', '/sign/:token/save', async (c) => {
   const b = await checkedBody(c);
   const { e, r } = look(c);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw bad('This envelope is no longer open for signing.');
+  // A save from a screen that still shows the document as it was before a correction is not applied. The page
+  // loads the new version, keeps the answers that still have a field, and asks the person to look again.
+  const shown = shownVersion(r, b);
+  if (shown != null && shown !== e.content_version) throw changedSince(e);
   applyValues(e, r, b.values || {}, false);
   // The chosen signature travels with "finish later", so picking up on another device does not mean signing again.
   if (b.signature_png !== undefined || b.initials_png !== undefined)
@@ -191,5 +239,6 @@ route('GET', '/sign/:token/download', async (c) => {
   const { e, r } = find(c);
   assertViewable(e, r);
   const done = finalPdf(e);
-  return pdfResponse(done || (await buildPdf(e, false)), e.subject || 'document', c.q.get('inline') === '1');
+  // Until everyone has finished, the copy a recipient downloads is made for them: it shows what their screen shows.
+  return pdfResponse(done || (await buildPdf(e, false, r.id)), e.subject || 'document', c.q.get('inline') === '1');
 }, 'public');

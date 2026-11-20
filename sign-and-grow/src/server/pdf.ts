@@ -277,7 +277,14 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     s.kv('Sent', ts(r.sent_at));
     if (r.role !== 'cc') {
       s.kv('Viewed', ts(r.viewed_at));
-      s.kv('Completed', ts(r.completed_at));
+      // Someone who finished, was asked to sign again because the sender changed the document, and did: both
+      // times are shown. The audit trail below says what changed in between.
+      const earlier = String(r.signed_before || '').split('\n').filter(Boolean);
+      if (earlier.length) {
+        s.kv('First completed', ts(earlier[0]));
+        if (earlier.length > 1) s.kv('Completed again', earlier.slice(1).map(ts).join(', '));
+        s.kv(r.completed_at ? 'Completed again' : 'Completed', r.completed_at ? `${ts(r.completed_at)}, after the sender changed the document` : 'Not yet, since the sender changed the document');
+      } else s.kv('Completed', ts(r.completed_at));
       s.kv('Identity check', r.access_code ? 'Email link and access code' : 'Email link');
       s.kv('E-record consent', ts(r.consent_at));
       s.kv('IP address', r.ip || '-');
@@ -344,12 +351,13 @@ function widgetPicture(widget: PDFDict): PDFRef | undefined {
   return n instanceof PDFRef && widget.context.lookup(n) instanceof PDFStream ? n : undefined;
 }
 
-// A fillable form the sender uploaded becomes ordinary page content, so the signed file has nothing left to fill in,
-// to change or to sign later. Each field's picture is drawn where the field was, then the field is taken off the
-// page. A field with no picture and nothing in it is just taken off: the usual one is an empty digital-signature
-// box, which must not be left waiting in a document that is already signed. pdf-lib's own flatten() is not used. It
-// gives up at the first field without a picture, which left every field after it live, and it leaves each page
-// pointing at field objects it has deleted, which strict readers and filing systems reject.
+// A fillable form, in a document that was sent or in a file a signer attached, becomes ordinary page content, so the
+// signed file has nothing left to fill in, to change or to sign later. Each field's picture is drawn where the field
+// was, then the field is taken off the page. A field with no picture and nothing in it is just taken off: the usual
+// one is an empty digital-signature box, which must not be left waiting in a document that is already signed.
+// pdf-lib's own flatten() is not used. It gives up at the first field without a picture, which left every field
+// after it live, and it leaves each page pointing at field objects it has deleted, which strict readers and filing
+// systems reject.
 function flattenForm(src: PDFDocument) {
   try {
     const form = src.getForm();
@@ -364,7 +372,14 @@ function flattenForm(src: PDFDocument) {
     /* no readable form: the pages are still gone through below */
   }
   for (const page of src.getPages()) {
-    const annots = page.node.Annots();
+    let annots: PDFArray | undefined;
+    try {
+      annots = page.node.Annots();
+    } catch {
+      // Written as something that is not a list. No reader shows anything from it, so it goes, like an entry that
+      // points at nothing. Failing here would fail the whole signed PDF, or leave a signer's attachment out of it.
+      page.node.delete(nm('Annots'));
+    }
     for (let i = 0; annots && i < annots.size(); ) {
       const a = annots.lookup(i);
       const widget = a instanceof PDFDict && a.lookup(nm('Subtype')) === nm('Widget') ? a : null;
@@ -400,23 +415,39 @@ function flattenForm(src: PDFDocument) {
   }
 }
 
+// The pages of one stored PDF, copied into the signed file with any fillable form in it made flat first. The
+// envelope's own documents and the files signers attach both come through here: what a signer attaches is very
+// often a form itself (a tax or bank form with a box to sign), and its fields must not stay live either.
+async function flatPages(doc: PDFDocument, sha256: string): Promise<PDFPage[]> {
+  const src = await PDFDocument.load(readBlob(sha256), { updateMetadata: false });
+  flattenForm(src);
+  // flattenForm has drawn every picture that could be drawn. Left to itself, save() would try the ones that could
+  // not be drawn once more and fail the whole document over them.
+  const flat = await PDFDocument.load(await src.save({ updateFieldAppearances: false }));
+  return doc.copyPages(flat, flat.getPageIndices());
+}
+
 // Builds the signed PDF: every document with field values stamped in, signer attachments, then the certificate.
-export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any }): Promise<Uint8Array> {
+export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any; viewer?: string }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
   const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format };
+  // A copy made for one recipient (`viewer`) while others are still at work shows the pages as that recipient's
+  // screen does: everything the sender wrote, what people who have finished filled in, and what the viewer has
+  // entered so far. Another person's half-filled answer, saved signature or uploaded file is not printed until that
+  // person has finished: their field shows what the sender put there, or nothing.
+  const asSeen = (f: any) => {
+    const o = f.recipient_id ? ctx.recipients.get(f.recipient_id) : null;
+    return !opts.viewer || !o || o.id === opts.viewer || o.status === 'completed' || f.readonly ? f : { ...f, value: f.prefill ?? null };
+  };
+  const fields = e.fields.map(asSeen);
 
   for (const d of e.documents) {
-    const src = await PDFDocument.load(readBlob(d.sha256), { updateMetadata: false });
-    flattenForm(src);
-    // flattenForm has drawn every picture that could be drawn. Left to itself, save() would try the ones that could
-    // not be drawn once more and fail the whole document over them.
-    const flat = await PDFDocument.load(await src.save({ updateFieldAppearances: false }));
-    const pages = await doc.copyPages(flat, flat.getPageIndices());
+    const pages = await flatPages(doc, d.sha256);
     pages.forEach((p) => doc.addPage(p));
-    for (const f of e.fields.filter((f: any) => f.document_id === d.id)) {
+    for (const f of fields.filter((f: any) => f.document_id === d.id)) {
       const page = pages[f.page];
       if (page) await drawField(ctx, page, f);
     }
@@ -426,12 +457,11 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
       page.drawText(`Sign&Grow Envelope ID: ${e.id}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
     }
   }
-  for (const f of e.fields.filter((f: any) => f.type === 'attachment' && f.value)) {
+  for (const f of fields.filter((f: any) => f.type === 'attachment' && f.value)) {
     const file = get('SELECT sha256 FROM files WHERE id=?', f.value);
     if (!file) continue;
     try {
-      const att = await PDFDocument.load(readBlob(file.sha256), { updateMetadata: false });
-      (await doc.copyPages(att, att.getPageIndices())).forEach((p) => doc.addPage(p));
+      (await flatPages(doc, file.sha256)).forEach((p) => doc.addPage(p));
     } catch {
       /* skip unreadable attachments */
     }

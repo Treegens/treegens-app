@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS credits (
 );
 CREATE INDEX IF NOT EXISTS credits_account ON credits(account_id);
 CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, retired_at TEXT NOT NULL);
+-- A signature that was set aside because the sender changed the document afterwards and asked for a new one. The
+-- audit trail says so in words. This keeps the signature itself and the answers exactly as they were.
+CREATE TABLE IF NOT EXISTS earlier_signatures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, recipient_id TEXT NOT NULL,
+  name TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL, completed_at TEXT, ip TEXT, signature_png TEXT, initials_png TEXT,
+  answers TEXT NOT NULL, set_aside_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS abuse_reports (
   id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL, account_id TEXT NOT NULL, reporter TEXT, reason TEXT NOT NULL, detail TEXT,
   ip TEXT, status TEXT NOT NULL DEFAULT 'open', at TEXT NOT NULL
@@ -142,10 +149,24 @@ CREATE TABLE IF NOT EXISTS billing_todo (
   tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, done_at TEXT, UNIQUE (kind, ref)
 );
 CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS refunds (
+  id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, account_id TEXT, cents INTEGER NOT NULL, signatures INTEGER NOT NULL DEFAULT 0,
+  why TEXT NOT NULL DEFAULT '', auto INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', provider_id TEXT,
+  tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, last_at TEXT, done_at TEXT
+);
+CREATE INDEX IF NOT EXISTS refunds_payment ON refunds(payment_id, status);
 CREATE TABLE IF NOT EXISTS support_requests (
   id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, topic TEXT NOT NULL, message TEXT NOT NULL, envelope_id TEXT,
   user_id TEXT, account_id TEXT, status TEXT NOT NULL DEFAULT 'open', at TEXT NOT NULL
 );
+-- One line for every person an account newly emailed: a first send, a person added or an address changed by a
+-- correction, a bulk row, a public form. The daily limits count these lines and not the envelopes, so voiding or
+-- deleting an envelope never hands the day's allowance back.
+CREATE TABLE IF NOT EXISTS reached (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  email TEXT NOT NULL COLLATE NOCASE, envelope_id TEXT, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reached_account ON reached(account_id, at);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -195,10 +216,22 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['payments', 'applied_at', 'TEXT'],
   ['payments', 'self_refund_at', 'TEXT'],
   ['payments', 'refund_pending_at', 'TEXT'],
+  ['payments', 'credits_refunded', 'INTEGER NOT NULL DEFAULT 0'],
+  ['payments', 'subscription_id', 'TEXT'],
+  ['payments', 'invoice_id', 'TEXT'],
+  ['accounts', 'dispute_at', 'TEXT'],
+  ['accounts', 'plan_started_at', 'TEXT'],
+  ['accounts', 'dormant_kept_for', 'TEXT'],
+  ['accounts', 'promo_missing_since', 'TEXT'],
+  ['billing_todo', 'last_at', 'TEXT'],
   // What a key may do: 'send' (everyday work, the default) or 'admin' (account settings too). See router.ts.
   ['api_keys', 'scope', "TEXT NOT NULL DEFAULT 'send'"],
-  // Set when the key's owner was removed from the account. The row stays so admins can see which keys stopped.
+  // Set when the key's owner left the account: an admin removed them, or their own login was deleted. The row
+  // stays so admins can see which keys stopped.
   ['api_keys', 'stopped_at', 'TEXT'],
+  // The name of the person who made the key, kept on the row when their login is deleted, so a stopped key in a
+  // team's list still says whose it was.
+  ['api_keys', 'owner_was', 'TEXT'],
   // 0 while a webhook delivery is still being tried. The row is written before the first try.
   ['webhook_deliveries', 'done', 'INTEGER NOT NULL DEFAULT 1'],
   // The Idempotency-Key a bulk send came with, and a hash of its body. The key belongs to the batch's sender.
@@ -206,14 +239,56 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['bulk_batches', 'request_hash', 'TEXT'],
   // When "Signing link issued" was last written to the audit trail for this recipient. At most once a day per link.
   ['recipients', 'link_issued_at', 'TEXT'],
+  // Wrong tries at this recipient's access code since the code was set, and when it was frozen for too many of them.
+  // Setting a new code clears both.
+  ['recipients', 'code_fails', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'code_frozen_at', 'TEXT'],
+  // When a person last lifted a pause. Reports from before that have been looked at and do not count again.
+  ['accounts', 'unpaused_at', 'TEXT'],
+  // An envelope started from a public form: which recipient is the visitor, and the device address it was started from.
+  ['envelopes', 'form_recipient_id', 'TEXT'],
+  ['envelopes', 'form_ip', 'TEXT'],
+  // What the sender wrote into a field that its signer may still change. It is kept beside the value, so every
+  // signer can be shown the sender's wording before the field's owner has answered, and so it comes back when the
+  // field passes to another person. Notes and read-only fields keep the sender's words in value itself.
+  ['fields', 'prefill', 'TEXT'],
+  // Goes up whenever a correction changes what a signer would see or sign. The signing screen sends the number it
+  // was shown with every save and with Finish, and a Finish on an older number is refused.
+  ['envelopes', 'content_version', 'INTEGER NOT NULL DEFAULT 1'],
+  // The content version this recipient's signing screen was last given.
+  ['recipients', 'seen_version', 'INTEGER'],
+  // Goes up with every save from the editor or the API, with who saved and when, so a save made from an older copy
+  // is refused instead of wiping a colleague's work.
+  ['envelopes', 'edit_version', 'INTEGER NOT NULL DEFAULT 0'],
+  ['envelopes', 'edited_by', 'TEXT'],
+  ['envelopes', 'edited_at', 'TEXT'],
+  // When this person finished before the sender changed the document and asked them to sign again. One time per
+  // line, oldest first. The certificate prints them next to the new signature.
+  ['recipients', 'signed_before', 'TEXT'],
+  // What the latest correction changed on the documents, in words. Quoted to the people who have to look again.
+  ['envelopes', 'last_change', 'TEXT'],
+  // A replaced link keeps the security code of the email that carried it, so /check can still say that email was
+  // genuine: which envelope it was for, who it was sent to, and why its link stopped (address, role, handed, removed).
+  ['retired_tokens', 'check_code', 'TEXT'],
+  ['retired_tokens', 'envelope_id', 'TEXT'],
+  ['retired_tokens', 'sent_to', 'TEXT'],
+  ['retired_tokens', 'why', 'TEXT'],
 ];
 
 function migrate(d: any) {
+  const hadPrefill = d.prepare('PRAGMA table_info(fields)').all().some((c: any) => c.name === 'prefill');
   for (const [table, column, definition] of COLUMNS) {
     const have = d.prepare(`PRAGMA table_info(${table})`).all().some((c: any) => c.name === column);
     if (!have) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   d.exec('CREATE INDEX IF NOT EXISTS recipients_check ON recipients(check_code)');
+  d.exec('CREATE INDEX IF NOT EXISTS retired_tokens_check ON retired_tokens(check_code)');
+  // Drafts and templates from before fields kept the sender's own wording apart: everything in them was typed by
+  // the sender, so it is copied across once. Envelopes that are already out are left alone, because there a value
+  // may be a signer's answer and nothing says which.
+  if (!hadPrefill)
+    d.exec(`UPDATE fields SET prefill=value WHERE value IS NOT NULL AND readonly=0 AND type IN ('text','number','date','company','title','checkbox','radio','dropdown')
+      AND envelope_id IN (SELECT id FROM envelopes WHERE status='draft')`);
   // One batch per person per Idempotency-Key, whatever else happens.
   d.exec('CREATE UNIQUE INDEX IF NOT EXISTS bulk_batches_idem ON bulk_batches(account_id, sender_id, idem_key) WHERE idem_key IS NOT NULL');
   // idempotency_keys used to be keyed by account alone and kept rows whose envelope had been deleted. The new shape

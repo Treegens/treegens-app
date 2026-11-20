@@ -92,7 +92,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="main">
           {me.account.paused && (
             <div className="banner paused" role="alert">
-              <span><b>Sending is paused on this account.</b> Reason: {me.account.paused}. A person reviews every pause. You can still open, download and export everything, and documents already out can still be signed.</span>
+              <span><b>Sending is paused on this account.</b> Reason: {String(me.account.paused).replace(/[.\s]+$/, '')}. A person reviews every pause. Until then nothing new goes out: no new envelopes, no new or changed recipients, no reminders and no reopening. You can still open, download and export everything, and people who already have a document can still sign it.</span>
               <Link href="/help" className="btn sm">Contact us</Link>
             </div>
           )}

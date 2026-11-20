@@ -7,7 +7,7 @@ import { formatDate } from '@/lib/dates';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
 
-const TONE: Record<string, string> = { finished: 'completed', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
+const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
 export type ReviewProps = {
   ed: Ed;
@@ -23,6 +23,8 @@ export type ReviewProps = {
   result: { people: Outcome[]; completes: boolean } | null;
   onSubmit: () => void;
   onRestore: () => void;
+  /** Save the changes as they are and ask the people who finished meanwhile to sign again. */
+  onSignAgain: () => void;
   onDiscard: () => void;
 };
 
@@ -34,7 +36,8 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
   const s = b?.signatures;
   if (!s) return null; // payments are not connected, so nothing is counted
   const mine = me.user.email.toLowerCase();
-  const signers = rcps.filter((r) => (r.role === 'signer' || r.role === 'inperson') && (r.email || '').trim().toLowerCase() !== mine);
+  // Signing in person is someone else signing on your device, so it always needs one, whatever address was typed.
+  const signers = rcps.filter((r) => r.role === 'inperson' || (r.role === 'signer' && (r.email || '').trim().toLowerCase() !== mine));
   // When correcting, signers who were already asked are already held; only new ones need another signature.
   const need = signers.filter((r) => !correcting || !r.status).length;
   const have = Math.max(0, s.available);
@@ -92,7 +95,7 @@ function SharedInbox({ rcps }: { rcps: any[] }) {
 
 // Step 3: one last look. For a draft that means "send"; for an envelope that is already out it spells out what
 // saving will do to each person before anything happens.
-export function StepReview({ ed, problems, busy, changed, error, conflict, closed, result, onSubmit, onRestore, onDiscard }: ReviewProps) {
+export function StepReview({ ed, problems, busy, changed, error, conflict, closed, result, onSubmit, onRestore, onSignAgain, onDiscard }: ReviewProps) {
   const { env, isTpl, correcting, docs, rcps } = ed;
   const fields = ed.fields.value;
   const pages = docs.reduce((n, d) => n + d.pages, 0);
@@ -110,8 +113,11 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       )}
       {conflict.length > 0 && (
         <div className="notice err" role="alert">
-          <b>{conflict.join(' and ')} finished while you were editing.</b> The documents and what they signed are locked now, and some of your changes touch that part. Your other changes are still here.
-          <div className="row wrap" style={{ marginTop: 10 }}><button type="button" className="btn sm" onClick={onRestore}>Put their part back and keep my other changes</button></div>
+          <b>{conflict.join(' and ')} finished while you were editing.</b> Some of your changes touch what they signed, so nothing was saved. Your changes are still here. Put the documents and fields back as they were signed and keep the rest of your changes, or save everything and ask {conflict.join(' and ')} to sign again.
+          <div className="row wrap" style={{ marginTop: 10 }}>
+            <button type="button" className="btn sm" onClick={onRestore}>Put the documents and fields back</button>
+            <button type="button" className="btn sm" disabled={busy || problems.length > 0} onClick={onSignAgain}>Save and ask {conflict.join(' and ')} to sign again</button>
+          </div>
         </div>
       )}
       {error && !closed && <div className="notice err" role="alert"><b>{correcting ? 'Not saved yet.' : isTpl ? 'Not saved yet.' : 'Not sent yet.'}</b> {error} Your changes are still here.</div>}
@@ -131,7 +137,11 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {correcting && result ? (
         <div className="card">
           <h2>What happens when you save</h2>
-          <p className="muted small" style={{ margin: '4px 0 12px' }}>{changed ? 'Nobody has to start again. Here is what each person will notice.' : 'You have not changed anything yet. Go back to make a change, or leave with Discard changes.'}</p>
+          <p className="muted small" style={{ margin: '4px 0 12px' }}>
+            {!changed ? 'You have not changed anything yet. Go back to make a change, or leave with Discard changes.'
+              : result.people.some((p) => p.kind === 'sign_again') ? 'This touches what someone already signed, so they would have to sign again. You are asked before it is saved. Here is what each person will notice.'
+              : 'Nobody has to start again. Here is what each person will notice.'}
+          </p>
           <ul className="ed-people">
             {result.people.map((p) => (
               <li key={p.id} className={p.kind === 'removed' ? 'gone' : ''}>

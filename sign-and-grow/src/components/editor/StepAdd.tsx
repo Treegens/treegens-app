@@ -24,9 +24,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
     <div className="main stack ed-narrow">
       <div className="card">
         <h2 style={{ marginBottom: 12 }}>Documents</h2>
-        {anyLocked ? (
-          <div className="notice ed-lockline"><Lock size={16} /><span>{lockedNames} already finished, so documents cannot be added, removed or reordered. You can still rename them.</span></div>
-        ) : (
+        {anyLocked && <div className="notice warn ed-lockline" style={{ marginBottom: 10 }}><Lock size={16} /><span>{lockedNames} already finished. If you add, replace, remove or reorder a document, they have to sign again. You are asked before anything is saved. Renaming a document is always fine.</span></div>}
+        {(
           <label className={`drop ed-drop${over ? ' over' : ''}`}
             onDragOver={(e) => (e.preventDefault(), setOver(true))} onDragLeave={() => setOver(false)}
             onDrop={(e) => (e.preventDefault(), setOver(false), ed.addFiles(e.dataTransfer.files))}>
@@ -62,7 +61,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
           <div className="row ed-doc">
             <input value={d.name} aria-label="Document name" maxLength={200} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
             <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}</span>
-            {!anyLocked && (
+            {(
               <>
                 <label className="btn sm ghost" title="Swap in a corrected version. Your fields stay where they are.">
                   Replace file
@@ -103,7 +102,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                     <Status s="completed" label={DONE[r.role] || 'Finished'} />
                   </div>
                   <div className="muted small ed-break" style={{ marginTop: 4 }}>{r.email} · {ROLE_LABEL[r.role]}</div>
-                  <div className="muted small ed-lockline" style={{ marginTop: 6 }}><Lock /><span>Finished{old?.completed_at ? ` on ${fmtDate(old.completed_at)}` : ''}. Their details and fields can no longer change.</span></div>
+                  <div className="muted small ed-lockline" style={{ marginTop: 6 }}><Lock /><span>Finished{old?.completed_at ? ` on ${fmtDate(old.completed_at)}` : ''}. Their details and their own fields stay as they are.</span></div>
                 </div>
               );
             return (
@@ -125,7 +124,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                 </div>
                 {more === r.id && (
                   <div className="grid g2" style={{ marginTop: 10 }}>
-                    <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">(share it with them yourself)</span></span><input value={r.access_code || ''} maxLength={50} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>
+                    <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">(at least 4 characters, share it with them yourself)</span></span><input value={r.access_code || ''} maxLength={50} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>
                     <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">(only they see it)</span></span><input value={r.note || ''} maxLength={1000} onChange={(e) => ed.patchRcp(r.id, { note: e.target.value })} /></label>
                   </div>
                 )}

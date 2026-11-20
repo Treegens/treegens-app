@@ -143,6 +143,7 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
                   {ROLE_LABEL[r.role]}
                   {r.reassigned_from ? ` · handed over by ${r.reassigned_from}` : ''}
                   {r.access_code ? <> · Access code <b className="sn-code">{r.access_code}</b> (give it to them yourself, it is not in the email)</> : null}
+                  {r.access_code && r.code_frozen_at ? <> · <b>This code is frozen</b> after too many wrong tries and opens nothing now. Choose Correct and set a new one to let them in.</> : null}
                 </div>
               </div>
               <div className="sn-person-badges">

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { PRICING } from '@/lib/impact';
-import { publicFacts } from './facts';
+import { publicFacts, abuseFacts } from './facts';
 import { FindDocuments, FindSubscription, StopByCard, ContactForm } from './tools';
 
 export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in and without a chatbot. Find your documents, stop a subscription, or write to a person.' };
@@ -19,6 +19,7 @@ const QA = ({ id, q, children }: { id: string; q: string; children: ReactNode })
 
 export default function Help() {
   const { refundDays, dormantStopDays, closeGraceDays } = publicFacts();
+  const abuse = abuseFacts();
   const P = PRICING;
   const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 
@@ -62,12 +63,13 @@ export default function Help() {
           </QA>
 
           <QA id="unexpected" q="I got a request I did not expect">
-            <p>You do not have to sign it. If it looks wrong, report it in one of two ways:</p>
+            <p>You do not have to sign it. If it looks wrong, report it in one of three ways:</p>
             <ul className="pub-list">
-              <li>Open the document and choose <b>Report this request</b> on the signing page.</li>
+              <li>Without opening anything: choose <b>Report this email</b> in the email, or type its security code into <Link href="/check">Check an email</Link> and report it there.</li>
+              <li>Or open the document and choose <b>Report this request</b> on the signing page.</li>
               <li>Or use the contact form on this page with the topic <b>Something looks suspicious</b>.</li>
             </ul>
-            <p>Every report goes to a person. When several different people report the same sender, sending from that account is paused until a person has reviewed it.</p>
+            <p>Every report goes to a person. When {abuse.reportsToPause} different people report the same sender, sending from that account is paused until a person has reviewed it: no new documents, no new recipients and no reminders go out.</p>
             <p><a href="#contact" data-topic="suspicious" className="btn sm">Report with the contact form</a></p>
           </QA>
 
@@ -92,7 +94,7 @@ export default function Help() {
               <li>Stop for now and finish later. Your link brings you back to where you were.</li>
               <li>Stop reminder emails for that document.</li>
             </ul>
-            <p className="muted small">Asked for an access code? The sender chose it and can tell you what it is. It is never in our email.</p>
+            <p className="muted small">Asked for an access code? The sender chose it and can tell you what it is. It is never in our email. The page that asks for it has an <b>Ask the sender</b> button. After {abuse.codeTries} wrong tries a code is frozen so it cannot be guessed, and the sender sets a new one.</p>
           </QA>
         </section>
 
@@ -127,7 +129,7 @@ export default function Help() {
             <p>Yes, and you do not have to ask anyone. This is the whole rule:</p>
             <ul className="pub-list">
               <li><b>Within {refundDays} days of a payment:</b> {refundRuleText(refundDays)} Each signature is refunded at the price you paid for it. Open Settings, then Plan: your latest payment is offered at the top, and earlier ones in the list of payments. There is no form and no approval.</li>
-              <li><b>It covers your latest payment,</b> whether that was the monthly plan or a top-up. Signatures held for envelopes that are still out count as in use until they come back.</li>
+              <li><b>It covers every payment inside that time,</b> the monthly plan and top-ups alike, and you can come back for more: signatures held for envelopes that are still out count as in use, and when they come back (a voided envelope, say) they can be refunded too.</li>
               <li><b>Refunding a monthly payment ends the monthly plan.</b> Refunding a top-up changes nothing else.</li>
               <li><b>Charged after you cancelled, charged twice, or charged more than the reminder said:</b> that should never happen. If it does, the software refunds it by itself and tells you. If the payment provider is down at that moment it keeps trying until the refund has gone through.</li>
             </ul>
@@ -140,7 +142,7 @@ export default function Help() {
             <p>A signature is one person signing one envelope. A new account gets {sigs(P.welcomeSignatures)} free to try the product. {P.planName} is ${P.monthlyUsd} a month and adds {sigs(P.monthlySignatures)} with every payment. On {P.planName} you can buy more at ${P.topUpUsd} each, whenever you need them.</p>
             <ul className="pub-list">
               <li><b>Used up:</b> only when someone actually signs.</li>
-              <li><b>Held, then given back:</b> sending holds one signature for each signer, so nobody is stopped halfway. If the envelope is voided, declined or left to expire, it comes back by itself.</li>
+              <li><b>Held, then given back:</b> sending holds one signature for each signer, so nobody is stopped halfway. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves. One that was already used stays used.</li>
               <li><b>Always free:</b> signing your own documents. Approvers, viewers and people who get a copy. Reminders, more time and corrections. A signer you add in a correction needs a signature like any other.</li>
               <li><b>Public forms:</b> one signature for each person who signs the form.</li>
             </ul>
@@ -150,7 +152,7 @@ export default function Help() {
 
           <QA id="code" q="I was given a code">
             <p>Some communities get {P.planName} free. Enter your code when you <Link href="/signup">sign up</Link>. If you already have an account, enter it under Settings, then Plan, where it says <b>Have a code?</b></p>
-            <p>With a code, the {sigs(P.monthlySignatures)} of the monthly plan arrive every month and nothing is charged. There is no card on file for it and nothing to cancel. If you were paying before, the renewal is stopped for you.</p>
+            <p>With a code, the {sigs(P.monthlySignatures)} of the monthly plan arrive every month and nothing is charged for the plan, so there is nothing to cancel. If you were paying before, your paid subscription ends the moment the code is applied, with a cancellation reference by email; the card you paid with stays saved for top-ups until you remove it on the Plan page.</p>
           </QA>
 
           <QA id="after-cancel" q="What happens to my documents when I cancel?">
@@ -168,8 +170,8 @@ export default function Help() {
 
           <QA id="fix-after-sending" q="I sent a document with a mistake">
             <p>You do not need to void it. Open the envelope and correct it in place: fix a name or an email address, move or add fields, add or remove people.</p>
-            <p>Until someone has finished, anything can change. After that, the documents and what that person signed are locked, and everything for the remaining people can still change.</p>
-            <p>Signatures already collected stay. People whose part changed get an email that says so. A correction never counts as a new envelope.</p>
+            <p>Until someone has finished, anything can change. After that, you can still fix names, email addresses and the signing order of the people who are left. A change to the pages themselves (a different file, new wording, a field added, moved or removed) is only saved if you choose to ask the people who already finished to sign again. You are asked first, in plain words, and nothing is saved if you say no.</p>
+            <p>Signatures already collected stay unless you make that choice. People whose part changed get an email that says what changed. Someone who is asked to sign again keeps their link, their first signature stays on record, and it does not use another signature. A correction never counts as a new envelope, and the audit trail says what each one changed.</p>
           </QA>
 
           <QA id="not-received" q="The recipient says they never got the email">
@@ -185,9 +187,10 @@ export default function Help() {
           <QA id="cannot-send" q="Why can I not send?">
             <ul className="pub-list">
               <li><b>Your email address is not confirmed yet.</b> We sent a link when you signed up. The banner at the top of the app sends it again.</li>
-              <li><b>The account is in its first week on the free plan.</b> New free accounts can send to a limited number of people a day. Need more right now? <a href="#contact" data-topic="sending">Write to us</a>.</li>
-              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call.</b> That is how scams look, so new free accounts cannot send those. If yours is genuine, write to us and a person will clear it.</li>
-              <li><b>Sending is paused.</b> This happens when several recipients report documents from one account. A person reviews every pause. Meanwhile you can still open, download and export everything, and documents already out can still be signed. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>
+              <li><b>The account has reached its daily limit.</b> An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone newly emailed counts, also people added or changed on a document that is already out, bulk sends and public forms. The limit looks at the last 24 hours, and the message says when there is room again. Paying for anything lifts it. So does a person: <a href="#contact" data-topic="sending">write to us</a>.</li>
+              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account that has not paid cannot send those. We read the subject, the message, notes to recipients, document names, your name and the account name. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a> and a person will clear your account.</li>
+              <li><b>Sending is paused.</b> This happens when {abuse.reportsToPause} different recipients report documents from one account, or when our team pauses it. The message and the banner in the app give the reason. A person reviews every pause. Until then nothing new goes out: no new documents, no new or changed recipients, no reminders and no reopening. You can still open, download and export everything, and people who already have a document can still sign it. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>
+              <li><b>An access code is too short.</b> A code you set needs at least {abuse.codeMin} characters.</li>
               <li><b>You are out of signatures.</b> See <a href="#signatures">how signatures work</a>.</li>
             </ul>
           </QA>

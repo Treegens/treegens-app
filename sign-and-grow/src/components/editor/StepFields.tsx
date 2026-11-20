@@ -32,8 +32,10 @@ export function StepFields({ ed }: { ed: Ed }) {
     const l = rcps.filter(SIGNS);
     return env.ordered ? [...l].sort((a, b) => a.routing_order - b.routing_order) : l;
   }, [rcps, env.ordered]);
-  const open = signers.filter((r) => !lockedIds.has(r.id));
-  const active = open.some((r) => r.id === activeId) ? activeId : open[0]?.id || '';
+  // Fields can be placed for anyone who signs. For someone who has finished that means they sign again, which is
+  // asked before the change is saved, so the people who have not signed yet come first when nothing is picked.
+  const open = signers;
+  const active = open.some((r) => r.id === activeId) ? activeId : (open.find((r) => !lockedIds.has(r.id)) || open[0])?.id || '';
   const list = fields.value;
   const selected = list.find((f) => f.id === sel);
   const selLocked = !!selected && isLockedField(selected);
@@ -67,7 +69,7 @@ export function StepFields({ ed }: { ed: Ed }) {
     const size = doc.page_sizes?.[page] || { w: 612, h: 792 };
     const w = t[2];
     const h = t[3] || (w * size.w) / size.h;
-    if (type !== 'note' && !active) return toast(signers.length ? 'Everyone who signs has already finished, so no more fields can be added for them.' : 'Add a signer in step 1 first, then place fields for them.', true);
+    if (type !== 'note' && !active) return toast('Add a signer in step 1 first, then place fields for them.', true);
     if (full()) return;
     const box = { x: clamp(x - w / 2, 0, 1 - w), y: clamp(y - h / 2, 0, 1 - h), w, h };
     // Dropped from the keyboard, a field lands in the middle of the page. Step down until it has a spot of its own.
@@ -308,8 +310,8 @@ export function StepFields({ ed }: { ed: Ed }) {
               {signers.map((r) => {
                 const locked = lockedIds.has(r.id);
                 return (
-                  <button key={r.id} type="button" className={`btn sm${active === r.id ? ' on' : ''}`} style={{ ['--fc' as any]: color(r.id) }} disabled={locked}
-                    onClick={() => setActiveId(r.id)} aria-pressed={active === r.id} title={locked ? 'Already finished. Their fields are locked.' : undefined}>
+                  <button key={r.id} type="button" className={`btn sm${active === r.id ? ' on' : ''}`} style={{ ['--fc' as any]: color(r.id) }}
+                    onClick={() => setActiveId(r.id)} aria-pressed={active === r.id} title={locked ? 'Already finished. The fields they signed stay where they are. A new field for them means they sign again.' : undefined}>
                     <span className="dot" style={{ background: color(r.id) }} /> <span className="truncate">{who(r)}</span>{locked && <><Lock /><span className="ed-sr">, already finished</span></>}
                   </button>
                 );
@@ -330,9 +332,11 @@ export function StepFields({ ed }: { ed: Ed }) {
             <h3 id="ed-add">Add a field</h3>
             <div className="palette" role="group" aria-labelledby="ed-add">
               {TYPES.map(([t, label]) => {
-                const off = t === 'note' && anyLocked;
+                // Nothing is switched off once someone has finished. A new field or note then means they sign again,
+                // which is asked before the change is saved.
+                const again = anyLocked ? `${ed.lockedNames} already finished. Adding this means they have to sign again. You are asked before anything is saved.` : undefined;
                 return (
-                  <button key={t} type="button" className={tool === t ? 'on' : ''} disabled={off} title={off ? 'Notes are part of what was already signed, so no more can be added.' : undefined}
+                  <button key={t} type="button" className={tool === t ? 'on' : ''} title={again}
                     onClick={(e) => (e.detail === 0 ? addInView(t) : setTool(tool === t ? null : t))} aria-pressed={tool === t}>{label}</button>
                 );
               })}
@@ -416,7 +420,7 @@ export function StepFields({ ed }: { ed: Ed }) {
             {selLocked ? (
               <div className="ed-sheetbody always">
                 <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
-                <div className="notice ed-lockline small"><Lock size={16} /><span>{selected.recipient_id ? `${who(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field can no longer change.` : `${ed.lockedNames} already finished. Notes are part of what they signed, so this one can no longer change.`}</span></div>
+                <div className="notice ed-lockline small"><Lock size={16} /><span>{who(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field stays where it is.</span></div>
               </div>
             ) : (
               <div className="ed-sheetbody">

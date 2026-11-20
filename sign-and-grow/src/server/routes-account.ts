@@ -8,7 +8,7 @@ import { billingEnabled, verifyChain, notifyPrefs } from './envelopes.ts';
 import { grant, creditSummary, findFreeCode } from './credits.ts';
 import { tick } from './cron.ts';
 import { redeemCode } from './routes-billing.ts';
-import { trustInfo } from './routes-trust.ts';
+import { trustInfo, keysOf, keyList, tellTeamsAboutKeys } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 
 const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
@@ -78,6 +78,8 @@ route('POST', '/auth/login', async (c) => {
   if (restored) {
     run('UPDATE users SET closing_at=NULL WHERE id=?', u.id);
     run("UPDATE accounts SET closing_at=NULL WHERE id IN (SELECT account_id FROM memberships WHERE user_id=? AND role='owner')", u.id);
+    // Their API keys work again from here. The admins of their teams were told the keys went off, so they hear this too.
+    await tellTeamsAboutKeys(u, keysOf(u.id), 'back');
   }
   c.cookies.push(createSession(u.id, m.account_id, c.secure));
   return { user: publicUser(u), restored };
@@ -249,7 +251,7 @@ route('DELETE', '/account/members/:id', async (c) => {
   run('UPDATE api_keys SET stopped_at=? WHERE account_id=? AND user_id=? AND stopped_at IS NULL', now(), c.account.id, c.params.id);
   if (keys.length) {
     const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
-    const list = keys.map((k) => `"${k.name}" (${k.prefix}..., ${k.last_used_at ? `last used ${k.last_used_at.slice(0, 10)}` : 'never used'})`).join('\n');
+    const list = keyList(keys);
     for (const a of admins)
       await sendMail({ to: a.email, subject: `${n} stopped working: ${m.name} was removed from ${c.account.name}`, heading: `${n} stopped working`,
         lines: [`${c.user.name} removed ${m.name} from ${c.account.name}. The API keys ${m.name} created stopped working at that moment:`, list, 'Anything that used one of them now gets an error that says the key has stopped. To carry on, create a new key and put it into the integration.'],
@@ -294,8 +296,11 @@ route('DELETE', '/contacts/:id', (c) => {
 
 // Members see their own keys. Admins see every key in the account, with its owner, because an integration that
 // hangs on one person's key is the whole team's business. The secret is never stored, so it can never be shown.
+// A key that does not work says so here too: "stopped_at" when its maker left the account (the name is kept on the
+// row once their login is gone), "closing" when its maker is closing their login and the key is off until that day.
 route('GET', '/api-keys', (c) => ({
-  keys: all(`SELECT k.id, k.name, k.prefix, k.scope, k.created_at, k.last_used_at, k.stopped_at, k.user_id, u.name owner_name, u.email owner_email
+  keys: all(`SELECT k.id, k.name, k.prefix, k.scope, k.created_at, k.last_used_at, k.stopped_at, k.user_id, COALESCE(u.name, k.owner_was) owner_name, u.email owner_email,
+      CASE WHEN k.stopped_at IS NULL THEN u.closing_at END closing
     FROM api_keys k LEFT JOIN users u ON u.id=k.user_id WHERE k.account_id=?${c.admin ? '' : ' AND k.user_id=?'} ORDER BY k.created_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
     .map((k) => ({ ...k, mine: k.user_id === c.user.id })),
 }));
@@ -371,13 +376,14 @@ route('GET', '/reports/summary', (c) => {
 
 function globalImpact() {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE kind='envelope' AND status='completed'");
-  const pay = get('SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments');
+  // Only money we know was paid to Sign&Grow by one of its accounts counts: the monthly plan and top-ups.
+  const pay = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id IS NOT NULL AND kind IN ('plan','topup')");
   return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: mangrovesFor(pay.cents / 100) };
 }
 route('GET', '/public/impact', () => globalImpact(), 'public');
 route('GET', '/impact', (c) => {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE account_id=? AND kind='envelope' AND status='completed'", c.account.id);
-  const pay = get('SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=?', c.account.id);
+  const pay = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=? AND kind IN ('plan','topup')", c.account.id);
   return { account: { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: mangrovesFor(pay.cents / 100) }, everyone: globalImpact() };
 });
 

@@ -313,10 +313,10 @@ test('the review step says what really happens to each person', async () => {
   const ada = base.recipients.find((r: any) => r.email === 'ada@example.com').id;
   const ben = base.recipients.find((r: any) => r.email === 'benjamin@example.com').id;
 
-  // The sender only moved one of Ben's fields. The editor's copy is out of date and has Ada's answer blank, but the
-  // server keeps whatever a signer entered, so even this save cannot wipe it.
+  // The sender only gave one of Ben's fields a label. The editor's copy is out of date and has Ada's answer blank,
+  // but the server keeps whatever a signer entered, so even this save cannot wipe it.
   const mine = clone(asBody(base));
-  mine.fields.find((f: any) => f.recipient_id === ben && f.type === 'signature').x = 0.55;
+  mine.fields.find((f: any) => f.recipient_id === ben && f.type === 'signature').label = 'Sign for the buyer';
   assert.equal((await jo.put(`/envelopes/${e.id}`, mine)).status, 200);
   assert.equal((await full()).fields.find((f: any) => f.recipient_id === ada && f.type === 'text').value, 'filled in', 'a stale editor cannot blank what Ada typed');
 
@@ -328,12 +328,22 @@ test('the review step says what really happens to each person', async () => {
   assert.equal(merged.recipients.find((r: any) => r.id === ada).status, 'completed');
   const caughtUp = { ...mine, recipients: merged.recipients, fields: merged.fields };
   assert.equal(outcomes(fresh, caughtUp).people.find((p) => p.name === 'Ada Signer')!.kind, 'finished');
-  // The move already went through with the first save, so relative to the server nothing is left to change for Ben.
+  // The label already went through with the first save, so relative to the server nothing is left to change for Ben.
   assert.equal(outcomes(fresh, caughtUp).people.find((p) => p.name === 'Ben Signer')!.kind, 'unchanged');
   assert.equal((await jo.put(`/envelopes/${e.id}`, caughtUp)).status, 200);
   fresh = await full();
   assert.equal(fresh.fields.find((f: any) => f.recipient_id === ada && f.type === 'text').value, 'filled in', "Ada's answer survived");
-  assert.equal(fresh.fields.find((f: any) => f.recipient_id === ben && f.type === 'signature').x, 0.55);
+  assert.equal(fresh.fields.find((f: any) => f.recipient_id === ben && f.type === 'signature').label, 'Sign for the buyer');
+
+  // Moving a field is different: it changes the pages Ada has signed. The review says she would have to sign again,
+  // and the server refuses the save until the sender has chosen that.
+  const move = clone(asBody(fresh));
+  move.fields.find((f: any) => f.recipient_id === ben && f.type === 'signature').x = 0.55;
+  assert.equal(touchesLocked(fresh, move), true);
+  assert.equal(outcomes(fresh, move).people.find((p) => p.name === 'Ada Signer')!.kind, 'sign_again');
+  const asked = await jo.put(`/envelopes/${e.id}`, move);
+  assert.equal(asked.status, 409);
+  assert.deepEqual([asked.data.code, asked.data.sign_again], ['sign_again', ['Ada Signer']]);
 
   // If the sender did change Ada's part, the editor sees the clash before the server has to say no...
   const clash = clone(asBody(base));
@@ -351,6 +361,15 @@ test('the review step says what really happens to each person', async () => {
   assert.equal(fixed.recipients.find((r: any) => r.id === ben).name, 'Benjamin Signer');
   assert.equal((await jo.put(`/envelopes/${e.id}`, fixed)).status, 200);
   assert.equal((await full()).recipients.find((r: any) => r.id === ben).name, 'Benjamin Signer');
+
+  // Or the sender answers the question with yes: the move is saved, and Ada is asked to sign again, as the review said.
+  fresh = await full();
+  const again = clone(asBody(fresh));
+  again.fields.find((f: any) => f.recipient_id === ben && f.type === 'signature').x = 0.55;
+  assert.match(outcomes(fresh, again).people.find((p) => p.name === 'Ada Signer')!.text, /asks them to sign again/);
+  assert.equal((await jo.put(`/envelopes/${e.id}`, { ...again, resign: true })).status, 200);
+  assert.equal((await full()).recipients.find((r: any) => r.id === ada).status, 'sent');
+  assert.ok(mailTo('ada@example.com').at(-1)!.subject.startsWith('Changed after you finished:'));
 });
 
 test('with a signing order, people are only told when it is their turn', () => {
@@ -396,13 +415,35 @@ test('with a signing order, people are only told when it is their turn', () => {
   assert.match(said.people[0].text, /when it is their turn/);
   assert.match(said.people[3].text, /invited by email now/);
 
-  // Once the only person left to act is removed, saving finishes the envelope.
-  const done = clone(before);
+  // The order is swapped while Ada has the document: her turn is taken back and Ben is asked first.
+  after = clone(before);
+  after.recipients[0].routing_order = 2;
+  after.recipients[1].routing_order = 1;
+  said = outcomes(before, after);
+  assert.deepEqual(kinds(said), { Ada: 'held', Ben: 'waiting', Cee: 'waiting' });
+  assert.match(said.people[0].text, /their turn is taken back/);
+  assert.match(said.people[1].text, /now their turn/);
+
+  // Once the only person left to act is removed, saving finishes the envelope. They had no fields on the pages, so
+  // nobody who signed is touched by it.
+  const done: any = clone(before);
   done.recipients[0].status = 'completed';
   done.recipients[2].status = 'completed';
+  done.recipients[1].role = 'approver';
+  done.fields.pop();
   after = clone(done);
   after.recipients.splice(1, 1);
-  after.fields.pop();
   assert.equal(outcomes(done, after).completes, true);
   assert.equal(outcomes(done, clone(done)).completes, false);
+
+  // Taking a signer and their field off the pages Ada signed means Ada signs again, so nothing completes.
+  const signed: any = clone(before);
+  signed.recipients[0].status = 'completed';
+  signed.recipients[2].status = 'completed';
+  after = clone(signed);
+  after.recipients.splice(1, 1);
+  after.fields.pop();
+  said = outcomes(signed, after);
+  assert.equal(said.completes, false);
+  assert.equal(said.people[0].kind, 'sign_again');
 });

@@ -4,8 +4,8 @@ import { api } from '@/components/ui';
 
 // The self-service tools on the help page. Every one of them works without logging in.
 
-// Billing dates are whole days in UTC, written the same way as in our emails so the two never disagree.
-export const billDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '');
+// Billing dates are written in the reader's own time zone, like the Plan page and our emails, so the three agree.
+export const billDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 
 // Turns a failed call into a sentence that says what to do next. Errors without a status never reached the server.
 const explain = (e: any, tooMany: string, byStatus: Record<number, string> = {}) =>
@@ -99,12 +99,12 @@ export function StopByCard() {
   const [noEmail, setNoEmail] = useState(false);
   const [on, setOn] = useState('');
   const [amount, setAmount] = useState('');
-  const a = useAction<{ account?: string; ends_at: string; reference: string; ended_now?: boolean }>();
+  const a = useAction<{ account?: string; ends_at: string; reference: string; ended_now?: boolean; all?: { account?: string; reference: string }[] }>();
   if (a.done)
     return (
       <Result show>
-        <p><b>Renewal stopped{a.done.account ? ` for ${a.done.account}` : ''}.</b> You will not be charged again.</p>
-        <p>Reference <span className="pub-ref">{a.done.reference}</span></p>
+        <p><b>Renewal stopped{a.done.all && a.done.all.length > 1 ? ` for ${a.done.all.length} plans paid with that card: ${a.done.all.map((x) => x.account).filter(Boolean).join(' and ')}` : a.done.account ? ` for ${a.done.account}` : ''}.</b> You will not be charged again.</p>
+        <p>Reference <span className="pub-ref">{(a.done.all && a.done.all.length > 1 ? a.done.all.map((x) => x.reference) : [a.done.reference]).join(', ')}</span></p>
         {a.done.ended_now
           ? <p>The last payment had not gone through, so the plan ended today and that payment will not be tried again. The signatures on the account stay, and nothing is deleted.</p>
           : <p>The plan runs until {billDay(a.done.ends_at)}, because that month is already paid for. No payment is taken after that. The signatures on the account stay, and nothing is deleted.</p>}
@@ -183,7 +183,7 @@ export function ContactForm() {
         <Result show>
           <p><b>We got your message.</b> A person will read it and reply by email to {a.done.email}.</p>
           <p>Your reference is <span className="pub-ref">{a.done.reference}</span></p>
-          <p>We also emailed you a copy with this reference. Reply to that email if you want to add anything.</p>
+          <p>We also emailed you this reference. Reply to that email if you want to add anything.</p>
         </Result>
         {info.email && <p className="muted small pub-form-hint">You can also write to <a href={`mailto:${info.email}?subject=${encodeURIComponent(`Reference ${a.done.reference}`)}`}>{info.email}</a>. Mention your reference.</p>}
         <button type="button" className="btn" onClick={() => (a.reset(), setF((s) => ({ ...s, message: '' })))}>Send another message</button>

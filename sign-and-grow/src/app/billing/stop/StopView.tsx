@@ -5,7 +5,7 @@ import { api } from '@/components/ui';
 import { PLANS, type PlanId } from '@/lib/impact';
 import { FindSubscription, StopByCard, billDay } from '@/app/help/tools';
 
-type Info = { account: string; plan: string; price: number; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null };
+type Info = { account: string; plan: string; price: number; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null; failing?: boolean };
 type Done = { ends_at: string; reference: string; ended_now?: boolean };
 type View = { kind: 'loading' } | { kind: 'no-link' } | { kind: 'expired' } | { kind: 'failed'; message: string } | { kind: 'ready'; info: Info };
 
@@ -185,7 +185,7 @@ export function StopView() {
           <dt>Account</dt>
           <dd>{info.account}</dd>
           <dt>Plan</dt>
-          <dd>{planName('grove')}, ${info.price} a month{info.plan !== 'grove' ? ' (on hold: the last payment did not go through)' : ''}</dd>
+          <dd>{planName('grove')}, ${info.price} a month{info.failing ? ' (the last payment did not go through)' : ''}</dd>
           {info.renews_at && <><dt>Next charge</dt><dd>${info.price} on {billDay(info.renews_at)}</dd></>}
           {typeof n === 'number' && <><dt>Signatures left</dt><dd>{n}<small>They stay yours after you stop</small></dd></>}
         </dl>
@@ -194,7 +194,7 @@ export function StopView() {
           <button type="button" className="btn primary lg" disabled={busy} onClick={stop}>{busy ? 'Stopping' : 'Stop renewing'}</button>
         </div>
         <ul className="pub-list muted small" style={{ margin: '18px 0 0' }}>
-          <li>You are not charged again. {info.plan !== 'grove' ? 'The plan ends today and the failed payment is not tried again.' : 'The plan runs until the end of the month you already paid for.'}</li>
+          <li>You are not charged again. {info.failing ? 'The last payment did not go through, so the plan ends today and that payment is not tried again.' : 'The plan runs until the end of the month you already paid for.'}</li>
           <li>The signatures you have left stay yours and never expire. Nothing is deleted.</li>
           <li>You get a cancellation reference here and by email.</li>
         </ul>

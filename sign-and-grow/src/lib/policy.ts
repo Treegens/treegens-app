@@ -21,3 +21,18 @@ export const abuseSuspendAfter = (): number => Number(process.env.ABUSE_SUSPEND_
 
 /** How many people a new, unpaid account may send to per day in its first week. */
 export const newAccountDailyRecipients = (): number => Number(process.env.NEW_ACCOUNT_DAILY_RECIPIENTS) || 50;
+
+/** How many people an account that has not paid may send to per day after its first week. Paying for anything, or being cleared by a person, lifts both limits. */
+export const unpaidDailyRecipients = (): number => Number(process.env.UNPAID_DAILY_RECIPIENTS) || 200;
+
+/** An access code a sender sets must have at least this many characters. */
+export const ACCESS_CODE_MIN = 4;
+
+/** After this many wrong tries in total an access code is frozen until the sender sets a new one. */
+export const ACCESS_CODE_TRIES = 10;
+
+/** A start from a public form that nobody has touched for this many hours is closed, and the signature held for it comes back. */
+export const powerformIdleHours = (): number => Number(process.env.POWERFORM_IDLE_HOURS) || 24;
+
+/** How many unfinished starts one device address may have on one public form at a time. */
+export const POWERFORM_OPEN_STARTS = 3;

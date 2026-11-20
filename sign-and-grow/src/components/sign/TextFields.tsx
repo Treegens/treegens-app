@@ -138,16 +138,24 @@ export function PageFields({ docId, page, c, near }: { docId: string; page: numb
   );
 }
 
-/** What other people already put on this page, as text. */
-export function PageOthers({ others }: { others: any[] }) {
+/** Who put something on the page that is not this signer's to fill in. Said next to it in both views. */
+export function otherSource(f: any, senderName: string): string {
+  if (f.from === 'start') return `Filled in by ${senderName} for ${f.by || 'another signer'}, who can still change it.`;
+  if (f.from === 'sender') return f.by ? `Written by ${senderName}, in the part for ${f.by}.` : `Written by ${senderName}.`;
+  return `Filled in by ${f.by || 'another signer'}.`;
+}
+
+/** What is already on this page besides the signer's own fields, as text: the sender's wording and what others filled in. */
+export function PageOthers({ others, senderName }: { others: any[]; senderName: string }) {
   if (!others.length) return null;
   return (
     <div className="sg-others">
-      <div className="sg-form-title">Already filled in by others on this page</div>
+      <div className="sg-form-title">Already on this page, from {senderName} and other signers</div>
       <ul>
         {others.map((f) => (
           <li key={f.id}>
-            {LABEL[f.type] || 'Field'}: {f.image ? <img src={f.image} alt="Signed" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'ticked' : 'not ticked') : f.value}
+            {f.label || LABEL[f.type] || 'Field'}: {f.image ? <img src={f.image} alt="Signed" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'ticked' : 'not ticked') : f.value}
+            {' '}<span className="muted small">{otherSource(f, senderName)}</span>
           </li>
         ))}
       </ul>

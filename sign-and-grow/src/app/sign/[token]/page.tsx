@@ -10,7 +10,7 @@ import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from 
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
 import { MenuDialog, AskDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
 import { TextView } from '@/components/sign/TextView';
-import { PageFields, PageOthers, type FieldCtx } from '@/components/sign/TextFields';
+import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
@@ -39,6 +39,7 @@ export default function SignPage() {
   const [uploading, setUploading] = useState('');
   const [agree, setAgree] = useState(false);
   const [code, setCode] = useState('');
+  const [askedCode, setAskedCode] = useState<'' | 'busy' | 'asked'>('');
   const [formError, setFormError] = useState('');
   const [finishError, setFinishError] = useState('');
   const [finished, setFinished] = useState<any>(null);
@@ -46,7 +47,13 @@ export default function SignPage() {
   const [muted, setMuted] = useState(false);
   const [muteNote, setMuteNote] = useState<'' | 'done' | 'failed'>('');
   const [moreTime, setMoreTime] = useState<'' | 'busy' | 'asked'>('');
+  // Set when the sender changed the document while this page was open: the page has loaded the new version and
+  // asks the person to look again before they finish.
+  const [changedOpen, setChangedOpen] = useState(false);
   const touch = useMedia(TOUCH);
+  // The content version this page shows. It goes back with consent, every save and Finish, and the server refuses
+  // a save or a Finish that comes from an older version than the one on the envelope.
+  const version = useRef<number | null>(null);
 
   const valuesRef = useRef(values);
   valuesRef.current = values;
@@ -63,6 +70,7 @@ export default function SignPage() {
       const d = await api(base);
       setProblem(null);
       setData(d);
+      version.current = d.version ?? null;
       setMuted((m) => m || !!d.recipient?.muted);
       if (d.fields) {
         const server: Record<string, string> = Object.fromEntries(d.fields.map((f: any) => [f.id, f.value || '']));
@@ -75,7 +83,8 @@ export default function SignPage() {
         setSig(s);
         setIni(i);
         const unsaved = !!lastSaved.current && JSON.stringify(valuesRef.current) !== lastSaved.current;
-        setValues((prev) => (unsaved ? { ...server, ...prev } : server));
+        // Answers not saved yet are kept, but only for fields that still exist: the sender may have taken one away.
+        setValues((prev) => (unsaved ? { ...server, ...Object.fromEntries(Object.entries(prev).filter(([id]) => id in server)) } : server));
         lastSaved.current = before;
       }
     } catch (e: any) {
@@ -181,7 +190,7 @@ export default function SignPage() {
     if (!canSave.current) return true;
     const json = JSON.stringify(valuesRef.current);
     if (json === lastSaved.current) return true;
-    const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ values: valuesRef.current }), credentials: 'same-origin' as const };
+    const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ values: valuesRef.current, version: version.current }), credentials: 'same-origin' as const };
     if (leaving) {
       // The page is going away: hand the request to the browser and do not wait for an answer.
       try {
@@ -198,13 +207,21 @@ export default function SignPage() {
     setSave('saving');
     try {
       const res = await fetch(`/api${base}/save`, request);
-      if (!res.ok) throw Object.assign(new Error(), { status: res.status });
+      if (!res.ok) throw Object.assign(new Error(), { status: res.status, code: (await res.json().catch(() => ({}))).code });
       lastSaved.current = json;
       rejected.current = 0;
       setSave(JSON.stringify(valuesRef.current) === json ? 'saved' : 'pending');
       return true;
     } catch (e: any) {
       if (!canSave.current) return true;
+      // The sender changed the document while it was open here. Nothing was saved over the new version: load it,
+      // keep what was typed for the fields that are still there, and say so.
+      if (e?.code === 'changed') {
+        setChangedOpen(true);
+        setSave('idle');
+        load();
+        return false;
+      }
       // The document changed underneath us (voided, corrected, finished elsewhere): show what is true now.
       if (e?.status >= 400 && e.status < 500 && e.status !== 429 && rejected.current++ < 2) {
         setSave('idle');
@@ -320,14 +337,21 @@ export default function SignPage() {
     setBusy(true);
     setFinishError('');
     try {
-      const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini } });
+      const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current } });
       canSave.current = false;
       writeKept(token, null, null);
       setOpen('');
       setFinished(r);
     } catch (e: any) {
       const msg = e?.message || 'Something went wrong on our side.';
-      if (/no longer open|already finished|not your turn/i.test(msg)) {
+      if (e?.code === 'changed') {
+        // Nothing was signed. Show the document as it is now, with the answers that still have a field, and ask
+        // for another look before finishing.
+        setOpen('');
+        setChangedOpen(true);
+        await load();
+        window.scrollTo({ top: 0 });
+      } else if (/no longer open|already finished|not your turn/i.test(msg)) {
         setOpen('');
         toast(msg, true);
         await load();
@@ -348,6 +372,18 @@ export default function SignPage() {
       setMoreTime('');
       toast(`${e?.message || 'We could not send that.'} You can also email ${env.sender.email} directly.`, true);
       return false;
+    }
+  }
+
+  // On the locked screen: never given the code, or the code is frozen. One click tells the sender, no code needed.
+  async function askForCode() {
+    setAskedCode('busy');
+    try {
+      await api(`${base}/ask-code`, { method: 'POST' });
+      setAskedCode('asked');
+    } catch (e: any) {
+      setAskedCode('');
+      toast(e?.status === 429 ? `You have already asked today. You can also email ${env.sender.email} directly.` : `${e?.message || 'We could not send that.'} You can also email ${env.sender.email} directly.`, true);
     }
   }
 
@@ -389,7 +425,24 @@ export default function SignPage() {
     </>
   );
 
-  if (stage === 'locked')
+  if (stage === 'locked') {
+    const askSender = askedCode === 'asked'
+      ? <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name}.</b> They will give you the code themselves, by phone or message. It never comes in an email from us.</div>
+      : <button type="button" className="btn" disabled={askedCode === 'busy'} onClick={askForCode}>{askedCode === 'busy' ? 'Asking' : 'Ask the sender'}</button>;
+    // Too many wrong tries: no code opens it now, so no box to type one into. Say what happened and who can fix it.
+    if (data.code_frozen)
+      return (
+        <Shell data={data} footer={report}>
+          {notice}
+          <StateCard tone="warn" title="This access code is frozen">
+            <p>The code for this document was entered wrongly too many times, so it no longer opens the document. That keeps a code from being guessed. Nothing you filled in is lost.</p>
+            <p>{sender.name} has been told and can set a new code. Ask them for the new one, then open your link again.</p>
+            {askSender}
+            <Sender env={env} brand={data.brand} />
+          </StateCard>
+          {dialogs}
+        </Shell>
+      );
     return (
       <Shell data={data} footer={report}>
         {notice}
@@ -402,7 +455,10 @@ export default function SignPage() {
             await api(`${base}/unlock`, { body: { code } });
             await load();
           } catch (err: any) {
-            setFormError(err?.status === 401 ? `That access code is not right. Check it and try again, or ask ${sender.name} for the code.` : `${err?.message || 'Something went wrong on our side.'}`);
+            // The server says what happened in full: a wrong code and how many tries are left, a short wait after
+            // several wrong tries from this device, or a code that is frozen now (the screen above, after a reload).
+            setFormError(err?.message || 'Something went wrong on our side.');
+            if (err?.status === 423) await load();
           } finally {
             setBusy(false);
           }
@@ -413,12 +469,14 @@ export default function SignPage() {
           <label className="f"><span>Access code</span><input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" autoCapitalize="off" spellCheck={false} aria-invalid={!!formError} /></label>
           {formError && <div className="notice err sg-problem" role="alert">{formError}</div>}
           <button className="btn primary lg" disabled={busy}>{busy ? 'Opening' : 'Open document'}</button>
-          <p className="muted small sg-after">Do not have a code? Ask the sender for it.</p>
+          <p className="muted small sg-after">Do not have a code? {sender.name} chose it and is the only one who can give it to you.</p>
+          <div style={{ marginTop: 10 }}>{askSender}</div>
           <Sender env={env} brand={data.brand} />
         </form>
         {dialogs}
       </Shell>
     );
+  }
 
   if (stage === 'closed') {
     const expired = env.status === 'expired';
@@ -535,7 +593,7 @@ export default function SignPage() {
             if (!agree) return setFormError('Tick the box above to agree, then choose Continue.');
             setBusy(true);
             try {
-              await api(`${base}/consent`, { method: 'POST' });
+              await api(`${base}/consent`, { body: { version: version.current } });
               await load();
             } catch (e: any) {
               setFormError(`${e?.message || 'Something went wrong on our side.'} Try again in a moment.`);
@@ -647,8 +705,10 @@ export default function SignPage() {
 
   const overlay = (docId: string) => (page: number) => (
     <>
+      {/* Everything already on the page that is not this person's to fill in: the sender's own wording, whoever it
+          is assigned to, and what people who have finished put there. */}
       {data.others.filter((f: any) => f.document_id === docId && f.page === page).map((f: any) => (
-        <div key={f.id} className={`field other${isBox(f) ? ' box' : ''}`} style={pos(f)}>
+        <div key={f.id} className={`field other${isBox(f) ? ' box' : ''}`} style={pos(f)} title={otherSource(f, sender.name)}>
           {f.image ? <img src={f.image} alt="Signature of another signer" /> : isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}
         </div>
       ))}
@@ -670,6 +730,20 @@ export default function SignPage() {
   return (
     <Shell data={data} bar={bar} bottom={bottom} footer={report} titleIsHeading live={live} helpInNewTab>
       {notice}
+      {changedOpen && (
+        <div className="notice warn sg-top" role="alert">
+          <b>{sender.name} changed this document while you had it open.</b> Nothing was signed. What you filled in is still here wherever its field still exists. Look at the document again before you finish.
+          {data.changed ? ` What changed: ${data.changed}` : ''}{' '}
+          <button type="button" className="sg-link" onClick={() => setChangedOpen(false)}>I have looked</button>
+        </div>
+      )}
+      {me.signed_before && !changedOpen && (
+        <div className="notice warn sg-top" role="status">
+          <b>{sender.name} changed this document after you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it on {fmtDate(me.signed_before, true)}.</b> What you did then no longer counts, and it is kept on record together with the change.
+          Look at the document again and {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again if you agree. Your earlier answers are still filled in for you to check.
+          {data.changed ? ` What changed: ${data.changed}` : ''}
+        </div>
+      )}
       {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now.</div>}
       <p className="sg-guide" id="sg-guide">
         {!acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
@@ -696,7 +770,7 @@ export default function SignPage() {
       ) : (
         <TextView documents={data.documents} urlFor={(id) => `/api${base}/doc/${id}`} senderName={sender.name} onAsk={go('ask')}
           fields={(docId, page, near) => <PageFields docId={docId} page={page} c={ctx} near={near} />}
-          others={(docId, page) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} />} />
+          others={(docId, page) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} />} />
       )}
       <p className="muted small center sg-envelope">Envelope {env.id}{env.expires_at ? ` · open until ${fmtDate(env.expires_at)}` : ''} · Signing on screen saves about {fmtNum(env.impact.sheets)} sheets of paper.</p>
 

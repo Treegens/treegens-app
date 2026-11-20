@@ -60,8 +60,9 @@ export function clientIp(req: Request): string {
   const hops = /^\d+$/.test(raw) ? Number(raw) : 1;
   if (!hops) return 'unknown';
   const list = (req.headers.get('x-forwarded-for') || '').split(',').map((s) => s.trim()).filter(Boolean);
-  // A shorter list than expected still starts with an entry one of our proxies wrote, so that one is used.
-  return list[Math.max(0, list.length - hops)] || req.headers.get('x-real-ip') || 'unknown';
+  // A shorter list than expected still starts with an entry one of our proxies wrote, so that one is used. No
+  // other header is consulted: X-Real-IP is as easy to type as this one.
+  return list[Math.max(0, list.length - hops)] || 'unknown';
 }
 
 // What an API key can never do, whatever its scope. These decide who controls the account or move money, so they
@@ -138,7 +139,7 @@ export async function handle(req: Request): Promise<Response> {
     }
     return json({ error: 'Not found', request_id: requestId }, 404, { 'x-request-id': requestId });
   } catch (e: any) {
-    if (e instanceof HttpError) return json({ error: e.message, request_id: requestId }, e.status, { 'x-request-id': requestId });
+    if (e instanceof HttpError) return json({ ...(e.data || {}), error: e.message, request_id: requestId }, e.status, { 'x-request-id': requestId });
     console.error('[api]', requestId, req.method, path, e);
     return json({ error: `Something went wrong on our side. Please try again. If it keeps happening, tell us this reference: ${requestId}.`, request_id: requestId }, 500, { 'x-request-id': requestId });
   }

@@ -1,9 +1,13 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
-import { publicFacts } from '@/app/help/facts';
+import { publicFacts, abuseFacts } from '@/app/help/facts';
 
 export const metadata = { title: 'Security and trust', description: 'What Sign&Grow does to protect signers, senders and documents, in plain words. And what it does not do.' };
+
+// The daily limits and the number of reports that pause an account are settings. Read them when the page is asked
+// for, not when the site is built.
+export const dynamic = 'force-dynamic';
 
 // Every statement on this page describes behaviour that exists in the code today. Before adding a line, find the
 // code that makes it true. If you cannot, it does not belong here.
@@ -22,6 +26,7 @@ const Block = ({ id, title, lead, not, children }: { id: string; title: string; 
 
 export default function Security() {
   const { closeGraceDays } = publicFacts();
+  const abuse = abuseFacts();
   return (
     <div className="pub">
       <PublicNav />
@@ -44,18 +49,18 @@ export default function Security() {
           <Point title="You never need an account or a password.">The link in your email is all you need. Nobody is asked to register, log in or start a trial in order to sign.</Point>
           <Point title="You are never sent marketing.">We email signers only about documents they are part of: the request, reminders, changes and the completed copy. You can switch off reminders for a document with one click.</Point>
           <Point title="Your link does not wear out.">It works for as long as the document is open, however many times you open it. There is no limit on clicks. If a deadline passes, the sender can reopen the document and the same link works again.</Point>
-          <Point title="You can check that an email is real.">Signing requests, reminders and completion emails carry a security code. Type it in at <Link href="/check">Check an email</Link> and we tell you who sent it.</Point>
+          <Point title="You can check that an email is real.">Signing requests, reminders and completion emails carry a security code. Type it in at <Link href="/check">Check an email</Link> and we tell you which address sent it and under what name. You can report the email there too, without opening the document.</Point>
           <Point title="You always know who is asking.">Each request names the sender and their email address, and a reply goes straight to that person.</Point>
           <Point title="You get your copy, also later.">Everyone on a document gets the completed PDF. <Link href="/help#find-documents">Find my documents</Link> sends the link again to the same inbox at any time.</Point>
-          <Point title="Extra protection when the sender wants it.">A sender can put an access code on a document. They give it to you themselves. It is never in our email.</Point>
+          <Point title="Extra protection when the sender wants it.">A sender can put an access code of at least {abuse.codeMin} characters on a document. They give it to you themselves. It is never in our email. After {abuse.codeTries} wrong tries the code is frozen, so it cannot be guessed, until the sender sets a new one.</Point>
         </Block>
 
-        <Block id="scams" title="Keeping scams out" lead="E-signature services get abused to send fake invoices. These checks run on every send.">
+        <Block id="scams" title="Keeping scams out" lead="E-signature services get abused to send fake invoices. These checks run whenever a sender causes an email to someone: a first send, a correction to a document that is out, a reminder, a bulk send and a public form.">
           <Point title="Senders confirm their email address first.">An account cannot send anything until its address is confirmed.</Point>
-          <Point title="New free accounts have a daily limit.">In its first week a free account can only send to a limited number of people a day.</Point>
-          <Point title="Fake payment notices are stopped.">A new free account cannot send something that reads like a payment notice from a well-known brand with a phone number to call. A person can clear a genuine one.</Point>
-          <Point title="Every request can be reported.">The signing page has a report link. Reports go to a person.</Point>
-          <Point title="Enough reports pause the sender.">When several different recipients report one account, new sends from it stop until a person has reviewed it. The account keeps access to its own documents meanwhile.</Point>
+          <Point title="Accounts that have not paid have a daily limit.">An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone newly emailed counts, however they are reached. A payment lifts the limit, and so can a person on our team.</Point>
+          <Point title="Fake payment notices are stopped.">An account that has not paid cannot send something that reads like a payment notice from a well-known brand with a phone number to call, and cannot send under a name that reads like such a brand. We read the subject, the message, notes to recipients, document names and the names the email goes out under, also when they are spelled with look-alike letters. It is a filter for the common trick, not a guarantee. A person can clear a genuine sender.</Point>
+          <Point title="Every request can be reported.">Each signing email has a report link that needs only its security code, and the signing page has one too. Reports go to a person.</Point>
+          <Point title="Enough reports pause the sender.">When {abuse.reportsToPause} different recipients report one account, everything it sends stops until a person has reviewed it: new documents, new or changed recipients, reminders and reopening. People who already have a document can still sign it, and the account keeps access to its own documents meanwhile.</Point>
           <Point title="We never ask for money or passwords by email.">Not for a password, not for a card number, not for a payment. An email that does is not from us. <Link href="/help#unexpected">Report it</Link>.</Point>
         </Block>
 
@@ -71,7 +76,7 @@ export default function Security() {
           <Point title="Stopping payment never costs you your documents.">Cancelling, a failed payment or moving to the free plan deletes nothing and locks nothing. A paused account can still open, download and export everything.</Point>
           <Point title={`Closing an account can be undone for ${closeGraceDays} days.`}>Nothing is deleted during that time, and signing in again brings the account straight back. After that it is removed for good.</Point>
           <Point title="A team does not lose documents when someone leaves.">Their envelopes pass to the team, and the owner can hand the account to someone else.</Point>
-          <Point title="Only the right people can open a document.">The people it was sent to, the person who sent it, and the admins of the sender&apos;s account. A recipient cannot open it before their turn, or after it has been voided, declined or left to expire.</Point>
+          <Point title="Only the right people can open a document.">The people it was sent to, the person who sent it, and the admins of the sender&apos;s account. A recipient cannot open it before their turn, or after it has been voided, declined or left to expire. On a public form, typing someone else&apos;s email address never opens their document: an unfinished one is only given back to the browser that started it.</Point>
         </Block>
 
         <Block id="privacy" title="Privacy and AI">
@@ -83,7 +88,7 @@ export default function Security() {
         <Block id="access" title="Accounts and access">
           <Point title="Passwords are never stored as written.">Only a salted scrypt hash is kept. Password reset links work once and for one hour.</Point>
           <Point title="API keys and login sessions are stored as fingerprints.">An API key is shown once, when you create it. After that we only hold its hash.</Point>
-          <Point title="Guessing is slowed down.">Sign-in attempts, access codes, security codes and the public forms on this site are rate limited.</Point>
+          <Point title="Guessing is slowed down.">Sign-in attempts, access codes, security codes and the public forms on this site are rate limited. An access code is frozen after {abuse.codeTries} wrong tries.</Point>
           <Point title="Webhooks are signed.">Every delivery carries an HMAC-SHA256 signature you can verify, and webhook addresses that point into a private network are refused.</Point>
           <Point title="Our pages cannot be framed by another site.">That stops a look-alike site from wrapping the real signing screen.</Point>
         </Block>

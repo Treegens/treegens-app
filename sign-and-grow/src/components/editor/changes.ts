@@ -2,9 +2,9 @@
 // person, and keeps the editor honest when signers act while the sender is still editing.
 // These functions mirror correctEnvelope() and advance() in src/server/envelopes.ts. Plain data in, plain data out.
 
-export type Content = { ordered?: any; documents: any[]; recipients: any[]; fields: any[] };
+export type Content = { ordered?: any; date_format?: any; documents: any[]; recipients: any[]; fields: any[] };
 
-export type OutcomeKind = 'finished' | 'copy_sent' | 'unchanged' | 'updated' | 'new_link' | 'invited' | 'waiting' | 'removed';
+export type OutcomeKind = 'finished' | 'sign_again' | 'copy_sent' | 'unchanged' | 'updated' | 'new_link' | 'held' | 'invited' | 'waiting' | 'removed';
 export type Outcome = { id: string; name: string; email: string; role: string; kind: OutcomeKind; badge: string; text: string };
 
 const r6 = (n: any) => Math.round((Number(n) || 0) * 1e6);
@@ -17,38 +17,70 @@ const byFirst = (a: any[], b: any[]) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
 // fields) is only ever filled in by the signer, and the server keeps what is there.
 const SENDER_VALUE = ['text', 'number', 'date', 'company', 'title', 'note', 'checkbox', 'radio', 'dropdown'];
 
-/** People whose part can no longer change: signers, approvers and viewers who have finished. */
+/** People who have finished: signers, approvers and viewers. What they signed only changes if they sign again. */
 export const finished = (recipients: any[]) => recipients.filter((r) => r.status === 'completed' && r.role !== 'cc');
 
-// What one person is asked to read and fill in. If this changes while they have the document, they are told.
-function askView(x: Content, recipientId: string): string {
+const has = (v: any) => v != null && v !== '';
+
+// The sender's own wording in a field, as the server keeps it once the editor's state is saved over `base`: a note,
+// a read-only value, or the value a signer's field starts out with. An answer a signer typed is never the sender's.
+// Mirrors writeContent() and senderText() on the server.
+function wording(base: Content): (f: any) => string {
+  const was = new Map<string, any>(base.fields.map((f) => [f.id, f]));
+  return (f) => {
+    const old = was.get(f.id);
+    const mine = SENDER_VALUE.includes(f.type);
+    const owned = f.type === 'note' || !!(old ? old.readonly : f.readonly);
+    const answered = !!old && !owned && has(old.value) && s(old.value) !== s(old.prefill);
+    const value = answered ? s(old.value) : mine ? s(f.value) : old ? s(old.value) : '';
+    if (f.readonly || f.type === 'note') return value;
+    if (answered) return s(old.prefill);
+    return mine ? value || (old && !has(old.value) ? s(old.prefill) : '') : '';
+  };
+}
+
+// What one person is asked to read and fill in. If this changes while they have the document, they are told. They
+// are shown what the sender wrote in other people's fields too, so that counts as well.
+function askView(x: Content, recipientId: string, text: (f: any) => string): string {
   return JSON.stringify({
     docs: x.documents.map((d) => [d.file_id, s(d.name)]),
     fields: x.fields.filter((f) => !f.recipient_id || f.recipient_id === recipientId)
-      .map((f) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), f.readonly || f.type === 'note' ? s(f.value) : '']).sort(byFirst),
+      .map((f) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), text(f)]).sort(byFirst),
+    words: x.fields.filter((f) => f.recipient_id && f.recipient_id !== recipientId && text(f))
+      .map((f) => [f.id, f.document_id, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), text(f)]).sort(byFirst),
   });
 }
 
-// What is frozen once someone has finished: the documents, those people, and everything on the page they signed.
-function lockedView(x: Content, done: any[]): string {
-  if (!done.length) return '';
-  const ids = new Set(done.map((r) => r.id));
+// What is printed on the pages whoever fills them in: the files in their order, where every field sits and whose it
+// is, the sender's own wording, and how dates are written. Once someone has finished, a change to any of it is only
+// saved if the sender chooses to ask them to sign again. Mirrors printedView() on the server.
+function printedView(x: Content, text: (f: any) => string, dates: string): string {
   return JSON.stringify({
     docs: x.documents.map((d) => [d.id, d.file_id]),
-    people: done.map((r) => {
-      const n = x.recipients.find((y) => y.id === r.id);
-      return n ? [n.id, n.role, s(n.name).trim(), lower(n.email), order(n)] : null;
-    }),
-    fields: x.fields.filter((f) => !f.recipient_id || ids.has(f.recipient_id))
-      .map((f) => [f.id, f.document_id, f.recipient_id || null, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), SENDER_VALUE.includes(f.type) ? s(f.value) : '']).sort(byFirst),
+    dates,
+    fields: x.fields.map((f) => [f.id, f.document_id, f.recipient_id || null, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly || f.type === 'note' ? 1 : 0, text(f)]).sort(byFirst),
   });
 }
 
-/** True when saving `after` would be refused because it touches what finished people signed. */
-export const touchesLocked = (before: Content, after: Content) => {
+/**
+ * The people who have finished and would have to sign again if `after` were saved: everyone who finished when what
+ * is printed changes, and anyone who finished and is themselves changed or removed. Empty when nobody has to.
+ */
+export function signsAgain(before: Content, after: Content): any[] {
   const done = finished(before.recipients);
-  return lockedView(before, done) !== lockedView(after, done);
-};
+  if (!done.length) return [];
+  const text = wording(before);
+  // A state that says nothing about the date format leaves it as it is, like a request without one does.
+  const was = s((before as any).date_format), now = (after as any).date_format;
+  const printed = printedView(before, text, was) !== printedView(after, text, now ? s(now) : was);
+  return done.filter((o) => {
+    const n = after.recipients.find((r) => r.id === o.id);
+    return printed || !n || n.role !== o.role || s(n.name).trim() !== s(o.name) || lower(n.email) !== lower(o.email) || order(n) !== order(o);
+  });
+}
+
+/** True when saving `after` touches what finished people signed, so it is only saved if they are asked to sign again. */
+export const touchesLocked = (before: Content, after: Content) => signsAgain(before, after).length > 0;
 
 /**
  * What happens to each person when the correction is saved, in the order they appear in the editor, followed by
@@ -58,13 +90,25 @@ export function outcomes(before: Content, after: Content): { people: Outcome[]; 
   const old = new Map<string, any>(before.recipients.map((r) => [r.id, r]));
   const status = new Map<string, string>();
   const kind = new Map<string, OutcomeKind>();
+  const text = wording(before);
+  const again = new Set<string>(signsAgain(before, after).map((r) => r.id));
   for (const r of after.recipients) {
     const o = old.get(r.id);
+    const other = !!o && (lower(o.email) !== lower(r.email) || o.role !== r.role);
     if (!o) (kind.set(r.id, 'invited'), status.set(r.id, 'pending'));
+    else if (again.has(r.id)) (kind.set(r.id, 'sign_again'), status.set(r.id, 'pending'));
+    else if (o.status === 'completed' && o.role === 'cc' && other) (kind.set(r.id, 'new_link'), status.set(r.id, 'pending'));
     else if (o.status === 'completed') (kind.set(r.id, o.role === 'cc' ? 'copy_sent' : 'finished'), status.set(r.id, 'completed'));
     else if (o.status === 'pending') (kind.set(r.id, 'waiting'), status.set(r.id, 'pending'));
-    else if (lower(o.email) !== lower(r.email) || o.role !== r.role) (kind.set(r.id, 'new_link'), status.set(r.id, 'pending'));
-    else (kind.set(r.id, askView(before, r.id) !== askView(after, r.id) ? 'updated' : 'unchanged'), status.set(r.id, o.status));
+    else if (other) (kind.set(r.id, 'new_link'), status.set(r.id, 'pending'));
+    else (kind.set(r.id, askView(before, r.id, text) !== askView(after, r.id, text) ? 'updated' : 'unchanged'), status.set(r.id, o.status));
+  }
+  // The signing order holds for people who already have the document too. Anyone who is now behind a person who has
+  // not finished gives the turn back. Same rule as outOfTurn() on the server.
+  if (after.ordered) {
+    const waiting = after.recipients.filter((r) => status.get(r.id) !== 'completed' && r.role !== 'cc');
+    const turn = Math.min(...waiting.map(order));
+    for (const r of waiting) if ((status.get(r.id) === 'sent' || status.get(r.id) === 'viewed') && order(r) > turn) (kind.set(r.id, 'held'), status.set(r.id, 'pending'));
   }
 
   // Who is asked right away. Same walk as advance() on the server: the lowest open routing order goes first, and
@@ -98,10 +142,14 @@ export function outcomes(before: Content, after: Content): { people: Outcome[]; 
     let badge = 'No change';
     let text = 'Nothing changes for them. They keep the same link.';
     if (k === 'finished') (badge = 'Finished'), (text = 'Already finished. Nothing changes for them.');
-    else if (k === 'copy_sent') {
-      badge = 'Has a copy';
-      text = lower(o.email) !== lower(r.email) ? `Their copy already went to ${o.email}. Only the completed document goes to the new address.` : 'Already has their copy. Nothing more is sent now.';
-    } else if (k === 'updated') (badge = 'Told it changed'), (text = host ? 'Keeps the same link. You get an email saying the document changed.' : 'Keeps the same link and gets an email saying the document changed.');
+    else if (k === 'sign_again') {
+      const did = r.role === 'approver' ? 'approved' : r.role === 'viewer' ? 'viewed' : 'signed';
+      const redo = r.role === 'approver' ? 'approve' : r.role === 'viewer' ? 'confirm' : 'sign';
+      badge = r.role === 'approver' ? 'Approves again' : r.role === 'viewer' ? 'Looks again' : 'Signs again';
+      text = `Already ${did}. This change touches what they ${did}, so ${host ? 'you get an email' : 'they get an email'} ${now ? 'now' : 'when it is their turn'} that says what changed and asks them to ${redo} again. What they ${did} the first time stays on record.`;
+    } else if (k === 'held') (badge = 'Waits again'), (text = host ? 'Someone before them in the signing order has not finished, so their turn is taken back. What they filled in is kept.' : 'Someone before them in the signing order has not finished, so their turn is taken back. They get an email that says so, and another when it is their turn. What they filled in is kept.');
+    else if (k === 'copy_sent') (badge = 'Has a copy'), (text = 'Already has their copy. Nothing more is sent now.');
+    else if (k === 'updated') (badge = 'Told it changed'), (text = host ? 'Keeps the same link. You get an email saying the document changed.' : 'Keeps the same link and gets an email saying the document changed.');
     else if (k === 'new_link') {
       badge = 'New link';
       text = now
@@ -119,6 +167,7 @@ export function outcomes(before: Content, after: Content): { people: Outcome[]; 
   for (const o of before.recipients) {
     if (after.recipients.some((r) => r.id === o.id)) continue;
     const text = o.status === 'pending' ? 'Is removed. They had not been asked yet, so no email is sent.'
+      : o.status === 'completed' && o.role !== 'cc' ? 'Is removed. What they signed is set aside and kept on record, and they get an email saying they are no longer on the document.'
       : o.status === 'completed' ? 'Is removed. The link they have stops working.'
       : o.role === 'inperson' ? 'Is removed. The link to host their signing stops working.'
       : 'Is removed and gets an email saying they are no longer needed. Their link stops working.';
@@ -162,28 +211,33 @@ export function rebase(base: Content, fresh: Content, mine: Content): { recipien
   });
   const fields = freshValues(base, fresh, mine.fields);
   const merged = { ...mine, recipients, fields };
-  const done = finished(fresh.recipients);
-  const conflict = lockedView(fresh, done) !== lockedView(merged, done) ? done.map((r) => s(r.name) || 'Someone') : [];
+  // Only people who finished after the editor was opened are a surprise. Saving a change that touches what they
+  // signed would mean asking them to sign again, so the sender is told before anything is sent.
+  const already = new Set(finished(base.recipients).map((r) => r.id));
+  const conflict = signsAgain(fresh, merged).filter((r) => !already.has(r.id)).map((r) => s(r.name) || 'Someone');
   return { recipients, fields, conflict };
 }
 
 /**
- * Puts back everything that is locked exactly as the server has it (the documents, the finished people and what
- * they signed), and keeps the sender's changes for everyone else.
+ * Puts back everything finished people signed exactly as the server has it: the documents, the fields on them, the
+ * sender's wording and the finished people themselves. The sender's other changes are kept: names, addresses and
+ * the order of the people who have not finished, people added without fields, and what a field asks of its signer
+ * (label, required, choices). Anyone the sender removed who still has fields on the pages stays, with those fields.
  */
 export function restoreLocked(fresh: Content, mine: Content): Content {
   const done = new Set(finished(fresh.recipients).map((r) => r.id));
   const names = new Map<string, any>(mine.documents.map((d) => [d.id, d.name]));
   const documents = fresh.documents.map((d) => ({ ...d, name: names.get(d.id) || d.name }));
-  const docIds = new Set(documents.map((d) => d.id));
   const kept = mine.recipients.filter((r) => !done.has(r.id));
-  const recipients = [...fresh.recipients.filter((r) => done.has(r.id)), ...kept];
-  const people = new Set(recipients.map((r) => r.id));
-  const fields = [
-    ...fresh.fields.filter((f) => !f.recipient_id || done.has(f.recipient_id)),
-    ...mine.fields.filter((f) => f.recipient_id && !done.has(f.recipient_id) && people.has(f.recipient_id) && docIds.has(f.document_id)),
-  ];
-  return { ordered: mine.ordered, documents, recipients, fields };
+  const there = new Set(kept.map((r) => r.id));
+  const needed = fresh.recipients.filter((r) => !done.has(r.id) && !there.has(r.id) && fresh.fields.some((f) => f.recipient_id === r.id));
+  const recipients = [...fresh.recipients.filter((r) => done.has(r.id)), ...kept, ...needed];
+  const asked = new Map<string, any>(mine.fields.map((f) => [f.id, f]));
+  const fields = fresh.fields.map((f) => {
+    const m = asked.get(f.id);
+    return m && !done.has(f.recipient_id) && f.type !== 'note' ? { ...f, label: m.label, required: m.required, options: m.options, group_name: m.group_name, validation: m.validation } : f;
+  });
+  return { ordered: mine.ordered, documents, recipients, fields, ...((fresh as any).date_format ? { date_format: (fresh as any).date_format } : {}) } as Content;
 }
 
 /** A canonical string of everything the editor can change. Two envelopes with the same fingerprint save the same. */

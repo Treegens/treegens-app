@@ -133,7 +133,7 @@ export default function EnvelopeDetail() {
           <div className="sn-edit">
             <div>
               <b>Need to change something?</b> Fix a typo, swap a document or change who signs, without voiding.
-              {finished.length > 0 && <div className="small sn-edit-lock">{joinNames(finished.map((r: any) => r.name))} already finished, so what they signed is locked. The rest can still change.</div>}
+              {finished.length > 0 && <div className="small sn-edit-lock">{joinNames(finished.map((r: any) => r.name))} already finished. Names, addresses and the order of the others can still change. A change to the pages means asking {finished.length === 1 ? 'them' : 'those who finished'} to sign again, and you are asked first.</div>}
             </div>
             <Link href={editHref} className="btn primary">Edit envelope</Link>
           </div>
