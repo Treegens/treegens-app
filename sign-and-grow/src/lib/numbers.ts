@@ -24,3 +24,18 @@ export const isNumber = (value: any): boolean => NUMBER_RULE.test(String(value ?
 export const NUMBER_HINT = 'Type the number as you write it, like 2500, 1.234,56 or 1,234.56. It is printed exactly as you type it.';
 /** Shown when what was typed does not read as a number. */
 export const NUMBER_PROBLEM = 'This does not read as a number. Type it as you write it, like 2500, 12.5, 1.234,56 or 1,234.56, with nothing else in the field.';
+
+/**
+ * A number the app itself shows on a screen (a count, an amount it worked out), written the reader's way: 1,234.5 in
+ * English, 1 234,5 in French. Never used for what a signer typed (that is printed as typed) nor in the signed PDF.
+ */
+export function numberOnScreen(n: number, locale?: unknown, digits = 2): string {
+  if (!Number.isFinite(n)) return '';
+  let tag = 'en';
+  try {
+    tag = (typeof locale === 'string' && locale.trim() && Intl.getCanonicalLocales(locale.trim().replace(/_/g, '-'))[0]) || 'en';
+  } catch {
+    /* not a language tag: English */
+  }
+  return new Intl.NumberFormat(tag, { maximumFractionDigits: digits }).format(n);
+}

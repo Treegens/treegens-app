@@ -114,6 +114,8 @@ export function Editor({ id }: { id: string }) {
     // A draft is saved while people are still typing. A half-typed email would make the server turn the whole
     // save down, so it is left out until it is complete and everything else is kept safe meanwhile.
     recipients: list.map((r) => ({ id: r.id, role: r.role, role_name: r.role_name, name: r.name, email: correcting || !r.email || validEmail(r.email) ? r.email : '', routing_order: r.routing_order, access_code: r.access_code, note: r.note,
+      // The language of our screens for this person, or null for their browser (editor/RecipientLanguage.tsx).
+      locale: r.locale || null,
       // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
       verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link,
       // "I will send the link myself": a name and no address, for envelopes only (editor/SendMyself.tsx).
@@ -221,7 +223,7 @@ export function Editor({ id }: { id: string }) {
       const name = group.length > 1 ? `${group[0].name} and ${plural(group.length - 1, 'more picture')}` : group[0].name;
       const sizeOf = (l: File[]) => l.reduce((n, f) => n + f.size, 0);
       // A picture is made smaller before it leaves, so whether it is too large is only known after that.
-      const problem = precheck(group[0], isPicture(group[0])) || (room <= 0 ? `An envelope can hold up to ${MAX_DOCS} documents. Remove one to add this file.` : '');
+      const problem = precheck(group[0], isPicture(group[0]), !!me.converts) || (room <= 0 ? `An envelope can hold up to ${MAX_DOCS} documents. Remove one to add this file.` : '');
       if (problem) {
         setUploads((u) => [...u, { key, name, size: sizeOf(group), progress: 0, state: 'error', error: problem }]);
         continue;
@@ -239,7 +241,7 @@ export function Editor({ id }: { id: string }) {
           patch({ state: 'uploading', size: sizeOf(ready) });
           const f = await uploadFile(ready.length > 1 ? ready : ready[0], (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
           setUploads((u) => u.filter((x) => x.key !== key));
-          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size }]);
+          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null }]);
           setEnv((e: any) => (e.subject ? e : { ...e, subject: e.kind === 'template' ? f.name : `Please sign: ${f.name}` }));
           dirty();
         } catch (e: any) {
@@ -259,7 +261,7 @@ export function Editor({ id }: { id: string }) {
   // moves to the last page so nothing disappears quietly.
   async function replaceDoc(did: string, file: File | null | undefined) {
     if (!file) return;
-    const problem = precheck(file, isPicture(file));
+    const problem = precheck(file, isPicture(file), !!me.converts);
     if (problem) return toast(problem, true);
     try {
       toast('Uploading the new file…');
@@ -267,7 +269,7 @@ export function Editor({ id }: { id: string }) {
       const ready = await shrinkPhoto(file);
       if (precheck(ready)) return toast(precheck(ready), true);
       const f = await uploadFile(ready, () => {});
-      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size } : x)));
+      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null } : x)));
       fields.set((l) => l.map((x) => (x.document_id === did && x.page >= f.pages ? { ...x, page: f.pages - 1 } : x)), { record: false });
       dirty();
       toast('File replaced. Your fields are where you left them. Check they still line up.');
@@ -284,7 +286,8 @@ export function Editor({ id }: { id: string }) {
   }
 
   function addRcp(p: any = {}) {
-    const r = { id: newId('rcp'), role: 'signer', role_name: isTpl ? `Signer ${rcps.length + 1}` : '', name: '', email: '', routing_order: rcps.length ? Math.max(...rcps.map((x) => x.routing_order)) + 1 : 1, access_code: '', note: '', ...p };
+    // A new person starts in the account's default language (Settings, Account), or with none: their browser decides.
+    const r = { id: newId('rcp'), role: 'signer', role_name: isTpl ? `Signer ${rcps.length + 1}` : '', name: '', email: '', routing_order: rcps.length ? Math.max(...rcps.map((x) => x.routing_order)) + 1 : 1, access_code: '', note: '', locale: me.account?.default_locale || null, ...p };
     setRcps((l) => [...l, r]);
     dirty();
   }

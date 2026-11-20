@@ -1,5 +1,6 @@
 import { route, json, type Ctx } from './router.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
+import { chosenLocale, defaultFor } from './locales.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, sessionEnd, SESSION_COOKIE } from './auth.ts';
@@ -23,6 +24,9 @@ import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 import { forgottenFile, disputeFacts } from './evidence.ts';
 import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, sessionMade, passwordChanged } from './twostep.ts';
+// The security record of each account: one line where something happens (seclog.ts).
+import { record, signedIn, signInFailed, settingsChanged } from './seclog.ts';
+import { converterOn } from './convert.ts';
 
 // `c`: with an API key, two_step is left out, because no key reads anything of two-step login (twostep.ts).
 export const publicUser = (u: any, c?: Ctx) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), ...(c?.auth?.via === 'api_key' ? {} : { two_step: twoStepOn(u) }), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
@@ -72,8 +76,9 @@ function openInvite(tokenText: string, email: string): any {
   return inv;
 }
 // Makes the person a member. Call inside tx().
-function join(inv: any, userId: string, t = now()) {
-  run('INSERT OR IGNORE INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', inv.account_id, userId, inv.role, t);
+function join(inv: any, userId: string, t = now(), c?: Ctx) {
+  if (run('INSERT OR IGNORE INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', inv.account_id, userId, inv.role, t).changes)
+    record('member.joined', { c, by: { type: 'user', id: userId }, accounts: inv.account_id, about: ['user', userId], details: { role: inv.role, invite: inv.id } });
   run('UPDATE invites SET accepted_at=? WHERE id=?', t, inv.id);
   run('UPDATE users SET last_account_id=? WHERE id=?', inv.account_id, userId);
 }
@@ -111,7 +116,7 @@ export async function createLogin(c: Ctx, p: { name: string; email: string; pass
   const t = now();
   tx(() => {
     run('INSERT INTO users (id, email, name, password_hash, email_verified, verify_token, created_at) VALUES (?,?,?,?,?,?,?)', uid, p.email, p.name, p.passwordHash, invite || p.verified ? 1 : 0, token(), t);
-    if (invite) join(invite, uid, t);
+    if (invite) join(invite, uid, t, c);
     else {
       // With a few free signatures to try the product with. Once per person.
       accountId = ownWorkspace(uid, p.name, t);
@@ -138,6 +143,9 @@ route('POST', '/auth/login', async (c) => {
     // a password cannot be found out by trying it here (twostep.ts).
     const held = holdWrongPassword(c, u, b.invite);
     if (held) return held;
+    // Only for a login that exists, and not while the second screen hides whether the password was right (above):
+    // such a sign-in is written when its code is typed (routes-twostep.ts).
+    if (u) signInFailed(c, u, 'wrong_password');
     throw bad('That email and password do not match.', 401);
   }
   const r = await signInAs(c, u, b.invite);
@@ -171,7 +179,7 @@ export async function signInAs(c: Ctx, u: any, inviteToken?: any, o: { passed?: 
   if (inviteToken) {
     try {
       joined = openInvite(str(inviteToken), u.email);
-      tx(() => join(joined, u.id));
+      tx(() => join(joined, u.id, now(), c));
     } catch (e) {
       if (!(e instanceof HttpError)) throw e;
       joined = null;
@@ -186,13 +194,15 @@ export async function signInAs(c: Ctx, u: any, inviteToken?: any, o: { passed?: 
   const accountId = joined?.account_id || (mine.includes(u.last_account_id) ? u.last_account_id : mine[0]) || tx(() => ownWorkspace(u.id, u.name));
   if (accountId !== u.last_account_id) run('UPDATE users SET last_account_id=? WHERE id=?', accountId, u.id);
   c.cookies.push(createSession(u.id, accountId, c.secure));
+  signedIn(c, u, o.via, o.passed);
+  if (restored) record('account.close_undone', { c, by: { type: 'user', id: u.id }, member: u.id, about: ['user', u.id] });
   // What the second step left for this session: the remembered device it is tied to, and whether a reset stopped.
   const step = sessionMade(c);
   return { restored, fresh, joined: (joined?.account_name as string) || null, invite_error: inviteError || null, ...step };
 }
 
 route('POST', '/auth/logout', (c) => {
-  if (c.auth?.sessionId) run('DELETE FROM sessions WHERE id=?', c.auth.sessionId);
+  if (c.auth?.sessionId && run('DELETE FROM sessions WHERE id=?', c.auth.sessionId).changes) record('session.ended', { c, member: c.user.id, about: ['user', c.user.id], details: { how: 'signed_out' } });
   c.cookies.push(cookie(SESSION_COOKIE, '', 0, c.secure));
   return { ok: true };
 }, 'public');
@@ -274,6 +284,7 @@ route('POST', '/auth/reset', async (c) => {
     run('UPDATE users SET password_hash=?, email_verified=1 WHERE id=?', hash, r.user_id);
     run('DELETE FROM password_resets WHERE user_id=?', r.user_id);
     run('DELETE FROM sessions WHERE user_id=?', r.user_id);
+    record('password.reset', { c, by: { type: 'user', id: r.user_id }, member: r.user_id, about: ['user', r.user_id], details: { address_confirmed_now: !was?.v, disconnected: cut.length } });
     return cut;
   });
   // A sign-in that typed the old password and waits for its code ends (twostep.ts).
@@ -310,7 +321,7 @@ route('GET', '/me', (c) => {
   return {
     user: publicUser(c.user, c),
     role: c.role,
-    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || null, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
+    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || null, default_locale: defaultFor(a), subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
     members: get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n,
     ...trustInfo(c),
@@ -321,6 +332,8 @@ route('GET', '/me', (c) => {
     outbox: devOutbox(),
     // Whether the operator of this server has switched text messages on. When not, nothing offers them.
     text_messages: !!smsProvider(),
+    // Whether this server turns Word, Excel and other files into a PDF on upload. When not, nothing offers them.
+    converts: converterOn(),
     // Set when an email to this login came back for good ({ address, since, reason }), so every page can say so
     // until the address is changed or the person says it works again. null otherwise. See routes-bounces.ts.
     email_problem: emailProblem(c.user),
@@ -355,6 +368,7 @@ route('POST', '/me/password', async (c) => {
   if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
   run('UPDATE users SET password_hash=? WHERE id=?', hashPassword(str(b.password, 200)), c.user.id);
   run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '');
+  record('password.changed', { c, member: c.user.id, about: ['user', c.user.id] });
   // A sign-in that typed the old password and waits for its code ends, and a reset by email under way stops.
   await passwordChanged(c.user, 'settings');
   return { ok: true };
@@ -386,6 +400,7 @@ route('POST', '/me/sessions/sign-out-others', (c) => {
   const forgot = Number(run('DELETE FROM two_step_devices WHERE user_id=? AND id != ?', c.user.id, keep).changes);
   // And a sign-in somewhere else that is waiting for its code does not finish either.
   run('DELETE FROM two_step_pending WHERE user_id=?', c.user.id);
+  record('signout.everywhere', { c, member: c.user.id, about: ['user', c.user.id], details: { signed_out: n, devices_forgotten: forgot } });
   return { ok: true, signed_out: n, ...(forgot ? { two_step_devices_forgotten: forgot } : {}) };
 });
 route('DELETE', '/me/sessions/:id', (c) => {
@@ -393,6 +408,7 @@ route('DELETE', '/me/sessions/:id', (c) => {
   if (!s) throw bad('That browser is not signed in any more, so there was nothing to sign out.', 404);
   run('DELETE FROM sessions WHERE id=?', s.id);
   const current = s.id === c.auth?.sessionId;
+  record('session.ended', { c, member: c.user.id, about: ['user', c.user.id], details: { how: current ? 'signed_out' : 'ended_from_settings' } });
   if (current) c.cookies.push(cookie(SESSION_COOKIE, '', 0, c.secure));
   return { ok: true, current };
 });
@@ -411,10 +427,14 @@ route('PATCH', '/account', async (c) => {
   // The date format new envelopes start with. One that does not exist is refused, never swapped for another.
   if (b.default_date_format != null && b.default_date_format !== '' && !(DATE_FORMATS as readonly string[]).includes(b.default_date_format))
     throw bad(`The date format "${str(b.default_date_format, 40)}" does not exist. Use one of: ${DATE_FORMATS.join(', ')}. Nothing was changed.`);
+  // The language new recipients start in (locales.ts): checked before anything is written, like the date format.
+  const locale = b.default_locale === undefined ? undefined : chosenLocale(b.default_locale, 'The default language ("default_locale")', 'Nothing was changed.');
   if (b.default_date_format !== undefined) run('UPDATE accounts SET default_date_format=? WHERE id=?', b.default_date_format || null, a.id);
+  if (locale !== undefined) run('UPDATE accounts SET default_locale=? WHERE id=?', locale, a.id);
   run('UPDATE accounts SET name=?, brand_color=?, brand_logo=?, default_reminder_days=?, default_expire_days=? WHERE id=?',
     str(b.name ?? a.name, 120).trim() || a.name, b.brand_color === undefined ? a.brand_color : b.brand_color || null,
     b.brand_logo === undefined ? a.brand_logo : b.brand_logo || null, days(b.default_reminder_days, 0, 60, a.default_reminder_days), days(b.default_expire_days, 1, 365, a.default_expire_days), a.id);
+  settingsChanged({ c }, a, get('SELECT * FROM accounts WHERE id=?', a.id), { name: 'value', brand_color: 'value', brand_logo: 'changed', default_reminder_days: 'value', default_expire_days: 'value', default_date_format: 'value', default_locale: 'value' });
   return { ok: true };
 }, 'admin');
 
@@ -439,7 +459,9 @@ route('POST', '/account/invites', async (c) => {
   if (no) throw bad(no.message, no.status);
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
   const t = token();
-  run('INSERT INTO invites (id, token, account_id, email, role, created_at) VALUES (?,?,?,?,?,?)', id('inv'), t, c.account.id, email, role, now());
+  const inviteId = id('inv');
+  run('INSERT INTO invites (id, token, account_id, email, role, created_at) VALUES (?,?,?,?,?,?)', inviteId, t, c.account.id, email, role, now());
+  record('member.invited', { c, about: ['invite', inviteId], details: { role } });
   noteInvited(c.account.id, email);
   // Someone who already has a login joins by signing in. Everyone else makes a login first. The email goes to the
   // invited address only, so it tells the person inviting nothing about who has an account.
@@ -453,7 +475,7 @@ route('POST', '/account/invites', async (c) => {
 route('POST', '/invites/accept', async (c) => {
   const inv = openInvite(str((await c.body()).token), c.user.email);
   tx(() => {
-    join(inv, c.user.id);
+    join(inv, c.user.id, now(), c);
     if (c.auth?.sessionId) run('UPDATE sessions SET account_id=? WHERE id=?', inv.account_id, c.auth.sessionId);
   });
   return { ok: true, joined: inv.account_name };
@@ -469,6 +491,7 @@ route('PATCH', '/account/members/:id', async (c) => {
   if (!m) throw bad('Member not found.', 404);
   if (m.role === 'owner') throw bad('The owner role cannot be changed.');
   run('UPDATE memberships SET role=? WHERE account_id=? AND user_id=?', role, c.account.id, c.params.id);
+  if (m.role !== role) record('member.role_changed', { c, about: ['user', c.params.id], details: { from: m.role, to: role } });
 }, 'admin');
 
 route('DELETE', '/account/members/:id', async (c) => {
@@ -498,6 +521,7 @@ route('DELETE', '/account/members/:id', async (c) => {
     run('DELETE FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
     run('DELETE FROM sessions WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
     run('UPDATE api_keys SET stopped_at=? WHERE account_id=? AND user_id=? AND stopped_at IS NULL', now(), c.account.id, c.params.id);
+    record('member.removed', { c, about: ['user', c.params.id], details: { role: m.role, keys_stopped: keys.length, handed_over: n, handed_to: successor } });
     return n;
   });
   if (keys.length) {
@@ -551,6 +575,7 @@ route('POST', '/account/leave', async (c) => {
     const next = get('SELECT account_id FROM memberships WHERE user_id=? ORDER BY created_at LIMIT 1', me.id)?.account_id || ownWorkspace(me.id, me.name);
     run('UPDATE sessions SET account_id=? WHERE account_id=? AND user_id=?', next, c.account.id, me.id);
     run('UPDATE users SET last_account_id=? WHERE id=?', next, me.id);
+    record('member.left', { c, accounts: c.account.id, about: ['user', me.id], details: { role, keys_stopped: keys.length, handed_over: handed, handed_to: heir.user_id } });
     return { handed, next, others, heir, keys };
   });
   // The people who run the team hear it from us, not from a missing name in a list.
@@ -580,6 +605,7 @@ route('POST', '/account/transfer-owner', async (c) => {
     if (get('SELECT closing_at FROM users WHERE id=?', to)?.closing_at) throw bad('That person is closing their login, so the account cannot be handed to them. Choose someone else, or ask them to sign in again first (that keeps their login).');
     run("UPDATE memberships SET role='admin' WHERE account_id=? AND user_id=?", c.account.id, c.user.id);
     run("UPDATE memberships SET role='owner' WHERE account_id=? AND user_id=?", c.account.id, to);
+    record('owner.handed_over', { c, about: ['user', to], details: { from: c.user.id, to } });
   });
 });
 
@@ -638,12 +664,16 @@ route('POST', '/api-keys', async (c) => {
   const scope = b.scope === 'admin' ? 'admin' : 'send';
   if (scope === 'admin' && !c.admin) throw bad('Only account admins can create a key with the "admin" scope. Leave the scope out for a "send" key.', 403);
   const key = `tsk_${token(30)}`;
-  run('INSERT INTO api_keys (id, account_id, user_id, name, prefix, key_hash, created_at, scope) VALUES (?,?,?,?,?,?,?,?)', id('key'), c.account.id, c.user.id, str(b.name, 80) || 'API key', key.slice(0, 10), sha256(key), now(), scope);
+  const keyId = id('key');
+  run('INSERT INTO api_keys (id, account_id, user_id, name, prefix, key_hash, created_at, scope) VALUES (?,?,?,?,?,?,?,?)', keyId, c.account.id, c.user.id, str(b.name, 80) || 'API key', key.slice(0, 10), sha256(key), now(), scope);
+  record('api_key.created', { c, about: ['api_key', keyId], details: { name: str(b.name, 80) || 'API key', scope } });
   return { key, scope }; // the key is shown once
 });
 // Revoke your own key, or as an admin any key in the account.
 route('DELETE', '/api-keys/:id', (c) => {
-  run(`DELETE FROM api_keys WHERE id=? AND account_id=?${c.admin ? '' : ' AND user_id=?'}`, ...(c.admin ? [c.params.id, c.account.id] : [c.params.id, c.account.id, c.user.id]));
+  const k = get('SELECT name, scope, user_id, stopped_at FROM api_keys WHERE id=? AND account_id=?', c.params.id, c.account.id);
+  if (run(`DELETE FROM api_keys WHERE id=? AND account_id=?${c.admin ? '' : ' AND user_id=?'}`, ...(c.admin ? [c.params.id, c.account.id] : [c.params.id, c.account.id, c.user.id])).changes)
+    record('api_key.revoked', { c, about: ['api_key', c.params.id], details: { name: k?.name, scope: k?.scope, made_by: k?.user_id, was_stopped: !!k?.stopped_at } });
 });
 
 // The delivery log, newest first, a page at a time. ?webhook= shows one webhook only, ?before= (the next_before of
@@ -677,7 +707,11 @@ route('POST', '/webhooks', async (c) => {
   }
   if (get('SELECT COUNT(*) n FROM webhooks WHERE account_id=?', c.account.id).n >= MAX_WEBHOOKS) throw bad(`An account can have up to ${MAX_WEBHOOKS} webhooks. Delete one that is no longer used, then add this one.`);
   const events = Array.isArray(b.events) && b.events.length ? b.events.filter((e: any) => WEBHOOK_EVENTS.includes(e)).join(',') : '*';
-  run('INSERT INTO webhooks (id, account_id, url, secret, events, created_at) VALUES (?,?,?,?,?,?)', id('whk'), c.account.id, str(b.url, 500), `whsec_${token(24)}`, events || '*', now());
+  const hookId = id('whk');
+  run('INSERT INTO webhooks (id, account_id, url, secret, events, created_at) VALUES (?,?,?,?,?,?)', hookId, c.account.id, str(b.url, 500), `whsec_${token(24)}`, events || '*', now());
+  // Only the host: the rest of a webhook address often holds a secret of the receiving service.
+  record('webhook.created', { c, about: ['webhook', hookId], details: { host: new URL(str(b.url, 500)).host, events: events || '*' } });
+  return { ok: true, id: hookId };
 }, 'admin');
 route('POST', '/webhooks/deliveries/:id/redeliver', async (c) => {
   const d = get('SELECT d.*, d.body IS NOT NULL has_body, w.account_id FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE d.id=?', Number(c.params.id));
@@ -690,7 +724,15 @@ route('DELETE', '/webhooks/:id', (c) => {
   // Its delivery log goes with it. The log holds envelope ids and, for the latest deliveries, what was sent, and
   // nothing else would ever remove it: closing the account only finds the logs of webhooks that still exist.
   tx(() => {
-    if (run('DELETE FROM webhooks WHERE id=? AND account_id=?', c.params.id, c.account.id).changes) run('DELETE FROM webhook_deliveries WHERE webhook_id=?', c.params.id);
+    const w = get('SELECT url, events FROM webhooks WHERE id=? AND account_id=?', c.params.id, c.account.id);
+    if (run('DELETE FROM webhooks WHERE id=? AND account_id=?', c.params.id, c.account.id).changes) {
+      run('DELETE FROM webhook_deliveries WHERE webhook_id=?', c.params.id);
+      let host = '';
+      try {
+        host = new URL(w?.url).host;
+      } catch {}
+      record('webhook.removed', { c, about: ['webhook', c.params.id], details: { host, events: w?.events } });
+    }
   });
 }, 'admin');
 

@@ -1,6 +1,7 @@
 import { authenticate, renewedCookie, type Auth } from './auth.ts';
 import { HttpError, bad, setOrigin, id } from './util.ts';
 import { twoStepGate } from './twostep.ts';
+import { keyUsedFrom } from './seclog.ts';
 import type { Actor } from './envelopes.ts';
 
 export type Ctx = {
@@ -92,6 +93,8 @@ const PERSON_ONLY: [RegExp, string][] = [
   [/^POST \/me\/password$/, 'change the password of a login'],
   [/^(POST|PUT|PATCH|DELETE) \/billing\//, 'change the plan, pay or refund'],
   [/^[A-Z]+ \/operator\//, 'work the operator queue'],
+  // A leaked admin key must not be able to switch the security alerts off before it does what they would report.
+  [/^PATCH \/account\/security$/, 'switch the security alerts or what the security record shares off or on'],
 ];
 // The one admin-level call a "send" key may make: reading the webhooks and their delivery log. The handler leaves
 // the signing secrets out for it.
@@ -125,6 +128,8 @@ export async function handle(req: Request): Promise<Response> {
       const m = r.re.exec(path);
       if (!m) continue;
       const auth = authenticate(req, r.level !== 'public');
+      // The first use of a key from an internet address is a line in the account's security record (seclog.ts).
+      keyUsedFrom(auth, clientIp(req), req.headers.get('user-agent') || '');
       // A browser that is used stays signed in: when this request moved the end of its session forward, the cookie
       // goes out again with the new end. A handler that signs out or in pushes its own cookie after this one.
       if (auth?.slid) cookies.push(renewedCookie(req, proto === 'https'));

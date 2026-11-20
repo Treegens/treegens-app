@@ -28,13 +28,21 @@ import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS
 import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
 import { reminderText } from '../lib/policy.ts';
 import { keptOnDelete, keptLine } from './deleting.ts';
+// Keeping closed envelopes for a set time, legal holds and what a purge left (records.ts).
+import { assertNotHeld, holdsFollow, retentionFacts } from './records.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner, noteCopy, copyIsTheirs, fileHeldBack, templateGoes, assertCorrectionKept, asMember, forRows, askWho } from './tplroles.ts';
 // A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
 import { witnessCorrected, rowFills } from './witness.ts';
 import { rowFieldProblem } from './logic.ts';
+// A bulk row's "language", and a form visitor's language from their browser (locales.ts).
+import { rowLanguageRefusal, assertRowLanguages, visitorLocale } from './locales.ts';
 import { keepText, sealedTextHits } from './searchtext.ts';
 import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
+// Office files and others turned into a PDF on upload, with the original kept (src/server/converted.ts).
+import { convertUpload, keepOriginal } from './converted.ts';
+import { KNOWN_EXT } from '../lib/convert.ts';
+import { record } from './seclog.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -48,6 +56,10 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   if (parts.length > MAX_PHOTOS_PER_DOCUMENT) throw bad(`One document can be made from up to ${MAX_PHOTOS_PER_DOCUMENT} pictures, and this upload has ${parts.length}. Send fewer at a time and add the rest as a second document.`);
   if (parts.reduce((n, f) => n + f.size, 0) > 25_000_000) throw bad(parts.length > 1 ? 'Together these pictures are larger than 25 MB. Make them smaller or send fewer at a time, then upload again.' : 'That file is larger than 25 MB. Save it with smaller images or split it into parts, then upload again.');
   let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
+  // A Word, Excel, PowerPoint, OpenDocument, RTF, text, HTML or TIFF file becomes a PDF first on a server with a
+  // converter, and goes on from here exactly as a PDF does. The original is kept with it (src/server/converted.ts).
+  const conv = await convertUpload(bytes, file.name, accountId, parts.length);
+  if (conv) bytes = conv.pdf;
   const isPdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
   const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
   const isJpg = bytes[0] === 0xff && bytes[1] === 0xd8;
@@ -65,7 +77,7 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   const info = await inspectPdf(bytes);
   if (info.pages > 500) throw bad('That document has more than 500 pages. Split it into smaller documents and add them one by one.');
   const fid = id('fil');
-  const name = str(file.name, 200).replace(/\.(pdf|png|jpe?g)$/i, '') || 'Document';
+  const name = str(file.name, 200).replace(KNOWN_EXT, '') || 'Document';
   // Text is kept for the sender's own search. Files uploaded by signers are not indexed.
   const read = isPdf && accountId ? await extractPages(bytes) : [];
   const text = textOf(read);
@@ -78,7 +90,8 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   // With FILE_ENCRYPTION_KEY set the text is kept encrypted like the file itself, never in the clear (searchtext.ts).
   const kept = keepText(fid, text);
   run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages, text_sealed, text_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), kept.text, scanPages.length ? JSON.stringify(scanPages) : null, kept.sealed, kept.key);
-  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages };
+  const converted = conv ? keepOriginal(fid, conv) : null;
+  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted };
 }
 
 route('POST', '/files', (c) => storeUpload(c, c.account.id));
@@ -195,7 +208,7 @@ route('GET', '/inbox', (c) => {
     // First what is waiting for a group this person is a member of, each with their own link (memberInbox in groups.ts).
     items: [...memberInbox(c.user.email), ...all(`SELECT e.id, e.subject, e.status, e.sent_at, e.completed_at, u.name sender, r.role, r.status my_status, r.token
       FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id
-      WHERE r.email=? AND e.kind='envelope' AND e.status!='draft' AND r.status!='pending' AND r.role!='inperson' ORDER BY e.updated_at DESC LIMIT 100`, c.user.email)],
+      WHERE r.email=? AND e.kind='envelope' AND e.status!='draft' AND e.purged_at IS NULL AND r.status!='pending' AND r.role!='inperson' ORDER BY e.updated_at DESC LIMIT 100`, c.user.email)],
   };
 });
 
@@ -292,10 +305,11 @@ route('GET', '/envelopes/:id', (c) => {
   else env.wording_lock = wordingLock(c, e);
   // Names and wording in a script the signed PDF has no font for, said here so the sender hears it from the
   // envelope page and not from the finished document. Each entry says where the text stands and which characters.
-  const print_problems = e.status === 'completed' && e.final_sha256 ? [] : printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id));
+  const print_problems = e.status === 'completed' && (e.final_sha256 || e.purged_at) ? [] : printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id));
   // texts: what became of every text message about this envelope, like deliveries for email. Numbers are masked.
   // kept_on_delete: whether deleting it now would only take it out of the lists (deleting.ts), for the delete dialog.
-  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e) };
+  // retention: how long it is kept, a purge asked for or announced, holds, and what a purge left (records.ts).
+  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e) };
 });
 
 // The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.
@@ -339,7 +353,8 @@ route('PATCH', '/envelopes/:id', async (c) => {
   const e = mine(c, c.params.id);
   assertMayChange(c, e);
   const b = await c.body();
-  if ('folder' in b) run('UPDATE envelopes SET folder=? WHERE id=?', str(b.folder, 80).trim() || null, e.id);
+  // A hold on the folder it leaves keeps covering it (records.ts).
+  if ('folder' in b) (holdsFollow(e.id), run('UPDATE envelopes SET folder=? WHERE id=?', str(b.folder, 80).trim() || null, e.id));
 });
 
 // Deleting removes a draft, a template or a closed envelope for good, with its audit trail, our copies of its
@@ -360,13 +375,18 @@ route('DELETE', '/envelopes/:id', (c) => {
   if (keptOnDelete(e)) {
     run('UPDATE envelopes SET hidden_at=? WHERE id=?', now(), e.id);
     audit(e.id, c.actor, 'Removed from the sender\'s lists', keptLine(e));
+    record('envelope.deleted', { c, about: ['envelope', e.id], details: { status: e.status, kept_for_recipients: true } });
     return { ok: true, kept_for_recipients: true };
   }
+  // Deleting for good is refused while a legal hold covers it, and the attempt is recorded (records.ts).
+  if (e.kind === 'envelope') assertNotHeld([e.id], c.actor.name, 'delete it');
   const shas = tx(() => {
     // Whoever a locked template belonged to keeps changing what was started from it once it is gone (tplroles.ts).
     templateGoes(e);
     const s = forgetEnvelopes([e.id]);
     run('DELETE FROM envelopes WHERE id=?', e.id);
+    // The id and the state only: the subject and everything else of it is gone with it (seclog.ts).
+    record('envelope.purged', { c, about: [e.kind === 'template' ? 'template' : 'envelope', e.id], details: { kind: e.kind, status: e.status } });
     return s;
   });
   // The uploaded documents stay: they are files of the account and other envelopes may use them.
@@ -381,8 +401,10 @@ route('DELETE', '/envelopes/:id', (c) => {
 route('POST', '/envelopes/:id/restore', (c) => {
   if (!c.admin) throw bad('Only an admin of the account can put back an envelope that its sender removed. Ask an admin of your team.', 403);
   const e = mine(c, c.params.id, 'envelope', { removed: true });
-  if (run('UPDATE envelopes SET hidden_at=NULL WHERE id=? AND hidden_at IS NOT NULL', e.id).changes)
+  if (run('UPDATE envelopes SET hidden_at=NULL WHERE id=? AND hidden_at IS NOT NULL', e.id).changes) {
     audit(e.id, c.actor, 'Put back in the sender\'s lists', 'An admin of the account put this envelope back after it had been removed from the sender\'s lists.');
+    record('envelope.restored', { c, about: ['envelope', e.id], details: { status: e.status } });
+  }
   return { envelope: publicEnvelope(loadEnvelope(e.id)) };
 });
 
@@ -461,6 +483,8 @@ route('POST', '/envelopes/:id/clone', async (c) => {
   // is locked, made by someone who may not set its rules, stays with the person the template belongs to (cloneOwner),
   // so a copy is no way round them. Its history says who made it (noteCopy).
   const senderId = cloneOwner(c, e, kind);
+  // A purged envelope has no documents left to copy (records.ts).
+  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${String(e.purged_at).slice(0, 10)}, so there is nothing left to copy. Start a new envelope instead.`, 409, { code: 'purged' });
   const eid = copyEnvelope(e, { accountId: c.account.id, senderId, kind, subject: kind === e.kind ? `${e.subject} (copy)`.trim() : e.subject });
   noteCopy(c, eid, e);
   if (senderId !== c.user.id) return { id: eid, belongs_to: get('SELECT name FROM users WHERE id=?', senderId)?.name || null, locked: !!get('SELECT tpl_locked FROM envelopes WHERE id=?', eid)?.tpl_locked };
@@ -490,6 +514,7 @@ route('POST', '/envelopes/:id/recipient-view', async (c) => {
 
 route('GET', '/envelopes/:id/download', async (c) => {
   const e = mine(c, c.params.id, undefined, { removed: true });
+  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${String(e.purged_at).slice(0, 10)} under the account's retention rule or at someone's request. Its record is on the envelope page. A copy someone was emailed or downloaded before is not affected.`, 410, { code: 'purged' });
   if (!e.documents.length) throw bad('This envelope has no documents yet.');
   const done = finalPdf(e);
   // A closed envelope's copy opens with a page that says it was not completed, and is marked across every page, so
@@ -619,7 +644,7 @@ route('POST', '/bulk/check', async (c) => {
   const topUp = short - planSignatures;
   const reach = [...tpl.recipients.map((r: any) => r.email), ...groupReach(tpl), ...rows.flatMap((row) => open.map((r: any) => str(row?.[r.role_name || r.id]?.email).trim()))].filter(Boolean);
   // bulkChecksRefusal: a row without the mobile number its role needs, or more text messages than the account may send today.
-  const refusal = tooMany || (rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) || bulkChecksRefusal(tpl, rows, open) : null);
+  const refusal = tooMany || (rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) || bulkChecksRefusal(tpl, rows, open) || rowLanguageRefusal(rows, open) : null);
   return {
     counted, rows: all_, signers_per_row: perRow, need, have: Math.max(0, have), short, plan: c.account.plan,
     cost: counted && short > 0 ? { usd: (onPlan ? 0 : PRICING.monthlyUsd) + topUp * PRICING.topUpUsd, plan_usd: onPlan ? 0 : PRICING.monthlyUsd, plan_signatures: onPlan ? 0 : PRICING.monthlySignatures, top_up: topUp, top_up_usd: topUp * PRICING.topUpUsd } : null,
@@ -667,6 +692,8 @@ route('POST', '/bulk', async (c) => {
   // A role the template checks or reaches by text message needs a mobile number ("phone") in every row, and the
   // account must be allowed that many texts today. Refused for the whole batch, like everything below.
   assertBulkChecks(tpl, rows, open);
+  // A row's "language" for a role must be one that is switched on, for every row, before anything is sent (locales.ts).
+  assertRowLanguages(rows, open);
   // A pause, the fake-notice filter and the daily limit refuse the whole batch before anything is written, instead of
   // failing it row by row. Every address in every row counts as a person emailed.
   assertMayEmail({ ...tpl, sender_id: c.user.id }, [...tpl.recipients.map((r: any) => r.email), ...groupReach(tpl), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))].filter(Boolean));
@@ -923,7 +950,7 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     await formNeedsSignatures(p.account_id, p.id, 'start', need);
     throw bad('This form cannot take new signatures right now. Please try again a little later, or contact the people who sent you here.', 503);
   }
-  const eid = copyEnvelope(tpl, { accountId: p.account_id, senderId: tpl.sender_id, kind: 'envelope', subject: p.name, fill: { [open.id]: { name, email } }, extra: { powerform_id: p.id } });
+  const eid = copyEnvelope(tpl, { accountId: p.account_id, senderId: tpl.sender_id, kind: 'envelope', subject: p.name, fill: { [open.id]: { name, email, locale: visitorLocale(c.req) ?? undefined } }, extra: { powerform_id: p.id } });
   // Which recipient is the visitor and which device address started it, so a later visit can be matched to this
   // start by more than an email address, and so unfinished starts can be counted and cleared.
   const visitor = get('SELECT id FROM recipients WHERE envelope_id=? AND position=?', eid, open.position);

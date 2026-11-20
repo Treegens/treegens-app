@@ -9,6 +9,8 @@ import { twoStepTick } from './twostep.ts';
 import { flushComments } from './routes-comments.ts';
 import { pruneStampImages } from './stamps.ts';
 import { sweepSignIns } from './reclaim.ts';
+import { purgeSecurityLog } from './seclog.ts';
+import { retentionTick } from './records.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -34,5 +36,9 @@ export async function tick() {
     // Sign-ins at Google or Microsoft that were started and never finished (signin_states), past their ten minutes (reclaim.ts).
     signins_cleared: sweepSignIns(),
     // Stamp pictures that no field and no stamp of an account points at any more (stamps.ts).
-    stamp_pictures: pruneStampImages() };
+    stamp_pictures: pruneStampImages(),
+    // Lines of the security record older than SECURITY_LOG_DAYS (seclog.ts).
+    security_lines_purged: purgeSecurityLog(),
+    // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
+    retention: await retentionTick() };
 }

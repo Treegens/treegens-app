@@ -10,6 +10,7 @@ import { checkPassword, hasPassword } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { signInAs, publicUser } from './routes-account.ts';
 import { linkProvider } from './routes-signin.ts';
+import { record, signInFailed } from './seclog.ts';
 import { deviceName } from '../lib/phone.ts';
 import { TWO_STEP_SIGNIN_MINUTES, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_PAUSE_MINUTES, TWO_STEP_TRIES, TWO_STEP_LOST_PER_DAY, TWO_STEP_RESET_BLOCK_DAYS } from '../lib/policy.ts';
 import {
@@ -44,7 +45,12 @@ route('POST', '/auth/two-step', async (c) => {
   if (!u) throw expired();
   // Throws, in words, for a wrong code, a wrong password before it (said the same way) and a pause. The waiting
   // sign-in stays, so a typo in the code costs a try and not the password.
-  const used = await useCode(u, b.code, { passwordOk: !!p.password_ok, at: 'signin', ip: c.ip });
+  const used = await useCode(u, b.code, { passwordOk: !!p.password_ok, at: 'signin', ip: c.ip }).catch((e) => {
+    // A wrong code, or a wrong password before it: the security record says it was one of the two, as this screen
+    // does, so that an admin of a team this person is on cannot use the record to find out a password.
+    if (e?.data?.code === 'wrong_code') signInFailed(c, u, 'wrong_password_or_code', p.via);
+    throw e;
+  });
   endPending(c, p);
   let note: any = {};
   try {
@@ -53,11 +59,11 @@ route('POST', '/auth/two-step', async (c) => {
   // Google or Microsoft that was not connected to this login yet is connected only now, after the code: whoever has
   // only the mailbox behind the address gets no way in (routes-signin.ts).
   const { link, ...said } = note;
-  if (link?.provider && link.who) Object.assign(said, await linkProvider(u.id, link.provider, link.who));
+  if (link?.provider && link.who) Object.assign(said, await linkProvider(u.id, link.provider, link.who, c));
   const device = b.remember === true ? rememberDevice(c, u.id) : null;
   // The phone (or a recovery code) is there after all: a reset by email that was under way is not needed, and stops.
   const stopped = await passedSecondStep(c, user(u.id), 'signed_in', device);
-  const r = await signInAs(c, user(u.id), p.invite, { passed: true });
+  const r = await signInAs(c, user(u.id), p.invite, { passed: true, via: p.via });
   return { user: publicUser(user(u.id)), ...said, ...r, next: p.next || null, used: used.kind, recovery_left: used.left, reset_stopped: stopped };
 }, 'public');
 
@@ -259,6 +265,7 @@ route('POST', '/me/two-step/confirm', async (c) => {
   const done = tx(() => {
     run('UPDATE users SET two_step_secret=two_step_new_secret, two_step_on_at=COALESCE(two_step_on_at, ?), two_step_last_step=?, two_step_new_secret=NULL, two_step_new_at=NULL, two_step_wrong=0, two_step_wrong_known=0, two_step_paused_until=NULL WHERE id=?', now(), k, u.id);
     logStep(u.id, moving ? 'moved' : 'on');
+    record('two_step.on', { c, member: u.id, about: ['user', u.id], details: { moved_to_another_app: moving } });
     if (moving) return { codes: null, signed_out: 0 };
     // Every other browser signed in to this login got in without the second step, so it is signed out now.
     const n = Number(run('DELETE FROM sessions WHERE user_id=? AND id != ?', u.id, c.auth?.sessionId || '').changes);
@@ -295,6 +302,7 @@ route('POST', '/me/two-step/off', async (c) => {
   tx(() => {
     clearTwoStep(c.user.id);
     logStep(c.user.id, 'off', { id: c.user.id, name: c.user.name });
+    record('two_step.off', { c, member: c.user.id, about: ['user', c.user.id] });
   });
   await sendMail({ to: c.user.email, subject: 'Two-step login is off for your Sign&Grow login', heading: 'Two-step login is off',
     lines: ['Two-step login was switched off under Settings, in a browser signed in to your Sign&Grow login. Signing in asks for no code now. Remembered devices and recovery codes were removed.', 'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'] });
@@ -368,6 +376,7 @@ route('POST', '/account/two-step', async (c) => {
   if (b.required && !twoStepOn(c.user)) throw bad('Switch two-step login on for yourself first, under Settings, Profile. Then you can ask it of everyone.', 409, { code: 'set_up_first' });
   await needCode(c, b.code, b.required ? 'ask everyone for two-step login' : 'stop asking everyone for two-step login');
   run('UPDATE accounts SET two_step_required_at=? WHERE id=?', b.required ? now() : null, c.account.id);
+  record('settings.changed', { c, details: { settings: { two_step_required: { from: !b.required, to: b.required } } } });
   let told = 0;
   if (b.required) {
     // Everyone who does not have it hears it from us before the next time they open the app.
@@ -399,6 +408,7 @@ route('POST', '/account/members/:id/two-step/reset', async (c) => {
   tx(() => {
     clearTwoStep(m.id);
     logStep(m.id, 'reset_by_admin', { id: c.user.id, name: c.user.name }, c.account);
+    record('two_step.reset', { c, member: m.id, about: ['user', m.id], details: { how: 'by_an_admin', account: c.account.id } });
   });
   await sendMail({ to: m.email, subject: `${c.user.name} switched off two-step login of your Sign&Grow login`, heading: 'Your second step was reset',
     lines: [`${c.user.name}, an admin of ${c.account.name}, switched off two-step login of your Sign&Grow login just now. Signing in asks for no code now, and your recovery codes and remembered devices were removed.`,

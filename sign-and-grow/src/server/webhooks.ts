@@ -9,7 +9,9 @@ import { sendMail } from './mail.ts';
 // envelope.updated: something about an envelope changed that is none of the others. Today that is news about an
 // email to one of its recipients (it came back, it was marked as spam, the sender had it tried again): the delivery
 // carries "recipient_id" and "change". Read the envelope again to see how it stands.
-export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'envelope.corrected', 'envelope.updated', 'recipient.viewed', 'recipient.completed', 'comment.created'];
+// security.event: a line of the account's security record (seclog.ts). Only for a webhook that lists it by name: "*"
+// never includes it, because it carries the team's internet addresses.
+export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'envelope.corrected', 'envelope.updated', 'recipient.viewed', 'recipient.completed', 'comment.created', 'security.event'];
 
 function isPrivate(ip: string): boolean {
   if (net.isIPv4(ip)) {
@@ -89,7 +91,8 @@ export function deliveryView(d: any) {
   };
 }
 
-async function deliver(hook: any, event: string, envelopeId: string, body: string) {
+// Exported for the security record (seclog.ts), whose deliveries name no envelope (envelopeId null).
+export async function deliver(hook: any, event: string, envelopeId: string | null, body: string) {
   // The row is written before the first try. An event that is in flight when the server stops is then still in the
   // log, and can be sent again from there.
   const rowId = Number(run('INSERT INTO webhook_deliveries (webhook_id, event, envelope_id, attempts, at, body, done) VALUES (?,?,?,0,?,?,0)', hook.id, event, envelopeId, now(), body).lastInsertRowid);
@@ -139,7 +142,7 @@ async function deliver(hook: any, event: string, envelopeId: string, body: strin
 }
 
 // Send a past delivery again, exactly as it was, after fixing whatever made it fail.
-export function redeliver(webhookId: string, event: string, envelopeId: string, body: string) {
+export function redeliver(webhookId: string, event: string, envelopeId: string | null, body: string) {
   const hook = get('SELECT * FROM webhooks WHERE id=?', webhookId);
   if (hook) void deliver(hook, event, envelopeId, body).catch(() => {});
 }

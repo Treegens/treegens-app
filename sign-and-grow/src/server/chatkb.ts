@@ -69,7 +69,7 @@ export const NOT_IN_IT: { lead: string; text: string }[] = [
   { lead: 'ID verification', text: 'No check of government ID, no knowledge-based questions, no checks by phone call. A one-time code by email or text shows that someone can read a mailbox or holds a phone, not who they are.' },
   { lead: 'Remote online notarisation.', text: 'No notary step. Payments are not collected: a trusted account can show a link to its own payment page after Finish, and the money never passes through Sign&Grow.' },
   { lead: 'A HIPAA business associate agreement', text: 'Not at any price. US healthcare providers must not put patient information through it.' },
-  { lead: 'Word or Google Docs upload', text: 'Export to PDF first.' },
+  { lead: 'Google Docs and cloud drives', text: 'Download a Google Doc as Word or PDF first. Word, Excel, PowerPoint, OpenDocument, RTF, text, web page and TIFF files are turned into a PDF on upload only where the people who run the server set up a converter; elsewhere, save them as PDF first. Where they are converted, the PDF is what people sign and can look different from the file, so check every page. Documents cannot be edited in Sign&Grow.' },
   { lead: 'Contract lifecycle management', text: 'No contract management, no AI contract analysis, no document generation. The help chat does not read documents.' },
   { lead: 'Single sign-on', text: 'No SAML, and a team cannot make everyone sign in one way. No native mobile apps. Signing in with Google or Microsoft and two-step login with an authenticator app are in, where the server has them. No passkeys or security keys.' },
   { lead: 'Signing without a connection.', text: 'Opening the document and Finish need a connection.' },

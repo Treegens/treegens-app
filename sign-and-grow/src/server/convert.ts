@@ -194,7 +194,7 @@ function looksLike(b: Uint8Array): string {
   const head = latin1(b.subarray(0, 64));
   if (starts(b, 0x47, 0x49, 0x46, 0x38)) return 'This is a GIF picture. Save it as PNG or JPEG and upload that.';
   if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return 'This is a WebP picture. Save it as PNG or JPEG and upload that.';
-  if (/^....ftyp(heic|heix|hevc|mif1|msf1)/.test(head)) return 'This is a HEIC photo. Choose it again from your phone\'s photos (most phones then hand over a JPEG), or save it as JPEG, and upload that.';
+  if (/^....ftyp(heic|heix|hevc|mif1|msf1)/s.test(head)) return 'This is a HEIC photo. Choose it again from your phone\'s photos (most phones then hand over a JPEG), or save it as JPEG, and upload that.';
   if (starts(b, 0x42, 0x4d)) return 'This is a BMP picture. Save it as PNG or JPEG and upload that.';
   if (starts(b, 0x4d, 0x5a) || starts(b, 0x7f, 0x45, 0x4c, 0x46)) return 'This is a program, not a document.';
   if (/^\s*<\?xml|^\s*<svg/i.test(head)) return 'This is an XML or SVG file, not a document we can turn into a PDF.';
@@ -228,6 +228,9 @@ export async function detect(b: Uint8Array, deep = true): Promise<Detected> {
   }
   if (starts(b, 0x49, 0x49, 0x2a, 0x00) || starts(b, 0x4d, 0x4d, 0x00, 0x2a)) return { kind: 'tiff', notes: [], tiffPages: tiffPages(b) };
   if (starts(b, 0xff, 0xfe) || starts(b, 0xfe, 0xff)) return { kind: 'unknown', why: 'This text file is saved as UTF-16. Save it again as UTF-8 (in Notepad: File, Save as, Encoding: UTF-8) and upload that.' };
+  // Pictures whose signature is long enough to be sure of, before anything is read as text.
+  const head4 = latin1(b.subarray(0, 16));
+  if (/^GIF8[79]a/.test(head4) || /^RIFF....WEBP/s.test(head4) || /^....ftyp(heic|heix|hevc|mif1|msf1)/s.test(head4)) return { kind: 'unknown', why: looksLike(b) };
   const body = starts(b, 0xef, 0xbb, 0xbf) ? b.subarray(3) : b;
   if (body.length && !body.includes(0)) {
     const head = latin1(body.subarray(0, 4096));
@@ -337,8 +340,10 @@ export const convertMaxJobs = () => intSetting('CONVERT_MAX_JOBS', 2, 1, 32);
 export function converterOn(): boolean {
   const m = converterMode();
   if (!m) return false;
-  if (m.mode === 'soffice') return g.__sgsoffice?.missing !== true;
-  return true;
+  if (m.mode !== 'soffice') return true;
+  // The first time it is asked, LibreOffice is looked for in the background: until that answers, it counts as there.
+  if (!g.__sgsoffice && !g.__sgsofficeprobe) void soffice();
+  return g.__sgsoffice?.missing !== true;
 }
 
 // Test hooks: which program stands for LibreOffice, and whether `unshare` may be tried.
@@ -348,10 +353,28 @@ export const convertTesting = { soffice: 'soffice', unshare: 'unshare', forget()
 
 type Ran = { code: number | null; signal: string | null; out: string; err: string; timedOut: boolean; failed?: string };
 
+const groupAlive = (pgid: number) => {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Removes a job's folder. A failure is logged and never fails the job: the next start sweeps what is left. */
+function removeFolder(dir: string) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch (e: any) {
+    console.error(`[convert] could not remove ${dir}: ${e?.message}`);
+  }
+}
+
 function runGroup(cmd: string, args: string[], ms: number, cwd: string): Promise<Ran> {
   return new Promise((resolve) => {
     // Only what LibreOffice needs: none of this server's settings (keys, mail and payment secrets) are handed on.
-    const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: cwd, TMPDIR: cwd, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', SAL_USE_VCLPLUGIN: 'svp' };
+    const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: cwd, TMPDIR: cwd, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', SAL_USE_VCLPLUGIN: 'svp' } as unknown as NodeJS.ProcessEnv;
     let child;
     try {
       child = spawn(cmd, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -369,12 +392,14 @@ function runGroup(cmd: string, args: string[], ms: number, cwd: string): Promise
     const timer = setTimeout(() => ((timedOut = true), killGroup()), ms);
     child.stdout.on('data', (c: Buffer) => (out = (out + c).slice(-4000)));
     child.stderr.on('data', (c: Buffer) => (err = (err + c).slice(-4000)));
-    const done = (r: Ran) => {
+    const done = async (r: Ran) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // Whatever it started and left behind goes with it.
+      // Whatever it started and left behind goes with it, and is gone before its folder is removed, so nothing of it
+      // can still be writing there. A killed process that only waits to be collected counts as gone after 2 seconds.
       killGroup();
+      for (let i = 0; i < 40 && child.pid && groupAlive(child.pid); i++) await new Promise((w) => setTimeout(w, 50));
       resolve(r);
     };
     child.on('error', (e: any) => done({ code: null, signal: null, out, err, timedOut, failed: e?.code || String(e?.message) }));
@@ -438,7 +463,7 @@ async function soffice(): Promise<Soffice> {
       logOnce('missing', `\n[convert] CONVERTER=soffice, but LibreOffice could not be started (${r.failed || r.err.trim().slice(0, 200) || `exit ${r.code}`}). Office files are not converted until it is installed and the server is restarted.\n`);
       return (g.__sgsoffice = { isolated: false, version: '', missing: true });
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      removeFolder(dir);
       delete g.__sgsofficeprobe;
     }
   })();
@@ -473,7 +498,7 @@ async function bySoffice(input: Uint8Array, ext: string): Promise<{ pdf: Uint8Ar
     if (fs.statSync(out).size > OUTPUT_MAX) throw bad(bigger(), 422);
     return { pdf: new Uint8Array(fs.readFileSync(out)), tool: lo.version };
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeFolder(dir);
   }
 }
 
@@ -481,7 +506,7 @@ const bigger = () => `The PDF made from this file is larger than ${OUTPUT_MAX / 
 
 async function byGotenberg(url: string, input: Uint8Array, ext: string): Promise<{ pdf: Uint8Array; tool: string }> {
   const form = new FormData();
-  form.append('files', new Blob([input]), `document${ext}`);
+  form.append('files', new Blob([new Uint8Array(input)]), `document${ext}`);
   let res: Response;
   try {
     res = await fetch(`${url}/forms/libreoffice/convert`, { method: 'POST', body: form, signal: AbortSignal.timeout(convertTimeoutMs()) });

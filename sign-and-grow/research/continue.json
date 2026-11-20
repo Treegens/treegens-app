@@ -5851,5 +5851,741 @@
   ],
   "needs_from_billing": "Nothing.",
   "notes_for_integrator": "Behaviour others will notice:\n- Every copy of an envelope that is still out is now marked NOT COMPLETED YET / NOT EVERYONE HAS SIGNED across every page. That covers the sender's View/Download while out, the signer's \"View document so far\" and Download before completion, and the pack's document-so-far.pdf. buildPdf(e, false, ...) marks by default; pass unfinished=false only when the caller adds its own mark, as the earlier-copy build does.\n- Closed copies are now tiled with dark rows and a bottom line, and each signature, initials and stamp field is framed with the word.\n- Disputes:\n  - The sender now receives the disputer's words (owner's decision).\n  - The Disputed audit line has no ip or user_agent.\n  - Operators get IP and browser in their email and queue row.\n  - New GET /envelopes/:id/disputes and POST /operator/disputes/:id.\n  - Closing a topic not-me alert in the queue closes the dispute (one line in routes-support.ts).\n  - Reopening that alert does not reopen the dispute.\n  - DELETE on an envelope with an open dispute only hides it.\n- forgotten_files.completed_at is now stored as a day. The deleted answers of /public/verify and /public/verify/:id give days for completed_at, deleted_at and kept_until, and add disputed_on/dispute_open (lookup: disputed_at, dispute_open, was). Live lookups add disputes_open and dispute_in_error_on.\n- KEPT_AFTER_DELETION has a new line, shown on Settings, /help, /security/processing and in the chat knowledge base.\n\nDecisions for the owner to confirm:\n- Form visitor disputes: I disagreed with refusing them; see that item.\n- Whether operators need a \"filed in error\" button in the operator page. Today it is API only, and closing from the queue means 'handled'.\n- Whether dispute words should go through the fake-notice filter.\n\nSeen and not fixed (out of scope):\n- The certificate itself (drawCertificate) still prints \"the history cannot be edited without breaking the chain\". That belongs to the certificate engineer.\n- Disputed lines written before this change keep their ip, because it is inside the hash; only their user_agent was removed.\n- CERTIFICATE_PAGE_VERSION stays 2026-11-20, the same day as these page changes.\n- src/lib/stampink.ts is mid-rework by another engineer, so 3 tests in stamps.test.ts fail.\n\nAll new copy says \"Sign&Grow\" for the rename pass."
+ },
+ "repair:witness": {
+  "found": "I started by running all nine of the skeptic's probes (output saved in tests/out/repair-witness/before.txt). Every finding reproduced as reported:\n\n- probe1 A/B: a finished witness stayed 'completed' after Ann's place went to someone else (Alice, or another name at Ann's address) with resign. The certificate then said 'Witness for Alice Other' above a statement about Ann.\n- probe1 C: moving a finished witness to Ben with no resign answered 200 and left no audit line.\n- probe2 A/B, probe5 B: Correct, including through an API key, could make the witness the signer, or the signer the witness (200).\n- probe2 C: Ann could pass her place to her own witness (200), and Will then witnessed himself.\n- probe2 D: a party (Ben) could be sent as Ann's witness, with no mark.\n- probe2 E/F: the signer's exact name at another address got no mark, and '\u00c1nn Signer' got past the signer's own-name check.\n- probe3 B: the sender's email said 'We told Ann' when Ann had no address.\n- probe3 C: the witness's note, carrying a phishing lure, reached Ann's inbox under the sender's name.\n- probe3 D: after 'not there', named_by_signer=1 stayed for good, so Ann replaced the sender's Vera with Mallory without the sender hearing.\n- probe7: a clone after 'not there' opened the witness place for the signer to fill.\n- probe4 D: a 'witness' with a party's fields (an amount to repay, initials) was sent for free.\n- probe5 A: device_hash was in the sender API and was the same across envelopes, accounts and people.\n- probe5 C: the expiry email said 'Still waiting on nobody'.\n- probe6 A: the group wording read 'A witness is one named person, and A witness is a group.'\n- probe8: no 'cannot check' sentence in the witness request email or in the signer's not-there email.\n- probe9: a payment lure typed as the witness name was accepted (200).\n\nThe witness tests in tests/witness.test.ts (18 at the time) passed before I started.",
+  "done": [
+   {
+    "item": "New bug (high): a finished witness outlived the signature they saw, so the certificate described a witnessing that never happened (check 8)",
+    "status": "done",
+    "how": "withWitnesses() in src/server/witness.ts is called by correctEnvelope when it decides who has to sign again. It adds every finished witness whose signer is being set aside, or who is being moved. witnessesSetAside() then empties their statement, marks and device value, and writes a 'Witness statement set aside' audit line that quotes the statement word for word. It also says the witness is asked again once the signer has signed. The early 409 in writeContent now lists the witness in sign_again and says 'X witnessed their signature and is asked to witness again too.' Re-running probe1 A/B: the witness goes back to pending, is asked again with a 'Changed after you finished' email, and the envelope cannot complete until they witness the new signer. The certificate then says 'Witness for Alice Other' with a statement about Alice.",
+    "test": "tests/witness.test.ts: 'a finished witness goes with the signature they saw: set aside when it is, on the record, and asked again'"
+   },
+   {
+    "item": "New bug (high): a finished witness could be moved to another signer with no resign and no audit line",
+    "status": "done",
+    "how": "withWitnesses() also treats a finished witness whose witness_for changes as someone who has to sign again. Without resign the answer is 409 sign_again, and the change is described in words: 'now the witness for Ben Second, no longer for Ann Signer' (witnessBits() inside describeCorrection). With resign the statement is set aside and the witness is asked again after Ben signs. A pending witness still moves freely, and the move is now written to the audit trail. probe1 C now answers 409.",
+    "test": "'a finished witness cannot be moved to witness someone else without the sign-again choice, and is then asked again'"
+   },
+   {
+    "item": "New bug (high) / check 16: device fingerprint given to senders, the same value across envelopes, accounts and people",
+    "status": "done",
+    "how": "Following the owner's decision:\n- publicEnvelope leaves out device_hash and witness_saw.\n- The HMAC key now includes the envelope id, so one browser gives a different value on every envelope.\n- Senders see only 'Same device: Yes/No' on the certificate and the envelope page (WitnessFacts), always with SAME_DEVICE_LIMITS, which says what yes and no can and cannot show.\n- The 'Check the witness' email carries the same sentence.\n- /security has a new point, 'One cookie, only where a signature has a witness' (DEVICE_COOKIE_WORDS in src/lib/witness.ts).\n- The code comment now says what is true.\n\nprobe5 A: device_hash is absent from both senders' API answers.",
+    "test": "'the device comparison stays inside one envelope: no fingerprint to any sender, only \"same device: yes or no\" and what it can show' (three envelopes in one browser give three different values; the API has no fingerprint; the certificate shows yes and no; source checks of the page, /security and the HMAC key)"
+   },
+   {
+    "item": "New bug (medium) / check 10: the 'not their own witness' rule could be got round by Correct, an API key and reassign",
+    "status": "done",
+    "how": "assertWitnessesAfter() in witness.ts is called from correctRecipient and reassignRecipient. It runs the witness rules on the envelope as it will be after the change.\n- The server's witnessProblem now also uses samePerson for the signer and for parties, so a name in another spelling at the same address counts.\n- A signer passing the document on is told in their own words that the person is on it as a witness.\n- A witness the signer named themselves still goes with their place.\n- Only a problem the change itself makes is refused, so an envelope sent before these rules can still be corrected.\n\nprobe2 A/B/C and probe5 B now answer 400.",
+    "test": "'a witness who would be the signer, or a party, is refused by Correct, by an API key and by passing the document on'; 'an envelope that went out before these rules can still be put right...'"
+   },
+   {
+    "item": "Check: a party to the document as witness / new bug (low): a party, or the signer's exact name at another address",
+    "status": "done",
+    "how": "witnessProblem in src/lib/witness.ts, used by both the editor and the server, now refuses a witness with the same email and the same name as another signer, in-person signer or approver. The server also catches another spelling.\n\nA new mark, 'name', is added in witnessDone when the witness uses the signer's name (or a spelling of it) at another address. It is printed on the certificate, written to the audit trail and emailed to the sender.\n\nThe signer's own-name check now ignores accents, case and dots (sameName), so '\u00c1nn Signer' is caught. probe2 D: 400. probe2 E: marked 'name' and the sender is emailed.",
+    "test": "'the smaller holes...' (party refused at send, the namesake marked with the sender emailed, the accented own name refused); 'a witness who would be the signer, or a party...' ('Benjamin Second' at Ben's address refused)"
+   },
+   {
+    "item": "New bug (medium) / check 3: named_by_signer was set for good after 'not there'; the signer could silently replace the sender's later choice; a clone handed naming to the signer",
+    "status": "done",
+    "how": "notPresent no longer sets named_by_signer. The signer's right to name someone else after 'not there' comes from witness_absent_at (signerMayName), and it ends when someone else is asked.\n- A witness the sender names with Correct, or names in a save while the envelope is out, is the sender's choice from then on (named_by_signer=0).\n- New column recipients.witness_chosen (db.ts COLUMNS) keeps the sender's own choice when the signer names someone else after 'not there'. A clone and a hand-over go back to it.\n- The sender is emailed whenever the signer replaces a witness the sender chose.\n\nprobe3 D now answers 409 'Sam Sender chose your witness: Vera Valid'. probe7: the copy has Will Witness, named_by_signer=0.",
+    "test": "'after \"I was not there\" the signer may name another witness, but whoever the sender puts in the place stays the sender's choice, also in a copy'"
+   },
+   {
+    "item": "New bug (medium) / check 5: false 'We told Ann' when the signer has no address, stopped our emails or bounced",
+    "status": "done",
+    "how": "signerTold() in witness.ts decides whether the signer can be told by email. Not when they:\n- signed in person,\n- have no email address,\n- marked our email as spam, or\n- had the last email bounce.\n\nThe sender's email now says either 'We told Ann...' or 'We could not tell Ann: <why>. Pass on their signing link yourself... or choose Correct'. The not-present answer carries signer_told, and GET /sign gives witness_of.signer_told. The witness's screen and the toast are worded from it ('We told Olga Owner, who can ask the person who was there instead'), and so are the witness request email and the decline/pass refusal.",
+    "test": "'\"I was not there\" says who was told as it is: the sender always, the signer only when we can email them, and never their note'"
+   },
+   {
+    "item": "New bug (medium) / check 17: the witness's free-text note was forwarded into the signer's inbox",
+    "status": "done",
+    "how": "The note now goes only to the sender and the audit trail, the same way a reason for declining does. The witness's form now reads 'Anything Olga Owner should know (optional, only Olga Owner sees it)'. I updated the existing assertion in the test '\"I was not there\" signs nothing...': it used to expect the note in Ann's email, and that change of behaviour is deliberate. probe3 C: carries the lure = false.",
+    "test": "updated '\"I was not there\" signs nothing, tells the signer and the sender...'; 'says who was told as it is' (the lure is not in Ann's email)"
+   },
+   {
+    "item": "New bug (low) / overclaim: the witness name a signer types was not read by the fake-notice filter",
+    "status": "done",
+    "how": "nameWitness now passes the typed name as extra to emailRefusal, for normal signers and for form visitors. probe9: 403 with neutral words, and nothing is emailed.",
+    "test": "'the smaller holes...' (lure name 403, no email, an ordinary name then goes through)"
+   },
+   {
+    "item": "New bug (low) / check 12: expiry warning said 'Still waiting on nobody'",
+    "status": "done",
+    "how": "witnessesWaiting(e) is added to the cronTick 'Expires soon' line. probe5 C: 'Still waiting on a witness for Ann Signer (Will Witness said they were not there, and nobody else has been named).'",
+    "test": "'the smaller holes...' (the cronTick expiry email)"
+   },
+   {
+    "item": "Check 7 / overclaim: the honesty sentence was missing from the witness emails and the signer's screens",
+    "status": "done",
+    "how": "WITNESS_RECORDS now appears in:\n- witnessMailLines (every request to witness),\n- the signer's 'Your witness was not there' email,\n- WitnessNotice for the signer, and\n- the signer's done box (WitnessAfter).\n\nprobe8: both checks now say true. Screenshot: tests/out/repair-witness/phone-02-signer-done.png",
+    "test": "'says who was told as it is' (request email and signer email contain WITNESS_RECORDS); 'the signer's own screens say what is recorded...'"
+   },
+   {
+    "item": "Check 9 / overclaim: 'same device' was really 'same browser'",
+    "status": "words_changed",
+    "how": "MARK_WORDS.device is now 'same device and browser as the signer'. The help entry, README and openapi say 'in the browser the signer signed in' and give the limits (another browser, a private window or a cleared cookie also gives no). The existing marks test now expects the new words.",
+    "test": "'the device comparison...' (MARK_WORDS.device and SAME_DEVICE_LIMITS text); updated assertion in 'a witness at the signer's address, in the signer's browser...'"
+   },
+   {
+    "item": "Check: money, other direction (a 'witness' used as a free party)",
+    "status": "done",
+    "how": "witnessProblem now limits a witness to the block's field types and counts: 1 signature, 1 full name, 2 text fields, 1 signing date. Anything else is refused in words at sending, in the editor (same lib rule), on Correct and on a save while the envelope is out. The words say to remove it, or to make them a signer if they agree to the document themselves. credits.ts is untouched and a witness is still never charged. probe4 D: 400.",
+    "test": "'the smaller holes...' (initials refused, a 3rd text field refused, the block itself passes, editor lib check)",
+    "left_open": "The two text fields can carry any label, so a sender could still label one 'Amount you agree to repay'. The certificate still calls that person a witness, with the fixed statement. The owner should confirm the field limit, or choose the other option (count a witness whose signer is the sender's own free signature)."
+   },
+   {
+    "item": "Copy glitches: group wording and 'in their own words'",
+    "status": "done",
+    "how": "The group rule now reads 'A witness is one named person, not a group. Name the person who will watch X sign.' The editor (WitnessChoice.tsx) and the witness email now say the witness ticks a statement as their own, not that they write it in their own words.",
+    "test": "'the smaller holes...' (exact group sentence; no 'in their/your own words' in WitnessChoice, witness.ts, help)"
+   },
+   {
+    "item": "Overclaims in openapi (Recipient.witness_for, witness_absent_at, witness_marks, witness_statement, /sign/{token}/not-present, /sign/{token}/witness)",
+    "status": "done",
+    "how": "Each description now says what the code does:\n- the refusals, now also on Correct, saves and hand-overs,\n- the set-aside on sign-again or move,\n- who is emailed after 'not there', and the new signer_told answer,\n- the note goes to the sender only,\n- the 'name' and 'device' marks, with their limits,\n- the new witness_chosen column (read only).\n\nThe developers page now says to give a witness the block and nothing more. The README 'What the bad reviews taught us' row, the 'What is in it' bullet and the test-table row are updated. Nothing about the witness is listed under 'What is not in it'. No new setting, so .env.example is unchanged.",
+    "test": "existing 'the API describes the role...' still passes; tsc clean"
+   },
+   {
+    "item": "Check 19: completed copy to a witness the signer named",
+    "status": "disagree",
+    "how": "Not a defect, so nothing was changed. The skeptic marked this check as holding and only asked the owner to decide whether a witness the signer chose should get the completed copy. I left it as it is: see notes_for_integrator, decision 2. ('disagree' is used here only because the report has no 'not broken' status.)",
+    "test": "existing 'reminders, the not-opened alert, find my documents and the completed copy all know the witness'"
+   },
+   {
+    "item": "Screens at 390x844 and 1280x900",
+    "status": "done",
+    "how": "Dev server on port 3612, driven with Playwright (tests/out/repair-witness/look.cjs). I looked at each screenshot, saved in tests/out/repair-witness/:\n- phone-01-signer-notice.png: the signer's notice\n- phone-02-signer-done.png: the signer's done box with the honesty sentence\n- phone/desk-03-witness-notthere-open.png: the witness's 'not there' panel for a signer who stopped emails, saying 'We tell Olga Owner' and that only the sender sees the note\n- phone-04-witness-after.png: the screen after 'not there', with 'We told Olga Owner, who can...'\n- phone/desk-05-envelope-yes/no.png: the envelope page with 'Same device Yes/No' and its limits\n- phone-06-security.png: the cookie point on /security\n- phone-07-help.png: /help#witness\n\nMeasurements: 0 px horizontal overflow everywhere; buttons 54 px; tick label 50 px on the phone, 44 px on desktop; textarea 72 px; no console errors. By keyboard: Tab from the note reaches 'Tell them I was not there', and Enter sends it. After the run I stopped the server, deleted .next-repair-witness and the data folder, and took out of tsconfig.json only the two lines next dev had added for me (other engineers' lines left as they were).",
+    "test": "browser run; overflow and tap-height numbers printed by look.cjs"
+   }
+  ],
+  "files_changed": [
+   "src/server/witness.ts (withWitnesses, witnessedBy, witnessBits, witnessesSetAside, server witnessProblem with samePerson, assertWitnessesAfter, witnessesWaiting, signerTold, chosenOf; changes to saveWitnesses, witnessCorrected, copyWitnesses, forgetNamedWitness, mayName/signerMayName, witnessFacts, nameWitness, notPresent, witnessCannot, the device HMAC per envelope, witnessDone 'name' mark and the device sentence, witnessMailLines, witnessCertLines 'Same device')",
+   "src/lib/witness.ts (MARK_WORDS device/name, sameDevice, SAME_DEVICE_LIMITS, DEVICE_COOKIE_WORDS, sameName, PARTY_ROLES, WITNESS_FIELDS, party and field-limit rules, group wording)",
+   "src/server/envelopes.ts (targeted: import line; publicEnvelope leaves out device_hash and witness_saw; writeContent 409 names the witness; describeCorrection witnessBits; correctEnvelope withWitnesses and witnessesSetAside; correctRecipient and reassignRecipient assertWitnessesAfter; cronTick expiry line witnessesWaiting)",
+   "src/server/db.ts (one COLUMNS line: recipients.witness_chosen)",
+   "src/server/openapi.ts (witness descriptions, witness_chosen, not-present answer signer_told)",
+   "src/components/sign/Witness.tsx (who was told, from signer_told; note label; WITNESS_RECORDS on the signer's notice and done box)",
+   "src/components/sender/WitnessFacts.tsx (Same device yes/no with limits; device left out of 'Check this')",
+   "src/components/editor/WitnessChoice.tsx (statement is ticked, not written)",
+   "src/app/help/witness.tsx (who is told, name/browser marks, device limits)",
+   "src/app/security/page.tsx (one import, one Point: the cookie)",
+   "src/app/developers/page.tsx (witness block only)",
+   "README.md (bad-reviews row, What is in it bullet, test-table row)",
+   "tests/witness.test.ts (two existing assertions updated deliberately; 10 new tests)",
+   "tests/out/repair-witness/ (before.txt, after1.txt, after.txt, look.cjs, screenshots, suite runs)",
+   "tsconfig.json (only the two lines next dev added for .next-repair-witness were removed)"
+  ],
+  "suite": "tests/witness.test.ts: 28 of 28 pass (18 old, 10 new). npx tsc --noEmit -p . is clean (exit 0, no output). Full npm test, last run: 742 passed, 20 failed. None of the 20 is in a witness test or reads a file I changed. They belong to work other engineers have in progress:\n- billing: 8 tests in the billing test files\n- encrypt.test.ts: pages and encryption wording\n- flow.test.ts 'published API description matches the routes': GET /envelopes/:id/stamp-image/:sha is not documented (the stamp work)\n- gaps-mobile-sign: lost Finish answer (mobile repair)\n- gaps-nonus-words: the processing-page encryption wording, and the replyTo={answerComesTo(me)} assertion that the builder already reported as broken by the comments work\n- templates.test.ts: 2 tests (template rules work)\n- trust.test.ts: 1 test, which passes 14/14 when run alone a minute later\n- two-step login: 4 tests\n\nAn earlier run in which every test of six files failed at once came from someone else's half-written file (ERR_INVALID_TYPESCRIPT_SYNTAX 'Expected }'). The next full run loaded normally.",
+  "abuse_and_stuck": [
+   "Abuse: a sender sets aside a witness statement they dislike with a resign change. Handled: the statement is quoted word for word in 'Witness statement set aside', the earlier signature is kept in earlier_signatures, and the witness is asked again. Tested.",
+   "Abuse: a sender or an API key uses Correct to make the witness the signer, or a party, after sending. Refused with 400, also with another spelling at the same address. Tested.",
+   "Abuse: a signer passes their place to their own witness so the witness watches themselves. Refused in words for the signer. Tested.",
+   "Abuse: a sender links one browser across envelopes or accounts through the API. The fingerprint is no longer in any API answer and is different on every envelope. Tested.",
+   "Abuse: a sender uses a free 'witness' as a party. The witness's fields are limited to the block. Tested. Left open: the two text fields can carry any label (see the item).",
+   "Abuse: a witness or signer puts a lure into an email under the sender's name. The note goes to the sender only, and the typed witness name goes through the fake-notice filter. Tested.",
+   "Abuse: the same person witnesses under the signer's name at a second address. Marked 'name' and the sender is emailed. Tested. Left open: a completely different name at a different address cannot be caught by software, as before.",
+   "Abuse: the signer replaces a witness the sender chose. Only after that witness says 'not there', and the sender is emailed every time. Tested.",
+   "Stuck: a sender corrects a recipient on an envelope sent before these rules, whose witness already breaks a rule. Only a problem the correction itself makes is refused. Tested.",
+   "Stuck: a sender moves a finished witness by mistake. The 409 says in words what moved and that the witness would be asked again. Tested.",
+   "Stuck: a signer who has no address, or stopped our emails, is never told their witness was not there. The sender's email now says so and tells them to pass on the link or use Correct, and the witness's screen says only the sender was told. Tested.",
+   "Stuck: a sender reads 'Same device: No' as proof the witness was elsewhere. The limits sentence next to every yes or no says what no can and cannot mean. Seen in the browser.",
+   "Stuck: an honest signer's witness name trips the fake-notice filter. They get 403 telling them to ask the sender to add the witness (as for passing a document on). Left open: there is no appeal from the signing page itself.",
+   "Stuck: a template made before this repair gives a witness extra fields. Sending now refuses it and names the field to remove. Not tested on an old template specifically, but the same rule is tested."
+  ],
+  "needs_from_billing": "Nothing. I did not touch credits.ts, routes-billing.ts, the billing tests or Billing(). A witness still never holds or uses a signature, because isChargeable and reserved() count only 'signer' and 'inperson'. I closed the free-party loophole by limiting which fields a witness may have, not by charging. If the owner prefers 'count a witness whose signer is the sender's own free signature' instead, that change would belong in isChargeable/reserved() in credits.ts.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n- correctEnvelope (src/server/envelopes.ts): a finished witness is now asked to sign again whenever their signer is (or the signer's place goes to someone else), and whenever the witness is moved. sign_again lists the witness, and the audit gets a new action, 'Witness statement set aside'.\n- correctRecipient and reassignRecipient call assertWitnessesAfter.\n- publicEnvelope no longer returns device_hash or witness_saw. A new readable column, witness_chosen, appears on recipient rows in the API.\n- The not-present answer gains signer_told, and GET /sign gives witness_of.signer_told.\n- The witness's note is no longer sent to the signer.\n- The expiry warning names witnesses that are holding the envelope up.\n- witnessProblem is stricter: parties and fields beyond the block are refused at sending and in the editor.\n- New mark 'name'. MARK_WORDS.device now reads 'same device and browser as the signer'.\n- The certificate prints 'Same device: Yes/No' with its limits for every finished witness, instead of listing 'device' under 'Marked'.\n\nCopy I added or changed (keeps 'Sign&Grow' for the rename pass):\n- DEVICE_COOKIE_WORDS on /security\n- SAME_DEVICE_LIMITS (certificate, envelope page, help, sender email)\n- the 'We could not tell...' sentences\n- the field-limit refusal\n\nDecisions for the owner:\n1. Field limit as the fix for the free-party loophole (see needs_from_billing). Text-field labels are not limited.\n2. Check 19: a witness the signer named, whom the sender never chose, receives the full completed copy like everyone else. The skeptic flagged this for the owner. I left it as it is.\n3. The ts_dev cookie still lasts up to 400 days (envelopes can be open up to 365 days). /security now says so.\n\nOut of scope, seen but not touched: the 20 failing tests listed under suite, all in other people's areas.",
+  "settings": [
+   "No new setting. .env.example and the README configuration table are unchanged: the witness feature needs no provider."
+  ]
+ },
+ "repair:clickwrap": {
+  "found": "The skeptic's report had 12 failing checks, 14 new bugs, 8 overclaims and 3 screen problems (01 scam page, 03 clickjacking, 08 tick boxes). No earlier repair had been started. All of them still reproduced when I began. Probe output is in /home/user/treegens-app/sign-and-grow/tests/out/repair-clickwrap/probe-before.txt.\nA1/A2/A3: a fake notice placed in the tick-box words, on the button or in a version note published (200), and the page showed it.\nB and probe2: a typed lure name was emailed to a typed stranger's address, 5 in a burst, and the same copy went again every hour (6 of 6).\nC: a paused account still sent the copy (outbox) and the certificate.\nD: the list, the single view and the CSV named a v1 acceptance by the unpublished draft name \"Consent to sell my data\".\nE: 12 signed colleagues behind one address got [200 x10, 429, 429]. E2: 10 refused presses blocked the next real person (429).\nF: 25 typed acceptances from one IPv6 /64 recorded 20, and afterwards the website's API and its signed visitors got 429.\nH2: a stranger with the signed link got the receipt and the certificate, with Cass's email and IP.\nI: a member's browser session recorded an API acceptance, and /status gave that member the visitor's IP.\nJ: a curl press using another browser's view printed \"ticked, pressed, 2 seconds, not covered\" as facts.\nL: with SMTP_URL set, the certificate blob stayed on disk after purgeUser.\nM: the returning visitor saw the v2 text.\nN: a reported page could be deleted (200).\nThe skeptic's look.cjs findings (V1, V2, unmarked frame recorded as \"hosted\", 4x13 px tick boxes) also hold in my own look.cjs; their \"before\" state is in the skeptic's screenshots.\nChecks that held stayed holding: G (race), H1/H3/H4/H6, K (CSV), O (em dashes).",
+  "done": [
+   {
+    "item": "Scam filter ignores the tick-box words, the button words and version notes (high; checks 'fake-payment-notice filter', overclaim build report item 6, screen 01)",
+    "status": "done",
+    "how": "termsRefusal now also reads a list of extra words: the box, the button, every version note, the new note at publish, and the details a website put in its signed link. publish, closedWhy and copyClaim all pass that list, so a page closes again when trust is lost. A new linkWhy closes the page and refuses the press when the name in a signed link completes the lure, and tells the team once a day. Labels are read with lureIn only, like fakeNotice does for field labels. posesAs stays for names, so an honest label like 'pay with PayPal' still publishes.",
+    "test": "tests/clickwrap.test.ts 'the scam filter reads every word the page shows...'; probe A1/A2/A3 now 422, A1 page closed; look.cjs step 1"
+   },
+   {
+    "item": "Covered-button check bypassed in Chromium by cropping the frame; record said not covered (high; check 'host page cannot click', overclaim EMBED_CANNOT and build item 2b, screens 03-jack)",
+    "status": "done",
+    "how": "The page only checks covering when it really is inside a frame. Every reading counts: a button that is cropped, partly scrolled away, transparent or covered disables it straight away. At the press the page takes a fresh reading with a new observer. It sends unobscured:true only when the last reading and the fresh one both say the whole button is in view and uncovered; otherwise it refuses on the spot with words and a link to the terms' own page. The server keeps unobscured only for presses inside a frame. While checking in Chrome I found that the app's empty fixed .toasts holder made an honest press near the bottom of a frame count as covered; clickwrap.css now hides it while it is empty. EMBED_CANNOT now names the remaining risk (a change in the last tenth of a second).",
+    "test": "tests/clickwrap.test.ts 'the certificate says what the browser reported...'. Browser, tests/out/repair-clickwrap/look.cjs: V0, V1 and V2 now disabled and nothing recorded; V3 honest frame recorded with button_uncovered true. flip.cjs: making the frame see-through for 50 ms or 400 ms around the click recorded nothing."
+   },
+   {
+    "item": "Framing /agree/<slug> without ?embed=1 recorded as 'Our page' (medium; overclaim EMBED_CAN)",
+    "status": "done",
+    "how": "next.config.mjs sends frame-ancestors * only when ?embed=1 is in the address (a has-query rule) and frame-ancestors 'self' otherwise (a missing-query rule). The page decides embed from embed=1 AND window.self !== window.top. EMBED_CAN says only ?embed=1 may be framed.",
+    "test": "Test above (config and page source). look.cjs step 0 headers; step 2: an iframe without embed=1 shows nothing."
+   },
+   {
+    "item": "Anyone can make us email any address with their own words, every hour (high; check 'Email copy', overclaim 'nothing else will come of it')",
+    "status": "done",
+    "how": "New copyClaim decides whether a copy may go. A copy goes only when identity is 'website' and the link had an email; a typed address gets 409 not_vouched. At most one copy per acceptance, ever: the new table clickwrap_copies, claimed atomically with INSERT OR IGNORE. No copy while the account is paused or closing, or while what the copy carries reads like a notice (409 closed). For an account that has not earned trust, copies count against dailyCap in `reached` with via='clickwrap' (429 copies_today). The email words now say we send one copy per acceptance, only on request and only to an address the website gave, and to tell the organisation if it was not you.",
+    "test": "tests/clickwrap.test.ts: 'the person gets a copy ... when the website gave the address' (updated), 'the receipt and the copy go only to the browser that accepted' (time moved 4 hours: [200,409,409,409]; two presses at once send one), 'copies by email ... daily limit of their own'. Probe B: 0 emails. probe2: [409 x6], 0 emails."
+   },
+   {
+    "item": "A signed link hands out the receipt, certificate and copy email to whoever holds it (low; check 'Replaying a signed link', overclaims page text and openapi 'kept nowhere but in that answer')",
+    "status": "done",
+    "how": "GET /public/agree/:slug never returns the receipt. The press returns it only for a new record, or to the same page load pressing again (view_hash, a column outside the seal). The page keeps the receipt in localStorage (try/catch) so a reload still offers the copy. Another browser is told the person accepted and is asked to contact the organisation. Page text and the openapi description were reworded.",
+    "test": "'the receipt and the copy go only to the browser that accepted...'. Probe H2: no receipt, certificate 404. look.cjs step 4: the same browser after reload keeps both buttons; another browser gets 0 buttons and the words."
+   },
+   {
+    "item": "Paused accounts still send copy emails and certificates (medium; check 'Paused accounts', overclaim 'closed everywhere')",
+    "status": "done",
+    "how": "The copy email is refused while the account is paused, closing or gone, or while the scam filter fires on the accepted version (copyClaim). Following the skeptic's suggestion and the owner's rule (the certificate goes only to the browser that accepted), the accepting browser can still download its own certificate. No email goes out.",
+    "test": "'the receipt and the copy go only...' (paused: 409 closed, 0 emails, download 200). Probe C: [409, 0 emails]."
+   },
+   {
+    "item": "Visitor's certificate PDF stays on disk after the account is deleted (medium; check 'Deleting', overclaim build item 7)",
+    "status": "done",
+    "how": "forgetClickwraps returns the attachment fingerprints from the email payloads (new helper attachedFiles), and purgeUser passes them to removeUnusedBlobs. The MAIL_COPY_DAYS timer in purgeClosedAccounts now also collects the attachments of the old copies it deletes and removes those files. This is two targeted edits in routes-trust.ts.",
+    "test": "'the certificate attached to a copy by email goes from the disk with the account, and with our copy of the email after its days' (SMTP_URL pointed at a refused port)"
+   },
+   {
+    "item": "Strangers can use up the monthly limit, also stopping the API and signed-only agreements (medium; check 'Monthly limit')",
+    "status": "done",
+    "how": "usage() now has two counts: typed, and vouched (signed link or API). Each may reach CLICKWRAP_MONTHLY_LIMIT, so typed strangers can never block the website. tellAdmins sends its 80 percent and full emails per count, using new columns accounts.clickwrap_typed_warned and clickwrap_typed_full; the typed 80 percent email is the spike warning. Per-address keys use addressKey(), which turns an IPv6 address into its /64 and an IPv4-mapped address into IPv4. The race still holds: count and insert happen in one step.",
+    "test": "Updated 'an acceptance is not a signature ... for typed-in visitors and for the website apart' and 'people behind one address are not locked out ...' (IPv6 /64: 10 then 429). Probe F: 10 recorded, API 200, signed 200. Probe G: still [200,429,1]."
+   },
+   {
+    "item": "Ten an hour per address locks out offices, failures included (medium; check 'Per-address rate limits')",
+    "status": "done",
+    "how": "Only recorded typed acceptances count, through an onRecorded callback that runs in the same step as the insert. Signed-link acceptances and refused presses are not counted. Presses of any kind are capped at a generous 300 an hour per address (CLICKWRAP_PRESSES_PER_ADDRESS_HOUR). The 429 address_limit message explains shared addresses, says nothing was recorded, gives retry_minutes, and suggests asking for a link that names you.",
+    "test": "'people behind one address are not locked out ...', updated 'rate limits per address: ten typed-in acceptances ...'. Probe E: 12 x 200; E2: 200."
+   },
+   {
+    "item": "Lists, API and CSV named the agreement by the current draft name; the certificate by the current account name (medium; check 'Terms changed after acceptance')",
+    "status": "done",
+    "how": "acceptanceView takes the name from the accepted version (version_title is joined into the list and export queries). New column clickwrap_versions.account_name is stored at publish and printed as 'Written by' on the certificate and in the email. Versions published before this print today's name and say so.",
+    "test": "'a record names what was accepted ...'. Probe D: list, view and CSV all say 'Newsletter consent'."
+   },
+   {
+    "item": "Returning person sees the new text under 'You have accepted these terms' (low)",
+    "status": "done",
+    "how": "When the accepted version still counts but is not the live one, GET 'already' carries that version's title and text plus the notes since. The page shows those words in the terms box and says that version N+1 is in force, what changed and why they were not asked again. For a PDF it says the pages shown are the newer version.",
+    "test": "'a person whose earlier version still counts is shown what they accepted ...'. look.cjs step 6, screenshot 06-returning-older-version-390.png."
+   },
+   {
+    "item": "Certificate stated tick, press, time open and 'not covered' as facts for a scripted request (low; check 'What the certificate claims', overclaim certificatePdf)",
+    "status": "done",
+    "how": "The view token now carries fingerprints of the address (/64) and browser it was handed to. A press records view_match ('same', 'address', 'browser' or 'both'); it is never refused, because phones change networks. view_match is sealed through SEALED_LATER, which only enters the seal when set, so old rows still fit. The certificate now says 'The page reported that the box ... was ticked and the button ... pressed. This server cannot see a screen' and 'how long the page was open, not that anyone read it'. It adds a 'Terms handed out to' line and uses coverLine for the button. recordShows says 'The browser that pressed reported ...' and does not show who, that they read it, or whether a person or a program pressed. The API and CSV gain terms_handed_to.",
+    "test": "'the certificate says what the browser reported ...' (curl from another address gives 'both'; a phone on another network gives 'address'; the seal breaks if view_match is changed; an API row still fits its seal). Probe J. Updated 2 wording assertions in older tests."
+   },
+   {
+    "item": "Non-admin members read visitors' IP and browser through /status, and recorded API acceptances from a browser session (low; check 'Another role')",
+    "status": "done",
+    "how": "POST /clickwraps/:id/acceptances now needs an API key (403 api_key_only). The status and acceptance answers leave out ip, user_agent, page_url and given_* unless the caller is an owner or admin session or an admin-scope key. recorded_by always says 'with an API key'.",
+    "test": "'a member who is not an admin, or a \"send\" key, ...'. Updated test 'the API ...': a send key no longer sees given_ip; the admin record does. Probe I: 403, no ip."
+   },
+   {
+    "item": "A reported page can be deleted before anyone reviews it (low)",
+    "status": "done",
+    "how": "DELETE refuses with 409 'reported' while an open abuse report on that page exists, and says to close the page instead.",
+    "test": "'a page someone reported cannot be deleted before a person has looked at it'. Probe N: 409, version kept."
+   },
+   {
+    "item": "Tick boxes 4 px wide on a phone (medium; screen 08)",
+    "status": "done",
+    "how": "clickwrap.css: .cw-team label.check checkboxes and radios are flex:none and 20x20. Radios are excluded from the 44 px min-height rule; their labels stay 44 px tall.",
+    "test": "'the tick boxes on the team's agreement screen keep their size on a phone'. look.cjs step 5: every box 20x20 at 390 and 1280; close-up 07-tick-3-390.png."
+   },
+   {
+    "item": "Overclaims in EMBED_CAN, EMBED_CANNOT, the email text, the page receipt text, the openapi descriptions and the certificate",
+    "status": "words_changed",
+    "how": "Each sentence now matches what the code does (see the items above). The openapi-clickwrap descriptions are updated for: accept, receipt/email, status, acceptances, delete and usage, plus the agreement, button_uncovered and terms_handed_to fields. I did not edit the builder's report in research/continue.json: the code now keeps its claims, except 'closed everywhere', which now holds for email but deliberately not for the accepting browser's own download.",
+    "test": "Assertions on EMBED_CAN and EMBED_CANNOT, the email text ('nothing else will come of it' is gone), and every route still documented (existing test)."
+   },
+   {
+    "item": "Docs: README, .env.example, developers page, policy",
+    "status": "done",
+    "how": "README changes: the feature bullet, the CLICKWRAP_MONTHLY_LIMIT row, the 'Things to decide' framing and price lines, one sentence added to the reviews row about telling a real request from a scam, and a test-table row for tests/clickwrap.test.ts. .env.example now explains the two counts. The developers card now covers framing only with embed=1, the API key, the two counts and the one copy. DELETED_WITH_ACCOUNT now mentions the attached certificates. No page said this was missing.",
+    "test": "Existing documentation test passes."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/clickwrap.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-clickwrap.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi-clickwrap.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/clickwrap.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts (CLICKWRAP comment, CLICKWRAP_PRESSES_PER_ADDRESS_HOUR, DELETED_WITH_ACCOUNT line)",
+   "/home/user/treegens-app/sign-and-grow/src/app/agree/[slug]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/clickwrap.css",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx (click-to-agree card)",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts (SCHEMA clickwrap_copies; COLUMNS view_hash, view_match, account_name, clickwrap_typed_warned, clickwrap_typed_full)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts (purgeUser collects attachment files; MAIL_COPY_DAYS timer removes them; import)",
+   "/home/user/treegens-app/sign-and-grow/next.config.mjs",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example",
+   "/home/user/treegens-app/sign-and-grow/tests/clickwrap.test.ts (11 new tests, 7 updated)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-clickwrap/ (look.cjs, flip.cjs, ticks.cjs, debug-io.cjs, screenshots, probe-before.txt, probe-after.txt, suite.txt, suite2.txt, suite3.txt)"
+  ],
+  "suite": "tests/clickwrap.test.ts: 31 of 31 pass, also inside the full run.\n\nFull npm test, final run: 827 tests, 823 pass, 4 fail. None of the 4 is in a file I touched:\n- tests/gaps-mobile-sign.test.ts 346 and 353 check the signing page source (src/app/sign/[token]/page.tsx: 'failed={(why, retry) => <NoViewer', 'no longer open|already finished|not your turn').\n- tests/gaps-nonus-words.test.ts 396 expects /security to say 'it adds no encryption of its own to stored files'. That wording is being changed by the encryption repair.\n- tests/gaps-nonus-words.test.ts 406 expects 'replyTo={answerComesTo(me)}' in a page I did not touch.\n\nTwo earlier runs failed almost everything because other people's edits were half finished:\n- First, src/server/routes-twostep.ts imported linkProvider before src/server/routes-signin.ts exported it.\n- Then src/server/openapi.ts line 218 had a quoting error ('Expected , got ident').\nI waited and re-ran each time; both cleared.\n\nnpx tsc --noEmit -p . on the final run: no errors. An earlier run showed errors only in reclaim.ts and routes-twostep.ts, not my files.\n\nThe skeptic's probes after the fix (tests/out/repair-clickwrap/probe-after.txt):\n- Every failing finding is now fixed.\n- M still prints version.text, because that is the live version; the page now shows already.text, which my test covers.\n- probe2 ends with a TypeError only because no email reached the victim: statuses [409 x6], 0 emails.",
+  "settings": [
+   "CLICKWRAP_MONTHLY_LIMIT: same name and default (1000), new meaning. It is counted apart for typed-in visitors and for people the website vouches for (signed link or API); each count may reach it, so up to 2000 in all. Updated in README config table, .env.example, openapi and policy.ts comment.",
+   "New constant in src/lib/policy.ts: CLICKWRAP_PRESSES_PER_ADDRESS_HOUR = 300 (presses of any kind per address per hour). CLICKWRAP_PER_ADDRESS_HOUR (30) and CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR (10) now count only recorded typed acceptances, per IPv6 /64.",
+   "next.config.mjs: frame-ancestors * only for /agree/* with ?embed=1; frame-ancestors 'self' otherwise."
+  ],
+  "abuse_and_stuck": [
+   "ABUSE scam split over box, button and terms, or put in a version note, or in the name a website signs into its link: refused at publish, page closed, press refused (tested).",
+   "ABUSE make us email a stranger: typed address never written (409), one copy per acceptance ever (tested hours later and two at once), daily cap of copies for unpaid accounts (tested).",
+   "ABUSE replay a forwarded signed link to get the person's certificate and IP: no receipt from GET or from another page load's press (tested).",
+   "ABUSE clickjacking: transparent, cropped, or shown then hidden frames are refused (look.cjs). A frame without embed=1 does not render (look.cjs). Flipping opacity around the click recorded nothing at 50 ms and 400 ms (flip.cjs).",
+   "ABUSE scripted press with another browser's view claiming uncovered: recorded as 'both' and 'Not checked' on our own page (tested).",
+   "ABUSE IPv6 rotation inside one /64 to fill the typed count: 10 per agreement, then 429 (tested). The typed count cannot block signed or API acceptances (tested).",
+   "ABUSE member or send key reading visitors' IPs, or a browser session forging API acceptances: trimmed fields and 403 (tested).",
+   "ABUSE deleting a reported page before review: 409 (tested).",
+   "STUCK office of 12 colleagues with signed links behind one address: all 200 (tested). 10 refused presses no longer block the next person (tested).",
+   "STUCK phone switching from wifi to mobile data between page and press: never refused, recorded as 'address' (tested).",
+   "STUCK honest frame with the button near its bottom edge was refused because of the app's empty toast holder: fixed in CSS (look.cjs V3 now records with button_uncovered true).",
+   "STUCK honest label that names a brand without a phone number publishes (tested).",
+   "STUCK returning person accepted v1 and a typo fix v2 is live: shown v1's words and what changed (tested, screenshot).",
+   "STUCK typed visitor who wants a copy by email: told to download instead; the download stays (tested).",
+   "STUCK visitor whose first press answer was lost: the same page load pressing again gets the receipt (tested).",
+   "LEFT OPEN someone who loses the receipt (another device, cleared storage, a frame where storage is blocked) cannot get their copy themselves. The page tells them to ask the organisation, which can download the certificate from the team screen.",
+   "LEFT OPEN a version note published before this fix that completes a lure closes an unpaid account's page for good, because notes cannot be edited. The fix is the contact form, then trust; or the team makes new terms.",
+   "LEFT OPEN an honest unpaid shop whose words hold a brand, money words and a support phone number is refused, the same as envelopes. The message says which words did it and how to get cleared.",
+   "LEFT OPEN covered-button readings exist only in Chrome and Edge, and a change in the last tenth of a second before a press could in principle be missed. EMBED_CANNOT says both.",
+   "LEFT OPEN rate limits are in memory per process (unchanged): restarts and several instances reset or split them.",
+   "LEFT OPEN a reported page waits for an operator before it can be deleted. If no one reviews, the team can only close it."
+  ],
+  "needs_from_billing": "Nothing. I did not touch routes-billing.ts, credits.ts, the billing tests, stripe-fake.ts or the Billing() component. Acceptances still use no signatures.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n(1) A copy by email now goes only to the address in a website's signed link, once per acceptance ever. Typed addresses get 409 not_vouched, and the page no longer offers the button for them.\n(2) GET /public/agree/:slug never returns a receipt. The page keeps the receipt in localStorage.\n(3) POST /clickwraps/:id/acceptances requires an API key (403 api_key_only for browser sessions).\n(4) A 'send' key and non-admin members no longer see ip, user_agent, page_url or given_* in /status and in that POST's answer. A website that read those with a send key needs an admin-scope key.\n(5) The monthly limit is two counts of CLICKWRAP_MONTHLY_LIMIT each, so up to 2000 a month in all. The owner should confirm this, because it doubles the most an account can store. The 'Things to decide' entry says so.\n(6) Only /agree/*?embed=1 may be framed. The product's snippets always had embed=1; a hand-made iframe without it now shows nothing.\n(7) The view token format changed (it is bound to the address and browser). A page left open across the deploy gets 'Load the page again and press the button there.' once.\n(8) The CSV gains a last column, terms_handed_to; the existing columns keep their order.\n(9) DELETE /clickwraps/:id answers 409 'reported' while a report is open.\n\nPromises in new copy: the email now says one copy per acceptance, only on request, only to an address the website gave. The page says only the accepting browser was given the way to the copy. The certificate prints only what the browser reported. EMBED_CANNOT now names the remaining gap. All new copy keeps 'Sign&Grow' for the rename pass.\n\nThings I saw that are out of scope:\n- The scratchpad folder is shared between sessions, and others reuse file names such as tsconfig.before.json and dev.log. Another server's request log landed in my dev.log, and my tsconfig backup was overwritten. Before deleting my DATA_DIR I checked that no running server used it.\n- tsconfig.json: I removed only the two .next-repair-clickwrap lines my server added. Other engineers' running servers keep adding and removing their own lines.\n- In next dev, Next's own 'N' badge counts as covering anything near the bottom-left of a frame. It does not exist in a production build. My browser checks hid only that badge.\n- The 4 remaining suite failures belong to the signing-page and encryption-wording work (named under suite)."
+ },
+ "repair:logic": {
+  "found": "The builder's work (research/continue.json \"build:logic\") was all in place and its 23 tests passed. I ran every probe in tests/out/verify-logic/ before changing anything (outputs kept in my scratchpad, folder \"before\"). This is what each finding looked like then:\n\n- HIGH, three decimals (probe2): Bea's Total was stored as the text '1.233'. Page 1 of the signed PDF had 0 images, so her signature was missing, and it printed 'FREIGHT SURCHARGE 250 APPLIES' (wording that was hidden when she signed). The sender's progress showed required_left 1. Ben's Grand total was stored as 2466 instead of 2.466, and his note said \"'Total' (1.233) is read as 1233\".\n- HIGH, Finish with no picture (probe4, angles 1 and 2): both returned 200 with the envelope completed, the audit line 'Signed', the field '1' and signature_png null.\n- MEDIUM, oracle (probe5): 60 refused Finish calls worked out Bi's unfinished price as 437.00. Nothing was written to the audit trail.\n- MEDIUM, parallel signing (probe3): after Una finished, Vic's open page got 400 'A required field is still empty: Approval reference...' for a field that was not on his screen. On the second envelope, 800 was signed under Vic's name while his screen showed 0.\n- LOW, raw field id (probe3): the note said \"With fld_yo4DIUtjfIwMSxmO 0\".\n- LOW, editor panel (screenshot 04): the panel was clipped at 390 px.\n- LOW, numbers written two ways (probe7): rules on '1.000' and '1000' were saved and sent (200). Finish then asked for 'Pallet terms'.\n- LOW, both radios (probe4 angle 3): 200, with both radios stored as '1'.\n- LOW, long chain (probe1): chains of 8000 and 20000 fields gave RangeError, and a chain of 2000 hid the overflow as 'cannot be worked out'. The probe8 file in the folder only goes up to 1300 fields (all 200), so I did not reproduce the skeptic's 1500-field 500 before the fix. I ran 1500 after the fix.\n- LOW, long literals (probe1): '12345678901234567 - 12345678901234566' gave 2, and '999999999999999.9 * 1' printed 16 digits.\n- LOW, trailing space (probe7): the editor predicted a sign-again (['Ann']) for 'Gold '.\n- LOW, digits (probe1): '\ud835\udfd9\ud835\udfd8\ud835\udfd8' was read as 0.\n- Overclaims: the README, openapi and continue.json claims listed by the skeptic were all untrue at that point.",
+  "done": [
+   {
+    "item": "HIGH: three-decimal results read back as thousands (PDF missing a signature, hidden wording printed, other totals 1000x off), check 'The signed PDF prints only what was shown' and check 'Number notations'",
+    "status": "done",
+    "how": "Followed the owner's decision. Every calculated field now stores its result twice: as shown (value '1,233') and as a plain number in a new column, fields.calc_num ('1.233'). Every later reader takes the number, never the shown text: canonOf in src/lib/logic.ts, used by workOut for rules, for other formulas, and for the PDF, progress and hiddenFor through hiddenOf. settleLogic writes both. saveLogic puts calc_num back on a kept result after writeContent rewrites the rows. GET /sign gives the number to the page ('num' on others and on formula_inputs). A calculated input's decimal mark is learned from its number (markOf), so a total of '1,233' carries its comma into the next total ('2,466'). Calc.value is now exactly the number shown, so a stored chain and a chain worked out on the spot agree.",
+    "test": "tests/logic.test.ts 'a calculated result with three decimals stays that number...': pure readings in both notations; the server flow gives required_left 0, calc_num kept after a PUT and not taken from the body, Ben's screen and the server both 2.466, and the completed PDF has 2 images, '1.233' and '2.466', and no FREIGHT SURCHARGE. probe2 after: 1 image, FREIGHT gone, required_left 0, grand total 2.466."
+   },
+   {
+    "item": "HIGH: signer finishes 'Signed' with no signature picture (check 'A signer cannot finish without a signature that is on the page')",
+    "status": "done",
+    "how": "Followed the owner's decision. I removed hiddenAfter. In completeRecipient, the check for a signature or initials picture now runs inside the claim transaction, through a new optional callback in applyValues, right after settleLogic has worked out from the stored answers what is shown. That one result decides the picture check, the required checks, and (through the stored values) what the PDF prints. A refusal undoes the claim. Messages and order are unchanged: 'Adopt a signature before finishing.' still comes before 'A required field is still empty'.",
+    "test": "'nobody finishes as signed without a picture...': a made-up attachment id gives 400, the person stays viewed and no 'Signed' line is written; with a picture it gives 200 and 1 image in the PDF. Another person's saved, unfinished price does not count. probe4 after: both angles give 400 'Adopt a signature before finishing.'"
+   },
+   {
+    "item": "MEDIUM: another person's unfinished answer read out through Finish errors (check 'A formula never reveals another person's answer before they finish')",
+    "status": "done",
+    "how": "Fixed at the root. Visibility at Finish now comes only from settleLogic's view, where an unfinished person's answers count as empty. There is no longer a second view built from raw saved values. I added no rate limit, because the answers no longer depend on the other person's input.",
+    "test": "Same test: five quantities from 1 to 1000 all give the identical '400 Adopt a signature before finishing.'; formula_inputs gives Price with value null and pending true. probe5 after: every call gives the same answer, and the probe can only guess '10.00'."
+   },
+   {
+    "item": "MEDIUM: open page shows one total and another is signed when someone else finishes; Finish refused for a field not on screen (check 'What a signer sees for a calculated field is what is signed', overclaim on README line 212)",
+    "status": "done",
+    "how": "New formulaInputs in src/server/logic.ts. It lists the other people's fields that this person's formulas use, as they count right now (same view as settleLogic), plus a key. GET /sign returns 'inputs' and 'formula_inputs'. The page works out formulas from formula_inputs and sends 'inputs' back with Finish. assertInputs refuses with 409 code 'changed' and why 'inputs' when the key no longer matches, before anything is claimed. The message reads: \"Una Worker finished while you had this document open, and what they filled in counts in 'Amount due'. Nothing was signed. It is worked out again below with their answers: look at it before you finish.\" A caller that sends no key is held to the last key that person was given (new column recipients.seen_inputs, set by GET /sign), like seen_version. On the page, the existing 'changed' branch now shows the server's sentence for why 'inputs' instead of 'the sender changed this document', and reloads. Other people's unfinished saves never change the key.",
+    "test": "'when someone else finishes while a screen is open...': a Finish with no key gives 409; with the old key, 409 with the exact words and the person stays viewed; after reloading, the page works out 2000, the approval field appears, and Finish gives 200 with 2000 stored. The radio and oracle test also shows Bi's unfinished save does not force a reload. Browser at 390x844 (tests/out/repair-logic/look.cjs): the notice names Una, the page reloads to 2000, the approval field is on screen, Vic stays viewed. Screenshots 02 and 03 in tests/out/repair-logic. probe3 after: both Finish calls give 409 with the words."
+   },
+   {
+    "item": "LOW: raw field id and 'a field' in the calculated note (check 'Signer-facing text names fields as people know them')",
+    "status": "done",
+    "how": "formula_inputs carries the label and owner of every input, so the note names 'Hours' and adds \"'Hours' counts once Una Worker has finished.\" The fallback in workOut and liveLogic is now 'another field' and never an id.",
+    "test": "Exact calc_note assertion in the parallel-signing test. Browser screenshot tests/out/repair-logic/01-vic-phone-total-after.png."
+   },
+   {
+    "item": "LOW: editor 'Calculate from...' panel clipped at 390 px with a long label (check 'Screens at 390x844', overclaim in build:logic item 4)",
+    "status": "done",
+    "how": "In FieldLogic.tsx: the panel grid is minmax(0, 1fr) with min-width 0; chips and the 'says' sentences wrap (overflow-wrap anywhere, white-space normal); controls are capped at 100% width and keep their 44 px minimum height.",
+    "test": "Browser only (styling, no unit test): tests/out/repair-logic/look-editor.cjs at 390x844 with the 60-character label found no element in .ed-logic wider than the screen, page width 390, no control under 44 px, for both the formula and the rule panel. Screenshots 04-editor-formula-phone-after.png and 05-editor-rule-phone-after.png."
+   },
+   {
+    "item": "LOW: two fields in one place whose rules compare one number written two ways are both shown",
+    "status": "done",
+    "how": "neverTogether compares number values as numbers when the field they depend on is a number field. stackedFields now passes the field list, a one-word edit in src/lib/stacked.ts. When the field is unknown, two values only count as different if they differ both as words and as numbers.",
+    "test": "'a number answer written two ways is one answer...': '1.000' with '1000' and '5' with '5.0' are refused as stacked; '5' with '6' and equals/not_equals on the same number are allowed; for a text field '5' and '5.0' are still two answers. probe7 after: the send is refused with the stacked-fields sentence."
+   },
+   {
+    "item": "LOW: both radio buttons of one group can be chosen",
+    "status": "done",
+    "how": "oneChoice in src/server/logic.ts, called once at the top of applyValues. Choosing two radios of one group in a save or a Finish is refused before anything is written: 'Only one option can be chosen for Billing, and 2 were chosen: Monthly, Yearly. Choose one and try again. Nothing was saved.' Choosing one turns the others in the group off, including ones the request leaves out.",
+    "test": "'two radio buttons of one group cannot both be chosen...': Finish and save are both refused; a later save of only Yearly clears Monthly and Monthly terms. probe4 after: 400."
+   },
+   {
+    "item": "LOW: a long chain of formula fields answers 500; a stack overflow is shown as 'cannot be read'",
+    "status": "done",
+    "how": "loopsIn and a new longestChain walk the fields without recursion. saveLogic refuses more than MAX_CHAIN (100) fields in one line with code 'logic_chain', in words that suggest sum(). In workOut, astOf only catches FormulaError, and a depth guard means rows saved before this limit are not worked out instead of crashing.",
+    "test": "'a very long line of fields...': longestChain and loopsIn on 5000 fields; workOut on 3000 does not crash; a POST with 1500 fields gives 400 logic_chain with the exact words; 100 fields gives 200. tests/out/repair-logic/probe8-after.ts: 400, 1300 and 1500 fields all give 400 in words in under 100 ms."
+   },
+   {
+    "item": "LOW: number literals over 15 digits not refused; 999999999999999.9 prints 16 digits",
+    "status": "done",
+    "how": "The tokenizer refuses a literal with more than 15 digits, in words. The 10^15 limit is checked on the rounded result as shown.",
+    "test": "'numbers too long for a formula...': the 17-digit literal and a 450-digit literal are refused in words; 999999999999999 + 0.5 gives 'too large'; 0.000000001 is still fine."
+   },
+   {
+    "item": "LOW: editor predicts a sign-again for a rule value with a trailing space",
+    "status": "done",
+    "how": "ruleOf trims the value, as saveLogic does.",
+    "test": "Same test: signsAgain with 'Gold ' against 'Gold' gives []."
+   },
+   {
+    "item": "Digits of scripts whose digit blocks touch another (\ud835\udfd9\ud835\udfd8\ud835\udfd8 read as 0), from check 'Number notations'",
+    "status": "done",
+    "how": "asciiDigit tries NFKC first, then counts back to the start of the digit run, so the digit is the distance mod 10. I checked in Node that every Unicode run of decimal digits is a whole number of tens.",
+    "test": "Same test: \ud835\udfd9\ud835\udfd8\ud835\udfd8, \ud835\udfcf\ud835\udfce\ud835\udfce, \ud835\udff8\ud835\udff9, \uff11\uff12\uff13, \u0661\u0662\u0663, \u0967\u0968\u0969 and \u0663\u066b\u0665 give 100, 100, 23, 123, 123, 123 and 3.5."
+   },
+   {
+    "item": "Overclaims: README 211-213 and the bad-reviews row, openapi 'A field of someone else only counts once that person has finished', continue.json items 2, 3 and 4",
+    "status": "done",
+    "how": "The claims are now true in code, with tests above. I edited the README feature paragraph (Finish visibility worked out once, the plain number kept, Finish refused with words when a co-signer finished meanwhile), extended the bad-reviews row, added a new bad-reviews row for the parallel-signing case, and extended the tests/logic.test.ts row. openapi: the formula description covers calc_num, formula_inputs and inputs, and 409 changed/inputs; show_when mentions logic_chain and the one-answer rule for radios; Field.calc_num is added. I did not edit research/continue.json, which is the builder's record; this report replaces those claims."
+   },
+   {
+    "item": "Checks that held (formula parser, lying browser, loops, sign-again, channels, API key path, no em dashes)",
+    "status": "done",
+    "how": "No change needed. I re-ran probe6 after my changes and it still holds: the API key path ignores value/required/readonly, bulk lures are refused, the correction lure gives 422. probe1's hostile formulas are still refused, and 500 x '1+' now parses in 1 ms. A grep for U+2014 in every file I touched found nothing.",
+    "test": "The 23 original tests in tests/logic.test.ts still pass; probe6 output after."
+   }
+  ],
+  "files_changed": [
+   "src/lib/logic.ts (ruleOf trim; asciiDigit; MAX_CHAIN; PLAIN, canonOf, markOf; literal digit limit; Calc.canon and value = shown number; notationOf takes {text, dec}; workOut stored number, fallback name, FormulaError-only catch, depth guard; iterative loopsIn; longestChain; neverTogether number-aware)",
+   "src/server/logic.ts (saveLogic chain limit and calc_num restore; settleLogic writes calc_num; viewFor; formulaInputs; assertInputs; oneChoice; hiddenAfter and asStored removed)",
+   "src/server/envelopes.ts (import line; applyValues: oneChoice, optional atFinish callback, returns hidden; completeRecipient: assertInputs, picture check moved inside the claim)",
+   "src/server/routes-sign.ts (formulaInputs, seen_inputs write, inputs and formula_inputs in GET /sign, num on others)",
+   "src/server/db.ts (COLUMNS: fields.calc_num, recipients.seen_inputs)",
+   "src/server/openapi.ts (formula and show_when descriptions, Field.calc_num)",
+   "src/lib/stacked.ts (neverTogether gets the field list)",
+   "src/components/sign/logic.ts (calc_num from num, 'another field' fallback, waiting note, namesIn import)",
+   "src/app/sign/[token]/page.tsx (changedOpen may hold the server's sentence; formulas use formula_inputs; Finish sends inputs; notice shows the sentence for why=inputs)",
+   "src/components/editor/FieldLogic.tsx (panel grid minmax(0,1fr), wrapping chips and sentences, controls capped at 100%)",
+   "tests/logic.test.ts (7 new tests plus a helper; the old sign-again test now replaces only the trailing '* 10')",
+   "README.md (feature paragraph, bad-reviews rows, test-file row)",
+   "tsconfig.json (only removed the two .next-repair-logic lines my dev server added)",
+   "tests/out/repair-logic/ (new: look.cjs, look-editor.cjs, probe1-after.ts, probe8-after.ts, screenshots 01-vic-phone-total-after, 01b-vic-adopt, 02a-vic-review-before, 02-vic-phone-after-una, 03-vic-phone-new-total, 04-editor-formula-phone-after, 05-editor-rule-phone-after)"
+  ],
+  "suite": "tests/logic.test.ts: 30 pass, 0 fail (run several times).\n\nnpx tsc --noEmit -p .: clean, run twice, the second after my last edit.\n\nFull npm test: 863 tests, 848 pass, 15 fail. After waiting two minutes I re-ran every failing file:\n- logic: 30/30 pass.\n- billing: 11/11 pass.\n- billing3: 10/10 pass.\n- billing5: 8/8 pass.\n- billing6: 18/18 pass.\n- gaps-disputes-evidence: 25/25 pass.\n- gaps-nonus-words: 27/27 pass.\n- lifecycle: 26 pass, 1 fail.\n\nThe 13 billing, disputes and nonus failures were other engineers' half-finished edits during the full run. The billing ones were a renewal adding 2 signatures where 11 were expected, in payment code I did not touch.\n\nThe logic failure in the full run was 'after someone has finished, a changed rule or formula...' (400 instead of 409). It passed alone three times. The likely cause was the test's replace('10','12') hitting a random field id that contains '10'. I made the replacement exact (/\\* 10$/) and the assertion now prints the error.\n\nThe one that persists: lifecycle.test.ts:1260 'the screens offer what the server allows...'. It is a regex on the public-forms page source (p.may_change ... shared_device), a page another engineer is editing (repair-groups). I did not touch it.",
+  "needs_from_billing": "Nothing has to change in routes-billing.ts, credits.ts or Billing(). One thing for the owner of completeRecipient's money path to know: the check for a signature or initials picture now runs inside the claim transaction, after the form's signature is taken there. When it refuses, the whole transaction rolls back, including that grant, which is correct. The visible change in order: a public-form visitor with no free signature AND no signature picture now gets the 503 'This form cannot take your signature at the moment' before 'Adopt a signature before finishing.' (before, it was the other way round). The page never sends a Finish without the picture, so only API callers would see this.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n- Every field from GET /envelopes/:id and GET /sign now carries calc_num, which is set only for calculated fields.\n- GET /sign also returns 'inputs' (a key or null) and 'formula_inputs' (array). The 'others' entries for a finished person's calculated field carry 'num'.\n- POST /sign/:token/complete accepts 'inputs'. It can now answer 409 code 'changed' with why 'inputs'. A caller that sends no key is held to the key it was last given (recipients.seen_inputs); a person who never loaded GET /sign after this change is not held to anything.\n- New 400 refusals on save: code 'logic_chain' (more than 100 fields in one line), and a number of more than 15 digits written in a formula. A formula saved earlier with such a long literal can no longer be read, and is shown as 'cannot be read'.\n- A save or Finish that chooses two radio buttons of one group is refused. Choosing one now clears the others of the group on the server.\n- applyValues has an optional 5th parameter and returns the hidden set. hiddenAfter no longer exists.\n- Two new columns: fields.calc_num and recipients.seen_inputs.\n\nDecision for the owner to confirm: Calc.value is now exactly the number shown. A formula that uses another calculated field therefore counts the shown number: {t}=1/3 shows 0.3333333333, and {t}*3 gives 0.9999999999, not 1. I chose this so a total worked out on the spot and one read back from storage always agree, and anyone checking the printed numbers by hand gets the same result. The other choice is to keep full precision in calc_num.\n\nLegal and copy: no legal claims were added. All new screen text is plain, and new copy says Sign&Grow only where it already did.\n\nProbes in tests/out/verify-logic that now behave differently by design:\n- probe1 stops at the long literal, which is now refused. The copy at tests/out/repair-logic/probe1-after.ts runs to the end.\n- probe7 stops because sending the stacked 1.000/1000 fields is now refused.\n- probe2 and probe3 still call liveLogic with v.others instead of formula_inputs. probe2 is correct now anyway, because others carry num. probe3 shows 'another field' instead of an id. The page itself uses formula_inputs.\n\nFragile test, for others: my PDF tests count every image on page 1 (2 and 1). If another engineer starts drawing an image on page 1, such as a QR code, those counts need updating.\n\nSeen but out of scope: lifecycle.test.ts:1260 fails against the public-forms page source.",
+  "abuse_and_stuck": [
+   "Abuse, stored number: a sender sends calc_num in PUT/POST. It is not taken: the server's own number is kept (test).",
+   "Abuse, stored number: a browser sends a made-up total. It is ignored as before (existing test 'the server decides').",
+   "Abuse, stored number: a stale calc_num on a field whose formula was removed. It cannot happen because writeContent rewrites the row and calc_num is only put back on a field that still has a formula with the same value. Left open: rows saved before this change have no calc_num and fall back to reading the shown text, the old behaviour (no backfill).",
+   "Abuse, Finish: a made-up attachment id hides nothing anymore, because the server drops it before visibility is decided (test).",
+   "Abuse, Finish: a '1' sent for a shown signature with no picture is refused, and the claim is undone (test).",
+   "Abuse, Finish: a '1' sent for a hidden signature is reset and needs no picture, as before (existing test).",
+   "Abuse, oracle: varying your own answers to learn another person's unfinished one. Every reply is identical (test). A forged or omitted inputs key can only produce a 409 or the last key given (test), so it gains nothing. No rate limit was added on refused Finish calls, since there is nothing left to learn.",
+   "Abuse, radios: choosing two at once to get both branches printed is refused (test).",
+   "Abuse, long chain: a huge line of fields to crash the server is refused in words (test), and a legacy row is not worked out instead of crashing (test).",
+   "Abuse, long literal: a 17-digit literal to get a silently wrong sum is refused (test).",
+   "Stuck, parallel signing: a total changed under an open page. Told who finished, nothing signed, the page reloads and shows the new total and the field that comes with it (test plus browser). Another person's unfinished saves never force a reload (test).",
+   "Stuck, parallel signing: a page loaded before this change that sends no key is held to the key it was given (test). Left open: a page loaded before this deploy and never reloaded has no recorded key and is not held.",
+   "Stuck, note: 0 on screen with no reason. The note now names the input and who it waits for (test plus browser).",
+   "Stuck, honest sender: two conditional fields on 1.000 and 1000 that would both show. Now refused as stacked before sending (test).",
+   "Stuck, honest sender: a long line of totals is refused with a suggestion to use sum(). Left open: the editor's review step does not count the line length beforehand, so the sender hears it on save.",
+   "Stuck, honest sender: 'Gold ' with a trailing space no longer asks someone to sign again (test).",
+   "Stuck, editor: a long label no longer pushes the panel off a phone screen (browser check of both panels, 44 px controls).",
+   "Left open, typed numbers: a lone '1.234' that the person typed (not a calculated value) is still read with the formula's hint inside a formula (1.234) but without a hint in a rule (1234), as in probe1. It was not one of the findings, and the screen does say how a formula read it.",
+   "Left open, display: other people's fields drawn on the page still use the sender's prefill to decide what is shown (hiddenFor), while formulas count only formula_inputs. The two can differ for an unfinished person's prefilled conditional fields, and the note says who the input waits for.",
+   "Left open, optional signature: a shown signature field that is optional and left empty still lets the person finish without a picture, with nothing printed there, as before. My reading of the owner's decision is that a signature 'applies' when it is shown and either required or filled."
+  ],
+  "settings": [
+   "No new setting: nothing added to .env.example or the README config table."
+  ]
+ },
+ "repair:groups": {
+  "found": "The builder's signing groups were in place and tests/groups.test.ts had 26 tests, all passing. I ran the skeptic's probes (tests/out/verify-groups/probe1-5.ts) before changing anything, and every finding reproduced exactly as written. Output is saved in scratchpad/probes-before.txt.\n\n- Spam marks (probe1 A and C). A member's complaint was kept for the account, but notifyMembers never read it. Ben got \"Reminder: Staff handbook\" after marking spam. The remind answer said reminded 1 and did not name him. His page had mail_stopped false, and mail-again was refused (409, not in MAY). After Maya marked spam and handed it back, she was reminded again as a member.\n- Bounce (B). The sender was told to \"choose Correct next to Maya Lopez\". Doing that answered 400.\n- Hand-back note (F). The PayPal lure text reached Ben's \"Back with HR team\" email.\n- Sender in the group (D). Signing for the group used 1 signature; signing directly used 0.\n- Group swapped after signing (E). The new group's row stayed free=1, so the total used stayed 1.\n- Removed member (probe2 G). The check page answered genuine, status sent, with her url.\n- Template whose group was deleted (J). Each bulk row failed, 2 drafts were left behind, and the message said \"Open the envelope\".\n- Template use naming a person for the group's role (K). Accepted and quietly ignored.\n- Send-scope key (L). GET /groups answered may_change true.\n- Access code (O). Ben, whose colleague had it, froze the group's code (423 for Maya too). His 2 asks for the code used up hers (429).\n- Certificate (N). It said \"Viewed | Ben Ortiz, for HR team\".\n- Member added by a correction (probe3 1, probe4 1). When the same save moved a field, Dee's only email was \"Updated\". When a colleague had it, Dee got nothing, while the editor and openapi promised an email.\n- Give back while paused (probe4 3). The route answered {ok:true}, nobody was emailed, and the toast said \"Every member was emailed their link.\"\n- Hand-back limit (probe4 4). Ben's first hand-back got 429 because Maya had used the group's 3.\n\nThe report lists no regressions. The screens list has no problems.",
+  "done": [
+   {
+    "item": "NEW BUG (high) / check 'Reminders only to people who can still act' / overclaim README+builder REMINDERS: a member's spam mark ignored, reminders keep going while the sender is told they stop",
+    "status": "done",
+    "how": "Owner decision followed: a member's spam complaint or report stops all mail to that member about that envelope, and the sender is told exactly what happened. In src/server/groups.ts, memberAs now gives each member their own marks: complained_at from the account's mail_complaints list, and reported_at from a new column recipient_members.reported_at. notifyMembers, groupPeople, tellGroup, declineForGroup, groupsCorrected and the completed-copy loop all skip such members, and one 'Not emailed' audit line says why. notifyRecipient has a one-line hook (memberMailStop) so a holder who reported is not emailed either. A report on a member's link or with a member's security code (POST /sign/:token/report, /public/check/report) sets the member's mark and answers mail_stopped:true; the report dialog then tells them. complaint() in routes-bounces.ts now names the member and the group ('Ben Ortiz <...>, a member of HR team ... The other members are not affected ... Only Ben Ortiz can undo that'). When the person who had taken it on is the one who complained, the email adds that they still get nothing after a hand-back. 'mail-again' is now in MAY (open/copy/taken). Each member gets their own code (new table member_mail_again, and the code's hash includes the member id), so one member's code never undoes another member's mark. The page shows mail_stopped and mail_stopped_why, and MailAgain has report wording. remind lists members in not_reminded (why marked_as_spam/reported/email_bounced). A holder who reported gets 409 with code 'reported'. remindedText words 'reported'. The envelope page shows each member's mail_stop. Probe1 A after: Ben gets 0 reminders, not_reminded names him, his page shows mail_stopped true. C: Maya is not reminded as a member, and mail-again works on her link.",
+    "test": "tests/groups.test.ts: 'repair: a member who marks our email as spam...', 'repair: the member who had it marks it as spam and hands it back...', 'repair: a member who reports the document...', 'repair: the member who has it reports it...', 'repair: a member of a copy group who marked our email as spam gets no completed copy...; the timer does not remind them either'",
+    "left_open": "A failed email to a member that was queued before the spam mark can still be retried by mail.ts. Its retry check reads the recipient row, not the member. A spam mark keeps the account-wide reach every complaint has: the member is not emailed about any of this account's documents. That is more than 'that envelope', and the sender's email says so. An individual (non-group) recipient's report still does not stop their mail. That behaviour is product-wide and outside this brief."
+   },
+   {
+    "item": "NEW BUG (medium) / check 'Abuse limits' / overclaim builder abuse list: hand-back note puts a stranger's text into colleagues' inboxes",
+    "status": "done",
+    "how": "handBack no longer puts the note in the members' 'Back with ...' email. The note goes to the sender's email ('with this note for you') and into the audit trail only. The sender's email says whether the members were emailed and that the note was not passed on. The dialog label now reads 'Why, for <sender> (optional. It goes to <sender> and into the record, not to the others in HR team)'. Help says the same. Probe1 F after: lure in Ben email = false.",
+    "test": "'repair: a hand-back note goes to the sender and the record only, never into the other members' inboxes'"
+   },
+   {
+    "item": "NEW BUG (medium) / check 'A bounce' / overclaim builder BOUNCES: holder's bounce tells sender to use Correct, which is refused",
+    "status": "done",
+    "how": "New holderBounceLine in groups.ts, used in recipientBounce when the matched row is a group's holder: 'Give back to the group', or Edit envelope (take them out and add them again), or Try again. Correct is never offered. Probe1 B after: the new wording, and release works.",
+    "test": "'repair: an email to the member who has it comes back: the sender is told to give it back or edit the group, never to use Correct'"
+   },
+   {
+    "item": "NEW BUG (medium) / check 'Access code' / overclaim builder left-open: a member who cannot act can freeze the signer's code and use up their asks",
+    "status": "done",
+    "how": "Members in state 'taken' or 'copy' have their wrong tries counted for that member alone (memberWrongCode in groups.ts; columns recipient_members.code_fails and code_for, a fingerprint of the current code, so a new code resets the count). At 10 tries only their own link freezes (asMember sets code_frozen_at for that member), and the sender gets one email 'Access code frozen for one link'. For those members the per-IP limit key is per member. ask-code is limited per member (askcode:<member id>). Probe2 O after: the row is not frozen, Maya gets in, and Maya's ask answers 200.",
+    "test": "'repair: a member who cannot act cannot freeze the access code of the colleague who is signing, nor use up their asks for it'",
+    "left_open": "While nobody has taken it on, any member's wrong tries still count towards the group's code. That is the same as one person's link, and the sender can set a new code. In a copy group each member gets 10 tries, so up to 200 for 20 members, still under the per-IP limit of 5 per 15 minutes. With per-member asks, a group can send the sender up to 2 asks a day per member."
+   },
+   {
+    "item": "NEW BUG (medium) / check 'Money: a group that includes the sender' / overclaim GROUP_RULE 'like one person'",
+    "status": "done",
+    "how": "Owner decision was 'either'. I followed the pricing rule as stated ('a person signs who is not the sender signing their own document under their own name and address'). takeOn sets free=1 when the member taking it on isSelf for the sender (credits.ts isSelf, imported, credits.ts unchanged), so the hold is released. unclaim and unclaimRow reset free to 'paid by this group' or 0, so the hold comes back. GROUP_RULE is now true as written. Probe1 D after: 0 used, same as signing directly.",
+    "test": "'repair: money: the sender who signs for a group they are in signs free, like signing directly, and a different group in its place pays its own'",
+    "left_open": "When the sender takes it on and then hands it back, the hold comes back. If the account spent its last signature in between, available() can go below zero."
+   },
+   {
+    "item": "NEW BUG (low) / check 'Money: a group replaced by a different group after it signed'",
+    "status": "done",
+    "how": "settleGroups (and the reset in unclaim) only treats a group as paid by a ledger line made under the row's current person_gen (shared SQL PAID_HERE). writeContent already moves person_gen when another group or a person takes the place, so an earlier group's payment no longer covers the next one. Probe1 E after: free 0, held 2, total used 2.",
+    "test": "same money test (swap part)"
+   },
+   {
+    "item": "NEW BUG (low) / check 'Taking it on, handing it back': hand-back limit shared by all members",
+    "status": "done",
+    "how": "routes-groups.ts counts hand-backs per member (3 a day) and per document (6 a day), with separate messages. I deliberately updated the existing limit test's regex to the new wording.",
+    "test": "'repair: hand-backs are counted per member, with a higher ceiling for the document...' plus the updated 'handing back is limited to 3 times a day'"
+   },
+   {
+    "item": "NEW BUG (low) / check 'Corrections' / overclaim GroupRecipient + openapi: added member not emailed, or gets only 'Updated'",
+    "status": "done",
+    "how": "notifyMembers never sends 'updated' to a member who was never emailed (groupsCorrected then sends the invitation and writes its audit line). For 'reminder', 'expiring' and 'reopened', such a member's first email is upgraded to the invitation, with an audit line. The editor note and openapi now say 'emailed when you save if nobody has taken it on and it is the group's turn; otherwise when it comes back to the group'. Probe3 1 after: Dee's first email is the invitation.",
+    "test": "'repair: someone added to a group by a correction gets the document itself as their first email, never \"Updated\"...'"
+   },
+   {
+    "item": "NEW BUG (low) / check 'Give back while sending is paused' / overclaim toast",
+    "status": "done",
+    "how": "tellGroup returns counts (emailed, not emailed, no mail server). The release route answers {ok, emailed, not_emailed, told}, and GroupMembers shows 'told' as the toast. Examples: 'Nobody was emailed about it...', 'No mail server is set up here, so no email went out...', '2 members were emailed their link, and 1 other was not...'. The confirm dialog no longer promises an email unconditionally. The hand-back dialog's sentence that promised an email was removed.",
+    "test": "'repair: giving it back while sending is paused says nobody was emailed, and the screen shows what the server said' (uses a mail-server stub of our own transport, restored after)"
+   },
+   {
+    "item": "NEW BUG (low) / check 'certificate' still_broken: viewers recorded 'for HR team'",
+    "status": "done",
+    "how": "asMember names non-holders '<name>, member of <group>'. takeOn switches the actor to '<name>, for <group>' and returns it, so consent, decline and signing say 'for'. I deliberately updated the existing not-opened test's actor regex.",
+    "test": "'repair: the record says \"member of\" for members who only looked...'"
+   },
+   {
+    "item": "NEW BUG (low) / check 'removed member' still_broken: check page treats removed member's code as live",
+    "status": "done",
+    "how": "removedMemberCheck in groups.ts, called by /public/check: answers genuine, replaced, why 'removed', with no url. The check page already has wording for 'removed'.",
+    "test": "'repair: the check page says a removed member's email was genuine and that they were taken off, with no link'"
+   },
+   {
+    "item": "Check 'Named groups' still_broken: may_change true for a send-scope key",
+    "status": "done",
+    "how": "may_change = admin and not a send-scope API key. openapi says so.",
+    "test": "'repair: a send-scope API key is told it may not change groups'"
+   },
+   {
+    "item": "Check 'Templates and bulk' still_broken J (deleted group: drafts left behind, wrong advice) and K (person named for the group role silently ignored)",
+    "status": "done",
+    "how": "New assertTemplateGroups (groups.ts) runs before anything is made, in POST /bulk and in POST /envelopes with template_id. A non-empty name or email for a group's role is refused ('Row N: the role \"Accounts\" is the group ...'). When sending, a deleted group or one with too few or too many members refuses the whole call with 'Change the template: choose another group or a person for that role'. Probe2 J after: 400, 0 drafts. K: 400, Eve not emailed.",
+    "test": "'repair: a template whose group is gone, or a row that names a person for the group's role, is refused before anything is made...'"
+   },
+   {
+    "item": "Overclaims (7 listed)",
+    "status": "done",
+    "how": "Each now matches the code: README 'Signing groups' bullet (reminders and marks, sender free, adding members, hand-back note, limits, access code); GROUP_RULE is now true; bounce advice; editor and openapi 'members'; toast; the abuse list (note filtered out of inboxes, per-member limit); access-code left-open (now only the open-group case). Also updated: help (signing-groups and group-taken), the README tests row, the README 'bad reviews' bounce/spam row (one sentence about group members), and openapi (members.mail_stop, release answer, mail-again now always documented because reports use it without mail events, check/report mail_stopped, may_change)."
+   },
+   {
+    "item": "Screens",
+    "status": "done",
+    "how": "Checked on next dev, port 3614, with tests/out/repair-groups/screens.cjs: Ben's page after reporting (MailAgain report wording), Cy's report dialog submitted by keyboard (confirmation says no more emails), Maya's hand-back dialog (new label), the envelope page at 1280 and 390 (members' 'Reported this document...' lines), the give-back confirm, and the toast. Every screen: scrollWidth equals the viewport, nothing past the right edge, no em dash, no control under 44 px inside dialogs, notices or group cards. I looked at the PNGs. The dev server is stopped and .next-repair-groups deleted. I removed only the two lines next dev added to tsconfig.json (other engineers had changed other lines in the meantime, and I left those alone)."
+   }
+  ],
+  "files_changed": [
+   "src/server/groups.ts",
+   "src/server/routes-groups.ts",
+   "src/server/routes-bounces.ts (complaint() member wording, recipientBounce holder advice, mail-again per member)",
+   "src/server/routes-sign.ts (mail_stopped_why, report hook, per-member code tries and ask-code)",
+   "src/server/routes-trust.ts (check page for removed member, check/report hook)",
+   "src/server/routes-envelopes.ts (remind not_reminded members, assertTemplateGroups in template use and bulk)",
+   "src/server/envelopes.ts (one hook line in notifyRecipient + import)",
+   "src/server/db.ts (COLUMNS recipient_members.reported_at, code_fails, code_for; SCHEMA member_mail_again)",
+   "src/server/openapi.ts",
+   "src/components/sender/GroupMembers.tsx",
+   "src/components/sender/MailNews.tsx (remindedText 'reported')",
+   "src/components/sign/MailAgain.tsx",
+   "src/components/sign/dialogs.tsx (ReportDialog says when mail stops)",
+   "src/components/sign/GroupNotice.tsx",
+   "src/components/editor/GroupRecipient.tsx",
+   "src/app/sign/[token]/page.tsx (one prop on MailAgain)",
+   "src/app/help/page.tsx",
+   "README.md",
+   "tests/groups.test.ts (16 new tests, 2 existing regexes updated)",
+   "tests/out/repair-groups/screens.cjs and 01-07 PNGs",
+   "tsconfig.json (only removed the two lines my next dev added)"
+  ],
+  "suite": "- tests/groups.test.ts: 42 of 42 pass.\n- npm test (887 tests): 883 pass, 4 fail, none mine.\n  - billing3 'cancelling...' and billing6 'refund ... refused three times': both passed on re-run a few minutes later, so they were the payment engineer's half-finished edits.\n  - flow.test.ts 'the published API description matches the routes': 'not documented: GET /envelopes/:id/disputes'. That route comes from the disputes repair in progress. Still failing on re-run.\n  - lifecycle.test.ts 'the screens offer what the server allows...': a regex over src/app/app/powerforms/page.tsx. Not touched by me. Still failing on re-run.\n- Re-run of groups, bounces, flow, lifecycle, billing3 and billing6 together: 137 tests, 135 pass, 2 fail (the same flow and lifecycle ones).\n- npx tsc --noEmit -p .: clean after my changes. The last run shows one error in src/server/chat.ts(161) ('limit' not in the reply type). That is someone else's file, the AI helper in progress, and none of my files have errors.\n- Probes after the fixes: scratchpad/probes-after.txt. Every finding now holds.",
+  "needs_from_billing": "Nothing has to change in credits.ts or routes-billing.ts. One thing to confirm:\n- groups.takeOn now sets free=1 on a group row when the sender takes it on under their own name and address (isSelf from credits.ts), so reserved() drops that hold.\n- unclaim and unclaimRow put free back to 'paid by this group (same person_gen)' or 0, so the hold returns on hand-back or give-back.\n- If the account spent its last free signature while the sender held it, available() goes below zero after the hand-back. Completion then charges as usual. If billing wants a different rule there (refuse the hand-back, or warn), that would need a hook in credits.ts.",
+  "notes_for_integrator": "Behaviour others will notice:\n- POST /envelopes/:id/recipients/:rid/release now answers {ok, emailed, not_emailed, told} (was {ok:true}).\n- POST /envelopes/:id/remind: not_reminded can hold group members ({recipient_id, member_id, name, why}) with why 'marked_as_spam', 'reported' or 'email_bounced'. Asking for a group whose holder reported it answers 409 with code 'reported'.\n- POST /sign/:token/report and /public/check/report answer {ok:true, mail_stopped:true} for a group member.\n- GET /sign/:token adds recipient.mail_stopped_why.\n- Group members on GET /envelopes/:id carry mail_stop.\n- The audit actor for members who only look, mute or report is now '<name>, member of <group> <email>'. 'for <group>' is kept for the person who takes it on.\n- Hand-back 429 messages changed: 'You have handed this document back 3 times today...', or '...6 times today by members of the group'.\n- A template use or bulk row that names a person for a group's role now answers 400 instead of being ignored. A template whose group was deleted is refused before any draft is made.\n- /sign/{token}/mail-again is now always in openapi, because member reports use it without MAIL_EVENTS_TOKEN.\n\nDecisions for the owner to confirm:\n- A member's report stops mail to that member about that envelope only. A spam mark is account-wide, like everyone's, and the sender's email says so.\n- An individual (non-group) recipient's report still does not stop their mail. The two now behave differently.\n- The sender taking on a group they are in signs free, which follows the pricing rule.\n- The hand-back note goes to the sender only.\n\nSeen but out of scope:\n- src/server/chat.ts has a tsc error.\n- flow.test.ts fails on an undocumented GET /envelopes/:id/disputes route (disputes work).\n- lifecycle.test.ts fails on the powerforms page.\n\nNo new setting, so .env.example is unchanged. 'Sign&Grow' is kept in copy.",
+  "settings": [],
+  "abuse_and_stuck": [
+   "Abuse (stopped mail): the sender copies a member's link and calls mail-again to undo the member's mark. A browser signed in to the account gets 403. Anyone else only gets a code sent to the member's own mailbox. Tested indirectly: a code works only on the link of the member it was sent to.",
+   "Abuse (stopped mail): one member's code is used on another member's link. Refused 400, because each member has their own code table row and hash (tested).",
+   "Abuse (stopped mail): a member reports the document to stop their colleagues' emails. It stops only their own (tested: Maya and Cy are still reminded).",
+   "Stuck (stopped mail): a member reported by mistake. Their page shows 'We do not email you about this document' with a button, and a code to their own address starts mail again (tested).",
+   "Stuck (stopped mail): the sender wonders why a member gets no reminder. The remind answer and toast name them with the reason, and the envelope page shows it next to the member (tested, screenshots 04/05).",
+   "Stuck (stopped mail): the person who had it marked spam and handed it back. As a member they are still skipped, and their member link offers the way back (tested).",
+   "Abuse (hand-back): a member uses the note to send a lure under the sender's name. The note never reaches members' inboxes (tested).",
+   "Abuse (hand-back): two colleagues alternate hand-backs to flood the group. Capped at 6 per document per day (tested).",
+   "Stuck (hand-back): a member who took it on by mistake after a colleague's 3 hand-backs. Their own count is separate (tested).",
+   "Abuse (access code): a member whose colleague has it types wrong codes to lock the signer out. Only their own link freezes (tested).",
+   "Abuse (access code): a member uses up the signer's asks for the code. Asks are counted per member (tested).",
+   "Left open (access code): before anyone takes it on, any member can still freeze the group's code, as with one person's link. The sender sets a new code.",
+   "Abuse (money): a sender puts themselves in a group to get others' signatures free. Only the sender's own signature, under their own name and address, is free. Hand-back restores the hold (tested).",
+   "Abuse (money): a group that signed is swapped for another group to get a free signature. The new group pays its own (tested).",
+   "Left open (money): the hold is released while the sender holds it, so available() can go negative if spent before a hand-back.",
+   "Stuck (templates): a template's group was deleted. The whole bulk or send is refused before anything is made, with words pointing at the template, and no drafts are left (tested).",
+   "Stuck (templates): a CSV names someone for the group's role. Refused in words naming the row and role, never silently dropped (tested).",
+   "Stuck (corrections): someone added while a colleague has it. The editor says they are emailed when it comes back to the group, and they are (tested).",
+   "Stuck (paused account): the sender gives it back. The toast says nobody was emailed and to copy the links (tested, screenshot 07 shows the no-mail-server variant)."
+  ]
+ },
+ "repair:nonus": {
+  "found": "No repair had been started (no tests/out/repair-nonus, no commits naming this report). I ran every probe in tests/out/verify-nonus before touching anything, and each finding reproduced as the skeptic described.\n- probe-tz: after a reassign the row kept tz Pacific/Kiritimati. The PDF printed 21 Nov 2026 for Bob, who sent no zone (the UTC day was 20 Nov), and the certificate said \"Time zone Pacific/Kiritimati, as reported by their device\" for him. After POST /correct the row kept Asia/Tokyo and the new person's invitation named Asia/Tokyo. 400 consent calls wrote 400 \"Time zone reported\" lines (500 from a second IP) and produced a 34-page PDF. A held reminder still went out after reminder_days was set to 0 (off_got 1). One sleeper plus three by-sender people sent the sender 3 \"Reminder to pass on\" emails. 'ASIA/KOLKATA' was printed as typed, and Etc/GMT-14 was printed as \"Etc/GMT-14 time\".\n- probe-oldconsent: consent.txt printed \"Wording 2026-11\" and today's words for a line in the old format.\n- probe-words: no warning for Kuendigung, Grundstueckskaufvertrag, Letztwillige Verfuegung, \"Will - Jo Bloggs.pdf\", Jo_Bloggs_Will, LastWill.pdf, PowerOfAttorney.pdf, POA, LPA, Power of Atty, soft hyphen, zero-width space, Deed of gift, Affidavit, Statutory declaration, Mortgage deed.\n- probe-pdf: the dates '2026-02-31', '03/04/2026' and 'next Tuesday' were each accepted with 200.\n- The by-sender \"more time\" toast and the menu still said \"in touch by email\", and \"Stop reminder emails\" was offered (code at page.tsx ~829/833). The sender's \"More time needed\" email gave the deadline in UTC only and did not say there was no address.\n- Author tests: test 46 (answerComesTo) had already been updated by the comments owner, and the file passed 27/27 when I started.\n- One thing went wrong in the middle: lang-core restructured CONSENT_WORDINGS by language while I was working and kept my UNVERSIONED_CONSENT entry. For a few minutes openapi.ts imported a file that did not exist yet, which made 455 tests fail at once. That cleared up when its owner added the file.",
+  "done": [
+   {
+    "item": "HIGH new bug 1 / check 'Time zones on recipients': a new person inherits the previous person's time zone",
+    "status": "done",
+    "how": "A time zone now belongs to its person. Wherever a recipient row becomes someone else, tz and reminder_held_at are set to NULL in the same UPDATE: reassignRecipient; correctRecipient for another name at the same address and for a new address; correctEnvelope (PUT) for otherPerson/otherName; groups.ts unclaim (hand-back); witness.ts forgetNamedWitness and naming a witness. A spelling fix to the same person keeps the zone. probe-tz after the fix: tz null, page_has_utc_date true, no 'as reported by their device' for Bob, the invitation does not mention Tokyo.",
+    "test": "tests/gaps-nonus-text.test.ts 'a time zone belongs to its person: a hand-over, a correction to another person or a hand-back to the group starts without it' (covers reassign + PDF date + certificate, POST /correct + invitation, same inbox under another name vs a spelling fix, PUT correction, group hand-back)"
+   },
+   {
+    "item": "MEDIUM new bug 2: any link holder can fill the audit trail and certificate with 'Time zone reported' lines",
+    "status": "done",
+    "how": "noteZone in routes-sign.ts keeps recipients.tz up to date without a new line each time. It writes an audit line the first time this person (by actor label) reports a zone, and once more at Finish if the zone then differs from the last one the record names (the line ends 'as their device says when they finished'). At Finish a device that sends no zone falls back to the stored one, so the zone the date rests on is always in the record. probe-tz flood after the fix: 1 line after 400 calls and after the second IP, PDF 3 pages instead of 34.",
+    "test": "gaps-nonus-text 'a signing link that reports a new time zone again and again writes one line, and one more at Finish if the zone changed'; the existing 'said once' assertion still passes"
+   },
+   {
+    "item": "MEDIUM new bug 3 / check 'Consent wording for envelopes whose consent line was written before this work' / overclaims on evidence.ts header and policy.ts comment",
+    "status": "done",
+    "how": "The pre-2026-11 wording, taken word for word from git (9b0ee8f^ page.tsx), is kept in policy.ts as UNVERSIONED_CONSENT ('before-2026-11'). consentWording can print it, and isConsentVersion refuses it, so no screen can claim it was shown. evidence.ts consent.txt uses it for lines that name no version and says it was inferred from the form of the line, which only the earlier code wrote. The header and the pack README say so. The policy.ts comment ('keep the old one') is now true. probe-oldconsent after the fix prints 'Wording before-2026-11 (...inferred...)' and the 'same legal effect' text that person saw.",
+    "test": "gaps-nonus-words 'an evidence pack prints the wording a signer saw before versions were recorded, says it was inferred, and no screen can claim that old wording'"
+   },
+   {
+    "item": "MEDIUM new bug 4 / check 'the signer's own page never promises an email' / overclaim outside.tsx no-email",
+    "status": "done",
+    "how": "New moreTimeWords() and laterWords() in src/lib/bysender.ts. The signing page (four small edits) uses them for the toast, the menu hint after asking, the expired screen's 'Done' notice and the 'Finish later' toast. For someone with no address: 'They have no email address for you here, so they will reach you the way they sent you this link.' 'Stop reminder emails' is hidden for link_by_sender. requestExtension adds answerLine(r) to the sender's 'More time needed' email for such a person. Seen in a browser at 390x844 and 1280x900: no mute item, no 'by email', no sideways scroll, all menu targets at least 44px.",
+    "test": "gaps-nonus-words 'someone with no address who asks for more time is never told \"by email\", and the sender is told there is no address to answer'; screenshots tests/out/repair-nonus/phone-sign-menu.png, phone-sign-asked.png, phone-sign-menu-after.png, desk-sign-menu.png"
+   },
+   {
+    "item": "MEDIUM new bug 5 / check 'Warning before sending': names with underscores, CamelCase, German without umlauts",
+    "status": "done",
+    "how": "In src/lib/paperwork.ts, flatWithPlaces now reads '_' and '.' as spaces, splits CamelCase, drops invisible characters (soft hyphen, zero-width characters, BOM) and folds \u00df to ss, keeping the place map so quotes stay exact. List words match \u00fc/\u00f6/\u00e4 written out (ue/oe/ae). New name-only word 'will' (document names only, never the subject). New subject-and-name-only words poa and lpa. New words: 'power of atty', affidavit, statutory declaration, deed of gift/assignment/variation/covenant, deed poll, mortgage deed. paperWordList returns namesOnly, and /help prints it with a sentence that file names are read. The probe now warns on every case the skeptic listed. 'Will you sign this?', Goodwill_Agreement.pdf and 'Deed of Trust' (still a trust warning only) raise nothing new.",
+    "test": "gaps-nonus-words 'the check reads file names as people write them...' (includes GET /envelopes/:id/warnings for Lasting_Power_of_Attorney_Smith.pdf + Kuendigung_Mueller.pdf -> attorney, employment, will); the existing word test still passes"
+   },
+   {
+    "item": "Check 'Country notes on /help' (7 points) and overclaims about the EU source label and the UK note",
+    "status": "partly",
+    "how": "(1) UK: the place is now 'United Kingdom: England and Wales'. The note opens by saying Scotland and Northern Ireland have their own law that the research did not look at, and says HM Land Registry covers England and Wales only. (2) EU: links EUR-Lex (eli/reg/2014/910/oj, which the research in government.json names) as the official text. The legislation.gov.uk link is marked 'not an official source' and labelled as the UK's kept and changed text. (3) Singapore: IMDA 2019 fact sheet linked (it is in the research). (4) Nigeria: names section 17(2) of the Cybercrimes Act 2015, with wills and birth and death certificates, and says a 2024 amendment was not read. (5) India: says the research confirmed wills and trusts only, and that the list has also named powers of attorney and land sale contracts, so read the current First Schedule. (6) The source age is now in the label ('De Rebus (2012)', 'IMDA ... 2019'). (7) Instructions reworded as statements in the UK, India, Indonesia, SA/Kenya, SG/NG and Australia notes and in stampNote. The unsupported 'long lease' claim for SA was dropped. Seen in a browser at phone and desktop width.",
+    "test": "gaps-nonus-words 'the country notes say which part of a country they are about, link the EU's own text...'; the existing test now reads research/gaps-partial.json, gaps.json and government.json for source URLs (updated: the EUR-Lex URL is in government.json)",
+    "left_open": "(5) A person who can read the current Indian First Schedule should still check that note. (6) I disagree with giving each note its own 'checked' month: all ten really were looked at in November 2026, so other months would be made up. I put the age of each source in its label instead. The Kenya half and SA leases rest only on summaries."
+   },
+   {
+    "item": "LOW new bug 8 / check 'Dates: typed date printed in the envelope's format everywhere' (API)",
+    "status": "done",
+    "how": "New isDateValue() and DATE_PROBLEM in src/lib/dates.ts: a real calendar day written YYYY-MM-DD. applyValues checks every date answer before writing anything, so /save and /complete answer 400 '\"X\" in <label>: ... Nothing was saved.' writeContent refuses a sender's prefilled date that is not a real day. formatDateValue no longer turns 2026-02-31 into 31/02/2026. The page's problemWith() gives the same words before Finish. The editor's 'Prefilled value' for a date field is now an <input type=date>; I checked it in a browser at phone and desktop width, 44px tall, and typing works by keyboard. probe copy tests/out/repair-nonus/probe-pdf-dates.ts: the three bad dates now get 400.",
+    "test": "gaps-nonus-text 'a date field takes a real day written year-month-day, from the page and through the API, and an impossible day is never reformatted'"
+   },
+   {
+    "item": "LOW new bug 6 / check 'Reminders held to the signer's daytime': a held reminder goes out after the sender turned reminders off",
+    "status": "done",
+    "how": "The cronTick release loop drops a held reminder when e.reminder_days <= 0 or the signer muted. One held back because of how the envelope reads is reported with noteHeld instead of being dropped silently. probe-tz after the fix: off_got 0.",
+    "test": "gaps-nonus-text 'a reminder held for the morning is dropped when the sender turns reminders off, and the sender gets one \"pass on\" email however many sleep'"
+   },
+   {
+    "item": "LOW new bug 7: one 'Reminder to pass on' per person when someone else is asleep",
+    "status": "done",
+    "how": "The asleep branch of cronTick now calls remindThroughSender once for all awake people and reminds only those with an address one by one. probe-tz after the fix: 1 email.",
+    "test": "same test as above (one email naming Hand A, Hand B and Hand C)"
+   },
+   {
+    "item": "LOW new bug 9: stored time zones not listed as processed data",
+    "status": "done",
+    "how": "/security/processing 'What is processed' now lists the account holder's browser zone and each signer's device zone, and says what each decides. The /security audit-trail point lists the zone line, written the first time and again at Finish if it changed.",
+    "test": "gaps-nonus-words 'the processing summary and /security list the time zones we keep, and the Find my documents email says whose reply to use'"
+   },
+   {
+    "item": "LOW new bug 10: zone names printed exactly as the device sent them",
+    "status": "done",
+    "how": "validZone keeps a device spelling such as Asia/Kolkata or Europe/Kyiv. When the capitals are plainly wrong (all upper or all lower case with a slash) it puts them right using the clock library's spelling. A zone named after an offset (Etc/..., GMT0, UTC...) is written as its offset in momentText, localStamp and the certificate (new zoneLabel; pdf.ts one-line edit). 'Etc/UTC, which is ... UTC' is no longer said in emails.",
+    "test": "gaps-nonus-text 'a zone is printed with its capitals right, and a zone named after an offset is written as that offset'",
+    "left_open": "With this Node's ICU, 'ASIA/KOLKATA' becomes 'Asia/Calcutta' (an older name of the same zone). A correctly spelled Asia/Kolkata is kept as it is."
+   },
+   {
+    "item": "LOW new bug 11: sender's 'More time needed' email gives the deadline in UTC only",
+    "status": "done",
+    "how": "requestExtension uses momentForEmail(e.expires_at, senderZone(e)), as 'Expires soon' already does.",
+    "test": "gaps-nonus-words more-time test asserts the deadline is given in Pacific/Auckland time in that email"
+   },
+   {
+    "item": "Overclaim outside.tsx cannot-open: 'Every email that asks someone to sign therefore ends with this line'",
+    "status": "done",
+    "how": "The help now names which emails carry the line and says the Find my documents list tells signers to reply to the sender's own email. The Find my documents email (emailMyLinks footnote) now says that, and says a reply to the list does not reach the sender.",
+    "test": "gaps-nonus-words 'the processing summary and /security list the time zones we keep, and the Find my documents email says whose reply to use'"
+   },
+   {
+    "item": "Overclaim research/continue.json gaps:nonus-text item D (certificate zone belongs to the previous person)",
+    "status": "done",
+    "how": "Made true by the fix to new bug 1. research/continue.json itself was not edited.",
+    "test": "gaps-nonus-text 'a time zone belongs to its person...'"
+   },
+   {
+    "item": "Check 'Author tests' / overclaim 'gaps:nonus-words suite 27 of 27 pass'",
+    "status": "done",
+    "how": "Test 46 had already been updated by the comments owner (it now checks Comments.tsx answers_to). Both files now pass: gaps-nonus-words 32/32, gaps-nonus-text 27/27. I also replaced three literal em dashes inside regexes in these test files with character-code checks.",
+    "test": "node --test tests/gaps-nonus-words.test.ts (32/32) and tests/gaps-nonus-text.test.ts (27/27)"
+   },
+   {
+    "item": "Screens listed by the skeptic (phone-sign-menu, phone-sign-asked, phone-help-uk, review, envelope)",
+    "status": "partly",
+    "how": "I looked again at phone and desktop sizes: the signing page menu and toast for a by-sender signer, the /help UK and EU notes, and the editor date picker. Screenshots are in tests/out/repair-nonus/. No sideways scroll, and menu targets are at least 44px.",
+    "left_open": "I did not take new screenshots of the review step or the envelope page. Their code did not change, and the review step's warning comes from the same paperWarnings that the API test exercises."
+   }
+  ],
+  "files_changed": [
+   "sign-and-grow/src/server/envelopes.ts (correctRecipient, reassignRecipient, correctEnvelope: tz/reminder_held_at reset; requestExtension: sender zone + answerLine; cronTick: held reminder rules, one pass-on email; applyValues: date check; writeContent: prefilled date check; emailMyLinks footnote; imports)",
+   "sign-and-grow/src/server/routes-sign.ts (noteZone: first line + Finish line only; complete passes finish=true)",
+   "sign-and-grow/src/server/groups.ts (unclaim clears tz, reminder_held_at)",
+   "sign-and-grow/src/server/witness.ts (two witness replacements clear tz, reminder_held_at)",
+   "sign-and-grow/src/server/evidence.ts (consent.txt: UNVERSIONED_CONSENT for lines without a version, header, pack README line)",
+   "sign-and-grow/src/server/pdf.ts (certificate 'Time zone' uses zoneLabel)",
+   "sign-and-grow/src/server/openapi.ts (date_format: real day or 400)",
+   "sign-and-grow/src/lib/policy.ts (UNVERSIONED_CONSENT wording kept; isConsentVersion refuses it; consentWording can print it)",
+   "sign-and-grow/src/lib/dates.ts (validZone capitals, byOffset, zoneLabel, isDateValue, DATE_PROBLEM, formatDateValue, zoneWords, momentForEmail, localStamp)",
+   "sign-and-grow/src/lib/paperwork.ts (file-name flattening, umlaut folding, name-only words, new words, paperWordList.namesOnly, country notes, stampNote)",
+   "sign-and-grow/src/lib/bysender.ts (moreTimeWords, laterWords)",
+   "sign-and-grow/src/components/sign/fields.ts (problemWith: date)",
+   "sign-and-grow/src/components/editor/StepFields.tsx (date picker for a prefilled date)",
+   "sign-and-grow/src/app/sign/[token]/page.tsx (import + four small edits: more time words, Finish later toast, mute hidden for link_by_sender)",
+   "sign-and-grow/src/app/help/outside.tsx (names-only words, file-name sentence, cannot-open sentence)",
+   "sign-and-grow/src/app/security/page.tsx (audit trail point lists the zone)",
+   "sign-and-grow/src/app/security/processing/page.tsx (zones in 'What is processed')",
+   "sign-and-grow/README.md (five rows of 'What the bad reviews taught us')",
+   "sign-and-grow/tests/helpers.ts (signAll fills a date field with 2026-01-15)",
+   "sign-and-grow/tests/gaps-nonus-text.test.ts (6 new tests)",
+   "sign-and-grow/tests/gaps-nonus-words.test.ts (6 new tests; research sources read from three files; em dashes in regexes replaced)",
+   "sign-and-grow/tests/out/repair-nonus/ (screens.cjs, editor.cjs, probe-pdf-dates.ts, after-probe-*.txt, suite outputs, screenshots)"
+  ],
+  "suite": "My files pass: tests/gaps-nonus-text.test.ts 27/27 and tests/gaps-nonus-words.test.ts 32/32. Full npm test, last run: 989 tests, 984 pass, 5 fail. All 5 failures are in other engineers' work in progress:\n- bounces.test.ts 'news that names our id...' got a 500 on delete during the run and passes when re-run alone (the retention/legal-hold work was being edited).\n- chat.test.ts 'what is not in the product is README's list' fails on README bullet 7 (Google Docs).\n- Two tests in convert.test.ts fail on the fake soffice.\n- flow.test.ts 'published API description matches the routes' fails on POST /envelopes/:id/hold, which is not documented yet.\nAn earlier run had 455 failures because openapi.ts imported openapi-convert.ts before it existed. That cleared within minutes. An even earlier run had only 4 stamps.test.ts failures (the stamp-look rework). npx tsc --noEmit -p .: clean on the last run. An earlier run showed one error in routes-envelopes.ts:938 (locale, lang-core work), which has since gone.",
+  "abuse_and_stuck": [
+   "Zone reset, abuse: the first signer sets a far-off zone and hands over so the next person's date shifts. Fixed and tested.",
+   "Zone reset, abuse: a group member reports a zone and hands back. Fixed and tested.",
+   "Zone reset, abuse: the sender corrects to another person at the same address. Fixed and tested. A spelling fix keeps the zone, also tested.",
+   "Zone reset, stuck: a new person whose device sends no zone gets the sender's zone, then UTC, as documented. Tested.",
+   "Zone reset, stuck: the same person reassigned to themselves, or a re-named witness, loses the zone until their page reports it again at consent or Finish. Not tested; it is reported again on its own.",
+   "Zone flood, abuse: alternating zones from one or two IPs give one line. Tested.",
+   "Zone flood, abuse: a second Finish is refused by the existing 409.",
+   "Zone flood, abuse: each 'Fix my name' changes the actor label and so allows one more first line. That is bounded by the existing rename limits. Left open.",
+   "Zone flood, stuck: a traveller whose zone changed between consent and Finish gets the Finish line. Tested.",
+   "Zone flood, stuck: a Finish with no zone still records the stored zone. Tested.",
+   "Zone flood, stuck: changes in between are kept without a line, by design.",
+   "Old consent, abuse: a screen claiming 'before-2026-11' is recorded as naming no wording we show. Tested.",
+   "Old consent: no request can write a line without a version (the server always writes one), so only old data reaches the inferred path.",
+   "Old consent, stuck: /help prints only the current version; the old words appear only in the evidence pack. Left open.",
+   "More time, abuse: asking repeatedly is limited to 2 a day (existing).",
+   "More time, abuse: POST /mute still works through the API for a by-sender person. Its only effect is to stop the sender's pass-on reminders about them, which is harmless. Left open.",
+   "More time, stuck: waiting for an email that never comes, the sender not knowing how to answer, and the 'link in your email' toast. All fixed and tested.",
+   "Paperwork words, false alarms: a file name like 'Will_Smith_contract.pdf' warns 'may be a will'. LPA can mean a limited partnership agreement and POA can mean proof of address. These warn only; I chose this because a missed lasting power of attorney costs more than a 'may be'. Left open for the owner.",
+   "Paperwork words, misses: a word hyphenated across a line break in the text ('attor-\\nney') is still missed, because joining it would break 'fixed-\\nterm'. Scanned PDFs have no text to read. Left open.",
+   "Dates, abuse: an API date, a sender's prefill and a /save with an impossible day are all refused and save nothing. Tested.",
+   "Dates, gap: a template or clone that already holds a bad prefilled date is copied without a check, and that date prints as typed. Left open.",
+   "Dates, stuck: a browser without a date picker shows the same words before Finish (problemWith, tested). An old draft with a bad prefill gets a save error that names the field, and the editor now offers a calendar there (checked in a browser).",
+   "Held reminders: reminders turned off by the sender, a signer muted, and the pass-on count. Tested."
+  ],
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour others will notice:\n1. A date field takes only a real day written YYYY-MM-DD, from the signer (/save and /complete) and from the sender's prefilled value (POST/PUT). Anything else gets a 400 with plain words, and nothing is saved. tests/helpers.ts signAll now fills date fields with 2026-01-15. The editor's prefilled value for a date is a date picker.\n2. The audit trail gets a 'Time zone reported' line only the first time for each person, plus one at Finish if the zone changed.\n3. A hand-over, a correction to another person, a group hand-back or a re-named witness clears tz and reminder_held_at.\n4. validZone may return an older canonical name (Asia/Calcutta) when the input has the wrong capitals. Offset zones are printed as UTC+hh:mm.\n5. The paperwork list grew. 'will' is now a names-only word. poa and lpa are checked in the subject and names only. Added: power of atty, affidavit, statutory declaration, deed of gift/assignment/variation/covenant, deed poll, mortgage deed. Document names are read like file names, and umlauts may be written out. Expect more warnings on file-named documents.\n6. Copy I changed that makes promises: the country notes (UK = England and Wales, EUR-Lex link, Singapore source, Nigeria Cybercrimes Act, India hedged, statements instead of instructions), stampNote, the /help cannot-open paragraph, the Find my documents footnote, consent.txt header and note, and the /security and processing lines on time zones.\n7. Policy.ts: lang-core restructured CONSENT_WORDINGS by language at the same time as my edit and kept UNVERSIONED_CONSENT. Whoever finishes that work must keep isConsentVersion refusing UNVERSIONED_CONSENT, and keep consentWording able to print it.\n\nDecisions for the owner to confirm:\n- Whether LPA and POA should warn (false alarms for 'limited partnership agreement' and 'proof of address').\n- Whether to keep one 'checked' month for all country notes (I kept it because it is true).\n- A person should review the India and Kenya notes.\n\nSeen but out of scope:\n- answerComesTo in src/components/sign/NoEmail.tsx is now unused (the comments work replaced its only use).\n- src/app/help/witness.tsx still says 'Do not use Sign&Grow for a will or a lasting power of attorney' as an instruction (witness owner's file).\n- research/continue.json still holds the old claims; I did not edit research reports.\n\nDev server on port 3615 stopped. .next-repair-nonus and its data folder deleted. The two tsconfig.json lines it added removed.",
+  "settings": [
+   "No new settings. Nothing in .env.example or the README config table changed."
+  ]
  }
 }

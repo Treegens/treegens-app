@@ -18,6 +18,7 @@ import { ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { unprintable } from './pdftext.ts';
 import { gateOf, lockedView } from './signercode.ts';
 import { CONSENT_VERSION } from '../lib/policy.ts';
+import { PURGED_LINK } from '../lib/retention.ts';
 // Which language this person's screens are in, and the audit line for agreeing with its language (locales.ts).
 import { signerLanguage, consentLine } from './locales.ts';
 import { labelOf } from '../lib/bysender.ts';
@@ -70,6 +71,8 @@ export function look(c: Ctx, needUnlocked = true) {
     throw bad('We do not recognise this link. It may have been copied incompletely.', 404);
   }
   const e = loadEnvelope(r.envelope_id);
+  // A purged envelope (src/server/records.ts) has nothing left to open: the link says the sender deleted it.
+  if (e?.purged_at) throw new HttpError(410, PURGED_LINK, { code: 'purged', deleted_on: String(e.purged_at).slice(0, 10) });
   const locked = !!r.access_code && !safeEqual(readCookie(c.req, `ts_ac_${r.id}`) || '', hmac(`ac:${r.id}:${r.access_code}`));
   if (locked && needUnlocked) throw bad('Enter the access code first.', 401);
   // The one-time code this browser still has to pass, when the sender asked for one (see signercode.ts). A device

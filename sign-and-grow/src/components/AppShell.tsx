@@ -9,7 +9,7 @@ import { EmailProblemBanner } from './EmailProblem';
 import { TwoStepRequired, TwoStepResetBanner } from './TwoStep';
 import { HelpChatButton } from './HelpChat';
 
-type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
+type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
 

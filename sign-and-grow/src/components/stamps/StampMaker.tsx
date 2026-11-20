@@ -156,7 +156,7 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
       {!f.empty && result?.empty && <div className="notice warn" role="alert">Nothing is left at these settings. Move &ldquo;What counts as paper&rdquo; towards &ldquo;Keep faint marks&rdquo;, or cut less off the edges.</div>}
       {f.several && (
         <p className="notice small">
-          This picture has marks in more than one colour, like a logo. A real stamp prints in one ink, so {look.onlyInk && f.hue != null ? <>only the {keptWord} marks are kept, in the ink you choose. To keep every mark, untick &ldquo;Only the {keptWord} marks&rdquo; below.</> : <>every mark is printed in the ink you choose{design && look.gaps ? ', with a thin gap of paper where two colours meet so the shapes stay apart' : ''}.</>}
+          {design ? 'This picture has marks in more than one colour, like a logo.' : 'This photo has marks in other colours too, such as printed text or lines around the stamp.'} A real stamp prints in one ink, so {look.onlyInk && f.hue != null ? <>only the {keptWord} marks are kept, in the ink you choose. To keep every mark, untick &ldquo;Only the {keptWord} marks&rdquo; below.</> : <>every mark is printed in the ink you choose{design && look.gaps ? ', with a thin gap of paper where two colours meet so the shapes stay apart' : ''}.</>}
           {design && <> A logo made for screens often looks less like a real stamp than a design made for one ink. If you have the stamp itself, a photo of it pressed on paper works best.</>}
         </p>
       )}

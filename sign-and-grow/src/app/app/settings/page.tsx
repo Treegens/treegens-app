@@ -16,6 +16,9 @@ import { TwoStepCard, TeamTwoStep } from './TwoStep';
 import { EmailAddressCard } from '@/components/EmailProblem';
 // The team's company stamps (src/components/stamps/StampSettings.tsx).
 import { StampSettings } from '@/components/stamps/StampSettings';
+// The language new recipients start in (src/components/settings/LanguageSettings.tsx).
+import { LanguageSettings } from '@/components/settings/LanguageSettings';
+import { SecurityLog } from '@/components/settings/SecurityLog';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -872,9 +875,12 @@ function YourData() {
 // Checkout sessions this page has already confirmed, so coming back is handled once.
 const returned = new Set<string>();
 
-const TABS: [string, string][] = [['profile', 'Profile'], ['notifications', 'Notifications'], ['account', 'Account'], ['team', 'Team'], ['stamps', 'Stamps'], ['billing', 'Plan'], ['data', 'Your data'], ['developers', 'API and webhooks']];
+const TABS: [string, string][] = [['profile', 'Profile'], ['notifications', 'Notifications'], ['account', 'Account'], ['team', 'Team'], ['stamps', 'Stamps'], ['billing', 'Plan'], ['data', 'Your data'], ['developers', 'API and webhooks'], ['security', 'Security']];
+// Tabs only admins have: a member is never shown one that would only say "admins only".
+const ADMIN_TABS = new Set(['security']);
 
 export default function Settings() {
+  const me = useMe();
   const [tab, setTab] = useState('profile');
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -906,15 +912,17 @@ export default function Settings() {
   return (
     <div>
       <div className="pagehead"><h1 className="serif">Settings</h1></div>
-      <div className="tabs" role="tablist">{TABS.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{l}</button>)}</div>
+      <div className="tabs" role="tablist">{TABS.filter(([k]) => !ADMIN_TABS.has(k) || me.role !== 'member').map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{l}</button>)}</div>
       {tab === 'profile' && <Profile />}
       {tab === 'notifications' && <Notifications />}
       {tab === 'account' && <Account />}
+      {tab === 'account' && <LanguageSettings />}
       {tab === 'team' && <Team />}
       {tab === 'billing' && <Billing />}
       {tab === 'data' && <YourData />}
       {tab === 'developers' && <Developers />}
       {tab === 'stamps' && <StampSettings />}
+      {tab === 'security' && <SecurityLog />}
     </div>
   );
 }

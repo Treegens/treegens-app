@@ -23,10 +23,10 @@ const DAY = 864e5;
 const waitAfter = (tries: number) => (tries >= FINAL_TRIES ? DAY : 10 * 60_000 * 2 ** Math.max(0, tries - 1));
 const stopped = () => !!storeState(path.join(dataDir(), 'blobs')).stop;
 
-/** The completed envelopes whose signed PDF the timer should try to make now. */
+/** The completed envelopes whose signed PDF the timer should try to make now. One that was purged has none on purpose (records.ts). */
 export function finalsDue(at = new Date().toISOString()): string[] {
   if (stopped()) return [];
-  return all(`SELECT id FROM envelopes WHERE status='completed' AND kind='envelope' AND final_sha256 IS NULL AND (final_due_at IS NULL OR final_due_at <= ?)
+  return all(`SELECT id FROM envelopes WHERE status='completed' AND kind='envelope' AND final_sha256 IS NULL AND purged_at IS NULL AND (final_due_at IS NULL OR final_due_at <= ?)
     ORDER BY final_due_at IS NOT NULL, final_due_at LIMIT ?`, at, FINALS_PER_TICK).map((r) => r.id);
 }
 

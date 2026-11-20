@@ -20,6 +20,7 @@ import { all, get, run, tx } from './db.ts';
 import { bad, sha256, token, now, HttpError, safeEqual, baseUrl, str } from './util.ts';
 import { cookie, readCookie, SESSION_COOKIE, type Auth } from './auth.ts';
 import { sendMail } from './mail.ts';
+import { record } from './seclog.ts';
 import type { Ctx } from './router.ts';
 import { TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES, TWO_STEP_REMEMBER_DAYS, TWO_STEP_RECOVERY_CODES, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_SIGNIN_MINUTES, TWO_STEP_RESET_BLOCK_DAYS } from '../lib/policy.ts';
 
@@ -462,6 +463,7 @@ export async function resetIfDue(u: any): Promise<boolean> {
     clearTwoStep(u.id);
     run('DELETE FROM sessions WHERE user_id=?', u.id);
     logStep(u.id, 'email_reset_done');
+    record('two_step.reset', { by: { type: 'system' }, member: u.id, about: ['user', u.id], details: { how: 'by_email_after_waiting' } });
     return true;
   })) return false;
   await sendMail({ to: u.email, subject: 'Two-step login of your Sign&Grow login is off', heading: 'Your second step was reset',

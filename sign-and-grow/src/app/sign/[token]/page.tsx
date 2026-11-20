@@ -10,6 +10,7 @@ import { consentWording } from '@/lib/policy';
 import { fmtNum } from '@/lib/impact';
 import { NUMBER_HINT } from '@/lib/numbers';
 import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
+import { PurgedLink } from '@/components/sign/PurgedLink';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
 import { CodeCheck } from '@/components/sign/CodeCheck';
 import { MenuDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
@@ -55,7 +56,7 @@ export default function SignPage() {
   const { token } = useParams<{ token: string }>();
   const base = `/sign/${token}`;
   const [data, setData] = useState<any>(null);
-  const [problem, setProblem] = useState<{ status: number; message: string } | null>(null);
+  const [problem, setProblem] = useState<{ status: number; message: string; code?: string; day?: string } | null>(null);
   const [handedTo, setHandedTo] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
   const [sig, setSig] = useState<string | null>(null);
@@ -167,7 +168,7 @@ export default function SignPage() {
     } catch (e: any) {
       const status = e?.status || 0;
       if (status === 404 || status === 410) setData(null);
-      setProblem({ status, message: e?.message || 'Something went wrong on our side.' });
+      setProblem({ status, message: e?.message || 'Something went wrong on our side.', code: e?.code, day: e?.data?.deleted_on });
     }
   }, [base, token]);
   useEffect(() => {
@@ -601,6 +602,8 @@ export default function SignPage() {
       </Shell>
     );
   if (!data && problem) {
+    // The sender's retention rule or their own request purged it (src/server/records.ts).
+    if (problem.code === 'purged') return <PurgedLink day={problem.day} />;
     if (problem.status === 410) return <ReplacedLink token={token} />;
     if (problem.status === 404) return <UnknownLink />;
     return <LoadProblem message={problem.message} onRetry={load} />;

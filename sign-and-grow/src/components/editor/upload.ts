@@ -1,13 +1,16 @@
 'use client';
 import { PHONE_SECONDS_PER_MB } from '../../lib/policy.ts';
+import { isConvertible, notTaken, uploadLimits, type Converted } from '../../lib/convert.ts';
 
 // is_scan and scan_pages: the pages that are pictures with no text, counted from 1. See src/lib/scans.ts.
 // size: the bytes of the stored PDF, which is what every signer downloads. See src/lib/phone.ts.
-export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[]; size?: number };
+// converted: what the PDF was made from, on a server that turns Word files and the like into PDF (src/lib/convert.ts).
+export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[]; size?: number; converted?: Converted | null };
 
 export const MAX_BYTES = 25_000_000;
 // What the server takes, and what that costs a signer on a phone (measured, see src/lib/phone.ts): both are true.
-export const LIMITS = `PDF, PNG or JPEG. Up to 25 MB and 500 pages each. A signer on a phone waits about ${Math.round(PHONE_SECONDS_PER_MB)} seconds for each MB on a slow connection.`;
+// On a server with a converter the editor shows uploadLimits(true, ...) instead, which names the other kinds.
+export const LIMITS = uploadLimits(false, PHONE_SECONDS_PER_MB);
 // Shown on touch screens only. A phone's own scanner straightens and cleans the page, which a plain photo does not.
 export const PAPER_HINT = 'Starting from paper? Most phones can scan it to a PDF (on an iPhone in Notes or Files, on Android in Google Drive), and that gives the cleanest pages. Plain photos work too: choose all the pages at once and we make one document from them.';
 
@@ -18,11 +21,12 @@ export const fmtSize = (n: number) => (n < 1_000_000 ? `${Math.max(1, Math.round
  * Problems we can see before sending a single byte. Returns '' when the file looks fine. `shrinksFirst` is for a
  * picture that is made smaller before it is uploaded (photos.ts): its size is judged after that, not before.
  */
-export function precheck(file: File, shrinksFirst = false): string {
+export function precheck(file: File, shrinksFirst = false, converts = false): string {
   if (file.size > MAX_BYTES && !shrinksFirst) return `This file is ${mb(file.size)}. Files can be up to 25 MB. Try compressing it, or split it into smaller documents.`;
   if (file.size === 0) return 'This file is empty. Choose a different file.';
-  const known = /\.(pdf|png|jpe?g)$/i.test(file.name) || ['application/pdf', 'image/png', 'image/jpeg'].includes(file.type);
-  if (!known) return 'Upload a PDF, PNG or JPEG. Export Word or Google Docs files as PDF first.';
+  // A guess from the name and type only: the server decides by the bytes (src/server/convert.ts).
+  const known = /\.(pdf|png|jpe?g)$/i.test(file.name) || ['application/pdf', 'image/png', 'image/jpeg'].includes(file.type) || (converts && isConvertible(file));
+  if (!known) return notTaken(converts);
   return '';
 }
 

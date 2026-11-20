@@ -38,9 +38,8 @@ export function signerLanguage(r: any, req?: Request): { locale: string; dir: 'r
   return { locale, dir: dir(locale), set_by: setBy };
 }
 
-/** The language a public form's visitor starts in: what their browser asks for among the languages switched on. */
-export const visitorLocale = (req?: Request, fallback?: unknown): string | null =>
-  browserLocale(header(req)) || (isShipped(fallback) ? normalizeLocale(fallback) : null);
+/** The language a public form's visitor starts in: what their browser asks for among the languages switched on, else none. */
+export const visitorLocale = (req?: Request): string | null => browserLocale(header(req));
 
 /**
  * The editor and the API save each recipient's "locale". Left out, a recipient keeps the one they had (a new one gets
@@ -52,7 +51,10 @@ export function saveLocales(asked: { rid: string; r: any; i: number }[], before:
   for (const { rid, r, i } of asked) {
     const whom = `The language ("locale") of recipient ${i + 1}${r?.name ? ` (${str(r.name, 120)})` : ''}`;
     const old = before.get(rid);
-    const value = r?.locale === undefined ? (old ? old.locale ?? null : defaultFor(account)) : chosenLocale(r.locale, whom);
+    // A language stored before it was switched off is kept when the editor sends it back unchanged, so a draft
+    // never stops saving because of it. Only a new choice has to be a language that is switched on.
+    const same = old?.locale && r?.locale != null && normalizeLocale(r.locale) === old.locale;
+    const value = r?.locale === undefined ? (old ? old.locale ?? null : defaultFor(account)) : same ? old.locale : chosenLocale(r.locale, whom);
     if (!old || (old.locale ?? null) !== value) run('UPDATE recipients SET locale=? WHERE id=?', value, rid);
   }
 }
@@ -62,28 +64,39 @@ export const defaultFor = (account: any): string | null => (account?.default_loc
 
 /**
  * A recipient copied into a new envelope (a template used, a copy, a bulk row, a public form) keeps their language.
- * A bulk row's "language" column, or the language a form visitor's browser asked for, comes first.
+ * What the copy is given for that person comes first: a bulk row's "language", the "locale" of a role filled in
+ * through the API, or the language a form visitor's browser asked for. One that is not switched on is refused, inside
+ * copyEnvelope's transaction, so nothing is made. (Bulk rows are all checked before the first is sent: rowLanguageRefusal.)
  */
 export function copyLocale(r: any, newId: string, fill: any) {
-  const own = fill && Object.hasOwn(fill, 'locale') ? fill.locale : r.locale;
-  const value = own && isShipped(own) ? normalizeLocale(own) : null;
+  // undefined: nothing said, the original's language goes with the copy. null or "": their browser decides.
+  const asked = !fill || typeof fill !== 'object' ? undefined : fill.locale !== undefined ? fill.locale : fill.language;
+  const value = asked === undefined ? r.locale || null : chosenLocale(asked, `The language for ${str(r.role_name || r.name || 'a recipient', 80)}`, 'Nothing was made.');
   if (value) run('UPDATE recipients SET locale=? WHERE id=?', value, newId);
 }
 
 /**
  * A bulk send's rows may say a language for a role: {"Client": {"name": ..., "email": ..., "language": "en"}}. Every
- * row is checked before anything is sent, and a language that is not switched on refuses the whole batch.
+ * row is checked before anything is sent: a language that is not switched on refuses the whole batch, in the words
+ * POST /bulk/check gives too. null when every row is fine.
  */
-export function assertRowLanguages(rows: any[], open: any[]) {
-  rows.forEach((row, i) => {
-    for (const r of open) {
-      const v = row?.[r.role_name || r.id];
-      if (v && typeof v === 'object' && v.language != null && v.language !== '') chosenLocale(v.language, `Row ${i + 1}: the "language" of "${r.role_name || 'Recipient'}"`, 'Nothing was sent.');
-    }
-  });
+export function rowLanguageRefusal(rows: any[], open: any[]): { status: number; message: string } | null {
+  try {
+    rows.forEach((row, i) => {
+      for (const r of open) {
+        const v = row?.[r.role_name || r.id];
+        if (v && typeof v === 'object' && v.language != null && v.language !== '') chosenLocale(v.language, `Row ${i + 1}: the "language" of "${r.role_name || 'Recipient'}"`, 'Nothing was sent.');
+      }
+    });
+    return null;
+  } catch (e: any) {
+    return { status: e.status || 400, message: e.message };
+  }
 }
-/** What copyEnvelope is given for a bulk row's person: their name and email, and their language when the row has one. */
-export const rowFill = (v: any) => (v && typeof v === 'object' && v.language != null && v.language !== '' ? { ...v, locale: normalizeLocale(v.language) } : v);
+export function assertRowLanguages(rows: any[], open: any[]) {
+  const no = rowLanguageRefusal(rows, open);
+  if (no) throw bad(no.message, no.status);
+}
 
 /**
  * The audit line for agreeing, after the person's name. The screen says which wording it showed ("wording") and in

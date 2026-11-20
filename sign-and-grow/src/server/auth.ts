@@ -92,7 +92,8 @@ export const renewedCookie = (req: Request, secure: boolean): string => {
 // A key's scope: 'send' does the everyday work, 'admin' may also change account settings. What each can reach is
 // decided in one place, router.ts.
 // slid: this request moved the end of the browser's session forward, so its cookie is to be sent again (see touch).
-export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key'; sessionId?: string; scope?: 'send' | 'admin'; slid?: boolean };
+// keyId: which key, for the security record (seclog.ts). Never the key itself.
+export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key'; sessionId?: string; scope?: 'send' | 'admin'; slid?: boolean; keyId?: string };
 
 const KEYS_PAGE = 'Settings, API and webhooks';
 
@@ -119,7 +120,7 @@ export function authenticate(req: Request, required = false): Auth | null {
     const closing = account.closing_at || user.closing_at;
     if (closing) return refuse(403, `${account.closing_at ? 'This account is being closed' : 'The person who created this API key is closing their login'}, so the key is switched off. Nothing is deleted before ${closing.slice(0, 10)}. Signing in to the app before then restores everything, and this key works again.`);
     run('UPDATE api_keys SET last_used_at=? WHERE id=?', now(), k.id);
-    return { user, account, role: m.role, via: 'api_key', scope: k.scope === 'admin' ? 'admin' : 'send' };
+    return { user, account, role: m.role, via: 'api_key', scope: k.scope === 'admin' ? 'admin' : 'send', keyId: k.id };
   }
   const t = readCookie(req, SESSION_COOKIE);
   const found = t ? get('SELECT * FROM sessions WHERE id=? AND expires_at > ?', sha256(t), now()) : null;

@@ -23,6 +23,9 @@ import { forgetCommentHooks } from './commentrules.ts';
 import { attachedFiles, forgetClickwraps } from './clickwrap.ts';
 import { rememberGoneMail } from './bounces.ts';
 import { stampExport, pruneStampImages } from './stamps.ts';
+import { record, securityExport, securityWords } from './seclog.ts';
+import { originalShas } from './converted.ts';
+import { assertMayClose, forgetRetentionLog } from './records.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -58,7 +61,9 @@ route('POST', '/public/check', async (c) => {
     return { genuine: true, replaced: true, why: old.why || 'address', replaced_at: old.retired_at, for_name: old.sent_to || null,
       sender: oe ? get('SELECT name, email FROM users WHERE id=?', oe.sender_id) : null, account: account?.name, paused: !!account?.suspended_at, subject: oe?.subject || null, status: oe?.status || null };
   }
-  const e = get('SELECT id, subject, status, sender_id, account_id, sent_at FROM envelopes WHERE id=?', r.envelope_id);
+  const e = get('SELECT id, subject, status, sender_id, account_id, sent_at, purged_at FROM envelopes WHERE id=?', r.envelope_id);
+  // Its documents were purged (records.ts): the email was real, and the document is gone, as for a deleted one.
+  if (e.purged_at) return { genuine: true, deleted: true, deleted_at: e.purged_at, can_report: true };
   const sender = get('SELECT name, email FROM users WHERE id=?', e.sender_id);
   const account = get('SELECT name, suspended_at FROM accounts WHERE id=?', e.account_id);
   return { genuine: true, sender, account: account?.name, paused: !!account?.suspended_at, subject: e.subject, status: e.status, sent_at: r.sent_at || e.sent_at, for_name: r.name, role: r.role, url: `${baseUrl()}/sign/${r.token}` };
@@ -144,6 +149,8 @@ route('GET', '/export', (c) => {
   const rows = all(`SELECT * FROM envelopes WHERE account_id=? AND kind='envelope' AND status!='draft' AND hidden_at IS NULL${scope} ORDER BY sent_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
     .filter((e) => (!only.length || only.includes(e.id)) && (!bulk || e.bulk_id === bulk));
   if (!rows.length) throw bad('There is nothing to export yet.');
+  // "everything": no envelopes or batch picked, so all the caller can export (an admin: the account's; a member: their own).
+  record('export.made', { c, details: { everything: !only.length && !bulk, whose: c.admin ? 'account' : 'own', envelopes: rows.length } });
 
   function* entries(): Generator<ZipEntry> {
     const index = [csv(['envelope_id', 'subject', 'status', 'sent_at', 'completed_at', 'recipients', 'signed_pdf_sha256', 'file'])];
@@ -155,6 +162,8 @@ route('GET', '/export', (c) => {
     // to do; and a completed envelope whose signed PDF could not be made yet is said too (finalretry.ts).
     const locked: string[] = [];
     const notMade: string[] = [];
+    // Envelopes whose documents a retention purge removed (records.ts): only their record is left to export.
+    const purged: string[] = [];
     for (const e of rows) {
       const people = all('SELECT name, email, role, status FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
       const base = `${(e.completed_at || e.sent_at || e.created_at).slice(0, 10)} ${safeName(e.subject)} ${e.id.slice(-6)}`;
@@ -168,7 +177,8 @@ route('GET', '/export', (c) => {
           (err.data?.code === 'file_locked' ? locked : unreadable).push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
           failed = true;
         }
-      } else if (e.status === 'completed' && !e.final_sha256) notMade.push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
+      } else if (e.purged_at) purged.push(`${e.subject || 'Untitled'} (envelope ${e.id}), on ${String(e.purged_at).slice(0, 10)}`);
+      else if (e.status === 'completed' && !e.final_sha256) notMade.push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
       if (data) {
         file = `signed/${base}.pdf`;
         bytes += data.length;
@@ -182,23 +192,27 @@ route('GET', '/export', (c) => {
       // The questions and comments in full, private ones included: this export is the sender's side (comments.ts).
       const said = files < ZIP_MAX_FILES - 3 ? commentsText(e) : '';
       if (said) (files++, yield { name: `comments/${base}.txt`, data: Buffer.from(said) });
-      index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256, file]));
+      index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256 || e.purged_sha256, file]));
     }
     yield { name: 'envelopes.csv', data: Buffer.from('﻿' + index.join('\r\n')) };
     // The team's own stamps (Settings, Stamps), each picture with its name and settings (stamps.ts).
     const stamps = stampExport(c.account.id);
     for (const s of stamps) yield s;
+    // The account's security record, for its admins only (seclog.ts).
+    if (c.admin) yield* securityExport(c.account.id);
     yield { name: 'README.txt', data: Buffer.from([
       `Sign&Grow export for ${c.account.name}, made ${now()}.`, '',
       'signed/        completed documents, each with its certificate of completion',
       'audit/         the full audit trail of every envelope, as JSON',
       'comments/      the questions and comments on an envelope, in full, where anyone wrote any. They are not part of what was signed.',
       ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps, as pictures, with their names and settings in stamps/index.csv'] : []),
+      ...(c.admin ? [`security/      the security record of the account as it stands now (Settings, Security), oldest first. ${securityWords()}`] : []),
       'envelopes.csv  one row per envelope',
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
       ...(skipped ? ['', `${skipped} signed document(s) did not fit in one ZIP file. Export again with fewer envelopes selected to get them.`] : []),
       ...(unreadable.length ? ['', `${unreadable.length} signed document(s) could not be read from storage and are not in this file. Their stored copy failed its check, so nothing damaged was put in. Their audit trails are here. The people who run this server have been told and can put the files back from a backup; export again later. Not included:`, ...unreadable.map((u) => `  ${u}`)] : []),
       ...(locked.length ? ['', `${locked.length} signed document(s) are locked with an encryption key this server was not given, so they are not in this file. They are not damaged and not lost, and nothing about them was changed. Their audit trails are here. Export again once the people who run this server have set that key. Not included:`, ...locked.map((u) => `  ${u}`)] : []),
+      ...(purged.length ? ['', `${purged.length} envelope(s) had their documents purged under the account's retention rule or at someone's request, so only their audit trails are here. envelopes.csv keeps the fingerprint of each signed PDF. Purged:`, ...purged.map((u) => `  ${u}`)] : []),
       ...(notMade.length ? ['', `${notMade.length} completed document(s) have no signed PDF yet, because it could not be made so far. Everyone finished, and their audit trails are here. It is made by itself once it can be; export again then. Not included:`, ...notMade.map((u) => `  ${u}`)] : []),
     ].join('\r\n')) };
   }
@@ -211,7 +225,7 @@ export function removeUnusedBlobs(shas: string[]) {
   // Stamp pictures are kept in the database, not as files: the ones nothing points at any more go too (stamps.ts).
   pruneStampImages();
   for (const sha of new Set(shas.filter(Boolean))) {
-    if (get('SELECT 1 x FROM files WHERE sha256=?', sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)) continue;
+    if (get('SELECT 1 x FROM files WHERE sha256=? OR original_sha256=?', sha, sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)) continue;
     fs.rmSync(path.join(dataDir(), 'blobs', sha), { force: true });
   }
 }
@@ -357,6 +371,8 @@ export { CLOSE_GRACE_DAYS };
 export function purgeUser(userId: string): any[] {
   const user = get('SELECT id, name, email, email_verified, created_at FROM users WHERE id=?', userId);
   if (!user) return [];
+  // Nothing under a legal hold goes, by this path or any other (records.ts). The attempt is recorded.
+  assertMayClose(userId, `Deleting the login of ${user.name}`);
   const owned = all("SELECT a.id FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role='owner'", userId);
   const stopped = keysOf(userId).filter((k) => k.team);
   const shas: string[] = [];
@@ -371,6 +387,8 @@ export function purgeUser(userId: string): any[] {
         run('UPDATE accounts SET closing_at=NULL WHERE id=?', a.id);
         continue;
       }
+      // A file that was turned into a PDF takes its stored original along (converted.ts).
+      shas.push(...originalShas(a.id));
       shas.push(...all('SELECT sha256 s FROM files WHERE account_id=?', a.id).map((r) => r.s), ...forgetEnvelopes(all('SELECT id FROM envelopes WHERE account_id=?', a.id).map((r) => r.id), true));
       run('DELETE FROM abuse_reports WHERE account_id=?', a.id);
       run('DELETE FROM files WHERE account_id=?', a.id);
@@ -386,6 +404,8 @@ export function purgeUser(userId: string): any[] {
       // Click-to-agree terms, versions and acceptances go with the account row; our copies of the emails that sent
       // people what they accepted are removed here (clickwrap.ts), and the certificate PDFs attached to them below.
       shas.push(...forgetClickwraps(a.id));
+      // The account's retention record keeps what happened to which envelope, without names or words (records.ts).
+      forgetRetentionLog(a.id);
       run('DELETE FROM accounts WHERE id=?', a.id);
     }
     // In teams they only belonged to, what they sent passes to the owner so nothing is stranded.
@@ -468,7 +488,18 @@ export async function purgeClosedAccounts(): Promise<number> {
       cta: { label: 'Sign in to keep my account', url: `${baseUrl()}/login` } });
   }
   const due = all('SELECT id, name FROM users WHERE closing_at IS NOT NULL AND closing_at < ?', now());
-  for (const u of due) await tellTeamsAboutKeys(u, purgeUser(u.id), 'stopped');
+  for (const u of due) {
+    // A login whose account holds something on legal hold is not deleted (records.ts assertMayClose): it stays
+    // closing, the attempt is in the account's record, and signing in again keeps it.
+    let stopped: any[];
+    try {
+      stopped = purgeUser(u.id);
+    } catch (e: any) {
+      if (e?.data?.code === 'legal_hold') continue;
+      throw e;
+    }
+    await tellTeamsAboutKeys(u, stopped, 'stopped');
+  }
   // The email that says an account was deleted is the last thing kept under that address. Its stored copy goes as
   // soon as the mail server has taken it.
   run("DELETE FROM emails WHERE subject=? AND status='sent' AND envelope_id IS NULL", CLOSED_SUBJECT);
@@ -509,6 +540,8 @@ route('POST', '/me/delete', async (c) => {
   const owned = all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role='owner'", c.user.id);
   for (const a of owned)
     if (get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n > 1) throw bad(`You own "${a.name}" and other people still use it. Make one of them the owner first (Settings, Team), then close your account.`);
+  // Refused, before anything else changes, while something in an account that would go is on legal hold (records.ts).
+  assertMayClose(c.user.id, `${c.user.name} <${c.user.email}>`);
   // Stop any billing before anything else, so a closed account can never be charged. Whatever state the plan is in,
   // it is ended on our side at once. When the payment provider does not confirm straight away, the end is queued and
   // tried again by the timer, and a payment that slips through in the meantime is refunded by the software.
@@ -528,6 +561,8 @@ route('POST', '/me/delete', async (c) => {
     // A refund still on its way when the account goes: the money still reaches the card, and the email says so,
     // because there is no Plan page any more to show it and no account to send "Refund sent" to.
     const owed = pendingRefundLines(owned.map((a) => a.id));
+    // Written before the deletion: the accounts this person owns go with their record, the teams keep the line.
+    record('account.closing', { c, member: c.user.id, about: ['user', c.user.id], details: { deleted_now: true, keys_stopped: keys.length } });
     await tellTeamsAboutKeys(c.user, purgeUser(c.user.id), 'stopped');
     await sendMail({ to: c.user.email, subject: CLOSED_SUBJECT, heading: 'Account closed and deleted',
       lines: [owned.length ? `Your login has been deleted, and with it ${owned.map((a) => `"${a.name}"`).join(' and ')} and everything in it: envelopes, drafts and templates, uploaded and signed documents, files signers attached, audit trails, contacts, API keys, webhooks and our copies of the emails about them. Any subscription has been stopped. You will not be charged again.` : 'Your login has been deleted.',
@@ -541,6 +576,7 @@ route('POST', '/me/delete', async (c) => {
   const when = new Date(Date.now() + CLOSE_GRACE_DAYS * 864e5).toISOString();
   run('UPDATE users SET closing_at=? WHERE id=?', when, c.user.id);
   for (const a of owned) run('UPDATE accounts SET closing_at=? WHERE id=?', when, a.id);
+  record('account.closing', { c, member: c.user.id, about: ['user', c.user.id], details: { deleted_now: false, deletes_at: when, accounts_closing: owned.length, keys_switched_off: keys.length } });
   run('DELETE FROM sessions WHERE user_id=?', c.user.id);
   await tellTeamsAboutKeys(c.user, keys, 'off', when);
   await sendMail({ to: c.user.email, subject: 'Your Sign&Grow account is closing', heading: `Your account will be deleted on ${when.slice(0, 10)}`,
@@ -607,6 +643,7 @@ route('POST', '/operator/accounts/:id', async (c) => {
     throw bad('Say what to change: "paused": true (with a "reason") or false, or "trusted": true or false. Nothing was changed.');
   if (typeof b.trusted === 'boolean') {
     run('UPDATE accounts SET trusted_at=? WHERE id=?', b.trusted ? a.trusted_at || now() : null, a.id);
+    if (b.trusted !== !!a.trusted_at) record(b.trusted ? 'operator.trusted' : 'operator.untrusted', { accounts: a.id, by: { type: 'operator', id: c.user.id } });
     // Told either way, so a limit never lifts or comes back without a word. The numbers are the ones that apply
     // to this account now: the first-week limit in its first week, and nothing at all when a payment of its own
     // is old enough to have lifted the checks anyway.
@@ -630,6 +667,8 @@ route('POST', '/operator/accounts/:id', async (c) => {
     run('UPDATE accounts SET suspended_at=NULL, suspended_reason=NULL, unpaused_at=? WHERE id=?', now(), a.id);
     run("UPDATE abuse_reports SET status='dismissed' WHERE account_id=? AND status='open'", a.id);
   }
+  // The reason is the one the admins are emailed below.
+  if (b.paused || a.suspended_at) record(b.paused ? 'operator.paused' : 'operator.resumed', { accounts: a.id, by: { type: 'operator', id: c.user.id }, details: b.paused ? { reason } : {} });
   for (const u of admins)
     await sendMail({ to: u.email, subject: b.paused ? 'Sending is paused on your Sign&Grow account' : 'Sending is back on for your Sign&Grow account', heading: b.paused ? 'Sending is paused' : 'You can send again',
       lines: b.paused ? [`Reason: ${reason.replace(/[.\s]+$/, '')}.`, PAUSED_MEANS, 'You can still open, download and export everything in your account, and people who already have a document can still open, sign and download it.', mistakeLine()]

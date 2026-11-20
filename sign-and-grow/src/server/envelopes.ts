@@ -28,6 +28,7 @@ import { carryRules } from './tplroles.ts';
 // Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
 import { fingerprintLines, noteCopyMailed } from './evidence.ts';
 // A witness for one signer: asked straight after that signer, never charged, a statement of their own (witness.ts).
+import { saveLocales, copyLocale } from './locales.ts';
 import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames, withWitnesses, witnessBits, witnessesSetAside, witnessedBy, assertWitnessesAfter, witnessesWaiting } from './witness.ts';
 import { waitsForName } from '../lib/witness.ts';
 // Conditional fields and formulas: checked when saved, worked out again from what is stored (logic.ts).
@@ -38,6 +39,8 @@ import { closedFormStart, closedStartText } from './formstart.ts';
 import { finalsDue, finalFailed, finalMadeLate } from './finalretry.ts';
 // A stamp next to a signature: a recipient's own, or the sender's, printed like ink (stamps.ts).
 import { isSenderStamp, printedStamp, stampOnSave, copyStamps, stampProblem, stampsSent, stampsFinished, senderStampChange } from './stamps.ts';
+import { convertedSent, convertedAdded } from './converted.ts';
+import { convertedOf } from '../lib/convert.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson', 'witness'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike', 'stamp'];
@@ -61,17 +64,27 @@ export function audit(envelopeId: string, actor: Actor, action: string, detail =
     envelopeId, at, actor.name, action, detail, actor.ip || null, (actor.ua || '').slice(0, 300) || null, prev, hash);
 }
 
-export const auditTrail = (envelopeId: string) => all('SELECT seq, at, actor, action, detail, ip, prev_hash, hash FROM audit WHERE envelope_id=? ORDER BY seq', envelopeId);
+export const auditTrail = (envelopeId: string) => all('SELECT seq, at, actor, action, detail, ip, prev_hash, hash, redacted_at FROM audit WHERE envelope_id=? ORDER BY seq', envelopeId);
 
-export function verifyChain(envelopeId: string): { ok: boolean; events: number; head: string } {
+// A line whose details a retention purge took out (redacted_at, src/server/records.ts) keeps its chain values: it is
+// checked for its place in the chain, not recomputed, and said as such (redacted, redacted_on). It counts only when its
+// time is the envelope's own purge: any other mark is a changed line like any other.
+export function verifyChain(envelopeId: string): { ok: boolean; events: number; head: string; redacted?: number; redacted_on?: string } {
   let prev = '';
   const rows = auditTrail(envelopeId);
+  const purged = rows.some((a) => a.redacted_at) ? get('SELECT purged_at p FROM envelopes WHERE id=?', envelopeId)?.p : null;
+  let redacted = 0;
   for (const a of rows) {
+    if (a.redacted_at && purged && a.redacted_at === purged) {
+      if (a.prev_hash !== prev) return { ok: false, events: rows.length, head: prev };
+      (prev = a.hash), redacted++;
+      continue;
+    }
     const h = sha256(JSON.stringify([prev, envelopeId, a.at, a.actor, a.action, a.detail, a.ip || '']));
     if (a.prev_hash !== prev || a.hash !== h) return { ok: false, events: rows.length, head: prev };
     prev = h;
   }
-  return { ok: true, events: rows.length, head: prev };
+  return { ok: true, events: rows.length, head: prev, ...(redacted ? { redacted, redacted_on: String(purged).slice(0, 10) } : {}) };
 }
 
 // ---- Loading and saving --------------------------------------------------------------------
@@ -91,11 +104,11 @@ export function loadEnvelope(envelopeId: string): any {
   const e = get('SELECT * FROM envelopes WHERE id=?', envelopeId);
   if (!e) return null;
   e.documents = all(
-    'SELECT d.id, d.name, d.position, d.file_id, f.pages, f.page_sizes, f.sha256, f.size, f.scan_pages FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=? ORDER BY d.position',
+    'SELECT d.id, d.name, d.position, d.file_id, f.pages, f.page_sizes, f.sha256, f.size, f.scan_pages, f.converted FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=? ORDER BY d.position',
     envelopeId,
     // Which pages are pictures with no text is kept with the file and said wherever the file is listed, so the
     // warning about a scan does not disappear when a draft is opened again.
-  ).map((d) => ({ ...d, page_sizes: JSON.parse(d.page_sizes), ...scanFlag(d.scan_pages) }));
+  ).map((d) => ({ ...d, page_sizes: JSON.parse(d.page_sizes), ...scanFlag(d.scan_pages), converted: convertedOf(d.converted) }));
   e.recipients = all('SELECT * FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', envelopeId);
   // A recipient that is a group carries its members (without their links): see attachGroups in groups.ts.
   attachGroups(e);
@@ -271,6 +284,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
   saveBySender(e, asked, oldRecs);
   // Whose signature a witness witnesses, and whether that signer names them ("witness_for", "named_by_signer"): witness.ts.
   saveWitnesses(e, asked, oldRecs, correcting);
+  // The language each person's screens are in ("locale"), or none for their browser: locales.ts.
+  saveLocales(asked, oldRecs, accountId);
   const placed = new Map<string, number>();
   // Each field with the id it was saved under, for its rule and formula once every field is in (logic.ts).
   const logic: { fid: string; f: any; rid: string | null; which: string }[] = [];
@@ -840,6 +855,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       ...again.filter((o: any) => sameSigner(o, nowById.get(o.id))).map((o: any) => `${o.name} had already ${finishedHow(o)} and is asked to ${ACTS(o.role) ? 'sign' : o.role === 'approver' ? 'approve' : 'look'} again.`),
       ...held.map((r: any) => `${r.name} had the document and now waits, because someone before them in the signing order has not finished.`)];
     if (said.length) audit(e.id, actor, 'Envelope corrected', said.join(' '));
+    // A document made from a Word file or the like says what it was made from (converted.ts).
+    convertedAdded(e, after, actor);
     for (const o of again) setAside(e, o, actor, nowById.get(o.id));
     witnessesSetAside(e, again, nowById, actor);
     asked =again.filter((o: any) => sameSigner(o, nowById.get(o.id)));
@@ -884,7 +901,7 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
 }
 
 // Copies an envelope or template into a new draft. Used for templates, cloning, bulk send and PowerForms.
-export function copyEnvelope(src: any, o: { accountId: string; senderId: string; kind: 'envelope' | 'template'; subject?: string; message?: string; fill?: Record<string, { name?: string; email?: string }>; extra?: Record<string, any> }): string {
+export function copyEnvelope(src: any, o: { accountId: string; senderId: string; kind: 'envelope' | 'template'; subject?: string; message?: string; fill?: Record<string, { name?: string; email?: string; locale?: string | null }>; extra?: Record<string, any> }): string {
   const eid = id(o.kind === 'template' ? 'tpl' : 'env');
   const t = now();
   tx(() => {
@@ -912,6 +929,8 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
       copyGroup(r, rmap.get(r.id)!);
       // So does "I will send the link myself", from an envelope to an envelope (bysender.ts).
       copyBySender(r, rmap.get(r.id)!, fill, o.kind);
+      // And their language, or the one a bulk row or a form visitor's browser gives (locales.ts).
+      copyLocale(r, rmap.get(r.id)!, fill);
     }
     // A witness stays the witness of the same person in the copy, and one the signer names is named afresh (witness.ts).
     copyWitnesses(src, rmap);
@@ -1223,6 +1242,8 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
       audit(e.id, actor, 'Wording struck out', `The sender struck out wording on ${strikePlace(f.page, e.documents.find((d: any) => d.id === f.document_id)?.name)}.`);
     // So is the sender's own stamp: which one, where, and the fingerprint of its picture (stamps.ts).
     stampsSent(e, actor);
+    // A document made from a Word file or the like: what it was made from, its fingerprint and the tool (converted.ts).
+    convertedSent(e, actor);
     // A word that often means paper, a witness or a notary is needed is written down with the send, and the answer to
     // sending carries it as "warnings". It never stops a send: see src/server/warnings.ts. A visitor of a public
     // form is not the sender, so there the line does not say that the sender was told.
@@ -2205,7 +2226,8 @@ const linkBefore = (a: LinkPlace, b: LinkPlace) => (a.at !== b.at ? a.at > b.at 
 // time), and every completed one, to the address that asks for it. Only that inbox receives the links, so asking
 // proves nothing and leaks nothing.
 export async function emailMyLinks(email: string): Promise<number> {
-  const where = `r.email=? AND r.role!='inperson' AND r.token IS NOT NULL AND e.kind='envelope'
+  // A purged envelope (src/server/records.ts) has nothing left to open: its link only says the sender deleted it.
+  const where = `r.email=? AND r.role!='inperson' AND r.token IS NOT NULL AND e.kind='envelope' AND e.purged_at IS NULL
         AND ((e.status='sent' AND r.status IN ('sent','viewed','completed')) OR e.status='completed'
           OR (e.status IN ('voided','declined','expired') AND (r.status='completed' OR r.signed_before IS NOT NULL) AND r.role!='cc'))`;
   const every = all(

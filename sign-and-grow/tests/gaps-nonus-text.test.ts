@@ -779,7 +779,7 @@ test('a date field takes a real day written year-month-day, from the page and th
   // The page tells the signer before Finish, in the same words the server uses.
   assert.equal(problemWith({ type: 'date' }, '2026-02-31'), DATE_PROBLEM);
   assert.equal(problemWith({ type: 'date' }, '2026-02-28'), '');
-  assert.doesNotMatch(DATE_PROBLEM, /—/);
+  assert.ok(!DATE_PROBLEM.includes(String.fromCharCode(0x2014)), 'no em dash');
 
   const c = await signUp('Dot Sender', 'dot-dates@example.com', ip());
   const e = await sendTo(c, [{ name: 'Dee Dates', email: 'dee-dates@example.com', type: 'date' }], { date_format: 'DD/MM/YYYY' });

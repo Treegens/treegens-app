@@ -13,6 +13,8 @@ import { commentsText, threadsOf } from './comments.ts';
 import { COMMENTS_NOT_SIGNED } from '../lib/policy.ts';
 import { stampEvidence } from './stamps.ts';
 import { STAMP_IS } from '../lib/stamps.ts';
+import { originalsEvidence } from './converted.ts';
+import { ORIGINALS_README } from '../lib/convert.ts';
 
 const SYSTEM: Actor = { name: 'System' };
 
@@ -31,14 +33,19 @@ const SYSTEM: Actor = { name: 'System' };
 // FINGERPRINT_KEPT_DAYS, like the fingerprints of security codes (forgotten_codes), and said in KEPT_AFTER_DELETION
 // in src/lib/policy.ts. Call it from forgetEnvelopes (src/server/routes-trust.ts), before the envelope goes.
 export function keepFingerprint(envelopeId: string) {
-  const e = get("SELECT id, final_sha256, completed_at FROM envelopes WHERE id=? AND status='completed' AND final_sha256 IS NOT NULL", envelopeId);
+  // A purged one (src/server/records.ts) kept the fingerprint of the signed PDF it removed: that is the one kept here.
+  const e = get("SELECT id, COALESCE(final_sha256, purged_sha256) final_sha256, completed_at FROM envelopes WHERE id=? AND status='completed' AND COALESCE(final_sha256, purged_sha256) IS NOT NULL", envelopeId);
   // The day, as KEPT_AFTER_DELETION says: not the moment.
   if (e) run('INSERT OR IGNORE INTO forgotten_files (file_sha256, envelope_id, completed_at, at) VALUES (?,?,?,?)', e.final_sha256, e.id, String(e.completed_at || '').slice(0, 10) || null, now());
   keepDispute(envelopeId);
 }
 
 /** The deleted document a signed file or an envelope id belongs to, with the last day we keep knowing it. */
-export function forgottenFile(o: { sha256?: string; id?: string }): { envelope_id: string; completed_at: string | null; deleted_at: string; kept_until: string; disputed_on: string | null; dispute_open: boolean } | null {
+export function forgottenFile(o: { sha256?: string; id?: string }): { envelope_id: string; completed_at: string | null; deleted_at: string; kept_until: string | null; disputed_on: string | null; dispute_open: boolean; purged?: { level: string } } | null {
+  // A completed envelope whose documents a retention purge removed (src/server/records.ts): its record is still here,
+  // with the fingerprint, for as long as the account keeps it (kept_until null). purged says so, and at which level.
+  const p = o.sha256 || o.id ? get(`SELECT id, completed_at, purged_at, purged_level FROM envelopes WHERE kind='envelope' AND status='completed' AND purged_at IS NOT NULL AND ${o.sha256 ? 'purged_sha256=?' : 'id=?'}`, o.sha256 || o.id) : null;
+  if (p) return { envelope_id: p.id, completed_at: String(p.completed_at || '').slice(0, 10) || null, deleted_at: String(p.purged_at).slice(0, 10), kept_until: null, disputed_on: null, dispute_open: false, purged: { level: p.purged_level } };
   const f = o.sha256 ? get('SELECT * FROM forgotten_files WHERE file_sha256=?', o.sha256) : o.id ? get('SELECT * FROM forgotten_files WHERE envelope_id=? ORDER BY at DESC LIMIT 1', o.id) : null;
   if (!f) return null;
   // A dispute that was open when it was deleted is still said, for as long as it is open (keepDispute).
@@ -99,7 +106,10 @@ export const forgetOldFingerprints = () => run('DELETE FROM forgotten_files WHER
 // template is not found.
 const CLOSING = ['Envelope voided', 'Declined', 'Envelope expired'];
 export async function lookupEnvelope(envelopeId: string): Promise<any> {
-  const e = get("SELECT id, status, sent_at, completed_at, final_sha256, final_pages, disputed_at FROM envelopes WHERE id=? AND kind='envelope' AND status!='draft'", envelopeId);
+  const e = get("SELECT id, status, sent_at, completed_at, final_sha256, final_pages, disputed_at, purged_at, purged_level, purged_sha256 FROM envelopes WHERE id=? AND kind='envelope' AND status!='draft'", envelopeId);
+  // Purged under its account's retention rule or at its sender's request (src/server/records.ts): said like a deleted
+  // one, with the state it was in and the fingerprint of the signed PDF it had, if any.
+  if (e?.purged_at) return { found: true, id: e.id, status: 'deleted', was: e.status, completed_at: String(e.completed_at || '').slice(0, 10) || null, deleted_at: String(e.purged_at).slice(0, 10), kept_until: null, sha256: e.purged_sha256 || null, purged: { level: e.purged_level } };
   if (!e) {
     const gone = forgottenFile({ id: envelopeId });
     if (gone) return { found: true, id: gone.envelope_id, status: 'deleted', completed_at: gone.completed_at, deleted_at: gone.deleted_at, kept_until: gone.kept_until, sha256: get('SELECT file_sha256 s FROM forgotten_files WHERE envelope_id=?', envelopeId)?.s,
@@ -383,7 +393,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const r = people.find((p: any) => labelOf(p) === a.actor);
       // In the language the line names (English for a line from before languages were recorded): policy.ts.
       const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
-      const how = !named ? ' (their audit line names no wording, because it was written before Sign&Grow recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line and its date, not stated by their screen)'
+      const how = !named ? ' (their audit line names no wording, because it was written before Sign&Grow recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
         : /did not say/.test(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
       return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
     }) : ['Nobody has agreed yet.']),
@@ -400,6 +410,9 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // Every stamp on the pages as its own picture, so its fingerprint in the audit trail can be checked (stamps.ts).
   const stamps = stampEvidence(e);
   for (const s of stamps) add(s.name, s.data);
+  // The Word file or the like each document was made from, as the sender uploaded it (converted.ts).
+  const originals = originalsEvidence(e, notes);
+  for (const o of originals) add(o.name, o.data);
 
   add('README.txt', [
     `Sign&Grow evidence pack for envelope ${e.id}, "${e.subject}".`, `Made on ${now()} by ${madeBy}. It shows the envelope as it stood at that moment.`, '',
@@ -410,6 +423,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     'emails/               a copy of every email we stored about this envelope, as HTML. Signing links and security codes are taken out of these copies, because they would still open the document; nothing else is changed. emails/index.csv says what became of each: whether the mail server took it, every try, and what the mail provider told us later (delivered, came back, marked as spam), with the SHA-256 of the email as stored before anything was taken out.',
     'consent.txt           the words each person agreed to before signing, in the version their audit line names (for a line from before versions were recorded, the wording shown then, marked as inferred).',
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
+    ...(originals.length ? [ORIGINALS_README] : []),
     ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []),
     ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at Sign&Grow has closed it.'] : []), '',
     'What this does and does not show.', CHAIN_TRUTH, WHO_WHEN_WHERE,

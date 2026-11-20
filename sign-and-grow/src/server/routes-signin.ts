@@ -9,6 +9,7 @@ import { provider, authorizeUrl, exchangeCode, verifyIdToken, identityOf, SignIn
 import { PROVIDER_IDS, PROVIDER_NAMES, SIGNIN_MINUTES, callbackPath, isProviderId, safeNext, signInProviders, removedText, SIGNIN_NOTE_COOKIE, type SignInError, type SignInNote, type Removed } from '../lib/signin.ts';
 import { forgetEarlierSetup } from './reclaim.ts';
 import { secondStepWaits } from './twostep.ts';
+import { record } from './seclog.ts';
 
 // Signing in and signing up with Google or Microsoft, next to email and password. The talking to the provider and
 // the checking of what it answers are in oidc.ts. This file decides who the person is, and that rule is short:
@@ -82,7 +83,8 @@ const addIdentity = (userId: string, p: Provider, who: Identity, userEmail: stri
 // Connects a provider that vouched for the address to the existing login with that address, and says what it did
 // for the first screen. Called by the callback below, or, when the login has two-step login, by POST /auth/two-step
 // after the code (routes-twostep.ts), never before.
-export async function linkProvider(userId: string, providerId: string, who: Identity): Promise<SignInNote> {
+// `c`: the request, for the internet address and browser in the security record.
+export async function linkProvider(userId: string, providerId: string, who: Identity, c?: Ctx): Promise<SignInNote> {
   const p = isProviderId(providerId) ? provider(providerId) : null;
   const existing = get('SELECT * FROM users WHERE id=?', userId);
   if (!p || !existing) return {};
@@ -104,6 +106,7 @@ export async function linkProvider(userId: string, providerId: string, who: Iden
       run('DELETE FROM password_resets WHERE user_id=?', existing.id);
     }
     addIdentity(existing.id, p, who, existing.email);
+    record('signin_method.connected', { c, by: { type: 'user', id: existing.id }, member: existing.id, about: ['user', existing.id], details: { provider: p.id, how: unconfirmed ? 'address_confirmed_by_provider' : 'provider_vouched_for_address' } });
   });
   await tellConnected(existing, p, who, unconfirmed ? 'reclaimed' : 'address', hadPassword, removed);
   const note: SignInNote = { linked: p.name };
@@ -195,6 +198,7 @@ route('GET', '/auth/:provider/callback', async (c) => {
     if (known && known.user_id !== c.user.id) return back('taken');
     if (!known) {
       addIdentity(c.user.id, p, who, c.user.email);
+      record('signin_method.connected', { c, member: c.user.id, about: ['user', c.user.id], details: { provider: p.id, how: 'settings' } });
       // The provider stands behind the very address this login has, for the person at this keyboard: it is confirmed.
       if (who.vouched && sameEmail(who.email, c.user.email) && !c.user.email_verified) run('UPDATE users SET email_verified=1 WHERE id=?', c.user.id);
       await tellConnected(c.user, p, who, 'settings');
@@ -228,7 +232,7 @@ route('GET', '/auth/:provider/callback', async (c) => {
         if ('two_step' in r) return redirect('/login/two-step');
         return done(c, row, Object.assign(note, r));
       }
-      Object.assign(note, await linkProvider(existing.id, p.id, who));
+      Object.assign(note, await linkProvider(existing.id, p.id, who, c));
       u = get('SELECT * FROM users WHERE id=?', existing.id);
     } else {
       // A browser that is signed in already does not make itself a second login in passing: that person most likely
@@ -307,5 +311,6 @@ route('DELETE', '/me/signin/:id', (c) => {
   if (!hasPassword(c.user) && !others.length)
     throw bad(`${name} is the only way into this login, so it was not disconnected: you could never sign in again. Set a password first with "Email me a link to set a password" on this page, or connect another way to sign in. Then you can disconnect ${name}.`, 409, { code: 'last_way_in' });
   run('DELETE FROM identities WHERE id=?', row.id);
+  record('signin_method.removed', { c, member: c.user.id, about: ['user', c.user.id], details: { provider: row.provider } });
   return { ok: true, disconnected: name };
 });

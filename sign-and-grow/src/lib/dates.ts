@@ -144,3 +144,51 @@ export function isDaytime(iso: string | Date, tz?: string | null): boolean {
   const c = clockIn(iso, tz);
   return !c || (c.hh >= REMINDER_DAY_START && c.hh < REMINDER_DAY_END);
 }
+
+// ---- Dates on a screen, in the reader's language ----------------------------------------------------------------
+// For screens only. The signed PDF, the certificate, the audit trail and the formats a sender picks above stay as
+// they are, whatever the reader's language: they are part of the record. English is written exactly as momentText
+// writes it, so no English screen changes; any other language is written by the browser's own rules for it (Intl).
+// A calendar other than the Gregorian one ("ethiopic" for the Ethiopian calendar, for example) is asked for here and
+// nowhere else, so a language that needs one gets it in one place.
+
+/** The calendars a screen may write a date in: the ones this runtime knows (Intl.supportedValuesOf). */
+export function validCalendar(c: unknown): string | null {
+  if (typeof c !== 'string' || !/^[a-z0-9-]{3,20}$/.test(c)) return null;
+  try {
+    return (Intl as any).supportedValuesOf?.('calendar')?.includes(c) ? c : null;
+  } catch {
+    return null;
+  }
+}
+const screenTag = (locale: unknown, calendar?: string | null): string => {
+  const tag = typeof locale === 'string' && locale.trim() ? locale.trim().replace(/_/g, '-') : 'en';
+  let base = 'en';
+  try {
+    base = Intl.getCanonicalLocales(tag)[0]?.split(/-u-/)[0] || 'en';
+  } catch {
+    /* not a language tag: English */
+  }
+  const cal = validCalendar(calendar);
+  return cal && cal !== 'gregory' ? `${base}-u-ca-${cal}` : base;
+};
+const plainEnglish = (tag: string) => /^en(-|$)/.test(tag) && !tag.includes('-u-');
+
+/** A day on a screen: "20 November 2026" in English, "20 novembre 2026" in French, by `calendar` when one is given. */
+export function dateOnScreen(iso: string | Date | null | undefined, locale?: unknown, tz?: string | null, calendar?: string | null): string {
+  const c = iso ? clockIn(iso, tz) : null;
+  if (!c) return '';
+  const tag = screenTag(locale, calendar);
+  if (plainEnglish(tag)) return `${c.d} ${MONTH_NAMES[c.m]} ${c.y}`;
+  return new Intl.DateTimeFormat(tag, { dateStyle: 'long', timeZone: validZone(tz) || 'UTC' }).format(typeof iso === 'string' ? new Date(iso) : iso!);
+}
+
+/** A moment on a screen with its time and zone: momentText in English, the language's own way otherwise. */
+export function momentOnScreen(iso: string | Date | null | undefined, locale?: unknown, tz?: string | null, calendar?: string | null): string {
+  const c = iso ? clockIn(iso, tz) : null;
+  if (!c) return '';
+  const tag = screenTag(locale, calendar);
+  if (plainEnglish(tag)) return momentText(iso, tz);
+  const when = new Intl.DateTimeFormat(tag, { dateStyle: 'long', timeStyle: 'short', hourCycle: 'h23', timeZone: c.zone }).format(typeof iso === 'string' ? new Date(iso) : iso!);
+  return `${when} ${c.zone === 'UTC' ? 'UTC' : `${c.zone.replace(/_/g, ' ')} (${c.offset})`}`;
+}

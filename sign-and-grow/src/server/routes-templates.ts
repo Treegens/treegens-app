@@ -4,6 +4,7 @@ import { route, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, str } from './util.ts';
 import { audit } from './envelopes.ts';
+import { record } from './seclog.ts';
 import { mine } from './routes-envelopes.ts';
 import { accessOf, maySetRules, ruleOf, askWho, ownerName } from './tplroles.ts';
 import { TPL_USES, TPL_CHANGES, accessSentence } from '../lib/tplroles.ts';
@@ -58,7 +59,11 @@ route('PUT', '/envelopes/:id/access', async (c) => {
   const now = loadRule(t.id, c);
   const after = accessSentence(now);
   // Written down only when something changed, so saving the same rule twice leaves one line.
-  if (after !== before) audit(t.id, c.actor, 'Who can use and change it', `${after} Before: ${before}`);
+  if (after !== before) {
+    audit(t.id, c.actor, 'Who can use and change it', `${after} Before: ${before}`);
+    // The rule by its values and how many members were chosen, never their names (seclog.ts).
+    record('template.rules_changed', { c, about: ['template', t.id], details: { from: { use: was.use, change: was.change, locked: !!was.locked }, to: { use, change, locked: !!locked, ...(lines ? { members_chosen: lines.length } : {}) } } });
+  }
   return { access: now };
 });
 

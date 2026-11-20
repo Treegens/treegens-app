@@ -70,6 +70,8 @@ What the test files cover:
 | `tests/logic.test.ts` | Conditional fields and formulas: the formula reader (order of operations, brackets, sum and round, what it refuses in words, nothing run as code), numbers as people write them and the result written the same way, empty inputs, dividing by 0, numbers too big or too small, rules that chain and loops (refused when saved, naming the fields), what the review step warns about, a browser that lies about a hidden required field or a calculated value, a signature field that an answer hides, the signed PDF, someone else's answer counting once they have finished and a signed result never changing, sign-again after a rule or a formula changes (predicted the same way in the editor), templates, copies, public forms, bulk send rows that fill a field, and the lock on a template's wording. After the skeptic's review: a result with three decimals read back as the same number (PDF pictures and words, the sender's counts, the next person's formula), no Finish as signed without a picture, nothing learned about an unfinished answer from Finish errors, a total that changed under an open page, two radio buttons chosen at once, number rule values written two ways, a very long line of fields, long numbers in a formula, and digits of every script. |
 | `tests/stamps.test.ts` | Company stamps: the processing steps as pure functions on pixels made in the test (paper removed under light that falls off by half and on grey, yellow, kraft and canary paper, a desk round the sheet, a hard shadow, ruled lines and a noisy faint stamp, one ink in every pixel with a little variation, a thin line kept thin, a design's tint printed solid, faint small print kept in a photo, black print left out and the stroke it crossed filled in, the ink chosen after cutting off the edges, a logo's colours kept apart, an oval made round, the texture sized in millimetres with full-ink cores, a heavier side, voids and darker rims, the ink found and other colours left out, a logo said to have several colours, the same impression for the same seed and another for another, trimmed with a small margin, a tilt from -4 to 4 turned by the page and not drawn in, a texture that keeps the ink readable, a see-through design, a seal that fills the picture, a dark table at the edge of a photo), which files can be a stamp, the account's stamps (up to ten, admins only, names checked for an unpaid account, anything but a see-through PNG refused in words, text and camera notes taken out of the file), a signer's stamp (Finish later keeps it, the answers never set it, required before Finish, the audit line with its fingerprint), the signed PDF (multiplied in at 97 percent and turned by its tilt, the words under it still in the file, the certificate lines and the honest sentence), changing and deleting a stamp, saved stamps from the signer's own account and who may not use them, the limits and who may see a picture, money, signing again after a change, templates, bulk sends, public forms, signing groups, the evidence pack, the export, deleting, and the API description. |
 | `tests/clickwrap.test.ts` | Click-to-agree terms: drafts and versions, our page, the frame (only `?embed=1`) and the API, the signed link a website makes, the record that never changes and its seal, what the certificate says the browser reported, the receipt and one copy by email only for the browser that accepted and an address the website gave, the scam filter on every word the page shows, the two monthly counts and the limits per address (offices, IPv6 blocks), paused accounts, reports, members and keys, and deleting with the files. |
+| `tests/convert.test.ts` | Office files turned into PDF: every kind recognised from bytes built in the test (Word, Excel, PowerPoint, OpenDocument, the old binary formats, RTF, HTML, text, TIFF) and never from the name, the unknown kinds and what each is told, passwords, ZIPs that unpack to more than 100 MB or 20 times their size (also when they lie about it, and one entry listed eighteen times), the test converter through a whole send, sign and evidence pack (the audit line with both fingerprints, the original kept encrypted, in `originals/`, kept while another account has it and deleted with the account), a correction that puts a converted file on, the notes (tracked changes, comments, sheets, outside content but not web links, macros), a name that reads like a payment notice left out of the record, no converter set up, a signer's attachment, several files at once, a TIFF that would lose pages, a stand-in for LibreOffice that hangs (killed with what it started, its folder gone), shows its environment (no secrets) and its network (none), the queue and the limit per account, and the real LibreOffice when it is installed. |
+| `tests/i18n.test.ts` | Languages: the catalogue parser and its placeholders, plural rules for English, French, Arabic and Russian, the fallback from pt-BR to pt to English, a missing or broken text shown in English and never as its key, right to left, the statuses of each language, the choice of language (the sender's, the browser's, English), legal texts in English with one sentence until a person has checked them, the language recorded in the audit line and read back by the evidence pack, `recipients[].locale` and `default_locale` refused in words when a language is not available, templates, copies, bulk rows and public forms, the bulk list's language column, `<html lang>` and `dir`, dates and numbers by language with the signed PDF unchanged, and `npm run i18n:check` failing on a catalogue that does not match. |
 
 ## What the bad reviews taught us
 
@@ -98,6 +100,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | No answer, no reference, nobody owns the problem, and the ticket is closed without a word. | Every help request is a ticket (see "How support works" below): a reference, a state the customer can see, one operator who has it and whose first name the customer is shown, and a thread. A response time is published (`SUPPORT_FIRST_REPLY_HOURS`, `SUPPORT_URGENT_REPLY_HOURS`), and the confirmation says the actual time a person will have answered by. When that time passes the request says "We are late with this. Sorry.", everyone who answers is emailed, and so is the customer. Every answer is emailed in full, with a private link that opens the request without a login, because the people who need help most are locked out. Nobody closes a request without a written answer, and a reply opens it again. A stranger who types your address into the form can send you at most three emails a day that way and can never use up what you can send us yourself. When the mail server refuses an answer, the person who wrote it is told at once, and again if it is given up, so nobody believes an answer arrived that did not. |
 | A typo after sending means void and start again. | An envelope that is out can be corrected in place: names, addresses, fields, people. Signatures already collected stay. Once someone has finished, the pages they signed only change if the sender chooses to ask them to sign again. That covers the files, the fields, the sender's wording and any name or address a field prints on the pages, by every route: the editor, the API, the quick correction, a signer passing the document on or fixing their name. They are told what changed, the first signature stays on record together with the document as they signed it, and it costs no extra signature. What a finished signer left empty or unticked is their answer and is never filled in again. A signer whose page is open during a correction cannot finish on the old version: the page loads the changed document again, and Finish stays off until its pages are on the screen. A change made outside the editor (a quick correction, a hand-over, sending) is a newer version too, so an editor that was opened before it cannot undo it. The audit trail says what every correction changed. |
 | Two people share one email address, and one person's signature ended up on the other's line. | A signature, initials, typed answers and the agreement to sign electronically belong to the person who made them. When the sender puts another person's name on a request at the same address (with Correct or in the editor), the request starts empty for that person on the same link, and they agree for themselves. A spelling fix of the same person keeps everything. "Fix my name" takes only a spelling of the name the sender wrote: never one that is, looks like (letters of another alphabet that look Latin, one letter off) or borrows from another person's on the document, and never a name that would turn the sender's own free signature into somebody else's. A browser tab keeps a signature only under the name it was made for. |
+| A Word file has to be exported to PDF first, or comes out different after the upload converted it, and nobody noticed before it was signed. | On a server with a converter, Word, Excel, PowerPoint and similar files are taken and turned into a PDF at upload, and the sender sees that PDF before placing a field, with "Check every page: the PDF is what people sign, and conversion can move text." next to it, plus a word about tracked changes, comments, split sheets, outside pictures and macros where the file has them. The audit trail names the original by its SHA-256 and the tool, and the evidence pack keeps the original. Nothing says the layout is the same. |
 | Signing links expire or stop after a few opens. | A link works for as long as the envelope is open, with no limit on opens. A replaced link offers to send the current one. `/help` emails anyone their documents again. An expired envelope is reopened, not rebuilt, and signers can ask for more time. |
 | Signers are pushed to create an account. | Signers never need an account or a password, and are never sent marketing. |
 | A signer has no way to ask about a clause before signing, and the answer is lost somewhere in email. | "Questions and comments" next to the document: a question goes to the sender's side (the sender and the admins of their account) privately unless the signer chooses everyone, the sender answers on the envelope page, and the answer is on the signing page and in one email when we can email that person (not someone signing in person, without an address, or whose address bounced or marked us as spam, and the page says so). Nobody else on the envelope ever reads a private thread, also not the next person handed the same device to sign in person. The sender sees who waits for an answer, and someone who presses Finish with a question unanswered is told so and can still finish. Comments are not part of what is signed, and the audit trail records who wrote and when, never the words. |
@@ -125,7 +128,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | I cannot find out where my documents are stored or who else handles them. | `/security` has a block "Where your data is", filled from settings (`OPERATOR_NAME`, `DATA_REGION`, `DATA_HOST`, `DATA_BACKUPS` and the provider settings): where the server is, who else handles data, in which country and what for. A provider is listed only when its switch is on, and whatever the operator has not stated is printed as "has not said ... Ask them." instead of being left out. `/security/processing` is a plain data processing summary to save as a PDF, and says that a signed agreement is between the customer and whoever runs the server. |
 | My signer cannot open the page where they are, and nobody says what to do. | Every email that asks someone to sign ends with one line: reply and ask the sender for the document as a PDF. `/help` tells the sender what to do then, and that a signature collected that way is outside the certificate. No claim is made about any country, because none was tested. |
 | My signers live in WhatsApp, not email, and a recipient cannot exist without an address. | Tick "I will send the link myself": a name and no address. We never write to that person, the envelope page hands the sender the link and the ways to share it, the sender gets the turn, the reminders and the copy in their place, and the certificate says "Link shared by the sender" instead of claiming an email went out. They count towards the limits like anyone. Their own page never promises them an email: asking for more time says the sender will reach them the way they sent the link, and the sender's email says there is no address to reply to. |
-| My signers do not read English and nobody told me. | The landing page, `/help`, `/security` and this file say it in one sentence (`LANGUAGE_NOTE`): the signing screen and the emails are in English for now, and the document can be in any language. `/help` prints the consent text so a sender can translate it. Languages themselves are not built yet. |
+| My signers do not read English and nobody told me. | The landing page, `/help`, `/security` and this file say it in one sentence (`LANGUAGE_NOTE`): the signing screen and the emails are in English for now, and the document can be in any language. `/help` prints the consent text so a sender can translate it. The foundation for other languages is built (catalogues, a language per recipient, legal texts in English until a person has checked a translation, the language each person agreed in on the audit line), and no screen is translated yet. |
 | A name in Chinese, Thai or Hindi comes out as empty boxes on the signed document. | The signed PDF and its certificate print Latin (with accents), Greek, Cyrillic, Arabic, Hebrew, Armenian, Georgian, Chinese, Japanese, Korean, Thai, Devanagari (Hindi, Marathi, Nepali) and Khmer, with the letters joined and stacked as the script needs, and only the font files a document uses are embedded in it. For any other script (Tamil or Bengali, say) nothing is printed as an empty box: the sender is told on the envelope page and before sending, the signer in the check before finishing, each such character is printed as the mark �, and the certificate lists them by Unicode number. A font file that is missing after a broken install counts the same way instead of failing the PDF. A typed signature shows four handwriting styles only when the handwriting fonts can write the name, and one plain style otherwise. |
 | Hebrew or Arabic typed into a field is reversed, and house number 42 becomes 24. | Right-to-left text is put in reading order on the signed PDF and the certificate, with digits and Latin words inside it left to right, and it starts at the right edge of its box. The fields on the signing page take their direction from what is typed. The words as typed are also written into the PDF next to the glyphs, for programs that copy or search. |
 | The dates on my document are in American order, and one page shows two formats. | One format for every date on an envelope: the date each person signs on, and any date they pick in a date field, on the signing page, in what other signers are shown and on the PDF. An account sets the format its new envelopes start with (Settings, Account), and the formats with the month as a word are listed first. Nothing is ever converted to month-first unless the sender chose that. |
@@ -181,6 +184,22 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   13 million (a 12 megapixel phone photo), read from the header before anything is unpacked. The server does not
   make pictures smaller, so a photo sent through the API reaches every signer's phone as it was sent, and the
   limit keeps it to what a phone can open. A document of 5 MB or more is pointed out as slow on a phone.
+- Word, Excel and PowerPoint files (also the old .doc, .xls and .ppt), OpenDocument texts, spreadsheets and
+  presentations, RTF, plain text (UTF-8), web pages and TIFF, on a server whose operator set up a converter (see
+  "Turning office files into PDF"). The file is recognised by its bytes, never by its name, and turned into a PDF
+  before anything else happens; from then on it is a PDF like any other (500 pages, 25 MB, text for search, the scan
+  warning). The sender sees that PDF before placing a field, and under the document and over its pages the editor
+  says "Converted from Contract.docx. Check every page: the PDF is what people sign, and conversion can move text.",
+  and also when the file has tracked changes or comments (Word, OpenDocument text, RTF), is a spreadsheet ("A sheet
+  may be split across pages."), points at pictures or files outside itself (Word, Excel, PowerPoint, OpenDocument,
+  RTF and HTML; a web link someone can click does not count) or has macros, which are never run. The original is
+  kept with the PDF as a stored file (encrypted when `FILE_ENCRYPTION_KEY` is set), the audit trail says "Converted
+  from Contract.docx (SHA-256 ...) to PDF by LibreOffice 24.2.7.2" when the envelope is sent or a correction puts the
+  document on it, the evidence pack carries it under `originals/`, and it is deleted with the account. A ZIP-based
+  file that unpacks to more than 100 MB or 20 times its own size is refused before anything opens it, and so is a
+  file protected with a password. A file a signer attaches is never converted. Without a converter these files are
+  refused with a sentence that names the kinds that need one. Rules in `src/server/convert.ts`, words in
+  `src/lib/convert.ts`, tests in `tests/convert.test.ts`.
 - Recipients who sign, approve, only view, get a copy, or sign in person on your device. Signing in person needs an
   internet connection from opening the document to pressing Finish: there is no offline mode.
 - Signing order (sequential, parallel or mixed) or everyone at once.
@@ -641,6 +660,45 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 - Every number comes from `src/lib/impact.ts`, and the method is published on `/impact`.
 - Payment ledger (from the payment provider's invoices) shown publicly as money sent to tree planting.
 
+**Languages (the foundation; only English is switched on)**
+- Catalogues of our own words as flat JSON, one file per language in `src/locales/<tag>.json`, with `en.json` as the
+  source (keys like `settings.language.button`). `t(locale, key, vars)` in `src/lib/i18n.ts` fills in `{name}` and
+  `{count, plural, one {# day} other {# days}}` with a small parser of our own and `Intl.PluralRules`; nothing in a
+  catalogue is ever run as code. A text is looked for in the person's language, then without its region (pt-BR, pt),
+  then in English; a missing or broken text shows the English one and never the key. `dir()` is right to left for
+  Arabic, Hebrew, Persian and Urdu. No library, so it works in pages and on the server alike.
+- `SUPPORTED_LOCALES` lists each language with two statuses: its screens and its legal texts (the consent, what kind
+  of signature this is, the adopt line, witness statements, `STAMP_IS`, `CHECK_PROVES`), each `reviewed` by a person,
+  a machine `draft`, or `missing`. English is the only one switched on. French, Amharic (in Ethiopic script) and
+  Afaan Oromo are listed with nothing translated; a language is switched on in the code when a person has checked it.
+- Which language a person sees: the one the sender set for them, else what their browser asks for among the languages
+  switched on, else English (`src/server/locales.ts`). The signing page is told the language, its direction and who
+  chose it (`language` in `GET /api/sign/:token`); `<html lang>` and `dir` come from the request.
+- Legal texts are kept by version and by language beside their words in `src/lib/policy.ts`, never in a catalogue,
+  so no translation tool can change them. A language whose legal texts no person has checked shows them in English
+  with one sentence in the reader's language: "This part is in English because its translation has not yet been
+  checked by a person." A machine translation of a legal text is never shown as the text. The audit line of each
+  person's consent names the wording and the language of the words they were shown ("Wording 2026-11, in English
+  (en), ..."), and the evidence pack prints those words in that language.
+- The sender's side: `recipients[].locale` in the API (a language that is not switched on is refused with a 400 that
+  names the ones that are), a Language choice per person in the editor under More, and the account's
+  `default_locale` under Settings, Account, which new recipients start with. Templates and copies keep it, a bulk
+  list may have a "language" column (a code or a name; one we do not have is left out with a note on that row), and a
+  public form takes the visitor's browser language. While English is the only language there is nothing to choose,
+  so the editor shows no choice and Settings says so in one sentence. The sender's own subject, message, notes and
+  documents are never translated.
+- Dates and numbers on a screen go through `Intl` with the reader's language (`dateOnScreen`, `momentOnScreen` in
+  `src/lib/dates.ts`, `numberOnScreen` in `src/lib/numbers.ts`), in one place, so another calendar (the Ethiopian one
+  is `ethiopic`) can be asked for there. English reads exactly as before, and the signed PDF prints what it printed.
+- For translators: `npm run i18n:check` checks every catalogue against `en.json`. Every English key has to be in
+  each catalogue, translated or marked missing with `""` (shown in English); no key may be left over; the
+  placeholders must be the ones in English; no HTML, entities or links; and it warns when a button's text is more
+  than 40 percent longer than in English. It exits with 1 on an error, so it can run in CI. The files are in the
+  format Weblate calls "JSON file" (flat, monolingual): add the project with `src/locales/en.json` as the
+  monolingual base file and `src/locales/*.json` as the file mask, use the "ICU MessageFormat" check, and run
+  `npm run i18n:check` on what Weblate commits. Legal texts are not in these files: a person who can answer for
+  them checks each language in `src/lib/policy.ts`.
+
 ## What is not in it
 
 Being straight about this: the market-leading e-signature products are large suites, and this covers the core
@@ -656,7 +714,11 @@ e-signature product, not all of it. Not built:
   "advanced" or "qualified" seal under eIDAS). It pays no stamp duty and is not an e-stamp certificate or an
   e-meterai.
 - Languages other than English. The signing screen and our emails are in English for now. Your document can be in
-  any language. (The sentence the pages print is `LANGUAGE_NOTE` in `src/lib/policy.ts`.)
+  any language. (The sentence the pages print is `LANGUAGE_NOTE` in `src/lib/policy.ts`.) The foundation is built
+  (see "Languages" above), but no screen and no email has been moved into the catalogue or translated yet, the
+  editor's "changed" check does not count a change of language alone, a signer cannot switch language on the page,
+  the certificate is English only, and there is no `LANGUAGES_ENABLED` setting: a language is switched on in
+  `SUPPORTED_LOCALES`. Nothing calls a translation service.
 - ID verification (government ID, knowledge-based checks) and checks by phone call. A one-time code by email or by
   text message is in (see "Checking who signs"); it shows that someone can read a mailbox or holds a phone, not who
   they are. Text messages only exist on a server whose operator has set a provider up.
@@ -664,7 +726,11 @@ e-signature product, not all of it. Not built:
   show a link to its own payment page after Finish (see "Reuse and scale"), and the money never passes through here.
 - A HIPAA business associate agreement, at any price. US healthcare providers must not put patient information
   through it (`NO_BAA_TEXT` in `src/lib/policy.ts`).
-- Word or Google Docs upload (export to PDF first).
+- Google Docs and cloud drives: download a Google Doc as Word or PDF first. Word and other office files are turned
+  into PDF only on a server with a converter, and the PDF can differ from what the program shows (fonts that are
+  not installed, page breaks, a sheet split across pages): the PDF is the record, so check it. Tracked changes and
+  outside links are not looked for in the old binary .doc, .xls and .ppt formats. Documents cannot be edited here,
+  and HEIC photos are not taken (phones hand over a JPEG when a photo is chosen).
 - Contract lifecycle management, AI contract analysis, document generation.
 - Single sign-on for a whole organization (SAML, or making a team sign in one way), native mobile apps. Signing in
   with Google or Microsoft is in, and so is two-step login with an authenticator app (see "Two-step login"). Codes by
@@ -784,6 +850,10 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SMS_DEV_OUTBOX=1` | Development only: text messages are switched on without a provider and are only written to `/dev/outbox`. Ignored on a production server unless `DEV_OUTBOX=1` is set too, because nobody receives anything. | off |
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |
 | `DEV_OUTBOX=1` | Shows the outbox in a production build. Never set this on a public server: it exposes every signing link. | off |
+| `CONVERTER` | `soffice`: Word, Excel, PowerPoint, OpenDocument, RTF, text, HTML and TIFF uploads are turned into PDF by LibreOffice on this machine (`soffice` on the `PATH`; Debian and Ubuntu: `apt install libreoffice-writer libreoffice-calc libreoffice-impress`). `gotenberg` (or leave it empty and set `CONVERTER_URL`): by a Gotenberg service. Anything else, or nothing: those files are refused, saying that a converter is needed, and nothing offers them. Read "Turning office files into PDF" first: the converter must have no network. (`stub` is for the tests and is ignored on a production server.) | off |
+| `CONVERTER_URL` | The address of a Gotenberg service (MIT licence, `gotenberg/gotenberg:8`) inside your own network, for example `http://gotenberg:3000`. Files go to its `/forms/libreoffice/convert` in the clear, so keep it on a private network. | none |
+| `CONVERT_TIMEOUT_MS` | How long one conversion may take before it is stopped (with LibreOffice here, its whole process group is killed). The sender is told that it took too long and nothing is saved. 1000 to 600000. | `60000` |
+| `CONVERT_MAX_JOBS` | How many conversions run at the same moment; the rest wait their turn (up to ten times this many, then a polite 503). One account converts at most 2 files at once and 60 an hour. LibreOffice takes a few hundred MB of memory per job. 1 to 32. | `2` |
 
 `/help`, `/` and `/security` quote the refund window and the unused-plan rule. They read them from
 `src/lib/policy.ts`, the same file the server enforces them from, so the pages and the code cannot disagree.
@@ -1023,6 +1093,42 @@ digits, 30 seconds, SHA-1) that every authenticator app makes, written out with 
   affected, and no key can see or change two-step login, nor change the password (`PERSON_ONLY` in
   `src/server/router.ts`); `GET /me` leaves two-step login out for a key.
 - The secret is kept in the database as it is, because the server has to read it to check a code.
+
+### Turning office files into PDF
+
+With `CONVERTER` or `CONVERTER_URL` set, an upload that is a Word, Excel, PowerPoint, OpenDocument, RTF, text, HTML
+or TIFF file becomes a PDF before anything else (`src/server/convert.ts`). What a sender gets back, and what the
+pages and the API say, is in "What is in it" above; this is what an operator needs to know.
+
+- **The converter must have no network.** A document can point at pictures and files on other servers, and an
+  office program may fetch them while it opens the file: that tells their owner when and from where the document was
+  opened, and can reach servers inside your own network. With `CONVERTER=soffice`, every job runs under
+  `unshare -rn` (a network namespace of its own with nothing in it) where that works, which needs nothing but
+  unprivileged user namespaces in the kernel; the first job checks, and when it does not work the server log says
+  so loudly and LibreOffice runs with the server's network. Then block it yourself, in one of these ways:
+  run the whole app as a user whose outbound traffic is dropped except for what the app needs (mail, payments), or
+  put a wrapper called `soffice` first on the `PATH` that starts the real one without a network
+  (`exec unshare -rn /usr/bin/soffice "$@"`, or the same with `firejail --net=none`), or use Gotenberg in a
+  container on a network with no way out (Docker: `docker network create --internal convert`, then run
+  `gotenberg/gotenberg:8` on that network only, and give this app a second network to reach it). Gotenberg itself
+  does not block a document's outside links.
+- **Each LibreOffice job** gets a fresh profile folder (`-env:UserInstallation`) with macros switched off and links
+  from untrusted documents blocked, only `PATH`, `HOME`, `TMPDIR` and the language from this server's environment
+  (none of its secrets), its own process group, which is killed whole after `CONVERT_TIMEOUT_MS`, and a temporary
+  folder under the system's temporary directory that is removed when it ends (a folder left by a server that was
+  stopped mid-job is removed by the first job after the restart, once it is an hour old). At most `CONVERT_MAX_JOBS` run at once. The file is in that folder in the
+  clear while the job runs, also when `FILE_ENCRYPTION_KEY` is set; with Gotenberg it travels to the service in the
+  clear. Keep LibreOffice up to date: opening a document is what its security fixes are about.
+- **Before anything opens a file**, a ZIP-based one (OOXML, OpenDocument) is unpacked in memory with every byte
+  counted, whatever sizes it claims, and refused past 100 MB or 20 times its own size. Without a converter nothing
+  is unpacked at all.
+- **What is checked and what is not.** The kind of file and the notes (tracked changes, comments, split sheets,
+  outside content, macros) are read from the file itself, in the newer formats and RTF and HTML; in the old binary
+  .doc, .xls and .ppt only the kind is known. A TIFF with more pages than the PDF made from it is refused, so no page
+  goes missing. Fonts the file uses that are not installed with the converter are replaced, which moves text: that
+  is why every converted document says to check every page. The tool and version in the audit line come from
+  `soffice --version`, or for Gotenberg from the PDF it made and its `/version` answer. Gotenberg has only been
+  tried against the shape of its documented API, not against a running service.
 
 ### Encrypting stored files
 

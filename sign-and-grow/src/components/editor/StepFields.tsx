@@ -14,6 +14,7 @@ import { WitnessBlockButton } from './WitnessChoice';
 // A stamp field: who puts it on, which of the team's stamps, its real size (StampChoice.tsx, src/server/stamps.ts).
 import { StampChoice, useStamps, editorStampSrc, editorStampTurn } from './StampChoice';
 import { stampBox, STAMP_DEFAULT_MM, turnStyle } from '@/lib/stamps';
+import { ConvertNotes } from './ConvertNotes';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
@@ -414,6 +415,8 @@ export function StepFields({ ed }: { ed: Ed }) {
             {docs.map((d) => (
               <div key={d.id} data-doc={d.id}>
                 <div className="muted small" style={{ fontWeight: 600, marginBottom: 6, textAlign: 'center' }}>{d.name}</div>
+                {/* Pages made from a Word file or the like: check them before placing fields (ConvertNotes.tsx). */}
+                <ConvertNotes d={d} compact />
                 <PdfDoc url={`/api/files/${d.file_id}/content`} zoom={zoom} onPageClick={(p, x, y) => place(d, p, x, y)} onDocument={(pdf) => setPdfs((m) => ({ ...m, [d.id]: pdf }))}
                   // Stamps on the page, printed like ink the way the signing page and the PDF print them.
                   // eslint-disable-next-line @next/next/no-img-element

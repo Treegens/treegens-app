@@ -623,7 +623,7 @@ test('the words for a person without an address say what happened and nothing mo
   assert.match(noEmailCopyText('Ada Sender', true), /^We have no email address for you, so no copy comes by email, and "Find my documents" on our help page cannot find this one\. Download your copy now\./);
   assert.match(noEmailCopyText('Ada Sender', false), /cannot tell you when the others have finished\. Ada Sender can\./);
   assert.match(noEmailWaitText('Ada Sender'), /Ada Sender will tell you when it is your turn/);
-  for (const t of [BY_SENDER_HOW, noEmailCopyText('x', true), noEmailCopyText('x', false), noEmailWaitText('x')]) assert.doesNotMatch(t, /—/);
+  for (const t of [BY_SENDER_HOW, noEmailCopyText('x', true), noEmailCopyText('x', false), noEmailWaitText('x')]) assert.ok(!t.includes(String.fromCharCode(0x2014)), t);
   // Counted as a person of their own, never as "nobody".
   assert.equal(reachKey({ id: 'rcp_1', email: '', link_by_sender: 1 }), 'link:rcp_1');
   assert.equal(reachKey({ id: 'rcp_1', email: 'a@example.com', link_by_sender: 0 }), 'a@example.com');
@@ -898,7 +898,7 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   assert.match(read('README.md'), /"I will send the link myself": a recipient with a name and no email address/);
   assert.match(read('README.md'), /\| My signers live in WhatsApp, not email, and a recipient cannot exist without an address\. \|/);
   // No em dash in anything written for this.
-  for (const f of ['lib/bysender.ts', 'server/bysender.ts', 'components/editor/SendMyself.tsx', 'components/sender/OwnLink.tsx', 'components/sign/NoEmail.tsx']) assert.doesNotMatch(src(f), /—/, f);
+  for (const f of ['lib/bysender.ts', 'server/bysender.ts', 'components/editor/SendMyself.tsx', 'components/sender/OwnLink.tsx', 'components/sign/NoEmail.tsx']) assert.ok(!src(f).includes(String.fromCharCode(0x2014)), f);
 });
 
 test('a link the sender passes on is read by the fake-notice filter like an email, and passing it on gives the next person an email', async () => {

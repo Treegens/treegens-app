@@ -90,6 +90,14 @@ export function normalizeLocale(v: unknown): string | null {
 
 const primary = (tag: string) => tag.split('-')[0];
 
+/** A language as people write it in a spreadsheet: a code ("fr", "pt_BR") or its name in English or in itself ("French", "Français"). */
+export function localeFromWords(v: unknown, langs: Language[] = SUPPORTED_LOCALES): string | null {
+  if (typeof v !== 'string' || !v.trim()) return null;
+  const s = v.trim();
+  const named = langs.find((l) => [l.english, l.own].some((n) => n.localeCompare(s, 'en', { sensitivity: 'base' }) === 0));
+  return named?.tag || normalizeLocale(s);
+}
+
 /** The languages a text is looked for in, best first: ["pt-BR", "pt", "en"]. Always ends with English. */
 export function fallbackChain(locale: unknown): string[] {
   const tag = normalizeLocale(locale);
@@ -322,7 +330,9 @@ export function browserLocale(header: unknown, langs: Language[] = SUPPORTED_LOC
   const on = shippedLocales(langs);
   for (const want of browserLocales(header)) {
     const chain = fallbackChain(want).filter((x) => x !== SOURCE_LOCALE || primary(want) === SOURCE_LOCALE);
-    const hit = chain.find((x) => on.includes(x)) || on.find((x) => primary(x) === primary(want));
+    // pt is served by pt-BR, but a script is never swapped for another: zh-Hant is not served by zh-Hans.
+    const script = (tag: string) => tag.split('-').find((p, i) => i > 0 && /^[A-Z][a-z]{3}$/.test(p)) || '';
+    const hit = chain.find((x) => on.includes(x)) || on.find((x) => primary(x) === primary(want) && (!script(want) || !script(x) || script(want) === script(x)));
     if (hit) return hit;
   }
   return null;

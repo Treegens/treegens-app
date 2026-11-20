@@ -830,7 +830,7 @@ export type InkFound = {
 };
 
 /**
- * Which ink the marks are in, weighed by how strong each mark is. Lines and letters count five times more than the
+ * Which ink the marks are in, weighed by how strong each mark is. Lines and letters count eight times more than the
  * inside of a large fill: the words of a design say what its ink is, not the disc behind its logo. In a photo, black
  * and grey marks are mostly the print of the document the stamp was pressed on, so a colour that holds a fair share
  * of the marks is taken as the stamp's ink even when there is more print.
@@ -846,7 +846,7 @@ export function findInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, ph
     for (let x = 0; x < w; x++) {
       const p = y * w + x;
       if (v[p] < 0.5) continue;
-      const wt = v[p] * (on(x - r, y) && on(x + r, y) && on(x, y - r) && on(x, y + r) ? 0.2 : 1);
+      const wt = v[p] * (on(x - r, y) && on(x + r, y) && on(x, y - r) && on(x, y + r) ? 0.12 : 1);
       const { hue, s } = inkHue(d, p * 4, paper, p * 3);
       total += wt;
       if (s < COLOURED) {
@@ -859,27 +859,29 @@ export function findInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, ph
       hy[b] += wt * Math.sin((hue * Math.PI) / 180);
     }
   if (total < Math.max(12, v.length * 0.0004)) return { ink: 'blue', empty: true, several: false, share: 0, hue: null, colours: [] };
-  // Colours one at a time: the 50 degrees of hue that hold the most, then the next 50 among what is left.
+  // Colours one at a time: the strongest hue, with everything within 25 degrees of it, then the next strongest
+  // among what is left. A peak first, so orange at 36 degrees and red at 358 stay two colours.
   const used = new Uint8Array(72);
   const colours: InkColour[] = [];
   for (;;) {
-    let best = -1, most = 0;
+    let best = -1, peak = 0;
     for (let b = 0; b < 72; b++) {
       if (used[b]) continue;
       let s = 0;
-      for (let k = -5; k <= 5; k++) {
+      for (let k = -1; k <= 1; k++) {
         const j = (b + k + 72) % 72;
         if (!used[j]) s += hist[j];
       }
-      if (s > most) (most = s, best = b);
+      if (s > peak) (peak = s, best = b);
     }
-    if (best < 0 || most < total * 0.03) break;
-    let cx = 0, cy = 0;
+    if (best < 0) break;
+    let cx = 0, cy = 0, most = 0;
     for (let k = -5; k <= 5; k++) {
       const j = (best + k + 72) % 72;
       if (used[j]) continue;
-      (cx += hx[j]), (cy += hy[j]), (used[j] = 1);
+      (cx += hx[j]), (cy += hy[j]), (most += hist[j]), (used[j] = 1);
     }
+    if (most < total * 0.03) continue;
     const hue = ((Math.atan2(cy, cx) * 180) / Math.PI + 360) % 360;
     colours.push({ ink: inkOfHue(hue), hue, share: most / total });
   }
@@ -1052,6 +1054,39 @@ export function despeckle(pl: Plane, least: number): Plane {
   const near = extremePlane(kept, w, h, 2, true);
   const out = new Float32Array(v.length);
   for (let p = 0; p < v.length; p++) out[p] = kept[p] || (!label[p] && near[p]) ? v[p] : 0;
+  return { width: w, height: h, v: out };
+}
+
+/**
+ * In a photo, only the stamp: its marks lie close together (letters, rings, a star, each within a few millimetres of
+ * the next), so marks are grouped with everything within about 3 percent of the picture, and a group is kept when it
+ * holds at least a sixth of the ink of the largest. Stray lines far from the stamp (the edge of the sheet, a fold, a
+ * crumb on the desk) go, so the stamp keeps its size in its field.
+ */
+export function mainMarks(pl: Plane): Plane {
+  const { width: w, height: h, v } = pl;
+  const k = Math.min(1, 300 / Math.max(w, h));
+  const sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
+  const cellOf = (x: number, y: number) => Math.min(sh - 1, Math.floor(y * k)) * sw + Math.min(sw - 1, Math.floor(x * k));
+  const mass = new Float32Array(sw * sh);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (v[y * w + x] > 0.3) mass[cellOf(x, y)] += v[y * w + x];
+  const has = new Float32Array(sw * sh);
+  for (let c = 0; c < has.length; c++) has[c] = mass[c] > 0 ? 1 : 0;
+  const near = extremePlane(has, sw, sh, Math.max(1, Math.round(Math.max(sw, sh) * 0.03)), true);
+  const on = new Uint8Array(sw * sh);
+  for (let c = 0; c < on.length; c++) on[c] = near[c] > 0 ? 1 : 0;
+  const { label, size } = pieces(on, sw, sh);
+  const ink = new Float64Array(size.length);
+  for (let c = 0; c < on.length; c++) if (label[c]) ink[label[c]] += mass[c];
+  let most = 0;
+  for (let i = 1; i < ink.length; i++) most = Math.max(most, ink[i]);
+  if (ink.length <= 2 || most <= 0) return pl;
+  const out = new Float32Array(v);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const l = label[cellOf(x, y)];
+      if (!l || ink[l] < most / 6) out[y * w + x] = 0;
+    }
   return { width: w, height: h, v: out };
 }
 
@@ -1287,14 +1322,15 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
   for (let p = 0; p < n; p++) {
     if (shape[p] <= 0) continue;
     const x = p % w, y = Math.floor(p / w);
-    const lean = Math.pow(((x * dx + y * dy) - lo) / Math.max(1, hi - lo), 1.3);
-    let macro = 1 - g * Math.min(1, Math.max(0, lean));
+    // Even pressure over the heavier third or so, then falling away towards the far side.
+    const lean = smooth(0.3, 1, ((x * dx + y * dy) - lo) / Math.max(1, hi - lo));
+    let macro = 1 - g * lean;
     for (const pt of patches) {
       const dd = (Math.hypot(x - pt.x, y - pt.y) / pt.rad) * (0.75 + 0.5 * pn[p]);
       if (dd < 1) macro *= 1 - pt.depth * smooth(1, 0.35, dd);
     }
-    macro *= 1 - 0.16 * A2 * Math.max(0, (mottle[p] - 0.4) / 0.6);
-    const grain = 1 - 0.24 * A2 * Math.max(0, (0.65 * g1[p] + 0.35 * g2[p] - 0.42) / 0.58);
+    macro *= 1 - 0.16 * A2 * Math.max(0, (mottle[p] - 0.5) / 0.5);
+    const grain = 1 - 0.24 * A2 * Math.max(0, (0.65 * g1[p] + 0.35 * g2[p] - 0.55) / 0.45);
     // Never so light that a stroke stops reading: all of this together keeps at least 38 percent of the ink.
     macro = Math.max(0.38, macro * (own ? own[p] : 1) * grain);
     if (arcOn) {
@@ -1446,7 +1482,7 @@ export function impression(p: Prepared, look: Look, maxSide = STAMP_OUT_MAX_SIDE
   // Pixels to a millimetre in the picture as it was taken: the stamp is `mm` across its longer side.
   const pxmm = Math.max(box.w, box.h) / mm;
   if (look.gaps && !p.photo && found.several) pl = colourGaps(img, paper, pl, Math.max(2, Math.round(0.22 * pxmm)));
-  if (p.photo) pl = despeckle(pl, Math.max(4, (0.15 * pxmm) ** 2));
+  if (p.photo) pl = mainMarks(despeckle(pl, Math.max(4, (0.15 * pxmm) ** 2)));
   box = inkBox(pl);
   if (!box) return nothing(found);
   pl = cropPlane(pl, box.x, box.y, box.w, box.h);

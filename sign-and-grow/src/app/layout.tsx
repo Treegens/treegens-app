@@ -17,8 +17,11 @@ import './styles/comments.css';
 import './styles/witness.css';
 import './styles/stamps.css';
 import './styles/chat.css';
+import './styles/seclog.css';
 import type { Metadata, Viewport } from 'next';
 import { Toasts } from '@/components/ui';
+import { headers } from 'next/headers';
+import { chooseLocale, dir } from '@/lib/i18n';
 
 export const metadata: Metadata = {
   title: { default: 'Sign&Grow · e-signatures that plant trees', template: '%s · Sign&Grow' },
@@ -27,9 +30,13 @@ export const metadata: Metadata = {
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#134a2c' };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+// The language of the page and its direction, from what the browser asks for among the languages switched on, else
+// English (src/lib/i18n.ts). Only English is switched on, so today this is lang="en" dir="ltr" everywhere. The signing
+// page sets its signer's own language when its words are translated (lang-signing).
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const lang = chooseLocale({ acceptLanguage: (await headers()).get('accept-language') });
   return (
-    <html lang="en">
+    <html lang={lang} dir={dir(lang)}>
       <body>
         {children}
         <Toasts />

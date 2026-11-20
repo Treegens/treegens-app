@@ -4,6 +4,8 @@
 // server components only, not in 'use client' files.
 // Which language a legal text is shown in, and the sentence when that is English (src/lib/i18n.ts, no environment).
 import { legalLocale, legalNote, languageWords, normalizeLocale, SOURCE_LOCALE } from './i18n.ts';
+// The prices and counts the expiry rule names (plain constants, no side effects).
+import { PRICING } from './impact.ts';
 
 /** Unused signatures from the latest payment are refunded on request within this many days. */
 export const refundDays = (): number => Number(process.env.REFUND_DAYS) || 30;
@@ -11,6 +13,31 @@ export const refundDays = (): number => Number(process.env.REFUND_DAYS) || 30;
 /** The refund rule as one sentence. Every email, page and error that states it uses this, so they cannot disagree. */
 export const refundRuleText = (days: number): string =>
   `Signatures you have not used are refunded in full within ${days} days of the payment that bought them, from the Plan page, without talking to anyone. Refunding a monthly payment also ends the monthly plan.`;
+
+// ---- Signatures expire (decided 2026-11-20, replacing "signatures never expire") ---------------------------
+// The server enforces these (src/server/credits.ts): each lot of signatures carries its own expiry, the one that
+// expires soonest is used first, and a held one does not expire while it is held. Plain numbers and words with no
+// environment in them, so a 'use client' file may import them.
+/** Top-up signatures expire this many months after the payment that bought them. */
+export const TOPUP_EXPIRY_MONTHS = 12;
+/** The free signatures of a new account expire this many days after the account is made. */
+export const WELCOME_EXPIRY_DAYS = 30;
+/** Unused top-up signatures are announced by email this many days before they expire, once each. */
+export const TOPUP_WARN_DAYS: number[] = [30, 3];
+/**
+ * The expiry rule as one paragraph. The Plan page, the pricing block of the landing page, /help, both payment pages
+ * of the provider, the welcome and receipt emails and every renewal reminder quote it, so they cannot disagree.
+ */
+export const expiryRuleText = (): string =>
+  `Signatures expire, so you always know what you have. The ${PRICING.monthlySignatures} that come with each month of ${PRICING.planName} belong to that month (with a free code, the calendar month in UTC): the ones not used by the end of it (the renewal, or the end of the paid month after you cancel) expire, and the next month brings a fresh ${PRICING.monthlySignatures}. Top-up signatures expire ${TOPUP_EXPIRY_MONTHS} months after the payment that bought them, and we email you ${TOPUP_WARN_DAYS[0]} days and ${TOPUP_WARN_DAYS[1]} days before, if any are unused. The ${PRICING.welcomeSignatures} free signatures of a new account expire ${WELCOME_EXPIRY_DAYS} days after it is made. The signature that expires soonest is always used first, and one held for an envelope that is out does not expire while it is held. Every date is on the Plan page. The trees are planted either way: everything you pay goes to planting mangroves with Treegens, whether the signatures are used or not.`;
+/** What happens to a held signature whose date passes, for every place that explains holds. */
+export const HELD_EXPIRY_TEXT = 'A signature held for an envelope that is out does not expire while it is held. If that envelope is then voided, declined or runs out of time after the signature\'s own date has passed, that signature is gone instead of coming back.';
+/** A moment a signature expires, the same way everywhere: "3 December 2026 at 14:00 UTC". */
+export const expiryMoment = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })} at ${d.toISOString().slice(11, 16)} UTC`;
+};
 
 /** A paid plan nobody has used for this many days is not renewed. 0 turns the rule off. */
 export const dormantStopDays = (): number => (process.env.DORMANT_AUTO_STOP_DAYS === undefined ? 90 : Number(process.env.DORMANT_AUTO_STOP_DAYS) || 0);
@@ -505,3 +532,19 @@ export const CLICKWRAP_PER_ADDRESS_HOUR = 30;
 export const CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR = 10;
 /** Presses of any kind from one address in an hour: far above what an office, a school or a phone network needs. */
 export const CLICKWRAP_PRESSES_PER_ADDRESS_HOUR = 300;
+
+// ---- Security record ---------------------------------------------------------------------------------
+// How many days a line of an account's security record is kept (src/server/seclog.ts): SECURITY_LOG_DAYS, a whole
+// number from 1 to 3650, else 400. The same for every account on a server, on purpose: an admin who could shorten it
+// could wipe the record of what they did.
+export const securityLogDays = (env: Record<string, string | undefined> = process.env): number => {
+  const n = Number((env.SECURITY_LOG_DAYS ?? '').trim() || NaN);
+  return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : 400;
+};
+/** The alerts about the security record and when each one fires (src/lib/seclog.ts names them). Each emails the admins
+ * of the account at most once an hour, and an admin can switch each one off. */
+export const ALERT_FAILED_SIGNINS_HOUR = 10; // failed sign-ins of one person, or from one internet address, in an hour
+export const ALERT_DELETES_HOUR = 20; // envelopes and templates deleted in an hour, by anyone in the account
+export const ALERT_EVERY_MINUTES = 60;
+/** A key that keeps showing up from new internet addresses writes at most this many lines about it in a day. */
+export const KEY_NEW_ADDRESS_PER_DAY = 50;

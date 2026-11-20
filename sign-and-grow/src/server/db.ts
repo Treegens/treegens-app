@@ -130,6 +130,28 @@ CREATE TABLE IF NOT EXISTS credits (
   at TEXT NOT NULL, UNIQUE (account_id, reason, ref)
 );
 CREATE INDEX IF NOT EXISTS credits_account ON credits(account_id);
+-- Signatures expire (src/server/credits.ts, expiryRuleText in src/lib/policy.ts). Each line that brings signatures
+-- is a lot: where they came from (the trial, a plan month, a month free with a code, a top-up payment) and when
+-- they expire. Every line that takes some away says which lot it took them from (credit_draws), and every signature
+-- held for someone who has been asked and not signed yet is held in one lot (credit_holds, keyed by a fingerprint
+-- of the ledger line its signature will have, so no address is kept here). A held one does not expire while held.
+CREATE TABLE IF NOT EXISTS credit_lots (
+  id INTEGER PRIMARY KEY REFERENCES credits(id) ON DELETE CASCADE, account_id TEXT NOT NULL, source TEXT NOT NULL,
+  ref TEXT NOT NULL, qty INTEGER NOT NULL, at TEXT NOT NULL, expires_at TEXT, paid INTEGER NOT NULL DEFAULT 0,
+  warned TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS credit_lots_account ON credit_lots(account_id, expires_at);
+CREATE TABLE IF NOT EXISTS credit_draws (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, credit_id INTEGER NOT NULL REFERENCES credits(id) ON DELETE CASCADE,
+  lot_id INTEGER REFERENCES credit_lots(id) ON DELETE SET NULL, n INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS credit_draws_credit ON credit_draws(credit_id);
+CREATE INDEX IF NOT EXISTS credit_draws_lot ON credit_draws(lot_id);
+CREATE TABLE IF NOT EXISTS credit_holds (
+  account_id TEXT NOT NULL, key TEXT NOT NULL, lot_id INTEGER REFERENCES credit_lots(id) ON DELETE SET NULL,
+  since TEXT NOT NULL, PRIMARY KEY (account_id, key)
+);
+CREATE INDEX IF NOT EXISTS credit_holds_lot ON credit_holds(lot_id);
 CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, retired_at TEXT NOT NULL);
 -- The security codes of emails about documents that were deleted since, as fingerprints only: no name, no address,
 -- no subject. They let the check page say "that email was real, the document has been deleted" instead of "fake".
@@ -462,6 +484,64 @@ CREATE INDEX IF NOT EXISTS pay_seen_envelope ON pay_seen(envelope_id);
 -- counted under a keyed fingerprint of an internet address, a signing link or an account, or for everyone ('all').
 -- Nothing of what was asked or answered. Rows go after two days.
 CREATE TABLE IF NOT EXISTS chat_counts (key TEXT NOT NULL, slot TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, PRIMARY KEY (key, slot));
+-- The security record of each account (src/server/seclog.ts): who signed in and who changed what. One line per event
+-- and account, chained by hash per account like the audit trail. Ids only, never a password, token, code, key, email
+-- address or document content. A line is never changed, and is deleted only once it is older than the days in
+-- security_log_keep (SECURITY_LOG_DAYS, written there by the purge) or when its account is deleted: the triggers
+-- below refuse anything else, whatever code asks. security_alerts_sent: when each alert last emailed an account's
+-- admins. api_key_addresses: the internet addresses each key has been used from, so a new one is noticed.
+CREATE TABLE IF NOT EXISTS security_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, at TEXT NOT NULL, actor_type TEXT NOT NULL, actor_id TEXT,
+  ip TEXT, ua TEXT, kind TEXT NOT NULL, outcome TEXT NOT NULL, about_type TEXT, about_id TEXT, details TEXT NOT NULL DEFAULT '{}',
+  prev_hash TEXT NOT NULL, hash TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS security_events_account ON security_events(account_id, seq);
+CREATE INDEX IF NOT EXISTS security_events_at ON security_events(at);
+CREATE TABLE IF NOT EXISTS security_log_keep (id INTEGER PRIMARY KEY CHECK (id = 1), days INTEGER NOT NULL);
+INSERT OR IGNORE INTO security_log_keep (id, days) VALUES (1, 400);
+CREATE TRIGGER IF NOT EXISTS security_events_fixed BEFORE UPDATE ON security_events BEGIN SELECT RAISE(ABORT, 'A line of the security record is never changed.'); END;
+CREATE TRIGGER IF NOT EXISTS security_events_kept BEFORE DELETE ON security_events
+  WHEN old.at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || (SELECT days FROM security_log_keep WHERE id = 1) || ' days')
+    AND EXISTS (SELECT 1 FROM accounts WHERE id = old.account_id)
+  BEGIN SELECT RAISE(ABORT, 'A line of the security record is kept for its days and deleted only with its account.'); END;
+CREATE TRIGGER IF NOT EXISTS accounts_security_gone AFTER DELETE ON accounts BEGIN DELETE FROM security_events WHERE account_id = old.id; END;
+CREATE TABLE IF NOT EXISTS security_alerts_sent (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, rule TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (account_id, rule));
+CREATE TABLE IF NOT EXISTS api_key_addresses (key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, ip TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (key_id, ip));
+-- Keeping closed envelopes for a set time (src/server/records.ts). retention_queue: one row for an envelope that the
+-- timer has told its sender and admins about (noticed_at, goes_at, level), that someone kept past its date (kept_*), or
+-- whose purge someone asked for (asked_*). legal_holds: a hold an admin put on one envelope or on a folder, with the
+-- reason, a matter reference and who set and lifted it; override_*: the first of the two people who run the server
+-- asking to lift it. legal_hold_items: the envelopes a hold covered when it was placed, or when one left its folder,
+-- so moving an envelope out of a held folder never frees it. retention_log: the disposition record (every policy
+-- change, keep, hold, purge and refused attempt). A line is never changed; when its account is deleted its names and
+-- words are blanked (gone_at), and it may be deleted a year after that. The triggers refuse anything else.
+CREATE TABLE IF NOT EXISTS retention_queue (
+  envelope_id TEXT PRIMARY KEY REFERENCES envelopes(id) ON DELETE CASCADE, account_id TEXT NOT NULL,
+  noticed_at TEXT, goes_at TEXT, level TEXT, kept_until TEXT, kept_reason TEXT, kept_by TEXT,
+  asked_level TEXT, asked_at TEXT, asked_by TEXT, asked_by_id TEXT
+);
+CREATE INDEX IF NOT EXISTS retention_queue_account ON retention_queue(account_id);
+CREATE TABLE IF NOT EXISTS legal_holds (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, envelope_id TEXT, folder TEXT,
+  reason TEXT NOT NULL, matter TEXT, set_by_id TEXT, set_by TEXT NOT NULL, set_at TEXT NOT NULL,
+  lifted_at TEXT, lifted_by TEXT, lift_reason TEXT, override_by TEXT, override_reason TEXT, override_at TEXT
+);
+CREATE INDEX IF NOT EXISTS legal_holds_account ON legal_holds(account_id, lifted_at);
+CREATE TABLE IF NOT EXISTS legal_hold_items (hold_id TEXT NOT NULL REFERENCES legal_holds(id) ON DELETE CASCADE, envelope_id TEXT NOT NULL, PRIMARY KEY (hold_id, envelope_id));
+CREATE INDEX IF NOT EXISTS legal_hold_items_env ON legal_hold_items(envelope_id);
+CREATE TABLE IF NOT EXISTS retention_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT, envelope_id TEXT, at TEXT NOT NULL, what TEXT NOT NULL,
+  level TEXT, sha256 TEXT, who TEXT, detail TEXT, gone_at TEXT
+);
+CREATE INDEX IF NOT EXISTS retention_log_account ON retention_log(account_id, id);
+CREATE TRIGGER IF NOT EXISTS retention_log_fixed BEFORE UPDATE ON retention_log
+  WHEN new.id IS NOT old.id OR new.envelope_id IS NOT old.envelope_id OR new.at IS NOT old.at OR new.what IS NOT old.what OR new.level IS NOT old.level OR new.sha256 IS NOT old.sha256
+    OR (new.account_id IS NOT old.account_id AND new.account_id IS NOT NULL) OR (new.who IS NOT old.who AND new.who IS NOT NULL)
+    OR (new.detail IS NOT old.detail AND new.detail IS NOT NULL) OR (new.gone_at IS NOT old.gone_at AND old.gone_at IS NOT NULL)
+  BEGIN SELECT RAISE(ABORT, 'A line of the retention record is never changed.'); END;
+CREATE TRIGGER IF NOT EXISTS retention_log_kept BEFORE DELETE ON retention_log
+  WHEN old.gone_at IS NULL OR old.gone_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-365 days')
+  BEGIN SELECT RAISE(ABORT, 'A line of the retention record is kept.'); END;
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -945,6 +1025,32 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // The language the editor starts each new recipient in (src/server/locales.ts). NULL: each person's browser decides,
   // then English. recipients.locale, above, is the language set for one person.
   ['accounts', 'default_locale', 'TEXT'],
+  // A file the sender uploaded as Word, Excel, PowerPoint, OpenDocument, RTF, text, HTML or TIFF and that was turned
+  // into this PDF (src/server/converted.ts). original_sha256: the stored original, kept like any file. converted: JSON
+  // with its name, kind, fingerprint, size, what made the PDF and the notes for the editor (src/lib/convert.ts).
+  ['files', 'original_sha256', 'TEXT'],
+  ['files', 'converted', 'TEXT'],
+  // The security record (src/server/seclog.ts). security_alerts_off: the alerts an admin switched off, as a JSON list
+  // of their names (src/lib/seclog.ts SECURITY_ALERTS); NULL is every alert on. security_log_emails: 1 when the record
+  // leaves the app (the API, the webhook, the CSV, the export) with people's email addresses as well as their ids.
+  ['accounts', 'security_alerts_off', 'TEXT'],
+  ['accounts', 'security_log_emails', 'INTEGER NOT NULL DEFAULT 0'],
+  // Keeping closed envelopes for a set time (src/server/records.ts). accounts.retention_days: how long, counted from
+  // when an envelope closed (NULL: off, the default); retention_level: what goes then (src/lib/retention.ts
+  // PURGE_LEVELS); retention_name and retention_code: the schedule's own name and code, as the organisation writes them.
+  // envelopes.retention_days on a template: its own period, used instead of the account's while the rule is on.
+  // envelopes.purged_at, purged_level, purged_sha256: when a purge ran, at which level, and the fingerprint of the
+  // signed PDF it removed. audit.redacted_at: the purge time on a line whose details it took out, so the chain says
+  // which lines can no longer be recomputed instead of calling the record altered.
+  ['accounts', 'retention_days', 'INTEGER'],
+  ['accounts', 'retention_level', 'TEXT'],
+  ['accounts', 'retention_name', 'TEXT'],
+  ['accounts', 'retention_code', 'TEXT'],
+  ['envelopes', 'retention_days', 'INTEGER'],
+  ['envelopes', 'purged_at', 'TEXT'],
+  ['envelopes', 'purged_level', 'TEXT'],
+  ['envelopes', 'purged_sha256', 'TEXT'],
+  ['audit', 'redacted_at', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

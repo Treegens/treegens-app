@@ -3,11 +3,13 @@
 // No React in here, so it can be tested on its own.
 import { looksLikeEmail } from './lib.ts';
 import { normalPhone, premiumPhone } from '../../lib/checks.ts';
+// A "language" column: the language of our screens for that person (src/lib/i18n.ts, src/server/locales.ts).
+import { isShipped, localeFromWords } from '../../lib/i18n.ts';
 
 // `phone` is true for a role the template checks with a code by text message, or texts the signing link to: every
 // row then needs that person's mobile number, in a column of its own.
 export type Role = { key: string; label: string; phone?: boolean };
-export type Cell = { name: string; email: string; phone?: string };
+export type Cell = { name: string; email: string; phone?: string; language?: string };
 export type BulkRow = { row: number; cells: Record<string, Cell>; problems: string[]; notes: string[] };
 export type Reading = {
   rows: BulkRow[];
@@ -73,6 +75,7 @@ const norm = (s: string) => s.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]
 const NAME_WORDS = ['name', 'fullname'];
 const EMAIL_WORDS = ['email', 'emailaddress', 'mail', 'mailaddress'];
 const PHONE_WORDS = ['phone', 'phonenumber', 'mobile', 'mobilenumber', 'mobilephone', 'cell', 'cellphone', 'telephone', 'tel'];
+const LANGUAGE_WORDS = ['language', 'lang', 'locale'];
 
 function findColumn(header: string[], role: string, words: string[], alone: boolean): number {
   const wanted = new Set<string>();
@@ -100,7 +103,7 @@ export function readRecipients(text: string, roles: Role[]): Reading {
   const body = header ? table.slice(1) : table;
   const alone = roles.length === 1;
 
-  type Cols = { name: number; first: number; last: number; email: number; phone: number };
+  type Cols = { name: number; first: number; last: number; email: number; phone: number; language: number };
   const cols: Record<string, Cols> = {};
   if (header) {
     const used = new Set<number>();
@@ -114,13 +117,14 @@ export function readRecipients(text: string, roles: Role[]): Reading {
         // Only read where the template texts this role. Otherwise a phone column is one more we do not need, and
         // nobody's number is taken along for nothing.
         phone: r.phone ? findColumn(firstNorm, rn, PHONE_WORDS, alone) : -1,
+        language: findColumn(firstNorm, rn, LANGUAGE_WORDS, alone),
       };
       // A column named just after the role ("Volunteer") holds the name.
       if (c.name < 0 && c.first < 0) c.name = firstNorm.indexOf(rn);
       if (c.name < 0 && c.first < 0) out.missing.push(`${r.label} name`);
       if (c.email < 0) out.missing.push(`${r.label} email`);
       if (r.phone && c.phone < 0) out.missing.push(`${r.label} phone`);
-      for (const i of [c.name, c.first, c.last, c.email, c.phone]) if (i >= 0) used.add(i);
+      for (const i of [c.name, c.first, c.last, c.email, c.phone, c.language]) if (i >= 0) used.add(i);
       cols[r.key] = c;
     }
     out.ignored = first.filter((h, i) => h && !used.has(i));
@@ -135,7 +139,7 @@ export function readRecipients(text: string, roles: Role[]): Reading {
       // No header to go by: if the "name" column is full of email addresses and the other is not, they are swapped.
       const at = (col: number) => body.filter((cells) => (cells[col] || '').includes('@')).length;
       if (at(name) > at(email)) ([name, email] = [email, name]), (out.swapped = true);
-      cols[r.key] = { name, first: -1, last: -1, email, phone };
+      cols[r.key] = { name, first: -1, last: -1, email, phone, language: -1 };
     });
   }
 
@@ -151,6 +155,10 @@ export function readRecipients(text: string, roles: Role[]): Reading {
       // The number is sent on as typed when it is a full international one, and said to be wrong here when it is not.
       row.cells[r.key] = { name, email, ...(phone ? { phone: normalPhone(phone) || phone } : {}) };
       const who = alone ? '' : `${r.label}: `;
+      // A language we have goes with the row as its code. Any other word is left out and said, never a reason to stop.
+      const said = get(c.language).trim(), language = localeFromWords(said);
+      if (said && language && isShipped(language)) row.cells[r.key].language = language;
+      else if (said) row.notes.push(`${who}the language "${said.slice(0, 40)}" is not available yet, so it is left out: this person sees their browser's language if we have it, otherwise English`);
       if (r.phone && !phone) row.problems.push(`${who}mobile number is missing`);
       else if (phone && !normalPhone(phone)) row.problems.push(premiumPhone(phone) ? `${who}"${phone}" is a premium-rate, satellite or international network number, and those are never texted` : `${who}"${phone}" is not a full mobile number. Write it with the country code, like +44 7700 900123`);
       if (!name && !email) row.problems.push(`${who}name and email are missing`);

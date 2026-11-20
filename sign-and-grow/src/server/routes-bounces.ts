@@ -10,6 +10,7 @@ import { audit, assertMayEmail, loadEnvelope, notifyRecipient, notifySender, rep
 import { find, look } from './routes-sign.ts';
 import { bouncedMember, complainedMember, memberWantsMail, holderBounceLine } from './groups.ts';
 import { welcomeMark } from './routes-trust.ts';
+import { record } from './seclog.ts';
 import {
   mailEventsAuth, readEvents, bounceWhy, softBounceDays, forgetSoftDays, noteBounced, forgetBounced, mailStop, mailStopText, sameAddress as same, type MailEvent,
   goneMail, noteComplaint, forgetComplaint,
@@ -566,6 +567,8 @@ route('POST', '/me/email/confirm', async (c) => {
     // Links that were mailed to the old address open nothing any more, and other browsers are signed out.
     run('DELETE FROM password_resets WHERE user_id=?', c.user.id);
     run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '');
+    // No address in the record, old or new: the login is named by its id (seclog.ts).
+    record('email.changed', { c, member: c.user.id, about: ['user', c.user.id] });
   });
   // The old address is told, also when it is the one that bounces: if it still reaches someone, they should know.
   await sendMail({ to: old, about: c.user.id, subject: 'The email address of your Sign&Grow login was changed', heading: 'Your login uses another address now',

@@ -55,10 +55,10 @@
     ".next-repair-mobile/dev/types/**/*.ts",
     ".next-build-chat/types/**/*.ts",
     ".next-build-chat/dev/types/**/*.ts",
-    ".next-repair-nonus/types/**/*.ts",
-    ".next-repair-nonus/dev/types/**/*.ts",
-    ".next-uxbase/types/**/*.ts",
-    ".next-uxbase/dev/types/**/*.ts"
+    ".next-build-ds-lang-core/types/**/*.ts",
+    ".next-build-ds-lang-core/dev/types/**/*.ts",
+    ".next-build-ds-sec-log/types/**/*.ts",
+    ".next-build-ds-sec-log/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

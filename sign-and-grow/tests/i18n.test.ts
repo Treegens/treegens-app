@@ -150,7 +150,7 @@ test('only English is switched on, every language has a status for its screens a
     assert.ok(/^[a-z0-9_]+(\.[a-z0-9_]+)+$/.test(k), `${k} is a dotted key`);
     assert.equal(typeof v, 'string', k);
     assert.ok(parseMessage(v as string), k);
-    assert.doesNotMatch(v as string, /<[a-z/!]|https?:|www\.|—/i, k);
+    assert.doesNotMatch(v as string, /<[a-z/!]|https?:|www\.|\u2014/i, k);
   }
 });
 
@@ -194,6 +194,10 @@ test('the sender\'s choice first, then the browser among the languages switched 
   assert.equal(chooseLocale({ acceptLanguage: 'fr;q=0,*' }, MORE), 'en', 'q=0 means no, and * is not a language');
   for (const h of [undefined, '', ';;;,,,', 'q=1', `${'x-'.repeat(2000)}fr`, 'fr;q=abc', 42]) assert.equal(chooseLocale({ acceptLanguage: h }, MORE), 'en', String(h).slice(0, 20));
   assert.deepEqual(browserLocales('fr-CA,fr;q=0.8,en;q=0.5'), ['fr-CA', 'fr', 'en']);
+  // A script is never swapped for another one of the same language.
+  const zh: Language[] = [MORE[0], { tag: 'zh-Hans', english: 'Chinese (Simplified)', own: '简体中文', ui: 'reviewed', legal: 'missing', shipped: true }];
+  assert.equal(chooseLocale({ acceptLanguage: 'zh-Hant-TW' }, zh), 'en', 'a Traditional Chinese reader is not given Simplified');
+  assert.equal(chooseLocale({ acceptLanguage: 'zh-CN' }, zh), 'zh-Hans');
   // With the languages that really are switched on (English alone), every browser gets English.
   assert.equal(chooseLocale({ chosen: 'fr', acceptLanguage: 'fr-FR' }), 'en');
   assert.equal(browserLocale('am-ET,om;q=0.8'), null);
@@ -282,4 +286,276 @@ test('the audit line records the wording and the language actually shown, and th
   // The evidence pack prints the words in the language the line names.
   const zip = Buffer.from((await ada.get(`/envelopes/${e.id}/evidence`)).data);
   assert.ok(zip.includes(Buffer.from('simple electronic signature')), 'the English words of the wording are in the pack');
+});
+
+// ---- 5. The sender's side: per recipient, the account's default, templates, bulk sends, public forms -----------
+
+const localeOf = (envelopeId: string) => db.all('SELECT locale FROM recipients WHERE envelope_id=? ORDER BY position', envelopeId).map((x: any) => x.locale);
+
+test('the API takes recipients[].locale, refuses a language that is not available in plain words, and saves nothing then', async () => {
+  const before = db.get('SELECT COUNT(*) n FROM envelopes').n;
+  const e = await simple(ada, 'lang.api@example.com', { recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'lang.api@example.com', locale: 'EN' }] });
+  assert.deepEqual(localeOf(e.id), ['en'], 'written the standard way');
+  assert.equal(e.recipients[0].locale, 'en', 'and returned');
+  for (const [locale, why] of [['fr', /"fr", and that language is not available yet: our screens have not been translated into it and checked by a person\. Use one of: English \(en\), or leave it out so the person's browser decides\. Nothing was saved\./],
+    ['am', /"am", and that language is not available yet/], ['english', /"english", which is not a language code\. Use a code like "en"/], ['<script>', /which is not a language code/], [42, /42, which is not a language code/], [['en'], /which is not a language code/]] as [any, RegExp][]) {
+    const r = await ada.post('/envelopes', { subject: 'x', recipients: [{ name: 'Sam', email: 'lang.api@example.com', locale }] });
+    assert.equal(r.status, 400, String(locale));
+    assert.match(r.data.error, why);
+    assert.match(r.data.error, /^The language \("locale"\) of recipient 1 \(Sam\) is /);
+  }
+  assert.equal(db.get('SELECT COUNT(*) n FROM envelopes').n, before + 1, 'none of the refused ones was made');
+  // Left out on a save, a recipient keeps theirs; null or "" means their browser.
+  const kept = await ada.put(`/envelopes/${e.id}`, { subject: 'Simple agreement again' });
+  assert.equal(kept.status, 200);
+  assert.deepEqual(localeOf(e.id), ['en']);
+  assert.equal((await ada.put(`/envelopes/${e.id}`, { recipients: [{ id: e.recipients[0].id, role: 'signer', name: 'Sam Signer', email: 'lang.api@example.com' }] })).status, 200);
+  assert.deepEqual(localeOf(e.id), ['en'], 'a full list without "locale" keeps it too');
+  assert.equal((await ada.put(`/envelopes/${e.id}`, { recipients: [{ id: e.recipients[0].id, role: 'signer', name: 'Sam Signer', email: 'lang.api@example.com', locale: null }] })).status, 200);
+  assert.deepEqual(localeOf(e.id), [null]);
+  // A language stored before it was switched off does not stop an honest save that sends it back unchanged...
+  db.run("UPDATE recipients SET locale='fr' WHERE envelope_id=?", e.id);
+  const back = await ada.put(`/envelopes/${e.id}`, { subject: 'Still saves', recipients: [{ id: e.recipients[0].id, role: 'signer', name: 'Sam Signer', email: 'lang.api@example.com', locale: 'fr' }] });
+  assert.equal(back.status, 200, JSON.stringify(back.data));
+  assert.deepEqual(localeOf(e.id), ['fr']);
+  // ...but it cannot be given to someone else, or be chosen anew.
+  const other = await ada.put(`/envelopes/${e.id}`, { recipients: [{ id: e.recipients[0].id, role: 'signer', name: 'Sam Signer', email: 'lang.api@example.com', locale: 'fr' }, { role: 'signer', name: 'New One', email: 'lang.new@example.com', locale: 'fr' }] });
+  assert.equal(other.status, 400);
+  assert.match(other.data.error, /recipient 2 \(New One\)/);
+  // The description of the API says all of it.
+  const spec = (await new Client().get('/openapi.json')).data;
+  const rcp = JSON.stringify(spec.components.schemas);
+  assert.match(rcp, /"locale":\{"type":"string","nullable":true,"description":"The language of our screens for this person/);
+  assert.match(rcp, /never translated/);
+  assert.ok(spec.paths['/account'].patch.description.includes('default_locale'));
+  assert.match(JSON.stringify(spec.paths['/bulk']), /"language":\{"type":"string","description":"The language for that person/);
+});
+
+test('the account default: set by an admin, refused when not available (and nothing else changed), given to new recipients', async () => {
+  const bea = await signUp('Bea Admin', 'bea.lang@example.com', '198.51.100.32');
+  assert.equal((await bea.get('/me')).data.account.default_locale, null);
+  const no = await bea.call('PATCH', '/account', { default_locale: 'fr', default_date_format: 'D MMM YYYY' });
+  assert.equal(no.status, 400);
+  assert.match(no.data.error, /^The default language \("default_locale"\) is "fr", and that language is not available yet.*Nothing was changed\.$/);
+  assert.equal((await bea.get('/me')).data.account.default_date_format, null, 'the date format in the same call was not saved either');
+  assert.equal((await bea.call('PATCH', '/account', { default_locale: 'en' })).status, 200);
+  assert.equal((await bea.get('/me')).data.account.default_locale, 'en');
+  // A new recipient that names no language gets it; one that says null keeps null; a saved one keeps its own.
+  const e = await simple(bea, 'lang.def@example.com', { recipients: [{ id: 'r', role: 'signer', name: 'A', email: 'lang.def@example.com' }, { id: 'b', role: 'cc', name: 'B', email: 'lang.def2@example.com', locale: null }] });
+  assert.deepEqual(localeOf(e.id), ['en', null]);
+  assert.equal((await bea.call('PATCH', '/account', { default_locale: '' })).status, 200);
+  assert.equal((await bea.get('/me')).data.account.default_locale, null);
+  // A default stored before its language was switched off is not handed out, and /me does not claim it.
+  db.run("UPDATE accounts SET default_locale='fr' WHERE id=(SELECT account_id FROM envelopes WHERE id=?)", e.id);
+  assert.equal((await bea.get('/me')).data.account.default_locale, null);
+  const e2 = await simple(bea, 'lang.def3@example.com');
+  assert.deepEqual(localeOf(e2.id), [null]);
+  // Only admins change it (the same rule as every account setting).
+  const mem = await signUp('Mo Member', 'mo.lang@example.com', '198.51.100.33');
+  assert.equal((await bea.post('/account/invites', { email: 'mo.lang@example.com', role: 'member' })).status, 200);
+  const tok = db.get('SELECT token FROM invites WHERE email=? AND accepted_at IS NULL', 'mo.lang@example.com').token;
+  assert.equal((await mem.post('/invites/accept', { token: tok })).status, 200);
+  const asMember = await mem.call('PATCH', '/account', { default_locale: 'en' });
+  assert.equal(asMember.status, 403);
+});
+
+test('templates keep the language, a copy keeps it, using a template can set it per role, a bulk row sets it with "language"', async () => {
+  const tpl = await simple(ada, '', { kind: 'template', subject: 'Lang template', recipients: [{ id: 'r', role: 'signer', role_name: 'Member', locale: 'en' }] });
+  assert.deepEqual(localeOf(tpl.id), ['en']);
+  const used = await ada.post('/envelopes', { template_id: tpl.id, recipients: { Member: { name: 'Mia Member', email: 'lang.tpl@example.com' } } });
+  assert.equal(used.status, 200, JSON.stringify(used.data));
+  assert.deepEqual(localeOf(used.data.envelope.id), ['en'], 'the template\'s language');
+  const set = await ada.post('/envelopes', { template_id: tpl.id, recipients: { Member: { name: 'Mia Member', email: 'lang.tpl@example.com', locale: null } } });
+  assert.deepEqual(localeOf(set.data.envelope.id), [null], 'a role filled in with locale null: their browser');
+  const bad = await ada.post('/envelopes', { template_id: tpl.id, recipients: { Member: { name: 'Mia Member', email: 'lang.tpl@example.com', locale: 'fr' } } });
+  assert.equal(bad.status, 400);
+  assert.match(bad.data.error, /The language for Member is "fr", and that language is not available yet.*Nothing was made\./);
+  const copy = await ada.post(`/envelopes/${used.data.envelope.id}/clone`, {});
+  assert.equal(copy.status, 200);
+  assert.deepEqual(localeOf(copy.data.id), ['en'], 'a copy keeps it');
+
+  // Bulk: a row's "language" for a role; one that is not available refuses the whole batch, here and in the check.
+  const plain = await simple(ada, '', { kind: 'template', subject: 'Lang bulk', recipients: [{ id: 'r', role: 'signer', role_name: 'Member' }] });
+  const rows = [{ Member: { name: 'Row One', email: 'lang.row1@example.com', language: 'en' } }, { Member: { name: 'Row Two', email: 'lang.row2@example.com' } }];
+  const batches = db.get('SELECT COUNT(*) n FROM bulk_batches').n;
+  const wrong = [...rows, { Member: { name: 'Row Three', email: 'lang.row3@example.com', language: 'fr' } }];
+  const check = await ada.post('/bulk/check', { template_id: plain.id, rows: wrong });
+  assert.equal(check.status, 200);
+  assert.equal(check.data.refusal.status, 400);
+  assert.match(check.data.refusal.message, /^Row 3: the "language" of "Member" is "fr", and that language is not available yet.*Nothing was sent\.$/);
+  const refused = await ada.post('/bulk', { template_id: plain.id, rows: wrong });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.data.error, check.data.refusal.message, 'the check and the send say the same');
+  assert.equal(db.get('SELECT COUNT(*) n FROM bulk_batches').n, batches, 'nothing was written');
+  const ok = await ada.post('/bulk', { template_id: plain.id, rows });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  const made = db.all('SELECT r.email, r.locale FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.bulk_id=? ORDER BY r.email', ok.data.id);
+  assert.deepEqual(made, [{ email: 'lang.row1@example.com', locale: 'en' }, { email: 'lang.row2@example.com', locale: null }]);
+});
+
+test('a public form takes the visitor\'s browser language, else the template\'s for that role', async () => {
+  const pf = await signUp('Pia Forms', 'pia.lang@example.com', '198.51.100.34');
+  const tpl = await simple(pf, '', { kind: 'template', subject: 'Lang form', recipients: [{ id: 'r', role: 'signer', role_name: 'Walker' }] });
+  assert.equal((await pf.post('/powerforms', { template_id: tpl.id, name: 'Walk in' })).status, 200);
+  const slug = (await pf.get('/powerforms')).data.powerforms[0].slug;
+  const start = async (i: number, lang?: string) => {
+    const v = new Client();
+    v.ip = `192.0.2.${100 + i}`;
+    const r = await v.call('POST', `/public/powerforms/${slug}/start`, { name: `Walk In ${i}`, email: `lang.walk${i}@example.com` }, lang ? { 'accept-language': lang } : {});
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    return db.get("SELECT r.locale FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.powerform_id IS NOT NULL AND r.email=?", `lang.walk${i}@example.com`).locale;
+  };
+  assert.equal(await start(1, 'en-GB,en;q=0.9'), 'en', 'their browser asked for English');
+  assert.equal(await start(2, 'fr-FR'), null, 'French is not available: nothing set, the page decides from the browser');
+  assert.equal(await start(3), null);
+  db.run("UPDATE recipients SET locale='en' WHERE envelope_id=?", tpl.id);
+  assert.equal(await start(4, 'de'), 'en', 'the template\'s language for the role, when the browser asks for none we have');
+});
+
+test('the bulk list reads a "language" column, takes a code or a name, and leaves out a language we do not have with a note', async () => {
+  const { readRecipients } = await import('../src/components/sender/csv.ts');
+  const roles = [{ key: 'Member', label: 'Member' }];
+  const r = readRecipients('Name,Email,Language\nAda One,ada1@example.org,English\nBen Two,ben2@example.org,en-GB\nCee Three,cee3@example.org,Français\nDee Four,dee4@example.org,\n', roles);
+  assert.deepEqual(r.ignored, [], 'the column is read, not ignored');
+  assert.equal(r.rows[0].cells.Member.language, 'en');
+  assert.equal(r.rows[1].cells.Member.language, undefined, 'en-GB is not a language of its own here');
+  assert.deepEqual(r.rows[1].notes, ['the language "en-GB" is not available yet, so it is left out: this person sees their browser\'s language if we have it, otherwise English']);
+  assert.equal(r.rows[2].cells.Member.language, undefined);
+  assert.match(r.rows[2].notes[0], /"Français" is not available yet/);
+  assert.deepEqual(r.rows.map((x) => x.problems.length), [0, 0, 0, 0], 'a language is never a reason to stop a row');
+  assert.equal(r.rows[3].cells.Member.language, undefined);
+  // Two roles: the column is named after its role.
+  const two = readRecipients('Client name,Client email,Client language,Agent name,Agent email\nA,a@example.org,en,B,b@example.org\n', [{ key: 'Client', label: 'Client' }, { key: 'Agent', label: 'Agent' }]);
+  assert.equal(two.rows[0].cells.Client.language, 'en');
+  assert.equal(two.rows[0].cells.Agent.language, undefined);
+});
+
+test('the editor and Settings offer a language only when there is more than one to choose; nothing a sender writes is translated', () => {
+  const stepAdd = read('src/components/editor/StepAdd.tsx');
+  assert.match(stepAdd, /<RecipientLanguage value=\{r\.locale\} who=\{who\(r\)\} onChange=\{\(p\) => ed\.patchRcp\(r\.id, p\)\} \/>/);
+  const editor = read('src/components/Editor.tsx');
+  assert.match(editor, /locale: r\.locale \|\| null,/, 'every save sends it');
+  assert.match(editor, /locale: me\.account\?\.default_locale \|\| null, \.\.\.p \}/, 'a new person starts with the default');
+  const comp = read('src/components/editor/RecipientLanguage.tsx');
+  assert.match(comp, /if \(on\.length < 2\) return null;/, 'no list with one entry in it');
+  const settings = read('src/components/settings/LanguageSettings.tsx');
+  assert.match(settings, /on\.length < 2 \? <p className="muted small" style=\{\{ margin: 0 \}\}>\{LANGUAGE_NOTE\}<\/p>/, 'with English alone it says so and offers nothing');
+  assert.match(read('src/app/app/settings/page.tsx'), /\{tab === 'account' && <LanguageSettings \/>\}/);
+  assert.match(en['editor.language.hint'], /Your subject, message and documents are never translated/);
+  assert.match(en['settings.language.hint'], /Your subject, message and documents are never translated/);
+});
+
+// ---- 6. <html lang> and dir ----------------------------------------------------------------------------------------
+
+test('the page\'s lang and dir come from the request, among the languages switched on', () => {
+  const layout = read('src/app/layout.tsx');
+  assert.match(layout, /const lang = chooseLocale\(\{ acceptLanguage: \(await headers\(\)\)\.get\('accept-language'\) \}\);/);
+  assert.match(layout, /<html lang=\{lang\} dir=\{dir\(lang\)\}>/);
+  assert.doesNotMatch(layout, /<html lang="en">/);
+  // What the layout works out, for a few browsers: English today, and the right direction once a language is on.
+  for (const h of ['fr-FR', 'ar-EG,ar;q=0.9', '', 'he']) assert.equal(chooseLocale({ acceptLanguage: h }), 'en', h);
+  const withArabic: Language[] = [...MORE, { tag: 'ar', english: 'Arabic', own: 'العربية', ui: 'reviewed', legal: 'missing', shipped: true }];
+  const l = chooseLocale({ acceptLanguage: 'ar-EG,ar;q=0.9' }, withArabic);
+  assert.equal(l, 'ar');
+  assert.equal(dir(l), 'rtl');
+});
+
+// ---- 7. Dates and numbers on screen by language; the signed PDF unchanged ------------------------------------------
+
+test('dates and numbers on a screen follow the reader\'s language through Intl; English and the signed PDF stay as they were', async () => {
+  const { dateOnScreen, momentOnScreen, momentText, formatDate, validCalendar } = await import('../src/lib/dates.ts');
+  const { numberOnScreen } = await import('../src/lib/numbers.ts');
+  const t0 = '2026-11-20T23:30:00Z';
+  // English is written exactly as before, on every screen that already shows it.
+  assert.equal(momentOnScreen(t0, 'en', 'Pacific/Auckland'), momentText(t0, 'Pacific/Auckland'));
+  assert.equal(momentOnScreen(t0, undefined), momentText(t0));
+  assert.equal(dateOnScreen(t0, 'en-GB', 'Pacific/Auckland'), '21 November 2026', 'the day where the reader is');
+  // Other languages the way they write it, with the zone named as the device names it.
+  assert.equal(dateOnScreen(t0, 'fr', 'Europe/Paris'), '21 novembre 2026');
+  assert.equal(momentOnScreen(t0, 'fr', 'Europe/Paris'), '21 novembre 2026 à 00:30 Europe/Paris (UTC+01:00)');
+  assert.match(momentOnScreen(t0, 'de', 'UTC'), /^20\. November 2026 um 23:30 UTC$/);
+  assert.match(dateOnScreen(t0, 'ar', 'UTC'), /نوفمبر/);
+  // Another calendar is asked for in one place: the Ethiopian one gives the Ethiopian year.
+  assert.equal(validCalendar('ethiopic'), 'ethiopic');
+  assert.equal(validCalendar('made-up'), null);
+  assert.match(dateOnScreen(t0, 'am', 'Africa/Addis_Ababa', 'ethiopic'), /2019/);
+  assert.match(dateOnScreen(t0, 'en', 'Africa/Addis_Ababa', 'ethiopic'), /2019/, 'also with English words');
+  assert.equal(dateOnScreen(t0, 'en', 'UTC', 'not a calendar'), '20 November 2026');
+  for (const nonsense of ['', '!!', '__proto__', 42, null]) assert.equal(dateOnScreen(t0, nonsense, 'UTC'), '20 November 2026', String(nonsense));
+  assert.equal(dateOnScreen('not a date', 'fr'), '');
+  assert.equal(numberOnScreen(1234.5, 'en'), '1,234.5');
+  assert.equal(numberOnScreen(1234.5, 'fr'), '1 234,5');
+  assert.match(numberOnScreen(1234.5, 'de-CH'), /^1['\u2019]234\.5$/, 'Swiss German, with the apostrophe this runtime writes');
+  assert.equal(numberOnScreen(1234.5, 'nonsense!!'), '1,234.5');
+  assert.equal(numberOnScreen(NaN, 'en'), '');
+  // The signed PDF prints what it printed: the sender's chosen format, the same for every reader.
+  assert.equal(formatDate(t0, 'D MMM YYYY', 'Pacific/Auckland'), '21 Nov 2026');
+  for (const f of ['src/server/pdf.ts', 'src/server/evidence.ts']) assert.doesNotMatch(read(f), /OnScreen|i18n\.ts/, `${f} does not use the screen formats`);
+});
+
+// ---- 8. The check translators run ----------------------------------------------------------------------------------
+
+test('npm run i18n:check passes on our catalogues and fails on a catalogue that does not match English', () => {
+  const run = (dir?: string) => spawnSync(process.execPath, ['--experimental-strip-types', '--no-warnings', path.join(root, 'scripts/i18n-check.mjs'), ...(dir ? [dir] : [])], { encoding: 'utf8' });
+  assert.match(read('package.json'), /"i18n:check": "node --experimental-strip-types --no-warnings scripts\/i18n-check\.mjs"/);
+  const ours = run();
+  assert.equal(ours.status, 0, ours.stdout + ours.stderr);
+  assert.match(ours.stdout, /^en: \d+ texts, the source\.$/m);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'i18n-check-'));
+  const write = (f: string, o: any) => fs.writeFileSync(path.join(dir, f), typeof o === 'string' ? o : JSON.stringify(o, null, 2));
+  write('en.json', { 'a.hello': 'Hello {name}', 'a.count': '{n, plural, one {# day} other {# days}}', 'a.finish.button': 'Finish', 'a.left': 'Left' });
+  write('fr.json', { 'a.hello': 'Bonjour {nom}', 'a.count': '{n, plural, one {# jour} other {# jours}}', 'a.finish.button': 'Terminer et envoyer maintenant', 'a.left': '', 'a.old': 'Vieux' });
+  write('de.json', { 'a.hello': 'Hallo <b>{name}</b>', 'a.count': '{n, plural, one {# Tag}}', 'a.finish.button': 'Fertig' });
+  write('pt-br.json', { 'a.hello': 'Olá {name}' });
+  write('es.json', '{ not json');
+  write('it.json', { 'a.hello': 'Ciao {name}, vedi https://example.com', 'a.count': { one: 'x' }, 'a.finish.button': 'Fine', 'a.left': 'Sinistra' });
+  const bad = run(dir);
+  assert.equal(bad.status, 1, bad.stdout);
+  const out = bad.stdout;
+  for (const want of [
+    'error: fr.json: "a.hello" has the placeholders {nom}, and the English text has {name}. Keep exactly the ones in English, with the same names.',
+    'error: fr.json: "a.old" is not in en.json. Remove it: the English key may have been renamed or taken out.',
+    'warning: fr.json: "a.finish.button" is a button and is 400 percent longer than in English (30 characters against 6). Check that it fits on a phone, or find a shorter word.',
+    'fr: 3 of 4 translated, 1 marked missing (shown in English).',
+    'error: de.json: "a.hello" holds HTML or an entity.',
+    'error: de.json: "a.count" does not read: {n, plural} needs an "other" branch',
+    'error: de.json: "a.left" is missing. Add it, with "" while it is not translated, so it is marked missing.',
+    'error: pt-br.json: the name must be a language code written the standard way, like fr.json or pt-BR.json (here: pt-BR.json).',
+    'error: es.json: this is not JSON that can be read',
+    'error: it.json: "a.hello" holds a link or a web address.',
+    'error: it.json: "a.count" holds an object. Every value is a text, and keys are flat',
+    'error: it.json: "a.count" is missing.',
+    'warning: de.json: de is not listed in SUPPORTED_LOCALES',
+  ]) assert.ok(out.includes(want), `missing: ${want}\n---\n${out}`);
+  assert.match(out, /\d+ errors\. Fix them and run npm run i18n:check again\.$/m);
+  // A folder without en.json has nothing to check against.
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'i18n-empty-'));
+  const none = run(empty);
+  assert.equal(none.status, 1);
+  assert.match(none.stdout, /there is no en\.json/);
+  // A catalogue that matches passes, with the long button as a warning only.
+  fs.rmSync(dir, { recursive: true });
+  fs.mkdirSync(dir);
+  write('en.json', { 'a.hello': 'Hello {name}', 'a.finish.button': 'Finish' });
+  write('fr.json', { 'a.hello': 'Bonjour {name}', 'a.finish.button': 'Terminer maintenant' });
+  const good = run(dir);
+  assert.equal(good.status, 0, good.stdout);
+  assert.match(good.stdout, /No errors, 1 warning\./);
+  fs.rmSync(dir, { recursive: true });
+  fs.rmSync(empty, { recursive: true });
+});
+
+// ---- Honest words ------------------------------------------------------------------------------------------------
+
+test('the product keeps saying its screens are in English until a language ships, and that nothing a sender writes is translated', () => {
+  const { LANGUAGE_NOTE } = { LANGUAGE_NOTE: read('src/lib/policy.ts').match(/export const LANGUAGE_NOTE = '([^']+)'/)![1] };
+  assert.equal(shippedLocales().length, 1);
+  assert.match(LANGUAGE_NOTE, /in English for now/);
+  const readme = read('README.md').replace(/\s+/g, ' ');
+  assert.ok(readme.includes('npm run i18n:check'), 'the README tells translators how to check their work');
+  assert.match(readme, /Weblate/);
+  assert.match(readme, /never translated/);
+  // No call to a translation service from the server, anywhere.
+  for (const f of fs.readdirSync(path.join(root, 'src/server'))) assert.doesNotMatch(read(`src/server/${f}`), /translate\.googleapis|api\.deepl|translator\.microsoft|libretranslate/i, f);
 });

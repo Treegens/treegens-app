@@ -1,0 +1,9 @@
+/* Settings, Security (src/components/settings/SecurityLog.tsx). Shared tokens and components live in ../globals.css. */
+.seclog-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0 14px; align-items: end; margin: 14px 0 6px; }
+.seclog-filters label.f { margin-bottom: 10px; }
+.seclog-filters select, .seclog-filters input { width: 100%; min-height: 44px; }
+.seclog-actions { grid-column: 1 / -1; margin-bottom: 10px; }
+.seclog-actions .btn { min-height: 44px; }
+.seclog .setting-row { min-height: 44px; align-items: center; }
+.seclog-detail { overflow-wrap: anywhere; margin-top: 2px; }
+.seclog-list > li { padding: 10px 0; }
