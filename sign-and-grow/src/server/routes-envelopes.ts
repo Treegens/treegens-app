@@ -26,11 +26,13 @@ import { PRICING } from '../lib/impact.ts';
 import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
+import { keptOnDelete } from './deleting.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner } from './tplroles.ts';
 // A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
 import { witnessCorrected, rowFills } from './witness.ts';
 import { rowFieldProblem } from './logic.ts';
+import { keepText, sealedTextHits } from './searchtext.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -71,7 +73,9 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   // with the file (scan_pages, counted from 1), so it is said again wherever the file is listed, not only here.
   // Files that signers attach are not looked at.
   const scanPages = !accountId ? [] : !isPdf || !read.some((p) => p.trim()) ? Array.from({ length: info.pages }, (_, i) => i + 1) : read.flatMap((p, i) => (p.trim() ? [] : [i + 1]));
-  run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages) VALUES (?,?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), text || null, scanPages.length ? JSON.stringify(scanPages) : null);
+  // With FILE_ENCRYPTION_KEY set the text is kept encrypted like the file itself, never in the clear (searchtext.ts).
+  const kept = keepText(fid, text);
+  run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages, text_sealed, text_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), kept.text, scanPages.length ? JSON.stringify(scanPages) : null, kept.sealed, kept.key);
   return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages };
 }
 
@@ -145,9 +149,13 @@ route('GET', '/envelopes', (c) => {
   const words = q.split(/\s+/).filter(Boolean).slice(0, 8);
   if (words.length) {
     const word = `(e.subject LIKE ? OR e.folder LIKE ? OR EXISTS (SELECT 1 FROM recipients r WHERE r.envelope_id=e.id AND (r.name LIKE ? OR r.email LIKE ? OR r.role_name LIKE ?))
-      OR EXISTS (SELECT 1 FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=e.id AND (d.name LIKE ? OR f.text LIKE ?)))`;
+      OR EXISTS (SELECT 1 FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=e.id AND (d.name LIKE ? OR f.text LIKE ?))
+      OR e.id IN (SELECT value FROM json_each(?)))`;
+    // Text kept encrypted (FILE_ENCRYPTION_KEY) cannot be searched by the database: it is opened in memory, for this
+    // account only, and the envelopes whose documents hold each word come back as a list (searchtext.ts).
+    const sealed = sealedTextHits(c.account.id, kind, words, own ? c.user.id : undefined);
     where.push(`(e.id = ? OR (${words.map(() => word).join(' AND ')}))`);
-    p.push(q, ...words.flatMap((w) => Array(7).fill(`%${w}%`)));
+    p.push(q, ...words.flatMap((w, i) => [...Array(7).fill(`%${w}%`), JSON.stringify(sealed[i])]));
   }
   const limit = Math.min(200, Number(c.q.get('limit')) || 100);
   const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, e.sender_id, u.name sender, e.hidden_at removed_at
@@ -203,6 +211,10 @@ route('POST', '/envelopes', async (c) => {
     } catch {
       // The envelope has passed to someone else since. The key starts afresh below.
     }
+    // One this person deleted from their lists after somebody signed is still out there for its recipients, so a
+    // retry with its key must not send the same thing to them a second time. The key stays used.
+    if (!prior && done && get('SELECT 1 x FROM envelopes WHERE id=? AND account_id=? AND sender_id=? AND hidden_at IS NOT NULL', done.envelope_id, c.account.id, c.user.id))
+      throw bad(`This Idempotency-Key already made envelope ${done.envelope_id}, which was signed and has been deleted from your lists since. Nothing new was created and nobody was emailed again. To send it once more on purpose, use a new key.`, 409);
     if (prior && done.request_hash && done.request_hash !== bodyHash(b))
       throw bad(`This Idempotency-Key was already used for a different request, which made envelope ${prior.id}. Nothing new was created. Repeat a call with its own key, and use a new key for each new envelope.`, 409);
     if (prior) return new Response(JSON.stringify({ envelope: publicEnvelope(prior) }), { headers: { 'content-type': 'application/json; charset=utf-8', 'idempotent-replay': 'true' } });
@@ -270,7 +282,8 @@ route('GET', '/envelopes/:id', (c) => {
   // envelope page and not from the finished document. Each entry says where the text stands and which characters.
   const print_problems = e.status === 'completed' && e.final_sha256 ? [] : printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id));
   // texts: what became of every text message about this envelope, like deliveries for email. Numbers are masked.
-  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null };
+  // kept_on_delete: whether deleting it now would only take it out of the lists (deleting.ts), for the delete dialog.
+  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e) };
 });
 
 // The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.
@@ -330,9 +343,9 @@ route('DELETE', '/envelopes/:id', (c) => {
   assertMayChange(c, e, true);
   if (e.status === 'sent') throw bad('Void this envelope before deleting it.');
   if (e.kind === 'template' && get('SELECT 1 x FROM powerforms WHERE template_id=?', e.id)) throw bad('A PowerForm still uses this template. Delete the PowerForm first.');
-  // Someone who signed and was then asked to sign again (signed_before) signed too, and keeps their copy as well.
-  const signed = e.kind === 'envelope' && e.status !== 'draft' && e.recipients.some((r: any) => (r.status === 'completed' || r.signed_before) && ['signer', 'inperson', 'approver'].includes(r.role));
-  if (e.kind === 'envelope' && (e.status === 'completed' || signed)) {
+  // Kept for whoever keeps a copy: the same rule as their download (keepsCopy), so a viewer who confirmed, or someone
+  // who signed and was then asked to sign again (signed_before), does not lose theirs (deleting.ts).
+  if (keptOnDelete(e)) {
     run('UPDATE envelopes SET hidden_at=? WHERE id=?', now(), e.id);
     audit(e.id, c.actor, 'Removed from the sender\'s lists', 'The sender deleted this envelope from their account. Everyone on it keeps their link and their copy.');
     return { ok: true, kept_for_recipients: true };

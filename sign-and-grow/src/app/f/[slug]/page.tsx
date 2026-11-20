@@ -18,7 +18,9 @@ export default function PowerForm() {
     setMsg('');
     try {
       const r = await api(`/public/powerforms/${slug}/start`, { body: f });
-      if (r.url) window.location.assign(r.url);
+      // On a shared device the form page is replaced, not stacked: Back must never bring up what the person before
+      // typed, and after "Start a new form for the next person" nothing of theirs is left in this tab's history.
+      if (r.url) form?.shared_device ? window.location.replace(r.url) : window.location.assign(r.url);
       else setQueued(true);
     } catch (err: any) {
       setMsg(err.message);
@@ -40,8 +42,9 @@ export default function PowerForm() {
             </div>
             <h1 className="serif" style={{ fontSize: 24 }}>{form.name}</h1>
             <p className="muted" style={{ margin: '8px 0 16px' }}>Enter your details to review and sign. It takes a minute, and no paper is involved.</p>
-            <label className="f"><span>Your full name</span><input dir="auto" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>
-            <label className="f"><span>Your email <span className="hint">(we send your signed copy here)</span></span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoComplete="email" /></label>
+            {/* A shared device must not offer the next person the names and addresses typed before: no autofill there. */}
+            <label className="f"><span>Your full name</span><input dir="auto" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete={form.shared_device ? 'off' : 'name'} autoFocus /></label>
+            <label className="f"><span>Your email <span className="hint">(we send your signed copy here)</span></span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoComplete={form.shared_device ? 'off' : 'email'} /></label>
             {msg && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{msg}</div>}
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{busy ? 'Preparing your document…' : 'Continue to sign'}</button>
             {/* On a big screen (a tablet at a front desk): a code that opens this same form on the visitor's own phone. */}

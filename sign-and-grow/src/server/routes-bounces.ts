@@ -81,7 +81,9 @@ function findMail(ev: MailEvent): Found {
   if (!rows.length) return null;
   if (new Set(rows.map((r) => r.owner)).size > 1) return 'ambiguous';
   // The newest email to it that has no such news yet, and if every one has, the newest (the news is then a repeat).
-  return found(rows.find(OPEN[ev.type]) || rows[0], ev);
+  // One whose envelope went with its account has nobody left to answer for it.
+  const f = found(rows.find(OPEN[ev.type]) || rows[0], ev);
+  return f === 'unknown_id' ? null : f;
 }
 
 // The moment the provider named, when it is believable, otherwise now.
@@ -323,7 +325,7 @@ async function confirmSubscription(raw: string, topic = ''): Promise<boolean> {
   } catch {
     return false;
   }
-  if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443') || !/^sns\.[a-z]{2}(-[a-z]+)+-\d{1,2}\.amazonaws\.com(\.cn)?$/.test(u.hostname)) return false;
+  if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443') || !/^sns\.[a-z]{2,4}(-[a-z]+)+-\d{1,2}\.amazonaws\.com(\.cn)?$/.test(u.hostname)) return false;
   if (u.searchParams.get('Action') !== 'ConfirmSubscription' || !topic || u.searchParams.get('TopicArn') !== topic) return false;
   try {
     const r = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
@@ -446,8 +448,10 @@ route('POST', '/sign/:token/mail-again', async (c) => {
   if (c.auth && get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', e.account_id, c.user.id) && !same(c.user.email, r.email))
     throw bad(`Only ${r.name} can ask for our emails about this document again, on their own device. You are signed in to the account that sent it, so nothing was changed. You can still send them their link yourself.`, 403);
   if (!code) {
+    // Counted for the address and the account, not the link: a sender holding the links of many envelopes to this
+    // person must not be able to have more codes sent to someone who asked for no more emails.
     try {
-      rateLimit(`mail-again:${r.id}`, MAIL_AGAIN_PER_DAY, 86400_000);
+      rateLimit(`mail-again:${e.account_id}:${r.email.toLowerCase()}`, MAIL_AGAIN_PER_DAY, 86400_000);
     } catch {
       throw bad(`We have sent ${MAIL_AGAIN_PER_DAY} codes to ${r.email} today, which is as many as we send in a day. Type the newest one, or try again tomorrow. This link opens the document whenever you like meanwhile.`, 429);
     }

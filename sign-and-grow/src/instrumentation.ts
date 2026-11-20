@@ -27,6 +27,10 @@ export async function register() {
   const { fileStoreWarning } = await import('./server/filestore');
   const files = fileStoreWarning();
   if (files) console.error(files);
+  // With a key, the text kept from uploaded PDFs for search is encrypted with it too, also what was kept before the
+  // key was set, and text under an old key moves to the current one (src/server/searchtext.ts).
+  const { sealKeptTexts } = await import('./server/searchtext');
+  sealKeptTexts();
   const { tick } = await import('./server/cron');
   g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
   g.__tscron.unref?.();

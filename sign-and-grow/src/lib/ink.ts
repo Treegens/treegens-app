@@ -75,3 +75,42 @@ export function pictureProblem(share: number, kind: Kind): string {
   if (share > 0.5) return `That picture is almost all ink, so your ${w} would not show. Choose a photo of your ${w} in dark ink on light paper, or choose Draw or Type.`;
   return '';
 }
+
+/** Said when a second finger lands on the pad while one is drawing. */
+export const twoFingers = (kind: Kind): string => `That was two fingers at once, so it was not kept. Draw your ${word(kind)} with one finger, or choose Type.`;
+
+/**
+ * One finger at a time on the pad. Every finger is a pointer of its own, and the pad used to add the moves of all
+ * of them to one line, so two fingers spread apart (a pinch) drew a long zigzag that passed as a signature. Here
+ * only the pointer that started the line draws. A second finger while one draws takes the line under way away
+ * ('drop'), and nothing draws again until every finger is off. A touch while a pen draws is a resting palm and is
+ * ignored. `primary` is the browser's word that no other pointer of this kind (touch, pen) is down, which also
+ * clears a finger whose lifting was never reported.
+ */
+export function onePen() {
+  const downs = new Map<number, string>();
+  let pen: number | null = null;
+  let spoiled = false;
+  return {
+    down(id: number, type: string, primary: boolean): 'draw' | 'ignore' | 'drop' {
+      if (primary) {
+        for (const [k, t] of downs) if (t === type) downs.delete(k);
+        if (pen !== null && !downs.has(pen)) pen = null;
+        if (!downs.size) spoiled = false;
+      }
+      downs.set(id, type);
+      if (pen === null) return !spoiled && downs.size === 1 ? ((pen = id), 'draw') : 'ignore';
+      if (downs.get(pen) === 'pen' && type !== 'pen') return 'ignore';
+      pen = null;
+      spoiled = true;
+      return 'drop';
+    },
+    move: (id: number): boolean => id === pen,
+    /** Whether this ends the line being drawn. */
+    up(id: number): boolean {
+      downs.delete(id);
+      if (!downs.size) spoiled = false;
+      return id === pen ? ((pen = null), true) : false;
+    },
+  };
+}

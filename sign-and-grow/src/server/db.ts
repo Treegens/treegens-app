@@ -420,6 +420,17 @@ CREATE TRIGGER IF NOT EXISTS clickwrap_acceptances_fixed BEFORE UPDATE ON clickw
 CREATE TRIGGER IF NOT EXISTS clickwrap_versions_fixed BEFORE UPDATE ON clickwrap_versions BEGIN SELECT RAISE(ABORT, 'A published version is never changed.'); END;
 -- The one copy by email an acceptance may have (clickwrap.ts copyClaim): a row here means it was asked for and sent.
 CREATE TABLE IF NOT EXISTS clickwrap_copies (acceptance_id TEXT PRIMARY KEY REFERENCES clickwrap_acceptances(id) ON DELETE CASCADE, at TEXT NOT NULL);
+-- Stamps (src/server/stamps.ts). stamp_images: every stamp impression once, by the SHA-256 of its PNG, which is
+-- what a stamp field holds as its value. A picture nothing points at any more is taken away (pruneStampImages).
+-- stamps: the account's own stamps under Settings, each with the impression it has now. Changing one gives it a
+-- new picture and leaves every field that holds the old one as it is.
+CREATE TABLE IF NOT EXISTS stamp_images (sha256 TEXT PRIMARY KEY, png BLOB NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, bytes INTEGER NOT NULL, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS stamps (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL, image_sha TEXT NOT NULL,
+  ink TEXT NOT NULL, seed INTEGER NOT NULL, tilt REAL NOT NULL DEFAULT 0, texture REAL NOT NULL DEFAULT 0.5, size_mm REAL NOT NULL DEFAULT 40,
+  created_by TEXT, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS stamps_account ON stamps(account_id);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -814,6 +825,20 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // one after "I was not there", so a copy of the envelope and a hand-over go back to the sender's own choice. Cleared
   // when the sender names a witness again (src/server/witness.ts).
   ['recipients', 'witness_chosen', 'TEXT'],
+  // files.text_sealed, text_key: the text kept from an uploaded PDF, encrypted with FILE_ENCRYPTION_KEY, and the id of
+  // the key (src/server/searchtext.ts). files.text then stays empty. envelopes.final_tries, final_tried_at,
+  // final_told_at: the timer's tries at the signed PDF of a completed envelope, so one that cannot be built never
+  // holds up the others, and when the sender and the operators were told it is stuck (src/server/finalretry.ts).
+  ['files', 'text_sealed', 'TEXT'],
+  ['files', 'text_key', 'TEXT'],
+  ['envelopes', 'final_tries', 'INTEGER NOT NULL DEFAULT 0'],
+  ['envelopes', 'final_tried_at', 'TEXT'],
+  ['envelopes', 'final_told_at', 'TEXT'],
+  // A stamp field (src/server/stamps.ts): its value is the SHA-256 of the impression in stamp_images. stamp_id: the
+  // account stamp it came from, when it did. stamp_meta: JSON with the stamp's name, ink, seed, tilt, texture,
+  // where it came from, who put it on and when.
+  ['fields', 'stamp_id', 'TEXT'],
+  ['fields', 'stamp_meta', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

@@ -107,7 +107,7 @@ export function witnessProblem(r: any, e: { recipients?: any[]; fields?: any[]; 
   const mine = (e?.fields || []).filter((f) => f.recipient_id === r.id);
   if (!mine.some((f) => f.type === 'signature')) return `${name} is a witness and has no signature field yet. Place the witness block for them near the signature of ${whose}.`;
   // Only the block: a witness never uses a signature, so fields of a party would make a free one.
-  const extra = Object.entries(mine.reduce((m: Record<string, number>, f) => ({ ...m, [f.type]: (m[f.type] || 0) + 1 }), {})).find(([t, k]) => k > (WITNESS_FIELDS[t] || 0));
+  const extra = Object.entries(mine.reduce((m: Record<string, number>, f) => ({ ...m, [f.type]: (m[f.type] || 0) + 1 }), {})).find(([t, k]) => Number(k) > (WITNESS_FIELDS[t] || 0));
   if (extra) return `${name} is a witness, and a witness fills in only their witness block: one signature, their name, their address and occupation (two text fields) and the date. ${WITNESS_FIELDS[extra[0]] ? `They have ${extra[1]} ${FIELD_WORDS[extra[0]]} fields, and the block has ${WITNESS_FIELDS[extra[0]]}` : `They have ${/^[aeiou]/.test(extra[0]) ? 'an' : 'a'} ${extra[0].replace('_', ' ')} field`}. Remove it, or make them a signer if they agree to the document themselves.`;
   return null;
 }

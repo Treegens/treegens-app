@@ -206,11 +206,14 @@ test('Finish that cannot reach us says that nothing was signed, keeps everything
   assert.equal(isConnectionError(new TypeError('Failed to fetch')), true);
   assert.equal(isConnectionError(Object.assign(new Error('Bad gateway'), { status: 502 })), true);
   assert.equal(isConnectionError(Object.assign(new Error('Unavailable'), { status: 503 })), true);
+  // A 503 of our own server carries its own sentence and is not a connection problem (tests/mobile-repair.test.ts).
+  assert.equal(isConnectionError(Object.assign(new Error('x'), { status: 503, data: { error: 'This form cannot take your signature at the moment.' } })), false);
   for (const status of [400, 409, 410, 429, 500]) assert.equal(isConnectionError(Object.assign(new Error('x'), { status })), false, `${status} came from the server`);
   for (const online of [true, false]) {
     const said = finishNotSent(online);
     assert.match(said, /^Not sent yet\./);
-    assert.match(said, /nothing was signed/);
+    // Only said when it is known: the device was offline before sending, or the server says so (mobile-repair).
+    assert.match(said, online ? /nothing is signed yet/ : /nothing was signed/);
     assert.match(said, /Your answers are safe on this page\./);
     assert.match(said, /by ourselves/);
     assert.ok(!/Failed to fetch|put it right/i.test(said), 'nothing for the signer to put right');
@@ -224,9 +227,10 @@ test('Finish that cannot reach us says that nothing was signed, keeps everything
   const page = signPage();
   const complete = page.slice(page.indexOf('async function complete()'), page.indexOf('async function askForTime()'));
   assert.ok(complete.indexOf('isConnectionError(e)') > 0 && complete.indexOf('isConnectionError(e)') < complete.indexOf("e?.code === 'changed'"));
-  assert.match(complete, /setFinishPending\(true\);\s+if \(open === 'review'\) setFinishError\(said\)/);
-  // Nothing is shown as signed before the server answered: the done screen only follows a successful request.
-  assert.ok(complete.indexOf('await api(`${base}/complete`') < complete.indexOf('setFinished(r)'));
+  assert.match(complete, /const say = \(said: string\) => \(open === 'review' \? setFinishError\(said\) : toast\(said, true\)\)/);
+  // Nothing is shown as signed before the server said so: the done screen follows a successful request, or the
+  // server's own word that this person's part is done (tests/mobile-repair.test.ts).
+  assert.ok(complete.indexOf('const landed') < complete.indexOf('await api(`${base}/complete`'));
   assert.ok(!/Go back, put it right[^']*'\);\s*$/m.test(complete.split('isConnectionError(e)')[0]));
   assert.match(page, /window\.addEventListener\('online', again\)/);
   assert.match(page, /setInterval\(\(\) => navigator\.onLine !== false && again\(\), FINISH_RETRY_MS\)/);

@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Dialog } from './sign/Dialog';
 import { adoptLine } from '@/lib/policy';
 import { handwritingWrites } from '@/lib/scripts';
-import { drawnProblem, inkShare, pictureProblem, PEN_WIDTH } from '@/lib/ink';
+import { drawnProblem, inkShare, pictureProblem, onePen, twoFingers, PEN_WIDTH } from '@/lib/ink';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
 // The handwriting fonts have Latin letters only. A name with none of them is typed in the device's own plain font:
@@ -158,6 +158,8 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
     const c = pad.current;
     let ctx = paint()!;
     let live: Point[] | null = null;
+    // One finger at a time: a second one takes the line under way away (onePen in src/lib/ink.ts).
+    const pens = onePen();
     const at = (e: PointerEvent): Point => {
       const r = c.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -165,6 +167,15 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
     const down = (e: PointerEvent) => {
       if (e.button > 0) return;
       e.preventDefault();
+      const what = pens.down(e.pointerId, e.pointerType, e.isPrimary);
+      if (what === 'drop') {
+        if (live) strokes.current = strokes.current.filter((s) => s !== live);
+        live = null;
+        ctx = paint()!;
+        setInked(strokes.current.length > 0);
+        return setError(twoFingers(kind));
+      }
+      if (what !== 'draw') return;
       c.setPointerCapture(e.pointerId);
       live = [at(e)];
       strokes.current.push(live);
@@ -173,7 +184,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
       setError('');
     };
     const move = (e: PointerEvent) => {
-      if (!live) return;
+      if (!live || !pens.move(e.pointerId)) return;
       for (const ev of e.getCoalescedEvents?.().length ? e.getCoalescedEvents() : [e]) {
         const p = at(ev), last = live[live.length - 1];
         if (Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 0.6) continue;
@@ -184,8 +195,8 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
         live.push(p);
       }
     };
-    const up = () => {
-      if (!live) return;
+    const up = (e: PointerEvent) => {
+      if (!pens.up(e.pointerId) || !live) return;
       live = null;
       ctx = paint()!; // redraw with smoothed curves
     };

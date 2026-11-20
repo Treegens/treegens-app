@@ -13,6 +13,7 @@ import { bad, baseUrl, hmac, id, isEmail, now, safeEqual, sha256, str, HttpError
 import { sendMail } from './mail.ts';
 import { dailyCap, hasNotPaid, nameRefusal, noteReached, pausedText } from './envelopes.ts';
 import { lureIn, posesAs } from './fakenotice.ts';
+import { withKeptText } from './searchtext.ts';
 import { sheetPdf } from './pdf.ts';
 import { clickwrapMonthlyLimit, CLICKWRAP_WARN_PERCENT, paidTrustText } from '../lib/policy.ts';
 import {
@@ -29,34 +30,46 @@ const nextMonth = (t = Date.now()) => {
   const d = new Date(t);
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
 };
-export function usage(accountId: string): { used: number; limit: number; resets: string; line: string } {
-  const used = get('SELECT COUNT(*) n FROM clickwrap_acceptances WHERE account_id=? AND at >= ?', accountId, monthStart()).n;
+// Two counts, each with the whole monthly limit: acceptances visitors typed their own details into (anyone who opens
+// the page can do that), and acceptances the website vouched for (a signed link, or the API). Strangers typing on a
+// page can fill the first, never the second, so the website's own visitors and its server keep working.
+export type Bucket = 'typed' | 'vouched';
+export const bucketOf = (identity: string): Bucket => (identity === 'typed' ? 'typed' : 'vouched');
+export function usage(accountId: string): { used: number; typed: number; vouched: number; limit: number; resets: string; line: string } {
+  const typed = get("SELECT COUNT(*) n FROM clickwrap_acceptances WHERE account_id=? AND at >= ? AND identity='typed'", accountId, monthStart()).n;
+  const vouched = get("SELECT COUNT(*) n FROM clickwrap_acceptances WHERE account_id=? AND at >= ? AND identity!='typed'", accountId, monthStart()).n;
   const limit = clickwrapMonthlyLimit();
-  return { used, limit, resets: nextMonth(), line: usageLine(used, limit, nextMonth()) };
+  return { used: typed + vouched, typed, vouched, limit, resets: nextMonth(), line: usageLine(typed, vouched, limit, nextMonth()) };
 }
 const admins = (accountId: string): string[] => all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", accountId).map((u) => u.email);
 
-// The admins hear once a month when acceptances reach 80 percent of the limit, and once when the limit is reached,
-// before a customer tells them that their website's terms page stopped taking acceptances.
-async function tellAdmins(accountId: string) {
+// The admins hear once a month for each count when it reaches 80 percent of the limit, and once when it is reached,
+// before a customer tells them that their website's terms page stopped taking acceptances. The 80 percent mail about
+// typed acceptances is also how they hear that strangers are pressing the button over and over.
+async function tellAdmins(accountId: string, kind: Bucket) {
   const u = usage(accountId);
   if (u.limit <= 0) return;
-  const a = get('SELECT name, clickwrap_warned, clickwrap_full FROM accounts WHERE id=?', accountId);
+  const [warnCol, fullCol] = kind === 'typed' ? ['clickwrap_typed_warned', 'clickwrap_typed_full'] : ['clickwrap_warned', 'clickwrap_full'];
+  const a = get(`SELECT name, ${warnCol} warned, ${fullCol} full FROM accounts WHERE id=?`, accountId);
   if (!a) return;
   const month = monthStart().slice(0, 7);
   const url = `${baseUrl()}/app/agreements`;
-  if (u.used >= u.limit && a.clickwrap_full !== month) {
-    run('UPDATE accounts SET clickwrap_full=?, clickwrap_warned=? WHERE id=?', month, month, accountId);
+  const n = u[kind];
+  const who = kind === 'typed' ? 'visitors who typed their own name and address' : 'people your website named in a signed link and acceptances your website sent through the API';
+  const other = kind === 'typed' ? `People your website names in a signed link, and acceptances your website sends through the API, are counted apart and still work (${u.vouched} of ${u.limit} used).` : `Visitors who type their own details are counted apart (${u.typed} of ${u.limit} used).`;
+  if (n >= u.limit && a.full !== month) {
+    run(`UPDATE accounts SET ${fullCol}=?, ${warnCol}=? WHERE id=?`, month, month, accountId);
     for (const to of admins(accountId))
-      await sendMail({ to, subject: `${a.name}: no more click-to-agree acceptances this month`, heading: 'Your terms cannot be accepted until next month',
-        lines: [`${a.name} has recorded ${u.used} acceptances of its click-to-agree terms this month. That is the most this server records for one account in a month, so from now until ${u.resets} every page and frame with your terms tells visitors that the terms cannot be accepted right now, and the API answers 429. Nothing that was recorded is lost.`,
-          `An acceptance is not a signature and costs nothing. The limit is there so that a page anyone can open cannot be used to fill the records. If your website really needs more, use the contact form at ${baseUrl()}/help and say how many you expect: the operator of this server can raise it.`],
+      await sendMail({ to, subject: `${a.name}: no more click-to-agree acceptances by ${kind === 'typed' ? 'typed-in visitors' : 'your website'} this month`, heading: `Until ${u.resets}, ${who} cannot accept your terms`,
+        lines: [`${a.name} has recorded ${n} acceptances this month by ${who}. That is the most this server records for one account in a month, so until ${u.resets} they are told that the terms cannot be accepted right now${kind === 'typed' ? '' : ', and the API answers 429'}, and nothing is recorded for them. Nothing that was recorded is lost. ${other}`,
+          kind === 'typed' ? 'If you did not expect this many, look at the list of acceptances for names you do not know: someone may be pressing the button over and over. Switching on "Only people the website names" stops anyone your website has not sent.'
+            : `An acceptance is not a signature and costs nothing. The limit is there so that the records cannot be filled without end. If your website really needs more, use the contact form at ${baseUrl()}/help and say how many you expect: the operator of this server can raise it.`],
         cta: { label: 'Open your agreements', url } });
-  } else if (u.used >= Math.ceil((u.limit * CLICKWRAP_WARN_PERCENT) / 100) && a.clickwrap_warned !== month) {
-    run('UPDATE accounts SET clickwrap_warned=? WHERE id=?', month, accountId);
+  } else if (n >= Math.ceil((u.limit * CLICKWRAP_WARN_PERCENT) / 100) && a.warned !== month) {
+    run(`UPDATE accounts SET ${warnCol}=? WHERE id=?`, month, accountId);
     for (const to of admins(accountId))
-      await sendMail({ to, subject: `${a.name}: ${CLICKWRAP_WARN_PERCENT} percent of this month's click-to-agree acceptances used`, heading: `${u.used} of ${u.limit} acceptances used this month`,
-        lines: [`${a.name} has recorded ${u.used} acceptances of its click-to-agree terms this month, out of ${u.limit}. When the limit is reached, your terms cannot be accepted until ${u.resets}: visitors are told so and nothing is recorded for them.`,
+      await sendMail({ to, subject: `${a.name}: ${CLICKWRAP_WARN_PERCENT} percent of this month's click-to-agree acceptances by ${kind === 'typed' ? 'typed-in visitors' : 'your website'} used`, heading: `${n} of ${u.limit} acceptances by ${kind === 'typed' ? 'typed-in visitors' : 'your website'} this month`,
+        lines: [`${a.name} has recorded ${n} acceptances this month by ${who}, out of ${u.limit}. When the limit is reached, they cannot accept your terms until ${u.resets}: they are told so and nothing is recorded for them. ${other}`,
           `If that is more than you expected, look at the list of acceptances for names you do not know: someone may be pressing the button over and over. Switching on "Only people the website names" stops anyone your website has not sent. If your website really needs more, use the contact form at ${baseUrl()}/help.`],
         cta: { label: 'Open your agreements', url } });
   }
@@ -75,7 +88,8 @@ export const minVersion = (cw: any): number => get('SELECT MAX(number) n FROM cl
 
 // What the draft would publish, read from the agreement's own columns and its file.
 function draftOf(cw: any) {
-  const file = cw.draft_format === 'pdf' && cw.draft_file_id ? get('SELECT * FROM files WHERE id=? AND account_id=?', cw.draft_file_id, cw.account_id) : null;
+  // The kept text may be encrypted (FILE_ENCRYPTION_KEY): withKeptText opens it in memory for the filter (searchtext.ts).
+  const file = cw.draft_format === 'pdf' && cw.draft_file_id ? withKeptText(get('SELECT * FROM files WHERE id=? AND account_id=?', cw.draft_file_id, cw.account_id)) : null;
   return {
     title: cw.name, format: cw.draft_format === 'pdf' ? 'pdf' : 'text', text: cw.draft_text || '', file,
     checkbox: cw.draft_checkbox || DEFAULT_CHECKBOX, button: cw.draft_button || DEFAULT_BUTTON, scroll: cw.draft_scroll ? 1 : 0,
@@ -123,9 +137,11 @@ export function publish(cw: any, user: any, note: string, askAgain: boolean) {
   const number = (cur?.number || 0) + 1;
   // Version 1 always counts as asking everyone: nobody has accepted anything before it.
   const ask = !cur || askAgain ? 1 : 0;
-  run('INSERT INTO clickwrap_versions (id, clickwrap_id, number, title, format, body, file_sha256, pages, terms_sha256, checkbox, button, scroll, note, ask_again, published_by, published_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+  // The account's name goes with the version: the page showed it above the terms, and a later rename must not change
+  // whom a record says the terms were from.
+  run('INSERT INTO clickwrap_versions (id, clickwrap_id, number, title, format, body, file_sha256, pages, terms_sha256, checkbox, button, scroll, note, ask_again, published_by, published_at, account_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     id('cwv'), cw.id, number, d.title, d.format, d.format === 'text' ? d.text : null, d.format === 'pdf' ? d.file.sha256 : null, d.format === 'pdf' ? d.file.pages : null, sha,
-    d.checkbox, d.button, d.scroll, why || null, ask, user ? `${user.name} <${user.email}>` : null, now());
+    d.checkbox, d.button, d.scroll, why || null, ask, user ? `${user.name} <${user.email}>` : null, now(), account.name);
   run('UPDATE clickwraps SET current_version=?, updated_at=? WHERE id=?', number, now(), cw.id);
   // Who has to accept again: everyone whose acceptances are all of earlier versions, counted as people (the
   // website's id for them, or else their address).
@@ -224,7 +240,7 @@ export function closedWhy(cw: any, v: any = versionOf(cw), extra: any[] = []): s
   if (!v) return 'Nothing is published yet. Publish the terms to open the page.';
   if (!cw.active) return 'You closed these terms. Open them again to take acceptances.';
   // Read again every time: an account that loses its trust (a refund, a dispute) has its pages read like a new one.
-  const file = v.format === 'pdf' ? get('SELECT text, scan_pages FROM files WHERE sha256=? AND account_id=? LIMIT 1', v.file_sha256, cw.account_id) : null;
+  const file = v.format === 'pdf' ? withKeptText(get('SELECT id, text, text_sealed, scan_pages FROM files WHERE sha256=? AND account_id=? LIMIT 1', v.file_sha256, cw.account_id)) : null;
   return termsRefusal(account, v.title, v.format === 'text' ? termsPlain(v.body) : file?.text || '', v.format === 'pdf' && isScan(file), [...shownWords(cw, v), ...extra]);
 }
 // The same for one visitor named in a signed link: the page prints their name and address ("You accept as ...") and a
@@ -274,7 +290,7 @@ export function cleanUrl(raw: any): string | null {
 export type AcceptIn = {
   cw: any; v: any; identity: Identity; person: Person; via: Via; page_url?: string | null; ip: string; ua: string;
   given_ip?: string | null; given_ua?: string | null; shown_ms?: number | null; scrolled?: boolean | null; unobscured?: boolean | null; recorded_by?: string | null;
-  view?: string | null; view_match?: ViewMatch;
+  view?: string | null; view_match?: ViewMatch; onRecorded?: () => void;
 };
 export class LimitReached extends HttpError {}
 
@@ -291,9 +307,10 @@ export async function recordAcceptance(a: AcceptIn, visitorWords = false): Promi
       : get("SELECT * FROM clickwrap_acceptances WHERE clickwrap_id=? AND version=? AND person_id IS NULL AND lower(email)=lower(?) AND identity != 'typed' ORDER BY at DESC LIMIT 1", cw.id, v.number, person.email || '');
   if (same) return { row: same, already: true };
   const u = usage(cw.account_id);
-  if (u.used >= u.limit) {
-    await tellAdmins(cw.account_id);
-    throw new LimitReached(429, visitorWords ? CLOSED_TEXT : `This account has recorded ${u.used} click-to-agree acceptances this month, and ${u.limit} is the most this server records for one account in a month. Nothing was recorded. The count starts again on ${u.resets}. If you need more, use the contact form at ${baseUrl()}/help.`, { code: 'monthly_limit', resets: u.resets });
+  const kind = bucketOf(a.identity);
+  if (u[kind] >= u.limit) {
+    await tellAdmins(cw.account_id, kind);
+    throw new LimitReached(429, visitorWords ? CLOSED_TEXT : `This account has recorded ${u[kind]} click-to-agree acceptances this month from its website (signed links and the API), and ${u.limit} is the most this server records for one account in a month. Nothing was recorded. The count starts again on ${u.resets}. If you need more, use the contact form at ${baseUrl()}/help.`, { code: 'monthly_limit', resets: u.resets });
   }
   const row: any = {
     id: id('cwa'), clickwrap_id: cw.id, account_id: cw.account_id, version_id: v.id, version: v.number, terms_sha256: v.terms_sha256, identity: a.identity,
@@ -307,15 +324,18 @@ export async function recordAcceptance(a: AcceptIn, visitorWords = false): Promi
   row.view_hash = a.view ? sha256(String(a.view)) : null;
   const cols = [...SEALED, ...SEALED_LATER, 'receipt_hash', 'seal', 'view_hash'];
   run(`INSERT INTO clickwrap_acceptances (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((k) => row[k]));
-  await tellAdmins(cw.account_id);
+  // Counted in the same step as the write, so only what was recorded counts (the limits per address).
+  a.onRecorded?.();
+  await tellAdmins(cw.account_id, kind);
   return { row, already: false };
 }
 
-// What the team and the API see of an acceptance.
-export function acceptanceView(r: any, cw?: any) {
-  const ag = cw || get('SELECT name, slug FROM clickwraps WHERE id=?', r.clickwrap_id);
+// What the team and the API see of an acceptance. "agreement" is the name of the version that was accepted, never the
+// draft's name now: a renamed draft must not make an old record name terms nobody accepted.
+export function acceptanceView(r: any) {
+  const title = r.version_title ?? get('SELECT title FROM clickwrap_versions WHERE id=?', r.version_id)?.title ?? null;
   return {
-    id: r.id, agreement_id: r.clickwrap_id, agreement: ag?.name ?? null, version: r.version, terms_sha256: r.terms_sha256, accepted_at: r.at,
+    id: r.id, agreement_id: r.clickwrap_id, agreement: title, version: r.version, terms_sha256: r.terms_sha256, accepted_at: r.at,
     identity: r.identity, person: { id: r.person_id, name: r.name, email: r.email }, via: r.via, page_url: r.page_url, ip: r.ip, user_agent: r.ua,
     given_ip: r.given_ip, given_user_agent: r.given_ua, seconds_open: r.shown_ms == null ? null : Math.round(r.shown_ms / 100) / 10,
     scrolled: r.scrolled == null ? null : !!r.scrolled, button_uncovered: r.unobscured == null ? null : !!r.unobscured, recorded_by: r.recorded_by,
@@ -336,7 +356,7 @@ export function statusFor(cw: any, q: { person_id?: string; email?: string }) {
   const best = rows[0] || null;
   return {
     agreement_id: cw.id, current_version: cw.current_version || null, counts_from_version: need || null,
-    accepted: !!best && need > 0 && best.version >= need, latest: best ? acceptanceView(best, cw) : null,
+    accepted: !!best && need > 0 && best.version >= need, latest: best ? acceptanceView(best) : null,
     versions_accepted: [...new Set(rows.map((r) => r.version))].sort((a, b) => a - b),
   };
 }
@@ -357,7 +377,7 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
   return sheetPdf('Record of acceptance', `Sign&Grow · Record of acceptance ${r.id}`, (s) => {
     s.h2('What was accepted');
     s.kv('Terms', v.title);
-    s.kv('Written by', account || '-');
+    s.kv('Written by', v.account_name || (account ? `${account} (the account's name now: versions published before the name was kept with them do not say what it was then)` : '-'));
     s.kv('Version', `${v.number}, published ${stamp(v.published_at)}${v.note ? `. What changed: ${v.note}` : ''}`);
     s.kv('SHA-256 of the terms', v.terms_sha256);
     if (r.via !== 'api') {
@@ -427,7 +447,7 @@ export function copyClaim(r: any): { status: number; code: string; message: stri
   const account = get('SELECT * FROM accounts WHERE id=?', r.account_id);
   // What the copy carries is read as the page is: the terms of the accepted version, the words shown with them, the
   // account's name and the details the website signed in.
-  const file = v?.format === 'pdf' ? get('SELECT text, scan_pages FROM files WHERE sha256=? AND account_id=? LIMIT 1', v.file_sha256, r.account_id) : null;
+  const file = v?.format === 'pdf' ? withKeptText(get('SELECT id, text, text_sealed, scan_pages FROM files WHERE sha256=? AND account_id=? LIMIT 1', v.file_sha256, r.account_id)) : null;
   if (!cw || !v || !account || account.suspended_at || account.closing_at
     || termsRefusal(account, v.title, v.format === 'text' ? termsPlain(v.body) : file?.text || '', v.format === 'pdf' && isScan(file), [...shownWords(cw, v), r.name, r.email, r.person_id]))
     return { status: 409, code: 'closed', message: `We cannot send a copy by email right now. Nothing was sent. ${COPY_ELSEWHERE}` };
@@ -480,9 +500,22 @@ export function csvOf(rows: any[]): string {
 // ---- Deleting ------------------------------------------------------------------------------------------------------
 // The agreements, versions and acceptances go with the account (ON DELETE CASCADE). What does not hang on it in the
 // database is removed here: our stored copies of the emails that sent people a copy of what they accepted. Called
-// from purgeUser in routes-trust.ts, inside its transaction and before the account row is deleted.
-export function forgetClickwraps(accountId: string) {
-  run("DELETE FROM emails WHERE envelope_id IS NULL AND about_user IN (SELECT 'clickwrap:' || id FROM clickwraps WHERE account_id=?)", accountId);
+// from purgeUser in routes-trust.ts, inside its transaction and before the account row is deleted. With a mail server
+// set up, each copy's certificate PDF (the person's name, address and internet address) waits in the file store for
+// a later try: the answer is those files, for removeUnusedBlobs once the transaction is done.
+export function forgetClickwraps(accountId: string): string[] {
+  const where = "envelope_id IS NULL AND about_user IN (SELECT 'clickwrap:' || id FROM clickwraps WHERE account_id=?)";
+  const shas = attachedFiles(all(`SELECT payload FROM emails WHERE ${where}`, accountId));
+  run(`DELETE FROM emails WHERE ${where}`, accountId);
+  return shas;
 }
+/** The stored files attached to these emails (sendMail keeps them by fingerprint in the payload). */
+export const attachedFiles = (rows: { payload: string | null }[]): string[] => rows.flatMap((r) => {
+  try {
+    return (JSON.parse(r.payload || '{}').attachments || []).map((a: any) => String(a.sha256 || '')).filter(Boolean);
+  } catch {
+    return [];
+  }
+});
 
 export { TERMS_MAX_CHARS, NAME_MAX, LABEL_MAX };

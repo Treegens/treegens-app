@@ -1843,12 +1843,12 @@ export const changedSince = (e: any) => bad('The sender changed this document wh
 // person whose turn was taken back is told exactly that, not that the envelope is closed, because it is not.
 export const notOpen = (e: any, r: any) => bad(e.status === 'sent' && r.status === 'pending'
   ? 'It is not your turn yet. Someone before you has to finish first, and we will email you when the document is ready for you. Nothing you filled in is lost.'
-  : 'This envelope is no longer open for signing.');
+  : closedFormStart(e, r) ? closedStartText(e) : 'This envelope is no longer open for signing.');
 
 export async function completeRecipient(e: any, r: any, body: any, actor: Actor) {
   // A second Finish (a double tap, a retry) is a conflict with the first, not a mistake in the request: 409. Asked
   // before anything else, because the first Finish may have completed the whole envelope by now.
-  if (r.status === 'completed') throw bad('You have already finished this document.', 409);
+  if (r.status === 'completed') throw bad('You have already finished this document.', 409, { code: 'already_finished' });
   if (e.status !== 'sent') throw bad(closedFormStart(e, r) ? closedStartText(e) : 'This envelope is no longer open for signing.');
   if (r.status !== 'sent' && r.status !== 'viewed') throw bad('It is not your turn to sign yet.');
   // What is on this person's screen must be what is on the envelope now. The signing screen sends the content
@@ -1882,7 +1882,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     } catch {}
     run('UPDATE recipients SET form_waits_at=?, form_ready_at=NULL WHERE id=?', now(), r.id);
     await formNeedsSignatures(e.account_id, e.powerform_id, 'finish');
-    throw bad(`This form cannot take your signature at the moment. That is nothing you did: the people who run it need to add signatures first, and we have just told them. Everything you filled in is saved, and it stays saved while you wait${e.expires_at ? `, until ${momentForEmail(e.expires_at, r.tz)}` : ''}.${r.email ? ` We email you at ${r.email} once the form can take your signature.` : ''} Then open the same link and press Finish.`, 503);
+    throw bad(`This form cannot take your signature at the moment. That is nothing you did: the people who run it need to add signatures first, and we have just told them. Everything you filled in is saved, and it stays saved while you wait${e.expires_at ? `, until ${momentForEmail(e.expires_at, r.tz)}` : ''}.${r.email ? ` We email you at ${r.email} once the form can take your signature.` : ''} Then open the same link and press Finish.`, 503, { code: 'form_waits' });
   }
   const t = now();
   // Finishing is claimed by one statement that only changes a row while this recipient and the envelope are both
@@ -1899,7 +1899,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     if (!claimed) {
       const cur = get('SELECT r.status, e.status env FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.id=?', r.id);
       if (cur?.env === 'sent' && (cur.status === 'sent' || cur.status === 'viewed')) throw changedSince(e);
-      throw bad(cur?.status === 'completed' ? 'You have already finished this document.' : 'This envelope is no longer open for signing.', 409);
+      throw bad(cur?.status === 'completed' ? 'You have already finished this document.' : 'This envelope is no longer open for signing.', 409, cur?.status === 'completed' ? { code: 'already_finished' } : undefined);
     }
     if (!ACTS(r.role)) return;
     applyValues(e, r, body.values || {}, true);
@@ -2461,8 +2461,9 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
     // A start from a public form costs nothing to make, and while it is unfinished it counts against what the form
     // can still take. One that its visitor has left alone for a day is closed, so a stranger cannot shut a form by
     // starting and walking away. On a form marked as filled in on a shared device that is an hour, because the next
-    // person is already waiting. Typing counts as being there (answers are saved as people type). The visitor loses
-    // nothing but the start: the form simply gives them a new one.
+    // person is already waiting. Typing counts as being there (answers are saved as people type). The start is lost:
+    // the visitor's link then says it was cleared and offers an empty form to start again, and the owner is not
+    // emailed or asked for more time about it (formstart.ts).
     const visitor = e.form_recipient_id && e.recipients.find((r: any) => r.id === e.form_recipient_id);
     // A visitor who pressed Finish while no signature was free was told that what they filled in is kept and that
     // we email them: that start is never closed for being idle (only the envelope's own deadline applies).

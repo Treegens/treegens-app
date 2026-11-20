@@ -3,15 +3,44 @@
 // Finish is sent again by itself when the connection is back. Plain functions with no React, so they can be tested.
 
 /**
- * Whether a failed request never reached us: no answer at all (the browser's "Failed to fetch"), or an answer from
- * something in between that could not reach the server. Any other answer came from the server and means what it says.
+ * Whether a failed request may not have reached us: no answer at all (the browser's "Failed to fetch"), or a 502,
+ * 503 or 504 that is not ours. Every answer of our own server carries its own sentence (`error` in JSON), also a 503
+ * it means, such as a public form with no signature free right now: that sentence is what to show, not "no
+ * connection". A page from something in between (a proxy, the host's error page) brings no such sentence.
  */
-export const isConnectionError = (e: any): boolean => !e?.status || e.status === 502 || e.status === 503 || e.status === 504;
+export const isConnectionError = (e: any): boolean => !e?.status || ((e.status === 502 || e.status === 503 || e.status === 504) && typeof e.data?.error !== 'string');
 
-/** Said in the last step when Finish did not get through. `online` is what the device says about itself. */
+/** The server says this person's part is already done: a Finish sent again after one that went through. */
+export const isAlreadyFinished = (e: any): boolean => e?.status === 409 && (e.code === 'already_finished' || /already finished/i.test(e?.message || ''));
+
+/**
+ * After a Finish that brought no clear answer (none at all, or an error from our side that may have come after the
+ * signature was recorded), what the server says now: 'done' when this person's part is finished, 'open' when it is
+ * not, 'unknown' when the server cannot be asked either. `ask` fetches the signing page's data.
+ */
+export async function finishLanded(ask: () => Promise<any>): Promise<'done' | 'open' | 'unknown'> {
+  try {
+    return (await ask())?.recipient?.status === 'completed' ? 'done' : 'open';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Said in the last step when Finish did not get through and that is known: the device was offline before it was
+ * sent, or the server says nothing is signed yet. `online` is what the device says about itself.
+ */
 export const finishNotSent = (online: boolean, finish = 'Finish and send'): string => online
-  ? `Not sent yet. We could not reach Sign&Grow just now, so nothing was signed. Your answers are safe on this page. We keep trying by ourselves while this stays open, or choose ${finish} to try now.`
+  ? `Not sent yet. We could not reach Sign&Grow just now, and nothing is signed yet. Your answers are safe on this page. We keep trying by ourselves while this stays open, or choose ${finish} to try now.`
   : `Not sent yet. This device seems to be offline, so nothing was signed. Your answers are safe on this page. We send it by ourselves as soon as the connection is back, or choose ${finish} to try now.`;
+
+/**
+ * Said when Finish was sent but no answer came back and the server cannot be asked: it may well have gone through,
+ * so nothing is promised either way. Trying again is safe: a second Finish of the same person signs nothing twice.
+ */
+export const finishUnknown = (online: boolean, finish = 'Finish and send'): string => online
+  ? `We did not hear back from Sign&Grow, so we cannot tell yet whether it went through. Nothing you typed is lost. We keep checking by ourselves while this stays open and send it again if it did not arrive, or choose ${finish} to try now.`
+  : `This device seems to have lost its connection, so we cannot tell yet whether it went through. Nothing you typed is lost. We check as soon as the connection is back and send it again if it did not arrive, or choose ${finish} to try now.`;
 
 /** Said once when saving stops getting through, not again on every try. */
 export const saveNotSent = (online: boolean): string => online

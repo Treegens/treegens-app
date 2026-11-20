@@ -295,7 +295,7 @@ const age = (id: string, days: number) => {
   s.db.run('UPDATE sessions SET expires_at=?, last_used_at=?, created_at=? WHERE id=?', iso(Date.parse(r.expires_at) - days * DAY), r.last_used_at ? iso(Date.parse(r.last_used_at) - days * DAY) : null, iso(Date.parse(r.created_at) - days * DAY), id);
 };
 
-test('a browser that is used stays signed in, and one that is not used is signed out after 30 days', async () => {
+test('a browser that is used stays signed in until 30 days after it signed in, and one that is not used is signed out after 30 days', async () => {
   assert.equal(SESSION_DAYS, 30);
   const c = await signUp('Lea Weekly', 'lea@example.com', ip());
   unnoted(c);
@@ -311,36 +311,32 @@ test('a browser that is used stays signed in, and one that is not used is signed
   assert.deepEqual(again.set, []);
   assert.equal(sessionRow('lea@example.com').last_used_at, made.last_used_at);
 
-  // She opens the app once a week for half a year. Before the session slid, week five was a sign-in page.
-  for (let week = 1; week <= 26; week++) {
+  // She opens the app once a week. It stays signed in, but only until 30 days after she signed in, however often
+  // she comes (SESSION_MAX_DAYS, the owner's decision after a copied cookie stayed alive for three years): from
+  // then she signs in again. The end never moves past that, so no cookie is sent again on the way.
+  for (let week = 1; week <= 4; week++) {
     age(made.id, 7);
     const r = await raw(c, 'GET', '/envelopes');
     assert.equal(r.status, 200, `week ${week}: ${JSON.stringify(r.data)}`);
-    // The cookie goes out again with a new end, because the browser forgets it on the date it was given with.
-    const sent = r.set.find((x) => x.startsWith('ts_session='));
-    assert.ok(sent, `week ${week}: the cookie is sent again`);
-    assert.equal(sent!.split(';')[0], `ts_session=${c.cookies.ts_session}`, 'the same session, not a new one');
-    assert.match(sent!, /Max-Age=2592000/);
-    assert.match(sent!, /HttpOnly/);
-    assert.match(sent!, /SameSite=Lax/);
+    assert.equal(r.set.find((x) => x.startsWith('ts_session=')), undefined, `week ${week}: the end does not move`);
     const row = s.db.get('SELECT * FROM sessions WHERE id=?', made.id);
-    assert.ok(Date.parse(row.expires_at) - Date.now() > 29.9 * DAY, `week ${week}: 30 days from this visit`);
+    assert.ok(Math.abs(Date.parse(row.expires_at) - (Date.parse(row.created_at) + 30 * DAY)) < 60_000, `week ${week}: still 30 days from signing in`);
     assert.ok(Date.now() - Date.parse(row.last_used_at) < 60_000);
   }
-  assert.equal(s.db.get('SELECT COUNT(*) n FROM sessions WHERE user_id=?', made.user_id).n, 1, 'still one session: nobody was signed in again');
+  age(made.id, 7);
+  assert.equal((await raw(c, 'GET', '/envelopes')).status, 401, 'week five: 35 days after signing in, she signs in again');
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM sessions WHERE user_id=?', made.user_id).n, 1, 'one session, never a second one made behind her back');
 
-  // The end moves at most once a day: a visit two hours later notes the use and sends no cookie.
-  s.db.run('UPDATE sessions SET last_used_at=? WHERE id=?', iso(Date.now() - 2 * 3600_000), made.id);
-  const soon = await raw(c, 'GET', '/me');
-  assert.deepEqual(soon.set, []);
-  assert.ok(Date.now() - Date.parse(s.db.get('SELECT last_used_at t FROM sessions WHERE id=?', made.id).t) < 60_000);
-
-  // Over https the cookie that is sent again is marked Secure, like the first one.
-  age(made.id, 3);
-  const { handle } = await import('../src/server/router.ts');
-  const https = await handle(new Request('http://test.local/api/me', { headers: { cookie: `ts_session=${c.cookies.ts_session}`, 'x-forwarded-proto': 'https', 'x-forwarded-for': c.ip } }));
-  assert.match(https.headers.getSetCookie().find((x) => x.startsWith('ts_session='))!, /Max-Age=2592000; Secure$/);
-
+  // A session that is not used is signed out the same way. (Back to a fresh sign-in for the rest of this test.)
+  {
+    const fresh = new Client();
+    fresh.ip = c.ip;
+    assert.equal((await fresh.post('/auth/login', { email: 'lea@example.com', password: 'correct horse battery' })).status, 200);
+    c.cookies = fresh.cookies;
+  }
+  const made2 = sessionRow('lea@example.com');
+  made.id = made2.id;
+  made.user_id = made2.user_id;
   // Thirty-one days without a visit: signed out, and a late visit does not bring the session back.
   age(made.id, 31);
   const late = await raw(c, 'GET', '/envelopes');

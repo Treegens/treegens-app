@@ -47,10 +47,12 @@
     ".next-verify-comments/dev/types/**/*.ts",
     ".next-repair-signercode/types/**/*.ts",
     ".next-repair-signercode/dev/types/**/*.ts",
-    ".next-repair-bounces/types/**/*.ts",
-    ".next-repair-bounces/dev/types/**/*.ts",
     ".next-repair-clickwrap/types/**/*.ts",
-    ".next-repair-clickwrap/dev/types/**/*.ts"
+    ".next-repair-clickwrap/dev/types/**/*.ts",
+    ".next-repair-witness/types/**/*.ts",
+    ".next-repair-witness/dev/types/**/*.ts",
+    ".next-repair-misc-today/types/**/*.ts",
+    ".next-repair-misc-today/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

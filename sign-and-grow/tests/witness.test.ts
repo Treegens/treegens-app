@@ -321,8 +321,10 @@ test('"I was not there" signs nothing, tells the signer and the sender, and the 
   assert.equal(toAnn.subject, 'Your witness was not there: Deed of gift');
   assert.match(text(toAnn.html), /Will Witness said that they were not physically with you when you signed "Deed of gift", so they did not sign as your witness\. Your own signature is kept/);
   assert.match(text(toAnn.html), /If nobody else saw you sign, ask Abe Absent what to do: a witness has to see the signature being made/);
-  assert.match(text(toAnn.html), /They wrote: "I was in Paris that day\."/);
+  // What the witness wrote is a stranger's words: for the sender and the record only, never in the signer's inbox.
+  assert.doesNotMatch(text(toAnn.html), /Paris/);
   const toSender = mailTo('abe@deed.example').pop();
+  assert.match(text(toSender.html), /They wrote: "I was in Paris that day\."/);
   assert.equal(toSender.subject, 'Witness was not there: Deed of gift');
   assert.match(text(toSender.html), /cannot be completed until a witness has signed/);
   assert.match(text(toSender.html), /If nobody else saw Ann Signer sign, a new witness cannot truthfully say they did/);
@@ -816,4 +818,240 @@ test('the device comparison stays inside one envelope: no fingerprint to any sen
   assert.match(read('src/app/security/page.tsx'), /<Point title="One cookie, only where a signature has a witness\.">\{DEVICE_COOKIE_WORDS\}<\/Point>/);
   assert.match(DEVICE_COOKIE_WORDS, /made for that document alone, never the cookie itself, so it cannot link one browser across documents or accounts/);
   assert.doesNotMatch(read('src/server/witness.ts'), /hmac\(`device:\$\{dev\}`\)/);
+});
+
+test('a witness who would be the signer, or a party, is refused by Correct, by an API key and by passing the document on', async () => {
+  const s = await person('Cora Correct', 'cora.correct@deed.example');
+  const e = await deed(s);
+  const { ann, wit, ben } = ids(e);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  const [annRow, willRow] = [row(ann), row(wit)];
+  const self = await s.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Ann Signer', email: annRow.email });
+  assert.equal(self.status, 400, JSON.stringify(self.data));
+  assert.match(self.data.error, /^Ann Signer would be the witness of their own signature\. A witness has to be somebody else\. Nothing was changed\.$/);
+  assert.equal(row(wit).email, willRow.email, 'nothing was changed');
+  const back = await s.post(`/envelopes/${e.id}/correct`, { recipient_id: ann, name: 'Will Witness', email: willRow.email });
+  assert.equal(back.status, 400);
+  assert.match(back.data.error, /Will Witness would be the witness of their own signature/);
+  // A spelling of the signer's name at her own address is her too, on the server.
+  const spelt = await s.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Ann B. Signer', email: annRow.email });
+  assert.equal(spelt.status, 400);
+  assert.match(spelt.data.error, /the same address, and the same name in another spelling/);
+  const party = await s.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Ben Second', email: row(ben).email });
+  assert.equal(party.status, 400);
+  assert.match(party.data.error, /Ben Second is the witness for Ann Signer and also signs this document, so they are a party to it, and a witness should not be\. Name somebody else as the witness\. Nothing was changed\./);
+  // A spelling of a party's name at their address is caught on the server too.
+  const spelt2 = await s.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Benjamin Second', email: row(ben).email });
+  assert.equal(spelt2.status, 400);
+  assert.match(spelt2.data.error, /is also on this document as Ben Second, who signs it, so they are a party to it/);
+  // The same through an API key.
+  const key = (await s.post('/api-keys', { name: 'witness' })).data.key;
+  const k = browser();
+  const call = k.call.bind(k);
+  k.call = (m: string, u: string, b?: any, h: Record<string, string> = {}) => call(m, u, b, { authorization: `Bearer ${key}`, ...h });
+  const viaKey = await k.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Ann Signer', email: annRow.email });
+  assert.equal(viaKey.status, 400);
+  // A correction that makes no witness problem goes through as before.
+  const wilma = `wilma.${n}@deed.example`;
+  assert.equal((await s.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Wilma Witness', email: wilma })).status, 200);
+  // Ann cannot pass her place on to her own witness.
+  const b = browser();
+  await b.get(`/sign/${row(ann).token}`);
+  const pass = await b.post(`/sign/${row(ann).token}/reassign`, { name: 'Wilma Witness', email: wilma, reason: 'Wilma signs' });
+  assert.equal(pass.status, 400, JSON.stringify(pass.data));
+  assert.match(pass.data.error, /cannot be passed on to Wilma Witness: Wilma Witness is on it as a witness, and a witness cannot also sign it\. Pass it on to someone else, or ask Cora Correct \(cora\.correct@deed\.example\) to change who is on it\. Nothing was changed\./);
+  assert.equal(row(ann).name, 'Ann Signer');
+  // A witness Ann named herself goes with her place, so passing it on to that person is not refused (they name their own).
+  const p = await deed(s, { named_by_signer: true, name: '', email: '' });
+  const pi = ids(p);
+  assert.equal((await s.post(`/envelopes/${p.id}/send`)).status, 200);
+  const pb = browser();
+  await pb.get(`/sign/${row(pi.ann).token}`);
+  const nell = `nell.${n}@deed.example`;
+  assert.equal((await pb.post(`/sign/${row(pi.ann).token}/witness`, { name: 'Nell Named', email: nell })).status, 200);
+  assert.equal((await pb.post(`/sign/${row(pi.ann).token}/reassign`, { name: 'Nell Named', email: nell, reason: 'Nell signs after all' })).status, 200);
+  assert.equal(row(pi.wit).email, '', 'Nell is the signer now, and names her own witness');
+});
+
+test('after "I was not there" the signer may name another witness, but whoever the sender puts in the place stays the sender\'s choice, also in a copy', async () => {
+  const s = await person('Sol Sender', 'sol@deed.example');
+  const e = await deed(s);
+  const { ann, wit } = ids(e);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await finish(row(ann).token)).status, 200);
+  assert.equal((await browser().post(`/sign/${row(wit).token}/not-present`, {})).status, 200);
+  assert.equal(row(wit).named_by_signer, 0, '"not there" gives the signer a turn to name, not the place');
+  assert.equal((await browser().get(`/sign/${row(ann).token}`)).data.recipient.witness.may_name, true);
+  // A copy made now has the sender's own choice, not an open place.
+  const c1 = await s.post(`/envelopes/${e.id}/clone`, {});
+  assert.equal(c1.status, 200, JSON.stringify(c1.data));
+  const w1 = witnessRow(c1.data.id || c1.data.envelope?.id);
+  assert.deepEqual([w1.name, w1.named_by_signer], ['Will Witness', 0]);
+  // The sender puts Vera there with Correct. After a change that asks Ann to sign again, Ann cannot replace Vera.
+  assert.equal((await s.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Vera Valid', email: `vera.${n}@deed.example` })).status, 200);
+  assert.equal(row(wit).named_by_signer, 0);
+  assert.equal((await edited(s, e.id, (r: any) => r, { resign: true, fields: [...(await s.get(`/envelopes/${e.id}`)).data.envelope.fields, { document_id: e.documents[0].id, type: 'note', value: 'Clause 2 amended', page: 0, x: 0.6, y: 0.9, w: 0.3, h: 0.03 }] })).status, 200);
+  const page = (await browser().get(`/sign/${row(ann).token}`)).data.recipient.witness;
+  assert.equal(page.may_name, false);
+  const swap = await browser().post(`/sign/${row(ann).token}/witness`, { name: 'Mallory Mate', email: `mallory.${n}@deed.example` });
+  assert.equal(swap.status, 409);
+  assert.match(swap.data.error, /Sol Sender chose your witness: Vera Valid/);
+  assert.equal(row(wit).name, 'Vera Valid');
+
+  // The signer names another after a sender-chosen witness said "not there": the sender hears it, and a copy has Will again.
+  const f = await deed(s);
+  const fi = ids(f);
+  assert.equal((await s.post(`/envelopes/${f.id}/send`)).status, 200);
+  assert.equal((await finish(row(fi.ann).token)).status, 200);
+  const willEmail = row(fi.wit).email;
+  assert.equal((await browser().post(`/sign/${row(fi.wit).token}/not-present`, {})).status, 200);
+  assert.equal((await browser().post(`/sign/${row(fi.ann).token}/witness`, { name: 'Mallory Mate', email: `mallory.${n}@deed.example` })).status, 200);
+  assert.deepEqual(JSON.parse(row(fi.wit).witness_chosen), { name: 'Will Witness', email: willEmail });
+  assert.ok(mailTo('sol@deed.example').some((m: any) => m.subject === 'New witness named: Deed of gift' && /Ann Signer has now named Mallory Mate <mallory\.\d+@deed\.example> as their witness instead of Will Witness, whom you had chosen, and we have emailed them\./.test(text(m.html))));
+  const c2 = await s.post(`/envelopes/${f.id}/clone`, {});
+  const w2 = witnessRow(c2.data.id || c2.data.envelope?.id);
+  assert.deepEqual([w2.name, w2.email, w2.named_by_signer], ['Will Witness', willEmail, 0], 'the copy is the sender\'s, with the sender\'s choice');
+
+  // A place the signer was given: after "not there" the sender names Vera, and from then on Vera is the sender's choice.
+  const o = await deed(s, { named_by_signer: true, name: '', email: '' });
+  const oi = ids(o);
+  assert.equal((await s.post(`/envelopes/${o.id}/send`)).status, 200);
+  const ob = browser();
+  await ob.get(`/sign/${row(oi.ann).token}`);
+  assert.equal((await ob.post(`/sign/${row(oi.ann).token}/witness`, { name: 'Nell Named', email: `nell.o${n}@deed.example` })).status, 200);
+  assert.equal((await finish(row(oi.ann).token, ob)).status, 200);
+  assert.equal((await browser().post(`/sign/${row(oi.wit).token}/not-present`, {})).status, 200);
+  assert.equal((await s.post(`/envelopes/${o.id}/correct`, { recipient_id: oi.wit, name: 'Vera Valid', email: `vera.o${n}@deed.example` })).status, 200);
+  assert.equal(row(oi.wit).named_by_signer, 0);
+  assert.equal((await ob.post(`/sign/${row(oi.ann).token}/witness`, { name: 'Max Other', email: `max.o${n}@deed.example` })).status, 409);
+});
+
+test('"I was not there" says who was told as it is: the sender always, the signer only when we can email them, and never their note', async () => {
+  const s = await person('Tom Told', 'tom@deed.example');
+  // Ann's link is passed on by the sender: we have no address for her.
+  const e = await deed(s);
+  const { ann, wit } = ids(e);
+  db.run("UPDATE recipients SET email='', link_by_sender=1 WHERE id=?", ann);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await finish(row(ann).token)).status, 200);
+  const ask = text(mailTo(row(wit).email).pop().html);
+  assert.match(ask, /nothing is signed then, and Tom Told is told\./);
+  const { WITNESS_RECORDS } = await import('../src/lib/witness.ts');
+  assert.ok(ask.includes(WITNESS_RECORDS), 'the request to witness says what is recorded and that it cannot be checked');
+  const before = (await browser().get(`/sign/${row(wit).token}`)).data.recipient.witness_of;
+  assert.equal(before.signer_told, false);
+  const lure = 'Your signature was rejected by the bank. Verify at http://secure-login.example/verify';
+  const said = await browser().post(`/sign/${row(wit).token}/not-present`, { note: lure });
+  assert.equal(said.status, 200);
+  assert.equal(said.data.signer_told, false);
+  const toSender = text(mailTo('tom@deed.example').filter((m: any) => m.subject === 'Witness was not there: Deed of gift').pop().html);
+  assert.doesNotMatch(toSender, /We told Ann/);
+  assert.match(toSender, /We could not tell Ann Signer: we have no email address for them, because you send them their link yourself\. Pass on their signing link yourself \(they can name another witness there\), or change the witness/);
+  // Someone who stopped our emails: the same, in their words.
+  const g = await deed(s);
+  const gi = ids(g);
+  assert.equal((await s.post(`/envelopes/${g.id}/send`)).status, 200);
+  assert.equal((await finish(row(gi.ann).token)).status, 200);
+  db.run('UPDATE recipients SET complained_at=? WHERE id=?', new Date().toISOString(), gi.ann);
+  const annMails = mailTo(row(gi.ann).email).length;
+  assert.equal((await browser().post(`/sign/${row(gi.wit).token}/not-present`, {})).data.signer_told, false);
+  assert.equal(mailTo(row(gi.ann).email).length, annMails, 'no email to someone who marked ours as spam');
+  assert.match(text(mailTo('tom@deed.example').pop().html), /We could not tell Ann Signer: they marked an earlier email from this account as spam/);
+  // Normally both are told, and the signer's email has the rules and what is recorded, not the stranger's words.
+  const h = await deed(s);
+  const hi = ids(h);
+  assert.equal((await s.post(`/envelopes/${h.id}/send`)).status, 200);
+  assert.equal((await finish(row(hi.ann).token)).status, 200);
+  const ok = await browser().post(`/sign/${row(hi.wit).token}/not-present`, { note: lure });
+  assert.equal(ok.data.signer_told, true);
+  const toAnn = text(mailTo(row(hi.ann).email).pop().html);
+  assert.ok(toAnn.includes(WITNESS_RECORDS));
+  assert.doesNotMatch(toAnn, /secure-login|rejected by the bank/);
+  assert.match(text(mailTo('tom@deed.example').pop().html), /We told Ann Signer, who can name another witness from their signing link\./);
+  // The witness's screen words it from what the server says.
+  const first = read('src/components/sign/Witness.tsx');
+  assert.match(first, /const told = w\.signer_told \? `\$\{w\.name\} and \$\{sender\.name\}` : sender\.name;/);
+  assert.match(first, /Anything \{sender\.name\} should know <span className="muted">\(optional, only \{sender\.name\} sees it\)<\/span>/);
+  assert.doesNotMatch(first, /We told \{w\.name\} and \{sender\.name\}/);
+});
+
+test('the smaller holes: a lure as a witness name, the deadline warning, a party or the signer\'s name, the group wording, and a witness given a party\'s fields', async () => {
+  const s = await person('Lou Lows', 'lou@deed.example');
+  // The name a signer types for their witness is read by the fake-notice filter, like a subject.
+  const e = await deed(s, { named_by_signer: true, name: '', email: '' });
+  const { ann, wit } = ids(e);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  const b = browser();
+  await b.get(`/sign/${row(ann).token}`);
+  const victim = `victim.${n}@deed.example`;
+  const lure = await b.post(`/sign/${row(ann).token}/witness`, { name: 'PayPal Billing call +1 800 555 0199 re $499 charge', email: victim });
+  assert.equal(lure.status, 403, JSON.stringify(lure.data));
+  assert.match(lure.data.error, /We cannot email a witness for this document right now/);
+  assert.equal(row(wit).email, '');
+  assert.equal(mailTo(victim).length, 0);
+  assert.equal((await b.post(`/sign/${row(ann).token}/witness`, { name: 'Paula Plain', email: victim })).status, 200, 'an ordinary name goes through');
+
+  // "Expires soon" names the witness the envelope still waits for, after "I was not there".
+  const x = await deed(s);
+  const xi = ids(x);
+  assert.equal((await s.post(`/envelopes/${x.id}/send`)).status, 200);
+  assert.equal((await finish(row(xi.ann).token)).status, 200);
+  assert.equal((await finish(row(xi.ben).token)).status, 200);
+  assert.equal((await browser().post(`/sign/${row(xi.wit).token}/not-present`, {})).status, 200);
+  db.run('UPDATE envelopes SET sent_at=?, expires_at=? WHERE id=?', new Date(Date.now() - 10 * 864e5).toISOString(), new Date(Date.now() + 2 * 864e5).toISOString(), x.id);
+  await env.cronTick();
+  const warn = mailTo('lou@deed.example').filter((m: any) => /Expires soon: Deed of gift/.test(m.subject)).pop();
+  assert.ok(warn);
+  assert.match(text(warn.html), /Still waiting on a witness for Ann Signer \(Will Witness said they were not there, and nobody else has been named\)\./);
+  assert.doesNotMatch(text(warn.html), /waiting on nobody/);
+
+  // A party as the witness is refused at sending; the signer's exact name at another address is allowed and marked.
+  const file = await upload(s, 1);
+  const two = (w: any, extra: any[] = []) => s.post('/envelopes', { subject: 'Party', send: true, documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'a', role: 'signer', name: 'Ann Party', email: `ann.party${n}@deed.example` }, { id: 'b', role: 'signer', name: 'Ben Party', email: 'ben.party@deed.example' }, { id: 'w', role: 'witness', witness_for: 'a', ...w }],
+    fields: [{ document_id: 'd', recipient_id: 'a', type: 'signature', page: 0, x: 0.1, y: 0.1, w: 0.2, h: 0.05 }, { document_id: 'd', recipient_id: 'b', type: 'signature', page: 0, x: 0.5, y: 0.1, w: 0.2, h: 0.05 }, ...block('w'), ...extra] });
+  const party = await two({ name: 'Ben Party', email: 'ben.party@deed.example' });
+  assert.equal(party.status, 400);
+  assert.match(party.data.error, /Ben Party is the witness for Ann Party and also signs this document, so they are a party to it/);
+  const namesake = await two({ name: 'Ann Party', email: `ann.elsewhere${n}@deed.example` });
+  assert.equal(namesake.status, 200, JSON.stringify(namesake.data));
+  const ne = namesake.data.envelope;
+  const [na, nw] = [ne.recipients.find((r: any) => r.name === 'Ann Party' && r.role === 'signer').id, ne.recipients.find((r: any) => r.role === 'witness').id];
+  assert.equal((await finish(row(na).token)).status, 200);
+  assert.equal((await witness(row(nw).token)).status, 200);
+  assert.equal(row(nw).witness_marks, 'name');
+  assert.ok(mailTo('lou@deed.example').some((m: any) => m.subject === 'Check the witness: Party' && /with the same name as the signer, or a spelling of it, at another address/.test(text(m.html))));
+  // The signer cannot get round "that is your own name" with an accent.
+  const f = await deed(s, { named_by_signer: true, name: '', email: '' });
+  const fi = ids(f);
+  assert.equal((await s.post(`/envelopes/${f.id}/send`)).status, 200);
+  const fb = browser();
+  await fb.get(`/sign/${row(fi.ann).token}`);
+  const accent = await fb.post(`/sign/${row(fi.ann).token}/witness`, { name: 'Ánn  Signer', email: `ann.alt${n}@deed.example` });
+  assert.equal(accent.status, 400);
+  assert.match(accent.data.error, /That is your own name/);
+
+  // A witness fills in their block only: the fields of a party would be a free signature for a party.
+  const fields = await two({ name: 'Carl Customer', email: 'carl@deed.example' }, [{ document_id: 'd', recipient_id: 'w', type: 'initials', label: 'Initial clause 3', page: 0, x: 0.5, y: 0.3, w: 0.1, h: 0.03 }]);
+  assert.equal(fields.status, 400);
+  assert.match(fields.data.error, /Carl Customer is a witness, and a witness fills in only their witness block: one signature, their name, their address and occupation \(two text fields\) and the date\. They have an initials field\. Remove it, or make them a signer if they agree to the document themselves\./);
+  const more = await two({ name: 'Carl Customer', email: 'carl@deed.example' }, [{ document_id: 'd', recipient_id: 'w', type: 'text', label: 'Amount you agree to repay', page: 0, x: 0.5, y: 0.2, w: 0.3, h: 0.03 }]);
+  assert.equal(more.status, 400);
+  assert.match(more.data.error, /They have 3 text fields, and the block has 2/);
+  // The editor reads the same rule before Send.
+  const lib = await import('../src/lib/witness.ts');
+  const people = [{ id: 'a', role: 'signer', name: 'Ann', email: 'a@x.example' }, { id: 'w', role: 'witness', witness_for: 'a', name: 'Wes', email: 'w@x.example' }];
+  assert.equal(lib.witnessProblem(people[1], { recipients: people, fields: block('w') }), null, 'the block itself is fine');
+  assert.match(lib.witnessProblem(people[1], { recipients: people, fields: [...block('w'), { recipient_id: 'w', type: 'checkbox' }] }) || '', /They have a checkbox field/);
+  // The group wording reads as one sentence.
+  assert.equal(lib.witnessProblem({ id: 'w', role: 'witness', witness_for: 'a', group_id: 'g', name: '', email: '' }, { recipients: people, fields: [] }), 'A witness is one named person, not a group. Name the person who will watch Ann sign.');
+  // The statement is ticked, not written: nowhere says "in their own words".
+  for (const f of ['src/components/editor/WitnessChoice.tsx', 'src/server/witness.ts', 'src/app/help/witness.tsx']) assert.doesNotMatch(read(f).replace(/\/\/.*$/gm, ''), /in (their|your) own words/, f);
+});
+
+test('the signer\'s own screens say what is recorded and that it cannot be checked, like the witness\'s', () => {
+  const sign = read('src/components/sign/Witness.tsx');
+  assert.ok((sign.match(/\{WITNESS_RECORDS\}/g) || []).length >= 6, 'the notice on the document, the review box, the done box and the witness\'s screens');
+  assert.match(sign, /we email them a link to confirm that and sign as witness\. \{WITNESS_RECORDS\}/, 'the signer\'s notice on the document');
+  assert.match(sign, /We tell you if they say they were not there\.<\/>\}<\/p>\s*<p className="muted small wt-note">\{WITNESS_RECORDS\}<\/p>/, 'the signer\'s done box');
 });

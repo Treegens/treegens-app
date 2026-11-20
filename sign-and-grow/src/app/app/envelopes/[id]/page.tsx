@@ -81,7 +81,9 @@ export default function EnvelopeDetail() {
   // An envelope somebody has signed is not only the sender's: deleting it takes it out of the sender's account and
   // leaves every recipient their link and their copy. That is every completed one, and a voided, declined or
   // expired one on which someone had already finished.
-  const kept = !isTpl && e.status !== 'draft' && (done || e.recipients.some((r: any) => r.status === 'completed' && ['signer', 'inperson', 'approver'].includes(r.role)));
+  // The server's own rule decides (kept_on_delete, src/server/deleting.ts), so this dialog never says "for good" about
+  // one that is kept. The line after ?? is only for an answer from a server older than that flag.
+  const kept = data.kept_on_delete ?? (!isTpl && e.status !== 'draft' && (done || e.recipients.some((r: any) => r.status === 'completed' && r.role !== 'cc')));
   const waiting = out ? waitingOn(e.recipients, me.user.email) : null;
   const unopened = out ? e.recipients.filter((r: any) => neverOpened(r)) : [];
   // People who filled in everything required and have not pressed Finish, by the server's count (progress.ready).

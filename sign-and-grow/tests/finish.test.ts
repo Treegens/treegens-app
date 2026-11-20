@@ -1,7 +1,7 @@
 // The last open ends: leaving a team by yourself, and what follows further down in this file.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { boot, Client, simple, signUp, mailTo, type Server } from './helpers.ts';
+import { boot, Client, simple, signUp, mailTo, PNG, type Server } from './helpers.ts';
 import { PRICING } from '../src/lib/impact.ts';
 
 let db: Server['db'];
@@ -580,4 +580,132 @@ test('a shared-device form takes a steady stream of people from one front desk, 
   } finally {
     for (const [k, v] of [['NEW_ACCOUNT_DAILY_RECIPIENTS', keep.n], ['UNPAID_DAILY_RECIPIENTS', keep.u]] as const) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
+});
+
+test('a form start that was cleared offers the visitor a fresh form and emails its owner nothing about deadlines', async () => {
+  const desk = await person('Ivo Inbox', 'ivo@cleared.example');
+  const kiosk = await formOf(desk, 'Sign-in sheet', true);
+  const here = ip();
+  const at = () => Object.assign(new Client(), { ip: here });
+  const s = await at().post(`/public/powerforms/${kiosk.slug}/start`, { name: 'Walker One', email: 'walker@cleared.example' });
+  const tok = s.data.url.split('/sign/')[1];
+  const eid = envelopeOf(s.data.url);
+  db.run('UPDATE envelopes SET sent_at=? WHERE id=?', ago(0.05), eid);
+  db.run('UPDATE audit SET at=? WHERE envelope_id=?', ago(0.05), eid);
+  await cron.tick();
+  assert.equal(db.get('SELECT status FROM envelopes WHERE id=?', eid).status, 'expired');
+  const before = mailTo('ivo@cleared.example').length;
+  // Back on the tablet, or the visitor's own email: the link says the form was cleared and where to start again.
+  const view = await at().get(`/sign/${tok}`);
+  assert.equal(view.status, 200);
+  assert.deepEqual([view.data.envelope.form_cleared, view.data.envelope.start_again, view.data.envelope.removed], [true, kiosk.slug, false]);
+  const finish = await at().post(`/sign/${tok}/complete`, { values: {}, signature_png: PNG });
+  assert.equal(finish.status, 400);
+  assert.match(finish.data.error, new RegExp(`cleared to make room for others\\. To sign, start again at http://test\\.local/f/${kiosk.slug}\\. The new form starts empty`));
+  const more = await at().post(`/sign/${tok}/request-extension`, {});
+  assert.equal(more.status, 409);
+  assert.match(more.data.error, /start again/);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(mailTo('ivo@cleared.example').length, before, 'the owner was not told a deadline passed, nor asked for more time');
+  // A paused form has nowhere to start again: the words say so.
+  assert.equal((await desk.call('PATCH', `/powerforms/${kiosk.id}`, { active: false })).status, 200);
+  assert.equal((await at().get(`/sign/${tok}`)).data.envelope.start_again, null);
+  assert.match((await at().post(`/sign/${tok}/complete`, { values: {}, signature_png: PNG })).data.error, /not taking new people right now\. Please contact whoever gave you the link/);
+
+  // A visitor who pressed Finish while no signature was free was told their answers are kept: that start stays the
+  // owner's to reopen, so the owner still hears that they could not open it.
+  db.run('UPDATE recipients SET form_waits_at=? WHERE token=?', ago(0.01), tok);
+  await at().get(`/sign/${tok}`);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(mailTo('ivo@cleared.example').filter((m: any) => m.subject === 'Could not open: Sign-in sheet').length, 1);
+});
+
+test('an expired envelope its sender removed tells the signer so, and never emails the sender a link that leads nowhere', async () => {
+  const owner = await person('Olga Hidden', 'olga@hidden-expired.example');
+  const mona = await join(owner, 'Mona Member', 'mona@hidden-expired.example');
+  const two = { ordered: false, recipients: [{ id: 'a', role: 'signer', name: 'Ann First', email: 'ann@hidden-expired.example' }, { id: 'b', role: 'signer', name: 'Bob Second', email: 'bob@hidden-expired.example' }],
+    fields: [{ id: 'fa', document_id: 'd', recipient_id: 'a', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'fb', document_id: 'd', recipient_id: 'b', type: 'signature', page: 0, x: 0.5, y: 0.5, w: 0.3, h: 0.06 }] };
+  const e = await simple(mona, '', { subject: 'Expired half signed', ...two });
+  assert.equal((await mona.post(`/envelopes/${e.id}/send`)).status, 200);
+  const { signAll } = await import('./helpers.ts');
+  assert.equal((await signAll(e.id, 'ann@hidden-expired.example')).status, 200);
+  db.run('UPDATE envelopes SET expires_at=? WHERE id=?', new Date(Date.now() - 60_000).toISOString(), e.id);
+  await cron.tick();
+  assert.deepEqual((await mona.call('DELETE', `/envelopes/${e.id}`)).data, { ok: true, kept_for_recipients: true });
+  const before = mailTo('mona@hidden-expired.example').length;
+  const bob = visitor();
+  const bobTok = db.get("SELECT token FROM recipients WHERE envelope_id=? AND email='bob@hidden-expired.example'", e.id).token;
+  const page = await bob.get(`/sign/${bobTok}`);
+  assert.equal(page.status, 200);
+  assert.equal(page.data.envelope.removed, true, 'the page does not offer to ask for more time');
+  const ask = await bob.post(`/sign/${bobTok}/request-extension`, {});
+  assert.equal(ask.status, 409);
+  assert.match(ask.data.error, /Mona Member has removed this document from their list.*ask them to send it again/);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(mailTo('mona@hidden-expired.example').length, before, 'no "Could not open" and no "More time needed"');
+  // Once an admin puts it back, the ordinary help returns.
+  assert.equal((await owner.post(`/envelopes/${e.id}/restore`, {})).status, 200);
+  assert.equal((await bob.get(`/sign/${bobTok}`)).data.envelope.removed, false);
+  assert.equal((await bob.post(`/sign/${bobTok}/request-extension`, {})).status, 200);
+});
+
+test('deleting keeps every envelope on which somebody keeps a copy, the dialog is told the same rule, and a retry key never sends a deleted one again', async () => {
+  const { signAll, upload } = await import('./helpers.ts');
+  const owner = await person('Olga Keeps', 'olga@keeps.example');
+  const mona = await join(owner, 'Mona Keeps', 'mona@keeps.example');
+  const tokenOf = (eid: string, email: string) => db.get('SELECT token FROM recipients WHERE envelope_id=? AND email=?', eid, email).token;
+
+  // Only a viewer had finished (confirmed viewing) before it was voided. Their download keeps working after delete.
+  const file = await upload(mona, 1);
+  const made = await mona.post('/envelopes', { subject: 'Viewer only', documents: [{ id: 'd', file_id: file.id }], ordered: false,
+    recipients: [{ id: 'v', role: 'viewer', name: 'Vera Viewer', email: 'vera@keeps.example' }, { id: 's', role: 'signer', name: 'Sid Signer', email: 'sid@keeps.example' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 's', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+  const viewerOnly = made.data.envelope.id;
+  assert.equal((await mona.post(`/envelopes/${viewerOnly}/send`)).status, 200);
+  assert.equal((await signAll(viewerOnly, 'vera@keeps.example')).status, 200);
+  assert.equal((await mona.post(`/envelopes/${viewerOnly}/void`, { reason: 'Changed my mind' })).status, 200);
+  assert.equal((await mona.get(`/envelopes/${viewerOnly}`)).data.kept_on_delete, true, 'the dialog says it is kept');
+  assert.deepEqual((await mona.call('DELETE', `/envelopes/${viewerOnly}`)).data, { ok: true, kept_for_recipients: true });
+  assert.equal((await visitor().call('GET', `/sign/${tokenOf(viewerOnly, 'vera@keeps.example')}/download`)).status, 200);
+
+  // Signed, then changed and sent back to sign again, then voided: kept, and the dialog was told so beforehand.
+  const two = { ordered: false, recipients: [{ id: 'a', role: 'signer', name: 'Cy First', email: 'cy@keeps.example' }, { id: 'b', role: 'signer', name: 'Di Second', email: 'di@keeps.example' }],
+    fields: [{ id: 'fa', document_id: 'd', recipient_id: 'a', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'fb', document_id: 'd', recipient_id: 'b', type: 'signature', page: 0, x: 0.5, y: 0.5, w: 0.3, h: 0.06 }] };
+  const again = await simple(mona, '', { subject: 'Signed before', ...two });
+  assert.equal((await mona.post(`/envelopes/${again.id}/send`)).status, 200);
+  assert.equal((await signAll(again.id, 'cy@keeps.example')).status, 200);
+  const full = (await mona.get(`/envelopes/${again.id}`)).data.envelope;
+  const put = await mona.put(`/envelopes/${again.id}`, { ...full, fields: [...full.fields, { id: 'nn', document_id: full.documents[0].id, type: 'note', value: 'Changed', page: 0, x: 0.5, y: 0.8, w: 0.3, h: 0.03 }], resign: true });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  assert.equal((await mona.post(`/envelopes/${again.id}/void`, { reason: 'x' })).status, 200);
+  const view = (await mona.get(`/envelopes/${again.id}`)).data;
+  assert.ok(view.envelope.recipients.every((r: any) => r.status !== 'completed'), 'nobody is marked completed any more');
+  assert.equal(view.kept_on_delete, true);
+  assert.equal((await mona.call('DELETE', `/envelopes/${again.id}`)).data.kept_for_recipients, true);
+
+  // Nobody finished: the dialog says "for good", and it is.
+  const none = await simple(mona, 'nobody@keeps.example', { subject: 'Never signed' });
+  assert.equal((await mona.post(`/envelopes/${none.id}/send`)).status, 200);
+  assert.equal((await mona.post(`/envelopes/${none.id}/void`, { reason: 'Mistake' })).status, 200);
+  assert.equal((await mona.get(`/envelopes/${none.id}`)).data.kept_on_delete, false);
+  assert.equal((await mona.call('DELETE', `/envelopes/${none.id}`)).data?.kept_for_recipients, undefined);
+  assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', none.id).n, 0);
+
+  // An integration made and sent one with an Idempotency-Key; it was signed and Mona deleted it. The retry of that
+  // same call must not send it to the signer a second time.
+  const key = (await mona.post('/api-keys', { name: 'crm' })).data.key;
+  const api = withKey(key);
+  const f2 = await upload(mona, 1);
+  const body = { subject: 'Order 1001', send: true, documents: [{ id: 'd', file_id: f2.id }], recipients: [{ id: 'r', role: 'signer', name: 'Pat Payer', email: 'pat@keeps.example' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] };
+  const first = await api.call('POST', '/envelopes', body, { 'idempotency-key': 'order-1001' });
+  assert.equal(first.status, 200, JSON.stringify(first.data));
+  assert.equal((await signAll(first.data.envelope.id, 'pat@keeps.example')).status, 200);
+  assert.equal((await mona.call('DELETE', `/envelopes/${first.data.envelope.id}`)).data.kept_for_recipients, true);
+  const mails = mailTo('pat@keeps.example').length;
+  const retry = await api.call('POST', '/envelopes', body, { 'idempotency-key': 'order-1001' });
+  assert.equal(retry.status, 409);
+  assert.match(retry.data.error, /already made envelope .* deleted from your lists since\. Nothing new was created and nobody was emailed again/);
+  assert.equal(mailTo('pat@keeps.example').length, mails);
+  assert.equal(db.get("SELECT COUNT(*) n FROM envelopes WHERE subject='Order 1001'").n, 1);
 });

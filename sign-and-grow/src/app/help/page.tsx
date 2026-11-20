@@ -319,7 +319,7 @@ export default function Help() {
             <p>After {TWO_STEP_TRIES} wrong codes in a row, wait {TWO_STEP_PAUSE_MINUTES} minutes before the next one, and check that the time on your phone is set automatically: the codes depend on it.</p>
             <p><b>No longer have that mailbox?</b> You can still <a href="#stop-by-card">stop the billing with your card</a>. Then <a href="#contact" data-topic="cannot-log-in">write to us</a> and a person will help with the account.</p>
             <p><b>On a team?</b> An owner or admin can remove someone who has left. What that person sent (envelopes, drafts, templates and bulk sends) passes to a member the admin chooses, and each envelope&apos;s audit trail says so. The owner can hand the whole account to someone else under Settings, then Team.</p>
-            <p><b>Were you removed from a team?</b> Your login still works. Sign in and you get an empty workspace of your own, with your inbox of documents sent to you. A team can invite you again at any time: sign in from the invitation and you are on it.</p>
+            <p><b>Were you removed from a team?</b> Your login still works, and we email you when it happens. Sign in and you are in another team you belong to, or else in an empty workspace of your own, with your inbox of documents sent to you. A team can invite you again at any time: sign in from the invitation and you are on it.</p>
           </QA>
 
           <QA id="unknown-charge" q="I see a charge I do not recognise">

@@ -5,7 +5,7 @@ import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS, DELETED_WITH_A
 import { mailEventsOn, BOUNCE_WARN_DAYS } from '@/lib/policy';
 import { ProcessorTable, Stated } from '../DataPlace';
 import { PrintButton } from './PrintButton';
-import { fileEncryptionOn, PROCESSING_ENCRYPTED } from '@/lib/storedfiles';
+import { fileEncryptionOn, PROCESSING_ENCRYPTED, databaseText, processingNotDone } from '@/lib/storedfiles';
 
 export const metadata = { title: 'Data processing summary', description: 'What this Sign&Grow server processes, for whom, for how long, where, and how it is deleted. One page you can save as a PDF.' };
 // Where the data is and who handles it are settings. Read them when the page is asked for, not when the site is built.
@@ -95,7 +95,9 @@ export default function ProcessingSummary() {
           <li>The audit trail of every envelope is hash chained, so a changed or missing entry shows.</li>
           {/* Whether this server encrypts its stored files is a setting (FILE_ENCRYPTION_KEY, src/lib/storedfiles.ts). */}
           {fileEncryptionOn() && <li>{PROCESSING_ENCRYPTED}</li>}
-          <li><b>What the software does not do:</b> {fileEncryptionOn() ? 'it does not encrypt the database.' : 'it adds no encryption of its own to stored files, so how the disk is protected depends on the host.'} It has no security certification. The <Link href="/security">security page</Link> lists the rest.</li>
+          {/* What stays readable in the database either way, the same list as on /security. */}
+          <li>{databaseText()}</li>
+          <li><b>What the software does not do:</b> {processingNotDone()} It has no security certification. The <Link href="/security">security page</Link> lists the rest.</li>
         </ul>
 
         <h2>Taking your data with you</h2>

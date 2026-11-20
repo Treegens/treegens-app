@@ -1,4 +1,5 @@
 import { all } from './db.ts';
+import { keptText } from './searchtext.ts';
 import { baseUrl } from './util.ts';
 import { paperWarnings, type PaperWarning } from '../lib/paperwork.ts';
 
@@ -20,6 +21,7 @@ export const PAPER_AUDIT_ACTION = 'Checked for documents that often need paper';
  * name when the envelope is sent, and document names are looked at anyway, so nothing is missed by leaving it empty.
  */
 export function sendWarnings(e: { id: string; subject?: string | null }): SendWarning[] {
-  const documents = all('SELECT d.name, f.text FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=? ORDER BY d.position', e.id);
+  // The kept text may be encrypted (FILE_ENCRYPTION_KEY): it is opened here, in memory, for this check only (searchtext.ts).
+  const documents = all('SELECT d.name, f.id, f.text, f.text_sealed FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=? ORDER BY d.position', e.id).map((d) => ({ name: d.name, text: keptText(d) }));
   return paperWarnings({ subject: e.subject, documents }).map((w) => ({ ...w, help_url: `${baseUrl()}${w.help}` }));
 }

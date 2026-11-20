@@ -24,7 +24,7 @@ import { strikeClass } from '@/lib/strike';
 import { pageBoxes } from '@/components/sign/pdfText';
 import { NoViewer } from '@/components/sign/NoViewer';
 import { ZoomControl } from '@/components/sign/Zoom';
-import { isConnectionError, finishNotSent, saveNotSent, keepAnswers, readAnswers, dropAnswers, FINISH_RETRY_MS } from '@/components/sign/offline';
+import { isConnectionError, isAlreadyFinished, finishLanded, finishNotSent, finishUnknown, saveNotSent, keepAnswers, readAnswers, dropAnswers, FINISH_RETRY_MS } from '@/components/sign/offline';
 import { CANNOT_REACH, sameFieldAgain } from '@/components/sign/stuck';
 import { SIGNING_ONLINE } from '@/lib/mobile';
 import { PayLink } from '@/components/sign/PayLink';
@@ -32,6 +32,7 @@ import { NoEmailDone, NoEmailWait } from '@/components/sign/NoEmail';
 // "Questions and comments": the one way to ask the sender something, and the note before Finish (Comments.tsx).
 import { CommentsDialog, OpenQuestion, useMyQuestions } from '@/components/sign/Comments';
 import { MailAgain } from '@/components/sign/MailAgain';
+import { NextPerson, FormCleared } from '@/components/sign/SharedDevice';
 import { witnessFirst, WitnessFirst, WitnessNotice, WitnessName, WitnessAfter } from '@/components/sign/Witness';
 // A document sent to a signing group: what this member's own link is to the group (src/server/groups.ts).
 import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText } from '@/components/sign/GroupNotice';
@@ -504,23 +505,33 @@ export default function SignPage() {
     if (!allShown) return (setOpen(''), toast(NOT_SHOWN, true));
     setBusy(true);
     setFinishError('');
+    // Offline before anything is sent: only then is it known that nothing reached us (offline.ts).
+    const offline = navigator.onLine === false;
+    const finish = me.role === 'approver' ? 'Approve and send' : 'Finish and send';
+    // What the page does once the server has this person's part, however that became known.
+    const landed = (r?: any) => (canSave.current = false, writeKept(token, null, null), dropAnswers(token), setFinishPending(false), setOpen(''), r && setFinished(r));
     try {
-      const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, tz: deviceZone() } });
-      canSave.current = false;
-      writeKept(token, null, null);
-      dropAnswers(token);
-      setFinishPending(false);
-      setOpen('');
-      setFinished(r);
+      landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, tz: deviceZone() } }));
     } catch (e: any) {
       const msg = e?.message || 'Something went wrong on our side.';
-      if (isConnectionError(e)) {
-        // It never reached us, so nothing was signed. Say that, keep everything as it is, and send it again by itself
-        // when the connection is back (the effect next to autosave). Never the browser's own "Failed to fetch".
-        const said = finishNotSent(navigator.onLine !== false, me.role === 'approver' ? 'Approve and send' : 'Finish and send');
-        setFinishPending(true);
-        if (open === 'review') setFinishError(said);
-        else toast(said, true);
+      const say = (said: string) => (open === 'review' ? setFinishError(said) : toast(said, true));
+      if (isAlreadyFinished(e)) {
+        // Sent again after a Finish that went through without its answer reaching us: done, not a mistake.
+        landed();
+        if (!finishPending) toast('You had already finished this document, so nothing more was sent.');
+        await load();
+      } else if (e?.code === 'form_waits') {
+        // A public form with no signature free: the server's own sentence says what happens next. Not sent again.
+        setFinishPending(false);
+        say(msg);
+      } else if (isConnectionError(e) || e?.status >= 500) {
+        // No answer, or an error from our side that may have come after the signature was recorded: ask the server
+        // before saying anything, and never say "nothing was signed" without knowing it. Tried again by itself when
+        // the connection is back (the effect next to autosave). Never the browser's own "Failed to fetch".
+        const now = offline ? 'open' : await finishLanded(() => api(base));
+        if (now === 'done') return void (landed(), await load());
+        setFinishPending(isConnectionError(e) || now === 'unknown');
+        say(now === 'unknown' ? finishUnknown(navigator.onLine !== false, finish) : isConnectionError(e) ? finishNotSent(!offline, finish) : `${msg} Nothing was signed. Try again in a moment.`);
       } else if (e?.code === 'changed') {
         // Nothing was signed. Show the document as it is now, with the answers that still have a field, and ask
         // for another look before finishing.
@@ -528,11 +539,11 @@ export default function SignPage() {
         setChangedOpen(true);
         await load();
         window.scrollTo({ top: 0 });
-      } else if (/no longer open|already finished|not your turn/i.test(msg)) {
+      } else if (/no longer open|not your turn/i.test(msg)) {
         setOpen('');
         toast(msg, true);
         await load();
-      } else if (open === 'review') setFinishError(e?.status >= 500 ? `${msg} Nothing was signed. Try again in a moment.` : `${msg} Go back, put it right, then finish again.`);
+      } else if (open === 'review') setFinishError(`${msg} Go back, put it right, then finish again.`);
       else toast(`${msg} Try again in a moment.`, true);
     } finally {
       setBusy(false);
@@ -692,14 +703,15 @@ export default function SignPage() {
     return (
       <Shell data={data} footer={report}>
         {notice}
-        <StateCard tone={expired ? 'warn' : 'stop'} title={voided ? `${sender.name} cancelled this document` : expired ? 'This signing request has expired' : mine ? 'You declined this document' : 'This document was declined'}>
+        <StateCard tone={expired ? 'warn' : 'stop'} title={voided ? `${sender.name} cancelled this document` : expired ? (env.form_cleared ? 'This form was cleared before it was finished' : 'This signing request has expired') : mine ? 'You declined this document' : 'This document was declined'}>
           {voided && <p>It was voided, so there is nothing for you to sign and nothing more to do.{env.void_reason ? '' : ` Contact ${sender.name} if you have questions.`}</p>}
           {voided && env.void_reason && <p className="sg-quote"><span className="muted small">Their reason</span>{env.void_reason}</p>}
           {!voided && !expired && <p>{mine ? `We told ${sender.name}. The document is closed and there is nothing more for you to do. Changed your mind? Ask them to send it again.` : 'One of the people asked to sign said no, so the document is closed. There is nothing more for you to do.'}</p>}
-          {expired && (
+          {expired && env.form_cleared && <FormCleared slug={env.start_again} />}
+          {expired && !env.form_cleared && (
             <>
-              <p>The deadline{env.expires_at ? ` was ${momentText(env.expires_at, deviceZone())}` : ' has passed'}. Nothing is lost: {sender.name} can open it again and you carry on from where you were.</p>
-              {me.status !== 'completed' && me.status !== 'declined' && me.role !== 'cc' && (moreTime === 'asked' ? (
+              <p>The deadline{env.expires_at ? ` was ${momentText(env.expires_at, deviceZone())}` : ' has passed'}. {env.removed ? `${sender.name} has since removed this document from their list, so it cannot be opened again from here. If you still need to sign it, ask them to send it again.` : `Nothing is lost: ${sender.name} can open it again and you carry on from where you were.`}</p>
+              {!env.removed && me.status !== 'completed' && me.status !== 'declined' && me.role !== 'cc' && (moreTime === 'asked' ? (
                 <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name} for more time.</b> You will get an email as soon as the document is open again.</div>
               ) : (
                 <button type="button" className="btn primary lg" disabled={moreTime === 'busy'} onClick={askForTime}>{moreTime === 'busy' ? 'Asking' : `Ask ${sender.name} for more time`}</button>
@@ -755,12 +767,7 @@ export default function SignPage() {
           {/* A signer with a witness: what became of them, and another one after "I was not there" (sign/Witness.tsx). */}
           <WitnessAfter me={me} base={base} onNamed={load} />
           {acts && <PayLink base={base} />}
-          {env.next_person && (
-            <StateCard tone="wait" title="Is this a shared device?">
-              <p>Your copy is on its way to {myEmail}, so you do not need this screen any more. Press the button before you hand the device on: it clears this page and opens an empty form for the next person.</p>
-              <div className="row wrap sg-actions"><a className="btn primary lg" href={`/f/${env.next_person}`}>Done. Start a new form for the next person</a></div>
-            </StateCard>
-          )}
+          {env.next_person && <NextPerson slug={env.next_person} email={myEmail} />}
           <Impact impact={finished?.impact || env.impact} />
         </div>
         {dialogs}

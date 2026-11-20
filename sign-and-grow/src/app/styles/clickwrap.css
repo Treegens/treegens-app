@@ -31,6 +31,9 @@
 .cw-linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; }
 .cw-report { margin-top: 12px; text-align: left; }
 .cw-done .btn { min-height: 44px; }
+/* The app's empty toast holder is fixed and moved with a transform, and Chrome counts anything like that above the
+   button as covering it, so a frame would refuse an honest press near its bottom edge. This page shows no toasts. */
+.cw-page ~ .toasts:empty { display: none; }
 .cw-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
 /* ---- The team's screens ---- */
@@ -44,6 +47,8 @@
 .cw-state.live { background: var(--green-soft); color: var(--green); }
 .cw-state.stopped { background: var(--red-soft); color: var(--red); }
 .cw-cell { overflow-wrap: anywhere; min-width: 0; }
+/* A label.check is a flex row, and a long sentence beside a tick box squeezed the box to a dot on a phone. */
+.cw-team label.check input[type='checkbox'], .cw-team label.check input[type='radio'] { flex: none; width: 20px; height: 20px; margin: 2px 0 0; }
 @media (max-width: 900px), (pointer: coarse) {
   .cw-team .btn, .cw-team select, .cw-team input:not([type='checkbox']) { min-height: 44px; }
   .cw-team label.check { min-height: 44px; }

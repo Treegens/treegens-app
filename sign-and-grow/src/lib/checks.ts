@@ -11,10 +11,12 @@ export type Check = (typeof CHECKS)[number];
 export const isCheck = (s: any): s is Check => (CHECKS as readonly string[]).includes(s);
 export const isCodeCheck = (s: any): s is 'email_code' | 'sms_code' => s === 'email_code' || s === 'sms_code';
 
+// Short enough to fit a select in a dialog 390 px wide: a select cannot wrap, and a cut-off name reads as another
+// one. The sentence under the select (CHECK_PROVES) says "one-time" in full.
 export const CHECK_NAMES: Record<Check, string> = {
   none: 'No extra check',
-  email_code: 'One-time code by email',
-  sms_code: 'One-time code by text message',
+  email_code: 'Code by email',
+  sms_code: 'Code by text message',
 };
 
 /** How a code travels, in the words the audit trail and the certificate use. */

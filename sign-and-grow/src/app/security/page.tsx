@@ -126,7 +126,7 @@ export default function Security() {
 
         <Block id="privacy" title="Privacy and AI">
           <Point title="Your documents are not sent to any AI system.">Nothing you upload or sign is passed to an AI service, and nothing is used to train one.</Point>
-          <Point title="Search stays inside your account.">The text of PDFs you upload is indexed so you can search your own envelopes. Files that signers attach are not indexed.</Point>
+          <Point title="Search stays inside your account.">The text of PDFs you upload is indexed so you can search your own envelopes. Files that signers attach are not indexed.{encrypted ? ' On this server that text is kept encrypted with the same key as the files, and a search opens it only for the account that is searching.' : ''}</Point>
           <Point title="A file you verify is not stored.">The verify page works out the fingerprint of the file and discards it. In the result, signers&apos; email addresses are partly hidden.</Point>
           {/* src/server/witness.ts beforeFinish and witnessDone make this true. */}
           <Point title="One cookie, only where a signature has a witness.">{DEVICE_COOKIE_WORDS}</Point>

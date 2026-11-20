@@ -881,13 +881,15 @@ test("a complaint is the person's own: a correction away and back, a new envelop
   assert.equal(counted(acc), 0);
   assert.equal(db.get('SELECT status FROM abuse_reports WHERE account_id=? AND reporter=?', acc, to).status, 'withdrawn');
   assert.equal((await c.post(`/envelopes/${fresh.eid}/remind`, { recipient_id: rec(fresh.eid, to).id })).status, 200);
-  // At most three codes a day, said in words.
+  // At most three codes a day to one address, said in words, also across the links of several envelopes to it.
   const third = await out(c, 'daily.limit@repair.example');
   await ok({ type: 'complaint', email: 'daily.limit@repair.example', mail_id: String(lastMail('daily.limit@repair.example', third.eid).id) });
-  const t3 = tokenFor(third.eid, 'daily.limit@repair.example');
+  const fourth = await out(c, 'daily.limit@repair.example', { subject: 'More' });
+  const links = [third.eid, third.eid, fourth.eid, fourth.eid].map((x) => tokenFor(x, 'daily.limit@repair.example'));
   const tries: number[] = [];
-  for (let i = 0; i < 4; i++) tries.push((await new Client().post(`/sign/${t3}/mail-again`)).status);
+  for (const l of links) tries.push((await new Client().post(`/sign/${l}/mail-again`)).status);
   assert.deepEqual(tries, [200, 200, 200, 429]);
+  assert.equal(mailTo('daily.limit@repair.example').filter((x: any) => x.subject === 'Your code to get our emails again').length, 3);
 });
 
 test('an email waiting for another try is not delivered to someone who complained, or to an address that came back, since', async () => {

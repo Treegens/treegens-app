@@ -139,6 +139,6 @@ export const termsPlain = (text: string): string =>
   termBlocks(text).map((b) => b.items.map((it, i) => `${b.kind === 'ul' ? '• ' : b.kind === 'ol' ? `${i + 1}. ` : ''}${it.map((s) => s.text).join('')}`).join('\n')).join('\n\n');
 
 /** The monthly count in words, for the team's screens. */
-export const usageLine = (used: number, limit: number, resets: string): string =>
+export const usageLine = (typed: number, vouched: number, limit: number, resets: string): string =>
   limit <= 0 ? 'This server records no acceptances at all: its operator set the monthly limit to 0.'
-    : `${used} of ${limit} acceptances used this month, counted for the whole account. The count starts again on ${resets}.`;
+    : `This month, counted for the whole account: ${vouched} of ${limit} acceptances by people your website named in a signed link or sent through the API, and ${typed} of ${limit} by visitors who typed their own details. The two are counted apart, so visitors typing on a page cannot use up what your website needs. The counts start again on ${resets}.`;

@@ -280,8 +280,9 @@ function Team() {
       <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything. Templates are shared: everyone can use them, and only the person a template belongs to or an admin can change or delete it. Everyone on the team is covered by the one plan: there is no charge per person.</p>
       {me.role !== 'owner' && members.length > 1 && (
         <div className="card row wrap" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
-          <div className="grow"><b>Leave this team</b><div className="muted small">You do not need anyone&apos;s permission. What you sent stays with the team, and you keep your own login.</div></div>
-          <button className="btn danger" onClick={() => (reloadKeys(), setTo(members.find((m) => m.role === 'owner')?.id || ''), setLeaving(true))}>Leave {me.account.name}</button>
+          {/* The text may shrink to a readable column and no further; below that the button wraps onto its own line. */}
+          <div className="grow" style={{ flex: '1 1 220px' }}><b>Leave this team</b><div className="muted small">You do not need anyone&apos;s permission. What you sent stays with the team, and you keep your own login.</div></div>
+          <button className="btn danger" style={{ minHeight: 44 }} onClick={() => (reloadKeys(), setTo(members.find((m) => m.role === 'owner')?.id || ''), setLeaving(true))}>Leave this team</button>
         </div>
       )}
       {me.role === 'owner' && members.length > 1 && <p className="muted small">You own this account, so you cannot leave it as it is. To leave, make someone else the owner first (Make owner, above). You can then leave like any other member.</p>}
@@ -289,7 +290,8 @@ function Team() {
       {leaving && (
         <Modal title={`Leave ${me.account.name}`} onClose={() => setLeaving(false)}>
           <p>You lose access to this team straight away. Nothing you sent is lost: your envelopes, drafts, templates and bulk sends pass to the person you choose, and anything still out for signature carries on. Each envelope&apos;s audit trail says who handed it to whom.</p>
-          <p className="muted small">You keep your login and stay signed in{me.accounts?.length > 1 ? ', in your other workspace' : ', in a workspace of your own'}. The team&apos;s owner and admins are told by email that you left. They can invite you back at any time.</p>
+          {/* Where they land is said by name: the oldest of their other workspaces, as the server picks it (me.accounts is oldest first). */}
+          <p className="muted small">You keep your login and stay signed in, {(me.accounts || []).find((a: any) => a.id !== me.account.id) ? `in ${(me.accounts || []).find((a: any) => a.id !== me.account.id).name}, the workspace you joined first among your others` : 'in a new workspace of your own'}. The team&apos;s owner and admins are told by email that you left. They can invite you back at any time.</p>
           {myKeys.length > 0 && (
             <div className="notice warn" style={{ marginBottom: 12 }}>
               <b>{myKeys.length === 1 ? 'This API key of yours stops' : `These ${myKeys.length} API keys of yours stop`} working the moment you leave:</b>
@@ -314,7 +316,7 @@ function Team() {
       {remove && (
         <Modal title={`Remove ${remove.name}`} onClose={() => setRemove(null)}>
           <p>They lose access to this account straight away. Nothing they sent is lost: their envelopes, drafts, templates and bulk sends pass to the person you choose, and anything still out for signature carries on. Each envelope&apos;s audit trail says who handed it to whom.</p>
-          <p className="muted small">{remove.name} keeps their own login. The next time they sign in they get a workspace of their own, and you can invite them back at any time.</p>
+          <p className="muted small">{remove.name} keeps their own login and is told by email. The next time they sign in they are in another team they belong to, or in a workspace of their own if there is none, and you can invite them back at any time.</p>
           {theirKeys.length > 0 && (
             <div className="notice warn" style={{ marginBottom: 12 }}>
               <b>{theirKeys.length === 1 ? 'This API key stops' : `These ${theirKeys.length} API keys stop`} working the moment you remove {remove.name}:</b>

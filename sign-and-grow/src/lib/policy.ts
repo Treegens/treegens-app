@@ -429,13 +429,18 @@ export const COMMENTS_NOT_SIGNED = 'Comments are not printed on the document and
 // ---- Click-to-agree ----------------------------------------------------------------------------------
 // An acceptance of click-to-agree terms is not a signature and costs none (src/server/clickwrap.ts). So that a page
 // anyone can open cannot be used to fill our database or a mailbox, each account may record this many acceptances in
-// a calendar month (UTC), counted over all its agreements. The admins are emailed at CLICKWRAP_WARN_PERCENT and again
-// when it is reached. 0 records none.
+// a calendar month (UTC), counted over all its agreements, and counted twice apart: once for acceptances visitors typed
+// their own details into, once for those the website vouched for (a signed link or the API), so strangers typing on a
+// page can never use up what the website needs. The admins are emailed at CLICKWRAP_WARN_PERCENT and again when either
+// is reached. 0 records none.
 export const clickwrapMonthlyLimit = (env: Record<string, string | undefined> = process.env): number => {
   const n = Number((env.CLICKWRAP_MONTHLY_LIMIT ?? '').trim() === '' ? NaN : env.CLICKWRAP_MONTHLY_LIMIT);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 1000;
 };
 export const CLICKWRAP_WARN_PERCENT = 80;
-/** Acceptances from one internet address in an hour, over every agreement, and on one agreement. */
+/** Acceptances with typed-in details recorded from one internet address (an IPv6 /64) in an hour, over every agreement,
+ * and on one agreement. Presses that record nothing, and people the website names, are not counted. */
 export const CLICKWRAP_PER_ADDRESS_HOUR = 30;
 export const CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR = 10;
+/** Presses of any kind from one address in an hour: far above what an office, a school or a phone network needs. */
+export const CLICKWRAP_PRESSES_PER_ADDRESS_HOUR = 300;

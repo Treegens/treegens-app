@@ -300,7 +300,9 @@ route('GET', '/me', (c) => {
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
     members: get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n,
     ...trustInfo(c),
-    accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', c.user.id),
+    // Oldest membership first: the order leaving a team goes by (POST /account/leave), so the Leave dialog can name
+    // the workspace the person lands in.
+    accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=? ORDER BY m.created_at', c.user.id),
     billing: { enabled: billingEnabled(), signatures: billingEnabled() ? creditSummary(a.id) : null },
     outbox: devOutbox(),
     // Whether the operator of this server has switched text messages on. When not, nothing offers them.

@@ -3,14 +3,14 @@
 // clickwrap.ts and the words in src/lib/clickwrap.ts.
 import { route, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, readBlob } from './db.ts';
-import { bad, baseUrl, id, isEmail, now, rateLimit, sha256, str, token } from './util.ts';
+import { bad, baseUrl, id, isEmail, now, rateLimit, rateWait, sha256, str, token } from './util.ts';
 import { sendMail } from './mail.ts';
 import { ABUSE_REASONS } from './envelopes.ts';
 import {
-  acceptanceView, certificatePdf, cleanUrl, closedWhy, CLOSED_TEXT, copyClaim, csvOf, emailCopy, linkWhy, loadAgreement, mayHaveReceipt, minVersion, pageUrl, publish, readView, readWho,
+  acceptanceView, addressKey, certificatePdf, cleanUrl, closedWhy, CLOSED_TEXT, copyClaim, csvOf, emailCopy, linkWhy, loadAgreement, mayHaveReceipt, minVersion, pageUrl, publish, readView, readWho,
   receiptOf, recordAcceptance, statusFor, tellOwnerClosed, usage, versionOf, viewToken, LABEL_MAX, NAME_MAX, TERMS_MAX_CHARS,
 } from './clickwrap.ts';
-import { CLICKWRAP_PER_ADDRESS_HOUR, CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR } from '../lib/policy.ts';
+import { CLICKWRAP_PER_ADDRESS_HOUR, CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR, CLICKWRAP_PRESSES_PER_ADDRESS_HOUR } from '../lib/policy.ts';
 import { CLICK_LAW, EMBED_CAN, EMBED_CANNOT, NOT_A_SIGNATURE, recordedBefore, recordShows, iframeSnippet, scriptSnippet, whoSnippet, WHO_FIELDS } from '../lib/clickwrap.ts';
 
 // ---- The team's agreements (admins: they speak for the organisation's website) -----------------------------------
@@ -162,7 +162,7 @@ route('POST', '/clickwraps/:id/acceptances', async (c) => {
     cw, v, identity: 'api', person, via: 'api', page_url: cleanUrl(b.page_url), ip: c.ip, ua: c.ua, given_ip: str(b.ip ?? '', 64).trim() || null, given_ua: str(b.user_agent ?? '', 400).trim() || null,
     recorded_by: `${c.actor.name}, ${c.auth?.via === 'api_key' ? 'with an API key' : 'signed in to the app'}`,
   });
-  return { acceptance: acceptanceView(row, cw), already };
+  return { acceptance: acceptanceView(row), already };
 });
 
 route('GET', '/clickwraps/:id/status', (c) => statusFor(loadAgreement(c.params.id, c.account.id), { person_id: c.q.get('person_id') || '', email: c.q.get('email') || '' }));
@@ -202,14 +202,14 @@ route('GET', '/clickwrap-acceptances', (c) => {
   const { where, params } = filtered(c);
   const limit = Math.min(200, Math.max(1, Number(c.q.get('limit')) || 50));
   const before = Number(c.q.get('before')) || 0;
-  const rows = all(`SELECT a.rowid n, a.* FROM clickwrap_acceptances a WHERE ${where}${before ? ' AND a.rowid < ?' : ''} ORDER BY a.rowid DESC LIMIT ?`, ...params, ...(before ? [before] : []), limit + 1);
+  const rows = all(`SELECT a.rowid n, a.*, (SELECT title FROM clickwrap_versions v WHERE v.id=a.version_id) version_title FROM clickwrap_acceptances a WHERE ${where}${before ? ' AND a.rowid < ?' : ''} ORDER BY a.rowid DESC LIMIT ?`, ...params, ...(before ? [before] : []), limit + 1);
   const total = get(`SELECT COUNT(*) n FROM clickwrap_acceptances a WHERE ${where}`, ...params).n;
   return { total, acceptances: rows.slice(0, limit).map((r) => acceptanceView(r)), next_before: rows.length > limit ? rows[limit - 1].n : null };
 }, 'admin');
 
 route('GET', '/clickwrap-acceptances/export', (c) => {
   const { where, params } = filtered(c);
-  const rows = all(`SELECT a.* FROM clickwrap_acceptances a WHERE ${where} ORDER BY a.rowid DESC LIMIT 100000`, ...params);
+  const rows = all(`SELECT a.*, (SELECT title FROM clickwrap_versions v WHERE v.id=a.version_id) version_title FROM clickwrap_acceptances a WHERE ${where} ORDER BY a.rowid DESC LIMIT 100000`, ...params);
   return new Response(csvOf(rows), { headers: { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="acceptances-${now().slice(0, 10)}.csv"` } });
 }, 'admin');
 
@@ -233,7 +233,7 @@ const agreementAt = (slug: string) => {
 };
 
 route('GET', '/public/agree/:slug', async (c) => {
-  rateLimit(`cwview:${c.ip}`, 600, 3600_000);
+  rateLimit(`cwview:${addressKey(c.ip)}`, 600, 3600_000);
   const cw = agreementAt(c.params.slug);
   const v = versionOf(cw);
   const why = closedWhy(cw, v);
@@ -279,12 +279,24 @@ route('GET', '/public/agree/:slug/terms', (c) => {
   return pdfResponse(readBlob(v.file_sha256), v.title, true);
 }, 'public');
 
+// Typed-in acceptances from one address (an IPv6 /64) in an hour, over every agreement and on one: a page anyone can
+// open must not be a way to fill an account's records from one machine. Only what was recorded counts, and people the
+// website names are not counted at all (it vouched for them), so the eleventh colleague in an office, or someone after
+// a few presses without the box ticked, is not turned away. Asked before recording, counted in the same step as it.
+function typedRoom(cw: any, ip: string) {
+  const at = addressKey(ip);
+  const wait = Math.max(rateWait(`cwtyped:${at}`, CLICKWRAP_PER_ADDRESS_HOUR), rateWait(`cwtyped:${cw.id}:${at}`, CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR));
+  if (wait) {
+    const minutes = Math.max(1, Math.ceil(wait / 60_000));
+    throw bad(`Many people have already typed their details into these terms from your internet address in the last hour. Several people can share one address (an office, a school, a phone network), and this limit keeps a stranger from filling the records. Nothing was recorded. Try again in about ${minutes} minute${minutes === 1 ? '' : 's'}, or ask the website for a link that names you.`, 429, { code: 'address_limit', retry_minutes: minutes });
+  }
+  return () => (rateLimit(`cwtyped:${at}`, Infinity, 3600_000), rateLimit(`cwtyped:${cw.id}:${at}`, Infinity, 3600_000));
+}
+
 route('POST', '/public/agree/:slug/accept', async (c) => {
-  // One address can accept only so much in an hour, over every agreement and on one: a page anyone can open must not
-  // be a way to fill an account's records or its monthly limit from one machine.
-  rateLimit(`cwacc:${c.ip}`, CLICKWRAP_PER_ADDRESS_HOUR, 3600_000);
+  // Presses of any kind from one address: far above what a shared address needs, against a page being hammered.
+  rateLimit(`cwtry:${addressKey(c.ip)}`, CLICKWRAP_PRESSES_PER_ADDRESS_HOUR, 3600_000);
   const cw = agreementAt(c.params.slug);
-  rateLimit(`cwacc:${cw.id}:${c.ip}`, CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR, 3600_000);
   const b = await c.body();
   const v = versionOf(cw);
   const why = closedWhy(cw, v);
@@ -309,9 +321,10 @@ route('POST', '/public/agree/:slug/accept', async (c) => {
     if (!name || !isEmail(email)) throw bad('Type your name and your email address. Nothing was recorded.', 400, { code: 'who_missing' });
     person = { id: null, name, email };
   }
+  const onRecorded = identity === 'typed' ? typedRoom(cw, c.ip) : undefined;
   const via = b.embed === true ? 'embed' : 'hosted';
   const { row, already } = await recordAcceptance({
-    cw, v, identity, person, via, page_url: cleanUrl(b.page_url), ip: c.ip, ua: c.ua, shown_ms: shown.open, view_match: shown.match,
+    cw, v, identity, person, via, page_url: cleanUrl(b.page_url), ip: c.ip, ua: c.ua, shown_ms: shown.open, view_match: shown.match, onRecorded,
     // Whether the button was covered only means something inside a frame on another website: on our own page
     // nothing is around the terms, so nothing is kept for it there, whatever a client sends.
     scrolled: v.scroll ? true : null, unobscured: via === 'embed' && typeof b.unobscured === 'boolean' ? b.unobscured : null, view: str(b.view, 200),

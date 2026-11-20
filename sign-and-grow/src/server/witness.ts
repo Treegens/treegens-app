@@ -45,7 +45,7 @@ export function witnessProblem(r: any, e: any): string | null {
  * POST /envelopes/:id/correct and a signer passing the document on (correctRecipient and reassignRecipient in
  * envelopes.ts): the same rules as sending, for the envelope as it will be after the change, so neither can make a
  * witness who is the signer, or a party. Only a problem this change makes is refused: an envelope that went out under
- * older rules can still be put right. `passing` is the signer handing it on, who is told in their own words.
+ * older rules can still be put right. `passing` is the signer handing it on, who is told in words meant for them.
  */
 export function assertWitnessesAfter(e: any, r: any, name: string, email: string, passing = false) {
   const after = { ...e, recipients: e.recipients.map((x: any) => (x.id === r.id ? { ...x, name, email } : x)) };

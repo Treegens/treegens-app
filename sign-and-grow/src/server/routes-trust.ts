@@ -18,7 +18,7 @@ import { memberForCode } from './groups.ts';
 import { forgetChosen } from './tplroles.ts';
 import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
 import { commentsText } from './comments.ts';
-import { forgetClickwraps } from './clickwrap.ts';
+import { attachedFiles, forgetClickwraps } from './clickwrap.ts';
 import { rememberGoneMail } from './bounces.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
@@ -362,8 +362,8 @@ export function purgeUser(userId: string): any[] {
       run("UPDATE credits SET ref = substr(ref, 1, instr(ref, '|')) || id WHERE account_id=? AND reason='signature' AND instr(ref, '|') > 0", a.id);
       run('UPDATE payments SET receipt_url=NULL WHERE account_id=?', a.id);
       // Click-to-agree terms, versions and acceptances go with the account row; our copies of the emails that sent
-      // people what they accepted are removed here (clickwrap.ts).
-      forgetClickwraps(a.id);
+      // people what they accepted are removed here (clickwrap.ts), and the certificate PDFs attached to them below.
+      shas.push(...forgetClickwraps(a.id));
       run('DELETE FROM accounts WHERE id=?', a.id);
     }
     // In teams they only belonged to, what they sent passes to the owner so nothing is stranded.
@@ -452,7 +452,12 @@ export async function purgeClosedAccounts(): Promise<number> {
   run(`DELETE FROM emails WHERE envelope_id IS NOT NULL AND ${NOT_WAITING} AND envelope_id NOT IN (SELECT id FROM envelopes)`);
   // Our copy of an email that is not part of a document's record has done its job once it was delivered. It is
   // kept for a while so "did you send me that?" can be answered, then deleted, whoever it was to.
-  run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND at < ?`, new Date(Date.now() - MAIL_COPY_DAYS * 864e5).toISOString());
+  // A file attached to such an email (the certificate of a click-to-agree acceptance) goes with it, unless something
+  // else still points at it (removeUnusedBlobs).
+  const oldMail = `envelope_id IS NULL AND ${NOT_WAITING} AND at < ?`, mailCut = new Date(Date.now() - MAIL_COPY_DAYS * 864e5).toISOString();
+  const oldFiles = attachedFiles(all(`SELECT payload FROM emails WHERE ${oldMail} AND payload LIKE '%"sha256"%'`, mailCut));
+  run(`DELETE FROM emails WHERE ${oldMail}`, mailCut);
+  removeUnusedBlobs(oldFiles);
   // The fingerprint of a security code from a deleted document is kept for a year, then that goes too.
   run('DELETE FROM forgotten_codes WHERE at < ?', new Date(Date.now() - 365 * 864e5).toISOString());
   // And so does the fingerprint of a signed PDF whose document was deleted (src/server/evidence.ts).

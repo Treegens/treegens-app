@@ -60,6 +60,8 @@ label.f { display: block; font-size: 13px; font-weight: 600; margin-bottom: 12px
 label.f > span { display: block; margin-bottom: 5px; }
 label.f .hint { font-weight: 400; color: var(--muted); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
+/* A long label next to it must never squeeze the box itself to a sliver on a phone. */
+label.check > input[type='checkbox'], label.check > input[type='radio'] { flex: none; }
 
 /* Layout */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
