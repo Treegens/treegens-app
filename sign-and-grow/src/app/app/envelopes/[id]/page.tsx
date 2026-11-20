@@ -17,6 +17,8 @@ import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { ownLink } from '@/components/sender/OwnLink';
 import { Disputed } from '@/components/sender/Disputed';
 import { EnvelopeComments } from '@/components/sender/Comments';
+import { RetentionCard } from '@/components/sender/Retention';
+import { redactedNote } from '@/lib/retention';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
 const MAIL_STATUS: Record<string, string> = { sent: 'Handed to the mail server', outbox: 'Not delivered, no mail server set up', failed: 'Could not be sent', queued: 'Waiting to go out' };
@@ -137,11 +139,11 @@ export default function EnvelopeDetail() {
         </div>
         <div className="row wrap sn-headactions">
           {e.documents.length > 0 && <a className="btn" href={`/api/envelopes/${e.id}/download?inline=1`} target="_blank" rel="noreferrer">{e.status === 'completed' ? 'View signed PDF' : 'Preview PDF'}</a>}
-          {e.status === 'completed' && <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>Download with certificate</a>}
+          {e.status === 'completed' && !e.purged_at && <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>Download with certificate</a>}
           {/* The signed PDF, the certificate, the record, our emails and the consent wording in one ZIP (evidence.ts). */}
-          {!isTpl && e.status !== 'draft' && <a className="btn" href={`/api/envelopes/${e.id}/evidence`} title="A ZIP with the signed PDF, its certificate, the audit trail as text and data, our emails about it and what each person agreed to">Download evidence pack</a>}
-          {!removed && <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>}
-          {!removed && !isTpl && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
+          {!isTpl && e.status !== 'draft' && !e.purged_at && <a className="btn" href={`/api/envelopes/${e.id}/evidence`} title="A ZIP with the signed PDF, its certificate, the audit trail as text and data, our emails about it and what each person agreed to">Download evidence pack</a>}
+          {!removed && !e.purged_at && <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>}
+          {!removed && !isTpl && !e.purged_at && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
           {out && <button className="btn danger" onClick={() => setDialog('void')}>Void</button>}
           {!removed && !out && mayChange && (!isTpl || e.access?.may_delete !== false) && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
         </div>
@@ -276,6 +278,9 @@ export default function EnvelopeDetail() {
       {/* Questions and comments: the threads, who waits for an answer, answer and settle (components/sender/Comments.tsx). */}
       {!isTpl && <EnvelopeComments envelope={e} />}
 
+      {/* How long it is kept, holds, Keep it, Purge now, and what a purge left (src/components/sender/Retention.tsx). */}
+      {!isTpl && <RetentionCard envelopeId={e.id} r={data.retention} onChanged={reload} />}
+
       {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
       <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />
 
@@ -306,7 +311,8 @@ export default function EnvelopeDetail() {
           )}
         </section>
         <section className="card" aria-labelledby="sn-audit-h">
-          <div className="row between wrap"><h2 id="sn-audit-h">Audit trail</h2><span className={`badge ${data.chain.ok ? 'completed' : 'declined'}`}>{data.chain.ok ? 'Record intact' : 'Record was altered'}</span></div>
+          <div className="row between wrap"><h2 id="sn-audit-h">Audit trail</h2><span className={`badge ${data.chain.ok ? 'completed' : 'declined'}`}>{data.chain.ok ? (data.chain.redacted ? 'Record intact, some details removed' : 'Record intact') : 'Record was altered'}</span></div>
+          {data.chain.ok && data.chain.redacted > 0 && <p className="muted small" role="note">{redactedNote(data.chain.redacted_on)}</p>}
           <div className="sn-audit" tabIndex={0} role="group" aria-label="Audit trail entries">
             {data.audit.length === 0 && <div className="muted small">Nothing has happened yet.</div>}
             {data.audit.map((a: any) => (
@@ -314,6 +320,7 @@ export default function EnvelopeDetail() {
                 <div className="row between wrap" style={{ rowGap: 0 }}><b className="small">{a.action}</b><span className="muted small">{fmtDate(a.at, true)}</span></div>
                 <div className="muted small">{a.detail}</div>
                 <div className="muted mono" style={{ fontSize: 11 }}>{a.actor}{a.ip ? ` · ${a.ip}` : ''} · {a.hash.slice(0, 12)}</div>
+                {a.redacted_at && <span className="badge ret-audit-mark">Details removed {String(a.redacted_at).slice(0, 10)}</span>}
               </div>
             ))}
           </div>

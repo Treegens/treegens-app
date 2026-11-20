@@ -589,7 +589,30 @@ export const stopBillingFor = (acct: any): Promise<boolean> => serial(acct?.id, 
 
 // ---- What the Plan page shows ----------------------------------------------------------------
 
-const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', dispute: 'Card dispute', adjust: 'Adjustment' };
+const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', dispute: 'Card dispute', adjust: 'Adjustment', expired: 'Expired unused' };
+// What a lot is, for the Plan page and the emails.
+const LOT_LABEL: Record<string, string> = { welcome: 'Free signatures of a new account', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', adjust: 'Added by a person here' };
+
+// The signatures an account has and when each expires, in sentences, for the emails that count them (sent when a
+// plan stops or is stopped, and when a code ends): what is left of the plan month runs to its end and expires then
+// like any month's, top-ups keep their own dates, the trial's its own. Nothing here claims a signature lasts longer
+// than its lot does.
+function whatYouKeep(accountId: string, planEnds = false): string {
+  const lots = lotsOf(accountId).filter((l) => l.live && l.left > 0);
+  const n = Math.max(0, available(accountId));
+  const of = (src: string[]) => lots.filter((l) => src.includes(l.source));
+  const count = (ls: LotView[]) => ls.reduce((k, l) => k + l.left, 0);
+  const first = (ls: LotView[]) => ls.map((l) => l.expires_at).filter(Boolean).sort()[0] || null;
+  const parts: string[] = [`You have ${sigs(n)} left to send with.`];
+  const plan = of(['plan', 'code']);
+  if (count(plan)) parts.push(`The ${sigs(count(plan))} left from this month of the plan can be used until ${expiryMoment(first(plan))}, when they expire like every month's${planEnds ? ', and no new month comes after that' : ''}.`);
+  const tops = of(['topup']);
+  if (count(tops)) parts.push(`Your ${sigs(count(tops))} from top-ups keep their own dates: ${TOPUP_EXPIRY_MONTHS} months after each payment${tops.length > 1 ? `, the first of them on ${expiryMoment(first(tops))}` : `, on ${expiryMoment(first(tops))}`}.`);
+  const trial = of(['welcome']);
+  if (count(trial)) parts.push(`The ${sigs(count(trial))} every new account gets expire on ${expiryMoment(first(trial))}.`);
+  parts.push('Signing your own documents is always free.');
+  return parts.join(' ');
+}
 const PAYMENT_LABEL: Record<string, string> = { plan: 'Monthly plan', topup: 'Top-up' };
 
 // The anti-abuse limits on accounts that have not paid are the server's own rule (hasNotPaid in envelopes.ts): they
@@ -600,6 +623,22 @@ const liftsOn = (accountId: string): string | null => {
   return at ? new Date(Date.parse(at) + PAID_TRUST_DAYS * 864e5).toISOString() : null;
 };
 
+// A lot as the Plan page and the API show it.
+const lotView = (l: LotView) => ({
+  source: l.source, label: LOT_LABEL[l.source] || l.source, payment_id: l.paid ? l.ref : null, at: l.at, expires_at: l.expires_at, live: l.live,
+  of: l.qty, left: Math.max(0, l.left), held: l.held, used: l.used, expired: l.expired, refunded: l.refunded,
+});
+// This month of the plan: the plan or code lot whose date has not passed and comes soonest. `fresh` says what
+// happens at `resets_at`: a renewal brings a fresh month ('renewal'), the next month of a free code does ('code'),
+// or nothing follows (the plan was cancelled or has ended: 'none').
+function periodOf(acct: any, lots: LotView[]) {
+  const cur = lots.filter((l) => (l.source === 'plan' || l.source === 'code') && l.live && l.expires_at).sort((x, y) => x.expires_at!.localeCompare(y.expires_at!))[0];
+  if (!cur) return null;
+  const fresh = cur.source === 'code' ? (acct.promo_code && findFreeCode(acct.promo_code) ? 'code' : 'none')
+    : !acct.promo_code && acct.plan === 'grove' && renewing(acct) ? 'renewal' : 'none';
+  return { source: cur.source, left: Math.max(0, cur.left), of: cur.qty, held: cur.held, used: cur.used, resets_at: cur.expires_at, fresh };
+}
+
 export function billingState(acct: any, user?: any) {
   const enabled = billingEnabled();
   const paid = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=? AND kind IN ('plan','topup')", acct.id).cents;
@@ -607,6 +646,7 @@ export function billingState(acct: any, user?: any) {
   const firstWeek = limited && Date.now() - Date.parse(acct.created_at) < 7 * 864e5;
   const nextMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)).toISOString();
   const s = enabled ? creditSummary(acct.id) : null;
+  const lots = enabled ? lotsOf(acct.id) : [];
   const pending = all("SELECT r.payment_id, r.cents, r.at, r.tries, r.auto, r.why, r.status, r.hand_parts, p.currency FROM refunds r JOIN payments p ON p.id=r.payment_id WHERE r.account_id=? AND r.status IN ('pending','manual') ORDER BY r.at", acct.id);
   return {
     enabled,
@@ -643,8 +683,20 @@ export function billingState(acct: any, user?: any) {
     // What can be sent right now: the balance, minus signatures held for people who have been asked and not signed yet.
     signatures: s,
     short: s && s.available < 0 ? -s.available : 0,
+    // Where the signatures come from and when each lot expires (expiryRuleText). `period` is this month of the plan
+    // (paid, or free with a code): how many of its signatures are left and the moment they reset, or expire for good
+    // when no new month follows (`fresh`: a renewal, the next month of a code, or none). `lots` lists every lot that
+    // still has signatures left or held, soonest to expire first; `topups` is the same for top-ups alone.
+    period: enabled ? periodOf(acct, lots) : null,
+    lots: lots.filter((l) => l.left > 0 || l.held > 0).sort((x, y) => (x.expires_at || '9999').localeCompare(y.expires_at || '9999')).map(lotView),
+    topups: lots.filter((l) => l.source === 'topup' && (l.left > 0 || l.held > 0)).sort((x, y) => (x.expires_at || '').localeCompare(y.expires_at || '')).map(lotView),
+    // Every signature accounted for: bought or given = used + held + refunded + expired + adjusted + left.
+    sums: enabled ? ledgerSums(acct.id) : null,
+    expiry_rule: expiryRuleText(),
+    held_rule: HELD_EXPIRY_TEXT,
+    // The trees follow the money: everything paid, less refunds, whether its signatures were used or not.
     mangroves: mangrovesFor(paid / 100),
-    refund: enabled ? refundOffer(acct) : null,
+    refund: enabled ? refundOffer(acct, lots) : null,
     // Refunds that have been asked for and not confirmed by the provider yet, so the page can say so at the top.
     // `auto`: one the software owes without being asked, with `why` in the customer's words. `by_hand`: the provider
     // refused it three times, so a person sends it.
@@ -662,7 +714,9 @@ export function billingState(acct: any, user?: any) {
     payments: all("SELECT * FROM payments WHERE account_id=? AND kind IN ('plan','topup') AND (applied_at IS NOT NULL OR refunded_cents > 0) ORDER BY at DESC, rowid DESC LIMIT 60", acct.id)
       .map((p) => ({
         id: p.id, amount_cents: p.amount_cents, currency: p.currency, at: p.at, receipt_url: p.receipt_url, refunded_at: p.refunded_at, refunded_cents: p.refunded_cents, kind: p.kind, label: PAYMENT_LABEL[p.kind], credits: p.credits, disputed: p.disputed || null,
-        amount: money(p.amount_cents, p.currency), refunded: p.refunded_cents ? money(p.refunded_cents, p.currency) : null, refund_pending: refundInFlight(p.id), refundable: enabled ? offerFor(acct, p) : null,
+        amount: money(p.amount_cents, p.currency), refunded: p.refunded_cents ? money(p.refunded_cents, p.currency) : null, refund_pending: refundInFlight(p.id), refundable: enabled ? offerFor(acct, p, lots) : null,
+        // When the signatures this payment bought expire.
+        expires_at: lotOfPayment(acct.id, p.id, lots)?.expires_at || null,
       })),
     ledger: all('SELECT delta, reason, at FROM credits WHERE account_id=? ORDER BY id DESC LIMIT 40', acct.id).map((l) => ({ ...l, label: LEDGER_LABEL[l.reason] || l.reason })),
     history: all('SELECT at, what, ref, detail FROM billing_log WHERE account_id=? ORDER BY id DESC LIMIT 40', acct.id).map((h) => ({ ...h, label: HISTORY_LABEL[h.what] || h.what })),
@@ -674,7 +728,7 @@ export function billingState(acct: any, user?: any) {
 const cancelLines = (a: any, reference: string, by: string, when: string[]) => [
   `Cancellation reference: ${reference}. Cancelled ${by}.`,
   ...when,
-  `Your signatures stay yours: the ${sigs(Math.max(0, available(a.id)))} you have left never expire, and signing your own documents is always free.`,
+  whatYouKeep(a.id, true),
   'Nothing is deleted. Every document, audit trail and receipt stays available to you for as long as the account exists.',
 ];
 

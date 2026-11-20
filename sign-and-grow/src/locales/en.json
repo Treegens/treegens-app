@@ -51,5 +51,10 @@
   "settings.security.emails": "Include names and email addresses when the record leaves GrowSigning",
   "settings.security.emails_hint": "Off: the download, the API, the webhook and the export name people by their id only. On: also by their name and email address as they are now. The record itself never stores them.",
   "settings.security.emails_on": "Names and email addresses are now included when the record leaves GrowSigning.",
-  "settings.security.emails_off": "People are now named by their id only when the record leaves GrowSigning."
+  "settings.security.emails_off": "People are now named by their id only when the record leaves GrowSigning.",
+  "sign.purged.title": "The sender deleted this document",
+  "sign.purged.body": "It is no longer kept here, so this link cannot open it. If you need a copy, use the one you were emailed or downloaded, or ask the sender.",
+  "sign.purged.day": "Deleted on {day}.",
+  "sign.purged.ask": "The sender decides how long their documents are kept, so questions about this one are for them. For anything else, use the help page.",
+  "sign.purged.help": "Open the help page"
 }
