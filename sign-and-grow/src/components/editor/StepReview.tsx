@@ -38,13 +38,15 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
   if (!s) return null; // payments are not connected, so nothing is counted
   const mine = me.user.email.toLowerCase();
   // Signing in person is someone else signing on your device, so it always needs one, whatever address was typed.
-  const signers = rcps.filter((r) => r.role === 'inperson' || (r.role === 'signer' && (r.email || '').trim().toLowerCase() !== mine));
+  // Free means you, signing under your own name at your own address. A client entered under your address is not you.
+  const same = (x: string, y: string) => (x || '').trim().replace(/\s+/g, ' ').toLowerCase() === (y || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const signers = rcps.filter((r) => r.role === 'inperson' || (r.role === 'signer' && !((r.email || '').trim().toLowerCase() === mine && same(r.name, me.user.name))));
   // When correcting, signers who were already asked are already held; only new ones need another signature.
   const need = signers.filter((r) => !correcting || !r.status).length;
   const have = Math.max(0, s.available);
   const each = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
   if (need === 0)
-    return <div className="notice">{correcting ? 'These changes use no extra signatures.' : 'This envelope uses none of your signatures. Signing your own documents, approving, viewing and copies are always free.'}</div>;
+    return <div className="notice">{correcting ? 'No new signers were added. If a change turns someone into a signer, or points your own signature at somebody else, that is checked when you save.' : 'This envelope uses none of your signatures. Signing your own documents, approving, viewing and copies are always free.'}</div>;
   if (need > have) {
     // Out of signatures: say so before the Send button does, and put every way forward on the table.
     const short = need - have;

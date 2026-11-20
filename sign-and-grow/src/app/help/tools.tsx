@@ -99,14 +99,14 @@ export function StopByCard() {
   const [noEmail, setNoEmail] = useState(false);
   const [on, setOn] = useState('');
   const [amount, setAmount] = useState('');
-  const a = useAction<{ account?: string; ends_at: string; reference: string; ended_now?: boolean; all?: { account?: string; reference: string }[] }>();
+  const a = useAction<{ account?: string; ends_at: string; reference: string; ended_now?: boolean; why?: string; all?: { account?: string; reference: string }[] }>();
   if (a.done)
     return (
       <Result show>
         <p><b>Renewal stopped{a.done.all && a.done.all.length > 1 ? ` for ${a.done.all.length} plans paid with that card: ${a.done.all.map((x) => x.account).filter(Boolean).join(' and ')}` : a.done.account ? ` for ${a.done.account}` : ''}.</b> You will not be charged again.</p>
         <p>Reference <span className="pub-ref">{(a.done.all && a.done.all.length > 1 ? a.done.all.map((x) => x.reference) : [a.done.reference]).join(', ')}</span></p>
         {a.done.ended_now
-          ? <p>The last payment had not gone through, so the plan ended today and that payment will not be tried again. The signatures on the account stay, and nothing is deleted.</p>
+          ? <p>{a.done.why === 'not_taken' ? 'The payment for the new month had not been taken yet, so the plan ended today and that payment is withdrawn.' : a.done.why === 'already_ended' ? 'The plan had already ended with the payment provider, so there was nothing more to stop.' : 'The last payment had not gone through, so the plan ended today and that payment will not be tried again.'} The signatures on the account stay, and nothing is deleted.</p>
           : <p>The plan runs until {billDay(a.done.ends_at)}, because that month is already paid for. No payment is taken after that. The signatures on the account stay, and nothing is deleted.</p>}
         <p>We emailed this confirmation to the admins of the account. Want the last charge back? See the <a href="#refunds">refund rule</a>.</p>
       </Result>

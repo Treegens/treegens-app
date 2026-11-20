@@ -451,6 +451,8 @@ route('POST', '/bulk/:id/void', async (c) => {
   const b = batch(c, c.params.id);
   const reason = str((await c.body()).reason, 500);
   if (!reason.trim()) throw bad('Give a reason for voiding. Recipients will see it.');
+  // While the batch is still going out, voiding would only catch the part already sent and the rest would follow.
+  if (sendingNow.has(b.id)) throw bad('This batch is still being sent. Wait until it has finished, then void it: that way nobody is missed.', 409);
   // skipped: envelopes that were open when the call began and had closed by their turn. They stay as they are.
   let voided = 0;
   let skipped = 0;

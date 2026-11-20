@@ -326,6 +326,8 @@ route('POST', '/account/transfer-owner', async (c) => {
   if (c.role !== 'owner') throw bad('Only the current owner can hand the account over.', 403);
   const to = str((await c.body()).user_id);
   if (to === c.user.id || !get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)) throw bad('Choose another member of this team.');
+  // Someone who is closing their own login cannot be handed a team: it would be left without an owner when they go.
+  if (get('SELECT closing_at FROM users WHERE id=?', to)?.closing_at) throw bad('That person is closing their login, so the account cannot be handed to them. Choose someone else, or ask them to sign in again first (that keeps their login).');
   tx(() => {
     run("UPDATE memberships SET role='admin' WHERE account_id=? AND user_id=?", c.account.id, c.user.id);
     run("UPDATE memberships SET role='owner' WHERE account_id=? AND user_id=?", c.account.id, to);

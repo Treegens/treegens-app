@@ -6,7 +6,7 @@ import { PLANS, type PlanId } from '@/lib/impact';
 import { FindSubscription, StopByCard, billDay } from '@/app/help/tools';
 
 type Info = { account: string; plan: string; price: number; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null; failing?: boolean };
-type Done = { ends_at: string; reference: string; ended_now?: boolean };
+type Done = { ends_at: string; reference: string; ended_now?: boolean; why?: string };
 type View = { kind: 'loading' } | { kind: 'no-link' } | { kind: 'expired' } | { kind: 'failed'; message: string } | { kind: 'ready'; info: Info };
 
 const planName = (plan: string) => PLANS[plan as PlanId]?.name || plan;
@@ -127,7 +127,7 @@ export function StopView() {
           <h2>The monthly plan for {info.account} has ended</h2>
           {reference && <p>Cancellation reference <span className="pub-ref">{reference}</span></p>}
           <ul className="pub-list">
-            <li>The last payment had not gone through, so the plan ended today and that payment will not be tried again.</li>
+            <li>{done.why === 'not_taken' ? 'The payment for the new month had not been taken yet, so the plan ended today and that payment is withdrawn.' : done.why === 'already_ended' ? 'The plan had already ended with the payment provider, so there was nothing more to stop.' : 'The last payment had not gone through, so the plan ended today and that payment will not be tried again.'}</li>
             <li><b>Your signatures stay yours.</b> {left}</li>
             <li><b>Nothing is deleted.</b> Every document, audit trail and receipt stays in the account, and you can export all of it for free.</li>
             <li>If a charge ever appears after today, the software refunds it by itself.</li>

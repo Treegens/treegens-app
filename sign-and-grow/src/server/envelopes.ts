@@ -932,18 +932,19 @@ async function completeEnvelope(e: any) {
   const t = now();
   run("UPDATE envelopes SET status='completed', completed_at=?, updated_at=? WHERE id=? AND status='sent'", t, t, e.id);
   audit(e.id, { name: 'System' }, 'Envelope completed', 'All recipients have finished');
+  // Everyone has finished, and that stands whatever happens next. If building the signed copy fails here, the
+  // timer builds it again until it succeeds (see buildFinal), instead of leaving the envelope without one.
+  const built = await buildFinal(e.id);
   const fresh = loadEnvelope(e.id);
-  const pdf = await buildPdf(fresh, true);
-  const sha = saveBlob(pdf);
-  run('UPDATE envelopes SET final_sha256=?, final_size=? WHERE id=?', sha, pdf.length, e.id);
+  const pdf = built ? finalPdf(fresh) : null;
   fireWebhooks(e.account_id, 'envelope.completed', e.id);
 
   const i = impactOf(fresh.sheets);
   const lines = [
-    'Everyone has finished. The signed document and its certificate of completion are ready.',
+    pdf ? 'Everyone has finished. The signed document and its certificate of completion are ready.' : 'Everyone has finished. The signed document and its certificate of completion are being prepared and will be at the link below shortly.',
     `Because this was signed digitally, about ${fmtNum(i.sheets)} sheets of paper and ${fmtNum(i.litresWater)} litres of water were not used.`,
   ];
-  const attachments = pdf.length < 8_000_000 ? [{ filename: `${(fresh.subject || 'signed').replace(/[^\w .-]+/g, '_').slice(0, 80)}.pdf`, content: Buffer.from(pdf) }] : undefined;
+  const attachments = pdf && pdf.length < 8_000_000 ? [{ filename: `${(fresh.subject || 'signed').replace(/[^\w .-]+/g, '_').slice(0, 80)}.pdf`, content: Buffer.from(pdf) }] : undefined;
   const brand = brandOf(e.account_id);
   const sender = senderOf(e);
   const sent = new Set<string>();
@@ -962,6 +963,21 @@ async function completeEnvelope(e: any) {
 
 export function finalPdf(e: any): Buffer | null {
   return e.final_sha256 ? readBlob(e.final_sha256) : null;
+}
+
+// Builds and stores the signed copy of a completed envelope if it does not have one yet. True when it has one.
+export async function buildFinal(envelopeId: string): Promise<boolean> {
+  const e = loadEnvelope(envelopeId);
+  if (!e || e.status !== 'completed') return false;
+  if (e.final_sha256) return true;
+  try {
+    const pdf = await buildPdf(e, true);
+    run('UPDATE envelopes SET final_sha256=?, final_size=? WHERE id=? AND final_sha256 IS NULL', saveBlob(pdf), pdf.length, e.id);
+    return true;
+  } catch (err: any) {
+    console.error('[pdf] could not build the signed copy yet', envelopeId, err?.message);
+    return false;
+  }
 }
 
 // Emails the sender about their own envelope, if they asked for that kind of news. 'always' is for things that need them to act.
@@ -1496,6 +1512,8 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
   let warned = 0;
   let unopenedAlerts = 0;
   const t = now();
+  // A completed envelope whose signed copy could not be built at the time gets it now.
+  for (const row of all("SELECT id FROM envelopes WHERE status='completed' AND kind='envelope' AND final_sha256 IS NULL LIMIT 5")) await buildFinal(row.id);
   for (const row of all("SELECT id FROM envelopes WHERE status='sent' AND kind='envelope'")) {
     const e = loadEnvelope(row.id);
     if (e.expires_at && e.expires_at < t) {
