@@ -263,7 +263,8 @@ test('a dragged field snaps to the edges and centres of its neighbours and repor
 // ---- Correcting an envelope that is already out -------------------------------------------------------------------
 
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
-const asBody = (e: any) => ({ subject: e.subject, message: e.message, ordered: e.ordered, documents: e.documents, recipients: e.recipients, fields: e.fields });
+// reminder_days is part of what the editor sends: a new account starts with reminders on (DEFAULT_REMINDER_DAYS).
+const asBody = (e: any) => ({ subject: e.subject, message: e.message, ordered: e.ordered, reminder_days: e.reminder_days, documents: e.documents, recipients: e.recipients, fields: e.fields });
 const kinds = (r: { people: any[] }) => Object.fromEntries(r.people.map((p) => [p.name, p.kind]));
 
 test('the review step says what really happens to each person', async () => {

@@ -13,8 +13,11 @@ const cp = (from, to) => {
   fs.cpSync(from, to, { recursive: true });
 };
 
-cp(nm('pdfjs-dist/build/pdf.min.mjs'), out('public/pdfjs/pdf.min.mjs'));
-cp(nm('pdfjs-dist/build/pdf.worker.min.mjs'), out('public/pdfjs/pdf.worker.min.mjs'));
+// The legacy build of the viewer, not the modern one. The modern build calls functions that only exist from iOS 17.4
+// and Chrome 119 (Promise.withResolvers first), so on an older phone the signing page drew no page at all. The legacy
+// build brings its own copies of them and runs on whatever the rest of the app runs on (Safari 16.4, Chrome 111).
+cp(nm('pdfjs-dist/legacy/build/pdf.min.mjs'), out('public/pdfjs/pdf.min.mjs'));
+cp(nm('pdfjs-dist/legacy/build/pdf.worker.min.mjs'), out('public/pdfjs/pdf.worker.min.mjs'));
 cp(nm('pdfjs-dist/cmaps'), out('public/pdfjs/cmaps'));
 cp(nm('pdfjs-dist/standard_fonts'), out('public/pdfjs/standard_fonts'));
 for (const f of ['caveat', 'dancing-script', 'great-vibes', 'sacramento'])

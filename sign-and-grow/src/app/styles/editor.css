@@ -79,9 +79,10 @@
 @media (pointer: coarse) {
   .field.edit .grip { width: 16px; height: 16px; right: -8px; bottom: -8px; }
   .field.edit.box .grip { right: -17px; bottom: -17px; }
-  /* A thumb needs about 44px. The corner's area grows away from the field only (16px and 28px more, down and to the
-     right), so it never lies over the field itself: a tick box is smaller than the area and could not be moved. */
-  .field.edit .grip::after { content: ''; position: absolute; inset: 0 -28px -28px 0; }
+  /* A thumb needs about 44px. The corner's area grows away from the field only (from the dot's outer edge, 44px down
+     and to the right), so it never lies over the field itself: a tick box is smaller than the area and could not be
+     moved. The area is placed from inside the dot's 2px border (box-sizing), hence -2px and 16 - 4 + 2 + 30 = 44. */
+  .field.edit .grip::after { content: ''; position: absolute; inset: -2px -30px -30px -2px; }
   /* The same for the field. At phone width a tick box is about 9px, so every field gets an area of at least 44px
      around its middle to tap and drag by. The areas lie behind every real field (the overlay is its own stacking
      order), so where two areas meet, the field that is drawn there still wins. */
@@ -111,10 +112,10 @@
   .ed-only-sm { display: block; }
   .ed-hide-sm, .ed-wide { display: none !important; }
 
-  /* Everything that can be tapped is at least 40px tall. */
-  .ed .btn, .ed .palette button, .ed .steps button { min-height: 40px; }
-  .ed .steps button { min-width: 40px; justify-content: center; }
-  .ed .btn.sm { min-width: 40px; }
+  /* Everything that can be tapped is at least 44px tall, the size of a thumb. */
+  .ed .btn, .ed .palette button, .ed .steps button { min-height: 44px; }
+  .ed .steps button { min-width: 44px; justify-content: center; }
+  .ed .btn.sm { min-width: 44px; }
   .ed input:not([type='checkbox']):not([type='radio']), .ed select { min-height: 40px; }
   .ed label.check { min-height: 40px; }
   .ed input[type='checkbox'] { width: 18px; height: 18px; }

@@ -22,6 +22,11 @@ export async function register() {
   const { smsWarning } = await import('./lib/checks');
   const sms = smsWarning();
   if (sms) console.error(sms);
+  // And when the stored files need a key the server was not given, or FILE_ENCRYPTION_KEY is not a key: it stores no
+  // new file until that is put right (src/server/filestore.ts), and the operator hears why before anyone uploads.
+  const { fileStoreWarning } = await import('./server/filestore');
+  const files = fileStoreWarning();
+  if (files) console.error(files);
   const { tick } = await import('./server/cron');
   g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
   g.__tscron.unref?.();

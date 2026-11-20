@@ -3,7 +3,11 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { WEBHOOK_EVENTS, MAX_WEBHOOKS, KEEP_BODIES } from '@/server/webhooks';
 import { ROLES, FIELD_TYPES } from '@/server/envelopes';
-import { DEFAULT_REMINDER_DAYS } from '@/lib/policy';
+import { DEFAULT_REMINDER_DAYS, PNG_MAX_PIXELS, JPEG_MAX_PIXELS } from '@/lib/policy';
+import { mailEventsOn } from '@/lib/policy';
+
+// Whether this server is told about bounces (MAIL_EVENTS_TOKEN) is a setting: read it when the page is asked for.
+export const dynamic = 'force-dynamic';
 
 export const metadata = { title: 'API reference', description: 'The Sign&Grow JSON API: the same on every plan, no go-live review. Send, correct, extend, export and get webhooks.' };
 
@@ -11,7 +15,7 @@ type Endpoint = [method: string, path: string, what: string, isNew?: boolean];
 
 const GROUPS: [string, Endpoint[]][] = [
   ['Files and envelopes', [
-    ['POST', '/api/files', 'Upload a PDF, PNG or JPEG as the multipart field "file", up to 25 MB and 500 pages. Returns the file id, page sizes and stored size. A phone photo is turned upright from its camera note. Repeat "file" to make one document from several pictures, a page for each, in the order sent.'],
+    ['POST', '/api/files', 'Upload a PDF, PNG or JPEG as the multipart field "file", up to 25 MB and 500 pages. Returns the file id, page sizes and stored size. A phone photo is turned upright from its camera note. Repeat "file" to make one document from several pictures, a page for each, in the order sent.' + ` A PNG can have up to ${PNG_MAX_PIXELS / 1e6} million pixels and a JPEG up to ${JPEG_MAX_PIXELS / 1e6} million.`],
     ['POST', '/api/envelopes', 'Create a draft, or create from a template with template_id. Add "send": true to send straight away.'],
     ['GET', '/api/envelopes', 'List envelopes. Filters: box (drafts, sent, waiting, completed, closed), q, folder, kind=template, limit, offset.'],
     ['GET', '/api/envelopes/:id', 'One envelope with its documents, recipients and fields, the audit trail, the email delivery log and how far each signer has got.'],
@@ -176,6 +180,8 @@ curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" 
           <ul className="pub-list">
             <li><b>New event: <C>envelope.corrected</C>.</b> Sent whenever an envelope that is out is corrected. Read the envelope again to see how it stands.</li>
             <li><b>Recipient events</b> and <C>envelope.declined</C> also carry a <C>recipient_id</C>.</li>
+            {/* Only on a server that is told about bounces (MAIL_EVENTS_TOKEN). Elsewhere envelope.updated never fires. */}
+            {mailEventsOn() && <li><b><C>envelope.updated</C></b> carries a <C>recipient_id</C> and a <C>change</C>: <C>email_bounced</C> (our email to them came back for good, and reminders to them stop), <C>email_marked_as_spam</C>, <C>email_tried_again</C> (you said the address works: <C>POST /api/envelopes/:id/try-again</C> with <C>recipient_id</C>), <C>email_works_again</C> (a later email arrived) or <C>email_wanted_again</C> (they asked for our emails again). Each recipient carries <C>bounced_at</C>, <C>bounce_reason</C> and <C>complained_at</C>, and each email in the delivery log <C>delivered_at</C>, which means their mail server took it, not that they read it. A send to an address that bounced in the last 30 days answers <C>409</C> with <C>&quot;code&quot;: &quot;bounced_address&quot;</C> until you repeat it with <C>&quot;send_anyway&quot;: true</C>.</li>}
             <li><b>The <C>text</C> property</b> is a one-line summary of the event. Slack and Microsoft Teams incoming webhooks show whatever is in <C>text</C>, so you can paste an incoming webhook URL as the webhook address and get every event as a chat message. No code needed.</li>
             <li><b>Retries.</b> A delivery that fails is tried three times in all, a few seconds apart. Your endpoint has 10 seconds to answer with a 2xx status. A redirect is not followed and counts as a failure. Only the status of your answer is read.</li>
             <li><b>Redelivery.</b> Every delivery is in the log from before the first try, so an event is listed even if our side restarts halfway. After you fix your side, send any of the latest {KEEP_BODIES} deliveries of that webhook again from Settings, or with <C>POST /api/webhooks/deliveries/:id/redeliver</C>. Older ones stay listed but can no longer be sent again. The <C>id</C> in the body stays the same, so you can ignore repeats.</li>
@@ -202,7 +208,7 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers
             <li>Text messages exist only when the operator of this server has switched them on. <C>GET /api/me</C> says so in <C>text_messages</C>. When they are off, <C>&quot;verify&quot;: &quot;sms_code&quot;</C> and <C>&quot;text_link&quot;: true</C> are refused with 400, a sentence that says so, and <C>&quot;code&quot;: &quot;texts_off&quot;</C>. <C>email_code</C> always works.</li>
             <li>A phone number that is not in international form, or a missing one where a text is asked for, is refused with 400 when the envelope is sent or corrected. A draft may hold a half-typed number.</li>
             <li>What comes back: <C>verify</C>, <C>phone</C>, <C>text_link</C>, and <C>check</C> with <C>line</C> (the sentence the certificate will carry, such as &ldquo;Link sent by email only&rdquo;), <C>passed_at</C> and <C>stopped</C> (someone using the link said the number is not theirs, and no code goes to it until you correct it). <C>GET /api/envelopes/:id</C> also returns <C>texts</C>: what became of every text message, with the number masked.</li>
-            <li>Changing <C>verify</C> or <C>phone</C> on an envelope that is out makes that person pass the check again and writes a line to the audit trail. Changing their email address to another person&apos;s needs their <C>phone</C> in the same call when a text is still asked for: a number typed for one person is never used for another.</li>
+            <li>Changing <C>verify</C> or <C>phone</C> on an envelope that is out makes that person pass the check again and writes a line to the audit trail. Changing their email address to another person&apos;s needs their <C>phone</C> in the same call when a text is still asked for: a number typed for one person is never used for another. After someone using the link said the number is not theirs (<C>check.stopped</C>), no code and no text goes to it; send <C>&quot;number_confirmed&quot;: true</C> to <C>POST /api/envelopes/:id/correct</C> once you have checked with the person that it is right after all.</li>
             <li>A text counts like an email to that person: 403 while the account is paused, 429 when an account under the daily limit would text more phone numbers than it may email people, and 429 when the account has used the text messages this server allows it in 24 hours. Texts are not charged for.</li>
             <li>Templates keep the check. <C>POST /api/bulk</C> and <C>POST /api/envelopes</C> with a <C>template_id</C> take <C>phone</C> next to <C>name</C> and <C>email</C> for each role. A public form refuses <C>sms_code</C> and <C>text_link</C> on the role its visitors fill in, and accepts <C>email_code</C>.</li>
           </ul>
@@ -212,6 +218,7 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers
           <h2>Embedded signing</h2>
           <p>Call <C>POST /api/envelopes/:id/recipient-view</C> with a <C>recipient_id</C> to get a signing URL, then send your user there in a new tab or with a redirect. The page cannot be shown inside a frame on another site. Any recipient can get a link, it stays the same while the envelope is open, and it survives a correction that leaves that person alone. Ask for it as often as you like: the audit trail on the certificate records that a link was issued at most once a day for each link.</p>
           <p className="muted small">Treat the URL like a password: whoever holds it can sign as that recipient.</p>
+          <p>To deliver the link entirely yourself, give the recipient <C>&quot;link_by_sender&quot;: true</C> and no <C>email</C>. We then never email that person, not even reminders or the completed copy, and this URL is the only way in, also to the completed document afterwards. The certificate says &quot;Link shared by the sender&quot; for them. They count towards the daily limit on new people like anyone, and reminding everyone answers with them in <C>not_reminded</C>.</p>
         </div>
 
         <p className="muted">Stuck on something this page does not answer? <Link href="/help?topic=sending#contact">Write to us</Link>. A person replies.</p>

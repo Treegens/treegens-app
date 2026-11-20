@@ -122,7 +122,7 @@ test('autosave carries the adopted signature and initials, another device gets t
   const idle = saveBody(here.values, second.version, { sig: here.sig, ini: here.ini }, here.saved);
   assert.equal('signature_png' in idle || 'initials_png' in idle, false);
   const progress = async () => (await full(jo, e.id)).envelope.recipients[0].progress;
-  assert.deepEqual(await progress(), { fields: 4, filled: 3, required_left: 1 });
+  assert.deepEqual(await progress(), { fields: 4, filled: 3, required_left: 1, ready: false });
 
   // A field that was saved as signed with no signature to show for it (an older save) is asked for again on this
   // screen, but that is not written back by opening the page.
@@ -416,9 +416,9 @@ test('the sender counts a radio group once, like the signer; the tab names the d
   const items = buildItems(v.fields, (f: any) => !!f.value);
   assert.equal(items.length, 3);
   const progress = async () => (await full(jo, e.id)).envelope.recipients[0].progress;
-  assert.deepEqual(await progress(), { fields: 3, filled: 0, required_left: 2 }, 'the sender sees the same three');
+  assert.deepEqual(await progress(), { fields: 3, filled: 0, required_left: 2, ready: false }, 'the sender sees the same three');
   await rae.post(`/sign/${tok}/save`, { values: { [v.fields.find((f: any) => f.label === 'Large').id]: '1' } });
-  assert.deepEqual(await progress(), { fields: 3, filled: 1, required_left: 1 }, 'one choice in the group fills the group');
+  assert.deepEqual(await progress(), { fields: 3, filled: 1, required_left: 1, ready: false }, 'one choice in the group fills the group');
 
   // The browser tab says which document this is.
   assert.equal(pageTitle('Lease for 12 Elm Street'), 'Lease for 12 Elm Street · Sign&Grow');

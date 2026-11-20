@@ -7,6 +7,7 @@ import { useMe } from '@/components/AppShell';
 import { Dialog } from '@/components/sender/Dialog';
 import { fail } from '@/components/sender/feedback';
 import { cap, exportUrl, howLong, joinNames, neverOpened, waitingOn } from '@/components/sender/lib';
+import { remindedText } from '@/components/sender/MailNews';
 
 const BOXES: [string, string][] = [['all', 'All'], ['drafts', 'Drafts'], ['waiting', 'Waiting for others'], ['completed', 'Completed'], ['closed', 'Declined, voided, expired']];
 // For admins only: what a sender deleted from their own lists after somebody had signed. It is in no other tab, and
@@ -102,9 +103,11 @@ export default function Envelopes() {
   async function remind(e: any) {
     setBusy(e.id);
     try {
-      const { reminded } = await api(`/envelopes/${e.id}/remind`, { method: 'POST' });
-      if (reminded) toast(`Reminder emailed to ${reminded} ${reminded === 1 ? 'person' : 'people'}.`);
-      else toast('No reminder went out. They turned reminders off. Open the envelope to share the link another way.', true);
+      const { reminded, not_reminded } = await api(`/envelopes/${e.id}/remind`, { method: 'POST' });
+      if (reminded || not_reminded?.length) {
+        const said = remindedText(reminded, not_reminded, 'Open the envelope to see what to do.');
+        toast(said.text, said.bad);
+      } else toast('No reminder went out. They turned reminders off. Open the envelope to share the link another way.', true);
     } catch (err) {
       fail(err);
     } finally {
@@ -222,9 +225,11 @@ export default function Envelopes() {
             <tbody>
               {rows.map((e) => {
                 const w = e.status === 'sent' ? waitingOn(e.recipients, me.user.email) : null;
-                const cold = e.status === 'sent' && e.recipients.some((r: any) => neverOpened(r));
+                // Someone still to act whose last email came back, or who marked it as spam (MailNews.tsx). Said before "not opened".
+                const dead = e.status === 'sent' ? e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && (r.bounced_at || r.complained_at)) : [];
+                const cold = e.status === 'sent' && !dead.length && e.recipients.some((r: any) => neverOpened(r));
                 const title = e.subject || 'Untitled draft';
-                const waitingText = w ? <><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{cold ? <span className="sn-cold"> · not opened</span> : null}</>
+                const waitingText = w ? <><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{dead.length ? <span className="sn-cold"> · {dead.some((r: any) => r.bounced_at && !r.complained_at) ? 'could not be delivered' : 'marked as spam'}</span> : cold ? <span className="sn-cold"> · not opened</span> : null}</>
                   : e.status === 'draft' ? <span className="muted">Not sent yet</span>
                   : e.status === 'completed' ? <span className="muted">Everyone finished</span>
                   : <span className="muted">{closedWhy(e)}</span>;

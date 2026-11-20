@@ -1,6 +1,7 @@
 // Correcting an envelope that is already out: works out, before anything is saved, what the server will do for each
 // person, and keeps the editor honest when signers act while the sender is still editing.
 // These functions mirror correctEnvelope() and advance() in src/server/envelopes.ts. Plain data in, plain data out.
+import { ownOutcome } from '../../lib/bysender.ts';
 
 export type Content = { ordered?: any; date_format?: any; documents: any[]; recipients: any[]; fields: any[] };
 
@@ -177,7 +178,9 @@ export function outcomes(before: Content, after: Content): { people: Outcome[]; 
       badge = now ? 'Their turn' : 'Not asked yet';
       text = now ? (copy ? 'It is now their turn, so their copy goes out by email.' : 'It is now their turn, so they are invited by email.') : 'Has not been asked yet. Nothing is sent until it is their turn.';
     }
-    return { id: r.id, name: s(r.name) || s(r.role_name) || 'Unnamed', email: s(r.email), role: r.role, kind: k, badge, text };
+    // Someone whose link the sender sends themselves gets no email: their sentence says so (editor/SendMyself.tsx).
+    const own = r.link_by_sender && !s(r.email) ? ownOutcome(k, now, r.role) : null;
+    return { id: r.id, name: s(r.name) || s(r.role_name) || 'Unnamed', email: s(r.email), role: r.role, kind: k, badge, text: own || text };
   });
   for (const o of before.recipients) {
     if (after.recipients.some((r) => r.id === o.id)) continue;

@@ -113,7 +113,13 @@ test('the filter for fake payment notices reads everything a recipient reads, ho
   const bulk = await carl.post('/bulk', { template_id: tpl.id, rows: [{ Payer: { name: 'Vic', email: 'victim-e@example.com' } }] });
   assert.equal(bulk.status, 422);
   assert.equal(db.get('SELECT COUNT(*) n FROM bulk_batches WHERE account_id=?', await accountOf(carl)).n, 0, 'refused as a whole, before anything was written');
-  await carl.post('/powerforms', { template_id: tpl.id, name: 'Pay here' });
+  // A public form of it is refused where it is made, with the reason, so the owner does not learn it from a visitor.
+  const made = await carl.post('/powerforms', { template_id: tpl.id, name: 'Pay here' });
+  assert.equal(made.status, 422);
+  assert.match(made.data.error, /What set this off: the name PayPal.* The form was not made\.$/);
+  assert.equal((await carl.get('/powerforms')).data.powerforms.length, 0);
+  // One made before that rule (written to the database here) still takes nobody.
+  db.run("INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at) VALUES ('pwf_carl', ?, ?, 'carl-pay-here', 'Pay here', ?)", await accountOf(carl), tpl.id, ago(30));
   const walkIn = await visitor().post(`/public/powerforms/${await slugOf(carl)}/start`, { name: 'Walk In', email: 'victim-f@example.com' });
   assert.equal(walkIn.status, 503);
   assert.equal(walkIn.data.error, FORM_CLOSED, 'the visitor is not told the owner\'s business');
@@ -586,6 +592,8 @@ test('the filter reads glued words, any word about money, a phone number however
   for (const [subject, message] of [['Your PayPal invoices', 'Two invoices are overdue. Call +1 (888) 555-0142.'], ['PayPal notice', 'You were billed for Bitcoin. Not you? Call +1 (888) 555-0142.'],
     ['PayPal receipt', 'Thank you for your purchase. Not you? Call +1 (888) 555-0142.'], ['PayPal inv0ice #4471', 'Call +1 (888) 555-0142.'], ['PayPal', 'A charge will appear on your statement. Call +1 (888) 555-0142 to stop it.'], ['PayPal', '$499.00. Call +1 (888) 555-0142.']])
     assert.equal((await tried(subject, message)).status, 422, `${subject} / ${message}`);
+  // Naming a program is not posing as its maker, but the program's own billing is the maker's notice again.
+  assert.equal((await tried('Microsoft Teams subscription', 'Your plan was charged $399. Call +1 (888) 555-0142 now.')).status, 422, 'Microsoft Teams subscription');
   // A phone number as a word processor or a scammer writes it: an en dash, another hyphen, slashes, bullets, a
   // letter O for a zero, seven digits, underscores.
   for (const phone of ['888–555–0142', '888‐555‐0142', '888/555/0142', '888•555•0142', '888 555 O142', '555-0142', '888_555_0142'])
@@ -610,7 +618,7 @@ test('the filter reads glued words, any word about money, a phone number however
   // pay, a date. None of them is posing as anyone.
   const honest: [string, string, string][] = [['Sarah McAfee', 'Lease agreement', 'Please sign the lease. Payment by bank transfer. Call me on 555 123 4567.'], ['Honest Plumber', 'Invoice 1042', 'Invoice for the boiler repair. Questions? Call 231-135-5550.'],
     ['Honest Quoter', 'Quote', 'Payment due on completion: $2,311.30. Our office: 020 7946 0991.'], ['Honest Landlord', 'Lease renewal', 'Renewal for the flat at 12 Apple Street. Call me on 555 123 4567 with questions.'],
-    ['Honest Agent', 'Subscription agreement', 'The Microsoft Word original is attached. Any questions, ring 555 123 4567.'], ['Honest Trader', 'Invoice 12', 'You can pay by Zelle to 555 123 4567, or by cheque.'], ['Honest Dater', 'PayPal agreement', 'Payment is due on 12/11/2026.']];
+    ['Honest Agent', 'Subscription agreement', 'The Microsoft Word original is attached. Any questions, ring 555 123 4567.'], ['Honest Tutor', 'Invoice 7', 'Join the Microsoft Teams call or ring 555 123 4567. Payment in 30 days.'], ['Honest Trader', 'Invoice 12', 'You can pay by Zelle to 555 123 4567, or by cheque.'], ['Honest Dater', 'PayPal agreement', 'Payment is due on 12/11/2026.']];
   for (const [name, subject, message] of honest) {
     const c = await person(name, `${name.toLowerCase().replace(/\W/g, '')}@honest.test`);
     const { r } = await sent(c, 'client-honest@example.com', { subject, message });
@@ -921,12 +929,21 @@ test('the operator route does only what it is told, and the email about removed 
   });
   const again = () => mailTo('ola@oper.test').filter((m) => m.subject === 'The sending limits apply to your Sign&Grow account again').at(-1)!;
   assert.match(again().html, /Until the account has a payment that is at least 14 days old and was not refunded or disputed, it can send to at most 50 people a day \(200 a day after its first week\) and is checked for fake payment notices again\./);
+  // With no support address set, a reply goes to the no-reply sender and reaches nobody: only the contact form is offered.
+  assert.ok(!again().html.includes('reply to this email'));
+  assert.match(again().html, /If this is a mistake, use the contact form at http:\/\/test\.local\/help and a person will review it\./);
   db.run('UPDATE accounts SET created_at=? WHERE id=?', ago(30), acc);
-  await asOperator(async () => {
-    await op.post(`/operator/accounts/${acc}`, { trusted: true });
-    await op.post(`/operator/accounts/${acc}`, { trusted: false });
-  });
+  process.env.SUPPORT_EMAIL = 'help@signgrow.test';
+  try {
+    await asOperator(async () => {
+      await op.post(`/operator/accounts/${acc}`, { trusted: true });
+      await op.post(`/operator/accounts/${acc}`, { trusted: false });
+    });
+  } finally {
+    delete process.env.SUPPORT_EMAIL;
+  }
   assert.match(again().html, /it can send to at most 200 people a day and is checked/);
+  assert.match(again().html, /If this is a mistake, reply to this email or use the contact form/, 'where replies reach a person, it says so');
 });
 
 test('an honest free account keeps its reminders, and a reminder the filter holds back is said out loud, once', async () => {
@@ -960,4 +977,58 @@ test('an honest free account keeps its reminders, and a reminder the filter hold
   await cron.tick();
   await cron.tick();
   assert.equal(reminders(), 3);
+});
+
+// ---- What a third look found. -----------------------------------------------------------------------------------
+
+test('a public form\'s page never prints a fake payment notice, and its owner hears why it is closed', async () => {
+  const gil = await person('Gil Gym', 'gil@formname.test');
+  const acc = await accountOf(gil);
+  const tpl = await simple(gil, '', { kind: 'template', subject: 'Gym waiver', recipients: [{ id: 'r', role: 'signer', role_name: 'Guest' }] });
+  const NOTICE = 'PayPal invoice: payment of $499 charged, call +1 (888) 555-0142';
+  // The form's name is the notice. Its page would print it, phone number and all, to anyone with the link, on our
+  // address, while every start is refused. So it is refused where it is made.
+  const made = await gil.post('/powerforms', { template_id: tpl.id, name: NOTICE });
+  assert.equal(made.status, 422);
+  assert.match(made.data.error, /^This reads like a payment notice .*What set this off: the name PayPal, words about money \("\w+"\) and what looks like a phone number/);
+  // A name that mentions a way to pay is not a notice.
+  assert.equal((await gil.post('/powerforms', { template_id: tpl.id, name: 'Gym waiver (pay by PayPal at the desk)' })).status, 200);
+  const fine = await visitor().get(`/public/powerforms/${await slugOf(gil)}`);
+  assert.deepEqual([fine.data.closed, fine.data.name, fine.data.brand.name], [false, 'Gym waiver (pay by PayPal at the desk)', "Gil Gym's workspace"]);
+  // A form that got such a name before the rule (written to the database here) is closed and prints nothing of it.
+  db.run("INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at) VALUES ('pwf_gil', ?, ?, 'gil-notice', ?, ?)", acc, tpl.id, NOTICE, ago(30));
+  for (let i = 0; i < 3; i++) {
+    const page = await visitor().get('/public/powerforms/gil-notice');
+    assert.equal(page.status, 200);
+    assert.equal(page.data.closed, true, 'said before anyone types a thing');
+    assert.equal(page.data.name, null);
+    assert.equal(page.data.brand, null);
+    assert.ok(!JSON.stringify(page.data).includes('555'));
+  }
+  assert.equal((await visitor().post('/public/powerforms/gil-notice/start', { name: 'Walk In', email: 'walkin-gil@example.com' })).data.error, FORM_CLOSED);
+  assert.equal(mailTo('walkin-gil@example.com').length, 0);
+  // Nobody starts a closed form, so the owner would never hear why. They are told, once a day however often it is opened.
+  const told = mailTo('gil@formname.test').filter((m) => m.subject.includes('could not take a signature'));
+  assert.equal(told.length, 1);
+  assert.match(told[0].html, /The name of this public form reads like a payment notice/);
+  // Cleared by a person, it is a form like any other.
+  await asOperator(() => op.post(`/operator/accounts/${acc}`, { trusted: true }));
+  assert.equal((await visitor().get('/public/powerforms/gil-notice')).data.closed, false);
+});
+
+test('someone who has forgotten the password they just chose confirms with a new one, and nobody else stays in that login', async () => {
+  const laptop = visitor();
+  assert.equal((await laptop.post('/auth/signup', { name: 'Rosa Forgets', email: 'rosa@forgot.test', password: 'a password I forgot' })).status, 200);
+  const link = { token: db.get("SELECT verify_token t FROM users WHERE email='rosa@forgot.test'").t };
+  // She opens the email on her phone, which is not signed in, and cannot remember the password.
+  const phone = visitor();
+  assert.equal((await phone.post('/auth/verify', link)).data.code, 'password_needed');
+  // The confirm page offers "Choose a new password". That link goes to the same mailbox, so it shows the same thing.
+  assert.equal((await phone.post('/auth/forgot', { email: 'rosa@forgot.test' })).status, 200);
+  const reset = mailTo('rosa@forgot.test').find((m) => m.subject === 'Reset your Sign&Grow password')!;
+  const t = /reset\?token=([\w-]+)/.exec(reset.html)![1];
+  assert.equal((await phone.post('/auth/reset', { token: t, password: 'a new one I will keep' })).status, 200);
+  assert.equal(db.get("SELECT email_verified v FROM users WHERE email='rosa@forgot.test'").v, 1, 'the address is confirmed');
+  assert.equal((await laptop.get('/me')).data.user, null, 'every browser that was signed in to the login is signed out, so a stranger who made it is put out');
+  assert.equal((await phone.post('/auth/verify', link)).status, 200, 'and the link in the first email now simply says it is done');
 });

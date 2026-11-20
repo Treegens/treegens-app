@@ -990,6 +990,11 @@ test('the signing page is given the fingerprint of each file, loads a replaced f
   assert.notEqual(docUrl(base, fresh.documents[0]), docUrl(base, doc));
   assert.ok((await textOf(await fetched(fresh.documents[0]))).includes('SWAPPED CONTRACT'));
   assert.equal(allOnScreen(fresh.documents, { [doc.id]: fresh.documents[0].sha256 }), true);
+  // Pages are drawn only near the screen. A replaced document further down still counts once its new file has loaded
+  // (nothing of the old one is left on the screen), or Finish would stay off until the signer happened to scroll to it.
+  const pdfDoc = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'components', 'PdfDoc.tsx'), 'utf8');
+  assert.match(pdfDoc, /useEffect\(\(\) => \{\s*if \(page && !visible\) onDrawn\?\.\(\);\s*\}, \[page, visible\]\)/);
+  assert.match(pdfDoc, /onDrawn=\{i === 0 \? onShown : undefined\}/, 'and that is said for the first page of each file');
 });
 
 // ---- 5 again. A hand-over is to another person, whatever the address ------------------------------------------------
@@ -1006,6 +1011,11 @@ test('handing a request over to another person at the same address passes on not
   assert.deepEqual([mary.recipient.name, mary.recipient.signature_png, mary.recipient.consented], ['Mary Family', null, false]);
   assert.deepEqual(mary.fields.map((f: any) => [f.type, f.value]), [['signature', null], ['text', null]]);
   assert.match((await audits(e.id, 'Reassigned')).at(-1)!, /^Jon Family <family@example\.com> assigned this to Mary Family <family@example\.com>\. Nothing that Jon Family had filled in or signed was passed on\.$/);
+  // Jon is told so before he passes it on, with the way to keep everything when only his name is spelled wrong.
+  const dialog = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'components', 'sign', 'dialogs.tsx'), 'utf8');
+  const reassign = dialog.slice(dialog.indexOf('export function ReassignDialog'), dialog.indexOf('export function SignedFieldDialog'));
+  assert.ok(reassign.includes('Nothing you filled in or signed goes with it: they start with an empty document.'));
+  assert.ok(reassign.includes('only your name is spelled wrong, go back instead. You can fix your name when you check the document before you finish.'));
 });
 
 // ---- 6 again. Every change is a newer version ---------------------------------------------------------------------
@@ -1080,6 +1090,20 @@ test('nothing in a request is dropped, cut short or moved without a word', async
     ['fields that are not a list', (b) => { b.fields = { 0: b.fields[0] }; }, /^"fields" must be a list, written with square brackets, and it is not\./],
     ['a place in the signing order that does not exist', (b) => { b.recipients[0].routing_order = 0; }, /^The place in the signing order \(routing_order\) of recipient 1 \(Sam Signer\) must be a whole number from 1 to 99, and "0" is not\./],
     ['a deadline that is out of range', (b) => { b.expire_days = 1000; }, /^The number of days until the deadline \(expire_days\) must be a whole number from 1 to 365, and "1000" is not\./],
+    // A yes or no in quotes would count as yes: a field made the sender's, a field made required, an order turned on,
+    // and real people emailed. Each is refused with the key named.
+    ['"readonly" in quotes', (b) => b.fields.push({ ...text, readonly: 'false' }), /^Field 2: "readonly" is "false", and it has to be true or false, written without quotes\./],
+    ['"required" in quotes', (b) => b.fields.push({ ...text, required: 'false' }), /^Field 2: "required" is "false", and it has to be true or false, written without quotes\./],
+    ['"ordered" in quotes', (b) => { b.ordered = 'false'; }, /^"ordered" is "false", and it has to be true or false, written without quotes\./],
+    ['"send" in quotes', (b) => { b.send = 'false'; }, /^"send" is "false", and it has to be true or false, written without quotes\./],
+    // A place or a size that is not a number would put the field in the top corner, or give it a size nobody chose.
+    ['a place on the page that is not a number', (b) => b.fields.push({ ...text, x: 'left' }), /^Field 2: "x" is "left", and it has to be a number, as a share of the page from 0 to 1\./],
+    ['a size that is not a number', (b) => b.fields.push({ ...text, h: [0.1] }), /^Field 2: "h" is \[0\.1\], and it has to be a number/],
+    ['text sent as an object', (b) => { b.subject = { text: 'Said out loud' }; }, /^The subject was sent as an object, and it has to be text\./],
+    ['a name sent as a list', (b) => { b.recipients[0].name = ['Sam', 'Signer']; }, /^The name of recipient 1 was sent as a list, and it has to be text\./],
+    // Which document is meant is said, also when its file is missing.
+    ['a document without its file', (b) => { b.documents[0] = { id: 'd', name: 'Lease' }; }, /^Document 1 \("Lease"\) has no "file_id"\. Upload the file first \(POST \/files\) and use the id you get back\./],
+    ['a file that is not there', (b) => { b.documents[0].file_id = 'file_not_here'; }, /^Document 1: its file no longer exists, or belongs to another account\. Upload it again and save\./],
   ];
   for (const [what, edit, says] of cases) {
     const b = base();
@@ -1218,6 +1242,8 @@ test('signers are told what changed without the long fingerprints, which stay in
   const css = (name: string) => fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'app', 'styles', name), 'utf8');
   assert.match(css('sign.css'), /\.sg-top \{[^}]*overflow-wrap: anywhere/);
   assert.match(css('sender.css'), /\.sn-audit-item \{[^}]*overflow-wrap: anywhere/);
+  // "I have looked" at the end of the notice is a control of its own, so on a phone it is as tall as a thumb (44 px).
+  assert.match(css('sign.css'), /@media \(max-width: 600px\), \(pointer: coarse\) \{[^}]*\.sg-top \.sg-link[^{]*\{[^}]*min-height: 44px/);
 });
 
 test('someone whose turn was taken back is told to wait, not that the envelope is closed', async () => {

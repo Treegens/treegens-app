@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Leaf } from '@/components/ui';
 import { fmtNum, fmtTrees } from '@/lib/impact';
+import { jumpRatherThanGlide } from '@/components/pdfMemory';
 
 const ICONS: Record<string, string> = {
   download: 'M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14',
@@ -145,13 +146,23 @@ export const prefersLessMotion = () => typeof window !== 'undefined' && window.m
 export function bringIntoView(el: Element, fraction = 0.45) {
   const go = (behavior: ScrollBehavior) => {
     const r = el.getBoundingClientRect();
+    // Zoomed in, the pages are wider than the screen and slide sideways in their own strip: bring the field to its middle.
+    const pan = el.closest('.sg-pan');
+    if (pan && pan.scrollWidth > pan.clientWidth) pan.scrollTo({ left: pan.scrollLeft + r.left + r.width / 2 - pan.getBoundingClientRect().left - pan.clientWidth / 2, behavior });
     window.scrollTo({ top: Math.max(0, r.top + window.scrollY + r.height / 2 - window.innerHeight * fraction), behavior });
   };
-  go(prefersLessMotion() ? 'auto' : 'smooth');
-  // Pages that were still loading can push the target further down while we scroll. Check once it has settled.
-  window.setTimeout(() => {
+  // Far away (page 51 seen from page 1), a glide passes pages that are still being laid out and stopped about 800 px
+  // past the field. So a far field is jumped to, and only a near one glides (src/components/pdfMemory.ts).
+  const far = jumpRatherThanGlide(el.getBoundingClientRect().top - window.innerHeight * fraction, window.innerHeight);
+  go(far || prefersLessMotion() ? 'auto' : 'smooth');
+  // Check where it landed once the scrolling has stopped (and once more a moment later, for a browser that does not
+  // say when scrolling stops), and put it right if pages moved the field meanwhile.
+  const check = () => {
+    window.removeEventListener('scrollend', check);
     if (!el.isConnected) return;
     const r = el.getBoundingClientRect();
     if (r.top < 64 || r.bottom > window.innerHeight - 96) go('auto');
-  }, 750);
+  };
+  if ('onscrollend' in window) window.addEventListener('scrollend', check);
+  window.setTimeout(check, 900);
 }

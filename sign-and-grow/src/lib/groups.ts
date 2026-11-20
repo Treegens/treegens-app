@@ -22,7 +22,8 @@ const memberList = (members: any[] | undefined, max = 20): string => {
  * nobody has.
  */
 export function whoIs(r: any): string {
-  if (!r?.group_name) return `${r?.name ?? ''} <${r?.email ?? ''}>`;
+  // A person whose link the sender passes on has no address, and is named with how their link reached them.
+  if (!r?.group_name) return !r?.email && r?.link_by_sender ? `${r?.name ?? ''} (link shared by the sender)` : `${r?.name ?? ''} <${r?.email ?? ''}>`;
   if (r.claimed_by) return `${actingName(r)} <${r.email}>`;
   const n = (r.members || []).length;
   return n ? `${r.group_name} (a group of ${n}: ${memberList(r.members)})` : `${r.group_name} (a group)`;
@@ -59,7 +60,7 @@ export const groupTakenTitle = (by: string, group: string, done: boolean, role: 
 
 /** The heading of a recipient on the certificate: for a group, the member who acted and the group. */
 export const certName = (r: any, iso: (s: any) => string = String): string =>
-  !r?.group_name ? `${iso(r.name)}  <${r.email}>` : r.claimed_by ? `${iso(r.name)}, for ${iso(r.group_name)}  <${r.email}>` : `${iso(r.group_name)}  (a group)`;
+  !r?.group_name ? (!r?.email && r?.link_by_sender ? `${iso(r.name)}  (link shared by the sender)` : `${iso(r.name)}  <${r.email}>`) : r.claimed_by ? `${iso(r.name)}, for ${iso(r.group_name)}  <${r.email}>` : `${iso(r.group_name)}  (a group)`;
 
 /** The line under it: the group as it was on this envelope, so the record says who could have acted. */
 export function certGroup(r: any, iso: (s: any) => string = String): string {

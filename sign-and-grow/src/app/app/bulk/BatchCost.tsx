@@ -6,6 +6,7 @@ import { useMe } from '@/components/AppShell';
 import { PRICING, mangrovesFor } from '@/lib/impact';
 import { plural } from '@/components/sender/lib';
 import type { BulkRow } from '@/components/sender/csv';
+import type { BouncedAddress } from '@/lib/mailnews';
 
 // What a batch will hold, said above the Send button and not in a refusal after it. The numbers are not worked out
 // here: the page asks the server (POST /api/bulk/check), which counts with the same function the send itself is held
@@ -16,6 +17,8 @@ export type BatchCheck = {
   counted: boolean; rows: number; signers_per_row: number; need: number; have: number; short: number; plan: string;
   cost: { usd: number; plan_usd: number; plan_signatures: number; top_up: number; top_up_usd: number } | null;
   refusal: { status: number; message: string } | null;
+  // Addresses in the list at which an email of this account came back for good lately (src/lib/mailnews.ts).
+  bounced?: BouncedAddress[];
 };
 
 /**

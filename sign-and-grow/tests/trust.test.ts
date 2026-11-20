@@ -389,7 +389,7 @@ test('small things that stop people getting stuck', async () => {
   const v = (await many.get(`/sign/${tok}`)).data;
   await many.post(`/sign/${tok}/save`, { values: { [v.fields.find((f: any) => f.type === 'text').id]: 'half way' } });
   const prog = (await info()).envelope.recipients.find((r: any) => r.email === 'ada@example.com').progress;
-  assert.deepEqual(prog, { fields: 2, filled: 1, required_left: 1 });
+  assert.deepEqual(prog, { fields: 2, filled: 1, required_left: 1, ready: false });
   assert.equal((await many.get(`/sign/${tok}`)).data.fields.find((f: any) => f.type === 'text').value, 'half way', 'saved values come back');
 
   // Three wrong access codes: the signer is told who to ask, and the sender hears about it once.

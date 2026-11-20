@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { consentWording, adoptLine, LANGUAGE_NOTE, cannotOpenLine } from '@/lib/policy';
 import { COUNTRY_NOTES, paperWordList } from '@/lib/paperwork';
+import { BY_SENDER_TICK, BY_SENDER_HOW, BY_SENDER_LINE } from '@/lib/bysender';
 
 // The answers on /help about what a signature made here is, and is not: what a signer agrees to, whether a simple
 // electronic signature is enough, and which language people are asked in. Kept beside the help page, in a file of
@@ -96,6 +97,12 @@ export function SignatureKind() {
         <blockquote className="pub-quote"><p>{cannotOpenLine('you')}</p></blockquote>
         <p>When someone writes that to you: open the envelope, choose <b>Preview PDF</b> and save the file. It is the document as it stands, with what has been filled in so far. Send it to them yourself, and collect their signature on paper or as a scan.</p>
         <p>A signature collected that way is outside Sign&Grow. It is not on our certificate and not in the audit trail, so keep the paper or the scan yourself. The envelope here stays open until you void it or its deadline passes. If the others on it should still finish here, take that one person off with a correction instead.</p>
+      </QA>
+
+      <QA id="no-email" q="My signer has no email address, or does not read it">
+        <p>Type their name and tick <b>{BY_SENDER_TICK}</b> instead of an address. {BY_SENDER_HOW}</p>
+        <p>We tell you what only you can pass on: when it becomes their turn after someone before them has finished, the reminders you set for the envelope, when their link has not been opened for a while, and, in the email that tells you everything is signed, that their copy is waiting behind their link. Their own page never promises them an email.</p>
+        <p>The audit trail and the certificate say &quot;{BY_SENDER_LINE}&quot; where an address would be. That is all we know: not how you sent it, not whether it arrived, and not who opened it. If it matters who signs, give them an access code and tell it to them another way, or ask for a one-time code by text message where this server sends texts. You can add their address later with <b>Correct</b> on the envelope page: from then on we email them, and the link you sent stops working.</p>
       </QA>
     </>
   );

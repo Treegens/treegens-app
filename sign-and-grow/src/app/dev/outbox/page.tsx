@@ -2,6 +2,17 @@
 import { useState } from 'react';
 import { api, useLoad, fmtDate } from '@/components/ui';
 
+// What became of an email: at hand-over, and then what the mail provider said about it (POST /api/mail/events,
+// src/server/routes-bounces.ts). News can be tried here by posting events of our own shape to that address.
+const HANDED: Record<string, string> = { outbox: 'In the outbox', sent: 'Handed to the mail server', failed: 'Not sent', queued: 'Waiting to go out' };
+function mailStatus(m: any): string {
+  const news = m.complained_at ? `marked as spam ${fmtDate(m.complained_at, true)}`
+    : m.bounce_kind === 'hard' ? `bounced ${fmtDate(m.bounced_at, true)}: ${m.bounce_reason}`
+    : m.bounce_kind === 'soft' ? `not delivered yet ${fmtDate(m.bounced_at, true)}: ${m.bounce_reason}`
+    : m.delivered_at ? `delivered to the mail server ${fmtDate(m.delivered_at, true)}` : '';
+  return `${HANDED[m.status] || m.status}${news ? `, then ${news}` : ''}`;
+}
+
 // Local development only: shows every email the app "sent" when no SMTP server is configured.
 export default function Outbox() {
   const [d, reload, error] = useLoad(() => api('/dev/outbox'));
@@ -15,7 +26,7 @@ export default function Outbox() {
           <table className="t"><tbody>
             {(d?.emails || []).map((m: any) => (
               <tr key={m.id} className="click" onClick={() => setOpen(m.id)} style={open === m.id ? { background: 'var(--green-soft)' } : undefined}>
-                <td><b>{m.subject}</b><div className="muted small">To {m.to_email} · {fmtDate(m.at, true)}</div>{m.link && <a className="small" href={m.link} onClick={(e) => e.stopPropagation()} data-outbox-link>{m.link.replace(/^https?:\/\/[^/]+/, '')}</a>}</td>
+                <td><b>{m.subject}</b><div className="muted small">To {m.to_email} · {fmtDate(m.at, true)}</div><div className={`small${m.bounce_kind === 'hard' || m.complained_at ? ' sn-bad' : ' muted'}`} data-outbox-status>{mailStatus(m)}</div>{m.link && <a className="small" href={m.link} onClick={(e) => e.stopPropagation()} data-outbox-link>{m.link.replace(/^https?:\/\/[^/]+/, '')}</a>}</td>
               </tr>
             ))}
             {d && d.emails.length === 0 && <tr><td className="muted">Nothing sent yet.</td></tr>}

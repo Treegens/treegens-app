@@ -1061,3 +1061,85 @@ test('the signing screen asks for the code the way a phone can fill it in, and t
   }
   assert.match(readme, /## Checking who signs|\*\*Checking who signs\*\*/);
 });
+
+// ---- 12. Found while finishing: a number someone disowned, and the filter over a text ------------------------------
+
+test('after "This is not my number" no text of any kind goes to it, and a sender who checked can let codes go to it again', async () => {
+  const s = await one(ada, { verify: 'sms_code', phone: '+44 7700 900321', text_link: true }, { subject: 'Shed lease' });
+  assert.deepEqual(texts(s.rid).map((t: any) => t.kind), ['link']);
+  const c = visitor();
+  assert.equal((await c.post(`/sign/${s.tok}/code/problem`, { what: 'not_mine' })).status, 200);
+  // The sender is told how to undo it when the number was right after all.
+  assert.match(toAda('Wrong number: Shed lease').pop()!.html, /If the number turns out to be right after all, tick (&quot;|")I checked with Sam Signer that this is their number(&quot;|") there, and codes go to it again\./);
+  assert.match((await line(ada, s.id, 'One-time code: not my number')).detail, /No more codes or links are texted to it until the sender corrects it or confirms it with them\.$/);
+  // A reminder a day later: the email goes, the text with the link does not go to a number someone disowned.
+  db.run('UPDATE recipients SET texted_at=? WHERE id=?', new Date(Date.now() - 25 * 3600_000).toISOString(), s.rid);
+  const reminders = () => mailTo(s.email).filter((m) => m.subject.startsWith('Reminder:')).length;
+  const mails = reminders();
+  assert.equal((await ada.post(`/envelopes/${s.id}/remind`)).status, 200);
+  assert.equal(reminders(), mails + 1);
+  assert.deepEqual(texts(s.rid).map((t: any) => t.kind), ['link'], 'the signing link was texted to a number someone said is not theirs');
+  assert.match(fs.readFileSync(new URL('../src/app/help/page.tsx', import.meta.url), 'utf8'), /We stop texting it at once, codes and links alike, and tell the sender\./);
+  // Sending the recipient back as it is, the way an API client fixes a name, does not lift the stop.
+  const name = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Sam Signer-Jones', email: s.email, verify: 'sms_code', phone: '+44 7700 900321', text_link: true });
+  assert.equal(name.status, 200, JSON.stringify(name.data));
+  assert.equal((await c.get(`/sign/${s.tok}`)).data.check.stopped, true);
+  assert.equal((await c.post(`/sign/${s.tok}/code`)).data.code, 'stopped');
+  // "number_confirmed" does, says so on the record with the number masked, and codes go to the same number again.
+  const ok = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, number_confirmed: true });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal((await c.get(`/sign/${s.tok}`)).data.check.stopped, false);
+  assert.equal((await full(ada, s.id)).envelope.recipients[0].check.stopped, false);
+  const said = (await line(ada, s.id, 'Check corrected')).detail;
+  assert.match(said, /the sender confirmed that \+44 \*\*\* \*\*\* 0321 is their number, after someone using the link had said it was not, so codes go to it again\.$/);
+  assert.equal(said.includes('7700'), false);
+  const again = await c.post(`/sign/${s.tok}/code`);
+  assert.deepEqual([again.status, again.data.to], [200, '+44 *** *** 0321']);
+  // Sent when nothing is stopped it changes nothing and writes nothing, and it never lifts a stop on another check.
+  const lines = (await actions(ada, s.id)).filter((a: string) => a === 'Check corrected').length;
+  assert.equal((await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, number_confirmed: true })).status, 200);
+  assert.equal((await actions(ada, s.id)).filter((a: string) => a === 'Check corrected').length, lines);
+  // A correction that is refused takes the confirmation back with it: all of the call or none.
+  assert.equal((await c.post(`/sign/${s.tok}/code/problem`, { what: 'not_mine' })).status, 200);
+  const refused = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, number_confirmed: true, access_code: 'ab' });
+  assert.equal(refused.status, 400);
+  assert.equal((await c.get(`/sign/${s.tok}`)).data.check.stopped, true, 'a refused call lifted the stop');
+});
+
+test('the filter for fake payment notices reads what a text would say: a document that reads like one is not texted', async () => {
+  const lu = await signUp('Lu Sender', 'lu.sender@example.com', ip());
+  const s = await one(lu, { phone: '+44 7700 900888', text_link: true }, { subject: 'Garden rota' });
+  assert.equal(texts(s.rid).length, 1);
+  // The envelope's words now read like a fake payment notice (the lists the filter reads grow over time). The next
+  // text is held by the same guard as an email, whoever it goes to, and the sender is told.
+  db.run('UPDATE envelopes SET subject=? WHERE id=?', 'PayPal invoice: $499.00 charged. To cancel call +1 (888) 555-0142', s.id);
+  db.run('UPDATE recipients SET texted_at=NULL WHERE id=?', s.rid);
+  const { alsoText } = await import('../src/server/signercode.ts');
+  const { loadEnvelope } = await import('../src/server/envelopes.ts');
+  const e = loadEnvelope(s.id);
+  await alsoText(e, e.recipients[0], 'reminder');
+  assert.equal(texts(s.rid).length, 1, 'a text went out that reads like a fake payment notice');
+  assert.match((await line(lu, s.id, 'Text not sent')).detail, /^Sam Signer: a reminder by text message to \+44 \*\*\* \*\*\* 0888 was not sent, because the envelope reads like a fake payment notice/);
+  assert.equal(mailTo('lu.sender@example.com').filter((m) => m.subject.startsWith('Text not sent:')).length, 1);
+});
+
+test('a bulk list brings a mobile number only where the template texts that role, in full international form', async () => {
+  const { readRecipients, headerFor } = await import('../src/components/sender/csv.ts');
+  const texted = [{ key: 'Volunteer', label: 'Volunteer', phone: true }];
+  assert.equal(headerFor(texted), 'Volunteer name,Volunteer email,Volunteer phone');
+  // A header in any order, with "mobile" for the number: spaces are forgiven and the number is sent on in full form.
+  const r = readRecipients('Volunteer mobile,Volunteer email,Volunteer name\n+44 7700 900123,ada@example.org,Ada\n,ben@example.org,Ben\n07700 900125,cy@example.org,Cy', texted);
+  assert.deepEqual(r.missing, []);
+  assert.deepEqual(r.rows[0].cells.Volunteer, { name: 'Ada', email: 'ada@example.org', phone: '+447700900123' });
+  assert.deepEqual(r.rows[0].problems, []);
+  assert.deepEqual(r.rows[1].problems, ['mobile number is missing']);
+  assert.deepEqual(r.rows[2].problems, ['"07700 900125" is not a full mobile number. Write it with the country code, like +44 7700 900123']);
+  // A list without the column says which one is missing before anything is sent.
+  assert.deepEqual(readRecipients('Volunteer name,Volunteer email\nAda,ada@example.org', texted).missing, ['Volunteer phone']);
+  // Without a header the columns come as suggested: name, email, phone.
+  assert.deepEqual(readRecipients('Ada,ada@example.org,+1 415 555 0100', texted).rows[0].cells.Volunteer, { name: 'Ada', email: 'ada@example.org', phone: '+14155550100' });
+  // A role the template does not text never takes a number along, even when the list has one.
+  const plain = readRecipients('Volunteer name,Volunteer email,Volunteer phone\nAda,ada@example.org,+44 7700 900123', [{ key: 'Volunteer', label: 'Volunteer' }]);
+  assert.deepEqual(plain.rows[0].cells.Volunteer, { name: 'Ada', email: 'ada@example.org' });
+  assert.deepEqual(plain.ignored, ['Volunteer phone']);
+});

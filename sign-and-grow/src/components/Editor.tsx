@@ -5,6 +5,7 @@ import { api, COLORS, Modal, fmtDate, newId, toast } from './ui';
 import { useHistory } from './editor/history';
 import { useMe } from './AppShell';
 import { checkTrouble } from './sender/CheckFields';
+import { sendMyselfTrouble } from './editor/SendMyself';
 import { finished, fingerprint, freshValues, outcomes, rebase, restoreLocked, signsAgain } from './editor/changes';
 import { precheck, uploadFile, fmtSize, MAX_BYTES } from './editor/upload';
 import { isPicture, shrinkPhoto } from './editor/photos';
@@ -13,6 +14,7 @@ import { StepAdd } from './editor/StepAdd';
 import { StepFields } from './editor/StepFields';
 import { StepReview } from './editor/StepReview';
 import { MAX_DOCS, SIGNS, clamp, plural, who, type Confirm, type Ed, type Upload } from './editor/shared';
+import { sendAnywayAsk } from '@/lib/mailnews';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -105,7 +107,9 @@ export function Editor({ id }: { id: string }) {
     // save down, so it is left out until it is complete and everything else is kept safe meanwhile.
     recipients: list.map((r) => ({ id: r.id, role: r.role, role_name: r.role_name, name: r.name, email: correcting || !r.email || validEmail(r.email) ? r.email : '', routing_order: r.routing_order, access_code: r.access_code, note: r.note,
       // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
-      verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link })),
+      verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link,
+      // "I will send the link myself": a name and no address, for envelopes only (editor/SendMyself.tsx).
+      link_by_sender: !isTpl && !!r.link_by_sender })),
     fields: flds,
   });
   latest.current = env && body();
@@ -296,7 +300,11 @@ export function Editor({ id }: { id: string }) {
     if (!rcps.length) p.push('Add at least one recipient.');
     for (const r of rcps) {
       const name = r.name || r.role_name || 'A recipient';
-      if (!isTpl && (!r.name.trim() || !validEmail(r.email))) p.push(`${name} needs a name and a valid email.`);
+      // Someone whose link the sender sends themselves needs a name and no address (editor/SendMyself.tsx).
+      if (!isTpl && r.link_by_sender) {
+        const no = sendMyselfTrouble(r, name, fields.value);
+        if (no) p.push(no);
+      } else if (!isTpl && (!r.name.trim() || !validEmail(r.email))) p.push(`${name} needs a name and a valid email.`);
       if (isTpl && !r.role_name?.trim() && !r.email) p.push('Give every open recipient a role name, such as "Client".');
       if (isTpl && r.email && !validEmail(r.email)) p.push(`${name} needs a valid email, or leave it empty to fill in later.`);
       if (SIGNS(r) && !fields.value.some((f) => f.recipient_id === r.id)) p.push(`${name} has no fields to sign yet.`);
@@ -363,7 +371,8 @@ export function Editor({ id }: { id: string }) {
     confirm({ title: 'Leave without saving?', body: 'Your changes have not been saved. If you leave now, the envelope stays exactly as it was and nobody is told anything.', yes: 'Discard changes', no: 'Keep editing', danger: true, onYes: () => leave(home) });
   }
 
-  async function send() {
+  // `anyway` is true only when the sender answered "Send anyway" below. A click hands in its event, which is not true.
+  async function send(anyway?: unknown) {
     setBusy(true);
     setError('');
     try {
@@ -377,7 +386,15 @@ export function Editor({ id }: { id: string }) {
         toast('Template saved');
         return leave('/app/templates');
       }
-      await api(`/envelopes/${id}/send`, { method: 'POST' });
+      try {
+        await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway === true } });
+      } catch (e: any) {
+        // An address on it bounced before (src/lib/mailnews.ts). Nothing went out: the sender sees which address and
+        // why, and decides. It is never refused for good.
+        if (e?.code !== 'bounced_address' || anyway === true) throw e;
+        const q = sendAnywayAsk(e.data?.bounced || []);
+        return confirm({ title: q.title, body: q.body, yes: 'Send anyway', no: 'Go back and check', onYes: () => void send(true) });
+      }
       toast('Sent. No paper involved.');
       leave(`/app/envelopes/${id}?sent=1`);
     } catch (e) {

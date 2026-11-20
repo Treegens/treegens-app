@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { storeFile, readStored } from './filestore.ts';
 
 // SQLite via Node's built-in driver: no native build step, one file on disk.
 // getBuiltinModule keeps bundlers from trying to resolve `node:sqlite` themselves.
@@ -293,6 +294,14 @@ CREATE TABLE IF NOT EXISTS recipient_members (
 CREATE INDEX IF NOT EXISTS recipient_members_recipient ON recipient_members(recipient_id, position);
 CREATE INDEX IF NOT EXISTS recipient_members_email ON recipient_members(email);
 CREATE INDEX IF NOT EXISTS recipient_members_check ON recipient_members(check_code);
+-- The members a template's owner or an admin chose (src/server/tplroles.ts): a line lets that person use the template
+-- when it is for chosen members, and can_change also lets them change it when it may be changed by chosen members.
+-- The lines go with the template, and with the person when they leave the team or are removed (handOver).
+CREATE TABLE IF NOT EXISTS template_members (
+  template_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, account_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, can_change INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (template_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS template_members_user ON template_members(account_id, user_id);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -564,6 +573,29 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['recipients', 'group_name', 'TEXT'],
   ['recipients', 'claimed_by', 'TEXT'],
   ['recipients', 'claimed_at', 'TEXT'],
+  // 1 when the sender said "I will send the link myself": the person has a name and no email address, nothing is
+  // ever emailed to them, and the sender passes their link on (src/server/bysender.ts).
+  ['recipients', 'link_by_sender', 'INTEGER NOT NULL DEFAULT 0'],
+  // A link to the sender's own payment page, shown to a signer after Finish (src/server/routes-paylink.ts): the
+  // address and which button it gets, and for each signer the address they were last shown and last pressed, with
+  // when they first were.
+  ['envelopes', 'pay_url', 'TEXT'],
+  ['envelopes', 'pay_kind', 'TEXT'],
+  ['recipients', 'pay_shown_url', 'TEXT'],
+  ['recipients', 'pay_shown_at', 'TEXT'],
+  ['recipients', 'pay_opened_url', 'TEXT'],
+  ['recipients', 'pay_opened_at', 'TEXT'],
+  // Who may use and change a template (src/server/tplroles.ts). tpl_use: 'team' (empty is the same), 'admins' or
+  // 'chosen'. tpl_change: 'owner' (empty is the same: the person it belongs to and admins), 'chosen' or 'team'.
+  // tpl_locked: 1 when its wording is locked for whoever may not change it. A template from before has the defaults.
+  ['envelopes', 'tpl_use', 'TEXT'],
+  ['envelopes', 'tpl_change', 'TEXT'],
+  ['envelopes', 'tpl_locked', 'INTEGER NOT NULL DEFAULT 0'],
+  // On an envelope started from a locked template: which template (wording_from), and which of its fields carry the
+  // template's own wording (wording_fixed, a JSON list of field ids). Whoever may not change that template cannot
+  // change the documents, the fields, that wording or the message of the envelope.
+  ['envelopes', 'wording_from', 'TEXT'],
+  ['envelopes', 'wording_fixed', 'TEXT'],
 ];
 
 function migrate(d: any) {
@@ -652,17 +684,15 @@ export function tx<T>(fn: () => T): T {
   }
 }
 
-// Content-addressed blob store on disk.
-const blobPath = (sha: string) => path.join(dataDir(), 'blobs', sha);
+// Content-addressed blob store on disk. Each file is named by the SHA-256 of its readable contents, is encrypted when
+// FILE_ENCRYPTION_KEY is set, and is checked every time it is read (src/server/filestore.ts).
 export function saveBlob(buf: Uint8Array): string {
   db();
-  const sha = crypto.createHash('sha256').update(buf).digest('hex');
-  if (!fs.existsSync(blobPath(sha))) fs.writeFileSync(blobPath(sha), buf);
-  return sha;
+  return storeFile(path.join(dataDir(), 'blobs'), buf);
 }
 export function readBlob(sha: string): Buffer {
   if (!/^[0-9a-f]{64}$/.test(sha)) throw new Error('bad blob id');
-  return fs.readFileSync(blobPath(sha));
+  return readStored(path.join(dataDir(), 'blobs'), sha);
 }
 
 // Server secret used for HMACs. Set APP_SECRET in production; otherwise one is generated and kept in the data dir.

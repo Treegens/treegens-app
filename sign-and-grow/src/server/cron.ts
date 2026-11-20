@@ -4,6 +4,7 @@ import { purgeClosedAccounts } from './routes-trust.ts';
 import { supportTick } from './routes-support.ts';
 import { retryMail } from './mail.ts';
 import { retryTexts } from './sms.ts';
+import { forgetOldBounces } from './bounces.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -16,5 +17,7 @@ export async function tick() {
   const r = { ...(await cronTick()), mail: await retryMail(), texts: await retryTexts() };
   return { ...r, renewals: await renewalReminders(), retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: await purgeClosedAccounts(),
     // Help requests that have passed the time a person should have answered by: the operators are emailed and the customer is told.
-    support: await supportTick() };
+    support: await supportTick(),
+    // Addresses that bounced, and "try later" days, older than BOUNCE_WARN_DAYS (bounces.ts).
+    bounces_forgotten: forgetOldBounces() };
 }

@@ -160,8 +160,9 @@ async function complaint(m: any, at: string): Promise<'applied' | 'repeat'> {
 }
 
 // An email that arrives is the proof that its address works. Marks that are older than this email go: on the
-// recipient, on the account's do-not-mail list and on a login with that address. News about an email that was sent
-// before the bounce proves nothing and clears nothing.
+// account's do-not-mail list, on every envelope of the account that is still out to that address (each record
+// says why, so a mark never vanishes without a word), and on a login with that address. News about an email that
+// was sent before the bounce proves nothing and clears nothing.
 function delivered(m: any, at: string): 'applied' | 'repeat' {
   if (m.delivered_at) return 'repeat';
   run('UPDATE emails SET delivered_at=? WHERE id=?', at, m.id);
@@ -170,9 +171,13 @@ function delivered(m: any, at: string): 'applied' | 'repeat' {
   const accountId = m.envelope_id ? get('SELECT account_id a FROM envelopes WHERE id=?', m.envelope_id)?.a : null;
   if (accountId) {
     forgetBounced(accountId, m.to_email, sentAt(m));
-    run('UPDATE recipients SET bounced_at=NULL, bounce_reason=NULL WHERE envelope_id=? AND lower(email)=lower(?) AND bounced_at < ?', m.envelope_id, m.to_email, sentAt(m));
+    for (const r of all("SELECT r.id, r.name, r.envelope_id FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.account_id=? AND e.status='sent' AND lower(r.email)=lower(?) AND r.bounced_at < ?", accountId, m.to_email, sentAt(m))) {
+      run('UPDATE recipients SET bounced_at=NULL, bounce_reason=NULL WHERE id=?', r.id);
+      audit(r.envelope_id, SYSTEM, 'Address works again', `A later email to ${r.name} <${m.to_email}> reached their mail server, so the address works. Reminders to it are on again.`);
+      fireWebhooks(accountId, 'envelope.updated', r.envelope_id, { recipient_id: r.id, change: 'email_works_again' });
+    }
   }
-  run('UPDATE users SET email_bounced_at=NULL, email_bounce_reason=NULL WHERE email=? AND email_bounced_at < ?', m.to_email, sentAt(m));
+  run('UPDATE users SET email_bounced_at=NULL, email_bounce_reason=NULL WHERE lower(email)=lower(?) AND email_bounced_at < ?', m.to_email, sentAt(m));
   return 'applied';
 }
 
@@ -238,21 +243,24 @@ route('POST', '/mail/events', async (c) => {
     throw new HttpError(401, 'The secret for mail events is missing or wrong. Send the value of MAIL_EVENTS_TOKEN as ?token=..., as "Authorization: Bearer ...", or as the password of HTTP Basic.');
   }
   const text = await readLimited(c.req);
-  let body: any;
+  // A body that is not JSON is one more shape this server does not know. It is accepted like the others (202),
+  // because most providers send again for days whatever they get back that is not a success.
+  let body: any, parsed = true;
   try {
     body = JSON.parse(text);
   } catch {
-    throw bad('The body is not JSON, so nothing in it was read. This address takes the bounce, complaint and delivery webhooks of the mail provider as JSON.');
+    parsed = false;
   }
-  const read = readEvents(body);
+  const read = parsed ? readEvents(body) : null;
   if (!read) {
     // Said once in the log, with the names of the top-level fields and nothing of what they hold.
     if (!g.__tsmailEventsUnknown) {
       g.__tsmailEventsUnknown = true;
-      const shape = Array.isArray(body) ? `a list whose first item has: ${Object.keys(body[0] && typeof body[0] === 'object' ? body[0] : {}).slice(0, 20).join(', ')}` : body && typeof body === 'object' ? `an object with: ${Object.keys(body).slice(0, 20).join(', ')}` : typeof body;
+      const shape = !parsed ? 'not JSON' : Array.isArray(body) ? `a list whose first item has: ${Object.keys(body[0] && typeof body[0] === 'object' ? body[0] : {}).slice(0, 20).join(', ')}` : body && typeof body === 'object' ? `an object with: ${Object.keys(body).slice(0, 20).join(', ')}` : typeof body;
       console.error(`[mail events] A message arrived at /api/mail/events in a shape this server does not know (${shape}). It was accepted and nothing was done with it. Later ones like it are not logged again. The README lists the shapes that are read.`);
     }
-    return json({ ok: true, understood: false, note: 'This message has a shape this server does not know. It was accepted and nothing was done with it.' }, 202);
+    return json({ ok: true, understood: false, note: parsed ? 'This message has a shape this server does not know. It was accepted and nothing was done with it.'
+      : 'The body is not JSON, so nothing in it was read. It was accepted and nothing was done with it. This address takes the bounce, complaint and delivery webhooks of the mail provider as JSON.' }, 202);
   }
   if (read.confirm !== undefined) return { ok: true, subscription: (await confirmSubscription(read.confirm)) ? 'confirmed' : 'not confirmed: the link in the message does not lead to Amazon SNS' };
   const done = { applied: 0, repeat: 0, unmatched: 0, failed: 0 };

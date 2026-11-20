@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { dataPlace, notSaid } from '@/lib/dataplace';
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION, powerformIdleHours } from '@/lib/policy';
+import { mailEventsOn, BOUNCE_WARN_DAYS } from '@/lib/policy';
 import { ProcessorTable, Stated } from '../DataPlace';
 import { PrintButton } from './PrintButton';
+import { fileEncryptionOn, PROCESSING_ENCRYPTED } from '@/lib/storedfiles';
 
 export const metadata = { title: 'Data processing summary', description: 'What this Sign&Grow server processes, for whom, for how long, where, and how it is deleted. One page you can save as a PDF.' };
 // Where the data is and who handles it are settings. Read them when the page is asked for, not when the site is built.
@@ -47,7 +49,7 @@ export default function ProcessingSummary() {
           <li><b>Documents:</b> the files you upload, the text read from PDFs so that you can search your own envelopes, the fields placed on them, the signed PDFs with their certificates, and files that signers attach.</li>
           <li><b>About the people you send to:</b> the name and email address you typed, an access code or a mobile number if you set one, what they filled in, their signature and initials as pictures, and when they opened, agreed, signed or declined.</li>
           <li><b>The audit trail of every envelope:</b> each step with its time, the internet address it came from and the kind of browser.</li>
-          <li><b>Emails:</b> a copy of every email this server sends, and whether the mail server took it.</li>
+          <li><b>Emails:</b> a copy of every email this server sends, and whether the mail server took it.{mailEventsOn() && ' Afterwards, what the mail provider tells us about it: that it reached the recipient\'s mail server, came back, or was marked as spam, with the reason the mail server gave.'}</li>
           <li><b>Payments, if you pay:</b> what was paid, refunded and bought, and the provider&apos;s reference for it. A full card number never reaches this server.</li>
           <li><b>Help requests:</b> what was written, by whom, and the answers.</li>
         </ul>
@@ -58,6 +60,7 @@ export default function ProcessingSummary() {
           <li><b>A draft, a template, or a closed envelope that nobody signed</b> is deleted for good when you delete it.</li>
           <li><b>An envelope that somebody signed</b> cannot be erased by itself. Deleting it takes it out of your lists, search and export, and its recipients keep their link and their copy. It is deleted when the account is.</li>
           <li><b>Our copies of emails that belong to no document</b> (invitations, notices, receipts) are deleted after {MAIL_COPY_DAYS} days. Copies of emails about a document stay with that document.</li>
+          {mailEventsOn() && <li><b>An address at which an email came back for good</b> stays on its account&apos;s list for {BOUNCE_WARN_DAYS} days, so that a new envelope to it warns the sender first. To count &quot;try later&quot; answers on separate days, only a keyed fingerprint of the address is kept, for the same {BOUNCE_WARN_DAYS} days.</li>}
           <li><b>An unfinished start from a public form</b> is closed after {powerformIdleHours()} hours without anyone touching it.</li>
           <li><b>A file dropped on <Link href="/verify">Verify a document</Link></b> is not stored.</li>
           <li><b>A closed account</b> is kept for {CLOSE_GRACE_DAYS} days so that it can be brought back, with an email to its owner {CLOSING_REMINDER_DAYS} days before the end, and is then deleted. You can also delete it at once.</li>
@@ -89,7 +92,9 @@ export default function ProcessingSummary() {
           <li>Passwords are kept as salted scrypt hashes. API keys and login sessions are kept as fingerprints, never as written.</li>
           <li>Only the people a document was sent to, its sender and the admins of the sender&apos;s account can open it. Sign-in attempts, access codes and the public forms are rate limited.</li>
           <li>The audit trail of every envelope is hash chained, so a changed or missing entry shows.</li>
-          <li><b>What the software does not do:</b> it adds no encryption of its own to stored files, so how the disk is protected depends on the host. It has no security certification. The <Link href="/security">security page</Link> lists the rest.</li>
+          {/* Whether this server encrypts its stored files is a setting (FILE_ENCRYPTION_KEY, src/lib/storedfiles.ts). */}
+          {fileEncryptionOn() && <li>{PROCESSING_ENCRYPTED}</li>}
+          <li><b>What the software does not do:</b> {fileEncryptionOn() ? 'it does not encrypt the database.' : 'it adds no encryption of its own to stored files, so how the disk is protected depends on the host.'} It has no security certification. The <Link href="/security">security page</Link> lists the rest.</li>
         </ul>
 
         <h2>Taking your data with you</h2>

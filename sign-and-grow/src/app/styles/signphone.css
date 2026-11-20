@@ -1,0 +1,21 @@
+/* The signing page on a phone: a browser that cannot show the document, the offline notice, the zoom control, and
+   the adopt dialog in landscape and at large text. Loaded after sign.css, whose rules these extend. */
+
+/* ---- A browser that cannot show the document -------------------------------------------------- */
+.sg-noview { text-align: left; overflow-wrap: anywhere; }
+.sg-noview ul { margin: 10px 0 8px; padding-left: 20px; }
+.sg-noview li { margin-bottom: 6px; }
+.sg-noview .sg-actions { margin-top: 10px; }
+.sg-noview .sg-link { min-height: 44px; font-size: inherit; }
+
+/* ---- A page that could not be drawn (a phone short of memory): said on the page, with a button ---------- */
+.pdf-redraw { position: absolute; inset: 0; z-index: 7; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; background: #fff; color: var(--ink); font-size: 15px; }
+
+/* ---- Page size: 100, 150 or 200 percent ----------------------------------------------------------------
+   Zoomed in, the pages are wider than the screen. They slide sideways inside this strip, so the page itself never
+   becomes wider than the phone and the bars at the top and bottom stay put. The strip reaches the edges of the
+   screen for room, and leaves space below for the page number. Pinch zoom is never switched off (no touch-action
+   here, and the viewport in src/app/layout.tsx sets no maximum scale). */
+.sg-pan.zoomed { overflow-x: auto; overscroll-behavior-x: contain; margin: 0 -12px; padding: 0 12px 26px; }
+.sg-pan.zoomed .pdfdoc { align-items: flex-start; }
+.sg-zoom button { min-width: 44px; padding: 6px 10px; font-variant-numeric: tabular-nums; }

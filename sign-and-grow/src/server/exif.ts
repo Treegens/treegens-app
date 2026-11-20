@@ -9,6 +9,8 @@
 // top to bottom, 5 mirrored and turned, 6 needs a quarter turn clockwise, 7 mirrored and turned the other way,
 // 8 needs a quarter turn anticlockwise. Phones write 1, 3, 6 and 8.
 
+import { PNG_MAX_PIXELS, JPEG_MAX_PIXELS } from '../lib/policy.ts';
+
 export type Orientation = { value: number; at: number; little: boolean };
 
 const u16 = (b: Uint8Array, at: number, little: boolean) => (little ? b[at] | (b[at + 1] << 8) : (b[at] << 8) | b[at + 1]);
@@ -77,3 +79,41 @@ export function uprightMatrix(value: number, x: number, y: number, w: number, h:
   }
 }
 export const liesOnItsSide = (value: number) => value >= 5 && value <= 8;
+
+// ---- How many pixels a picture says it has ------------------------------------------------------------
+// Read from the header, before a pixel is unpacked. A PNG is unpacked in full on the server to go into a PDF (and
+// a small file can claim to be enormous), a JPEG on every signer's phone. So an absurd picture is refused in words
+// before it costs anyone memory. pdf-lib reads the same header fields.
+
+/** The width and height a PNG or JPEG gives in its header, or null when the header cannot be read. */
+export function pictureSize(b: Uint8Array, png: boolean): { w: number; h: number } | null {
+  if (png) {
+    // The signature, then the IHDR chunk: its length, "IHDR", the width and the height.
+    if (b.length < 24 || b[12] !== 0x49 || b[13] !== 0x48 || b[14] !== 0x44 || b[15] !== 0x52) return null;
+    return { w: u32(b, 16, false), h: u32(b, 20, false) };
+  }
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null;
+  let p = 2;
+  while (p + 9 <= b.length) {
+    if (b[p] !== 0xff) return null;
+    const marker = b[p + 1];
+    if (marker === 0xff) { p++; continue; }
+    if (marker === 0xd9 || marker === 0xda) return null;
+    // A start-of-frame marker (C0 to CF, except C4, C8 and CC, which are tables) gives the height, then the width.
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { h: u16(b, p + 5, false), w: u16(b, p + 7, false) };
+    const len = u16(b, p + 2, false);
+    if (len < 2) return null;
+    p += 2 + len;
+  }
+  return null;
+}
+
+/** Why this picture is refused for its number of pixels, or '' when it is fine (or its header cannot be read). */
+export function pictureLimit(b: Uint8Array, png: boolean, name?: string): string {
+  const size = pictureSize(b, png);
+  const max = png ? PNG_MAX_PIXELS : JPEG_MAX_PIXELS;
+  if (!size || size.w * size.h <= max) return '';
+  const n = (x: number) => x.toLocaleString('en');
+  const what = name ? `"${name}" is` : 'This picture is';
+  return `${what} ${n(size.w)} by ${n(size.h)} pixels, which is ${n(Math.round((size.w * size.h) / 1e6))} million. A ${png ? 'PNG' : 'JPEG'} can have up to ${n(max / 1e6)} million, far more than a page needs. Make it smaller${png ? ' or save it as a JPEG' : ''}, then upload it again.${name ? ' No document was made.' : ''}`;
+}

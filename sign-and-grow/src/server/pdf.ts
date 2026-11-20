@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PDFDocument, PDFPage, PDFFont, PDFName, PDFDict, PDFRef, PDFArray, PDFNumber, PDFStream, rgb, degrees, pushGraphicsState, popGraphicsState, translate, drawObject, concatTransformationMatrix } from 'pdf-lib';
-import { jpegOrientation, markUpright, uprightMatrix, liesOnItsSide } from './exif.ts';
+import { jpegOrientation, markUpright, uprightMatrix, liesOnItsSide, pictureLimit } from './exif.ts';
 import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad } from './util.ts';
@@ -12,6 +12,7 @@ import { isolate, hasRtl } from './bidi.ts';
 import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
 import { strikeLines } from '../lib/strike.ts';
 import { certName, certGroup } from '../lib/groups.ts';
+import { labelOf } from '../lib/bysender.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -70,6 +71,9 @@ export async function imagesToPdf(list: { bytes: Uint8Array; png: boolean; name?
   for (const it of list) {
     const o = it.png ? null : jpegOrientation(it.bytes);
     const turn = o && o.value > 1 ? o.value : 1;
+    // Counted from the header before a pixel is unpacked: a small PNG can claim to be enormous (exif.ts).
+    const huge = pictureLimit(it.bytes, it.png, list.length > 1 ? it.name || 'One of the pictures' : undefined);
+    if (huge) throw bad(huge);
     let img;
     try {
       img = it.png ? await doc.embedPng(it.bytes) : await doc.embedJpg(turn > 1 ? markUpright(it.bytes, o!) : it.bytes);
@@ -84,6 +88,8 @@ export async function imagesToPdf(list: { bytes: Uint8Array; png: boolean; name?
     const scale = Math.min((W - 48) / iw, (H - 48) / ih, 1);
     const page = doc.addPage([W, H]);
     page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...uprightMatrix(turn, (W - iw * scale) / 2, (H - ih * scale) / 2, iw * scale, ih * scale)), drawObject(page.node.newXObject('Image', img.ref)), popGraphicsState());
+    // Packed into the PDF now, so the unpacked pixels of this picture are let go before the next one is read.
+    await img.embed();
   }
   return doc.save();
 }
@@ -384,7 +390,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   for (const r of e.recipients) {
     const zone = validZone(r.tz);
     if (!zone) continue;
-    for (const name of new Set([r.name, r.sender_name, r.self_name].filter(Boolean))) zones.set(`${name} <${r.email}>`, zone);
+    for (const name of new Set([r.name, r.sender_name, r.self_name].filter(Boolean))) zones.set(labelOf({ ...r, name }), zone);
   }
   s.h2('Audit trail');
   s.text('Each event is hashed together with the one before it, so the history cannot be edited without breaking the chain.', { size: 7.5, color: MUTED, gap: 4 });

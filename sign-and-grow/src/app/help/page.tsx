@@ -7,10 +7,14 @@ import { PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
 import { CHECK_PROVES, CHECK_LIMITS, smsProvider } from '@/lib/checks';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODES_PER_HOUR, smsDailyPerAccount } from '@/lib/policy';
+import { mailEventsOn, BOUNCE_MEANS, BOUNCE_STOPS, COMPLAINT_MEANS, SOFT_BOUNCE_DAYS } from '@/lib/policy';
 import { publicFacts, abuseFacts, supportFacts } from './facts';
 import { replyPromise } from '@/lib/support';
 import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord, FindRequests } from './tools';
 import { ConsentWords, SignatureKind } from './outside';
+import { SigningOnPhone } from './phone';
+import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
+import { PAID_TRUST_DAYS } from '@/lib/policy';
 
 export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in and without a chatbot. Find your documents, stop a subscription, or write to a person.' };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
@@ -32,6 +36,8 @@ export default function Help() {
   const support = supportFacts();
   // Whether the operator of this server has switched text messages on. When not, the page offers none and says why.
   const textsOn = !!smsProvider();
+  // Whether this server hears from its mail provider what became of an email (MAIL_EVENTS_TOKEN). Not said when not.
+  const bouncesOn = mailEventsOn();
   const smsDaily = smsDailyPerAccount();
   const P = PRICING;
   const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
@@ -66,6 +72,7 @@ export default function Help() {
               <FindDocuments />
             </div>
             <p className="muted small">If the sender corrected the document, your old link was replaced. The page it opens offers to send you the new one.</p>
+            <p className="muted small">Did the sender send you the link themselves, by WhatsApp, text message or chat, and not by email from us? Then we have no address for you and this cannot find it. Ask the sender: the envelope page shows your link to them, also after everyone has signed.</p>
           </QA>
 
           <QA id="real" q="Is this email really from Sign&Grow?">
@@ -109,6 +116,7 @@ export default function Help() {
             </ul>
             <p className="muted small">Asked for an access code? The sender chose it and can tell you what it is. It is never in our email. The page that asks for it has an <b>Ask the sender</b> button. After {abuse.codeTries} wrong tries a code is frozen so it cannot be guessed, and the sender sets a new one.</p>
           </QA>
+          <SigningOnPhone />
 
           <QA id="one-time-code" q="I was asked for a one-time code">
             <p>The sender asked us to check who opens the document. When you press <b>Send me the code</b> we send a {SIGNER_CODE_DIGITS}-digit code {textsOn ? 'to your email address, or by text message to a mobile number the sender typed for you' : 'to your email address'}. The screen shows where it goes with most of it hidden. Type the code in and the document opens. On that device it stays open for a day.</p>
@@ -116,7 +124,7 @@ export default function Help() {
               <li>A code works for {SIGNER_CODE_MINUTES} minutes and for {SIGNER_CODE_TRIES} tries. Only the newest one works.</li>
               <li>You can ask for a new code after a minute, up to {SIGNER_CODES_PER_HOUR} times an hour. The button says when.</li>
               <li><b>The code does not arrive?</b> A code by email goes to the same mailbox as the link, so look in the spam folder.{textsOn ? ' A text can take a minute.' : ''} If it still does not come, <b>I do not get the code</b> on the same screen tells the sender.</li>
-              {textsOn && <li><b>The number is not yours?</b> Press <b>This is not my number</b>. We stop sending codes to it at once and tell the sender.</li>}
+              {textsOn && <li><b>The number is not yours?</b> Press <b>This is not my number</b>. We stop texting it at once, codes and links alike, and tell the sender.</li>}
               <li>Only the sender can change where the code goes, or take the check off. We cannot do that for you, because we cannot know who is asking.</li>
             </ul>
             <p className="muted small">Nobody at Sign&Grow will ever ask you for this code, and neither should the sender. If a code arrives that you did not ask for, someone else has opened your link: do not pass the code on.</p>
@@ -214,8 +222,24 @@ export default function Help() {
               <li>Correct their email address. Nothing is voided and nobody else is disturbed.</li>
             </ul>
             <p className="muted small">If a request sits unopened for a couple of days, we email you so you can help before anyone has to ask.</p>
+            <p className="muted small">Someone who has no email address, or does not read it, can be on an envelope without one: <a href="#no-email">tick &quot;I will send the link myself&quot;</a> and send them the link from the envelope page.</p>
             {textsOn && <p className="muted small">You can also have us text the signing link: under <b>More</b> next to a recipient, type their mobile number and tick <b>Also text the signing link</b>. It is off unless you choose it, the text names you and the document, and reminders by text follow at most once a day.</p>}
           </QA>
+
+          {bouncesOn && (
+            <QA id="bounced" q="An envelope says &quot;Could not be delivered&quot; or &quot;Marked as spam&quot;">
+              <p><b>Could not be delivered.</b> {BOUNCE_MEANS} We email you at once, and the envelope says it next to the person&apos;s name. {BOUNCE_STOPS}</p>
+              <ul className="pub-list">
+                <li>Address wrong? Choose <b>Correct</b> next to their name and type the right one. A new email goes out at once, and nothing is voided.</li>
+                <li>Address right, and the mailbox works again (it was full, or switched off for a while)? Choose <b>Try again</b>. We email them again at once and reminders start again. If it comes back again, you hear it again.</li>
+                <li>Either way you can copy their signing link and send it yourself, by text or chat.</li>
+              </ul>
+              <p><b>Not delivered yet</b> means their mail server asked us to try later, often because the mailbox is full. Nothing is stopped. If the same address says that on {SOFT_BOUNCE_DAYS} separate days, we treat it as an address that does not work.</p>
+              <p><b>Delivered to the mail server of example.com</b> means their mail server took the email. It does not mean they read it, and it may still be in a spam folder.</p>
+              <p><b>Marked as spam.</b> {COMPLAINT_MEANS} You cannot undo that for them, but you can still give them their link yourself.</p>
+              <p className="muted small">When our emails to your own address come back, the app says so at the top of every page. Choose &quot;It works now, try again&quot;, or move your login to an address that works under Settings, Profile.</p>
+            </QA>
+          )}
 
           <QA id="checking-signers" q="How can I check who is signing?">
             <p>Under <b>More</b> next to each recipient you choose what they have to do before the document opens: nothing, an access code you give them yourself, {textsOn ? 'a one-time code we send to their email address, or a one-time code we send by text message to a mobile number you type' : 'or a one-time code we send to their email address'}. An access code can be combined with a one-time code. What each of them proves:</p>
@@ -246,11 +270,17 @@ export default function Help() {
             <p className="muted small">Nobody here is a lawyer and this is not legal advice. It is a statement of what Sign&Grow does not have. <Link href="/security#not">The other limits are on Security and trust</Link>.</p>
           </QA>
 
+          <QA id="payment-link" q="Can someone pay a deposit when they sign?">
+            <p>Sign&Grow does not take payments. What it can do is show a link to your own payment page, such as one from your card provider, right after a person presses Finish. {PAY_FOR_SENDER}</p>
+            <p>{payNotYet(PAID_TRUST_DAYS)} Once it is offered, it is on the last step of the editor, next to the Send button, and a template&apos;s link goes with every envelope made from it.</p>
+            <p>If you signed something and were shown a Pay button: your signature is complete whether you pay or not. The page names the sender and the full address the button opens. Sign&Grow cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
+          </QA>
+
           <QA id="cannot-send" q="Why can I not send?">
             <ul className="pub-list">
               <li><b>Your email address is not confirmed yet.</b> We sent a link when you signed up. The banner at the top of the app sends it again.</li>
               <li><b>The account has reached its daily limit.</b> An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone you newly email counts, also people added or changed on a document that is already out and every row of a bulk send. A public form has the same limit of its own for the people who start it, counted for that form alone, and a team can invite {abuse.invitesPerDay} people a day. The limit looks at the last 24 hours, and the message says when there is room again. Paying does not lift it at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed, and the message then gives the date. A person can lift it sooner: <a href="#contact" data-topic="sending">write to us</a>.</li>
-              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account cannot send those, or invite under such a name, until it has a payment that is {abuse.paidTrustDays} days old and was not refunded or disputed. We read what the emails print: the subject, the message, notes to recipients, document names, what you wrote on the pages, the reason for voiding, your name and the account name. The message says which words set it off, so you can see whether it is a misreading. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a> and a person will clear your account.</li>
+              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account cannot send those, or invite under such a name, until it has a payment that is {abuse.paidTrustDays} days old and was not refunded or disputed. We read what the emails print: the subject, the message, notes to recipients, document names, what you wrote on the pages, the reason for voiding, your name and the account name, and the name of a public form, which its page shows to anyone with the link. The message says which words set it off, so you can see whether it is a misreading. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a> and a person will clear your account.</li>
               <li><b>Sending is paused.</b> This happens when {abuse.reportsToPause} different recipients report documents from one account, or when our team pauses it. The message and the banner in the app give the reason. A person reviews every pause. Until then nothing you start is emailed to anyone: no new documents, no new or changed recipients, no reminders, no reopening, no team invitations and no email about a change you make, and people who are waiting further down a signing order are asked only once the pause is lifted. You can still open, download and export everything, give a document that is out more time, and void one (the people on it are told, without your reason). People who already have a document can still sign it. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>
               <li><b>An access code is too short.</b> A code you set needs at least {abuse.codeMin} characters.</li>
               {textsOn && <li><b>A mobile number is missing or not complete.</b> Someone you check by text message, or text the link to, needs a number with its country code, like +44 7700 900123. Or the account has sent its {smsDaily} text messages for the day: the message says when there is room again, and a code by email always works. See <a href="#checking-signers">checking who signs</a>.</li>}

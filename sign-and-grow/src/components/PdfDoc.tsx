@@ -1,5 +1,8 @@
 'use client';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { VIEW_FAILED, whyNotShown, type ViewFailure } from './viewFailure';
+import { DRAW_SCREENS, RELEASE_SCREENS, nearScreen, pixelRatio } from './pdfMemory';
+export type { ViewFailure } from './viewFailure';
 
 // pdf.js is served from /public so the bundler never has to process it.
 let lib: Promise<any> | null = null;
@@ -16,6 +19,9 @@ function Page({ pdf, index, width, children, onClick, onDrawn }: { pdf: any; ind
   const canvas = useRef<HTMLCanvasElement>(null);
   const [page, setPage] = useState<any>(null);
   const [visible, setVisible] = useState(index < 2);
+  // A drawing that failed (not one that was cancelled), and how often the person asked for it again.
+  const [failed, setFailed] = useState(false);
+  const [again, setAgain] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -25,42 +31,79 @@ function Page({ pdf, index, width, children, onClick, onDrawn }: { pdf: any; ind
     };
   }, [pdf, index]);
 
+  // Drawn when it comes within a screen of view, and its picture given back when it is more than three screens away
+  // (src/components/pdfMemory.ts). So a long document holds a handful of pictures, not one per page it ever showed.
   useEffect(() => {
-    if (visible || !box.current) return;
-    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && setVisible(true), { rootMargin: '800px' });
-    io.observe(box.current);
-    return () => io.disconnect();
-  }, [visible]);
+    const el = box.current;
+    if (!el) return;
+    const screen = () => window.innerHeight || 800;
+    const check = () => {
+      const r = el.getBoundingClientRect();
+      setVisible((v) => (v ? nearScreen(r.top, r.bottom, screen(), RELEASE_SCREENS) : nearScreen(r.top, r.bottom, screen(), DRAW_SCREENS)));
+    };
+    const io = new IntersectionObserver(check, { rootMargin: `${DRAW_SCREENS * 100}% 0px` });
+    const far = new IntersectionObserver(check, { rootMargin: `${RELEASE_SCREENS * 100}% 0px` });
+    io.observe(el);
+    far.observe(el);
+    return () => (io.disconnect(), far.disconnect());
+  }, []);
 
   const vp = page?.getViewport({ scale: 1 });
   const height = vp ? (width * vp.height) / vp.width : width * 1.294;
 
   useEffect(() => {
-    if (!page || !visible || !canvas.current || !width) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const v = page.getViewport({ scale: (width / page.getViewport({ scale: 1 }).width) * dpr });
     const c = canvas.current;
+    if (!page || !c || !width) return;
+    if (!visible) {
+      // Far from view: an empty picture holds no memory. The page keeps its size, so nothing on screen moves.
+      c.width = 0;
+      c.height = 0;
+      page.cleanup?.();
+      return;
+    }
+    const base = page.getViewport({ scale: 1 });
+    // Sharp at the screen's own density and at any zoom, within a ceiling per page (pixelRatio).
+    const ratio = pixelRatio(width, (width * base.height) / base.width, window.devicePixelRatio || 1);
+    const v = page.getViewport({ scale: (width / base.width) * ratio });
     c.width = Math.floor(v.width);
     c.height = Math.floor(v.height);
     const task = page.render({ canvasContext: c.getContext('2d')!, viewport: v });
-    // Said once the page is really on the screen. A drawing that was cancelled (the file was replaced) says nothing.
-    task.promise.then(() => onDrawn?.()).catch(() => {});
+    // Said once the page is really on the screen. A drawing that was cancelled (the file was replaced, the page went
+    // far from view) says nothing. One that failed for another reason (a phone short of memory) offers to try again.
+    task.promise.then(() => (setFailed(false), onDrawn?.())).catch((e: any) => e?.name !== 'RenderingCancelledException' && setFailed(true));
     return () => task.cancel();
-  }, [page, visible, width]);
+  }, [page, visible, width, again]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A first page far from view is only drawn when it comes near, and nothing of an older file is on the screen in its
+  // place (a new file is a new PdfDoc). So it counts as shown once it has loaded. Otherwise the signing page, whose
+  // Finish waits for this, would stay switched off for a replaced document further down, whether or not it was ever
+  // looked at, and drawing it when it comes near still says so above.
+  useEffect(() => {
+    if (page && !visible) onDrawn?.();
+  }, [page, visible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div ref={box} className="pdfpage" data-page={index} style={{ width, height, ['--pw' as any]: `${width}px` }} onClick={onClick}>
-      {/* A drawn page is a picture to a screen reader, and says so: which page it is, and that it is one. */}
-      <canvas ref={canvas} role="img" aria-label={`Page ${index + 1} of ${pdf.numPages}, shown as a picture`} />
+      {/* A drawn page is a picture to a screen reader, and says so: which page it is, and that it is one. Its picture
+          starts empty (0 by 0): a canvas left at the browser's default size would hold memory for nothing. */}
+      <canvas ref={canvas} width={0} height={0} role="img" aria-label={`Page ${index + 1} of ${pdf.numPages}, shown as a picture`} />
+      {failed && visible && (
+        <div className="pdf-redraw" role="alert">
+          This page could not be drawn. <button type="button" className="btn sm" onClick={(e) => (e.stopPropagation(), setFailed(false), setAgain((n) => n + 1))}>Draw it again</button>
+        </div>
+      )}
       <div className="overlay">{children}</div>
       <span className="pageno">{index + 1}</span>
     </div>
   );
 }
 
-export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, onPages, onDocument, onShown }: {
-  /** Called when the first page of the file at `url` has been drawn, so the parent knows which file is on screen. */
+export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, onPages, onDocument, onShown, failed }: {
+  /** Called when the first page of the file at `url` has been drawn, or has loaded while far from view (it is drawn
+   *  when it comes near), so the parent knows which file is on screen. */
   onShown?: () => void;
+  /** What to show instead of the pages when they cannot be shown. Without it, a plain sentence with Try again. */
+  failed?: (why: ViewFailure, retry: () => void) => ReactNode;
   url: string;
   maxWidth?: number;
   zoom?: number;
@@ -72,16 +115,20 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [pdf, setPdf] = useState<any>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<ViewFailure | ''>('');
+  const [attempt, setAttempt] = useState(0);
   const [avail, setAvail] = useState(0);
 
   useEffect(() => {
     let live = true;
     let task: any;
+    let loaded = false;
     setPdf(null);
     setError('');
+    // A viewer that did not load is forgotten, so Try again fetches it afresh.
     pdfjs()
       .then((m) => {
+        loaded = true;
         task = m.getDocument({ url, cMapUrl: '/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: '/pdfjs/standard_fonts/', withCredentials: true });
         return task.promise;
       })
@@ -91,14 +138,18 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
         onPages?.(d.numPages);
         onDocument?.(d);
       })
-      .catch((e: any) => live && setError(e?.message || 'Could not load the document.'));
+      .catch((e: any) => {
+        if (!loaded) lib = null;
+        // Never the viewer's own words ("Promise.withResolvers is not a function"): what happened, in a person's terms.
+        if (live) setError(whyNotShown(e, loaded, typeof navigator === 'undefined' || navigator.onLine !== false));
+      });
     return () => {
       live = false;
       onDocument?.(null);
       task?.destroy?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url]);
+  }, [url, attempt]);
 
   useEffect(() => {
     if (!wrap.current) return;
@@ -110,7 +161,12 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
   const width = Math.round(Math.min(maxWidth, avail || maxWidth) * zoom);
   return (
     <div ref={wrap} className="pdfdoc" style={{ width: '100%' }}>
-      {error && <div className="notice err">{error}</div>}
+      {error && (failed ? failed(error, () => setAttempt((n) => n + 1)) : (
+        <div className="notice err" role="alert">
+          {VIEW_FAILED[error]}{' '}
+          <button type="button" className="btn sm" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+        </div>
+      ))}
       {!pdf && !error && <div className="muted" style={{ padding: 40 }}>Loading document…</div>}
       {pdf && avail > 0 &&
         Array.from({ length: pdf.numPages }, (_, i) => (

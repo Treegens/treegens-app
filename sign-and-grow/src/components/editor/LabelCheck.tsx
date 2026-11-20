@@ -21,7 +21,7 @@ export function LabelCheck({ ed }: { ed: Ed }) {
   return (
     <section className="notice warn" aria-labelledby="ed-nolabel-h">
       <b id="ed-nolabel-h">{plural(n, 'field')} {n === 1 ? 'has' : 'have'} no label.</b>{' '}
-      Someone who signs with a screen reader cannot see where a field sits on the page. They hear its label. Without one they hear only what kind of field it is, such as &ldquo;{HEARD_AS[list[0].type]}, required&rdquo;, and cannot know what belongs in it. A label of a few words is enough, such as &ldquo;Seedlings pledged&rdquo;. You can send without, but then tell that signer yourself what each field is for.
+      Someone who signs with a screen reader cannot see where a field sits on the page. They hear its label. Without one they hear only what kind of field it is, such as &ldquo;{HEARD_AS[list[0].type]}{list[0].type === 'radio' ? '' : list[0].required ? ', required' : ', optional'}&rdquo;, and cannot know what belongs in it. A label of a few words is enough, such as &ldquo;Seedlings pledged&rdquo;. You can send without, but then tell that signer yourself what each field is for.
       <ul className="ed-nolabel">
         {list.slice(0, SHOWN).map((f) => (
           <li key={f.id}>

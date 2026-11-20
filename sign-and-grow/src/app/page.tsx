@@ -6,6 +6,7 @@ import { PLANS, PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { BULK_COST_NOTE, DEFAULT_REMINDER_DAYS, IN_PERSON_ONLINE, NO_BAA_TITLE, NO_BAA_TEXT } from '@/lib/policy';
 import { IN_PERSON_SHORT } from '@/lib/phone';
+import { SIGNING_BROWSERS_SHORT, SIGNING_ONLINE } from '@/lib/mobile';
 
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
 export const dynamic = 'force-dynamic';
@@ -13,7 +14,7 @@ export const dynamic = 'force-dynamic';
 const FEATURES: [string, string][] = [
   ['Send for signature', 'Upload PDFs or images, add signers, approvers, viewers and people who get a copy. Sign in order or all at once.'],
   ['Drag and drop fields', 'Signatures, initials, dates, text, checkboxes, radio buttons, dropdowns, attachments and notes. Required or optional, prefilled or validated.'],
-  ['Sign anywhere', `Recipients sign from any phone or computer with no account. Type, draw or upload a signature. Finish later, decline or pass it to someone else. ${LANGUAGE_NOTE}`],
+  ['Sign anywhere', `Recipients sign in the browser of their phone or computer, with no account and no app. ${SIGNING_BROWSERS_SHORT} Type, draw or upload a signature. Finish later, decline or pass it to someone else. ${SIGNING_ONLINE} ${LANGUAGE_NOTE}`],
   ['Templates and bulk send', `Set a document up once and reuse it. Send one template to hundreds of people from a spreadsheet. ${BULK_COST_NOTE} The page shows the count and the price before you send.`],
   ['PowerForms', 'A public link that lets anyone fill in and sign a form on their own. Put it on your website or in an email, or print the QR code the app makes for it on a sheet for a poster or a front desk. Good for waivers, sign-ups and permission slips. Not for patient forms: there is no HIPAA agreement to sign with us, as the rules under the prices say.'],
   ['In-person signing', `Host a signing on your own phone, tablet or laptop when the signer is standing next to you. ${IN_PERSON_SHORT} ${IN_PERSON_ONLINE}`],

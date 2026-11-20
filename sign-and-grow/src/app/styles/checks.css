@@ -41,6 +41,8 @@
 .sn-check-fix .ed-check { margin-top: 0; padding-top: 0; border-top: 0; }
 /* The dialog is narrow: one control to a line, so the name of the check is never cut short. */
 .sn-check-fix .ed-check-row { grid-template-columns: 1fr; }
+/* "I checked with them that this is their number": a whole line to tap, 44px at least. */
+.sn-check-fix label.sn-check-confirm { min-height: 44px; display: flex; align-items: center; gap: 8px; margin: 0; }
 
 /* The security and help pages: what each check proves, one to a line. */
 .pub-proof { display: block; margin: 6px 0 0; }

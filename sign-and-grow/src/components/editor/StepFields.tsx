@@ -70,6 +70,12 @@ export function StepFields({ ed }: { ed: Ed }) {
       if (!el && ++tries < 60) return;
       clearInterval(t);
       el?.scrollIntoView({ block: 'center', inline: 'nearest' });
+      // On a phone the settings cover the lower half of the screen, so the field goes above them, as when tapped.
+      const panel = document.querySelector('.ed-settings.has');
+      if (el && panel && window.matchMedia('(max-width: 900px)').matches) {
+        const top = panel.getBoundingClientRect().top, r = el.getBoundingClientRect();
+        if (r.bottom > top - 12) window.scrollBy({ top: r.bottom - top + 24 });
+      }
       document.getElementById('ed-label')?.focus({ preventScroll: true });
     }, 100);
     return () => clearInterval(t);

@@ -17,6 +17,7 @@ import { ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { unprintable } from './pdftext.ts';
 import { gateOf, lockedView } from './signercode.ts';
 import { CONSENT_VERSION, isConsentVersion, consentAuditNote } from '../lib/policy.ts';
+import { labelOf } from '../lib/bysender.ts';
 // A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
 import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup } from './groups.ts';
 
@@ -64,7 +65,8 @@ export function look(c: Ctx, needUnlocked = true) {
   // that passed is remembered by a cookie, the same way a correct access code is.
   const gate = gateOf(c.req, r);
   if (gate && needUnlocked) throw bad('Type the one-time code first.', 401);
-  const actor = { name: `${r.name} <${r.email}>`, ip: c.ip, ua: c.ua };
+  // Signed with how this person is reached: an address, or "link shared by the sender" (src/lib/bysender.ts).
+  const actor = { name: labelOf(r), ip: c.ip, ua: c.ua };
   const out = { e, r: e.recipients.find((x: any) => x.id === r.id), locked, gate, actor };
   // A member acts under their own name, and only as far as the state of their link allows: see asMember.
   return member ? asMember(c, out, member) : out;
@@ -94,7 +96,8 @@ route('GET', '/sign/:token', (c) => {
     // whether the document as they signed it then was kept, so the page only offers that download when it exists.
     // mail_stopped: this person marked an email about the envelope as spam, so nothing more is emailed to them about
     // it. The page says so and offers the one way back, which only they have (POST /sign/:token/mail-again).
-    recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, mail_stopped: !!r.complained_at, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
+    // link_by_sender: we have no address for this person, so the page never promises an email (src/lib/bysender.ts).
+    recipient: { id: r.id, name: r.name, email: r.email, link_by_sender: !!r.link_by_sender && !r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, mail_stopped: !!r.complained_at, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
       earlier_copy: r.status !== 'completed' && !!r.signed_before && !!get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? AND copy_sha256 IS NOT NULL', e.id, r.id) },
   };
   // Someone ran into the deadline. The sender is told before anything else is decided here, so an access code that

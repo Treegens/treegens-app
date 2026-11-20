@@ -7,11 +7,14 @@ import { useMe } from '@/components/AppShell';
 import { fmtNum, fmtTrees, impactOf } from '@/lib/impact';
 import { reminderText } from '@/lib/policy';
 import { Recipients, lastEmailTo, type Delivery } from '@/components/sender/Recipients';
+import { BackNews, MailStopLines, deliveredLine, remindedText } from '@/components/sender/MailNews';
 import { ConfirmDialog, CorrectDialog, ExtendDialog, VoidDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { AfterSend } from '@/components/sender/AfterSend';
 import { PrintNotice } from '@/components/sender/PrintNotice';
+import { PayLinkNote } from '@/components/sender/PayLinkNote';
 import { readAllowance, voidCostLine } from '@/components/sender/allowance';
+import { ownLink } from '@/components/sender/OwnLink';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
 const MAIL_STATUS: Record<string, string> = { sent: 'Handed to the mail server', outbox: 'Not delivered, no mail server set up', failed: 'Could not be sent', queued: 'Waiting to go out' };
@@ -80,8 +83,11 @@ export default function EnvelopeDetail() {
   // People who filled in everything required and have not pressed Finish, by the server's count (progress.ready).
   const almost = out ? e.recipients.filter((r: any) => r.progress?.ready) : [];
   const bounced = out ? e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && lastEmailTo(deliveries, r.email, r.id)?.status === 'failed') : [];
-  // Reminders never go to people who turned them off, so do not offer a button that would do nothing.
-  const canRemind = out && e.recipients.some((r: any) => hasTurn(r) && !r.muted);
+  // Reminders never go to people who turned them off, so do not offer a button that would do nothing. Nor to an
+  // address the last email came back from, or someone who marked one as spam (MailNews.tsx).
+  const stopped = out ? e.recipients.filter((r: any) => hasTurn(r) && r.role !== 'inperson' && (r.bounced_at || r.complained_at)) : [];
+  // Nor to someone with no address, whose link the sender passes on (OwnLink.tsx): their card offers the link instead.
+  const canRemind = out && e.recipients.some((r: any) => hasTurn(r) && !r.muted && !stopped.includes(r) && !ownLink(r));
   const allMuted = out && !canRemind && e.recipients.some((r: any) => hasTurn(r) && r.muted);
   const decliner = e.recipients.find((r: any) => r.status === 'declined');
   // Only worth a banner while people can still act on it. Each recipient's own line says it in every state.
@@ -93,9 +99,11 @@ export default function EnvelopeDetail() {
 
   async function remindAll() {
     await act(async () => {
-      const { reminded } = await api(`/envelopes/${e.id}/remind`, { method: 'POST' });
-      if (reminded) toast(`Reminder emailed to ${reminded} ${reminded === 1 ? 'person' : 'people'}.`);
-      else toast('No reminder went out. Everyone waiting has turned reminders off, so share their links another way.', true);
+      const { reminded, not_reminded } = await api(`/envelopes/${e.id}/remind`, { method: 'POST' });
+      // Someone whose link you send yourself is named apart: nothing was wrong with an email, there was none to send.
+      const own = (not_reminded || []).filter((x: any) => x.why === 'link_by_sender');
+      const said = remindedText(reminded, (not_reminded || []).filter((x: any) => x.why !== 'link_by_sender'));
+      toast(own.length ? `${said.text} You send the link to ${own.map((x: any) => x.name).join(' and ')} yourself, so we did not write to ${own.length === 1 ? 'them' : 'them either'}.` : said.text, said.bad);
     });
   }
   const clone = (kind: 'envelope' | 'template') => act(async () => {
@@ -159,12 +167,13 @@ export default function EnvelopeDetail() {
             <div>
               <p className="sn-now-line">{waiting ? <>Waiting on <b>{waiting.label}</b>{waiting.since ? ` for ${howLong(waiting.since)}` : ''}.</> : 'Sent. Nobody is holding it up right now.'}</p>
               {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} {bounced.some((r: any) => lastEmailTo(deliveries, r.email, r.id)?.next_try_at) ? 'has not gone out yet, and we keep trying' : 'did not go out'}. See below to fix the address or share the link yourself.</p>}
+              <MailStopLines people={stopped} />
               {almost.length > 0 && <p className="sn-now-sub warn" id="sn-almost"><b>{joinNames(almost.map((r: any) => r.name))}</b> {almost.length === 1 ? 'has' : 'have'} filled in everything but {almost.length === 1 ? 'has' : 'have'} not pressed Finish, so {almost.length === 1 ? 'their part is' : 'their parts are'} not signed yet. A reminder tells them that one button is left.</p>}
               {unopened.length > 0 && <p className="sn-now-sub warn">{joinNames(unopened.map((r: any) => r.name))} {unopened.length === 1 ? 'has' : 'have'} not opened it yet. See below for ways to reach them.</p>}
               {allMuted && <p className="sn-now-sub">They turned reminder emails off, so reach them with their link instead. It is below.</p>}
               <p className={`sn-now-sub${closingSoon(e.expires_at) ? ' warn' : ''}`}>{e.expires_at ? `${deadlineLine(e.expires_at)}.` : 'No closing date.'}{closingSoon(e.expires_at) ? ' Give more time if they need it.' : ''}</p>
               {/* Whether anyone is reminded without the sender doing anything, in a full sentence (reminderText in src/lib/policy.ts). */}
-              {!paused && <p className="sn-now-sub" id="sn-reminders">{reminderText(e.reminder_days)} To change it, use Edit envelope.</p>}
+              {!paused && <p className="sn-now-sub" id="sn-reminders">{reminderText(e.reminder_days)}{e.reminder_days > 0 && e.recipients.some(ownLink) ? ' For someone whose link you send yourself, the reminder comes to you instead.' : ''} To change it, use Edit envelope.</p>}
               {paused && <p className="sn-now-sub warn">Sending is paused on this account, so reminders are off, nobody is emailed about a change you make, and people further down the signing order are asked only once the pause is lifted. You can still give more time, change the envelope and void it.</p>}
               {!paused && e.held_at && <p className="sn-now-sub warn">We are holding back emails about this envelope. We emailed you why, and the history below says it too.</p>}
             </div>
@@ -245,6 +254,9 @@ export default function EnvelopeDetail() {
         )}
       </section>
 
+      {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
+      <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />
+
       <div className="grid g2">
         <section className="card" aria-labelledby="sn-docs-h">
           <h2 id="sn-docs-h" style={{ marginBottom: 10 }}>Documents</h2>
@@ -264,7 +276,7 @@ export default function EnvelopeDetail() {
                     <div><b className="small">{d.subject}</b></div>
                     <div className="muted small">To {d.to_email} · {dayTime(d.at)}</div>
                     {/* A refused email is tried again by the timer: say whether a next try is coming or nobody tries any more. */}
-                    <div className={`small${d.status === 'failed' || d.status === 'outbox' ? ' sn-bad' : ''}`}>{d.status === 'failed' && d.next_try_at ? 'Not sent yet' : MAIL_STATUS[d.status] || d.status}{d.status === 'failed' && d.error ? `: ${d.error}` : ''}{d.status === 'failed' ? (d.next_try_at ? `. We try again around ${dayTime(d.next_try_at)}.` : '. We have stopped trying.') : ''}</div>
+                    <div className={`small${d.status === 'failed' || d.status === 'outbox' ? ' sn-bad' : ''}`}>{d.status === 'sent' && deliveredLine(d) ? <>{deliveredLine(d)}.</> : <>{d.status === 'failed' && d.next_try_at ? 'Not sent yet' : MAIL_STATUS[d.status] || d.status}{d.status === 'failed' && d.error ? `: ${d.error}` : ''}{d.status === 'failed' ? (d.next_try_at ? `. We try again around ${dayTime(d.next_try_at)}.` : '. We have stopped trying.') : ''}</>}<BackNews d={d} /></div>
                   </li>
                 ))}
               </ul>

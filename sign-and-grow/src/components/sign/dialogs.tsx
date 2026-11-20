@@ -191,6 +191,9 @@ export function ReassignDialog({ base, sender, onClose, onDone }: { base: string
         if (await send(() => api(`${base}/reassign`, { body: form }), 'Check the details and try again.')) onDone(form.name.trim());
       }}>
         <p className="muted">Not the right person to sign? Pass it on. They get their own link by email, yours stops working, and {sender.name} is told.</p>
+        {/* A hand-over passes on nothing, also to someone at the same address (reassignRecipient), so that is said
+            before it happens, with the way to keep everything for someone who only wants their name spelled right. */}
+        <p className="muted">Nothing you filled in or signed goes with it: they start with an empty document. If this is you and only your name is spelled wrong, go back instead. You can fix your name when you check the document before you finish.</p>
         <label className="f"><span>Their name</span><input dir="auto" data-autofocus autoComplete="off" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="f"><span>Their email</span><input type="email" autoComplete="off" autoCapitalize="off" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
         <label className="f"><span>Reason <span className="hint">(optional)</span></span><input value={form.reason} maxLength={300} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>

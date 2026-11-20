@@ -8,6 +8,7 @@ import './styles/support.css';
 import './styles/checks.css';
 import './styles/abroad.css';
 import './styles/qr.css';
+import './styles/signphone.css';
 import type { Metadata, Viewport } from 'next';
 import { Toasts } from '@/components/ui';
 

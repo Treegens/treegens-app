@@ -127,7 +127,7 @@ export default function Operator() {
         {q.reports.map((r: any) => (
           <div key={r.id} className="queue-item">
             <div className="row between wrap"><b>{r.envelope_deleted ? 'A document its sender has deleted since' : r.subject}</b><span className="muted small">{r.reason} · {fmtDate(r.at, true)}</span></div>
-            <div className="small">{r.envelope_deleted ? 'Nothing of the document is left. ' : `Sent by ${r.sender_name} (${r.sender_email}). `}Reported by {r.reporter}.</div>
+            <div className="small">{r.envelope_deleted ? 'Nothing of the document is left. ' : `Sent by ${r.sender_name} (${r.sender_email}). `}Reported by {/^link:/.test(r.reporter || '') ? 'a person with no email address here, whose link the sender shared' : r.reporter}.</div>
             {r.via_form && <div className="small" style={{ marginTop: 4 }}><span className="badge">Public form</span> This person came through a public form and typed their own name and address. The report does not count towards the automatic pause.</div>}
             {about(r)}
             {r.message && <pre>{r.message}</pre>}

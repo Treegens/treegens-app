@@ -1,4 +1,5 @@
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
+import { assertCanStore } from './filestore.ts';
 import { bad, id, token, sha256, now, isEmail, str, baseUrl, checkCode } from './util.ts';
 import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { renderEnvelopePdf, withNotice } from './pdf.ts';
@@ -18,6 +19,10 @@ import { bouncedBefore, bouncedRefusal, bouncedLine } from './bounces.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
 import { attachGroups, groupNames, saveGroups, copyGroup, assertGroups, groupReach, groupReachNew, snapshotGroups, settleGroups, groupPeople, notifyMembers, groupLine, groupWords, groupChange, groupsCorrected, memberLinks, assertGroupCorrection } from './groups.ts';
 import { isOpenGroup, whoIs } from '../lib/groups.ts';
+// A person whose link the sender passes on themselves, with no email address (src/server/bysender.ts).
+import { saveBySender, bySenderProblem, reachKey, reporterKey, copyBySender, bySenderNotice, assertNudgeable, remindThroughSender, untoldLines, unopenedLines, noteNoCopy, senderCopyLines, answerLine } from './bysender.ts';
+import { labelOf, signerAt } from '../lib/bysender.ts';
+import { carryRules } from './tplroles.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike'];
@@ -108,6 +113,8 @@ const int = (n: any, lo: number, hi: number, d: number) => (Number.isFinite(Numb
 // long, a number outside its range and a part that is not the list it should be are refused, and the answer names
 // the part and its limit. `what` starts the sentence: "The subject", "Field 2 (\"Amount\"): the value".
 const fit = (v: any, max: number, what: string): string => {
+  // Text sent as a list or an object would be saved as "[object Object]". That is said, not saved.
+  if (v != null && typeof v === 'object') throw bad(`${what} was sent as ${Array.isArray(v) ? 'a list' : 'an object'}, and it has to be text. Nothing was saved.`);
   const s = v == null ? '' : String(v);
   if (s.length > max) throw bad(`${what} is ${fmtNum(s.length)} characters long, and the most that fits is ${fmtNum(max)}. Shorten it and save again. Nothing was saved.`);
   return s;
@@ -115,6 +122,22 @@ const fit = (v: any, max: number, what: string): string => {
 const whole = (v: any, lo: number, hi: number, d: number, what: string): number => {
   if (v == null || v === '') return d;
   if (typeof v === 'boolean' || !Number.isInteger(Number(v)) || Number(v) < lo || Number(v) > hi) throw bad(`${what} must be a whole number from ${lo} to ${hi}, and "${str(v, 40)}" is not. Nothing was saved.`);
+  return Number(v);
+};
+// A yes or no is true or false (1 and 0 do too: the database gives them back that way). Anything else is refused,
+// because the word "false" in quotes would otherwise count as yes: a field made read-only, a signing order turned
+// on, an envelope sent. Left out, the usual default holds. `what` names the key: '"readonly" of field 2'.
+export const yesNo = (v: any, d: boolean, what: string): boolean => {
+  if (v == null || v === '') return d;
+  if (v === true || v === 1) return true;
+  if (v === false || v === 0) return false;
+  throw bad(`${what} is ${str(JSON.stringify(v), 40)}, and it has to be true or false, written without quotes. Nothing was saved.`);
+};
+// A place or a size on the page is a number (a share of the page's width or height). A word or a list is refused,
+// so a field is never put at the top corner, or given a size nobody asked for. Left out, the usual default holds.
+const share = (v: any, what: string): number | null => {
+  if (v == null || v === '') return null;
+  if (typeof v === 'boolean' || typeof v === 'object' || !Number.isFinite(Number(v))) throw bad(`${what} is ${str(JSON.stringify(v), 40)}, and it has to be a number, as a share of the page from 0 to 1. Nothing was saved.`);
   return Number(v);
 };
 // A list that is left out of a request stays as it is, like a subject that is left out. One that is sent must be a list.
@@ -167,14 +190,17 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
   // Whatever is left out stays as it is: the subject, the message, and also whether people sign in order. A
   // correction that does not mention the order must never turn it off and email the next person.
   run('UPDATE envelopes SET subject=?, message=?, ordered=?, reminder_days=?, expire_days=?, date_format=?, updated_at=?, edit_version=edit_version+1, edited_by=?, edited_at=?, edited_how=NULL WHERE id=?',
-    fit(body.subject ?? e.subject, 200, 'The subject'), fit(body.message ?? e.message, 5000, 'The message to recipients'), (body.ordered ?? e.ordered) ? 1 : 0,
+    fit(body.subject ?? e.subject, 200, 'The subject'), fit(body.message ?? e.message, 5000, 'The message to recipients'), yesNo(body.ordered, !!e.ordered, '"ordered"') ? 1 : 0,
     whole(body.reminder_days, 0, 60, e.reminder_days, 'The number of days between reminders (reminder_days)'), whole(body.expire_days, 1, 365, e.expire_days, 'The number of days until the deadline (expire_days)'),
     body.date_format || e.date_format, t, by?.name || null, t, e.id);
   run('DELETE FROM fields WHERE envelope_id=?', e.id);
   run('DELETE FROM documents WHERE envelope_id=?', e.id);
   docs.forEach((d: any, i: number) => {
     const f = get('SELECT id, pages, name FROM files WHERE id=? AND account_id=?', d?.file_id, accountId);
-    if (!f) throw bad('A document in this envelope no longer exists. Upload it again.');
+    // Which document it is, so a caller who left the file out, or whose file was deleted, knows which one to fix.
+    const doc = `Document ${i + 1}${d?.name ? ` ("${str(d.name, 60)}")` : ''}`;
+    if (!f) throw bad(d?.file_id == null || d.file_id === '' ? `${doc} has no "file_id". Upload the file first (POST /files) and use the id you get back. Nothing was saved.`
+      : `${doc}: its file no longer exists, or belongs to another account. Upload it again and save. Nothing was saved.`);
     const did = docId(d.id);
     if (docPages.has(did)) throw bad(`Documents ${[...docPages.keys()].indexOf(did) + 1} and ${i + 1} have the same id "${str(d.id, 60)}". Give every document an id of its own, or leave the ids out. Nothing was saved.`);
     docPages.set(did, f.pages);
@@ -223,6 +249,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
   saveChecks(e, asked, oldRecs, correcting);
   // Which recipients are groups, and on an envelope that is out, who their members are ("group_id", "members"): groups.ts.
   saveGroups(e, asked, oldRecs, correcting);
+  // Who has no email address because the sender sends their link themselves ("link_by_sender"): bysender.ts.
+  saveBySender(e, asked, oldRecs);
   const placed = new Map<string, number>();
   flds.forEach((f: any, i: number) => {
     // A field that cannot be placed is named with its place in the list. It is never dropped without a word.
@@ -242,8 +270,9 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     const last = docPages.get(did)! - 1;
     if (f.page != null && f.page !== '' && (!Number.isInteger(Number(f.page)) || Number(f.page) < 0 || Number(f.page) > last))
       throw bad(`${which}, a ${f.type} field, has "page": ${str(JSON.stringify(f.page), 40)}, and its document has ${last + 1} page${last ? 's' : ''}. Pages are counted from 0, so use ${last ? `a whole number from 0 to ${last}` : '0'}. Nothing was saved.`);
-    const w = Math.min(1, Math.max(0.005, Number(f.w) || 0.1));
-    const h = Math.min(1, Math.max(0.005, Number(f.h) || 0.03));
+    const w = Math.min(1, Math.max(0.005, share(f.w, `${which}: "w"`) || 0.1));
+    const h = Math.min(1, Math.max(0.005, share(f.h, `${which}: "h"`) || 0.03));
+    const ro = yesNo(f.readonly, false, `${which}: "readonly"`);
     const prefilled = ['text', 'number', 'date', 'company', 'title', 'note', 'checkbox', 'radio', 'dropdown'].includes(f.type);
     // Signatures, initials and attachments are never set by the sender, and a name, an address or a signing date
     // fills itself in. A value sent for one of those is refused, unless it is only what the field holds already
@@ -253,7 +282,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     // During a correction, whatever a signer already entered is kept: an editor that was opened earlier must never
     // wipe it. The sender can still set a value on a field that is empty, on their own read-only fields, and on a
     // field that still holds exactly what the sender put there (prefill).
-    const senderOwned = SENDER_MARK(f.type) || (old ? !!old.readonly : !!f.readonly);
+    const senderOwned = SENDER_MARK(f.type) || (old ? !!old.readonly : ro);
     // Someone who has finished gave an answer in every field of theirs, also where they emptied a line or unticked
     // a box that the sender had filled in. That answer is protected exactly like words they typed: this call never
     // puts the sender's value back, whatever the body carries. Where they left the sender's own wording as it was,
@@ -261,7 +290,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     const finished = !!old?.recipient_id && doneIds.has(old.recipient_id);
     const answered = correcting && !!old && !senderOwned && old.value !== old.prefill && (finished || old.value != null);
     const value = answered ? old.value : prefilled ? fit(f.value, 4000, `${which}: the value`) || null : correcting && old ? old.value : null;
-    const readonly = f.readonly || SENDER_MARK(f.type) ? 1 : 0;
+    const readonly = ro || SENDER_MARK(f.type) ? 1 : 0;
     // The sender's own wording in a field its signer may still change. Kept beside the value: see db.ts. A signer
     // who emptied the field did not change what the sender wrote, so a save that leaves it empty keeps the wording.
     const prefill = answered ? old.prefill : prefilled && !readonly ? value ?? (correcting && old && old.value == null ? old.prefill : null) : null;
@@ -269,7 +298,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     if ((f.options || []).length > 100) throw bad(`${which} has ${f.options.length} choices, and the most a field can offer is 100. Remove some and save again. Nothing was saved.`);
     run('INSERT INTO fields (id, envelope_id, document_id, recipient_id, type, page, x, y, w, h, required, label, value, options, group_name, validation, readonly, prefill) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       fid, e.id, did, rid, f.type, Number(f.page) || 0,
-      Math.min(clamp01(f.x), 1 - w), Math.min(clamp01(f.y), 1 - h), w, h, f.required === false || f.required === 0 ? 0 : 1,
+      Math.min(clamp01(share(f.x, `${which}: "x"`)), 1 - w), Math.min(clamp01(share(f.y, `${which}: "y"`)), 1 - h), w, h, yesNo(f.required, true, `${which}: "required"`) ? 1 : 0,
       fit(f.label, 120, `${which}: the label`) || null, value,
       Array.isArray(f.options) ? JSON.stringify(f.options.map((o: any, n: number) => fit(o, 200, `${which}: choice ${n + 1}`))) : null,
       fit(f.group_name, 80, `${which}: the group name`) || null, fit(f.validation, 200, `${which}: the validation rule`) || null, readonly, prefill);
@@ -316,7 +345,10 @@ function assertSendable(e: any) {
   for (const r of e.recipients) {
     if (!r.name) throw bad('Every recipient needs a name.');
     // A group has no address of its own until one member takes the document on: its members have (groups.ts).
-    if (!isOpenGroup(r) && !isEmail(r.email)) throw bad(`${r.name} needs a valid email address.`);
+    // So does someone whose link the sender sends themselves, and what cannot work for them is said here (bysender.ts).
+    const own = bySenderProblem(r, e);
+    if (own) throw bad(own);
+    if (!isOpenGroup(r) && !r.link_by_sender && !isEmail(r.email)) throw bad(`${r.name} needs a valid email address.`);
     if (ACTS(r.role) && !e.fields.some((f: any) => f.recipient_id === r.id && f.type !== 'note'))
       throw bad(`${r.name} has nothing to sign yet. Place at least one field for them.`);
   }
@@ -477,7 +509,8 @@ function describeCorrection(a: any, b: any): { people: string[]; content: string
       continue;
     }
     const bits: string[] = [];
-    if (!sameEmail(o.email, r.email)) people.push(`${who(o)} was replaced by ${who(r)}: the email address changed from ${o.email} to ${r.email}.`);
+    // No address on one side: the sender sends that link themselves (bysender.ts), and the record says so in words.
+    if (!sameEmail(o.email, r.email)) people.push(`${who(o)} was replaced by ${who(r)}: the email address changed from ${o.email || 'none'} to ${r.email || 'none'}.`);
     else if (o.name !== r.name) {
       bits.push(`name changed from ${q(o.name)} to ${q(r.name)}`);
       // Where the name is printed by a full name field, the change is said with the page it is on, further down.
@@ -618,13 +651,17 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
         409, { code: 'sign_again', sign_again: again.map((o: any) => o.name), changes: all });
     }
     const againIds = new Set<string>(again.map((o: any) => o.id));
+    // Whoever is asked to sign again keeps a copy of what they signed (below). While no file can be stored, the
+    // correction waits rather than losing that copy (src/server/filestore.ts).
+    if (again.length) assertCanStore();
     assertSendable(after);
     // A correction is checked like a first send. The fake-notice filter reads the corrected text, and the words in
     // which the people who have the document are told what changed. Everyone who is added, or whose address
     // changes, counts towards the daily limit, and none of that is allowed while paused.
     assertCodes(after.recipients, oldById);
     // Every member who is added to a group, or comes with a group that is added, is a person newly emailed too.
-    const reach = after.recipients.filter((r: any) => !sameEmail(oldById.get(r.id)?.email, r.email)).map((r: any) => r.email).filter(Boolean).concat(groupReachNew(e, after));
+    // Someone added with no address, whose link the sender passes on, is a new person too (reachKey in bysender.ts).
+    const reach = after.recipients.filter((r: any) => !oldById.has(r.id) || !sameEmail(oldById.get(r.id)?.email, r.email)).map(reachKey).filter(Boolean).concat(groupReachNew(e, after));
     assertMayEmail(after, reach, { pause: reach.length > 0, extra: changes.content });
     noteReached(after, reach);
     // A new access code starts clean: wrong tries at the old one are forgotten, and a frozen code opens again.
@@ -736,12 +773,13 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
   const unsaid = quiet ? [...removed, ...held, ...changedFor].filter((r: any) => r.role !== 'inperson') : [];
   if (unsaid.length) audit(e.id, { name: 'System' }, 'Change not emailed', `Sending is paused on the account, so nobody was emailed about this change: ${listSome([...new Set(unsaid.map((r: any) => r.name))])}. The signing page shows it.`);
   // groupPeople: for a group nobody has taken on, each member who was sent the document is written to (groups.ts).
+  // Nobody without an address is written to: someone whose link the sender passes on is told by the sender, if at all.
   for (const r of quiet ? [] : removed.flatMap(groupPeople))
-    if (r.role !== 'inperson' && !r.complained_at) // nothing more is emailed to someone who marked this envelope's email as spam
+    if (r.role !== 'inperson' && !r.complained_at && r.email) // nothing more is emailed to someone who marked this envelope's email as spam
       await sendMail({ to: r.email, subject: `No longer needed: ${e.subject}`, heading: r.status === 'completed' ? 'You are no longer on this document' : 'You no longer need to sign this',
         lines: [r.status === 'completed' ? `${sender.name} changed the document and ${replaced.has(r.id) ? 'gave your place on it to someone else' : 'took you off it'}. What you ${finishedHow(r)} on ${ts(r.completed_at)} is no longer part of it${replaced.has(r.id) ? ', and it is kept on record' : ''}. There is nothing more for you to do.` : `${sender.name} changed the document and you are no longer on it. There is nothing more for you to do.`], ...mail });
   for (const r of quiet ? [] : held.flatMap(groupPeople))
-    if (r.role !== 'inperson' && !r.complained_at)
+    if (r.role !== 'inperson' && !r.complained_at && r.email)
       await sendMail({ to: r.email, subject: `Not your turn yet: ${after.subject}`, heading: 'It is not your turn yet',
         lines: [`${sender.name} changed this document, and someone who signs before you now has to finish first. Until they have, the link you have says it is not your turn yet.`, 'You do not need to do anything now. We will email you as soon as it is your turn. Anything you already filled in is kept.'], recipientId: r.id, ...mail });
   for (const r of changedFor) if (!held.some((h) => h.id === r.id)) await notifyRecipient(after, r, 'updated');
@@ -758,9 +796,10 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
   const eid = id(o.kind === 'template' ? 'tpl' : 'env');
   const t = now();
   tx(() => {
-    run('INSERT INTO envelopes (id, account_id, sender_id, kind, subject, message, ordered, reminder_days, expire_days, date_format, template_id, powerform_id, bulk_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    // pay_url, pay_kind: the link to the sender's own payment page goes with the copy (src/server/routes-paylink.ts).
+    run('INSERT INTO envelopes (id, account_id, sender_id, kind, subject, message, ordered, reminder_days, expire_days, date_format, template_id, powerform_id, bulk_id, created_at, updated_at, pay_url, pay_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       eid, o.accountId, o.senderId, o.kind, str(o.subject ?? src.subject, 200), str(o.message ?? src.message, 5000), src.ordered, src.reminder_days, src.expire_days, src.date_format,
-      src.kind === 'template' ? src.id : src.template_id, o.extra?.powerform_id ?? null, o.extra?.bulk_id ?? null, t, t);
+      src.kind === 'template' ? src.id : src.template_id, o.extra?.powerform_id ?? null, o.extra?.bulk_id ?? null, t, t, src.pay_url ?? null, src.pay_kind ?? null);
     const dmap = new Map<string, string>();
     const rmap = new Map<string, string>();
     for (const d of src.documents) {
@@ -778,6 +817,8 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
       copyCheck(r, rmap.get(r.id)!, fill);
       // A group stays a group in the copy, whoever acted for it on the original (groups.ts).
       copyGroup(r, rmap.get(r.id)!);
+      // So does "I will send the link myself", from an envelope to an envelope (bysender.ts).
+      copyBySender(r, rmap.get(r.id)!, fill, o.kind);
     }
     for (const f of src.fields) {
       // Values entered by signers are never copied, only what the sender prefilled.
@@ -789,6 +830,8 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
         id('fld'), eid, dmap.get(f.document_id), f.recipient_id ? rmap.get(f.recipient_id) : null, f.type, f.page, f.x, f.y, f.w, f.h, f.required, f.label,
         value, JSON.stringify(f.options || []), f.group_name, f.validation, f.readonly, f.readonly || f.type === 'note' ? null : value);
     }
+    // Who may use and change a template, and the lock on its wording, go with every copy (tplroles.ts).
+    carryRules(src, eid, o.kind);
   });
   return eid;
 }
@@ -855,8 +898,9 @@ export function closingText(account: { name: string; closing_at: string }, what:
 // and as a phone number) is in fakenotice.ts. Here: what is read, and what the sender is told.
 
 // A name an email would go out under that reads like a well-known brand, or like the notice itself. Asked wherever a
-// name is set or about to be printed to someone: before an envelope's email, before an invitation, at sign-up, and
-// when a person or an account that the checks apply to is renamed. Returns what to tell them, or null.
+// name is about to be printed to someone (before an envelope's email, before an invitation, on a public form's page)
+// and when a person or an account that the checks apply to is renamed. Sign-up does not ask: a new login emails
+// nobody until one of those does. Returns what to tell them, or null.
 export function nameRefusal(names: any[]): string | null {
   for (const name of names) {
     const brand = posesAs(name);
@@ -974,6 +1018,17 @@ export function inviteRefusal(account: any, inviter: any, email: string): { stat
 }
 export const noteInvited = (accountId: string, email: string) => noteReached({ account_id: accountId }, [email], 'invite');
 
+// A public form's page prints its name under the account's name to anyone with the link, before they type a thing.
+// A form named like the notice itself ("PayPal invoice: payment charged, call ...") would show it, phone number and
+// all, on our address, although every start is refused (fakeNotice reads the form's name as the subject). So what
+// the page prints is read the same way, and such a page is closed. Returns what to tell the owner, or null.
+export function formPageRefusal(account: any, formName: string): string | null {
+  if (!account || !hasNotPaid(account)) return null;
+  if (posesAs(account.name)) return nameRefusal([account.name]);
+  const lure = lureIn([formName, account.name]);
+  return lure ? lureText(lure, 'The name of this public form reads') : null;
+}
+
 // An access code of one or two characters is guessed in a minute, so a code that is set (or changed) must have a
 // few. A draft may hold a half-typed one, like a half-typed address: it is checked here, before anything goes out.
 function assertCodes(recipients: any[], before?: Map<string, any>) {
@@ -1023,7 +1078,8 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
   // else on the envelope (the people the owner put on the template) against what the owner may send. Each member
   // of a group is emailed, so each counts as a person reached.
   const visitor = e.powerform_id ? e.recipients.find((r: any) => r.id === e.form_recipient_id) : null;
-  const reach = e.recipients.filter((r: any) => r !== visitor).map((r: any) => r.email).concat(groupReach(e));
+  // Someone whose link the sender passes on is reached all the same, so they count too (reachKey in bysender.ts).
+  const reach = e.recipients.filter((r: any) => r !== visitor).map(reachKey).concat(groupReach(e));
   assertMayEmail(e, reach, { visitor: visitor?.email });
   // The do-not-mail list (bounces.ts): an address at which an email of this account came back for good in the last
   // weeks is not emailed by a new envelope before the sender has been told. It is a warning with a way on, never a
@@ -1111,12 +1167,16 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
   // A group that nobody has taken on yet: every member who can still act gets their own email with their own link,
   // each written by this same function (notifyMembers in groups.ts). Once a member has taken it on, the row is theirs.
   if (isOpenGroup(r) && !r.member) return notifyMembers(e, r, kind, notifyRecipient);
+  // Someone whose link the sender passes on is never emailed, whatever the kind. The sender hears what only the
+  // sender can pass on (bySenderNotice in bysender.ts), and the caller is answered false: nothing was written.
+  if (r.link_by_sender && !r.email) return bySenderNotice(e, r, kind);
   if (kind === 'reminder' && r.muted) return false;
   // Someone who marked our email about this envelope as spam is not emailed about it again, whoever asks, until they
   // ask for that themselves on their signing page (routes-bounces.ts). And no reminder goes to an address the last
-  // email came back from, until the sender corrects it or says "try again". The caller is answered false, as for
-  // a reminder that was turned off, and the envelope's record already says why.
-  if (r.role !== 'inperson' && (r.complained_at || (kind === 'reminder' && r.bounced_at))) return false;
+  // email came back from, until the sender corrects it or says "try again". The "expires soon" notice is a reminder
+  // too, and would only come back. The caller is answered false, as for a reminder that was turned off, and the
+  // envelope's record already says why.
+  if (r.role !== 'inperson' && (r.complained_at || ((kind === 'reminder' || kind === 'expiring') && r.bounced_at))) return false;
   const sender = senderOf(e);
   // Whoever asked for this email (the sender, the timer, a name a signer changed), the guard has the last word
   // before it is written: nothing goes to a recipient in a paused sender's name, and nothing that reads like a fake
@@ -1249,6 +1309,8 @@ export async function advance(envelopeId: string): Promise<void> {
       const how = await notifyRecipient(e, { ...r }, 'new');
       // Someone who signs in person is never emailed: the sender hosts it on their own device, and is told so.
       if (r.role === 'inperson') audit(e.id, { name: 'System' }, 'Ready to sign in person', `${r.name}. The sender hosts the signing on their own device.`);
+      // Nor is someone whose link the sender passes on. The record says no more than that: not how, not whether it arrived.
+      else if (r.link_by_sender && !r.email) audit(e.id, { name: 'System' }, 'Not emailed', `${labelOf(r)}. The sender said they would send the link themselves, so no email went out. The request is open.`);
       else if (how === 'outbox') audit(e.id, { name: 'System' }, 'Not emailed', `${whoIs(r)}. No mail server is set up, so no email went out. The request is open, and the sender can pass on the signing link.`);
       else if (how === false && r.complained_at) audit(e.id, { name: 'System' }, 'Not emailed', `${r.name} <${r.email}>. They marked an earlier email about this envelope as spam, so no email went out. The request is open, and the sender can pass on the signing link.`);
       else if (how !== 'failed') audit(e.id, { name: 'System' }, r.role === 'cc' ? 'Copy sent' : 'Sent to recipient', whoIs(r)); // a group is named with its members
@@ -1348,7 +1410,11 @@ async function completeEnvelope(e: any) {
   // A group that only got a copy: every member gets the completed one, with their own link (groupPeople in groups.ts).
   for (const r of fresh.recipients.flatMap(groupPeople)) {
     const to = r.email.toLowerCase();
-    if (!to) continue;
+    // No address: a group nobody took on, or someone whose link the sender passes on (the record says so for them).
+    if (!to) {
+      noteNoCopy(e, r);
+      continue;
+    }
     // Someone who marked an email about this envelope as spam gets no copy by email, and the record says so.
     // Their link still opens the completed document.
     if (r.complained_at) {
@@ -1360,7 +1426,7 @@ async function completeEnvelope(e: any) {
     await sendMail({ to: r.email, recipientId: r.id, subject: `Completed: ${fresh.subject}`, heading: `${shared ? `For ${r.name}: ` : ''}Your document is complete`, lines: [...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []), ...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their Sign&Grow account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code });
   }
   if (sender && !sent.has(sender.email.toLowerCase()) && notifyPrefs(sender).completed)
-    await sendMail({ to: sender.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines, cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand, attachments });
+    await sendMail({ to: sender.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, ...senderCopyLines(fresh)], cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand, attachments });
 }
 
 export function finalPdf(e: any): Buffer | null {
@@ -1405,7 +1471,8 @@ async function notifyActive(e: any, subject: string, heading: string, lines: str
   // For a group nobody has taken on, every member who was sent the document is told (groupPeople in groups.ts).
   for (const r of e.recipients.flatMap(groupPeople))
     // Not to someone who marked an email about this envelope as spam: nothing more is emailed to them about it.
-    if (r.status !== 'pending' && r.role !== 'inperson' && !r.complained_at)
+    // Nor to someone without an address, whose link the sender passes on: their link shows what happened.
+    if (r.status !== 'pending' && r.role !== 'inperson' && !r.complained_at && r.email)
       await sendMail({ to: r.email, subject, heading, lines, envelopeId: e.id, ...(bare ? {} : { brand: brandOf(e.account_id), replyTo: sender?.email, fromName: sender?.name }) });
 }
 
@@ -1455,6 +1522,10 @@ export async function remindEnvelope(e: any, actor: Actor, recipientId?: string)
   // A reminder is an email in the sender's name like any other: none while paused, and none for a fake notice.
   assertMayEmail(e);
   const waiting = e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && (!recipientId || r.id === recipientId));
+  // Someone whose link the sender passes on has no address: a nudge by hand is refused in words, and the timer's
+  // reminder for them goes to the sender (bysender.ts).
+  assertNudgeable(e, recipientId, actor);
+  await remindThroughSender(e, waiting, actor);
   const reminded: string[] = [];
   for (const r of waiting) {
     // A reminder the mail server would not take is not a reminder sent. The record says so by itself ("Email could
@@ -1533,7 +1604,9 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   if (r.status === 'completed') throw bad(`${r.name} has already finished, so their name and address cannot be changed from here. Nothing was changed. To change those after all, edit the envelope itself (Edit envelope in the app): a new name or address means asking them to sign again, and you are asked first. Their access code can be changed from here: send "access_code" with the name and the address as they are.`);
   const name = fit(patch.name ?? r.name, 120, 'The name').trim();
   const email = fit(patch.email ?? r.email, 254, 'The email address').trim();
-  if (!name || !isEmail(email)) throw bad('Enter a name and a valid email address.');
+  // Someone whose link the sender passes on has no address, and keeps none when only the name or the code changes.
+  // An address given for them means we email them from now on (the tick goes, below).
+  if (!name || (!isEmail(email) && !(r.link_by_sender && !email))) throw bad(r.link_by_sender && !name ? 'Enter a name.' : 'Enter a name and a valid email address.');
   const code = patch.access_code === undefined ? r.access_code : str(patch.access_code, 50).trim() || null;
   // A code that is set or changed must be long enough. A new code starts clean: wrong tries at the old one are
   // forgotten and a frozen code opens again, which is how the sender lets a signer back in.
@@ -1579,11 +1652,12 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   // A different address is a different person: nothing the first one typed, ticked, uploaded or drew goes with the
   // request, and the wait before "not opened yet" is counted from the email that goes to the new address now.
   clearAnswers(r.id);
-  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sent_at=?, status=?, free=?, ${fresh} WHERE id=?`,
+  // With an address we email them from now on, so a link the sender used to pass on is no longer theirs to pass.
+  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sent_at=?, status=?, free=?, link_by_sender=0, ${fresh} WHERE id=?`,
     name, email, code, token(), checkCode(), r.status === 'pending' ? r.sent_at : now(), r.status === 'pending' ? 'pending' : 'sent', free, r.id);
   noteReached(e, [email]);
-  audit(e.id, actor, 'Recipient corrected', `${r.name} <${r.email}> is now ${name} <${email}>. The link sent to ${r.email} stopped working, and anything filled in through it was cleared.`);
-  newerVersion(e.id, actor, `changed ${r.name} <${r.email}> to ${name} <${email}>`);
+  audit(e.id, actor, 'Recipient corrected', `${labelOf(r)} is now ${name} <${email}>. The link ${r.email ? `sent to ${r.email}` : 'the sender had shared'} stopped working, and anything filled in through it was cleared.`);
+  newerVersion(e.id, actor, `changed ${labelOf(r)} to ${name} <${email}>`);
   // Where a field prints this person's name or address, everyone else who has the document sees a different page.
   if (e.fields.some((f: any) => f.recipient_id === r.id && printsName(f))) await nameChanged(e, `${r.name} was replaced by ${name}, and the name and address printed for them changed with that.`, r.id);
   if (r.status !== 'pending') await notifyRecipient(loadEnvelope(e.id), get('SELECT * FROM recipients WHERE id=?', r.id));
@@ -1766,10 +1840,11 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // one inbox (a family, an office). Someone who only wants their name spelled differently has "Fix my name".
   // The wait before the sender hears "not opened yet" starts again with the email that goes out now.
   clearAnswers(r.id);
-  run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, reassigned_from=?, free=? WHERE id=?",
-    name, email, token(), checkCode(), now(), `${r.name} <${r.email}>`, free, r.id);
+  // The new person has an address and is emailed, also when the first one's link was passed on by the sender.
+  run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, reassigned_from=?, free=?, link_by_sender=0 WHERE id=?",
+    name, email, token(), checkCode(), now(), labelOf(r), free, r.id);
   noteReached(e, [email]);
-  audit(e.id, actor, 'Reassigned', `${r.name} <${r.email}> assigned this to ${name} <${email}>${to.reason ? `: ${str(to.reason, 300)}` : ''}${/[.!?]$/.test(str(to.reason, 300).trim()) ? '' : '.'} Nothing that ${r.name} had filled in or signed was passed on.`);
+  audit(e.id, actor, 'Reassigned', `${labelOf(r)} assigned this to ${name} <${email}>${to.reason ? `: ${str(to.reason, 300)}` : ''}${/[.!?]$/.test(str(to.reason, 300).trim()) ? '' : '.'} Nothing that ${r.name} had filled in or signed was passed on.`);
   newerVersion(e.id, actor, `passed this document on to ${name}`);
   // A number the sender typed for the first person is not used for the second, and a check the first passed does
   // not count for the second: see passCheckOn in signercode.ts.
@@ -1832,7 +1907,8 @@ export async function requestExtension(e: any, r: any, actor: Actor) {
 // 'unknown' (not a link of ours). A replaced link is as unguessable as a live one, so only someone who was sent it
 // can ask, and none of these answers tells them more than their own emails did.
 // 'stopped': the person who holds the document now marked an email about it as spam, so none is sent to them.
-export type ResendAnswer = 'sent' | 'delayed' | 'waiting' | 'removed' | 'closed' | 'unknown' | 'stopped';
+// 'ask_sender': the person who holds it now has no email address, because the sender passes their link on.
+export type ResendAnswer = 'sent' | 'delayed' | 'waiting' | 'removed' | 'closed' | 'unknown' | 'stopped' | 'ask_sender';
 export async function resendFromRetired(oldToken: string): Promise<ResendAnswer> {
   const row = get('SELECT recipient_id FROM retired_tokens WHERE token=?', oldToken);
   if (!row) return 'unknown';
@@ -1841,6 +1917,8 @@ export async function resendFromRetired(oldToken: string): Promise<ResendAnswer>
   if (!e) return 'removed';
   if ((e.status !== 'sent' && e.status !== 'completed') || r.status === 'declined') return 'closed';
   if (!r.token || r.status === 'pending') return 'waiting';
+  // The person it is with now has no address: the sender passes their link on (bysender.ts). Nothing can be emailed.
+  if (r.link_by_sender && !r.email) return 'ask_sender';
   const how = await notifyRecipient(e, e.recipients.find((x: any) => x.id === r.id) || r, 'resent');
   // Nothing was written: the holder of an old link is not the person the document is with now, and that person asked
   // not to be emailed about it. The page says that no email is coming, and to ask the sender.
@@ -1997,7 +2075,7 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
   // The same question is put to the sender once. Asking it again changes nothing, emails nobody and is answered in
   // the same words. `why` finishes "... to be written as X." for the record.
   const ask = async (why: string, lines: string[]) => {
-    const detail = `The signer at ${r.email} asked for the name "${r.name}" to be written as "${name}". ${why}, so it was not changed and the sender was asked.`;
+    const detail = `${signerAt(r)} asked for the name "${r.name}" to be written as "${name}". ${why}, so it was not changed and the sender was asked.`;
     if (get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Name change asked for' AND detail=?", e.id, detail)) return;
     audit(e.id, actor, 'Name change asked for', detail);
     await notifySender(e, 'always', `Name change asked for: ${e.subject}`, `${r.name} asked to be named ${name}`, lines);
@@ -2017,8 +2095,8 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
       : mixed ? 'That name has a word written in two alphabets at once, which is how one name is made to look like another'
       : otherScript ? `That is in a different script from "${written}", the name the sender wrote. It may be the same name in another script, which software cannot tell`
       : `That is more than a small spelling fix of "${written}", the name the sender wrote`;
-    await ask(why, [`Someone using the signing link of ${r.name} <${r.email}> asked for the name on the document to be "${name}". ${why.replace(', the name the sender wrote', '')}, so we did not change it.`,
-      `If "${name}" is right, open the envelope, choose Correct next to ${r.name} and type the name yourself. Their link keeps working. If it is another person's name, whatever was filled in or signed under "${r.name}" is cleared, so the new person starts with an empty document. If two people share ${r.email}, check that each of them is using the link from the email that carries their own name. If you do nothing, the name stays "${r.name}".`]);
+    await ask(why, [`Someone using the signing link of ${labelOf(r)} asked for the name on the document to be "${name}". ${why.replace(', the name the sender wrote', '')}, so we did not change it.`,
+      `If "${name}" is right, open the envelope, choose Correct next to ${r.name} and type the name yourself. Their link keeps working. If it is another person's name, whatever was filled in or signed under "${r.name}" is cleared, so the new person starts with an empty document.${r.email ? ` If two people share ${r.email}, check that each of them is using the link from the email that carries their own name.` : ''} If you do nothing, the name stays "${r.name}".`]);
     const told = taken ? `"${name}" is, or reads like, the name of someone else on this document`
       : mixed ? `"${name}" has a word written in two alphabets at once, so we cannot tell whose name it is`
       : `Only a small slip can be corrected here, such as a letter missing or two swapped, and "${name}" differs from "${written}"${written !== r.name ? `, the name ${from} wrote,` : ''} by more than that`;
@@ -2030,7 +2108,7 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
   const own = r.role === 'signer' && !isChargeable(r, sender || '') && sameEmail(r.email, sender?.email) && !paidFor(e.account_id, r);
   if (own && !isSelf({ ...r, name }, sender || '')) {
     await ask(`This request is the sender's own signature on their own document, which is free under the name on the sender's account only, and "${name}" is not that name`,
-      [`Someone using the signing link of ${r.name} <${r.email}> asked for the name on the document to be "${name}". This request is your own signature on your own document, which is free under the name on your account, "${from}", and under that name only. So we did not change it.`,
+      [`Someone using the signing link of ${labelOf(r)} asked for the name on the document to be "${name}". This request is your own signature on your own document, which is free under the name on your account, "${from}", and under that name only. So we did not change it.`,
         `If "${name}" is another person, open the envelope, choose Correct next to ${r.name} and type the name yourself. It is then that person's signature and is counted like one. If it is you, and only the spelling of your name on your account is off, change your name under Settings first: after that the signing page accepts it and the signature stays free. If you do nothing, the name stays "${r.name}".`]);
     return { applied: false, name: r.name, message: `We did not change it. ${from} is signing their own document here, and that is free under the name on their account only, which is "${from}". "${name}" is not that name, so we asked ${from} instead, and only they can change it, from the envelope with Correct.` };
   }
@@ -2040,7 +2118,7 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
   if (over.length) {
     const names = listSome(over.map((o: any) => o.name), 8);
     await ask(`The name is printed on the document and ${names} ${over.length === 1 ? 'has' : 'have'} already finished`,
-      [`The signer at ${r.email} asked for their name to be written "${name}" instead of "${r.name}". That name is printed on the document, and ${names} ${over.length === 1 ? 'has' : 'have'} already finished, so we did not change it.`,
+      [`${signerAt(r)} asked for their name to be written "${name}" instead of "${r.name}". That name is printed on the document, and ${names} ${over.length === 1 ? 'has' : 'have'} already finished, so we did not change it.`,
         `If "${name}" is right, open the envelope, choose Edit envelope and change the name there. You are then asked whether ${names} should sign again, and nothing is saved until you say yes. If you do nothing, the name stays "${r.name}".`]);
     return { applied: false, name: r.name, message: `We did not change it here. Your name is printed on the document and ${names} ${over.length === 1 ? 'has' : 'have'} already finished, so only ${from} can change it now. We asked them for you. You can wait for their answer, or finish under "${r.name}" if that is close enough.` };
   }
@@ -2050,7 +2128,7 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
   // Other people who have the document and see this name printed on it are told, and an open screen of theirs has
   // to load the page again before it can finish. The signer's own screen carries on with the new version.
   await nameChanged(e, `The name "${r.name}" is now written "${name}".`, r.id);
-  await notifySender(e, 'always', `Name corrected: ${e.subject}`, `${r.name} corrected their name to ${name}`, [`The signer at ${r.email} changed how their name is written, from "${r.name}" to "${name}". It is recorded in the audit trail. If this is not who you expected, void the envelope.`]);
+  await notifySender(e, 'always', `Name corrected: ${e.subject}`, `${r.name} corrected their name to ${name}`, [`${signerAt(r)} changed how their name is written, from "${r.name}" to "${name}". It is recorded in the audit trail. If this is not who you expected, void the envelope.`]);
   return { applied: true, name, message: '', version: get('SELECT content_version v FROM envelopes WHERE id=?', e.id)?.v };
 }
 
@@ -2121,7 +2199,7 @@ export async function askSender(e: any, r: any, message: string, actor: Actor) {
   const sender = senderOf(e);
   audit(e.id, actor, 'Question asked', `${r.name} asked the sender a question`);
   await sendMail({ to: sender.email, replyTo: r.email, fromName: r.name, subject: `Question about: ${e.subject}`, heading: `${r.name} has a question before signing`,
-    lines: [text, `Reply to this email to answer ${r.name} (${r.email}) directly. If the document needs changing, you can correct it without voiding it.`],
+    lines: [text, `${answerLine(r)} If the document needs changing, you can correct it without voiding it.`],
     cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand: brandOf(e.account_id) });
 }
 
@@ -2166,11 +2244,13 @@ export const ABUSE_REASONS = ['phishing', 'spam', 'not-for-me', 'other'];
 // other. A sender who sends, voids and deletes must not be out of reach of the people who still hold the email.
 export async function reportAbuse(e: any, r: any, body: any, actor: Actor) {
   const reason = ABUSE_REASONS.includes(body?.reason) ? body.reason : 'other';
-  if (get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND account_id=? AND lower(reporter)=lower(?)', e.id, e.account_id, r.email)) return;
+  // A person with no address, whose link the sender passed on, is counted as the one person they are (reporterKey).
+  const reporter = reporterKey(r);
+  if (get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND account_id=? AND lower(reporter)=lower(?)', e.id, e.account_id, reporter)) return;
   // The visitor of a public form typed their own name and address, so three made-up visitors are not three
   // recipients. Their report is kept and shown to the people who review reports, and never counts towards a pause.
   const viaForm = !!e.powerform_id && !!e.form_recipient_id && r.id === e.form_recipient_id;
-  run('INSERT INTO abuse_reports (id, envelope_id, account_id, reporter, reason, detail, ip, at, via_form) VALUES (?,?,?,?,?,?,?,?,?)', id('abr'), e.id, e.account_id, r.email, reason, str(body?.detail, 2000) || null, actor.ip || null, now(), viaForm ? 1 : 0);
+  run('INSERT INTO abuse_reports (id, envelope_id, account_id, reporter, reason, detail, ip, at, via_form) VALUES (?,?,?,?,?,?,?,?,?)', id('abr'), e.id, e.account_id, reporter, reason, str(body?.detail, 2000) || null, actor.ip || null, now(), viaForm ? 1 : 0);
   if (!e.gone) audit(e.id, actor, 'Reported as suspicious', `${r.name}: ${reason}`);
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
   // Reports that are still open and reports an operator confirmed as abuse both count: confirming one must never make
@@ -2193,7 +2273,7 @@ export async function reportAbuse(e: any, r: any, body: any, actor: Actor) {
   if (to)
     await sendMail({ to, subject: `Report: ${e.gone ? 'a document that was deleted since' : e.subject}`, heading: paused ? 'Account paused after reports' : 'A recipient reported a document', ...(isEmail(r.email) ? { replyTo: r.email } : {}),
       lines: [e.gone ? `A document that its sender has deleted since, from the account ${account.name} (${account.id}). The report was made with the security code of an email about it.` : `Envelope ${e.id} from ${sender?.name} <${sender?.email}> (account ${account.name}, ${account.id}).`,
-        `Reported by ${e.gone ? r.name : `${r.name} <${r.email}>`} as: ${reason}.`, ...(body?.detail ? [`They wrote: ${str(body.detail, 2000)}`] : []),
+        `Reported by ${e.gone ? r.name : labelOf(r)} as: ${reason}.`, ...(body?.detail ? [`They wrote: ${str(body.detail, 2000)}`] : []),
         ...(viaForm ? ['This person came through a public form and typed their own name and address, so the report does not count towards the automatic pause. A person should still look at it.'] : []),
         `${n} open or confirmed report(s) that count against this account in the last 30 days.${paused ? ' Sending is now paused for it.' : ''}`],
       cta: { label: 'Open the review queue', url: `${baseUrl()}/app/operator` } });
@@ -2258,7 +2338,7 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       run('UPDATE envelopes SET expiry_warned_at=? WHERE id=?', t, e.id);
       const waiting = e.recipients.filter((r: any) => r.status === 'sent' || r.status === 'viewed');
       if (!held) for (const r of waiting) await notifyRecipient(e, r, 'expiring');
-      await notifySender(e, 'problems', `Expires soon: ${e.subject}`, 'This envelope expires in three days', [`Still waiting on ${waiting.map((r: any) => r.name).join(', ') || 'nobody'}. You can extend the deadline if they need longer.`], { label: 'Extend deadline', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
+      await notifySender(e, 'problems', `Expires soon: ${e.subject}`, 'This envelope expires in three days', [`Still waiting on ${waiting.map((r: any) => r.name).join(', ') || 'nobody'}. You can extend the deadline if they need longer.`, ...untoldLines(waiting)], { label: 'Extend deadline', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
       warned++;
     }
     // "I never got it": if a request sits unopened, tell the sender once so they can share the link another way.
@@ -2270,8 +2350,8 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
     const unopened = e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && !r.unopened_alerted_at && !r.bounced_at && !r.complained_at && r.sent_at && Date.now() - Date.parse(r.sent_at) > quietMs && !sameEmail(r.email, own));
     if (unopened.length) {
       for (const r of unopened) run('UPDATE recipients SET unopened_alerted_at=? WHERE id=?', t, r.id);
-      await notifySender(e, 'problems', `Not opened yet: ${e.subject}`, `${unopened.map((r: any) => r.name).join(', ')} ${unopened.length === 1 ? 'has' : 'have'} not opened your document`,
-        ['The email may be sitting in a spam folder or have gone to the wrong address.', 'From the envelope page you can copy their signing link and send it yourself by text or chat, nudge them, or correct the address without voiding anything.']);
+      // In the words that fit how each of them got the link: by our email, or from the sender (bysender.ts).
+      await notifySender(e, 'problems', `Not opened yet: ${e.subject}`, `${unopened.map((r: any) => r.name).join(', ')} ${unopened.length === 1 ? 'has' : 'have'} not opened your document`, unopenedLines(unopened));
       unopenedAlerts += unopened.length;
     }
     // An automatic reminder that waited for someone's morning (see below) goes out once it is day where they are.
@@ -2293,7 +2373,8 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       // 8:00 and 20:00 there. One that falls in their night waits for the morning instead of waking a phone at 3 a.m.
       // Someone whose zone we do not know is reminded as before, at about the hour the envelope was sent. A reminder
       // the sender asks for by hand always goes out at once.
-      const asleep: any[] = due && !held ? e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && !r.muted && validZone(r.tz) && !isDaytime(t, r.tz)) : [];
+      // Someone whose link the sender passes on gets no email, so their night does not matter: the sender is told.
+      const asleep: any[] = due && !held ? e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && !r.muted && !r.link_by_sender && validZone(r.tz) && !isDaytime(t, r.tz)) : [];
       if (asleep.length) {
         for (const r of e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && !asleep.includes(r))) reminded += (await remindEnvelope(e, { name: 'System' }, r.id)) ? 1 : 0;
         for (const r of asleep) run('UPDATE recipients SET reminder_held_at=? WHERE id=?', t, r.id);

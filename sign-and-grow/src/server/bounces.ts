@@ -1,6 +1,7 @@
 import { all, get, run } from './db.ts';
 import { hmac, isEmail, now, safeEqual, sha256, str } from './util.ts';
 import { mailEventsOn, BOUNCE_WARN_DAYS } from '../lib/policy.ts';
+import { bouncedLine as line } from '../lib/mailnews.ts';
 
 // Knowing when an email did not arrive.
 //
@@ -58,7 +59,8 @@ const bare = (v: any): string => {
 };
 const iso = (v: any): string | undefined => {
   const ms = typeof v === 'number' ? v * 1000 : Date.parse(str(v, 60));
-  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : undefined;
+  // Beyond the last date a computer can write (year 275760) toISOString throws: such a value is no time at all.
+  return Number.isFinite(ms) && ms > 0 && ms < 8.64e15 ? new Date(ms).toISOString() : undefined;
 };
 function ev(type: MailEvent['type'], email: any, o: { mail_id?: any; message_id?: any; reason?: any; at?: any } = {}): MailEvent[] {
   const to = bare(email);
@@ -187,8 +189,9 @@ export function readEvents(body: any): { events: MailEvent[]; confirm?: string }
 const WHY: [RegExp, string][] = [
   [/suppress|bounced address|inactive recipient|deactivated at the mail provider/i, 'the mail provider no longer sends to this address, because earlier emails to it came back'],
   [/spam report|complain/i, 'the mail provider no longer sends to this address, because an email to it was marked as spam'],
+  // The domain is asked before the mailbox: "domain does not exist" would otherwise read as "no such mailbox".
+  [/\b5\.1\.2\b|\b5\.4\.4\b|domain (not found|does(n't| not) exist|name not found)|host (not found|unknown)|unknown host|no mx|no mail ?server|nxdomain|unrouteable|bad destination system|DnsError/i, 'the domain does not exist or takes no email'],
   [/\b5\.1\.[136]\b|user unknown|unknown user|no such (user|mailbox|recipient|address|person)|does(n't| not) exist|not exist|invalid (recipient|mailbox|address)|mailbox not found|recipient (address )?rejected|address rejected|\bNoEmail\b|bad destination mailbox/i, 'no such mailbox'],
-  [/\b5\.1\.2\b|\b5\.4\.4\b|domain (not found|does not exist|name not found)|host (not found|unknown)|unknown host|no mx|no mail ?server|nxdomain|unrouteable|bad destination system|DnsError/i, 'the domain does not exist or takes no email'],
   [/\b[45]\.2\.2\b|mailbox (is )?full|over ?quota|quota exceeded|MailboxFull|insufficient (system )?storage/i, 'the mailbox is full'],
   [/\b5\.2\.1\b|mailbox (is )?(disabled|inactive|unavailable)|account (is )?(disabled|inactive|suspended)/i, 'the mailbox is switched off'],
   [/\b5\.[23]\.[34]\b|too (large|big)|MessageTooLarge|size limit/i, 'the email is too large for that mailbox'],
@@ -206,10 +209,6 @@ export function bounceWhy(reason: string | undefined, hard: boolean): { plain: s
 }
 
 const same = (a: any, b: any) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
-/** "3 May", by the calendar in UTC, so an email and a page written on the same day say the same day. */
-export const bounceDay = (at: string): string => new Date(at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: 'UTC' });
-/** The domain of an address, for "the mail server of example.com". */
-export const domainOf = (email: string): string => String(email || '').split('@').pop() || '';
 
 // ---- "Try later" on separate days ---------------------------------------------------------------
 
@@ -222,6 +221,14 @@ export function softBounceDays(email: string, at: string): number {
   const day = at.slice(0, 10) >= from && Date.parse(at) < Date.now() + 864e5 ? at.slice(0, 10) : now().slice(0, 10);
   run('INSERT OR IGNORE INTO soft_bounce_days (address_hash, day) VALUES (?,?)', softKey(email), day);
   return get('SELECT COUNT(*) n FROM soft_bounce_days WHERE address_hash=?', softKey(email)).n;
+}
+/**
+ * Called by the timer (cron.ts). The list of addresses that bounced and the "try later" days are kept for
+ * BOUNCE_WARN_DAYS, as the data processing summary says, also when no new bounce comes in to clear them out.
+ */
+export function forgetOldBounces(): number {
+  const from = new Date(Date.now() - BOUNCE_WARN_DAYS * 864e5).toISOString();
+  return Number(run('DELETE FROM bounced_addresses WHERE at < ?', from).changes) + Number(run('DELETE FROM soft_bounce_days WHERE day < ?', from.slice(0, 10)).changes);
 }
 /** An email arrived there, or the address counts as not working now: the days start again. */
 export const forgetSoftDays = (email: string) => void run('DELETE FROM soft_bounce_days WHERE address_hash=?', softKey(email));
@@ -243,8 +250,8 @@ export function bouncedBefore(accountId: string, emails: any[]): Bounced[] {
   if (!want.size) return [];
   return all('SELECT email, at, reason FROM bounced_addresses WHERE account_id=? AND at > ? ORDER BY at DESC', accountId, new Date(Date.now() - BOUNCE_WARN_DAYS * 864e5).toISOString()).filter((b) => want.has(b.email.toLowerCase()));
 }
-/** The warning in the words the brief asks for: "x@y.z bounced on 3 May: no such mailbox. Check the address." */
-export const bouncedLine = (b: Bounced): string => `${b.email} bounced on ${bounceDay(b.at)}: ${b.reason}. Check the address.`;
+/** The warning: "x@y.z bounced on 3 May: no such mailbox. Check the address." Worded in src/lib/mailnews.ts, for the pages too. */
+export const bouncedLine = (b: Bounced): string => line(b);
 /**
  * What a send is answered with when it would email an address on the list and the sender has not said "anyway".
  * It never refuses for good and never drops anyone quietly: the same request with "send_anyway": true goes out.

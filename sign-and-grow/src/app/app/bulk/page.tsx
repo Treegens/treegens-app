@@ -9,6 +9,7 @@ import { BatchView } from '@/components/sender/BatchView';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { headerFor, readRecipients, MAX_ROWS, type BulkRow, type Role } from '@/components/sender/csv';
 import { dayTime, explain, plural } from '@/components/sender/lib';
+import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 
 export default function BulkPage() {
   return <Suspense fallback={<div className="muted" role="status">Loading…</div>}><Bulk /></Suspense>;
@@ -59,6 +60,11 @@ function BulkSend({ preset }: { preset: string }) {
   const { check, failed: checkFailed } = useBatchCheck(tid, listOk ? ready : [], asked);
   // The server would refuse the whole batch, and the notice above the button says why and what to do about it.
   const wouldRefuse = !!check && ((check.counted && check.short > 0) || !!check.refusal);
+  // Addresses in the list that bounced before: from the check, or from a refusal that came after it. The dialog
+  // names them and its button becomes "Send anyway". A new list starts again.
+  const [deadNow, setDeadNow] = useState<BouncedAddress[]>([]);
+  useEffect(() => setDeadNow([]), [csv, tid]);
+  const dead = check?.bounced?.length ? check.bounced : deadNow;
   const canSend = listOk && !wouldRefuse;
 
   // The list is kept in this browser tab while it is being worked on, so paying for missing signatures (which
@@ -112,8 +118,9 @@ function BulkSend({ preset }: { preset: string }) {
   // One key per batch as it stands. If the connection drops and Send is pressed again for the same batch, the server
   // sees the same key and finishes that batch instead of sending everybody a second time.
   const sendKey = useRef<{ sig: string; key: string } | null>(null);
-  async function send(rows: BulkRow[]) {
-    const body = { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => x.cells) };
+  async function send(rows: BulkRow[], anyway = false) {
+    // "send_anyway": the sender has seen which addresses bounced before and chose to send (src/lib/mailnews.ts).
+    const body = { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => x.cells), ...(anyway ? { send_anyway: true } : {}) };
     const sig = JSON.stringify(body);
     if (sendKey.current?.sig !== sig) sendKey.current = { sig, key: `bulk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` };
     const r = await api('/bulk', { body, headers: { 'Idempotency-Key': sendKey.current.key } });
@@ -267,11 +274,15 @@ function BulkSend({ preset }: { preset: string }) {
       </section>
 
       {confirming && (
-        <ConfirmDialog title={`Send ${plural(confirming.length, 'envelope')}`} confirmLabel={`Send ${plural(confirming.length, 'envelope')}`} keepLabel="Not yet" danger={false} unchanged="" onClose={() => setConfirming(null)}
+        <ConfirmDialog title={`Send ${plural(confirming.length, 'envelope')}`} confirmLabel={dead.length ? 'Send anyway' : `Send ${plural(confirming.length, 'envelope')}`} keepLabel="Not yet" danger={false} unchanged="" onClose={() => setConfirming(null)}
           onConfirm={async () => {
             try {
-              await send(confirming);
+              await send(confirming, dead.length > 0);
             } catch (e: any) {
+              if (e?.code === 'bounced_address') {
+                setDeadNow(e.data?.bounced || []);
+                throw new Error('Nothing was sent yet. Read which addresses bounced before, above, then choose Send anyway or go back and correct the list.');
+              }
               // A dropped connection does not tell us whether the batch went out, so never invite a blind second try.
               if (!e?.status) throw new Error('We lost the connection while sending. Look under Past batches to see whether it went out before you try again, so nobody gets it twice.');
               throw new Error(explain(e, 'Nothing was sent.'));
@@ -279,6 +290,7 @@ function BulkSend({ preset }: { preset: string }) {
           }}>
           <p>{confirming.length === 1 ? 'One person gets' : `${confirming.length} people each get`} their own copy of &ldquo;{loaded?.subject || 'this template'}&rdquo; by email, straight away.</p>
           {batchLine(check) && <p>{batchLine(check)}</p>}
+          {dead.length > 0 && <div className="notice warn"><b>{sendAnywayAsk(dead).title}.</b> {sendAnywayAsk(dead).body}</div>}
           <p className="muted">Sent to the wrong list? You can void the whole batch in one go afterwards. {voidCostLine(allowance)}</p>
         </ConfirmDialog>
       )}

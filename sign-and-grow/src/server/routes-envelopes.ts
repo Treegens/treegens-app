@@ -15,13 +15,17 @@ import { bouncedBefore, bouncedRefusal, bouncedLine, mailStop, mailStopText } fr
 import { correctWithCheck, assertBulkChecks, bulkChecksRefusal, assertFormChecks, textsOf } from './signercode.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
 import { memberLink, memberInbox, groupReach, assertNoGroupCheck } from './groups.ts';
+import { assertBySenderCorrection } from './bysender.ts';
+import { labelOf } from '../lib/bysender.ts';
 import { cookie, readCookie } from './auth.ts';
 import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
 import { sendWarnings } from './warnings.ts';
-import { emailRefusal, fieldProgress } from './envelopes.ts';
+import { emailRefusal, fieldProgress, formPageRefusal, yesNo } from './envelopes.ts';
 import { PRICING } from '../lib/impact.ts';
 import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
+// Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
+import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner } from './tplroles.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -80,6 +84,9 @@ export function mine(c: Ctx, envelopeId: string, kind?: string, o: { removed?: b
   if (!e || e.account_id !== c.account.id || (kind && e.kind !== kind)) throw bad('Envelope not found.', 404);
   // Members see what they sent. Admins see the whole account. Templates are shared with the team.
   if (e.kind === 'envelope' && !c.admin && e.sender_id !== c.user.id) throw bad('Envelope not found.', 404);
+  // A template can be for admins only or for chosen members (tplroles.ts). Every way of reading, using, copying or
+  // changing a template comes through here, so one who may not use it gets no further, and is told who to ask.
+  if (e.kind === 'template') assertMayUse(c, e);
   // An envelope its sender deleted after somebody had signed is gone for the sender: no list, no search, no
   // change. Its recipients still have it, and so does the account: an admin can open it, download it and put it
   // back (the three routes that pass `removed`), and do nothing else to it until it is back.
@@ -87,12 +94,12 @@ export function mine(c: Ctx, envelopeId: string, kind?: string, o: { removed?: b
   return e;
 }
 
-// Everyone on the team can use every template: read it, copy it, send from it. Changing or deleting one is for
-// the person it belongs to and for admins, so no member can wipe or rewrite what the whole team sends from.
-function assertMayChange(c: Ctx, e: any) {
-  if (e.kind !== 'template' || c.admin || e.sender_id === c.user.id) return;
-  const owner = get('SELECT name FROM users WHERE id=?', e.sender_id)?.name || 'a colleague';
-  throw bad(`This template belongs to ${owner}. You can use it and copy it, but only ${owner} or an admin of your team can change or delete it. To make your own version, copy it and change the copy.`, 403);
+// Whoever may use a template can read it, copy it and send from it. Changing one is for the person it belongs to and
+// for admins, and for the members they chose or the whole team when its rule says so (tplroles.ts), so no member can
+// wipe or rewrite what the whole team sends from. Deleting is only ever for the person it belongs to and admins.
+export function assertMayChange(c: Ctx, e: any, deleting = false) {
+  if (e.kind !== 'template') return;
+  if (!mayChange(c, e) || (deleting && !maySetRules(c, e))) throw changeRefusal(c, e, deleting);
 }
 
 // The Idempotency-Key a call came with, or '' when it sent none. The key is kept with a hash of the body, so a
@@ -118,6 +125,9 @@ route('GET', '/envelopes', (c) => {
   // Members see what they sent, and the folders of what they sent. Templates and their folders are the team's.
   const own = kind === 'envelope' && !c.admin;
   if (own) (where.push('e.sender_id=?'), p.push(c.user.id));
+  // A template someone may not use is not listed at all, and neither is its folder (tplroles.ts).
+  const [usable, usableP] = kind === 'template' ? usableSql(c) : ['', []];
+  if (usable) (where.push(usable), p.push(...usableP));
   const boxes: Record<string, string> = { drafts: "e.status='draft'", sent: "e.status!='draft'", waiting: "e.status='sent'", completed: "e.status='completed'", closed: "e.status IN ('voided','declined','expired')" };
   if (kind === 'envelope' && boxes[box]) where.push(boxes[box]);
   if (c.q.get('folder')) (where.push('e.folder=?'), p.push(c.q.get('folder')));
@@ -145,11 +155,12 @@ route('GET', '/envelopes', (c) => {
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
   }
   // Only the folders of what this person can see: a folder name such as "Layoffs 2026" says something by itself.
-  const folders = all(`SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND ${hidden} AND folder IS NOT NULL AND folder != ''${own ? ' AND sender_id=?' : ''}`, ...(own ? [c.account.id, kind, c.user.id] : [c.account.id, kind])).map((r) => r.folder);
+  const folders = all(`SELECT DISTINCT folder FROM envelopes e WHERE account_id=? AND kind=? AND ${hidden} AND folder IS NOT NULL AND folder != ''${own ? ' AND sender_id=?' : ''}${usable ? ` AND ${usable}` : ''}`, ...(own ? [c.account.id, kind, c.user.id] : [c.account.id, kind]), ...usableP).map((r) => r.folder);
   // Admins can narrow the list to one person's envelopes.
   const senders = c.admin ? all(`SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? AND e.${hidden} ORDER BY u.name`, c.account.id, kind) : [];
-  // On a template, may_change says whether this person may change or delete it (their own, or they are an admin).
-  if (kind === 'template') for (const e of rows) e.may_change = c.admin || e.sender_id === c.user.id;
+  // On a template, may_change says whether this person may change it, and access what they may do with it and its
+  // rule (use, change, locked), so the page shows the right buttons and an "Admins only" or lock mark (tplroles.ts).
+  if (kind === 'template') markList(c, rows);
   // For admins: how many envelopes in the account were removed by their sender, so the list can offer to show them.
   const removedCount = c.admin && kind === 'envelope' ? get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND hidden_at IS NOT NULL", c.account.id).n : undefined;
   return { envelopes: rows, folders, senders, ...(removedCount === undefined ? {} : { removed: removedCount }) };
@@ -172,6 +183,8 @@ route('POST', '/envelopes', async (c) => {
   if (b.kind != null && b.kind !== '' && b.kind !== 'template' && b.kind !== 'envelope')
     throw bad(`"kind" is "${str(b.kind, 40)}", which does not exist. Use "envelope" or "template", or leave it out for an envelope. Nothing was created.`);
   const kind = b.kind === 'template' ? 'template' : 'envelope';
+  // "send": "false", in quotes, must never email anybody. A yes or no is true or false, or it is refused (yesNo).
+  const send = yesNo(b.send, false, '"send"');
   // A retried or timed-out call with the same Idempotency-Key gets the envelope the first call made instead of
   // sending twice. A key belongs to whoever used it (a person, or the owner of the API key), so two members of a
   // team who pick the same text, say an order number, never see each other's envelope. The same key with a different
@@ -192,6 +205,8 @@ route('POST', '/envelopes', async (c) => {
   let eid: string;
   if (b.template_id) {
     const tpl = mine(c, str(b.template_id), 'template');
+    // A locked template keeps its own message for whoever may not change it. The subject is the envelope's name.
+    assertMessageKept(c, tpl, b.message);
     eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: c.user.id, kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
   } else {
     eid = createEnvelope(c.account, c.user.id, kind, b);
@@ -208,7 +223,7 @@ route('POST', '/envelopes', async (c) => {
   // The key row goes when its envelope goes (the database deletes it with the envelope), so a key never points at
   // nothing. REPLACE covers the one case left: a key whose envelope now belongs to somebody else.
   if (idem) run('INSERT OR REPLACE INTO idempotency_keys (account_id, user_id, key, envelope_id, request_hash, at) VALUES (?,?,?,?,?,?)', c.account.id, c.user.id, idem, eid, bodyHash(b), now());
-  if (b.send && kind === 'envelope') {
+  if (send && kind === 'envelope') {
     try {
       // "send_anyway": the caller has seen that an address on it bounced before, and wants it sent all the same.
       await sendEnvelope(eid, c.actor, { anyway: b.send_anyway === true });
@@ -221,7 +236,7 @@ route('POST', '/envelopes', async (c) => {
   }
   const made = loadEnvelope(eid);
   // What was sent goes out with what the check before sending found. It is a list to read, never a refusal.
-  return { envelope: publicEnvelope(made), ...(b.send && kind === 'envelope' ? { warnings: sendWarnings(made) } : {}) };
+  return { envelope: publicEnvelope(made), ...(send && kind === 'envelope' ? { warnings: sendWarnings(made) } : {}) };
 });
 
 route('GET', '/envelopes/:id', (c) => {
@@ -241,6 +256,10 @@ route('GET', '/envelopes/:id', (c) => {
   // `ready` marks someone who filled in everything required and has not pressed Finish (fieldProgress in envelopes.ts,
   // the same count the reminder to that person goes by).
   for (const r of env.recipients) r.progress = fieldProgress(e, r);
+  // A template: who can use and change it, and what this person may do with it. An envelope started from a template
+  // whose wording is locked for this person: what is locked and who can unlock it, so the editor shows it as locked.
+  if (e.kind === 'template') env.access = accessOf(c, e);
+  else env.wording_lock = wordingLock(c, e);
   // Names and wording in a script the signed PDF has no font for, said here so the sender hears it from the
   // envelope page and not from the finished document. Each entry says where the text stands and which characters.
   const print_problems = e.status === 'completed' && e.final_sha256 ? [] : printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id));
@@ -271,6 +290,8 @@ route('PUT', '/envelopes/:id', async (c) => {
   const b = await c.body();
   const e = mine(c, c.params.id);
   assertMayChange(c, e);
+  // Started from a template whose wording is locked for this person: the locked parts stay as they are (tplroles.ts).
+  assertWordingKept(c, e, b);
   // A body that carries the edit_version its sender loaded is refused with 409 when someone has saved since, so a
   // save from an older copy never wipes a colleague's work. A body without it is saved as it always was.
   if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, b, c.account.id, c.actor);
@@ -300,7 +321,7 @@ route('PATCH', '/envelopes/:id', async (c) => {
 // download it, and put it back (POST /envelopes/:id/restore): the account is a party to the document as well.
 route('DELETE', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
-  assertMayChange(c, e);
+  assertMayChange(c, e, true);
   if (e.status === 'sent') throw bad('Void this envelope before deleting it.');
   if (e.kind === 'template' && get('SELECT 1 x FROM powerforms WHERE template_id=?', e.id)) throw bad('A PowerForm still uses this template. Delete the PowerForm first.');
   // Someone who signed and was then asked to sign again (signed_before) signed too, and keeps their copy as well.
@@ -363,7 +384,8 @@ route('POST', '/envelopes/:id/remind', async (c) => {
   const waiting = e.status === 'sent' ? e.recipients.filter((r: any) => r.status === 'sent' || r.status === 'viewed') : [];
   const one = b?.recipient_id ? waiting.find((r: any) => r.id === str(b.recipient_id)) : null;
   if (one && mailStop(one)) throw bad(mailStopText(one), 409, { code: mailStop(one) === 'complaint' ? 'marked_as_spam' : 'email_bounced' });
-  const not_reminded = b?.recipient_id ? [] : waiting.filter((r: any) => mailStop(r)).map((r: any) => ({ recipient_id: r.id, name: r.name, why: mailStop(r) === 'complaint' ? 'marked_as_spam' : 'email_bounced' }));
+  // Someone whose link the sender passes on has no address at all: named too, so the sender knows to send it again.
+  const not_reminded = b?.recipient_id ? [] : waiting.filter((r: any) => mailStop(r) || (r.link_by_sender && !r.email)).map((r: any) => ({ recipient_id: r.id, name: r.name, why: r.link_by_sender && !r.email ? 'link_by_sender' : mailStop(r) === 'complaint' ? 'marked_as_spam' : 'email_bounced' }));
   return { reminded: await remindEnvelope(e, c.actor, b?.recipient_id ? str(b.recipient_id) : undefined), not_reminded };
 });
 
@@ -372,6 +394,8 @@ route('POST', '/envelopes/:id/correct', async (c) => {
   const e = mine(c, c.params.id, 'envelope');
   // A one-time code or a text message goes to one person, so neither can be asked of a group (groups.ts).
   assertNoGroupCheck(e, str(b.recipient_id), b);
+  // Nor a code by email or a texted link for someone who stays without an address (bysender.ts).
+  assertBySenderCorrection(e, str(b.recipient_id), b);
   // With their check too ("verify", "phone", "text_link"): correctWithCheck does all of the call or none of it.
   await correctWithCheck(e, str(b.recipient_id), b, c.actor);
 });
@@ -382,7 +406,11 @@ route('POST', '/envelopes/:id/clone', async (c) => {
   if (b?.kind != null && b.kind !== '' && b.kind !== 'template' && b.kind !== 'envelope')
     throw bad(`"kind" is "${str(b.kind, 40)}", which does not exist. Use "envelope" or "template", or leave it out to copy it as what it is. Nothing was copied.`);
   const kind = b?.kind === 'template' || (e.kind === 'template' && b?.kind !== 'envelope') ? 'template' : 'envelope';
-  const eid = copyEnvelope(e, { accountId: c.account.id, senderId: c.user.id, kind, subject: kind === e.kind ? `${e.subject} (copy)`.trim() : e.subject });
+  // A copy keeps the rules of the template it comes from (carryRules). One of a locked template, made by someone who
+  // may not change it, stays with the person the template belongs to (cloneOwner), so a copy is no way round the lock.
+  const senderId = cloneOwner(c, e, kind);
+  const eid = copyEnvelope(e, { accountId: c.account.id, senderId, kind, subject: kind === e.kind ? `${e.subject} (copy)`.trim() : e.subject });
+  if (senderId !== c.user.id) return { id: eid, belongs_to: get('SELECT name FROM users WHERE id=?', senderId)?.name || null, locked: true };
   return { id: eid };
 });
 
@@ -403,7 +431,7 @@ route('POST', '/envelopes/:id/recipient-view', async (c) => {
   const first = run(`UPDATE recipients SET link_issued_at=? WHERE id=? AND (link_issued_at IS NULL OR link_issued_at < ?
     OR link_issued_at <= COALESCE((SELECT MAX(retired_at) FROM retired_tokens WHERE recipient_id=recipients.id), ''))`,
     now(), r.id, new Date(Date.now() - 864e5).toISOString()).changes;
-  if (first) audit(e.id, c.actor, 'Signing link issued', `${r.name} <${r.email}>`);
+  if (first) audit(e.id, c.actor, 'Signing link issued', labelOf(r));
   return { url: signUrl(r) };
 });
 
@@ -659,33 +687,38 @@ function powerformTemplate(templateId: string) {
 
 // A public form sends in the name of the person its template belongs to, uses that account's signatures, and its
 // template cannot be deleted while the form exists. So publishing a template as a form, and pausing, changing or
-// deleting the form, is for the people who may change the template: the person it belongs to, and admins. Everyone
-// on the team still sees the forms and can hand out their links.
-const mayRunForm = (c: Ctx, templateOwner: string | null | undefined) => c.admin || (!!templateOwner && templateOwner === c.user.id);
+// deleting the form, is for the people who may change the template: the person it belongs to, admins, and whoever
+// its rule lets change it (tplroles.ts). Everyone who may use the template sees the forms and can hand out their links.
+const mayRunForm = (c: Ctx, tpl: any) => !!tpl && mayChange(c, tpl);
 function assertMayRunForm(c: Ctx, tpl: any, doing: string) {
-  if (mayRunForm(c, tpl?.sender_id)) return;
+  if (mayRunForm(c, tpl)) return;
   const owner = (tpl && get('SELECT name FROM users WHERE id=?', tpl.sender_id)?.name) || 'a colleague';
-  throw bad(`This template belongs to ${owner}, so only ${owner} or an admin of your team can ${doing}. Nothing was changed. To have a PowerForm of your own, copy the template and make the PowerForm from your copy.`, 403);
+  const chosen = tpl?.tpl_change === 'chosen' ? `${owner}, an admin of your team or a member they chose` : `${owner} or an admin of your team`;
+  // A copy of a locked template stays with its owner (cloneOwner), so a copy is no way to a form of one's own there.
+  throw bad(`This template belongs to ${owner}, so only ${chosen} can ${doing}. Nothing was changed. ${tpl?.tpl_locked ? `Its wording is locked, so a copy would be locked in the same way. Ask ${owner} or an admin of your team.` : 'To have a PowerForm of your own, copy the template and make the PowerForm from your copy.'}`, 403);
 }
 // The form a call names, for someone who may change it. The same answer for a form that does not exist and for one
 // in another account.
 function formToChange(c: Ctx, doing: string) {
   const p = get('SELECT * FROM powerforms WHERE id=? AND account_id=?', c.params.id, c.account.id);
   if (!p) throw bad('That PowerForm does not exist any more. It may have been deleted already.', 404);
-  assertMayRunForm(c, get('SELECT sender_id FROM envelopes WHERE id=?', p.template_id), doing);
+  assertMayRunForm(c, get('SELECT * FROM envelopes WHERE id=?', p.template_id), doing);
   return p;
 }
 
 route('GET', '/powerforms', (c) => ({
   // "uses" counts every start. "signed" is what people finished, and "open" is who is filling one in right now.
   // may_change says whether this person may pause, change or delete the form, and owner whose template it is on.
-  powerforms: all(`SELECT p.id, p.slug, p.name, p.active, p.uses, p.shared_device, p.created_at, t.subject template, t.sender_id template_owner, u.name owner,
+  powerforms: all(`SELECT p.id, p.slug, p.name, p.active, p.uses, p.shared_device, p.created_at, t.subject template, p.template_id template_ref, u.name owner,
       (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND r.status='completed') signed,
       (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND e.status='sent' AND r.status IN ('pending','sent','viewed')) open
     FROM powerforms p LEFT JOIN envelopes t ON t.id=p.template_id LEFT JOIN users u ON u.id=t.sender_id WHERE p.account_id=? ORDER BY p.created_at DESC`, c.account.id)
     // url is the public address of the form, built from APP_URL like every link in an email and never from a
     // request header. The app copies it and draws the form's QR code from it.
-    .map(({ template_owner, ...p }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, template_owner), url: `${baseUrl()}/f/${p.slug}` })),
+    // A form on a template this person may not use is not listed, like the template itself (tplroles.ts).
+    .map(({ template_ref, ...p }) => ({ p, t: get('SELECT * FROM envelopes WHERE id=?', template_ref) }))
+    .filter(({ t }) => !t || c.admin || mayUse(c, t))
+    .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), url: `${baseUrl()}/f/${p.slug}` })),
 }));
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();
@@ -693,8 +726,13 @@ route('POST', '/powerforms', async (c) => {
   assertMayRunForm(c, tpl, 'publish it as a PowerForm');
   // A visitor types their own details, so the open role can be checked with a code by email and never by text.
   assertFormChecks(powerformTemplate(tpl.id).open);
+  // A form whose every start would be refused because it reads like a fake payment notice (its name is the subject
+  // of what visitors are sent) is refused here, with the words that set it off, and not later for each visitor.
+  const name = str(b.name, 120) || tpl.subject || 'PowerForm';
+  const no = emailRefusal({ ...powerformTemplate(tpl.id).tpl, subject: name }, [], { pause: false });
+  if (no) throw bad(`${no.message} The form was not made.`, no.status);
   const pid = id('pwf');
-  run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at, shared_device) VALUES (?,?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), str(b.name, 120) || tpl.subject || 'PowerForm', now(), b.shared_device ? 1 : 0);
+  run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at, shared_device) VALUES (?,?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), name, now(), b.shared_device ? 1 : 0);
   return { id: pid };
 });
 route('PATCH', '/powerforms/:id', async (c) => {
@@ -709,14 +747,27 @@ route('DELETE', '/powerforms/:id', (c) => {
   run('DELETE FROM powerforms WHERE id=? AND account_id=?', c.params.id, c.account.id);
 });
 
-route('GET', '/public/powerforms/:slug', (c) => {
+route('GET', '/public/powerforms/:slug', async (c) => {
   const p = get('SELECT * FROM powerforms WHERE slug=? AND active=1', c.params.slug);
   if (!p) throw bad('This form is not available.', 404);
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', p.account_id);
   const { tpl, open } = powerformTemplate(p.template_id);
+  // A page that would print a fake payment notice (a form made before that was refused) is closed, prints neither
+  // its name nor the account's, and its owner is told why. See formPageRefusal.
+  const posing = formPageRefusal(get('SELECT * FROM accounts WHERE id=?', p.account_id), p.name);
+  if (posing) await tellFormOwner(p, tpl.sender_id, posing);
   // Said before anyone types their name and address into a form that cannot take them.
-  return { name: p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: a, closed: formClosed(p, tpl), shared_device: !!p.shared_device };
+  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || formClosed(p, tpl), shared_device: !!p.shared_device };
 }, 'public');
+
+// The owner of a form hears why it could not take someone, in plain words and once a day at most. The visitor is
+// told only that the form cannot take new signatures right now.
+async function tellFormOwner(p: any, ownerId: string, why: string) {
+  if (p.alerted_at && Date.parse(p.alerted_at) >= Date.now() - 864e5) return;
+  run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
+  const owner = get('SELECT email FROM users WHERE id=?', ownerId);
+  if (owner) await sendMail({ to: owner.email, subject: `Your form "${p.name}" could not take a signature`, heading: 'Someone tried to sign your form and could not', lines: [`What stopped it: ${why}`, 'They were told only that the form cannot take new signatures right now, and nothing of theirs was kept.'], cta: { label: 'Open your forms', url: `${baseUrl()}/app/powerforms` } });
+}
 
 // Why an owner cannot send right now (a pause, an address that was never confirmed, an account that is being
 // closed) is the owner's business. A visitor is told only that the form is closed for now, before they type
@@ -737,7 +788,6 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   if (!name || !isEmail(email)) throw bad('Enter your name and a valid email address.');
   const { tpl, open } = powerformTemplate(p.template_id);
   if (formClosed(p, tpl)) throw bad(FORM_CLOSED, 503);
-  const owner = get('SELECT email FROM users WHERE id=?', tpl.sender_id);
   // Opening the form twice must not create two envelopes. But an email address proves nothing, because anyone can
   // type somebody else's. So an unfinished start is only handed back to the browser that made it, which has held a
   // cookie since then, and only when the same name and address are typed again. Everyone else, and every other
@@ -780,10 +830,7 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     // reason (once a day at most).
     run('DELETE FROM envelopes WHERE id=?', eid);
     if (!(err instanceof HttpError)) throw err;
-    if (!p.alerted_at || Date.parse(p.alerted_at) < Date.now() - 864e5) {
-      run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
-      await sendMail({ to: owner.email, subject: `Your form "${p.name}" could not take a signature`, heading: 'Someone tried to sign your form and could not', lines: [`What stopped it: ${err.message}`, 'They were told only that the form cannot take new signatures right now, and nothing of theirs was kept.'], cta: { label: 'Open your forms', url: `${baseUrl()}/app/powerforms` } });
-    }
+    await tellFormOwner(p, tpl.sender_id, err.message);
     throw bad(FORM_CLOSED, 503);
   }
   run('UPDATE powerforms SET uses=uses+1 WHERE id=?', p.id);

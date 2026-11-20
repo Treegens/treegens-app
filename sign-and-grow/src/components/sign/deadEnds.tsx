@@ -19,6 +19,8 @@ const NOT_SENT: Record<string, [string, string]> = {
   waiting: ['Nothing was sent, because it is not this person\'s turn yet.', 'Others sign first. The current link is emailed to the address this document is assigned to as soon as it is their turn. There is nothing to do until then.'],
   removed: ['There is no current link to send.', 'The person this link was for is no longer on the document: the sender changed it after this link was made. There is nothing more for you to do. If you think you should still sign, reply to the email this link came in and ask the sender.'],
   closed: ['There is no current link to send.', 'This document is no longer open for signing: it was cancelled, declined or ran out of time. There is nothing more for you to do. If you think that is a mistake, reply to the email this link came in and ask the sender.'],
+  // The person it is with now gets no email from us: the sender passes their link on (src/lib/bysender.ts).
+  ask_sender: ['Nothing was sent.', 'We cannot email the current link for this document. Ask the sender for it, the way they reached you before.'],
   unknown: ['We found no current link for this one.', 'Open the link from the newest email about this document. If you cannot find it, use the Help link below: Find my documents sends every document for your address again.'],
 };
 

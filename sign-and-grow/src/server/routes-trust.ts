@@ -15,6 +15,7 @@ import { advance, emailRefusal, hasNotPaid, dailyCap, PAUSED_MEANS } from './env
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
 import { memberForCode } from './groups.ts';
+import { forgetChosen } from './tplroles.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -133,17 +134,29 @@ route('GET', '/export', (c) => {
   function* entries(): Generator<ZipEntry> {
     const index = [csv(['envelope_id', 'subject', 'status', 'sent_at', 'completed_at', 'recipients', 'signed_pdf_sha256', 'file'])];
     let bytes = 0, files = 0, skipped = 0;
+    // A signed PDF whose stored copy fails its check (src/server/filestore.ts) is left out and named in README.txt,
+    // so one damaged file never breaks the ZIP of everything else, and nothing damaged is put in it.
+    const unreadable: string[] = [];
     for (const e of rows) {
       const people = all('SELECT name, email, role, status FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
       const base = `${(e.completed_at || e.sent_at || e.created_at).slice(0, 10)} ${safeName(e.subject)} ${e.id.slice(-6)}`;
       let file = '';
+      let data: Buffer | null = null, failed = false;
       if (e.final_sha256 && files < ZIP_MAX_FILES - 3 && bytes + (e.final_size || 0) < ZIP_MAX_BYTES) {
-        const data = readBlob(e.final_sha256);
+        try {
+          data = readBlob(e.final_sha256);
+        } catch (err) {
+          if (!(err instanceof HttpError)) throw err;
+          unreadable.push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
+          failed = true;
+        }
+      }
+      if (data) {
         file = `signed/${base}.pdf`;
         bytes += data.length;
         files++;
         yield { name: file, data };
-      } else if (e.final_sha256) skipped++;
+      } else if (e.final_sha256 && !failed) skipped++;
       if (files < ZIP_MAX_FILES - 3) {
         files++;
         yield { name: `audit/${base}.json`, data: Buffer.from(JSON.stringify({ envelope: { id: e.id, subject: e.subject, status: e.status, sent_at: e.sent_at, completed_at: e.completed_at }, recipients: people, events: auditTrail(e.id) }, null, 2)) };
@@ -158,6 +171,7 @@ route('GET', '/export', (c) => {
       'envelopes.csv  one row per envelope',
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
       ...(skipped ? ['', `${skipped} signed document(s) did not fit in one ZIP file. Export again with fewer envelopes selected to get them.`] : []),
+      ...(unreadable.length ? ['', `${unreadable.length} signed document(s) could not be read from storage and are not in this file. Their stored copy failed its check, so nothing damaged was put in. Their audit trails are here. The people who run this server have been told and can put the files back from a backup; export again later. Not included:`, ...unreadable.map((u) => `  ${u}`)] : []),
     ].join('\r\n')) };
   }
   return new Response(zipStream(entries()), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="sign-and-grow-export-${now().slice(0, 10)}.zip"` } });
@@ -230,6 +244,8 @@ export function handOver(accountId: string, from: { id: string; name: string; em
   for (const e of moved) audit(e.id, actor, 'Handed over', `From ${from.name} <${from.email}> to ${to.name} <${to.email}>: ${why}`);
   run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
   run('UPDATE bulk_batches SET sender_id=?, idem_key=NULL WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
+  // Someone who leaves is no longer one of the members chosen to use or change a template here (tplroles.ts).
+  forgetChosen(accountId, from.id);
   return moved.length;
 }
 
@@ -504,6 +520,9 @@ route('POST', '/operator/reports/:id', async (c) => {
 // reminders and reopening. People keep every document they already have, and can still sign what is out.
 // Trusting is the other tool: the refusals for the daily limit and the fake-notice filter promise that a person can
 // lift them, and this is how. A trusted account skips both. Reports from recipients count for it like for anyone.
+// A reply reaches a person only where the operator set SUPPORT_EMAIL (it becomes the Reply-To). Without it a reply
+// goes to the no-reply sender, so the email offers only the contact form.
+const mistakeLine = () => `If this is a mistake, ${process.env.SUPPORT_EMAIL ? 'reply to this email or ' : ''}use the contact form at ${baseUrl()}/help and a person will review it.`;
 route('POST', '/operator/accounts/:id', async (c) => {
   operator(c);
   const b = await c.body();
@@ -527,7 +546,7 @@ route('POST', '/operator/accounts/:id', async (c) => {
       for (const u of admins)
         await sendMail({ to: u.email, subject: b.trusted ? 'A person has cleared your Sign&Grow account' : 'The sending limits apply to your Sign&Grow account again', heading: b.trusted ? 'Your account is cleared' : 'Your account is no longer marked as trusted',
           lines: b.trusted ? [`Someone on the Sign&Grow team looked at ${a.name} and marked it as trusted. The daily limit on how many people you can send to, and the check for fake payment notices, no longer apply to it.`, 'If something you tried to send was refused, send it again now.']
-            : [`Someone on the Sign&Grow team removed the trusted mark from ${a.name}. ${again}`, 'If this is a mistake, reply to this email or use the contact form and a person will review it.'],
+            : [`Someone on the Sign&Grow team removed the trusted mark from ${a.name}. ${again}`, mistakeLine()],
           cta: { label: b.trusted ? 'Open Sign&Grow' : 'Contact us', url: b.trusted ? `${baseUrl()}/app` : `${baseUrl()}/help` } });
     if (b.trusted) await releaseHeld(a.id);
     return { trusted: b.trusted };
@@ -541,7 +560,7 @@ route('POST', '/operator/accounts/:id', async (c) => {
   }
   for (const u of admins)
     await sendMail({ to: u.email, subject: b.paused ? 'Sending is paused on your Sign&Grow account' : 'Sending is back on for your Sign&Grow account', heading: b.paused ? 'Sending is paused' : 'You can send again',
-      lines: b.paused ? [`Reason: ${reason.replace(/[.\s]+$/, '')}.`, PAUSED_MEANS, 'You can still open, download and export everything in your account, and people who already have a document can still open, sign and download it.', 'If this is a mistake, reply to this email or use the contact form and a person will review it.']
+      lines: b.paused ? [`Reason: ${reason.replace(/[.\s]+$/, '')}.`, PAUSED_MEANS, 'You can still open, download and export everything in your account, and people who already have a document can still open, sign and download it.', mistakeLine()]
         : ['A person looked at it and lifted the pause. Sorry for the interruption.', 'Anyone who was waiting further down a signing order while it lasted is being asked now. Reminders start again by themselves.'],
       cta: { label: 'Contact us', url: `${baseUrl()}/help` } });
   if (!b.paused) await releaseHeld(a.id);

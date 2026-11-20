@@ -277,7 +277,7 @@ export const NO_BAA_TEXT = 'There is no HIPAA business associate agreement (BAA)
 export const NO_BAA_FIRST: string[] = [
   'A business associate agreement written by a lawyer, signed by whoever runs this service.',
   'The same kind of agreement between them and every company that handles the data for them: the host of the server, and the mail provider that carries the emails and the signed PDFs attached to them.',
-  'Stored files encrypted by the software itself. Today it adds no encryption of its own.',
+  'The database encrypted by the software itself, not only the stored files. Today the software can encrypt the files, when the people who run the server switch that on, and it never encrypts the database.',
   'A record of who opened which document, and a written way of telling you about a breach.',
 ];
 export const NO_BAA_AFTER = 'None of that exists today, and this page will say so on the day it does. Rules about health information differ by country and by kind of document: outside the United States too, check what applies to you before you send anything about a person\'s health.';
@@ -291,7 +291,8 @@ export const NO_BAA_AFTER = 'None of that exists today, and this page will say s
 //   the operator     GET /operator/queue in src/server/routes-trust.ts, forOperator() in src/server/routes-support.ts
 //                    and the card lookup in the payment routes: no route there returns a document, a signed PDF, a
 //                    signature, an answer or an audit trail
-//   stored files     saveBlob() in src/server/db.ts writes them as they are
+//   stored files     saveBlob() in src/server/db.ts encrypts them only when FILE_ENCRYPTION_KEY is set
+//                    (src/server/filestore.ts), with the key in the server's settings; the database never
 export const WHO_CAN_SEE: { who: string; what: string }[] = [
   { who: 'The people it was sent to, and anyone they pass their link to.',
     what: 'A signing link opens the document for whoever holds it. There is no login behind it, so forwarding the email, or sharing an inbox, shares the document. That is why a sender can put an access code on a document, which they give to the signer themselves and which is never in our email, or ask for a one-time code that is sent to the signer when they open the link. A recipient cannot open a document before their turn in a signing order. After it has been voided, declined or left to expire, only someone who already signed can still open the copy of what they signed.' },
@@ -300,7 +301,7 @@ export const WHO_CAN_SEE: { who: string; what: string }[] = [
   { who: 'The owner and the admins of the sender\'s account.',
     what: 'On a team, the owner and every admin can open every envelope, template and bulk send of every member. A member sees only what they sent themselves, and every template. If you send from a team, its admins can read what you send.' },
   { who: 'The people who run this server.',
-    what: 'Inside the app they work a queue of help requests and reports. There they see what somebody wrote to them. For a reported document they see its subject, the sender\'s message, the sender\'s name and address and who reported it. For an account they see its name, its plan, its age, its last payment, the names and addresses of its owner and admins, and whether it is paused. The queue has no screen and no function that opens a document, a signed PDF, a signature, an answer typed into a field or an audit trail. Outside the app it is different: the software adds no encryption of its own to stored files, so whoever has the disk and the database of the server can read everything on them. The rule for that is: only to answer a help request or a report about that document, or to repair the service, and never for anything else. That rule is a promise by the people who run the server. Software cannot enforce it.' },
+    what: 'Inside the app they work a queue of help requests and reports. There they see what somebody wrote to them. For a reported document they see its subject, the sender\'s message, the sender\'s name and address and who reported it. For an account they see its name, its age, its plan and whether it renews or ends and when, a free code it uses, its last payment, a card dispute, how many signatures it has left, the names and addresses of its owner and admins, and whether it is paused or marked as trusted. The queue has no screen and no function that opens a document, a signed PDF, a signature, an answer typed into a field or an audit trail. Outside the app it is different: the software adds no encryption of its own to the database, and the key to the stored files, where it encrypts them, is in the server\'s settings, so whoever has the disk, the database and the settings of the server can read everything on them. The rule for that is: only to answer a help request or a report about that document, or to repair the service, and never for anything else. That rule is a promise by the people who run the server. Software cannot enforce it.' },
   { who: 'The companies that carry it.',
     what: 'The host of the server, and the mail provider that delivers the emails with the signed PDF attached. Who they are on this server is listed under "Where your data is" on this page.' },
   { who: 'Nobody else.',
@@ -315,6 +316,10 @@ export const WHO_CAN_SEE: { who: string; what: string }[] = [
 export const PHOTO_MAX_SIDE = 2000;
 /** How many pictures one upload can join into one document, a page for each. */
 export const MAX_PHOTOS_PER_DOCUMENT = 50;
+/** The most pixels a PNG can have. The server unpacks every pixel of a PNG to put it in a PDF, and a PNG of 300 KB can say it is 10,000 pixels square: that took 800 MB of memory when we tried. */
+export const PNG_MAX_PIXELS = 25_000_000;
+/** The most pixels a JPEG can have. The server does not unpack a JPEG, but every signer's phone does. A 50 megapixel phone photo fits. */
+export const JPEG_MAX_PIXELS = 50_000_000;
 
 /** A browser stays signed in for this many days after it was last used. Using the app moves the end forward. */
 export const SESSION_DAYS = 30;
@@ -322,6 +327,10 @@ export const SESSION_DAYS = 30;
 export const SESSION_TOUCH_MINUTES = 60;
 /** After this many wrong passwords on a device that was handed to a signer, that browser is signed out. */
 export const HAND_OVER_TRIES = 5;
+/** A stored document of at least this many bytes is pointed out to the sender as slow to open on a phone (phoneWeight() in src/lib/phone.ts). */
+export const PHONE_SLOW_BYTES = 5_000_000;
+/** Seconds a phone needed for each megabyte of a document on the signing page over a slow mobile connection: Chrome's "Slow 4G" (1.6 megabits a second), measured with tests/out/gaps-mobile-send/g-measure.cjs. */
+export const PHONE_SECONDS_PER_MB = 5.6;
 
 // Signing groups: a recipient that is a group of people, any one of whom can act (src/server/groups.ts). The
 // Contacts page, the editor, the help page and the server all quote these.

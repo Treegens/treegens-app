@@ -12,6 +12,7 @@ import { DATE_FORMAT_CHOICES, formatDate, deviceZone } from '@/lib/dates';
 // The same holds for signin.ts: the names and the words only.
 import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
 import { SignedIn } from './SignedIn';
+import { EmailAddressCard } from '@/components/EmailProblem';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -41,6 +42,7 @@ function Profile() {
         </div>
         <div className="row between wrap"><span className="muted small">{me.user.email} · {me.user.email_verified ? 'confirmed' : 'not confirmed yet'}</span><button className="btn primary" onClick={() => save(f)}>Save profile</button></div>
       </div>
+      <EmailAddressCard me={me} />
       <div className="card">
         <h2 style={{ marginBottom: 4 }}>Your signature</h2>
         <p className="muted small">Saved here, it is offered when a document is sent to {me.user.email}. You can always change it while signing.</p>
@@ -218,6 +220,9 @@ function Team() {
   const admin = me.role !== 'member';
   const [d, reload] = useLoad(() => api('/account/members'));
   const [inv, setInv] = useState({ email: '', role: 'member' });
+  // An invitation is an email, so the server refuses it while sending is paused or the address is not confirmed. The
+  // button says so before it is pressed.
+  const inviteHeld = me.account?.paused ? 'Invitations wait while sending is paused on this account. The red banner at the top says why.' : !me.user?.email_verified ? 'Confirm your email address first: the banner at the top sends the link again.' : '';
   const [remove, setRemove] = useState<any>(null);
   const [to, setTo] = useState('');
   const [leaving, setLeaving] = useState(false);
@@ -238,9 +243,10 @@ function Team() {
       )}
       {admin && (
         <form className="card row wrap" style={{ alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); api('/account/invites', { body: inv }).then(() => (toast('Invitation sent'), setInv({ email: '', role: 'member' }), reload())).catch(oops); }}>
-          <label className="f grow" style={{ margin: 0 }}><span>Invite by email</span><input type="email" required value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /></label>
-          <label className="f" style={{ margin: 0 }}><span>Role</span><select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}><option value="member">Member</option><option value="admin">Admin</option></select></label>
-          <button className="btn primary">Send invite</button>
+          <label className="f grow" style={{ margin: 0 }}><span>Invite by email</span><input type="email" required value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} style={{ minHeight: 44 }} /></label>
+          <label className="f" style={{ margin: 0 }}><span>Role</span><select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })} style={{ minHeight: 44 }}><option value="member">Member</option><option value="admin">Admin</option></select></label>
+          <button className="btn primary" disabled={!!inviteHeld} aria-describedby={inviteHeld ? 'invite-held' : undefined} style={{ minHeight: 44 }}>Send invite</button>
+          {inviteHeld && <p id="invite-held" className="muted small" style={{ flexBasis: '100%', margin: 0 }}>{inviteHeld}</p>}
         </form>
       )}
       <div className="card pad0">

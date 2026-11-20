@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Dialog } from './sign/Dialog';
 import { adoptLine } from '@/lib/policy';
 import { handwritingWrites } from '@/lib/scripts';
+import { drawnProblem, inkShare, pictureProblem, PEN_WIDTH } from '@/lib/ink';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
 // The handwriting fonts have Latin letters only. A name with none of them is typed in the device's own plain font:
@@ -81,6 +82,17 @@ function fitImage(img: HTMLImageElement): string {
   return '';
 }
 
+// How much of a picture is ink, read from a small copy of it (300 px at most across is plenty to tell).
+function inkOf(img: HTMLImageElement): number {
+  const k = Math.min(1, 300 / Math.max(img.width, img.height, 1));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(img.width * k));
+  c.height = Math.max(1, Math.round(img.height * k));
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  return inkShare(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+}
+
 function drawStroke(ctx: CanvasRenderingContext2D, s: Point[]) {
   if (!s.length) return;
   ctx.beginPath();
@@ -132,7 +144,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
     c.height = Math.round(h * dpr);
     const ctx = c.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.lineWidth = 2.6;
+    ctx.lineWidth = PEN_WIDTH;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = INK;
@@ -216,6 +228,9 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
       image = typed(text.trim(), handwritingWrites(text) ? `'${font}', cursive` : PLAIN);
       if (!image) return setError('Type at least one letter or number, then try again.');
     } else if (tab === 'draw') {
+      // A tap or a speck is not a signature: refused in words before it goes on the page (src/lib/ink.ts).
+      const wrong = drawnProblem(strokes.current, size.current, kind);
+      if (wrong) return setError(wrong);
       image = strokes.current.length && pad.current ? trim(pad.current) : null;
       if (!image) return setError(`Draw your ${word} in the box first.`);
     } else {
@@ -233,6 +248,9 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
+      // A blank photo or a solid block is refused the same way as a tap on the pad.
+      const wrong = pictureProblem(inkOf(img), kind);
+      if (wrong) return (setPhoto(''), setError(wrong));
       const fitted = fitImage(img);
       if (fitted) setPhoto(fitted);
       else setError('That picture is too detailed to use. Try a smaller one, or draw or type instead.');

@@ -251,7 +251,7 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 /* Secondary controls that stand on their own are as easy to hit with a thumb as the buttons: 44 px tall on a phone.
    A link in the middle of a sentence keeps the height of its line. */
 @media (max-width: 600px), (pointer: coarse) {
-  .sg-foot-links .sg-link, .sg-review .sg-link, .sg-more { display: inline-flex; align-items: center; min-height: 44px; }
+  .sg-foot-links .sg-link, .sg-review .sg-link, .sg-top .sg-link, .sg-more { display: inline-flex; align-items: center; min-height: 44px; }
   .sg-who dd a { display: inline-flex; align-items: center; min-height: 44px; }
   .sg-who > div { align-items: center; }
 }

@@ -3,6 +3,9 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/components/ui';
 
+// People open this link from an email, often on a phone: every control is at least 44 pixels tall.
+const TAP = { minHeight: 44 };
+
 export default function VerifyEmail() {
   // 'password' and 'signin': the link was opened in a browser that is not signed in to the login it confirms. The
   // link shows that someone can read the mailbox. That they also made the login is shown by its password, or by
@@ -34,15 +37,17 @@ export default function VerifyEmail() {
         {state === 'password' && (
           <form onSubmit={(ev) => (ev.preventDefault(), void confirm(password))} style={{ textAlign: 'left', marginTop: 10 }}>
             <p className="muted" style={{ marginBottom: 12 }}>This link confirms the email address of a Sign&Grow login. To show that the login is yours, type the password you chose when you signed up.</p>
-            <label className="f"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(ev) => setPassword(ev.target.value)} autoFocus /></label>
+            <label className="f"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(ev) => setPassword(ev.target.value)} autoFocus style={TAP} /></label>
             {wrong && <p className="notice warn" role="alert" style={{ marginBottom: 12 }}>{wrong}</p>}
-            <button className="btn primary" disabled={busy || !password}>Confirm my email</button>
+            <button className="btn primary" disabled={busy || !password} style={TAP}>{busy ? 'Checking…' : 'Confirm my email'}</button>
+            {/* The link for a new password goes to this same mailbox, so choosing one confirms the address too. */}
+            <p className="muted small" style={{ marginTop: 12 }}>Forgotten it? <Link href="/forgot">Choose a new password</Link>. We email the link for that to this same address, so it confirms your address too.</p>
             <p className="muted small" style={{ marginTop: 12 }}>Did not sign up for Sign&Grow? Then close this page. Nothing is confirmed, and that login can never send anything or see what was sent to you.</p>
           </form>
         )}
         {state === 'signin' && <p className="muted" style={{ margin: '10px 0 16px' }}>This link confirms the email address of a Sign&Grow login that has no password, because it was made by signing in with Google or Microsoft. Sign in the same way first, then open the link in the email again in this browser. If you did not sign up for Sign&Grow, close this page: nothing was confirmed.</p>}
         {!asking && <p className="muted" style={{ margin: '10px 0 16px' }}>{state === 'ok' ? 'Documents sent to this address will now show up in your inbox.' : state === 'wait' ? '' : state}</p>}
-        {state === 'signin' ? <Link href="/login" className="btn primary">Sign in</Link> : state !== 'password' && <Link href="/app" className="btn primary">Go to Sign&Grow</Link>}
+        {state === 'signin' ? <Link href="/login" className="btn primary" style={TAP}>Sign in</Link> : state !== 'password' && <Link href="/app" className="btn primary" style={TAP}>Go to Sign&Grow</Link>}
       </div>
       <p className="muted small center" style={{ marginTop: 14 }}>{state !== 'wait' && state !== 'ok' && !asking ? 'You can ask for a new confirmation email from the banner at the top of the app. ' : state === 'password' ? 'Signed up in another browser? You can also sign in here first and open the link again. ' : ''}<Link href="/help#contact">Need a hand? Get help</Link></p>
     </div>

@@ -822,7 +822,7 @@ test('the welcome signatures are given once per email address, also after the lo
   assert.equal(welcome('looper@example.com'), PRICING.welcomeSignatures);
   assert.equal((await first.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
   const again = await person('Loop Er', 'looper@example.com');
-  assert.equal((await me(again)).account.name, "Loop's workspace", 'the new login gets a workspace like any other');
+  assert.equal((await me(again)).account.name, "Loop Er's workspace", 'the new login gets a workspace like any other');
   assert.equal(welcome('looper@example.com'), 0, 'and no second set of welcome signatures');
   // And not a third, after the days in between and the timer either.
   assert.equal((await again.post('/me/delete', { password: PW })).data.closed, 'scheduled');
@@ -975,8 +975,8 @@ test('a file a signer uploaded and did not attach goes with the envelope it came
 
 test('a public form is published, paused, changed and deleted by the person its template belongs to and by admins, and a member sees only their own contacts', async () => {
   const owner = await person('Fay Owner', 'fay.owner@example.com');
-  const ann = await join(owner, 'Ann Member', 'ann.member@example.com');
-  const bob = await join(owner, 'Bob Member', 'bob.member@example.com');
+  const ann = await join(owner, 'Ann Member', 'ann.formmaker@example.com');
+  const bob = await join(owner, 'Bob Member', 'bob.formuser@example.com');
   const tpl = await template(ann, 'Ann sign-off');
   const pf = await ann.post('/powerforms', { template_id: tpl.id, name: 'Ann form' });
   assert.equal(pf.status, 200, JSON.stringify(pf.data));

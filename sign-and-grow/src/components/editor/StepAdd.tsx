@@ -4,8 +4,10 @@ import { ROLE_LABEL, Status, fmtDate } from '../ui';
 import { useMe } from '../AppShell';
 import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, deviceZone, momentText } from '@/lib/dates';
 import { scanWarning } from '@/lib/scans';
+import { phoneWeight } from '@/lib/phone';
 import { Lock } from './parts';
 import { CheckFields } from '../sender/CheckFields';
+import { SendMyself } from './SendMyself';
 import { LIMITS, PAPER_HINT, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
 
@@ -82,6 +84,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
           </div>
           {/* The server keeps which pages are pictures with the file, so this is also said when a draft is opened again. */}
           {scanWarning(d) && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{scanWarning(d)}</p>}
+          {phoneWeight(d) && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{phoneWeight(d)}</p>}
           </div>
         ))}
         {docs.length >= MAX_DOCS && <p className="muted small" style={{ margin: '10px 0 0' }}>An envelope can hold up to {MAX_DOCS} documents. Remove one to add another.</p>}
@@ -105,7 +108,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                     <b className="ed-break">{who(r)}</b>
                     <Status s="completed" label={DONE[r.role] || 'Finished'} />
                   </div>
-                  <div className="muted small ed-break" style={{ marginTop: 4 }}>{r.email} · {ROLE_LABEL[r.role]}</div>
+                  <div className="muted small ed-break" style={{ marginTop: 4 }}>{r.email || (r.link_by_sender ? 'You send their link yourself' : '')} · {ROLE_LABEL[r.role]}</div>
                   <div className="muted small ed-lockline" style={{ marginTop: 6 }}><Lock /><span>Finished{old?.completed_at ? ` on ${fmtDate(old.completed_at)}` : ''}. Their details and their own fields stay as they are.</span></div>
                 </div>
               );
@@ -115,17 +118,19 @@ export function StepAdd({ ed }: { ed: Ed }) {
                   {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
                   {isTpl && <input placeholder="Role, e.g. Client" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
                   <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
-                  <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" style={{ flex: '1 1 170px' }}
+                  {/* No address for someone whose link the sender sends themselves (SendMyself.tsx, below). */}
+                  {!(r.link_by_sender && !isTpl) && <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" style={{ flex: '1 1 170px' }}
                     onChange={(e) => {
                       const c = contacts.find((x) => x.email.toLowerCase() === e.target.value.toLowerCase());
                       ed.patchRcp(r.id, { email: e.target.value, ...(c && !r.name ? { name: c.name } : {}) });
-                    }} />
+                    }} />}
                   <select value={r.role} aria-label="Role" style={{ flex: '0 1 170px' }} onChange={(e) => ed.patchRcp(r.id, { role: e.target.value })}>
                     {Object.entries(ROLE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                   </select>
                   <button type="button" className="btn sm ghost" onClick={() => setMore(more === r.id ? null : r.id)} aria-expanded={more === r.id} aria-label={`More options for ${who(r)}`}>More</button>
                   <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${who(r)}`}>✕</button>
                 </div>
+                <SendMyself r={r} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
                 {more === r.id && (
                   <div className="grid g2" style={{ marginTop: 10 }}>
                     <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">(at least 4 characters, share it with them yourself)</span></span><input value={r.access_code || ''} maxLength={50} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>

@@ -1,7 +1,7 @@
 // What a phone changes for the person who sends: photos of paper, staying signed in, documents that are heavy for
 // a phone, fields that are announced only by their type. Plain functions with no imports beyond the numbers in
 // policy.ts and no side effects, so pages, the server and tests can all use them.
-import { PHOTO_MAX_SIDE } from './policy.ts';
+import { PHOTO_MAX_SIDE, PHONE_SLOW_BYTES, PHONE_SECONDS_PER_MB } from './policy.ts';
 
 // ---- Where a person is signed in -------------------------------------------------------------------
 
@@ -48,6 +48,28 @@ export const IN_PERSON_LIMITS: string[] = [
   'A Google or Microsoft account that is signed in on the device, if that is how you sign in to Sign&Grow. Signing in again is then one tap.',
   'A page of your account that is open in another tab stays on screen until that tab is brought to the front. Then it locks too.',
 ];
+
+// ---- Documents that are slow on a phone ------------------------------------------------------------
+// A signer's phone downloads the whole stored file (pdf.js in src/components/PdfDoc.tsx fetches all of it, also
+// where it could start with a part), so the size of the file is the wait. The seconds are measured, not assumed:
+// see PHONE_SECONDS_PER_MB in policy.ts and tests/out/gaps-mobile-send/g-measure.cjs.
+
+/** About how long a phone took to download a file of this many bytes on a slow mobile connection, in words. */
+export function phoneWait(bytes: number): string {
+  const s = Math.max(1, Math.round((bytes / 1e6) * PHONE_SECONDS_PER_MB));
+  return s < 90 ? `about ${s} seconds` : `about ${Math.round(s / 60)} minutes`;
+}
+
+/**
+ * What the sender is told about a document that is large enough to be slow on a phone, or '' when it is not. Said
+ * under the document in step 1 and again before sending. It warns and never blocks: a long scanned contract may have
+ * to be what it is, and a signer at a desk does not mind.
+ */
+export function phoneWeight(d: { size?: number | null }): string {
+  const bytes = Number(d?.size) || 0;
+  if (bytes < PHONE_SLOW_BYTES) return '';
+  return `This file is ${(bytes / 1e6).toFixed(1)} MB. Every signer's phone downloads all of it, which takes ${phoneWait(bytes)} on a slow mobile connection and longer where the signal is weak. If people will sign on a phone, save it with smaller pictures (many PDF programs have "reduce file size") or split it into parts. Under ${PHONE_SLOW_BYTES / 1e6} MB is best.`;
+}
 
 // ---- Photos ----------------------------------------------------------------------------------------
 

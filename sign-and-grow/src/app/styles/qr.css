@@ -42,6 +42,9 @@
 /* Paper gets the sheet and nothing else: no menu, no banners, no buttons, no notes that are for the owner only. */
 @media print {
   body.qr-printing { background: #fff; }
+  /* The menu is hidden on paper, but on paper wider than the phone layout (landscape, A3) the grid would keep its
+     column and squeeze the sheet into it. */
+  body.qr-printing .shell { display: block; }
   body.qr-printing .main { padding: 0; }
   body.qr-printing .main > *:not(.qr-page), body.qr-printing .qr-noprint, body.qr-printing .toasts { display: none !important; }
   body.qr-printing .qr-page { max-width: none; }

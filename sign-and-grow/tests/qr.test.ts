@@ -547,6 +547,15 @@ test('the dialog and the sheet say that the code is the link and who may see it'
   assert.match(personScanLine('Nguyễn Văn An', 'signer'), /^Ask Nguyễn Văn An to point/);
   assert.match(personScanLine('Ben Boss', 'approver'), /they read and approve there\.$/);
   assert.match(personScanLine('  ', 'cc'), /^Ask them to point .* they read it there\.$/);
+  // Someone who has signed and is handed their link again, for their copy: nothing is left to sign, and whoever
+  // scans the code can read the signed document and download it, which the warning says.
+  assert.equal(personScanLine('Ada Signer', 'signer', true), 'Ask Ada Signer to point the camera of their phone at this code and tap the link it shows. The document opens on their own phone, and as they have finished, they can read it and download a copy there.');
+  assert.equal(personCodeWarning('Ada Signer', 'signer', true), 'This code is the link. Whoever scans it, or takes a photo of it, can open the document, read all of it and download a copy, as Ada Signer. Show it only to Ada Signer, and close this window when they have scanned it.');
+  for (const role of ['signer', 'approver', 'viewer', 'cc']) {
+    assert.doesNotMatch(personScanLine('A', role, true), /sign there|approve there/, role);
+    assert.doesNotMatch(personCodeWarning('A', role, true), /sign it|approve it/, role);
+  }
+  assert.equal(personCodeWarning('', 'signer', true), 'This code is the link. Whoever scans it, or takes a photo of it, can open the document, read all of it and download a copy, as this person. Show it only to the person it is for, and close this window when they have scanned it.');
 
   // What the sender asked for before the document opens is not in the code, and the dialog says what happens.
   assert.equal(afterScanLine({}), '');
@@ -572,7 +581,7 @@ test('the dialog and the sheet say that the code is the link and who may see it'
   assert.match(SCAN_TROUBLE, /use Copy link\.$/);
 
   // No em dash, and no promise about what a signature is worth, in anything this file can say.
-  const said = [personCodeWarning('A', 'signer'), personScanLine('A', 'signer'), afterScanLine({ access_code: '1234', verify: 'email_code' }), hiddenLine('A'), formCodeWarning(true),
+  const said = [personCodeWarning('A', 'signer'), personScanLine('A', 'signer'), personCodeWarning('A', 'signer', true), personScanLine('A', 'signer', true), afterScanLine({ access_code: '1234', verify: 'email_code' }), hiddenLine('A'), formCodeWarning(true),
     ...Object.values(words).filter((v): v is string => typeof v === 'string'), (qrForLink('x') as any).why, (qrForLink('http://localhost/x') as any).note];
   for (const s of said) {
     assert.doesNotMatch(s, /\u2014|\u2013/, s);
@@ -718,13 +727,23 @@ test('the code is made here: no library, no outside service, and the link is sen
 test('each place a link is handed over in person offers a code, with its warning', () => {
   // The envelope page: next to "Copy link", for the same people and no others.
   const people = read('src/components/sender/Recipients.tsx');
-  assert.match(people, /\{reachable && <button className="btn sm qr-tap"[^\n]*onClick=\{\(\) => showQr\(r\)\}[^\n]*aria-label=\{`Show a QR code with the signing link for \$\{r\.name\}`\}>Show QR code<\/button>\}/);
+  assert.match(people, /\{reachable && <button className="btn sm qr-tap"[^\n]*onClick=\{\(ev\) => showQr\(r, ev\.currentTarget\)\}[^\n]*aria-label=\{`Show a QR code with the signing link for \$\{r\.name\}`\}>Show QR code<\/button>\}/);
   assert.match(people, /Copy link<\/button>\}\n\s*\{reachable && <button[^\n]*>Show QR code<\/button>\}/, 'it stands right after Copy link');
-  assert.match(people, /const reachable = turn && !isMe && r\.role !== 'inperson';/, 'not for someone who signs on the sender\'s own device, and not before their turn');
-  assert.match(people, /\{qr === r\.id && links\[r\.id\] && turn && <QrDialog recipient=\{r\} link=\{links\[r\.id\]\} onClose=\{\(\) => setQr\(''\)\} \/>\}/);
+  assert.match(people, /const reachable = turn && !isMe && r\.role !== 'inperson'(?: && !own)?;/, 'not for someone who signs on the sender\'s own device, and not before their turn');
+  // Also for someone with no email address whose link the sender passes on (OwnLink.tsx), during their turn and
+  // afterwards for their copy.
+  assert.match(people, /\{qr === r\.id && links\[r\.id\] && (?:turn|\(turn \|\| own\)) && <QrDialog recipient=\{r\} link=\{links\[r\.id\]\} opener=\{qrFrom\} onClose=\{\(\) => setQr\(''\)\} \/>\}/);
   const dialog = read('src/components/sender/QrDialog.tsx');
-  assert.match(dialog, /<div className="notice warn">\{personCodeWarning\(r\.name, r\.role\)\}<\/div>/);
-  assert.match(dialog, /\{personScanLine\(r\.name, r\.role\)\}/);
+  // The button that opened it is switched off while the link is fetched, so the browser drops focus. Closing the
+  // dialog by Close or by Escape puts the keyboard back on that button (measured in a browser: it was lost before).
+  assert.match(people, /async function showQr\(r: any, from\?: HTMLButtonElement\) \{\n\s*qrFrom\.current = from \|\| null;/);
+  assert.match(dialog, /const done = \(\) => \{\n\s*const back = opener\?\.current;\n\s*onClose\(\);\n\s*setTimeout\(\(\) => back\?\.isConnected && back\.focus\(\), 0\);/);
+  assert.match(dialog, /<Dialog title=\{`QR code for \$\{name\}`\} onClose=\{done\}>/, 'Escape and a click outside go the same way');
+  assert.match(dialog, /onClick=\{done\} data-autofocus="">Close<\/button>/);
+  assert.doesNotMatch(dialog, /onClick=\{onClose\}|onClose=\{onClose\}/, 'no way out of the dialog that leaves focus behind');
+  assert.match(dialog, /<div className="notice warn">\{personCodeWarning\(r\.name, r\.role, finished\)\}<\/div>/);
+  assert.match(dialog, /\{personScanLine\(r\.name, r\.role, finished\)\}/);
+  assert.match(dialog, /const finished = r\.status === 'completed';/, 'someone who has signed is not told to sign again');
   assert.match(dialog, /afterScanLine\(r\)/);
   assert.match(dialog, /setTimeout\(\(\) => setHidden\(true\), QR_SHOW_SECONDS \* 1000\)/, 'the code leaves the screen by itself');
   assert.match(dialog, /hidden \? \([\s\S]*hiddenLine\(r\.name\)[\s\S]*Show the code again[\s\S]*\) : <QrCode/, 'while it is hidden the picture is not in the page at all');
@@ -745,6 +764,9 @@ test('each place a link is handed over in person offers a code, with its warning
   // Paper gets the sheet only.
   const css = read('src/app/styles/qr.css');
   assert.match(css, /@media print \{[\s\S]*body\.qr-printing \.main > \*:not\(\.qr-page\), body\.qr-printing \.qr-noprint, body\.qr-printing \.toasts \{ display: none !important; \}/);
+  // On paper wider than the phone layout the menu's grid column stayed and squeezed the sheet into 232 px.
+  assert.match(css, /@media print \{[^@]*body\.qr-printing \.shell \{ display: block; \}/);
+  assert.match(read('src/app/globals.css'), /\.shell \{ display: grid; grid-template-columns: 232px/, 'the grid this undoes is still the one the app uses');
   assert.match(sheet, /document\.body\.classList\.add\('qr-printing'\);\s*return \(\) => document\.body\.classList\.remove\('qr-printing'\);/);
   assert.match(css, /\(max-width: 900px\), \(pointer: coarse\) \{ \.btn\.qr-tap \{ min-height: 44px; \} \}/, 'a button a finger taps is 44 px high');
   assert.match(read('src/app/layout.tsx'), /import '\.\/styles\/qr\.css';/);

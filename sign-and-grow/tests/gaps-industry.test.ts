@@ -81,6 +81,13 @@ test('what the people who run the server see in the app is what "Who can see you
   assert.match(operator, /no screen and no function that opens a document/);
   assert.match(operator, /adds no encryption of its own/, 'and it says that the disk is another matter');
   assert.match(operator, /promise by the people who run the server/, 'a rule the software cannot enforce is called a promise');
+  // Every fact the operator's account views return is named: the queue, a help request and the card dispute list.
+  const theirs = (await sender.get('/me')).data.account;
+  s.db.run('UPDATE accounts SET dispute_at=? WHERE id=?', new Date().toISOString(), theirs.id);
+  const disputed = (await op.get('/operator/billing/disputed')).data.accounts.find((a: any) => a.id === theirs.id);
+  assert.deepEqual(Object.keys(disputed).sort(), ['admins', 'dispute_at', 'free_with', 'id', 'name', 'plan', 'signatures'], 'if this list grows, the sentence has to grow with it');
+  for (const [field, words] of [['plan', /its plan/], ['free_with', /a free code it uses/], ['dispute_at', /a card dispute/], ['signatures', /how many signatures it has left/], ['admins', /names and addresses of its owner and admins/], ['trusted_at', /marked as trusted/], ['suspended_at', /paused/], ['last_payment', /its last payment/], ['renews_at', /renews or ends and when/]] as [string, RegExp][])
+    assert.match(operator, words, `the page names ${field}`);
   const nobody = policy.WHO_CAN_SEE[5].what;
   for (const re of [/no advertising/, /sold/, /AI service/]) assert.match(nobody, re);
   // The block is printed from the one list, on the security page.
@@ -190,7 +197,7 @@ test('"automatic nudges" is true: a new account reminds every 3 days, says so, a
   assert.doesNotMatch(landing, /Automatic nudges/);
   assert.match(landing, /A new account reminds whoever has not finished by email every \$\{DEFAULT_REMINDER_DAYS\} days/);
   // In-person signing says that it needs a connection.
-  assert.match(landing, /standing next to you\. \$\{IN_PERSON_ONLINE\}/);
+  assert.match(landing, /\['In-person signing', `[^`]*standing next to you\.[^`]*\$\{IN_PERSON_ONLINE\}`\]/);
   assert.match(policy.IN_PERSON_ONLINE, /needs an internet connection from opening the document to pressing Finish/);
 });
 
@@ -795,4 +802,256 @@ test('a strike-out travels with a template, and needs no signer to be placed', a
   const bad = await c.post('/envelopes', { subject: 'x', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'A', email: 'a-strike@example.com' }], fields: [{ document_id: 'd', recipient_id: 'r', type: 'strikethrough', page: 0, x: 0.1, y: 0.1, w: 0.1, h: 0.02 }] });
   assert.equal(bad.status, 400);
   assert.match(bad.data.error, /strike/);
+});
+
+// ---- I. A link to the sender's own payment page, after Finish --------------------------------------------
+
+const trust = async (c: Client) => {
+  const a = (await c.get('/me')).data.account;
+  s.db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), a.id);
+  return a;
+};
+const payment = (accountId: string, daysAgo: number) =>
+  s.db.run("INSERT INTO payments (id, account_id, amount_cents, currency, at, kind, applied_at) VALUES (?,?,?,?,?,'plan',?)", `pay_gi_${accountId}_${daysAgo}`, accountId, 900, 'usd', days(daysAgo), days(daysAgo));
+async function deal(c: Client, tag: string, over: any = {}) {
+  const file = await upload(c, 1);
+  const r = await c.post('/envelopes', {
+    subject: `Kitchen refit ${tag}`, ordered: false, documents: [{ id: 'd', file_id: file.id, name: 'Quote' }],
+    recipients: [
+      { id: 'a', role: 'signer', name: `Ana ${tag}`, email: `ana-${tag}@example.com` },
+      { id: 'b', role: 'signer', name: `Bo ${tag}`, email: `bo-${tag}@example.com` },
+      { id: 'v', role: 'approver', name: `Vi ${tag}`, email: `vi-${tag}@example.com` },
+      { id: 'k', role: 'cc', name: `Kit ${tag}`, email: `kit-${tag}@example.com` },
+    ],
+    fields: ['a', 'b'].map((p, i) => ({ document_id: 'd', recipient_id: p, type: 'signature', page: 0, x: 0.1, y: 0.2 + i * 0.2, w: 0.3, h: 0.06 })),
+    ...over,
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  return r.data.envelope;
+}
+const payOf = async (envelopeId: string, email: string, client = new Client()) => (await client.get(`/sign/${tokenFor(envelopeId, email)}/pay`)).data.pay;
+
+test('a payment link is offered only to an account that has earned trust, and only for an https address of a real site', async () => {
+  const c = await signUp('Pia Plumber', 'pia-plumber@example.com', ip());
+  const e = await deal(c, 'trust');
+  const acct = (await c.get('/me')).data.account;
+  const set = (url: string, kind?: string) => c.put(`/envelopes/${e.id}/pay-link`, { url, kind });
+  // A new account that has not paid: not offered, and the API refuses it with the reason and the way to get it.
+  const first = (await c.get(`/envelopes/${e.id}/pay-link`)).data;
+  assert.deepEqual([first.pay_link, first.may], [null, false]);
+  assert.match(first.why, /once your account has a payment for the plan or a top-up that is at least 14 days old .* or once a person on the Sign&Grow team has cleared it/);
+  const refused = await set('https://buy.stripe.com/test_deposit');
+  assert.equal(refused.status, 403);
+  assert.match(refused.data.error, /what scammers want\. Nothing was saved\.$/);
+  // Paying yesterday is not enough: nine dollars must not buy a Pay button for a day.
+  payment(acct.id, 3);
+  assert.equal((await set('https://buy.stripe.com/test_deposit')).status, 403);
+  payment(acct.id, 15);
+  assert.equal((await c.get(`/envelopes/${e.id}/pay-link`)).data.may, true);
+
+  // Every address that hides where it goes, or goes nowhere a signer can reach, is refused in a sentence.
+  const was = process.env.APP_URL;
+  process.env.APP_URL = 'https://sign.example.org';
+  try {
+    const bad: [string, RegExp][] = [
+      ['http://pay.example.com/deposit', /has to start with https:\/\//],
+      ['javascript:alert(1)', /has to start with https:\/\//],
+      ['data:text/html,<b>pay</b>', /has to start with https:\/\//],
+      ['pay.example.com/deposit', /is not a web address/],
+      ['https://www.paypal.com@pay-me.example.net/x', /a name or a password in front of the @ sign/],
+      ['https://203.0.113.5/pay', /a number instead of a name/],
+      ['https://localhost/pay', /not a site on the public internet/],
+      ['https://intranet/pay', /not a site on the public internet/],
+      ['https://pay.example.com:8443/x', /names a port \(:8443\)/],
+      ['https://pay.example.com/a b', /a space or an invisible character/],
+      ['https://pay.example.com/\u200bx', /a space or an invisible character/],
+      [`https://pay.example.com/${'x'.repeat(500)}`, /the most that fits is 500/],
+      ['https://sign.example.org/sign/abc', /leads to Sign&Grow itself/],
+      ['https://pay.example.c0m/x', /does not end in a real domain ending/],
+      ['', /Paste the address of your own payment page/],
+    ];
+    for (const [url, says] of bad) {
+      const r = await set(url || ' ');
+      assert.equal(r.status, url ? 400 : 200, `${url}: ${JSON.stringify(r.data)}`);
+      if (url) assert.match(r.data.error, says, url);
+      if (url) assert.match(r.data.error, /Nothing was saved\.$/);
+    }
+    assert.equal((await set('https://pay.example.com/x', 'invoice')).status, 400, 'the button is one of the fixed few');
+  } finally {
+    if (was === undefined) delete process.env.APP_URL;
+    else process.env.APP_URL = was;
+  }
+  assert.equal(s.db.get('SELECT pay_url u FROM envelopes WHERE id=?', e.id).u, null, 'nothing refused was saved');
+  // A host in another alphabet is kept, and shown, the way the browser will really open it.
+  const look = await set('https://p\u0430ypal.com/deposit', 'retainer');
+  assert.equal(look.status, 200, JSON.stringify(look.data));
+  assert.deepEqual([look.data.pay_link.host, look.data.pay_link.label], ['xn--pypal-4ve.com', 'Pay the retainer']);
+  const ok = await set('  https://buy.stripe.com/test_deposit  ');
+  assert.deepEqual([ok.status, ok.data.pay_link.url, ok.data.pay_link.label], [200, 'https://buy.stripe.com/test_deposit', 'Pay the retainer'], 'the button stays what it was when only the address changes');
+  const trail = (await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => /^Payment link/.test(a.action));
+  assert.deepEqual(trail.map((a: any) => a.action), ['Payment link added', 'Payment link changed']);
+  assert.match(trail[1].detail, /^"Pay the retainer" opens https:\/\/buy\.stripe\.com\/test_deposit \(it opened https:\/\/xn--pypal-4ve\.com\/deposit before\)\. It is shown to each person who signs, after they finish, and never in an email\. Sign&Grow takes no part in the payment\.$/);
+  // Somebody else's envelope is not theirs to set a link on, or to read.
+  const other = await signUp('Oz Other', 'oz-other-pay@example.com', ip());
+  assert.equal((await other.put(`/envelopes/${e.id}/pay-link`, { url: 'https://evil.example.net/pay' })).status, 404);
+  assert.equal((await other.get(`/envelopes/${e.id}/pay-link`)).status, 404);
+});
+
+test('the link is shown after Finish, to each person who signs, with the sender\'s name and the full address, and never in an email', async () => {
+  const c = await signUp('Gus Builder', 'gus-builder@example.com', ip());
+  await trust(c);
+  const e = await deal(c, 'shown');
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: 'https://buy.stripe.com/gus_deposit', kind: 'deposit' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  const ana = 'ana-shown@example.com';
+  // Before Finish there is nothing: not in the answer for the pay button, and not anywhere in the signing page's data.
+  const before = new Client();
+  assert.equal(await payOf(e.id, ana, before), null);
+  assert.ok(!JSON.stringify((await before.get(`/sign/${tokenFor(e.id, ana)}`)).data).includes('buy.stripe.com'), 'the signing page does not carry it');
+  assert.equal((await signAll(e.id, ana)).status, 200);
+  const shown = await payOf(e.id, ana);
+  assert.deepEqual(shown, { url: 'https://buy.stripe.com/gus_deposit', host: 'buy.stripe.com', kind: 'deposit', label: 'Pay the deposit', sender: { name: 'Gus Builder', email: 'gus-builder@example.com' }, account: (await c.get('/me')).data.account.name });
+  // The tab was closed: the same link, on another device, shows it again. The record says it was shown, once.
+  assert.deepEqual(await payOf(e.id, ana), shown);
+  const shownLines = (await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => a.action === 'Shown the payment link');
+  assert.deepEqual(shownLines.map((a: any) => a.detail), ['Ana shown was shown "Pay the deposit", which opens https://buy.stripe.com/gus_deposit.']);
+  // Bo has not finished. The approver and the copy never sign, so they are never asked to pay.
+  assert.equal(await payOf(e.id, 'bo-shown@example.com'), null);
+  assert.equal((await signAll(e.id, 'vi-shown@example.com')).status, 200);
+  assert.equal(await payOf(e.id, 'vi-shown@example.com'), null);
+  assert.equal(await payOf(e.id, 'kit-shown@example.com'), null);
+
+  // Pressing it is written down once, and the line says that nobody here knows whether it was paid.
+  const press = () => new Client().post(`/sign/${tokenFor(e.id, ana)}/pay-opened`);
+  assert.equal((await press()).data.recorded, true);
+  assert.equal((await press()).data.recorded, false);
+  const opened = (await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => a.action === 'Opened the payment link');
+  assert.equal(opened.length, 1);
+  assert.match(opened[0].detail, /Whether a payment was made is not known to Sign&Grow\.$/);
+  assert.equal((await new Client().post(`/sign/${tokenFor(e.id, 'bo-shown@example.com')}/pay-opened`)).data.recorded, false, 'not before they finished');
+  // The sender sees who was shown it and who pressed it.
+  const seen = (await c.get(`/envelopes/${e.id}/pay-link`)).data.people;
+  assert.equal(seen.length, 2, 'the two who sign, not the approver or the copy');
+  const anaRow = seen.find((p: any) => p.name === 'Ana shown');
+  assert.ok(anaRow.shown_at && anaRow.opened_at);
+  assert.deepEqual([seen.find((p: any) => p.name === 'Bo shown').shown_at, seen.find((p: any) => p.name === 'Bo shown').opened_at], [null, null]);
+
+  // Everyone finishes: still there for both of them, and no email about this envelope ever carried the address.
+  assert.equal((await signAll(e.id, 'bo-shown@example.com')).status, 200);
+  assert.equal((await c.get(`/envelopes/${e.id}`)).data.envelope.status, 'completed');
+  assert.equal((await payOf(e.id, 'bo-shown@example.com'))?.url, 'https://buy.stripe.com/gus_deposit');
+  const mails = s.db.all("SELECT subject, html FROM emails WHERE envelope_id=? OR to_email IN ('gus-builder@example.com')", e.id);
+  assert.ok(mails.length >= 6, 'invitations, completions and the sender\'s own emails were written');
+  for (const m of mails) assert.ok(!m.html.includes('buy.stripe.com') && !m.html.includes('Pay the deposit'), `"${m.subject}" carries no payment link`);
+});
+
+test('trust that goes away takes the link off every screen, a closed envelope asks nobody for money, and a finished one can only lose its link', async () => {
+  const c = await signUp('Lou Lawyer', 'lou-lawyer@example.com', ip());
+  const acct = await trust(c);
+  const e = await deal(c, 'gone');
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: 'https://pay.example.com/retainer', kind: 'retainer' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'ana-gone@example.com')).status, 200);
+  assert.equal((await payOf(e.id, 'ana-gone@example.com'))?.label, 'Pay the retainer');
+  // A person takes the trusted mark away: the link is gone from the signer's screen at once, and the sender is told why.
+  s.db.run('UPDATE accounts SET trusted_at=NULL WHERE id=?', acct.id);
+  assert.equal(await payOf(e.id, 'ana-gone@example.com'), null);
+  const why = (await c.get(`/envelopes/${e.id}/pay-link`)).data;
+  assert.equal(why.may, false);
+  assert.ok(why.pay_link, 'the sender still sees what they set');
+  assert.equal((await new Client().post(`/sign/${tokenFor(e.id, 'ana-gone@example.com')}/pay-opened`)).data.recorded, false);
+  // A pause, and a disputed card, do the same.
+  s.db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), acct.id);
+  s.db.run("UPDATE accounts SET suspended_at=?, suspended_reason='checking a report' WHERE id=?", new Date().toISOString(), acct.id);
+  assert.equal(await payOf(e.id, 'ana-gone@example.com'), null);
+  assert.match((await c.get(`/envelopes/${e.id}/pay-link`)).data.why, /^Sending is paused on this account, so its payment links are shown to nobody/);
+  s.db.run('UPDATE accounts SET suspended_at=NULL, suspended_reason=NULL, dispute_at=? WHERE id=?', new Date().toISOString(), acct.id);
+  assert.equal(await payOf(e.id, 'ana-gone@example.com'), null);
+  s.db.run('UPDATE accounts SET dispute_at=NULL WHERE id=?', acct.id);
+  assert.ok(await payOf(e.id, 'ana-gone@example.com'), 'and it is back when the account is in good standing again');
+
+  // Voided after Ana signed: the deal is off, so nobody is asked to pay for it.
+  assert.equal((await c.post(`/envelopes/${e.id}/void`, { reason: 'The client chose another firm.' })).status, 200);
+  assert.equal(await payOf(e.id, 'ana-gone@example.com'), null);
+  // Closed, it can no longer be changed to another address. It can be taken off.
+  const change = await c.put(`/envelopes/${e.id}/pay-link`, { url: 'https://pay.example.com/other' });
+  assert.equal(change.status, 409);
+  assert.match(change.data.error, /^This envelope is voided, so its payment link can only be removed now, not added or changed\. Nothing was saved\.$/);
+  const off = await c.put(`/envelopes/${e.id}/pay-link`, { url: '' });
+  assert.equal(off.status, 200);
+  assert.equal(off.data.pay_link, null);
+  assert.ok((await c.get(`/envelopes/${e.id}`)).data.audit.some((a: any) => a.action === 'Payment link removed' && a.detail === '"Pay the retainer" to https://pay.example.com/retainer is no longer shown to anyone.'));
+  // Taking a link off is always allowed, also for an account that may not add one: a paused account can clean up.
+  s.db.run("UPDATE accounts SET suspended_at=?, suspended_reason='x' WHERE id=?", new Date().toISOString(), acct.id);
+  const e2 = await deal(c, 'gone2');
+  s.db.run("UPDATE envelopes SET pay_url='https://pay.example.com/old', pay_kind='fee' WHERE id=?", e2.id);
+  assert.equal((await c.put(`/envelopes/${e2.id}/pay-link`, { url: 'https://pay.example.com/new' })).status, 403);
+  assert.equal((await c.put(`/envelopes/${e2.id}/pay-link`, { url: '' })).status, 200);
+});
+
+test('a template\'s link goes with every envelope made from it, and only its owner or an admin changes it', async () => {
+  const owner = await signUp('Tom Tutor', 'tom-tutor@example.com', ip());
+  await trust(owner);
+  assert.equal((await owner.post('/account/invites', { email: 'mia-tutor@example.com', role: 'member' })).status, 200);
+  const member = new Client();
+  member.ip = ip();
+  assert.equal((await member.post('/auth/signup', { name: 'Mia Tutor', email: 'mia-tutor@example.com', password: 'correct horse battery', invite: s.db.get('SELECT token FROM invites WHERE email=?', 'mia-tutor@example.com').token })).status, 200);
+  const file = await upload(owner, 1);
+  const tpl = (await owner.post('/envelopes', { kind: 'template', subject: 'Term enrolment', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Parent' }], fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).data.envelope;
+  assert.equal((await owner.put(`/envelopes/${tpl.id}/pay-link`, { url: 'https://pay.example.com/term-fee', kind: 'fee' })).status, 200);
+  assert.equal((await member.put(`/envelopes/${tpl.id}/pay-link`, { url: 'https://pay.example.com/mine' })).status, 403, 'a member does not change a colleague\'s template');
+  assert.equal((await member.put(`/envelopes/${tpl.id}/pay-link`, { url: '' })).status, 403, 'or take its link off');
+  // A member sending from it: the envelope has the template's link, and its parent is shown it after Finish.
+  const made = await member.post('/envelopes', { template_id: tpl.id, recipients: { [tpl.recipients[0].id]: { name: 'Pat Parent', email: 'pat-parent@example.com' } } });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const env = made.data.envelope;
+  assert.deepEqual([env.pay_url, env.pay_kind], ['https://pay.example.com/term-fee', 'fee']);
+  assert.equal((await member.post(`/envelopes/${env.id}/send`)).status, 200);
+  assert.equal((await signAll(env.id, 'pat-parent@example.com')).status, 200);
+  assert.equal((await payOf(env.id, 'pat-parent@example.com'))?.label, 'Pay the fee');
+  assert.equal((await payOf(env.id, 'pat-parent@example.com'))?.sender.name, 'Mia Tutor', 'the person who sent it is named');
+});
+
+test('the screens show the payment link only where the rules say, and every page tells the truth about it', async () => {
+  const pl = await import('../src/lib/paylink.ts');
+  // The signer's screen: after Finish only, for those who sign, with the full address and a button that hands the
+  // payment site nothing of the signing link.
+  const sign = read('src/app/sign/[token]/page.tsx');
+  const done = sign.slice(sign.indexOf("if (stage === 'done')"), sign.indexOf("if (stage === 'pending')"));
+  assert.match(done, /\{acts && <PayLink base=\{base\} \/>\}/, 'on the last screen, for someone who signs');
+  assert.equal(sign.split('<PayLink ').length, 2, 'and nowhere else on the signing page');
+  const card = read('src/components/sign/PayLink.tsx');
+  assert.match(card, /api<\{ pay: Pay \| null \}>\(`\$\{base\}\/pay`\)/, 'the server decides whether there is one');
+  assert.match(card, /rel="noopener noreferrer" referrerPolicy="no-referrer"/);
+  assert.match(card, /<code id="sg-pay-url"[^>]*>\{pay\.url\}<\/code>/, 'the whole address, before the button');
+  assert.match(card, /\{pay\.label\} on \{pay\.host\}/);
+  assert.match(card, /payForSigner\(pay\.sender\.name\)/);
+  assert.match(card, /payNotUs\(pay\.sender\.name\)/);
+  assert.match(pl.payForSigner('Gus'), /your signature does not depend on this payment, and it stays signed whether you pay now, later or not at all/);
+  assert.match(pl.payNotUs('Gus'), /^Sign&Grow takes no part in this payment\. We do not see what you pay, cannot confirm that it was paid and cannot refund it\./);
+  assert.match(pl.payNotUs('Gus'), /If you did not expect to pay Gus anything, do not pay/);
+  // The sender's screens: next to the Send button, absent for an account that may not show one, and on the envelope.
+  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && <PayLinkChoice envelopeId=\{env\.id\} isTpl=\{isTpl\} \/>\}/);
+  const choice = read('src/components/editor/PayLinkChoice.tsx');
+  assert.match(choice, /if \(!envelopeId \|\| !st \|\| \(!st\.may && !st\.pay_link\)\) return null;/, 'no dead control for an account that may not');
+  assert.match(choice, /<span>Address of your own payment page<\/span>/);
+  assert.match(choice, /<span>The button says<\/span>/);
+  assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /<PayLinkNote envelopeId=\{e\.id\} closed=\{/);
+  assert.match(read('src/components/sender/PayLinkNote.tsx'), /cannot tell you whether anyone paid/);
+  // The pages: /help says when it is offered and what a signer should do, /security lists it under what this is not.
+  const help = read('src/app/help/page.tsx');
+  assert.match(help, /<QA id="payment-link" q="Can someone pay a deposit when they sign\?">/);
+  assert.match(help, /\{payNotYet\(PAID_TRUST_DAYS\)\}/);
+  assert.match(read('src/app/security/page.tsx'), /<Point title="No payment collection\.">Sign&Grow never takes money for a sender\./);
+  const readme = read('README.md');
+  assert.doesNotMatch(readme, /payments collected during signing/, 'the README no longer lists it as missing');
+  assert.match(readme, /Payments are not collected: a trusted account can\s+show a link to its own payment page after Finish/);
+  // Plain words: no em dash, and no promise about the law.
+  for (const t of [pl.payForSigner('X'), pl.payNotUs('X'), pl.PAY_FOR_SENDER, pl.payNotYet(14), ...Object.values(pl.PAY_KINDS), card, choice, read('src/server/routes-paylink.ts')])
+    assert.doesNotMatch(t, /\u2014|is valid|will hold up|guarantee/i);
+  // The API description lists both calls.
+  const { openapi } = await import('../src/server/openapi.ts');
+  const p = (openapi() as any).paths['/envelopes/{id}/pay-link'];
+  assert.ok(p.get && p.put);
+  assert.match(p.put.description, /never put in an email/);
 });

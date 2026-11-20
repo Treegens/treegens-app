@@ -8,6 +8,7 @@ import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
 import { reminderText } from '@/lib/policy';
+import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 
 // With a waiver form for each state or client, one flat list stops working at about twenty. So the page has what
 // the envelope list has: a search (every word has to be found in the name, the folder, a role or the document), a
@@ -63,6 +64,8 @@ export default function Templates() {
   const [deleting, setDeleting] = useState<any>(null);
   // Set once the envelope exists but could not be sent yet.
   const [draftId, setDraftId] = useState('');
+  // Addresses on it that bounced before (src/lib/mailnews.ts): said here, and the button becomes "Send anyway".
+  const [dead, setDead] = useState<BouncedAddress[] | null>(null);
 
   async function start(t: any) {
     try {
@@ -71,12 +74,13 @@ export default function Templates() {
       setFill(Object.fromEntries(open.map((r: any) => [r.id, { name: '', email: '' }])));
       setProblem('');
       setDraftId('');
+      setDead(null);
       setUse({ ...envelope, open });
     } catch (e) {
       fail(e);
     }
   }
-  async function create(send: boolean) {
+  async function create(send: boolean, anyway = false) {
     if (send && !draftId) {
       const gap = use.open.find((r: any) => !fill[r.id]?.name.trim() || !looksLikeEmail((fill[r.id]?.email || '').trim()));
       if (gap) return setProblem(`Add a name and a full email address for ${gap.role_name || 'every recipient'} before sending. To finish it later, choose Review first.`);
@@ -95,10 +99,11 @@ export default function Templates() {
         toast('Draft created.');
         return router.push(`/app/envelopes/${id}/edit`);
       }
-      await api(`/envelopes/${id}/send`, { method: 'POST' });
+      await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway } });
       toast('Sent.');
       router.push(`/app/envelopes/${id}`);
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.code === 'bounced_address' && !anyway) return setDead(e.data?.bounced || []);
       setProblem(id ? `${explain(e)} It is saved as a draft, so nothing you typed is lost.` : explain(e));
     } finally {
       setBusy(false);
@@ -184,7 +189,7 @@ export default function Templates() {
 
       {use && (
         <Dialog title={`Use "${use.subject || 'template'}"`} onClose={() => setUse(null)}>
-          <form onSubmit={(e) => (e.preventDefault(), create(true))}>
+          <form onSubmit={(e) => (e.preventDefault(), create(true, !!dead))}>
             {use.open.length === 0 && <p className="muted">Everyone who signs is already set in this template. Send it as it is, or review it first.</p>}
             {use.open.map((r: any, i: number) => (
               <fieldset key={r.id} className="sn-rolefill">
@@ -196,9 +201,10 @@ export default function Templates() {
             {/* "Send now" skips the review step, so what it would show about reminders is said here. */}
             <p className="muted small" id="sn-use-reminders">{reminderText(use.reminder_days)} That comes from the template. To change it for this envelope, choose Review first.</p>
             {problem && <div className="notice err" role="alert">{problem}</div>}
+            {dead && <div className="notice warn" role="alert"><b>{sendAnywayAsk(dead).title}.</b> {sendAnywayAsk(dead).body} It is saved as a draft: to correct the address, choose Open the draft.</div>}
             <div className="actions">
               <button type="button" className="btn" disabled={busy} onClick={() => create(false)}>{draftId ? 'Open the draft' : 'Review first'}</button>
-              <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Working…' : draftId ? 'Try sending again' : 'Send now'}</button>
+              <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Working…' : dead ? 'Send anyway' : draftId ? 'Try sending again' : 'Send now'}</button>
             </div>
           </form>
         </Dialog>

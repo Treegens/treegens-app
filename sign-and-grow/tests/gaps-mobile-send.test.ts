@@ -4,13 +4,15 @@
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { boot, signUp, upload, signAll, simple, samplePdf, mailTo, Client, PNG, type Server } from './helpers.ts';
-import { jpegOrientation, markUpright } from '../src/server/exif.ts';
+import { jpegOrientation, markUpright, pictureSize, pictureLimit } from '../src/server/exif.ts';
 import { sha256 } from '../src/server/util.ts';
 import { imagesToPdf } from '../src/server/pdf.ts';
-import { fitWithin, deviceName, IN_PERSON_LIMITS, IN_PERSON_LOCK } from '../src/lib/phone.ts';
-import { MAX_PHOTOS_PER_DOCUMENT, PHOTO_MAX_SIDE, SESSION_DAYS, SESSION_TOUCH_MINUTES, HAND_OVER_TRIES } from '../src/lib/policy.ts';
+import { fitWithin, deviceName, IN_PERSON_LIMITS, IN_PERSON_LOCK, HEARD_AS, unlabelled, phoneWeight, phoneWait } from '../src/lib/phone.ts';
+import { PDFDocument } from 'pdf-lib';
+import { MAX_PHOTOS_PER_DOCUMENT, PHOTO_MAX_SIDE, SESSION_DAYS, SESSION_TOUCH_MINUTES, HAND_OVER_TRIES, PHONE_SLOW_BYTES, PHONE_SECONDS_PER_MB, PNG_MAX_PIXELS, JPEG_MAX_PIXELS } from '../src/lib/policy.ts';
 
 let s: Server;
 before(async () => {
@@ -673,4 +675,191 @@ test('the screens of in-person signing say to hand the device back and what the 
   assert.match(IN_PERSON_LOCK, /locks your account in that browser\. To come back you type your password, or sign in again if your login has none\./);
   for (const file of ['src/components/HandedOver.tsx', 'src/app/security/page.tsx']) assert.match(read(file), /IN_PERSON_LIMITS\.map/, file);
   for (const file of ['src/components/sender/Recipients.tsx', 'src/app/security/page.tsx']) assert.match(read(file), /\{IN_PERSON_LOCK\}/, file);
+});
+
+// ---- Fields a thumb can hold in the editor -------------------------------------------------------------
+
+// The rules a touch screen gets in the editor, read from the stylesheet the page loads. The sizes are worked out
+// the way the browser does: every box is border-box (globals.css), so a child that is placed absolutely is measured
+// from inside its parent's border.
+test('in the editor on a touch screen every field and its resize corner answer a thumb over at least 44 px', () => {
+  const css = read('src/app/styles/editor.css');
+  const base = read('src/app/globals.css');
+  assert.match(base, /\* \{ box-sizing: border-box; \}/);
+  const at = css.indexOf('@media (pointer: coarse) {\n  .field.edit .grip');
+  assert.ok(at > 0, 'the touch rules for fields are in editor.css');
+  const block = css.slice(at, css.indexOf('\n}\n', at));
+  const rule = (sel: string) => {
+    const body = new RegExp(`\\n  ${sel.replace(/[.:()]/g, '\\$&')} \\{([^}]*)\\}`).exec(block)?.[1];
+    assert.ok(body, `${sel} under (pointer: coarse)`);
+    return body!;
+  };
+  const px = (body: string, prop: string) => Number(new RegExp(`(?:^|[ ;])${prop}: (-?\\d+)px`).exec(body)?.[1]);
+  const border = Number(/\.field \.grip \{[^}]*border: (\d+)px/.exec(base)?.[1]);
+  const grip = rule('.field.edit .grip');
+  const [w, h] = [px(grip, 'width'), px(grip, 'height')];
+  const inset = /inset: (-?\d+)px (-?\d+)px (-?\d+)px (-?\d+)px/.exec(rule('.field.edit .grip::after'))!.slice(1).map(Number);
+  const [top, right, bottom, left] = inset;
+  // Across: from the area's left edge to its right edge. Down: the same from top to bottom.
+  assert.ok(w - 2 * border - left - right >= 44, `the resize corner is ${w - 2 * border - left - right} px across`);
+  assert.ok(h - 2 * border - top - bottom >= 44, `the resize corner is ${h - 2 * border - top - bottom} px down`);
+  // It starts at the dot's own outer edge, so pressing the dot itself is inside it, and grows away from the field.
+  assert.deepEqual([top, left], [-border, -border]);
+  assert.ok(right < 0 && bottom < 0);
+  // Every field, however small (a tick box is about 9 px at phone width), has an area of 44 px around its middle.
+  const field = rule('.field.edit::before');
+  assert.match(field, /width: max\(100%, 44px\); height: max\(100%, 44px\); transform: translate\(-50%, -50%\)/);
+  assert.match(field, /z-index: -1/);
+  assert.match(rule('.field.edit'), /overflow: visible/);
+  // Only on a touch screen: with a mouse, a click next to a small field places a new field there, as before.
+  assert.equal(css.slice(0, at).includes('.field.edit::before'), false);
+  // Every button of the editor on a phone is at least 44 px tall (it was 40), and the later rule wins over earlier ones.
+  const phone = css.slice(css.indexOf('@media (max-width: 900px) {\n  .ed-only-sm'));
+  assert.match(phone, /\n  \.ed \.btn, \.ed \.palette button, \.ed \.steps button \{ min-height: 44px; \}/);
+  assert.match(phone, /\n  \.ed \.btn\.sm \{ min-width: 44px; \}/);
+});
+
+// ---- Fields without a label, before sending ------------------------------------------------------------
+
+test('fields a screen reader can only call by their type are listed before sending, with a way to each', async () => {
+  const f = (type: string, more: Record<string, any> = {}) => ({ id: type, type, label: '', readonly: false, ...more });
+  const all = ['text', 'number', 'date', 'dropdown', 'attachment', 'checkbox', 'radio', 'signature', 'initials', 'full_name', 'email', 'company', 'title', 'date_signed'].map((t) => f(t));
+  // The ones whose type does not say what belongs in them. A signature, a name, an email address, a company and a
+  // job title explain themselves.
+  assert.deepEqual(unlabelled(all).map((x) => x.type), ['text', 'number', 'date', 'dropdown', 'attachment', 'checkbox', 'radio']);
+  // A label of spaces is no label. A label, a note or a strike-out of the sender, or a read-only prefilled value is not listed.
+  assert.deepEqual(unlabelled([f('text', { label: '   ' }), f('text', { label: 'Seedlings pledged' }), f('note', { readonly: true, value: 'Note' }), f('strike', { readonly: true }), f('text', { readonly: true, value: 'Mangrove Trust' })]).map((x) => x.label), ['   ']);
+  // What the list says a signer hears is what the signing page says for a field with no label.
+  const { LABEL } = await import('../src/components/sign/fields.ts');
+  for (const t of Object.keys(HEARD_AS)) if (t !== 'radio') assert.equal(HEARD_AS[t], LABEL[t], t);
+  const signPage = read('src/app/sign/[token]/page.tsx');
+  assert.match(signPage, /const name = fieldName\(f\);/);
+  assert.match(signPage, /aria-label=\{f\.label \|\| `Option \$\{group\.indexOf\(f\) \+ 1\} of \$\{group\.length\}`\}/);
+  // A field that is not required is read out as optional, and the example in the list says so too.
+  assert.match(signPage, /const need = f\.required \? ', required' : ', optional';/);
+  assert.match(read('src/components/editor/LabelCheck.tsx'), /list\[0\]\.type === 'radio' \? '' : list\[0\]\.required \? ', required' : ', optional'/);
+
+  // The review step shows the list unless the envelope is closed, and only fields that can still be changed.
+  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && <LabelCheck ed=\{ed\} \/>\}/);
+  const check = read('src/components/editor/LabelCheck.tsx');
+  assert.match(check, /unlabelled\(ed\.fields\.value\)\.filter\(\(f\) => !ed\.isLockedField\(f\)\)/);
+  assert.match(check, /Someone who signs with a screen reader cannot see where a field sits on the page\. They hear its label\./);
+  assert.match(check, /You can send without, but then tell that signer yourself what each field is for\./);
+  // Each one has a button that says which field it opens, and opens it in step 2 with the cursor in the Label box.
+  assert.match(check, /onClick=\{\(\) => ed\.showField\(f\.id\)\} aria-label=\{`Add a label to the \$\{where\(f\)\}`\}/);
+  assert.match(read('src/components/Editor.tsx'), /showField: \(fid\) => \(setJump\(fid\), void go\(2\)\), jump, clearJump: \(\) => setJump\(null\)/);
+  const fieldsStep = read('src/components/editor/StepFields.tsx');
+  assert.match(fieldsStep, /const id = ed\.jump;[\s\S]{0,120}setSel\(id\);\s+setSheet\(true\);[\s\S]{0,900}document\.getElementById\('ed-label'\)\?\.focus/);
+  assert.match(fieldsStep, /<input id="ed-label" /);
+  // On a phone the settings sheet covers the lower half, and the field is moved above it, not left under it.
+  assert.match(fieldsStep, /el\?\.scrollIntoView\(\{ block: 'center', inline: 'nearest' \}\);\s+\/\/[^\n]*\n\s+const panel = document\.querySelector\('\.ed-settings\.has'\);[\s\S]{0,260}window\.scrollBy\(\{ top: r\.bottom - top \+ 24 \}\);/);
+  // The rows have room for a thumb.
+  assert.match(read('src/app/styles/editor.css'), /\.ed-nolabel \.btn \{ min-height: 44px; \}/);
+});
+
+// ---- Documents that are slow on a phone -----------------------------------------------------------------
+
+test('a document large enough to be slow on a phone is pointed out with the time it took, and the upload hint says what is true', async () => {
+  assert.equal(PHONE_SLOW_BYTES, 5_000_000);
+  // Nothing to say about a file under the line, or one whose size is not known.
+  for (const d of [{ size: PHONE_SLOW_BYTES - 1 }, { size: 0 }, { size: null }, {}]) assert.equal(phoneWeight(d), '', JSON.stringify(d));
+  // The wait is the measured rate times the size, in seconds, and in minutes from a minute and a half.
+  assert.equal(phoneWait(5_000_000), `about ${Math.round(5 * PHONE_SECONDS_PER_MB)} seconds`);
+  assert.equal(phoneWait(25_000_000), `about ${Math.round((25 * PHONE_SECONDS_PER_MB) / 60)} minutes`);
+  const said = phoneWeight({ size: 12_340_000 });
+  assert.equal(said, `This file is 12.3 MB. Every signer's phone downloads all of it, which takes ${phoneWait(12_340_000)} on a slow mobile connection and longer where the signal is weak. If people will sign on a phone, save it with smaller pictures (many PDF programs have "reduce file size") or split it into parts. Under 5 MB is best.`);
+  // It says what the sender can do, never that the document will not open or must be changed.
+  assert.doesNotMatch(said, /will not open|cannot be opened|must|—/);
+
+  // The size it needs comes from the server: with the upload, and with the envelope when a draft is opened again.
+  const c = await signUp('Wren Weighty', 'wren@example.com', ip());
+  const doc = await PDFDocument.create();
+  doc.addPage([595.28, 841.89]).drawText('A scanned lease, heavy as scans are', { x: 60, y: 780 });
+  await doc.attach(crypto.randomBytes(6_000_000), 'scan.bin', { mimeType: 'application/octet-stream' });
+  const heavy = await uploadFiles(c, [{ bytes: await doc.save(), name: 'Lease.pdf', type: 'application/pdf' }]);
+  assert.equal(heavy.status, 200, JSON.stringify(heavy.data));
+  assert.ok(heavy.data.size >= PHONE_SLOW_BYTES, `stored ${heavy.data.size} bytes`);
+  assert.equal(heavy.data.size, (await content(c, heavy.data.id)).length);
+  assert.match(phoneWeight(heavy.data), /^This file is 6\.\d MB\./);
+  const light = await upload(c, 3);
+  assert.equal(phoneWeight(light), '');
+  const made = await c.post('/envelopes', { subject: 'Lease', documents: [{ id: 'a', file_id: heavy.data.id }, { id: 'b', file_id: light.id }], recipients: [] });
+  const again = (await c.get(`/envelopes/${made.data.envelope.id}`)).data;
+  const docs = (again.envelope || again).documents;
+  assert.deepEqual(docs.map((d: any) => !!phoneWeight(d)), [true, false]);
+
+  // The editor says it under the document in step 1 and again before sending, and the hint under the upload box
+  // gives the same measured rate next to the limits of the server.
+  assert.match(read('src/components/editor/StepAdd.tsx'), /\{phoneWeight\(d\) && <p className="notice warn small" style=\{\{ margin: '6px 0 0' \}\}>\{phoneWeight\(d\)\}<\/p>\}/);
+  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && docs\.filter\(\(d\) => phoneWeight\(d\)\)\.map\(/);
+  const { LIMITS } = await import('../src/components/editor/upload.ts');
+  assert.equal(LIMITS, `PDF, PNG or JPEG. Up to 25 MB and 500 pages each. A signer on a phone waits about ${Math.round(PHONE_SECONDS_PER_MB)} seconds for each MB on a slow connection.`);
+  // On a touch screen the box does not say "drop" or "click": a phone can do neither.
+  const add = read('src/components/editor/StepAdd.tsx');
+  assert.match(add, /<span className="ed-fine">Drop files here or click to choose them<\/span><span className="ed-touch">Tap to choose files or take a photo<\/span>/);
+  assert.match(read('src/app/styles/editor.css'), /@media \(pointer: coarse\) \{ \.ed-fine \{ display: none; \} \.ed-touch \{ display: revert; \} \}/);
+  // The API says the same about the size it returns.
+  assert.match(read('src/server/openapi.ts'), /size: \{ type: 'integer', description: `Bytes of the stored PDF\. Every signer downloads all of it\. From \$\{PHONE_SLOW_BYTES \/ 1e6\} MB the app's editor tells the sender that it is slow to open on a phone\.` \}/);
+});
+
+// ---- A picture that claims to be enormous ---------------------------------------------------------------
+
+// A PNG header that claims w by h pixels: the signature and an IHDR chunk, followed by a little data that is never
+// unpacked because the claim is refused first.
+const pngClaiming = (w: number, h: number) => {
+  const ihdr = Buffer.alloc(25);
+  ihdr.writeUInt32BE(13, 0);
+  ihdr.write('IHDR', 4, 'latin1');
+  ihdr.writeUInt32BE(w, 8);
+  ihdr.writeUInt32BE(h, 12);
+  ihdr[16] = 8;
+  ihdr[17] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ihdr, Buffer.alloc(300_000)]);
+};
+// The real JPEG with its frame header changed to claim w by h pixels.
+const jpegClaiming = (w: number, h: number) => {
+  const b = Buffer.from(BASE);
+  const sof = b.indexOf(Buffer.from([0xff, 0xc0]));
+  b.writeUInt16BE(h, sof + 5);
+  b.writeUInt16BE(w, sof + 7);
+  return b;
+};
+
+test('a picture that claims more pixels than a page could use is refused in words before it costs the server memory', async () => {
+  assert.equal(PNG_MAX_PIXELS, 25_000_000);
+  assert.equal(JPEG_MAX_PIXELS, 50_000_000);
+  // The header is read as it is written: the real JPEG says 48 by 32, a PNG says what its IHDR says.
+  assert.deepEqual(pictureSize(BASE, false), { w: 48, h: 32 });
+  assert.deepEqual(pictureSize(photo(6, true), false), { w: 48, h: 32 }, 'past the camera note');
+  assert.deepEqual(pictureSize(Buffer.from(PNG.split(',')[1], 'base64'), true), { w: 1, h: 1 });
+  assert.deepEqual(pictureSize(pngClaiming(5000, 5000), true), { w: 5000, h: 5000 });
+  for (const bad of [new Uint8Array(0), Buffer.from([0xff, 0xd8, 0xff, 0xd9]), Buffer.from('not a picture at all, just words')]) {
+    assert.equal(pictureSize(bad, false), null);
+    assert.equal(pictureSize(bad, true), null);
+  }
+  for (let cut = 0; cut < BASE.length; cut += 7) assert.doesNotThrow(() => pictureSize(BASE.subarray(0, cut), false));
+  // Up to the limit is fine, one pixel more is not.
+  assert.equal(pictureLimit(pngClaiming(5000, 5000), true), '');
+  assert.equal(pictureLimit(pngClaiming(5000, 5001), true), 'This picture is 5,000 by 5,001 pixels, which is 25 million. A PNG can have up to 25 million, far more than a page needs. Make it smaller or save it as a JPEG, then upload it again.');
+  assert.equal(pictureLimit(jpegClaiming(8160, 6120), false), '', 'a 50 megapixel phone photo');
+  assert.match(pictureLimit(jpegClaiming(16320, 12240), false), /^This picture is 16,320 by 12,240 pixels, which is 200 million\. A JPEG can have up to 50 million, far more than a page needs\. Make it smaller, then upload it again\.$/);
+
+  // Through the upload: refused at once with that sentence, and nothing kept.
+  const c = await signUp('Zed Bomb', 'zed@example.com', ip());
+  const before = s.db.get('SELECT COUNT(*) n FROM files').n;
+  const t = Date.now();
+  const one = await uploadFiles(c, [{ bytes: pngClaiming(30000, 30000), name: 'tiny.png', type: 'image/png' }]);
+  assert.equal(one.status, 400);
+  assert.match(one.data.error, /^This picture is 30,000 by 30,000 pixels, which is 900 million\. A PNG can have up to 25 million/);
+  assert.ok(Date.now() - t < 3000, 'refused before anything was unpacked');
+  // Among several pictures it is named, so the sender knows which one to leave out.
+  const many = await uploadFiles(c, [{ bytes: photo(1), name: 'page 1.jpg' }, { bytes: jpegClaiming(20000, 20000), name: 'page 2.jpg' }]);
+  assert.equal(many.status, 400);
+  assert.match(many.data.error, /^"page 2\.jpg" is 20,000 by 20,000 pixels, .* No document was made\.$/);
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM files').n, before);
+  // Each picture is packed into the PDF before the next one is read, so its unpacked pixels are let go at once.
+  assert.match(read('src/server/pdf.ts'), /drawObject\(page\.node\.newXObject\('Image', img\.ref\)\), popGraphicsState\(\)\);\n\s+\/\/[^\n]*\n\s+await img\.embed\(\);/);
+  // The API description and the developers page give both limits.
+  assert.match(read('src/server/openapi.ts'), /A PNG can have up to \$\{PNG_MAX_PIXELS \/ 1e6\} million pixels and a JPEG up to \$\{JPEG_MAX_PIXELS \/ 1e6\} million/);
+  assert.match(read('src/app/developers/page.tsx'), /A PNG can have up to \$\{PNG_MAX_PIXELS \/ 1e6\} million pixels and a JPEG up to \$\{JPEG_MAX_PIXELS \/ 1e6\} million\./);
 });

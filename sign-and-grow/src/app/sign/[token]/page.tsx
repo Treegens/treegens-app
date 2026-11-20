@@ -21,6 +21,13 @@ import { docUrl, allOnScreen } from '@/components/sign/fields';
 import { useAutoReview } from '@/components/sign/autoReview';
 import { strikeClass } from '@/lib/strike';
 import { pageBoxes } from '@/components/sign/pdfText';
+import { NoViewer } from '@/components/sign/NoViewer';
+import { ZoomControl } from '@/components/sign/Zoom';
+import { isConnectionError, finishNotSent, saveNotSent, keepAnswers, readAnswers, dropAnswers, FINISH_RETRY_MS } from '@/components/sign/offline';
+import { SIGNING_ONLINE } from '@/lib/mobile';
+import { PayLink } from '@/components/sign/PayLink';
+import { NoEmailDone, NoEmailWait, answerComesTo } from '@/components/sign/NoEmail';
+import { MailAgain } from '@/components/sign/MailAgain';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review';
@@ -55,6 +62,8 @@ export default function SignPage() {
   // The date field whose picker is open. A date that was picked is otherwise shown the way it will be printed.
   const [dateOpen, setDateOpen] = useState<string | null>(null);
   const [view, setView] = useState<'doc' | 'text'>('doc');
+  // The size of the pages: 1, 1.5 or 2 times the width of the screen (Zoom.tsx).
+  const [zoom, setZoom] = useState(1);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState('');
   const [agree, setAgree] = useState(false);
@@ -92,6 +101,10 @@ export default function SignPage() {
   const lastSaved = useRef('');
   const canSave = useRef(false);
   const rejected = useRef(0);
+  const warnedSave = useRef(false);
+  // Finish was pressed and did not get through for want of a connection: it is sent again by itself (see complete).
+  const [finishPending, setFinishPending] = useState(false);
+  const completeRef = useRef<() => void>(() => {});
   const afterClose = useRef<any>(null);
   // The name on the request as this tab last showed it: see load, where marks made under another name are dropped.
   const who = useRef<string | null>(null);
@@ -122,7 +135,9 @@ export default function SignPage() {
         savedMarks.current = start.saved;
         const unsaved = mine && !!lastSaved.current && JSON.stringify(valuesRef.current) !== lastSaved.current;
         // Answers not saved yet are kept, but only for fields that still exist: the sender may have taken one away.
-        setValues((prev) => (unsaved ? { ...server, ...Object.fromEntries(Object.entries(prev).filter(([id]) => id in server)) } : server));
+        // After a reload, answers this tab had not got through to the server yet come back from its own storage.
+        const tabKept = mine && !unsaved ? readAnswers(token, d.recipient?.name, Object.keys(server)) : null;
+        setValues((prev) => (unsaved ? { ...server, ...Object.fromEntries(Object.entries(prev).filter(([id]) => id in server)) } : tabKept ? { ...server, ...tabKept } : server));
         lastSaved.current = start.baseline;
       }
     } catch (e: any) {
@@ -266,6 +281,7 @@ export default function SignPage() {
       lastSaved.current = json;
       savedMarks.current = { sig: marks.sig || savedMarks.current.sig, ini: marks.ini || savedMarks.current.ini };
       rejected.current = 0;
+      warnedSave.current = false;
       setSave(JSON.stringify(valuesRef.current) === json ? 'saved' : 'pending');
       return true;
     } catch (e: any) {
@@ -286,10 +302,15 @@ export default function SignPage() {
       if (e?.status >= 400 && e.status < 500 && e.status !== 429 && rejected.current++ < 2) {
         setSave('idle');
         load();
-      } else setSave((s) => {
-        if (s !== 'error') toast('We could not save just now. Check your connection. We will keep trying, and nothing is lost while this page stays open.', true);
-        return 'error';
-      });
+      } else {
+        // Said once until a save gets through again, never from inside a state update (React may run those twice).
+        // Not over an open dialog: the last step says it in its own words, and the next try after it closes says it.
+        if (!warnedSave.current && !document.documentElement.classList.contains('sg-locked')) {
+          toast(isConnectionError(e) ? saveNotSent(navigator.onLine !== false) : 'We could not save just now. We will keep trying, and nothing is lost while this page stays open.', true);
+          warnedSave.current = true;
+        }
+        setSave('error');
+      }
       return false;
     }
   }, [base, load]);
@@ -306,8 +327,28 @@ export default function SignPage() {
   useEffect(() => {
     if (save !== 'error') return;
     const t = setInterval(() => flush(), 8000);
-    return () => clearInterval(t);
+    // And at once when the device says it is back online.
+    const back = () => flush();
+    window.addEventListener('online', back);
+    return () => (clearInterval(t), window.removeEventListener('online', back));
   }, [save, flush]);
+  // Answers that have not reached the server yet are kept in the tab as well, so a reload does not lose them. Once the
+  // server has them, or the page is done with them, they are cleared (offline.ts).
+  useEffect(() => {
+    if (stage === 'sign' && acts) return valuesJson !== lastSaved.current ? keepAnswers(token, data?.recipient?.name, values) : dropAnswers(token);
+    if (stage === 'done' || stage === 'closed' || stage === 'handed') dropAnswers(token);
+  }, [valuesJson, save, stage, acts, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A Finish that did not get through is sent again when the device says it is back online, and every few seconds
+  // while it says it is online anyway (a weak signal, or our server was briefly out of reach). Only while the last
+  // step is still open: someone who went back to change something is not finished behind their back.
+  completeRef.current = complete;
+  useEffect(() => {
+    if (!finishPending || busy || stage !== 'sign' || (open !== 'review' && data?.recipient?.role !== 'viewer')) return;
+    const again = () => completeRef.current();
+    const t = setInterval(() => navigator.onLine !== false && again(), FINISH_RETRY_MS);
+    window.addEventListener('online', again);
+    return () => (clearInterval(t), window.removeEventListener('online', again));
+  }, [finishPending, busy, stage, open, data?.recipient?.role]);
   useEffect(() => {
     const hidden = () => document.visibilityState === 'hidden' && flush(true);
     const leaving = () => flush(true);
@@ -344,7 +385,7 @@ export default function SignPage() {
       live = false;
       window.removeEventListener('resize', read);
     };
-  }, [flagKey, pdfReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [flagKey, pdfReady, zoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Moving around ------------------------------------------------------------------------------
   const usesSheet =(f: any) => touch && view === 'doc' && (TYPED.includes(f.type) || f.type === 'dropdown');
@@ -429,6 +470,7 @@ export default function SignPage() {
       return goTo(wrong);
     }
     setFinishError('');
+    setFinishPending(false);
     setOpen('review');
   }
 
@@ -442,11 +484,20 @@ export default function SignPage() {
       const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, tz: deviceZone() } });
       canSave.current = false;
       writeKept(token, null, null);
+      dropAnswers(token);
+      setFinishPending(false);
       setOpen('');
       setFinished(r);
     } catch (e: any) {
       const msg = e?.message || 'Something went wrong on our side.';
-      if (e?.code === 'changed') {
+      if (isConnectionError(e)) {
+        // It never reached us, so nothing was signed. Say that, keep everything as it is, and send it again by itself
+        // when the connection is back (the effect next to autosave). Never the browser's own "Failed to fetch".
+        const said = finishNotSent(navigator.onLine !== false, me.role === 'approver' ? 'Approve and send' : 'Finish and send');
+        setFinishPending(true);
+        if (open === 'review') setFinishError(said);
+        else toast(said, true);
+      } else if (e?.code === 'changed') {
         // Nothing was signed. Show the document as it is now, with the answers that still have a field, and ask
         // for another look before finishing.
         setOpen('');
@@ -457,7 +508,7 @@ export default function SignPage() {
         setOpen('');
         toast(msg, true);
         await load();
-      } else if (open === 'review') setFinishError(`${msg} Go back, put it right, then finish again.`);
+      } else if (open === 'review') setFinishError(e?.status >= 500 ? `${msg} Nothing was signed. Try again in a moment.` : `${msg} Go back, put it right, then finish again.`);
       else toast(`${msg} Try again in a moment.`, true);
     } finally {
       setBusy(false);
@@ -511,17 +562,18 @@ export default function SignPage() {
   const stillOpen = env.status === 'sent' && !iAmDone && !closed;
   const report = <button type="button" className="sg-link" onClick={() => setOpen('report')}>Report this request</button>;
   const downloadUrl = `/api${base}/download`;
-  const notice = muteNote === 'done' ? (
+  // MailAgain: they marked our email as spam, so we email them nothing more about this, and only they can undo it.
+  const notice = <><MailAgain base={base} stopped={!!me.mail_stopped} />{muteNote === 'done' ? (
     <div className="notice sg-top" role="status">
       <b>Reminders are off.</b> We will not send you any more reminder emails about this document.{stillOpen ? ` You can still ${acts ? 'sign' : 'open'} it here whenever you are ready.` : ''}
     </div>
   ) : muteNote === 'failed' ? (
     <div className="notice warn sg-top" role="alert">We could not turn off reminders just now. <button type="button" className="sg-link" onClick={() => mute(true)}>Try again</button></div>
-  ) : null;
+  ) : null}</>;
   const dialogs = (
     <>
       {open === 'report' && <ReportDialog base={base} sender={sender} onClose={() => setOpen('')} />}
-      {open === 'ask' && <AskDialog base={base} sender={sender} replyTo={me.email} onClose={() => setOpen('')} />}
+      {open === 'ask' && <AskDialog base={base} sender={sender} replyTo={answerComesTo(me)} onClose={() => setOpen('')} />}
       {open === 'decline' && <DeclineDialog base={base} sender={sender} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
       {open === 'reassign' && <ReassignDialog base={base} sender={sender} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
     </>
@@ -650,16 +702,19 @@ export default function SignPage() {
           {/* In person, the device is not the signer's: the first thing the done screen says is to hand it back. */}
           {inPerson && <HandBack signer={me.name} sender={sender.name} envelopeId={env.id} />}
           <StateCard tone="ok" title={title}>
-            <p>
+            {/* No address for someone whose link the sender passed on: nothing is emailed, so nothing is promised. */}
+            {me.link_by_sender ? <NoEmailDone sender={sender.name} allDone={allDone} /> : <p>
               {allDone
                 ? inPerson ? `The completed document, with its certificate, has been emailed to ${sender.name}. Download your own copy here.` : <>A copy has been emailed to {myEmail}. It includes a certificate with the full record of who signed and when.</>
                 : inPerson ? `${sender.name} will get the completed document by email once everyone has finished. You can download it as it stands now.` : <>Others still need to finish. We will email the completed document to {myEmail} as soon as they have.</>}
-            </p>
+            </p>}
             <div className="row wrap sg-actions">
               <a className="btn primary lg" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> {allDone ? 'View completed document' : 'View document so far'}<span className="sg-vh"> (opens in a new tab)</span></a>
               <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download PDF</a>
             </div>
           </StateCard>
+          {/* The sender's own payment page, when they set one and may: only after Finish (src/components/sign/PayLink.tsx). */}
+          {acts && <PayLink base={base} />}
           {env.next_person && (
             <StateCard tone="wait" title="Is this a shared device?">
               <p>Your copy is on its way to {myEmail}, so you do not need this screen any more. Press the button before you hand the device on: it clears this page and opens an empty form for the next person.</p>
@@ -678,7 +733,7 @@ export default function SignPage() {
       <Shell data={data} footer={report}>
         {notice}
         <StateCard tone="wait" title="It is not your turn yet">
-          <p>Others need to finish first. We will email {myEmail} as soon as the document is ready for you. There is nothing to do until then.</p>
+          {me.link_by_sender ? <NoEmailWait sender={sender.name} /> : <p>Others need to finish first. We will email {myEmail} as soon as the document is ready for you. There is nothing to do until then.</p>}
           {/* Someone who signed, and is asked to sign again after a change, waits here for their turn. What they
               signed the first time is still theirs to download meanwhile. */}
           {me.signed_before && me.earlier_copy && !data.locked && (
@@ -721,10 +776,10 @@ export default function SignPage() {
           <p className="sg-kicker">{ask}</p>
           <h1 className="serif" id="sg-h1" tabIndex={-1}>{env.subject}</h1>
           <Sender env={env} brand={data.brand} />
-          <p className="muted small">This was sent to {me.name} ({myEmail}). Not expecting it? Do not sign. You can <button type="button" className="sg-link" onClick={go('report')}>report this request</button>.</p>
+          <p className="muted small">{me.link_by_sender ? <>This is for {me.name}. {sender.name} sent you the link themselves, not by email from us.</> : <>This was sent to {me.name} ({myEmail}).</>} Not expecting it? Do not sign. You can <button type="button" className="sg-link" onClick={go('report')}>report this request</button>.</p>
           {data.message && <div className="sg-quote"><span className="muted small">Message from {sender.name}</span>{data.message}</div>}
           {data.note && <div className="notice sg-gap"><b>Private note for you:</b> {data.note}</div>}
-          {me.role === 'inperson' && <div className="notice warn sg-gap">In-person signing. Hand this device to <b>{me.name}</b> now.</div>}
+          {me.role === 'inperson' && <div className="notice warn sg-gap">In-person signing. Hand this device to <b>{me.name}</b> now. {SIGNING_ONLINE}</div>}
           <div className="row wrap sg-actions">
             <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
             <a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> View or print<span className="sg-vh"> (opens in a new tab)</span></a>
@@ -943,7 +998,7 @@ export default function SignPage() {
           {me.earlier_copy && <a className="sg-link" href={`${downloadUrl}?earlier=1`}>Download the document as you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it the first time</a>}
         </div>
       )}
-      {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now.</div>}
+      {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now. {SIGNING_ONLINE}</div>}
       <p className="sg-guide" id="sg-guide">
         {!acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
           : hasNext ? <>Choose <b>Next</b> and we take you to each place that needs you, one at a time.</>
@@ -959,17 +1014,19 @@ export default function SignPage() {
           <button type="button" aria-pressed={view === 'doc'} onClick={() => chooseView('doc')}>Document</button>
           <button type="button" aria-pressed={view === 'text'} onClick={() => chooseView('text')}>Text view</button>
         </div>
+        {view === 'doc' && <ZoomControl zoom={zoom} onZoom={setZoom} />}
         <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
       </div>
 
       {view === 'doc' ? (
-        <div className="stack sg-doc">
+        <div className={`stack sg-doc sg-pan${zoom > 1 ? ' zoomed' : ''}`}>
           {data.documents.map((d: any) => (
             <div key={d.id}>
               {data.documents.length > 1 && <h2 className="sg-docname">{d.name}</h2>}
               {/* The address and the key carry the fingerprint of the file. A file the sender replaced is fetched and
                   drawn afresh, and onShown says when its first page is really on the screen. */}
-              <PdfDoc key={d.sha256 || d.id} url={docUrl(base, d)} overlay={overlay(d.id)} onShown={() => markShown(d)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }} />
+              <PdfDoc key={d.sha256 || d.id} url={docUrl(base, d)} zoom={zoom} overlay={overlay(d.id)} onShown={() => markShown(d)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }}
+                failed={(why, retry) => <NoViewer why={why} retry={retry} sender={sender.name} downloadUrl={downloadUrl} onAsk={go('ask')} />} />
             </div>
           ))}
         </div>

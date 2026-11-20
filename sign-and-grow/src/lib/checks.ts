@@ -75,9 +75,10 @@ export function plainTime(iso: any): string {
  * typed is said to be exactly that. `passed` is the record of a code that was typed correctly: what the code was
  * sent as and to where (masked), and when.
  */
-export function checkLine(r: { role?: string; access_code?: any; verify?: any }, passed: { how: string; at: string } | null): string {
+export function checkLine(r: { role?: string; access_code?: any; verify?: any; link_by_sender?: any }, passed: { how: string; at: string } | null): string {
   const inPerson = r.role === 'inperson';
-  const link = inPerson ? 'Signed in person on a device of the sender, who was emailed the link' : 'Link sent by email';
+  // "I will send the link myself": we know the sender had the link, not how it travelled (src/lib/bysender.ts).
+  const link = inPerson ? 'Signed in person on a device of the sender, who was emailed the link' : r.link_by_sender ? 'Link shared by the sender' : 'Link sent by email';
   const code = r.access_code ? ' and an access code chosen by the sender' : '';
   if (passed) return `${passed.how}, passed ${plainTime(passed.at)}${r.access_code ? '. Also an access code chosen by the sender' : ''}`;
   if (isCodeCheck(r.verify)) return `${link}${code}. A one-time code by ${CHANNEL_WORDS[r.verify]} was asked for and was not passed`;
@@ -96,7 +97,7 @@ export const CHECK_PROVES: { key: 'link' | 'access_code' | 'email_code' | 'sms_c
 ];
 
 /** Said next to the list above, so nobody takes any of these for a check of an identity document. */
-export const CHECK_LIMITS = 'None of these looks at a passport or an identity card, and none makes a signature "advanced" or "qualified" in the legal sense. The certificate of completion says for every signer which check was passed, to which masked address or number the code went and when, and says "Link sent by email only" when there was none.';
+export const CHECK_LIMITS = 'None of these looks at a passport or an identity card, and none makes a signature "advanced" or "qualified" in the legal sense. The certificate of completion says for every signer which check was passed, to which masked address or number the code went and when, and says "Link sent by email only" when there was none, or "Link shared by the sender only" for someone whose link the sender passed on themselves.';
 
 // ---- Settings (server only from here) ------------------------------------------------------------
 

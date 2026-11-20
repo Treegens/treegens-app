@@ -53,13 +53,17 @@ const AS: Record<string, string> = { signer: 'sign it', approver: 'approve it' }
 // country (the family name comes first in much of Asia), so no first name is guessed.
 const called = (name: string) => String(name || '').trim() || 'them';
 
-/** Above a personal code: what the person next to the sender has to do, and what happens then. */
-export const personScanLine = (name: string, role: string) =>
-  `Ask ${called(name)} to point the camera of their phone at this code and tap the link it shows. The document opens on their own phone, and they ${DOES[role] || 'read it'} there.`;
+/**
+ * Above a personal code: what the person next to the sender has to do, and what happens then. `finished` is for
+ * someone who has already signed and is handed their link again for their copy (a person with no email address,
+ * see src/components/sender/OwnLink.tsx): there is nothing left for them to sign, so the line does not say so.
+ */
+export const personScanLine = (name: string, role: string, finished = false) =>
+  `Ask ${called(name)} to point the camera of their phone at this code and tap the link it shows. The document opens on their own phone, and ${finished ? 'as they have finished, they can read it and download a copy there' : `they ${DOES[role] || 'read it'} there`}.`;
 
 /** Under a personal code. The code is the link, so it is shown to one person only. */
-export const personCodeWarning = (name: string, role: string) =>
-  `This code is the link. Whoever scans it, or takes a photo of it, can open the document${AS[role] ? ` and ${AS[role]}` : ''} as ${name || 'this person'}. Show it only to ${name || 'the person it is for'}, and close this window when they have scanned it.`;
+export const personCodeWarning = (name: string, role: string, finished = false) =>
+  `This code is the link. Whoever scans it, or takes a photo of it, can open the document${finished ? `, read all of it and download a copy, as ${name || 'this person'}` : `${AS[role] ? ` and ${AS[role]}` : ''} as ${name || 'this person'}`}. Show it only to ${name || 'the person it is for'}, and close this window when they have scanned it.`;
 
 /** What stands between scanning and the document, when the sender asked for a check. The QR code carries none of it. */
 export function afterScanLine(r: { access_code?: string | null; verify?: string | null }): string {

@@ -9,8 +9,10 @@ import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
 import { PaperCheck, EnoughLink } from './PaperCheck';
 import { ReminderChoice } from './ReminderChoice';
+import { PayLinkChoice } from './PayLinkChoice';
 import { PrintCheck } from './PrintCheck';
 import { LabelCheck } from './LabelCheck';
+import { phoneWeight } from '@/lib/phone';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -135,6 +137,10 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {docs.filter((d) => scanWarning(d)).map((d) => (
         <div key={d.id} className="notice warn"><b>{d.name || 'A document'}:</b> {scanWarning(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the documents</button></div>
       ))}
+      {/* A file large enough to be slow on a phone (src/lib/phone.ts). It warns and never blocks. */}
+      {!closed && docs.filter((d) => phoneWeight(d)).map((d) => (
+        <div key={`phone-${d.id}`} className="notice warn"><b>{d.name || 'A document'}:</b> {phoneWeight(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the documents</button></div>
+      ))}
       {/* Fields a screen reader can only name by their type, each with a way to the box where the label is typed. */}
       {!closed && <LabelCheck ed={ed} />}
       {/* The check before sending: a word that often means paper, a witness or a notary. It warns and never blocks. */}
@@ -151,7 +157,9 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       </div>
 
       {/* Reminders are on for a new account without anyone having chosen that, so the choice stands by the Send button. */}
-      {!closed && <ReminderChoice days={env.reminder_days} isTpl={isTpl} onChange={(n) => ed.patchEnv({ reminder_days: n })} />}
+      {!closed && <ReminderChoice days={env.reminder_days} isTpl={isTpl} bySender={!isTpl && rcps.some((r) => r.link_by_sender)} onChange={(n) => ed.patchEnv({ reminder_days: n })} />}
+      {/* A link to the sender's own payment page, shown to signers after Finish. Absent for an account that may not show one. */}
+      {!closed && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} />}
 
       {correcting && result ? (
         <div className="card">
@@ -187,7 +195,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
                   <span className="dot" style={{ background: ed.color(r.id) }} />
                   <div className="grow">
                     <b className="ed-break">{r.name || r.role_name || 'Unnamed'}</b>
-                    <div className="muted small ed-break">{r.email || 'Filled in when the template is used'}</div>
+                    <div className="muted small ed-break">{r.email || (r.link_by_sender ? 'No email from us. You send them the link yourself after sending.' : 'Filled in when the template is used')}</div>
                     <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
                   </div>
                 </li>

@@ -16,6 +16,13 @@ import { dataPlace, dataPlaceWarning, notSaid } from '../src/lib/dataplace.ts';
 import { MAIL_COPY_DAYS, CLOSE_GRACE_DAYS } from '../src/lib/policy.ts';
 import { cannotOpenLine } from '../src/lib/policy.ts';
 import { renderMail } from '../src/server/mail.ts';
+import { PNG, upload } from './helpers.ts';
+import { extractText } from '../src/server/text.ts';
+import { isChargeable } from '../src/server/credits.ts';
+import { bySenderProblem, reachKey, reporterKey } from '../src/server/bysender.ts';
+import { labelOf, BY_SENDER_LINE, BY_SENDER_TICK, BY_SENDER_HOW, noEmailCopyText, noEmailWaitText, signerAt } from '../src/lib/bysender.ts';
+import { checkLine } from '../src/lib/checks.ts';
+import { whoIs, certName } from '../src/lib/groups.ts';
 
 let db: Server['db'];
 let env: Server['env'];
@@ -578,4 +585,355 @@ test('every email that asks someone to sign says what to do when the page will n
   assert.match(help, /We have not tested from which places this one can be reached, so we make no promise about any country\./);
   assert.match(help, /A signature collected that way is outside Sign&Grow\. It is not on our certificate and not in the audit trail/);
   for (const f of ['app/help/outside.tsx', 'app/help/page.tsx', 'app/page.tsx', 'app/security/page.tsx', 'lib/policy.ts']) assert.doesNotMatch(src(f), /works in China|reachable from China|VPN/i, f);
+});
+
+// ---- F. A recipient the sender reaches themselves ("I will send the link myself") ---------------------------------
+
+// One signer with a name and no address, whose link the sender passes on. `over` changes the recipient.
+const byHand = (name = 'Wanjiru Kamau', over: any = {}) => ({ recipients: [{ id: 'r', role: 'signer', name, email: '', link_by_sender: true, ...over }] });
+const linkOf = (envelopeId: string) => db.get('SELECT id, token FROM recipients WHERE envelope_id=? AND link_by_sender=1', envelopeId);
+const auditOf = async (c: Client, id: string) => (await full(c, id)).audit as any[];
+const signWith = async (tok: string, c = new Client()) => {
+  assert.equal((await c.post(`/sign/${tok}/consent`, { wording: CONSENT_VERSION })).status, 200);
+  const v = (await c.get(`/sign/${tok}`)).data;
+  return c.post(`/sign/${tok}/complete`, { values: Object.fromEntries(v.fields.map((f: any) => [f.id, '1'])), signature_png: PNG, initials_png: PNG });
+};
+
+test('the words for a person without an address say what happened and nothing more', () => {
+  assert.equal(BY_SENDER_LINE, 'Link shared by the sender');
+  assert.equal(BY_SENDER_TICK, 'I will send the link myself');
+  // The tick says before anyone relies on it: no email at all, no copy, not findable by address, and what it costs.
+  assert.match(BY_SENDER_HOW, /no email at all: no invitation, no reminders, no copy at the end/);
+  assert.match(BY_SENDER_HOW, /"Find my documents" on our help page cannot find it/);
+  assert.match(BY_SENDER_HOW, /uses one of your signatures, also when the person is you/);
+  assert.equal(labelOf({ name: 'Wanjiru Kamau', email: '', link_by_sender: 1 }), 'Wanjiru Kamau (link shared by the sender)');
+  assert.equal(labelOf({ name: 'Ada', email: 'ada@example.com', link_by_sender: 0 }), 'Ada <ada@example.com>', 'everyone else is named exactly as before');
+  assert.equal(whoIs({ name: 'Wanjiru Kamau', email: '', link_by_sender: 1 }), 'Wanjiru Kamau (link shared by the sender)');
+  assert.equal(certName({ name: 'Wanjiru Kamau', email: '', link_by_sender: 1 }), 'Wanjiru Kamau  (link shared by the sender)');
+  assert.equal(checkLine({ role: 'signer', link_by_sender: 1 }, null), 'Link shared by the sender only');
+  assert.equal(checkLine({ role: 'signer', link_by_sender: 1, access_code: '4242' }, null), 'Link shared by the sender and an access code chosen by the sender');
+  assert.equal(signerAt({ name: 'Wanjiru Kamau', email: '' }), 'Wanjiru Kamau, whose link the sender shares,');
+  assert.match(noEmailCopyText('Ada Sender', true), /^We have no email address for you, so no copy comes by email, and "Find my documents" on our help page cannot find this one\. Download your copy now\./);
+  assert.match(noEmailCopyText('Ada Sender', false), /cannot tell you when the others have finished\. Ada Sender can\./);
+  assert.match(noEmailWaitText('Ada Sender'), /Ada Sender will tell you when it is your turn/);
+  for (const t of [BY_SENDER_HOW, noEmailCopyText('x', true), noEmailCopyText('x', false), noEmailWaitText('x')]) assert.doesNotMatch(t, /—/);
+  // Counted as a person of their own, never as "nobody".
+  assert.equal(reachKey({ id: 'rcp_1', email: '', link_by_sender: 1 }), 'link:rcp_1');
+  assert.equal(reachKey({ id: 'rcp_1', email: 'a@example.com', link_by_sender: 0 }), 'a@example.com');
+  assert.equal(reporterKey({ id: 'rcp_2', email: '', link_by_sender: 1 }), 'link:rcp_2');
+  // A group, whose members each get an email, cannot be ticked.
+  assert.match(bySenderProblem({ link_by_sender: 1, name: 'HR team', group_id: 'grp_1' }, {})!, /is a group, and every member of a group gets an email of their own/);
+  assert.equal(bySenderProblem({ link_by_sender: 0, name: 'Ada', email: '' }, {}), null);
+});
+
+test('a person with a name and no address gets nothing from us, the record says so, and their link does everything', async () => {
+  // Without the tick, an empty address is still refused when sending.
+  const bare = await simple(ada, '', { recipients: [{ id: 'r', role: 'signer', name: 'No Address', email: '' }] });
+  const refused = await ada.post(`/envelopes/${bare.id}/send`);
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /No Address needs a valid email address/);
+
+  const e = await simple(ada, '', byHand());
+  const sent = await ada.post(`/envelopes/${e.id}/send`);
+  assert.equal(sent.status, 200, JSON.stringify(sent.data));
+  const r = (await full(ada, e.id)).envelope.recipients[0];
+  assert.deepEqual([r.link_by_sender, r.email, r.status], [1, '', 'sent']);
+  assert.equal(db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id=? AND recipient_id IS NOT NULL', e.id).n, 0, 'no email is written for them');
+  let audit = await auditOf(ada, e.id);
+  assert.equal(audit.find((a) => a.action === 'Not emailed')?.detail, 'Wanjiru Kamau (link shared by the sender). The sender said they would send the link themselves, so no email went out. The request is open.');
+  assert.ok(!audit.some((a) => a.action === 'Sent to recipient'), 'nothing claims an email was sent');
+  assert.equal(r.check.line, 'Link shared by the sender only');
+
+  // The sender takes the link from the envelope page, and that is on the record in the same words.
+  const view = await ada.post(`/envelopes/${e.id}/recipient-view`, { recipient_id: r.id });
+  assert.equal(view.status, 200);
+  audit = await auditOf(ada, e.id);
+  assert.equal(audit.find((a) => a.action === 'Signing link issued')?.detail, 'Wanjiru Kamau (link shared by the sender)');
+
+  // Their page knows there is no address, so it never promises an email.
+  const tok = linkOf(e.id).token;
+  assert.equal(view.data.url, `http://test.local/sign/${tok}`);
+  const w = new Client();
+  assert.equal((await w.get(`/sign/${tok}`)).data.recipient.link_by_sender, true);
+  const done = await signWith(tok, w);
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+  assert.equal(done.data.envelope_status, 'completed');
+
+  // No copy by email for them, and the record says where it is instead. The sender is told to pass it on.
+  audit = await auditOf(ada, e.id);
+  assert.match(audit.find((a) => a.action === 'Copy not emailed')!.detail, /^Wanjiru Kamau \(link shared by the sender\)\. There is no email address for them, so no copy was emailed\. Their link opens the completed document/);
+  assert.ok(audit.filter((a) => a.actor === 'Wanjiru Kamau (link shared by the sender)').some((a) => a.action === 'Agreed to electronic records and signatures'), 'what they did is signed with how they were reached');
+  const told = mailTo('ada.sender@example.com').filter((m: any) => m.subject === 'Completed: Simple agreement').at(-1)!;
+  assert.match(told.html, /We have no email address for Wanjiru Kamau, so no copy went to them\. Their link opens the completed document/);
+  assert.equal((await w.get(`/sign/${tok}/download`)).status, 200, 'the same link opens the completed copy');
+  assert.equal(env.verifyChain(e.id).ok, true);
+
+  // The certificate names how the link travelled, and no empty address.
+  const cert = (await extractText((await ada.get(`/envelopes/${e.id}/download`)).data)).replace(/\s+/g, ' ');
+  assert.match(cert, /Wanjiru Kamau \(link shared by the sender\)/);
+  assert.match(cert, /Identity check Link shared by the sender only/);
+  assert.doesNotMatch(cert, /<>/);
+});
+
+test('it costs a signature like anyone who is not the sender, and the sender cannot tick it to get one free', async () => {
+  // The sender's own name with no address is not the sender's own address: it counts.
+  assert.equal(isChargeable({ role: 'signer', name: 'Ada Sender', email: '', link_by_sender: 1, free: null }, { email: 'ada.sender@example.com', name: 'Ada Sender' }), true);
+  const e = await simple(ada, '', byHand('Ada Sender'));
+  await ada.post(`/envelopes/${e.id}/send`);
+  assert.equal(db.get('SELECT free FROM recipients WHERE envelope_id=?', e.id).free, 0);
+});
+
+test('what cannot work without an address is refused in words before anything goes out', async () => {
+  const sendIt = async (over: any, fields?: any[]) => {
+    const e = await simple(ada, '', { ...byHand('Pat Phone', over), ...(fields ? { fields } : {}) });
+    return ada.post(`/envelopes/${e.id}/send`);
+  };
+  const both = await sendIt({ email: 'pat@example.com' });
+  assert.equal(both.status, 400);
+  assert.match(both.data.error, /Pat Phone has an email address and "I will send the link myself" ticked\. Choose one/);
+  assert.match((await sendIt({ role: 'cc' }, [])).data.error, /only gets a copy, and a copy goes out by email once everyone has finished/);
+  assert.match((await sendIt({ role: 'inperson' })).data.error, /signs in person on your device, so there is no link to send them/);
+  assert.match((await sendIt({ verify: 'email_code' })).data.error, /no email address here, so a one-time code by email could never reach them/);
+  const withEmailField = await sendIt({}, [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'g', document_id: 'd', recipient_id: 'r', type: 'email', page: 0, x: 0.1, y: 0.7, w: 0.3, h: 0.04 }]);
+  assert.match(withEmailField.data.error, /has an Email field, which prints their email address on the document, and they have none here/);
+  // A template cannot hold it: an envelope made from it would lose it without a word.
+  const file = await upload(ada, 1);
+  const tpl = await ada.post('/envelopes', { kind: 'template', subject: 'T', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Client', name: '', email: '', link_by_sender: true }] });
+  assert.equal(tpl.status, 400);
+  assert.match(tpl.data.error, /this is a template\. Leave it out here, and tick "I will send the link myself" on the envelope you make from the template\. Nothing was saved\./);
+  // Giving an address without saying anything about the tick means we email them from now on.
+  const d = await simple(ada, '', byHand('Gives Address'));
+  const cur = (await full(ada, d.id)).envelope;
+  const put = await ada.put(`/envelopes/${d.id}`, { subject: cur.subject, documents: cur.documents.map((x: any) => ({ id: x.id, file_id: x.file_id })), recipients: [{ id: cur.recipients[0].id, role: 'signer', name: 'Gives Address', email: 'gives@example.com' }], fields: cur.fields });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  assert.equal(db.get('SELECT link_by_sender FROM recipients WHERE envelope_id=?', d.id).link_by_sender, 0);
+});
+
+test('the daily limit and the automatic pause count every such person as a person', async () => {
+  process.env.NEW_ACCOUNT_DAILY_RECIPIENTS = '2';
+  process.env.ABUSE_SUSPEND_AFTER = '2';
+  try {
+    const kim = await signUp('Kim Fresh', 'kim.fresh@example.com', '198.51.100.203');
+    const many = await simple(kim, '', { recipients: [0, 1, 2].map((i) => ({ id: `v${i}`, role: 'viewer', name: `Viewer ${i}`, email: '', link_by_sender: true })), fields: [] });
+    const over = await kim.post(`/envelopes/${many.id}/send`);
+    assert.equal(over.status, 429, JSON.stringify(over.data));
+    assert.match(over.data.error, /this would add 3\./, 'three people, not none');
+    // Two of them, on two envelopes, say it looks wrong: two different people, so sending pauses.
+    for (const i of [0, 1]) {
+      const one = await simple(kim, '', { recipients: [{ id: 'v', role: 'viewer', name: `Reader ${i}`, email: '', link_by_sender: true }], fields: [] });
+      assert.equal((await kim.post(`/envelopes/${one.id}/send`)).status, 200);
+      assert.equal((await new Client().post(`/sign/${linkOf(one.id).token}/report`, { reason: 'phishing' })).status, 200);
+    }
+    const acc = db.get("SELECT a.suspended_at FROM accounts a JOIN memberships m ON m.account_id=a.id JOIN users u ON u.id=m.user_id WHERE u.email='kim.fresh@example.com'");
+    assert.ok(acc.suspended_at, 'two people reported, so the account is paused');
+  } finally {
+    delete process.env.NEW_ACCOUNT_DAILY_RECIPIENTS;
+    delete process.env.ABUSE_SUSPEND_AFTER;
+  }
+});
+
+test('reminders, turns and questions reach the sender, who is the only one who can pass them on', async () => {
+  // In order: someone with an address first, then someone whose link the sender passes on.
+  const file = await upload(ada, 1);
+  const e = (await ada.post('/envelopes', {
+    subject: 'Two in order', ordered: true, reminder_days: 1, documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'a', role: 'signer', name: 'First Mail', email: 'first.mail@example.com', routing_order: 1 }, { id: 'b', role: 'signer', name: 'Second Hand', email: '', link_by_sender: true, routing_order: 2 }],
+    fields: ['a', 'b'].map((rid, i) => ({ document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x: 0.1, y: 0.3 + i * 0.2, w: 0.3, h: 0.06 })), send: true,
+  })).data.envelope;
+  const turnMails = () => mailTo('ada.sender@example.com').filter((m: any) => m.subject === 'Your turn to pass it on: Two in order');
+  assert.equal(turnMails().length, 0, 'not on the first send: the sender is looking at the envelope page');
+  assert.equal((await signWith(tokenFor(e.id, 'first.mail@example.com'))).status, 200);
+  assert.equal(turnMails().length, 1);
+  assert.match(turnMails()[0].html, /It is now Second Hand&#39;s turn to sign &quot;Two in order&quot;\. You said you would send them the link yourself, so we did not write to them\./);
+  const rid = linkOf(e.id).id;
+
+  // A nudge by hand is refused in words. Reminding everyone names them as not reminded.
+  const nudge = await ada.post(`/envelopes/${e.id}/remind`, { recipient_id: rid });
+  assert.equal(nudge.status, 400);
+  assert.match(nudge.data.error, /^Second Hand gets no email from us: you said you would send them the link yourself\. Copy it from the envelope page/);
+  const all = await ada.post(`/envelopes/${e.id}/remind`);
+  assert.equal(all.status, 200);
+  assert.deepEqual(all.data.not_reminded, [{ recipient_id: rid, name: 'Second Hand', why: 'link_by_sender' }]);
+
+  // The timer: "not opened yet" in the words that fit, and the reminder goes to the sender instead.
+  const past = new Date(Date.now() - 3 * 864e5).toISOString();
+  db.run('UPDATE recipients SET sent_at=? WHERE id=?', past, rid);
+  db.run('UPDATE envelopes SET last_reminder_at=?, sent_at=? WHERE id=?', past, past, e.id);
+  await env.cronTick();
+  const quiet = mailTo('ada.sender@example.com').filter((m: any) => m.subject === 'Not opened yet: Two in order');
+  assert.equal(quiet.length, 1);
+  assert.match(quiet[0].html, /You said you would send the link to Second Hand yourself\. If you have, it has not been opened yet\./);
+  assert.doesNotMatch(quiet[0].html, /spam folder/);
+  const remind = mailTo('ada.sender@example.com').filter((m: any) => m.subject === 'Reminder to pass on: Two in order');
+  assert.equal(remind.length, 1);
+  assert.ok((await auditOf(ada, e.id)).some((a) => a.action === 'Reminder sent to the sender' && a.detail.startsWith('Second Hand (link shared by the sender).')));
+
+  // A question from them reaches the sender with no reply address that would go nowhere, and says so.
+  const tok = linkOf(e.id).token;
+  const s = new Client();
+  await s.post(`/sign/${tok}/consent`, { wording: CONSENT_VERSION });
+  assert.equal((await s.post(`/sign/${tok}/ask`, { message: 'Can I sign on paper instead?' })).status, 200);
+  const q = mailTo('ada.sender@example.com').filter((m: any) => /^Question about: Two in order/.test(m.subject)).at(-1)!;
+  assert.match(q.html, /Second Hand has no email address here, so this email has no reply address of theirs\. Answer them the way you sent them the link\./);
+  // Asking to be named in another script asks the sender, in words that need no address.
+  assert.equal((await s.post(`/sign/${tok}/name`, { name: 'Секонд Ханд' })).data.applied, false);
+  assert.ok((await auditOf(ada, e.id)).some((a) => a.action === 'Name change asked for' && a.detail.startsWith('Second Hand, whose link the sender shares, asked')));
+});
+
+test('correcting such a person: a new name keeps the link, an address means we email them from now on', async () => {
+  const e = await simple(ada, '', byHand('Old Spelling'));
+  await ada.post(`/envelopes/${e.id}/send`);
+  const { id: rid, token: first } = linkOf(e.id);
+  // The name alone, with no address: saved, and the link stays.
+  const renamed = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: rid, name: 'Old Spellingg', email: '' });
+  assert.equal(renamed.status, 200, JSON.stringify(renamed.data));
+  assert.deepEqual(Object.values(db.get('SELECT name, token, link_by_sender FROM recipients WHERE id=?', rid)), ['Old Spellingg', first, 1]);
+  // Staying without an address and asking for a code by email cannot work, and nothing changes.
+  const code = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: rid, verify: 'email_code' });
+  assert.equal(code.status, 400);
+  assert.match(code.data.error, /a one-time code by email could never reach them\..*Nothing was changed\.$/);
+  // An address: the tick goes, the shared link stops, and the invitation goes to the address.
+  const given = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: rid, name: 'Old Spellingg', email: 'now.mailed@example.com' });
+  assert.equal(given.status, 200, JSON.stringify(given.data));
+  const row = db.get('SELECT email, token, link_by_sender FROM recipients WHERE id=?', rid);
+  assert.deepEqual([row.email, row.link_by_sender, row.token === first], ['now.mailed@example.com', 0, false]);
+  assert.equal(mailTo('now.mailed@example.com').length, 1);
+  assert.match((await auditOf(ada, e.id)).find((a) => a.action === 'Recipient corrected' && /now Old Spellingg <now\.mailed/.test(a.detail))!.detail, /^Old Spellingg \(link shared by the sender\) is now Old Spellingg <now\.mailed@example\.com>\. The link the sender had shared stopped working/);
+});
+
+test('a copy of the envelope keeps the choice, a template made from it does not, and a decline emails nobody without an address', async () => {
+  const e = await simple(ada, '', byHand('Clone Me'));
+  const copy = await ada.post(`/envelopes/${e.id}/clone`, {});
+  assert.equal(copy.status, 200);
+  assert.equal(db.get('SELECT link_by_sender FROM recipients WHERE envelope_id=?', copy.data.id).link_by_sender, 1);
+  const tpl = await ada.post(`/envelopes/${e.id}/clone`, { kind: 'template' });
+  assert.equal(db.get('SELECT link_by_sender FROM recipients WHERE envelope_id=?', tpl.data.id).link_by_sender, 0);
+
+  // Two signers, one of them by hand: the other declines, and the one without an address is not written to.
+  const file = await upload(ada, 1);
+  const two = (await ada.post('/envelopes', {
+    subject: 'Declined one', documents: [{ id: 'd', file_id: file.id }], send: true,
+    recipients: [{ id: 'a', role: 'signer', name: 'Says No', email: 'says.no@example.com' }, { id: 'b', role: 'signer', name: 'By Hand', email: '', link_by_sender: true }],
+    fields: ['a', 'b'].map((rid, i) => ({ document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x: 0.1, y: 0.3 + i * 0.2, w: 0.3, h: 0.06 })),
+  })).data.envelope;
+  const no = new Client();
+  const t = tokenFor(two.id, 'says.no@example.com');
+  await no.post(`/sign/${t}/consent`, { wording: CONSENT_VERSION });
+  assert.equal((await no.post(`/sign/${t}/decline`, { reason: 'Not for me' })).status, 200);
+  // Across every test in this file: no email was ever written to an empty address.
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE trim(to_email)=''").n, 0);
+});
+
+test('the screens offer the choice, hand the sender the link, and never promise an email to someone without an address', async () => {
+  // Editor: the tick replaces the address, says what it means, and the same rule as the server stops Send.
+  const tick = src('components/editor/SendMyself.tsx');
+  assert.match(tick, /export const canSendMyself = \(r: any, isTpl: boolean\) => !isTpl && !r\.group_id && \(r\.role === 'signer' \|\| r\.role === 'approver' \|\| r\.role === 'viewer'\);/);
+  assert.match(tick, /<span>\{BY_SENDER_TICK\}/);
+  assert.match(tick, /\{!!r\.link_by_sender && <p id=\{hint\} className="muted small">\{BY_SENDER_HOW\}<\/p>\}/);
+  assert.match(tick, /return bySenderProblem\(r, \{ fields \}\);/);
+  const add = src('components/editor/StepAdd.tsx');
+  assert.match(add, /\{!\(r\.link_by_sender && !isTpl\) && <input placeholder="Email"/);
+  assert.match(add, /<SendMyself r=\{r\} isTpl=\{isTpl\} onChange=\{\(p\) => ed\.patchRcp\(r\.id, p\)\} \/>/);
+  const editor = src('components/Editor.tsx');
+  assert.match(editor, /link_by_sender: !isTpl && !!r\.link_by_sender/);
+  assert.match(editor, /const no = sendMyselfTrouble\(r, name, fields\.value\);/);
+  assert.match(src('app/styles/abroad.css'), /\.ed-myself label\.check \{ min-height: 44px;/);
+
+  // Envelope page: no nudge, no "Sent", the link with its share buttons while it is their turn and for their copy.
+  const card = src('components/sender/Recipients.tsx');
+  assert.match(card, /if \(ownLink\(r\)\) return \{ s: neverOpened\(r\) \? 'expired' : 'sent', label: 'Not opened yet' \};/);
+  assert.match(card, /const reachable = turn && !isMe && r\.role !== 'inperson' && !own;/);
+  assert.match(card, /\{own && <OwnLinkActions r=\{r\} envelopeStatus=\{e\.status\} busy=\{busy\} link=\{shown === r\.id \? links\[r\.id\] \|\| '' : ''\}/);
+  assert.match(card, /\{qr === r\.id && links\[r\.id\] && \(turn \|\| own\) && <QrDialog/);
+  assert.match(src('app/styles/abroad.css'), /\.sn-myself \.btn \{ min-height: 44px; \}/);
+  const own = src('components/sender/OwnLink.tsx');
+  for (const b of ['Show link', 'Copy link', 'Show QR code', 'Share on WhatsApp', 'Share by text message']) assert.ok(own.includes(`>${b}</button>`), b);
+  assert.match(own, /const done = r\.status === 'completed' && \(envelopeStatus === 'sent' \|\| envelopeStatus === 'completed'\);/);
+  assert.doesNotMatch(own, /Nudge/);
+  assert.match(src('components/sender/AfterSend.tsx'), /const own = acting\.filter\(\(r: any\) => ownLink\(r\) && r\.status === 'sent'\);/);
+  // "Send reminder" is not offered for them alone, its answer names them apart, and the reminder sentence says where theirs go.
+  const env_ = src('app/app/envelopes/[id]/page.tsx');
+  assert.match(env_, /hasTurn\(r\) && !r\.muted && !stopped\.includes\(r\) && !ownLink\(r\)\);/);
+  assert.match(env_, /remindedText\(reminded, \(not_reminded \|\| \[\]\)\.filter\(\(x: any\) => x\.why !== 'link_by_sender'\)\)/);
+  assert.match(env_, /For someone whose link you send yourself, the reminder comes to you instead\./);
+  assert.match(src('components/editor/ReminderChoice.tsx'), /n > 0 && bySender \? ' For someone whose link you send yourself, the reminder comes to you instead\.' : ''/);
+  assert.match(src('components/editor/StepReview.tsx'), /bySender=\{!isTpl && rcps\.some\(\(r\) => r\.link_by_sender\)\}/);
+  // Correct can keep them without an address, or give them one, and says which happens.
+  const fix = src('components/sender/dialogs.tsx');
+  assert.match(fix, /if \(!\(own && !f\.email\.trim\(\)\) && !looksLikeEmail\(f\.email\.trim\(\)\)\)/);
+  assert.match(fix, /They have no email address here, so the link you sent them keeps working and nothing is emailed to them\./);
+
+  // Signing page: what comes by email is nothing, and the link is the way back.
+  const page = src('app/sign/[token]/page.tsx');
+  assert.match(page, /\{me\.link_by_sender \? <NoEmailDone sender=\{sender\.name\} allDone=\{allDone\} \/> : <p>/);
+  assert.match(page, /\{me\.link_by_sender \? <NoEmailWait sender=\{sender\.name\} \/> : <p>Others need to finish first\./);
+  assert.match(page, /replyTo=\{answerComesTo\(me\)\}/);
+  assert.match(page, /sent you the link themselves, not by email from us/);
+
+  // Help, security, developers and the API description say the same, and "Find my documents" says what it cannot find.
+  const help = src('app/help/outside.tsx');
+  assert.match(help, /<QA id="no-email" q="My signer has no email address, or does not read it">/);
+  assert.match(help, /<b>\{BY_SENDER_TICK\}<\/b> instead of an address\. \{BY_SENDER_HOW\}/);
+  assert.match(help, /not how you sent it, not whether it arrived, and not who opened it/);
+  assert.match(src('app/help/page.tsx'), /Then we have no address for you and this cannot find it\. Ask the sender/);
+  assert.match(src('app/help/page.tsx'), /<a href="#no-email">tick &quot;I will send the link myself&quot;<\/a>/);
+  assert.match(src('app/security/page.tsx'), /<Point title="A link the sender passed on themselves\.">/);
+  assert.match(src('app/developers/page.tsx'), /<C>&quot;link_by_sender&quot;: true<\/C> and no <C>email<\/C>/);
+  const { openapi } = await import('../src/server/openapi.ts');
+  const spec: any = openapi();
+  assert.equal(spec.components.schemas.Recipient.properties.link_by_sender.type, 'boolean');
+  assert.deepEqual(spec.components.schemas.Recipient.required, ['name']);
+  assert.match(JSON.stringify(spec.paths['/envelopes/{id}/remind']), /link_by_sender/);
+  assert.match(read('README.md'), /"I will send the link myself": a recipient with a name and no email address/);
+  assert.match(read('README.md'), /\| My signers live in WhatsApp, not email, and a recipient cannot exist without an address\. \|/);
+  // No em dash in anything written for this.
+  for (const f of ['lib/bysender.ts', 'server/bysender.ts', 'components/editor/SendMyself.tsx', 'components/sender/OwnLink.tsx', 'components/sign/NoEmail.tsx']) assert.doesNotMatch(src(f), /—/, f);
+});
+
+test('a link the sender passes on is read by the fake-notice filter like an email, and passing it on gives the next person an email', async () => {
+  // Not sent by us is no way round the filter: the page it opens carries the same words.
+  const lou = await signUp('Lou Fresh', 'lou.fresh@example.com', '198.51.100.204');
+  const lure = await simple(lou, '', { ...byHand('Vic Tim'), subject: 'PayPal invoice #4471', message: 'Your payment of $499.00 was charged. To cancel call +1 (888) 555-0142 now.' });
+  const no = await lou.post(`/envelopes/${lure.id}/send`);
+  assert.equal(no.status, 422, JSON.stringify(no.data));
+
+  // The person whose link was passed on hands the document to someone with an address: from then on we email them.
+  const e = await simple(ada, '', byHand('Hands On'));
+  await ada.post(`/envelopes/${e.id}/send`);
+  const { id: rid, token } = linkOf(e.id);
+  const h = new Client();
+  await h.post(`/sign/${token}/consent`, { wording: CONSENT_VERSION });
+  const passed = await h.post(`/sign/${token}/reassign`, { name: 'Next Person', email: 'next.person@example.com', reason: 'My colleague signs these' });
+  assert.equal(passed.status, 200, JSON.stringify(passed.data));
+  assert.deepEqual(Object.values(db.get('SELECT email, link_by_sender, reassigned_from FROM recipients WHERE id=?', rid)), ['next.person@example.com', 0, 'Hands On (link shared by the sender)']);
+  assert.equal(mailTo('next.person@example.com').length, 1);
+  assert.match((await auditOf(ada, e.id)).find((a) => a.action === 'Reassigned')!.detail, /^Hands On \(link shared by the sender\) assigned this to Next Person <next\.person@example\.com>/);
+});
+
+test('before a correction is saved, the editor says what really happens to someone with no address', async () => {
+  const { outcomes } = await import('../src/components/editor/changes.ts');
+  const doc = { id: 'd', file_id: 'f', name: 'Doc', pages: 1 };
+  const sig = (rid: string) => ({ id: `f-${rid}`, document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 });
+  const mailed = { id: 'a', role: 'signer', name: 'Ann Mail', email: 'ann@example.com', routing_order: 1, status: 'sent' };
+  const before = { documents: [doc], recipients: [mailed], fields: [sig('a')] };
+  const after = { documents: [doc], recipients: [mailed, { id: 'w', role: 'signer', name: 'Wanjiru Kamau', email: '', link_by_sender: true, routing_order: 1 }], fields: [sig('a'), sig('w')] };
+  const said = outcomes(before, after).people;
+  assert.equal(said.find((p) => p.id === 'w')!.text, 'Is added. We send them no email: send them their link from the envelope page once you have saved.');
+  assert.equal(said.find((p) => p.id === 'a')!.text, 'Nothing changes for them. They keep the same link.', 'everyone else is told as before');
+});
+
+test('an old link whose person now has no address is answered "ask the sender", never with a promise of an email', async () => {
+  // Emailed first, then the sender switches to sending the link themselves: the emailed link is replaced.
+  const e = await simple(ada, 'was.mailed@example.com', { recipients: [{ id: 'r', role: 'signer', name: 'Was Mailed', email: 'was.mailed@example.com' }] });
+  await ada.post(`/envelopes/${e.id}/send`);
+  const old = tokenFor(e.id, 'was.mailed@example.com');
+  const cur = (await full(ada, e.id)).envelope;
+  const put = await ada.put(`/envelopes/${e.id}`, { subject: cur.subject, documents: cur.documents.map((x: any) => ({ id: x.id, file_id: x.file_id })), recipients: [{ id: cur.recipients[0].id, role: 'signer', name: 'Was Mailed', email: '', link_by_sender: true }], fields: cur.fields, edit_version: cur.edit_version });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  assert.equal(db.get('SELECT link_by_sender FROM recipients WHERE envelope_id=?', e.id).link_by_sender, 1);
+  const asked = await new Client().post('/public/links/resend', { token: old });
+  assert.deepEqual([asked.data.sent, asked.data.result], [false, 'ask_sender']);
+  assert.match(src('components/sign/deadEnds.tsx'), /ask_sender: \['Nothing was sent\.', 'We cannot email the current link for this document\. Ask the sender for it, the way they reached you before\.'\]/);
+  // The record of the correction says where the address went, in words.
+  assert.ok((await auditOf(ada, e.id)).some((a) => a.action === 'Envelope corrected' && /the email address changed from was\.mailed@example\.com to none\./.test(a.detail)));
 });

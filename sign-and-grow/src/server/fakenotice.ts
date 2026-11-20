@@ -121,7 +121,10 @@ export function lureIn(texts: any[]): { brand: string; money: string; phone: str
     const found = brandsIn(p);
     // An everyday word counts as the brand only beside a company word ("Apple Support", "Zelle payment"), and a
     // program is not its maker ("Microsoft Word").
-    brand ||= found.find((f) => (f.everyday ? companyWord(f.before) || companyWord(f.after) : !(f.brand === 'Microsoft' && PROGRAMS.has(f.after))))?.brand || '';
+    // A program followed by a company word is the maker's billing again: "Microsoft Teams subscription", "Microsoft
+    // Outlook renewal".
+    const program = (f: Found) => f.brand === 'Microsoft' && PROGRAMS.has(f.after) && !companyWord(p.slice(f.end).split(/[^a-z]+/).filter((w) => w.length > 1)[1] || '');
+    brand ||= found.find((f) => (f.everyday ? companyWord(f.before) || companyWord(f.after) : !program(f)))?.brand || '';
     // The brand's own letters are not its words about money: there is "pay" in PayPal.
     for (const f of found) p = `${p.slice(0, f.at)}${' '.repeat(f.end - f.at)}${p.slice(f.end)}`;
     money ||= moneyIn(p) || '';

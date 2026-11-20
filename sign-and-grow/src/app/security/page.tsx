@@ -11,6 +11,8 @@ import { SESSION_DAYS, HAND_OVER_TRIES } from '@/lib/policy';
 import { IN_PERSON_LOCK, IN_PERSON_LIMITS } from '@/lib/phone';
 import { QR_SHOW_SECONDS } from '@/lib/qrlink';
 import { WhereYourDataIs } from './DataPlace';
+import { BY_SENDER_LINE } from '@/lib/bysender';
+import { encryptedFilesPoint, notEncryptedPoint } from '@/lib/storedfiles';
 
 export const metadata = { title: 'Security and trust', description: 'What Sign&Grow does to protect signers, senders and documents, in plain words. And what it does not do.' };
 
@@ -41,6 +43,9 @@ export default function Security() {
   const signIn = signInProviders().map((p) => PROVIDER_NAMES[p]).join(' or ');
   // Whether the operator of this server has switched text messages on. When not, the page says so and offers none.
   const textsOn = !!smsProvider();
+  // Whether this server encrypts the files it stores (FILE_ENCRYPTION_KEY). The sentences are in src/lib/storedfiles.ts.
+  const encrypted = encryptedFilesPoint();
+  const notEncrypted = notEncryptedPoint();
   return (
     <div className="pub">
       <PublicNav />
@@ -77,12 +82,14 @@ export default function Security() {
             {CHECK_PROVES.map((p) => <span key={p.key} className="pub-proof"><b>{p.title}.</b> {p.text} </span>)}
             <span className="pub-proof">{CHECK_LIMITS}</span>
           </Point>
+          {/* A person with no address, whose link the sender passed on (src/lib/bysender.ts): the record says so. */}
+          <Point title="A link the sender passed on themselves.">A sender can put someone on a document with a name and no email address, and send them the link by WhatsApp, text message or chat. We never write to that person. The certificate says &quot;{BY_SENDER_LINE}&quot; for them, which shows less than our email does: not how the link travelled, and not who opened it.</Point>
         </Block>
 
         <Block id="scams" title="Keeping scams out" lead="E-signature services get abused to send fake invoices. These checks are made where a sender starts something that emails a person (a first send, a correction to a document that is out, a reminder, reopening, a bulk send, a public form, a team invitation) and again where the email to the next person in a signing order is written.">
           <Point title="Senders confirm their email address first.">An account cannot send anything or invite anyone until its address is confirmed. The link in the confirmation email works in the browser that signed up. Anywhere else it asks for the password of the login, so the owner of a mailbox cannot confirm a login that someone else made in their name by clicking a link out of habit.</Point>
           <Point title="New accounts have a daily limit.">An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone a sender newly emails counts, however they are reached. A public form has the same limit of its own, counted for that form alone, so strangers filling in a form never use up what its owner may send. A team can invite {abuse.invitesPerDay} people a day. Paying does not lift the limit at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed. A person on our team can lift it sooner.</Point>
-          <Point title="Fake payment notices are stopped.">Until that same day an account cannot send something that reads like a payment notice from a well-known brand with a phone number to call, and cannot send or invite under a name that reads like such a brand. We read what the emails print: the subject, the message, notes to recipients, document names, what the sender wrote on the pages, the reason for voiding and the names the email goes out under, also when a brand is glued to another word or spelled with look-alike letters. It is a filter for the common trick, not a guarantee: a scam worded another way passes it, which is what reports are for. A refusal says which words set it off, and a person can clear a genuine sender.</Point>
+          <Point title="Fake payment notices are stopped.">Until that same day an account cannot send something that reads like a payment notice from a well-known brand with a phone number to call, and cannot send or invite under a name that reads like such a brand. We read what the emails print: the subject, the message, notes to recipients, document names, what the sender wrote on the pages, the reason for voiding, the names the email goes out under and the name of a public form, which its page shows to anyone with the link, also when a brand is glued to another word or spelled with look-alike letters. It is a filter for the common trick, not a guarantee: a scam worded another way passes it, which is what reports are for. A refusal says which words set it off, and a person can clear a genuine sender.</Point>
           <Point title="Every request can be reported.">Each signing email has a report link that needs only its security code, and the signing page has one too. The code still works for a report after the sender has deleted the document. Reports go to a person.</Point>
           <Point title="Enough reports pause the sender.">When {abuse.reportsToPause} different recipients report one account, it is paused until a person has reviewed it. Nothing its senders start is emailed to anyone meanwhile: no new documents, no new or changed recipients, no reminders, no reopening, no invitations and no email about a change, and people further down a signing order are asked only once the pause is lifted. What recipients do themselves still works and is confirmed to them: people who already have a document can sign it, decline it and get their copy. The account keeps access to its own documents. A report from a visitor of a public form reaches a person but does not count towards the pause, because a form takes whatever name and address is typed into it.</Point>
           <Point title="We never ask for money or passwords by email.">Not for a password, not for a card number, not for a payment. An email that does is not from us. <Link href="/help#unexpected">Report it</Link>.</Point>
@@ -104,6 +111,7 @@ export default function Security() {
           <Point title="A team does not lose documents when someone leaves.">What they sent (envelopes, drafts, templates and bulk sends) passes to a member an admin chooses, each envelope&apos;s audit trail says who handed it to whom, and the owner can hand the account to someone else. The person who was removed keeps their login and gets a workspace of their own.</Point>
           <Point title="Templates are shared, not up for grabs.">Everyone on a team can use every template. Only the person it belongs to and the admins can change or delete it. Members see their own envelopes, folders and bulk sends, and admins see all of them.</Point>
           <Point title="A signing link opens the document for whoever holds it.">So do the sender&apos;s login and the logins of the owner and admins of the sender&apos;s account. The whole list, with what the people who run this server can see, is under <a href="#who">Who can see your documents</a>. A recipient cannot open a document before their turn. On a public form, typing someone else&apos;s email address never opens their document: an unfinished one is only given back to the browser that started it.</Point>
+          {encrypted && <Point title={encrypted.title}>{encrypted.text}</Point>}
           <Point title="A QR code is the link.">The app can show a signing link or the link of a public form as a QR code. The code is drawn in your browser from the link, by our own code: the link is not sent to another service to be turned into a picture. Whoever scans the code, or a photo of it, holds the link. A code for one person&apos;s signing link is taken off the screen again after {QR_SHOW_SECONDS / 60} minutes. A code can do no more than its link: once an address is corrected the old code no longer opens the document, a voided envelope cannot be signed from it, and the code of a paused or deleted form opens a page that says the form is not available.</Point>
         </Block>
 
@@ -148,8 +156,9 @@ export default function Security() {
             ? <Point title="No two-step login of our own, and no single sign-on for a whole organization.">Accounts are protected by a password, or by signing in with {signIn}. A second step at sign-in is whatever your account there has. We add none of our own, and a team cannot make its members sign in one particular way.</Point>
             : <Point title="No two-step login or single sign-on yet.">Accounts are protected by a password.</Point>}
           <Point title={NO_BAA_TITLE}>{NO_BAA_TEXT} What would have to be true first: {NO_BAA_FIRST.map((x, i) => `(${i + 1}) ${x}`).join(' ')} {NO_BAA_AFTER}</Point>
+          <Point title="No payment collection.">Sign&Grow never takes money for a sender. An account that has earned trust can show a link to its own payment page after a person presses Finish, with its name and the full address, and never in an email. We do not see that payment, cannot confirm it and cannot refund it.</Point>
           <Point title="No security certification.">We have not been audited against a security standard, and we will not hint that we have.</Point>
-          <Point title="No claim about encrypted storage.">The software does not add its own encryption to stored documents. How the disk is protected depends on where the service is hosted.</Point>
+          <Point title={notEncrypted.title}>{notEncrypted.text}</Point>
         </Block>
 
         <p className="muted" style={{ marginTop: 20 }}>Found a security problem, or something on this page that is not true? <Link href="/help?topic=other#contact">Tell us</Link>. A person reads every message.</p>

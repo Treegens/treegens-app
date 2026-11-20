@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { api, Leaf, toast, oops } from './ui';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 import { HandedOver, type Locked } from './HandedOver';
+import { EmailProblemBanner } from './EmailProblem';
 
 type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
@@ -131,6 +132,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Link href="/help" className="btn sm">Contact us</Link>
             </div>
           )}
+          {/* Our last email to this login came back for good: said on every page until it is dealt with. */}
+          <EmailProblemBanner me={{ ...me, reload }} />
           {notice && (
             <div className={`notice${/did not join/.test(notice) ? ' warn' : ''} row between wrap`} style={{ marginBottom: 16 }} role="status">
               <span>{notice}</span>

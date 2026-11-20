@@ -1,11 +1,13 @@
 'use client';
+import { PHONE_SECONDS_PER_MB } from '../../lib/policy.ts';
 
 // is_scan and scan_pages: the pages that are pictures with no text, counted from 1. See src/lib/scans.ts.
 // size: the bytes of the stored PDF, which is what every signer downloads. See src/lib/phone.ts.
 export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[]; size?: number };
 
 export const MAX_BYTES = 25_000_000;
-export const LIMITS = 'PDF, PNG or JPEG. Up to 25 MB and 500 pages each.';
+// What the server takes, and what that costs a signer on a phone (measured, see src/lib/phone.ts): both are true.
+export const LIMITS = `PDF, PNG or JPEG. Up to 25 MB and 500 pages each. A signer on a phone waits about ${Math.round(PHONE_SECONDS_PER_MB)} seconds for each MB on a slow connection.`;
 // Shown on touch screens only. A phone's own scanner straightens and cleans the page, which a plain photo does not.
 export const PAPER_HINT = 'Starting from paper? Most phones can scan it to a PDF (on an iPhone in Notes or Files, on Android in Google Drive), and that gives the cleanest pages. Plain photos work too: choose all the pages at once and we make one document from them.';
 

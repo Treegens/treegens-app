@@ -329,7 +329,7 @@ export function checkBits(o: any, r: any): string[] {
  */
 export async function correctWithCheck(e: any, recipientId: string, patch: any, actor: Actor) {
   const r = e?.recipients?.find((x: any) => x.id === recipientId);
-  const asks = !!patch && (patch.verify !== undefined || patch.phone !== undefined || patch.text_link !== undefined);
+  const asks = !!patch && (patch.verify !== undefined || patch.phone !== undefined || patch.text_link !== undefined || patch.number_confirmed !== undefined);
   const email = patch?.email !== undefined ? str(patch.email, 254).trim() : r?.email;
   const swapped = !!r && !sameAddress(r.email, email);
   const other = !!patch && (patch.name !== undefined || patch.email !== undefined || patch.access_code !== undefined);
@@ -350,14 +350,23 @@ export async function correctWithCheck(e: any, recipientId: string, patch: any, 
     const no = textRefusal(e, [after]);
     if (no) throw bad(no, 429);
   }
+  // "number_confirmed": someone using the link said the number is not theirs, and the sender has since heard from
+  // the person, a way they trust, that it is right after all (a finger slipped, a relative held the phone). Codes go
+  // to the same number again. Only when said in so many words: a call that sends the whole recipient back to fix a
+  // name must never lift a stop that protects whoever owns the number.
+  const confirm = patch.number_confirmed === true && !!r.check_stop && !changed && !swapped && c.verify === 'sms_code';
   const was = get('SELECT verify, phone, text_link, check_gen, checked_at, checked_how, checked_for, check_stop, texted_at FROM recipients WHERE id=?', r.id);
   const bits = checkBits(r, after);
   if (changed) applyCheck(r.id, r, c);
+  if (confirm) {
+    run('UPDATE recipients SET check_stop=NULL WHERE id=?', r.id);
+    bits.push(`the sender confirmed that ${maskPhone(r.phone)} is their number, after someone using the link had said it was not, so codes go to it again`);
+  }
   if (other) {
     try {
       await correctRecipient(changed ? loadEnvelope(e.id) : e, recipientId, patch, actor);
     } catch (err) {
-      if (changed) run('UPDATE recipients SET verify=?, phone=?, text_link=?, check_gen=?, checked_at=?, checked_how=?, checked_for=?, check_stop=?, texted_at=? WHERE id=?',
+      if (changed || confirm) run('UPDATE recipients SET verify=?, phone=?, text_link=?, check_gen=?, checked_at=?, checked_how=?, checked_for=?, check_stop=?, texted_at=? WHERE id=?',
         was.verify, was.phone, was.text_link, was.check_gen, was.checked_at, was.checked_how, was.checked_for, was.check_stop, was.texted_at, r.id);
       throw err;
     }
@@ -443,6 +452,9 @@ export async function alsoText(e: any, r: any, kind: string): Promise<void> {
     const cur = get('SELECT * FROM recipients WHERE id=?', r.id);
     const phone = normalPhone(cur?.phone);
     if (!cur || !cur.text_link || !phone || !cur.token || cur.status === 'declined' || cur.muted && kind === 'reminder') return;
+    // Someone using the link said this number is not theirs. Its owner is left alone: no code and no link by text
+    // either, until the sender corrects the number or confirms it. The sender was told when it was said.
+    if (cur.check_stop) return;
     // Someone who told us this document looks wrong hears nothing more from us about it by text.
     if (get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', e.id, cur.email)) return;
     if (kind === 'reminder' && cur.texted_at && Date.now() - Date.parse(cur.texted_at) < 864e5) return;
@@ -668,10 +680,10 @@ export async function codeProblem(e: any, r: any, what: any, actor: Actor): Prom
     run('UPDATE recipients SET check_stop=? WHERE id=?', now(), r.id);
     run("UPDATE signer_codes SET ended_at=?, ended_how='stopped' WHERE recipient_id=? AND ended_at IS NULL", now(), r.id);
     dropCodeTexts(r.id);
-    audit(e.id, actor, 'One-time code: not my number', `Someone using the signing link of ${r.name} said the mobile number ${d.masked} is not theirs. No more codes are sent to it until the sender corrects it.`);
+    audit(e.id, actor, 'One-time code: not my number', `Someone using the signing link of ${r.name} said the mobile number ${d.masked} is not theirs. No more codes or links are texted to it until the sender corrects it or confirms it with them.`);
     await notifySender(e, 'always', `Wrong number: ${e.subject}`, `${r.name} says the mobile number is not theirs`,
       [`Someone using the signing link of ${r.name} told us that ${d.masked}, the number you typed for the one-time code, is not their number. We have stopped sending codes to it, so whoever owns that number is left alone.`,
-        `${r.name} cannot open "${e.subject}" until you fix this. ${fix}`, careful]);
+        `${r.name} cannot open "${e.subject}" until you fix this. ${fix} If the number turns out to be right after all, tick "I checked with ${r.name} that this is their number" there, and codes go to it again.`, careful]);
     return { told: true, stopped: true };
   }
   audit(e.id, actor, 'One-time code: did not arrive', `Someone using the signing link of ${r.name} said the code sent by ${how} to ${d.masked} did not arrive.`);

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { api } from '../ui';
 import { useMe } from '../AppShell';
 import { joinNames } from './lib';
+import { ownLink } from './OwnLink';
 
 // Shown once, on the page a sender lands on right after sending (the editor sends them here with ?sent=1). Someone
 // waiting for a signature on their phone hears nothing until the end unless they found the setting, so the one
@@ -28,6 +29,8 @@ export function AfterSend({ envelope }: { envelope: any }) {
   // The people whose finishing is news: everyone who signs, approves or has to view. An email "as each person signs"
   // only differs from the one at the end when there is more than one of them.
   const acting: any[] = envelope.recipients.filter((r: any) => r.role !== 'cc');
+  // Whose link the sender said they would send, and whose turn it is now. The others are told about when it comes.
+  const own = acting.filter((r: any) => ownLink(r) && r.status === 'sent');
   const flip = () => {
     const next = !on;
     setOn(next);
@@ -47,6 +50,8 @@ export function AfterSend({ envelope }: { envelope: any }) {
           : <>You have switched off the email that tells you when everyone has finished. You can switch it back on under <Link href="/app/settings?tab=notifications">Settings, Notifications</Link>.</>}
         {' '}This page always shows where things stand.
       </p>
+      {/* People with no address, whose link the sender said they would send: nobody else will (OwnLink.tsx). */}
+      {own.length > 0 && <p className="sn-hint warn"><b>Now send {joinNames(own.map((r: any) => r.name))} the link yourself.</b> It is on {own.length === 1 ? 'their card' : 'each of their cards'} below. We do not write to them.</p>}
       {acting.length > 1 && (
         <>
           <label className="setting-row sn-switch">
