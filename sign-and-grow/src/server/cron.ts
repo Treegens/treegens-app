@@ -7,6 +7,8 @@ import { retryTexts } from './sms.ts';
 import { forgetOldBounces } from './bounces.ts';
 import { twoStepTick } from './twostep.ts';
 import { flushComments } from './routes-comments.ts';
+import { pruneStampImages } from './stamps.ts';
+import { sweepSignIns } from './reclaim.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -28,5 +30,9 @@ export async function tick() {
     two_step: await twoStepTick(),
     // Emails about comments that waited, because one went to the same person about the same envelope minutes before,
     // or because sending was paused (routes-comments.ts).
-    comments: await flushComments() };
+    comments: await flushComments(),
+    // Sign-ins at Google or Microsoft that were started and never finished (signin_states), past their ten minutes (reclaim.ts).
+    signins_cleared: sweepSignIns(),
+    // Stamp pictures that no field and no stamp of an account points at any more (stamps.ts).
+    stamp_pictures: pruneStampImages() };
 }

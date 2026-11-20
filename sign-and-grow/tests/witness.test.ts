@@ -1055,3 +1055,17 @@ test('the signer\'s own screens say what is recorded and that it cannot be check
   assert.match(sign, /we email them a link to confirm that and sign as witness\. \{WITNESS_RECORDS\}/, 'the signer\'s notice on the document');
   assert.match(sign, /We tell you if they say they were not there\.<\/>\}<\/p>\s*<p className="muted small wt-note">\{WITNESS_RECORDS\}<\/p>/, 'the signer\'s done box');
 });
+
+test('an envelope that went out before these rules can still be put right: only a witness problem the change itself makes is refused', async () => {
+  const s = await person('Olive Older', 'olive.older@deed.example');
+  const e = await deed(s);
+  const { ann, wit, ben } = ids(e);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  // As if it had been sent before a party could not be a witness: Ben witnesses Ann.
+  db.run('UPDATE recipients SET name=?, email=? WHERE id=?', 'Ben Second', row(ben).email, wit);
+  const fix = await s.post(`/envelopes/${e.id}/correct`, { recipient_id: ann, name: 'Ann Signer-Smith', email: row(ann).email });
+  assert.equal(fix.status, 200, JSON.stringify(fix.data));
+  assert.equal(row(ann).name, 'Ann Signer-Smith');
+  // Putting the right person in the witness's place is a correction like any other.
+  assert.equal((await s.post(`/envelopes/${e.id}/correct`, { recipient_id: wit, name: 'Wendy Neutral', email: `wendy.${n}@deed.example` })).status, 200);
+});

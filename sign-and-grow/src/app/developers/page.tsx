@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { WEBHOOK_EVENTS, MAX_WEBHOOKS, KEEP_BODIES } from '@/server/webhooks';
 import { ROLES, FIELD_TYPES } from '@/server/envelopes';
-import { DEFAULT_REMINDER_DAYS, PNG_MAX_PIXELS, JPEG_MAX_PIXELS } from '@/lib/policy';
+import { DEFAULT_REMINDER_DAYS, PNG_MAX_PIXELS, JPEG_MAX_PIXELS, PHOTO_MAX_SIDE } from '@/lib/policy';
 import { mailEventsOn } from '@/lib/policy';
 
 // Whether this server is told about bounces (MAIL_EVENTS_TOKEN) is a setting: read it when the page is asked for.
@@ -15,7 +15,7 @@ type Endpoint = [method: string, path: string, what: string, isNew?: boolean];
 
 const GROUPS: [string, Endpoint[]][] = [
   ['Files and envelopes', [
-    ['POST', '/api/files', 'Upload a PDF, PNG or JPEG as the multipart field "file", up to 25 MB and 500 pages. Returns the file id, page sizes and stored size. A phone photo is turned upright from its camera note. Repeat "file" to make one document from several pictures, a page for each, in the order sent.' + ` A PNG can have up to ${PNG_MAX_PIXELS / 1e6} million pixels and a JPEG up to ${JPEG_MAX_PIXELS / 1e6} million.`],
+    ['POST', '/api/files', 'Upload a PDF, PNG or JPEG as the multipart field "file", up to 25 MB and 500 pages. Returns the file id, page sizes and stored size. A phone photo is turned upright from its camera note. Repeat "file" to make one document from several pictures, a page for each, in the order sent.' + ` A PNG can have up to ${PNG_MAX_PIXELS / 1e6} million pixels and a JPEG up to ${JPEG_MAX_PIXELS / 1e6} million. Pictures are not made smaller here: every signer's phone unpacks the whole picture, so make photos smaller before you send them (${PHOTO_MAX_SIDE.toLocaleString('en')} pixels on the long side is plenty).`],
     ['POST', '/api/envelopes', 'Create a draft, or create from a template with template_id. Add "send": true to send straight away.'],
     ['GET', '/api/envelopes', 'List envelopes. Filters: box (drafts, sent, waiting, completed, closed), q, folder, kind=template, limit, offset.'],
     ['GET', '/api/envelopes/:id', 'One envelope with its documents, recipients and fields, the audit trail, the email delivery log and how far each signer has got.'],
@@ -24,7 +24,7 @@ const GROUPS: [string, Endpoint[]][] = [
     ['DELETE', '/api/envelopes/:id', 'Delete a draft, a template or a closed envelope for good. A completed envelope, or any envelope somebody has already signed, is taken out of your lists, search, export and reports, and its recipients keep their link and their copy.'],
     ['POST', '/api/envelopes/:id/send', 'Send a draft. The answer carries "warnings": what the check before sending found. The envelope has gone out either way.'],
     ['GET', '/api/envelopes/:id/warnings', 'The check before sending, to read before you send: words in the subject, a document name or the text of a document that name a kind of document which often needs paper, a witness, a notary or a qualified signature. It warns and never refuses.', true],
-    ['POST', '/api/envelopes/:id/clone', 'Copy as a new draft or template. A copy of a template keeps who can use and change it, and a copy of a locked template made by someone who may not change it stays with its owner.'],
+    ['POST', '/api/envelopes/:id/clone', 'Copy as a new draft or template. A copy of a template keeps who can use and change it and the lock. A copy of one that is locked or not for everyone, made by someone who may not set its rules, stays with its owner, and an envelope started before its template was locked cannot be copied by someone the lock is for.'],
     ['GET', '/api/envelopes/:id/access', 'Who can use and change a template (everyone, admins only or chosen members; its owner and admins, chosen members as well or everyone), and whether its wording is locked. A template you may not use answers 403 with who to ask, wherever it is read or used.'],
     ['PUT', '/api/envelopes/:id/access', 'Set that rule and the chosen members. Only for the person the template belongs to and admins. Written to the template\'s history.'],
     ['GET', '/api/envelopes/:id/download', 'The signed PDF with its certificate, or a preview while signing is in progress. A voided, declined or expired envelope comes with a first page that says so and a mark across every page.'],
@@ -239,11 +239,11 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers
 
         <div className="card" id="click-to-agree">
           <h2>Click-to-agree terms</h2>
-          <p>Terms your website&apos;s visitors accept with one click (made under Click-to-agree in the app, by an owner or admin). Show them on our page <C>/agree/SLUG</C>, inside your own page with <C>&lt;script src=&quot;.../clickwrap.js&quot; data-agreement=&quot;SLUG&quot;&gt;</C> or an iframe of <C>/agree/SLUG?embed=1</C>, or collect the click yourself and record it with <C>POST /api/clickwraps/:id/acceptances</C>. Ask <C>GET /api/clickwraps/:id/status?person_id=...</C> whether someone has accepted the version that counts.</p>
+          <p>Terms your website&apos;s visitors accept with one click (made under Click-to-agree in the app, by an owner or admin). Show them on our page <C>/agree/SLUG</C>, inside your own page with <C>&lt;script src=&quot;.../clickwrap.js&quot; data-agreement=&quot;SLUG&quot;&gt;</C> or an iframe of <C>/agree/SLUG?embed=1</C> (only that address may be shown in a frame at all), or collect the click yourself and record it from your server, with an API key, with <C>POST /api/clickwraps/:id/acceptances</C>. Ask <C>GET /api/clickwraps/:id/status?person_id=...</C> whether someone has accepted the version that counts.</p>
           <ul>
             <li>To say who the visitor is, your server adds <C>who</C> (base64url of JSON with <C>id</C>, <C>name</C>, <C>email</C> and <C>exp</C> in seconds) and <C>sig</C> (HMAC-SHA256 of that exact text with the key of the terms) to the address. Without them the visitor types a name and an address, which nobody checks.</li>
             <li>The frame cannot be ticked or pressed by the page around it, but it can be covered or hidden. Treat the <C>signgrow:accepted</C> event as a hint and ask the status call before you rely on it. An acceptance you record yourself is marked as recorded by your website.</li>
-            <li>An acceptance is not a signature and costs none. Each account can record a limited number a month (429 with <C>&quot;code&quot;: &quot;monthly_limit&quot;</C> after that). Whether a click binds anyone depends on the country and on the agreement: check what applies to yours.</li>
+            <li>An acceptance is not a signature and costs none. Each account can record a limited number a month, counted apart for visitors who type their own details and for the people your website vouches for (signed links and the API), so strangers cannot use up yours (429 with <C>&quot;code&quot;: &quot;monthly_limit&quot;</C> after that). A copy by email goes only to an address your signed link gave, once. Whether a click binds anyone depends on the country and on the agreement: check what applies to yours.</li>
           </ul>
         </div>
 

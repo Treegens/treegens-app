@@ -17,6 +17,10 @@ import { labelOf } from '../lib/bysender.ts';
 import { witnessOrder, witnessCertLines } from './witness.ts';
 import { drawStamp, stampFor, stampForMark } from './stamp.ts';
 import { hiddenOf } from './logic.ts';
+// A company stamp on the page, printed like ink (src/server/stamps.ts). Not the large "VOIDED" mark of stamp.ts.
+import { BlendMode } from 'pdf-lib';
+import { stampPng, stampCertLines, senderStampCertLines, stampCertNote } from './stamps.ts';
+import { STAMP_OPACITY } from '../lib/stamps.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -173,6 +177,8 @@ export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null, se
     case 'email': return ((r?.group_name || r?.role === 'witness') && r.status !== 'completed' ? '' : r?.email) || '';
     case 'date_signed': return r?.completed_at ? formatDate(r.completed_at, dateFormat, validZone(r.tz) || senderTz) : '';
     case 'date': return formatDateValue(f.value, dateFormat);
+    // A stamp is a picture. Its value is the fingerprint of that picture, never words on the page.
+    case 'stamp': return '';
     default: return f.value || '';
   }
 }
@@ -213,6 +219,30 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
     return;
   }
   if (f.type === 'attachment') return;
+  // A stamp, printed like ink: multiplied into the page at slightly less than full strength, so the words printed
+  // under it show through as they would under a real stamp, and there is never a box around it. The words stay in
+  // the file. As large as fits its field, in the middle of it, the way the signing screen shows it (stamps.ts).
+  if (f.type === 'stamp') {
+    if (!f.value) return;
+    const key = `stamp:${f.value}`;
+    if (!ctx.images.has(key)) {
+      const png = stampPng(f.value);
+      let img: any = null;
+      try {
+        img = png ? await ctx.doc.embedPng(png) : null;
+      } catch {
+        img = null;
+      }
+      ctx.images.set(key, img);
+    }
+    const img = ctx.images.get(key);
+    if (!img) return;
+    const s = Math.min(vw / img.width, vh / img.height);
+    const w = img.width * s, h = img.height * s;
+    const p = m.pt(vx + (vw - w) / 2, vy + (vh + h) / 2);
+    page.drawImage(img, { x: p.x, y: p.y, width: w, height: h, rotate: m.rotate, opacity: STAMP_OPACITY, blendMode: BlendMode.Multiply });
+    return;
+  }
   // A strike-out: the sender's line through wording printed on the page. The same shape the signing screen shows
   // (strikeLines in src/lib/strike.ts): one line through the middle, or corner to corner over more than one line.
   // The words under it stay in the file.
@@ -334,6 +364,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   s.kv('Sent', ts(e.sent_at));
   s.kv('Completed', ts(e.completed_at));
   s.kv('Signing order', e.ordered ? 'Sequential' : 'Everyone at once');
+  // The sender's own stamp: which one, where, and the fingerprint of its picture (stamps.ts).
+  for (const [k, v] of senderStampCertLines(e)) s.kv(k, known(v));
 
   s.h2('Documents');
   for (const d of e.documents) {
@@ -379,6 +411,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
         if (r.completed_at) s.kv('Completed, their time', localStamp(r.completed_at, zone));
       }
       if (r.reassigned_from) s.kv('Reassigned from', known(r.reassigned_from));
+      // Each stamp this person put on: which, where, when, and the fingerprint of its picture (stamps.ts).
+      for (const [k, v] of stampCertLines(e, r)) s.kv(k, known(v));
     }
     const img = await image(ctx, r.signature_png);
     if (img && s.y < top) {
@@ -391,6 +425,9 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     if (r.group_name) s.kv(r.claimed_by ? 'Acted for' : 'Sent to', certGroup(r, iso));
     s.rule(6);
   }
+  // What a stamp on this envelope is, and what it is not, said once (STAMP_IS in src/lib/stamps.ts).
+  const stamped = stampCertNote(e);
+  if (stamped) s.text(stamped, { size: 7.5, color: MUTED, gap: 4 });
 
   // Whose time zone we know, by the name and address each of their audit lines is signed with. Their lines carry
   // their local time as well as UTC.
@@ -614,8 +651,11 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     if (!file) continue;
     try {
       (await flatPages(doc, file.sha256)).forEach((p) => (doc.addPage(p), opts.notice && drawStamp(p, bold, stampFor(e.status))));
-    } catch {
-      /* skip unreadable attachments */
+    } catch (err: any) {
+      // The signed PDF is stored for good, so it is never sealed without a signer's attachment whose stored copy failed
+      // its check or is locked: the build fails and is tried again until the file is back (finalretry.ts tells the
+      // sender and the operators). A file that pdf-lib cannot read at all is left out as before.
+      if (opts.certificate && (err?.data?.code === 'file_damaged' || err?.data?.code === 'file_locked')) throw err;
     }
   }
   if (opts.certificate) await drawCertificate(ctx, e, audit, opts.sender);

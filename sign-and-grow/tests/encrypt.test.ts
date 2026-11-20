@@ -637,18 +637,24 @@ test('the pages say what is encrypted and what is not, from the setting the serv
   assert.equal(encryptedFilesPoint(), null, 'nothing about encrypted files where they are not');
   const off = notEncryptedPoint();
   assert.equal(off.title, 'Stored files and the database are not encrypted by the software on this server.');
-  assert.match(off.text, /The software can encrypt the uploaded documents, signed PDFs and the files signers attach, and the people who run this server have not switched that on/);
+  // Said of new files: a server where it was switched off still holds files encrypted while it was on (tests/qr-encrypt-repair.test.ts).
+  assert.match(off.text, /The software can encrypt the uploaded documents, signed PDFs and the files signers attach, and it is not switched on here, so new files are kept on the disk as they were uploaded and signed/);
   setKeys(K1);
   const on = encryptedFilesPoint()!;
   assert.equal(on.title, 'Stored files are encrypted by the software.');
   assert.match(on.text, /AES-256-GCM and a key of its own for each file/);
-  assert.match(on.text, /protects a copy of the disk or of a backup taken without the server's settings\. It does not protect against someone who gets into the running server, because the key is in those settings/);
+  // The files are unreadable on a copy of the disk; the copy is not safe by itself, because the database is not encrypted.
+  assert.match(on.text, /keeps those files unreadable on a copy of the disk or of a backup taken without the server's settings\. It does not make such a copy safe by itself, because the database on the same disk is not encrypted/);
+  assert.match(on.text, /It does not protect against someone who gets into the running server either, because the key is in those settings/);
   assert.match(on.text, /Files stored before encryption was switched on are encrypted when the people who run this server run the script/);
   const dbOnly = notEncryptedPoint();
   assert.equal(dbOnly.title, 'The database is not encrypted by the software.');
   for (const t of [off.text, dbOnly.text]) {
-    assert.match(t, /The names and email addresses of everyone on a document, what they typed into its fields, their signatures as pictures and every audit trail are kept in the database, and the software does not encrypt it/);
-    assert.match(t, /Whoever has a copy of the disk can read all of that unless the disk itself is encrypted/);
+    // The whole list of what stays readable is DATABASE_HOLDS (checked item by item in tests/qr-encrypt-repair.test.ts).
+    assert.match(t, /The software does not encrypt the database\. Whoever has a copy of the disk or of a backup can read what it holds: the names, email addresses and phone numbers of everyone on a document/);
+    assert.match(t, /what people typed into fields, and their signatures and initials as pictures/);
+    assert.match(t, /every audit trail, with the IP addresses and browsers it records/);
+    assert.match(t, /So encrypt the disk itself as well\./);
   }
   assert.match(PROCESSING_ENCRYPTED, /The database is not/);
   for (const t of [on.title, on.text, off.title, off.text, dbOnly.text, PROCESSING_ENCRYPTED])
@@ -662,7 +668,7 @@ test('the pages say what is encrypted and what is not, from the setting the serv
   assert.doesNotMatch(security, /No claim about encrypted storage/);
   const processing = read('src/app/security/processing/page.tsx');
   assert.match(processing, /\{fileEncryptionOn\(\) && <li>\{PROCESSING_ENCRYPTED\}<\/li>\}/);
-  assert.match(processing, /fileEncryptionOn\(\) \? 'it does not encrypt the database\.' : 'it adds no encryption of its own to stored files/);
+  assert.match(processing, /<b>What the software does not do:<\/b> \{processingNotDone\(\)\}/);
   const policy = read('src/lib/policy.ts');
   assert.match(policy, /the key to the stored files, where it encrypts them, is in the server\\'s settings, so whoever has the disk, the database and the settings of the server can read everything on them/);
   assert.match(policy, /'The database encrypted by the software itself, not only the stored files\. Today the software can encrypt the files/);

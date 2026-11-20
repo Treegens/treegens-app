@@ -6,7 +6,7 @@ import { api, Leaf, toast, oops } from './ui';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 import { HandedOver, type Locked } from './HandedOver';
 import { EmailProblemBanner } from './EmailProblem';
-import { TwoStepRequired } from './TwoStep';
+import { TwoStepRequired, TwoStepResetBanner } from './TwoStep';
 
 type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
@@ -91,7 +91,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   // set it up (the server refuses the rest with "two_step_setup", src/server/twostep.ts).
   if (me.two_step?.setup_required) return <MeCtx.Provider value={{ ...me, reload }}><TwoStepRequired me={me} /></MeCtx.Provider>;
   const full = /^\/app\/(envelopes|templates)\/[^/]+\/edit/.test(path);
-  if (full) return <MeCtx.Provider value={{ ...me, reload }}>{children}</MeCtx.Provider>;
+  if (full) return <MeCtx.Provider value={{ ...me, reload }}>{me.two_step?.reset_at && <div className="full-ts-reset"><TwoStepResetBanner me={{ ...me, reload }} /></div>}{children}</MeCtx.Provider>;
 
   const on = (href: string) => (href === '/app' ? path === '/app' : path.startsWith(href));
   return (
@@ -140,6 +140,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
           {/* Our last email to this login came back for good: said on every page until it is dealt with. */}
           <EmailProblemBanner me={{ ...me, reload }} />
+          {/* A reset by email of two-step login is under way: said on every page until it stops or takes effect. */}
+          <TwoStepResetBanner me={{ ...me, reload }} />
           {notice && (
             <div className={`notice${/did not join/.test(notice) ? ' warn' : ''} row between wrap`} style={{ marginBottom: 16 }} role="status">
               <span>{notice}</span>

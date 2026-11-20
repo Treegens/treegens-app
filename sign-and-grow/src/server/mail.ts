@@ -1,5 +1,5 @@
 import { run, get, all, saveBlob, readBlob } from './db.ts';
-import { esc, now, baseUrl, fmtCode, sha256, token } from './util.ts';
+import { esc, now, baseUrl, fmtCode, sha256, token, HttpError } from './util.ts';
 import { PRICING } from '../lib/impact.ts';
 import { cannotOpenLine } from '../lib/policy.ts';
 
@@ -182,12 +182,27 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
       return 'outbox';
     }
     const p = JSON.parse(row.payload || '{}');
+    // An attached file whose stored copy cannot be read when the email goes out (it failed its check, or it is locked
+    // with a key this server was not given) must not hold the email back until it gives up: the email goes without
+    // it and says so at the top, and the copy we keep of the email is what went out (readStored reports the file).
+    const left: string[] = [];
+    const attachments = (p.attachments || []).flatMap((a: any) => {
+      try {
+        return [{ filename: a.filename, content: readBlob(a.sha256) }];
+      } catch (x) {
+        if (!(x instanceof HttpError)) throw x;
+        return (left.push(String(a.filename || 'the file')), []);
+      }
+    });
+    const missing = left.length ? `We could not attach ${left.map((f) => `"${f}"`).join(' and ')} to this email: our stored copy could not be read when it went out, and the people who run this service have been told. Use the link in this email instead.` : '';
+    const html = missing ? String(row.html).replace('</h1>', `</h1>\n    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;padding:10px 12px;background:#fdf3e1;border-radius:8px">${esc(missing)}</p>`) : row.html;
     await t.sendMail({
-      from: p.from || fromHeader(), replyTo: p.replyTo || undefined, to: row.to_email, subject: row.subject, html: row.html, text: p.text || undefined,
+      from: p.from || fromHeader(), replyTo: p.replyTo || undefined, to: row.to_email, subject: row.subject, html, text: missing ? `${missing}\n\n${p.text || ''}` : p.text || undefined,
       // The ids the mail provider hands back when it tells us what became of this email: see mailHeaders.
       ...(row.message_id ? { messageId: `<${row.message_id}>` } : {}), headers: mailHeaders(row.id),
-      attachments: (p.attachments || []).map((a: any) => ({ filename: a.filename, content: readBlob(a.sha256) })),
+      attachments,
     });
+    if (missing) run('UPDATE emails SET html=? WHERE id=?', html, id);
     run("UPDATE emails SET status='sent', error=NULL, tries=tries+1, tried_at=?, next_try_at=NULL WHERE id=?", now(), id);
     if (again) await tell(id, 'sent');
     return 'sent';

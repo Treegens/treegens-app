@@ -218,9 +218,10 @@ export function metaOf(f: any): StampMeta | null {
  *    was put on with; another stamp, or "stamp_refresh": true, takes that stamp's picture as it is now.
  */
 export function stampOnSave(f: any, old: any, rid: string | null, accountId: string, which: string, by?: Actor) {
+  // `required`: null keeps what was saved from the request. The sender's own stamp is nobody's to fill in.
   if (rid) {
     const keep = !!old && old.type === 'stamp' && old.recipient_id === rid && !!old.value;
-    return keep ? { value: old.value, stamp_id: old.stamp_id ?? null, meta: old.stamp_meta ?? null, readonly: 0, required: f.required === false || f.required === 0 ? 0 : 1 } : { value: null, stamp_id: null, meta: null, readonly: 0, required: f.required === false || f.required === 0 ? 0 : 1 };
+    return keep ? { value: old.value, stamp_id: old.stamp_id ?? null, meta: old.stamp_meta ?? null, readonly: 0, required: null } : { value: null, stamp_id: null, meta: null, readonly: 0, required: null };
   }
   const sid = f.stamp_id == null || f.stamp_id === '' ? null : str(f.stamp_id, 60);
   if (!sid) return { value: null, stamp_id: null, meta: null, readonly: 1, required: 0 };

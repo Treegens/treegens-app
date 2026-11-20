@@ -36,11 +36,14 @@ import { NextPerson, FormCleared } from '@/components/sign/SharedDevice';
 import { witnessFirst, WitnessFirst, WitnessNotice, WitnessName, WitnessAfter } from '@/components/sign/Witness';
 // A document sent to a signing group: what this member's own link is to the group (src/server/groups.ts).
 import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText } from '@/components/sign/GroupNotice';
+// A stamp field: the signer puts their own stamp on, printed like ink (src/components/stamps, src/server/stamps.ts).
+import { StampDialog } from '@/components/stamps/StampDialog';
+import { layers } from '@/lib/stacked';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback';
 const SAVE_TEXT: Record<Save, string> = { idle: 'Saves as you go', pending: 'Saving', saving: 'Saving', saved: 'Saved', error: 'Not saved yet' };
-const FLAG: Record<string, string> = { signature: 'Sign here', initials: 'Initial here', checkbox: 'Tick here', radio: 'Choose one', dropdown: 'Choose here', attachment: 'Attach here' };
+const FLAG: Record<string, string> = { signature: 'Sign here', initials: 'Initial here', checkbox: 'Tick here', radio: 'Choose one', dropdown: 'Choose here', attachment: 'Attach here', stamp: 'Stamp here' };
 // Phones, and anything else used mainly by touch, get a sheet with a large input instead of typing into the page.
 // Typing straight into a small box makes touch browsers zoom in and out.
 const TOUCH = '(max-width: 600px), (pointer: coarse)';
@@ -66,6 +69,8 @@ export default function SignPage() {
   const pdfs = useRef<Record<string, any>>({});
   const [open, setOpen] = useState<Open>('');
   const [signedField, setSignedField] = useState<string | null>(null);
+  // The stamp field whose dialog is open (StampDialog).
+  const [stampFor, setStampFor] = useState<string | null>(null);
   const [sheet, setSheet] = useState<string | null>(null);
   // The date field whose picker is open. A date that was picked is otherwise shown the way it will be printed.
   const [dateOpen, setDateOpen] = useState<string | null>(null);
@@ -230,6 +235,8 @@ export default function SignPage() {
   const otherFields: any[] = useMemo(() => data?.others || [], [data?.others]);
   const logic = useLiveLogic(ownFields, otherFields, values, setValues);
   const fields: any[] = logic.fields;
+  // Of two fields that overlap, the smaller is drawn on top, so both can be tapped (layers in src/lib/stacked.ts).
+  const layered = useMemo(() => layers(fields), [fields]);
   // A witness signs too, in a block of their own, after a statement of their own (sign/Witness.tsx).
   const acts = me?.role === 'signer' || me?.role === 'inperson' || me?.role === 'witness';
   const closed = !!env && (env.status === 'voided' || env.status === 'declined' || env.status === 'expired' || me.status === 'declined');
@@ -428,7 +435,7 @@ export default function SignPage() {
   }
   // Focus cannot move to the page while a dialog is still closing, so the move waits for it.
   useEffect(() => {
-    if (sheet || adopt || open || signedField || !afterClose.current) return;
+    if (sheet || adopt || open || signedField || stampFor || !afterClose.current) return;
     const f = afterClose.current;
     afterClose.current = null;
     goTo(f);
@@ -482,7 +489,7 @@ export default function SignPage() {
   const NOT_SHOWN = 'The document is still loading. You can finish as soon as its pages are on your screen.';
 
   // The first time nothing required is left, "Check before you finish" opens by itself (see autoReview.ts).
-  useAutoReview(stage === 'sign' && acts && required.length > 0 && left.length === 0 && allShown && !sheet && !adopt && !open && !signedField && !changedOpen && !busy
+  useAutoReview(stage === 'sign' && acts && required.length > 0 && left.length === 0 && allShown && !sheet && !adopt && !open && !signedField && !stampFor && !changedOpen && !busy
     && !ordered.some((f) => problemWith(f, values[f.id] || '')), pressFinish);
 
   function pressFinish() {
@@ -917,10 +924,17 @@ export default function SignPage() {
     const shown = f.type === 'date' ? formatDateValue(value, env.date_format) : value;
     const wrong = !auto && !!problemWith(f, value);
     const cls = `field fill sg-f${auto || ok ? ' done' : ''}${f.id === nextField?.id ? ' next' : ''}${isBox(f) ? ' box' : ''}${wrong ? ' bad' : ''}${auto ? ' sg-auto' : ''}`;
-    const common = { id: `f-${f.id}`, className: cls, style: pos(f) };
+    const common = { id: `f-${f.id}`, className: cls, style: { ...pos(f), zIndex: layered.get(f.id) } };
     const name = fieldName(f);
     const need = f.required ? ', required' : ', optional';
 
+    // A stamp field: what is pressed is here, the stamp itself is printed in the page's ink layer under it (inkLayer).
+    if (f.type === 'stamp')
+      return (
+        <button key={f.id} type="button" {...common} className={`${cls} stamp`} onClick={() => setStampFor(f.id)} aria-label={ok ? `${name}: your stamp is on the page. Change it or take it off` : `${name}${need}. Put your stamp here`}>
+          {!ok && <span className="cta"><Icon name="check" size={14} /> Stamp</span>}
+        </button>
+      );
     if (f.type === 'signature' || f.type === 'initials') {
       const word = f.type === 'signature' ? 'signature' : 'initials';
       return (
@@ -944,7 +958,7 @@ export default function SignPage() {
     if (f.type === 'radio') {
       const group = fields.filter((x) => x.type === 'radio' && !x.readonly && groupKey(x) === groupKey(f));
       return (
-        <label key={f.id} {...common} style={{ ...pos(f), borderRadius: '50%' }}>
+        <label key={f.id} {...common} style={{ ...common.style, borderRadius: '50%' }}>
           <input type="radio" className="sg-vh" name={`f-${groupKey(f)}`} checked={!!value} aria-label={f.label || `Option ${group.indexOf(f) + 1} of ${group.length}`} onChange={() => pickRadio(f)} />
           {value && <span className="sg-dot" />}
         </label>
@@ -1024,7 +1038,7 @@ export default function SignPage() {
     <>
       {/* Everything already on the page that is not this person's to fill in: the sender's own wording, whoever it
           is assigned to, and what people who have finished put there. */}
-      {data.others.filter((f: any) => f.document_id === docId && f.page === page).map((f: any) => (
+      {data.others.filter((f: any) => f.document_id === docId && f.page === page && f.type !== 'stamp').map((f: any) => (
         <div key={f.id} dir="auto" className={`field other${isBox(f) ? ' box' : ''}${strikeClass(f)}`} style={pos(f)} title={otherSource(f, sender.name)}>
           {f.image ? <img src={f.image} alt="Signature of another signer" /> : isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}
         </div>
@@ -1038,8 +1052,19 @@ export default function SignPage() {
     </>
   );
 
-  const ctx: FieldCtx = { me, values, sig, ini, dateText, dateFormat: env.date_format, ordered, uploading, filled, set, pickRadio, clickSig, attach };
+  // Stamps, printed like ink into the drawn page (the ink layer of PdfDoc): this person's own, the sender's, and those
+  // of people who have finished. The same picture, place and blend as in the signed PDF (stamps.css, pdf.ts).
+  const stampUrl = (f: any): string | null => (values[f.id] ? `/api${base}/stamp-image/${values[f.id]}` : null);
+  const inkLayer = (docId: string) => (page: number) => {
+    const here = [...data.others.filter((f: any) => f.type === 'stamp' && f.image).map((f: any) => ({ f, src: f.image as string })),
+      ...fields.filter((f) => f.type === 'stamp' && stampUrl(f)).map((f) => ({ f, src: stampUrl(f)! }))].filter(({ f }) => f.document_id === docId && f.page === page);
+    // eslint-disable-next-line @next/next/no-img-element
+    return here.length ? here.map(({ f, src }) => <span key={f.id} className="st-print" style={pos(f)}><img src={src} alt="" /></span>) : null;
+  };
+
+  const ctx: FieldCtx = { me, values, sig, ini, dateText, dateFormat: env.date_format, ordered, uploading, filled, set, pickRadio, clickSig, attach, clickStamp: (f: any) => setStampFor(f.id), stampUrl };
   const signed = byId(signedField);
+  const stampField = byId(stampFor);
   const sheetField = byId(sheet);
   const sheetTarget = sheetField && nextAfter(sheetField.id);
 
@@ -1094,8 +1119,8 @@ export default function SignPage() {
               {data.documents.length > 1 && <h2 className="sg-docname">{d.name}</h2>}
               {/* The address and the key carry the fingerprint of the file. A file the sender replaced is fetched and
                   drawn afresh, and onShown says when its first page is really on the screen. */}
-              <PdfDoc key={d.sha256 || d.id} url={docUrl(base, d)} zoom={zoom} overlay={overlay(d.id)} onShown={() => markShown(d)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }}
-                failed={(why, retry) => <NoViewer why={why} retry={retry} sender={sender.name} downloadUrl={downloadUrl} onAsk={go('ask')} />} />
+              <PdfDoc key={d.sha256 || d.id} url={docUrl(base, d)} zoom={zoom} overlay={overlay(d.id)} ink={inkLayer(d.id)} onShown={() => markShown(d)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }}
+                failed={(why, retry, said) => <NoViewer why={why} retry={retry} said={said} sender={sender.name} downloadUrl={downloadUrl} onAsk={go('ask')} />} />
             </div>
           ))}
         </div>
@@ -1144,6 +1169,25 @@ export default function SignPage() {
             setSeen((s) => ({ ...s, [adopt.kind]: true }));
             if (adopt.field) set(adopt.field, '1');
             setAdopt(null);
+          }} />
+      )}
+      {stampField && (
+        <StampDialog base={base} field={stampField} version={version.current} current={stampUrl(stampField) ? { image_url: stampUrl(stampField)! } : null}
+          onClose={() => setStampFor(null)}
+          onChanged={() => { setStampFor(null); setChangedOpen(true); load(); }}
+          onPut={(r) => {
+            // Kept on the server at once, so "Finish later" and another device have it too.
+            set(stampField.id, r.value);
+            const next = nextAfter(stampField.id);
+            setStampFor(null);
+            toast('Your stamp is on the page.');
+            if (next) afterClose.current = next;
+          }}
+          onTakeOff={async () => {
+            await api(`${base}/stamp/${stampField.id}`, { method: 'DELETE' });
+            set(stampField.id, '');
+            setStampFor(null);
+            toast(stampField.required ? 'Your stamp was taken off. This stamp is required, so put one on again before you finish.' : 'Your stamp was taken off.');
           }} />
       )}
     </Shell>

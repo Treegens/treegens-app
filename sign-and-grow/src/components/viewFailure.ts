@@ -25,3 +25,21 @@ export function whyNotShown(e: any, loaded: boolean, online = true): ViewFailure
   if (/fetch|network|load failed/i.test(e?.message || '')) return 'offline';
   return 'browser';
 }
+
+/** What the server said when it refused a stored file: it failed its check, or it is locked with an encryption key the
+ *  server was not given (src/server/filestore.ts). Its words say what happened; a page shows them as they are. */
+export type ServerSaid = { code: 'file_damaged' | 'file_locked'; text: string };
+export const STORED_FILE_CODES = ['file_damaged', 'file_locked'];
+export function readServerSaid(body: any): ServerSaid | null {
+  return body && STORED_FILE_CODES.includes(body.code) && typeof body.error === 'string' ? { code: body.code, text: body.error } : null;
+}
+/** Asks once more for a file the viewer could not load, only to read why. Null when it says nothing we know. */
+export async function serverSaid(url: string): Promise<ServerSaid | null> {
+  try {
+    const r = await fetch(url, { credentials: 'include' });
+    if (!/json/.test(r.headers.get('content-type') || '')) return (r.body?.cancel().catch(() => {}), null);
+    return readServerSaid(await r.json());
+  } catch {
+    return null;
+  }
+}

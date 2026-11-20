@@ -12,8 +12,11 @@
 import type { Ctx } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, str } from './util.ts';
-import { TPL_USES, TPL_CHANGES, LOCK_MEANS, type TplUse, type TplChange, type TplAccess } from '../lib/tplroles.ts';
+import { TPL_USES, TPL_CHANGES, LOCK_MEANS, accessSentence, type TplUse, type TplChange, type TplAccess, type KeptForPerson } from '../lib/tplroles.ts';
 import { logicKey } from '../lib/logic.ts';
+// envelopes.ts imports this file too (carryRules). Only functions are used from it, and only when a request runs.
+import { audit } from './envelopes.ts';
+import { isCodeCheck } from '../lib/checks.ts';
 
 export type Rule = { use: TplUse; change: TplChange; locked: boolean };
 export const ruleOf = (t: any): Rule => ({
@@ -28,6 +31,15 @@ export const askWho = (t: any) => (t ? `${ownerName(t)} or an admin of your team
 
 /** The person it belongs to and admins: the only ones who set the rules, and who can delete it. */
 export const maySetRules = (c: Ctx, t: any) => c.admin || t.sender_id === c.user.id;
+
+/** A rule that holds something back from someone: the template is not for everyone, or its wording is locked. */
+const holdsBack = (t: any) => ruleOf(t).use !== 'team' || ruleOf(t).locked;
+/**
+ * Whether a template this person copies would be theirs (cloneOwner). The owner of a copy sets its rules, so a copy
+ * that held back less than the template would be a way round them: one of a template that is not for everyone, or
+ * whose wording is locked, is only the copier's when they may set the rules of the template itself.
+ */
+export const copyIsTheirs = (c: Ctx, t: any) => maySetRules(c, t) || !holdsBack(t);
 
 export function mayChange(c: Ctx, t: any): boolean {
   if (maySetRules(c, t)) return true;
@@ -51,6 +63,17 @@ export function usableSql(c: Ctx): [string, any[]] {
     OR EXISTS (SELECT 1 FROM template_members tm WHERE tm.template_id=e.id AND tm.user_id=? AND (e.tpl_use='chosen' OR (tm.can_change=1 AND e.tpl_change='chosen'))))`, [c.user.id, c.user.id]];
 }
 
+/**
+ * Whether a file of the account is a document of a template this person may not use. GET /files/:id/content then
+ * serves it only through an envelope or a template they can open that holds the same file (one they started from it
+ * before its rule changed, say), so the id of an HR letter, once seen, does not keep opening it.
+ */
+export function fileHeldBack(c: Ctx, fileId: string): boolean {
+  if (c.admin) return false;
+  return all("SELECT e.id, e.sender_id, e.tpl_use, e.tpl_change FROM documents d JOIN envelopes e ON e.id=d.envelope_id WHERE d.file_id=? AND e.kind='template' AND e.account_id=?", fileId, c.account.id)
+    .some((t) => !mayUse(c, t));
+}
+
 /** Refused when someone opens, uses, copies or sends from a template that is not for them. Says who to ask. */
 export function assertMayUse(c: Ctx, t: any) {
   if (mayUse(c, t)) return;
@@ -64,7 +87,8 @@ export function assertMayUse(c: Ctx, t: any) {
 export function changeRefusal(c: Ctx, t: any, deleting = false) {
   const owner = ownerName(t);
   const r = ruleOf(t);
-  const tail = r.locked ? ' Its wording is locked, and a copy of it is locked in the same way.' : ' To make your own version, copy it and change the copy.';
+  const tail = r.locked ? ' Its wording is locked, and a copy of it is locked in the same way.'
+    : !copyIsTheirs(c, t) ? ` A copy of it would belong to ${owner} too, with the same rules, because the template is not for everyone.` : ' To make your own version, copy it and change the copy.';
   // Someone who may change it, and is asked to delete it: deleting takes it away from everyone, so it stays with
   // the person it belongs to and the admins, like the rules themselves.
   if (deleting && mayChange(c, t))
@@ -103,6 +127,8 @@ export function accessOf(c: Ctx, t: any) {
     ...r, owner: ownerName(t), owner_id: t.sender_id,
     chosen_use: r.use === 'chosen' ? lines.map((l) => l.name) : [], chosen_change: r.change === 'chosen' ? lines.filter((l) => l.can_change).map((l) => l.name) : [],
     may_use: mayUse(c, t), may_change: mayChange(c, t), may_delete: maySetRules(c, t), may_set: maySetRules(c, t),
+    // Whether a copy this person makes is theirs, or stays with the owner and keeps the rules (cloneOwner).
+    copy_is_yours: copyIsTheirs(c, t),
   };
   // The team, so the people who set the rule can pick members. Only for them: who else is on the team, and who
   // was chosen, is theirs to see. Admins and the owner of the account are listed as always able.
@@ -124,28 +150,51 @@ const fixedOf = (e: any): string[] => {
     return [];
   }
 };
+/** What a locked template gave one person, which stays: their private note, a code check (which channel), an access code. */
+export type Kept = KeptForPerson;
+const peopleOf = (e: any): Record<string, Kept> => {
+  try {
+    const m = JSON.parse(e?.wording_people || '{}');
+    return m && typeof m === 'object' && !Array.isArray(m) ? m : {};
+  } catch {
+    return {};
+  }
+};
 
 /**
  * Called by copyEnvelope() for every copy it makes, after the copy is written. copyEnvelope writes the fields of the
  * copy in the order of src.fields, so the n-th field of the copy (by the order it was written in) is the copy of
  * the n-th field of the source.
  *   template to envelope   a locked template marks the envelope (wording_from), with its fields that carry the
- *                          template's own wording: a note, a strike-out, and every field the template filled in.
- *   envelope to envelope   a clone of a locked envelope is locked in the same way.
+ *                          template's own wording: a note, a strike-out, and every field the template filled in,
+ *                          and what it gave each person: a private note, a code check, an access code (wording_people).
+ *   envelope to envelope   a clone of a locked envelope is locked in the same way. (One started before the lock
+ *                          cannot be cloned by someone the lock is for: cloneOwner refuses it.)
  *   to a template          the copy has the same rules and the same chosen people as the template it came from,
  *                          so a copy is never a way to reach more people or to get round the lock. Who it belongs
  *                          to is decided by the clone route (cloneOwner).
+ * copyEnvelope writes the recipients in the order of src.recipients too.
  */
 export function carryRules(src: any, eid: string, kind: 'envelope' | 'template') {
   const ids: string[] = all('SELECT id FROM fields WHERE envelope_id=? ORDER BY rowid', eid).map((f) => f.id);
   const twin = new Map<string, string>((src.fields || []).map((f: any, i: number) => [f.id, ids[i]]));
-  const mark = (from: string, fixed: string[]) => run('UPDATE envelopes SET wording_from=?, wording_fixed=? WHERE id=?', from, JSON.stringify(fixed.filter(Boolean)), eid);
+  const rids: string[] = all('SELECT id FROM recipients WHERE envelope_id=? ORDER BY rowid', eid).map((r) => r.id);
+  const mark = (from: string, fixed: string[], people: Record<string, Kept>, owner: string | null = null) =>
+    run('UPDATE envelopes SET wording_from=?, wording_fixed=?, wording_people=?, wording_owner=? WHERE id=?', from, JSON.stringify(fixed.filter(Boolean)), JSON.stringify(people), owner, eid);
   if (kind === 'envelope' && src.kind === 'template') {
-    if (ruleOf(src).locked) mark(src.id, src.fields.filter((f: any) => f.type === 'note' || f.type === 'strike' || (f.value != null && f.value !== '')).map((f: any) => twin.get(f.id)!));
+    if (!ruleOf(src).locked) return;
+    const people: Record<string, Kept> = {};
+    (src.recipients || []).forEach((r: any, i: number) => {
+      const k: Kept = { ...(text(r.note).trim() ? { note: 1 } : {}), ...(isCodeCheck(r.verify) ? { verify: r.verify } : {}), ...(text(r.access_code).trim() ? { code: 1 } : {}) };
+      if (rids[i] && Object.keys(k).length) people[rids[i]] = k;
+    });
+    mark(src.id, src.fields.filter((f: any) => f.type === 'note' || f.type === 'strike' || (f.value != null && f.value !== '')).map((f: any) => twin.get(f.id)!), people);
     return;
   }
   if (kind === 'envelope') {
-    if (src.wording_from) mark(src.wording_from, fixedOf(src).map((fid) => twin.get(fid)!));
+    const was = peopleOf(src);
+    const people = Object.fromEntries((src.recipients || []).flatMap((r: any, i: number) => (was[r.id] && rids[i] ? [[rids[i], was[r.id]]] : [])));
+    if (src.wording_from) mark(src.wording_from, fixedOf(src).map((fid) => twin.get(fid)!), people, src.wording_owner || null);
     return;
   }
   const from = src.kind === 'template' ? src : src.template_id ? get("SELECT * FROM envelopes WHERE id=? AND kind='template'", src.template_id) : null;
@@ -155,31 +204,63 @@ export function carryRules(src: any, eid: string, kind: 'envelope' | 'template')
 }
 
 /**
- * Who a copy that becomes a template belongs to. Normally the person who copies. A copy of a template whose wording
- * is locked, made by someone who may not change it, stays with the person the template belongs to: the same people
- * keep the say over it, and the lock holds on the copy too. An envelope whose locked template was deleted cannot be
- * made into a template by someone other than an admin, because that would end the lock.
+ * Who a copy that becomes a template belongs to. Normally the person who copies. Whoever owns a template sets its
+ * rules, so a copy of a template that is not for everyone, or whose wording is locked, made by someone who may not
+ * set the rules of that template, stays with the person it belongs to (copyIsTheirs). It keeps the same rules and the
+ * same people (carryRules), and its owner and admins keep the say over it. Otherwise one copy and one change of its
+ * rule would open an HR template to the whole team, lift its lock, or put it on a public form. The same goes for a
+ * template made from an envelope that was started from such a template. One made from an envelope whose template
+ * this person may no longer use is refused, and so is one from an envelope whose locked template was deleted
+ * (except for admins), because that would end the lock.
  */
 export function cloneOwner(c: Ctx, e: any, kind: 'envelope' | 'template'): string {
-  if (kind !== 'template') return c.user.id;
   const from = e.kind === 'template' ? e : e.template_id ? get("SELECT * FROM envelopes WHERE id=? AND kind='template' AND account_id=?", e.template_id, e.account_id) : null;
-  if (!from) {
-    if (e.wording_from && !c.admin) throw bad(`This envelope was started from a template whose wording was locked, and that template has been deleted. A template made from it would no longer be locked, so it was not made. Ask ${askWho(null)}.`, 403, { code: 'wording_locked' });
+  if (kind !== 'template') {
+    // An envelope started before its template was locked is not locked. A copy of it made now would be a new
+    // envelope with the template's wording and no lock, again and again, so it is refused for whoever the lock is for.
+    if (e.kind === 'envelope' && !e.wording_from && from && ruleOf(from).locked && !mayChange(c, from))
+      throw bad(`This envelope was started from the template "${str(from.subject || 'Untitled template', 120)}" before its wording was locked, so it is not locked itself, and a copy made now would not be either. So no copy was made. To send it again, use the template: you fill in the names, the email addresses and the fields left empty, and the rest stays as the template has it. Ask ${askWho(from)} if it needs to change.`, 403, { code: 'wording_locked', template_id: from.id });
     return c.user.id;
   }
-  return ruleOf(from).locked && !mayChange(c, from) ? from.sender_id : c.user.id;
+  if (!from) {
+    // The person the deleted template belonged to keeps the say over what was started from it (wording_owner).
+    if (e.wording_from && !c.admin && e.wording_owner !== c.user.id) throw bad(`This envelope was started from a template whose wording was locked, and that template has been deleted. A template made from it would no longer be locked, so it was not made. Ask ${askWho(null)}.`, 403, { code: 'wording_locked' });
+    return c.user.id;
+  }
+  if (e.kind !== 'template' && !mayUse(c, from))
+    throw bad(`This envelope was started from the template "${str(from.subject || 'Untitled template', 120)}", which you can no longer use, so a template made from it was not made. Ask ${askWho(from)} if you need it.`, 403, { code: 'template_not_for_you' });
+  return copyIsTheirs(c, from) ? c.user.id : from.sender_id;
+}
+
+/**
+ * Written on a copy that belongs to someone other than the person who made it (cloneOwner), so its owner and the
+ * admins can see where it came from and who made it: it is in their list now, with their name on it.
+ */
+export function noteCopy(c: Ctx, copyId: string, src: any) {
+  const t = get('SELECT sender_id, tpl_use, tpl_locked FROM envelopes WHERE id=?', copyId);
+  if (!t || t.sender_id === c.user.id) return;
+  const from = src.kind === 'template' ? `the template "${str(src.subject || 'Untitled template', 120)}"` : `the envelope "${str(src.subject || 'Untitled', 120)}", which was started from a template`;
+  audit(copyId, c.actor, 'Copied', `Made by ${c.user.name || c.user.email} as a copy of ${from}. It belongs to ${ownerName(t)}, like that template, and keeps who can use and change it${ruleOf(t).locked ? ' and its locked wording' : ''}, so a copy is no way round them.`);
 }
 
 // ---- The lock on an envelope's wording ---------------------------------------------------------------------------
 
 /** Whether the wording of this envelope is locked for this person, and what the editor needs to say so. */
-export function wordingLock(c: Ctx, e: any): null | { template_id: string; template: string | null; ask: string; fixed: string[] } {
+export function wordingLock(c: Ctx, e: any): null | { template_id: string; template: string | null; ask: string; fixed: string[]; people: Record<string, Kept> } {
   if (e?.kind !== 'envelope' || !e.wording_from || c.admin) return null;
   const t = get("SELECT id, subject, sender_id, tpl_use, tpl_change, tpl_locked FROM envelopes WHERE id=? AND kind='template'", e.wording_from);
   // Unlocking the template, or being given the right to change it, unlocks the envelopes already started from it.
-  // A template that was deleted keeps its envelopes locked for everyone but admins.
+  // A template that was deleted keeps its envelopes locked for everyone but admins and the person it belonged to
+  // (wording_owner, written when it was deleted): nothing is locked away from the people responsible for it.
   if (t && (!ruleOf(t).locked || mayChange(c, t))) return null;
-  return { template_id: e.wording_from, template: t ? t.subject || 'Untitled template' : null, ask: askWho(t), fixed: fixedOf(e) };
+  if (!t && e.wording_owner && e.wording_owner === c.user.id) return null;
+  const owner = !t && e.wording_owner ? get('SELECT name FROM users WHERE id=?', e.wording_owner)?.name : null;
+  return { template_id: e.wording_from, template: t ? t.subject || 'Untitled template' : null, ask: owner ? `${owner} or an admin of your team` : askWho(t), fixed: fixedOf(e), people: peopleOf(e) };
+}
+
+/** Before a template is deleted: who it belonged to goes on the envelopes whose wording it locked (wordingLock). */
+export function templateGoes(t: any) {
+  if (t?.kind === 'template') run('UPDATE envelopes SET wording_owner=? WHERE wording_from=? AND account_id=?', t.sender_id, t.id, t.account_id);
 }
 
 const near = (a: any, b: any) => Math.abs(Number(a) - Number(b)) < 1e-7;
@@ -197,7 +278,7 @@ export function assertWordingKept(c: Ctx, e: any, b: any) {
   const lock = wordingLock(c, e);
   if (!lock) return;
   const no = (what: string) => {
-    throw bad(`${what} ${lock.template ? `This envelope was started from the template "${lock.template}", whose wording is locked.` : 'This envelope was started from a template whose wording was locked.'} ${LOCK_MEANS} Nothing was saved. If it needs to change, ask ${lock.ask} to change the template.`, 403, { code: 'wording_locked', template_id: lock.template_id });
+    throw bad(`${what} ${lock.template ? `This envelope was started from the template "${lock.template}", whose wording is locked.` : 'This envelope was started from a template whose wording was locked.'} ${LOCK_MEANS} Nothing was saved. If it needs to change, ask ${lock.ask} ${lock.template ? 'to change the template' : 'to change this envelope for you'}.`, 403, { code: 'wording_locked', template_id: lock.template_id });
   };
   if (b.message !== undefined && text(b.message) !== text(e.message)) no('The message cannot be changed.');
   if (typeof yes(b.ordered, !!e.ordered) === 'boolean' && yes(b.ordered, !!e.ordered) !== !!e.ordered) no('Whether people sign in order cannot be changed.');
@@ -221,6 +302,16 @@ export function assertWordingKept(c: Ctx, e: any, b: any) {
       if (!was) no(`Recipient ${i + 1} is not one of the people on it. Send each person with the id they have.`);
       else if (role !== was.role || text(x.role_name) !== text(was.role_name) || order !== was.routing_order)
         no(`What ${str(was.name || was.role_name || `recipient ${i + 1}`, 120)} does, and their place in the order, cannot be changed. Their name and address can.`);
+      else {
+        // Who signs stays who signs: a person is not turned into a signing group (which any member of it could sign
+        // for), nor a group into a person, nor a witness moved to another signer.
+        const who = str(was.name || was.role_name || `recipient ${i + 1}`, 120);
+        const group = x.group_id === undefined ? (was.group_name ? was.group_id : null) : text(x.group_id).trim() || null;
+        if (group !== (was.group_name ? was.group_id : null)) no(`${who} cannot be turned into a signing group, or a group into one person: who signs is part of the template.`);
+        if (text(x.witness_for === undefined ? was.witness_for : x.witness_for) !== text(was.witness_for)) no(`Whose signature ${who} witnesses cannot be changed.`);
+        const p = personProblem(lock, was, x);
+        if (p) no(p);
+      }
     });
   }
   if (b.fields !== undefined) {
@@ -249,6 +340,49 @@ export function assertWordingKept(c: Ctx, e: any, b: any) {
   }
 }
 
+/**
+ * What the template gave one person stays, as they would be sent it: the private note under the message (emailed as
+ * "Note for you"), and the check before the document opens. A note the template left empty is the sender's to write.
+ * A code check can go by email or by text, but not be taken off, and an access code can be changed, not taken off.
+ * `x` is what a save or a correction sends for them: a key it leaves out keeps the check and the code as they are,
+ * and a note left out of a save would empty it, so it counts as a change.
+ */
+function personProblem(lock: { people: Record<string, Kept> }, was: any, x: any, correcting = false): string | null {
+  const k = lock.people[was.id];
+  if (!k) return null;
+  const who = str(was.name || was.role_name || 'this person', 120);
+  if (k.note && !correcting && text(x.note) !== text(was.note)) return `The private note for ${who} comes from the template, and it cannot be changed or taken off.`;
+  const verify = x.verify === undefined ? was.verify : x.verify;
+  if (k.verify && !isCodeCheck(verify)) return `The template asks ${who} for a one-time code before the document opens, and that check cannot be taken off. It can go by email or by text message.`;
+  // A save writes every person whole, so one without "access_code" takes the code off. A correction leaves it as it is.
+  const codeGone = (correcting ? x.access_code !== undefined : true) && !text(x.access_code).trim();
+  if (k.code && codeGone) return `The template gives ${who} an access code, and it cannot be taken off. It can be changed.`;
+  return null;
+}
+
+/** POST /envelopes/:id/correct on an envelope whose wording is locked for this person: the same as a save (personProblem). */
+export function assertCorrectionKept(c: Ctx, e: any, recipientId: string, patch: any) {
+  const lock = wordingLock(c, e);
+  const was = lock && e.recipients.find((r: any) => r.id === recipientId);
+  const p = was && personProblem(lock, was, patch || {}, true);
+  if (p) throw bad(`${p} ${lock!.template ? `This envelope was started from the template "${lock!.template}", whose wording is locked.` : 'This envelope was started from a template whose wording was locked.'} Nothing was changed. If it needs to change, ask ${lock!.ask}.`, 403, { code: 'wording_locked', template_id: lock!.template_id });
+}
+
+/**
+ * A bulk send is made later than the call that asked for it, without a request. Who sends it, as the rules see them:
+ * the person and whether they are an admin of the account now. null once they are no longer on the team.
+ */
+export function asMember(accountId: string, userId: string): Ctx | null {
+  const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', accountId, userId);
+  return m ? ({ admin: m.role === 'owner' || m.role === 'admin', user: { id: userId } } as any) : null;
+}
+
+/**
+ * The template as a bulk send's rows see it (planValues in logic.ts): a column may change a value the template filled
+ * in unless the wording is locked for whoever sends the batch. Its owner and admins are never locked out of it.
+ */
+export const forRows = (c: Ctx | null, t: any) => ({ ...t, locked_for_rows: ruleOf(t).locked && !(c && mayChange(c, t)) });
+
 /** Anything else that is part of what the template says: the message when it is used, and the payment link. */
 export function assertNotLocked(c: Ctx, e: any, what: string) {
   const lock = wordingLock(c, e);
@@ -261,7 +395,19 @@ export function assertMessageKept(c: Ctx, t: any, message: any) {
   throw bad(`The message cannot be changed: the wording of this template is locked. ${LOCK_MEANS} Nothing was created. Leave "message" out, or ask ${askWho(t)} to change the template.`, 403, { code: 'wording_locked', template_id: t.id });
 }
 
-/** A member who leaves the team or is removed is no longer one of the chosen people of any of its templates. */
-export function forgetChosen(accountId: string, userId: string) {
+/**
+ * A member who leaves the team or is removed is no longer one of the chosen people of any of its templates. Each
+ * template that chose them says so in its history, with the rule before and after, like a change by its owner:
+ * who can use an HR template changed, and the people responsible can see when and why.
+ */
+export function forgetChosen(accountId: string, userId: string, actor: { name: string } = { name: 'System' }) {
+  const name = get('SELECT name, email FROM users WHERE id=?', userId);
+  const nobody = { admin: false, user: { id: '' } } as any; // the sentence does not depend on who reads it
+  const touched = all("SELECT e.* FROM template_members tm JOIN envelopes e ON e.id=tm.template_id WHERE tm.account_id=? AND tm.user_id=? AND e.kind='template'", accountId, userId);
+  const before = new Map(touched.map((t) => [t.id, accessSentence(accessOf(nobody, t))]));
   run('DELETE FROM template_members WHERE account_id=? AND user_id=?', accountId, userId);
+  for (const t of touched) {
+    const after = accessSentence(accessOf(nobody, t));
+    if (after !== before.get(t.id)) audit(t.id, actor as any, 'Who can use and change it', `${name?.name || name?.email || 'A member'} is no longer on the team, so they are no longer chosen. ${after} Before: ${before.get(t.id)}`);
+  }
 }

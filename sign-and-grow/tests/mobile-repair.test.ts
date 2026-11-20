@@ -89,6 +89,9 @@ test('tries one after another: four wrong and the right one opens, and the next 
   const { host, tok, sid } = await hosting('seq');
   for (let i = 1; i < HAND_OVER_TRIES; i++) assert.equal((await host.post('/auth/unlock', { password: `guess ${i}` })).data.tries_left, HAND_OVER_TRIES - i);
   assert.equal((await host.get('/me')).data.handed_over.tries_left, 1);
+  // Opening the signing page again while it is locked does not give the guesser five new tries.
+  await host.get(`/sign/${tok}`);
+  assert.equal((await host.get('/me')).data.handed_over.tries_left, 1);
   assert.deepEqual((await host.post('/auth/unlock', { password: PASSWORD })).data.ok, true, 'the fifth try is the right one');
   assert.equal(s.db.get('SELECT unlock_tries n FROM sessions WHERE id=?', sid).n, 0);
   // The signer still has to sign, so opening the page again locks again, with all five tries.
@@ -381,4 +384,241 @@ test('two fingers spread on the pad make no signature, one finger still does, an
   assert.match(src, /if \(!live \|\| !pens\.move\(e\.pointerId\)\) return;/);
   assert.match(src, /if \(!pens\.up\(e\.pointerId\) \|\| !live\) return;/);
   assert.match(src, /return setError\(twoFingers\(kind\)\);/);
+});
+
+// ---- Fields that cover each other: what a finger can reach --------------------------------------------
+
+const fbox = (o: any) => ({ document_id: 'd1', page: 0, type: 'signature', x: 0.1, y: 0.5, w: 0.3, h: 0.06, recipient_id: 'r1', ...o });
+const who = [{ id: 'r1', name: 'Pat Patient' }];
+const doc1 = [{ id: 'd1', name: 'Intake' }];
+
+test('a tick box inside a text field is drawn on top and allowed; a field mostly hidden by others is still refused', async () => {
+  const { stackedFields, layers } = await import('../src/lib/stacked.ts');
+  // The skeptic's paper-form layout: "Allergies", with a tick box "None" inside its right end.
+  const text = fbox({ id: 'txt', type: 'text', x: 0.1, y: 0.4, w: 0.6, h: 0.03 });
+  const tick = fbox({ id: 'na', type: 'checkbox', x: 0.67, y: 0.4025, w: 0.025, h: 0.025 });
+  assert.deepEqual(stackedFields([text, tick], who, doc1), []);
+  assert.deepEqual(stackedFields([tick, text], who, doc1), [], 'whichever was placed first');
+  // On the signing page the tick box is drawn over the text field, whatever order they came in.
+  assert.deepEqual([...layers([text, tick])], [['txt', 1], ['na', 2]]);
+  assert.deepEqual([...layers([tick, text])], [['na', 2], ['txt', 1]]);
+  assert.deepEqual([...layers([text, fbox({ id: 'far', y: 0.8 })])], [], 'fields that touch nothing keep the page order');
+  // Still refused: two the same size in one spot (the later is on top and hides the earlier), a field just a
+  // little smaller than the one it sits on, and a text field covered end to end by three tick boxes.
+  const msg = 'Two fields for Pat Patient sit on top of each other on page 1, so one of them cannot be tapped. Move or remove one.';
+  assert.deepEqual(stackedFields([fbox({}), fbox({ x: 0.11 })], who, doc1), [msg]);
+  assert.deepEqual(stackedFields([fbox({}), fbox({ type: 'text', x: 0.11, y: 0.502, w: 0.28, h: 0.055 })], who, doc1), [msg]);
+  assert.deepEqual(stackedFields([fbox({ type: 'text', w: 0.3, h: 0.03 }), ...[0, 1, 2].map((k) => fbox({ type: 'checkbox', x: 0.1 + k * 0.1, w: 0.1, h: 0.03 }))], who, doc1), [msg]);
+  // The page uses the same order for the person's own fields.
+  assert.match(signPage(), /const layered = useMemo\(\(\) => layers\(fields\), \[fields\]\);/);
+  assert.match(signPage(), /style: \{ \.\.\.pos\(f\), zIndex: layered\.get\(f\.id\) \}/);
+});
+
+test('templates and public forms are checked when they are saved or made, and a form made before the rule takes its visitors', async () => {
+  const c = await signUp('Nia Forms', 'nia-r@example.com', ip());
+  const { upload } = await import('./helpers.ts');
+  const file = await upload(c, 1);
+  const base = { kind: 'template', subject: 'Intake form', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Patient' }] };
+  const apart = [fbox({ id: 'a', document_id: 'd', recipient_id: 'r', y: 0.3 }), fbox({ id: 'b', document_id: 'd', recipient_id: 'r', y: 0.6 })];
+  const together = [fbox({ id: 'a', document_id: 'd', recipient_id: 'r' }), fbox({ id: 'b', document_id: 'd', recipient_id: 'r', x: 0.11 })];
+  // Saving a template whose fields cover each other is refused, and nothing is left behind.
+  const before = s.db.get("SELECT COUNT(*) n FROM envelopes WHERE kind='template'").n;
+  const bad1 = await c.post('/envelopes', { ...base, fields: together });
+  assert.equal(bad1.status, 400);
+  assert.match(bad1.data.error, /^Two fields for Patient sit on top of each other on page 1, so one of them cannot be tapped\. Move or remove one\. The template was not saved\.$/);
+  assert.equal(s.db.get("SELECT COUNT(*) n FROM envelopes WHERE kind='template'").n, before);
+  // A good one saves; stacking it later through PUT is refused and the template stays as it was.
+  const tpl = (await c.post('/envelopes', { ...base, fields: apart })).data.envelope;
+  const put = await c.put(`/envelopes/${tpl.id}`, { ...base, fields: together });
+  assert.equal(put.status, 400);
+  assert.deepEqual(s.db.all('SELECT y FROM fields WHERE envelope_id=? ORDER BY y', tpl.id).map((f: any) => f.y), [0.3, 0.6]);
+  // A draft may still hold it while the sender works (refused at send, as before).
+  assert.equal((await c.post('/envelopes', { ...base, kind: 'envelope', recipients: [{ id: 'r', role: 'signer', name: 'Pat', email: 'pat-r@example.com' }], fields: together })).status, 200);
+  // A template made before the rule (stacked in the database) cannot become a new public form.
+  s.db.run('UPDATE fields SET x=0.11, y=0.5 WHERE envelope_id=? AND y=0.6', tpl.id);
+  s.db.run('UPDATE fields SET x=0.1, y=0.5 WHERE envelope_id=? AND y=0.3', tpl.id);
+  const pf = await c.post('/powerforms', { template_id: tpl.id, name: 'Intake form' });
+  assert.equal(pf.status, 400);
+  assert.match(pf.data.error, /Change the template first\. The form was not made\.$/);
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM powerforms WHERE template_id=?', tpl.id).n, 0);
+  // A form that was already live when its template was stacked: visitors are let in, the owner is told once a day.
+  s.db.run('UPDATE fields SET y=0.3 WHERE envelope_id=? AND x=0.1', tpl.id);
+  s.db.run('UPDATE fields SET x=0.1, y=0.6 WHERE envelope_id=? AND x=0.11', tpl.id);
+  assert.equal((await c.post('/powerforms', { template_id: tpl.id, name: 'Intake form' })).status, 200);
+  s.db.run('UPDATE fields SET x=0.11, y=0.5 WHERE envelope_id=? AND y=0.6', tpl.id);
+  s.db.run('UPDATE fields SET y=0.5 WHERE envelope_id=? AND y=0.3', tpl.id);
+  const slug = (await c.get('/powerforms')).data.powerforms[0].slug;
+  for (const [i, email] of ['walkin1-r@example.com', 'walkin2-r@example.com'].entries()) {
+    const v = new Client();
+    v.ip = ip();
+    const start = await v.post(`/public/powerforms/${slug}/start`, { name: `Walk In ${i}`, email });
+    assert.equal(start.status, 200, JSON.stringify(start.data));
+    assert.match(start.data.url, /\/sign\//);
+  }
+  const told = s.db.all("SELECT subject, html FROM emails WHERE to_email='nia-r@example.com' AND subject LIKE 'Two fields on your form%'");
+  assert.equal(told.length, 1, 'once a day, not once a visitor');
+  assert.equal(told[0].subject, 'Two fields on your form "Intake form" cover each other');
+  assert.match(told[0].html, /Text view/);
+  // Only the start is let in: the owner correcting a visitor's envelope keeps to the rule.
+  const visitorEnv = s.db.get("SELECT e.id FROM envelopes e JOIN recipients r ON r.envelope_id=e.id WHERE r.email='walkin1-r@example.com'").id;
+  const out = (await c.get(`/envelopes/${visitorEnv}`)).data.envelope;
+  const corr = await c.put(`/envelopes/${visitorEnv}`, { subject: out.subject, documents: out.documents, recipients: out.recipients, fields: out.fields });
+  assert.equal(corr.status, 400, JSON.stringify(corr.data));
+  assert.match(corr.data.error, /sit on top of each other/);
+  noDash(read('src/server/stackedforms.ts'), 'stackedforms.ts');
+});
+
+// ---- Photos: all eight camera orientations, in files laid out the way cameras and phones write them ------
+
+// A real JPEG, 48 by 32 pixels as stored: top left red, top right green, bottom left blue, bottom right white. It
+// starts with a JFIF header, as files saved by an editor or a messaging app do.
+const BASE = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAgADADAREAAhEBAxEB/8QAFwABAQEBAAAAAAAAAAAAAAAAAAcKCP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAYAQEBAQEBAAAAAAAAAAAAAAAACQYHCP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AOWnHFJQAFKZVCcABNWqXYAAUplUJwAHI62T0GAA0zJtNgAAzMqSseAA0zJtNgAA/9k=', 'base64');
+const JFIF_END = 2 + 2 + BASE.readUInt16BE(4); // SOI, then the JFIF APP0 segment
+// The thumbnail a camera puts inside its note: a JPEG of its own, with its own size mark (here it says 160 by 120),
+// which a careless reader takes for the photo's.
+const THUMB = (() => {
+  const t = Buffer.from(BASE);
+  const sof = t.indexOf(Buffer.from([0xff, 0xc0]));
+  t.writeUInt16BE(120, sof + 5);
+  t.writeUInt16BE(160, sof + 7);
+  return t;
+})();
+// The note as a phone writes it: IFD0 with Make, Model, Orientation, resolutions, Software, DateTime and a pointer
+// to the Exif sub-IFD (with the time taken and the pixel size), then IFD1 pointing at the thumbnail. Values that
+// do not fit in four bytes live after the lists, as in real files. `little`: "II" (most Android phones), else "MM".
+function cameraNote(orientation: number, little: boolean): Buffer {
+  const u16 = (v: number) => (little ? [v & 255, v >> 8] : [v >> 8, v & 255]);
+  const u32 = (v: number) => (little ? [...u16(v & 65535), ...u16(v >>> 16)] : [...u16(v >>> 16), ...u16(v & 65535)]);
+  const ascii = (t: string) => [...Buffer.from(`${t}\0`)];
+  const make = ascii('Apple'), model = ascii('iPhone 13'), soft = ascii('17.5'), when = ascii('2026:11:20 09:30:00');
+  const n0 = 10, n1 = 3, n2 = 3;
+  const ifd0 = 8, ifdE = ifd0 + 2 + n0 * 12 + 4, ifd1 = ifdE + 2 + n1 * 12 + 4, data = ifd1 + 2 + n2 * 12 + 4;
+  const at: number[] = [];
+  let o = data;
+  for (const len of [make.length, model.length, 8, 8, soft.length, when.length, when.length]) at.push(o), (o += len);
+  const thumbAt = o;
+  const e = (tag: number, kind: number, count: number, value: number[]) => [...u16(tag), ...u16(kind), ...u32(count), ...value, ...Array(4 - value.length).fill(0)];
+  const tiff = [...(little ? [0x49, 0x49] : [0x4d, 0x4d]), ...u16(42), ...u32(ifd0),
+    ...u16(n0), ...e(0x010f, 2, make.length, u32(at[0])), ...e(0x0110, 2, model.length, u32(at[1])), ...e(0x0112, 3, 1, u16(orientation)),
+    ...e(0x011a, 5, 1, u32(at[2])), ...e(0x011b, 5, 1, u32(at[3])), ...e(0x0128, 3, 1, u16(2)), ...e(0x0131, 2, soft.length, u32(at[4])),
+    ...e(0x0132, 2, when.length, u32(at[5])), ...e(0x0213, 3, 1, u16(1)), ...e(0x8769, 4, 1, u32(ifdE)), ...u32(ifd1),
+    ...u16(n1), ...e(0x9003, 2, when.length, u32(at[6])), ...e(0xa002, 4, 1, u32(48)), ...e(0xa003, 4, 1, u32(32)), ...u32(0),
+    ...u16(n2), ...e(0x0103, 3, 1, u16(6)), ...e(0x0201, 4, 1, u32(thumbAt)), ...e(0x0202, 4, 1, u32(THUMB.length)), ...u32(0),
+    ...make, ...model, ...u32(72), ...u32(1), ...u32(72), ...u32(1), ...soft, ...when, ...when, ...THUMB];
+  const body = [0x45, 0x78, 0x69, 0x66, 0, 0, ...tiff];
+  return Buffer.from([0xff, 0xe1, (body.length + 2) >> 8, (body.length + 2) & 255, ...body]);
+}
+// Other segments real files carry next to the note: a colour profile (APP2) and Adobe's XMP (a second APP1, which
+// starts like no Exif note and here even claims orientation 1: browsers go by the Exif note, and so do we).
+const seg = (marker: number, payload: Buffer) => Buffer.concat([Buffer.from([0xff, marker, (payload.length + 2) >> 8, (payload.length + 2) & 255]), payload]);
+const ICC = seg(0xe2, Buffer.concat([Buffer.from('ICC_PROFILE\0\x01\x01', 'latin1'), Buffer.alloc(120, 7)]));
+const XMP = seg(0xe1, Buffer.from('http://ns.adobe.com/xap/1.0/\0<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description tiff:Orientation="1"/></rdf:RDF></x:xmpmeta>', 'latin1'));
+const LAYOUTS: Record<string, (o: number, little: boolean) => Buffer> = {
+  // A camera original: the note first, then (here) the JFIF header that follows in some files.
+  'note first': (o, little) => Buffer.concat([BASE.subarray(0, 2), cameraNote(o, little), BASE.subarray(2)]),
+  // Saved again by an editor or an app: JFIF first, the note after it.
+  'note after JFIF': (o, little) => Buffer.concat([BASE.subarray(0, JFIF_END), cameraNote(o, little), BASE.subarray(JFIF_END)]),
+  // With a colour profile and XMP after the note.
+  'note, profile, XMP': (o, little) => Buffer.concat([BASE.subarray(0, 2), cameraNote(o, little), ICC, XMP, BASE.subarray(2)]),
+};
+// Where each stored corner is seen once the photo is the right way up, from the EXIF standard.
+const SEEN: Record<number, Record<string, string>> = {
+  1: { red: 'TL', green: 'TR', blue: 'BL', white: 'BR' }, 2: { red: 'TR', green: 'TL', blue: 'BR', white: 'BL' },
+  3: { red: 'BR', green: 'BL', blue: 'TR', white: 'TL' }, 4: { red: 'BL', green: 'BR', blue: 'TL', white: 'TR' },
+  5: { red: 'TL', green: 'BL', blue: 'TR', white: 'BR' }, 6: { red: 'TR', green: 'BR', blue: 'TL', white: 'BL' },
+  7: { red: 'BR', green: 'TR', blue: 'BL', white: 'TL' }, 8: { red: 'BL', green: 'TL', blue: 'BR', white: 'TR' },
+};
+// One page drawn the way a PDF viewer draws it, far enough to look at the photo: pdf.js decodes the JPEG with its own
+// decoder (which ignores camera notes, as the viewers a signed PDF is downloaded into do) and says where the picture
+// goes. Gives the colour seen well inside each quarter of the picture as it lies on the page.
+async function seen(pdf: Uint8Array, want = (img: any) => img.width === 48 || img.height === 48) {
+  const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(pdf), verbosity: 0, isEvalSupported: false, disableFontFace: true, useSystemFonts: false }).promise;
+  try {
+    const page = await doc.getPage(1);
+    const ops = await page.getOperatorList();
+    const mul = (m: number[], t: number[]) => [m[0] * t[0] + m[2] * t[1], m[1] * t[0] + m[3] * t[1], m[0] * t[2] + m[2] * t[3], m[1] * t[2] + m[3] * t[3], m[0] * t[4] + m[2] * t[5] + m[4], m[1] * t[4] + m[3] * t[5] + m[5]];
+    let ctm = [1, 0, 0, 1, 0, 0];
+    const stack: number[][] = [];
+    for (let i = 0; i < ops.fnArray.length; i++) {
+      const fn = ops.fnArray[i];
+      if (fn === pdfjs.OPS.save) stack.push(ctm);
+      else if (fn === pdfjs.OPS.restore) ctm = stack.pop() || ctm;
+      else if (fn === pdfjs.OPS.transform) ctm = mul(ctm, ops.argsArray[i]);
+      else if (fn === pdfjs.OPS.paintImageXObject) {
+        const img: any = await new Promise((res) => page.objs.get(ops.argsArray[i][0], res));
+        if (!want(img)) continue;
+        const [a, b, c, d, e, f] = ctm;
+        const det = a * d - b * c;
+        const per = img.data.length / (img.width * img.height);
+        const colour = (x: number, y: number) => {
+          const u = (d * (x - e) - c * (y - f)) / det, v = (-b * (x - e) + a * (y - f)) / det;
+          const col = Math.min(img.width - 1, Math.floor(u * img.width)), row = Math.min(img.height - 1, Math.floor((1 - v) * img.height));
+          const [r, g, bl] = img.data.subarray((row * img.width + col) * per);
+          return r > 180 && g < 80 && bl < 80 ? 'red' : g > 110 && r < 80 && bl < 80 ? 'green' : bl > 180 && r < 80 && g < 80 ? 'blue' : r > 200 && g > 200 && bl > 200 ? 'white' : `rgb(${r},${g},${bl})`;
+        };
+        const xs = [e, e + a, e + c, e + a + c], ys = [f, f + b, f + d, f + b + d];
+        const box = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+        const at = (fx: number, fy: number) => colour(box.x0 + (box.x1 - box.x0) * fx, box.y0 + (box.y1 - box.y0) * fy);
+        // PDF y runs upwards, so the top of what is seen is the larger y.
+        const corners: Record<string, string> = { TL: at(0.2, 0.8), TR: at(0.8, 0.8), BL: at(0.2, 0.2), BR: at(0.8, 0.2) };
+        return { page: page.view as number[], tall: box.y1 - box.y0 > box.x1 - box.x0, where: Object.fromEntries(Object.entries(corners).map(([k, v]) => [v, k])) };
+      }
+    }
+    throw new Error('no photo on this page');
+  } finally {
+    await doc.destroy().catch(() => {});
+  }
+}
+
+test('all eight camera orientations come out upright, in both byte orders and three real file layouts, on the page and in the signed PDF', async () => {
+  const { jpegOrientation, pictureSize } = await import('../src/server/exif.ts');
+  const c = await signUp('Pho Eight', 'pho-eight@example.com', ip());
+  const upload1 = (bytes: Buffer, name: string) => {
+    const f = new FormData();
+    f.append('file', new Blob([bytes], { type: 'image/jpeg' }), name);
+    return c.call('POST', '/files', f);
+  };
+  for (const [layout, make] of Object.entries(LAYOUTS))
+    for (const little of [false, true])
+      for (let o = 1; o <= 8; o++) {
+        const file = make(o, little);
+        const what = `${layout}, ${little ? 'II' : 'MM'}, orientation ${o}`;
+        assert.equal(jpegOrientation(file)?.value, o, `${what}: the note is read`);
+        assert.deepEqual(pictureSize(file, false), { w: 48, h: 32 }, `${what}: the photo's size, not the thumbnail's`);
+        const up = await upload1(file, `IMG_${o}.jpg`);
+        assert.equal(up.status, 200, `${what}: ${JSON.stringify(up.data)}`);
+        const side = o >= 5;
+        const size = up.data.page_sizes[0];
+        assert.equal(size.w < size.h, side, `${what}: the page suits the photo as it is looked at`);
+        const pdf = (await c.get(`/files/${up.data.id}/content`)).data as Uint8Array;
+        const d = await seen(pdf);
+        assert.equal(d.tall, side, `${what}: the photo's shape on the page`);
+        assert.deepEqual(d.where, SEEN[o], `${what}: every corner where it belongs`);
+      }
+  // The same in what a signer signs: one envelope per orientation, saved again by an app (the commonest layout).
+  for (let o = 1; o <= 8; o++) {
+    const up = await upload1(LAYOUTS['note after JFIF'](o, o % 2 === 0), `Lease ${o}.jpg`);
+    const email = `tenant-${o}@example.com`;
+    const made = await c.post('/envelopes', { subject: `Photographed lease ${o}`, documents: [{ id: 'd', file_id: up.data.id }], recipients: [{ id: 'r', role: 'signer', name: 'Hal Tenant', email }], fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.88, w: 0.3, h: 0.06 }], send: true });
+    assert.equal(made.status, 200, JSON.stringify(made.data));
+    const tok = s.db.get('SELECT token FROM recipients WHERE envelope_id=?', made.data.envelope.id).token;
+    const signer = new Client();
+    signer.ip = ip();
+    await signer.post(`/sign/${tok}/consent`);
+    const view = (await signer.get(`/sign/${tok}`)).data;
+    assert.equal((await signer.post(`/sign/${tok}/complete`, { values: Object.fromEntries(view.fields.map((f: any) => [f.id, '1'])), signature_png: PNG_SIG, initials_png: PNG_SIG, version: view.version })).status, 200);
+    const signed = (await c.get(`/envelopes/${made.data.envelope.id}/download`)).data as Uint8Array;
+    const d = await seen(signed);
+    assert.equal(d.page[2] < d.page[3], o >= 5, `signed, orientation ${o}: the page`);
+    assert.deepEqual(d.where, SEEN[o], `signed, orientation ${o}: every corner where it belongs`);
+  }
+});
+
+test('/help says what the page does when the signal drops at Finish, and no more', async () => {
+  const { SIGNING_WEAK_SIGNAL } = await import('../src/lib/mobile.ts');
+  assert.doesNotMatch(SIGNING_WEAK_SIGNAL, /says that nothing was signed/);
+  assert.match(SIGNING_WEAK_SIGNAL, /asks whether it went through and says what it finds\. When it cannot tell yet, it says so/);
+  assert.match(SIGNING_WEAK_SIGNAL, /Trying again never signs twice\./);
+  noDash(SIGNING_WEAK_SIGNAL, 'SIGNING_WEAK_SIGNAL');
 });

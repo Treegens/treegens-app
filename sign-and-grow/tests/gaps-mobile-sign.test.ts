@@ -382,8 +382,9 @@ test('two fields of the same person that cover each other are named; anything a 
   // The case from the research: two required signatures in the same spot, sent, and the signer stuck at 1 of 2 left.
   assert.deepEqual(stackedFields([box({ recipient_id: 'r1' }), box({ recipient_id: 'r1', x: 0.12 })], people, oneDoc),
     ['Two fields for Pat Phone sit on top of each other on page 1, so one of them cannot be tapped. Move or remove one.']);
-  // A tick box hidden under a text field, and a field under one the sender filled in for them.
-  assert.equal(stackedFields([box({ recipient_id: 'r1', type: 'text', w: 0.4, h: 0.04 }), box({ recipient_id: 'r1', type: 'checkbox', x: 0.2, y: 0.505, w: 0.02, h: 0.02 })], people, oneDoc).length, 1);
+  // A tick box inside a text field is drawn on top of it, so both can be tapped (tests/mobile-repair.test.ts). A field
+  // under one the sender filled in for them, the same size and in the same spot, cannot.
+  assert.equal(stackedFields([box({ recipient_id: 'r1', type: 'text', w: 0.4, h: 0.04 }), box({ recipient_id: 'r1', type: 'checkbox', x: 0.2, y: 0.505, w: 0.02, h: 0.02 })], people, oneDoc).length, 0);
   assert.equal(stackedFields([box({ recipient_id: 'r1', type: 'text' }), box({ recipient_id: 'r1', type: 'text', readonly: 1 })], people, oneDoc).length, 1);
   // Not stacked: two people in the same spot (each sees only their own), another page, a slight touch, two fields
   // filled in for the signer, and the sender's own notes.

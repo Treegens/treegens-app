@@ -27,6 +27,8 @@ import { noteVisit, noteCopyOpened } from './evidence.ts';
 import { witnessFacts, beforeFinish } from './witness.ts';
 // Fields of other people that their answers hide are not on this screen either (logic.ts).
 import { hiddenFor } from './logic.ts';
+// A stamp on someone else's part of the page, or the sender's own (stamps.ts).
+import { stampSeen } from './stamps.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -169,6 +171,9 @@ route('GET', '/sign/:token', (c) => {
         // signer's own calendar.
         value: done ? fieldDisplayValue(f, o, e.date_format, senderZone(e)) : f.type === 'date' ? formatDateValue(words(f), e.date_format) : words(f),
         image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
+        // A stamp: its picture by this signing link, and its name. The sender's from the first look, another
+        // person's once they have finished (stamps.ts).
+        ...(f.type === 'stamp' && done && f.value ? stampSeen(c.params.token, f) : {}),
       };
       // A strike-out has no words and no picture: it is the sender's line through what is printed, and everyone is shown it.
     }).filter((f: any) => f.value || f.image || f.type === 'strike'),

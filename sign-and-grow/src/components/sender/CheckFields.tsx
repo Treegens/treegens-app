@@ -29,7 +29,9 @@ export function checkTrouble(r: CheckValue & { role?: string }, textsOn: boolean
   return null;
 }
 
-export function CheckFields({ value, role, textsOn, open = false, onChange }: { value: CheckValue; role?: string; textsOn: boolean; open?: boolean; onChange: (patch: CheckValue) => void }) {
+// keepCode: a locked template asks this person for a one-time code (src/server/tplroles.ts), so "no extra check" is
+// not offered: the server would refuse it, and the editor says so before anyone picks it.
+export function CheckFields({ value, role, textsOn, open = false, keepCode = false, onChange }: { value: CheckValue; role?: string; textsOn: boolean; open?: boolean; keepCode?: boolean; onChange: (patch: CheckValue) => void }) {
   const saysId = useId();
   const verify = verifyOf(value);
   const typed = String(value.phone || '');
@@ -43,7 +45,7 @@ export function CheckFields({ value, role, textsOn, open = false, onChange }: { 
         <label className="f">
           <span>Check before the document opens</span>
           <select value={verify} aria-describedby={saysId} onChange={(e) => onChange({ verify: e.target.value })}>
-            <option value="none">{CHECK_NAMES.none}</option>
+            {(!keepCode || verify === 'none') && <option value="none">{CHECK_NAMES.none}</option>}
             <option value="email_code">{CHECK_NAMES.email_code}</option>
             {(textsOn || verify === 'sms_code') && <option value="sms_code">{CHECK_NAMES.sms_code}</option>}
           </select>

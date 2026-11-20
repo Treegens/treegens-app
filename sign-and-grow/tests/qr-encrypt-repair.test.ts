@@ -21,6 +21,7 @@ before(async () => {
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+const DASH = String.fromCharCode(0x2014); // written this way so this file holds none itself
 const newKey = () => crypto.randomBytes(32).toString('base64');
 const K1 = newKey(), K2 = newKey(), K3 = newKey();
 const id1 = keyIdOf(decodeFileKey(K1)!), id2 = keyIdOf(decodeFileKey(K2)!);
@@ -178,10 +179,301 @@ test('/security and the data processing summary list what stays readable in the 
   assert.doesNotMatch(notEncryptedPoint().text, /those files are on the disk as they were uploaded/);
   assert.match(processingNotDone(false), /does not encrypt the files it stores now, and it never encrypts the database/);
   for (const t of [on.text, dbOn.text, off.text, databaseText(true), databaseText(false), PROCESSING_ENCRYPTED, processingNotDone(true), processingNotDone(false), ...DATABASE_HOLDS])
-    assert.doesNotMatch(t, /—|bank-grade|military|fully secure|unbreakable|compliant|is valid|will hold up/i);
+    assert.doesNotMatch(t, new RegExp(`${DASH}|bank-grade|military|fully secure|unbreakable|compliant|is valid|will hold up`, 'i'));
   // Both pages print the list, whatever the setting.
   const processing = read('src/app/security/processing/page.tsx');
   assert.match(processing, /<li>\{databaseText\(\)\}<\/li>/);
   assert.match(processing, /\{processingNotDone\(\)\}/);
   assert.match(read('src/app/security/page.tsx'), /<Point title=\{notEncrypted\.title\}>\{notEncrypted\.text\}<\/Point>/);
+});
+
+// ---- 2. A signed PDF that cannot be made (medium) ------------------------------------------------------------------
+
+// As if time had passed for the timer: every envelope's next try comes `ms` earlier, in the same order.
+const later = (ms: number) => {
+  for (const r of db.all('SELECT id, final_due_at FROM envelopes WHERE final_due_at IS NOT NULL')) db.run('UPDATE envelopes SET final_due_at=? WHERE id=?', new Date(Date.parse(r.final_due_at) - ms).toISOString(), r.id);
+};
+const finalOf = (eid: string) => db.get('SELECT final_sha256, final_tries, final_told_at FROM envelopes WHERE id=?', eid);
+
+test('five envelopes whose signed PDF cannot be made never hold up the others: the timer skips them after their tries, tells the sender and the operators once, and goes on', async () => {
+  setKeys(K1);
+  const jo = await person('Jo Timer', 'jo@timer.example');
+  const stuck: { id: string; src: string }[] = [];
+  for (let i = 0; i < 5; i++) {
+    const file = await uploadWith(jo, `Stuck ${i}`);
+    const e = await envelopeWith(jo, file, `s${i}@timer.example`, `Stuck ${i}`);
+    assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+    const src = db.get('SELECT sha256 s FROM files WHERE id=?', file.id).s;
+    flip(src);
+    assert.equal((await signAll(e.id, `s${i}@timer.example`)).status, 200, 'signing finishes whatever happens to the PDF');
+    stuck.push({ id: e.id, src });
+    assert.equal(finalOf(e.id).final_tries, 1, 'the failed try at completion counts');
+  }
+  // One more completes while storing is stopped (a new key in place of the old one): not its fault, so not counted.
+  const wf = await uploadWith(jo, 'Waits for storage');
+  const w = await envelopeWith(jo, wf, 'wait@timer.example', 'Waits for storage');
+  assert.equal((await jo.post(`/envelopes/${w.id}/send`)).status, 200);
+  setKeys(K2);
+  assert.equal((await signAll(w.id, 'wait@timer.example')).status, 200);
+  assert.deepEqual(finalOf(w.id), { final_sha256: null, final_tries: 0, final_told_at: null });
+  // Nothing is tried while storing is stopped.
+  const before = stuck.map((s) => finalOf(s.id).final_tries);
+  later(3600_000);
+  await env.cronTick();
+  assert.deepEqual(stuck.map((s) => finalOf(s.id).final_tries), before);
+  // The old key is listed again: the next tick makes the waiting one first, ahead of the five that keep failing.
+  setKeys(K2, [K1]);
+  later(3600_000);
+  await env.cronTick();
+  assert.ok(finalOf(w.id).final_sha256, 'the waiting envelope got its signed PDF');
+  // Time passes. Each stuck one is tried less often, and after its fifth try its sender and the operators are told.
+  for (let i = 0; i < 6; i++) (later(86_400_000), await env.cronTick());
+  await tick();
+  for (const s of stuck) {
+    const f = finalOf(s.id);
+    assert.equal(f.final_sha256, null);
+    assert.ok(f.final_told_at, `told about ${s.id}`);
+    assert.ok(f.final_tries >= 5);
+  }
+  const delayed = db.all("SELECT envelope_id, subject, html FROM emails WHERE to_email='jo@timer.example' AND subject LIKE 'Signed PDF delayed:%'");
+  assert.equal(delayed.length, 5, 'one email for each, not one each tick');
+  assert.match(delayed[0].html, /Everyone has finished/);
+  assert.match(delayed[0].html, /We try again once a day, and we email you as soon as the signed PDF is ready/);
+  const ops = alerts().filter((a) => a.startsWith('A signed PDF cannot be made'));
+  assert.equal(ops.length, 5, 'one alert for each, in the operator queue');
+  // A new one that failed once for a passing reason is not kept waiting behind them.
+  const nf = await uploadWith(jo, 'Passing trouble');
+  const n = await envelopeWith(jo, nf, 'new@timer.example', 'Passing trouble');
+  assert.equal((await jo.post(`/envelopes/${n.id}/send`)).status, 200);
+  const nsrc = db.get('SELECT sha256 s FROM files WHERE id=?', nf.id).s;
+  flip(nsrc);
+  assert.equal((await signAll(n.id, 'new@timer.example')).status, 200);
+  flip(nsrc); // put back as it was
+  later(3600_000);
+  await env.cronTick();
+  assert.ok(finalOf(n.id).final_sha256, 'made on the next tick after its short wait');
+  // More ticks tell nobody again.
+  for (let i = 0; i < 3; i++) (later(86_400_000), await env.cronTick());
+  await tick();
+  assert.equal(db.all("SELECT 1 FROM emails WHERE to_email='jo@timer.example' AND subject LIKE 'Signed PDF delayed:%'").length, 5);
+  assert.equal(alerts().filter((a) => a.startsWith('A signed PDF cannot be made')).length, 5);
+  // The file is put back from a backup: the daily try makes the PDF, and the sender hears that it is ready.
+  flip(stuck[0].src);
+  later(86_400_000);
+  await env.cronTick();
+  assert.ok(finalOf(stuck[0].id).final_sha256);
+  assert.equal(db.all("SELECT 1 FROM emails WHERE to_email='jo@timer.example' AND subject=?", 'Signed PDF ready: Stuck 0').length, 1);
+});
+
+// ---- 3. QR codes (medium) ------------------------------------------------------------------------------------------
+
+test('a code or a link shown again after a correction, a reassignment or a new role is the link that works now', () => {
+  const people = read('src/components/sender/Recipients.tsx');
+  const linkFor = people.slice(people.indexOf('const linkFor = async (r: any) => {'), people.indexOf('// The whole name as the sender wrote it.'));
+  assert.ok(linkFor.length > 40, 'linkFor is where it was');
+  assert.doesNotMatch(linkFor, /if \(links\[r\.id\]\) return/, 'never the link fetched before: it may have been replaced since');
+  assert.match(linkFor, /await api\(`\/envelopes\/\$\{e\.id\}\/recipient-view`/);
+  // What is on the screen goes when the people on the envelope change: a link under a name, and an open code.
+  assert.match(people, /const who = e\.recipients\.map\(\(r: any\) => `\$\{r\.id\}:\$\{r\.email\}:\$\{r\.name\}:\$\{r\.role\}:\$\{r\.phone \|\| ''\}`\)\.join\('\|'\);/);
+  assert.match(people, /useEffect\(\(\) => \{\n\s*setLinks\(\{\}\);\n\s*setShown\(''\);\n\s*setQr\(''\);\n\s*\}, \[who\]\);/);
+  // The QR dialog only opens after the link was asked for at that moment.
+  assert.match(people, /async function showQr\(r: any, from\?: HTMLButtonElement\) \{\n\s*qrFrom\.current = from \|\| null;\n\s*setBusy\(`qr:\$\{r\.id\}`\);\n\s*try \{\n\s*await linkFor\(r\);\n\s*setQr\(r\.id\);/);
+});
+
+test('the QR dialog says what the link lets its holder do, for every role a code is shown for, a witness included', async () => {
+  const { personScanLine, personCodeWarning } = await import('../src/lib/qrlink.ts');
+  const { ROLES } = await import('../src/server/envelopes.ts');
+  assert.equal(personScanLine('Will Witness', 'witness'), 'Ask Will Witness to point the camera of their phone at this code and tap the link it shows. The document opens on their own phone, and they read it and witness the signature there.');
+  assert.equal(personCodeWarning('Will Witness', 'witness'), 'This code is the link. Whoever scans it, or takes a photo of it, can open the document and witness the signature on it as Will Witness. Show it only to Will Witness, and close this window when they have scanned it.');
+  // A role whose link acts (signs, approves, witnesses) never reads as if the link only opened the document.
+  const acts: Record<string, RegExp> = { signer: /sign it/, approver: /approve it/, witness: /witness the signature/, inperson: /sign it/ };
+  for (const role of ROLES) {
+    const w = personCodeWarning('A Person', role);
+    if (acts[role] && role !== 'inperson') assert.match(w, acts[role], role);
+    if (role === 'viewer' || role === 'cc') assert.match(w, /can open the document as A Person\./, role);
+    assert.doesNotMatch(`${w} ${personScanLine('A Person', role)}`, new RegExp(`${DASH}|undefined`), role);
+  }
+  // In-person signers sign on the sender's own device: no code is offered for them at all.
+  assert.match(read('src/components/sender/Recipients.tsx'), /const reachable = turn && !isMe && r\.role !== 'inperson' && !own;/);
+});
+
+// ---- 4. When a stored file cannot be read (low) --------------------------------------------------------------------
+
+// The folder holds files under K1 and K2 from the tests above: both listed, so storing goes on.
+const both = () => setKeys(K2, [K1]);
+async function sentAndSigned(c: Client, email: string, subject: string) {
+  const file = await uploadWith(c, subject);
+  const e = await envelopeWith(c, file, email, subject);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, email)).status, 200);
+  return e;
+}
+
+test('a completion email waiting for another try goes out without an attachment that cannot be read, says so, and keeps what went out', async () => {
+  both();
+  const g = globalThis as any;
+  let fails = 0;
+  const taken: any[] = [];
+  process.env.SMTP_URL = 'smtp://stub.invalid';
+  g.__tsmail = { sendMail: async (m: any) => { if (fails-- > 0) throw new Error('mail server down'); taken.push(m); } };
+  try {
+    const mo = await person('Mo Mail', 'mo@retry.example');
+    const cases: [string, () => void][] = [
+      ['damaged', () => flip(db.get("SELECT final_sha256 s FROM envelopes WHERE subject='Retry damaged'").s, 120)],
+      // Locked: the server is given a key that is not the one the signed PDF was written with.
+      ['locked', () => setKeys(K3)],
+    ];
+    for (const [kind, spoil] of cases) {
+      both();
+      const subject = `Retry ${kind}`;
+      fails = 99; // every completion email fails on its first try
+      const e = await sentAndSigned(mo, `${kind}@retry.example`, subject);
+      const waiting = db.all("SELECT id, payload FROM emails WHERE envelope_id=? AND subject=? AND status='failed'", e.id, `Completed: ${subject}`);
+      assert.ok(waiting.length >= 1 && waiting.every((m) => JSON.parse(m.payload).attachments.length === 1), 'they wait with the signed PDF attached');
+      spoil();
+      fails = 0;
+      db.run("UPDATE emails SET next_try_at=? WHERE envelope_id=? AND status='failed'", new Date(Date.now() - 1000).toISOString(), e.id);
+      await (await import('../src/server/cron.ts')).tick();
+      const after = db.all('SELECT status, html FROM emails WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(waiting.map((m) => m.id)));
+      assert.ok(after.every((m) => m.status === 'sent'), `${kind}: they went out (${JSON.stringify(after.map((m) => m.status))})`);
+      const out = taken.filter((m) => m.subject === `Completed: ${subject}`);
+      assert.equal(out.length, waiting.length);
+      for (const m of out) {
+        assert.equal(m.attachments.length, 0, 'without the file that could not be read');
+        assert.match(m.html, /<\/h1>\n\s*<p [^>]*>We could not attach &quot;Retry [a-z]+\.pdf&quot; to this email: our stored copy could not be read when it went out/, 'at the top');
+        assert.match(m.text, /^We could not attach "Retry [a-z]+\.pdf" to this email: our stored copy could not be read when it went out, and the people who run this service have been told\. Use the link in this email instead\./);
+      }
+      assert.ok(after.every((m) => /We could not attach/.test(m.html)), 'the copy we keep is what went out');
+    }
+  } finally {
+    delete g.__tsmail;
+    delete process.env.SMTP_URL;
+  }
+});
+
+test('the export calls a locked signed PDF locked, not damaged, and names a completed envelope whose signed PDF is not made yet', async () => {
+  both();
+  const ez = await person('Ez Export', 'ez@export2.example');
+  const ok = await sentAndSigned(ez, 'one@export2.example', 'Export locked');
+  // One whose signed PDF could not be made.
+  const file = await uploadWith(ez, 'Export not made');
+  const nm = await envelopeWith(ez, file, 'two@export2.example', 'Export not made');
+  assert.equal((await ez.post(`/envelopes/${nm.id}/send`)).status, 200);
+  flip(db.get('SELECT sha256 s FROM files WHERE id=?', file.id).s);
+  assert.equal((await signAll(nm.id, 'two@export2.example')).status, 200);
+  assert.equal(finalOf(nm.id).final_sha256, null);
+  setKeys(K3); // the signed PDF of the first is under K2, which this server is not given now
+  const res = await ez.get('/export');
+  assert.equal(res.status, 200);
+  const zip = Buffer.from(res.data);
+  const at = zip.indexOf(Buffer.from('README.txt'));
+  const readme = zip.subarray(at).toString('utf8');
+  assert.match(readme, /1 signed document\(s\) are locked with an encryption key this server was not given, so they are not in this file\. They are not damaged and not lost/);
+  assert.ok(readme.includes(`Export locked (envelope ${ok.id})`));
+  assert.doesNotMatch(readme, /failed its check/, 'a locked file is not called damaged');
+  assert.match(readme, /1 completed document\(s\) have no signed PDF yet, because it could not be made so far/);
+  assert.ok(readme.includes(`Export not made (envelope ${nm.id})`));
+});
+
+test('a click-to-agree record says the terms could not be read when their PDF fails its check, instead of saying they follow', async () => {
+  both();
+  const pia = await person('Pia Record', 'pia@record.example');
+  const file = await uploadWith(pia, 'Terms of the reading circle. Return the books on time.', 'terms.pdf');
+  const made = await pia.post('/clickwraps', { name: 'Reading terms', format: 'pdf', file_id: file.id });
+  assert.equal((await pia.post(`/clickwraps/${made.data.id}/publish`, {})).status, 200);
+  const slug = (await pia.get(`/clickwraps/${made.data.id}`)).data.agreement.slug;
+  const visitor = Object.assign(new Client(), { ip: '198.19.250.1' });
+  const page = await visitor.get(`/public/agree/${slug}`);
+  const res = await visitor.post(`/public/agree/${slug}/accept`, { view: page.data.view, agree: true, name: 'Rae Reader', email: 'rae@record.example' });
+  assert.equal(res.status, 200, JSON.stringify(res.data));
+  const aid = res.data.acceptance.id;
+  const { extractText } = await import('../src/server/text.ts');
+  const good = await pia.get(`/clickwrap-acceptances/${aid}/certificate`);
+  assert.match(await extractText(good.data), /They follow this page, exactly as they were stored/);
+  flip(db.get('SELECT sha256 s FROM files WHERE id=?', file.id).s);
+  const cert = await pia.get(`/clickwrap-acceptances/${aid}/certificate`);
+  assert.equal(cert.status, 200, 'the record itself is still made');
+  const t = (await extractText(cert.data)).replace(/\s+/g, ' ');
+  assert.doesNotMatch(t, /They follow this page/);
+  assert.match(t, /They could not be read from storage when this record was made \(the stored copy failed its check\), so they are not in this file/);
+  assert.equal((await PDFDocument.load(cert.data)).getPageCount() < (await PDFDocument.load(good.data)).getPageCount(), true);
+});
+
+test('a signed PDF is never sealed without a signer\'s attachment that fails its check: it is made once the file is back', async () => {
+  both();
+  const al = await person('Al Attach', 'al@attach2.example');
+  const file = await uploadWith(al, 'With an attachment');
+  const e = (await al.post('/envelopes', {
+    subject: 'With an attachment', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Sig Ner', email: 'sig@attach2.example' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'a', document_id: 'd', recipient_id: 'r', type: 'attachment', page: 0, x: 0.1, y: 0.3, w: 0.3, h: 0.06, required: false }],
+  })).data.envelope;
+  assert.equal((await al.post(`/envelopes/${e.id}/send`)).status, 200);
+  const tok = tokenFor(e.id, 'sig@attach2.example');
+  const s = Object.assign(new Client(), { ip: '198.19.251.1' });
+  await s.post(`/sign/${tok}/consent`);
+  const v = (await s.get(`/sign/${tok}`)).data;
+  const f = new FormData();
+  const two = await PDFDocument.create();
+  two.addPage([300, 300]);
+  two.addPage([300, 300]);
+  f.append('file', new Blob([await two.save()], { type: 'application/pdf' }), 'passport.pdf');
+  const up = await s.call('POST', `/sign/${tok}/upload`, f);
+  assert.equal(up.status, 200, JSON.stringify(up.data));
+  const att = db.get('SELECT sha256 s FROM files WHERE id=?', up.data.id).s;
+  flip(att, 200);
+  const values: any = {};
+  for (const x of v.fields) values[x.id] = x.type === 'attachment' ? up.data.id : '1';
+  assert.equal((await s.post(`/sign/${tok}/complete`, { values, signature_png: (await import('./helpers.ts')).PNG })).data.envelope_status, 'completed');
+  assert.equal(finalOf(e.id).final_sha256, null, 'not sealed without it');
+  assert.equal(finalOf(e.id).final_tries, 1);
+  // The file is put back: the timer makes the signed PDF, with the attachment's two pages in it.
+  flip(att, 200);
+  later(3600_000);
+  await env.cronTick();
+  const fin = finalOf(e.id).final_sha256;
+  assert.ok(fin);
+  const pages = (await PDFDocument.load((await al.get(`/envelopes/${e.id}/download`)).data)).getPageCount();
+  assert.ok(pages >= 1 + 2 + 1, `document, attachment and certificate: ${pages}`);
+});
+
+test('a signer facing a document the server cannot hand over is shown the server\'s words and no download that would fail the same way', async () => {
+  const { readServerSaid, STORED_FILE_CODES } = await import('../src/components/viewFailure.ts');
+  assert.deepEqual(STORED_FILE_CODES, ['file_damaged', 'file_locked']);
+  assert.deepEqual(readServerSaid({ code: 'file_locked', error: 'We could not open this file at the moment.' }), { code: 'file_locked', text: 'We could not open this file at the moment.' });
+  assert.equal(readServerSaid({ code: 'not_found', error: 'x' }), null, 'only the two the page knows what to do about');
+  assert.equal(readServerSaid(null), null);
+  // The server's own answer for both, which the page shows as it is.
+  both();
+  const lo = await person('Lo Locked', 'lo@locked.example');
+  const file = await uploadWith(lo, 'Locked for the signer');
+  const e = await envelopeWith(lo, file, 'signer@locked.example', 'Locked for the signer');
+  assert.equal((await lo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const tok = tokenFor(e.id, 'signer@locked.example');
+  const s = Object.assign(new Client(), { ip: '198.19.252.1' });
+  await s.post(`/sign/${tok}/consent`);
+  const doc = (await s.get(`/sign/${tok}`)).data.documents[0].id;
+  setKeys(K3);
+  const r = await s.get(`/sign/${tok}/doc/${doc}`);
+  assert.equal(r.status, 503);
+  assert.deepEqual(readServerSaid(r.data)?.code, 'file_locked');
+  assert.match(readServerSaid(r.data)!.text, /locked with an encryption key this server has not been given/);
+  const viewer = read('src/components/PdfDoc.tsx');
+  assert.match(viewer, /if \(live && e\?\.name === 'UnexpectedResponseException' && e\?\.status >= 500\)\n\s*serverSaid\(url\)\.then\(\(s\) => live && setSaid\(s\)\);/);
+  assert.match(viewer, /failed\(error, \(\) => setAttempt\(\(n\) => n \+ 1\), said\)/);
+  const nv = read('src/components/sign/NoViewer.tsx');
+  const block = nv.slice(nv.indexOf("if (why === 'file' && said)"), nv.indexOf("if (why === 'file')\n"));
+  assert.match(block, /\{said\.text\}/);
+  assert.doesNotMatch(block, /download/i, 'no download offered when it would fail the same way');
+  assert.match(block, /Try again<\/button>/);
+  assert.match(block, /Ask \{sender\}/);
+  assert.match(read('src/app/sign/[token]/page.tsx'), /failed=\{\(why, retry, said\) => <NoViewer why=\{why\} retry=\{retry\} said=\{said\}/);
+});
+
+test('every member of a group can be handed their own link as a QR code, asked for at that moment', () => {
+  const gm = read('src/components/sender/GroupMembers.tsx');
+  assert.match(gm, /<button type="button" className="btn sm qr-tap" disabled=\{!!busy\} onClick=\{\(ev\) => showQr\(m, ev\.currentTarget\)\} aria-haspopup="dialog" aria-label=\{`Show a QR code with the signing link of \$\{m\.name\}`\}>Show QR code<\/button>/);
+  assert.match(gm, /await api\(`\/envelopes\/\$\{e\.id\}\/recipient-view`, \{ body: \{ recipient_id: r\.id, member_id: m\.id \} \}\);\n\s*setQr\(\{ m, url \}\);/);
+  assert.match(gm, /\{qr && turn && open && <QrDialog recipient=\{\{ name: qr\.m\.name, role: r\.role, status: r\.status, access_code: r\.access_code, verify: r\.verify \}\} link=\{qr\.url\} opener=\{qrFrom\} onClose=\{\(\) => setQr\(null\)\} \/>\}/);
+  // Only while the group's turn is on and nobody has taken it on: then every member's own link still works.
+  assert.ok(gm.indexOf('Show QR code') > gm.indexOf('{turn && open && ('));
 });

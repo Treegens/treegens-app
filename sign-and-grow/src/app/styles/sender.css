@@ -182,7 +182,7 @@ table.sn-batch tr.cont td { border-bottom: 0; padding-bottom: 2px; }
 .sn-choice { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; min-height: 44px; }
 .sn-choice.on { border-color: var(--green); background: var(--green-soft); }
 .sn-choice:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
-.sn-choice input { margin: 0; outline: none !important; }
+.sn-choice input { margin: 0; outline: none !important; flex-shrink: 0; } /* a long label that wraps never squeezes the radio */
 .sn-preview { margin: 0 0 12px; }
 .sn-rolefill { border: 0; padding: 0; margin: 0 0 4px; min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 .sn-rolefill legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 6px; }

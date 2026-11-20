@@ -6,7 +6,9 @@ import { sendMail } from './mail.ts';
 import { sameEmail } from './credits.ts';
 import { signInAs, createLogin, sendPasswordLink } from './routes-account.ts';
 import { provider, authorizeUrl, exchangeCode, verifyIdToken, identityOf, SignInRefused, type Provider, type Identity } from './oidc.ts';
-import { PROVIDER_IDS, PROVIDER_NAMES, SIGNIN_MINUTES, callbackPath, isProviderId, safeNext, signInProviders, SIGNIN_NOTE_COOKIE, type SignInError, type SignInNote } from '../lib/signin.ts';
+import { PROVIDER_IDS, PROVIDER_NAMES, SIGNIN_MINUTES, callbackPath, isProviderId, safeNext, signInProviders, removedText, SIGNIN_NOTE_COOKIE, type SignInError, type SignInNote, type Removed } from '../lib/signin.ts';
+import { forgetEarlierSetup } from './reclaim.ts';
+import { secondStepWaits } from './twostep.ts';
 
 // Signing in and signing up with Google or Microsoft, next to email and password. The talking to the provider and
 // the checking of what it answers are in oidc.ts. This file decides who the person is, and that rule is short:
@@ -77,18 +79,50 @@ route('GET', '/auth/:provider/start', (c) => {
 const addIdentity = (userId: string, p: Provider, who: Identity, userEmail: string) =>
   run('INSERT INTO identities (id, provider, subject, user_id, email, vouched, created_at) VALUES (?,?,?,?,?,?,?)', id('idn'), p.id, who.subject, userId, who.email, who.vouched && sameEmail(who.email, userEmail) ? 1 : 0, now());
 
+// Connects a provider that vouched for the address to the existing login with that address, and says what it did
+// for the first screen. Called by the callback below, or, when the login has two-step login, by POST /auth/two-step
+// after the code (routes-twostep.ts), never before.
+export async function linkProvider(userId: string, providerId: string, who: Identity): Promise<SignInNote> {
+  const p = isProviderId(providerId) ? provider(providerId) : null;
+  const existing = get('SELECT * FROM users WHERE id=?', userId);
+  if (!p || !existing) return {};
+  // Connected meanwhile (another tab, or under Settings): nothing more to do.
+  if (get('SELECT 1 x FROM identities WHERE provider=? AND subject=?', p.id, who.subject)) return { linked: p.name };
+  // The provider stands behind the address, so this person owns the login with that address. If nobody had ever
+  // confirmed the address, whoever set the login up before has shown nothing: their password and every other
+  // way in they left behind stop here, or a stranger who made a login in this person's name would share it.
+  const unconfirmed = !existing.email_verified;
+  const hadPassword = hasPassword(existing);
+  let removed: Removed = {};
+  tx(() => {
+    if (unconfirmed) {
+      // And what was set up in it goes too, or it would go on working for whoever that was (reclaim.ts).
+      removed = forgetEarlierSetup(existing.id, who.name);
+      const gone = cutEarlierAccess(existing.id).map((x) => PROVIDER_NAMES[x as 'google' | 'microsoft'] || x);
+      if (gone.length) removed.disconnected = [...new Set(gone)];
+      run('UPDATE users SET password_hash=?, email_verified=1 WHERE id=?', NO_PASSWORD, existing.id);
+      run('DELETE FROM password_resets WHERE user_id=?', existing.id);
+    }
+    addIdentity(existing.id, p, who, existing.email);
+  });
+  await tellConnected(existing, p, who, unconfirmed ? 'reclaimed' : 'address', hadPassword, removed);
+  const note: SignInNote = { linked: p.name };
+  if (unconfirmed) Object.assign(note, { reclaimed: hadPassword ? 'password' : 'login', removed });
+  return note;
+}
+
 // The owner of a login hears about every new way into it, however it came about, with what to do if it was not them.
-async function tellConnected(user: any, p: Provider, who: Identity, how: 'settings' | 'address' | 'reclaimed', hadPassword = false) {
+async function tellConnected(user: any, p: Provider, who: Identity, how: 'settings' | 'address' | 'reclaimed', hadPassword = false, removed: Removed = {}) {
   const as = who.email ? ` as ${who.email}` : '';
   await sendMail({
     to: user.email, subject: `${p.name} can now open your Sign&Grow login`, heading: `${p.name} was connected to your login`,
     lines: [
       `Signing in with ${p.name}${as} now opens the Sign&Grow login of ${user.email}.`,
       how === 'settings' ? 'It was connected under Settings, by someone who was signed in to your login.'
-        : how === 'address' ? `It was connected because ${p.name} confirmed to us that ${who.email} belongs to the person who just signed in there. Your password is unchanged.`
-        : `This login was started earlier, but its address had never been confirmed, so we could not know who started it. ${p.name} has now confirmed that the address is yours. To be safe, ${hadPassword ? 'the password that was set before no longer works, ' : ''}every browser that was signed in has been signed out, and API keys made by this login were revoked. ${hadPassword ? 'You can choose a new password under Settings.' : ''} If you did not start this login yourself, look at what is in it under Settings: the team, the API keys and the webhooks.`.replace(/\s+/g, ' ').trim(),
+        : how === 'address' ? `It was connected because ${p.name} confirmed to us that ${who.email} belongs to the person who just signed in there.${hasPassword(user) ? ' Your password is unchanged.' : ''}`
+        : `This login was started earlier, but its address had never been confirmed, so we could not know who started it. ${p.name} has now confirmed that the address is yours. To be safe, ${hadPassword ? 'the password that was set before no longer works, ' : ''}every browser that was signed in has been signed out. ${hadPassword ? 'You can choose a new password under Settings.' : ''} ${removedText(removed) || 'Nothing else had been set up in it.'} If you set any of it up yourself, you can set it up again under Settings.`.replace(/\s+/g, ' ').trim(),
       'If this was you, there is nothing to do.',
-      `If it was not you: sign in, open Settings, Profile, and under "Ways to sign in" disconnect ${p.name}. Then change your password, because someone else may know it. If you cannot get in, use "Forgot password" on the sign-in page, or write to us: ${baseUrl()}/help`,
+      `If it was not you: sign in, open Settings, Profile, and under "Ways to sign in" disconnect ${p.name}.${how !== 'reclaimed' && hasPassword(user) ? ' Then change your password, because someone else may know it.' : ' Then disconnect any other way to sign in listed there that you do not know.'} If you cannot get in, use "Forgot password" on the sign-in page, or write to us: ${baseUrl()}/help`,
     ],
     cta: { label: 'Open ways to sign in', url: `${baseUrl()}/app/settings?tab=profile` },
   });
@@ -129,7 +163,9 @@ route('GET', '/auth/:provider/callback', async (c) => {
   const state = str(c.q.get('state'), 200);
   const row = state ? get('SELECT * FROM signin_states WHERE id=?', sha256(state)) : null;
   if (row) run('DELETE FROM signin_states WHERE id=?', row.id);
-  if (!row || row.provider !== p.id || row.expires_at <= now() || !inBrowser || !safeEqual(inBrowser, state)) return fail(null, p, 'expired');
+  // Someone who is signed in started this under Settings (Connect), or in a tab left open. "Start again" on the
+  // sign-in page would make them a second login and switch the browser to it, so they go back to Settings instead.
+  if (!row || row.provider !== p.id || row.expires_at <= now() || !inBrowser || !safeEqual(inBrowser, state)) return fail(c.auth?.via === 'session' ? { user_id: c.user.id } : null, p, 'expired');
   const back = (code: SignInError, email = '') => fail(row, p, code, email);
   if (c.q.get('error')) {
     const what = str(c.q.get('error'), 80);
@@ -184,24 +220,21 @@ route('GET', '/auth/:provider/callback', async (c) => {
     const existing = get('SELECT * FROM users WHERE email=?', who.email);
     if (existing && !who.vouched) return back('exists', who.email);
     if (existing) {
-      // The provider stands behind the address, so this person owns the login with that address. If nobody had ever
-      // confirmed the address, whoever set the login up before has shown nothing: their password and every other
-      // way in they left behind stop here, or a stranger who made a login in this person's name would share it.
-      const unconfirmed = !existing.email_verified;
-      const hadPassword = hasPassword(existing);
-      tx(() => {
-        if (unconfirmed) {
-          cutEarlierAccess(existing.id);
-          run('UPDATE users SET password_hash=?, email_verified=1 WHERE id=?', NO_PASSWORD, existing.id);
-          run('DELETE FROM password_resets WHERE user_id=?', existing.id);
-        }
-        addIdentity(existing.id, p, who, existing.email);
-      });
-      await tellConnected(existing, p, who, unconfirmed ? 'reclaimed' : 'address', hadPassword);
+      // Two-step login is on: Google or Microsoft alone connects, cuts and confirms nothing here. That waits for the
+      // code (POST /auth/two-step calls linkProvider), so whoever has only the mailbox behind the address gains no
+      // way in, and the owner hears of a new connection only once it is real.
+      if (secondStepWaits(c, existing)) {
+        const r = await signInAs(c, existing, row.invite, { next: safeNext(row.next), note: { ...(row.code ? { code_unused: true } : {}), link: { provider: p.id, who } }, via: p.name });
+        if ('two_step' in r) return redirect('/login/two-step');
+        return done(c, row, Object.assign(note, r));
+      }
+      Object.assign(note, await linkProvider(existing.id, p.id, who));
       u = get('SELECT * FROM users WHERE id=?', existing.id);
-      note.linked = p.name;
-      if (unconfirmed) note.reclaimed = hadPassword ? 'password' : 'login';
     } else {
+      // A browser that is signed in already does not make itself a second login in passing: that person most likely
+      // meant to connect this account to the login they are in. Settings says how, and how to make a separate one.
+      // An invitation is the exception: it was sent to this new address, so a login for it is what was asked for.
+      if (c.auth?.via === 'session' && !row.invite) return fail({ user_id: c.user.id }, p, 'signed_in');
       try {
         rateLimit(`signup:${c.ip}`, 10, 3600_000);
       } catch {

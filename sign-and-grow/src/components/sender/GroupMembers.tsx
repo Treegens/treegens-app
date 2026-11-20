@@ -1,7 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { api, toast } from '@/components/ui';
 import { fail } from './feedback';
+import { QrDialog } from './QrDialog';
 import { dayTime } from './lib';
 import { ConfirmDialog } from './dialogs';
 import { groupDoes } from '@/lib/groups';
@@ -17,6 +18,10 @@ export function GroupMembers({ e, r, deliveries, onChanged }: { e: any; r: any; 
   const [busy, setBusy] = useState('');
   const [shown, setShown] = useState<{ id: string; url: string } | null>(null);
   const [releasing, setReleasing] = useState(false);
+  // A member standing next to the sender can scan their own link, like any other person on the envelope (QrDialog).
+  // The link is asked for at that moment, so it is always the one that works now.
+  const [qr, setQr] = useState<{ m: any; url: string } | null>(null);
+  const qrFrom = useRef<HTMLButtonElement | null>(null);
   const members: any[] = r.members || [];
   const out = e.status === 'sent';
   const turn = out && (r.status === 'sent' || r.status === 'viewed');
@@ -34,6 +39,18 @@ export function GroupMembers({ e, r, deliveries, onChanged }: { e: any; r: any; 
       } catch {
         toast('Your browser did not let us copy. The link is shown under their name, so you can select and copy it.', true);
       }
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy('');
+    }
+  }
+  async function showQr(m: any, from: HTMLButtonElement) {
+    qrFrom.current = from;
+    setBusy(`qr:${m.id}`);
+    try {
+      const { url } = await api(`/envelopes/${e.id}/recipient-view`, { body: { recipient_id: r.id, member_id: m.id } });
+      setQr({ m, url });
     } catch (err) {
       fail(err);
     } finally {
@@ -59,7 +76,12 @@ export function GroupMembers({ e, r, deliveries, onChanged }: { e: any; r: any; 
           <li key={m.id}>
             <span><b>{m.name}</b> <span className="muted">{m.email}</span><br /><span className="muted small">{fact(m)}</span></span>
             {/* While nobody has it, each member's own link can be passed on. Once someone has it, only theirs works. */}
-            {turn && open && <button type="button" className="btn sm" disabled={!!busy} onClick={() => copy(m)} aria-label={`Copy the signing link of ${m.name}`}>{busy === m.id ? 'Copying…' : 'Copy link'}</button>}
+            {turn && open && (
+              <span className="sn-person-actions">
+                <button type="button" className="btn sm" disabled={!!busy} onClick={() => copy(m)} aria-label={`Copy the signing link of ${m.name}`}>{busy === m.id ? 'Copying…' : 'Copy link'}</button>
+                <button type="button" className="btn sm qr-tap" disabled={!!busy} onClick={(ev) => showQr(m, ev.currentTarget)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link of ${m.name}`}>Show QR code</button>
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -69,6 +91,7 @@ export function GroupMembers({ e, r, deliveries, onChanged }: { e: any; r: any; 
           <input readOnly value={shown.url} onFocus={(ev) => ev.currentTarget.select()} />
         </label>
       )}
+      {qr && turn && open && <QrDialog recipient={{ name: qr.m.name, role: r.role, status: r.status, access_code: r.access_code, verify: r.verify }} link={qr.url} opener={qrFrom} onClose={() => setQr(null)} />}
       {turn && !open && (
         <div className="sn-person-actions">
           <button type="button" className="btn sm" onClick={() => setReleasing(true)} aria-label={`Give ${r.group_name} back to the whole group`}>Give back to the group</button>

@@ -52,8 +52,10 @@ export function assertWitnessesAfter(e: any, r: any, name: string, email: string
   for (const w of after.recipients.filter(isWitness)) {
     // A witness the person passing it on had named goes with them (forgetNamedWitness), so there is nothing to check.
     if (passing && w.witness_for === r.id && w.status === 'pending' && w.signer_named_at) continue;
+    // A witness that already broke a rule before this change (sent before the rule existed) is not held to it here:
+    // its words would differ with any change of name, and refusing would stop the sender putting anything right.
     const is = witnessProblem(w, after);
-    if (!is || is === witnessProblem(e.recipients.find((x: any) => x.id === w.id), e)) continue;
+    if (!is || witnessProblem(e.recipients.find((x: any) => x.id === w.id), e)) continue;
     const sender = senderOf(e);
     throw bad(passing ? `This document cannot be passed on to ${name}: ${name} is on it as a witness, and a witness cannot also sign it. Pass it on to someone else, or ask ${sender?.name || 'the sender'}${sender?.email ? ` (${sender.email})` : ''} to change who is on it. Nothing was changed.` : `${is} Nothing was changed.`);
   }

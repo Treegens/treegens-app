@@ -6,8 +6,8 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { boot, Client, signUp, mailTo } from './helpers.ts';
-import { safeNext, signInErrorText, signInNotice, signInProviders, SIGNIN_ERRORS } from '../src/lib/signin.ts';
+import { boot, Client, signUp, mailTo, simple } from './helpers.ts';
+import { safeNext, signInErrorText, signInNotice, signInProviders, removedText, SIGNIN_ERRORS } from '../src/lib/signin.ts';
 
 type P = 'google' | 'microsoft';
 const G = { id: 'sign-and-grow.apps.google.test', secret: 'google-secret' };
@@ -589,9 +589,11 @@ test('a login somebody started in another person\'s name is theirs no longer onc
   assert.match(withKey.data.error, /It was revoked/);
   // Val is told on the first screen and by email, with what to look at.
   assert.equal(r.note.reclaimed, 'password');
-  assert.match(signInNotice(r.note), /the address was never confirmed.*the password that was set before no longer works.*choose a new password under Settings.*look at the team, the API keys and the webhooks/);
+  // What was removed is named, and only what was there (not a team or webhooks the login could not have).
+  assert.match(signInNotice(r.note), /the address was never confirmed.*the password that was set before no longer works.*choose a new password under Settings.*What had been set up in it was removed: 1 API key, the name on the profile and the workspace name\. Your name is now "Val Real"\./);
+  assert.doesNotMatch(signInNotice(r.note), /team|webhook/);
   const [told] = mailTo('val@gmail.com').filter((m) => /Google can now open your/.test(m.subject));
-  assert.match(told.html, /its address had never been confirmed.*the password that was set before no longer works.*API keys made by this login were revoked/s);
+  assert.match(told.html, /its address had never been confirmed.*the password that was set before no longer works.*What had been set up in it was removed: 1 API key, the name on the profile and the workspace name/s);
 
   // The other way round: the stranger makes the login by signing in with Microsoft under the victim's address.
   const squatter = browser();
@@ -1013,4 +1015,283 @@ test('every way a sign-in can fail has words that say what happened and what to 
     }
   assert.match(signInErrorText('made-up-code', 'google'), /Google did not confirm who you are/, 'an unknown code gets the general words');
   assert.match(signInErrorText('no_email', 'microsoft'), /Microsoft did not tell us an email address.*Create one with your email and a password instead/);
+});
+
+// ---- Taking back a login somebody else started (repairs after review) ------------------------------
+
+// What a stranger can set up in a login made with somebody else's address, before that person arrives: everything the
+// API lets a login whose address is unconfirmed do, plus what it cannot do today but older code let it (written
+// straight into the database), so the rule holds whatever is there.
+async function setUpAsStranger(c: Client, email: string) {
+  const me = await whoIs(c);
+  const acc = db.get("SELECT account_id a FROM memberships WHERE user_id=? AND role='owner'", me.id).a;
+  const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  assert.equal((await c.call('PATCH', '/me', { name: 'Customer Support Team', title: 'Billing', company: 'Your Bank', signature_png: PNG, initials_png: PNG, notify: { completed: false } })).status, 200);
+  assert.equal((await c.call('PATCH', '/account', { name: 'Stranger Brand', brand_color: '#ff0000', brand_logo: PNG })).status, 200);
+  // A webhook can no longer be added before the address is confirmed.
+  const hook = await c.post('/webhooks', { url: 'https://listener.stranger.example/hook' });
+  assert.equal(hook.status, 403);
+  assert.match(hook.data.error, /Confirm your email address before you add a webhook/);
+  const t = new Date().toISOString();
+  db.run('INSERT INTO webhooks (id, account_id, url, secret, events, created_at) VALUES (?,?,?,?,?,?)', `whk_${email}`, acc, 'https://listener.stranger.example/hook', 'whsec_x', '*', t);
+  db.run('INSERT INTO webhook_deliveries (webhook_id, event, at) VALUES (?,?,?)', `whk_${email}`, 'envelope.sent', t);
+  db.run('INSERT INTO invites (id, token, account_id, email, role, created_at) VALUES (?,?,?,?,?,?)', `inv_${email}`, `tok_${email}`, acc, 'accomplice@stranger.example', 'admin', t);
+  const tpl = (await c.post('/envelopes', { kind: 'template', subject: 'A template' })).data.envelope;
+  db.run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at) VALUES (?,?,?,?,?,?)', `pf_${email}`, acc, tpl?.id || 'tpl', `form-${email}`, 'Open form', t);
+  db.run('INSERT INTO clickwraps (id, account_id, slug, name, secret, created_at, updated_at) VALUES (?,?,?,?,?,?,?)', `cw_${email}`, acc, `terms-${email}`, 'Terms', 'secret', t, t);
+  db.run('INSERT INTO stamps (id, account_id, name, image_sha, ink, seed, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)', `stp_${email}`, acc, 'Company seal', 'a'.repeat(64), 'blue', 1, t, t);
+  assert.equal((await c.post('/envelopes', { subject: 'A draft' })).status, 200);
+  return acc;
+}
+
+test('taking back a login somebody else started removes everything they set up, and says exactly what', async () => {
+  const stranger = browser();
+  assert.equal((await stranger.post('/auth/signup', { name: 'Stranger', email: 'rena@gmail.com', password: 'stranger knows this' })).status, 200);
+  const acc = await setUpAsStranger(stranger, 'rena@gmail.com');
+  // A team somebody else runs, that this login is in as well: that team is theirs too, and nothing of it changes.
+  const other = await signUp('Theo Team', 'theo@team.example', browser().ip);
+  const theirs = db.get("SELECT account_id a FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email=? AND role='owner'", 'theo@team.example').a;
+  db.run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'member',?)", theirs, user('rena@gmail.com').id, new Date().toISOString());
+  void other;
+  const hookAt = (id: string, accountId: string) => db.run('INSERT INTO webhooks (id, account_id, url, secret, events, created_at) VALUES (?,?,?,?,?,?)', id, accountId, `https://${id}.example/in`, 'whsec_x', '*', new Date().toISOString());
+  hookAt('team-hook', theirs);
+  db.run('UPDATE accounts SET brand_color=? WHERE id=?', '#123456', theirs);
+
+  const real = browser();
+  const r = await signIn(real, 'google', google('rena@gmail.com', { name: 'Rena Real' }));
+  landed(r);
+  const u = user('rena@gmail.com');
+  assert.deepEqual([u.name, u.title, u.company, u.signature_png, u.initials_png, u.notify], ['Rena Real', null, null, null, null, null]);
+  const a = db.get('SELECT * FROM accounts WHERE id=?', acc);
+  assert.deepEqual([a.name, a.brand_color, a.brand_logo], ["Rena Real's workspace", null, null]);
+  assert.equal(db.get('SELECT COUNT(*) n FROM webhooks WHERE account_id=?', acc).n, 0);
+  assert.equal(db.get("SELECT COUNT(*) n FROM webhook_deliveries WHERE webhook_id='whk_rena@gmail.com'").n, 0, 'the delivery log goes with it');
+  assert.equal(db.get('SELECT COUNT(*) n FROM invites WHERE account_id=? AND accepted_at IS NULL', acc).n, 0);
+  assert.equal(db.get('SELECT active FROM powerforms WHERE account_id=?', acc).active, 0, 'a public form would open the moment the address is confirmed');
+  assert.equal(db.get('SELECT active FROM clickwraps WHERE account_id=?', acc).active, 0);
+  assert.equal(db.get('SELECT COUNT(*) n FROM stamps WHERE account_id=?', acc).n, 0);
+  // What does nothing by itself stays, and is pointed out.
+  assert.equal(db.get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind!='template'", acc).n, 1);
+  // Theo's team is untouched.
+  assert.equal(db.get('SELECT COUNT(*) n FROM webhooks WHERE account_id=?', theirs).n, 1);
+  assert.equal(db.get('SELECT brand_color b FROM accounts WHERE id=?', theirs).b, '#123456');
+
+  // Said on the first screen, and the same list by email. Nothing about a team or API keys that cannot be there.
+  assert.deepEqual(r.note.removed.hooks_to, ['listener.stranger.example']);
+  const said = signInNotice(r.note);
+  assert.match(said, /What had been set up in it was removed: 1 webhook \(sending to listener\.stranger\.example\), 1 invitation nobody had accepted yet, the name, job title, company, signature, initials and email settings on the profile, the workspace name, brand colour and logo and 1 stamp\./);
+  assert.match(said, /We switched off 1 public form and 1 click-to-agree page, so nobody can use them now\./);
+  assert.match(said, /Your name is now "Rena Real"\./);
+  assert.match(said, /Still there from before: 1 draft and 1 template\. Look at who they name before you use them\./);
+  assert.doesNotMatch(said, /look at the team/);
+  const told = mailTo('rena@gmail.com').filter((m) => /Google can now open your/.test(m.subject)).at(-1)!;
+  assert.match(told.html, /1 webhook \(sending to listener\.stranger\.example\)/);
+  assert.match(told.html, /Your name is now &quot;Rena Real&quot;|Your name is now "Rena Real"/);
+  assert.doesNotMatch(told.html, /the team, the API keys and the webhooks/);
+  // The owner sends; nobody else hears of it.
+  const before = db.get('SELECT COUNT(*) n FROM webhook_deliveries').n;
+  const sent = await real.post(`/envelopes/${(await simple(real, 'counterparty@example.com', { subject: 'Salary agreement' })).id}/send`);
+  assert.equal(sent.status, 200, JSON.stringify(sent.data));
+  assert.equal(db.get("SELECT COUNT(*) n FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE w.account_id=?", acc).n, 0);
+  void before;
+
+  // A login whose address was confirmed loses nothing when a provider is connected to it.
+  const kept = await signUp('Kim Kept', 'kim@gmail.com', browser().ip);
+  hookAt('kim-hook', db.get("SELECT account_id a FROM memberships WHERE user_id=? AND role='owner'", (await whoIs(kept)).id).a);
+  const k = await signIn(browser(), 'google', google('kim@gmail.com', { name: 'Someone Else' }));
+  landed(k);
+  assert.equal(k.note.removed, undefined);
+  assert.equal(user('kim@gmail.com').name, 'Kim Kept');
+  assert.equal(db.get('SELECT COUNT(*) n FROM webhooks w JOIN memberships m ON m.account_id=w.account_id JOIN users u ON u.id=m.user_id WHERE u.email=?', 'kim@gmail.com').n, 1);
+});
+
+test('choosing a password by email for a login nobody had confirmed removes the same things, and says so', async () => {
+  const stranger = browser();
+  assert.equal((await stranger.post('/auth/signup', { name: 'Stranger', email: 'paz.owner@corp.example', password: 'stranger knows this' })).status, 200);
+  const acc = await setUpAsStranger(stranger, 'paz.owner@corp.example');
+  await browser().post('/auth/forgot', { email: 'paz.owner@corp.example' });
+  const mail = mailTo('paz.owner@corp.example').filter((m) => /password/i.test(m.subject)).at(-1)!;
+  const reset = await browser().post('/auth/reset', { token: new URL(mail.link).searchParams.get('token'), password: PW });
+  assert.equal(reset.status, 200, JSON.stringify(reset.data));
+  assert.equal(reset.data.removed.webhooks, 1);
+  // Nobody we know typed the old name, and this page asks for none: the part of the address before the @ stands in.
+  assert.equal(user('paz.owner@corp.example').name, 'paz.owner');
+  assert.match(removedText(reset.data.removed), /Your name is now "paz\.owner"\. You can change it under Settings, Profile\./);
+  assert.equal(db.get('SELECT COUNT(*) n FROM webhooks WHERE account_id=?', acc).n, 0);
+  assert.equal(db.get('SELECT brand_color b FROM accounts WHERE id=?', acc).b, null);
+  const told = mailTo('paz.owner@corp.example').filter((m) => m.subject === 'What we removed from your Sign&amp;Grow login' || m.subject === 'What we removed from your Sign&Grow login');
+  assert.equal(told.length, 1);
+  assert.match(told[0].html, /You chose a password for your Sign&amp;Grow login with the link we emailed to you\./);
+  assert.match(told[0].html, /1 webhook \(sending to listener\.stranger\.example\)/);
+  // A second reset of the same login, now confirmed, removes nothing and sends nothing more.
+  await browser().post('/auth/forgot', { email: 'paz.owner@corp.example' });
+  const again = mailTo('paz.owner@corp.example').filter((m) => /password/i.test(m.subject)).at(-1)!;
+  const r2 = await browser().post('/auth/reset', { token: new URL(again.link).searchParams.get('token'), password: PW });
+  assert.deepEqual(r2.data.removed, {});
+  assert.equal(mailTo('paz.owner@corp.example').filter((m) => /What we removed/.test(m.subject)).length, 1);
+});
+
+test('a signed-in person whose Connect took too long goes back to Settings, and is never made a second login', async () => {
+  const c = await signUp('Slow Connector', 'slow.c@corp.example', browser().ip);
+  const me = (await whoIs(c)).id;
+  // The state ran out at the provider.
+  const r = await c.post('/me/signin/google/connect');
+  const auth = new URL(r.data.url);
+  const code = approve('google', r.data.url, google('slow.private@gmail.com'));
+  db.run('UPDATE signin_states SET expires_at=? WHERE user_id=?', new Date(Date.now() - 1000).toISOString(), me);
+  const late = await go(c, `/auth/google/callback?${new URLSearchParams({ code, state: auth.searchParams.get('state')! })}`);
+  const to = new URL(late.location);
+  assert.equal(to.pathname, '/app/settings');
+  assert.deepEqual([to.searchParams.get('tab'), to.searchParams.get('signin_error'), to.searchParams.get('provider')], ['profile', 'expired', 'google']);
+  // A newer start in another tab replaced the cookie: the older one ends in Settings as well.
+  const first = await c.post('/me/signin/google/connect');
+  await c.post('/me/signin/google/connect');
+  const old = new URL(first.data.url);
+  const replaced = await go(c, `/auth/google/callback?${new URLSearchParams({ code: approve('google', first.data.url, google('slow.private@gmail.com')), state: old.searchParams.get('state')! })}`);
+  assert.equal(new URL(replaced.location).pathname, '/app/settings');
+  // Pressing "Continue with Google" on the sign-in page while signed in, with an account nobody knows: no new login,
+  // the browser stays where it was, and Settings says how to connect it or how to make a separate login.
+  const again = await signIn(c, 'google', google('slow.private@gmail.com'));
+  refused(again, 'signed_in', '/app/settings');
+  assert.ok(!user('slow.private@gmail.com'));
+  assert.equal((await whoIs(c)).id, me);
+  assert.match(signInErrorText('signed_in', 'google'), /You are already signed in to Sign&Grow in this browser, so no new login was made\. To sign in with Google from now on, press Connect next to Google here\. To make a separate login with it instead, sign out first/);
+  // Not signed in, the same account makes its login as always.
+  const fresh = browser();
+  landed(await signIn(fresh, 'google', google('slow.private@gmail.com')));
+  assert.equal((await whoIs(fresh)).email, 'slow.private@gmail.com');
+  // Signed in, an account that already has a login switches to it, as signing in with a password does.
+  landed(await signIn(c, 'google', google('slow.private@gmail.com')));
+  assert.equal((await whoIs(c)).email, 'slow.private@gmail.com');
+  // An invitation to a new address is what it says: a login for that address, also from a browser signed in elsewhere.
+  const owner = await signUp('Ivy Inviter', 'ivy@team.example', browser().ip);
+  await owner.post('/account/invites', { email: 'slow.new@gmail.com' });
+  const tok = db.get('SELECT token FROM invites WHERE email=?', 'slow.new@gmail.com').token;
+  landed(await signIn(c, 'google', google('slow.new@gmail.com'), { query: { mode: 'signup', invite: tok } }));
+  assert.equal((await whoIs(c)).email, 'slow.new@gmail.com');
+});
+
+test('the email about a new connection only talks about a password the login has', async () => {
+  // Made with Microsoft (not vouched), confirmed with our link in its own browser: no password.
+  const m = browser();
+  landed(await signIn(m, 'microsoft', microsoft('nopw.owner@gmail.com')));
+  assert.equal((await m.post('/auth/verify', { token: user('nopw.owner@gmail.com').verify_token })).status, 200);
+  landed(await signIn(browser(), 'google', google('nopw.owner@gmail.com')));
+  const told = mailTo('nopw.owner@gmail.com').filter((x) => /Google can now open/.test(x.subject)).at(-1)!;
+  assert.doesNotMatch(told.html, /Your password is unchanged|change your password/);
+  assert.match(told.html, /disconnect Google\. Then disconnect any other way to sign in listed there that you do not know\./);
+  // Connected under Settings, to a login without a password: the same.
+  const g = browser();
+  landed(await signIn(g, 'google', google('only.google@gmail.com')));
+  assert.equal((await connect(g, 'microsoft', microsoft('only.google@work.example'))).status, 302);
+  assert.doesNotMatch(mailTo('only.google@gmail.com').filter((x) => /Microsoft can now open/.test(x.subject)).at(-1)!.html, /change your password/);
+  // With a password, it is still said.
+  await signUp('Pat Password', 'pat.pw@gmail.com', browser().ip);
+  landed(await signIn(browser(), 'google', google('pat.pw@gmail.com')));
+  const withPw = mailTo('pat.pw@gmail.com').filter((x) => /Google can now open/.test(x.subject)).at(-1)!;
+  assert.match(withPw.html, /Your password is unchanged\./);
+  assert.match(withPw.html, /Then change your password, because someone else may know it\./);
+});
+
+test('started sign-ins are cleared by the timer once they ran out, and at once with the login they name', async () => {
+  const c = await signUp('Left Over', 'left.over@corp.example', browser().ip);
+  const uid = (await whoIs(c)).id;
+  assert.equal((await c.post('/me/signin/google/connect')).status, 200);
+  await go(browser(), '/auth/google/start?code=GROWalition');
+  db.run("UPDATE signin_states SET expires_at=? WHERE code='GROWalition'", new Date(Date.now() - 1000).toISOString());
+  const before = db.get('SELECT COUNT(*) n FROM signin_states').n;
+  const { tick } = await import('../src/server/cron.ts');
+  const r: any = await tick();
+  assert.ok(r.signins_cleared >= 1, JSON.stringify(r).slice(0, 300));
+  assert.equal(db.get("SELECT COUNT(*) n FROM signin_states WHERE code='GROWalition'").n, 0);
+  assert.ok(db.get('SELECT COUNT(*) n FROM signin_states').n < before);
+  // The one that names the login is still in its ten minutes, and goes when the login does.
+  assert.equal(db.get('SELECT COUNT(*) n FROM signin_states WHERE user_id=?', uid).n, 1);
+  const del = await c.post('/me/delete', { password: PW, now: true });
+  assert.equal(del.status, 200, JSON.stringify(del.data));
+  assert.ok(!user('left.over@corp.example'));
+  assert.equal(db.get('SELECT COUNT(*) n FROM signin_states WHERE user_id=?', uid).n, 0);
+});
+
+test('a Google Workspace address is vouched for only by its own domain', async () => {
+  await signUp('Hd Victim', 'hd.victim@corp.example', browser().ip);
+  // hd names another organization than the one the address is in: nobody is signed in to the login that exists.
+  const c = browser();
+  refused(await signIn(c, 'google', google('hd.victim@corp.example', { sub: 'g-hd-attacker', hd: 'attacker.example' })), 'exists');
+  assert.equal(await whoIs(c), null);
+  assert.equal(identities('hd.victim@corp.example').length, 0);
+  // The address's own domain, in any letter case, is vouched for as before.
+  landed(await signIn(browser(), 'google', google('hd.victim@corp.example', { hd: 'Corp.Example' })));
+  assert.equal(identities('hd.victim@corp.example')[0].vouched, 1);
+  // A domain that only ends the same way is not the same domain.
+  await signUp('Sub Domain', 'sub.dom@eu.corp.example', browser().ip);
+  refused(await signIn(browser(), 'google', google('sub.dom@eu.corp.example', { hd: 'corp.example' })), 'exists');
+});
+
+test('words for a sign-in that failed start with a capital letter, whatever the provider in the address says', () => {
+  for (const code of [...SIGNIN_ERRORS, 'made-up'])
+    for (const p of ['google', 'microsoft', 'Call +1 555 0100', undefined]) {
+      const w = signInErrorText(code, p);
+      assert.equal(w[0], w[0].toUpperCase(), `${code}/${p}: ${w}`);
+      assert.doesNotMatch(w, /555 0100/);
+    }
+  assert.match(signInErrorText('failed', 'Call +1 555 0100'), /^The sign-in service did not confirm who you are/);
+});
+
+test('no way of signing in with Google or Microsoft skips two-step login', async () => {
+  const { totp, fromBase32 } = await import('../src/server/twostep.ts');
+  const later = (secret: string) => totp(fromBase32(secret), Date.now() + 30_000); // the code just used is spent
+  const switchOn = async (c: Client, password?: string) => {
+    const s = await c.post('/me/two-step/setup', password ? { password } : {});
+    assert.equal(s.status, 200, JSON.stringify(s.data));
+    const on = await c.post('/me/two-step/confirm', { code: totp(fromBase32(s.data.secret)) });
+    assert.equal(on.status, 200, JSON.stringify(on.data));
+    return { secret: s.data.secret as string, recovery: on.data.codes as string[] };
+  };
+  const gotSession = (r: any) => r.set.some((s: string) => s.startsWith('ts_session=') && !/Max-Age=0/.test(s));
+  const heldFor = async (c: Client, r: any) => {
+    assert.equal(r.location, 'http://test.local/login/two-step', JSON.stringify(r.location));
+    assert.ok(!gotSession(r), 'no session before the code');
+    assert.equal(await whoIs(c), null);
+  };
+  // A login with a password and two-step login, and Google vouches for its address: held, and nothing is connected
+  // or announced until the code is typed.
+  const owner = await signUp('Tess Two', 'tess.two@gmail.com', browser().ip);
+  const t = await switchOn(owner, PW);
+  const mails = mailTo('tess.two@gmail.com').length;
+  const b = browser();
+  await heldFor(b, await signIn(b, 'google', google('tess.two@gmail.com')));
+  assert.equal(identities('tess.two@gmail.com').length, 0);
+  assert.equal(mailTo('tess.two@gmail.com').slice(mails).filter((m) => /can now open/.test(m.subject)).length, 0);
+  const fin = await b.post('/auth/two-step', { code: later(t.secret) });
+  assert.equal(fin.status, 200, JSON.stringify(fin.data));
+  assert.equal(fin.data.linked, 'Google');
+  assert.equal(fin.data.link, undefined, 'what waited with the sign-in is not handed to the browser');
+  assert.equal(identities('tess.two@gmail.com').length, 1);
+  assert.equal((await whoIs(b)).email, 'tess.two@gmail.com');
+  // The same Google account again, now known: held again, and a recovery code finishes it.
+  const again = browser();
+  await heldFor(again, await signIn(again, 'google', google('tess.two@gmail.com')));
+  assert.equal((await again.post('/auth/two-step', { code: t.recovery[0] })).status, 200);
+  // Microsoft vouching for the same address: held the same way.
+  const ms = browser();
+  await heldFor(ms, await signIn(ms, 'microsoft', microsoft('tess.two@gmail.com', { xms_edov: true })));
+  assert.equal(identities('tess.two@gmail.com').length, 1);
+  // A login made with Google, with two-step login switched on: Google alone does not open it either.
+  const g = browser();
+  landed(await signIn(g, 'google', google('gail.two@gmail.com')));
+  const gs = await switchOn(g);
+  const g2 = browser();
+  await heldFor(g2, await signIn(g2, 'google', google('gail.two@gmail.com')));
+  assert.equal((await g2.post('/auth/two-step', { code: later(gs.secret) })).status, 200);
+  // Connecting another provider under Settings signs nobody in: no new session comes with it.
+  const linked = await connect(g, 'microsoft', microsoft('gail.two@work.example'));
+  assert.ok(!gotSession(linked));
+  // A login nobody confirmed cannot put a phone in front of itself, so taking it back is never held by a stranger's.
+  const stranger = browser();
+  assert.equal((await stranger.post('/auth/signup', { name: 'Stranger', email: 'tina.two@gmail.com', password: 'stranger knows this' })).status, 200);
+  assert.equal((await stranger.post('/me/two-step/setup', { password: 'stranger knows this' })).data.code, 'confirm_first');
+  const real = browser();
+  landed(await signIn(real, 'google', google('tina.two@gmail.com')));
+  assert.equal((await whoIs(real)).email, 'tina.two@gmail.com');
 });

@@ -24,8 +24,10 @@ route('PUT', '/envelopes/:id/access', async (c) => {
   const was = ruleOf(t);
   const pick = <T extends string>(v: any, list: readonly T[], key: string, d: T): T => {
     if (v == null || v === '') return d;
-    if (!list.includes(v)) throw bad(`"${key}" is "${str(v, 40)}", which does not exist. Use one of: ${list.join(', ')}. Nothing was changed.`);
-    return v;
+    // A list or an object is said as it was sent: written as text it would read "team" or "[object Object]".
+    if (typeof v !== 'string') throw bad(`"${key}" is ${str(JSON.stringify(v), 60)}, and it has to be one of ${list.join(', ')}, written as text in quotes. Nothing was changed.`);
+    if (!list.includes(v as T)) throw bad(`"${key}" is "${str(v, 40)}", which does not exist. Use one of: ${list.join(', ')}. Nothing was changed.`);
+    return v as T;
   };
   const use = pick(b.use, TPL_USES, 'use', was.use);
   const change = pick(b.change, TPL_CHANGES, 'change', was.change);

@@ -34,9 +34,12 @@ import { saveLogic, settleLogic, hiddenAfter, hiddenOf, copyLogic, logicChanges 
 import { ruleOf, logicKey } from '../lib/logic.ts';
 // A public form's visitor whose start was closed is offered a fresh form, and the owner is not emailed (formstart.ts).
 import { closedFormStart, closedStartText } from './formstart.ts';
+import { finalsDue, finalFailed, finalMadeLate } from './finalretry.ts';
+// A stamp next to a signature: a recipient's own, or the sender's, printed like ink (stamps.ts).
+import { isSenderStamp, printedStamp, stampOnSave, copyStamps, stampProblem, stampsSent, stampsFinished, senderStampChange } from './stamps.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson', 'witness'];
-export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike'];
+export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike', 'stamp'];
 // The sender's own marks on a page, which belong to no recipient: words added (a note) and a line through words that
 // are printed there (a strike-out, src/lib/strike.ts). Both are wording that everyone signs.
 const SENDER_MARK = (type: any) => type === 'note' || type === 'strike';
@@ -276,7 +279,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     if (!FIELD_TYPES.includes(f?.type)) throw bad(`${which} has the type "${str(f?.type, 40)}", which does not exist. Use one of: ${FIELD_TYPES.join(', ')}. Nothing was saved.`);
     const did = docId(f.document_id);
     if (!docPages.has(did)) throw bad(`${which}, a ${f.type} field, points at the document "${str(f.document_id, 60)}", which is not in this envelope. Use the id of one of its documents. Nothing was saved.`);
-    const rid = SENDER_MARK(f.type) ? null : recId(f.recipient_id);
+    // A stamp field with no recipient is the sender's own stamp, like a note belongs to nobody (stamps.ts).
+    const rid = SENDER_MARK(f.type) || isSenderStamp(f) ? null : recId(f.recipient_id);
     if (rid && !seen.has(rid))
       throw bad(f.recipient_id ? `${which}, a ${f.type} field, is for the recipient "${str(f.recipient_id, 60)}", who is not on this envelope. Use the id of one of its recipients, or add that person. Nothing was saved.`
         : `${which}, a ${f.type} field, has no recipient_id. Every field except a note and a strike-out belongs to one recipient. Nothing was saved.`);
@@ -296,7 +300,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     // fills itself in. A value sent for one of those is refused, unless it is only what the field holds already
     // (the editor sends every field back as it got it).
     if (!prefilled && f.value != null && f.value !== '' && String(f.value) !== String(old?.value ?? ''))
-      throw bad(`${which}, a ${f.type.replace('_', ' ')} field, was sent with a value. ${f.type === 'strike' ? 'A strike-out is a line through what is printed and holds no words of its own' : f.type === 'signature' || f.type === 'initials' || f.type === 'attachment' ? 'Only the signer can fill that in' : 'That field fills itself in when its signer finishes'}. Leave "value" out. Nothing was saved.`);
+      throw bad(`${which}, a ${f.type.replace('_', ' ')} field, was sent with a value. ${f.type === 'strike' ? 'A strike-out is a line through what is printed and holds no words of its own' : f.type === 'stamp' ? 'A stamp field holds a stamp picture: a recipient puts their own on when they sign, and for a stamp of your account you send its "stamp_id" with no recipient_id' : f.type === 'signature' || f.type === 'initials' || f.type === 'attachment' ? 'Only the signer can fill that in' : 'That field fills itself in when its signer finishes'}. Leave "value" out. Nothing was saved.`);
     // During a correction, whatever a signer already entered is kept: an editor that was opened earlier must never
     // wipe it. The sender can still set a value on a field that is empty, on their own read-only fields, and on a
     // field that still holds exactly what the sender put there (prefill).
@@ -323,6 +327,9 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
       fit(f.label, 120, `${which}: the label`) || null, value,
       Array.isArray(f.options) ? JSON.stringify(f.options.map((o: any, n: number) => fit(o, 200, `${which}: choice ${n + 1}`))) : null,
       fit(f.group_name, 80, `${which}: the group name`) || null, fit(f.validation, 200, `${which}: the validation rule`) || null, readonly, prefill);
+    // What a stamp field holds is decided here from what was there before, never taken from the request (stamps.ts).
+    const stamp = f.type === 'stamp' ? stampOnSave(f, old, rid, accountId, which, by) : null;
+    if (stamp) run('UPDATE fields SET value=?, stamp_id=?, stamp_meta=?, readonly=?, required=COALESCE(?, required) WHERE id=?', stamp.value, stamp.stamp_id, stamp.meta, stamp.readonly, stamp.required, fid);
     logic.push({ fid, f, rid, which });
   });
   // "show_when" and "formula": a loop, a field of another person or a formula that cannot be read is refused here,
@@ -363,6 +370,13 @@ export function saveDraft(e: any, body: any, accountId: string, by?: Actor) {
   tx(() => {
     if (by) assertFresh(e, body);
     writeContent(e, body, accountId, false, by);
+    // A template is sent again and again (bulk, public forms), and the editor does not save one whose fields cover
+    // each other, so neither does the API: refused here, once, instead of at every send made from it.
+    if (e.kind === 'template') {
+      const t = loadEnvelope(e.id);
+      const stacked = stackedFields(t.fields, t.recipients, t.documents);
+      if (stacked.length) throw bad(`${stacked.join(' ')} The template was not saved.`);
+    }
   });
 }
 
@@ -384,8 +398,13 @@ function assertSendable(e: any) {
   }
   if (!e.recipients.some((r: any) => r.role !== 'cc')) throw bad('Add at least one recipient who signs, approves or views.');
   // Two fields of one person on top of each other: a finger reaches only the top one, and the signer can never finish.
+  // Not for a visitor of a public form that was made before this rule: turning every visitor away helps nobody, and
+  // Text view still reaches every field. Its owner is told instead (POST /public/powerforms/:slug/start).
   const stacked = stackedFields(e.fields, e.recipients, e.documents);
-  if (stacked.length) throw bad(stacked.join(' '));
+  if (stacked.length && !(e.powerform_id && e.status === 'draft')) throw bad(stacked.join(' '));
+  // The sender's own stamp has one chosen, and only someone who signs has a stamp to put on (stamps.ts).
+  const stamp = stampProblem(e);
+  if (stamp) throw bad(stamp);
 }
 
 const r6 = (n: number) => Math.round(n * 1e6);
@@ -395,7 +414,8 @@ const ts = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UT
 
 // The words the sender put on a page: a note, a read-only value, or the value a signer's field starts out with.
 // Every signer is shown these from the first time they open the document, whoever the field belongs to.
-export const senderText = (f: any): string => (f.type === 'note' || f.readonly ? f.value : f.prefill) ?? '';
+// A stamp is a picture, not words: its fingerprint is not read as text (printedStamp below says when it changes).
+export const senderText = (f: any): string => (f.type === 'stamp' ? '' : (f.type === 'note' || f.readonly ? f.value : f.prefill) ?? '');
 
 // A full name field and an email field print the name and the address the sender gave their owner, also for someone
 // who only gets a copy. Those are words on the page like any other the sender wrote: every signer is shown them
@@ -421,7 +441,8 @@ function printedView(x: any): string {
     docs: x.documents.map((d: any) => [d.id, d.file_id]),
     dates: x.date_format ?? '',
     // logicKey: when a field is shown and what it is worked out from decide what the page says (src/lib/logic.ts).
-    fields: x.fields.map((f: any) => [f.id, f.document_id, f.recipient_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly ? 1 : 0, words(f), logicKey(f)]).sort(byFirst),
+    // printedStamp: the picture of the sender's own stamp, by its fingerprint. Another picture is another page.
+    fields: x.fields.map((f: any) => [f.id, f.document_id, f.recipient_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly ? 1 : 0, words(f), logicKey(f), printedStamp(f)]).sort(byFirst),
   });
 }
 
@@ -432,7 +453,7 @@ function seenView(x: any): string {
     docs: x.documents.map((d: any) => [d.id, d.file_id, d.name]),
     dates: x.date_format ?? '',
     fields: x.fields.map((f: any) => [f.id, f.document_id, f.recipient_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly ? 1 : 0, words(f),
-      f.required, f.label ?? '', (f.options || []).join('\n'), f.group_name ?? '', f.validation ?? '', logicKey(f)]).sort(byFirst),
+      f.required, f.label ?? '', (f.options || []).join('\n'), f.group_name ?? '', f.validation ?? '', logicKey(f), printedStamp(f)]).sort(byFirst),
   });
 }
 
@@ -444,7 +465,7 @@ function askView(x: any, recipientId: string): string {
     docs: x.documents.map((d: any) => [d.file_id, d.name]),
     me: x.recipients.find((r: any) => r.id === recipientId)?.name ?? '',
     fields: x.fields.filter((f: any) => !f.recipient_id || f.recipient_id === recipientId)
-      .map((f: any) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.required, f.label ?? '', words(f), logicKey(f)]).sort(byFirst),
+      .map((f: any) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.required, f.label ?? '', words(f), logicKey(f), printedStamp(f)]).sort(byFirst),
     // What the sender wrote in other people's fields is shown to this person as well.
     words: x.fields.filter((f: any) => f.recipient_id && f.recipient_id !== recipientId && words(f))
       .map((f: any) => [f.id, f.document_id, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), words(f)]).sort(byFirst),
@@ -493,6 +514,8 @@ export function retireToken(r: any, why: 'address' | 'role' | 'handed' | 'remove
 // it. Fields go back to what the sender put there (which may be nothing), and read-only wording stays as it is.
 export function clearAnswers(recipientId: string) {
   run("UPDATE fields SET value=prefill WHERE recipient_id=? AND readonly=0 AND type!='note'", recipientId);
+  // A stamp they put on goes with its name and where it came from (stamps.ts).
+  run("UPDATE fields SET stamp_id=NULL, stamp_meta=NULL WHERE recipient_id=? AND type='stamp'", recipientId);
   run('UPDATE recipients SET signature_png=NULL, initials_png=NULL, ip=NULL, user_agent=NULL, seen_version=NULL, signed_before=NULL WHERE id=?', recipientId);
   // A witness the first person named and who was not asked yet is theirs too: the next person names their own.
   forgetNamedWitness(recipientId);
@@ -590,6 +613,12 @@ function describeCorrection(a: any, b: any): { people: string[]; content: string
       else if ([o.document_id, o.page, r6(o.x), r6(o.y), r6(o.w), r6(o.h)].join() !== [f.document_id, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h)].join()) content.push(`A strike-out was moved or resized on ${where(f, b)}, so other wording is struck out now.`);
       continue;
     }
+    // The sender's own stamp is printed on the page too: put on, changed, moved or taken off (stamps.ts).
+    if (isSenderStamp(f) && (!o || isSenderStamp(o))) {
+      const said = senderStampChange(b, o, f, where, a, b);
+      if (said) content.push(said);
+      continue;
+    }
     const was = o ? senderText(o) : '', is = senderText(f);
     if (was !== is) content.push(!was ? `New wording from the sender on ${where(f, b)}, ${part(f, b)}: ${q(is, 1000)}.` : !is ? `Wording from the sender removed from ${where(f, b)}: ${q(was, 1000)}.` : `Wording from the sender on ${where(f, b)}, ${part(f, b)}, changed from ${q(was, 1000)} to ${q(is, 1000)}.`);
     if (f.type === 'note' && (!o || o.type === 'note')) {
@@ -606,6 +635,7 @@ function describeCorrection(a: any, b: any): { people: string[]; content: string
     if (fldB.has(o.id)) continue;
     if (o.type === 'strike') content.push(`A strike-out was removed from ${where(o, a)}, so the wording under it stands again.`);
     else if (o.type === 'note') content.push(`A note was removed from ${where(o, a)}: ${q(senderText(o), 1000)}.`);
+    else if (isSenderStamp(o)) content.push(senderStampChange(a, o, null, where, a, b)!);
     else {
       note(owner(o, a), 'removed', name(o, a));
       if (senderText(o)) content.push(`Wording from the sender removed from ${where(o, a)}: ${q(senderText(o), 1000)}.`);
@@ -646,7 +676,7 @@ function setAside(e: any, o: any, actor: Actor, after?: any) {
   run('INSERT INTO earlier_signatures (envelope_id, recipient_id, name, email, role, completed_at, ip, signature_png, initials_png, answers, set_aside_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
     e.id, o.id, o.name, o.email, o.role, o.completed_at, o.ip, o.signature_png, o.initials_png, JSON.stringify(answers), now());
   const said = answers.filter((a: any) => a.type !== 'signature' && a.type !== 'initials')
-    .map((a: any) => `${a.label || a.type.replace('_', ' ')} on page ${a.page + 1}: ${a.type === 'checkbox' || a.type === 'radio' ? 'ticked' : a.type === 'attachment' ? 'a file' : `"${str(a.value, 300)}"`}`);
+    .map((a: any) => `${a.label || a.type.replace('_', ' ')} on page ${a.page + 1}: ${a.type === 'checkbox' || a.type === 'radio' ? 'ticked' : a.type === 'attachment' ? 'a file' : a.type === 'stamp' ? `a stamp, whose picture has the SHA-256 ${str(a.value, 64)}` : `"${str(a.value, 300)}"`}`);
   const mark = ACTS(o.role) ? 'signature' : o.role === 'approver' ? 'approval' : 'confirmation';
   audit(e.id, actor, removed || passed ? `Earlier ${mark} set aside` : ACTS(o.role) ? 'Asked to sign again' : o.role === 'approver' ? 'Asked to approve again' : 'Asked to look again',
     `${o.name} <${o.email}> ${finishedHow(o)} on ${ts(o.completed_at)}${o.ip ? ` from ${o.ip}` : ''}. The sender changed the envelope after that, so that ${mark} no longer counts. It is kept on record${o.signature_png ? `, with a signature image whose SHA-256 is ${sha256(o.signature_png)}` : ''}.`
@@ -748,7 +778,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
         if (!otherPerson && !otherName) run('UPDATE recipients SET free=1 WHERE id=?', r.id);
         // Their place goes to someone else. The person who signed is told, like someone who is taken off.
         else (replaced.add(old.id), removed.push(old));
-        run("UPDATE fields SET value=NULL WHERE recipient_id=? AND type IN ('signature','initials')", r.id);
+        // A stamp is put on again like a signature: the first one is set aside with it (earlier_signatures).
+        run("UPDATE fields SET value=NULL WHERE recipient_id=? AND type IN ('signature','initials','stamp')", r.id);
       } else if (old.status === 'completed') continue;
       if (otherPerson || old.role !== r.role) {
         // A different person or a different job: the old link dies and they are asked afresh when it is their turn.
@@ -889,6 +920,8 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
         fmap.set(f.id, id('fld')).get(f.id), eid, dmap.get(f.document_id), f.recipient_id ? rmap.get(f.recipient_id) : null, f.type, f.page, f.x, f.y, f.w, f.h, f.required, f.label,
         value, JSON.stringify(f.options || []), f.group_name, f.validation, f.readonly, f.readonly || f.type === 'note' ? null : value);
     }
+    // The sender's own stamp goes with every copy, with the picture it has (stamps.ts).
+    copyStamps(src, fmap);
     // Who may use and change a template, and the lock on its wording, go with every copy (tplroles.ts).
     carryRules(src, eid, o.kind);
     // "Only show when" and formulas go with the copy, and a bulk send row may fill fields they depend on (logic.ts).
@@ -1179,6 +1212,8 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
     // A line the sender drew through printed wording is part of what is sent, so the record names each one.
     for (const f of e.fields.filter((f: any) => f.type === 'strike'))
       audit(e.id, actor, 'Wording struck out', `The sender struck out wording on ${strikePlace(f.page, e.documents.find((d: any) => d.id === f.document_id)?.name)}.`);
+    // So is the sender's own stamp: which one, where, and the fingerprint of its picture (stamps.ts).
+    stampsSent(e, actor);
     // A word that often means paper, a witness or a notary is needed is written down with the send, and the answer to
     // sending carries it as "warnings". It never stops a send: see src/server/warnings.ts. A visitor of a public
     // form is not the sender, so there the line does not say that the sender was told.
@@ -1515,9 +1550,12 @@ export async function buildFinal(envelopeId: string): Promise<boolean> {
   try {
     const pdf = await buildPdf(e, true);
     run('UPDATE envelopes SET final_sha256=?, final_size=? WHERE id=? AND final_sha256 IS NULL', saveBlob(pdf), pdf.length, e.id);
+    await finalMadeLate(e).catch((x) => console.error('[pdf] could not tell the sender', x?.message));
     return true;
   } catch (err: any) {
     console.error('[pdf] could not build the signed copy yet', envelopeId, err?.message);
+    // Counted, so one that keeps failing waits longer and never holds up the others, and its sender hears (finalretry.ts).
+    await finalFailed(e, err).catch((x) => console.error('[pdf] could not record the try', x?.message));
     return false;
   }
 }
@@ -1798,8 +1836,9 @@ const VALIDATORS: Record<string, RegExp> = { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export function applyValues(e: any, r: any, values: Record<string, any>, strict: boolean) {
   const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !AUTO_TYPES.includes(f.type));
   for (const f of mine) {
-    // A calculated field is the server's to work out: whatever the browser sent for it is not taken (logic.ts).
-    if (!(f.id in values) || f.formula) continue;
+    // A calculated field is the server's to work out: whatever the browser sent for it is not taken (logic.ts). A
+    // stamp is put on and taken off by its own request (POST /sign/:token/stamp), never by the answers.
+    if (!(f.id in values) || f.formula || f.type === 'stamp') continue;
     let v = str(values[f.id], 4000);
     if (f.type === 'checkbox' || f.type === 'radio' || f.type === 'signature' || f.type === 'initials') v = v ? '1' : '';
     if (f.type === 'dropdown' && v && !(f.options || []).includes(v)) v = '';
@@ -1905,6 +1944,8 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     applyValues(e, r, body.values || {}, true);
     run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(body.signature_png) ? body.signature_png : null, okImage(body.initials_png) ? body.initials_png : null, r.id);
   });
+  // Each stamp they put on: which, where, when and its fingerprint (stamps.ts). A stamp uses no signature.
+  if (ACTS(r.role)) stampsFinished(e, r, actor);
   // Someone signing for the second time, after the sender changed the document, is recorded as exactly that.
   audit(e.id, actor, r.signed_before ? `${verb} again` : verb, whoIs(r)); // for a group: the person who acted, and the group
   // A witness with the signer's address or device is marked, before the certificate can be made (witness.ts).
@@ -2447,7 +2488,8 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
   let unopenedAlerts = 0;
   const t = now();
   // A completed envelope whose signed copy could not be built at the time gets it now.
-  for (const row of all("SELECT id FROM envelopes WHERE status='completed' AND kind='envelope' AND final_sha256 IS NULL LIMIT 5")) await buildFinal(row.id);
+  // The ones that are due, never-tried first, so a few that cannot be built never block the rest (finalretry.ts).
+  for (const eid of finalsDue()) await buildFinal(eid);
   for (const row of all("SELECT id FROM envelopes WHERE status='sent' AND kind='envelope'")) {
     const e = loadEnvelope(row.id);
     if (e.expires_at && e.expires_at < t) {

@@ -28,11 +28,12 @@ import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS
 import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
 import { keptOnDelete } from './deleting.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
-import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner } from './tplroles.ts';
+import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner, noteCopy, copyIsTheirs, fileHeldBack, templateGoes, assertCorrectionKept, asMember, forRows, askWho } from './tplroles.ts';
 // A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
 import { witnessCorrected, rowFills } from './witness.ts';
 import { rowFieldProblem } from './logic.ts';
 import { keepText, sealedTextHits } from './searchtext.ts';
+import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -83,6 +84,10 @@ route('POST', '/files', (c) => storeUpload(c, c.account.id));
 route('GET', '/files/:id/content', (c) => {
   const f = get('SELECT * FROM files WHERE id=? AND account_id=?', c.params.id, c.account.id);
   if (!f) throw bad('File not found.', 404);
+  // A document of a template that is not for this person is read only through something they can open that holds it
+  // (tplroles.ts), the same answer as a file that does not exist.
+  const opens = (eid: string) => { try { return !!mine(c, eid); } catch { return false; } };
+  if (fileHeldBack(c, f.id) && !all('SELECT DISTINCT envelope_id FROM documents WHERE file_id=?', f.id).some((d) => opens(d.envelope_id))) throw bad('File not found.', 404);
   return pdfResponse(readBlob(f.sha256), f.name, true);
 });
 
@@ -226,6 +231,7 @@ route('POST', '/envelopes', async (c) => {
     assertMessageKept(c, tpl, b.message);
     // "kind": "template" with a template_id is a copy of the template, held to the same rule as /clone (cloneOwner).
     eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: cloneOwner(c, tpl, kind), kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
+    if (kind === 'template') noteCopy(c, eid, tpl);
   } else {
     eid = createEnvelope(c.account, c.user.id, kind, b);
     try {
@@ -351,6 +357,8 @@ route('DELETE', '/envelopes/:id', (c) => {
     return { ok: true, kept_for_recipients: true };
   }
   const shas = tx(() => {
+    // Whoever a locked template belonged to keeps changing what was started from it once it is gone (tplroles.ts).
+    templateGoes(e);
     const s = forgetEnvelopes([e.id]);
     run('DELETE FROM envelopes WHERE id=?', e.id);
     return s;
@@ -417,6 +425,8 @@ route('POST', '/envelopes/:id/correct', async (c) => {
   assertNoGroupCheck(e, str(b.recipient_id), b);
   // Nor a code by email or a texted link for someone who stays without an address (bysender.ts).
   assertBySenderCorrection(e, str(b.recipient_id), b);
+  // A check or an access code a locked template gave this person stays (tplroles.ts).
+  assertCorrectionKept(c, e, str(b.recipient_id), b);
   // With their check too ("verify", "phone", "text_link"): correctWithCheck does all of the call or none of it.
   await correctWithCheck(e, str(b.recipient_id), b, c.actor);
   // A witness who is now another person starts clean, and is asked at once if their signer has signed (witness.ts).
@@ -437,11 +447,13 @@ route('POST', '/envelopes/:id/clone', async (c) => {
   if (b?.kind != null && b.kind !== '' && b.kind !== 'template' && b.kind !== 'envelope')
     throw bad(`"kind" is "${str(b.kind, 40)}", which does not exist. Use "envelope" or "template", or leave it out to copy it as what it is. Nothing was copied.`);
   const kind = b?.kind === 'template' || (e.kind === 'template' && b?.kind !== 'envelope') ? 'template' : 'envelope';
-  // A copy keeps the rules of the template it comes from (carryRules). One of a locked template, made by someone who
-  // may not change it, stays with the person the template belongs to (cloneOwner), so a copy is no way round the lock.
+  // A copy keeps the rules of the template it comes from (carryRules). One of a template that is not for everyone or
+  // is locked, made by someone who may not set its rules, stays with the person the template belongs to (cloneOwner),
+  // so a copy is no way round them. Its history says who made it (noteCopy).
   const senderId = cloneOwner(c, e, kind);
   const eid = copyEnvelope(e, { accountId: c.account.id, senderId, kind, subject: kind === e.kind ? `${e.subject} (copy)`.trim() : e.subject });
-  if (senderId !== c.user.id) return { id: eid, belongs_to: get('SELECT name FROM users WHERE id=?', senderId)?.name || null, locked: true };
+  noteCopy(c, eid, e);
+  if (senderId !== c.user.id) return { id: eid, belongs_to: get('SELECT name FROM users WHERE id=?', senderId)?.name || null, locked: !!get('SELECT tpl_locked FROM envelopes WHERE id=?', eid)?.tpl_locked };
   return { id: eid };
 });
 
@@ -523,10 +535,15 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
         let eid: string = row.envelope_id;
         if (!eid) {
           if (!tpl || tpl.kind !== 'template') throw bad('The template was deleted before this row could be sent.');
+          // Who may use the template is asked again for every new copy, like whether the sender is still on the team:
+          // a batch repeated with its Idempotency-Key after the template was taken from them sends nothing more.
+          const who = asMember(b.account_id, b.sender_id);
+          if (who && !mayUse(who, tpl)) throw bad(`Not sent. The template "${str(tpl.subject || 'Untitled template', 120)}" is no longer one the person who started this bulk send may use. Ask ${askWho(tpl)}.`);
           // A row's "fields" fill fields of the template by their label, like the sender's own prefilled values, so a
-          // rule that depends on one shows or hides from the first look (fillValues in logic.ts).
+          // rule that depends on one shows or hides from the first look (fillValues in logic.ts). Whether a column may
+          // change the template's own wording is decided for whoever sends the batch (forRows in tplroles.ts).
           const fill = JSON.parse(row.fill);
-          eid = copyEnvelope(tpl, { accountId: b.account_id, senderId: b.sender_id, kind: 'envelope', fill, extra: { bulk_id: b.id, values: fill?.fields && typeof fill.fields === 'object' ? fill.fields : null } });
+          eid = copyEnvelope(forRows(who, tpl), { accountId: b.account_id, senderId: b.sender_id, kind: 'envelope', fill, extra: { bulk_id: b.id, values: fill?.fields && typeof fill.fields === 'object' ? fill.fields : null } });
           set('envelope_id=?', eid);
         }
         const status = get('SELECT status FROM envelopes WHERE id=?', eid)?.status;
@@ -626,7 +643,7 @@ route('POST', '/bulk', async (c) => {
       if (!v || !str(v.name).trim() || !isEmail(str(v.email).trim())) throw bad(`Row ${i + 1}: "${r.role_name || 'Recipient'}" needs a name and a valid email.`);
     }
     // Fields a row fills ("fields": {"Plan": "Gold"}) are checked for every row before anything is sent (logic.ts).
-    const wrong = rowFieldProblem(tpl, row?.fields);
+    const wrong = rowFieldProblem(forRows(c, tpl), row?.fields);
     if (wrong) throw bad(`Row ${i + 1}: ${wrong} Nothing was sent.`);
   });
   // A role the template checks or reaches by text message needs a mobile number ("phone") in every row, and the
@@ -737,8 +754,9 @@ function assertMayRunForm(c: Ctx, tpl: any, doing: string) {
   if (mayRunForm(c, tpl)) return;
   const owner = (tpl && get('SELECT name FROM users WHERE id=?', tpl.sender_id)?.name) || 'a colleague';
   const chosen = tpl?.tpl_change === 'chosen' ? `${owner}, an admin of your team or a member they chose` : `${owner} or an admin of your team`;
-  // A copy of a locked template stays with its owner (cloneOwner), so a copy is no way to a form of one's own there.
-  throw bad(`This template belongs to ${owner}, so only ${chosen} can ${doing}. Nothing was changed. ${tpl?.tpl_locked ? `Its wording is locked, so a copy would be locked in the same way. Ask ${owner} or an admin of your team.` : 'To have a PowerForm of your own, copy the template and make the PowerForm from your copy.'}`, 403);
+  // A copy of a locked template, or of one not for everyone, stays with its owner (cloneOwner), so a copy is no way to
+  // a form of one's own there, and the refusal does not suggest one.
+  throw bad(`This template belongs to ${owner}, so only ${chosen} can ${doing}. Nothing was changed. ${tpl?.tpl_locked ? `Its wording is locked, so a copy would be locked in the same way. Ask ${owner} or an admin of your team.` : tpl && !copyIsTheirs(c, tpl) ? `It is not for everyone on the team, so a copy would belong to ${owner} too. Ask ${owner} or an admin of your team.` : 'To have a PowerForm of your own, copy the template and make the PowerForm from your copy.'}`, 403);
 }
 // The form a call names, for someone who may change it. The same answer for a form that does not exist and for one
 // in another account.
@@ -774,6 +792,8 @@ route('POST', '/powerforms', async (c) => {
   const name = str(b.name, 120) || tpl.subject || 'PowerForm';
   const no = emailRefusal({ ...powerformTemplate(tpl.id).tpl, subject: name }, [], { pause: false });
   if (no) throw bad(`${no.message} The form was not made.`, no.status);
+  // A template whose fields cover each other is refused here too, not found out from the first visitor.
+  assertFormNotStacked(tpl.id);
   const pid = id('pwf');
   run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at, shared_device) VALUES (?,?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), name, now(), b.shared_device ? 1 : 0);
   return { id: pid };
@@ -901,6 +921,8 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     throw bad(FORM_CLOSED, 503);
   }
   run('UPDATE powerforms SET uses=uses+1 WHERE id=?', p.id);
+  // A form made before fields that cover each other were refused takes its visitors, and its owner is told.
+  await tellStackedForm(p, tpl.sender_id);
   // The cookie that lets this browser, and nobody else, pick this start up again. It lasts as long as the start can.
   c.cookies.push(cookie(jar, `${eid}.${hmac(`pf:${p.id}:${eid}`)}`, Math.ceil(p.shared_device ? powerformSharedIdleMinutes() * 60 : powerformIdleHours() * 3600), c.secure));
   const me = visitor && get("SELECT token FROM recipients WHERE id=? AND status != 'pending'", visitor.id);

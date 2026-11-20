@@ -111,7 +111,7 @@ export const DELETED_WITH_ACCOUNT: string[] = [
   'Your login, your profile and your saved signature.',
   'Every account you own: its envelopes, drafts and templates, the documents you uploaded, the signed PDFs, the files signers attached and every audit trail, with the names, email addresses and internet addresses in them.',
   'Its contacts, API keys, webhooks and their delivery logs, bulk send records, public forms and reports from recipients.',
-  'Its click-to-agree terms with every version, every acceptance recorded for them (with the names, email addresses, customer numbers, internet addresses, browsers and pages in them), reports about their pages, and our stored copies of the emails that sent people a copy of what they accepted.',
+  'Its click-to-agree terms with every version, every acceptance recorded for them (with the names, email addresses, customer numbers, internet addresses, browsers and pages in them), reports about their pages, and our stored copies of the emails that sent people a copy of what they accepted, with the certificate files attached to them.',
   'Our stored copies of the emails about those envelopes, and of the emails we sent you about your account.',
   'Help requests of yours that have been answered or closed, each with everything written back and forth on it.',
 ];
@@ -348,8 +348,13 @@ export const PHOTO_MAX_SIDE = 2000;
 export const MAX_PHOTOS_PER_DOCUMENT = 50;
 /** The most pixels a PNG can have. The server unpacks every pixel of a PNG to put it in a PDF, and a PNG of 300 KB can say it is 10,000 pixels square: that took 800 MB of memory when we tried. */
 export const PNG_MAX_PIXELS = 25_000_000;
-/** The most pixels a JPEG can have. The server does not unpack a JPEG, but every signer's phone does. A 50 megapixel phone photo fits. */
-export const JPEG_MAX_PIXELS = 50_000_000;
+/**
+ * The most pixels a JPEG can have. The server does not unpack a JPEG and does not make one smaller (only the app's
+ * editor does, in the browser), but every signer's phone unpacks all of it to show the page: a 50 megapixel photo is
+ * about 191 MB there, whatever the page is drawn at, and older phones stall or give up. 13 million lets a
+ * 12 megapixel phone photo through (4032 by 3024 is 12.2 million) at about 48 MB. Was 50 million until 2026-11-20.
+ */
+export const JPEG_MAX_PIXELS = 13_000_000;
 
 /** A browser stays signed in for this many days after it was last used. Using the app moves the end forward. */
 export const SESSION_DAYS = 30;
@@ -401,15 +406,22 @@ export const TWO_STEP_PAUSE_MINUTES = 15;
 export const TWO_STEP_REMEMBER_DAYS = 30;
 export const TWO_STEP_RECOVERY_CODES = 10;
 /** A reset by email takes effect this many days after it was started from the emailed link. */
-export const TWO_STEP_EMAIL_RESET_DAYS = 3;
+export const TWO_STEP_EMAIL_RESET_DAYS = 7;
+/** After a reset by email was stopped, a new one can be asked for this many days later, unless the person signs in with the second step first. */
+export const TWO_STEP_RESET_BLOCK_DAYS = 7;
+/** Emails about a lost phone ("I lost my phone and my recovery codes") that one login gets in a day, at most. */
+export const TWO_STEP_LOST_PER_DAY = 3;
 /** How long the second screen waits for the code after the password, or after Google or Microsoft. */
 export const TWO_STEP_SIGNIN_MINUTES = 10;
 export const TWO_STEP_API_KEYS = 'API keys are not affected: a program that uses one is never asked for a code. Treat a key like a password, and revoke it under Settings, API and webhooks if it may have leaked.';
 /** What someone who lost their phone and their recovery codes can do, in the words Settings and the sign-in screen share. */
 export const TWO_STEP_LOST: string[] = [
-  'On a team: an owner or an admin of the team can switch your second step off under Settings, Team. You are emailed at once, and it is written down who did it. Then you sign in with your password and set it up again.',
-  `The owner of an account (nobody else can reset it for you): ask for a reset by email on the sign-in screen, after your password. Open the link we email you, and your second step is switched off ${TWO_STEP_EMAIL_RESET_DAYS} days later. We email you when it starts and every day until then. Signing in with your code or a recovery code stops it, and so does Stop under Settings in a browser where you are still signed in. The wait is there so that someone who has only got into your mailbox cannot get into your login quietly.`,
+  'On a team: an owner or an admin of the team can switch your second step off under Settings, Team, unless you own a workspace or are an admin of another one (it would open that workspace too). They type their own code first, if they have two-step login. You are emailed at once, and it is written down who did it. Then you sign in with your password and set it up again.',
+  `A reset by email, for everyone who has not switched it off under Settings, Profile: on the sign-in screen, after your password, choose "I lost my phone and my recovery codes". It needs the right password, and then we email you a link. Open it, and your second step is switched off ${TWO_STEP_EMAIL_RESET_DAYS} days later. Every day until then we email you, with a link that stops it, and every browser where you are signed in says so on every page. Signing in with your code, a recovery code or a remembered device stops it at once, and so does changing your password while signed in. After a reset was stopped, a new one can be asked for ${TWO_STEP_RESET_BLOCK_DAYS} days later, or sooner after a sign-in with your code.`,
+  'With the reset by email switched off, only an admin of your team can reset it, as above. If you own a workspace or are an admin of more than one, nobody can: keep your recovery codes safe.',
 ];
+/** What the reset by email risks, said where it is switched off and on /security. */
+export const TWO_STEP_EMAIL_RESET_RISK = `Someone who controls your mailbox and knows your password, and whom you do not notice for ${TWO_STEP_EMAIL_RESET_DAYS === 7 ? 'a week' : `${TWO_STEP_EMAIL_RESET_DAYS} days`}, could get in this way. Switch the reset by email off if you would rather be locked out than take that risk.`;
 
 // Questions and comments on a document while it is out (src/server/comments.ts, src/server/routes-comments.ts). The
 // signing page, the envelope page, /help and the server quote these, and the server enforces them from here.

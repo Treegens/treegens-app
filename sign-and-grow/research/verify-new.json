@@ -3945,5 +3945,573 @@
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s11-settings-devices.png",
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s12-required-setup.png"
   ]
+ },
+ "verify:comments": {
+  "checks": [
+   {
+    "item": "1. Nobody sees a private thread they are not in (screen, email, API, export, hand-over, correction, group member, in-person device)",
+    "holds": false,
+    "evidence": "Held in these angles (probes in /home/user/treegens-app/sign-and-grow/tests/out/verify-comments/probe.ts, probe2.ts, probe4.ts): after a signer hands over, the old link answers 410 and never shows the new person's thread; the sender correcting the name to another person at the same inbox (POST /envelopes/:id/correct) hides the old thread from the new person and the answer is dropped with 'Someone else has their place'; the editor (PUT /envelopes/:id) changing the address gives Eve no access and Ada's old link 410; a group member's hand-back then a colleague's take-over hides the first member's thread; a non-admin team member, their API key and another account's key all get 404 on GET/POST/settle; a thread id from another envelope is 404; the host's locked browser gets 401 on /envelopes/:id/comments, /export, /envelopes/:id/evidence, /envelopes/:id and /envelopes; the in-person signer posting into a remote signer's private thread gets 404; three writes at once at 49 comments: 200, 429, 429 and 50 stored.",
+    "still_broken": "Two people signing in person on the host's laptop: the second reads the first person's private thread with the host. Steps (look.cjs with SKIP_PAT=1, Chromium): envelope with in-person Pat and Quinn; host clicks 'Host signing now' for Pat; Pat writes privately 'PAT PRIVATE: can I sublet without Quinn knowing?'; host answers from another device 'HOST ANSWER: yes, quietly.'; Pat steps away; host types the password on the lock screen and clicks 'Host signing now' for Quinn; Quinn presses Back twice, lands on Pat's /sign/<token>, opens Other actions > Questions and comments: both texts shown (quinnReads true, screenshot 07b-quinn-reads-pat-thread.png). If Pat had finished, the completed page has no comments entry, but fetch('/api/sign/<pat>/comments') from that page returns 200 with both texts (probe2 d1: [200,true,true]).",
+    "suggested_fix": "For role 'inperson', show private threads on /sign/:token/comments only while that person's hand-over is the live one in this browser (a cookie set by handDevice for that recipient and cleared by POST /auth/unlock or by the next hand-over), and open in-person links with location.replace so they do not stay in the history. Add a test with two in-person signers in one browser."
+   },
+   {
+    "item": "2. Telling people: one digest to the sender at most every 10 minutes; a recipient emailed when answered; assertMayEmail rules (fake-notice filter, pause) on what the sender writes",
+    "holds": false,
+    "evidence": "Digest cadence and single send under concurrency hold: two sender answers at the same moment produced 1 email (probe k12b); held answer while paused goes out after the pause is lifted, also after completion (probe z14). The filter refuses a lure written in one comment (422).",
+    "still_broken": "The filter only reads the newest comment: the same lure split over three answers is accepted (200,200,200), shown together on Ada's signing page and emailed (s5, s5b). A batch that does read as a lure is held for ever and blocks every later answer, while the screen says it waits (probe3 b1). An admin's own brand-like name is never read (a10). A public-form stranger's text goes to the owner's inbox under the stranger's chosen From name with no filter (p6). Details in new_bugs.",
+    "suggested_fix": "Read each new sender-side comment together with every earlier sender-side comment the same person can read, the envelope text and the writer's own name; at send time drop (not hold) a refused batch with a reason; read recipients' text and names before they are emailed or shown for everyone."
+   },
+   {
+    "item": "3. Signing page: quiet entry in the menu and next to the document, Finish note, old Ask merged into it",
+    "holds": true,
+    "evidence": "At 390x844 the tools row shows 'Questions and comments' next to Download with no sideways scroll (scrollWidth 390 = clientWidth 390, 01-sign-phone.png); the dialog with a 1,900-character unbroken word and a 300-character word wraps with no element wider than the screen (02-dialog-phone.png, 03-dialog-phone-full.png). POST /sign/:token/ask writes a private comment (author test, passes). The Finish note is only a note. Author's 18 tests pass now.",
+    "still_broken": "Minor: the count behind the Finish note is fetched only when the page loads or the dialog closes (useMyQuestions(base, !!data?.fields && open !== 'ask')), so an answer that arrives while the page is open still shows 'You asked ... a question that has not been answered' at Finish.",
+    "suggested_fix": "Fetch the count again when the review step opens."
+   },
+   {
+    "item": "4. Sender's envelope page: threads, who waits, answer, mark as settled",
+    "holds": true,
+    "evidence": "At 390x844 the card has no element wider than the screen (cardOverflow page [390,390], wide []), shows 'Waiting for your answer: <names>', Answer and Mark as settled at 44px (04-card-phone.png). Settle by the sender and by the person who asked works; another signer gets 403 (author test).",
+    "still_broken": "Copy: the 'Who can read it' list says 'Only Pat Present (they are emailed)' for an in-person signer (cardSelect in report.json), and the answer box says 'Only <name> can read it, and they are emailed.' for people who are never emailed (in person, no address, marked spam, bounced). A recipient's 60-line comment makes the card about 4,300 CSS px tall with no way to fold it.",
+    "suggested_fix": "Return per person whether they would be emailed and why (reach()) in 'people' and per thread, and word the option and hint from it."
+   },
+   {
+    "item": "5a. Record: not printed, not part of what is signed, audit says who and when never the words, export and evidence carry the threads, read-only after completion",
+    "holds": true,
+    "evidence": "Author test reads the signed PDF text (no words, 'wrote a comment' present). A comment between loading the page and Finish does not change content_version and Finish succeeds (probe2 v3). Export and evidence carry the threads for the sender's side; a member's export has nothing of the owner's envelope (probe4). Completed: writes 409 read_only.",
+    "still_broken": "The settle and open-again toggles have no limit and each writes an audit line that is printed in the certificate (see new_bugs). Also, after the sender removes a completed envelope, an admin gets 404 on GET /envelopes/:id/comments but the evidence pack (removed: true) still holds the threads (probe4).",
+    "suggested_fix": "Limit and fold settle audit lines; let the admin read route take removed: true like the evidence route."
+   },
+   {
+    "item": "5b. Comments go with the envelope (nothing personal kept after deletion)",
+    "holds": false,
+    "evidence": "comment_threads, comments, comment_news rows are gone after DELETE (author test).",
+    "still_broken": "The comment.created webhook body, with the writer's name and the full private text, stays in webhook_deliveries after the envelope is voided and deleted. Probe w8: Ada writes 'My HIV status is positive, does clause 9 apply?'; void; DELETE /envelopes/:id 200; 1 delivery row left whose body holds the words; GET /webhooks still lists it with can_redeliver true, so it can be sent out again.",
+    "suggested_fix": "In forgetEnvelopes (routes-trust.ts) delete the envelope's webhook_deliveries rows, or at least set body NULL for them."
+   },
+   {
+    "item": "6. Limits: length, 50 per person, burst per link, in-person signer does not see the host's private threads with others",
+    "holds": false,
+    "evidence": "Length refused with the count; 50 per person holds under three requests at once (k12); burst refuses the 11th from one link while another link is not held up (author test); zero-width and direction marks are removed by the fake-notice reader's own normalisation so they do not evade it.",
+    "still_broken": "In-person: fails across two in-person signers (check 1). Burst: refused requests use up the burst, so a real question is refused: 10 posts with thread_id 'thr_none' (404) then 'A real question' answers 429 'That is 10 comments in 10 minutes...' (f13). Settle has no limit at all (sender side 200 of 200 toggles accepted).",
+    "suggested_fix": "Call limits() after the thread, pin and 'for' are validated (or count only stored comments); rate-limit settle per thread."
+   },
+   {
+    "item": "7. API for a key: list and write the sender's side, openapi, comment.created webhook",
+    "holds": true,
+    "evidence": "Author test with a key of the account plus a local webhook receiver passes; my probes: a non-admin member's key gets 404 on another member's envelope, another account's key 404, cross-envelope thread 404. openapi has the three paths and comment.created.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "8. 'comments on documents' removed from 'What is not in it'",
+    "holds": true,
+    "evidence": "README 'What is not in it' (around line 505) no longer lists comments; the feature is described under Signing and Developers.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "No em dashes in new text; suite and types",
+    "holds": true,
+    "evidence": "grep for an em dash or en dash in src/server/comments.ts, src/server/routes-comments.ts, src/lib/comments.ts, both Comments.tsx, comments.css, tests/comments.test.ts: none. tests/comments.test.ts: 18 of 18 pass (run twice). tsc --noEmit shows one error in src/lib/witness.ts(110,144), another engineer's file in the middle of the witness repair, not this work. My first dev server failed with 'no such column: unlock_tries' because another engineer added that migration after my database was made; a fresh DATA_DIR fixed it (work in progress, not this piece).",
+    "still_broken": "",
+    "suggested_fix": ""
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Second in-person signer reads the first one's private thread with the host on the same laptop",
+    "severity": "high",
+    "where": "src/server/routes-comments.ts GET /sign/:token/comments (signerSide/signerView), src/components/sender/Recipients.tsx signNow (window.location.href), src/server/handover.ts",
+    "detail": "Steps and result in check 1 (look.cjs with SKIP_PAT=1, screenshot /home/user/treegens-app/sign-and-grow/tests/out/verify-comments/07b-quinn-reads-pat-thread.png; server proof probe2.ts d1 [200,true,true]). The brief's in-person promise is only tested for a remote signer's thread. Fix: tie reading private threads of an in-person link to the live hand-over in that browser (cookie set in handDevice for that recipient, cleared on /auth/unlock and on the next hand-over), and navigate to in-person links with location.replace."
+   },
+   {
+    "title": "Fake-payment-notice filter bypassed by splitting the notice over several comments",
+    "severity": "high",
+    "where": "src/server/routes-comments.ts POST /envelopes/:id/comments (emailRefusal with extra: [text]) and flushComments",
+    "detail": "Unpaid account. One answer 'PayPal invoice INV-2231 attached. Your payment of $499.00 was charged today. To cancel it call +1 (888) 555-0142 now.' gives 422. The same three sentences as three answers give 200, 200, 200; Ada's signing page shows them together in one thread on our address; the first goes in one email, the other two in the next batch (flush mailed 2, held 0) because that batch has no brand. Spaced 10 minutes apart, three emails each carry one part (probe.ts s5, s5b). Fix: at write time read the new text with all earlier sender-side comments the same person can read plus the envelope; at send time read the batch with what was already sent to that person on that envelope."
+   },
+   {
+    "title": "A batch that reads like a notice is held for ever, blocks all later answers, and the sender is told it 'waits'",
+    "severity": "medium",
+    "where": "src/server/routes-comments.ts flushComments (emailRefusal(...) -> held++; continue), src/components/sender/Comments.tsx newsLine",
+    "detail": "probe3.ts b1: first answer emailed; then 'PayPal invoice INV-2231.', 'Your payment of $499.00 was charged.', 'To cancel call +1 (888) 555-0142.' within 10 minutes (each 200). Every tick after 10 minutes returns {mailed:0, held:1}; news stays mailed_at null, not_emailed null, so the card says 'Waiting to be emailed to Ada Tenant. We send at most one email every 10 minutes to each person, and nothing while sending is paused.' A later harmless answer 'Ignore the above, see you Monday.' is also never emailed (emails to Ada stay at 1). A legitimate landlord who writes 'PayPal is fine', then the deposit amount, then their phone number hits this. Fix: on a 422 at send time mark those rows dropped with the filter's reason (shown to the sender) and send the rest; never queue innocent comments behind them."
+   },
+   {
+    "title": "An admin's own name is not read by the filter; the email prints it next to money and a phone number",
+    "severity": "medium",
+    "where": "src/server/routes-comments.ts POST /envelopes/:id/comments (emailRefusal reads sender and account names only; newComment name: c.user.name)",
+    "detail": "probe.ts a10: owner invites an admin who signs up as 'PayPal Resolution Center' (no check at sign-up or invite acceptance). Admin answers 'Your invoice of $499.00 is overdue. Call +1 (888) 555-0142 today.' -> 200. Email to Ada: subject 'Own Er wrote to you about: Lease a10' (claims the sender wrote it) and body 'PayPal Resolution Center, privately: Your invoice of $499.00 is overdue. Call +1 (888) 555-0142 today.'; the signing page shows the same. Fix: add c.user.name to the text read at write time (and authors' names at send time); name the writer and the sender consistently in subject and body."
+   },
+   {
+    "title": "A public-form stranger's text reaches the owner's inbox under a From name the stranger chose, unfiltered, with a reply address the stranger typed",
+    "severity": "medium",
+    "where": "src/server/routes-comments.ts senderDigest (fromName: one.name, replyTo: one.email), writeAsSigner (no lure check on recipient text)",
+    "detail": "probe.ts p6: visitor starts the form as 'PayPal Billing' <billing@paypa1-support.example> and writes 'Your PayPal payment of $499.00 was charged. Not you? Call +1 (888) 555-0142 or log in at http://paypa1-secure.example/login' -> 200. Owner's email: subject 'Questions and comments: Volunteers', From '\"PayPal Billing via Sign&Grow\" <no-reply@...>', Reply-To billing@paypa1-support.example, body with the phone and the link. The old askSender did the same From/Reply-To (git d2719f0^), so this is carried over, now with 50 comments per envelope. Also a recipient's notice for everyone is shown to the other signers on our page (probe.ts r7: 200, Ben sees it); a signer can hand their place to anyone, so that writer can be a stranger too. Fix: read recipients' text and names with lureIn/posesAs before emailing or showing for everyone; for a public-form visitor (unverified address) do not use their name as the From display or their address as Reply-To."
+   },
+   {
+    "title": "Settle and open-again toggles are unlimited and each prints an audit line in the certificate",
+    "severity": "medium",
+    "where": "src/server/routes-comments.ts settle() and both settle routes",
+    "detail": "probe.ts t4: the asking signer alternates {settled:true/false} 400 times from rotating addresses: 400 of 400 accepted, 400 audit lines; the sender 200 times: 199 lines. After both sign, the signed PDF has 34 pages for a 2-page document. From one address the only cap is find()'s 600 per 10 minutes per link, so one signer can add about 3,600 certificate lines an hour to a document every party receives. Fix: rate-limit settle per thread and link, and write at most one settle audit line per thread per hour (or only the final state)."
+   },
+   {
+    "title": "Private comment text survives envelope deletion in the webhook delivery log and can be redelivered",
+    "severity": "medium",
+    "where": "src/server/routes-trust.ts forgetEnvelopes; src/server/webhooks.ts deliver (body kept for the latest 200)",
+    "detail": "probe.ts w8: comment.created webhook; Ada writes 'My HIV status is positive, does clause 9 apply?'; void, DELETE /envelopes/:id -> 200; webhook_deliveries still has 1 row for that envelope whose body holds the words and Ada's name; GET /webhooks lists it with can_redeliver true. Fix: delete or blank webhook_deliveries rows of the envelope in forgetEnvelopes."
+   },
+   {
+    "title": "Refused requests use up the burst limit and lock out a real question",
+    "severity": "low",
+    "where": "src/server/routes-comments.ts writeAsSigner (limits() before thread, pin, 'for' checks)",
+    "detail": "probe.ts f13: 10 posts with thread_id 'thr_none' (404 each), then 'A real question' -> 429 'That is 10 comments in 10 minutes, which is as many as we take in that time...'. Same for a bad pin or a form visitor choosing everyone. Fix: validate first, then count the burst, or count only stored comments."
+   },
+   {
+    "title": "Screens and emails promise an email to people who are never emailed",
+    "severity": "low",
+    "where": "src/components/sender/Comments.tsx (option text and reply hint), src/server/routes-comments.ts senderDigest and signerView.answers_to",
+    "detail": "'Only Pat Present (they are emailed)' for an in-person signer (look.cjs cardSelect); reply hint 'Only <name> can read it, and they are emailed.'; for a recipient who marked our email as spam the digest still says 'They see your answer on their signing page, and we email it to them.' with no exception line (probe.ts m9 [true,false]); a bounced signer's page gets answers_to = their address, so the dialog says 'we email it to ben...' (m9). Fix: use reach() for each person in people, the digest lines and answers_to."
+   },
+   {
+    "title": "Finish note count can be stale",
+    "severity": "low",
+    "where": "src/components/sign/Comments.tsx useMyQuestions; src/app/sign/[token]/page.tsx line 122",
+    "detail": "The count is fetched on load and when the dialog closes only. If the sender answers while the signer has the page open, Finish still says 'You asked <sender> a question that has not been answered. Finish anyway?'. Found by reading the code, not run in a browser. Fix: refetch when the review step opens."
+   },
+   {
+    "title": "Admin cannot list comments of an envelope the sender removed, yet the evidence pack has them",
+    "severity": "low",
+    "where": "src/server/routes-comments.ts senderSide (mine without removed: true)",
+    "detail": "probe4.ts: after the sender deletes a completed envelope, admin GET /envelopes/:id/comments -> 404, admin GET /envelopes/:id/evidence -> 200 with the threads. Fix: pass { removed: true } for GET like the evidence route."
+   },
+   {
+    "title": "Same comment accepted twice",
+    "severity": "low",
+    "where": "POST /envelopes/:id/comments and POST /sign/:token/comments",
+    "detail": "probe3.ts t2: two identical answers sent at once -> [200,200], 2 rows. The screens disable the button while busy, so this is for API callers and retried requests. Fix: honour Idempotency-Key, or refuse an identical body from the same author in the same thread within a few seconds."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md, Questions and comments bullet; research/continue.json build:comments abuse_and_stuck",
+    "claim": "a comment that reads like a fake payment notice is refused / 'emailRefusal is checked when written (422, nothing saved) and again when emailed ... Tested.'",
+    "reality": "Only when the whole notice is in one comment. Split over three answers it is accepted, shown together on the signing page and emailed (probe.ts s5, s5b)."
+   },
+   {
+    "where": "README.md, Questions and comments bullet and the tests/comments.test.ts row",
+    "claim": "Nobody ever reads a private thread they are not in ... on the device of someone who signs in person",
+    "reality": "A second in-person signer on the host's laptop reads the first one's private thread and the host's answer through Back (07b-quinn-reads-pat-thread.png, probe2.ts d1)."
+   },
+   {
+    "where": "research/continue.json build:comments item 5",
+    "claim": "Everything is deleted with the envelope by foreign-key cascade.",
+    "reality": "The comment.created webhook body with the private text and the writer's name stays in webhook_deliveries and can be redelivered (probe.ts w8)."
+   },
+   {
+    "where": "src/components/sender/Comments.tsx newsLine",
+    "claim": "Waiting to be emailed to <name>. We send at most one email every 10 minutes to each person, and nothing while sending is paused.",
+    "reality": "Also shown for answers held for ever by the filter, which never go out (probe3.ts b1)."
+   },
+   {
+    "where": "src/components/sender/Comments.tsx option text and reply hint",
+    "claim": "Only <name> (they are emailed) / Only <name> can read it, and they are emailed.",
+    "reality": "Not emailed when they sign in person, have no address, marked spam or bounced (look.cjs cardSelect shows it for in-person Pat)."
+   },
+   {
+    "where": "src/app/help/page.tsx line 116",
+    "claim": "their answer appears on the same page and comes by email",
+    "reality": "No email for in-person signers, people without an address, spam-marked or bounced addresses, or when the answer is held."
+   },
+   {
+    "where": "research/continue.json build:comments abuse_and_stuck",
+    "claim": "ABUSE, recipient floods the sender: one email per envelope every 10 minutes, 50 comments per person, 10 per 10 minutes per link. Tested.",
+    "reality": "Those limits hold, but nothing limits settle/open-again, which floods the audit trail and the certificate (probe.ts t4: 34-page PDF for 2 pages)."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "From display 'PayPal Billing via Sign&Grow': many phone mail apps show only the display name, so it would read as PayPal. Fairly sure from how Gmail and iOS Mail show senders; not tested against a real mailbox.",
+   "The stranger's plain URL in the owner's digest: Gmail and Outlook usually turn a plain URL in an HTML body into a link. Medium confidence; the email is escaped text, so it is only a link if the client auto-links.",
+   "Browser history on the host's device: proved in headless Chromium (window.location.href navigations stay in history and Back reaches the earlier in-person link). Safari and Chrome on an iPad behave the same for location.href; high confidence, not tested on a real tablet.",
+   "Webhook receivers: what the account's own systems keep is outside our control; the finding is only about our own delivery log."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/01-sign-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/02-dialog-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/03-dialog-phone-full.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/04-card-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/04a-card-top.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/04b-card-bottom.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/06-quinn-back-on-pat.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/07b-quinn-reads-pat-thread.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/report.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/report-skip.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/look.cjs",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/probe.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/probe2.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/probe3.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-comments/probe4.ts"
+  ]
+ },
+ "verify:pay-round4": {
+  "checks": [
+   {
+    "item": "(1) Round-three pay-core B4/A1: cancelled on the provider page while a payment is failing, with one failed provider call",
+    "holds": true,
+    "evidence": "Re-ran tests/out/verify-pay-core/a-angles.ts into /home/user/treegens-app/sign-and-grow/tests/out/verify-pay-round4/rerun/verify-pay-core--a-angles.txt. A1: webhook 502 while DELETE fails, provider retry 200 applied, local plan seedling/canceled, open invoice void, inbox empty, one 'Your Grove plan is cancelled' mail; the retry of the failed payment is then refunded 900, added 0, 'Refund sent: $9.00'. Plan page problem null, can_cancel false."
+   },
+   {
+    "item": "(1) Round-three pay-core A2 / O3: cancel in the rollover hour when the invoice lookup fails, then press again",
+    "holds": true,
+    "evidence": "Same file, A2: echo mail now 'Cancelled in the app by Roll Tester. The payment for the new month had not been taken yet, so the plan ends today and that payment is withdrawn'; the new month's charge is refunded 900, added 0.",
+    "still_broken": "Small: the second press, which the first error told the customer to make, answers 400 'There is no monthly plan on this account, so there is nothing to cancel' and the page shows it as an error.",
+    "suggested_fix": "In cancelPlan, when the plan was ended within the last day with a cancel_ref, answer 200 with that reference and ended_now true instead of 400."
+   },
+   {
+    "item": "(1) Round-three pay-core O4/A3: an automatic refund whose charge cannot be found",
+    "holds": true,
+    "evidence": "A3 rerun: refund row 'manual' after three refusals, 1 operator alert, customer mail 'A person will send your refund of $9.00'. The probe's own page-render line is stale; the real Plan page (browser, state manualpaid) words it 'We owe you a refund of $9.00: you were charged after the plan was cancelled...'. The partial-hand-refund path breaks this state: see the 'manual' check below."
+   },
+   {
+    "item": "(1) Round-three pay-core O8 history line, round-one bug 15 (free code makes a used-up payment refundable), A7 tax notice, A9 dispute closed by charge only, A5 hand refund mail, W5 dispute order, Q1 and W2 inbox, I2 shared customer",
+    "holds": true,
+    "evidence": "rerun/verify-pay-core--r2-n4-timers.txt: history 'Renewal reminder could not be delivered'. r2-p4-refunds: after the code offer null, refund 400, paid_net 9 (was 0). a-angles A7: reminder $9.90, refunded 0, no alert; A9 both shapes 112 back 'won'; A5 'Refund sent: $9.00' with signatures and plan. b-today W5: closed answered 502, applied after created, balance 112, 'won'; W2 applied after 5 runs; I2 'Theirs'. q1-tick: both timer runs finished (were stuck)."
+   },
+   {
+    "item": "(1) Round-three pay-core $0 first invoice in the welcome",
+    "holds": true,
+    "evidence": "The old r2-p6-misc section still shows the old welcome, but only because its stand-in names the invoice nowhere. /home/user/treegens-app/sign-and-grow/tests/out/verify-pay-round4/f9-misc.ts Z1 (subscription latest_invoice) and Z2 (checkout names the invoice, invoice message first): welcome says 'Your first invoice came to $0.00, so this first month brought no signatures'."
+   },
+   {
+    "item": "(1) Round-three pay-core A4: amount-only matching lets another product's refund or dispute touch our customer",
+    "holds": false,
+    "evidence": "A4 rerun: the no-invoice foreign charge now changes nothing and nothing is conceded (one alert).",
+    "still_broken": "The same class goes through the invoice id. f10-notours.ts N1: another product's $49.00 invoice of our customer is stored as kind 'not_ours' WITH our account_id; its refund mails our customer 'Refund sent: $49.00 ... of your payment of $49.00 ... It was sent by a person here' and writes 'Refund sent' into our plan history. N2: a dispute of that product's $20.00 charge ends OUR plan at the provider, switches payments off (top-up 403), mails 'A payment was disputed, so we stopped billing you', and we concede the other product's dispute. f11-stranger.ts N4: a customer who is not ours at all disputes the other product's $20.00 charge: we concede it (disputes/dp_stranger_1/close) and alert 'Card dispute on a payment whose account no longer exists'. f8-charge.ts K1: our own refund still picks a charge by amount and refunded ch_other_product.",
+    "suggested_fix": "paymentForCharge: match by id only rows of kind 'plan' or 'topup' (never 'not_ours', 'unknown', 'other'). Dispute branch: concede and end a plan only for such a row with an account. chargeTarget: drop the amount fallback, answer 'needs a person' instead."
+   },
+   {
+    "item": "(1) Round-three pay-core: one slow mail call holds the account's queue",
+    "holds": false,
+    "evidence": "Timeouts are in place (greeting 10 s, socket 20 s).",
+    "still_broken": "See the open end (3a) check: Cancel answered after 39.8 s and 79.8 s.",
+    "suggested_fix": "Queue billing emails (insert into emails with status queued and let retryMail or a microtask after serial() deliver them) instead of awaiting sendMail inside serial()."
+   },
+   {
+    "item": "(1) Round-three pay-core screens (cancel confirmation scroll on the phone, refund dialog on an ended plan, paused badge)",
+    "holds": false,
+    "evidence": "Server texts re-checked and fixed: b-today P1 top-up refusals for paused and on hold now name the right action; pay-open 409s worded from the state.",
+    "still_broken": "I did not re-check the cancel scroll, the refund dialog on an ended plan or the paused badge in a browser, so I cannot say they hold."
+   },
+   {
+    "item": "(1) Round-three pay-terms UNMATCHED, STARVATION, NOTOURS listing and manual, FIND while queued, CODE ONLY ended, CLOSEOPEN2, PRICES, REFUND429, CURRENCY, GONECUS, DECLINED, THROWS, TWOSUBS, MEMBER STOP",
+    "holds": true,
+    "evidence": "rerun/verify-pay-terms--p2-money.txt and p5/p6: UNMATCHED applied after the timer (balance 12); STARVATION ours applied with 2 lookups; NOTOURS row 'not_ours', balance unchanged, receipt untouched; FIND mail says the end is being confirmed; CODE ONLY ended badge 'Ended'; CLOSEOPEN2 closing mail names the $30 refund and it completes; stop page price 12 and resumed mail $12.00; MEMBER STOP 404. RESUME429's second half threw in my rerun because the probe leaves a 429 rule armed (probe artifact; REFUND429 in p5 passes)."
+   },
+   {
+    "item": "(1) Round-three pay-terms RETURNER, OLDROW, TAX INCLUSIVE, NOTICE WITHDRAWN, ZONE, NOSMTP, NEW PRICE",
+    "holds": true,
+    "evidence": "rerun/verify-pay-terms--p3-price.txt: RETURNER price_cents 1200, renewal refunded 0; OLDROW refunded 300; INCLUSIVE reminder $9.00, refund 300; WITHDRAWN 5 withdrawn and mailed; ZONE subject 'March 1, 2027 (UTC)'; HOLD account told. New angles on the backfill fail: see the stored-price check.",
+    "still_broken": "OLDROW shows 'plan_page_price_before: $12.00' for the NULL row: GET /billing uses c.account and never fills the price (f5-price.ts B3)."
+   },
+   {
+    "item": "(1) Round-three pay-terms SAMEBOX, POINT6, SWAP3, ROLEFLIP, INPAGAIN, OWNADDR",
+    "holds": true,
+    "evidence": "rerun/verify-pay-terms--p1-credits.txt: SAMEBOX 402, POINT6 correct 402, reassign 402 (same and other address), SWAP3 2 used, ROLEFLIP and INPAGAIN unchanged and right."
+   },
+   {
+    "item": "(1) Round-three pay-terms RENAME (rename the account to the client, send to yourself, rename back)",
+    "holds": false,
+    "evidence": "rerun p1-credits RENAME: three times completed under 'Walk-in Client N' with 0 signatures used.",
+    "still_broken": "Unchanged by the owner's decision; README names it as a known limit.",
+    "suggested_fix": "Owner decision (monthly cap on free self-signatures, or decide free at signing time)."
+   },
+   {
+    "item": "(1) Round-three pay-terms TOLD TO COME BACK (FORMIDLE, FORMSHARED), FORMOVER, TWOROLE, FORMLOW, FORMNUMS, FORMSELF, FORMAGAIN",
+    "holds": true,
+    "evidence": "rerun/verify-pay-terms--p4-forms.txt: FORMIDLE envelope completed, finish 200 with the saved answer; FORMSHARED stays 'sent'; FORMOVER [200, 503 x5], balance 0; TWOROLE refused only when 2 are needed; FORMLOW both low-balance mails."
+   },
+   {
+    "item": "(1) Round-three pay-terms RACE: two visitors finish at the same moment with one signature free",
+    "holds": false,
+    "evidence": "Round three: [200, 503], balance 0.",
+    "still_broken": "Regressed. rerun p4-forms RACE: [200, 200], balance -1. My probe /home/user/treegens-app/sign-and-grow/tests/out/verify-pay-round4/f1-race.ts: 10 of 10 trials end at balance -1 with 2 signatures used; three visitors at once: [200,200,200], balance -2. The check (available < 1, envelopes.ts line 1918) and the grant (line 1958) now have 'await witnessDone(e, r, actor)' (line 1952) between them.",
+    "suggested_fix": "Take the form signature inside the tx that claims the Finish: INSERT the 'signature' credit only WHERE (balance - held) >= 1 in the same statement, and roll the claim back when it inserted nothing; or move the grant before the first await."
+   },
+   {
+    "item": "(1) Round-three pay-terms PARTIAL hand refunds and the Stripe doubts (charge search, adaptive_pricing, draft delete, tax_id, upcoming timing)",
+    "holds": false,
+    "evidence": "PARTIAL rerun: after $5 and $4 by hand the row is now 'manual', banner by_hand true, page row '$9.00 refunded'. Doubts unchanged in code (README test-mode lines).",
+    "still_broken": "See the 'manual' and open end (3b) checks; Stripe doubts need test mode."
+   },
+   {
+    "item": "(2) New refund state 'manual'",
+    "holds": false,
+    "evidence": "f2-refunds.ts R3: a full hand refund settles a 'manual' row with 'Refund sent: $9.00'. R4: 'manual' is reached 30 minutes after the first clear refusal with the built-in 15-minute timer.",
+    "still_broken": "R1: provider refuses, a person refunds $5 then $4 by hand; the customer gets 'Refund sent: $5.00', 'Refund sent: $4.00', THEN 'A person will send your refund of $9.00 ... We owe you a refund of $9.00'; the row stays 'manual' for ever, Plan page notice 'We owe you a refund of $9.00 ... a person here will send it to your card by hand' next to '$9.00 refunded', and operators are told 'Refund the charge by hand' for a charge that is fully refunded. R2: 'manual' first, then $5 and $4 by hand: never settles. R5: close the account at once with a 'manual' refund: the closing email does not mention it (pendingRefundLines selects status 'pending' only, routes-billing.ts line 277).",
+    "suggested_fix": "charge.refunded (line 1799) and tryRefund (line 362): settle as 'outside' when the charge's amount_refunded reaches the payment's amount, or compare against refunded_cents before this charge's hand refunds were recorded; a refund refused with 'greater than what is left' re-reads the charge first. pendingRefundLines: status IN ('pending','manual')."
+   },
+   {
+    "item": "(2) The after-stop and cancel-by markers",
+    "holds": false,
+    "evidence": "A1 and A2 reruns show the markers doing their job when nobody touches the pay button.",
+    "still_broken": "f3-cancel.ts C1: payment failing; owner presses Cancel, provider will not end it (502), its echo fails the same way; a second admin opens 'Pay the open payment' (200, URL) and closes it without paying: the marker is deleted (routes-billing.ts line 959). The provider's own card retry then succeeds: refunded 0, 9 added, plan active; the echo re-applied writes 'Cancelled... The plan runs until December 18, 2026, because that month is already paid for'. The customer pressed Cancel and pays $9 for another month.",
+    "suggested_fix": "Clear the marker only when the invoice is paid through the hosted page (check status_transitions.paid_at after the pay-open time and that the payment came from that page), or keep the marker and ask the admin in pay-open whether they want to keep the plan."
+   },
+   {
+    "item": "(2) Cancelling decided from a fresh read of the subscription",
+    "holds": false,
+    "evidence": "A1 rerun holds.",
+    "still_broken": "f3-cancel.ts C2: the message says past_due and set to end, the fresh read says 'unpaid' and NOT set to end (the customer undid it): the plan is ended anyway ('Cancelled on the payment provider's page. Ended at once'). Line 1700 returns only for LIVE statuses. C3: cancelled in the app, resumed on the provider page, Cancel pressed again in the app before that message arrives: the early return (line 577) answers 'cancelled' with the old reference without asking the provider; the late resume message then clears cancel_at ('Your Grove plan continues') and the renewal is kept (refunded 0, added 9).",
+    "suggested_fix": "Line 1700: if (!plannedEnd(fresh)) return applySubscription(account(a.id), fresh, at, false). Early return in cancelPlan: GET the subscription first and fall through when cancel_at_period_end is false."
+   },
+   {
+    "item": "(2) Matching charges only by id and expanded invoice payments",
+    "holds": false,
+    "evidence": "A4 rerun: amount-only incoming matches are gone.",
+    "still_broken": "N1, N2, N4 (invoice-id matches of other products' rows) and K1 (outgoing refund by amount), see the A4 check above.",
+    "suggested_fix": "As in the A4 check."
+   },
+   {
+    "item": "(2) Free signatures counted as used first (paidAvailable)",
+    "holds": true,
+    "evidence": "r2-p4 bug-15 angle: offer null after a code. f6-people.ts G3: 3 welcome + 10 paid, an operator adjustment of -3: offer still all 10 (taken from the free ones first), reason text right."
+   },
+   {
+    "item": "(2) The stored price per account and its backfill (fillPrices)",
+    "holds": false,
+    "evidence": "RETURNER, OLDROW, INCLUSIVE hold.",
+    "still_broken": "f5-price.ts B1: an old row paid $9.72 (tax 72), then the provider's early notice set renewal_tax_cents 90; restart: price_cents 882 (972 minus the upcoming tax); every $9.90 renewal refunds $0.18 with 'the price went up without the 30 days' notice we promise, so you pay the price you were on: $9.72, not $9.90' plus an operator alert, month after month. B2: last plan payment was a $4.50 coupon month: price_cents 450, every full $9.00 renewal refunds $4.50 with the same untrue reason. B3: a NULL row while the server runs shows plan_price and next_amount $12.00 on GET /billing after PRICING went to $12 (the money path fills it, the page does not).",
+    "suggested_fix": "fillPrices: use the last plan payment whose amount equals its line's unit_amount (or the price's unit_amount), minus that payment's own tax (store taxOf per payment), never renewal_tax_cents; billingState: read through account()."
+   },
+   {
+    "item": "(2) Price notices to every owner and admin",
+    "holds": true,
+    "evidence": "p3-price rerun: HOLD account told, WITHDRAWN mailed, ZONE in UTC, NOSMTP outbox counted on a development server only (author's production test). Browser: operator page at 390x844 in Los Angeles, dialog '...from December 30, 2026 (UTC)?', result '2 accounts were told that the plan costs $12.00 a month from December 30, 2026 (UTC).', scrollWidth 390.",
+    "still_broken": "By reading only: the 30-day check counts from each account's own start time (price_notice_at = started), while 'from' is only checked against the time of the request; a run that takes hours (a slow mail server) records notices that noticed() never honours. See new bug."
+   },
+   {
+    "item": "(2) Form visitors kept and emailed (formVisitorsReady)",
+    "holds": false,
+    "evidence": "FORMIDLE and FORMSHARED hold; the email goes out when a signature is free.",
+    "still_broken": "f7-forms.ts V1: a visitor who reported our earlier email as spam (complained_at, mail_complaints) still gets 'You can finish \"Join us\" now'. V2: after the owner switches the form off, both waiting visitors are emailed and can finish (200), using signatures. V3: one signature added, the told visitor never returns; the next waiting visitor is never told although 1 is free (they can finish, 200). V4: the owner's account is paused for 'reports of fake documents' and the visitors are still emailed under our name with the form's name. Plus the RACE regression.",
+    "suggested_fix": "In formVisitorsReady skip recipients with complained_at or a mail_complaints row, envelopes whose account is suspended or closing (mayWrite), and forms with active=0; count only visitors told within the last day against the room."
+   },
+   {
+    "item": "(2) person_gen",
+    "holds": true,
+    "evidence": "p1-credits rerun SAMEBOX/POINT6/reassign all 402; billing7 test passes.",
+    "still_broken": "f6-people.ts G1 and G2: Ann signs; the sender renames her to Bob and straight back to Ann (Edit with sign again, or Correct): person_gen 2, Ann's second signature costs another one (2 used, balance 1 to 0). The address round trip is documented; the name round trip is not.",
+    "suggested_fix": "Before bumping, look for a ledger line of this recipient at any earlier gen whose person (kept per gen: normalised name and address) is the same person, and reuse that gen."
+   },
+   {
+    "item": "(2) The Plan page sending-limit sentence",
+    "holds": false,
+    "evidence": "Browser, state youngpaid (paid 3 days ago, first week), both sizes: 'an account that has not paid anything can send to 50 people a day in its first week (that is you, for now) ... (for you, on December 1, 2026, UTC, if that payment stands)'.",
+    "still_broken": "It tells a paying account it is an account 'that has not paid anything'. f6-people.ts L2: a 20-day-old $9.00 payment of which we ourselves sent back $0.18 (charged more than the reminder said) never lifts the limits (refunded_cents = 0 is required), lifts_on null.",
+    "suggested_fix": "Word it 'An account without a payment that has stood for 14 days can send...'; count a payment whose refunded_cents is below its amount and was refunded by the software for an overcharge."
+   },
+   {
+    "item": "(3a) Billing emails sent inside serial() while a mail server stalls",
+    "holds": false,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/verify-pay-round4/f4-mailstall.ts (a TCP server that never greets, or greets and then says nothing), account with 2 admins: a renewal receipt is being mailed, the owner presses Cancel 300 ms later: answered after 39841 ms (silent) and 79803 ms (greet then silence). Cancel with nothing ahead: 20008 ms and 40023 ms. The webhook itself answers 'received' in 5 s.",
+    "still_broken": "The repair note says 'up to about 40 s per admin'; each billing email of each queued event adds 10 to 20 s per admin, so a Cancel behind one receipt with 2 admins waited 80 s, past a 60 s proxy limit (nginx's default), and the customer would see an error for a cancel that went through. The price-notice route awaits every account in one request, so a stalled server makes it run for N accounts x admins x 20 s.",
+    "suggested_fix": "Write billing emails as queued rows inside serial() and deliver them after the queue item resolves (or from retryMail); answer the Cancel before mail goes out."
+   },
+   {
+    "item": "(3b) A refund made by hand at the provider in two parts while ours is pending",
+    "holds": false,
+    "evidence": "f2-refunds.ts R1 and R2 and the browser state manualpaid.",
+    "still_broken": "Never settles; after the full $9 went back the customer is told a person will send $9.00 and the page says 'We owe you a refund of $9.00' for ever.",
+    "suggested_fix": "As in the 'manual' check."
+   },
+   {
+    "item": "Billing test suite and types",
+    "holds": true,
+    "evidence": "tests/billing.test.ts to billing7.test.ts: 93 of 93 pass (rerun/billing-suite.txt). npx tsc --noEmit -p . shows no errors in the payment files. Twice the code base did not load for a few minutes (routes-twostep.ts importing linkProvider from routes-signin.ts, then a syntax error in openapi.ts): work in progress by others, I waited and retried."
+   },
+   {
+    "item": "Screens at 390x844 and 1280x900 for the round-four states",
+    "holds": true,
+    "evidence": "ui4.cjs on my dev server (port 3585): manualpaid, youngpaid, failend and the operator page: no sideways scroll, no element wider than the window, no em dash. Texts are wrong in two states (see 'manual' and sending-limit checks)."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Another product's invoice is matched by its invoice id: its refund is mailed to our customer, its dispute ends our plan, and we concede other products' disputes, also for strangers",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts paymentForCharge line 1188 (matches 'OR id=?' with the charge's invoice against any payment row, including kind 'not_ours'), charge.refunded branch 1782 to 1823, charge.dispute.created line 1858 (concedes before checking the account at 1865)",
+    "detail": "Probes tests/out/verify-pay-round4/f10-notours.ts and f11-stranger.ts. N1: our customer on our plan; invoice.paid of price_other_product $49.00 for the same provider customer is stored as kind 'not_ours' with our account_id; charge.refunded of that charge: our customer mailed 'Refund sent: $49.00 ... of your payment of $49.00 ... It was sent by a person here', plan history 'Refund sent'. N2: charge.dispute.created on that product's $20.00 charge: our subscription canceled at the provider, plan seedling, dispute_at set, top-up 403, mail 'A payment was disputed, so we stopped billing you', and disputes/dp_other_2/close was called. N4: a stranger (not our customer) disputes the other product's $20.00 charge: we concede it and alert 'Card dispute on a payment whose account no longer exists'. Fix: match by id only rows of kind 'plan'/'topup'; never concede or end anything for other kinds. Depends on the charge carrying 'invoice' (true on API versions before 2025-03-31, which the README asks to pin)."
+   },
+   {
+    "title": "A refund we owe, sent by hand in two parts, is never settled and the customer is told a person will send money that already came back",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts charge.refunded line 1799 and tryRefund line 362 (compare against refunded_cents that already includes the earlier hand part); billingRetries 'manual' mail 1561 to 1567",
+    "detail": "tests/out/verify-pay-round4/f2-refunds.ts R1: cancelled plan charged again, provider refuses our $9.00 refund; a person refunds $5.00 then $4.00 in the dashboard. Mails: 'Refund sent: $5.00', 'Refund sent: $4.00', then 'A person will send your refund of $9.00' ('We owe you a refund of $9.00'). Row status 'manual' for ever, Plan page notice 'We owe you a refund of $9.00 ... a person here will send it to your card by hand' next to '$9.00 refunded' (browser, state manualpaid), operator alert 'A refund we owe needs a person ... Refund the charge by hand'. R2: same when 'manual' came first. Fix: settle as 'outside' when amount_refunded >= amount_cents, and re-read the charge before counting a 'greater than what is left' refusal."
+   },
+   {
+    "title": "A stalled mail server holds Cancel (and every other billing step of that account) for 40 to 80 seconds",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts mailAdmins 198 to 212 awaited inside serial() by cancelPlan (619, 627), applyInvoice (1437) and the rest; price-notice route 2050 to 2109",
+    "detail": "tests/out/verify-pay-round4/f4-mailstall.ts, 2 admins: Cancel behind a renewal receipt answered after 39.8 s (server never greets) and 79.8 s (greets, then silence); Cancel alone 20.0 s and 40.0 s. A proxy that gives up at 60 s shows the customer an error for a cancel that went through. Each queued billing email adds 10 to 20 s per admin, so three admins and two queued events pass two minutes. Fix: queue billing emails and send them outside serial()."
+   },
+   {
+    "title": "Two public-form visitors finishing at once take the owner's balance below zero (regression)",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts completeRecipient: check at line 1918, 'await witnessDone' at line 1952, grant at line 1958",
+    "detail": "tests/out/verify-pay-round4/f1-race.ts: 1 signature free, two visitors post Finish together: 10 of 10 trials [200, 200], balance -1; three visitors: [200,200,200], balance -2. Round three gave [200, 503]. In-process requests interleave at every await; on a real Node server the gap is one already-resolved await, so I am fairly sure (about 80 percent) two HTTP requests cannot land in it today, but any awaited I/O there makes it real and the rule 'a form never takes your balance below zero' depends on it. Fix: take the signature in the same SQLite transaction as the claim, conditional on available >= 1."
+   },
+   {
+    "title": "Opening 'Pay the open payment' (without paying) deletes the stop marker, so a payment after Cancel is kept",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/pay-open line 959",
+    "detail": "tests/out/verify-pay-round4/f3-cancel.ts C1: payment failing; owner presses Cancel, DELETE refused twice (press and its echo), 502; second admin opens the pay page and leaves; the provider's card retry succeeds: refunded 0, 9 added; the echo applied again gives 'The plan runs until December 18, 2026, because that month is already paid for'. Fix: clear the marker only when the invoice is paid after pay-open via the hosted page, or ask in pay-open."
+   },
+   {
+    "title": "A fresh read that shows the plan no longer set to end still ends it when the status is 'unpaid' or 'paused'",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts applySubscription line 1700",
+    "detail": "f3-cancel.ts C2: message past_due with cancel_at_period_end true; provider now 'unpaid', cancel_at_period_end false: plan ended at the provider, mail 'Your Grove plan is cancelled', history 'Cancelled on the payment provider's page. Ended at once'. Fix: return to the normal path whenever plannedEnd(fresh) is null."
+   },
+   {
+    "title": "'Already cancelled' is answered from our own record without asking the provider; a late resume message then renews the plan",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts cancelPlan lines 577 to 580",
+    "detail": "f3-cancel.ts C3: cancel in the app (paid, runs to the end); resume on the provider page; press Cancel again in the app before that message arrives: 200 with the old reference, 1 provider call in total (none for the second press); the late message clears cancel_at, mails 'Your Grove plan continues'; the renewal is kept (refunded 0, added 9). Fix: GET the subscription in the early return and continue when it is not set to end."
+   },
+   {
+    "title": "The price backfill takes the upcoming tax off the last payment, and takes a discounted month as the price, so every renewal is refunded with an untrue 'price went up' email",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/db.ts fillPrices lines 823 to 828 (also run by account() in routes-billing.ts line 66 while the server runs)",
+    "detail": "tests/out/verify-pay-round4/f5-price.ts B1: $9.72 paid (tax 72), early notice tax 90, restart: price_cents 882; each $9.90 renewal refunds $0.18 with 'the price went up without the 30 days' notice we promise, so you pay the price you were on: $9.72, not $9.90' and an operator alert. B2: last plan payment $4.50 (coupon): price_cents 450; each $9.00 renewal refunds $4.50 with the same reason. Only rows with no stored price are affected (payments are off on the first deployment, so mainly restored backups). Fix: take a full-price payment and its own tax."
+   },
+   {
+    "title": "Plan page shows the new-customer price for an account whose price is not written down yet",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts route GET /billing line 634 (billingState(c.account), not account())",
+    "detail": "f5-price.ts B3: price_cents NULL, PRICING.monthlyUsd 12: plan_price and next_amount '$12.00' while the renewal will be held to $9.00. Fix: billingState(account(c.account.id), c.user)."
+   },
+   {
+    "title": "Our own refund is sent to a charge found by amount, which can be another product's",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts chargeTarget lines 298 to 304",
+    "detail": "f8-charge.ts K1: plan payment with no charge id, its invoice names no charge, our charge not among the customer's listed charges, another product's $9.00 charge with no invoice is: POST /billing/refund 200, the provider was asked to refund ch_other_product, and payments.charge_id is now ch_other_product, so that product's later refunds and disputes match our payment by id. Fix: no amount fallback; mark it for a person."
+   },
+   {
+    "title": "A refund or a dispute reported before its invoice is applied is dropped for good",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts paymentForCharge line 1191 ('names an invoice that is not one of ours: not ours') and the charge.refunded and charge.dispute.created branches",
+    "detail": "f10-notours.ts N3: checkout applied, our first invoice's message not yet applied (failed once), a hand refund of $9.00 arrives: applied 'ok' and recorded as handled; then the invoice applies: balance 12, refunded_cents 0, 'Receipt: $9.00'. The customer has the money and the signatures, and the page offers a refund again. Fix: when the charge's invoice is unknown but its customer is ours, throw (unsure) so it is retried after the invoice, as done for dispute.closed."
+   },
+   {
+    "title": "'You can finish now' emails skip the spam complaint, the pause, and a form that was switched off",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts formVisitorsReady (line 1686 onward, calls sendMail directly)",
+    "detail": "f7-forms.ts V1: visitor with complained_at and a mail_complaints row is emailed. V2: form set active=0, both waiting visitors emailed and one finishes (200), using a signature. V4: account paused for 'reports of fake documents', visitors emailed 'The form can take your signature now' with the form's name. Fix: same guards as notifyRecipient (complaint, mayWrite) plus powerforms.active."
+   },
+   {
+    "title": "A visitor who was told and never comes back keeps the next waiting visitor from ever being told",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts formVisitorsReady line 1693 (room = available minus every told visitor still open, up to the 4-month deadline)",
+    "detail": "f7-forms.ts V3: 1 signature added, second visitor told and absent, third never told after 3 more timer runs with 1 free; the 503 text promised 'We email you at <address> once the form can take your signature'. Fix: count told visitors against the room only for a day or so."
+   },
+   {
+    "title": "Renaming a signer to someone else and back makes the same person pay again",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts correctEnvelope person_gen bump (line 762) and correctRecipient (sameInbox branch)",
+    "detail": "f6-people.ts G1 (Edit with sign again) and G2 (Correct): Ann signs, renamed Bob, renamed Ann: person_gen 2, Ann signs again: 2 signatures used. Fix: reuse an earlier gen that was the same person."
+   },
+   {
+    "title": "Closing an account at once does not mention a refund that is waiting for a person",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts pendingRefundLines line 277 (status='pending' only)",
+    "detail": "f2-refunds.ts R5: refund in state 'manual', /me/delete now: closing email has no refund line; after the account is gone a hand refund sends no mail (settleRefund returns when the account is missing). Fix: include 'manual'."
+   },
+   {
+    "title": "Plan page limit sentence tells a paying account it has not paid anything; our own small correction refund keeps the limits on",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx line 683; src/server/envelopes.ts hasNotPaid (refunded_cents = 0)",
+    "detail": "Browser youngpaid at both sizes and f6-people.ts L1: 'an account that has not paid anything can send to 50 people a day in its first week (that is you, for now)' for a 3-day-old $9.00 payment. L2: $0.18 refunded by the software on a 20-day-old payment: still limited, lifts_on null."
+   },
+   {
+    "title": "A price notice run that takes hours records notices that never take effect",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts price-notice route (from checked against request time at 2060, price_notice_at = per-account 'started' at 2088) and noticed() lines 39 to 41",
+    "detail": "By reading. The earliest day the page allows is the date of now+31 days at 00:00 UTC, so the margin over 30 days can be a few hours; noticed() needs from minus price_notice_at >= 30 days minus 1 hour. Accounts mailed after the margin are told of the rise but held to the old price (refunded every month) until a new notice with another day. With mail at 1 s per admin, a few thousand accounts take hours. Fix: refuse to record (put in not_told) an account whose started is less than 30 days before from, or check each account's own time."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts lines 25 to 27",
+    "claim": "a message that needs an earlier one ... waits for it, so the outcome does not depend on their order",
+    "reality": "f10-notours.ts N3: a hand refund reported before its invoice is applied is dropped; the invoice then adds 9 signatures and shows no refund."
+   },
+   {
+    "where": "routes-billing.ts paymentForCharge comment lines 1180 to 1186 and the billing6 test name 'a refund or a dispute of a charge that may be another product's never touches our customer'",
+    "claim": "another product's charge ... its refund or dispute must never touch our customer; nothing is stopped, taken or conceded on a guess",
+    "reality": "N1, N2: matched by invoice id, our customer is mailed a $49.00 'Refund sent' and our plan is ended by a dispute on another product; N4: we concede a stranger's dispute with the other product."
+   },
+   {
+    "where": "routes-billing.ts chargeTarget comment lines 284 to 286",
+    "claim": "a refund is never sent to a charge picked by guessing",
+    "reality": "f8-charge.ts K1: refunded ch_other_product picked by amount."
+   },
+   {
+    "where": "settings/page.tsx line 680 and the 'A person will send your refund' email (routes-billing.ts 1565 to 1567)",
+    "claim": "if the provider refuses the refund three times, a person here sends it by hand and we tell you so",
+    "reality": "R1: sent after the full $9.00 already went back in two hand refunds; the page then says 'We owe you a refund of $9.00' for ever."
+   },
+   {
+    "where": "research/continue.json repair:pay-core, mail item left_open",
+    "claim": "a stalled server can hold that account's queue up to about 40 s per admin, not minutes",
+    "reality": "Measured 79.8 s for a Cancel behind one receipt with 2 admins; every queued billing email adds 10 to 20 s per admin."
+   },
+   {
+    "where": "research/continue.json repair:pay-core notes; routes-billing.ts cancelPlan comment lines 575 to 576",
+    "claim": "cancel_at is only ever written after both the end and 'month is paid' were confirmed, so the early 'already paid' answer is now safe",
+    "reality": "f3-cancel.ts C3: after a resume on the provider page the early answer says 'cancelled' without asking, and the renewal is kept."
+   },
+   {
+    "where": "settings/page.tsx line 674 (rules) and the completeRecipient comment",
+    "claim": "A form never ... takes your balance below zero",
+    "reality": "f1-race.ts: two or three Finishes at once end at -1 and -2 (in-process)."
+   },
+   {
+    "where": "envelopes.ts 503 text to a refused form visitor",
+    "claim": "We email you at <address> once the form can take your signature",
+    "reality": "V3: with a signature free the second waiting visitor is never emailed while a told visitor stays away."
+   },
+   {
+    "where": "envelopes.ts cronTick comment 'Nothing goes to recipients in the name of a sender who is paused, also not from the timer'",
+    "claim": "nothing is emailed for a paused sender from the timer",
+    "reality": "V4: formVisitorsReady emails form visitors of a paused account."
+   },
+   {
+    "where": "Refund email reason in applyInvoice (routes-billing.ts line 1415) for backfilled accounts",
+    "claim": "the price went up without the 30 days' notice we promise",
+    "reality": "B1 and B2: the price did not go up; the backfill wrote a price that was too low."
+   },
+   {
+    "where": "settings/page.tsx line 683",
+    "claim": "an account that has not paid anything ... (that is you, for now)",
+    "reality": "Shown to an account that paid 3 days ago (browser, youngpaid)."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "N1, N2, N4 depend on the charge naming its invoice. I am about 70 percent sure Charge.invoice was removed in API version 2025-03-31; on any earlier pinned version (the README asks to pin one; the round-three VERSION probe used 2024-06-20) it is there and these happen as shown. On the newer version the match goes through the expanded invoice instead, which is safe.",
+   "C3 needs the provider's resume message to reach us after the second Cancel press. Stripe usually delivers within seconds; our own inbox can delay it while the account's queue is busy (see the mail stall).",
+   "C1 assumes the provider keeps retrying the card after cancel_at_period_end on a past_due subscription. Likely (round-three doubt 4).",
+   "The 40 to 80 s Cancel matters at the proxy: nginx's default proxy_read_timeout is 60 s (fairly sure); other hosts differ, I cannot check the deployment's.",
+   "RACE: I am fairly sure (about 80 percent) two real HTTP requests cannot interleave in the one-await gap today; the in-process probe shows it every time.",
+   "Unchanged and unproven without test mode: invoice expand[]=payments, subscriptions?status=all, paying an uncollectible invoice, DELETE of a subscription's draft (auto_advance fallback), dispute.closed payload, tax_behavior and inclusive flags, invoice_creation metadata on the top-up invoice (if it does not land, every top-up raises 'An invoice that is not the monthly plan was paid', as r2-p4 shows), charge search for stop-by-card, adaptive_pricing, tax_id_collection."
+  ],
+  "screens": [
+   "My dev server on port 3585 (NEXT_DIST_DIR=.next-verify-pay-round4, fresh DATA_DIR, DEV_OUTBOX=1, provider stood in by a copy of the round-three preload at /home/user/treegens-app/sign-and-grow/tests/out/verify-pay-round4/preload-dev.cjs), seeded by ui-seed4.mjs, driven by ui4.cjs and ui4-op.cjs at 1280x900 and 390x844 in America/Los_Angeles. Screenshots in /home/user/treegens-app/sign-and-grow/tests/out/verify-pay-round4/shots/, results in ui4.out and ui4-op.out. Server stopped; .next-verify-pay-round4 and the temporary data folder deleted; tsconfig.json left as next dev changed it.",
+   "manualpaid (both sizes): top notice 'We owe you a refund of $9.00: you were charged after the plan was cancelled. The payment provider would not send it automatically, so a person here will send it to your card by hand...' while the Payments row for the same payment reads '$9.00 $9.00 refunded Refund on its way'. Badge 'Ended'.",
+   "youngpaid (both sizes): 'an account that has not paid anything can send to 50 people a day in its first week (that is you, for now) ... (for you, on December 1, 2026, UTC, if that payment stands)'.",
+   "failend (payment failing and already set to end, both sizes): badge 'Payment failed', notice ends 'It is already set to end on November 28, 2026 at 1:00 PM; pressing Cancel plan ends it today instead.' Reads right.",
+   "Operator page at 390x844: price notice confirm dialog '...from December 30, 2026 (UTC)?', result '2 accounts were told that the plan costs $12.00 a month from December 30, 2026 (UTC).', scrollWidth 390.",
+   "No sideways scroll and no element wider than the window in any state at 390x844; no em dash on any page I opened."
+  ]
  }
 }

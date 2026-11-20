@@ -22,3 +22,7 @@
 .twostep summary::-webkit-details-marker { display: none; }
 .twostep summary::before { content: '\25B8'; margin-right: 8px; }
 .twostep details[open] > summary::before { content: '\25BE'; }
+/* The reset by email under way, on every page of the app (TwoStepResetBanner). */
+.banner.ts-reset { background: #fff4d6; color: #5a4300; border: 1px solid #e9cf86; }
+.banner.ts-reset .btn { min-height: 44px; white-space: normal; }
+.full-ts-reset { padding: 10px 16px 0; }

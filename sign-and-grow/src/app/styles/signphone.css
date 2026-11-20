@@ -59,6 +59,18 @@
   .sg-dialog-head { margin-bottom: 6px; }
   .sg-sigtabs { margin-bottom: 10px; }
 }
+/* A phone on its side at 200 percent is 195 px tall: the pinned part may take what it needs, the sentence keeps one
+   line and scrolls, the problem is said in fewer pixels and the box to draw in is lower, so the buttons stay on the
+   screen and part of the box can still be scrolled into view above them. Buttons stay 44 px. */
+@media (max-height: 260px) {
+  .sg-dialog .sigpad { height: 90px; }
+  .sg-dialog, .sg-dialog.wide { --sg-dpb: 6px; padding-top: 8px; }
+  .sg-adopt-foot { max-height: none; }
+  .sg-adopt-foot > .sg-siglegal { min-height: 1.3em; max-height: 2.6em; margin-top: 4px; font-size: 13px; }
+  .sg-adopt-foot .sg-problem { margin: 4px 0 0; padding: 6px 10px; }
+  .sg-adopt-foot .actions { margin-top: 6px; }
+  .sg-adopt-foot .actions .btn { min-height: 44px; }
+}
 
 /* ---- Very narrow screens: a 390 px phone at 200 percent is 195 px wide ------------------------------------------
    The title of the document gets a line of its own instead of shrinking to one letter beside Other actions, the
@@ -74,3 +86,7 @@
 }
 .sg-row-sig img { max-width: min(240px, 100%); }
 .sg-others img { max-width: 100%; }
+/* The server said its stored copy cannot be handed over (NoViewer, data-stored): a download is made from the same
+   file and would fail the same way, so no link to one is offered while that notice is on the page. A copy kept of
+   what someone signed before a change is another file, and stays. */
+body:has(.sg-noview[data-stored]) a[href*="/download"]:not([href*="earlier=1"]) { display: none; }

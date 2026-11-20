@@ -34,11 +34,16 @@ export function safeNext(next: any, fallback = '/app'): string {
 }
 
 /** Every way a sign-in at a provider can end without signing anyone in. The pages get the code, never free text. */
-export const SIGNIN_ERRORS = ['cancelled', 'expired', 'failed', 'exists', 'no_email', 'invite', 'code', 'taken', 'session', 'busy'] as const;
+export const SIGNIN_ERRORS = ['cancelled', 'expired', 'failed', 'exists', 'no_email', 'invite', 'code', 'taken', 'session', 'signed_in', 'busy'] as const;
 export type SignInError = (typeof SIGNIN_ERRORS)[number];
 
 /** What happened and what to do next, in words. `provider` is only ever one of the names above. */
 export function signInErrorText(code: any, provider?: any): string {
+  // A provider we do not know is "the sign-in service", which can open a sentence: then it starts with a capital.
+  const words = errorWords(code, provider);
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+function errorWords(code: any, provider?: any): string {
   const p = isProviderId(provider) ? PROVIDER_NAMES[provider] : 'the sign-in service';
   switch (code as SignInError) {
     case 'cancelled':
@@ -57,6 +62,8 @@ export function signInErrorText(code: any, provider?: any): string {
       return `That ${p} account is already connected to another Sign&Grow login, so it was not connected to this one. Sign in to the other login and disconnect it there first, or choose a different ${p} account.`;
     case 'session':
       return `You were no longer signed in to the same Sign&Grow login when ${p} answered, so nothing was connected. Sign in and try again under Settings, Profile.`;
+    case 'signed_in':
+      return `You are already signed in to Sign&Grow in this browser, so no new login was made. To sign in with ${p} from now on, press Connect next to ${p} here. To make a separate login with it instead, sign out first and then use "Continue with ${p}" on the sign-in page.`;
     case 'busy':
       return 'Too many attempts. Please wait a bit and try again.';
     default:
@@ -77,6 +84,7 @@ export type SignInNote = {
   confirm?: boolean; // and we emailed our own link to confirm the address
   linked?: string; // this provider was connected to a login that existed already
   reclaimed?: 'password' | 'login'; // that login had never been confirmed, and what was cut off (see cutEarlierAccess)
+  removed?: Removed; // and what had been set up in it, which went too (reclaim.ts)
   code_unused?: boolean; // a code was carried along but the person already had a login
 };
 
@@ -89,12 +97,56 @@ export const SIGNIN_NOTE_COOKIE = 'sg_signin_note';
 export function signInNotice(r: SignInNote): string {
   const said: string[] = [];
   if (r.created) said.push(`Welcome. Your Sign&Grow login was made with ${r.created}, so use "Continue with ${r.created}" to sign in from now on. It has no password. You can set one under Settings, Profile.${r.confirm ? ' We emailed you a link to confirm your address. Open it in this browser while you are signed in, and you can send documents.' : ''}`);
-  if (r.reclaimed) said.push(`${r.linked} confirmed that this address is yours. A Sign&Grow login had been started with it earlier, but the address was never confirmed, so we could not know who started it. To be safe${r.reclaimed === 'password' ? ' the password that was set before no longer works and' : ''} every other browser was signed out. From now on you sign in with ${r.linked}${r.reclaimed === 'password' ? ', and you can choose a new password under Settings, Profile' : ''}. If you did not start that login yourself, look at the team, the API keys and the webhooks under Settings.`);
+  if (r.reclaimed) said.push(`${r.linked} confirmed that this address is yours. A Sign&Grow login had been started with it earlier, but the address was never confirmed, so we could not know who started it. To be safe${r.reclaimed === 'password' ? ' the password that was set before no longer works and' : ''} every other browser was signed out. From now on you sign in with ${r.linked}${r.reclaimed === 'password' ? ', and you can choose a new password under Settings, Profile' : ''}. ${removedText(r.removed) ? `${removedText(r.removed)} We emailed you the same list.` : 'Nothing else had been set up in it.'}`);
   else if (r.linked) said.push(`${r.linked} is now connected to your login, because it confirmed your address to us. You can sign in with ${r.linked} or with your password. We emailed you a note about it.`);
   if (r.invite_error) said.push(`You are signed in, but you did not join the team. ${r.invite_error}`);
   else if (r.joined) said.push(`You have joined ${r.joined}.${r.created ? '' : ' If you have a workspace of your own, it is still there: switch between them at the bottom of the menu.'}`);
   else if (r.fresh) said.push('You are no longer on a team, so we made you a workspace of your own. Documents sent to you are in your inbox, and a team can invite you again at any time.');
   if (r.code_unused) said.push('The code was not used, because you already had a login. You can add it under Settings, Plan.');
+  return said.join(' ');
+}
+
+/**
+ * What was taken out of a login whose address had never been confirmed, the moment its owner proved the address was
+ * theirs (forgetEarlierSetup in src/server/reclaim.ts). Counts and host names only: it travels in a small cookie.
+ */
+export type Removed = {
+  name?: string; // the name the login has now
+  profile?: string[]; // what was cleared on the profile: name, job title, company, signature, initials, email settings
+  keys?: number; // API keys
+  webhooks?: number;
+  hooks_to?: string[]; // the hosts those webhooks sent to, a few of them
+  invites?: number; // invitations nobody had accepted yet
+  forms?: number; // public forms switched off
+  agreements?: number; // click-to-agree pages switched off
+  stamps?: number;
+  workspace?: string[]; // what was put back on the workspace: name, brand colour, logo, two-step rule
+  disconnected?: string[]; // Google or Microsoft accounts that had not vouched for the address
+  kept?: { drafts: number; templates: number; contacts: number; groups: number }; // what stays, to be looked at
+};
+const many = (n: number, one: string, more: string) => `${n} ${n === 1 ? one : more}`;
+const andList = (l: string[]) => (l.length < 2 ? l.join('') : `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`);
+
+/** The same words on the first screen, on the password page and in the email. Empty when nothing was removed. */
+export function removedText(r: Removed | null | undefined): string {
+  if (!r) return '';
+  const gone: string[] = [];
+  if (r.webhooks) gone.push(`${many(r.webhooks, 'webhook', 'webhooks')}${r.hooks_to?.length ? ` (sending to ${andList(r.hooks_to)})` : ''}`);
+  if (r.keys) gone.push(many(r.keys, 'API key', 'API keys'));
+  if (r.invites) gone.push(many(r.invites, 'invitation nobody had accepted yet', 'invitations nobody had accepted yet'));
+  if (r.disconnected?.length) gone.push(`the connection to ${andList(r.disconnected)}`);
+  if (r.profile?.length) gone.push(`the ${andList(r.profile)} on the profile`);
+  if (r.workspace?.length) gone.push(`the workspace ${andList(r.workspace)}`);
+  if (r.stamps) gone.push(many(r.stamps, 'stamp', 'stamps'));
+  const off = [r.forms ? many(r.forms, 'public form', 'public forms') : '', r.agreements ? many(r.agreements, 'click-to-agree page', 'click-to-agree pages') : ''].filter(Boolean);
+  const k = r.kept;
+  const kept = k ? [k.drafts ? many(k.drafts, 'draft', 'drafts') : '', k.templates ? many(k.templates, 'template', 'templates') : '', k.contacts ? many(k.contacts, 'contact', 'contacts') : '', k.groups ? many(k.groups, 'signing group', 'signing groups') : ''].filter(Boolean) : [];
+  const said: string[] = [];
+  if (gone.length) said.push(`What had been set up in it was removed: ${andList(gone)}.`);
+  const several = (r.forms || 0) + (r.agreements || 0) > 1;
+  if (off.length) said.push(`We switched off ${andList(off)}, so nobody can use ${several ? 'them' : 'it'} now. If ${several ? 'they are' : 'it is'} yours, switch ${several ? 'them' : 'it'} on again in the app.`);
+  if (r.profile?.includes('name') && r.name) said.push(`Your name is now "${r.name}". You can change it under Settings, Profile.`);
+  if (kept.length) said.push(`Still there from before: ${andList(kept)}. Look at who they name before you use them.`);
   return said.join(' ');
 }
 

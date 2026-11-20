@@ -225,15 +225,17 @@ export function paperOf(img: Rgba): Uint8ClampedArray {
 }
 
 /**
- * How far each pixel is from its paper, from 0 (paper) to 1: the light the ink takes away from the paper's own
- * colour, by channel, weighted the way the eye weighs them. Lighter than the paper (a glare) counts as paper.
+ * How far each pixel is from its paper, from 0 (paper) to 1: the share of the paper's own light the ink takes away,
+ * by channel, weighted the way the eye weighs them. A share, not an amount: where the light is dim, the paper and
+ * the ink are both darker, and the ink still takes the same share. Lighter than the paper (a glare) counts as paper.
  */
 export function inkDistance(img: Rgba, paper: Uint8ClampedArray): Float32Array {
   const { width: w, height: h, data: d } = img;
   const out = new Float32Array(w * h);
   for (let p = 0; p < w * h; p++) {
     const i = p * 4, j = p * 3;
-    const r = Math.max(0, paper[j] - d[i]) / 255, g = Math.max(0, paper[j + 1] - d[i + 1]) / 255, b = Math.max(0, paper[j + 2] - d[i + 2]) / 255;
+    const take = (c: number) => Math.max(0, 1 - d[i + c] / Math.max(24, paper[j + c]));
+    const r = take(0), g = take(1), b = take(2);
     out[p] = Math.sqrt(0.3 * r * r + 0.59 * g * g + 0.11 * b * b);
   }
   return out;
@@ -254,8 +256,9 @@ export function strengthOf(dist: Float32Array, width: number, height: number, pa
 }
 
 /**
- * Leaves out dark parts that touch the edge of the picture: in a photo that is the table, the edge of the paper or
- * a shadow, not the stamp. Unless they are most of the ink: a design cropped tightly can touch the edge itself.
+ * Leaves out solid dark areas that touch the edge of the picture: in a photo that is the table, the edge of the paper
+ * or a shadow, not the stamp. A mark made of lines (the ring of a seal cropped so tightly that it touches the edge)
+ * stays, and so does everything when the solid area is nearly all the ink there is (a seal that fills the picture).
  * Worked out on a smaller copy (at most 400 pixels across), joined the way a mark is: pixel to neighbouring pixel.
  */
 export function dropEdgeMarks(pl: Plane): Plane {
@@ -275,29 +278,42 @@ export function dropEdgeMarks(pl: Plane): Plane {
   let total = 0;
   for (let j = 0; j < weight.length; j++) total += weight[j];
   if (total <= 0) return pl;
-  // Everything joined to a pixel on the edge, one step at a time.
-  const edge = new Uint8Array(sw * sh);
-  const stack: number[] = [];
-  const push = (j: number) => {
-    if (on[j] && !edge[j]) (edge[j] = 1, stack.push(j));
-  };
-  for (let x = 0; x < sw; x++) (push(x), push((sh - 1) * sw + x));
-  for (let y = 0; y < sh; y++) (push(y * sw), push(y * sw + sw - 1));
-  while (stack.length) {
-    const j = stack.pop()!;
-    const x = j % sw, y = (j - x) / sw;
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dx = -1; dx <= 1; dx++) {
-        const nx = x + dx, ny = y + dy;
-        if ((dx || dy) && nx >= 0 && ny >= 0 && nx < sw && ny < sh) push(ny * sw + nx);
-      }
+  // Each mark that touches the edge, one at a time: its cells, its box, how much ink it holds.
+  const seen = new Uint8Array(sw * sh);
+  const drop = new Uint8Array(sw * sh);
+  let dropped = 0;
+  const starts: number[] = [];
+  for (let x = 0; x < sw; x++) starts.push(x, (sh - 1) * sw + x);
+  for (let y = 0; y < sh; y++) starts.push(y * sw, y * sw + sw - 1);
+  for (const s0 of starts) {
+    if (!on[s0] || seen[s0]) continue;
+    const cells: number[] = [];
+    const stack = [s0];
+    seen[s0] = 1;
+    let x0 = sw, x1 = 0, y0 = sh, y1 = 0, ink = 0;
+    while (stack.length) {
+      const j = stack.pop()!;
+      cells.push(j);
+      const x = j % sw, y = (j - x) / sw;
+      x0 = Math.min(x0, x), x1 = Math.max(x1, x), y0 = Math.min(y0, y), y1 = Math.max(y1, y);
+      ink += weight[j];
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          const n = ny * sw + nx;
+          if ((dx || dy) && nx >= 0 && ny >= 0 && nx < sw && ny < sh && on[n] && !seen[n]) (seen[n] = 1, stack.push(n));
+        }
+    }
+    // Solid: it fills much of its own box. A ring, a line of letters, a frame of lines does not.
+    const solid = cells.length / ((x1 - x0 + 1) * (y1 - y0 + 1)) > 0.45 && cells.length > 12;
+    if (!solid) continue;
+    for (const j of cells) drop[j] = 1;
+    dropped += ink;
   }
-  let atEdge = 0;
-  for (let j = 0; j < weight.length; j++) if (edge[j]) atEdge += weight[j];
-  if (!atEdge || atEdge > total * 0.5) return pl;
+  if (!dropped || total - dropped < total * 0.15) return pl;
   const out = new Float32Array(v);
   for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) if (edge[Math.min(sh - 1, Math.floor(y * k)) * sw + Math.min(sw - 1, Math.floor(x * k))]) out[y * w + x] = 0;
+    for (let x = 0; x < w; x++) if (drop[Math.min(sh - 1, Math.floor(y * k)) * sw + Math.min(sw - 1, Math.floor(x * k))]) out[y * w + x] = 0;
   return { width: w, height: h, v: out };
 }
 

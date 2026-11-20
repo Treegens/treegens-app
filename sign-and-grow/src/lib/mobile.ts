@@ -12,7 +12,7 @@ export const SIGNING_BROWSERS_SHORT = 'Any browser from 2023 or later works (on 
 /** What a signer needs from the connection. There is no offline signing: the server takes the time and the address. */
 export const SIGNING_ONLINE = 'Signing needs an internet connection to open the document and again to finish.';
 /** What happens when the signal drops in between. The signing page does this (src/components/sign/offline.ts). */
-export const SIGNING_WEAK_SIGNAL = 'If the signal drops while you fill it in, your answers stay on the page and in that browser tab, and are saved when the connection is back. If it drops as you finish, the page says that nothing was signed and sends it by itself once you are back online, as long as the page stays open. Nothing counts as signed until the page says you are done.';
+export const SIGNING_WEAK_SIGNAL = 'If the signal drops while you fill it in, your answers stay on the page and in that browser tab, and are saved when the connection is back. If it drops as you finish, the page asks whether it went through and says what it finds. When it cannot tell yet, it says so, keeps what you typed and tries again by itself once you are back online, as long as the page stays open. Trying again never signs twice. Nothing counts as signed until the page says you are done.';
 /** The page sizes the signing page offers, as parts of the width of the screen. */
 export const ZOOMS = [1, 1.5, 2];
 /** What /help says about reading small print on a phone. */

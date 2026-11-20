@@ -1,6 +1,7 @@
 'use client';
 import { newId } from '../ui';
 import type { History } from './history';
+import type { KeptForPerson } from '../../lib/tplroles';
 
 // [type, label, width, height] with sizes as a fraction of the page. Height 0 means "make it square".
 export const TYPES: [string, string, number, number][] = [
@@ -10,6 +11,8 @@ export const TYPES: [string, string, number, number][] = [
   ['dropdown', 'Dropdown', 0.2, 0.026], ['attachment', 'Attachment', 0.2, 0.03], ['note', 'Note', 0.25, 0.026],
   // The sender's line through wording printed on the page (src/lib/strike.ts). Like a note, it belongs to nobody.
   ['strike', 'Strike out', 0.3, 0.02],
+  // A company stamp or seal (src/server/stamps.ts). It starts at 40 mm across: see add() in StepFields.tsx.
+  ['stamp', 'Stamp', 0.18, 0],
 ];
 /** Marks the sender puts on a page that belong to no recipient: words added (a note) and words struck out. */
 export const SENDER_MARK = (type: string) => type === 'note' || type === 'strike';
@@ -55,7 +58,7 @@ export type Ed = {
   anyLocked: boolean;
   isLockedField: (f: any) => boolean;
   /** Set when the envelope was started from a template whose wording is locked for this person (src/server/tplroles.ts). */
-  wording?: { template_id: string; template: string | null; ask: string; fixed: string[] } | null;
+  wording?: { template_id: string; template: string | null; ask: string; fixed: string[]; people?: Record<string, KeptForPerson> } | null;
   docs: any[];
   rcps: any[];
   fields: History<any[]>;

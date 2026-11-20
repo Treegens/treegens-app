@@ -11,6 +11,10 @@ import { strikeClass, STRIKE_HELP } from '@/lib/strike';
 import { WordingField } from '../templates/WhoCanUse';
 import { FieldLogic, withoutField } from './FieldLogic';
 import { WitnessBlockButton } from './WitnessChoice';
+// A stamp field: who puts it on, which of the team's stamps, its real size (StampChoice.tsx, src/server/stamps.ts).
+import { StampChoice, useStamps, editorStampSrc } from './StampChoice';
+import { stampBox, STAMP_DEFAULT_MM } from '@/lib/stamps';
+const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
 const DRAG_START_PX = 3; // a press only becomes a drag after this much movement, so a click never moves anything
@@ -28,6 +32,8 @@ export function StepFields({ ed }: { ed: Ed }) {
   const [finding, setFinding] = useState('');
   const [note, setNote] = useState<{ text: string; count: number } | null>(null); // what the last search found
   const [sheet, setSheet] = useState(false);
+  // The team's stamps, for the sender's own stamp fields and their pictures on the page.
+  const stamps = useStamps();
   const canvas = useRef<HTMLDivElement>(null);
   const reveal = useRef<{ id: string; focus: boolean } | null>(null);
   const pressed = useRef(false); // a press that started on a field must not count as a click on the page
@@ -105,8 +111,10 @@ export function StepFields({ ed }: { ed: Ed }) {
   function add(type: string, doc: any, page: number, x: number, y: number, fromKeyboard = false) {
     const t = TYPES.find((v) => v[0] === type)!;
     const size = doc.page_sizes?.[page] || { w: 612, h: 792 };
-    const w = t[2];
-    const h = t[3] || (w * size.w) / size.h;
+    // A stamp starts at the real size of a round company seal, 40 mm across, whatever the size of the page.
+    const seal = type === 'stamp' ? stampBox(STAMP_DEFAULT_MM, size.w, size.h) : null;
+    const w = seal ? seal.w : t[2];
+    const h = seal ? seal.h : t[3] || (w * size.w) / size.h;
     if (!SENDER_MARK(type) && !active) return toast('Add a signer in step 1 first, then place fields for them.', true);
     if (full()) return;
     const box = { x: clamp(x - w / 2, 0, 1 - w), y: clamp(y - h / 2, 0, 1 - h), w, h };
@@ -407,17 +415,20 @@ export function StepFields({ ed }: { ed: Ed }) {
               <div key={d.id} data-doc={d.id}>
                 <div className="muted small" style={{ fontWeight: 600, marginBottom: 6, textAlign: 'center' }}>{d.name}</div>
                 <PdfDoc url={`/api/files/${d.file_id}/content`} zoom={zoom} onPageClick={(p, x, y) => place(d, p, x, y)} onDocument={(pdf) => setPdfs((m) => ({ ...m, [d.id]: pdf }))}
+                  // Stamps on the page, printed like ink the way the signing page and the PDF print them.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  ink={(page) => list.filter((f) => f.document_id === d.id && f.page === page && editorStampSrc(f, env.id, stamps)).map((f) => <span key={f.id} className="st-print" style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` }}><img src={editorStampSrc(f, env.id, stamps)!} alt="" /></span>)}
                   overlay={(page) => (
                     <>
                       {list.filter((f) => f.document_id === d.id && f.page === page).map((f) => {
                         const locked = isLockedField(f);
                         const owner = f.recipient_id ? rcps.find((r) => r.id === f.recipient_id) : null;
                         return (
-                          <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${strikeClass(f)}${locked ? ' locked' : ''}`}
+                          <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${f.type === 'stamp' ? ' stamp' : ''}${strikeClass(f)}${locked ? ' locked' : ''}`}
                             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
-                            tabIndex={0} role="button" aria-label={`${TLABEL[f.type]} field${owner ? ` for ${who(owner)}` : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
+                            tabIndex={0} role="button" aria-label={`${TLABEL[f.type]} field${owner ? ` for ${who(owner)}` : senderStamp(f) ? ', your own stamp' : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
                             onClick={(e) => e.stopPropagation()} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
-                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : f.label || TLABEL[f.type]}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
+                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || TLABEL[f.type]}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
                             {sel === f.id && !locked && <span className="grip" onPointerDown={(e) => drag(e, f, 'resize')} />}
                           </div>
                         );
@@ -468,7 +479,9 @@ export function StepFields({ ed }: { ed: Ed }) {
                 <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
                 {/* A strike-out has nothing to set: it is a line, it belongs to nobody, and its place is the whole of it. */}
                 {selected.type === 'strike' && <p className="muted small" id="ed-strike-help">{STRIKE_HELP}</p>}
-                {!SENDER_MARK(selected.type) && (
+                {selected.type === 'stamp' ? (
+                  <StampChoice field={selected} open={open} envelopeId={env.id} page={docs.find((d) => d.id === selected.document_id)?.page_sizes?.[selected.page] || { w: 612, h: 792 }} patch={(p) => patchField(selected.id, p)} />
+                ) : !SENDER_MARK(selected.type) && (
                   <label className="f"><span>Assigned to</span>
                     <select value={selected.recipient_id || ''} onChange={(e) => patchField(selected.id, { recipient_id: e.target.value })}>
                       {open.map((r) => <option key={r.id} value={r.id}>{who(r)}</option>)}
@@ -476,10 +489,10 @@ export function StepFields({ ed }: { ed: Ed }) {
                   </label>
                 )}
                 {/* A calculated field is never typed into: not required, no prefilled value (FieldLogic.tsx). */}
-                {!SENDER_MARK(selected.type) && !['date_signed', 'full_name', 'email'].includes(selected.type) && selected.formula == null && (
+                {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email'].includes(selected.type) && selected.formula == null && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
-                {!SENDER_MARK(selected.type) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
+                {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
                 {PREFILL.includes(selected.type) && selected.formula == null && (
                   <>
                     <label className="f"><span>{selected.type === 'note' ? 'Text' : 'Prefilled value'}</span><textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>

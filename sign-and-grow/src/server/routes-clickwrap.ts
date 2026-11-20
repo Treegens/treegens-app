@@ -140,14 +140,25 @@ route('DELETE', '/clickwraps/:id', (c) => {
   const cw = loadAgreement(c.params.id, c.account.id);
   const n = get('SELECT COUNT(*) n FROM clickwrap_acceptances WHERE clickwrap_id=?', cw.id).n;
   if (n) throw bad(`${n} ${n === 1 ? 'acceptance is' : 'acceptances are'} recorded for these terms, and records are kept for as long as the account exists, so the terms cannot be deleted. Close them instead: the page stops taking acceptances and the records stay.`, 409);
+  // A page someone reported keeps its terms until a person has looked at them: deleting it would leave the review
+  // queue with nothing to judge.
+  if (get("SELECT 1 x FROM abuse_reports WHERE clickwrap_id=? AND status='open'", cw.id))
+    throw bad('Someone reported these terms, and the people who review reports have not looked at them yet, so they cannot be deleted until then. Close them instead: the page stops at once. Nothing was deleted.', 409, { code: 'reported' });
   run('DELETE FROM clickwraps WHERE id=?', cw.id);
 }, 'admin');
 
 // ---- For a website's own server (any member's key) -----------------------------------------------------------------
 
+// The internet address, browser and page of a visitor are for the owner and the admins, as in the list of
+// acceptances: a member, or a key with the "send" scope, is told whether and how someone accepted, without them.
+const seesVisitors = (c: Ctx) => c.admin && (c.auth?.via === 'session' || c.auth?.scope === 'admin');
+const forCaller = (c: Ctx, a: any) => (!a || seesVisitors(c) ? a : { ...a, ip: undefined, user_agent: undefined, page_url: undefined, given_ip: undefined, given_user_agent: undefined });
+
 // Records an acceptance the website collected itself. It is marked as recorded by the website through the API, with
-// who did it, everywhere it is shown: Sign&Grow did not see the click.
+// who did it, everywhere it is shown: Sign&Grow did not see the click. Only with an API key: it is the website's server
+// that says who accepted, never a person in a browser, who could otherwise record "acceptances" for anybody.
 route('POST', '/clickwraps/:id/acceptances', async (c) => {
+  if (c.auth?.via !== 'api_key') throw bad('Acceptances are recorded through the API by your website\'s server, with an API key (Settings, API and webhooks), not from a browser. Nothing was recorded.', 403, { code: 'api_key_only' });
   const cw = loadAgreement(c.params.id, c.account.id);
   const b = await c.body();
   const v = versionOf(cw);
@@ -160,12 +171,15 @@ route('POST', '/clickwraps/:id/acceptances', async (c) => {
   if (person.email && !isEmail(person.email)) throw bad(`"${str(person.email, 80)}" is not an email address. Leave it out or give a real one. Nothing was recorded.`);
   const { row, already } = await recordAcceptance({
     cw, v, identity: 'api', person, via: 'api', page_url: cleanUrl(b.page_url), ip: c.ip, ua: c.ua, given_ip: str(b.ip ?? '', 64).trim() || null, given_ua: str(b.user_agent ?? '', 400).trim() || null,
-    recorded_by: `${c.actor.name}, ${c.auth?.via === 'api_key' ? 'with an API key' : 'signed in to the app'}`,
+    recorded_by: `${c.actor.name}, with an API key`,
   });
-  return { acceptance: acceptanceView(row), already };
+  return { acceptance: forCaller(c, acceptanceView(row)), already };
 });
 
-route('GET', '/clickwraps/:id/status', (c) => statusFor(loadAgreement(c.params.id, c.account.id), { person_id: c.q.get('person_id') || '', email: c.q.get('email') || '' }));
+route('GET', '/clickwraps/:id/status', (c) => {
+  const s = statusFor(loadAgreement(c.params.id, c.account.id), { person_id: c.q.get('person_id') || '', email: c.q.get('email') || '' });
+  return { ...s, latest: forCaller(c, s.latest) };
+});
 
 // ---- Looking acceptances up (admins) ---------------------------------------------------------------------------------
 
@@ -258,7 +272,13 @@ route('GET', '/public/agree/:slug', async (c) => {
   const need = minVersion(cw);
   // Never the receipt: whoever opens this link is told that the person accepted, and only the browser that accepted
   // holds the way to the copy (it keeps the receipt it was given in the answer to its press).
-  const already = best && best.version >= need ? { id: best.id, version: best.version, at: best.at, email: copyOffered(best) } : null;
+  // A person whose earlier version still counts is shown what they accepted, never the newer text under "You have
+  // accepted these terms": the page gets that version's words (or its name, for a PDF) and the notes of what changed.
+  const kept = best && best.version >= need && best.version !== v.number ? get('SELECT title, format, body FROM clickwrap_versions WHERE id=?', best.version_id) : null;
+  const already = best && best.version >= need ? {
+    id: best.id, version: best.version, at: best.at, email: copyOffered(best),
+    ...(kept ? { title: kept.title, format: kept.format, text: kept.format === 'text' ? kept.body : null, changes: all('SELECT number, note FROM clickwrap_versions WHERE clickwrap_id=? AND number > ? ORDER BY number', cw.id, best.version) } : {}),
+  } : null;
   const earlier = best && !already ? { version: best.version, at: best.at, changes: all('SELECT number, note FROM clickwrap_versions WHERE clickwrap_id=? AND number > ? ORDER BY number', cw.id, best.version) } : null;
   const identity = person ? 'website' : 'typed';
   const words = recordShows(identity, c.q.get('embed') ? 'embed' : 'hosted');

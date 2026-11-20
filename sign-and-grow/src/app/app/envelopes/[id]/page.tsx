@@ -67,6 +67,8 @@ export default function EnvelopeDetail() {
   // whoever its rule adds. A locked one is not copied as a way to change it: the copy would be locked too.
   const mayChange = !isTpl || (e.access ? e.access.may_change !== false : me.role !== 'member' || e.sender_id === me.user.id);
   const tplLocked = isTpl && !!e.access?.locked && !mayChange;
+  // A copy of a template that is not for everyone stays with its owner, so "make your own copy" is not offered.
+  const tplHeld = isTpl && !mayChange && e.access?.copy_is_yours === false;
   const done = e.status === 'completed';
   // Set when its sender removed this envelope from their lists. Only an admin gets to see it then: they can read
   // it, download it and put it back, and nothing else until it is back.
@@ -114,8 +116,9 @@ export default function EnvelopeDetail() {
   }
   const clone = (kind: 'envelope' | 'template') => act(async () => {
     const r = await api(`/envelopes/${e.id}/clone`, { body: { kind } });
-    // A template made from a locked one stays with the person that one belongs to, and its wording stays locked.
-    if (r.belongs_to) return (toast(`Saved as a template. Its wording is locked like the template it came from, so it belongs to ${r.belongs_to}, and only they or an admin can change it.`), router.push('/app/templates'));
+    // A template made from a locked one, or from one not for everyone, stays with the person that one belongs to and
+    // keeps its rules (cloneOwner in src/server/tplroles.ts).
+    if (r.belongs_to) return (toast(`Saved as a template. It keeps the rules of the template it came from${r.locked ? ', and its wording stays locked' : ''}, so it belongs to ${r.belongs_to}. Only they or an admin can change who can use it.`), router.push('/app/templates'));
     router.push(`/app/${kind === 'template' ? 'templates' : 'envelopes'}/${r.id}/edit`);
   });
 
@@ -164,9 +167,9 @@ export default function EnvelopeDetail() {
       {e.status === 'draft' && (
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
-            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : tplLocked ? `Use it to start a new envelope. Its wording is locked: you fill in names, email addresses and the fields left empty for you. To change it, ask ${e.access.owner} or an admin of your team.` : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To change something, make your own copy: the copy is yours and the original stays as it is.'}</p></div>
+            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : tplLocked ? `Use it to start a new envelope. Its wording is locked: you fill in names, email addresses and the fields left empty for you. To change it, ask ${e.access.owner} or an admin of your team.` : tplHeld ? `Use it to start a new envelope. It belongs to ${e.access.owner} and is not for everyone on the team, so only they or an admin can change it, and a copy would be theirs too. To change something, ask ${e.access.owner} or an admin of your team.` : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To change something, make your own copy: the copy is yours and the original stays as it is.'}</p></div>
             {mayChange ? <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>
-              : tplLocked ? <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Use</button></div>
+              : tplLocked || tplHeld ? <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Use</button></div>
               : <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('template')}>Make my own copy</button></div>}
           </div>
         </section>
@@ -342,7 +345,7 @@ export default function EnvelopeDetail() {
               {isAdmin
                 ? <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves the lists, the search, the export and the reports. It is not destroyed: you and the other admins of this account still find it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back from there.</p>
                 : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back yourself. An admin of your team still finds it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back, so ask one of them if you need it again. Download the PDF first if you want to keep a copy of your own.</p>}
-              <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone has already signed it, so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>
+              <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone on it has already done their part (signed, approved, witnessed or confirmed they viewed it), so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>
             </>
           ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>}
         </ConfirmDialog>

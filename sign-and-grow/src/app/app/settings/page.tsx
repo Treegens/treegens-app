@@ -14,6 +14,8 @@ import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
 import { SignedIn } from './SignedIn';
 import { TwoStepCard, TeamTwoStep } from './TwoStep';
 import { EmailAddressCard } from '@/components/EmailProblem';
+// The team's company stamps (src/components/stamps/StampSettings.tsx).
+import { StampSettings } from '@/components/stamps/StampSettings';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -862,7 +864,7 @@ function YourData() {
 // Checkout sessions this page has already confirmed, so coming back is handled once.
 const returned = new Set<string>();
 
-const TABS: [string, string][] = [['profile', 'Profile'], ['notifications', 'Notifications'], ['account', 'Account'], ['team', 'Team'], ['billing', 'Plan'], ['data', 'Your data'], ['developers', 'API and webhooks']];
+const TABS: [string, string][] = [['profile', 'Profile'], ['notifications', 'Notifications'], ['account', 'Account'], ['team', 'Team'], ['stamps', 'Stamps'], ['billing', 'Plan'], ['data', 'Your data'], ['developers', 'API and webhooks']];
 
 export default function Settings() {
   const [tab, setTab] = useState('profile');
@@ -904,6 +906,7 @@ export default function Settings() {
       {tab === 'billing' && <Billing />}
       {tab === 'data' && <YourData />}
       {tab === 'developers' && <Developers />}
+      {tab === 'stamps' && <StampSettings />}
     </div>
   );
 }

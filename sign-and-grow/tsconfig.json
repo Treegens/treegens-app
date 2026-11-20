@@ -47,12 +47,16 @@
     ".next-verify-comments/dev/types/**/*.ts",
     ".next-repair-signercode/types/**/*.ts",
     ".next-repair-signercode/dev/types/**/*.ts",
-    ".next-repair-clickwrap/types/**/*.ts",
-    ".next-repair-clickwrap/dev/types/**/*.ts",
-    ".next-repair-witness/types/**/*.ts",
-    ".next-repair-witness/dev/types/**/*.ts",
     ".next-repair-misc-today/types/**/*.ts",
-    ".next-repair-misc-today/dev/types/**/*.ts"
+    ".next-repair-misc-today/dev/types/**/*.ts",
+    ".next-verify-pay-round4/types/**/*.ts",
+    ".next-verify-pay-round4/dev/types/**/*.ts",
+    ".next-repair-mobile/types/**/*.ts",
+    ".next-repair-mobile/dev/types/**/*.ts",
+    ".next-repair-qr-encrypt/types/**/*.ts",
+    ".next-repair-qr-encrypt/dev/types/**/*.ts",
+    ".next-build-stamp/types/**/*.ts",
+    ".next-build-stamp/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

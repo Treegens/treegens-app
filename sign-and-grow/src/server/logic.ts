@@ -10,7 +10,7 @@ import {
   readNumber, ruleWords, formulaWords, COND_WORDS, logicKey,
 } from '../lib/logic.ts';
 
-const TYPE_WORD: Record<string, string> = { checkbox: 'tick box', radio: 'radio button', dropdown: 'choice', text: 'text', number: 'number', date: 'date', attachment: 'attachment', company: 'company', title: 'job title', signature: 'signature', initials: 'initials', full_name: 'full name', email: 'email', date_signed: 'date signed' };
+const TYPE_WORD: Record<string, string> = { checkbox: 'tick box', radio: 'radio button', dropdown: 'choice', text: 'text', number: 'number', date: 'date', attachment: 'attachment', company: 'company', title: 'job title', signature: 'signature', initials: 'initials', full_name: 'full name', email: 'email', date_signed: 'date signed', stamp: 'stamp' };
 /** A field as people know it: its label, or what it is and where. */
 export const nameOf = (f: any): string => (f?.label ? String(f.label) : `${TYPE_WORD[f?.type] || 'unnamed'} field on page ${Number(f?.page || 0) + 1}`);
 const fold = (s: any) => String(s ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -237,8 +237,10 @@ function planValues(src: any, values: Record<string, any>): { id: string; value:
     if (group.length && str(raw).trim() && !group.some((f: any) => fold(f.label) === fold(raw))) throw bad(`The column "${str(k, 80)}" holds "${str(raw, 80)}", which is not one of its choices: ${group.map((f: any) => f.label).filter(Boolean).join(', ')}.`);
     for (const f of hits) {
       if (!FILLABLE.includes(f.type) || f.formula) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which ${f.formula ? 'is worked out by itself' : 'only its signer fills in'}. Leave the column out.`);
-      // The template's own wording stays: a read-only value, or any value of a template whose wording is locked.
-      if (f.value && (f.readonly || src.tpl_locked)) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which holds the template's own wording and cannot be changed by a row.`);
+      // The template's own wording stays: a read-only value, or any value of a template whose wording is locked for
+      // whoever sends the batch (locked_for_rows, set by the bulk send: forRows in tplroles.ts). Its owner and the
+      // admins may change it, so for them a column may change it too.
+      if (f.value && (f.readonly || (src.locked_for_rows ?? src.tpl_locked))) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which holds the template's own wording and cannot be changed by a row.`);
       let v = str(raw, 4000).trim();
       if (f.type === 'checkbox') v = /^(1|yes|y|true|x|ticked|checked|ja|oui|si|sí)$/i.test(v) ? '1' : '';
       if (f.type === 'radio') v = group.length ? (fold(v) === fold(f.label) ? '1' : '') : v && !/^(0|no|n|false)$/i.test(v) ? '1' : '';

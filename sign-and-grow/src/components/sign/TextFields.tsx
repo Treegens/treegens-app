@@ -22,6 +22,10 @@ export type FieldCtx = {
   pickRadio: (f: any) => void;
   clickSig: (f: any) => void;
   attach: (f: any, file?: File) => void;
+  /** Opens the dialog that puts this person's stamp on a stamp field (src/components/stamps/StampDialog.tsx). */
+  clickStamp?: (f: any) => void;
+  /** Where the picture of the stamp on a field of theirs is, or null while there is none. */
+  stampUrl?: (f: any) => string | null;
 };
 
 const Need = ({ f }: { f: any }) => <span className="hint"> ({f.required ? 'required' : 'optional'})</span>;
@@ -35,6 +39,21 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
   const hint = !f.label && near && f.type !== 'company' && f.type !== 'title' ? near : '';
   const described = hint ? `${id}-near` : undefined;
 
+  // A stamp: the picture they put on, said in words, and the one button that opens the dialog to put it on or change it.
+  if (f.type === 'stamp') {
+    const url = c.stampUrl?.(f) || null;
+    return (
+      <div className="sg-row">
+        <div className="sg-row-label">{name}<Need f={f} /></div>
+        <Near id={`${id}-near`} text={hint} />
+        <div className="sg-row-stamp">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {url && <img src={url} alt="Your stamp, as it is printed on the document" />}
+          <button type="button" id={id} className={`btn${url ? '' : ' primary'}`} onClick={() => c.clickStamp?.(f)} aria-describedby={described}>{url ? <>Change or take off<span className="sg-vh"> your stamp</span></> : 'Put your stamp on'}</button>
+        </div>
+      </div>
+    );
+  }
   if (isSig(f)) {
     const word = f.type === 'signature' ? 'signature' : 'initials';
     const image = f.type === 'signature' ? c.sig : c.ini;
@@ -149,6 +168,8 @@ export function PageFields({ docId, page, c, near }: { docId: string; page: numb
 /** Who put something on the page that is not this signer's to fill in. Said next to it in both views. */
 export function otherSource(f: any, senderName: string): string {
   if (isStrike(f)) return `Struck out by ${senderName}.`;
+  // A stamp is a picture someone put on the page: who, and nothing more (src/lib/stamps.ts).
+  if (f.type === 'stamp') return f.by ? `Put on by ${f.by}.` : `Put on by ${senderName}, who sent this document.`;
   if (f.from === 'start') return `Filled in by ${senderName} for ${f.by || 'another signer'}, who can still change it.`;
   if (f.from === 'sender') return f.by ? `Written by ${senderName}, in the part for ${f.by}.` : `Written by ${senderName}.`;
   return `Filled in by ${f.by || 'another signer'}.`;
@@ -166,7 +187,7 @@ export function PageOthers({ others, senderName, near }: { others: any[]; sender
           <li key={f.id}><b>Struck out:</b> {strikeSays(senderName, near?.(f))}</li>
         ) : (
           <li key={f.id}>
-            {f.label || LABEL[f.type] || 'Field'}: {f.image ? <img src={f.image} alt="Signed" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'ticked' : 'not ticked') : <bdi>{f.value}</bdi>}
+            {f.label || LABEL[f.type] || 'Field'}: {f.type === 'stamp' && f.image ? <img className="st-thumb" src={f.image} alt={f.stamp?.name ? `The stamp "${f.stamp.name}"` : 'A stamp'} /> : f.image ? <img src={f.image} alt="Signed" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'ticked' : 'not ticked') : <bdi>{f.value}</bdi>}
             {' '}<span className="muted small">{otherSource(f, senderName)}</span>
           </li>
         )))}

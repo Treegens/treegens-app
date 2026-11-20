@@ -237,7 +237,7 @@ test('a locked wording: names, addresses and the empty fields can be filled in, 
   const e = await read();
   // The editor is told what is locked and who can unlock it.
   const byLabel = (x: any, label: string) => x.fields.find((f: any) => f.label === label || f.value === label);
-  assert.deepEqual({ ...e.wording_lock, fixed: [...e.wording_lock.fixed].sort() }, { template_id: tpl.id, template: 'NDA', ask: 'Maya Lopez or an admin of your team', fixed: [byLabel(e, 'Fee').id, byLabel(e, 'Governed by the laws of Kenya.').id].sort() });
+  assert.deepEqual({ ...e.wording_lock, fixed: [...e.wording_lock.fixed].sort() }, { template_id: tpl.id, template: 'NDA', ask: 'Maya Lopez or an admin of your team', fixed: [byLabel(e, 'Fee').id, byLabel(e, 'Governed by the laws of Kenya.').id].sort(), people: {} }, 'the template gives its one person no note and no check');
   assert.match(lockedBanner(e.wording_lock.template, e.wording_lock.ask), /^It was started from the template "NDA", whose wording is locked\. .* To change them, ask Maya Lopez or an admin of your team to change the template\.$/);
 
   // What the editor saves: the whole envelope, with the client's name and address and the empty start date filled in.
@@ -321,15 +321,16 @@ test('a locked wording: names, addresses and the empty fields can be filled in, 
   const open = (await otto.get(`/envelopes/${draft.id}`)).data.envelope;
   assert.equal(open.wording_lock, null);
   assert.equal((await otto.put(`/envelopes/${draft.id}`, { message: 'Free again' })).status, 200);
-  // Locked again, and then deleted: what was started from it stays locked, and only an admin can help.
+  // Locked again, and then deleted: what was started from it stays locked, and only Maya, whose template it was, or
+  // an admin can help (the refusal used to name only an admin, and locked Maya out of her own envelopes too).
   await setRule(maya, tpl.id, { locked: true });
   assert.equal((await otto.put(`/envelopes/${draft.id}`, { message: 'Not now' })).status, 403);
   assert.equal((await maya.call('DELETE', `/envelopes/${tpl.id}`)).status, 200);
   const orphan = (await otto.get(`/envelopes/${draft.id}`)).data.envelope.wording_lock;
-  assert.deepEqual([orphan.template, orphan.ask], [null, 'an admin of your team']);
+  assert.deepEqual([orphan.template, orphan.ask], [null, 'Maya Lopez or an admin of your team']);
   const gone = await otto.put(`/envelopes/${draft.id}`, { message: 'Still not' });
   assert.equal(gone.status, 403);
-  assert.match(gone.data.error, /started from a template whose wording was locked\..* ask an admin of your team to change the template\.$/);
+  assert.match(gone.data.error, /started from a template whose wording was locked\..* ask Maya Lopez or an admin of your team to change this envelope for you\.$/);
   assert.equal((await admin.put(`/envelopes/${draft.id}`, { message: 'The admin decides' })).status, 200);
 });
 
@@ -370,13 +371,21 @@ test('a copy of a template keeps its rule and its people, and a copy of a locked
   assert.equal(asTpl.data.belongs_to, 'Maya Lopez');
   assert.deepEqual({ ...db.get('SELECT sender_id, tpl_use, tpl_locked FROM envelopes WHERE id=?', asTpl.data.id) }, { sender_id: ids.maya, tpl_use: 'chosen', tpl_locked: 1 });
 
-  // Not locked: the copy is Otto's to change, as before, and it is still only for the people chosen.
+  // Not locked, but still only for the people chosen: the copy stays Maya's too (owner's decision: copying is never a
+  // way round who can use it). It used to be Otto's, who could then open it to the whole team.
   await setRule(maya, tpl.id, { locked: false });
   const mine = await otto.post(`/envelopes/${tpl.id}/clone`);
-  assert.equal(mine.data.belongs_to, undefined);
-  assert.deepEqual({ ...db.get('SELECT sender_id, tpl_use FROM envelopes WHERE id=?', mine.data.id) }, { sender_id: ids.otto, tpl_use: 'chosen' });
-  assert.equal((await otto.put(`/envelopes/${mine.data.id}`, { message: 'My version' })).status, 200);
+  assert.deepEqual([mine.data.belongs_to, mine.data.locked], ['Maya Lopez', false]);
+  assert.deepEqual({ ...db.get('SELECT sender_id, tpl_use FROM envelopes WHERE id=?', mine.data.id) }, { sender_id: ids.maya, tpl_use: 'chosen' });
+  assert.equal((await otto.put(`/envelopes/${mine.data.id}/access`, { use: 'team' })).status, 403);
   assert.equal(await listed(chad, mine.data.id), false);
+  // Open to the whole team and unlocked, a copy is the copier's to change, as before.
+  await setRule(maya, tpl.id, { use: 'team' });
+  const free = await otto.post(`/envelopes/${tpl.id}/clone`);
+  assert.equal(free.data.belongs_to, undefined);
+  assert.equal(db.get('SELECT sender_id FROM envelopes WHERE id=?', free.data.id).sender_id, ids.otto);
+  assert.equal((await otto.put(`/envelopes/${free.data.id}`, { message: 'My version' })).status, 200);
+  await setRule(maya, tpl.id, { use: 'chosen' });
   // Maya's own copy of her locked template is hers.
   await setRule(maya, tpl.id, { locked: true });
   assert.equal((await maya.post(`/envelopes/${tpl.id}/clone`)).data.belongs_to, undefined);
@@ -522,7 +531,7 @@ test('the screens show the rule and the lock before anyone types, and the pages 
   assert.match(fieldsStep, /<WordingField field=\{selected\} lock=\{ed\.wording\}/, 'a field left empty can be filled in, and the rest says why it stays');
   assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && !ed\.wording && <PayLinkChoice/);
   // The words the screens use say what the server does.
-  assert.match(LOCK_MEANS, /cannot change the documents, the fixed wording, the fields, the message or who signs in what order\.$/);
+  assert.match(LOCK_MEANS, /cannot change the documents, the fixed wording, the fields, the message, who signs in what order, or the private note and the checks the template gives each person\. The subject stays theirs to set\.$/);
   assert.equal(accessSentence({ use: 'team', change: 'owner', locked: false, owner: 'Maya Lopez' }), 'Everyone on the team can use it. Only Maya Lopez and admins can change it. Its wording is not locked: whoever uses it can change the envelope they make from it before sending. Only Maya Lopez and admins can change these rules or delete it.');
   // The pages that described templates.
   assert.doesNotMatch(read('src/app/security/page.tsx'), /Everyone on a team can use every template\./);
@@ -540,4 +549,274 @@ test('the screens show the rule and the lock before anyone types, and the pages 
   assert.match(readme, /the table `template_members`/);
   assert.match(readme, /\| Anyone on the team could open our HR letters, and a salesperson sent the contract with the liability clause changed\. \|/);
   for (const f of ['src/server/tplroles.ts', 'src/server/routes-templates.ts', 'src/lib/tplroles.ts', 'src/components/templates/WhoCanUse.tsx', 'tests/templates.test.ts']) assert.doesNotMatch(read(f), /\u2014/, `${f}: no em dashes`);
+});
+
+// ---- 9. Repairs after the skeptic's report (research/verify-new.json "verify:tplroles") ----------------------------
+
+test('a copy of a template not for everyone, or of a locked one, stays with its owner and its rules: no copy opens it to the team, unlocks it or puts it on a public form', async () => {
+  const { maya, chad, otto, admin, ids, keys } = await team();
+  // (a) Unlocked, chosen members only, Otto chosen to use it. His copy, by browser or key, through /clone, through
+  // POST /envelopes kind template, or through Save as template on an envelope he started, is Maya's with the same rule.
+  const hr = await nda(maya, 'HR warning letter');
+  await setRule(maya, hr.id, { use: 'chosen', members: [{ id: ids.otto }] });
+  const env = (await use(otto, hr.id)).data.envelope;
+  const copies = [
+    (await otto.post(`/envelopes/${hr.id}/clone`)).data.id,
+    (await keys.otto.post('/envelopes', { kind: 'template', template_id: hr.id, subject: 'Mine now' })).data.envelope.id,
+    (await otto.post(`/envelopes/${env.id}/clone`, { kind: 'template' })).data.id,
+  ];
+  for (const id of copies) {
+    assert.deepEqual({ ...db.get('SELECT sender_id, kind, tpl_use FROM envelopes WHERE id=?', id) }, { sender_id: ids.maya, kind: 'template', tpl_use: 'chosen' }, id);
+    const widen = await otto.put(`/envelopes/${id}/access`, { use: 'team' });
+    assert.equal(widen.status, 403, JSON.stringify(widen.data));
+    assert.equal(await listed(chad, id), false);
+    assert.equal((await use(chad, id)).status, 403, 'Chad was never chosen');
+    assert.equal((await use(otto, id)).status, 200, 'Otto can use the copy, as he can use the template');
+    // Its history says who made it, since it is in Maya's list with her name on it.
+    assert.match(db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Copied'", id).detail, /^Made by Otto Other as a copy of the (template "HR warning letter"|envelope "HR warning letter", which was started from a template)\. It belongs to Maya Lopez, like that template, and keeps who can use and change it, so a copy is no way round them\.$/);
+  }
+  const answer = await otto.post(`/envelopes/${hr.id}/clone`);
+  assert.deepEqual([answer.data.belongs_to, answer.data.locked], ['Maya Lopez', false], 'the answer says whose it is, and that it is not locked');
+  // A refusal no longer tells Otto to make his own version by copying it.
+  const change = await otto.put(`/envelopes/${hr.id}`, { message: 'x' });
+  assert.match(change.data.error, /A copy of it would belong to Maya Lopez too, with the same rules, because the template is not for everyone\.$/);
+  assert.doesNotMatch(change.data.error, /copy it and change the copy/);
+  assert.equal((await otto.get(`/envelopes/${hr.id}/access`)).data.access.copy_is_yours, false);
+  const form = await otto.post('/powerforms', { template_id: hr.id, name: 'HR to the world' });
+  assert.match(form.data.error, /It is not for everyone on the team, so a copy would belong to Maya Lopez too\. Ask Maya Lopez or an admin of your team\.$/);
+
+  // (b) Locked, chosen members only, Chad chosen to change it but not to set its rules. Every copy of his is Maya's,
+  // locked, for the same people. He can still change its wording, as he can the template's, and nothing more.
+  const locked = await nda(maya, 'Locked HR contract');
+  await setRule(maya, locked.id, { use: 'chosen', change: 'chosen', locked: true, members: [{ id: ids.chad, can_change: true }] });
+  for (const made of [await chad.post(`/envelopes/${locked.id}/clone`), await keys.chad.post('/envelopes', { kind: 'template', template_id: locked.id, subject: 'Mine now' })]) {
+    const id = made.data.id || made.data.envelope.id;
+    assert.deepEqual({ ...db.get('SELECT sender_id, tpl_use, tpl_change, tpl_locked FROM envelopes WHERE id=?', id) }, { sender_id: ids.maya, tpl_use: 'chosen', tpl_change: 'chosen', tpl_locked: 1 });
+    assert.equal((await chad.put(`/envelopes/${id}/access`, { use: 'team', locked: false })).status, 403);
+    assert.equal((await keys.chad.put(`/envelopes/${id}/access`, { use: 'team' })).status, 403);
+    assert.equal((await chad.put(`/envelopes/${id}`, { message: 'Chad may change the wording' })).status, 200);
+    assert.equal((await use(otto, id)).status, 403, 'Otto was never chosen');
+    assert.equal((await chad.call('DELETE', `/envelopes/${id}`)).status, 403, 'and only Maya or an admin deletes it');
+  }
+  // The people responsible still make copies of their own: Maya and an admin, who may set the rules.
+  const adminCopy = await admin.post(`/envelopes/${locked.id}/clone`);
+  assert.equal(adminCopy.data.belongs_to, undefined);
+  assert.equal(db.get('SELECT sender_id FROM envelopes WHERE id=?', adminCopy.data.id).sender_id, ids.admin);
+  assert.equal((await maya.post(`/envelopes/${locked.id}/clone`)).data.belongs_to, undefined);
+
+  // (c) A template made from an envelope whose template Otto may no longer use is not made at all.
+  await setRule(maya, hr.id, { use: 'admins' });
+  const late = await otto.post(`/envelopes/${env.id}/clone`, { kind: 'template' });
+  assert.equal(late.status, 403);
+  assert.equal(late.data.code, 'template_not_for_you');
+  assert.match(late.data.error, /^This envelope was started from the template "HR warning letter", which you can no longer use, so a template made from it was not made\. Ask Maya Lopez or an admin of your team if you need it\.$/);
+});
+
+// A locked NDA whose one role the template gives a private note, a one-time code by email and an access code.
+async function guarded(c: Client, subject = 'Guarded NDA') {
+  const file = await upload(c, 1);
+  const r = await c.post('/envelopes', {
+    kind: 'template', subject, message: 'Please sign the NDA.', documents: [{ id: 'd', file_id: file.id, name: 'NDA' }],
+    recipients: [
+      { id: 'r', role: 'signer', role_name: 'Client', note: 'Read clause 4 on liability before you sign.', access_code: '7788', verify: 'email_code' },
+      { id: 'w', role: 'signer', role_name: 'Guarantor' },
+    ],
+    fields: [
+      { id: 'sig', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.3, h: 0.06 },
+      { id: 'sig2', document_id: 'd', recipient_id: 'w', type: 'signature', page: 0, x: 0.5, y: 0.8, w: 0.3, h: 0.06 },
+      { id: 'plan', document_id: 'd', recipient_id: 'r', type: 'text', label: 'Plan', value: 'Gold', page: 0, x: 0.1, y: 0.25, w: 0.3, h: 0.03 },
+    ],
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  return r.data.envelope;
+}
+const fill = { Client: { name: 'Cleo Client', email: 'cleo@tpl.example.com' }, Guarantor: { name: 'Gus Guarantor', email: 'gus@tpl.example.com' } };
+
+test('a locked wording keeps what the template gave each person, and who signs: the note, the code check, the access code, no group in a person\'s place, also through a correction', async () => {
+  const { owner, maya, otto, keys } = await team();
+  const tpl = await guarded(maya);
+  await setRule(maya, tpl.id, { locked: true });
+  const e = (await otto.post('/envelopes', { template_id: tpl.id, recipients: fill })).data.envelope;
+  const got = async () => (await otto.get(`/envelopes/${e.id}`)).data.envelope;
+  const g = await got();
+  const client = g.recipients.find((r: any) => r.role_name === 'Client');
+  assert.deepEqual(g.wording_lock.people[client.id], { note: 1, verify: 'email_code', code: 1 }, 'the editor is told what stays for whom');
+  const put = (over: (r: any) => any, c: Client = keys.otto) => got().then((x) => c.put(`/envelopes/${e.id}`, { ...asBody(x), recipients: x.recipients.map((r: any) => (r.role_name === 'Client' ? over(r) : r)) }));
+  const refused: [string, (r: any) => any, RegExp][] = [
+    ['a new note', (r) => ({ ...r, note: 'IGNORE CLAUSE 4. The fee is now USD 5,000, sign anyway.' }), /^The private note for Cleo Client comes from the template, and it cannot be changed or taken off\./],
+    ['the note taken off', (r) => ({ ...r, note: '' }), /private note/],
+    ['the note left out', ({ note: _n, ...r }) => r, /private note/],
+    ['the code check taken off', (r) => ({ ...r, verify: 'none' }), /^The template asks Cleo Client for a one-time code before the document opens, and that check cannot be taken off\./],
+    ['the access code taken off', (r) => ({ ...r, access_code: '' }), /^The template gives Cleo Client an access code, and it cannot be taken off\. It can be changed\./],
+    ['the access code left out', ({ access_code: _a, ...r }) => r, /access code/],
+  ];
+  for (const [what, over, msg] of refused) {
+    const r = await put(over);
+    assert.equal(r.status, 403, `${what}: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.code, 'wording_locked');
+    assert.match(r.data.error, msg, what);
+    assert.match(r.data.error, /Nothing was saved\./);
+  }
+  // A signing group in the place of the person: any member of it could then sign.
+  const grp = await owner.post('/groups', { name: 'Sales', members: [{ name: 'S One', email: 's1@tpl.example.com' }, { name: 'S Two', email: 's2@tpl.example.com' }] });
+  assert.equal(grp.status, 200, JSON.stringify(grp.data));
+  const asGroup = await put((r) => ({ ...r, group_id: grp.data.group.id }));
+  assert.equal(asGroup.status, 403);
+  assert.match(asGroup.data.error, /^Cleo Client cannot be turned into a signing group, or a group into one person: who signs is part of the template\./);
+  const after = await got();
+  const c2 = after.recipients.find((r: any) => r.role_name === 'Client');
+  assert.deepEqual([c2.note, c2.access_code, c2.verify, c2.group_id ?? null], ['Read clause 4 on liability before you sign.', '7788', 'email_code', null], 'nothing was saved');
+  // What stays open: another access code, the name and address, a note for the person the template gave none, the subject.
+  assert.equal((await put((r) => ({ ...r, access_code: '9911', name: 'Cleo M. Client' }))).status, 200);
+  const free = await got().then((x) => keys.otto.put(`/envelopes/${e.id}`, { ...asBody(x), recipients: x.recipients.map((r: any) => (r.role_name === 'Guarantor' ? { ...r, note: 'Call me if anything is unclear.' } : r)) }));
+  assert.equal(free.status, 200, JSON.stringify(free.data));
+  assert.equal((await otto.put(`/envelopes/${e.id}`, { subject: 'NDA, Cleo Client' })).status, 200);
+  // Once it is out, a correction is held to the same.
+  assert.equal((await otto.post(`/envelopes/${e.id}/send`)).status, 200);
+  for (const [patch, msg] of [[{ verify: 'none' }, /one-time code/], [{ access_code: '' }, /access code, and it cannot be taken off/]] as const) {
+    const r = await keys.otto.post(`/envelopes/${e.id}/correct`, { recipient_id: client.id, ...patch });
+    assert.equal(r.status, 403, JSON.stringify(r.data));
+    assert.match(r.data.error, msg);
+    assert.match(r.data.error, /Nothing was changed\. If it needs to change, ask Maya Lopez or an admin of your team\.$/);
+  }
+  assert.equal((await keys.otto.post(`/envelopes/${e.id}/correct`, { recipient_id: client.id, name: 'Cleo Maria Client' })).status, 200, 'a name can still be put right');
+  // The template's owner is not held to it on her own envelope.
+  const hers = (await maya.post('/envelopes', { template_id: tpl.id, recipients: fill })).data.envelope;
+  const h = (await maya.get(`/envelopes/${hers.id}`)).data.envelope;
+  assert.equal(h.wording_lock, null);
+  assert.equal((await maya.put(`/envelopes/${hers.id}`, { ...asBody(h), recipients: h.recipients.map((r: any) => ({ ...r, note: '', verify: 'none', access_code: '' })) })).status, 200);
+});
+
+test('an envelope from before the lock cannot be cloned into a new unlocked one; the owner of a deleted template keeps her envelopes; bulk columns for the people responsible; replay after the template was taken away; files by id', async () => {
+  const { maya, otto, admin, keys } = await team();
+  // (a) Started before the lock, cloned after it.
+  const tpl = await nda(maya);
+  const early = (await use(otto, tpl.id)).data.envelope;
+  const mayasEarly = (await use(maya, tpl.id)).data.envelope;
+  await setRule(maya, tpl.id, { locked: true });
+  for (const c of [otto, keys.otto]) {
+    const r = await c.post(`/envelopes/${early.id}/clone`);
+    assert.equal(r.status, 403, JSON.stringify(r.data));
+    assert.equal(r.data.code, 'wording_locked');
+    assert.match(r.data.error, /^This envelope was started from the template "NDA" before its wording was locked, so it is not locked itself, and a copy made now would not be either\. So no copy was made\. To send it again, use the template: /);
+  }
+  assert.equal((await maya.post(`/envelopes/${mayasEarly.id}/clone`)).status, 200, 'Maya may change the template, so her copy is fine');
+  assert.equal((await admin.post(`/envelopes/${early.id}/clone`)).status, 200, 'and an admin can');
+  assert.equal((await otto.put(`/envelopes/${early.id}`, { message: 'The early draft itself stays as it was: not locked' })).status, 200);
+
+  // (b) Maya deletes her own locked template: she keeps changing the envelope she started from it, Otto does not,
+  // and his refusal now names her.
+  const mine = (await use(maya, tpl.id)).data.envelope;
+  const his = (await use(otto, tpl.id, 'later@tpl.example.com')).data.envelope;
+  assert.equal((await maya.call('DELETE', `/envelopes/${tpl.id}`)).status, 200);
+  assert.equal((await maya.get(`/envelopes/${mine.id}`)).data.envelope.wording_lock, null);
+  assert.equal((await maya.put(`/envelopes/${mine.id}`, { message: 'Maya wording 2' })).status, 200);
+  assert.equal((await maya.post(`/envelopes/${mine.id}/clone`, { kind: 'template' })).status, 200, 'and may make a template of it again');
+  const no = await otto.put(`/envelopes/${his.id}`, { message: 'Otto wording' });
+  assert.equal(no.status, 403);
+  assert.match(no.data.error, /ask Maya Lopez or an admin of your team to change this envelope for you\.$/);
+  assert.equal((await otto.get(`/envelopes/${his.id}`)).data.envelope.wording_lock.ask, 'Maya Lopez or an admin of your team');
+
+  // (c) A bulk column for a value the template filled in: refused for Otto once it is locked, never for Maya or an admin.
+  const g = await guarded(maya, 'Bulk NDA');
+  await setRule(maya, g.id, { locked: true });
+  const row = (n: string) => [{ Client: { name: `Row ${n}`, email: `row.${n}@tpl.example.com` }, Guarantor: { name: 'Gus', email: `gus.${n}@tpl.example.com` }, fields: { Plan: 'Silver' } }];
+  for (const [who, c, n] of [['maya', maya, 'm'], ['admin', admin, 'a'], ['maya key', keys.maya, 'k']] as const) {
+    const r = await c.post('/bulk', { template_id: g.id, rows: row(n) });
+    assert.equal(r.status, 200, `${who}: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.sent, 1, `${who}: ${JSON.stringify(r.data.failed)}`);
+    const plan = (await c.get(`/envelopes/${r.data.results[0].id}`)).data.envelope.fields.find((f: any) => f.label === 'Plan');
+    assert.equal(plan.prefill ?? plan.value, 'Silver', who);
+  }
+  const ottoRow = await otto.post('/bulk', { template_id: g.id, rows: row('o') });
+  assert.equal(ottoRow.status, 400);
+  assert.match(ottoRow.data.error, /holds the template's own wording and cannot be changed by a row/);
+
+  // (d) The same bulk call repeated with its key after Otto lost the template: what is left is not sent, and says why.
+  const k = { 'idempotency-key': 'order-1' };
+  const two = [{ ...fill, Client: { name: 'R1', email: 'r1@tpl.example.com' } }, { ...fill, Client: { name: 'R2', email: 'r2@tpl.example.com' } }];
+  const first = await otto.call('POST', '/bulk', { template_id: g.id, rows: two }, k);
+  assert.equal(first.data.sent, 2, JSON.stringify(first.data));
+  await setRule(maya, g.id, { use: 'admins' });
+  const second = db.get('SELECT envelope_id FROM bulk_rows WHERE bulk_id=? AND position=1', first.data.id).envelope_id;
+  db.run('DELETE FROM envelopes WHERE id=?', second);
+  db.run('UPDATE bulk_rows SET sent_at=NULL, envelope_id=NULL, fill=? WHERE bulk_id=? AND position=1', JSON.stringify(two[1]), first.data.id);
+  const again = await otto.call('POST', '/bulk', { template_id: g.id, rows: two }, k);
+  assert.equal(again.data.sent, 1, JSON.stringify(again.data));
+  assert.match(again.data.failed[0].error, /^Not sent\. The template "Bulk NDA" is no longer one the person who started this bulk send may use\. Ask Maya Lopez or an admin of your team\.$/);
+
+  // (e) The template's document by its file id: not for Otto once it is admins only, still for those who may use it
+  // and for Otto through an envelope of his own that holds it. A file he just uploaded is his to read as before.
+  const hrOnly = await nda(maya, 'Layoffs 2026 letter');
+  await setRule(maya, hrOnly.id, { use: 'admins' });
+  const fileId = db.get('SELECT file_id FROM documents WHERE envelope_id=?', hrOnly.id).file_id;
+  const ownFile = await upload(otto, 1);
+  for (const c of [otto, keys.otto]) {
+    const r = await c.get(`/files/${fileId}/content`);
+    assert.equal(r.status, 404, JSON.stringify(r.data));
+    assert.equal((await c.get(`/files/${ownFile.id}/content`)).status, 200);
+  }
+  for (const c of [maya, admin]) assert.equal((await c.get(`/files/${fileId}/content`)).status, 200);
+  const hrFile = db.get('SELECT file_id FROM documents WHERE envelope_id=?', early.id).file_id;
+  assert.equal((await otto.get(`/files/${hrFile}/content`)).status, 200, 'through his own envelope started before');
+});
+
+test('the smaller things: a history line when a chosen member leaves or is removed, the sentence with several people, plain words for odd input, a radio that is never squeezed', async () => {
+  const { maya, chad, otto, admin, ids } = await team();
+  const tpl = await nda(maya);
+  await setRule(maya, tpl.id, { use: 'chosen', change: 'chosen', members: [{ id: ids.chad, can_change: true }, { id: ids.otto }] });
+  const sentence = accessSentence((await maya.get(`/envelopes/${tpl.id}/access`)).data.access);
+  assert.match(sentence, /^Only admins, Maya Lopez, Chad Chosen and Otto Other can use it\. Maya Lopez, admins and Chad Chosen can change it\./);
+  assert.equal(accessSentence({ use: 'admins', change: 'chosen', locked: false, owner: 'Maya Lopez', chosen_change: ['Chad Chosen', 'Otto Other'] }).split('. ').slice(0, 2).join('. '),
+    'Only admins, Maya Lopez, Chad Chosen and Otto Other can use it. Maya Lopez, admins, Chad Chosen and Otto Other can change it');
+  // Chad leaves by himself, Otto is removed by an admin: each is a line in the template's history, with who did it.
+  const lines = () => historyOf(tpl.id);
+  assert.equal(lines().length, 1);
+  assert.equal((await chad.post('/account/leave', { to: ids.owner })).status, 200);
+  assert.equal(lines().length, 2);
+  assert.match(lines()[1].detail, /^Chad Chosen is no longer on the team, so they are no longer chosen\. Only admins, Maya Lopez and Otto Other can use it\. Only Maya Lopez and admins can change it, because nobody else has been chosen yet\. .* Before: Only admins, Maya Lopez, Chad Chosen and Otto Other can use it\./);
+  assert.equal((await admin.call('DELETE', `/account/members/${ids.otto}?to=${ids.admin}`)).status, 200);
+  assert.equal(lines().length, 3);
+  assert.match(lines()[2].actor, /^Adam Admin\b/, 'written by the admin who removed him');
+  assert.match(lines()[2].detail, /^Otto Other is no longer on the team, so they are no longer chosen\. Only admins and Maya Lopez can use it, because nobody else has been chosen yet\./);
+  // A list or an object where a choice belongs is said as it was sent.
+  const list = await maya.put(`/envelopes/${tpl.id}/access`, { use: ['team'] });
+  assert.equal(list.status, 400);
+  assert.equal(list.data.error, '"use" is ["team"], and it has to be one of team, admins, chosen, written as text in quotes. Nothing was changed.');
+  const obj = await maya.put(`/envelopes/${tpl.id}/access`, { change: { a: 1 } });
+  assert.equal(obj.data.error, '"change" is {"a":1}, and it has to be one of owner, chosen, team, written as text in quotes. Nothing was changed.');
+  assert.equal(db.get('SELECT tpl_use FROM envelopes WHERE id=?', tpl.id).tpl_use, 'chosen', 'nothing was changed');
+  assert.match(read('src/app/styles/sender.css'), /\.sn-choice input \{[^}]*flex-shrink: 0;/, 'a radio next to a long name that wraps keeps its size');
+});
+
+test('the pages promise what the repaired code keeps: copies, the lock on notes and checks, the subject, files, and the editor shows it before anyone types', async () => {
+  const help = read('src/app/help/page.tsx');
+  assert.doesNotMatch(help, /A copy of a template keeps who can use it, and a copy of a locked one stays with its owner, so a copy is no way round the lock\./, 'the old claim, false for restricted templates');
+  assert.match(help, /A copy of a template that is not for everyone, or that is locked, made by someone who may not set its rules, belongs to the person the template belongs to/);
+  assert.match(help, /it cannot be copied into a new unlocked one, so to send it again you use the template/);
+  assert.match(help, /The subject stays theirs to set/);
+  assert.match(help, /a one-time code it asks for can go by email or by text but not be taken off/);
+  const { openapi } = await import('../src/server/openapi.ts');
+  const spec: any = openapi();
+  const clone = spec.paths['/envelopes/{id}/clone'].post.description;
+  assert.match(clone, /not for everyone on the team or whose wording is locked, made by someone who may not set its rules/);
+  assert.match(clone, /cannot be copied by someone the lock is for \(403, "code": "wording_locked"\)/);
+  assert.ok(spec.components.schemas.TemplateAccess.properties.copy_is_yours);
+  assert.match(spec.paths['/envelopes/{id}'].put.description, /what the template gave each person: their private note, a one-time code check/);
+  assert.match(read('src/app/developers/page.tsx'), /A copy of one that is locked or not for everyone, made by someone who may not set its rules, stays with its owner/);
+  // The template page does not invite a copy that would not be theirs, and the toast says whose a copy is.
+  const page = read('src/app/app/envelopes/[id]/page.tsx');
+  assert.match(page, /const tplHeld = isTpl && !mayChange && e\.access\?\.copy_is_yours === false;/);
+  assert.match(page, /: tplLocked \|\| tplHeld \? <div className="sn-now-actions"><button className="btn primary" disabled=\{busy\} onClick=\{\(\) => clone\('envelope'\)\}>Use<\/button><\/div>/);
+  assert.match(page, /It keeps the rules of the template it came from\$\{r\.locked \? ', and its wording stays locked' : ''\}, so it belongs to \$\{r\.belongs_to\}\./);
+  // The editor: the note from the template is read-only, "no check" is not offered, and a line says why.
+  const add = read('src/components/editor/StepAdd.tsx');
+  assert.match(add, /readOnly=\{!!wording\?\.people\?\.\[r\.id\]\?\.note\}/);
+  assert.match(add, /keepCode=\{!!wording\?\.people\?\.\[r\.id\]\?\.verify\}/);
+  assert.match(add, /<LockedLine>\{keptLine\(wording\.people\[r\.id\], wording\.ask\)\}<\/LockedLine>/);
+  assert.match(read('src/components/sender/CheckFields.tsx'), /\{\(!keepCode \|\| verify === 'none'\) && <option value="none">/);
+  const { keptLine } = await import('../src/lib/tplroles.ts');
+  assert.equal(keptLine({ note: 1, verify: 'email_code', code: 1 }, 'Maya Lopez or an admin of your team'), 'From the template, and it stays: the private note, a one-time code before the document opens (by email or by text message, but not none) and an access code (you can change it, not take it off). To change them, ask Maya Lopez or an admin of your team.');
+  assert.match(lockedBanner('NDA', 'Maya Lopez or an admin of your team'), /and choose the subject\. .*the notes and checks it gives each person stay as the template has them\./);
+  for (const f of ['src/server/tplroles.ts', 'src/server/routes-templates.ts', 'src/lib/tplroles.ts', 'tests/templates.test.ts', 'src/app/help/page.tsx', 'src/components/editor/StepAdd.tsx', 'src/components/sender/CheckFields.tsx']) assert.doesNotMatch(read(f), /\u2014/, `${f}: no em dashes`);
 });

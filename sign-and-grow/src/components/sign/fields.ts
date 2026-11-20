@@ -7,7 +7,7 @@ export const TYPED = ['text', 'number', 'date', 'company', 'title'];
 
 export const LABEL: Record<string, string> = {
   signature: 'Signature', initials: 'Initials', text: 'Text', number: 'Number', date: 'Date', company: 'Company', title: 'Job title',
-  dropdown: 'Choice', attachment: 'Attachment', checkbox: 'Checkbox', radio: 'Option', date_signed: 'Date signed', full_name: 'Full name', email: 'Email', note: 'Note',
+  dropdown: 'Choice', attachment: 'Attachment', checkbox: 'Checkbox', radio: 'Option', date_signed: 'Date signed', full_name: 'Full name', email: 'Email', note: 'Note', stamp: 'Stamp',
 };
 export const fieldName = (f: any): string => f.label || LABEL[f.type] || 'Field';
 export const groupKey = (f: any): string => f.group_name || f.id;

@@ -4,7 +4,8 @@ import { all, get, run, tx } from './db.ts';
 import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, sessionEnd, SESSION_COOKIE } from './auth.ts';
 import { rememberedDevice } from './twostep.ts';
-import { PROVIDER_NAMES, isProviderId } from '../lib/signin.ts';
+import { PROVIDER_NAMES, isProviderId, type Removed } from '../lib/signin.ts';
+import { forgetEarlierSetup, tellRemoved } from './reclaim.ts';
 import { deviceName } from '../lib/phone.ts';
 import { handedOver } from './handover.ts';
 import { SESSION_DAYS, SESSION_MAX_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
@@ -21,9 +22,10 @@ import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed }
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 import { forgottenFile } from './evidence.ts';
-import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe } from './twostep.ts';
+import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, sessionMade, passwordChanged } from './twostep.ts';
 
-export const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), two_step: twoStepOn(u), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
+// `c`: with an API key, two_step is left out, because no key reads anything of two-step login (twostep.ts).
+export const publicUser = (u: any, c?: Ctx) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), ...(c?.auth?.via === 'api_key' ? {} : { two_step: twoStepOn(u) }), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
 
 // `via` names the provider when the login was made by signing in with Google or Microsoft and the provider did not
@@ -184,7 +186,9 @@ export async function signInAs(c: Ctx, u: any, inviteToken?: any, o: { passed?: 
   const accountId = joined?.account_id || (mine.includes(u.last_account_id) ? u.last_account_id : mine[0]) || tx(() => ownWorkspace(u.id, u.name));
   if (accountId !== u.last_account_id) run('UPDATE users SET last_account_id=? WHERE id=?', accountId, u.id);
   c.cookies.push(createSession(u.id, accountId, c.secure));
-  return { restored, fresh, joined: (joined?.account_name as string) || null, invite_error: inviteError || null };
+  // What the second step left for this session: the remembered device it is tied to, and whether a reset stopped.
+  const step = sessionMade(c);
+  return { restored, fresh, joined: (joined?.account_name as string) || null, invite_error: inviteError || null, ...step };
 }
 
 route('POST', '/auth/logout', (c) => {
@@ -259,15 +263,25 @@ route('POST', '/auth/reset', async (c) => {
   // Opening this link shows that the address belongs to whoever is choosing the password now. If nobody had shown
   // that before, whatever else leads into the login was put there by someone who never did: it is cut off here, so
   // a stranger who made a login in this person's name does not stay in it. `disconnected` names what was removed.
+  let removed: Removed = {};
   const disconnected = tx(() => {
-    const cut = get('SELECT email_verified v FROM users WHERE id=?', r.user_id)?.v ? [] : cutEarlierAccess(r.user_id);
+    const was = get('SELECT email, email_verified v FROM users WHERE id=?', r.user_id);
+    // What was set up in it goes as well (reclaim.ts). The name was typed by nobody we know either: until the person
+    // gives theirs, it is the part of the address before the @, and they are told so.
+    if (was && !was.v) removed = forgetEarlierSetup(r.user_id, String(was.email).split('@')[0]);
+    const cut = was?.v ? [] : cutEarlierAccess(r.user_id);
+    if (cut.length) removed.disconnected = [...new Set(cut.map((p) => (isProviderId(p) ? PROVIDER_NAMES[p] : p)))];
     run('UPDATE users SET password_hash=?, email_verified=1 WHERE id=?', hash, r.user_id);
     run('DELETE FROM password_resets WHERE user_id=?', r.user_id);
     run('DELETE FROM sessions WHERE user_id=?', r.user_id);
     return cut;
   });
+  // A sign-in that typed the old password and waits for its code ends (twostep.ts).
+  await passwordChanged({ id: r.user_id }, 'email');
+  await tellRemoved(get('SELECT email FROM users WHERE id=?', r.user_id), removed, 'You chose a password for your Sign&Grow login with the link we emailed to you.');
   // two_step: the next sign-in asks for the code as well, because a reset by email is not a second step (twostep.ts).
-  return { ok: true, disconnected: [...new Set(disconnected)].map((p) => (isProviderId(p) ? PROVIDER_NAMES[p] : p)), two_step: twoStepOn(get('SELECT two_step_on_at, two_step_secret FROM users WHERE id=?', r.user_id)) };
+  // removed: what was taken out of a login that had never been confirmed, for the page to say (removedText).
+  return { ok: true, disconnected: [...new Set(disconnected)].map((p) => (isProviderId(p) ? PROVIDER_NAMES[p] : p)), removed, two_step: twoStepOn(get('SELECT two_step_on_at, two_step_secret FROM users WHERE id=?', r.user_id)) };
 }, 'public');
 
 route('POST', '/auth/switch', async (c) => {
@@ -294,7 +308,7 @@ route('GET', '/me', (c) => {
     } catch {}
   }
   return {
-    user: publicUser(c.user),
+    user: publicUser(c.user, c),
     role: c.role,
     account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || null, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
@@ -328,7 +342,7 @@ route('PATCH', '/me', async (c) => {
   run('UPDATE users SET name=?, title=?, company=?, signature_png=?, initials_png=?, notify=? WHERE id=?',
     str(b.name ?? c.user.name, 120).trim() || c.user.name, str(b.title ?? c.user.title, 120) || null, str(b.company ?? c.user.company, 120) || null,
     b.signature_png === undefined ? c.user.signature_png : b.signature_png || null, b.initials_png === undefined ? c.user.initials_png : b.initials_png || null, notify, c.user.id);
-  return { user: publicUser(get('SELECT * FROM users WHERE id=?', c.user.id)) };
+  return { user: publicUser(get('SELECT * FROM users WHERE id=?', c.user.id), c) };
 });
 
 route('POST', '/me/password', async (c) => {
@@ -341,6 +355,8 @@ route('POST', '/me/password', async (c) => {
   if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
   run('UPDATE users SET password_hash=? WHERE id=?', hashPassword(str(b.password, 200)), c.user.id);
   run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '');
+  // A sign-in that typed the old password and waits for its code ends, and a reset by email under way stops.
+  await passwordChanged(c.user, 'settings');
   return { ok: true };
 });
 
@@ -368,6 +384,8 @@ route('POST', '/me/sessions/sign-out-others', (c) => {
   // again with a saved password alone. Only this browser stays remembered.
   const keep = rememberedDevice(c, c.user)?.id || '';
   const forgot = Number(run('DELETE FROM two_step_devices WHERE user_id=? AND id != ?', c.user.id, keep).changes);
+  // And a sign-in somewhere else that is waiting for its code does not finish either.
+  run('DELETE FROM two_step_pending WHERE user_id=?', c.user.id);
   return { ok: true, signed_out: n, ...(forgot ? { two_step_devices_forgotten: forgot } : {}) };
 });
 route('DELETE', '/me/sessions/:id', (c) => {
@@ -649,6 +667,9 @@ route('GET', '/webhooks', (c) => {
 }, 'admin');
 route('POST', '/webhooks', async (c) => {
   const b = await c.body();
+  // A webhook hears about every document of the account. Until the address of the login is confirmed, the login may
+  // be a stranger's made in somebody else's name, waiting for that person to arrive and send (reclaim.ts).
+  if (!c.user.email_verified) throw bad('Confirm your email address before you add a webhook. We emailed you a link when you signed up, and you can resend it from the banner at the top of the app.', 403);
   try {
     await assertPublicUrl(str(b.url, 500));
   } catch (e: any) {

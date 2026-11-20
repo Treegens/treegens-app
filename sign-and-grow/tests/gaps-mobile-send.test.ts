@@ -823,7 +823,9 @@ const jpegClaiming = (w: number, h: number) => {
 
 test('a picture that claims more pixels than a page could use is refused in words before it costs the server memory', async () => {
   assert.equal(PNG_MAX_PIXELS, 25_000_000);
-  assert.equal(JPEG_MAX_PIXELS, 50_000_000);
+  // Lowered from 50 million after a skeptic showed a 50 MP JPEG reaches every signer's phone at full size
+  // (tests/mobile-repair.test.ts).
+  assert.equal(JPEG_MAX_PIXELS, 13_000_000);
   // The header is read as it is written: the real JPEG says 48 by 32, a PNG says what its IHDR says.
   assert.deepEqual(pictureSize(BASE, false), { w: 48, h: 32 });
   assert.deepEqual(pictureSize(photo(6, true), false), { w: 48, h: 32 }, 'past the camera note');
@@ -837,8 +839,8 @@ test('a picture that claims more pixels than a page could use is refused in word
   // Up to the limit is fine, one pixel more is not.
   assert.equal(pictureLimit(pngClaiming(5000, 5000), true), '');
   assert.equal(pictureLimit(pngClaiming(5000, 5001), true), 'This picture is 5,000 by 5,001 pixels, which is 25 million. A PNG can have up to 25 million, far more than a page needs. Make it smaller or save it as a JPEG, then upload it again.');
-  assert.equal(pictureLimit(jpegClaiming(8160, 6120), false), '', 'a 50 megapixel phone photo');
-  assert.match(pictureLimit(jpegClaiming(16320, 12240), false), /^This picture is 16,320 by 12,240 pixels, which is 200 million\. A JPEG can have up to 50 million, far more than a page needs\. Make it smaller, then upload it again\.$/);
+  assert.equal(pictureLimit(jpegClaiming(4032, 3024), false), '', 'a 12 megapixel phone photo');
+  assert.match(pictureLimit(jpegClaiming(16320, 12240), false), /^This picture is 16,320 by 12,240 pixels, which is 200 million\. A JPEG can have up to 13 million, because every signer's phone unpacks all of it to show the page/);
 
   // Through the upload: refused at once with that sentence, and nothing kept.
   const c = await signUp('Zed Bomb', 'zed@example.com', ip());

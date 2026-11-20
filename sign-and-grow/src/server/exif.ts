@@ -9,7 +9,7 @@
 // top to bottom, 5 mirrored and turned, 6 needs a quarter turn clockwise, 7 mirrored and turned the other way,
 // 8 needs a quarter turn anticlockwise. Phones write 1, 3, 6 and 8.
 
-import { PNG_MAX_PIXELS, JPEG_MAX_PIXELS } from '../lib/policy.ts';
+import { PNG_MAX_PIXELS, JPEG_MAX_PIXELS, PHOTO_MAX_SIDE } from '../lib/policy.ts';
 
 export type Orientation = { value: number; at: number; little: boolean };
 
@@ -115,5 +115,5 @@ export function pictureLimit(b: Uint8Array, png: boolean, name?: string): string
   if (!size || size.w * size.h <= max) return '';
   const n = (x: number) => x.toLocaleString('en');
   const what = name ? `"${name}" is` : 'This picture is';
-  return `${what} ${n(size.w)} by ${n(size.h)} pixels, which is ${n(Math.round((size.w * size.h) / 1e6))} million. A ${png ? 'PNG' : 'JPEG'} can have up to ${n(max / 1e6)} million, far more than a page needs. Make it smaller${png ? ' or save it as a JPEG' : ''}, then upload it again.${name ? ' No document was made.' : ''}`;
+  return `${what} ${n(size.w)} by ${n(size.h)} pixels, which is ${n(Math.round((size.w * size.h) / 1e6))} million. ${png ? `A PNG can have up to ${n(max / 1e6)} million, far more than a page needs. Make it smaller or save it as a JPEG, then upload it again.` : `A JPEG can have up to ${n(max / 1e6)} million, because every signer's phone unpacks all of it to show the page, and larger photos are slow or fail to open there. Make it smaller (${n(PHOTO_MAX_SIDE)} pixels on the long side is plenty for a page), then upload it again.`}${name ? ' No document was made.' : ''}`;
 }

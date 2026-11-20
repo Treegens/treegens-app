@@ -87,6 +87,9 @@ const PERSON_ONLY: [RegExp, string][] = [
   [/^[A-Z]+ \/me\/sessions/, 'see or end where a person is signed in'],
   // A second step that a key could switch off, reset or ask of a team would not be a second step (twostep.ts).
   [/two-step/, 'see or change two-step login'],
+  // Changing the password asks for the code of two-step login, so a key there could pause the second step by
+  // guessing, or take the login over with one code (twostep.ts, needCode).
+  [/^POST \/me\/password$/, 'change the password of a login'],
   [/^(POST|PUT|PATCH|DELETE) \/billing\//, 'change the plan, pay or refund'],
   [/^[A-Z]+ \/operator\//, 'work the operator queue'],
 ];

@@ -189,7 +189,9 @@ test('after the password a second screen asks for the code, and a wrong password
   assert.equal(a.status, 401);
   assert.equal(b.status, 401);
   assert.equal(a.data.error, 'That did not work: the code is not right, or the password you typed before it was not. We do not say which, so that nobody can find out a password by trying it here. 3 more tries, then the second step of this login pauses for 15 minutes. Type the newest code from your app, or start again with your password.'.replace('3 more', `${TWO_STEP_TRIES - 1} more`));
-  assert.equal(b.data.error, a.data.error.replace(`${TWO_STEP_TRIES - 1} more`, `${TWO_STEP_TRIES - 2} more`), 'both count towards one pause, so the count says nothing either');
+  // Each internet address counts its own tries, the same way after a right and a wrong password, so that a stranger
+  // cannot pause the owner (twostep-repair.test.ts). The count says nothing about the password either.
+  assert.equal(b.data.error, a.data.error, 'the same words and the same count');
   assert.equal(signedIn(wrong.c), false);
   // A typo costs a try, not the password: the right password's sign-in still waits, and the right code finishes it.
   usedStep.delete(secret);
@@ -249,7 +251,7 @@ test(`${TWO_STEP_TRIES} wrong codes pause the second step of that login for 15 m
   assert.equal((await password(email, 'wrong')).r.data.paused_until, other.r.data.paused_until);
   const mail = mailTo(email).filter((m) => m.subject === 'Wrong codes were typed for your Sign&Grow login');
   assert.equal(mail.length, 1);
-  assert.match(mail[0].html, /At least one of them came after your correct password/);
+  assert.match(mail[0].html, /They came after your correct password/);
   // When the pause is over, the right code works.
   db.run('UPDATE users SET two_step_paused_until=? WHERE id=?', new Date(realNow() - 1000).toISOString(), id);
   assert.equal((await other.c.post('/auth/two-step', { code: code(secret) })).status, 200);
@@ -379,11 +381,12 @@ test('a password reset by email still needs the code afterwards', async () => {
 });
 
 test('a stranger who set up a login in someone else\'s name, with two-step login, does not keep its owner out', async () => {
-  // Signed up with an address that is not theirs (never confirmed), and put their own phone in front of it.
+  // Signed up with an address that is not theirs (never confirmed). Putting their own phone in front of it is
+  // refused: two-step login needs a confirmed address, because proving the address later does not remove it.
   const stranger = browser();
   const email = `victim.${n}@example.com`;
   assert.equal((await stranger.post('/auth/signup', { name: 'Not Them', email, password: PW })).status, 200);
-  await switchOn(stranger);
+  assert.equal((await stranger.post('/me/two-step/setup', { password: PW })).data.code, 'confirm_first');
   // The owner of the mailbox chooses a password by email: that proves the address, and cuts what was there before.
   await browser().post('/auth/forgot', { email });
   const t = new URL(mailTo(email).filter((m) => /password/i.test(m.subject)).at(-1)!.link).searchParams.get('token');
@@ -406,6 +409,9 @@ test('an owner or admin resets a member\'s second step: the member is emailed at
     db.run('INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', acc, p.id, role, new Date().toISOString());
     assert.equal((await p.c.post('/auth/switch', { account_id: acc })).status, 200);
   }
+  // Max is only on this team, as someone who joined from the invitation is: an admin may reset only such a member,
+  // not someone who owns a workspace of their own (twostep-repair.test.ts).
+  db.run("DELETE FROM accounts WHERE id IN (SELECT account_id FROM memberships WHERE user_id=? AND role='owner')", member.id);
   await switchOn(member.c);
   // Not a member's to do, and not an API key's.
   assert.equal((await member.c.post(`/account/members/${admin.id}/two-step/reset`, {})).status, 403);
@@ -472,7 +478,7 @@ test('the only owner resets by email: it takes effect after the wait, is emailed
   assert.equal(mailTo(email).filter((m) => /^Reminder: two-step login/.test(m.subject)).length, 0, 'not twice on the first day');
   db.run('UPDATE users SET two_step_reset_noticed_at=? WHERE id=?', new Date(realNow() - 24 * 3600_000).toISOString(), id);
   await cron.tick();
-  assert.equal(mailTo(email).filter((m) => /^Reminder: two-step login of your Sign&Grow login goes off in 3 days/.test(m.subject)).length, 1);
+  assert.equal(mailTo(email).filter((m) => new RegExp(`^Reminder: two-step login of your Sign&Grow login goes off in ${TWO_STEP_EMAIL_RESET_DAYS} days`).test(m.subject)).length, 1);
   assert.equal((await c.get('/me/two-step')).data.reset_at, started.data.takes_effect_at, 'Settings shows it, with a Stop');
   // The owner (who still has the phone) signs in with the code: it stops, and they are told.
   await fullSignIn(email, secret);
@@ -483,9 +489,12 @@ test('the only owner resets by email: it takes effect after the wait, is emailed
   const t2 = new URL(mailTo(email).filter((m) => m.subject === 'Reset two-step login of your Sign&Grow login').at(-1)!.link).searchParams.get('token');
   assert.equal((await browser().post('/auth/two-step/email-reset', { token: t2 })).status, 200);
   assert.equal((await c.post('/me/two-step/reset/stop')).data.stopped, true);
-  // Started a third time, and this time the days pass: off, by the timer, in words.
-  const s3 = await c.post('/me/two-step/lost');
-  assert.equal(s3.data.owner, true);
+  // A stop under Settings makes a new reset wait, unless the owner signs in with the code (twostep-repair.test.ts).
+  await fullSignIn(email, secret);
+  // Started a third time, and this time the days pass: off, by the timer, in words. Under Settings the password is
+  // asked for too.
+  const s3 = await c.post('/me/two-step/lost', { password: PW });
+  assert.equal(s3.data.what, 'link');
   const t3 = new URL(mailTo(email).filter((m) => m.subject === 'Reset two-step login of your Sign&Grow login').at(-1)!.link).searchParams.get('token');
   assert.equal((await browser().post('/auth/two-step/email-reset', { token: t3 })).status, 200);
   db.run('UPDATE users SET two_step_reset_at=? WHERE id=?', new Date(realNow() - 1000).toISOString(), id);
@@ -501,10 +510,12 @@ test('a reset whose day has come takes effect at the next sign-in, also before t
   const { c: b, r } = await password(email);
   assert.equal(r.data.user?.email, email);
   assert.ok(signedIn(b));
-  assert.equal((await c.get('/me/two-step')).data.on, false);
+  assert.equal((await b.get('/me/two-step')).data.on, false);
+  // Every browser that was signed in was signed out when it took effect, so the owner notices.
+  assert.equal((await c.get('/me/two-step')).status, 401);
 });
 
-test('someone who owns no account is told by email which admins can reset it, and gets no reset link', async () => {
+test('someone who owns no account is told by email which admins can reset it, next to the reset link', async () => {
   const owner = await person('Bea Boss');
   const acc = db.get("SELECT account_id a FROM memberships WHERE user_id=? AND role='owner'", owner.id).a;
   const m = await person('Ivo Invited');
@@ -515,10 +526,12 @@ test('someone who owns no account is told by email which admins can reset it, an
   await switchOn(m.c);
   const { c } = await password(m.email);
   assert.deepEqual((await c.post('/auth/two-step/lost', {})).data, { ok: true });
+  // The reset by email is for everyone who did not switch it off (the owner's decision), and the admin who can do it
+  // faster is named in the same email.
   const mail = mailTo(m.email).at(-1)!;
-  assert.equal(mail.subject, 'Getting back into your Sign&Grow login without your phone');
+  assert.equal(mail.subject, 'Reset two-step login of your Sign&Grow login');
+  assert.match(mail.html, /Faster: An owner or an admin of your team can switch it off at once/);
   assert.match(mail.html, /Bea Boss/);
-  assert.equal(mailTo(m.email).filter((x) => x.subject === 'Reset two-step login of your Sign&Grow login').length, 0);
 });
 
 // ---- Teams ----------------------------------------------------------------------------------------------

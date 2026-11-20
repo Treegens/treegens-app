@@ -11,6 +11,7 @@ import { SendMyself } from './SendMyself';
 import { LIMITS, PAPER_HINT, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
 import { LockedLine, WhoCanUse } from '../templates/WhoCanUse';
+import { keptLine } from '@/lib/tplroles';
 import { GroupRow, AddGroup, useGroups, isGroupRow } from './GroupRecipient';
 import { WitnessChoice, signerNames } from './WitnessChoice';
 
@@ -147,13 +148,15 @@ export function StepAdd({ ed }: { ed: Ed }) {
                 <WitnessChoice r={r} rcps={rcps} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
                 {more === r.id && (
                   <div className="grid g2" style={{ marginTop: 10 }}>
-                    <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">(at least 4 characters, share it with them yourself)</span></span><input value={r.access_code || ''} maxLength={50} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>
-                    <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">(only they see it)</span></span><input value={r.note || ''} maxLength={1000} onChange={(e) => ed.patchRcp(r.id, { note: e.target.value })} /></label>
+                    {/* What a locked template gave this person stays (wording.people, tplroles.ts): shown as such. */}
+                    <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">{wording?.people?.[r.id]?.code ? '(from the template: you can change it, not take it off)' : '(at least 4 characters, share it with them yourself)'}</span></span><input value={r.access_code || ''} maxLength={50} required={!!wording?.people?.[r.id]?.code} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>
+                    <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">{wording?.people?.[r.id]?.note ? '(from the template, locked)' : '(only they see it)'}</span></span><input value={r.note || ''} maxLength={1000} readOnly={!!wording?.people?.[r.id]?.note} onChange={(e) => ed.patchRcp(r.id, { note: e.target.value })} /></label>
                   </div>
                 )}
+                {more === r.id && wording?.people?.[r.id] && <LockedLine>{keptLine(wording.people[r.id], wording.ask)}</LockedLine>}
                 {/* A one-time code before the document opens, and the signing link by text message: only what this
                     server can do is offered (me.text_messages says whether its operator switched texts on). */}
-                {more === r.id && <CheckFields value={r} role={r.role} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={(p) => ed.patchRcp(r.id, p)} />}
+                {more === r.id && <CheckFields value={r} role={r.role} textsOn={!!me.text_messages} open={isTpl && !r.email} keepCode={!!wording?.people?.[r.id]?.verify} onChange={(p) => ed.patchRcp(r.id, p)} />}
                 {r.role === 'inperson' && <div className="muted small" style={{ marginTop: 6 }}>You host the signing on your own device. The link is emailed to you. While they hold the device your account is locked in that browser, and you type your password to come back.</div>}
                 {correcting && (
                   <div className="muted small" style={{ marginTop: 6 }}>

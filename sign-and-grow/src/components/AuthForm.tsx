@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, Leaf } from './ui';
 // Plain functions and constants only: the rest of that file reads the environment and is for the server.
-import { safeNext, signInErrorText, signInNotice } from '@/lib/signin';
+import { safeNext, signInErrorText, signInNotice, removedText } from '@/lib/signin';
 
 type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 type Provider = { id: string; name: string };
@@ -21,14 +21,22 @@ export function AuthForm({ mode }: { mode: Mode }) {
   // What a sign-in at Google or Microsoft ended with when it did not sign anyone in. It comes back as a code in the
   // address and is said here in words.
   const [cameBack, setCameBack] = useState('');
+  // The address of the login this browser is signed in to already, if any. Continuing with Google or Microsoft here
+  // would make that person a second login (the server refuses it and sends them to Settings), so the page says where
+  // connecting is done instead.
+  const [signedInAs, setSignedInAs] = useState('');
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     setQ(p);
     if (p.get('email')) setF((s) => ({ ...s, email: p.get('email')! }));
     if (p.get('code')) setF((s) => ({ ...s, code: p.get('code')! }));
     if (p.get('signin_error')) setCameBack(signInErrorText(p.get('signin_error'), p.get('provider')));
-    if (mode === 'login' || mode === 'signup') api('/auth/providers').then((r) => setProviders(r.providers || [])).catch(() => {});
+    if (mode === 'login' || mode === 'signup') {
+      api('/auth/providers').then((r) => setProviders(r.providers || [])).catch(() => {});
+      api('/me').then((r) => setSignedInAs(r?.user?.email || '')).catch(() => {});
+    }
   }, [mode]);
+  const signOut = () => api('/auth/logout', { method: 'POST' }).then(() => setSignedInAs('')).catch((e) => setError(e.message));
   // The address of a provider's button. An invitation, a code typed into the form and the page to open afterwards
   // travel with it, so nothing is lost on the way through the provider.
   const startAt = (id: string) => {
@@ -52,7 +60,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
         if (r.two_step) return window.location.assign(`/login/two-step${q?.get('next') ? `?next=${encodeURIComponent(q.get('next')!)}` : ''}`);
         // Someone who already has an account accepts a team invitation by signing in: the server does both in one
         // step. What happened on the way in is said on the first screen of the app, never swallowed.
-        const notice = signInNotice(r);
+        // A remembered device is the second step: signing in on it stops a reset of two-step login by email.
+        const notice = [signInNotice(r), r.reset_stopped ? 'The reset of your two-step login that was under way has stopped, because you signed in on a device that is remembered for your login.' : ''].filter(Boolean).join(' ');
         try {
           if (r.restored) sessionStorage.setItem('sg_restored', '1');
           if (notice) sessionStorage.setItem('sg_notice', notice);
@@ -70,7 +79,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         const r = await api('/auth/reset', { body: { token: q?.get('token'), password: f.password } });
         // Choosing a password for a login whose address had never been confirmed cuts off a provider that did not
         // stand behind the address. That is said here, so the next sign-in holds no surprise.
-        setDone(`Password changed.${r.disconnected?.length ? ` ${r.disconnected.join(' and ')} was disconnected from this login, because this address had not been confirmed before. Once you are signed in you can connect it again under Settings.` : ''} You can sign in now.${r.two_step ? ' After the password you are asked for the code from your authenticator app, as before: a new password does not change the second step.' : ''}`);
+        setDone(`Password changed.${r.disconnected?.length ? ` ${r.disconnected.join(' and ')} was disconnected from this login, because this address had not been confirmed before. Once you are signed in you can connect it again under Settings.` : ''}${removedText({ ...r.removed, disconnected: undefined }) ? ` ${removedText({ ...r.removed, disconnected: undefined })} We emailed you the same list.` : ''} You can sign in now.${r.two_step ? ' After the password you are asked for the code from your authenticator app, as before: a new password does not change the second step.' : ''}`);
       }
     } catch (err: any) {
       // Someone whose login was made with Google or Microsoft has no password to get right. The server does not say
@@ -99,7 +108,15 @@ export function AuthForm({ mode }: { mode: Mode }) {
             {mode === 'signup' && !q?.get('invite') && <label className="f"><span>Code <span className="hint">(optional, if you were given one)</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
             {error && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{error}</div>}
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Save password'}</button>
-            {(mode === 'login' || mode === 'signup') && providers.length > 0 && (
+            {(mode === 'login' || mode === 'signup') && providers.length > 0 && signedInAs && !q?.get('invite') && (
+              <div className="auth-alt" role="group" aria-label="You are signed in already">
+                <p className="auth-or" aria-hidden="true"><span>or</span></p>
+                <p className="notice" style={{ margin: '8px 0 0' }}>You are signed in as {signedInAs} in this browser. To sign in with {list(providers.map((p) => p.name))} as well, connect it under Settings, Profile: continuing with it here would make you a separate login. To use another login, sign out first.</p>
+                <a className="btn" href="/app/settings?tab=profile">Open Settings, Profile</a>
+                <button type="button" className="btn" onClick={signOut}>Sign out</button>
+              </div>
+            )}
+            {(mode === 'login' || mode === 'signup') && providers.length > 0 && (!signedInAs || !!q?.get('invite')) && (
               <div className="auth-alt" role="group" aria-label={mode === 'login' ? 'Other ways to sign in' : 'Other ways to create your account'}>
                 <p className="auth-or" aria-hidden="true"><span>or</span></p>
                 {/* The providers' names in plain text. Real links, so they work by keyboard and without scripts. */}

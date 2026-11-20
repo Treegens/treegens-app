@@ -4,10 +4,11 @@ import { toast } from '@/components/ui';
 import { Icon } from './parts';
 import { CANNOT_SHOW_WAYS, SIGNING_BROWSERS } from '@/lib/mobile';
 import type { ViewFailure } from '@/components/PdfDoc';
+import type { ServerSaid } from '@/components/viewFailure';
 
 // Shown in place of the pages when they cannot be shown on this device. Never a blank page and never the viewer's
 // own error text: what happened, that nothing is lost, and a way forward that works from here.
-export function NoViewer({ why, retry, sender, downloadUrl, onAsk }: { why: ViewFailure; retry: () => void; sender: string; downloadUrl: string; onAsk: () => void }) {
+export function NoViewer({ why, retry, sender, downloadUrl, onAsk, said }: { why: ViewFailure; retry: () => void; sender: string; downloadUrl: string; onAsk: () => void; said?: ServerSaid | null }) {
   const [copied, setCopied] = useState(false);
   // A document that did not arrive is fetched again by itself as soon as the device says it is back online.
   useEffect(() => {
@@ -31,6 +32,19 @@ export function NoViewer({ why, retry, sender, downloadUrl, onAsk }: { why: View
       <div className="notice warn sg-noview" role="alert">
         <b>The document did not arrive.</b> This device seems to be offline, or the signal is too weak. Nothing was signed and nothing is lost. We try again by ourselves when the connection is back.
         <div className="row wrap sg-actions"><button type="button" className="btn" onClick={retry}>Try again now</button></div>
+      </div>
+    );
+  // The server said why it could not hand the file over: its stored copy failed its check, or it is locked with a
+  // key the server was not given (src/server/filestore.ts). A download would fail the same way, so none is offered:
+  // its words, a way to try again later, and the sender.
+  if (why === 'file' && said)
+    return (
+      <div className="notice err sg-noview" role="alert" data-stored={said.code}>
+        <b>The document cannot be opened at the moment.</b> {said.text} Nothing you did here is lost. You can carry on once it opens again.
+        <div className="row wrap sg-actions">
+          <button type="button" className="btn" onClick={retry}>Try again</button>
+          <button type="button" className="btn" onClick={onAsk}><Icon name="mail" /> Ask {sender}</button>
+        </div>
       </div>
     );
   if (why === 'file')

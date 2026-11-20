@@ -32,11 +32,13 @@ export const RULE_VALUE_MAX = 200;
 export const FORMULA_MAX = 500;
 /** round(x, n) rounds to at most this many decimals. */
 export const MAX_DECIMALS = 10;
+/** The most fields that can depend on each other in one line (a total of a total of a total...). */
+export const MAX_CHAIN = 100;
 
 /** Fields that belong to the sender and are always on the page: they cannot be made conditional. */
 export const ALWAYS_SHOWN = (type: any) => type === 'note' || type === 'strike';
 
-type F = { id: string; type: string; recipient_id?: string | null; value?: any; label?: any; options?: any; readonly?: any; show_when?: Rule | null; formula?: string | null; group_name?: any };
+type F = { id: string; type: string; recipient_id?: string | null; value?: any; calc_num?: any; label?: any; options?: any; readonly?: any; show_when?: Rule | null; formula?: string | null; group_name?: any };
 
 /** The rule of a field as an object, whether it came from the database (JSON text), the editor or an API caller. */
 export function ruleOf(f: { show_when?: any } | null | undefined): Rule | null {
@@ -48,7 +50,10 @@ export function ruleOf(f: { show_when?: any } | null | undefined): Rule | null {
       return null;
     }
   }
-  return w && typeof w === 'object' && !Array.isArray(w) && w.field ? { field: String(w.field), is: w.is, ...(w.value != null && w.value !== '' ? { value: String(w.value) } : {}) } : null;
+  // The value is trimmed, as the server stores it (saveLogic), so "Gold " in the editor is the rule "Gold" and not a
+  // change that would ask someone to sign again.
+  const v = w?.value != null ? String(w.value).trim() : '';
+  return w && typeof w === 'object' && !Array.isArray(w) && w.field ? { field: String(w.field), is: w.is, ...(v ? { value: v } : {}) } : null;
 }
 
 /**
@@ -70,11 +75,16 @@ const fold = (s: any) => String(s ?? '').normalize('NFKC').trim().replace(/\s+/g
 export type Notation = { dec: '.' | ','; group: string | null; indian: boolean };
 export type ReadNumber = { value: number; digits: number; dec: '.' | ',' | null; group: string | null; indian: boolean; ambiguous: '.' | ',' | null };
 
-/** Digits of any script (١٢٣, १२३) as 0 to 9: Unicode keeps every script's digits together in order from 0. */
+/**
+ * Digits of any script (١٢٣, १२३, １２３, 𝟙𝟘𝟘) as 0 to 9. Unicode keeps every script's digits together in order from
+ * 0, in whole runs of ten, and some runs sit right after each other (five styles of mathematical digits, 50 in a
+ * row): so the digit is how far it is from the start of its run, counted in tens, not at most ten steps back.
+ */
 function asciiDigit(ch: string): string {
-  if (ch >= '0' && ch <= '9') return ch;
+  const plain = ch.normalize('NFKC');
+  if (plain >= '0' && plain <= '9') return plain;
   let cp = ch.codePointAt(0)!, k = 0;
-  while (k < 10 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1))) (cp--, k++);
+  while (k < 60 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1))) (cp--, k++);
   return String(k % 10);
 }
 const SPACES = /[    ]/g;
@@ -173,6 +183,18 @@ export function formatNumber(x: number, how: Notation, fixed?: number | null): s
   }
   return `${neg ? '-' : ''}${int}${frac ? `${how.dec}${frac}` : ''}`;
 }
+/** A number written plainly: a dot before decimals and no grouping, the way a calculated result is kept (canon). */
+export const PLAIN: Notation = { dec: '.', group: null, indian: false };
+/**
+ * The number a stored calculated field holds, from `calc_num` (its result written plainly, kept next to the text that
+ * is shown): "1.233" or "1,233" on its own could be one thousand and more, so the shown text is never read again for
+ * it. Null when the field holds nothing (a view that blanks a value blanks its number with it) or keeps no number.
+ */
+export function canonOf(f: { value?: any; calc_num?: any } | null | undefined): number | null {
+  if (!f || f.value == null || f.value === '' || f.calc_num == null || f.calc_num === '') return null;
+  const n = Number(f.calc_num);
+  return Number.isFinite(n) ? n : null;
+}
 
 // ---- Formulas: "Calculate from..." ------------------------------------------------------------------------------
 
@@ -211,6 +233,10 @@ function tokens(src: string): Tok[] {
     if (ch === '}') throw new FormulaError('There is a } with no { before it. Write field names like {Quantity}.');
     const num = /^\d+(?:\.\d+)?/.exec(src.slice(i));
     if (num) {
+      // A number typed into a field may have at most MAX_DIGITS digits, and so may one in the formula: beyond that the
+      // sum is no longer exact, and the result would be wrong without a word.
+      if (num[0].replace('.', '').replace(/^0+/, '').length > MAX_DIGITS)
+        throw new FormulaError(`The number ${num[0].length > 40 ? `${num[0].slice(0, 20)}...` : num[0]} in the formula has more than ${MAX_DIGITS} digits, more than can be worked out exactly. Use a shorter number.`);
       out.push({ t: 'num', v: num[0], at: i });
       i += num[0].length;
       continue;
@@ -340,7 +366,12 @@ export const namesIn = (src: any): string[] => [...String(src ?? '').matchAll(/\
 export const renameRefs = (src: any, to: (name: string) => string): string => String(src ?? '').replace(/\{([^{}]*)\}/g, (_m, n) => `{${to(String(n).trim())}}`);
 
 /** What a formula worked out to: a number, or nothing and why. */
-export type Calc = { value: number | null; text: string | null; error: string | null; empty: boolean; ambiguous: string[]; numbers: string };
+/**
+ * `text` is the result as the signer sees it, in the notation of its inputs (1.234,50). `canon` is the same number
+ * written plainly (1234.5), stored next to it (fields.calc_num) and read by everything that later needs the number,
+ * and `value` is that number: what is shown, what is printed and what the next formula counts are one number.
+ */
+export type Calc = { value: number | null; text: string | null; canon?: string | null; error: string | null; empty: boolean; ambiguous: string[]; numbers: string };
 export const CALC_EMPTY = 'Fills in by itself once the fields it is worked out from are filled in.';
 export const CALC_RULES = 'Empty fields count as 0. A field that is not shown counts as empty.';
 
@@ -351,6 +382,7 @@ export const CALC_RULES = 'Empty fields count as 0. A field that is not shown co
  * exactly, and when every field it uses is empty.
  */
 export function evaluate(ast: Ast, input: (id: string) => { text?: string | null; num?: number | null; error?: string | null } | null, name: (id: string) => string): Calc {
+  // An input with `num` (another calculated field) is taken as that number; its `text` only says how it is written.
   const refs = refsOf(ast);
   const texts = refs.map((id) => input(id)?.text).filter((t) => t != null && String(t).trim() !== '');
   const how = notationOf(texts);
@@ -399,10 +431,13 @@ export function evaluate(ast: Ast, input: (id: string) => { text?: string | null
   };
   const v = run(ast);
   if (div0) return fail(`This cannot be worked out yet: it would divide by 0, because ${div0}.`);
-  if (!Number.isFinite(v) || Math.abs(v) >= 10 ** MAX_DIGITS) return fail(`The result is too large to work out exactly (${MAX_DIGITS} digits at most), so this is left empty.`);
   const fixed = ast.k === 'round' ? ast.n : null;
+  // The number as it is shown, written plainly. The limit is checked on it, after rounding: 999999999999999.9 shows
+  // as 1000000000000000, which has 16 digits.
+  const canon = Number.isFinite(v) ? formatNumber(v, PLAIN, fixed) : '';
+  if (!canon || Math.abs(Number(canon)) >= 10 ** MAX_DIGITS) return fail(`The result is too large to work out exactly (${MAX_DIGITS} digits at most), so this is left empty.`);
   const numbers = refs.map((id) => `${name(id)} ${formatNumber(shown.get(id) ?? 0, { ...how, group: null })}`).join(', ');
-  return { value: fixed != null ? roundTo(v, fixed) : v, text: formatNumber(v, how, fixed), error: null, empty: false, ambiguous, numbers };
+  return { value: Number(canon), text: formatNumber(v, how, fixed), canon, error: null, empty: false, ambiguous, numbers };
 }
 
 /**
@@ -456,9 +491,10 @@ export type Outcome = {
  */
 export function workOut(fields: F[], o: { stored?: (f: F) => boolean; name?: (f: F) => string } = {}): Outcome {
   const byId = new Map<string, F>(fields.map((f) => [f.id, f]));
+  // A field that is not in the list is never named by its id on a screen.
   const name = (id: string) => {
     const f = byId.get(id);
-    return f ? (o.name ? o.name(f) : String(f.label || f.type)) : id;
+    return f ? (o.name ? o.name(f) : String(f.label || f.type)) : 'another field';
   };
   const shownMemo = new Map<string, boolean>();
   const calcMemo = new Map<string, Calc>();
@@ -468,21 +504,31 @@ export function workOut(fields: F[], o: { stored?: (f: F) => boolean; name?: (f:
     if (!parsed.has(f.id)) {
       try {
         parsed.set(f.id, parseFormula(f.formula));
-      } catch {
+      } catch (err) {
+        // Only a formula that cannot be read is "cannot be read". Anything else is a fault of ours and is not hidden.
+        if (!(err instanceof FormulaError)) throw err;
         parsed.set(f.id, null);
       }
     }
     return parsed.get(f.id)!;
   };
   const calcd = (f: F) => !!f.formula && f.type === 'number' && !(o.stored && o.stored(f));
+  // How deep the working out goes at once. A save refuses a line of more than MAX_CHAIN fields that depend on each
+  // other (src/server/logic.ts), so this is only reached by fields saved before that limit: they are not shown or
+  // not worked out, instead of the stack running out on a phone or on the server.
+  let level = 0;
+  const DEEP = MAX_CHAIN * 3;
   function shown(f: F): boolean {
     if (shownMemo.has(f.id)) return shownMemo.get(f.id)!;
     const w = ruleOf(f);
     if (!w || ALWAYS_SHOWN(f.type)) return (shownMemo.set(f.id, true), true);
     if (busy.has(`s:${f.id}`)) return false; // a loop: never shown
+    if (level > DEEP) return (shownMemo.set(f.id, false), false);
     busy.add(`s:${f.id}`);
+    level++;
     const p = byId.get(w.field);
     const ok = !!p && p.id !== f.id && shown(p) && holds(w, p);
+    level--;
     busy.delete(`s:${f.id}`);
     shownMemo.set(f.id, ok);
     return ok;
@@ -492,10 +538,12 @@ export function workOut(fields: F[], o: { stored?: (f: F) => boolean; name?: (f:
     if (calcd(f)) return calc(f).text ?? '';
     return f.value == null ? '' : String(f.value);
   }
+  // A calculated field that keeps what it holds counts with the number stored for it (canonOf), never with its
+  // shown text read again: "1.233" is one and a bit, not one thousand two hundred and thirty-three.
   function numOf(f: F): number | null {
     if (!shown(f)) return null;
     if (calcd(f)) return calc(f).value;
-    return readNumber(f.value)?.value ?? null;
+    return canonOf(f) ?? readNumber(f.value)?.value ?? null;
   }
   function holds(w: Rule, p: F): boolean {
     const v = textOf(p);
@@ -526,14 +574,20 @@ export function workOut(fields: F[], o: { stored?: (f: F) => boolean; name?: (f:
     const ast = astOf(f);
     if (!ast) return { value: null, text: null, error: 'This formula cannot be read, so nothing is worked out.', empty: false, ambiguous: [], numbers: '' };
     if (busy.has(`c:${f.id}`)) return { value: null, text: null, error: 'This formula depends on itself, so it cannot be worked out.', empty: false, ambiguous: [], numbers: '' };
+    if (level > DEEP) return { value: null, text: null, error: `More than ${MAX_CHAIN} fields depend on each other in a line here, so this is not worked out.`, empty: false, ambiguous: [], numbers: '' };
     busy.add(`c:${f.id}`);
+    level++;
     const out = evaluate(ast, (id) => {
       const x = byId.get(id);
       if (!x || x.type !== 'number' || !shown(x)) return null;
-      if (!calcd(x)) return { text: x.value == null ? null : String(x.value) };
+      const text = x.value == null ? null : String(x.value);
+      // Another calculated field gives its number, whether it is worked out now or kept as stored, and its text says
+      // how it is written, so both ways come to the same result.
+      if (!calcd(x)) return canonOf(x) != null ? { num: canonOf(x), text } : { text };
       const inner = calc(x);
-      return { num: inner.value, error: inner.error };
+      return { num: inner.value, error: inner.error, text: inner.text };
     }, name);
+    level--;
     busy.delete(`c:${f.id}`);
     calcMemo.set(f.id, out);
     return out;
@@ -561,20 +615,54 @@ export function loopsIn(fields: F[]): string[][] {
   const byId = new Map<string, F>(fields.map((f) => [f.id, f]));
   const state = new Map<string, 1 | 2>();
   const loops: string[][] = [];
+  // Walked with a list of its own rather than by calling itself, so no number of fields can run the stack out.
   const path: string[] = [];
-  const visit = (id: string) => {
-    state.set(id, 1);
-    path.push(id);
-    for (const next of dependsOn(byId.get(id)!)) {
+  const todo: { id: string; next: string[]; i: number }[] = [];
+  const enter = (id: string) => (state.set(id, 1), path.push(id), todo.push({ id, next: dependsOn(byId.get(id)!), i: 0 }));
+  for (const f of fields) {
+    if (state.has(f.id)) continue;
+    enter(f.id);
+    while (todo.length) {
+      const top = todo[todo.length - 1];
+      if (top.i >= top.next.length) {
+        todo.pop(), path.pop(), state.set(top.id, 2);
+        continue;
+      }
+      const next = top.next[top.i++];
       if (!byId.has(next)) continue;
       if (state.get(next) === 1) loops.push(path.slice(path.indexOf(next)));
-      else if (!state.has(next)) visit(next);
+      else if (!state.has(next)) enter(next);
     }
-    path.pop();
-    state.set(id, 2);
-  };
-  for (const f of fields) if (!state.has(f.id)) visit(f.id);
+  }
   return loops;
+}
+
+/**
+ * The longest line of fields that each depend on the next (shown after its answer, or worked out from it), as the
+ * field it starts from and how many fields are in it. Asked once there is no loop; walked without calling itself.
+ */
+export function longestChain(fields: F[]): { id: string; length: number } {
+  const byId = new Map<string, F>(fields.map((f) => [f.id, f]));
+  const len = new Map<string, number>();
+  let best = { id: '', length: 0 };
+  for (const f of fields) {
+    if (len.has(f.id)) continue;
+    const on = new Set<string>([f.id]);
+    const todo: { id: string; next: string[]; i: number }[] = [{ id: f.id, next: dependsOn(f).filter((n) => byId.has(n)), i: 0 }];
+    while (todo.length) {
+      const top = todo[todo.length - 1];
+      if (top.i < top.next.length) {
+        const n = top.next[top.i++];
+        if (!len.has(n) && !on.has(n)) on.add(n), todo.push({ id: n, next: dependsOn(byId.get(n)!).filter((x) => byId.has(x)), i: 0 });
+        continue;
+      }
+      todo.pop(), on.delete(top.id);
+      const l = 1 + top.next.reduce((m, n) => Math.max(m, len.get(n) ?? 0), 0);
+      len.set(top.id, l);
+      if (l > best.length) best = { id: top.id, length: l };
+    }
+  }
+  return best;
 }
 
 /** A rule as a sentence: "Shown when 'Has a co-signer' is ticked". `parent` is the field it depends on. */

@@ -47,8 +47,10 @@ export function qrForLink(raw: string): QrLink {
 
 // ---- Words ---------------------------------------------------------------------------------------------------------
 
-const DOES: Record<string, string> = { signer: 'read and sign', approver: 'read and approve' };
-const AS: Record<string, string> = { signer: 'sign it', approver: 'approve it' };
+// Every role a code can be shown for says what the link lets its holder do. A witness's link makes the witness
+// statement and signs as the witness, so it must never read as if it only opened the document.
+const DOES: Record<string, string> = { signer: 'read and sign', approver: 'read and approve', witness: 'read it and witness the signature' };
+const AS: Record<string, string> = { signer: 'sign it', approver: 'approve it', witness: 'witness the signature on it' };
 // The whole name as the sender wrote it. Which word of a name is the one to call someone by differs from country to
 // country (the family name comes first in much of Asia), so no first name is guessed.
 const called = (name: string) => String(name || '').trim() || 'them';

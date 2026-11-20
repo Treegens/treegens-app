@@ -329,8 +329,11 @@ test('the API: a website records an acceptance itself, marked as recorded by the
   assert.equal(rec.data.acceptance.via, 'api');
   assert.equal(rec.data.acceptance.identity, 'api');
   assert.match(rec.data.acceptance.recorded_by, /Olive Owner <.*>, with an API key/);
-  assert.equal(rec.data.acceptance.given_ip, '198.51.100.7');
-  assert.equal(rec.data.acceptance.ip, site.ip, 'and the address we saw is the website\'s own');
+  // A "send" key is not told addresses and browsers; an admin is, in the record.
+  assert.equal(rec.data.acceptance.given_ip, undefined);
+  const row = (await owner.get(`/clickwrap-acceptances/${rec.data.acceptance.id}`)).data.acceptance;
+  assert.equal(row.given_ip, '198.51.100.7');
+  assert.equal(row.ip, site.ip, 'and the address we saw is the website\'s own');
   assert.equal((await site.post(`/clickwraps/${id}/acceptances`, { person: { id: 'u-7' }, version: 1 })).data.already, true);
   assert.match((await site.post(`/clickwraps/${id}/acceptances`, { person: { name: 'No id' } })).data.error, /id or email is needed/);
   const wrong = await site.post(`/clickwraps/${id}/acceptances`, { person: { id: 'u-8' }, version: 5 });
@@ -936,4 +939,148 @@ test('the certificate says what the browser reported: a view handed to one brows
   const lib = await import('../src/lib/clickwrap.ts');
   assert.match(lib.EMBED_CAN, /Only the address that ends in \?embed=1 may be shown in a frame at all/);
   assert.match(lib.EMBED_CANNOT, /last tenth of a second before a press can still be missed/);
+});
+
+test('people behind one address are not locked out: signed links do not count, refused presses do not count, and an IPv6 block counts as one address', async () => {
+  const { slug, secret } = await published('Office terms');
+  // Twelve colleagues with their own signed links, from one office address.
+  const office = from();
+  const statuses: number[] = [];
+  for (let i = 0; i < 12; i++) {
+    const w = sign(secret, { id: `emp-${i}`, name: `Employee ${i}`, exp: soon() });
+    statuses.push((await accept(slug, {}, `who=${w.who}&sig=${w.sig}`, Object.assign(new Client(), { ip: office.ip }))).res.status);
+  }
+  assert.deepEqual(statuses, Array(12).fill(200));
+  // Ten presses without the box ticked record nothing and count for nothing.
+  const { slug: s2 } = await published('Office terms 2');
+  const shared = from();
+  const page = await shared.get(`/public/agree/${s2}`);
+  for (let i = 0; i < 10; i++) assert.equal((await shared.post(`/public/agree/${s2}/accept`, { view: page.data.view, agree: false, name: 'X', email: 'x@inbox.example' })).status, 400);
+  assert.equal((await accept(s2, { name: 'First Real', email: 'real@inbox.example' }, '', shared)).res.status, 200);
+  // A phone network or a household gets one IPv6 block: its addresses count together.
+  const { slug: s3 } = await published('IPv6 terms');
+  const got: number[] = [];
+  for (let i = 1; i <= 11; i++) got.push((await accept(s3, { name: `Bot ${i}`, email: `bot${i}@spam.example` }, '', Object.assign(new Client(), { ip: `2001:db8:77:1::${i.toString(16)}` }))).res.status);
+  assert.deepEqual(got, [...Array(10).fill(200), 429]);
+});
+
+test('a record names what was accepted: the version\'s name and the account\'s name when it was published, whatever the draft or the account is called now', async () => {
+  const { slug, owner, id } = await published('Newsletter consent', 'You may email me.');
+  const { res } = await accept(slug, { name: 'Rita Renamed', email: 'rita@inbox.example' });
+  const aid = res.data.acceptance.id;
+  const accountName = (await owner.get('/me')).data.account.name;
+  // The draft is renamed and never published; the account is renamed too.
+  assert.equal((await owner.call('PATCH', `/clickwraps/${id}`, { name: 'Consent to sell my data' })).status, 200);
+  db.run('UPDATE accounts SET name=? WHERE id=?', 'Data Brokers Inc', (await owner.get('/me')).data.account.id);
+  assert.equal((await owner.get(`/clickwrap-acceptances?agreement=${id}`)).data.acceptances[0].agreement, 'Newsletter consent');
+  assert.equal((await owner.get(`/clickwrap-acceptances/${aid}`)).data.acceptance.agreement, 'Newsletter consent');
+  const csv = new TextDecoder().decode((await owner.call('GET', `/clickwrap-acceptances/export?agreement=${id}`)).data);
+  assert.match(csv.split('\r\n')[1], /^"cwa_[^"]+","Newsletter consent"/);
+  const key = withKey((await owner.post('/api-keys', { name: 'Website', scope: 'admin' })).data.key);
+  assert.equal((await key.get(`/clickwraps/${id}/status?email=rita@inbox.example`)).data.latest.agreement, 'Newsletter consent');
+  const t = await pdfText((await owner.get(`/clickwrap-acceptances/${aid}/certificate`)).data);
+  assert.match(t, new RegExp(`Written by ${accountName.replace(/[.*+?^${}()|[\]\\']/g, '.')}`));
+  assert.equal(/Data Brokers|sell my data/.test(t), false);
+});
+
+test('the certificate attached to a copy by email goes from the disk with the account, and with our copy of the email after its days', async () => {
+  const path = await import('node:path');
+  const blobs = path.join(process.env.DATA_DIR!, 'blobs');
+  const { purgeUser, purgeClosedAccounts } = await import('../src/server/routes-trust.ts');
+  const { MAIL_COPY_DAYS } = await import('../src/lib/policy.ts');
+  const was = process.env.SMTP_URL;
+  // With a mail server that refuses, the attachment waits in the file store for a later try.
+  process.env.SMTP_URL = 'smtp://127.0.0.1:9';
+  try {
+    const { slug, owner, secret } = await published('Deleted copy terms');
+    const dora = sign(secret, { id: 'dora', name: 'Dora Deleted', email: 'dora@inbox.example', exp: soon() });
+    const { res, c } = await accept(slug, {}, `who=${dora.who}&sig=${dora.sig}`);
+    const before = new Set(fs.readdirSync(blobs));
+    assert.equal((await c.post('/public/agree/receipt/email', { receipt: res.data.receipt })).status, 200);
+    const added = fs.readdirSync(blobs).filter((f) => !before.has(f));
+    assert.equal(added.length, 1, 'the certificate PDF was stored for the retry');
+    purgeUser((await owner.get('/me')).data.user.id);
+    assert.equal(fs.existsSync(path.join(blobs, added[0])), false, 'and it goes with the account');
+    // The timer that deletes our old copies of emails takes their attachments too.
+    const t2 = await published('Old copy terms');
+    const ed = sign(t2.secret, { id: 'ed', email: 'ed@inbox.example', exp: soon() });
+    const r2 = await accept(t2.slug, {}, `who=${ed.who}&sig=${ed.sig}`);
+    const b2 = new Set(fs.readdirSync(blobs));
+    await r2.c.post('/public/agree/receipt/email', { receipt: r2.res.data.receipt });
+    const a2 = fs.readdirSync(blobs).filter((f) => !b2.has(f));
+    assert.equal(a2.length, 1);
+    db.run("UPDATE emails SET status='sent', next_try_at=NULL, at=? WHERE to_email='ed@inbox.example'", new Date(Date.now() - (MAIL_COPY_DAYS + 1) * 864e5).toISOString());
+    await purgeClosedAccounts();
+    assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='ed@inbox.example'").n, 0);
+    assert.equal(fs.existsSync(path.join(blobs, a2[0])), false);
+  } finally {
+    if (was === undefined) delete process.env.SMTP_URL;
+    else process.env.SMTP_URL = was;
+  }
+});
+
+test('the tick boxes on the team\'s agreement screen keep their size on a phone', () => {
+  const css = read('src/app/styles/clickwrap.css');
+  assert.match(css, /\.cw-team label\.check input\[type='checkbox'\], \.cw-team label\.check input\[type='radio'\] \{ flex: none; width: 20px; height: 20px;/);
+});
+
+test('a person whose earlier version still counts is shown what they accepted, not newer text under "You have accepted"', async () => {
+  const { slug, owner, id, secret } = await published('Typo terms', 'You may not resell the trees.');
+  const w = sign(secret, { id: 'kept', exp: soon() });
+  await accept(slug, {}, `who=${w.who}&sig=${w.sig}`);
+  await owner.call('PATCH', `/clickwraps/${id}`, { text: 'You may resell the trees.' });
+  assert.equal((await owner.post(`/clickwraps/${id}/publish`, { note: 'A typo.', ask_again: false })).status, 200);
+  const page = (await from().get(`/public/agree/${slug}?who=${w.who}&sig=${w.sig}`)).data;
+  assert.deepEqual([page.already.version, page.version.number], [1, 2]);
+  assert.equal(page.already.text, 'You may not resell the trees.', 'the words they accepted');
+  assert.deepEqual(page.already.changes, [{ number: 2, note: 'A typo.' }]);
+  // Someone who accepted the version in force gets nothing extra.
+  const w2 = sign(secret, { id: 'new', exp: soon() });
+  await accept(slug, {}, `who=${w2.who}&sig=${w2.sig}`);
+  const now = (await from().get(`/public/agree/${slug}?who=${w2.who}&sig=${w2.sig}`)).data;
+  assert.equal(now.already.version, 2);
+  assert.equal(now.already.text, undefined);
+  const agree = read('src/app/agree/[slug]/page.tsx');
+  assert.match(agree, /older\?\.text != null \? <ClickwrapTerms text=\{older\.text\} \/>/, 'the page shows those words in the terms box');
+  assert.match(agree, /the one you accepted\. Version \$\{v\.number\} is in force now/);
+});
+
+test('a member who is not an admin, or a "send" key, is not told visitors\' addresses and browsers, and only a key records an acceptance for the website', async () => {
+  const { id, slug, owner } = await published('Role terms');
+  const visitor = from();
+  await accept(slug, { name: 'Vic Visitor', email: 'vic@inbox.example' }, '', visitor);
+  assert.equal((await owner.post('/account/invites', { email: `mem${++n}@roles.example`, role: 'member' })).status, 200);
+  const email = db.get('SELECT email FROM invites ORDER BY rowid DESC LIMIT 1').email;
+  const inv = db.get('SELECT token FROM invites WHERE email=?', email).token;
+  const mem = from();
+  assert.equal((await mem.post('/auth/signup', { name: 'Mem Member', email, password: 'correct horse battery', invite: inv })).status, 200);
+  // A browser session records nothing for "anyone": the website's server does that, with a key.
+  for (const who of [mem, owner]) {
+    const rec = await who.post(`/clickwraps/${id}/acceptances`, { person: { id: 'ceo', name: 'The CEO', email: 'ceo@bigcustomer.example' } });
+    assert.equal(rec.status, 403);
+    assert.equal(rec.data.code, 'api_key_only');
+  }
+  assert.equal(db.get("SELECT COUNT(*) n FROM clickwrap_acceptances WHERE clickwrap_id=? AND person_id='ceo'", id).n, 0);
+  // Status: whether and how, without the visitor's address, browser or page for a member or a "send" key.
+  const st = (await mem.get(`/clickwraps/${id}/status?email=vic@inbox.example`)).data;
+  assert.equal(st.accepted, true);
+  assert.equal(st.latest.identity, 'typed');
+  for (const k of ['ip', 'user_agent', 'page_url', 'given_ip', 'given_user_agent']) assert.equal(k in st.latest, false, k);
+  const send = withKey((await owner.post('/api-keys', { name: 'Site' })).data.key);
+  assert.equal('ip' in (await send.get(`/clickwraps/${id}/status?email=vic@inbox.example`)).data.latest, false);
+  const admin = withKey((await owner.post('/api-keys', { name: 'Site admin', scope: 'admin' })).data.key);
+  assert.equal((await admin.get(`/clickwraps/${id}/status?email=vic@inbox.example`)).data.latest.ip, visitor.ip, 'an admin key is');
+  assert.equal((await owner.get(`/clickwraps/${id}/status?email=vic@inbox.example`)).data.latest.ip, visitor.ip, 'and so is the owner');
+});
+
+test('a page someone reported cannot be deleted before a person has looked at it', async () => {
+  const { slug, owner, id } = await published('Reported then deleted');
+  await from().post(`/public/agree/${slug}/report`, { reason: 'phishing', email: `rep${++n}@inbox.example` });
+  const del = await owner.call('DELETE', `/clickwraps/${id}`);
+  assert.equal(del.status, 409);
+  assert.equal(del.data.code, 'reported');
+  assert.match(del.data.error, /have not looked at them yet.*Close them instead/);
+  assert.equal(db.get('SELECT COUNT(*) n FROM clickwrap_versions WHERE clickwrap_id=?', id).n, 1, 'the terms stay for the review');
+  db.run("UPDATE abuse_reports SET status='dismissed' WHERE clickwrap_id=?", id);
+  assert.equal((await owner.call('DELETE', `/clickwraps/${id}`)).status, 200);
 });

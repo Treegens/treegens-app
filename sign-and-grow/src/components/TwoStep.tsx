@@ -66,7 +66,7 @@ export function LostPhoneRules() {
         <li>Use one of your {TWO_STEP_RECOVERY_CODES} recovery codes in place of the code. Each works once, and the sign-in says how many are left. You can make new ones under Settings.</li>
         {TWO_STEP_LOST.map((l) => <li key={l}>{l}</li>)}
       </ul>
-      <p className="muted small">{TWO_STEP_TRIES} wrong codes in a row pause the second step of your login for {TWO_STEP_PAUSE_MINUTES} minutes, and we email you. Changing your password, your email address or two-step login itself asks for a code. {TWO_STEP_API_KEYS}</p>
+      <p className="muted small">{TWO_STEP_TRIES} wrong codes in a row after your password pause the second step of your login for {TWO_STEP_PAUSE_MINUTES} minutes, and we email you. Wrong codes after a wrong password pause only the internet address they came from, so someone who does not know your password cannot keep you out. Changing your password, your email address or two-step login itself asks for a code. {TWO_STEP_API_KEYS}</p>
     </div>
   );
 }
@@ -145,6 +145,31 @@ export function SetUpTwoStep({ hasPassword, moving = false, onDone, onCancel }: 
         {onCancel && <button type="button" className="btn" onClick={onCancel}>Cancel</button>}
       </div>
     </form>
+  );
+}
+
+// On every page of the app, in every browser signed in to the login, while a reset by email is under way (the
+// owner's decision): someone who did not ask for it must not miss it. Stopping it needs no code: it only keeps the
+// second step as it is.
+export function TwoStepResetBanner({ me }: { me: any }) {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState('');
+  const at = me?.two_step?.reset_at;
+  if (said) return <div className="notice row between wrap" role="status" style={{ marginBottom: 16 }}><span>{said}</span><button className="btn" style={{ minHeight: 44 }} onClick={() => setSaid('')}>OK</button></div>;
+  if (!at) return null;
+  const when = new Date(at).toLocaleString(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const stop = () => {
+    setBusy(true);
+    api('/me/two-step/reset/stop', { method: 'POST' })
+      .then(() => (setSaid('The reset was stopped, and two-step login stays on. We emailed you that it stopped. If you did not ask for it, change your password now under Settings, Profile, and the password of your mailbox.'), me.reload?.()))
+      .catch((e: any) => setSaid(e?.message || 'We could not reach Sign&Grow, so nothing was stopped. Check your connection and press the button again.'))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="banner ts-reset" role="alert">
+      <span><b>Two-step login of your login will be switched off on {when}.</b> Someone who typed your password asked for a reset by email, saying the phone and the recovery codes are lost. If that was you, there is nothing to do. If not, stop it now, then change your password and the password of your mailbox.</span>
+      <button className="btn" disabled={busy} onClick={stop}>{busy ? 'Stopping…' : 'Stop the reset'}</button>
+    </div>
   );
 }
 

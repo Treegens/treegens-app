@@ -20,6 +20,7 @@ import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
 import { commentsText } from './comments.ts';
 import { attachedFiles, forgetClickwraps } from './clickwrap.ts';
 import { rememberGoneMail } from './bounces.ts';
+import { stampExport, pruneStampImages } from './stamps.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -145,6 +146,10 @@ route('GET', '/export', (c) => {
     // A signed PDF whose stored copy fails its check (src/server/filestore.ts) is left out and named in README.txt,
     // so one damaged file never breaks the ZIP of everything else, and nothing damaged is put in it.
     const unreadable: string[] = [];
+    // A locked one (its key was not given to this server) is not damaged and not lost, so it is named apart, with what
+    // to do; and a completed envelope whose signed PDF could not be made yet is said too (finalretry.ts).
+    const locked: string[] = [];
+    const notMade: string[] = [];
     for (const e of rows) {
       const people = all('SELECT name, email, role, status FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
       const base = `${(e.completed_at || e.sent_at || e.created_at).slice(0, 10)} ${safeName(e.subject)} ${e.id.slice(-6)}`;
@@ -155,10 +160,10 @@ route('GET', '/export', (c) => {
           data = readBlob(e.final_sha256);
         } catch (err) {
           if (!(err instanceof HttpError)) throw err;
-          unreadable.push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
+          (err.data?.code === 'file_locked' ? locked : unreadable).push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
           failed = true;
         }
-      }
+      } else if (e.status === 'completed' && !e.final_sha256) notMade.push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
       if (data) {
         file = `signed/${base}.pdf`;
         bytes += data.length;
@@ -175,15 +180,21 @@ route('GET', '/export', (c) => {
       index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256, file]));
     }
     yield { name: 'envelopes.csv', data: Buffer.from('﻿' + index.join('\r\n')) };
+    // The team's own stamps (Settings, Stamps), each picture with its name and settings (stamps.ts).
+    const stamps = stampExport(c.account.id);
+    for (const s of stamps) yield s;
     yield { name: 'README.txt', data: Buffer.from([
       `Sign&Grow export for ${c.account.name}, made ${now()}.`, '',
       'signed/        completed documents, each with its certificate of completion',
       'audit/         the full audit trail of every envelope, as JSON',
       'comments/      the questions and comments on an envelope, in full, where anyone wrote any. They are not part of what was signed.',
+      ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps, as pictures, with their names and settings in stamps/index.csv'] : []),
       'envelopes.csv  one row per envelope',
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
       ...(skipped ? ['', `${skipped} signed document(s) did not fit in one ZIP file. Export again with fewer envelopes selected to get them.`] : []),
       ...(unreadable.length ? ['', `${unreadable.length} signed document(s) could not be read from storage and are not in this file. Their stored copy failed its check, so nothing damaged was put in. Their audit trails are here. The people who run this server have been told and can put the files back from a backup; export again later. Not included:`, ...unreadable.map((u) => `  ${u}`)] : []),
+      ...(locked.length ? ['', `${locked.length} signed document(s) are locked with an encryption key this server was not given, so they are not in this file. They are not damaged and not lost, and nothing about them was changed. Their audit trails are here. Export again once the people who run this server have set that key. Not included:`, ...locked.map((u) => `  ${u}`)] : []),
+      ...(notMade.length ? ['', `${notMade.length} completed document(s) have no signed PDF yet, because it could not be made so far. Everyone finished, and their audit trails are here. It is made by itself once it can be; export again then. Not included:`, ...notMade.map((u) => `  ${u}`)] : []),
     ].join('\r\n')) };
   }
   return new Response(zipStream(entries()), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="sign-and-grow-export-${now().slice(0, 10)}.zip"` } });
@@ -192,6 +203,8 @@ route('GET', '/export', (c) => {
 // A stored file is taken off the disk once nothing points at it any more: no uploaded file, no signed PDF, no copy
 // of what someone signed before a correction, and no email that is still waiting to be sent with it attached.
 export function removeUnusedBlobs(shas: string[]) {
+  // Stamp pictures are kept in the database, not as files: the ones nothing points at any more go too (stamps.ts).
+  pruneStampImages();
   for (const sha of new Set(shas.filter(Boolean))) {
     if (get('SELECT 1 x FROM files WHERE sha256=?', sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)) continue;
     fs.rmSync(path.join(dataDir(), 'blobs', sha), { force: true });
@@ -264,7 +277,7 @@ export function handOver(accountId: string, from: { id: string; name: string; em
   run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
   run('UPDATE bulk_batches SET sender_id=?, idem_key=NULL WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
   // Someone who leaves is no longer one of the members chosen to use or change a template here (tplroles.ts).
-  forgetChosen(accountId, from.id);
+  forgetChosen(accountId, from.id, actor);
   return moved.length;
 }
 
@@ -404,6 +417,8 @@ export function purgeUser(userId: string): any[] {
     // copy outside a document's record after MAIL_COPY_DAYS.
     run(`DELETE FROM emails WHERE about_user=? AND envelope_id IS NULL AND ${NOT_WAITING}`, userId);
     run('DELETE FROM password_resets WHERE user_id=?', userId);
+    // A sign-in at Google or Microsoft this login started to connect one: it names the login, and goes with it.
+    run('DELETE FROM signin_states WHERE user_id=?', userId);
     // Which contacts of a team they had in their own list. The contacts themselves are the team's and stay.
     run('DELETE FROM contact_users WHERE user_id=?', userId);
     // A key they made in a team is on that team's list, not theirs to take along. It stops for good and stays

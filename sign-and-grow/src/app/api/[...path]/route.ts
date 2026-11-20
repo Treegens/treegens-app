@@ -15,6 +15,7 @@ import '@/server/routes-witness';
 import '@/server/routes-comments';
 import '@/server/routes-twostep';
 import '@/server/routes-clickwrap';
+import '@/server/routes-stamps';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

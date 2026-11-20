@@ -50,14 +50,14 @@ async function tellAdmins(accountId: string, kind: Bucket) {
   const u = usage(accountId);
   if (u.limit <= 0) return;
   const [warnCol, fullCol] = kind === 'typed' ? ['clickwrap_typed_warned', 'clickwrap_typed_full'] : ['clickwrap_warned', 'clickwrap_full'];
-  const a = get(`SELECT name, ${warnCol} warned, ${fullCol} full FROM accounts WHERE id=?`, accountId);
+  const a = get(`SELECT name, ${warnCol} warned_for, ${fullCol} full_for FROM accounts WHERE id=?`, accountId);
   if (!a) return;
   const month = monthStart().slice(0, 7);
   const url = `${baseUrl()}/app/agreements`;
   const n = u[kind];
   const who = kind === 'typed' ? 'visitors who typed their own name and address' : 'people your website named in a signed link and acceptances your website sent through the API';
   const other = kind === 'typed' ? `People your website names in a signed link, and acceptances your website sends through the API, are counted apart and still work (${u.vouched} of ${u.limit} used).` : `Visitors who type their own details are counted apart (${u.typed} of ${u.limit} used).`;
-  if (n >= u.limit && a.full !== month) {
+  if (n >= u.limit && a.full_for !== month) {
     run(`UPDATE accounts SET ${fullCol}=?, ${warnCol}=? WHERE id=?`, month, month, accountId);
     for (const to of admins(accountId))
       await sendMail({ to, subject: `${a.name}: no more click-to-agree acceptances by ${kind === 'typed' ? 'typed-in visitors' : 'your website'} this month`, heading: `Until ${u.resets}, ${who} cannot accept your terms`,
@@ -65,7 +65,7 @@ async function tellAdmins(accountId: string, kind: Bucket) {
           kind === 'typed' ? 'If you did not expect this many, look at the list of acceptances for names you do not know: someone may be pressing the button over and over. Switching on "Only people the website names" stops anyone your website has not sent.'
             : `An acceptance is not a signature and costs nothing. The limit is there so that the records cannot be filled without end. If your website really needs more, use the contact form at ${baseUrl()}/help and say how many you expect: the operator of this server can raise it.`],
         cta: { label: 'Open your agreements', url } });
-  } else if (n >= Math.ceil((u.limit * CLICKWRAP_WARN_PERCENT) / 100) && a.warned !== month) {
+  } else if (n >= Math.ceil((u.limit * CLICKWRAP_WARN_PERCENT) / 100) && a.warned_for !== month) {
     run(`UPDATE accounts SET ${warnCol}=? WHERE id=?`, month, accountId);
     for (const to of admins(accountId))
       await sendMail({ to, subject: `${a.name}: ${CLICKWRAP_WARN_PERCENT} percent of this month's click-to-agree acceptances by ${kind === 'typed' ? 'typed-in visitors' : 'your website'} used`, heading: `${n} of ${u.limit} acceptances by ${kind === 'typed' ? 'typed-in visitors' : 'your website'} this month`,
@@ -374,6 +374,18 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
   } catch {}
   const words = recordShows(r.identity, r.via, host);
   const ok = intact(r);
+  // The pages of terms in a PDF are read before the sheet is written, so the sheet says what this file really holds:
+  // the pages after it, or why they could not be read (filestore.ts refuses a damaged or locked file). Never a promise
+  // of pages that are then left out.
+  let terms: PDFDocument | null = null;
+  let unread = '';
+  // Terms whose agreement was deleted are no longer stored, and asking for them would only report a missing file.
+  if (v.format === 'pdf' && v.file_sha256 && cw)
+    try {
+      terms = await PDFDocument.load(readBlob(v.file_sha256), { updateMetadata: false, ignoreEncryption: true });
+    } catch (e: any) {
+      unread = e?.data?.code === 'file_locked' ? 'they are locked with an encryption key this server was not given' : e?.data?.code === 'file_damaged' ? 'the stored copy failed its check' : 'the stored copy could not be opened';
+    }
   return sheetPdf('Record of acceptance', `Sign&Grow · Record of acceptance ${r.id}`, (s) => {
     s.h2('What was accepted');
     s.kv('Terms', v.title);
@@ -415,14 +427,9 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
     s.kv('State', ok ? 'Unchanged since it was recorded: the seal still fits every line above.' : 'CHANGED: this record no longer fits its seal. Something changed it after it was written. Do not rely on it.');
     s.h2('The terms as shown');
     if (v.format === 'text') for (const para of termsPlain(v.body || '').split('\n')) s.text(para || ' ', { size: 8.5, gap: 1 });
-    else s.text(`The terms were a PDF of ${v.pages || 'several'} page${v.pages === 1 ? '' : 's'}. ${cw ? 'They follow this page, exactly as they were stored' : 'They are no longer stored'} (SHA-256 above).`, { size: 9 });
-  }, v.format === 'pdf' && v.file_sha256 ? async (doc) => {
-    try {
-      const src = await PDFDocument.load(readBlob(v.file_sha256), { updateMetadata: false, ignoreEncryption: true });
-      for (const p of await doc.copyPages(src, src.getPageIndices())) doc.addPage(p);
-    } catch {
-      /* a file that cannot be read any more leaves the record without the pages; the fingerprint still names them */
-    }
+    else s.text(`The terms were a PDF of ${v.pages || 'several'} page${v.pages === 1 ? '' : 's'}. ${terms ? 'They follow this page, exactly as they were stored' : !cw ? 'They are no longer stored' : `They could not be read from storage when this record was made (${unread}), so they are not in this file. The people who run this server have been told. Ask for this record again later`} (SHA-256 above).`, { size: 9 });
+  }, terms ? async (doc) => {
+    for (const p of await doc.copyPages(terms!, terms!.getPageIndices())) doc.addPage(p);
   } : undefined);
 }
 

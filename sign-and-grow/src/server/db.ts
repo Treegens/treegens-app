@@ -387,6 +387,16 @@ CREATE TABLE IF NOT EXISTS two_step_log (
   what TEXT NOT NULL, by_id TEXT, by_name TEXT, account_id TEXT, account_name TEXT
 );
 CREATE INDEX IF NOT EXISTS two_step_log_user ON two_step_log(user_id, id);
+-- two_step_tries: wrong codes in a row that do not belong to the login as a whole (twostep.ts, useCode): those typed
+-- after a wrong password, by internet address ("ip:<login>:<address>"), and those typed under Settings, by browser
+-- ("session:<session>"). paused_until is set at the fifth. two_step_stops: links in the emails about a reset by email
+-- that stop it without signing in, as fingerprints.
+CREATE TABLE IF NOT EXISTS two_step_tries (
+  key TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, wrong INTEGER NOT NULL DEFAULT 0, paused_until TEXT, at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS two_step_stops (
+  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL
+);
 -- Click-to-agree (src/server/clickwrap.ts). clickwraps: terms of one account that a website's visitors accept with a
 -- click, with the draft being written (draft_*) and the number of the version that is live. clickwrap_versions: each
 -- published version as it was shown, terms_sha256 the fingerprint of the exact terms. clickwrap_acceptances: one row
@@ -707,6 +717,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // Tries at the owner's password since the lock went on, counted before each one is checked (handover.ts), so
   // tries sent at the same moment cannot all pass on one count.
   ['sessions', 'unlock_tries', 'INTEGER NOT NULL DEFAULT 0'],
+  // When the owner of a public form made before the stacked-field rule was last told that two of its fields cover
+  // each other (visitors are let through; Text view reaches every field). Once a day at most.
+  ['powerforms', 'stacked_told_at', 'TEXT'],
   // The envelope through whose signing link a signer uploaded this file. Such a file belongs to no account, so
   // this is what lets it go with the envelope (or its account) also when it was never attached to a field.
   ['files', 'via_envelope', 'TEXT'],
@@ -741,6 +754,11 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // change the documents, the fields, that wording or the message of the envelope.
   ['envelopes', 'wording_from', 'TEXT'],
   ['envelopes', 'wording_fixed', 'TEXT'],
+  // wording_people: what that template gave each person on it, by recipient id: their private note, the check before
+  // the document opens and an access code ({"rcp_..": {"note": 1, "verify": "email_code", "code": 1}}), which stay.
+  // wording_owner: who the template belonged to when it was deleted, who keeps changing these envelopes.
+  ['envelopes', 'wording_people', 'TEXT'],
+  ['envelopes', 'wording_owner', 'TEXT'],
   // Around the certificate (src/server/evidence.ts). disputed_at: the first time a person named on the envelope said
   // they did not sign it, or that it was not them. final_pages: how many pages the signed PDF has, counted once for
   // the lookup by envelope ID. copy_opened_at: when this person first opened or downloaded the completed copy.
@@ -780,6 +798,15 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['users', 'two_step_reset_at', 'TEXT'],
   ['users', 'two_step_reset_noticed_at', 'TEXT'],
   ['accounts', 'two_step_required_at', 'TEXT'],
+  // two_step_email_reset_off: when the person switched the reset by email off (NULL: it is allowed, the default).
+  // two_step_reset_stopped_at: when a reset by email was last stopped other than by a sign-in with the second step; a
+  // new one waits TWO_STEP_RESET_BLOCK_DAYS from then. two_step_paused_mail_at: the last email about a pause, at most
+  // one a day. sessions.two_step_device: the remembered device that let this browser in or was remembered by it, so
+  // withdrawing the device signs it out too.
+  ['users', 'two_step_email_reset_off', 'TEXT'],
+  ['users', 'two_step_reset_stopped_at', 'TEXT'],
+  ['users', 'two_step_paused_mail_at', 'TEXT'],
+  ['sessions', 'two_step_device', 'TEXT'],
   // A witness for one signer (src/server/witness.ts, rules in src/lib/witness.ts). witness_for: the recipient they
   // witness. named_by_signer: that signer names them on the signing page. signer_named_at: when the signer named the
   // person who is in the place now (empty when the sender chose them), witness_names how often a name was given.
@@ -826,13 +853,14 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // when the sender names a witness again (src/server/witness.ts).
   ['recipients', 'witness_chosen', 'TEXT'],
   // files.text_sealed, text_key: the text kept from an uploaded PDF, encrypted with FILE_ENCRYPTION_KEY, and the id of
-  // the key (src/server/searchtext.ts). files.text then stays empty. envelopes.final_tries, final_tried_at,
-  // final_told_at: the timer's tries at the signed PDF of a completed envelope, so one that cannot be built never
-  // holds up the others, and when the sender and the operators were told it is stuck (src/server/finalretry.ts).
+  // the key (src/server/searchtext.ts). files.text then stays empty. envelopes.final_tries, final_due_at,
+  // final_told_at: the timer's failed tries at the signed PDF of a completed envelope and when the next is due, so one
+  // that cannot be built never holds up the others, and when the sender and the operators were told it is stuck
+  // (src/server/finalretry.ts).
   ['files', 'text_sealed', 'TEXT'],
   ['files', 'text_key', 'TEXT'],
   ['envelopes', 'final_tries', 'INTEGER NOT NULL DEFAULT 0'],
-  ['envelopes', 'final_tried_at', 'TEXT'],
+  ['envelopes', 'final_due_at', 'TEXT'],
   ['envelopes', 'final_told_at', 'TEXT'],
   // A stamp field (src/server/stamps.ts): its value is the SHA-256 of the impression in stamp_images. stamp_id: the
   // account stamp it came from, when it did. stamp_meta: JSON with the stamp's name, ink, seed, tilt, texture,

@@ -709,3 +709,23 @@ test('deleting keeps every envelope on which somebody keeps a copy, the dialog i
   assert.equal(mailTo('pat@keeps.example').length, mails);
   assert.equal(db.get("SELECT COUNT(*) n FROM envelopes WHERE subject='Order 1001'").n, 1);
 });
+
+test('the Leave dialog can name where the person lands: /me lists workspaces oldest first, and leaving goes to the first of the others', async () => {
+  const o1 = await person('Olga First', 'olga@lands.example');
+  const o2 = await person('Otto Second', 'otto@lands.example');
+  const o3 = await person('Ivy Third', 'ivy@lands.example');
+  const mira = await join(o1, 'Mira Many', 'mira@lands.example');
+  for (const o of [o2, o3]) {
+    assert.equal((await o.post('/account/invites', { email: 'mira@lands.example' })).status, 200);
+    assert.equal((await mira.post('/invites/accept', { token: inviteFor('mira@lands.example') })).status, 200);
+  }
+  const now_ = await me(mira);
+  assert.deepEqual(now_.accounts.map((a: any) => a.name), ["Olga First's workspace", "Otto Second's workspace", "Ivy Third's workspace"]);
+  assert.equal(now_.account.name, "Ivy Third's workspace");
+  // What the dialog says (the first of the others in that list) is where the server puts her.
+  const named = now_.accounts.find((a: any) => a.id !== now_.account.id).name;
+  const left = await mira.post('/account/leave', {});
+  assert.equal(left.status, 200);
+  assert.equal(left.data.now_in.name, named);
+  assert.equal((await me(mira)).account.name, named);
+});

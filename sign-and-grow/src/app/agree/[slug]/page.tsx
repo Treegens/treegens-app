@@ -182,6 +182,9 @@ export default function Agree() {
   const receipt: string | null = done?.receipt || (ref ? keptReceipt(ref) : null);
   const covered = visible === false;
   const blocked = !ticked || (v?.scroll && !scrolled) || covered || busy;
+  // Accepted an earlier version that still counts: what they accepted is shown, not the newer text (the server sends
+  // that version's words, or for a PDF its name, with the notes of what changed).
+  const older = !done && data?.already?.changes ? data.already : null;
 
   return (
     <main className={`cw-page${embed ? ' cw-embed' : ''}`}>
@@ -197,8 +200,15 @@ export default function Agree() {
             {data.account.logo ? <img src={data.account.logo} alt="" /> : <Leaf color="#1f6f43" size={22} />}
             <span className="muted small">{data.account.name}</span>
           </div>
-          <h1 className="cw-title serif">{v.title}</h1>
-          <div className="muted small">Version {v.number}, published {fmtDate(v.published_at)}</div>
+          <h1 className="cw-title serif">{older?.title || v.title}</h1>
+          <div className="muted small">{older ? `Version ${older.version}, the one you accepted. Version ${v.number} is in force now.` : `Version ${v.number}, published ${fmtDate(v.published_at)}`}</div>
+          {older && (
+            <div className="notice" style={{ marginTop: 12 }}>
+              You accepted version {older.version} on {fmtDate(older.at)}. These terms have changed since, and the people who wrote them said the change does not ask you to accept again, so your acceptance still counts.
+              {older.changes.filter((c: any) => c.note).map((c: any) => <div key={c.number} style={{ marginTop: 4 }}>What changed in version {c.number}: {c.note}</div>)}
+              <div style={{ marginTop: 4 }}>{older.format === 'text' ? `Below are the terms as you accepted them. To read version ${v.number}, ask ${data.account.name}.` : `The pages below are version ${v.number}. The version you accepted is in your copy of the record.`}</div>
+            </div>
+          )}
           {data.earlier && (
             <div className="notice warn" style={{ marginTop: 12 }}>
               You accepted version {data.earlier.version} on {fmtDate(data.earlier.at)}. These terms have changed since, so you are asked to accept them again.
@@ -206,8 +216,8 @@ export default function Agree() {
             </div>
           )}
           {/* The terms, in a box a keyboard can scroll (Tab to it, then the arrow keys). */}
-          <div ref={box} className={`cw-terms${v.format === 'pdf' ? ' cw-pdf' : ''}`} tabIndex={0} role="region" aria-label={`The terms: ${v.title}`} onScroll={checkEnd}>
-            {v.format === 'pdf' ? <PdfDoc url={v.pdf} maxWidth={720} onPages={() => setTimeout(checkEnd, 300)} /> : <ClickwrapTerms text={v.text} />}
+          <div ref={box} className={`cw-terms${v.format === 'pdf' && !older?.text ? ' cw-pdf' : ''}`} tabIndex={0} role="region" aria-label={`The terms: ${older?.title || v.title}`} onScroll={checkEnd}>
+            {older?.text != null ? <ClickwrapTerms text={older.text} /> : v.format === 'pdf' ? <PdfDoc url={v.pdf} maxWidth={720} onPages={() => setTimeout(checkEnd, 300)} /> : <ClickwrapTerms text={v.text} />}
           </div>
           {finished ? (
             <div className="cw-done" role="status" aria-live="polite">

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { VIEW_FAILED, whyNotShown, type ViewFailure } from './viewFailure';
+import { VIEW_FAILED, whyNotShown, serverSaid, type ViewFailure, type ServerSaid } from './viewFailure';
 import { DRAW_SCREENS, RELEASE_SCREENS, nearScreen, pixelRatio } from './pdfMemory';
 export type { ViewFailure } from './viewFailure';
 
@@ -14,7 +14,7 @@ function pdfjs(): Promise<any> {
   return lib;
 }
 
-function Page({ pdf, index, width, children, onClick, onDrawn }: { pdf: any; index: number; width: number; children?: ReactNode; onClick?: (e: React.MouseEvent<HTMLDivElement>) => void; onDrawn?: () => void }) {
+function Page({ pdf, index, width, children, ink, onClick, onDrawn }: { pdf: any; index: number; width: number; children?: ReactNode; ink?: ReactNode; onClick?: (e: React.MouseEvent<HTMLDivElement>) => void; onDrawn?: () => void }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [page, setPage] = useState<any>(null);
@@ -92,18 +92,24 @@ function Page({ pdf, index, width, children, onClick, onDrawn }: { pdf: any; ind
           This page could not be drawn. <button type="button" className="btn sm" onClick={(e) => (e.stopPropagation(), setFailed(false), setAgain((n) => n + 1))}>Draw it again</button>
         </div>
       )}
+      {/* Stamps, printed like ink (src/server/stamps.ts): a layer of their own right on the drawn page, which starts
+          no stacking context, so mix-blend-mode multiplies them into the page's own pixels and the printed words
+          show through. What can be clicked stays in the overlay above. */}
+      {ink && <div className="ink" aria-hidden="true">{ink}</div>}
       <div className="overlay">{children}</div>
       <span className="pageno">{index + 1}</span>
     </div>
   );
 }
 
-export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, onPages, onDocument, onShown, failed }: {
+export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, ink, onPageClick, onPages, onDocument, onShown, failed }: {
+  /** What is printed like ink on a page (stamps), under the overlay and blended into the drawn page. */
+  ink?: (page: number) => ReactNode;
   /** Called when the first page of the file at `url` has been drawn, or has loaded while far from view (it is drawn
    *  when it comes near), so the parent knows which file is on screen. */
   onShown?: () => void;
   /** What to show instead of the pages when they cannot be shown. Without it, a plain sentence with Try again. */
-  failed?: (why: ViewFailure, retry: () => void) => ReactNode;
+  failed?: (why: ViewFailure, retry: () => void, said?: ServerSaid | null) => ReactNode;
   url: string;
   maxWidth?: number;
   zoom?: number;
@@ -116,6 +122,7 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
   const wrap = useRef<HTMLDivElement>(null);
   const [pdf, setPdf] = useState<any>(null);
   const [error, setError] = useState<ViewFailure | ''>('');
+  const [said, setSaid] = useState<ServerSaid | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [avail, setAvail] = useState(0);
 
@@ -125,6 +132,7 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
     let loaded = false;
     setPdf(null);
     setError('');
+    setSaid(null);
     // A viewer that did not load is forgotten, so Try again fetches it afresh.
     pdfjs()
       .then((m) => {
@@ -142,6 +150,10 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
         if (!loaded) lib = null;
         // Never the viewer's own words ("Promise.withResolvers is not a function"): what happened, in a person's terms.
         if (live) setError(whyNotShown(e, loaded, typeof navigator === 'undefined' || navigator.onLine !== false));
+        // The server refused the file and says why in words: its stored copy failed its check, or it is locked with an
+        // encryption key the server was not given. A download would fail the same way, so the page says that instead.
+        if (live && e?.name === 'UnexpectedResponseException' && e?.status >= 500)
+          serverSaid(url).then((s) => live && setSaid(s));
       });
     return () => {
       live = false;
@@ -161,7 +173,7 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
   const width = Math.round(Math.min(maxWidth, avail || maxWidth) * zoom);
   return (
     <div ref={wrap} className="pdfdoc" style={{ width: '100%' }}>
-      {error && (failed ? failed(error, () => setAttempt((n) => n + 1)) : (
+      {error && (failed ? failed(error, () => setAttempt((n) => n + 1), said) : (
         <div className="notice err" role="alert">
           {VIEW_FAILED[error]}{' '}
           <button type="button" className="btn sm" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
@@ -170,7 +182,7 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
       {!pdf && !error && <div className="muted" style={{ padding: 40 }}>Loading document…</div>}
       {pdf && avail > 0 &&
         Array.from({ length: pdf.numPages }, (_, i) => (
-          <Page key={i} pdf={pdf} index={i} width={width} onDrawn={i === 0 ? onShown : undefined}
+          <Page key={i} pdf={pdf} index={i} width={width} onDrawn={i === 0 ? onShown : undefined} ink={ink?.(i)}
             onClick={onPageClick ? (e) => {
               const r = e.currentTarget.getBoundingClientRect();
               onPageClick(i, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);

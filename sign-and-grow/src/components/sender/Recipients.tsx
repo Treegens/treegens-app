@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, toast, Status, ROLE_LABEL } from '@/components/ui';
 import { fail } from './feedback';
 import { dayTime, howLong, neverOpened } from './lib';
@@ -90,8 +90,16 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
   const qrFrom = useRef<HTMLButtonElement | null>(null); // the button that opened it, where the keyboard goes back to
   const out = e.status === 'sent';
 
+  // A correction, a reassignment or a change of role gives a person a new link, and the old one stops working. So the
+  // link is asked for again each time it is handed over (Copy link, QR code, share, sign now), never taken from what
+  // was fetched before, and a link shown under a name, or a code on the screen, goes when the people change.
+  const who = e.recipients.map((r: any) => `${r.id}:${r.email}:${r.name}:${r.role}:${r.phone || ''}`).join('|');
+  useEffect(() => {
+    setLinks({});
+    setShown('');
+    setQr('');
+  }, [who]);
   const linkFor = async (r: any) => {
-    if (links[r.id]) return links[r.id];
     const { url } = await api(`/envelopes/${e.id}/recipient-view`, { body: { recipient_id: r.id } });
     setLinks((l) => ({ ...l, [r.id]: url }));
     return url as string;

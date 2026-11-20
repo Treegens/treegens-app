@@ -618,10 +618,11 @@ test('a completed envelope its sender deletes leaves the sender\'s lists, and ev
   assert.equal((await summary()).completed, 1);
   assert.equal((await summary()).byStatus.completed, 1);
   assert.equal((await jo.get('/impact')).data.account.sheets, paper, 'the paper it saved was saved all the same');
-  // A repeat of the call that made it does not answer with an envelope the sender deleted: the key is free again.
+  // A repeat of the call that made it does not answer with an envelope the sender deleted, and does not send the
+  // same thing to the signer a second time either: the envelope is still out there for them, so the key stays used.
   const repeat = await jo.call('POST', '/envelopes', await simpleBody(jo, 'keeper@example.com', 'Keep me'), { 'idempotency-key': 'order-77' });
-  assert.equal(repeat.status, 200);
-  assert.notEqual(repeat.data.envelope.id, e.id);
+  assert.equal(repeat.status, 409);
+  assert.match(repeat.data.error, /deleted from your lists since\. Nothing new was created/);
 
   // Kept for the recipient: the link, the download, "documents sent to me", "find my documents" and the check of the PDF.
   const anyone = from();
@@ -1276,8 +1277,8 @@ test('the screens offer what the server allows, promise only what it does, and c
   assert.match(page, /An admin of your team still finds it under Envelopes, in the tab <b>Removed by its sender<\/b>/);
   // A member sees whose public form it is under its name, where a phone shows it, and no buttons that would be refused.
   const forms = source('app/app/powerforms/page.tsx');
-  assert.match(forms, /<td><b>\{p\.name\}<\/b>.*\{p\.may_change === false && <div className="muted small">Only \{p\.owner/);
-  assert.match(forms, /\{p\.may_change === false \? <td \/> : \(/);
+  // The buttons that change it stand under the name too (so a phone reaches them), and only for whoever may.
+  assert.match(forms, /<td><b>\{p\.name\}<\/b>[^\n]*\n\s*\{p\.may_change === false \? <div className="muted small">Only \{p\.owner[^\n]*: \(\n\s*<div className="row wrap"[^\n]*>\n\s*<button[^\n]*shared_device/);
   assert.match(forms, /Only templates you may change are listed here/);
   // Before closing, nobody is promised that the payment provider has already stopped the subscription.
   const yourData = part(source('app/app/settings/page.tsx'), 'YourData');

@@ -158,7 +158,11 @@ export function identityOf(p: Provider, claims: Record<string, any>): Identity {
   const nameOr = (email: string) => (typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : [claims.given_name, claims.family_name].filter((x) => typeof x === 'string' && x.trim()).join(' ') || email.split('@')[0] || 'New member').slice(0, 120);
   if (p.id === 'google') {
     const email = mail(claims.email);
-    const runsMailbox = /@(gmail|googlemail)\.com$/.test(email) || (typeof claims.hd === 'string' && !!claims.hd);
+    // The Workspace domain has to be the address's own: "hd" says which organization runs the account, and only for
+    // an address in that very domain does it say who runs the mailbox. An address in another domain of the same
+    // organization is then not vouched for, and gets our own confirmation email, which is the safe way to be wrong.
+    const hd = typeof claims.hd === 'string' ? claims.hd.trim().toLowerCase() : '';
+    const runsMailbox = /@(gmail|googlemail)\.com$/.test(email) || (!!hd && email.endsWith(`@${hd}`));
     return { subject: claims.sub, email, vouched: !!email && claims.email_verified === true && runsMailbox, name: nameOr(email) };
   }
   // The same person has a different "sub" in every app but one "oid" in their organization. Whichever is used is

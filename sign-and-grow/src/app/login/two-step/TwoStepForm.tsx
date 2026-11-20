@@ -16,6 +16,8 @@ export function TwoStepForm() {
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState<{ text: string; code?: string } | null>(null);
   const [lost, setLost] = useState<'' | 'open' | 'sent'>('');
+  // After Google or Microsoft no password was typed, and a reset by email needs it: asked for here (password_asked).
+  const [lostPw, setLostPw] = useState('');
   const [busy, setBusy] = useState(false);
   // The page to open afterwards, from the address bar of the password page. Read once the page runs in the browser.
   const [nextPage, setNextPage] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export function TwoStepForm() {
   }
   const sendLost = () => {
     setBusy(true);
-    api('/auth/two-step/lost', { method: 'POST' }).then(() => setLost('sent')).catch((e: any) => setError({ text: e.message, code: e.code })).finally(() => setBusy(false));
+    api('/auth/two-step/lost', { body: state?.password_asked ? { password: lostPw } : { asked: true } }).then(() => setLost('sent')).catch((e: any) => setError({ text: e.message, code: e.code })).finally(() => setBusy(false));
   };
 
   const again = <Link href={`/login${nextPage ? `?next=${encodeURIComponent(nextPage)}` : ''}`}>Start again with your password</Link>;
@@ -68,7 +70,7 @@ export function TwoStepForm() {
         ) : (
           <form onSubmit={submit}>
             <p className="muted small">{state.via ? `${state.via} has said who you are. Your login also asks` : 'Your login asks, after the password,'} for a code from the authenticator app on your phone.</p>
-            {state.paused_until && !error && <div className="notice warn" role="status" style={{ margin: '10px 0' }}>Too many wrong codes were typed for this login, so its second step is paused until {new Date(state.paused_until).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}. No code works before then.</div>}
+            {state.paused_until && !error && <div className="notice warn" role="status" style={{ margin: '10px 0' }}>Too many wrong codes were typed for this login, so its second step is paused until {new Date(state.paused_until).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}. Wait until then, then type the newest code from your app, or a recovery code.</div>}
             <CodeField id="ts-signin" value={code} onChange={setCode} recovery={recovery} autoFocus label={recovery ? 'Recovery code' : 'Code from your authenticator app'} />
             <button type="button" className="btn ghost" style={{ marginBottom: 8 }} onClick={() => (setRecovery(!recovery), setCode(''))}>{recovery ? 'Use the code from the app instead' : 'Use a recovery code instead'}</button>
             <label className="setting-row" style={{ cursor: 'pointer' }}>
@@ -88,13 +90,19 @@ export function TwoStepForm() {
                 <div className="ts-rules">
                   <b>Getting in without your phone</b>
                   <ul className="rules">{TWO_STEP_LOST.map((l) => <li key={l}>{l}</li>)}</ul>
-                  <p className="small">We email the address of your login what you can do: an owner gets the link that starts the reset, someone on a team is told who can reset it.</p>
-                  <button type="button" className="btn" disabled={busy} onClick={sendLost}>Email me what to do</button>
+                  <p className="small">We email the address of your login what you can do: the link that starts a reset by email, or who on your team can reset it. A reset by email needs the right password.</p>
+                  {state.password_asked && (
+                    <label className="f" htmlFor="ts-lost-pw"><span>Your password</span>
+                      <input id="ts-lost-pw" type="password" autoComplete="current-password" value={lostPw} onChange={(e) => setLostPw(e.target.value)} />
+                      <span className="hint">You signed in with {state.via}, so type the password of your Sign&amp;Grow login here. If it has none yet, choose one first with &quot;Forgot password&quot; on the sign-in page.</span>
+                    </label>
+                  )}
+                  <button type="button" className="btn" disabled={busy || (state.password_asked && !lostPw)} onClick={sendLost}>Email me what to do</button>
                 </div>
               )}
               {lost === 'sent' && (
                 <div className="notice" role="status">
-                  {state.via ? 'We sent an email to the address of your login.' : 'If the password you typed was right, we sent an email to the address of your login.'} It says what you can do next. {state.via ? '' : 'If nothing arrives within a few minutes, the password may not have been right: start again with it.'}
+                  If the password you typed was right, we sent an email to the address of your login. It says what you can do next. If nothing arrives within a few minutes, the password may not have been right: start again with it.
                 </div>
               )}
             </div>
