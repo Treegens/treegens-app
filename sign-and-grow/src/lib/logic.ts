@@ -653,7 +653,7 @@ export function longestChain(fields: F[]): { id: string; length: number } {
       const top = todo[todo.length - 1];
       if (top.i < top.next.length) {
         const n = top.next[top.i++];
-        if (!len.has(n) && !on.has(n)) on.add(n), todo.push({ id: n, next: dependsOn(byId.get(n)!).filter((x) => byId.has(x)), i: 0 });
+        if (!len.has(n) && !on.has(n)) (on.add(n), todo.push({ id: n, next: dependsOn(byId.get(n)!).filter((x) => byId.has(x)), i: 0 }));
         continue;
       }
       todo.pop(), on.delete(top.id);
