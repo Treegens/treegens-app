@@ -36,7 +36,10 @@ What the test files cover:
 ## What the bad reviews taught us
 
 Before building further we read the negative reviews of the market-leading e-signature product: review sites,
-complaint boards, community forums and developer issue trackers. The notes are in `research/complaints.json`.
+complaint boards, community forums and developer issue trackers. The notes are in `research/complaints.json`
+(167 sourced complaints, merged into 45 themes). Four areas were not researched and are open gaps, not clean
+results: mobile app store reviews, users outside the US, account security and signature disputes, and
+industry-specific workflows.
 Each row is something people complain about again and again, and what this code does instead. Every row is
 behaviour in the code, not a line in a policy page, and most rows are pinned down by a test in
 `tests/billing.test.ts` or `tests/trust.test.ts`.
@@ -178,13 +181,20 @@ Copy `.env.example` to `.env.local`. Everything is optional for local use.
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |
 | `DEV_OUTBOX=1` | Shows the outbox in a production build. Never set this on a public server: it exposes every signing link. | off |
 
-`/help`, `/` and `/security` quote the refund window and the unused-plan rule. They read `REFUND_DAYS` and
-`DORMANT_AUTO_STOP_DAYS` through `src/app/help/facts.ts`, which mirrors the server rules. Keep the two in step.
+`/help`, `/` and `/security` quote the refund window and the unused-plan rule. They read them from
+`src/lib/policy.ts`, the same file the server enforces them from, so the pages and the code cannot disagree.
 
 ## Things to decide before launch
 
-- **Prices** in `src/lib/impact.ts` (`PRICING`) are placeholders, and `STRIPE_PRICE_GROVE` has to charge the
-  same monthly amount.
+- **Prices** are in `src/lib/impact.ts` (`PRICING`): $9 a month for 9 signatures, $1 for each extra signature,
+  10 mangrove trees per dollar. `STRIPE_PRICE_GROVE` has to be a monthly price for the same $9. Top-ups need no
+  price in Stripe; the amount is sent with each checkout.
+- **Choices made around those prices**, each one line to change in `PRICING` or the settings above: a signature is
+  one person signing one envelope; signatures never expire and roll over; a new account gets 3 free ones; top-ups
+  need the monthly plan; unused signatures from the latest payment are refunded within 30 days; an unused plan
+  stops renewing after 90 days.
+- **The free code** (`GROWalition` by default) is in this source code. If the repository is public, so is the
+  code, and nothing limits how many accounts use it. Change it with `FREE_PLAN_CODES`.
 - **Impact factors** in the same file are commonly cited estimates. Check them against a source you are happy
   to stand behind publicly.
 - **The 100% promise and the trees per dollar** are business commitments. The app records what was paid and
