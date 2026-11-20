@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
+import Link from 'next/link';
+import { api, useLoad, fmtDate, oops, toast, Modal, Leaf } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { AdoptSignature } from '@/components/SignaturePad';
 import { PLANS } from '@/lib/impact';
@@ -11,6 +12,7 @@ const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   r.onerror = rej;
   r.readAsDataURL(file);
 });
+const longDate = (s?: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 
 function Profile() {
   const me = useMe();
@@ -31,7 +33,7 @@ function Profile() {
       </div>
       <div className="card">
         <h2 style={{ marginBottom: 4 }}>Your signature</h2>
-        <p className="muted small">Saved here, it is offered automatically whenever a document is sent to {me.user.email}.</p>
+        <p className="muted small">Saved here, it is offered when a document is sent to {me.user.email}. You can always change it while signing.</p>
         <div className="grid g2">
           {(['signature', 'initials'] as const).map((k) => {
             const img = k === 'signature' ? me.user.signature_png : me.user.initials_png;
@@ -60,6 +62,36 @@ function Profile() {
   );
 }
 
+const NOTIFY: [string, string, string][] = [
+  ['completed', 'When everyone has finished', 'One email with the signed document. Most people only need this one.'],
+  ['problems', 'When something needs you', 'Someone declined, passed it on, or the deadline is close or has passed.'],
+  ['signed', 'Each time someone signs', 'One email per person as they finish. Off by default to keep your inbox quiet.'],
+  ['viewed', 'Each time someone opens it', 'Useful when you want to know it arrived. Off by default.'],
+];
+
+function Notifications() {
+  const me = useMe();
+  const [n, setN] = useState<Record<string, boolean>>(me.user.notify || {});
+  const flip = (k: string) => {
+    const next = { ...n, [k]: !n[k] };
+    setN(next);
+    api('/me', { method: 'PATCH', body: { notify: { [k]: next[k] } } }).then(() => (toast('Saved'), me.reload())).catch(oops);
+  };
+  return (
+    <div className="card">
+      <h2 style={{ marginBottom: 4 }}>Emails about your envelopes</h2>
+      <p className="muted small">You choose how much we email you. Everything is always visible in the app either way.</p>
+      {NOTIFY.map(([k, title, hint]) => (
+        <label key={k} className="setting-row">
+          <input type="checkbox" checked={!!n[k]} onChange={() => flip(k)} />
+          <span><b>{title}</b><span className="muted small" style={{ display: 'block' }}>{hint}</span></span>
+        </label>
+      ))}
+      <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>People you send to get one request, the reminders you set on the envelope, and one copy when it is complete. They can turn reminders off for themselves.</p>
+    </div>
+  );
+}
+
 function Account() {
   const me = useMe();
   const a = me.account;
@@ -75,13 +107,14 @@ function Account() {
         <div className="f"><span style={{ display: 'block', marginBottom: 5, fontSize: 13, fontWeight: 600 }}>Logo <span className="hint">(PNG or JPEG, under 200 KB)</span></span>
           <div className="row">
             {f.brand_logo && <img src={f.brand_logo} alt="Logo" style={{ maxHeight: 38, maxWidth: 140 }} />}
-            <label className="btn sm">Upload<input type="file" hidden accept="image/png,image/jpeg" onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; if (file.size > 200_000) return toast('Logo must be under 200 KB.', true); setF({ ...f, brand_logo: await fileToDataUrl(file) }); }} /></label>
+            <label className="btn sm">Upload<input type="file" hidden accept="image/png,image/jpeg" onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; if (file.size > 200_000) return toast('That logo is over 200 KB. Try a smaller PNG or JPEG.', true); setF({ ...f, brand_logo: await fileToDataUrl(file) }); }} /></label>
             {f.brand_logo && <button className="btn sm ghost" onClick={() => setF({ ...f, brand_logo: '' })}>Remove</button>}
           </div>
         </div>
         <label className="f"><span>Default reminder <span className="hint">(days, 0 for never)</span></span><input type="number" min={0} max={60} value={f.default_reminder_days} onChange={(e) => setF({ ...f, default_reminder_days: Number(e.target.value) })} /></label>
-        <label className="f"><span>Default expiry <span className="hint">(days)</span></span><input type="number" min={1} max={365} value={f.default_expire_days} onChange={(e) => setF({ ...f, default_expire_days: Number(e.target.value) })} /></label>
+        <label className="f"><span>Default deadline <span className="hint">(days)</span></span><input type="number" min={1} max={365} value={f.default_expire_days} onChange={(e) => setF({ ...f, default_expire_days: Number(e.target.value) })} /></label>
       </div>
+      <p className="muted small">Emails to your recipients come from "{me.user.name} via Sign&Grow" and replies go straight to you.</p>
       <button className="btn primary" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (toast('Saved'), me.reload())).catch(oops)}>Save</button>
     </div>
   );
@@ -92,8 +125,17 @@ function Team() {
   const admin = me.role !== 'member';
   const [d, reload] = useLoad(() => api('/account/members'));
   const [inv, setInv] = useState({ email: '', role: 'member' });
+  const [remove, setRemove] = useState<any>(null);
+  const [to, setTo] = useState('');
+  const members: any[] = d?.members || [];
+  const adminCount = members.filter((m) => m.role !== 'member').length;
   return (
     <div className="stack">
+      {admin && members.length > 0 && adminCount < 2 && (
+        <div className="notice warn">
+          <b>This account depends on one person.</b> If you lose access to {me.user.email}, nobody else can manage it. Invite a second admin below so the account is never stuck behind one mailbox.
+        </div>
+      )}
       {admin && (
         <form className="card row wrap" style={{ alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); api('/account/invites', { body: inv }).then(() => (toast('Invitation sent'), setInv({ email: '', role: 'member' }), reload())).catch(oops); }}>
           <label className="f grow" style={{ margin: 0 }}><span>Invite by email</span><input type="email" required value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /></label>
@@ -102,16 +144,19 @@ function Team() {
         </form>
       )}
       <div className="card pad0">
-        <table className="t">
+        <div className="tablewrap"><table className="t">
           <thead><tr><th>Member</th><th>Role</th><th /></tr></thead>
           <tbody>
-            {(d?.members || []).map((m: any) => (
+            {members.map((m) => (
               <tr key={m.id}>
-                <td><b>{m.name}</b><div className="muted small">{m.email}</div></td>
+                <td><b>{m.name}</b>{m.id === me.user.id ? ' (you)' : ''}<div className="muted small">{m.email}</div></td>
                 <td>{admin && m.role !== 'owner' && m.id !== me.user.id ? (
-                  <select value={m.role} style={{ width: 120 }} aria-label="Role" onChange={(e) => api(`/account/members/${m.id}`, { method: 'PATCH', body: { role: e.target.value } }).then(reload).catch(oops)}><option value="member">Member</option><option value="admin">Admin</option></select>
+                  <select value={m.role} style={{ width: 120 }} aria-label={`Role for ${m.name}`} onChange={(e) => api(`/account/members/${m.id}`, { method: 'PATCH', body: { role: e.target.value } }).then(reload).catch(oops)}><option value="member">Member</option><option value="admin">Admin</option></select>
                 ) : <span style={{ textTransform: 'capitalize' }}>{m.role}</span>}</td>
-                <td style={{ textAlign: 'right' }}>{admin && m.role !== 'owner' && m.id !== me.user.id && <button className="btn sm ghost danger" onClick={() => window.confirm(`Remove ${m.name} from the team?`) && api(`/account/members/${m.id}`, { method: 'DELETE' }).then(reload).catch(oops)}>Remove</button>}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {me.role === 'owner' && m.id !== me.user.id && <button className="btn sm ghost" onClick={() => window.confirm(`Make ${m.name} the owner of this account? You stay on as an admin.`) && api('/account/transfer-owner', { body: { user_id: m.id } }).then(() => (toast(`${m.name} is now the owner`), me.reload(), reload())).catch(oops)}>Make owner</button>}
+                  {admin && m.role !== 'owner' && m.id !== me.user.id && <button className="btn sm ghost danger" onClick={() => (setRemove(m), setTo(me.user.id))}>Remove</button>}
+                </td>
               </tr>
             ))}
             {(d?.invites || []).map((i: any) => (
@@ -119,9 +164,24 @@ function Team() {
                 <td style={{ textAlign: 'right' }}><button className="btn sm ghost danger" onClick={() => api(`/account/invites/${i.id}`, { method: 'DELETE' }).then(reload).catch(oops)}>Cancel</button></td></tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       </div>
-      <p className="muted small">Members see the envelopes they sent. Admins see everything in the account. Templates are shared with everyone.</p>
+      <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything, and templates are shared. Everyone on the team is covered by the one plan: there is no charge per person.</p>
+
+      {remove && (
+        <Modal title={`Remove ${remove.name}`} onClose={() => setRemove(null)}>
+          <p>They lose access to this account straight away. Nothing they sent is lost: their envelopes, drafts and templates pass to the person you choose, and anything still out for signature carries on.</p>
+          <label className="f"><span>Hand their documents to</span>
+            <select value={to} onChange={(e) => setTo(e.target.value)}>
+              {members.filter((m) => m.id !== remove.id).map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === me.user.id ? ' (you)' : ''}</option>)}
+            </select>
+          </label>
+          <div className="actions">
+            <button className="btn" onClick={() => setRemove(null)}>Cancel</button>
+            <button className="btn primary" onClick={() => api(`/account/members/${remove.id}?to=${encodeURIComponent(to)}`, { method: 'DELETE' }).then(() => (toast(`${remove.name} was removed. Their documents were handed over.`), setRemove(null), reload())).catch(oops)}>Remove and hand over</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -137,10 +197,10 @@ function Developers() {
     <div className="stack">
       <div className="card">
         <div className="row between wrap"><h2>API keys</h2><a href="/developers" target="_blank">API reference ↗</a></div>
-        <p className="muted small">Included on every plan. Use a key as a Bearer token.</p>
-        {fresh && <div className="notice" style={{ marginBottom: 12 }}>Copy your key now. It will not be shown again:<div className="mono" style={{ marginTop: 4 }}>{fresh}</div></div>}
+        <p className="muted small">Included on every plan, with the same limits as the app. A key works straight away: there is no review step and no separate test environment.</p>
+        {fresh && <div className="notice" style={{ marginBottom: 12 }}>Copy your key now. It is not shown again:<div className="mono" style={{ marginTop: 4 }}>{fresh}</div></div>}
         {(keys?.keys || []).map((k: any) => (
-          <div key={k.id} className="row between" style={{ padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
+          <div key={k.id} className="row between wrap" style={{ padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
             <span><b>{k.name}</b> <span className="mono muted">{k.prefix}…</span></span>
             <span className="row"><span className="muted small">{k.last_used_at ? `last used ${fmtDate(k.last_used_at)}` : 'never used'}</span><button className="btn sm ghost danger" onClick={() => api(`/api-keys/${k.id}`, { method: 'DELETE' }).then(reloadKeys).catch(oops)}>Revoke</button></span>
           </div>
@@ -150,7 +210,7 @@ function Developers() {
       {admin && (
         <div className="card">
           <h2>Webhooks</h2>
-          <p className="muted small">We POST JSON to your URL when an envelope is sent, viewed, signed, completed, declined, voided or expires. Verify the <span className="mono">X-SignAndGrow-Signature</span> header with the signing secret.</p>
+          <p className="muted small">We POST JSON to your URL when an envelope is sent, opened, signed, corrected, completed, declined, voided or expires. Check the <span className="mono">X-SignAndGrow-Signature</span> header with the signing secret. Each payload also carries a one-line <span className="mono">text</span> summary for tools that just want a message to show.</p>
           {(hooks?.webhooks || []).map((h: any) => (
             <div key={h.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
               <div className="row between"><b className="truncate">{h.url}</b><button className="btn sm ghost danger" onClick={() => api(`/webhooks/${h.id}`, { method: 'DELETE' }).then(reloadHooks).catch(oops)}>Delete</button></div>
@@ -162,9 +222,21 @@ function Developers() {
             <button className="btn">Add webhook</button>
           </form>
           {hooks?.deliveries?.length > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <h3 style={{ marginBottom: 6 }}>Recent deliveries</h3>
-              {hooks.deliveries.map((d: any) => <div key={d.id} className="row between small" style={{ padding: '3px 0' }}><span className="mono">{d.event}</span><span className={d.status && d.status < 300 ? '' : 'muted'}>{d.status || d.error} · {fmtDate(d.at, true)}</span></div>)}
+            <div style={{ marginTop: 16 }}>
+              <div className="row between"><h3>Recent deliveries</h3><button className="btn sm ghost" onClick={reloadHooks}>Refresh</button></div>
+              <p className="muted small">Each delivery is tried three times. If your side was down, fix it and send the same event again.</p>
+              {hooks.deliveries.map((d: any) => {
+                const ok = d.status && d.status < 300;
+                return (
+                  <div key={d.id} className="row between wrap small" style={{ padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
+                    <span><span className={`badge ${ok ? 'completed' : 'declined'}`}>{ok ? `Delivered (${d.status})` : d.status ? `Failed (${d.status})` : 'Failed'}</span> <span className="mono">{d.event}</span></span>
+                    <span className="row">
+                      <span className="muted">{!ok && d.error ? `${d.error} · ` : ''}{fmtDate(d.at, true)}</span>
+                      {!!d.can_redeliver && <button className="btn sm" onClick={() => api(`/webhooks/deliveries/${d.id}/redeliver`, { method: 'POST' }).then(() => (toast('Sent again. Refresh in a moment to see the result.'), setTimeout(reloadHooks, 2500))).catch(oops)}>Send again</button>}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -176,43 +248,237 @@ function Developers() {
 function Billing() {
   const me = useMe();
   const admin = me.role !== 'member';
-  const grove = me.account.plan === 'grove';
-  const go = (path: string) => api(path, { method: 'POST' }).then((r) => (window.location.href = r.url)).catch(oops);
+  const [b, reload] = useLoad(() => api('/billing'));
+  const [modal, setModal] = useState<'' | 'cancel' | 'refund' | 'card'>('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<any>(null);
+  if (!b) return <div className="muted">Loading…</div>;
+  const grove = b.plan === 'grove';
+  const price = `$${PLANS.grove.price}`;
+  const act = async (fn: () => Promise<any>) => {
+    setBusy(true);
+    try {
+      await fn();
+      reload();
+      me.reload();
+    } catch (e) {
+      oops(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const go = (path: string) => act(async () => {
+    const r = await api(path, { method: 'POST' });
+    window.location.href = r.url;
+  });
+
   return (
     <div className="stack">
-      <div className="card" style={{ background: 'var(--green-deep)', color: '#fff', borderColor: 'var(--green-deep)' }}>
-        <h2 className="serif" style={{ fontSize: 22 }}>100% of what you pay plants trees</h2>
-        <p style={{ color: '#cfe2d3', margin: '6px 0 0', maxWidth: 640 }}>Not profit, not a percentage. All subscription revenue from Sign&Grow goes to Treegens tree planting. People who sign your documents never pay anything.</p>
+      <div className="card plan-hero">
+        <Leaf size={28} color="#9ed88f" />
+        <div>
+          <h2 className="serif" style={{ fontSize: 22 }}>100% of what you pay plants trees</h2>
+          <p style={{ margin: '4px 0 0' }}>All subscription revenue from Sign&Grow goes to Treegens tree planting. People who sign your documents never pay anything.</p>
+        </div>
       </div>
-      <div className="grid g2">
-        {(['seedling', 'grove'] as const).map((id) => {
-          const p = PLANS[id];
-          const current = me.account.plan === id;
-          return (
-            <div key={id} className="card" style={current ? { borderColor: 'var(--green)', boxShadow: '0 0 0 1px var(--green)' } : undefined}>
-              <div className="row between"><h2>{p.name}</h2>{current && <span className="badge completed">Your plan</span>}</div>
-              <div className="serif" style={{ fontSize: 34, fontWeight: 700, margin: '8px 0 2px' }}>${p.price}<span className="muted" style={{ fontSize: 15, fontWeight: 400 }}> / month</span></div>
-              <div className="muted">{p.blurb}</div>
-              <ul style={{ paddingLeft: 18, lineHeight: 1.8, margin: '12px 0' }}>
-                <li>{Number.isFinite(p.envelopesPerMonth) ? `${p.envelopesPerMonth} envelopes a month` : 'Unlimited envelopes'}</li>
-                <li>Unlimited signers, always free for them</li>
-                <li>Templates, bulk send, PowerForms, API and webhooks</li>
-                <li>Audit trail, certificates and public verification</li>
-                {id === 'grove' && <li><b>Every cent goes to tree planting</b></li>}
-              </ul>
-              {id === 'grove' && !grove && admin && <button className="btn primary" disabled={!me.billing.enabled} onClick={() => go('/billing/checkout')}>Upgrade to Grove</button>}
-              {id === 'grove' && grove && admin && <button className="btn" onClick={() => go('/billing/portal')}>Manage subscription</button>}
-            </div>
-          );
-        })}
+
+      {done && (
+        <div className="notice" role="status">
+          {done.kind === 'cancel' && <><b>Cancelled. You will not be charged again.</b> Grove stays active until {longDate(done.ends_at)} because that time is already paid for. Reference {done.reference}. We emailed you this too.</>}
+          {done.kind === 'refund' && <><b>Refund sent: {done.refunded}.</b> It goes back to the card you paid with. Reference {done.reference}. Banks usually show it within 5 to 10 working days.</>}
+          {done.kind === 'card' && <><b>Card removed.</b> Nothing can be charged to it. {grove ? 'Your plan runs until the end of the time already paid for.' : ''}</>}
+        </div>
+      )}
+
+      <div className="card">
+        <div className="row between wrap">
+          <div>
+            <div className="muted small" style={{ fontWeight: 600 }}>Your plan</div>
+            <h2 style={{ fontSize: 24 }}>{grove ? 'Grove' : 'Seedling'} <span className="muted" style={{ fontSize: 15, fontWeight: 400 }}>{grove ? `${price} a month` : 'free'}</span></h2>
+          </div>
+          {grove && !b.ends_at && <span className="badge completed">Active</span>}
+          {grove && b.ends_at && <span className="badge expired">Ends {fmtDate(b.ends_at)}</span>}
+        </div>
+
+        {grove && !b.ends_at && (
+          <>
+            <p className="plan-line">{b.renews_at ? <>Next charge: <b>{price} on {longDate(b.renews_at)}</b>. That is the whole amount. We remind you by email before it happens.</> : <>Billed {price} each month. We remind you by email before every charge.</>}</p>
+            {admin && (
+              <div className="row wrap">
+                <button className="btn" onClick={() => setModal('cancel')}>Cancel plan</button>
+                <button className="btn ghost" disabled={busy} onClick={() => go('/billing/portal')}>Change card</button>
+                <button className="btn ghost" onClick={() => setModal('card')}>Remove card</button>
+              </div>
+            )}
+          </>
+        )}
+        {grove && b.ends_at && (
+          <>
+            <p className="plan-line"><b>Cancelled.</b> You will not be charged again. Grove stays active until {longDate(b.ends_at)}, then the account moves to the free plan. Nothing is deleted.</p>
+            {admin && <button className="btn primary" disabled={busy} onClick={() => act(() => api('/billing/resume', { method: 'POST' }).then(() => toast('Welcome back. Your plan continues.')))}>Keep Grove after all</button>}
+          </>
+        )}
+        {!grove && (
+          <>
+            {b.limit != null ? (
+              <>
+                <div className="meter" role="img" aria-label={`${b.used} of ${b.limit} envelopes used this month`}><i style={{ width: `${Math.min(100, (b.used / b.limit) * 100)}%` }} /></div>
+                <p className="plan-line"><b>{b.used} of {b.limit}</b> envelopes used this month. The count starts again on {longDate(b.resets_at)}. When you reach the limit, sending pauses. Nothing extra is ever charged.</p>
+              </>
+            ) : <p className="plan-line">No limits apply on this server.</p>}
+            {admin && b.enabled && (
+              <div className="row wrap">
+                <button className="btn primary" disabled={busy} onClick={() => go('/billing/checkout')}>Upgrade to Grove for {price} a month</button>
+                <span className="muted small">Month to month. Cancel in one click. Full refund within {b.refund_days} days.</span>
+              </div>
+            )}
+          </>
+        )}
+        {!admin && <p className="muted small" style={{ marginBottom: 0 }}>Only account admins can change the plan.</p>}
       </div>
-      {!me.billing.enabled && <div className="notice warn">Payments are not connected on this server, so there are no sending limits and nothing to pay. Set the Stripe keys described in the README to turn billing on.</div>}
-      {me.billing.limit != null && <div className="muted small">{me.billing.used} of {me.billing.limit} envelopes used this month.</div>}
+
+      {admin && b.refund && (
+        <div className="card row between wrap">
+          <div style={{ maxWidth: 560 }}>
+            <h3>Want your last payment back?</h3>
+            <p className="muted" style={{ margin: '4px 0 0' }}>Your last charge of {b.refund.amount} can be refunded in full ({b.refund.reason}). No form, no waiting for approval. The paid plan ends when you take the refund.</p>
+          </div>
+          <button className="btn" onClick={() => setModal('refund')}>Refund {b.refund.amount}</button>
+        </div>
+      )}
+
+      <div className="card">
+        <h2 style={{ marginBottom: 10 }}>The rules, all of them</h2>
+        <ul className="rules">
+          <li><b>Month to month.</b> No yearly contract and no notice period. Cancel any time up to the minute before a charge.</li>
+          <li><b>No extra charges.</b> There are no overage fees and no per-person fees. Your whole team is covered by one plan.</li>
+          <li><b>The free plan stops, it never bills.</b> {PLANS.seedling.envelopesPerMonth} envelopes a month. Only envelopes that are out for signature or completed count. Voided, declined and expired ones do not. Correcting a sent envelope and sending reminders are free. Signing your own documents is always free.</li>
+          <li><b>Refunds are automatic.</b> Any charge is refunded in full within {b.refund_days} days from this page, or later if you sent nothing since that charge.</li>
+          <li><b>Charged after cancelling?</b> That should never happen. If it does, the software refunds it by itself.</li>
+          <li><b>Stopping never costs you your documents.</b> Cancelling, a failed payment or moving to the free plan deletes nothing and locks nothing. Export is free on every plan.</li>
+          <li><b>Every plan has every feature.</b> Templates, bulk send, public forms, branding, the API and webhooks are on both plans.</li>
+          <li><b>Locked out?</b> Every billing email has a link that stops the renewal without logging in, and <Link href="/help">the help page</Link> can stop it with the card number.</li>
+        </ul>
+      </div>
+
+      <div className="card pad0">
+        <div style={{ padding: '14px 16px' }}><h2>Payment history</h2><div className="muted small">Kept for as long as the account exists, on any plan.</div></div>
+        {b.payments.length === 0 ? <div className="empty" style={{ padding: 24 }}>No payments yet.</div> : (
+          <div className="tablewrap"><table className="t">
+            <thead><tr><th>Date</th><th>Amount</th><th>Status</th><th /></tr></thead>
+            <tbody>{b.payments.map((p: any) => (
+              <tr key={p.id}><td>{fmtDate(p.at)}</td><td className="num">{p.amount}</td><td>{p.refunded_at ? <span className="badge">Refunded {fmtDate(p.refunded_at)}</span> : <span className="badge completed">Paid</span>}</td>
+                <td style={{ textAlign: 'right' }}>{p.receipt_url && <a href={p.receipt_url} target="_blank" rel="noreferrer">Invoice ↗</a>}</td></tr>
+            ))}</tbody>
+          </table></div>
+        )}
+      </div>
+
+      {!b.enabled && <div className="notice warn">Payments are not connected on this server, so there are no sending limits and nothing to pay.</div>}
+
+      {modal === 'cancel' && (
+        <Modal title="Cancel Grove" onClose={() => setModal('')}>
+          <ul className="rules">
+            <li>You will not be charged again.</li>
+            <li>Grove stays active until {b.renews_at ? longDate(b.renews_at) : 'the end of the month you paid for'}, because that time is already paid for.</li>
+            <li>Nothing is deleted. Every document, audit trail and invoice stays in your account on the free plan.</li>
+            <li>You can come back whenever you like.</li>
+          </ul>
+          <div className="actions">
+            <button className="btn" onClick={() => setModal('')}>Keep Grove</button>
+            <button className="btn primary" disabled={busy} onClick={() => act(async () => { const r = await api('/billing/cancel', { method: 'POST' }); setDone({ kind: 'cancel', ...r }); setModal(''); })}>Cancel plan</button>
+          </div>
+        </Modal>
+      )}
+      {modal === 'refund' && b.refund && (
+        <Modal title={`Refund ${b.refund.amount}`} onClose={() => setModal('')}>
+          <p>We will send {b.refund.amount} back to the card you paid with, in full. The paid plan ends now and the account moves to the free plan. Nothing is deleted.</p>
+          <div className="actions">
+            <button className="btn" onClick={() => setModal('')}>Not now</button>
+            <button className="btn primary" disabled={busy} onClick={() => act(async () => { const r = await api('/billing/refund', { method: 'POST' }); setDone({ kind: 'refund', ...r }); setModal(''); })}>Send my refund</button>
+          </div>
+        </Modal>
+      )}
+      {modal === 'card' && (
+        <Modal title="Remove your card" onClose={() => setModal('')}>
+          <p>We take the card off file so nothing can be charged to it. {grove && !b.ends_at ? 'Your plan is cancelled at the same time and runs until the end of the time already paid for.' : ''} Nothing is deleted.</p>
+          <div className="actions">
+            <button className="btn" onClick={() => setModal('')}>Keep the card</button>
+            <button className="btn primary" disabled={busy} onClick={() => act(async () => { await api('/billing/remove-card', { method: 'POST' }); setDone({ kind: 'card' }); setModal(''); })}>Remove card</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
-const TABS: [string, string][] = [['profile', 'Profile'], ['account', 'Account'], ['team', 'Team'], ['developers', 'API and webhooks'], ['billing', 'Plan']];
+function YourData() {
+  const me = useMe();
+  const [info] = useLoad(() => api('/me/delete'));
+  const [open, setOpen] = useState(false);
+  const [pw, setPw] = useState('');
+  const [now, setNow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const blocked: string[] = info?.blocked || [];
+  const owned: any[] = info?.owned || [];
+  const inFlight = owned.reduce((n, a) => n + a.in_flight, 0);
+
+  async function close() {
+    setBusy(true);
+    try {
+      const r = await api('/me/delete', { body: { password: pw, now } });
+      window.location.assign(r.closed === 'now' ? '/?closed=now' : '/login?closing=1');
+    } catch (e) {
+      oops(e);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="card row between wrap">
+        <div style={{ maxWidth: 600 }}>
+          <h2>Take everything with you</h2>
+          <p className="muted" style={{ margin: '6px 0 0' }}>One ZIP file with every signed PDF and its certificate, the full audit trail of every envelope, and a spreadsheet listing them all. Free on every plan, as often as you like, and it keeps working if you cancel.</p>
+        </div>
+        <a className="btn primary" href="/api/export">Export everything</a>
+      </div>
+
+      <div className="card">
+        <h2>Close your account</h2>
+        <p className="muted" style={{ margin: '6px 0 12px' }}>Closing is separate from cancelling a plan. If you only want to stop paying, <button className="linklike" onClick={() => window.location.assign('/app/settings?tab=billing')}>cancel the plan</button> instead and keep all your documents.</p>
+        {blocked.length > 0 ? (
+          <div className="notice warn">You own {blocked.map((n) => `"${n}"`).join(' and ')} and other people still use it. Make one of them the owner on the Team tab first, then you can close your own account.</div>
+        ) : (
+          <>
+            <ul className="rules">
+              <li>Any subscription stops at once. You will not be charged again.</li>
+              <li><b>Nothing is deleted for 30 days.</b> If you change your mind, or closed it by mistake, sign in again and the account comes straight back.</li>
+              <li>After 30 days the account{owned.length ? `, its ${owned.reduce((n, a) => n + a.envelopes, 0)} envelope(s)` : ''} and its audit trails are removed for good. Export first if you want copies.</li>
+              {inFlight > 0 && <li>{inFlight} envelope(s) are still out for signature. People can keep signing during the 30 days.</li>}
+              <li>Documents other people sent you belong to them and are not affected.</li>
+            </ul>
+            <button className="btn danger" onClick={() => setOpen(true)}>Close my account</button>
+          </>
+        )}
+      </div>
+
+      {open && (
+        <Modal title="Close your account" onClose={() => setOpen(false)}>
+          <p>Enter your password to confirm it is you, {me.user.name.split(' ')[0]}.</p>
+          <label className="f"><span>Password</span><input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus /></label>
+          <label className="check" style={{ marginBottom: 8 }}><input type="checkbox" checked={now} onChange={(e) => setNow(e.target.checked)} /> Delete everything right now instead of keeping it for 30 days. This cannot be undone.</label>
+          <div className="actions">
+            <button className="btn" onClick={() => setOpen(false)}>Keep my account</button>
+            <button className="btn primary" style={{ background: 'var(--red)', borderColor: 'var(--red)' }} disabled={busy || !pw} onClick={close}>{now ? 'Delete now' : 'Close account'}</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+const TABS: [string, string][] = [['profile', 'Profile'], ['notifications', 'Notifications'], ['account', 'Account'], ['team', 'Team'], ['billing', 'Plan'], ['data', 'Your data'], ['developers', 'API and webhooks']];
 
 export default function Settings() {
   const [tab, setTab] = useState('profile');
@@ -221,15 +487,21 @@ export default function Settings() {
     if (q.get('tab')) setTab(q.get('tab')!);
     if (q.get('upgraded')) toast('Welcome to Grove. Thank you for planting trees.');
   }, []);
+  const pick = (k: string) => {
+    setTab(k);
+    window.history.replaceState(null, '', `/app/settings?tab=${k}`);
+  };
   return (
     <div>
       <div className="pagehead"><h1 className="serif">Settings</h1></div>
-      <div className="tabs">{TABS.map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</div>
+      <div className="tabs" role="tablist">{TABS.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{l}</button>)}</div>
       {tab === 'profile' && <Profile />}
+      {tab === 'notifications' && <Notifications />}
       {tab === 'account' && <Account />}
       {tab === 'team' && <Team />}
-      {tab === 'developers' && <Developers />}
       {tab === 'billing' && <Billing />}
+      {tab === 'data' && <YourData />}
+      {tab === 'developers' && <Developers />}
     </div>
   );
 }

@@ -76,7 +76,7 @@ export function fireWebhooks(accountId: string, event: string, envelopeId: strin
   const hooks = all('SELECT * FROM webhooks WHERE account_id=? AND active=1', accountId).filter((h) => h.events === '*' || h.events.split(',').includes(event));
   if (!hooks.length) return;
   const e = get('SELECT id, status, subject, sent_at, completed_at FROM envelopes WHERE id=?', envelopeId);
-  // "text" lets the same URL be a Slack or Teams incoming webhook with no code in between.
+  // "text" is a one-line summary for chat tools and no-code automations that only want a message to show.
   const body = JSON.stringify({ event, created_at: now(), envelope: e, ...extra, text: `${e?.subject || 'Envelope'}: ${event.replace('.', ' ')}` });
   for (const h of hooks) void deliver(h, event, envelopeId, body).catch(() => {});
 }

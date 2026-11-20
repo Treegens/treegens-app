@@ -24,7 +24,14 @@ export function AuthForm({ mode }: { mode: Mode }) {
     setError('');
     try {
       if (mode === 'login' || mode === 'signup') {
-        await api(`/auth/${mode}`, { body: { ...f, invite: q?.get('invite') || undefined } });
+        const r = await api(`/auth/${mode}`, { body: { ...f, invite: q?.get('invite') || undefined } });
+        if (r.restored) {
+          try {
+            sessionStorage.setItem('sg_restored', '1');
+          } catch {
+            /* storage can be unavailable */
+          }
+        }
         // Someone who already has an account accepts a team invitation by signing in.
         if (mode === 'login' && q?.get('invite')) await api('/invites/accept', { body: { token: q.get('invite') } }).catch(() => {});
         const next = q?.get('next');
@@ -48,7 +55,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
       <Link href="/" className="logo" style={{ marginBottom: 20 }}><Leaf color="#1f6f43" size={24} /> Sign&Grow</Link>
       <form className="card" onSubmit={submit}>
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{TITLE[mode]}</h1>
-        {mode === 'signup' && <p className="muted small">{q?.get('invite') ? 'You were invited to join a team.' : 'Free to start. Every subscription plants trees.'}</p>}
+        {mode === 'signup' && <p className="muted small">{q?.get('invite') ? 'You were invited to join a team.' : 'Free to start. No card needed. Every subscription plants trees.'}</p>}
+        {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>Your account is closed and will be deleted in 30 days. Any subscription has been stopped. Changed your mind? Sign in and it comes straight back.</div>}
         {done ? <div className="notice" style={{ margin: '12px 0' }}>{done} <Link href="/login">Sign in</Link></div> : (
           <div style={{ marginTop: 14 }}>
             {mode === 'signup' && <label className="f"><span>Your name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}
@@ -60,7 +68,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         )}
       </form>
       <p className="muted small center" style={{ marginTop: 14 }}>
-        {mode === 'login' ? <>New here? <Link href="/signup">Create an account</Link> · <Link href="/forgot">Forgot password?</Link></> : <>Already have an account? <Link href={`/login${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Sign in</Link></>}
+        {mode === 'login' ? <>New here? <Link href="/signup">Create an account</Link> · <Link href="/forgot">Forgot password?</Link> · <Link href="/help">Help</Link></> : <>Already have an account? <Link href={`/login${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Sign in</Link></>}
       </p>
     </div>
   );

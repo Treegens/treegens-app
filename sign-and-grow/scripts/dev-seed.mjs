@@ -7,7 +7,7 @@ const { PDFDocument, StandardFonts } = require('pdf-lib');
 
 const BASE = (process.argv[2] || 'http://localhost:3000').replace(/\/$/, '');
 const stamp = Date.now().toString(36);
-const email = `demo-${stamp}@example.org`;
+const email = process.env.SEED_EMAIL || `demo-${stamp}@example.org`;
 const password = 'plant-more-trees';
 let cookie = '';
 

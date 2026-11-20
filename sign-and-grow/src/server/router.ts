@@ -24,14 +24,17 @@ export type Ctx = {
 type Level = 'user' | 'admin' | 'public';
 type Handler = (c: Ctx) => any;
 const g = globalThis as any;
-const routes: { method: string; re: RegExp; keys: string[]; level: Level; fn: Handler }[] = (g.__tsroutes ??= []);
+const routes: { method: string; path: string; re: RegExp; keys: string[]; level: Level; fn: Handler }[] = (g.__tsroutes ??= []);
+
+// Every registered route, for documentation checks.
+export const listRoutes = () => routes.map((r) => ({ method: r.method, path: r.path, level: r.level }));
 
 export function route(method: string, path: string, fn: Handler, level: Level = 'user') {
   const keys: string[] = [];
   const re = new RegExp('^' + path.replace(/:(\w+)/g, (_, k) => (keys.push(k), '([^/]+)')) + '/?$');
   // Hot reload re-registers routes; replace instead of stacking duplicates.
   const i = routes.findIndex((r) => r.method === method && String(r.re) === String(re));
-  const entry = { method, re, keys, level, fn };
+  const entry = { method, path, re, keys, level, fn };
   if (i >= 0) routes[i] = entry;
   else routes.push(entry);
 }

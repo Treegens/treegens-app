@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { api, Leaf, toast, oops } from './ui';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 
-type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; reload: () => void };
+type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; admins: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
 
@@ -40,6 +40,17 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (me) api('/impact').then(setImpact).catch(() => {});
   }, [me, path]);
   useEffect(() => setOpen(false), [path]);
+  useEffect(() => {
+    // Set by the login form when signing in cancelled a pending account closure.
+    try {
+      if (sessionStorage.getItem('sg_restored')) {
+        sessionStorage.removeItem('sg_restored');
+        toast('Welcome back. Your account is no longer scheduled to be deleted.');
+      }
+    } catch {
+      /* storage can be unavailable */
+    }
+  }, []);
 
   if (!me) return <div className="muted center" style={{ padding: 80 }}>Loading…</div>;
   const full = /^\/app\/(envelopes|templates)\/[^/]+\/edit/.test(path);
@@ -57,6 +68,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link href="/app" className="brand"><Leaf color="#9ed88f" size={22} /> Sign&Grow</Link>
           <Link href="/app/envelopes/new" className="btn" style={{ margin: '0 4px 10px', background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>New envelope</Link>
           {NAV.map(([href, label]) => <Link key={href} href={href} className={`nav${on(href) ? ' on' : ''}`}>{label}</Link>)}
+          <Link href="/help" className="nav">Help</Link>
+          {me.operator && <Link href="/app/operator" className={`nav${on('/app/operator') ? ' on' : ''}`}>Review queue</Link>}
           {me.outbox && <a className="nav" href="/dev/outbox" target="_blank">Dev outbox ↗</a>}
           <button className="btn sm ghost" style={{ color: '#fff', display: open ? 'block' : 'none', marginTop: 8 }} onClick={() => setOpen(false)}>Close menu</button>
           <div className="impact">
@@ -77,9 +90,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </aside>
         <main className="main">
+          {me.account.paused && (
+            <div className="banner paused" role="alert">
+              <span><b>Sending is paused on this account.</b> Reason: {me.account.paused}. A person reviews every pause. You can still open, download and export everything, and documents already out can still be signed.</span>
+              <Link href="/help" className="btn sm">Contact us</Link>
+            </div>
+          )}
           {!me.user.email_verified && (
-            <div className="notice warn row between" style={{ marginBottom: 16 }}>
-              <span>Confirm your email ({me.user.email}) to see documents others send you in your inbox.</span>
+            <div className="notice warn row between wrap" style={{ marginBottom: 16 }}>
+              <span>Confirm your email ({me.user.email}) before you send. It also puts documents others send you in your inbox. This keeps scammers from sending in someone else&apos;s name.</span>
               <button className="btn sm" onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => toast('Confirmation email sent')).catch(oops)}>Resend email</button>
             </div>
           )}

@@ -250,3 +250,22 @@ test('stripe webhook: signature check and revenue ledger', async () => {
   await acct.applyStripeEvent(JSON.parse(raw)); // replays are ignored
   assert.equal(db.get('SELECT SUM(amount_cents) c FROM payments').c, 1200);
 });
+
+test('the published API description matches the routes that exist', async () => {
+  const { openapi } = await import('../src/server/openapi.ts');
+  const { listRoutes } = await import('../src/server/router.ts');
+  const spec = openapi();
+  const have = new Set(listRoutes().map((r) => `${r.method} ${r.path.replace(/:(\w+)/g, '{$1}')}`));
+  const documented: string[] = [];
+  for (const [path, item] of Object.entries<any>(spec.paths))
+    for (const method of ['get', 'post', 'put', 'patch', 'delete']) if (item[method]) documented.push(`${method.toUpperCase()} ${path}`);
+  for (const d of documented) assert.ok(have.has(d), `documented but missing: ${d}`);
+  // Everything a developer would call on envelopes is described.
+  for (const r of listRoutes()) if (/^\/(envelopes|bulk|export|files$)/.test(r.path) && r.path !== '/files/:id/content') assert.ok(documented.includes(`${r.method} ${r.path.replace(/:(\w+)/g, '{$1}')}`), `not documented: ${r.method} ${r.path}`);
+  const served = await new Client().get('/openapi.json');
+  assert.equal(served.status, 200);
+  assert.equal(served.data.openapi, '3.0.3');
+  // Every $ref resolves.
+  const text = JSON.stringify(spec);
+  for (const m of text.matchAll(/#\/components\/schemas\/(\w+)/g)) assert.ok((spec.components.schemas as any)[m[1]], `dangling schema ${m[1]}`);
+});

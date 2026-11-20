@@ -22,6 +22,7 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-envelopes.ts');
   await import('../src/server/routes-sign.ts');
   await import('../src/server/routes-trust.ts');
+  await import('../src/server/openapi.ts');
   const billing = await import('../src/server/routes-billing.ts');
   handle = (await import('../src/server/router.ts')).handle;
   server = { db: await import('../src/server/db.ts'), env: await import('../src/server/envelopes.ts'), billing, cron: await import('../src/server/cron.ts') };

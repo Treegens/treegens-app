@@ -88,7 +88,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 14px; cur
 .side .impact { margin-top: auto; background: rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 12px; font-size: 12.5px; line-height: 1.45; color: #dcebdf; }
 .side .impact b { display: block; font-size: 20px; color: #fff; font-family: var(--serif); }
 .side .me { padding: 10px; font-size: 13px; color: #b9d2c0; }
-.main { padding: 28px 32px 64px; max-width: 1180px; width: 100%; }
+.main { padding: 28px 32px 64px; max-width: 1180px; width: 100%; min-width: 0; }
 .pagehead { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .mobilebar { display: none; }
 
@@ -187,7 +187,7 @@ table.t tr.click:hover td { background: #fbfaf6; }
 /* Marketing */
 .nav-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1120px; margin: 0 auto; padding: 18px 20px; }
 .logo { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; color: var(--green-deep); text-decoration: none; }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+.wrap:not(.row) { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
 .hero { padding: 56px 0 40px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
 .hero h1 { font-family: var(--serif); font-size: clamp(36px, 5.2vw, 60px); line-height: 1.04; letter-spacing: -0.02em; font-weight: 600; }
 .hero h1 em { font-style: italic; color: var(--green); }
@@ -208,7 +208,7 @@ table.t tr.click:hover td { background: #fbfaf6; }
 .doc-art .ln { height: 9px; border-radius: 5px; background: #ece8dd; margin-bottom: 11px; }
 
 @media (max-width: 900px) {
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: minmax(0, 1fr); }
   .side { display: none; position: fixed; inset: 0; z-index: 60; height: auto; }
   .side.open { display: flex; }
   .mobilebar { display: flex; align-items: center; justify-content: space-between; background: var(--green-deep); color: #fff; padding: 10px 14px; position: sticky; top: 0; z-index: 50; }
