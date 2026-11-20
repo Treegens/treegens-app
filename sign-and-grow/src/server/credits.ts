@@ -106,6 +106,16 @@ export function needed(e: any, sender: Sender): number {
   return e.recipients.filter((r: any) => isChargeable(r, sender) && r.status !== 'completed' && r.status !== 'declined' && !paidFor(e.account_id, r)).length;
 }
 
+// A payment that has "stood", as far as the limits on accounts that have not paid go (hasNotPaid in envelopes.ts,
+// and the Plan page): for the plan or a top-up, applied, not disputed, and not refunded, except for money the
+// software sent back by itself because more was charged than we said (the reasons start "we said" or "the price went
+// up", see applyInvoice in routes-billing.ts). That small correction is ours, not the customer taking the money back.
+// A condition on the `payments` table, for a WHERE clause.
+export const STANDING_PAYMENT = `payments.kind IN ('plan','topup') AND payments.applied_at IS NOT NULL AND payments.amount_cents > 0 AND payments.disputed IS NULL
+  AND payments.refunded_cents < payments.amount_cents
+  AND payments.refunded_cents <= (SELECT COALESCE(SUM(r.cents), 0) FROM refunds r WHERE r.payment_id = payments.id AND r.status = 'done' AND r.auto = 1
+    AND (r.why LIKE 'we said %' OR r.why LIKE 'the price went up%'))`;
+
 export function creditSummary(accountId: string) {
   const b = balance(accountId);
   const held = reserved(accountId);
