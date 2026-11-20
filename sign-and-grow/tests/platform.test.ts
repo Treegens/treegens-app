@@ -507,7 +507,7 @@ test('a webhook is sent to the address that was checked, with one answer for eve
   await assert.rejects(resolvePublic('https://flip.test/hook'), /cannot be used for a webhook/, 'every delivery checks the address it is about to use');
   names['flip.test'] = () => '93.184.216.34';
   const target = await resolvePublic('https://flip.test/hook');
-  assert.equal(target.address, '93.184.216.34', 'and hands back that one address to connect to');
+  assert.deepEqual(target.addresses, [{ address: '93.184.216.34', family: 4 }], 'and hands back only what it checked, to connect to');
   db.run("DELETE FROM webhooks WHERE url='https://flip.test/hook'");
 
   // The delivery connects to exactly the address the check returned. This name exists nowhere but in the answer

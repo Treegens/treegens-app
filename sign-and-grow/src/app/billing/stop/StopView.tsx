@@ -5,8 +5,8 @@ import { api } from '@/components/ui';
 import { PLANS, type PlanId } from '@/lib/impact';
 import { FindSubscription, StopByCard, billDay } from '@/app/help/tools';
 
-type Info = { account: string; plan: string; price: number; renews_at: string | null; ends_at: string | null; signatures_left?: number };
-type Done = { ends_at: string; reference: string };
+type Info = { account: string; plan: string; price: number; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null };
+type Done = { ends_at: string; reference: string; ended_now?: boolean };
 type View = { kind: 'loading' } | { kind: 'no-link' } | { kind: 'expired' } | { kind: 'failed'; message: string } | { kind: 'ready'; info: Info };
 
 const planName = (plan: string) => PLANS[plan as PlanId]?.name || plan;
@@ -29,7 +29,7 @@ function OtherWays({ lead }: { lead: string }) {
       </div>
       <div className="card" style={{ marginTop: 12 }}>
         <h2 style={{ fontFamily: 'var(--sans)', fontSize: 18, marginBottom: 6 }}>Stop billing with my card</h2>
-        <p className="muted">No access to that mailbox any more? Enter the account email address and the last four digits of the card being charged.</p>
+        <p className="muted">No access to that mailbox any more, or not sure which address the account is under? Enter the last four digits of the card being charged, plus either the account email address or the date and amount of a charge.</p>
         <StopByCard />
       </div>
       <p className="muted small" style={{ marginTop: 16 }}>Neither works for you? <Link href="/help?topic=billing#contact">Write to us</Link> and a person will stop it. You do not need to log in.</p>
@@ -117,6 +117,26 @@ export function StopView() {
   const n = info.signatures_left;
   const left = typeof n === 'number' ? `The ${n} signature${n === 1 ? '' : 's'} you have left never expire${n === 1 ? 's' : ''}.` : 'The ones you have left never expire.';
 
+  const reference = done?.reference || info.cancel_ref;
+  if (done?.ended_now)
+    return (
+      <>
+        <Head title="Renewal stopped" />
+        <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus">
+          <span className="badge completed">You will not be charged again</span>
+          <h2>The monthly plan for {info.account} has ended</h2>
+          {reference && <p>Cancellation reference <span className="pub-ref">{reference}</span></p>}
+          <ul className="pub-list">
+            <li>The last payment had not gone through, so the plan ended today and that payment will not be tried again.</li>
+            <li><b>Your signatures stay yours.</b> {left}</li>
+            <li><b>Nothing is deleted.</b> Every document, audit trail and receipt stays in the account, and you can export all of it for free.</li>
+            <li>If a charge ever appears after today, the software refunds it by itself.</li>
+            <li>We emailed this confirmation to the admins of the account.</li>
+          </ul>
+        </div>
+      </>
+    );
+
   if (done || info.ends_at)
     return (
       <>
@@ -124,8 +144,8 @@ export function StopView() {
         <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus">
           <span className="badge completed">You will not be charged again</span>
           <h2>{planName(info.plan)} for {info.account} ends on {billDay(ends)}</h2>
-          {done?.reference && <p>Cancellation reference <span className="pub-ref">{done.reference}</span></p>}
-          {done && !done.reference && <p className="muted">There is no reference on file for this cancellation. It is stopped all the same.</p>}
+          {reference && <p>Cancellation reference <span className="pub-ref">{reference}</span></p>}
+          {done && !reference && <p className="muted">There is no reference on file for this cancellation. It is stopped all the same.</p>}
           <ul className="pub-list">
             <li>The plan runs until {billDay(ends)}, because that month is already paid for. No payment is taken after that.</li>
             <li><b>Your signatures stay yours.</b> {left}</li>
@@ -133,25 +153,21 @@ export function StopView() {
             <li>If a charge ever appears after {billDay(ends)}, the software refunds it by itself.</li>
             {done && <li>We emailed this confirmation to the admins of the account.</li>}
           </ul>
-          {!done && (
-            <div className="pub-actions-row" style={{ marginTop: 4 }}>
-              <button type="button" className="btn" disabled={busy} onClick={stop}>{busy ? 'Looking it up' : 'Show my cancellation reference'}</button>
-            </div>
-          )}
           {error && <div className="notice err" role="alert" style={{ marginTop: 14 }}>{error}</div>}
         </div>
         <p className="muted small" style={{ marginTop: 16 }}>Changed your mind? <Link href="/app/settings?tab=billing">Sign in and resume the plan</Link> any time before {billDay(ends)}. Want the last charge back? See the <Link href="/help#refunds">refund rule</Link>.</p>
       </>
     );
 
-  if (info.plan !== 'grove' || nothing)
+  // A plan on hold after a failed payment is not on "grove" any more, but there is still something to stop.
+  if ((info.plan !== 'grove' && !info.can_cancel) || info.free_with || nothing)
     return (
       <>
         <Head title="Nothing to stop" />
         <div className="card pub-verdict good" role="status">
           <span className="badge completed">No charges</span>
           <h2>{info.account} has no paid monthly plan</h2>
-          <p>{nothing || 'Nothing is being charged on this account and nothing will be.'} Every document is still there, and so are any signatures the account has left.</p>
+          <p>{nothing || (info.free_with ? `The monthly plan is free with the code ${info.free_with}. Nothing is being charged for it and nothing will be.` : 'Nothing is being charged on this account and nothing will be.')} Every document is still there, and so are any signatures the account has left.</p>
         </div>
         <section className="pub-aside" aria-labelledby="other-h">
           <h2 id="other-h">Still seeing a charge from us?</h2>
@@ -169,7 +185,7 @@ export function StopView() {
           <dt>Account</dt>
           <dd>{info.account}</dd>
           <dt>Plan</dt>
-          <dd>{planName(info.plan)}, ${info.price} a month</dd>
+          <dd>{planName('grove')}, ${info.price} a month{info.plan !== 'grove' ? ' (on hold: the last payment did not go through)' : ''}</dd>
           {info.renews_at && <><dt>Next charge</dt><dd>${info.price} on {billDay(info.renews_at)}</dd></>}
           {typeof n === 'number' && <><dt>Signatures left</dt><dd>{n}<small>They stay yours after you stop</small></dd></>}
         </dl>
@@ -178,7 +194,7 @@ export function StopView() {
           <button type="button" className="btn primary lg" disabled={busy} onClick={stop}>{busy ? 'Stopping' : 'Stop renewing'}</button>
         </div>
         <ul className="pub-list muted small" style={{ margin: '18px 0 0' }}>
-          <li>You are not charged again. The plan runs until the end of the month you already paid for.</li>
+          <li>You are not charged again. {info.plan !== 'grove' ? 'The plan ends today and the failed payment is not tried again.' : 'The plan runs until the end of the month you already paid for.'}</li>
           <li>The signatures you have left stay yours and never expire. Nothing is deleted.</li>
           <li>You get a cancellation reference here and by email.</li>
         </ul>

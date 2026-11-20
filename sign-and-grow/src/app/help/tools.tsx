@@ -91,17 +91,23 @@ export function FindSubscription({ label = 'Your email address' }: { label?: str
   );
 }
 
-// Locked out of the mailbox as well: prove you are the payer with the card that is being charged.
+// Locked out of the mailbox as well, or no idea which address the account is under: prove you are the payer with
+// the card that is being charged. Either the account's email address, or the date and amount of a charge.
 export function StopByCard() {
   const [email, setEmail] = useState('');
   const [last4, setLast4] = useState('');
-  const a = useAction<{ account: string; ends_at: string; reference: string }>();
+  const [noEmail, setNoEmail] = useState(false);
+  const [on, setOn] = useState('');
+  const [amount, setAmount] = useState('');
+  const a = useAction<{ account?: string; ends_at: string; reference: string; ended_now?: boolean }>();
   if (a.done)
     return (
       <Result show>
-        <p><b>Renewal stopped for {a.done.account}.</b> You will not be charged again.</p>
+        <p><b>Renewal stopped{a.done.account ? ` for ${a.done.account}` : ''}.</b> You will not be charged again.</p>
         <p>Reference <span className="pub-ref">{a.done.reference}</span></p>
-        <p>The plan runs until {billDay(a.done.ends_at)}, because that month is already paid for. No payment is taken after that. The signatures you have left stay yours, and nothing is deleted.</p>
+        {a.done.ended_now
+          ? <p>The last payment had not gone through, so the plan ended today and that payment will not be tried again. The signatures on the account stay, and nothing is deleted.</p>
+          : <p>The plan runs until {billDay(a.done.ends_at)}, because that month is already paid for. No payment is taken after that. The signatures on the account stay, and nothing is deleted.</p>}
         <p>We emailed this confirmation to the admins of the account. Want the last charge back? See the <a href="#refunds">refund rule</a>.</p>
       </Result>
     );
@@ -109,7 +115,7 @@ export function StopByCard() {
     <form
       className="pub-form"
       onSubmit={(e) =>
-        a.run(e, () => api('/public/billing/stop-by-card', { body: { email: email.trim(), last4 } }), (err) =>
+        a.run(e, () => api('/public/billing/stop-by-card', { body: noEmail ? { last4, charged_on: on, amount } : { email: email.trim(), last4 } }), (err) =>
           explain(err, 'That is too many tries for now. Wait an hour, or use the contact form below and a person will stop it for you.', {
             501: 'This copy of Sign&Grow does not take payments, so there is nothing to stop here. If you see a charge anyway, use the contact form below.',
             502: `${err.message} Nothing was changed. Try again in a minute, or use the contact form below.`,
@@ -117,11 +123,16 @@ export function StopByCard() {
       }
     >
       <div className="pub-form-row">
-        <label className="f"><span>Email address of the account</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>
+        {!noEmail && <label className="f"><span>Email address of the account</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>}
         <label className="f pub-last4"><span>Last 4 digits of the card</span><input value={last4} onChange={(e) => setLast4(e.target.value.replace(/\D/g, '').slice(0, 4))} onPaste={(e) => (e.preventDefault(), setLast4(e.clipboardData.getData('text').replace(/\D/g, '').slice(-4)))} required inputMode="numeric" pattern="[0-9]{4}" maxLength={4} autoComplete="off" placeholder="1234" title="The last four digits of the card being charged" /></label>
+        {noEmail && <label className="f"><span>Date of a charge on your statement</span><input type="date" value={on} onChange={(e) => setOn(e.target.value)} required /></label>}
+        {noEmail && <label className="f pub-last4"><span>Amount charged</span><input value={amount} onChange={(e) => setAmount(e.target.value)} required inputMode="decimal" placeholder="9.00" title="The amount of that charge, as on your statement" /></label>}
         <button className="btn primary" disabled={a.busy}>{a.busy ? 'Stopping' : 'Stop billing'}</button>
       </div>
-      <p className="muted small pub-form-hint">Only the last four digits. Never type a full card number here.</p>
+      <p className="muted small pub-form-hint">
+        Only the last four digits. Never type a full card number here.{' '}
+        <button type="button" className="linklike" onClick={() => setNoEmail(!noEmail)}>{noEmail ? 'I know the email address of the account' : 'I do not know which email address the account is under'}</button>
+      </p>
       {a.error && <div className="notice err" role="alert">{a.error}</div>}
     </form>
   );

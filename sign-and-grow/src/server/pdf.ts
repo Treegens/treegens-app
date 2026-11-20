@@ -411,7 +411,9 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   for (const d of e.documents) {
     const src = await PDFDocument.load(readBlob(d.sha256), { updateMetadata: false });
     flattenForm(src);
-    const flat = await PDFDocument.load(await src.save());
+    // flattenForm has drawn every picture that could be drawn. Left to itself, save() would try the ones that could
+    // not be drawn once more and fail the whole document over them.
+    const flat = await PDFDocument.load(await src.save({ updateFieldAppearances: false }));
     const pages = await doc.copyPages(flat, flat.getPageIndices());
     pages.forEach((p) => doc.addPage(p));
     for (const f of e.fields.filter((f: any) => f.document_id === d.id)) {

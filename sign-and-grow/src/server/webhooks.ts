@@ -27,10 +27,10 @@ const PENDING_MS = 2 * 60_000; // three tries with their waits end well inside t
 // out which names exist inside our own network.
 const REFUSED = 'That address cannot be used for a webhook. It has to be an https address on the public internet that we can reach.';
 
-type Target = { url: URL; address: string; family: number };
+type Target = { url: URL; addresses: { address: string; family: number }[] };
 
 // Webhook targets are user supplied, so refuse anything that points back into a private network. The host name is
-// looked up once, here, and the delivery connects to exactly the address that passed the check. A name that
+// looked up once, here, and the delivery connects only to the addresses that passed the check. A name that
 // answers with a public address first and a private one a moment later gets nowhere.
 export async function resolvePublic(raw: string): Promise<Target> {
   let u: URL;
@@ -42,25 +42,28 @@ export async function resolvePublic(raw: string): Promise<Target> {
   const open = process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
   if (u.protocol !== 'https:' && !(open && u.protocol === 'http:')) throw new Error('Webhook URLs must use https.');
   const host = u.hostname.replace(/^\[|\]$/g, '');
-  const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await dns.lookup(host, { all: true }).catch(() => []);
+  // A name server that never answers must not hold a delivery up for longer than a server that never answers.
+  const slow = () => new Promise<never>((_, no) => setTimeout(no, TIMEOUT_MS).unref());
+  const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await Promise.race([dns.lookup(host, { all: true }), slow()]).catch(() => []);
   if (!addrs.length || (!open && addrs.some((a) => isPrivate(a.address)))) throw new Error(REFUSED);
-  return { url: u, address: addrs[0].address, family: addrs[0].family };
+  return { url: u, addresses: addrs.map((a) => ({ address: a.address, family: a.family })) };
 }
 export async function assertPublicUrl(raw: string) {
   await resolvePublic(raw);
 }
 
-// POSTs to the address that was checked, not to whatever the name resolves to by now. The Host header and the TLS
-// server name still carry the host name, so the receiving server and its certificate are the right ones. Redirects
-// are not followed. Only the status is kept: the reply is read up to a limit and thrown away.
+// POSTs to the addresses that were checked, not to whatever the name resolves to by now. The Host header and the
+// TLS server name still carry the host name, so the receiving server and its certificate are the right ones.
+// Redirects are not followed. Only the status is kept: the reply is read up to a limit and thrown away.
 function post(t: Target, headers: Record<string, string>, body: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const lookup = (_host: string, opts: any, cb: any) => (opts?.all ? cb(null, [{ address: t.address, family: t.family }]) : cb(null, t.address, t.family));
+    const lookup = (_host: string, opts: any, cb: any) => (opts?.all ? cb(null, t.addresses) : cb(null, t.addresses[0].address, t.addresses[0].family));
     const req = (t.url.protocol === 'https:' ? https : http).request(t.url, { method: 'POST', agent: false, lookup, headers: { ...headers, 'content-length': String(Buffer.byteLength(body)) } }, (res) => {
       let seen = 0;
       res.on('data', (chunk: Buffer) => {
         if ((seen += chunk.length) > MAX_REPLY_BYTES) req.destroy();
       });
+      res.on('error', () => {}); // cutting a reply short is our own doing, not a failed delivery
       resolve(res.statusCode as number);
     });
     // One deadline for the whole exchange, so a server that answers a byte a minute cannot hold a connection open.

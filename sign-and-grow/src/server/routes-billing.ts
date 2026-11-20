@@ -368,6 +368,8 @@ route('POST', '/billing/checkout', async (c) => {
   const a = c.account;
   if (a.promo_code) throw bad(`Your plan is already free with the code ${a.promo_code}. There is nothing to pay.`);
   if (a.plan === 'grove' && renewing(a)) throw bad(`This account is already on the ${PRICING.planName} plan.`);
+  // Cancelled but still running: paying again would start a second subscription next to the first.
+  if (a.plan === 'grove' && hasSub(a) && a.cancel_at) throw bad('Your plan is cancelled but still running, so there is nothing to pay for yet. Press "Keep the plan after all" on the Plan page and it simply continues, with no new payment today.');
   if (hasSub(a) && a.plan !== 'grove') throw bad('The last payment for this plan did not go through. Update the card with "Invoices and card" on the Plan page, or cancel the plan first and start again.');
   const s = await stripe('POST', 'checkout/sessions', {
     mode: 'subscription', 'line_items[0][price]': process.env.STRIPE_PRICE_GROVE, 'line_items[0][quantity]': '1',
@@ -793,7 +795,7 @@ async function settleInvoice(o: any): Promise<void> {
 // charged and when, each with a one-click way to stop it. Sent on our own timer; the provider's "upcoming invoice"
 // message triggers the same thing and adds the exact amount. Every reminder is written to the plan history.
 async function remindRenewal(a: any, when: string, cents?: number | null, currency = 'usd'): Promise<boolean> {
-  if (a.plan !== 'grove' || !renewing(a) || !LIVE.includes(a.subscription_status || '')) return false;
+  if (a.plan !== 'grove' || !renewing(a) || !['active', 'trialing'].includes(a.subscription_status || '')) return false;
   const key = when.slice(0, 10);
   const [k, sent = ''] = String(a.renewal_reminded || '').split('|');
   const already = k === key ? sent.split(',').filter(Boolean) : [];
@@ -965,7 +967,8 @@ async function handleEvent(ev: any) {
   if (ev.type === 'charge.dispute.created') {
     const charge = o.charge && billingEnabled() ? await stripe('GET', `charges/${sid(o.charge)}`).catch(() => null) : null;
     const a = charge?.customer ? get('SELECT * FROM accounts WHERE stripe_customer_id=?', sid(charge.customer)) : null;
-    const accepted = billingEnabled() && o.id ? await stripe('POST', `disputes/${o.id}/close`).then(() => true).catch(() => false) : false;
+    // ACCEPT_DISPUTES=0 leaves the decision to a person; billing is stopped either way.
+    const accepted = billingEnabled() && o.id && process.env.ACCEPT_DISPUTES !== '0' ? await stripe('POST', `disputes/${o.id}/close`).then(() => true).catch(() => false) : false;
     const p = charge ? paymentForCharge(charge, a) : null;
     if (p) run('UPDATE payments SET refunded_at=COALESCE(refunded_at, ?), refunded_cents=amount_cents WHERE id=?', now(), p.id);
     const forOps = accepted ? 'The dispute was accepted with the payment provider automatically, so the bank returns the money.' : 'The dispute could NOT be accepted automatically. Accept it by hand with the payment provider so the bank releases the money.';
@@ -974,7 +977,7 @@ async function handleEvent(ev: any) {
     if (!a.promo_code) run("UPDATE accounts SET plan='seedling', subscription_status='canceled', cancel_at=NULL, renews_at=NULL WHERE id=?", a.id);
     log(a.id, 'dispute', 'A charge was disputed with the bank. All billing stopped.', o.id || '');
     await mailAdmins(a.id, 'We stopped all billing on your account', 'A payment was disputed, so we stopped billing you', [
-      `A payment${charge?.amount ? ` of ${money(charge.amount, charge.currency)}` : ''} to Sign&Grow was disputed with the card's bank. We are not contesting it: the bank returns the money to the card.`,
+      `A payment${charge?.amount ? ` of ${money(charge.amount, charge.currency)}` : ''} to Sign&Grow was disputed with the card's bank. ${accepted ? 'We are not contesting it: the bank returns the money to the card.' : 'A person here will look at it and write to you. You do not need to do anything.'}`,
       'Your monthly plan has ended and nothing more will be charged. Nothing was deleted, and the signatures you have stay yours.',
       'If this was a mistake you can start the plan again from the Plan page at any time.',
     ], { label: 'Open the Plan page', url: planUrl() });

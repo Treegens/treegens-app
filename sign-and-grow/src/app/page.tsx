@@ -1,3 +1,4 @@
+import { refundRuleText } from '@/lib/policy';
 import Link from 'next/link';
 import { Leaf } from '@/components/ui';
 import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/Public';
@@ -56,7 +57,7 @@ export default function Landing() {
     { said: 'People who only want to sign are told to register.', title: 'Signers never need an account', text: 'No sign-up, no password, no trial offer and no marketing. Open the link, sign, get your copy.', href: '/security#signers', link: 'What signers can expect' },
     { said: 'Nobody can say whether a signing request is real.', title: 'Check any email is real', text: 'Every signing email carries a security code. Type it in on our site and we tell you who sent it, before you click anything.', href: '/check', link: 'Check an email' },
     { said: 'There is no cancel button to be found.', title: 'Month to month, cancel in one click', text: 'No yearly term and no notice period. One button on the Plan page, a stop link in every renewal reminder, and a way to stop without logging in. Signatures you paid for stay yours.', href: '/help#cancel', link: 'Three ways to cancel' },
-    { said: 'A refund is refused a day after a renewal.', title: 'Refunds without asking', text: `Signatures you have not used from your latest payment are refunded within ${refundDays} days, from the Plan page, with no form and no approval. A charge that arrives after you cancelled refunds itself.`, href: '/help#refunds', link: 'The refund rule' },
+    { said: 'A refund is refused a day after a renewal.', title: 'Refunds without asking', text: `${refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself.`, href: '/help#refunds', link: 'The refund rule' },
     { said: 'A bill for extra documents arrives out of nowhere.', title: 'No overage charges, ever', text: 'When your signatures run out, sending pauses. It never turns into a bill. A signature is only used when someone actually signs, so voided, declined and expired envelopes cost nothing.', href: '#pricing', link: 'See pricing' },
     { said: 'The account is locked with the signed contracts inside.', title: 'Your documents stay yours', text: 'Export everything as one ZIP file, free, on any plan, also after you cancel. Cancelling or a failed payment never deletes or locks a document.', href: '/security#your-documents', link: 'What we promise about your data' },
     { said: 'Support is a chatbot going in circles.', title: 'A person answers', text: 'No chatbot. The contact form works without logging in, gives you a reference, and goes to a person.', href: '/help#contact', link: 'Write to us' },
@@ -175,7 +176,7 @@ export default function Landing() {
               <li><b>Signatures never expire.</b> What you do not use this month is there next month, also after you cancel.</li>
               <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at ${P.topUpUsd} a signature, with the total shown before you pay. There are no overage charges.</li>
               <li><b>Month to month.</b> {P.planName} is ${P.monthlyUsd} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
-              <li><b>Refunds are automatic.</b> Within {refundDays} days of a payment, every signature from it that you have not used is refunded at the price you paid. A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
+              <li><b>Refunds are automatic.</b> {refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
               {dormantStopDays > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you.</li>}
               <li><b>Same features on both plans.</b> Templates, bulk send, public forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
               <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>

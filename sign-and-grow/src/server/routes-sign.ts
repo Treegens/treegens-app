@@ -17,16 +17,17 @@ function find(c: Ctx, needUnlocked = true) {
 }
 
 // Reading a request body means waiting, and while a handler waits a second request can finish, decline, reassign or
-// void. So a handler that changes something looks the link up twice. The first look refuses a bad link, a missing
-// access code or a flood before anything is read. The second is the one that is acted on, and nothing is waited
-// for between it and the change, so two requests at the same moment are handled one after the other.
-async function findWithBody(c: Ctx) {
+// void. So a handler that changes something looks the link up twice: `const body = await checkedBody(c)` and then
+// `look(c)`. The first look, in here, refuses a bad link, a missing access code or a flood before anything is read.
+// The second is the one that is acted on. It must be called in the handler itself, on the line after the await,
+// because nothing may be waited for between that look and the change. That is what makes two requests at the same
+// moment take turns.
+function checkedBody(c: Ctx): Promise<any> {
   find(c);
-  const body = await c.body();
-  return { ...look(c, true), body };
+  return c.body();
 }
 
-function look(c: Ctx, needUnlocked: boolean) {
+function look(c: Ctx, needUnlocked = true) {
   const r = get('SELECT * FROM recipients WHERE token=?', c.params.token);
   if (!r) {
     // 410 tells the page this link was replaced, so it can offer to send the current one instead of a dead end.
@@ -115,7 +116,8 @@ route('GET', '/sign/:token/doc/:doc', (c) => {
 // "Finish later": keep what has been filled in so far.
 route('POST', '/sign/:token/save', async (c) => {
   // Looked up after the body is in, so a save that crosses Finish can never change what was just signed.
-  const { e, r, body: b } = await findWithBody(c);
+  const b = await checkedBody(c);
+  const { e, r } = look(c);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw bad('This envelope is no longer open for signing.');
   applyValues(e, r, b.values || {}, false);
   // The chosen signature travels with "finish later", so picking up on another device does not mean signing again.
@@ -134,24 +136,28 @@ route('POST', '/sign/:token/upload', async (c) => {
 // second look. A double tap or a retry finds the first request's work already done and is told so: 409 for a
 // second Finish or Decline, 410 for a link that a reassignment has just replaced.
 route('POST', '/sign/:token/complete', async (c) => {
-  const { e, r, actor, body } = await findWithBody(c);
+  const body = await checkedBody(c);
+  const { e, r, actor } = look(c);
   await completeRecipient(e, r, body, actor);
   const after = get('SELECT status, sheets FROM envelopes WHERE id=?', e.id);
   return { ok: true, envelope_status: after.status, impact: impactOf(after.sheets) };
 }, 'public');
 
 route('POST', '/sign/:token/decline', async (c) => {
-  const { e, r, actor, body } = await findWithBody(c);
+  const body = await checkedBody(c);
+  const { e, r, actor } = look(c);
   await declineRecipient(e, r, str(body.reason, 500), actor);
 }, 'public');
 
 route('POST', '/sign/:token/reassign', async (c) => {
-  const { e, r, actor, body } = await findWithBody(c);
+  const body = await checkedBody(c);
+  const { e, r, actor } = look(c);
   await reassignRecipient(e, r, body, actor);
 }, 'public');
 
 route('POST', '/sign/:token/name', async (c) => {
-  const { e, r, actor, body } = await findWithBody(c);
+  const body = await checkedBody(c);
+  const { e, r, actor } = look(c);
   rateLimit(`name:${r.id}`, 5, 3600_000);
   await renameSelf(e, r, body.name, actor);
 }, 'public');

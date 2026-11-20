@@ -1,3 +1,4 @@
+import { refundRuleText } from '@/lib/policy';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
@@ -106,7 +107,7 @@ export default function Help() {
             <p>There are three ways. Use whichever you can reach.</p>
             <ol className="pub-list">
               <li><b>In the app.</b> Settings, then Plan, then <b>Cancel plan</b>. It is one button. Owners and admins can use it.</li>
-              <li><b>From your inbox.</b> The welcome email and every renewal reminder have a link that stops the renewal. It works without logging in.</li>
+              <li><b>From your inbox.</b> While a plan is renewing, every email about a payment (the welcome, each reminder, each receipt) has a link that stops the renewal. It works without logging in.</li>
               <li><b>Without logging in.</b> Use one of the two tools below.</li>
             </ol>
             <div className="pub-tool" id="find-subscription">
@@ -116,19 +117,19 @@ export default function Help() {
             </div>
             <div className="pub-tool" id="stop-by-card">
               <h4>Stop billing with my card</h4>
-              <p className="muted small">For when you no longer have that mailbox, for example after leaving a job. The card proves you are the one paying.</p>
+              <p className="muted small">For when you no longer have that mailbox, for example after leaving a job, or do not know which address the account is under. The card proves you are the one paying: its last four digits, plus either the account email or the date and amount of a charge.</p>
               <StopByCard />
             </div>
-            <p><b>What happens next.</b> You get a cancellation reference on screen and by email. The plan runs until the end of the month you already paid for, and no payment is taken after that. The signatures you have left stay yours and never expire. Nothing is deleted. If a charge ever arrives after that, the software refunds it by itself.</p>
+            <p><b>What happens next.</b> You get a cancellation reference on screen and by email. The plan runs until the end of the month you already paid for, and no payment is taken after that. (If the last payment had failed there is no paid month, so it ends the same day and the failed payment is not tried again.) The signatures you have left stay yours and never expire. Nothing is deleted. If a charge ever arrives after that, the software refunds it by itself and keeps trying until the refund has gone through.</p>
           </QA>
 
           <QA id="refunds" q="Can I get a refund?">
             <p>Yes, and you do not have to ask anyone. This is the whole rule:</p>
             <ul className="pub-list">
-              <li><b>Within {refundDays} days of a payment:</b> every signature from that payment that you have not used is refunded, at the price you paid for it. Open Settings, then Plan, and choose the refund. There is no form and no approval.</li>
+              <li><b>Within {refundDays} days of a payment:</b> {refundRuleText(refundDays)} Each signature is refunded at the price you paid for it. Open Settings, then Plan: your latest payment is offered at the top, and earlier ones in the list of payments. There is no form and no approval.</li>
               <li><b>It covers your latest payment,</b> whether that was the monthly plan or a top-up. Signatures held for envelopes that are still out count as in use until they come back.</li>
               <li><b>Refunding a monthly payment ends the monthly plan.</b> Refunding a top-up changes nothing else.</li>
-              <li><b>Charged after you cancelled:</b> that should never happen. If it does, the software refunds it in full by itself and tells you.</li>
+              <li><b>Charged after you cancelled, charged twice, or charged more than the reminder said:</b> that should never happen. If it does, the software refunds it by itself and tells you. If the payment provider is down at that moment it keeps trying until the refund has gone through.</li>
             </ul>
             <p>The money goes back to the card that paid. Banks usually show it within 5 to 10 working days. Your documents stay where they are.</p>
             <p>Outside this rule, or about an older payment? <a href="#contact" data-topic="billing">Write to us</a> and a person will look at it.</p>

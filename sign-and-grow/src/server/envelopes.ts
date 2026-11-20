@@ -636,9 +636,10 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
 export const okImage = (s: any) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < 700_000;
 
 export async function completeRecipient(e: any, r: any, body: any, actor: Actor) {
-  if (e.status !== 'sent') throw bad('This envelope is no longer open for signing.');
-  // A second Finish (a double tap, a retry) is a conflict with the first, not a mistake in the request: 409.
+  // A second Finish (a double tap, a retry) is a conflict with the first, not a mistake in the request: 409. Asked
+  // before anything else, because the first Finish may have completed the whole envelope by now.
   if (r.status === 'completed') throw bad('You have already finished this document.', 409);
+  if (e.status !== 'sent') throw bad('This envelope is no longer open for signing.');
   if (r.status !== 'sent' && r.status !== 'viewed') throw bad('It is not your turn to sign yet.');
   if (!r.consent_at) throw bad('Please agree to use electronic records and signatures first.');
   let verb = 'Viewed';

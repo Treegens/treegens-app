@@ -223,3 +223,6 @@ table.t tr.click:hover td { background: #fbfaf6; }
   .topbar { overflow-x: auto; }
 }
 @media print { .signbar, .side, .mobilebar { display: none; } }
+
+/* A button that reads as a link, for small secondary actions inside a sentence. */
+.linklike { border: 0; background: none; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; }
