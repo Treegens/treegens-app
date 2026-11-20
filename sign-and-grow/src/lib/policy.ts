@@ -120,7 +120,7 @@ export const KEPT_AFTER_DELETION: string[] = [
   'A fingerprint of the security code in each email about a document you sent, for one year. It holds no name, address or title. It only lets someone who still has that email learn that it was real and that the document has been deleted.',
   'For each completed document you sent: the fingerprint (SHA-256) of its signed PDF, its envelope ID and the day it was completed, for one year. Nothing else: no name, address or title. It only lets someone who holds that exact file learn at Verify a document that it was completed here on that day and that its sender has deleted it since.',
   'A fingerprint of your email address and the day you were given the welcome signatures, if your address was confirmed. The welcome signatures are given once per address, and this is how we know after your login is gone, or after it moved to another address (that fingerprint is kept from the day it moved). It is made with a key only this server has, cannot be turned back into your address, and holds no name.',
-  `Our stored copies of emails to other people are deleted with the account when we know they are about you: an invitation you sent, or a notice to a team about your API keys or that you left. Any other copy that happens to mention your name goes with all such copies, ${MAIL_COPY_DAYS} days after it was sent.`,
+  `Our stored copies of emails to other people are deleted with your login when we marked them as being about you when they were sent: an invitation you sent, a notice to a team about your API keys or that you left, or our note to the people who answer help requests about a request of yours. Any other copy, such as one where somebody else typed your name or address, and any email still waiting to be delivered at that moment, is deleted like every copy that is not part of a document's record: ${MAIL_COPY_DAYS} days after it was sent.`,
 ];
 
 /**
@@ -239,9 +239,13 @@ export const SIGNER_PASS_HOURS = 24;
 export const SIGNER_CODE_WAIT_SECONDS = 60;
 /** How many one-time codes one recipient can be sent in an hour. */
 export const SIGNER_CODES_PER_HOUR = 5;
-/** How many one-time codes one device address can ask for in an hour, over every link it opens. An office shares one address. */
-export const SIGNER_CODES_PER_CALLER_HOUR = 15;
-/** How many one-time codes can go to one mailbox or one phone number in a day, whoever asks and for whichever document. */
+/**
+ * How many one-time codes one device address can ask for in an hour for the documents of one sender and then not
+ * type in. A code typed in correctly does not count, and another sender's documents are counted apart, because an
+ * office behind one address can be signing a whole bulk send at once.
+ */
+export const SIGNER_CODES_PER_CALLER_HOUR = 100;
+/** How many one-time codes one sender's documents can send to one mailbox or one phone number in a day (a public form counts on its own). */
 export const SIGNER_CODES_PER_DESTINATION_DAY = 15;
 /** How many texts with a signing link or a reminder can go to one phone number from one account in a day. */
 export const LINK_TEXTS_PER_NUMBER_DAY = 4;

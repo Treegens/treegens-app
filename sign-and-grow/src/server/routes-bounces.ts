@@ -24,35 +24,64 @@ import { abuseSuspendAfter, BOUNCE_MATCH_DAYS, BOUNCE_WARN_DAYS, SOFT_BOUNCE_DAY
 //     every page, and the other admins of their teams are told.
 //   - A soft bounce is noted and stops nothing, until the same address has answered "try later" on SOFT_BOUNCE_DAYS
 //     separate days. Then it counts as hard.
-//   - A complaint stops every email to that person about that envelope and counts as a report against the sender.
+//   - A complaint stops every email to that person from that account, now and later, and counts as a report against
+//     the sender. Only the person can take it back.
 //   - "Delivered" is noted, and is the proof that an address works again.
 // Every one of them does its work once, however often the provider repeats itself.
 
 const SYSTEM = { name: 'System' };
 const MAX_BODY = 1_048_576; // one megabyte: the largest batch a provider sends is well under it
-const MAX_EVENTS = 2000;
+const MAX_EVENTS = 5000; // more than a megabyte of real provider events can hold; a batch is never cut short quietly
 const g = globalThis as any;
 
 // ---- Which email is it about -------------------------------------------------------------------
 
 // Only an email that was handed over can have news ('outbox' is the stand-in for that on a machine with no mail server).
 const LEFT = "status IN ('sent','outbox')";
-// By our own ids when the provider handed one back, and only when the address fits too: a number that happens to
-// exist is not enough. Otherwise by the address alone: the newest email to it from the last BOUNCE_MATCH_DAYS that
-// has no such news yet, and if every one has, the newest (the news is then a repeat and changes nothing).
-function findMail(ev: MailEvent): any {
-  if (ev.mail_id) {
-    const m = get(`SELECT * FROM emails WHERE id=? AND ${LEFT}`, Number(ev.mail_id));
-    if (m && same(m.to_email, ev.email)) return m;
-  }
-  if (ev.message_id) {
-    const m = get(`SELECT * FROM emails WHERE message_id=? AND ${LEFT}`, ev.message_id);
-    if (m && same(m.to_email, ev.email)) return m;
+// Whose email it was: the account whose envelope it was about, or '' for our own emails to a login (an email to the
+// sender's own address about their own envelope is one of those). For an envelope that was deleted since, the
+// account kept for it (mail_gone), or a mark that matches no other email's.
+const OWNER = "CASE WHEN m.envelope_id IS NULL OR lower(m.to_email)=lower(s.email) THEN '' ELSE COALESCE(e.account_id, gm.account_id, '?' || m.id) END";
+const ownerOf = (m: any, e: any): string => (!m.envelope_id || (e && same(senderOf(e)?.email, m.to_email)) ? '' : e?.account_id || '?');
+// Which emails to an address the news may be about, for each kind: one that has no such news yet.
+const OPEN: Record<MailEvent['type'], (m: any) => boolean> = {
+  bounce: (m) => (!m.bounce_kind || m.bounce_kind === 'soft') && !m.delivered_at,
+  soft_bounce: (m) => !m.bounce_kind && !m.delivered_at,
+  not_sent: (m) => !m.bounce_kind && !m.delivered_at,
+  complaint: (m) => !m.complained_at,
+  delivered: (m) => !m.delivered_at && m.bounce_kind !== 'hard',
+};
+type Found = { m: any } | { gone: any } | 'unknown_id' | 'ambiguous' | null;
+// An email whose envelope was deleted since (it was still waiting for the mail server then) is the kept line's.
+const found = (m: any, ev: MailEvent): Found => {
+  if (!m.envelope_id || get('SELECT 1 x FROM envelopes WHERE id=?', m.envelope_id)) return { m };
+  const gone = goneMail({ mail_id: String(m.id), email: ev.email });
+  return gone ? { gone } : 'unknown_id';
+};
+/**
+ * By our own ids when the provider handed one back, and only when the address fits too: a number that happens to
+ * exist is not enough. An id that names no email of ours (or one to another address) is never guessed at by the
+ * address: the news is logged and left alone, so it cannot land on somebody else's email to the same person. An
+ * email of a deleted envelope is still known by its id (mail_gone). Without ids, by the address alone, among the
+ * emails to it from the last BOUNCE_MATCH_DAYS, and only when they all have one sender: one account, or our own
+ * emails to a login. When two senders wrote to that address, the news cannot be told apart and touches nobody.
+ */
+function findMail(ev: MailEvent): Found {
+  if (ev.mail_id || ev.message_id) {
+    for (const [col, v] of [['id', ev.mail_id ? Number(ev.mail_id) : null], ['message_id', ev.message_id]] as const) {
+      const m = v ? get(`SELECT * FROM emails WHERE ${col}=? AND ${LEFT}`, v) : null;
+      if (m && same(m.to_email, ev.email)) return found(m, ev);
+    }
+    const gone = goneMail(ev);
+    return gone ? { gone } : 'unknown_id';
   }
   const since = new Date(Date.now() - BOUNCE_MATCH_DAYS * 864e5).toISOString();
-  const open = { bounce: "(bounce_kind IS NULL OR bounce_kind='soft')", soft_bounce: 'bounce_kind IS NULL', complaint: 'complained_at IS NULL', delivered: 'delivered_at IS NULL AND bounce_kind IS NULL' }[ev.type];
-  const recent = `to_email=? COLLATE NOCASE AND ${LEFT} AND COALESCE(tried_at, at) > ?`;
-  return get(`SELECT * FROM emails WHERE ${recent} AND ${open} ORDER BY id DESC LIMIT 1`, ev.email, since) || get(`SELECT * FROM emails WHERE ${recent} ORDER BY id DESC LIMIT 1`, ev.email, since);
+  const rows = all(`SELECT m.*, ${OWNER} owner FROM emails m LEFT JOIN envelopes e ON e.id=m.envelope_id LEFT JOIN users s ON s.id=e.sender_id LEFT JOIN mail_gone gm ON gm.mail_id=m.id
+    WHERE m.to_email=? COLLATE NOCASE AND m.${LEFT} AND COALESCE(m.tried_at, m.at) > ? ORDER BY m.id DESC LIMIT 500`, ev.email, since);
+  if (!rows.length) return null;
+  if (new Set(rows.map((r) => r.owner)).size > 1) return 'ambiguous';
+  // The newest email to it that has no such news yet, and if every one has, the newest (the news is then a repeat).
+  return found(rows.find(OPEN[ev.type]) || rows[0], ev);
 }
 
 // The moment the provider named, when it is believable, otherwise now.
@@ -71,35 +100,43 @@ const firstNames = (rows: any[], m: any): string => (rows.length ? rows.map((r) 
 
 // ---- Hard bounce -------------------------------------------------------------------------------
 
-async function hardBounce(m: any, at: string, why: { plain: string; raw: string; full: string }): Promise<'applied' | 'repeat'> {
-  if (m.bounce_kind === 'hard') return 'repeat';
-  run("UPDATE emails SET bounced_at=?, bounce_kind='hard', bounce_reason=? WHERE id=?", at, why.full.slice(0, 500), m.id);
-  forgetSoftDays(m.to_email);
+// `escalated`: the address said "try later" on SOFT_BOUNCE_DAYS separate days. The person and the address are marked
+// as for a hard bounce, and the email itself stays "not delivered yet": if it arrives after all, that clears them.
+async function hardBounce(m: any, at: string, why: { plain: string; raw: string; full: string }, escalated = false): Promise<'applied' | 'repeat'> {
+  if (!escalated) {
+    if (m.bounce_kind === 'hard') return 'repeat';
+    // Our words for the customer; what the mail server wrote, for the people who run the server only.
+    run("UPDATE emails SET bounced_at=?, bounce_kind='hard', bounce_reason=?, bounce_said=? WHERE id=?", at, why.plain, why.full.slice(0, 500), m.id);
+  }
   const e = m.envelope_id ? loadEnvelope(m.envelope_id) : null;
   const own = !!e && same(senderOf(e)?.email, m.to_email);
+  forgetSoftDays(ownerOf(m, e), m.to_email);
   if (e && e.kind === 'envelope' && !own) return (await recipientBounce(e, m, at, why), 'applied');
-  // An email to one of our own customers: about their plan, their login, or their own envelope.
-  const u = get('SELECT * FROM users WHERE email=?', m.to_email);
+  // An email to one of our own customers about their own plan, login or envelope. Not one that is about somebody
+  // else (an invitation, a notice to a team: emails.about_user), nor one about an envelope of another kind: a mail
+  // server that refuses those may be refusing words someone else wrote, which says nothing about this mailbox.
+  const u = (m.envelope_id ? own : !m.about_user) ? get('SELECT * FROM users WHERE email=?', m.to_email) : null;
   if (u) await loginBounce(u, at, why);
   return 'applied';
 }
 
-async function recipientBounce(e: any, m: any, at: string, why: { plain: string; raw: string }) {
+async function recipientBounce(e: any, m: any, at: string, why: { plain: string }) {
   const rows = recipientsOf(e, m);
   const fresh = rows.filter((r: any) => !r.bounced_at);
   for (const r of fresh) run('UPDATE recipients SET bounced_at=?, bounce_reason=? WHERE id=?', at, why.plain, r.id);
   // The account's do-not-mail list: a new envelope to this address warns before it goes out.
   noteBounced(e.account_id, m.to_email, why.plain, at);
   const out = e.status === 'sent';
-  const said = why.raw ? ` Their mail server said: "${why.raw}".` : '';
-  audit(e.id, SYSTEM, 'Email could not be delivered', `Email to ${names(rows, m)} could not be delivered: ${why.plain}.${said} The email was "${str(m.subject, 200)}".${out && fresh.length ? ' Reminders to this address are stopped until the address is corrected or the sender chooses to try again.' : ''}`);
+  // In our own words only. What the mail server wrote is never quoted to the sender or in the record: whoever runs
+  // that server can write anything there, a fake security notice from us included.
+  audit(e.id, SYSTEM, 'Email could not be delivered', `Email to ${names(rows, m)} could not be delivered: ${why.plain}. The email was "${str(m.subject, 200)}".${out && fresh.length ? ' Reminders to this address are stopped until the address is corrected or the sender chooses to try again.' : ''}`);
   // A second email that comes back from an address already marked is written down, and nobody is told twice.
   if (rows.length && !fresh.length) return;
   // The address of one member of a signing group, which no recipient row carries: said as such (groups.ts).
   const member = !rows.length && out ? bouncedMember(e.id, m.to_email) : null;
   if (!e.hidden_at)
     await notifySender(e, 'problems', `Could not be delivered: ${e.subject}`, `Our email to ${member?.name || firstNames(rows, m)} did not arrive`, [
-      `The email "${m.subject}" to ${m.to_email} could not be delivered: ${why.plain}.${said}`,
+      `The email "${m.subject}" to ${m.to_email} could not be delivered: ${why.plain}.`,
       member ? member.line : out && fresh.length ? `No reminders go to this address until you do one of two things. Open the envelope and choose Correct next to ${firstNames(rows, m)} to fix the address: a new email goes out at once. Or, if the address is right and the mailbox works again, choose "Try again" there. You can also copy their signing link from the same page and send it to them yourself.`
         : e.status === 'completed' ? 'The envelope is completed, so there is nothing to send again from here. Download the signed document from the envelope page and send it to them yourself.'
         : out ? 'Open the envelope to see who is on it now. If this person should still get it, add them with the right address.'
@@ -128,16 +165,32 @@ async function loginBounce(u: any, at: string, why: { plain: string }) {
 // ---- Soft bounce, complaint, delivered -----------------------------------------------------------
 
 async function softBounce(m: any, at: string, reason?: string): Promise<'applied' | 'repeat'> {
-  if (m.bounce_kind === 'hard') return 'repeat';
+  // News that comes after the email arrived, or after it came back for good, is old news (providers do not promise
+  // the order): it changes nothing and writes nothing.
+  if (m.bounce_kind === 'hard' || m.delivered_at) return 'repeat';
   const why = bounceWhy(reason, false);
   const first = !m.bounced_at;
-  run("UPDATE emails SET bounced_at=?, bounce_kind='soft', bounce_reason=? WHERE id=?", at, why.full.slice(0, 500), m.id);
-  // The same address on SOFT_BOUNCE_DAYS separate days is an address that does not work.
-  const days = softBounceDays(m.to_email, at);
-  if (days >= SOFT_BOUNCE_DAYS) return hardBounce(m, at, { plain: `${why.plain}, on ${days} separate days`, raw: why.raw, full: `${why.plain}, on ${days} separate days${why.raw ? ` (${why.raw})` : ''}` });
-  const e = first && m.envelope_id ? loadEnvelope(m.envelope_id) : null;
+  run("UPDATE emails SET bounced_at=?, bounce_kind='soft', bounce_reason=?, bounce_said=? WHERE id=?", at, why.plain, why.full.slice(0, 500), m.id);
+  const e = m.envelope_id ? loadEnvelope(m.envelope_id) : null;
+  // The same address on SOFT_BOUNCE_DAYS separate days, to emails of this same sender, is an address that does not work.
+  const days = softBounceDays(ownerOf(m, e), m.to_email, at);
+  if (days >= SOFT_BOUNCE_DAYS) return hardBounce({ ...m, bounced_at: at }, at, { plain: `${why.plain}, on ${days} separate days`, raw: why.raw, full: `${why.plain}, on ${days} separate days${why.raw ? ` (${why.raw})` : ''}` }, true);
+  if (first && e && e.kind === 'envelope' && !same(senderOf(e)?.email, m.to_email))
+    audit(e.id, SYSTEM, 'Email not delivered yet', `Email to ${names(recipientsOf(e, m), m)} has not arrived yet: ${why.plain}. The email was "${str(m.subject, 200)}". Nothing was stopped: it usually arrives later, and reminders go on.`);
+  return 'applied';
+}
+
+// The provider did not send it, because of how our sending is set up there. That is ours to fix and says nothing
+// about the person: nothing is stopped, marked or listed. The email reads "not delivered yet" with why, the record
+// says it, and the people who run the server read it in the log, with the provider's words.
+async function notSent(m: any, at: string, reason?: string): Promise<'applied' | 'repeat'> {
+  if (m.bounce_kind || m.delivered_at) return 'repeat';
+  const plain = 'our mail provider did not send it, because of a setting on our side, which the people who run this service have been told about';
+  run("UPDATE emails SET bounced_at=?, bounce_kind='soft', bounce_reason=?, bounce_said=? WHERE id=?", at, plain, `not sent by the provider (${bounceWhy(reason, false).raw || 'no reason given'})`, m.id);
+  console.error(`[mail events] The mail provider did not send email ${m.id}, because of a setting there: "${bounceWhy(reason, false).raw || 'no reason given'}". Nothing was marked on the person. Check the provider's account (its quotas, its unsubscribe list, the headers it accepts).`);
+  const e = m.envelope_id ? loadEnvelope(m.envelope_id) : null;
   if (e && e.kind === 'envelope' && !same(senderOf(e)?.email, m.to_email))
-    audit(e.id, SYSTEM, 'Email not delivered yet', `Email to ${names(recipientsOf(e, m), m)} has not arrived yet: ${why.plain}.${why.raw ? ` Their mail server said: "${why.raw}".` : ''} The email was "${str(m.subject, 200)}". Nothing was stopped: it usually arrives later, and reminders go on.`);
+    audit(e.id, SYSTEM, 'Email not delivered yet', `Email to ${names(recipientsOf(e, m), m)} was not sent: ${plain}. The email was "${str(m.subject, 200)}". Nothing was stopped. If it is urgent, copy their link and send it to them yourself.`);
   return 'applied';
 }
 
@@ -150,15 +203,22 @@ async function complaint(m: any, at: string): Promise<'applied' | 'repeat'> {
   const rows = recipientsOf(e, m);
   const fresh = rows.filter((r: any) => !r.complained_at);
   if (rows.length && !fresh.length) return 'applied';
-  for (const r of fresh) run('UPDATE recipients SET complained_at=? WHERE id=?', at, r.id);
-  audit(e.id, SYSTEM, 'Marked as spam', `${names(rows, m)} marked the email "${str(m.subject, 200)}" as spam in their mail program. Nothing more is emailed to them about this envelope unless they ask for it themselves on their signing page.`);
+  // The person's word is kept for the account, not on these rows alone: whatever the sender does next (a correction
+  // away and back, "try again", a new envelope), nothing more is emailed to them until they ask for it themselves.
+  const marked = noteComplaint(e.account_id, m.to_email, at);
+  audit(e.id, SYSTEM, 'Marked as spam', `${names(rows, m)} marked the email "${str(m.subject, 200)}" as spam in their mail program. Nothing more is emailed to them about this account's documents unless they ask for it themselves on a signing page.`);
+  // Other envelopes of the account that are out to the same person stop emailing them too, and each record says why.
+  for (const r of marked.filter((x: any) => x.envelope_id !== e.id && x.status === 'sent')) {
+    audit(r.envelope_id, SYSTEM, 'Marked as spam', `${r.name} <${r.email}> marked another email from this account as spam in their mail program. Nothing more is emailed to them about this envelope unless they ask for it themselves on a signing page.`);
+    fireWebhooks(e.account_id, 'envelope.updated', r.envelope_id, { recipient_id: r.id, change: 'email_marked_as_spam' });
+  }
   // It counts against the sending account exactly as the "Report this email" link does: the same list, the same
   // count towards a pause, once for each person and envelope. Someone who is no longer on the envelope counts too.
   for (const r of fresh.length ? fresh : [{ id: '', name: m.to_email, email: m.to_email }])
     await reportAbuse(e, r, { reason: 'spam', detail: 'Marked as spam in their mail program. Reported by the mail provider, not typed by the person.' }, { name: 'Mail provider' });
   if (!e.hidden_at)
     await notifySender(e, 'always', `Marked as spam: ${e.subject}`, `${firstNames(rows, m)} marked our email as spam`, [
-      `${names(rows, m)} marked the email "${m.subject}" as spam in their mail program. So we no longer email them about this document: no reminders, no notice when you change it, and no copy when it is completed.`,
+      `${names(rows, m)} marked the email "${m.subject}" as spam in their mail program. So we no longer email them about documents from your account: no reminders, no notice when you change one, and no copy when one is completed. That holds for this envelope, for any other that is out to them, and for new ones.`,
       ...(fresh.length ? [`Only ${firstNames(rows, m)} can undo that: their signing page has a button that starts our emails to them again. You can still give them their link yourself. Open the envelope and choose Copy link next to their name.`] : []),
       `It also counts as one report against your account, like the "Report this email" link in our emails does. When ${abuseSuspendAfter()} different recipients have reported an account within 30 days, its sending is paused until a person has looked.`,
     ]);
@@ -169,33 +229,65 @@ async function complaint(m: any, at: string): Promise<'applied' | 'repeat'> {
 // An email that arrives is the proof that its address works. Marks that are older than this email go: on the
 // account's do-not-mail list, on every envelope of the account that is still out to that address (each record
 // says why, so a mark never vanishes without a word), and on a login with that address. News about an email that
-// was sent before the bounce proves nothing and clears nothing.
-function delivered(m: any, at: string): 'applied' | 'repeat' {
+// was sent before the bounce proves nothing and clears nothing, with one exception: the marks that this very email
+// set when it said "try later" on the last of SOFT_BOUNCE_DAYS separate days go, because it has arrived after all.
+async function delivered(m: any, at: string): Promise<'applied' | 'repeat'> {
   if (m.delivered_at) return 'repeat';
-  run('UPDATE emails SET delivered_at=? WHERE id=?', at, m.id);
+  // Arriving wins over an earlier "try later": the email no longer reads "not delivered yet". A hard bounce stays.
+  run("UPDATE emails SET delivered_at=?, bounce_kind=CASE WHEN bounce_kind='soft' THEN NULL ELSE bounce_kind END WHERE id=?", at, m.id);
   if (m.bounce_kind === 'hard') return 'applied';
-  forgetSoftDays(m.to_email);
-  const accountId = m.envelope_id ? get('SELECT account_id a FROM envelopes WHERE id=?', m.envelope_id)?.a : null;
-  if (accountId) {
-    forgetBounced(accountId, m.to_email, sentAt(m));
-    for (const r of all("SELECT r.id, r.name, r.envelope_id FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.account_id=? AND e.status='sent' AND lower(r.email)=lower(?) AND r.bounced_at < ?", accountId, m.to_email, sentAt(m))) {
+  const e = m.envelope_id ? loadEnvelope(m.envelope_id) : null;
+  forgetSoftDays(ownerOf(m, e), m.to_email);
+  const deferred = m.bounce_kind === 'soft' && m.bounced_at;
+  const upTo = deferred && m.bounced_at >= sentAt(m) ? new Date(Date.parse(m.bounced_at) + 1).toISOString() : sentAt(m);
+  if (e) {
+    forgetBounced(e.account_id, m.to_email, upTo);
+    for (const r of all("SELECT r.id, r.name, r.envelope_id FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.account_id=? AND e.status='sent' AND lower(r.email)=lower(?) AND r.bounced_at < ?", e.account_id, m.to_email, upTo)) {
       run('UPDATE recipients SET bounced_at=NULL, bounce_reason=NULL WHERE id=?', r.id);
       audit(r.envelope_id, SYSTEM, 'Address works again', `A later email to ${r.name} <${m.to_email}> reached their mail server, so the address works. Reminders to it are on again.`);
-      fireWebhooks(accountId, 'envelope.updated', r.envelope_id, { recipient_id: r.id, change: 'email_works_again' });
+      fireWebhooks(e.account_id, 'envelope.updated', r.envelope_id, { recipient_id: r.id, change: 'email_works_again' });
     }
+    // The record said it had not arrived yet. It says that it did.
+    if (deferred && e.kind === 'envelope' && !same(senderOf(e)?.email, m.to_email))
+      audit(e.id, SYSTEM, 'Email delivered', `Email to ${names(recipientsOf(e, m), m)} reached their mail server after all. The email was "${str(m.subject, 200)}".`);
   }
-  run('UPDATE users SET email_bounced_at=NULL, email_bounce_reason=NULL WHERE lower(email)=lower(?) AND email_bounced_at < ?', m.to_email, sentAt(m));
+  run('UPDATE users SET email_bounced_at=NULL, email_bounce_reason=NULL WHERE lower(email)=lower(?) AND email_bounced_at < ?', m.to_email, upTo);
   return 'applied';
 }
 
-/** Applies one piece of news. 'unmatched': it names no email of ours, so nothing is done with it. */
-export async function applyMailEvent(ev: MailEvent): Promise<'applied' | 'repeat' | 'unmatched'> {
-  const m = findMail(ev);
-  if (!m) return 'unmatched';
+// News about an email of an envelope its sender has deleted since. Nobody is left to mark or tell, but the account
+// that sent it is known: a complaint counts against it and is kept for it, and a hard bounce goes on its list.
+async function goneNews(gone: any, ev: MailEvent, at: string): Promise<'applied' | 'repeat'> {
+  if (ev.type === 'complaint') {
+    if (gone.complained_at) return 'repeat';
+    run('UPDATE mail_gone SET complained_at=? WHERE mail_id=?', at, gone.mail_id);
+    noteComplaint(gone.account_id, ev.email, at);
+    await reportAbuse({ id: '', gone: true, account_id: gone.account_id }, { name: ev.email, email: ev.email }, { reason: 'spam', detail: 'Marked as spam in their mail program, about a document that its sender deleted since. Reported by the mail provider, not typed by the person.' }, { name: 'Mail provider' });
+    return 'applied';
+  }
+  if (ev.type === 'bounce') {
+    if (gone.bounce_kind === 'hard') return 'repeat';
+    run("UPDATE mail_gone SET bounce_kind='hard' WHERE mail_id=?", gone.mail_id);
+    noteBounced(gone.account_id, ev.email, bounceWhy(ev.reason, true).plain, at);
+  }
+  return 'applied';
+}
+
+/**
+ * Applies one piece of news. 'unmatched': it names no email of ours, or cannot be told apart, so nothing is done
+ * with it. `notes` counts why, for the log: an id that names no email, or an address two senders wrote to.
+ */
+export async function applyMailEvent(ev: MailEvent, notes: { unknown_id: number; ambiguous: number } = { unknown_id: 0, ambiguous: 0 }): Promise<'applied' | 'repeat' | 'unmatched'> {
+  const f = findMail(ev);
+  if (f === 'unknown_id' || f === 'ambiguous') return (notes[f]++, 'unmatched');
+  if (!f) return 'unmatched';
   const at = when(ev.at);
+  if ('gone' in f) return goneNews(f.gone, ev, at);
+  const m = f.m;
   if (ev.type === 'delivered') return delivered(m, at);
   if (ev.type === 'complaint') return complaint(m, at);
   if (ev.type === 'soft_bounce') return softBounce(m, at, ev.reason);
+  if (ev.type === 'not_sent') return notSent(m, at, ev.reason);
   return hardBounce(m, at, bounceWhy(ev.reason, true));
 }
 
@@ -221,15 +313,18 @@ async function readLimited(req: Request): Promise<string> {
 
 // Amazon SNS asks a new address to prove it wants the messages by fetching a link. Fetching whatever link a message
 // names would let anyone who has the secret point this server at any address, so only a link to the SNS service
-// itself is fetched: https, a host of the form sns.<region>.amazonaws.com, no redirects, nothing read from the answer.
-async function confirmSubscription(raw: string): Promise<boolean> {
+// itself is fetched: https, a host of the form sns.<region>.amazonaws.com (a region looks like eu-west-1, which no
+// S3 bucket host does), no redirects, nothing read from the answer. And only the confirmation for the topic the
+// message is about: never an unsubscribe link, nor anything else at that host.
+async function confirmSubscription(raw: string, topic = ''): Promise<boolean> {
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
     return false;
   }
-  if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443') || !/^sns\.[a-z0-9-]+\.amazonaws\.com(\.cn)?$/.test(u.hostname)) return false;
+  if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443') || !/^sns\.[a-z]{2}(-[a-z]+)+-\d{1,2}\.amazonaws\.com(\.cn)?$/.test(u.hostname)) return false;
+  if (u.searchParams.get('Action') !== 'ConfirmSubscription' || !topic || u.searchParams.get('TopicArn') !== topic) return false;
   try {
     const r = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
     return r.status >= 200 && r.status < 300;
@@ -258,6 +353,9 @@ route('POST', '/mail/events', async (c) => {
   } catch {
     parsed = false;
   }
+  // Every piece of news in a batch is read, or none: a part cut off quietly would never be sent again.
+  const tooMany = () => bad(`That batch holds more than ${MAX_EVENTS} events, which is more than this address reads at once, so none of it was read. Send it in smaller batches.`, 413);
+  if (Array.isArray(body) && body.length > MAX_EVENTS) throw tooMany();
   const read = parsed ? readEvents(body) : null;
   if (!read) {
     // Said once in the log, with the names of the top-level fields and nothing of what they hold.
@@ -269,17 +367,32 @@ route('POST', '/mail/events', async (c) => {
     return json({ ok: true, understood: false, note: parsed ? 'This message has a shape this server does not know. It was accepted and nothing was done with it.'
       : 'The body is not JSON, so nothing in it was read. It was accepted and nothing was done with it. This address takes the bounce, complaint and delivery webhooks of the mail provider as JSON.' }, 202);
   }
-  if (read.confirm !== undefined) return { ok: true, subscription: (await confirmSubscription(read.confirm)) ? 'confirmed' : 'not confirmed: the link in the message does not lead to Amazon SNS' };
+  if (read.confirm !== undefined) return { ok: true, subscription: (await confirmSubscription(read.confirm, read.topic)) ? 'confirmed' : 'not confirmed: the link in the message is not the confirmation of that topic at Amazon SNS' };
+  // Said every time: from now on this address hears nothing from that topic, so bounces go unnoticed.
+  if (read.unsubscribed) console.error('[mail events] Amazon SNS says this address was unsubscribed from a topic. No more bounce, complaint or delivery news comes from it until it is subscribed again.');
+  if (read.events.length > MAX_EVENTS) throw tooMany();
   const done = { applied: 0, repeat: 0, unmatched: 0, failed: 0 };
-  for (const ev of read.events.slice(0, MAX_EVENTS)) {
-    try {
-      done[await applyMailEvent(ev)]++;
-    } catch (e: any) {
-      // One piece of news that cannot be applied must not make the provider send the whole batch again.
-      done.failed++;
-      console.error('[mail events] could not apply', ev.type, e?.message);
+  const notes = { unknown_id: 0, ambiguous: 0 };
+  const work = (async () => {
+    for (const ev of read.events) {
+      try {
+        done[await applyMailEvent(ev, notes)]++;
+      } catch (e: any) {
+        // One piece of news that cannot be applied must not make the provider send the whole batch again.
+        done.failed++;
+        console.error('[mail events] could not apply', ev.type, e?.message);
+      }
     }
-  }
+    if (notes.unknown_id) console.error(`[mail events] ${notes.unknown_id} piece(s) of news named an email of ours by its number or Message-ID, but no such email is here, or it went to another address. They were left alone.`);
+    if (notes.ambiguous) console.error(`[mail events] ${notes.ambiguous} piece(s) of news named only an address, and more than one sender here wrote to it in the last ${BOUNCE_MATCH_DAYS} days, so nobody can tell whose email it was about. They were left alone. A provider that hands back our ids (see the README) avoids this.`);
+  })();
+  // The marks are made at once. Telling people (an email each) can take long with a slow mail server, and a provider
+  // that waits too long sends the whole batch again. So after a while the answer goes, and the rest goes on here.
+  let timer: any;
+  g.__tsmailEventsWork = work; // the tail of the last batch, for a test to wait on
+  const finished = await Promise.race([work.then(() => true), new Promise<boolean>((r) => (timer = setTimeout(() => r(false), g.__tsmailEventsAnswerMs ?? 8000)))]);
+  clearTimeout(timer);
+  if (!finished) return json({ ok: true, understood: true, events: read.events.length, ...done, note: 'Taken. The rest of this batch is being applied, and needs nothing more from you.' }, 202);
   return { ok: true, understood: true, events: read.events.length, ...done };
 }, 'public');
 
@@ -319,17 +432,52 @@ route('POST', '/envelopes/:id/try-again', async (c) => {
 
 // ---- A recipient who marked our email as spam and wants emails again -----------------------------
 
-// Only the person themselves can undo a complaint, and holding the signing link is how they show who they are.
-route('POST', '/sign/:token/mail-again', (c) => {
-  const { e, r, actor } = find(c, false);
+// Only the person themselves can undo a complaint. Holding the signing link does not show that: the sender can copy
+// it (Copy link), from any browser or a second login. Reading the mailbox does. So the first call emails a code to
+// the address, and a second call with that code undoes the complaint. That email is the one thing we send to someone
+// who marked ours as spam, and only when it is asked for on their signing page, at most MAIL_AGAIN_PER_DAY a day.
+const MAIL_AGAIN_MINUTES = 30, MAIL_AGAIN_TRIES = 5, MAIL_AGAIN_PER_DAY = 3;
+route('POST', '/sign/:token/mail-again', async (c) => {
+  find(c, false);
+  const code = str((await c.body())?.code, 40).replace(/\D/g, '');
+  const { e, r, actor } = look(c, false);
   if (!r.complained_at) return { ok: true, changed: false };
-  // The sender can copy this link, so holding it is not enough when the browser (or key) is signed in to the account
-  // that sent the envelope: undoing a complaint is the recipient's word alone, unless the address is that person's own.
+  // Signed in to the account that sent it, unless the address is that person's own: the sender, so not even a code is sent.
   if (c.auth && get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', e.account_id, c.user.id) && !same(c.user.email, r.email))
     throw bad(`Only ${r.name} can ask for our emails about this document again, on their own device. You are signed in to the account that sent it, so nothing was changed. You can still send them their link yourself.`, 403);
-  run('UPDATE recipients SET complained_at=NULL WHERE id=?', r.id);
-  audit(e.id, actor, 'Emails started again', `${r.name} had marked an email about this envelope as spam, and now asked to be emailed about it again.`);
-  fireWebhooks(e.account_id, 'envelope.updated', e.id, { recipient_id: r.id, change: 'email_wanted_again' });
+  if (!code) {
+    try {
+      rateLimit(`mail-again:${r.id}`, MAIL_AGAIN_PER_DAY, 86400_000);
+    } catch {
+      throw bad(`We have sent ${MAIL_AGAIN_PER_DAY} codes to ${r.email} today, which is as many as we send in a day. Type the newest one, or try again tomorrow. This link opens the document whenever you like meanwhile.`, 429);
+    }
+    const k = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const until = new Date(Date.now() + MAIL_AGAIN_MINUTES * 60_000).toISOString();
+    run('INSERT OR REPLACE INTO mail_again_codes (recipient_id, code_hash, tries, expires_at) VALUES (?,?,0,?)', r.id, hmac(`mail-again:${r.id}:${k}`), until);
+    // Not as one of the envelope's emails to them (no recipient id): those stay stopped until the code is typed.
+    const delivery = await sendMail({ to: r.email, envelopeId: e.id, expiresAt: until, subject: `Your code: ${k}`, heading: 'Your code to get our emails again',
+      lines: [`Someone asked, on the signing page of "${str(e.subject, 200)}", for our emails about it to start again. You had marked one of them as spam, so we had stopped. If that was you, type this code on that page: ${k}`,
+        `The code works for ${MAIL_AGAIN_MINUTES} minutes. If you did not ask for it, ignore this email. Nothing changes, and we send you nothing more unless you ask on that page.`] });
+    audit(e.id, actor, 'Code sent to start emails again', `${r.name} <${r.email}> asked on the signing page for our emails again. A code went to that address. Nothing changes until it is typed there.`);
+    return { ok: true, code_sent: true, sent_to: r.email, minutes: MAIL_AGAIN_MINUTES, delivery };
+  }
+  const row = get('SELECT * FROM mail_again_codes WHERE recipient_id=?', r.id);
+  if (!row || row.expires_at <= now()) throw bad('That code has run out, or none was asked for. Ask for a new one with the button.', 410);
+  if (row.tries >= MAIL_AGAIN_TRIES) throw bad(`That code was typed wrongly ${MAIL_AGAIN_TRIES} times, so it no longer works. Ask for a new one with the button.`, 429);
+  if (!safeEqual(hmac(`mail-again:${r.id}:${code}`), row.code_hash)) {
+    run('UPDATE mail_again_codes SET tries=tries+1 WHERE recipient_id=?', r.id);
+    throw bad('That code is not right. Type the 6 digits from our newest email to you. Nothing was changed.', 400, { code: 'wrong_code' });
+  }
+  run('DELETE FROM mail_again_codes WHERE recipient_id=?', r.id);
+  // The complaint was kept for the account, so it goes for the account: every envelope of it that holds this address.
+  const back = forgetComplaint(e.account_id, r.email);
+  // The report the mail provider made for them is their own click, which they have now taken back: it no longer
+  // counts towards pausing the sender. A report an operator has looked at already stays as they left it.
+  run("UPDATE abuse_reports SET status='withdrawn' WHERE account_id=? AND lower(reporter)=lower(?) AND status='open' AND detail LIKE 'Marked as spam in their mail program%'", e.account_id, r.email);
+  for (const x of back.length ? back : [{ id: r.id, envelope_id: e.id }]) {
+    audit(x.envelope_id, actor, 'Emails started again', `${r.name} <${r.email}> had marked an email from this account as spam, and now asked to be emailed again, with a code sent to that address.`);
+    fireWebhooks(e.account_id, 'envelope.updated', x.envelope_id, { recipient_id: x.id, change: 'email_wanted_again' });
+  }
   return { ok: true, changed: true };
 }, 'public');
 
@@ -385,6 +533,9 @@ route('POST', '/me/email/confirm', async (c) => {
     if (get('SELECT 1 x FROM users WHERE email=? AND id != ?', row.new_email, c.user.id)) throw bad(`In the meantime a Sign&Grow login was made with ${row.new_email}, so this one cannot move there. Nothing was changed.`, 409);
     // The new address is proven, and whatever was known about the old one is not about this one.
     run('UPDATE users SET email=?, email_verified=1, email_bounced_at=NULL, email_bounce_reason=NULL WHERE id=?', row.new_email, c.user.id);
+    // Our copies of what was sent to the old address about this login are now about a login with another address:
+    // marked as such, they go when the login does (purgeUser deletes by about_user), not 90 days later.
+    run('UPDATE emails SET about_user=? WHERE envelope_id IS NULL AND about_user IS NULL AND to_email=? COLLATE NOCASE', c.user.id, old);
     // The welcome signatures are given once per address (welcomeMark in routes-trust.ts). The confirmed address this
     // login leaves was welcomed, so a new login made under it now is not welcomed a second time.
     if (c.user.welcomed_at && c.user.email_verified) run('INSERT OR IGNORE INTO welcomed (email_hash, at) VALUES (?,?)', welcomeMark(old), String(c.user.welcomed_at).slice(0, 10));
@@ -394,7 +545,7 @@ route('POST', '/me/email/confirm', async (c) => {
     run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '');
   });
   // The old address is told, also when it is the one that bounces: if it still reaches someone, they should know.
-  await sendMail({ to: old, subject: 'The email address of your Sign&Grow login was changed', heading: 'Your login uses another address now',
+  await sendMail({ to: old, about: c.user.id, subject: 'The email address of your Sign&Grow login was changed', heading: 'Your login uses another address now',
     lines: ['The Sign&Grow login that used this address was moved to another one. From now on our emails go there, and that address signs in.',
       `If you did this, there is nothing more to do. If you did not, someone else has been in your login: write to us through ${baseUrl()}/help and a person will help you get it back.`] });
   return { ok: true, email: row.new_email };

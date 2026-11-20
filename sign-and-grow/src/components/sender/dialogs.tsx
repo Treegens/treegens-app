@@ -160,9 +160,11 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
       // never used for another without the sender saying so.
       const checks = checkChanged || newAddress ? { verify: check.verify, phone: String(check.phone || '').trim(), text_link: !!check.text_link } : {};
       const reopen = confirmed && !checkChanged && !newAddress ? { number_confirmed: true } : {};
-      await api(`/envelopes/${envelopeId}/correct`, { body: { recipient_id: recipient.id, name: f.name.trim(), email: f.email.trim(), access_code: f.access_code, ...checks, ...reopen } });
+      const res = await api(`/envelopes/${envelopeId}/correct`, { body: { recipient_id: recipient.id, name: f.name.trim(), email: f.email.trim(), access_code: f.access_code, ...checks, ...reopen } });
       const again = checkChanged && check.verify !== 'none' ? ' They are asked for a new one-time code.' : 'number_confirmed' in reopen ? ' Codes go to their number again.' : '';
-      toast(!newAddress ? `Updated. Their link still works.${again}` : waiting ? 'Updated. They get the email when it is their turn.' : `Updated. A new email is on its way to ${f.email.trim()}.`);
+      // An address that marked an email from this account as spam is not emailed, whatever the sender does.
+      if (res?.not_emailed === 'marked_as_spam') toast(`Updated, but no email went out: ${f.email.trim()} marked an earlier email from your account as spam. Copy their link and send it yourself.`, true);
+      else toast(!newAddress ? `Updated. Their link still works.${again}` : waiting ? 'Updated. They get the email when it is their turn.' : `Updated. A new email is on its way to ${f.email.trim()}.`);
       onDone();
     } catch (e: any) {
       setError(explain(e, 'Nothing was changed.'));

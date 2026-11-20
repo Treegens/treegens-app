@@ -398,3 +398,47 @@ test('deleting one account never removes the stored emails of another customer, 
   assert.equal(copies('billy.joe@samename.example'), before.billy);
   void billy;
 });
+
+test('deleting a login never removes a copy that strangers\' words point at, nor an email still waiting to be delivered', async () => {
+  process.env.SUPPORT_EMAIL = 'desk@words.example';
+  try {
+    const count = (where: string, ...p: any[]) => db.get(`SELECT COUNT(*) n FROM emails WHERE ${where}`, ...p).n;
+    const later = () => new Date(Date.now() + 5 * 60_000).toISOString();
+    const vic = await person('Vic Victim', 'vic@words.example');
+    // Carol, signed in under her own confirmed address, asks for help and names Vic the usual way.
+    const carol = await person('Carol Customer', 'carol@words.example');
+    const { SUPPORT_TOPICS } = await import('../src/lib/policy.ts');
+    assert.equal((await carol.post('/public/support', { email: 'carol@words.example', name: 'Carol Customer', topic: (SUPPORT_TOPICS as readonly string[])[0],
+      message: 'My colleague Vic Victim <vic@words.example> cannot open the document I sent him. Can someone look?' })).status, 200);
+    // Mallory puts Vic's address into her own name, and invites Nina.
+    const mal = await person('Mal <vic@words.example>', 'mal@words.example');
+    assert.equal((await mal.post('/account/invites', { email: 'nina@words.example' })).status, 200);
+    const theirs = { carol: count("to_email='carol@words.example'"), desk: count("to_email='desk@words.example'"), nina: count("to_email='nina@words.example'") };
+    assert.ok(theirs.carol >= 2 && theirs.desk === 1 && theirs.nina === 1, JSON.stringify(theirs));
+    // The mail server is down for the desk's copy, Nina's invitation and one email to Vic himself.
+    db.run("UPDATE emails SET status='failed', tries=1, next_try_at=? WHERE to_email IN ('desk@words.example','nina@words.example')", later());
+    db.run("UPDATE emails SET status='failed', tries=1, next_try_at=? WHERE id=(SELECT MIN(id) FROM emails WHERE to_email='vic@words.example')", later());
+    assert.equal((await vic.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+    assert.deepEqual({ carol: count("to_email='carol@words.example'"), desk: count("to_email='desk@words.example'"), nina: count("to_email='nina@words.example'") }, theirs, 'nobody else lost a copy');
+    // Vic's own copies went, except the one still waiting to be delivered (and the notice that his login is gone).
+    assert.equal(count("to_email='vic@words.example' AND status='failed' AND next_try_at IS NOT NULL"), 1);
+    assert.equal(count("to_email='vic@words.example' AND NOT (status='failed' AND next_try_at IS NOT NULL) AND subject NOT LIKE 'Your Sign&Grow account is closed%'"), 0);
+
+    // Someone signs up with Nina's address without being able to confirm it, and deletes that login at once. The
+    // invitation Mallory sent to that address before is Mallory's record, not theirs.
+    db.run("UPDATE emails SET status='sent', next_try_at=NULL WHERE to_email IN ('desk@words.example','nina@words.example')");
+    const eve = from();
+    assert.equal((await eve.post('/auth/signup', { name: 'Not Nina', email: 'nina@words.example', password: PW })).status, 200);
+    assert.equal((await eve.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+    assert.equal(count("to_email='nina@words.example' AND subject NOT LIKE 'Your Sign&Grow account is closed%' AND subject NOT LIKE 'Confirm your email%'"), 1, 'the invitation is still there');
+
+    // When Carol herself goes, her copies go, and so does the desk's note about her request, which is marked as
+    // being about her. Mallory's invitation to Nina stays.
+    assert.equal((await carol.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+    assert.equal(count("to_email='desk@words.example'"), 0);
+    assert.equal(count("to_email='carol@words.example' AND subject NOT LIKE 'Your Sign&Grow account is closed%'"), 0);
+    assert.equal(count("to_email='nina@words.example' AND subject LIKE '%invit%'"), 1);
+  } finally {
+    delete process.env.SUPPORT_EMAIL;
+  }
+});

@@ -249,6 +249,12 @@ function tooLate(row: any): { why: string; quiet: boolean } | null {
   } catch {}
   if (asks && row.recipient_id && ['completed', 'declined'].includes(get('SELECT status FROM recipients WHERE id=?', row.recipient_id)?.status))
     return { why: 'Not sent again: the person it asks had already finished by then.', quiet: true };
+  // What the mail provider told us since (routes-bounces.ts) holds for an email that was waiting too. Someone who
+  // marked an earlier one as spam gets nothing more, and a request or reminder does not go to an address that came
+  // back for good: the envelope's record and the sender were told about that already.
+  const to = row.recipient_id ? get('SELECT email, bounced_at, complained_at FROM recipients WHERE id=?', row.recipient_id) : null;
+  if (to && String(to.email || '').toLowerCase() === String(row.to_email).toLowerCase() && (to.complained_at || (asks && to.bounced_at)))
+    return { why: `Not sent again: ${to.complained_at ? 'the person had marked an earlier email as spam by then' : 'an earlier email to the address had come back for good by then'}.`, quiet: true };
   // A team invitation is only worth sending while it can still be accepted. One that was withdrawn, replaced by a
   // newer one or used already would lead to a refusal.
   const invite = /[?&]invite=([\w-]+)/.exec(row.link || '')?.[1];

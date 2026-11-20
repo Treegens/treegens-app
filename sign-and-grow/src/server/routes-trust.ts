@@ -19,6 +19,7 @@ import { forgetChosen } from './tplroles.ts';
 import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
 import { commentsText } from './comments.ts';
 import { forgetClickwraps } from './clickwrap.ts';
+import { rememberGoneMail } from './bounces.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -234,6 +235,8 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
       run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at, account_id, reported) VALUES (?,?,?,?)', sha256(r.c), now(), owner,
         r.to_email && get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', eid, r.to_email) ? 1 : 0);
     run('DELETE FROM audit WHERE envelope_id=?', eid);
+    // News from the mail provider about these emails (a spam complaint) still counts against the account (bounces.ts).
+    if (owner) rememberGoneMail(eid, owner);
     run(`DELETE FROM emails WHERE envelope_id=?${account ? '' : ` AND ${NOT_WAITING}`}`, eid);
     run('DELETE FROM retired_tokens WHERE envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?)', eid, eid);
     if (account) run('DELETE FROM abuse_reports WHERE envelope_id=?', eid);
@@ -323,7 +326,7 @@ export { CLOSE_GRACE_DAYS };
 // payments, refunds and the signature ledger, with the plan history emptied of its wording (it names people) and
 // the link to the receipt removed. A help request that is still open stays until a person has answered it.
 export function purgeUser(userId: string): any[] {
-  const user = get('SELECT id, name, email, email_verified FROM users WHERE id=?', userId);
+  const user = get('SELECT id, name, email, email_verified, created_at FROM users WHERE id=?', userId);
   if (!user) return [];
   const owned = all("SELECT a.id FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role='owner'", userId);
   const stopped = keysOf(userId).filter((k) => k.team);
@@ -379,9 +382,14 @@ export function purgeUser(userId: string): any[] {
     run(`DELETE FROM support_requests WHERE ${theirs} AND status NOT IN ('open','waiting')`, ...who);
     run(`UPDATE support_requests SET forget=1, user_id=NULL, account_id=NULL WHERE ${theirs}`, ...who);
     // Our stored copies of emails that belong to no envelope and went to the person (sign-up, receipts, reminders,
-    // notices) or name them as "Name <address>" (a help request passed on to the people who answer). Emails about
-    // a document somebody else sent them are part of that sender's record and stay with it.
-    run("DELETE FROM emails WHERE envelope_id IS NULL AND (lower(to_email)=lower(?) OR instr(lower(html), '&lt;' || lower(?) || '&gt;') > 0)", user.email, user.email);
+    // notices). Only the address an email was sent to decides, never what its text says: a help message, a user
+    // name or an account name is words a stranger typed, and other customers' copies must not hang on them. An
+    // address the login never confirmed proves nothing, so then only copies written since the login was made go,
+    // and never one about another login (an invitation somebody sent to that address). Emails about a document
+    // somebody else sent them are part of that sender's record and stay with it. A copy that still has to be
+    // delivered is left alone (NOT_WAITING) and goes with the others after MAIL_COPY_DAYS.
+    run(`DELETE FROM emails WHERE envelope_id IS NULL AND lower(to_email)=lower(?) AND ${NOT_WAITING}${user.email_verified ? '' : ' AND at >= ? AND (about_user IS NULL OR about_user=?)'}`,
+      ...(user.email_verified ? [user.email] : [user.email, user.created_at, userId]));
     // Copies of emails to OTHER people that are about the person: an invitation they sent, a notice to a team's
     // admins about their API keys or that they left. Each such email is marked with the login it is about when it
     // is written (emails.about_user), and only that mark decides: never a name or a part of an address, which

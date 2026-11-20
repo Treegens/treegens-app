@@ -407,6 +407,14 @@ route('POST', '/envelopes/:id/correct', async (c) => {
   await correctWithCheck(e, str(b.recipient_id), b, c.actor);
   // A witness who is now another person starts clean, and is asked at once if their signer has signed (witness.ts).
   await witnessCorrected(e.id, str(b.recipient_id), e.recipients.find((r: any) => r.id === str(b.recipient_id)));
+  // An address that marked an email of this account as spam keeps that mark through a correction (db.ts), so no email
+  // went to it. The answer and the record say so, instead of letting the sender believe one is on its way.
+  const after = get('SELECT id, name, email, complained_at FROM recipients WHERE id=?', str(b.recipient_id));
+  const was = e.recipients.find((r: any) => r.id === str(b.recipient_id));
+  if (after?.complained_at && was && String(was.email || '').toLowerCase() !== String(after.email || '').toLowerCase()) {
+    audit(e.id, { name: 'System' }, 'Not emailed', `${after.name} <${after.email}>. This address marked an earlier email from this account as spam, so no email went out. Only that person can start our emails again, on a signing page. The sender can pass on the signing link.`);
+    return { ok: true, not_emailed: 'marked_as_spam' };
+  }
 });
 
 route('POST', '/envelopes/:id/clone', async (c) => {

@@ -115,8 +115,9 @@ export function lockedView(view: any, r: any, accessLocked: boolean, gate: strin
       kind: r.verify, to: destOf(r).masked, minutes: SIGNER_CODE_MINUTES, digits: SIGNER_CODE_DIGITS,
       sent: !!live, expires_in: live ? Math.max(0, Math.ceil((Date.parse(live.expires_at) - Date.now()) / 1000)) : 0,
       tries_left: live ? Math.max(0, SIGNER_CODE_TRIES - live.fails) : 0, resend_in: waitFor(r).seconds,
-      // Someone using this link said the number is not theirs. No code goes to it until the sender has corrected it.
-      stopped: r.verify === 'sms_code' && !!r.check_stop,
+      // Someone using this link, or another link from the same account, said the number is not theirs. No code goes
+      // to it until the sender has corrected or confirmed it.
+      stopped: r.verify === 'sms_code' && stoppedFor(r),
     },
   };
 }
@@ -132,7 +133,7 @@ export function publicCheck(r: any, token: string | null): any {
   const { check_gen: _g, checked_at, checked_how, checked_for, check_stop, texted_at: _t, ...rest } = r;
   const passed = passedCheck({ ...r, token, checked_at, checked_how, checked_for });
   return { ...rest, verify: isCodeCheck(r.verify) ? r.verify : 'none', phone: r.phone || null, text_link: !!r.text_link,
-    check: { line: checkLine(r, passed), passed_at: passed?.at || null, stopped: !!check_stop } };
+    check: { line: checkLine(r, passed), passed_at: passed?.at || null, stopped: (r.verify === 'sms_code' || !!r.text_link) && stoppedFor({ ...r, check_stop }) } };
 }
 
 /** What became of every text about an envelope, for its sender. The number is only ever shown masked, and never the text. */
@@ -377,13 +378,18 @@ export async function correctWithCheck(e: any, recipientId: string, patch: any, 
   // the person, a way they trust, that it is right after all (a finger slipped, a relative held the phone). Codes go
   // to the same number again. Only when said in so many words: a call that sends the whole recipient back to fix a
   // name must never lift a stop that protects whoever owns the number.
-  const confirm = patch.number_confirmed === true && !!r.check_stop && !changed && !swapped && c.verify === 'sms_code';
+  // The stop can have been said on another envelope of this account for the same number: it is lifted for the whole
+  // account, because the sender has now confirmed the number with its owner.
+  const confirm = patch.number_confirmed === true && stoppedFor(r) && !changed && !swapped && (c.verify === 'sms_code' || !!c.text_link);
   const was = get('SELECT verify, phone, text_link, check_gen, checked_at, checked_how, checked_for, check_stop, texted_at FROM recipients WHERE id=?', r.id);
+  const key = normalPhone(r.phone) ? phoneKey(normalPhone(r.phone)!) : '';
+  const stop = confirm ? get('SELECT * FROM text_stops WHERE account_id=? AND dest_hash=?', e.account_id, key) : null;
   const bits = checkBits(r, after);
   if (changed) applyCheck(r.id, r, c);
   if (confirm) {
     run('UPDATE recipients SET check_stop=NULL WHERE id=?', r.id);
-    bits.push(`the sender confirmed that ${maskPhone(r.phone)} is their number, after someone using the link had said it was not, so codes go to it again`);
+    run('DELETE FROM text_stops WHERE account_id=? AND dest_hash=?', e.account_id, key);
+    bits.push(`the sender confirmed that ${maskPhone(r.phone)} is their number, after someone using a signing link had said it was not, so texts go to it again`);
   }
   if (other) {
     try {
@@ -391,6 +397,7 @@ export async function correctWithCheck(e: any, recipientId: string, patch: any, 
     } catch (err) {
       if (changed || confirm) run('UPDATE recipients SET verify=?, phone=?, text_link=?, check_gen=?, checked_at=?, checked_how=?, checked_for=?, check_stop=?, texted_at=? WHERE id=?',
         was.verify, was.phone, was.text_link, was.check_gen, was.checked_at, was.checked_how, was.checked_for, was.check_stop, was.texted_at, r.id);
+      if (stop) run('INSERT OR REPLACE INTO text_stops (account_id, dest_hash, envelope_id, at) VALUES (?,?,?,?)', stop.account_id, stop.dest_hash, stop.envelope_id, stop.at);
       throw err;
     }
   }
@@ -429,10 +436,26 @@ export async function passCheckOn(e: any, old: any, actor: Actor) {
 // Why a text must not go to this number right now, or null. Asked at the moment of every text, so no path to a
 // text can walk round a limit: the hard stop per account and day, the daily number of phone numbers for an account
 // the email limit applies to, and for a link or a reminder how many of those one number gets in a day.
+// "This is not my number" is kept for the whole account that sent the link, by a fingerprint of the number: no text
+// of any kind goes to that number from that account, on any of its envelopes, until its sender confirms the number
+// with the person (number_confirmed on POST /envelopes/:id/correct). Correcting one envelope to another number does
+// not lift it: the number someone disowned is still not theirs.
+const numberStopped = (accountId: string, phone: string | null) => !!phone && !!get('SELECT 1 x FROM text_stops WHERE account_id=? AND dest_hash=?', accountId, phoneKey(phone));
+/** Whether nothing may be texted to this recipient's number: stopped on their own link, or anywhere in the account. */
+export function stoppedFor(r: any): boolean {
+  if (r?.check_stop) return true;
+  const phone = normalPhone(r?.phone);
+  return !!phone && !!get('SELECT 1 x FROM text_stops s JOIN envelopes e ON e.account_id=s.account_id WHERE e.id=? AND s.dest_hash=?', r.envelope_id, phoneKey(phone));
+}
+// Which daily allowance of codes to one mailbox or number a code counts against: the sender's account, and for the
+// visitor of a public form, who typed their own address, that form alone.
+const codeBucket = (e: any, r: any) => (e.powerform_id && e.form_recipient_id === r.id ? `form:${e.powerform_id}` : e.account_id);
+
 // `own` is for a text the timer tries again: it was counted when it was first written, and while that count is
 // still inside the last 24 hours it is not counted against itself a second time.
 function mayText(e: any, phone: string, kind: 'code' | 'link' | 'reminder', own = false): string | null {
   if (!smsMode()) return 'text messages are switched off on this server';
+  if (numberStopped(e.account_id, phone)) return 'someone using a signing link from this account said this number is not theirs, and nothing more is texted to it until the sender confirms it with them';
   const mine = own ? 1 : 0;
   if (textsLeft(e.account_id) + mine < 1) return `the account this document was sent from has sent as many text messages as this server allows in a day (${smsDailyPerAccount()})`;
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
@@ -602,7 +625,15 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
   const byText = kind === 'sms_code';
   const d = destOf(r);
   const how = CHANNEL_WORDS[kind];
-  if (byText && r.check_stop) throw bad(`No code is sent to ${d.masked} any more, because someone using this link said it is not their number. ${sender.name} has been told and has to put in the right number. Until then this document cannot be opened. You can reach ${reach}.`, 409, { code: 'stopped' });
+  // "This is not my number" said on this link, or on another link from the same account for the same number: its
+  // owner is left alone by that account, on every envelope, until the sender confirms the number with the person.
+  if (byText && stoppedFor(r)) {
+    if (!r.check_stop) await tellOnce(e, 'One-time code could not be sent', `${r.name}: a code by text message to ${d.masked} was asked for and not sent, because someone using a signing link from this account said that number is not theirs.`, () =>
+      notifySender(e, 'always', `Cannot open: ${e.subject}`, `${r.name} cannot get a one-time code`,
+        [`${r.name} asked for the one-time code that opens "${e.subject}", by text message to ${d.masked}. Someone using another of your signing links told us that number is not theirs, so nothing more is texted to it from your account.`,
+          `Open the envelope and choose Correct next to their name: put in the right number, or switch to a one-time code by email. If the number is right after all, tick "I checked with ${r.name} that this is their number" there, and codes go to it again. Make sure first that you are dealing with the right person.`]));
+    throw bad(`No code is sent to ${d.masked} any more, because someone using ${r.check_stop ? 'this link' : `a signing link from ${sender.name}`} said it is not their number. ${sender.name} has been told and has to put in the right number. Until then this document cannot be opened. You can reach ${reach}.`, 409, { code: 'stopped' });
+  }
   // The server cannot send this kind of message at all, or the number cannot be texted. Nothing the signer did.
   const cannot = byText ? (!smsMode() ? 'text messages are switched off on this server' : !d.to ? 'the mobile number on file is not complete' : '') : !canEmail() || !d.to ? 'this server cannot send email' : '';
   const sorry = (why: string) => bad(`We cannot send you a code by ${how} right now. That is nothing you did: ${why}. ${sender.name} has been told and can fix it or choose another check. You can reach ${reach}. Nothing you filled in is lost.`, 503, { code: 'unavailable' });
@@ -614,16 +645,33 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
     await tellSender(cannot);
     throw sorry(cannot);
   }
+  // While sending is paused no text goes out, not even a code: a paused sender could otherwise keep texting numbers
+  // it typed by opening its own links. The same holds for an envelope that reads like a fake payment notice. Whoever
+  // holds the link is told neutrally, and the sender hears the reason and what they can do.
+  const held = byText ? textGuard(e) : null;
+  if (held) {
+    await tellSender(held);
+    throw sorry('texts for this document are on hold');
+  }
 
   const t = Date.now();
   const wait = waitFor(r);
   if (wait.why === 'minute') throw bad(`A code was sent less than a minute ago. You can ask for a new one in ${many(wait.seconds, 'second')}.`, 429, { code: 'wait', resend_in: wait.seconds });
   if (wait.why === 'hour') throw bad(`${SIGNER_CODES_PER_HOUR} codes were sent for this document in the last hour, which is the most we send. You can ask for a new one in ${many(Math.ceil(wait.seconds / 60), 'minute')}. The newest code you were sent may still work.`, 429, { code: 'wait', resend_in: wait.seconds });
-  // An address we cannot tell apart (no proxy in front) is not counted, or every visitor would share one limit.
-  if (actor.ip && actor.ip !== 'unknown' && get('SELECT COUNT(*) n FROM signer_codes WHERE ip=? AND at > ?', actor.ip, iso(t - 3600_000)).n >= SIGNER_CODES_PER_CALLER_HOUR)
-    throw bad(`${SIGNER_CODES_PER_CALLER_HOUR} codes were asked for from your internet connection in the last hour, which is the most we send. Wait a while and try again. If you need help, you can reach ${reach}.`, 429, { code: 'wait_caller' });
-  if (get('SELECT COUNT(*) n FROM signer_codes WHERE dest_hash=? AND at > ?', d.key, iso(t - 864e5)).n >= SIGNER_CODES_PER_DESTINATION_DAY)
-    throw bad(`${SIGNER_CODES_PER_DESTINATION_DAY} codes have gone to ${d.masked} in the last 24 hours, which is the most we send to one ${byText ? 'number' : 'mailbox'} in a day. Try again tomorrow. If you need the document sooner, you can reach ${reach}.`, 429, { code: 'wait_destination' });
+  // One internet address can be a whole office signing one sender's bulk send, so the caller limit is counted for
+  // one sender's documents, and a code that was typed in correctly does not count: only codes asked for and never
+  // used do. It stops one machine working its way through many links of one sender, and never stands between a
+  // person and another sender's document. An address we cannot tell apart (no proxy in front, see
+  // TRUSTED_PROXY_HOPS) is not counted, or every visitor would share one limit; the limits per recipient and per
+  // mailbox or number hold anyway.
+  if (actor.ip && actor.ip !== 'unknown' && get("SELECT COUNT(*) n FROM signer_codes WHERE ip=? AND account_id=? AND at > ? AND COALESCE(ended_how, '') != 'used'", actor.ip, e.account_id, iso(t - 3600_000)).n >= SIGNER_CODES_PER_CALLER_HOUR)
+    throw bad(`${SIGNER_CODES_PER_CALLER_HOUR} codes for documents from ${sender.name} were asked for from your internet connection in the last hour and not typed in, which is the most we send. Wait a while and try again. If you need help, you can reach ${reach}.`, 429, { code: 'wait_caller' });
+  // One mailbox or number gets at most so many codes a day from one sender, counted for that sender alone: another
+  // account, or a stranger typing the address into a public form, can never use up what anyone else's document
+  // sends. A public form's visitor counts against that form only (see codeBucket).
+  const bucket = codeBucket(e, r);
+  if (get('SELECT COUNT(*) n FROM signer_codes WHERE dest_hash=? AND COALESCE(bucket, account_id)=? AND at > ?', d.key, bucket, iso(t - 864e5)).n >= SIGNER_CODES_PER_DESTINATION_DAY)
+    throw bad(`${SIGNER_CODES_PER_DESTINATION_DAY} codes for documents from ${sender.name}${bucket === e.account_id ? '' : ' through this form'} have gone to ${d.masked} in the last 24 hours, which is the most we send to one ${byText ? 'number' : 'mailbox'} in a day. Try again tomorrow. If you need the document sooner, you can reach ${reach}.`, 429, { code: 'wait_destination' });
   if (byText) {
     const no = mayText(e, d.to!, 'code');
     if (no) {
@@ -638,8 +686,8 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
   // The newer code ends the older one in the same step that makes it, so there is never more than one that works.
   const id = tx(() => {
     run("UPDATE signer_codes SET ended_at=?, ended_how='replaced' WHERE recipient_id=? AND ended_at IS NULL", at, r.id);
-    return Number(run('INSERT INTO signer_codes (recipient_id, envelope_id, account_id, channel, dest, dest_hash, code_hash, stamp, ip, at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-      r.id, e.id, e.account_id, kind, d.masked, d.key, codeHash(r, stamp, code), stamp, actor.ip || null, at, expires).lastInsertRowid);
+    return Number(run('INSERT INTO signer_codes (recipient_id, envelope_id, account_id, channel, dest, dest_hash, code_hash, stamp, ip, at, expires_at, bucket) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      r.id, e.id, e.account_id, kind, d.masked, d.key, codeHash(r, stamp, code), stamp, actor.ip || null, at, expires, bucket).lastInsertRowid);
   });
   // An older code that is still waiting to be sent would arrive after this one and work for nothing.
   // (An email about an envelope that carries an end time is a code email. They are filed under the envelope and the
@@ -744,6 +792,9 @@ export async function codeProblem(e: any, r: any, what: any, actor: Actor): Prom
   const careful = 'Before you change anything, make sure you are dealing with the right person. Reach them a way you already trust, such as a call to a number you know: someone who should not have the link could be the one asking.';
   if (notMine) {
     run('UPDATE recipients SET check_stop=? WHERE id=?', now(), r.id);
+    // For every envelope of this account, not this link alone: a text waiting on another envelope is decided again
+    // when it is tried (mayText), and a new envelope to the number is held the same way.
+    if (d.to) run('INSERT OR REPLACE INTO text_stops (account_id, dest_hash, envelope_id, at) VALUES (?,?,?,?)', e.account_id, phoneKey(d.to), e.id, now());
     run("UPDATE signer_codes SET ended_at=?, ended_how='stopped' WHERE recipient_id=? AND ended_at IS NULL", now(), r.id);
     dropTexts(r.id, 'someone using the signing link said the number is not theirs');
     audit(e.id, actor, 'One-time code: not my number', `Someone using the signing link of ${r.name} said the mobile number ${d.masked} is not theirs. No more codes or links are texted to it until the sender corrects it or confirms it with them.`);

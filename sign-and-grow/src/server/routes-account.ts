@@ -718,5 +718,5 @@ route('GET', '/dev/outbox', (c) => {
   }
   // Text messages land here too on a machine without a provider (SMS_DEV_OUTBOX=1), with the number masked.
   // delivered_at, bounced_at (with its kind and reason) and complained_at: what the mail provider said afterwards.
-  return json({ emails: all('SELECT id, to_email, subject, link, status, at, delivered_at, bounced_at, bounce_kind, bounce_reason, complained_at FROM emails ORDER BY id DESC LIMIT 100'), texts: all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100') });
+  return json({ emails: all('SELECT id, to_email, subject, link, status, at, delivered_at, bounced_at, bounce_kind, bounce_reason, bounce_said, complained_at FROM emails ORDER BY id DESC LIMIT 100'), texts: all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100') });
 }, 'public');

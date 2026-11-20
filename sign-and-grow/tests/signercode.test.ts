@@ -402,16 +402,27 @@ test('codes are limited for a recipient, for a caller and for a mailbox, each wi
   older(s.rid, 3600);
   assert.equal((await c.post(`/sign/${s.tok}/code`)).status, 200);
 
-  // One caller over many links: an address cannot work its way through every document it holds a link to.
+  // One caller over many links: an address cannot work its way through every document of one sender it holds a
+  // link to. Only codes that were never typed in count, so the ones are let in here as if they were asked for.
   const caller = visitor();
-  const links: string[] = [];
-  for (let i = 0; i < SIGNER_CODES_PER_CALLER_HOUR + 1; i++) links.push((await one(ada, { verify: 'email_code' })).tok);
-  for (let i = 0; i < SIGNER_CODES_PER_CALLER_HOUR; i++) assert.equal((await caller.post(`/sign/${links[i]}/code`)).status, 200, `link ${i + 1}`);
-  const tooMany = await caller.post(`/sign/${links[SIGNER_CODES_PER_CALLER_HOUR]}/code`);
+  const links: any[] = [];
+  for (let i = 0; i < 2; i++) links.push(await one(ada, { verify: 'email_code' }));
+  assert.equal((await caller.post(`/sign/${links[0].tok}/code`)).status, 200);
+  const made = db.get('SELECT * FROM signer_codes WHERE recipient_id=? ORDER BY id DESC LIMIT 1', links[0].rid);
+  for (let i = 1; i < SIGNER_CODES_PER_CALLER_HOUR; i++)
+    db.run('INSERT INTO signer_codes (recipient_id, envelope_id, account_id, channel, dest, dest_hash, code_hash, stamp, ip, at, expires_at, ended_at, ended_how) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      made.recipient_id, made.envelope_id, made.account_id, made.channel, made.dest, `other${i}`, made.code_hash, 'old', caller.ip, made.at, made.expires_at, made.at, 'replaced');
+  const tooMany = await caller.post(`/sign/${links[1].tok}/code`);
   assert.deepEqual([tooMany.status, tooMany.data.code], [429, 'wait_caller']);
-  assert.match(tooMany.data.error, /codes were asked for from your internet connection in the last hour/);
-  // Somebody else, from somewhere else, is not held up by that.
-  assert.equal((await visitor().post(`/sign/${links[SIGNER_CODES_PER_CALLER_HOUR]}/code`)).status, 200);
+  assert.equal(tooMany.data.error, `${SIGNER_CODES_PER_CALLER_HOUR} codes for documents from Ada Sender were asked for from your internet connection in the last hour and not typed in, which is the most we send. Wait a while and try again. If you need help, you can reach Ada Sender: ada.sender@example.com.`);
+  // Somebody else, from somewhere else, is not held up by that, and neither is a document from another sender.
+  assert.equal((await visitor().post(`/sign/${links[1].tok}/code`)).status, 200);
+  const elsewhere = await one(await signUp('Ezra Elsewhere', 'ezra.elsewhere@example.com', ip()), { verify: 'email_code' });
+  assert.equal((await caller.post(`/sign/${elsewhere.tok}/code`)).status, 200, 'one sender\'s codes held up another sender\'s document');
+  // Codes that were typed in do not count: the caller's own code for links[0], typed now, takes one off.
+  db.run("UPDATE signer_codes SET ended_how='used' WHERE ip=? AND dest_hash='other1'", caller.ip);
+  older(links[1].rid, 120);
+  assert.equal((await caller.post(`/sign/${links[1].tok}/code`)).status, 200);
 
   // One mailbox over many documents and many callers: a sender cannot fill it with codes.
   const box = fresh('flooded');
@@ -422,7 +433,7 @@ test('codes are limited for a recipient, for a caller and for a mailbox, each wi
     if (i < SIGNER_CODES_PER_DESTINATION_DAY) (assert.equal(res.status, 200, `document ${i + 1}`), sentTo++);
     else {
       assert.deepEqual([res.status, res.data.code], [429, 'wait_destination']);
-      assert.match(res.data.error, /15 codes have gone to f\*\*\*@example\.com in the last 24 hours, which is the most we send to one mailbox in a day/);
+      assert.match(res.data.error, /15 codes for documents from Ada Sender have gone to f\*\*\*@example\.com in the last 24 hours, which is the most we send to one mailbox in a day/);
       assert.equal(res.data.error.includes(box), false);
     }
   }
@@ -521,7 +532,7 @@ test('an access code and a one-time code together: the access code comes first, 
 });
 
 test('"This is not my number" and "I do not get the code" tell the sender, and the wrong number is left alone', async () => {
-  const s = await one(ada, { verify: 'sms_code', phone: UK }, { subject: 'Wrong number lease' });
+  const s = await one(ada, { verify: 'sms_code', phone: '+44 7700 900124' }, { subject: 'Wrong number lease' });
   const c = visitor();
   await c.post(`/sign/${s.tok}/code`);
   const code = textCode(s.rid);
@@ -531,7 +542,7 @@ test('"This is not my number" and "I do not get the code" tell the sender, and t
   const told = toAda('Code did not arrive: Wrong number lease');
   assert.equal(told.length, before + 1);
   assert.match(told.pop()!.html, /does not arrive.*Check that the number is right.*choose Correct next to their name.*make sure you are dealing with the right person/s);
-  assert.match((await line(ada, s.id, 'One-time code: did not arrive')).detail, /said the code sent by text message to \+44 \*\*\* \*\*\* 0123 did not arrive/);
+  assert.match((await line(ada, s.id, 'One-time code: did not arrive')).detail, /said the code sent by text message to \+44 \*\*\* \*\*\* 0124 did not arrive/);
   // Not my number: no further code goes to it, also not the one that was on its way, until the sender corrects it.
   const mine = await c.post(`/sign/${s.tok}/code/problem`, { what: 'not_mine' });
   assert.deepEqual([mine.status, mine.data.stopped], [200, true]);
@@ -541,7 +552,7 @@ test('"This is not my number" and "I do not get the code" tell the sender, and t
   older(s.rid, 120);
   const refused = await c.post(`/sign/${s.tok}/code`);
   assert.deepEqual([refused.status, refused.data.code], [409, 'stopped']);
-  assert.match(refused.data.error, /No code is sent to \+44 \*\*\* \*\*\* 0123 any more, because someone using this link said it is not their number\. Ada Sender has been told and has to put in the right number/);
+  assert.match(refused.data.error, /No code is sent to \+44 \*\*\* \*\*\* 0124 any more, because someone using this link said it is not their number\. Ada Sender has been told and has to put in the right number/);
   assert.equal(texts(s.rid).length, 1);
   assert.equal((await full(ada, s.id)).envelope.recipients[0].check.stopped, true);
   // Only a few a day, so a link cannot be used to fill the sender's inbox.

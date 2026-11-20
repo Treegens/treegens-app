@@ -3,12 +3,15 @@ import { useState } from 'react';
 import { api, useLoad, fmtDate } from '@/components/ui';
 
 // What became of an email: at hand-over, and then what the mail provider said about it (POST /api/mail/events,
-// src/server/routes-bounces.ts). News can be tried here by posting events of our own shape to that address.
+// src/server/routes-bounces.ts). News can be tried here by posting events of our own shape to that address. This page
+// is for the people who run the server, so it shows what the mail server wrote too (bounce_said), which customers
+// never see.
 const HANDED: Record<string, string> = { outbox: 'In the outbox', sent: 'Handed to the mail server', failed: 'Not sent', queued: 'Waiting to go out' };
 function mailStatus(m: any): string {
+  const why = m.bounce_said || m.bounce_reason;
   const news = m.complained_at ? `marked as spam ${fmtDate(m.complained_at, true)}`
-    : m.bounce_kind === 'hard' ? `bounced ${fmtDate(m.bounced_at, true)}: ${m.bounce_reason}`
-    : m.bounce_kind === 'soft' ? `not delivered yet ${fmtDate(m.bounced_at, true)}: ${m.bounce_reason}`
+    : m.bounce_kind === 'hard' ? `bounced ${fmtDate(m.bounced_at, true)}: ${why}`
+    : m.bounce_kind === 'soft' ? `not delivered yet ${fmtDate(m.bounced_at, true)}: ${why}`
     : m.delivered_at ? `delivered to the mail server ${fmtDate(m.delivered_at, true)}` : '';
   return `${HANDED[m.status] || m.status}${news ? `, then ${news}` : ''}`;
 }

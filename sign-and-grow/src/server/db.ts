@@ -253,6 +253,13 @@ CREATE TABLE IF NOT EXISTS sms_usage (
   kind TEXT NOT NULL, dest_hash TEXT NOT NULL, at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sms_usage_account ON sms_usage(account_id, at);
+-- Numbers that someone using a signing link said are not theirs ("This is not my number", src/server/signercode.ts),
+-- for each account: a keyed fingerprint of the number, never the number. Nothing more is texted to it from that
+-- account, on any of its envelopes, until its sender confirms the number with the person (number_confirmed).
+CREATE TABLE IF NOT EXISTS text_stops (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, dest_hash TEXT NOT NULL, envelope_id TEXT, at TEXT NOT NULL,
+  PRIMARY KEY (account_id, dest_hash)
+);
 -- An account's do-not-mail list (src/server/bounces.ts): an address at which an email about one of the account's
 -- envelopes could not be delivered for good, with what the mail server said and when. A new envelope to that
 -- address within BOUNCE_WARN_DAYS is answered with a warning first, and goes out when the sender says so. One line
@@ -640,6 +647,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['recipients', 'checked_for', 'TEXT'],
   ['recipients', 'check_stop', 'TEXT'],
   ['recipients', 'texted_at', 'TEXT'],
+  // Which daily allowance of codes to one mailbox or number a code counts against: the sender's account, or for the
+  // visitor of a public form that form alone ("form:<id>"), so codes a stranger asks for through one never use up
+  // what anyone else's document may send. Empty on older lines: the account.
+  ['signer_codes', 'bucket', 'TEXT'],
   // The document exactly as this person signed it, as a stored PDF (its fingerprint), made at the moment their
   // signature was set aside. It is what they download when they ask for what they signed the first time.
   ['earlier_signatures', 'copy_sha256', 'TEXT'],
@@ -813,6 +824,7 @@ function migrate(d: any) {
   const hadPrefill = d.prepare('PRAGMA table_info(fields)').all().some((c: any) => c.name === 'prefill');
   const hadWelcomed = d.prepare('PRAGMA table_info(users)').all().some((c: any) => c.name === 'welcomed_at');
   const hadCameBy = d.prepare('PRAGMA table_info(support_requests)').all().some((c: any) => c.name === 'came_by');
+  const hadBounceSaid = d.prepare('PRAGMA table_info(emails)').all().some((c: any) => c.name === 'bounce_said');
   for (const [table, column, definition] of COLUMNS) {
     const have = d.prepare(`PRAGMA table_info(${table})`).all().some((c: any) => c.name === column);
     if (!have) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -846,6 +858,12 @@ function migrate(d: any) {
     d.exec('UPDATE users SET welcomed_at=created_at WHERE NOT EXISTS (SELECT 1 FROM invites i WHERE i.email=users.email AND i.accepted_at=users.created_at)');
   // Help requests from before came_by was kept (see fillOldSupport above).
   if (!hadCameBy) fillOldSupport(d);
+  // Bounces from before bounce_said: the mail server's words, which were stored after our own in brackets, move to
+  // where only the people who run the server see them. Complaints from before mail_complaints are kept for the account.
+  if (!hadBounceSaid) {
+    d.exec("UPDATE emails SET bounce_said=bounce_reason, bounce_reason=substr(bounce_reason, 1, instr(bounce_reason, ' (') - 1) WHERE bounce_reason LIKE '% (%'");
+    d.exec("INSERT OR IGNORE INTO mail_complaints (account_id, email, at) SELECT e.account_id, lower(r.email), MIN(r.complained_at) FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.complained_at IS NOT NULL AND r.email IS NOT NULL GROUP BY e.account_id, lower(r.email)");
+  }
   // One batch per person per Idempotency-Key, whatever else happens.
   d.exec('CREATE UNIQUE INDEX IF NOT EXISTS bulk_batches_idem ON bulk_batches(account_id, sender_id, idem_key) WHERE idem_key IS NOT NULL');
   // Every account has the monthly price it is on written down (src/server/routes-billing.ts, priceFor).

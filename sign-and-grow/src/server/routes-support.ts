@@ -236,15 +236,19 @@ function writer(c: Ctx) {
   if (host !== new URL(c.origin).host) throw new HttpError(403, 'Cross-site request blocked.');
 }
 
-// Tells the people who answer. The customer is named as "Name <address>" so that deleting an account finds this copy.
-// A line break typed into the form never reaches the subject line of an email: the subject is one line.
+// Tells the people who answer. Our copy is marked as being about the login the request belongs to (the confirmed
+// login of its address, or the login that wrote it under its own address), so deleting that login takes the copy
+// along (purgeUser in routes-trust.ts). Never found by the text: an address a customer typed into the message is
+// somebody else's. A line break typed into the form never reaches the subject line of an email: the subject is one line.
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+const aboutOf = (t: any): string | null => get('SELECT id FROM users WHERE email=? AND (email_verified=1 OR id=?)', t.email, t.user_id || '')?.id ?? null;
 async function announce(t: any, extra: string[] = []) {
   const account = t.account_id ? get('SELECT name, plan FROM accounts WHERE id=?', t.account_id) : null;
+  const about = aboutOf(t);
   // With neither SUPPORT_EMAIL nor OPERATOR_EMAILS nobody hears of a request, so the server log says so every time.
   if (!desk().length) console.error(`[support] HELP REQUEST ${refOf(t)} ARRIVED AND NOBODY WAS TOLD (set SUPPORT_EMAIL or OPERATOR_EMAILS). It is stored and waits in the operator queue.`);
   for (const to of desk())
-    await sendMail({ to, subject: `[${t.topic}] ${refOf(t)}: ${oneLine(t.message.slice(0, 60))}`, heading: `Help request ${refOf(t)}`,
+    await sendMail({ to, about, subject: `[${t.topic}] ${refOf(t)}: ${oneLine(t.message.slice(0, 60))}`, heading: `Help request ${refOf(t)}`,
       lines: [`From ${who(t)}${account ? `, account ${account.name} (${account.plan})` : ', not logged in'}.`, ...(t.envelope_id ? [`About envelope ${t.envelope_id}.`] : []), ...extra,
         t.due_at ? `${priorityOf(t) === 'urgent' ? 'Urgent. ' : ''}The customer was told a person will have answered by ${whenText(t.due_at, tzOf(to))}.` : 'No response time was promised for this one.',
         t.message, 'Answer it from the queue, not by replying to this email: only an answer written there reaches the request, is emailed to the customer and stops the clock.'],
@@ -375,7 +379,7 @@ async function customerReply(t: any, text: any, userId: string | null) {
   if (was !== 'open') {
     const owner = ownerOf(fresh);
     for (const to of owner ? [owner.email] : desk())
-      await sendMail({ to, subject: `[reply] ${refOf(t)}: ${oneLine(message.slice(0, 60))}`, heading: `${t.name || 'The customer'} replied on request ${refOf(t)}`,
+      await sendMail({ to, about: aboutOf(t), subject: `[reply] ${refOf(t)}: ${oneLine(message.slice(0, 60))}`, heading: `${t.name || 'The customer'} replied on request ${refOf(t)}`,
         lines: [`From ${who(t)}.`, message, due ? `They were told a person will have answered by ${whenText(due, tzOf(to))}.` : 'No response time was promised for this one.', 'Answer it from the queue, not by replying to this email.'],
         cta: { label: 'Open the request', url: `${baseUrl()}/app/operator?ticket=${t.id}` } });
   }

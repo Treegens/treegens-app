@@ -936,7 +936,7 @@ export function dailyCap(account: any): { cap: number; firstWeek: boolean } {
 
 // What a pause stops, in one sentence that every refusal and every email about a pause uses. It lists what the code
 // holds back, no more: see emailRefusal, advance, notifyRecipient, correctEnvelope, voidEnvelope and inviteRefusal.
-export const PAUSED_MEANS = 'Until a person has looked at it, nothing a sender starts is emailed to anyone: no new envelopes, no new or changed recipients, no reminders, no reopening, no team invitations, no email about a change to a document, and nobody who is waiting further down a signing order is asked. What recipients do themselves still works and is confirmed to them: signing, declining, the copy when everyone has finished, a link they ask for again. An envelope can still be voided, and the people on it are told so without the reason.';
+export const PAUSED_MEANS = 'Until a person has looked at it, nothing a sender starts is emailed to anyone: no new envelopes, no new or changed recipients, no reminders, no reopening, no team invitations, no email about a change to a document, and nobody who is waiting further down a signing order is asked. What recipients do themselves still works and is confirmed to them: signing, declining, the copy when everyone has finished, a link they ask for again. The one exception is a one-time code by text message: no text is sent while paused, so someone whose document asks for one cannot open it until the pause is lifted or you switch them to a code by email (Correct, next to their name). An envelope can still be voided, and the people on it are told so without the reason.';
 // Said by every path that is refused while an account is paused, with the reason the pause was really given for.
 export function pausedText(account: any): string {
   const why = String(account.suspended_reason || 'it is under review').replace(/[.\s]+$/, '');
@@ -1377,7 +1377,7 @@ export async function advance(envelopeId: string): Promise<void> {
       // Nor is someone whose link the sender passes on. The record says no more than that: not how, not whether it arrived.
       else if (r.link_by_sender && !r.email) audit(e.id, { name: 'System' }, 'Not emailed', `${labelOf(r)}. The sender said they would send the link themselves, so no email went out. The request is open.`);
       else if (how === 'outbox') audit(e.id, { name: 'System' }, 'Not emailed', `${whoIs(r)}. No mail server is set up, so no email went out. The request is open, and the sender can pass on the signing link.`);
-      else if (how === false && r.complained_at) audit(e.id, { name: 'System' }, 'Not emailed', `${r.name} <${r.email}>. They marked an earlier email about this envelope as spam, so no email went out. The request is open, and the sender can pass on the signing link.`);
+      else if (how === false && r.complained_at) audit(e.id, { name: 'System' }, 'Not emailed', `${r.name} <${r.email}>. They marked an earlier email from this account as spam, so no email went out. The request is open, and the sender can pass on the signing link.`);
       else if (how !== 'failed') audit(e.id, { name: 'System' }, r.role === 'cc' ? 'Copy sent' : 'Sent to recipient', whoIs(r)); // a group is named with its members
     }
     if (!copied) return;
@@ -1487,7 +1487,7 @@ async function completeEnvelope(e: any) {
     // Someone who marked an email about this envelope as spam gets no copy by email, and the record says so.
     // Their link still opens the completed document.
     if (r.complained_at) {
-      audit(e.id, { name: 'System' }, 'Copy not emailed', `${r.name} <${r.email}> marked an earlier email about this envelope as spam, so the completed copy was not emailed to them. Their signing link opens it.`);
+      audit(e.id, { name: 'System' }, 'Copy not emailed', `${r.name} <${r.email}> marked an earlier email from this account as spam, so the completed copy was not emailed to them. Their signing link opens it.`);
       continue;
     }
     sent.add(to);
