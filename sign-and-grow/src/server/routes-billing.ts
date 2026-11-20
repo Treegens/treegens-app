@@ -3,7 +3,7 @@ import { all, get, run } from './db.ts';
 import { bad, hmac, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { sendMail } from './mail.ts';
 import { billingEnabled } from './envelopes.ts';
-import { grant, creditSummary, available } from './credits.ts';
+import { grant, creditSummary, available, findFreeCode } from './credits.ts';
 import { PRICING, mangrovesFor } from '../lib/impact.ts';
 
 // How Sign&Grow charges:
@@ -82,7 +82,7 @@ export function refundOffer(account: any): { payment_id: string; cents: number; 
 // How long a paid account can go without sending anything before its renewal is stopped for it. 0 turns this off.
 export const dormantStopDays = () => (process.env.DORMANT_AUTO_STOP_DAYS === undefined ? 90 : Number(process.env.DORMANT_AUTO_STOP_DAYS) || 0);
 
-const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', adjust: 'Adjustment' };
+const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', adjust: 'Adjustment' };
 
 export function billingState(account: any, user?: any) {
   const enabled = billingEnabled();
@@ -93,8 +93,10 @@ export function billingState(account: any, user?: any) {
     status: account.subscription_status,
     price: PRICING.monthlyUsd,
     pricing: PRICING,
-    renews_at: account.plan === 'grove' && !account.cancel_at ? account.renews_at : null,
-    ends_at: account.plan === 'grove' ? account.cancel_at : null,
+    // Set when the plan is free through a code: nothing is charged, so there is nothing to renew or to end.
+    free_with: account.promo_code || null,
+    renews_at: account.plan === 'grove' && !account.cancel_at && !account.promo_code ? account.renews_at : null,
+    ends_at: account.plan === 'grove' && !account.promo_code ? account.cancel_at : null,
     // What can be sent right now: the balance, minus signatures held for people who have been asked and not signed yet.
     signatures: enabled ? creditSummary(account.id) : null,
     mangroves: mangrovesFor(paid / 100),
@@ -102,7 +104,7 @@ export function billingState(account: any, user?: any) {
     refund_days: refundDays(),
     dormant_stop_days: dormantStopDays(),
     // Other paid plans this person already manages, so nobody pays twice without noticing.
-    other_paid: user ? all("SELECT a.name FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role IN ('owner','admin') AND a.plan='grove' AND a.id!=?", user.id, account.id).map((r) => r.name) : [],
+    other_paid: user ? all("SELECT a.name FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role IN ('owner','admin') AND a.plan='grove' AND a.promo_code IS NULL AND a.id!=?", user.id, account.id).map((r) => r.name) : [],
     payments: all('SELECT id, amount_cents, currency, at, receipt_url, refunded_at, refunded_cents, kind, credits FROM payments WHERE account_id=? ORDER BY at DESC, rowid DESC LIMIT 60', account.id)
       .map((p) => ({ ...p, amount: money(p.amount_cents, p.currency), refunded: p.refunded_cents ? money(p.refunded_cents, p.currency) : null })),
     ledger: all('SELECT delta, reason, at FROM credits WHERE account_id=? ORDER BY id DESC LIMIT 40', account.id).map((l) => ({ ...l, label: LEDGER_LABEL[l.reason] || l.reason })),
@@ -154,9 +156,28 @@ async function refundPayment(account: any, p: any, cents: number, signatures: nu
 
 route('GET', '/billing', (c) => billingState(c.account, c.user));
 
+// A code that makes the monthly plan free. The plan's signatures arrive every month and nothing is ever charged for it.
+route('POST', '/billing/redeem', async (c) => {
+  rateLimit(`redeem:${c.ip}`, 20, 3600_000);
+  const code = findFreeCode((await c.body()).code);
+  if (!code) throw bad('We do not recognise that code. Check the spelling and try again.');
+  const a = c.account;
+  if (a.promo_code !== code) {
+    // Someone already paying is never charged again once their plan is free.
+    if (a.plan === 'grove' && a.stripe_subscription_id && !a.cancel_at && billingEnabled()) await cancelPlan(a, 'because a free code was added', true);
+    run("UPDATE accounts SET promo_code=?, promo_at=?, plan='grove', subscription_status='free' WHERE id=?", code, now(), a.id);
+    await mailAdmins(a.id, `Code ${code} accepted: your plan is free`, 'Your monthly plan is free', [
+      `${a.name} is on the monthly plan at no charge with the code ${code}. ${sigs(PRICING.monthlySignatures)} are added to your balance every month.`,
+      `There is no card on file for it and nothing to cancel. If you need more in a busy month you can top up at ${money(PRICING.topUpUsd * 100)} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`,
+    ], { label: 'Open the Plan page', url: `${baseUrl()}/app/settings?tab=billing` });
+  }
+  return billingState(get('SELECT * FROM accounts WHERE id=?', a.id), c.user);
+}, 'admin');
+
 route('POST', '/billing/checkout', async (c) => {
   if (!billingEnabled() || !process.env.STRIPE_PRICE_GROVE) throw bad('Billing is not set up on this server yet.', 501);
   const a = c.account;
+  if (a.promo_code) throw bad(`Your plan is already free with the code ${a.promo_code}. There is nothing to pay.`);
   if (a.plan === 'grove' && !a.cancel_at) throw bad(`This account is already on the ${PRICING.planName} plan.`);
   const s = await stripe('POST', 'checkout/sessions', {
     mode: 'subscription', 'line_items[0][price]': process.env.STRIPE_PRICE_GROVE, 'line_items[0][quantity]': '1',
@@ -300,7 +321,7 @@ route('POST', '/public/billing/find', async (c) => {
   const email = str((await c.body()).email, 254).trim().toLowerCase();
   if (!isEmail(email)) throw bad('Enter a valid email address.');
   rateLimit(`find:${email}`, 3, 3600_000);
-  const rows = all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id JOIN users u ON u.id=m.user_id WHERE u.email=? AND m.role IN ('owner','admin') AND a.plan='grove'", email);
+  const rows = all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id JOIN users u ON u.id=m.user_id WHERE u.email=? AND m.role IN ('owner','admin') AND a.plan='grove' AND a.stripe_subscription_id IS NOT NULL", email);
   if (rows.length)
     await sendMail({
       to: email, subject: 'Your Sign&Grow subscriptions', heading: 'Your monthly plans',
@@ -417,6 +438,11 @@ export async function applyStripeEvent(ev: any) {
     const live = !ended && ['active', 'trialing', 'past_due'].includes(o.status);
     const a = byCustomer();
     if (!a) return;
+    if (a.promo_code) {
+      // The plan is free through a code. The old paid subscription winding down changes nothing for them.
+      if (!live) run('UPDATE accounts SET stripe_subscription_id=NULL, cancel_at=NULL, renews_at=NULL WHERE id=?', a.id);
+      return;
+    }
     const end = periodEnd(o);
     run('UPDATE accounts SET plan=?, subscription_status=?, renews_at=?, cancel_at=? WHERE id=?', live ? 'grove' : 'seedling', ended ? 'canceled' : o.status,
       live ? end : null, live && o.cancel_at_period_end ? end || a.cancel_at : null, a.id);
@@ -456,7 +482,7 @@ route('POST', '/stripe/webhook', async (c) => {
 // Once every two months at most: tell people who pay but do not send, so nobody funds a forgotten plan by accident.
 export async function dormancyNudges(): Promise<number> {
   const cutoff = new Date(Date.now() - 60 * 864e5).toISOString();
-  const rows = all("SELECT * FROM accounts WHERE plan='grove' AND cancel_at IS NULL AND (dormant_nudged_at IS NULL OR dormant_nudged_at < ?) AND created_at < ?", cutoff, cutoff)
+  const rows = all("SELECT * FROM accounts WHERE plan='grove' AND promo_code IS NULL AND cancel_at IS NULL AND (dormant_nudged_at IS NULL OR dormant_nudged_at < ?) AND created_at < ?", cutoff, cutoff)
     .filter((a) => get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", a.id, cutoff).n === 0);
   for (const a of rows) {
     run('UPDATE accounts SET dormant_nudged_at=? WHERE id=?', now(), a.id);

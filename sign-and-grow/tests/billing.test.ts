@@ -362,3 +362,58 @@ test('back from checkout the plan is active at once; a card dispute stops all fu
   assert.equal(account().plan, 'seedling');
   assert.equal(stripe.sub.status, 'canceled');
 });
+
+test('the code GROWalition makes the monthly plan free', async () => {
+  // Entered at sign-up, in any letter case.
+  const gro = new Client();
+  assert.equal((await gro.post('/auth/signup', { name: 'Gro Member', email: 'gro@example.com', password: 'correct horse battery', code: 'growALITION' })).status, 200);
+  await new Client().post('/auth/verify', { token: db.get("SELECT verify_token t FROM users WHERE email='gro@example.com'").t });
+  let state = (await gro.get('/billing')).data;
+  assert.equal(state.plan, 'grove');
+  assert.equal(state.free_with, 'GROWalition');
+  assert.deepEqual(state.signatures, { balance: 12, held: 0, available: 12 }, '3 to try plus this month\'s 9');
+  assert.equal(state.renews_at, null);
+  assert.equal(state.refund, null, 'nothing was paid, so there is nothing to refund');
+  assert.equal(state.ledger[0].label, 'Monthly plan, free with your code');
+  assert.equal((await gro.get('/billing')).data.signatures.balance, 12, 'looking twice does not add twice');
+  assert.equal(db.get('SELECT COUNT(*) n FROM payments WHERE account_id=?', (await gro.get('/me')).data.account.id).n, 0);
+
+  // Next month the plan's signatures arrive again, on top of what is left.
+  const gid = (await gro.get('/me')).data.account.id;
+  db.run("UPDATE credits SET ref='GROWalition:2026-01' WHERE account_id=? AND reason='code'", gid);
+  assert.equal((await gro.get('/billing')).data.signatures.balance, 21);
+
+  // They can send, and top up like anyone on the plan. There is nothing to cancel and nothing to check out.
+  const e = await simple(gro, 'friend@example.com');
+  assert.equal((await gro.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await gro.post('/billing/topup', { quantity: 2 })).data.total, '$2.00');
+  assert.equal((await gro.post('/billing/cancel')).status, 400);
+  assert.equal((await gro.post('/billing/checkout')).status, 400);
+  await cron.tick();
+  assert.equal(subjects('gro@example.com').includes('Still using Sign&Grow?'), false, 'never nudged about a payment they do not make');
+
+  // Entered later on the Plan page. A wrong code says so.
+  const late = await signUp('Late Joiner', 'late@example.com');
+  assert.equal((await late.post('/billing/redeem', { code: 'nope' })).status, 400);
+  const ok = await late.post('/billing/redeem', { code: ' GROWalition ' });
+  assert.equal(ok.data.free_with, 'GROWalition');
+  assert.equal(ok.data.signatures.balance, 12);
+  assert.ok(subjects('late@example.com').includes('Code GROWalition accepted: your plan is free'));
+  assert.equal((await late.post('/billing/redeem', { code: 'GROWalition' })).data.signatures.balance, 12, 'entering it again changes nothing');
+
+  // Someone already paying who adds the code is never charged again, and keeps the plan when the old one winds down.
+  const payer = await signUp('Paying Member', 'payer@example.com');
+  const pid = (await payer.get('/me')).data.account.id;
+  await event('checkout.session.completed', { mode: 'subscription', client_reference_id: pid, customer: 'cus_pay', subscription: 'sub_1' });
+  stripe.sub.cancel_at_period_end = false;
+  await payer.post('/billing/redeem', { code: 'GROWalition' });
+  assert.equal(stripe.sub.cancel_at_period_end, true, 'the paid renewal was turned off');
+  await event('customer.subscription.deleted', { customer: 'cus_pay', status: 'canceled' });
+  assert.equal(db.get('SELECT plan FROM accounts WHERE id=?', pid).plan, 'grove');
+  assert.equal(subjects('payer@example.com').includes('Your monthly plan has ended'), false);
+
+  // The code can be changed or switched off without touching the software.
+  process.env.FREE_PLAN_CODES = 'Mangrove2027';
+  assert.equal((await owner.post('/billing/redeem', { code: 'GROWalition' })).status, 400);
+  delete process.env.FREE_PLAN_CODES;
+});

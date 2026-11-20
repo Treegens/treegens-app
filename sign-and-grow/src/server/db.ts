@@ -158,6 +158,8 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['payments', 'credits', 'INTEGER NOT NULL DEFAULT 0'],
   ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
   ['powerforms', 'alerted_at', 'TEXT'],
+  ['accounts', 'promo_code', 'TEXT'],
+  ['accounts', 'promo_at', 'TEXT'],
 ];
 
 function migrate(d: any) {

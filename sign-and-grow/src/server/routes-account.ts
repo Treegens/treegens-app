@@ -5,7 +5,7 @@ import { hashPassword, checkPassword, createSession, cookie, SESSION_COOKIE } fr
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver } from './webhooks.ts';
 import { billingEnabled, verifyChain, notifyPrefs } from './envelopes.ts';
-import { grant, creditSummary } from './credits.ts';
+import { grant, creditSummary, findFreeCode } from './credits.ts';
 import { tick } from './cron.ts';
 import { trustInfo } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
@@ -49,6 +49,10 @@ route('POST', '/auth/signup', async (c) => {
       run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'owner',?)", accountId, uid, t);
       // A few free signatures to try the product with. Once per account.
       grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
+      // A free-plan code entered at sign-up takes effect straight away. A wrong one is simply ignored here; it can be
+      // entered again on the Plan page, which says so if it is not recognised.
+      const code = findFreeCode(b.code);
+      if (code) run("UPDATE accounts SET promo_code=?, promo_at=?, plan='grove', subscription_status='free' WHERE id=?", code, t, accountId);
     }
   });
   const u = get('SELECT * FROM users WHERE id=?', uid);
@@ -132,7 +136,7 @@ route('GET', '/me', (c) => {
   return {
     user: publicUser(c.user),
     role: c.role,
-    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.cancel_at },
+    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
     ...trustInfo(c),
     accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', c.user.id),

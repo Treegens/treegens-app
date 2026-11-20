@@ -260,8 +260,10 @@ function Billing() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<any>(null);
   const [qty, setQty] = useState(10);
+  const [code, setCode] = useState('');
   if (!b) return <div className="muted">Loading…</div>;
   const grove = b.plan === 'grove';
+  const free = !!b.free_with;
   const P = PRICING;
   const price = `$${P.monthlyUsd}`;
   const s = b.signatures;
@@ -320,14 +322,20 @@ function Billing() {
         <div className="row between wrap">
           <div>
             <div className="muted small" style={{ fontWeight: 600 }}>Monthly plan</div>
-            <h2 style={{ fontSize: 24 }}>{price} a month <span className="muted" style={{ fontSize: 15, fontWeight: 400 }}>adds {n(P.monthlySignatures)} every month</span></h2>
+            <h2 style={{ fontSize: 24 }}>{free ? <>Free <s className="muted" style={{ fontSize: 16, fontWeight: 400 }}>{price} a month</s></> : <>{price} a month</>} <span className="muted" style={{ fontSize: 15, fontWeight: 400 }}>adds {n(P.monthlySignatures)} every month</span></h2>
           </div>
-          {grove && !b.ends_at && <span className="badge completed">Active</span>}
-          {grove && b.ends_at && <span className="badge expired">Ends {fmtDate(b.ends_at)}</span>}
+          {free && <span className="badge completed">Free with {b.free_with}</span>}
+          {grove && !free && !b.ends_at && <span className="badge completed">Active</span>}
+          {grove && !free && b.ends_at && <span className="badge expired">Ends {fmtDate(b.ends_at)}</span>}
           {!grove && <span className="badge">Not started</span>}
         </div>
 
-        {grove && !b.ends_at && (
+        {free && (
+          <p className="plan-line" style={{ marginBottom: 0 }}>
+            <b>Your plan is free with the code {b.free_with}.</b> {n(P.monthlySignatures)} are added to your balance every month at no charge, and what you do not use rolls over. There is no card on file for the plan and nothing to cancel. Need more in a busy month? Top up below.
+          </p>
+        )}
+        {grove && !free && !b.ends_at && (
           <>
             <p className="plan-line">{b.renews_at ? <>Next charge: <b>{price} on {longDate(b.renews_at)}</b>, which adds {n(P.monthlySignatures)} and plants {mangrovesFor(P.monthlyUsd)} mangroves. That is the whole amount. We remind you by email before it happens.</> : <>Billed {price} each month. We remind you by email before every charge.</>}</p>
             {admin && (
@@ -339,7 +347,7 @@ function Billing() {
             )}
           </>
         )}
-        {grove && b.ends_at && (
+        {grove && !free && b.ends_at && (
           <>
             <p className="plan-line"><b>Cancelled.</b> You will not be charged again. The plan runs until {longDate(b.ends_at)}. Your signatures stay yours after that, and nothing is deleted.</p>
             {admin && <button className="btn primary" disabled={busy} onClick={() => act(() => api('/billing/resume', { method: 'POST' }).then(() => toast('Welcome back. Your plan continues.')))}>Keep the plan after all</button>}
@@ -361,6 +369,17 @@ function Billing() {
         )}
         {!admin && <p className="muted small" style={{ marginBottom: 0 }}>Only account admins can change the plan.</p>}
       </div>
+
+      {admin && !free && (
+        <form className="card" onSubmit={(e) => { e.preventDefault(); act(async () => { const r = await api('/billing/redeem', { body: { code } }); setCode(''); toast(`Code ${r.free_with} accepted. Your monthly plan is free.`); }); }}>
+          <h3>Have a code?</h3>
+          <p className="muted small" style={{ margin: '4px 0 10px' }}>Some communities get the monthly plan free. Enter the code you were given.</p>
+          <div className="row wrap">
+            <input value={code} onChange={(e) => setCode(e.target.value)} aria-label="Code" placeholder="Your code" autoComplete="off" style={{ maxWidth: 240 }} />
+            <button className="btn" disabled={busy || !code.trim()}>Apply code</button>
+          </div>
+        </form>
+      )}
 
       {admin && b.enabled && (
         <div className="card">

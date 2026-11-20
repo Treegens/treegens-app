@@ -7,7 +7,7 @@ type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 const TITLE: Record<Mode, string> = { login: 'Welcome back', signup: 'Create your free account', forgot: 'Reset your password', reset: 'Choose a new password' };
 
 export function AuthForm({ mode }: { mode: Mode }) {
-  const [f, setF] = useState({ name: '', email: '', password: '' });
+  const [f, setF] = useState({ name: '', email: '', password: '', code: '' });
   const [q, setQ] = useState<URLSearchParams | null>(null);
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
@@ -16,6 +16,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
     const p = new URLSearchParams(window.location.search);
     setQ(p);
     if (p.get('email')) setF((s) => ({ ...s, email: p.get('email')! }));
+    if (p.get('code')) setF((s) => ({ ...s, code: p.get('code')! }));
   }, []);
 
   async function submit(e: React.FormEvent) {
@@ -62,6 +63,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
             {mode === 'signup' && <label className="f"><span>Your name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}
             {mode !== 'reset' && <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} /></label>}
             {mode !== 'forgot' && <label className="f"><span>{mode === 'reset' ? 'New password' : 'Password'} {mode !== 'login' && <span className="hint">(at least 8 characters)</span>}</span><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={mode === 'login' ? 1 : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
+            {mode === 'signup' && !q?.get('invite') && <label className="f"><span>Code <span className="hint">(optional, if you were given one)</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
             {error && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{error}</div>}
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Save password'}</button>
           </div>

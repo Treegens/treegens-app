@@ -357,12 +357,14 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   // These three checks exist to keep scammers from using the service to send convincing fakes.
   if (!sender?.email_verified) throw bad('Confirm your email address before you send. We emailed you a link when you signed up, and you can resend it from the banner at the top of the app.', 403);
   if (account.suspended_at) throw bad('Sending is paused on this account while we look into a report from a recipient. Contact support and we will sort it out quickly.', 403);
-  if (account.plan === 'seedling' && Date.now() - Date.parse(account.created_at) < 7 * 864e5) {
+  // Anti-abuse limits apply to accounts that have not paid: the free tier and plans that are free through a code.
+  const unpaid = account.plan === 'seedling' || !!account.promo_code;
+  if (unpaid && Date.now() - Date.parse(account.created_at) < 7 * 864e5) {
     const cap = Number(process.env.NEW_ACCOUNT_DAILY_RECIPIENTS) || 50;
     const today = get("SELECT COUNT(*) n FROM recipients r JOIN envelopes x ON x.id=r.envelope_id WHERE x.account_id=? AND x.sent_at > ?", e.account_id, new Date(Date.now() - 864e5).toISOString()).n;
     if (today + e.recipients.length > cap) throw bad(`New accounts can send to ${cap} people a day during their first week. Need more right now? Contact support.`, 429);
   }
-  if (account.plan === 'seedling' && Date.now() - Date.parse(account.created_at) < 30 * 864e5 && looksLikeScam(e))
+  if (unpaid && Date.now() - Date.parse(account.created_at) < 30 * 864e5 && looksLikeScam(e))
     throw bad('This reads like a payment notice from a well-known brand with a phone number to call, which is how scams look. We do not send those from new accounts. If it is genuine, use the contact form and a person will clear it for you.', 422);
   // A signature is held for every signer so nobody is stopped halfway. It is only used up when they actually sign,
   // and it comes back by itself if the envelope is voided, declined or expires.
