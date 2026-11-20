@@ -237,6 +237,16 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers
           <p>To deliver the link entirely yourself, give the recipient <C>&quot;link_by_sender&quot;: true</C> and no <C>email</C>. We then never email that person, not even reminders or the completed copy, and this URL is the only way in, also to the completed document afterwards. The certificate says &quot;Link shared by the sender&quot; for them. They count towards the daily limit on new people like anyone, and reminding everyone answers with them in <C>not_reminded</C>.</p>
         </div>
 
+        <div className="card" id="click-to-agree">
+          <h2>Click-to-agree terms</h2>
+          <p>Terms your website&apos;s visitors accept with one click (made under Click-to-agree in the app, by an owner or admin). Show them on our page <C>/agree/SLUG</C>, inside your own page with <C>&lt;script src=&quot;.../clickwrap.js&quot; data-agreement=&quot;SLUG&quot;&gt;</C> or an iframe of <C>/agree/SLUG?embed=1</C>, or collect the click yourself and record it with <C>POST /api/clickwraps/:id/acceptances</C>. Ask <C>GET /api/clickwraps/:id/status?person_id=...</C> whether someone has accepted the version that counts.</p>
+          <ul>
+            <li>To say who the visitor is, your server adds <C>who</C> (base64url of JSON with <C>id</C>, <C>name</C>, <C>email</C> and <C>exp</C> in seconds) and <C>sig</C> (HMAC-SHA256 of that exact text with the key of the terms) to the address. Without them the visitor types a name and an address, which nobody checks.</li>
+            <li>The frame cannot be ticked or pressed by the page around it, but it can be covered or hidden. Treat the <C>signgrow:accepted</C> event as a hint and ask the status call before you rely on it. An acceptance you record yourself is marked as recorded by your website.</li>
+            <li>An acceptance is not a signature and costs none. Each account can record a limited number a month (429 with <C>&quot;code&quot;: &quot;monthly_limit&quot;</C> after that). Whether a click binds anyone depends on the country and on the agreement: check what applies to yours.</li>
+          </ul>
+        </div>
+
         <p className="muted">Stuck on something this page does not answer? <Link href="/help?topic=sending#contact">Write to us</Link>. A person replies.</p>
       </main>
       <PublicFooter />

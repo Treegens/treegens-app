@@ -913,6 +913,15 @@ the app itself (`src/server/filecrypt.ts` for the format, `src/server/filestore.
   new price as the price.
 - **The free code** (`GROWalition` by default) is in this source code. If the repository is public, so is the
   code, and nothing limits how many accounts use it. Change it with `FREE_PLAN_CODES`.
+- **Click-to-agree acceptances** are free on every plan and use no signatures: an acceptance is not a signature.
+  What stands in for a price is `CLICKWRAP_MONTHLY_LIMIT` (1000 a month per account, emails to the admins at 80
+  percent and at the limit). Decide whether to price them (a website with heavy traffic would pass 1000 in a day),
+  whether the limit should rise with the plan, and what to tell a customer who asks for more; today the refusal
+  sends them to the contact form and only the operator can raise the number, for every account at once. Also decide
+  whether any site may frame the terms (today `frame-ancestors *` on `/agree/*`, see `next.config.mjs`) or only
+  sites a team lists. And have a lawyer read the words on the page and the certificate (`src/lib/clickwrap.ts`): they
+  say what the record shows and what it does not, and that whether a click binds anyone depends on the country and
+  the agreement, and they promise nothing more.
 - **Impact factors** in the same file are commonly cited estimates. Check them against a source you are happy
   to stand behind publicly.
 - **The 100% promise and the trees per dollar** are business commitments. The app records what was paid and

@@ -166,7 +166,7 @@ const LORA_600 = 'lora-latin-600-normal.woff2';
 const LORA_500_ITALIC = 'lora-latin-500-italic.woff2';
 // Tightenings on top of Lora's own kerning, in thousandths of an em. r and o, and w and s, are the concept designer's
 // and carry over unchanged (the letters around them are the same in "growsigner"). e and r is new with "signer":
-// Lora sets it 7 to 8 units looser than its neighbours n-e, i-g and s-i (white area between the letters over the
+// Lora sets it 7 to 10 units looser than its neighbours n-e, s-i and i-g (white area between the letters over the
 // x-height), and at 200 px it shows as a gap before the last letter.
 const EXTRA_KERN = { ro: -6, ws: -10, er: -8 };
 

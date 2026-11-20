@@ -2,10 +2,10 @@ import { route } from './router.ts';
 import { all, get, run, fillPrices } from './db.ts';
 import { bad, hmac, now, id, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { sendMail } from './mail.ts';
-import { billingEnabled } from './envelopes.ts';
+import { billingEnabled, hasNotPaid } from './envelopes.ts';
 import { grant, creditSummary, available, balance, findFreeCode, paidAvailable } from './credits.ts';
 import { PRICING, mangrovesFor } from '../lib/impact.ts';
-import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients, PRICE_NOTICE_DAYS, priceRuleText, priceChangeDay } from '../lib/policy.ts';
+import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients, PRICE_NOTICE_DAYS, priceRuleText, priceChangeDay, PAID_TRUST_DAYS } from '../lib/policy.ts';
 
 export { refundDays, dormantStopDays };
 
@@ -455,13 +455,18 @@ export const stopBillingFor = (acct: any): Promise<boolean> => serial(acct?.id, 
 const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', dispute: 'Card dispute', adjust: 'Adjustment' };
 const PAYMENT_LABEL: Record<string, string> = { plan: 'Monthly plan', topup: 'Top-up' };
 
-// Has this account ever paid for anything it kept? Anti-abuse limits on unpaid accounts stop applying once it has.
-const hasPaid = (accountId: string) => !!get("SELECT 1 x FROM payments WHERE account_id=? AND kind IN ('plan','topup') AND amount_cents > refunded_cents LIMIT 1", accountId);
+// The anti-abuse limits on accounts that have not paid are the server's own rule (hasNotPaid in envelopes.ts): they
+// stop once a payment has stood for PAID_TRUST_DAYS without being refunded or disputed, or when a person cleared
+// the account. The Plan page shows exactly that rule, and the day a young payment will lift them.
+const liftsOn = (accountId: string): string | null => {
+  const at = get("SELECT MIN(at) at FROM payments WHERE account_id=? AND kind IN ('plan','topup') AND applied_at IS NOT NULL AND amount_cents > 0 AND refunded_cents = 0 AND disputed IS NULL", accountId)?.at;
+  return at ? new Date(Date.parse(at) + PAID_TRUST_DAYS * 864e5).toISOString() : null;
+};
 
 export function billingState(acct: any, user?: any) {
   const enabled = billingEnabled();
   const paid = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=? AND kind IN ('plan','topup')", acct.id).cents;
-  const limited = (acct.plan === 'seedling' || !!acct.promo_code) && !acct.trusted_at && !hasPaid(acct.id);
+  const limited = hasNotPaid(acct);
   const firstWeek = limited && Date.now() - Date.parse(acct.created_at) < 7 * 864e5;
   const nextMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)).toISOString();
   const s = enabled ? creditSummary(acct.id) : null;
@@ -511,7 +516,7 @@ export function billingState(acct: any, user?: any) {
     refund_rule: refundRuleText(refundDays()),
     dormant_stop_days: dormantStopDays(),
     // Limits, as numbers, before anybody runs into them.
-    limits: { first_week_daily: firstWeek ? newAccountDailyRecipients() : null, unpaid_daily_now: limited && !firstWeek ? unpaidDailyRecipients() : null, new_account_daily: newAccountDailyRecipients(), unpaid_daily: unpaidDailyRecipients(), top_up_max: PRICING.topUpMax, bulk_rows: 500 },
+    limits: { paid_trust_days: PAID_TRUST_DAYS, lifts_on: limited ? liftsOn(acct.id) : null, first_week_daily: firstWeek ? newAccountDailyRecipients() : null, unpaid_daily_now: limited && !firstWeek ? unpaidDailyRecipients() : null, new_account_daily: newAccountDailyRecipients(), unpaid_daily: unpaidDailyRecipients(), top_up_max: PRICING.topUpMax, bulk_rows: 500 },
     // Other paid plans this person already manages, so nobody pays twice without noticing.
     other_paid: user ? all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role IN ('owner','admin') AND a.id!=?", user.id, acct.id).filter(hasSub).map((r) => r.name) : [],
     // Only payments that were turned into signatures (or sent back) are listed: one still being worked out is not a payment yet.

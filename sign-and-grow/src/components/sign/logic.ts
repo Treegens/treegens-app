@@ -44,6 +44,24 @@ export function liveLogic(mine: any[], others: any[], values: Record<string, str
 const theirs = (f: any) => !f.readonly && !f.formula && !AUTO.includes(f.type);
 
 /**
+ * What changed when the shown fields changed. `was` is the person's own fields that were shown before (null on the
+ * first look, when nothing is said). Answers in fields that are hidden now are cleared (`clear`), so what is on the
+ * screen is what will be saved; `said` is the sentence for the live region, and `came` the field Next goes to.
+ */
+export function fieldChange(mine: any[], was: Set<string> | null, hidden: Set<string>, values: Record<string, string>) {
+  const shown = new Set<string>(mine.filter((f) => theirs(f) && !hidden.has(f.id)).map((f) => f.id));
+  const cleared = mine.filter((f) => hidden.has(f.id) && !f.readonly && (values[f.id] ?? '') !== (f.prefill ?? ''));
+  const clear: Record<string, string> = Object.fromEntries(cleared.map((f) => [f.id, f.prefill ?? '']));
+  if (!was) return { shown, clear, said: '', came: null as string | null };
+  const came = mine.filter((f) => shown.has(f.id) && !was.has(f.id));
+  const went = mine.filter((f) => was.has(f.id) && !shown.has(f.id));
+  const words: string[] = [];
+  if (came.length) words.push(`${came.length === 1 ? 'A field appeared' : `${came.length} fields appeared`}: ${came.map((f) => `${fieldName(f)}, ${f.required ? 'required' : 'optional'}`).join('; ')}.${came.some((f) => f.required) ? ' Next goes there.' : ''}`);
+  if (went.length) words.push(`${went.length === 1 ? 'A field is no longer needed' : `${went.length} fields are no longer needed`}: ${went.map((f) => fieldName(f)).join(', ')}.${cleared.some((f) => went.includes(f)) ? ' What was in it was cleared.' : ''}`);
+  return { shown, clear, said: words.join(' '), came: came.find((f) => f.required)?.id ?? came[0]?.id ?? null };
+}
+
+/**
  * The hook the signing page uses. Besides what liveLogic gives: an answer in a field that is hidden is cleared (it
  * goes back to what the sender put there, as on the server), a field that appears or goes is said in `said` (for a
  * polite live region), and `appeared` is the field that just appeared, so Next goes there first. It stops being
@@ -53,25 +71,20 @@ export function useLiveLogic(mine: any[], others: any[], values: Record<string, 
   const live = useMemo(() => liveLogic(mine, others, values), [mine, others, values]);
   const [said, setSaid] = useState('');
   const [appeared, setAppeared] = useState<string | null>(null);
-  const before = useRef<Set<string> | null>(null);
+  const before = useRef<{ ids: string; shown: Set<string> } | null>(null);
   const hiddenKey = [...live.hidden].sort().join('|');
+  const ids = mine.map((f) => f.id).join('|');
   useEffect(() => {
-    const shown = new Set<string>(mine.filter((f) => theirs(f) && !live.hidden.has(f.id)).map((f) => f.id));
-    const was = before.current;
-    before.current = shown;
-    // Answers in fields that are hidden now are cleared, so what is on the screen is what will be saved.
-    const clear = mine.filter((f) => live.hidden.has(f.id) && !f.readonly && (values[f.id] ?? '') !== (f.prefill ?? ''));
-    if (clear.length) setValues((v) => ({ ...v, ...Object.fromEntries(clear.map((f) => [f.id, f.prefill ?? ''])) }));
-    if (!was) return; // the first look: nothing appeared, it was all there
-    const came = mine.filter((f) => shown.has(f.id) && !was.has(f.id));
-    const went = mine.filter((f) => theirs(f) && was.has(f.id) && !shown.has(f.id));
-    const words: string[] = [];
-    if (came.length) words.push(`${came.length === 1 ? 'A field appeared' : `${came.length} fields appeared`}: ${came.map((f) => `${fieldName(f)}, ${f.required ? 'required' : 'optional'}`).join('; ')}.${came.some((f) => f.required) ? ' Next goes there.' : ''}`);
-    if (went.length) words.push(`${went.length === 1 ? 'A field is no longer needed' : `${went.length} fields are no longer needed`}: ${went.map((f) => fieldName(f)).join(', ')}.${clear.some((f) => went.includes(f)) ? ' What was in it was cleared.' : ''}`);
-    if (words.length) setSaid(words.join(' '));
-    if (came.length) setAppeared(came[0].id);
-    else if (appeared && !shown.has(appeared)) setAppeared(null);
-  }, [hiddenKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Only an answer makes a field appear. The fields arriving (the page loading, or loading a changed document
+    // again) is a first look, and nothing is announced for it.
+    const was = before.current && before.current.ids === ids && ids ? before.current.shown : null;
+    const ch = fieldChange(mine, was, live.hidden, values);
+    before.current = { ids, shown: ch.shown };
+    if (Object.keys(ch.clear).length) setValues((v) => ({ ...v, ...ch.clear }));
+    if (ch.said) setSaid(ch.said);
+    if (ch.came) setAppeared(ch.came);
+    else if (appeared && !ch.shown.has(appeared)) setAppeared(null);
+  }, [hiddenKey, ids]); // eslint-disable-line react-hooks/exhaustive-deps
   // Once the person is on the field that appeared, or has filled it in, Next goes back to its usual order.
   useEffect(() => {
     if (!appeared) return;

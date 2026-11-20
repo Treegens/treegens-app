@@ -31,6 +31,8 @@ function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: stri
   const open = envelopeStatus === 'sent';
   if (r.status === 'completed') return { s: 'completed', label: DONE[r.role] };
   if (r.status === 'declined') return { s: 'declined', label: 'Declined' };
+  // A witness who said they were not there is not waiting for anything (WitnessFacts.tsx).
+  if (r.witness_absent_at && r.status === 'pending') return { s: 'declined', label: 'Was not there' };
   if (r.status === 'pending') return { s: 'pending', label: envelopeStatus === 'draft' ? 'Not sent' : open ? 'Waiting for their turn' : 'Never reached' };
   if (!open) return { s: 'pending', label: r.status === 'viewed' ? 'Opened, did not finish' : 'Did not open' };
   // Everything required has a saved value and Finish was not pressed: nothing is signed, and only a nudge helps.

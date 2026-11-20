@@ -667,3 +667,23 @@ test('two fields that are never shown at the same time may share a place on the 
   assert.equal(both({ field: 'box', is: 'checked' }, null).length, 1);
   assert.equal(both({ field: 'p', is: 'equals', value: 'Gold' }, { field: 'q', is: 'equals', value: 'Silver' }).length, 1, 'different fields can both be answered');
 });
+
+test('on the signing page a field that appears or goes is said once, its answer is cleared, and loading the page says nothing', async () => {
+  const { fieldChange, liveLogic } = await import('../src/components/sign/logic.ts');
+  const mine = [
+    { id: 'co', type: 'checkbox', label: 'Has a co-signer' },
+    { id: 'name', type: 'text', label: 'Co-signer name', required: 1, show_when: { field: 'co', is: 'checked' } },
+    { id: 'note', type: 'text', label: 'Note for the co-signer', prefill: 'Welcome', show_when: { field: 'co', is: 'checked' } },
+  ];
+  const hidden = (values: any) => liveLogic(mine, [], values).hidden;
+  const first = fieldChange(mine, null, hidden({ co: '' }), { co: '', name: 'Old answer' });
+  assert.equal(first.said, '', 'the first look announces nothing');
+  assert.deepEqual(first.clear, { name: '', note: 'Welcome' }, "a hidden answer goes, the sender's own words come back");
+  const ticked = fieldChange(mine, first.shown, hidden({ co: '1' }), { co: '1' });
+  assert.equal(ticked.said, 'A field appeared: Co-signer name, required; Note for the co-signer, optional. Next goes there.'.replace('A field appeared', '2 fields appeared'));
+  assert.equal(ticked.came, 'name', 'Next goes to the required one');
+  const unticked = fieldChange(mine, ticked.shown, hidden({ co: '' }), { co: '', name: 'Bob', note: 'Welcome' });
+  assert.equal(unticked.said, '2 fields are no longer needed: Co-signer name, Note for the co-signer. What was in it was cleared.');
+  assert.deepEqual(unticked.clear, { name: '' });
+  assert.equal(unticked.came, null);
+});

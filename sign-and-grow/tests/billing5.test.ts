@@ -455,3 +455,26 @@ test('closing an account: asking twice does not turn "the provider has not confi
   assert.equal(left.length, 1);
   assert.doesNotMatch(JSON.stringify(left), /@|private\.signer/);
 });
+
+test('the Plan page states the same sending-limit rule the server applies, and an accent does not make someone else', async () => {
+  const p = await person('Limits');
+  let lim = (await state(p)).limits;
+  assert.equal(lim.paid_trust_days, 14);
+  assert.ok(lim.first_week_daily, 'a new account that has not paid is limited');
+  assert.equal(lim.lifts_on, null);
+  // A payment that has just been made does not lift the limits yet: the server keeps them for 14 days.
+  await subscribe(p);
+  lim = (await state(p)).limits;
+  assert.ok(lim.first_week_daily, 'still limited, as the server still limits it');
+  assert.ok(Math.abs(Date.parse(lim.lifts_on) - (Date.now() + 14 * 864e5)) < 120_000, 'and the page says when that ends');
+  // Fourteen days on, both agree that the limits are gone.
+  db.run("UPDATE payments SET at=? WHERE account_id=?", new Date(Date.now() - 15 * 864e5).toISOString(), p.id);
+  lim = (await state(p)).limits;
+  assert.deepEqual([lim.first_week_daily, lim.unpaid_daily_now, lim.lifts_on], [null, null, null]);
+
+  const { sameName, isSelf } = await import('../src/server/credits.ts');
+  assert.equal(sameName('María García', 'maria  garcia'), true);
+  assert.equal(sameName('Zoë Ångström', 'Zoe Angstrom'), true);
+  assert.equal(sameName('Maria Garcia', 'Mario Garcia'), false);
+  assert.equal(isSelf({ role: 'signer', email: 'mg@x.example', name: 'María García' }, { email: 'MG@x.example', name: 'Maria Garcia' }), true);
+});

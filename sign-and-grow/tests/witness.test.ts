@@ -607,7 +607,7 @@ test('the API describes the role, its two settings and the three routes, and the
 test('every place a witness is offered says what is recorded and that it cannot be checked, and nothing promises it holds', async () => {
   const lib = await import('../src/lib/witness.ts');
   assert.match(lib.WITNESS_RECORDS, /records what the witness states.*It cannot check that they were in the room\. Whether a document witnessed this way is accepted depends on the law that applies to it.*For a deed, check that first\./);
-  assert.match(lib.WHO_MAY_WITNESS, /an adult who is not a party to this document/);
+  assert.match(lib.WHO_MAY_WITNESS, /an adult who is not a party to the document/);
   assert.match(lib.WHO_MAY_WITNESS, /physically with the person who signs, in the same room, and watch them sign/);
   assert.match(lib.WHO_MAY_WITNESS, /The rules differ by country and by kind of document/);
   // Editor, signing page, envelope page, certificate, help: each says it, from the one text.
@@ -663,5 +663,22 @@ test('the screens: a witness of their own on the signing page, the choice in the
   for (const sel of ['.ed-witness select', '.ed-witness label.check', '.ed-witness-block .btn', '.wt-tick', '.wt-actions .btn', '.wt-form input, .wt-form textarea']) assert.match(css, new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[^}]*min-height: 44px`), sel);
   assert.match(read('src/app/layout.tsx'), /import '\.\/styles\/witness\.css';/);
   const ui = read('src/components/ui.tsx');
-  assert.match(ui, /witness: 'Witnesses a signature'/);
+  assert.match(ui, /witness: 'Is a witness'/);
+});
+
+test('a witness who pressed "I was not there" by mistake can be named again by the signer, and gets a new link', async () => {
+  const s = await person('Mia Mistake', 'mia@deed.example');
+  const e = await deed(s);
+  const { ann, wit } = ids(e);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await finish(tokenFor(e.id, row(ann).email))).status, 200);
+  const willEmail = row(wit).email;
+  const old = row(wit).token;
+  assert.equal((await browser().post(`/sign/${old}/not-present`, {})).status, 200);
+  const again = await browser().post(`/sign/${row(ann).token}/witness`, { name: 'Will Witness', email: willEmail });
+  assert.equal(again.status, 200, JSON.stringify(again.data));
+  assert.equal(again.data.witness.state, 'asked');
+  assert.notEqual(row(wit).token, old, 'a fresh link, and the old one stops');
+  assert.equal(mailTo(willEmail).filter((m: any) => /witness the signature/.test(text(m.html))).length, 2);
+  assert.equal((await witness(row(wit).token)).status, 200);
 });

@@ -13,7 +13,7 @@ export function witnessWait(r: any, e: any): string {
   const s = signerOf(e, r);
   const who = s?.name || 'the person they witness';
   if (e.status !== 'sent') return 'Never sent. The envelope closed before they were asked.';
-  if (r.witness_absent_at) return `Not asked again. They said on ${dayTime(r.witness_absent_at)} that they were not there when ${who} signed. ${who} can name another witness, or you can with Correct.`;
+  if (r.witness_absent_at) return `Not asked again. ${who} can name another witness, or you can with Correct.`;
   if (!r.email) return `${who} names the witness on their signing page before they finish. We email the witness straight after.`;
   return `It goes out straight after ${who} has signed, whatever the signing order says.`;
 }

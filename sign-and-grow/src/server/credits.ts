@@ -73,7 +73,9 @@ export const sameEmail = (a: any, b: any) => String(a ?? '').trim().toLowerCase(
 // so handing an envelope to another sender, or the sender changing their own address, never turns a free signature
 // into a paid one. Before that, and for requests sent before the flag existed, it is the sender's own address that
 // decides.
-export const sameName = (a: any, b: any) => String(a ?? '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+// Accents do not make another person: "María García" and "Maria Garcia" are the same name, as on the signing page.
+const plainName = (a: any) => String(a ?? '').normalize('NFKD').replace(/\p{M}/gu, '').trim().replace(/\s+/g, ' ').toLowerCase();
+export const sameName = (a: any, b: any) => plainName(a) === plainName(b);
 
 // The sender, as far as paying goes: their address, and their name when it is known.
 export type Sender = string | { email: string; name?: string | null };

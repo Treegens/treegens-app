@@ -26,7 +26,7 @@ export const openWitnessName = (signer: any): string => `Witness for ${String(si
 
 /** Who may be a witness, in one paragraph: on the signer's review screen and next to the choice in the editor. */
 export const WHO_MAY_WITNESS =
-  'A witness has to be an adult who is not a party to this document: they do not sign it as one of the people it binds, and it gives them nothing. They have to be physically with the person who signs, in the same room, and watch them sign. Someone on a video call is usually not enough. The rules differ by country and by kind of document, and some ask for more, so check what applies before anyone signs.';
+  'A witness has to be an adult who is not a party to the document: they do not sign it as one of the people it binds, and it gives them nothing. They have to be physically with the person who signs, in the same room, and watch them sign. Someone on a video call is usually not enough. The rules differ by country and by kind of document, and some ask for more, so check what applies before anyone signs.';
 
 /** What the product does and does not do, said wherever a witness is offered: editor, signing page, certificate, help. */
 export const WITNESS_RECORDS =
