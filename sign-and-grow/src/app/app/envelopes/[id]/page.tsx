@@ -130,6 +130,8 @@ export default function EnvelopeDetail() {
         <div className="row wrap sn-headactions">
           {e.documents.length > 0 && <a className="btn" href={`/api/envelopes/${e.id}/download?inline=1`} target="_blank" rel="noreferrer">{e.status === 'completed' ? 'View signed PDF' : 'Preview PDF'}</a>}
           {e.status === 'completed' && <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>Download with certificate</a>}
+          {/* The signed PDF, the certificate, the record, our emails and the consent wording in one ZIP (evidence.ts). */}
+          {!isTpl && e.status !== 'draft' && <a className="btn" href={`/api/envelopes/${e.id}/evidence`} title="A ZIP with the signed PDF, its certificate, the audit trail as text and data, our emails about it and what each person agreed to">Download evidence pack</a>}
           {!removed && <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>}
           {!removed && !isTpl && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
           {out && <button className="btn danger" onClick={() => setDialog('void')}>Void</button>}
