@@ -133,8 +133,12 @@ function Team() {
   const [inv, setInv] = useState({ email: '', role: 'member' });
   const [remove, setRemove] = useState<any>(null);
   const [to, setTo] = useState('');
-  // Admins see every API key in the account, so the Remove dialog can say which ones stop with the person.
-  const [keys, reloadKeys] = useLoad(() => (admin ? api('/api-keys') : Promise.resolve(null)));
+  const [leaving, setLeaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // Admins see every API key in the account, so the Remove dialog can say which ones stop with the person. Everyone
+  // sees their own, so the Leave dialog can say the same about theirs.
+  const [keys, reloadKeys] = useLoad(() => api('/api-keys'));
+  const myKeys: any[] = (keys?.keys || []).filter((k: any) => k.mine && !k.stopped_at);
   const theirKeys: any[] = remove ? (keys?.keys || []).filter((k: any) => k.user_id === remove.id && !k.stopped_at) : [];
   const members: any[] = d?.members || [];
   const adminCount = members.filter((m) => m.role !== 'member').length;
@@ -176,7 +180,38 @@ function Team() {
         </table></div>
       </div>
       <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything. Templates are shared: everyone can use them, and only the person a template belongs to or an admin can change or delete it. Everyone on the team is covered by the one plan: there is no charge per person.</p>
-      {me.role !== 'owner' && <p className="muted small">Want to leave this team? Ask the owner or an admin to remove you here. They choose who takes over what you sent, and you keep your own login.</p>}
+      {me.role !== 'owner' && members.length > 1 && (
+        <div className="card row wrap" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <div className="grow"><b>Leave this team</b><div className="muted small">You do not need anyone&apos;s permission. What you sent stays with the team, and you keep your own login.</div></div>
+          <button className="btn danger" onClick={() => (reloadKeys(), setTo(members.find((m) => m.role === 'owner')?.id || ''), setLeaving(true))}>Leave {me.account.name}</button>
+        </div>
+      )}
+      {me.role === 'owner' && members.length > 1 && <p className="muted small">You own this account, so you cannot leave it as it is. To leave, make someone else the owner first (Make owner, above). You can then leave like any other member.</p>}
+
+      {leaving && (
+        <Modal title={`Leave ${me.account.name}`} onClose={() => setLeaving(false)}>
+          <p>You lose access to this team straight away. Nothing you sent is lost: your envelopes, drafts, templates and bulk sends pass to the person you choose, and anything still out for signature carries on. Each envelope&apos;s audit trail says who handed it to whom.</p>
+          <p className="muted small">You keep your login and stay signed in{me.accounts?.length > 1 ? ', in your other workspace' : ', in a workspace of your own'}. The team&apos;s owner and admins are told by email that you left. They can invite you back at any time.</p>
+          {myKeys.length > 0 && (
+            <div className="notice warn" style={{ marginBottom: 12 }}>
+              <b>{myKeys.length === 1 ? 'This API key of yours stops' : `These ${myKeys.length} API keys of yours stop`} working the moment you leave:</b>
+              <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
+                {myKeys.map((k) => <li key={k.id}><b>{k.name}</b> <span className="mono">{k.prefix}…</span>, {k.last_used_at ? `last used ${fmtDate(k.last_used_at)}` : 'never used'}</li>)}
+              </ul>
+              Anything that uses one of them gets an error from then on. The admins are told which keys these were.
+            </div>
+          )}
+          <label className="f"><span>Who takes over what you sent</span>
+            <select value={to} onChange={(e) => setTo(e.target.value)}>
+              {members.filter((m) => m.id !== me.user.id).map((m) => <option key={m.id} value={m.id}>{m.name} ({m.role})</option>)}
+            </select>
+          </label>
+          <div className="row" style={{ justifyContent: 'flex-end', marginTop: 14 }}>
+            <button className="btn" onClick={() => setLeaving(false)}>Stay</button>
+            <button className="btn danger" disabled={busy || !to} onClick={() => { setBusy(true); api('/account/leave', { body: { to } }).then((r) => { toast(`You left ${r.left}. You are now in ${r.now_in?.name || 'your own workspace'}.`); window.location.href = '/app'; }).catch((e) => (setBusy(false), oops(e))); }}>Leave this team</button>
+          </div>
+        </Modal>
+      )}
 
       {remove && (
         <Modal title={`Remove ${remove.name}`} onClose={() => setRemove(null)}>

@@ -289,7 +289,7 @@ route('DELETE', '/account/members/:id', async (c) => {
   if (m.role === 'owner') throw bad('The owner cannot be removed. Make someone else the owner first.');
   // Nobody removes themselves: whoever leaves must not be the one who keeps their envelopes, and with them the
   // signed copies that arrive later. Another admin does it, and chooses who takes over.
-  if (c.params.id === c.user.id) throw bad(`You cannot remove yourself from ${c.account.name}. To leave, ask the owner or another admin to remove you on the Team tab: they choose who takes over your envelopes, templates and bulk sends, and nothing you sent is lost. To give up your whole login instead, use Settings, Your data.`);
+  if (c.params.id === c.user.id) throw bad(`You cannot remove yourself from ${c.account.name} this way. To leave, use "Leave this team" on the Team tab (POST /account/leave): you choose who takes over your envelopes, templates and bulk sends, and nothing you sent is lost. To give up your whole login instead, use Settings, Your data.`);
   // Their envelopes, templates and bulk sends stay with the team: they pass to a chosen successor, or to whoever
   // removed them. The successor is someone who stays. A name we do not know is refused, never quietly replaced.
   const to = c.q.get('to');
@@ -320,6 +320,41 @@ route('DELETE', '/account/members/:id', async (c) => {
   }
   return { ok: true, keys_stopped: keys, handed_over: handed, handed_to: successor };
 }, 'admin');
+
+// Leaving a team is the member's own decision and needs nobody's permission. What they sent stays with the team:
+// it passes to the member they choose, or to the owner. The owner is the one person who cannot walk out, because
+// the account would have nobody responsible for it: they hand it over first, or close it.
+route('POST', '/account/leave', async (c) => {
+  if (c.role === 'owner') throw bad(`You own ${c.account.name}, so you cannot leave it. Make someone else the owner first (Team tab, Make owner) and then leave, or close the account under Settings, Your data.`);
+  const others: any[] = all('SELECT m.user_id, m.role, u.name, u.email, u.closing_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id!=?', c.account.id, c.user.id);
+  const to = str((await c.body()).to);
+  // The successor is someone who stays. Without a choice it is the owner. A name we do not know is refused.
+  const heir = to ? others.find((o) => o.user_id === to) : others.find((o) => o.role === 'owner');
+  if (!heir) throw bad(`Choose a member of ${c.account.name} to take over what you sent. The person named in "to" is not on the team. Nothing was changed.`);
+  if (heir.closing_at) throw bad(`${heir.name} is closing their login, so they cannot take over what you sent. Choose someone else. Nothing was changed.`);
+  const me = { id: c.user.id, name: c.user.name, email: c.user.email };
+  const keys = all('SELECT id, name, prefix, scope, last_used_at FROM api_keys WHERE account_id=? AND user_id=? AND stopped_at IS NULL', c.account.id, c.user.id);
+  const left = tx(() => {
+    const handed = handOver(c.account.id, me, heir.user_id, c.actor, `${me.name} left the team`);
+    run('DELETE FROM memberships WHERE account_id=? AND user_id=?', c.account.id, me.id);
+    run('UPDATE api_keys SET stopped_at=? WHERE account_id=? AND user_id=? AND stopped_at IS NULL', now(), c.account.id, me.id);
+    // The person stays signed in, in another workspace of theirs. If this was their only one they get their own.
+    const next = get('SELECT account_id FROM memberships WHERE user_id=? ORDER BY created_at LIMIT 1', me.id)?.account_id || ownWorkspace(me.id, me.name);
+    run('UPDATE sessions SET account_id=? WHERE account_id=? AND user_id=?', next, c.account.id, me.id);
+    run('UPDATE users SET last_account_id=? WHERE id=?', next, me.id);
+    return { handed, next };
+  });
+  // The people who run the team hear it from us, not from a missing name in a list.
+  const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
+  for (const a of others.filter((o) => o.role !== 'member' || o.user_id === heir.user_id))
+    await sendMail({ to: a.email, subject: `${me.name} left ${c.account.name}`, heading: `${me.name} left the team`,
+      lines: [`${me.name} (${me.email}) left ${c.account.name} on Sign&Grow and no longer has access to it.`,
+        left.handed ? `What ${me.name} sent stays with the team: ${left.handed} ${left.handed === 1 ? 'envelope, draft or template' : 'envelopes, drafts and templates'} and any bulk sends now belong to ${a.user_id === heir.user_id ? 'you' : `${heir.name}`}. Anything out for signature carries on, and each audit trail says who handed it to whom.` : `${me.name} had sent nothing, so there was nothing to hand over.`,
+        ...(keys.length ? [`${n} that ${me.name} created stopped working at that moment:`, keyList(keys), 'Anything that used one of them now gets an error that says the key has stopped. To carry on, create a new key and put it into the integration.'] : []),
+        'You can invite them back at any time on the Team tab.'],
+      cta: { label: 'Open the team', url: `${baseUrl()}/app/settings?tab=team` } });
+  return { ok: true, left: c.account.name, now_in: get('SELECT id, name FROM accounts WHERE id=?', left.next), handed_over: left.handed, handed_to: { id: heir.user_id, name: heir.name }, keys_stopped: keys };
+});
 
 // Hand the account to someone else, so it never depends on one person's mailbox.
 route('POST', '/account/transfer-owner', async (c) => {

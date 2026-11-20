@@ -71,6 +71,7 @@ const PERSON_ONLY: [RegExp, string][] = [
   [/^(POST|DELETE) \/api-keys/, 'create or revoke API keys'],
   [/^POST \/account\/transfer-owner$/, 'hand the account to another owner'],
   [/^DELETE \/account\/members\//, 'remove someone from the team'],
+  [/^POST \/account\/leave$/, 'leave the team'],
   [/^POST \/me\/delete$/, 'close the account'],
   [/^(POST|PUT|PATCH|DELETE) \/billing\//, 'change the plan, pay or refund'],
   [/^[A-Z]+ \/operator\//, 'work the operator queue'],

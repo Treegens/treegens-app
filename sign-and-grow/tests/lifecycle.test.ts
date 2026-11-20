@@ -152,7 +152,7 @@ test('nobody removes themselves, the successor is a member who stays, and bulk s
   assert.equal((await adm.post(`/envelopes/${own.id}/send`)).status, 200);
   const self = await adm.call('DELETE', `/account/members/${admId}`);
   assert.equal(self.status, 400);
-  assert.match(self.data.error, /cannot remove yourself.*ask the owner or another admin to remove you/);
+  assert.match(self.data.error, /cannot remove yourself.*use "Leave this team" on the Team tab/);
   assert.equal((await adm.get('/envelopes')).status, 200, 'still on the team');
   assert.equal(db.get('SELECT sender_id FROM envelopes WHERE id=?', own.id).sender_id, admId);
 
