@@ -4235,7 +4235,7 @@
  "owner_answers": {
   "date": "2026-11-20",
   "licence": "EUPL-1.2",
-  "first_government": "Ethiopia: Fayda national ID through MOSIP eSignet (OpenID Connect), signer side in Amharic and Afaan Oromo",
+  "first_government": "Not Ethiopia: the owner said on 2026-11-20 \"don't waste time on Ethiopia\". No country-specific work; build the general government batches only.",
   "trees_on_certificate": "Off for government tenants only; business customers keep the tree lines on their certificate (every impact number must be specific and backed by evidence, EU Directive 2024/825)",
   "ai_for_government": "Self-hosted model only: off until the agency points it at an OpenAI-compatible model it runs inside its own boundary; never the hosted route",
   "earlier": {

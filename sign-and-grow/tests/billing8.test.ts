@@ -503,12 +503,13 @@ test('a payment we sent a little back from ourselves (charged more than we said)
   await event('invoice.paid', renewal(p, inv, Math.floor(Date.parse(acct(p.id).renews_at) / 1000), { amount_paid: 918 }));
   assert.equal(stripe.refunded(`ch_${inv}`), 18);
   assert.equal(pay(inv).refunded_cents, 18);
-  db.run("UPDATE payments SET at=? WHERE account_id=? AND kind='plan'", ago(20 * 864e5), p.id);
+  // Only that payment is old enough to lift the limits (the first one is less than 14 days old).
+  db.run('UPDATE payments SET at=? WHERE id=?', ago(20 * 864e5), inv);
   db.run('UPDATE accounts SET created_at=? WHERE id=?', ago(30 * 864e5), p.id);
   assert.equal(env.hasNotPaid(acct(p.id)), false);
+  assert.equal((await state(p)).limits.lifts_on, null);
   // A refund made by hand, or one the customer asked for, still keeps them on.
   db.run('UPDATE payments SET refunded_cents=refunded_cents+100 WHERE id=?', inv);
-  db.run("UPDATE payments SET refunded_cents=100 WHERE id=?", `in8_${p.k}_1`);
   assert.equal(env.hasNotPaid(acct(p.id)), true);
   const page = readFileSync(new URL('../src/app/app/settings/page.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /an account that has not paid anything can send/);

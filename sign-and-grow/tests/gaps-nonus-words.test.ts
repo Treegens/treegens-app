@@ -1034,3 +1034,42 @@ test('someone with no address who asks for more time is never told "by email", a
   assert.ok(!asked2.html.includes('no email address here'));
   assert.equal((await ada.call('GET', '/me', undefined, { 'x-tz': 'UTC' })).status, 200);
 });
+
+test('the check reads file names as people write them: underscores, dots, CamelCase, umlauts written out, invisible characters', async () => {
+  const one = (input: any) => paperWarnings(input).map((w) => `${w.kind}:${w.seen}`);
+  // Straight from file names, as the server keeps them when the sender gives no other name.
+  for (const [name, want] of [
+    ['power_of_attorney.pdf', 'attorney:power_of_attorney'], ['Lasting_Power_of_Attorney_Smith.pdf', 'attorney:Lasting_Power_of_Attorney'], ['PowerOfAttorney.pdf', 'attorney:PowerOfAttorney'],
+    ['Deed_of_Sale.pdf', 'land:Deed_of_Sale'], ['Title_Deed_Plot14.pdf', 'land:Title_Deed'], ['Last_Will_Jo.pdf', 'will:Last_Will'], ['LastWill.pdf', 'will:LastWill'],
+    ['Separation_Agreement.pdf', 'employment:Separation_Agreement'], ['Will - Jo Bloggs.pdf', 'will:Will'], ['Jo_Bloggs_Will', 'will:Will'], ['power.of.attorney.pdf', 'attorney:power.of.attorney'],
+  ] as const) assert.deepEqual(one({ documents: [{ name }] }), [want], name);
+  // German typed without umlauts, and ß as ss.
+  for (const [subject, want] of [['Kuendigung Herr Mueller', 'employment:Kuendigung'], ['Kuendigungsschreiben', 'employment:Kuendigungsschreiben'], ['Letztwillige Verfuegung', 'will:Letztwillige Verfuegung'], ['MUELLER KUENDIGUNG', 'employment:KUENDIGUNG']] as const)
+    assert.deepEqual(one({ subject }), [want], subject);
+  assert.deepEqual(one({ documents: [{ name: 'Grundstueckskaufvertrag' }] }), ['land:Grundstueckskaufvertrag']);
+  // Invisible characters do not cut a word in two.
+  assert.deepEqual(one({ subject: 'power of at­torney' }).length, 1);
+  assert.deepEqual(one({ subject: 'power​ of attorney' }).length, 1);
+  // Short forms in the subject and names, and the documents that are sworn before someone.
+  for (const subject of ['POA for the bank', 'LPA health and welfare', 'Power of Atty', 'Statutory declaration', 'Affidavit of support', 'Deed of gift', 'Mortgage deed'])
+    assert.equal(paperWarnings({ subject }).length, 1, subject);
+  // And still nothing for what only looks like it: "will" is a word on its own only in a document name.
+  for (const input of [{ subject: 'Will you sign this?' }, { subject: 'We will notify you' }, { documents: [{ name: 'Goodwill_Agreement.pdf' }] }, { documents: [{ name: 'Willow Street lease.pdf' }] }, { documents: [{ name: 'Lease_v2.final.pdf' }] }, { documents: [{ name: 'X', text: 'The tenant will pay. Indeed.' }] }, { subject: 'Deed of Trust' }])
+    assert.ok(paperWarnings(input).every((w) => w.kind !== 'will' && w.kind !== 'witness'), JSON.stringify(input));
+  assert.deepEqual(kinds(paperWarnings({ subject: 'Deed of Trust' })), ['trust']);
+  // The help page lists the names-only word and says that file names are read.
+  const listed = paperWordList().find((k) => k.a === 'a will')!;
+  assert.deepEqual(listed.namesOnly, ['will']);
+  assert.ok(!listed.titleOnly.includes('will'));
+  const help = src('app/help/outside.tsx');
+  assert.match(help, /In document names only: \{k\.namesOnly\.join\(', '\)\}/);
+  assert.match(help, /The name of a document is usually its file name, and it is read too: underscores and dots count as spaces/);
+  assert.match(help, /an umlaut may be written out \(ue for ü\)/);
+
+  // The same through the API: a draft with those file names warns before sending.
+  const file = await upload(ada, 1);
+  const d = (await ada.post('/envelopes', { subject: 'Last Will of Jo Bloggs', documents: [{ id: 'a', file_id: file.id, name: 'Lasting_Power_of_Attorney_Smith.pdf' }, { id: 'b', file_id: file.id, name: 'Kuendigung_Mueller.pdf' }], recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'files.named@example.com' }], fields: [{ id: 'f', document_id: 'a', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).data.envelope;
+  const w = await ada.get(`/envelopes/${d.id}/warnings`);
+  assert.equal(w.status, 200);
+  assert.deepEqual(kinds(w.data.warnings), ['attorney', 'employment', 'will']);
+});
