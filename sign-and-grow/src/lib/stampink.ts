@@ -47,11 +47,11 @@ export const INK_RGB: Record<Ink, [number, number, number]> = {
 };
 /** The same inks where they are thin or short of ink: a little lighter and cooler, as real pad ink is. */
 const THIN_RGB: Record<Ink, [number, number, number]> = {
-  blue: [62, 74, 160],
-  red: [186, 52, 84],
-  purple: [104, 70, 156],
-  black: [58, 62, 84],
-  green: [44, 112, 96],
+  blue: [58, 66, 152],
+  red: [184, 44, 60],
+  purple: [98, 60, 146],
+  black: [56, 60, 80],
+  green: [40, 104, 84],
 };
 export const INK_WORD: Record<Ink, string> = { blue: 'Blue', red: 'Red', purple: 'Purple', black: 'Black', green: 'Green' };
 export const isInk = (s: any): s is Ink => (INKS as readonly string[]).includes(s);
@@ -517,12 +517,103 @@ export const paperCut = (paper: number, cut: Cut = DEFAULT_CUT) => {
   return { lo, hi: lo + (cut.design ? 0.1 : 0.3) };
 };
 
-/** Ink strength per pixel from its distance to the paper. */
+/**
+ * Ink strength per pixel from its distance to the paper. In a photo (`cut.design` false) the cut is also set for each
+ * small part of the picture (about a hundredth of it each way, a millimetre or so of the stamp) from the strongest
+ * ink in it: a lightly inked corner, or small print that the camera blurred to a faint line, is cut lower than the
+ * heavy ring, so it is kept, even right under a line of large letters. Never below the paper's own grain
+ * (`cut.floor`).
+ */
 export function strengthOf(dist: Float32Array, width: number, height: number, paper = DEFAULT_PAPER, cut: Cut = DEFAULT_CUT): Plane {
   const { lo, hi } = paperCut(paper, cut);
   const v = new Float32Array(dist.length);
-  for (let i = 0; i < dist.length; i++) v[i] = smooth(lo, hi, dist[i]);
+  if (cut.design) {
+    for (let i = 0; i < dist.length; i++) v[i] = smooth(lo, hi, dist[i]);
+    return { width, height, v };
+  }
+  const w = width, h = height;
+  const B = Math.max(6, Math.round(Math.max(w, h) * 0.011));
+  const gw = Math.ceil(w / B), gh = Math.ceil(h / B);
+  const top = new Float32Array(gw * gh);
+  const hist = new Uint32Array(100);
+  for (let by = 0; by < gh; by++)
+    for (let bx = 0; bx < gw; bx++) {
+      hist.fill(0);
+      let n = 0;
+      for (let y = by * B; y < Math.min(h, by * B + B); y++)
+        for (let x = bx * B; x < Math.min(w, bx * B + B); x++) (hist[Math.min(99, Math.floor(dist[y * w + x] * 100))]++, n++);
+      let want = Math.max(1, Math.round(n * 0.03)), i = 99;
+      for (; i > 0; i--) if ((want -= hist[i]) <= 0) break;
+      top[by * gw + bx] = (i + 0.5) / 100;
+    }
+  const near = new Float32Array(gw * gh);
+  for (let by = 0; by < gh; by++)
+    for (let bx = 0; bx < gw; bx++) {
+      // A part with only paper in it takes some of the ink beside it, so the soft edge of a stroke is not cut lower.
+      let m = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (by + dy >= 0 && bx + dx >= 0 && by + dy < gh && bx + dx < gw) m = Math.max(m, top[(by + dy) * gw + bx + dx]);
+      near[by * gw + bx] = Math.max(top[by * gw + bx], 0.35 * m);
+    }
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(gh - 1, Math.max(0, (y + 0.5) / B - 0.5)), y0 = Math.floor(fy), y1 = Math.min(gh - 1, y0 + 1), ty = fy - y0;
+    for (let x = 0; x < w; x++) {
+      const fx = Math.min(gw - 1, Math.max(0, (x + 0.5) / B - 0.5)), x0 = Math.floor(fx), x1 = Math.min(gw - 1, x0 + 1), tx = fx - x0;
+      const t = (near[y0 * gw + x0] * (1 - tx) + near[y0 * gw + x1] * tx) * (1 - ty) + (near[y1 * gw + x0] * (1 - tx) + near[y1 * gw + x1] * tx) * ty;
+      const l = Math.max(cut.floor, Math.min(lo, 0.4 * t));
+      v[y * w + x] = smooth(l, Math.max(l + 0.04, Math.min(hi, 0.8 * t)), dist[y * w + x]);
+    }
+  }
   return { width, height, v };
+}
+
+/**
+ * What is around the sheet in a photo (a desk, a table, the floor) is set to paper. It is found by flooding in from
+ * the edges of the picture over smooth areas that are not paper, cell by cell on a smaller copy. The strokes of a
+ * stamp are never smooth at that scale, so the flood stops at them. Only when an open sheet is left inside: a seal
+ * that fills the picture to its edges is not taken for a desk.
+ */
+export function offSheet(dist: Float32Array, w: number, h: number, floor: number): Float32Array {
+  const k = Math.min(1, 400 / Math.max(w, h));
+  const sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
+  const sum = new Float32Array(sw * sh), sq = new Float32Array(sw * sh), cnt = new Float32Array(sw * sh);
+  const cellOf = (x: number, y: number) => Math.min(sh - 1, Math.floor(y * k)) * sw + Math.min(sw - 1, Math.floor(x * k));
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const c = cellOf(x, y), d = dist[y * w + x];
+      (sum[c] += d), (sq[c] += d * d), cnt[c]++;
+    }
+  const cand = new Uint8Array(sw * sh);
+  for (let c = 0; c < cand.length; c++) {
+    if (!cnt[c]) continue;
+    const m = sum[c] / cnt[c], sd = Math.sqrt(Math.max(0, sq[c] / cnt[c] - m * m));
+    cand[c] = m > Math.max(0.08, floor * 1.5) && sd < 0.06 ? 1 : 0;
+  }
+  const flood = new Uint8Array(sw * sh);
+  const stack: number[] = [];
+  const start = (c: number) => cand[c] && !flood[c] && (flood[c] = 1, stack.push(c));
+  for (let x = 0; x < sw; x++) (start(x), start((sh - 1) * sw + x));
+  for (let y = 0; y < sh; y++) (start(y * sw), start(y * sw + sw - 1));
+  while (stack.length) {
+    const c = stack.pop()!;
+    const x = c % sw, y = (c - x) / sw;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < sw && ny < sh) start(ny * sw + nx);
+      }
+  }
+  if (!flood.some((f) => f)) return dist;
+  const open = new Uint8Array(sw * sh);
+  for (let c = 0; c < open.length; c++) open[c] = flood[c] ? 0 : 1;
+  const room = insideDistance(open, sw, sh);
+  let most = 0;
+  for (let c = 0; c < room.length; c++) most = Math.max(most, room[c]);
+  if (most < 0.12 * Math.min(sw, sh)) return dist;
+  // One cell more all round, for the shadow along the edge of the sheet.
+  const wide = extremePlane(Float32Array.from(flood), sw, sh, 1, true);
+  const out = new Float32Array(dist);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (wide[cellOf(x, y)]) out[y * w + x] = 0;
+  return out;
 }
 
 /**
@@ -628,9 +719,12 @@ export function unrule(img: Rgba, rules: Rule[]): Rgba {
  * Leaves out solid dark areas that touch the edge of the picture: in a photo that is the table, the edge of the paper
  * or a shadow, not the stamp. A mark made of lines (the ring of a seal cropped so tightly that it touches the edge)
  * stays, and so does everything when the solid area is nearly all the ink there is (a seal that fills the picture).
- * Worked out on a smaller copy (at most 400 pixels across), joined the way a mark is: pixel to neighbouring pixel.
+ * Small scraps at the edge (the corner of the sheet) go too. Worked out on a smaller copy (at most 400 pixels
+ * across), joined the way a mark is: pixel to neighbouring pixel. Only in a photo: a design has nothing around it,
+ * so a logo cropped tightly keeps the letter or the disc that touches its edge.
  */
-export function dropEdgeMarks(pl: Plane): Plane {
+export function dropEdgeMarks(pl: Plane, photo = true): Plane {
+  if (!photo) return pl;
   const { width: w, height: h, v } = pl;
   const k = Math.min(1, 400 / Math.max(w, h));
   const sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
@@ -681,7 +775,8 @@ export function dropEdgeMarks(pl: Plane): Plane {
     // Solid: it fills much of its own box, or it is far thicker than a stroke (a desk round the sheet). A ring, a
     // line of letters, a frame of lines is neither.
     const solid = (cells.length / ((x1 - x0 + 1) * (y1 - y0 + 1)) > 0.45 && cells.length > 12) || deepest >= thick;
-    if (!solid) continue;
+    // A small scrap at the edge (the corner of the sheet, a crumb on the desk) is never the stamp either.
+    if (!solid && ink >= total * 0.02) continue;
     for (const j of cells) drop[j] = 1;
     dropped += ink;
   }
@@ -736,9 +831,11 @@ export type InkFound = {
 
 /**
  * Which ink the marks are in, weighed by how strong each mark is. Lines and letters count five times more than the
- * inside of a large fill: the words of a design say what its ink is, not the disc behind its logo.
+ * inside of a large fill: the words of a design say what its ink is, not the disc behind its logo. In a photo, black
+ * and grey marks are mostly the print of the document the stamp was pressed on, so a colour that holds a fair share
+ * of the marks is taken as the stamp's ink even when there is more print.
  */
-export function findInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane): InkFound {
+export function findInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, photo = false): InkFound {
   const { width: w, height: h } = strength;
   const d = img.data, v = strength.v;
   const r = Math.max(2, Math.round(Math.max(w, h) * 0.008));
@@ -788,6 +885,10 @@ export function findInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane): I
   }
   if (grey > total * 0.03) colours.push({ ink: 'black', hue: null, share: grey / total });
   colours.sort((a, b) => b.share - a.share);
+  if (photo && colours[0]?.hue == null) {
+    const k = colours.findIndex((c) => c.hue != null && c.share >= 0.12);
+    if (k > 0) colours.unshift(...colours.splice(k, 1));
+  }
   const main = colours[0] || { ink: 'black' as Ink, hue: null, share: 1 };
   const second = colours[1]?.share ?? 0;
   return { ink: main.ink, empty: false, several: main.share < 0.75 && second > 0.12, share: main.share, hue: main.hue, colours };
@@ -944,51 +1045,6 @@ export function despeckle(pl: Plane, least: number): Plane {
   const near = extremePlane(kept, w, h, 2, true);
   const out = new Float32Array(v.length);
   for (let p = 0; p < v.length; p++) out[p] = kept[p] || (!label[p] && near[p]) ? v[p] : 0;
-  return { width: w, height: h, v: out };
-}
-
-/**
- * A faint stamp in a photo is brought up to full strength part by part, over windows of about a tenth of the stamp
- * (4 mm of a 40 mm seal): a light corner of the stamp is lifted as far as it needs, while the heavy ring does not
- * hold the faint small print down. Never more than two and a half times, and only upwards. Then the strong parts of
- * each stroke print as full ink, and the paler parts of the real impression stay a little paler.
- */
-export function lift(pl: Plane): Plane {
-  const { width: w, height: h, v } = pl;
-  const box = inkBox(pl);
-  if (!box) return pl;
-  const B = Math.max(4, Math.round(Math.max(box.w, box.h) * 0.05));
-  const gw = Math.ceil(w / B), gh = Math.ceil(h / B);
-  const top = new Float32Array(gw * gh).fill(-1);
-  const vals: number[] = [];
-  for (let by = 0; by < gh; by++)
-    for (let bx = 0; bx < gw; bx++) {
-      vals.length = 0;
-      for (let y = by * B; y < Math.min(h, by * B + B); y++) for (let x = bx * B; x < Math.min(w, bx * B + B); x++) if (v[y * w + x] > 0.12) vals.push(v[y * w + x]);
-      if (vals.length < B * 0.6) continue;
-      vals.sort((a, b) => a - b);
-      top[by * gw + bx] = vals[Math.floor(vals.length * 0.9)];
-    }
-  // Each block takes the strongest of the blocks around it, so a window spans about two blocks each way.
-  const all = [...top].filter((t) => t > 0).sort((a, b) => a - b);
-  const global = all.length ? all[Math.floor(all.length * 0.9)] : 1;
-  const near = new Float32Array(gw * gh);
-  for (let by = 0; by < gh; by++)
-    for (let bx = 0; bx < gw; bx++) {
-      let m = -1;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (by + dy >= 0 && bx + dx >= 0 && by + dy < gh && bx + dx < gw) m = Math.max(m, top[(by + dy) * gw + bx + dx]);
-      near[by * gw + bx] = m > 0 ? m : global;
-    }
-  const out = new Float32Array(v.length);
-  for (let y = 0; y < h; y++) {
-    const fy = Math.min(gh - 1, Math.max(0, (y + 0.5) / B - 0.5)), y0 = Math.floor(fy), y1 = Math.min(gh - 1, y0 + 1), ty = fy - y0;
-    for (let x = 0; x < w; x++) {
-      const fx = Math.min(gw - 1, Math.max(0, (x + 0.5) / B - 0.5)), x0 = Math.floor(fx), x1 = Math.min(gw - 1, x0 + 1), tx = fx - x0;
-      const t = (near[y0 * gw + x0] * (1 - tx) + near[y0 * gw + x1] * tx) * (1 - ty) + (near[y1 * gw + x0] * (1 - tx) + near[y1 * gw + x1] * tx) * ty;
-      const k = Math.min(2.5, Math.max(1, 1 / Math.max(0.05, t)));
-      out[y * w + x] = smooth(0.04, 0.78, Math.min(1, v[y * w + x] * k));
-    }
-  }
   return { width: w, height: h, v: out };
 }
 
@@ -1171,7 +1227,7 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
     for (let p = 0; p < n; p++) inkOn[p] = pl.v[p] > 0.3 ? 1 : 0;
     const m1 = blurPlane(pl.v, w, h, mm(0.25)), m2 = blurPlane(inkOn, w, h, mm(0.25));
     own = new Float32Array(n);
-    for (let p = 0; p < n; p++) own[p] = 0.3 + 0.7 * smooth(0.25, 0.92, m1[p] / Math.max(0.05, m2[p]));
+    for (let p = 0; p < n; p++) own[p] = 0.55 + 0.45 * smooth(0.3, 0.92, m1[p] / Math.max(0.05, m2[p]));
   }
 
   // Where each pixel is in its stroke: how far from the edge, in millimetres.
@@ -1231,7 +1287,9 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
       if (dd < 1) macro *= 1 - pt.depth * smooth(1, 0.35, dd);
     }
     macro *= 1 - 0.16 * A2 * Math.max(0, (mottle[p] - 0.4) / 0.6);
-    macro = Math.max(0.4, macro);
+    const grain = 1 - 0.24 * A2 * Math.max(0, (0.65 * g1[p] + 0.35 * g2[p] - 0.42) / 0.58);
+    // Never so light that a stroke stops reading: all of this together keeps at least 38 percent of the ink.
+    macro = Math.max(0.38, macro * (own ? own[p] : 1) * grain);
     if (arcOn) {
       let da = Math.atan2(y - cy, x - cx) - arcAt;
       da = Math.atan2(Math.sin(da), Math.cos(da));
@@ -1243,9 +1301,8 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
     const dmm = deep[p] / pxmm;
     rim[p] = 1 - smooth(0.08, 0.22, dmm);
     const inner = 1 - (0.08 + 0.08 * A1) * smooth(0.25, 0.9, dmm);
-    const grain = 1 - 0.24 * A2 * Math.max(0, (0.65 * g1[p] + 0.35 * g2[p] - 0.42) / 0.58);
     starved[p] = 1 - macro;
-    v[p] = shape[p] * (own ? own[p] : 1) * macro * inner * grain;
+    v[p] = shape[p] * macro * inner;
   }
 
   // Voids: small spots where the ink did not take, never wider than nine tenths of the stroke they are in.
@@ -1334,10 +1391,14 @@ export function prepare(picture: Rgba): Prepared {
     // Sensor noise would turn into grain along every edge: each pixel takes the middle value of its neighbours.
     dist = median3(dist, img.width, img.height);
   }
-  const cut = cutOf(dist, photo);
+  let cut = cutOf(dist, photo);
+  if (photo) {
+    dist = offSheet(dist, img.width, img.height, cut.floor);
+    cut = cutOf(dist, photo);
+  }
   // A design prints every mark that is clearly there, however light its colour.
   if (!photo) cut.base = Math.min(cut.base, 0.22);
-  const found = findInk(img, paper, dropEdgeMarks(strengthOf(dist, img.width, img.height, DEFAULT_PAPER, cut)));
+  const found = findInk(img, paper, dropEdgeMarks(strengthOf(dist, img.width, img.height, DEFAULT_PAPER, cut), photo), photo);
   return { img, paper, dist, found, photo, cut, ruled };
 }
 
@@ -1370,15 +1431,15 @@ export function impression(p: Prepared, look: Look, maxSide = STAMP_OUT_MAX_SIDE
     dist = cropPlane({ width: w, height: h, v: dist }, x0, y0, cw, ch).v;
     (w = cw), (h = ch);
   }
-  let pl = dropEdgeMarks(strengthOf(dist, w, h, look.paper, p.cut));
-  const found = look.crop ? findInk(img, paper, pl) : p.found;
+  let pl = dropEdgeMarks(strengthOf(dist, w, h, look.paper, p.cut), p.photo);
+  const found = look.crop ? findInk(img, paper, pl, p.photo) : p.found;
   if (look.onlyInk) pl = onlyInk(img, paper, pl, found, look.ink);
   let box = inkBox(pl);
   if (!box) return nothing(found);
   // Pixels to a millimetre in the picture as it was taken: the stamp is `mm` across its longer side.
   const pxmm = Math.max(box.w, box.h) / mm;
   if (look.gaps && !p.photo && found.several) pl = colourGaps(img, paper, pl, Math.max(2, Math.round(0.22 * pxmm)));
-  if (p.photo) pl = lift(despeckle(pl, Math.max(4, (0.15 * pxmm) ** 2)));
+  if (p.photo) pl = despeckle(pl, Math.max(4, (0.15 * pxmm) ** 2));
   box = inkBox(pl);
   if (!box) return nothing(found);
   pl = cropPlane(pl, box.x, box.y, box.w, box.h);

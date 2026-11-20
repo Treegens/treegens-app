@@ -200,7 +200,7 @@ export const STAMP_ZONES: Record<string, 'India' | 'Indonesia'> = {
   'Asia/Jakarta': 'Indonesia', 'Asia/Pontianak': 'Indonesia', 'Asia/Makassar': 'Indonesia', 'Asia/Ujung_Pandang': 'Indonesia', 'Asia/Jayapura': 'Indonesia',
 };
 export const stampNote = (country: 'India' | 'Indonesia'): string =>
-  `Signing here does not pay stamp duty. In ${country} an agreement that should carry a stamp and does not can be refused as evidence. If yours needs one, buy the ${country === 'India' ? 'e-stamp certificate' : 'electronic duty stamp (e-meterai)'} first and add it as the first document of the envelope, or upload the first page already stamped.`;
+  `Signing here does not pay stamp duty. In ${country} an agreement that should carry a stamp and does not can be refused as evidence. The ${country === 'India' ? 'e-stamp certificate' : 'electronic duty stamp (e-meterai)'} is bought separately, and the stamped page can be added as the first document of the envelope.`;
 
 // ---- Country notes ---------------------------------------------------------------------------------
 // Short, dated, with the source each one rests on. `official` says whether the link is to a government or a court,
@@ -212,7 +212,10 @@ export const COUNTRY_NOTES: CountryNote[] = [
   {
     id: 'eu', place: 'European Union', checked: CHECKED,
     text: 'EU law knows three levels of electronic signature: simple, advanced and qualified. Sign&Grow makes the first. The regulation says that an electronic signature cannot be refused as evidence only because it is electronic, and that a qualified one has the same effect as a handwritten signature. It does not say that of a simple one. Each member state decides which documents need written form or a qualified signature, so the answer for your document is in your national law.',
-    sources: [{ label: 'Regulation (EU) No 910/2014 (eIDAS), Article 25, the 2014 text as kept on legislation.gov.uk. It was amended in 2024 and we have not read the amendment.', url: 'https://www.legislation.gov.uk/eur/2014/910/article/25', official: true }],
+    sources: [
+      { label: 'Regulation (EU) No 910/2014 (eIDAS), the EU\'s own text on EUR-Lex; Article 25 is about signatures. It was amended in 2024 by Regulation (EU) 2024/1183, and we have not read the amendment', url: 'https://eur-lex.europa.eu/eli/reg/2014/910/oj', official: true },
+      { label: 'Article 25 on legislation.gov.uk, where our research read it. That site shows the text as the United Kingdom kept and changed it after leaving the EU, not the EU\'s own current text', url: 'https://www.legislation.gov.uk/eur/2014/910/article/25', official: false },
+    ],
   },
   {
     id: 'de', place: 'Germany', checked: CHECKED,
@@ -223,8 +226,8 @@ export const COUNTRY_NOTES: CountryNote[] = [
     ],
   },
   {
-    id: 'uk', place: 'United Kingdom', checked: CHECKED,
-    text: 'The law says an electronic signature can be put before a court as evidence. A deed is different: it needs a witness who is physically present when it is signed. Sign&Grow can add a witness who states that they saw the signature, and it cannot check that they were there, so whether a deed witnessed here is accepted depends on whoever it is for: check that first, or sign it on paper. Do not use Sign&Grow for a will or a lasting power of attorney. HM Land Registry has rules of its own that have changed more than once, so read its current guide before sending it anything.',
+    id: 'uk', place: 'United Kingdom: England and Wales', checked: CHECKED,
+    text: 'This note is about England and Wales. Scotland and Northern Ireland have their own law on deeds, wills and land, which our research did not look at. The law of the United Kingdom says an electronic signature can be put before a court as evidence. A deed is different: in England and Wales it needs a witness who is physically present when it is signed. Sign&Grow can add a witness who states that they saw the signature, and it cannot check that they were there, so whether a deed witnessed here is accepted depends on whoever it is for. The Law Commission\'s view is that a will cannot be made electronically under the Wills Act 1837 as it stands, and a lasting power of attorney has formal steps of its own: Sign&Grow is not made for either. HM Land Registry, which covers England and Wales only, has rules of its own that have changed more than once; its current practice guide says what it accepts.',
     sources: [
       { label: 'Electronic Communications Act 2000, section 7', url: 'https://www.legislation.gov.uk/ukpga/2000/7/section/7', official: true },
       { label: 'HM Land Registry, practice guide 8: execution of deeds', url: 'https://www.gov.uk/government/publications/execution-of-deeds/practice-guide-8-execution-of-deeds', official: true },
@@ -232,7 +235,7 @@ export const COUNTRY_NOTES: CountryNote[] = [
   },
   {
     id: 'in', place: 'India', checked: CHECKED,
-    text: 'Sign&Grow makes an ordinary electronic signature, not an Aadhaar eSign and not a digital signature certificate. Where a law requires a signature, use one of those two. Where no law demands one, ours can be used, and whoever relies on it may have to prove who signed. Wills and trusts are on the list of documents the Information Technology Act does not cover. And signing here does not pay stamp duty: an agreement that should be stamped and is not can be refused as evidence, so buy the e-stamp certificate first and add it as the first document of the envelope, or upload the first page already stamped. Duty differs by state.',
+    text: 'Sign&Grow makes an ordinary electronic signature, not an Aadhaar eSign and not a digital signature certificate. Where a law requires a signature, the Information Technology Act recognises electronic signatures of the kinds it lists, and those two are the usual ones. Where no law demands one, ours can be used, and whoever relies on it may have to prove who signed. The Act also has a list of documents it does not cover. Our research confirmed that wills and trusts are still on it after a 2022 amendment. It did not confirm the rest of that list, which has also named powers of attorney and contracts for the sale of land, so read the current First Schedule. And signing here does not pay stamp duty: an agreement that should be stamped and is not can be refused as evidence. Duty is paid separately, for example with an e-stamp certificate, and the stamped page can be added as the first document of the envelope. Duty differs by state.',
     sources: [
       { label: 'Notification S.O. 4720(E) amending the First Schedule of the Information Technology Act', url: 'https://www.cca.gov.in/sites/files/pdf/ACT/SO4720.pdf', official: true },
       { label: 'Leegality, questions and answers on eSign and e-stamping', url: 'https://www.leegality.com/blog/esign-estamp-faqs', official: false },
@@ -240,21 +243,24 @@ export const COUNTRY_NOTES: CountryNote[] = [
   },
   {
     id: 'id', place: 'Indonesia', checked: CHECKED,
-    text: 'Signing here does not pay stamp duty. The tax office sells an electronic duty stamp (e-meterai) for documents that need one. Add the stamped page as the first document of the envelope.',
+    text: 'Signing here does not pay stamp duty. The tax office sells an electronic duty stamp (e-meterai) for documents that need one, and the stamped page can be added as the first document of the envelope.',
     sources: [{ label: 'Directorate General of Taxes, on the electronic duty stamp', url: 'https://pajak.go.id/en/node/71611', official: true }],
   },
   {
     id: 'za-ke', place: 'South Africa and Kenya', checked: CHECKED,
-    text: 'For ordinary commercial contracts a simple electronic signature like ours can be used. Where a statute itself requires a signature, only an advanced electronic signature from an accredited provider counts, or ink on paper. Sign&Grow is not such a provider. Do not sign a sale of land or a long lease here.',
+    text: 'For ordinary commercial contracts a simple electronic signature like ours can be used. Where a statute itself requires a signature, only an advanced electronic signature from an accredited provider counts, or ink on paper. Sign&Grow is not such a provider. In South Africa the law on electronic transactions leaves out agreements to sell land, so Sign&Grow is not made for a sale of land there; our research did not look at leases. For Kenya it read only a summary of the 2020 amendment, so the current law there is the place to check.',
     sources: [
-      { label: 'De Rebus, quoting section 13 of the Electronic Communications and Transactions Act (South Africa)', url: 'https://www.saflii.org/za/journals/DEREBUS/2012/69.html', official: false },
+      { label: 'De Rebus (2012), quoting section 13 of the Electronic Communications and Transactions Act (South Africa)', url: 'https://www.saflii.org/za/journals/DEREBUS/2012/69.html', official: false },
       { label: 'CIPIT, Strathmore University, on the Business Laws (Amendment) Act 2020 (Kenya)', url: 'https://cipit.strathmore.edu/?p=4710', official: false },
     ],
   },
   {
     id: 'sg-ng', place: 'Singapore and Nigeria', checked: CHECKED,
-    text: 'Both keep a list of documents their electronic transactions law does not cover. In Singapore it has named wills, trusts, powers of attorney and contracts for land. In Nigeria it names wills. Do not sign those here. For Singapore our research had a 2019 fact sheet of the regulator and no link to the current list, so check the list itself.',
-    sources: [{ label: 'Mondaq, on electronic signatures in Nigeria', url: 'https://www.mondaq.com/nigeria/contracts-and-commercial-law/1314284/electronic-signatures-in-nigeria', official: false }],
+    text: 'Both have a list of documents that their law does not let be signed electronically, and Sign&Grow is not made for those. In Singapore the Electronic Transactions Act has named wills, trusts, powers of attorney and contracts for land; our research had the regulator\'s 2019 fact sheet and not the current list, which has changed since, so the current list is the one to read. In Nigeria section 17(2) of the Cybercrimes Act 2015 leaves out wills and birth and death certificates, as reported in the source below; our research heard of a 2024 amendment to that section and did not read it.',
+    sources: [
+      { label: 'IMDA, fact sheet on the review of the Electronic Transactions Act (Singapore, 2019)', url: 'https://www.imda.gov.sg/-/media/imda/files/about/media-releases/2019/fact-sheet-public-consultation-on-review-of-electronic-transactions-act.pdf', official: true },
+      { label: 'Mondaq, on electronic signatures in Nigeria and section 17(2) of the Cybercrimes Act', url: 'https://www.mondaq.com/nigeria/contracts-and-commercial-law/1314284/electronic-signatures-in-nigeria', official: false },
+    ],
   },
   {
     id: 'br', place: 'Brazil', checked: CHECKED,
@@ -266,7 +272,7 @@ export const COUNTRY_NOTES: CountryNote[] = [
   },
   {
     id: 'au', place: 'Australia', checked: CHECKED,
-    text: 'The federal law on electronic transactions has a list of exemptions, and each state and territory has rules of its own that change over time. Wills, some deeds and documents that need a witness are the usual exceptions. Check your state before sending. When two officers have to sign for a company, each can sign from their own link.',
+    text: 'The federal law on electronic transactions has a list of exemptions, and each state and territory has rules of its own that change over time. Wills, some deeds and documents that need a witness are the usual exceptions, and the rules of your state or territory decide. When two officers have to sign for a company, each can sign from their own link.',
     sources: [{ label: 'Attorney-General\'s Department, exemptions from the Electronic Transactions Act', url: 'https://ag.gov.au/legal-system/electronic-signatures-documents-and-transactions/exemptions-eta', official: true }],
   },
   {

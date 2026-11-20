@@ -78,9 +78,23 @@ export function formatDate(iso: string | Date, format?: string | null, tz?: stri
 export function formatDateValue(value: any, format?: string | null): string {
   const s = String(value ?? '');
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (!m || +m[2] < 1 || +m[2] > 12 || +m[3] < 1 || +m[3] > 31) return s;
+  // A day that does not exist (31 February) is not turned into one that looks real: it stays as typed.
+  if (!m || !isDateValue(s)) return s;
   return written(+m[1], +m[2] - 1, +m[3], format);
 }
+
+/**
+ * Whether a typed date is a real calendar day written year-month-day, which is what the date picker sends and the
+ * only form the server takes for a date field: "2026-02-31", "03/04/2026" (which day is that?) and "next Tuesday"
+ * are not. The page says so before Finish, and the server refuses it with the same words.
+ */
+export function isDateValue(value: any): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''));
+  if (!m || +m[1] < 1000) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+export const DATE_PROBLEM = 'This is not a date we can read. Pick it from the calendar, or type it as year-month-day, like 2027-03-20. It is printed on the document in the format the sender chose.';
 
 /** A zone the way people read it: "UTC", or "Pacific/Auckland time (UTC+13:00)". */
 const zoneWords = (c: Clock): string => (c.zone === 'UTC' ? 'UTC' : `${c.zone.replace(/_/g, ' ')} time (${c.offset})`);

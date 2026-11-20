@@ -4964,5 +4964,892 @@
   ],
   "needs_from_billing": "Nothing. Comments do not touch signatures or payments. I did not edit routes-billing.ts, credits.ts, tests/billing*, tests/stripe-fake.ts or the Billing() component.",
   "notes_for_integrator": "Behaviour others will notice:\n- **Comment filters:**\n  - What a recipient writes for everyone, and anything a public-form visitor writes, is now read by the fake-notice filter whatever the account's trust, together with that person's name and their words from the last day. A refusal is 422 in plain words.\n  - A visitor can no longer answer in a conversation for everyone (403).\n  - A recipient's private words to the sender are still not filtered. This is my choice: the sender chose that person. Please confirm.\n- **Emails about comments:**\n  - The sender's digest no longer uses a visitor's name as From or their address as Reply-To, and it says so in a line.\n  - Answer emails name the writer in the subject (\"Kim Helper wrote to you about: ...\") and add \", for <sender>,\" when it was not the sender.\n  - Answers the filter refuses at sending are dropped (comment_news.dropped = FILTERED) and the sender gets an email \"Not emailed to <name>: comments on <subject>\". flushComments now returns {mailed, held, dropped}; cron's comments result has the extra field.\n- **Repeats and settling:** The same words from the same person to the same readers within 15 s are one comment; the signer API answers with again: true. Settling is limited to 10 changes per person per thread per hour (429), with one audit line per thread per hour.\n- **In person:**\n  - Recipients.tsx \"Host signing now\" uses location.replace for in-person signers.\n  - handDevice and /auth/unlock now set and clear the ts_hand cookie.\n  - The signing page of an in-person signer who no longer holds the device gets \"away\" (a note), may_write false, and only threads for everyone.\n- **Admins:** GET /envelopes/:id/comments now works for an admin on an envelope its sender removed (like the evidence pack). The owner counts as an admin.\n\nPromises in copy I added or changed (all kept by the code and tested):\n- The help page says when an answer is not emailed.\n- The card option says \"(not emailed, they see it on their signing page)\".\n- The reply hint names the reason.\n- The in-person note says \"If you are <name>, ask <sender> to open your page for you again with \\\"Host signing now\\\"\".\n- The README bullet and the bad-reviews row were rewritten to match the code.\n\nDecisions for the owner to confirm:\n- The filter window is 24 hours, so parts a day apart pass.\n- The duplicate window is 15 s.\n- The fold is at 600 characters or 8 lines.\n- The settle limit is 10 changes an hour per person.\n\nSeen broken, out of scope:\n- The next in-person person can Back to an earlier person's unfinished signing page and fill it in (not comments).\n- tests 296, 300 and 302 (the disputes repair in progress).\n- test 538 lifecycle.test.ts:1260 (the powerforms page source regex).\n- probe-g3: a group's row token after a member takes the document on is emailed only to that member, so it is not a leak.\n\nRename: all new copy says Sign&Grow where the product is named; nothing renamed."
+ },
+ "repair:signercode": {
+  "found": "There was no earlier repair work for this key. The code was the builder's version, already committed by the periodic \"work in progress\" commits, and tests/signercode.test.ts passed 30 of 30. tsconfig.json already had the two .next-repair-signercode include lines before my dev server started, so I left them. I ran every probe in tests/out/verify-signercode/ before changing anything:\n- retry.ts: BROKEN 5 of 5. After a correction the old number was texted (Twilio To=+447700900111). A retry also texted a disowned number, a reporter, a paused sender's recipient, and a signer who had already finished (\"is waiting for you to sign\").\n- certificate.ts, run from the project root (from inside tests/out it cannot find the fonts): BROKEN. Alex Jones inherited Sam's pass at the same inbox: sam_device_still_open true, and the certificate said \"One-time code sent by email ... passed\". The in-person and link-shared-by-sender lines also dropped how the link travelled.\n- lockout.ts: BROKEN 3 of 3. The 16th colleague behind one office address got 429. Another account used up the victim's 15 a day. A public form used up the allowance too, and the real document answered 429.\n- stranger.ts: /mute and /report without the code silenced texts with no \"Text not sent\" line. The pass cookie was the same value on two devices, and a copied cookie opened the link with no limit on the server.\n- notmine-scope.ts: BROKEN. The second envelope from the same sender sent a link text and a code to the disowned number.\n- paused.ts: BROKEN. 15 code texts went out while the account was paused.\n- mailretry.ts: BROKEN. Our stored copy kept the code after a timer retry.\n- lookup.ts: BROKEN. The locked view gave the envelope id and page count, and GET /public/verify then gave signers 2, approvers 1, documents 3.\n- race.ts: holds, but normalPhone accepted +1 900, +44 909, +881, +882 and +999.\n- dialog.cjs at 390 px: the checkbox rendered 7x13 px, and the select showed \"One-time code by text messag\" cut off.",
+  "done": [
+   {
+    "item": "HIGH new bug: a timer retry of a link text ignores everything since the first try (old number after a correction, disowned number, reporter, paused sender, someone who signed)",
+    "status": "done",
+    "how": "sms.ts has a new hook, onTextRetry, and retryTexts asks it before every later try. A guard that throws holds the text back. signercode.ts registers the envelope guard, which decides the text again at that moment, as the owner asked:\n- the number on file must equal to_phone\n- check_stop and the account-wide stop list\n- a code text must be the newest live code\n- for a link or reminder: text_link still on, token unchanged, envelope still out, person sent or viewed, not muted\n- no report\n- pause and fake-notice filter (textGuard)\n- the daily limits through mayText, with own=true so the text is not counted against itself a second time\nLink texts that are held write 'Text not sent' and tell the sender, like a first try. resetCheck and not_mine now also drop every waiting text of that person with dropTexts, not only code texts.",
+    "test": "tests/signercode.test.ts: 'a text tried again by the timer is decided again: ...' and '... held by the pause, the fake-notice filter and the daily limit ...'. 'a code by text that waited for another try is not sent once sending is paused'. retry.ts now shows HOLDS 5 of 5."
+   },
+   {
+    "item": "Check: 'Not my number' stops all codes and link texts to that number (scope per link only, skipped on retry) + new bug 'per link only' + help/README overclaim",
+    "status": "done",
+    "how": "New text_stops table, one line per account and number fingerprint. not_mine writes a line there. mayText refuses a stopped number. requestCode answers 409 'stopped' on any envelope of that account and tells the sender once a day which box to tick. lockedView and publicCheck report stopped. number_confirmed lifts the stop for the whole account. It works for a recipient who only has text_link too, is rolled back if the rest of the correction is refused, and a link text held back meanwhile goes out after confirmation. Correcting the person to another number does not lift the stop on the disowned number. The words on the stopped screen, the envelope page, the Correct dialog, the audit line and the sender's email were changed to say 'someone using one of your signing links'.",
+    "test": "'\"This is not my number\" holds for every envelope of that sender until they confirm it, and never for another sender'. notmine-scope.ts HOLDS."
+   },
+   {
+    "item": "Check: Pause stops texts like emails + new bug 'A paused account keeps texting numbers it typed'",
+    "status": "done",
+    "how": "requestCode refuses a code by text while textGuard refuses, which covers the pause and the fake-notice filter. The signer gets 503 'unavailable' with neutral words: '...texts for this document are on hold...'. The sender is told the real reason and that they can switch the person to a code by email. Codes by email still go, because they go to the mailbox that already has the link. PAUSED_MEANS in envelopes.ts now names this one exception, because the pause emails promise that recipients can still open their documents. Retries are covered by the guard.",
+    "test": "The existing pause test was updated: before, it asserted that a code by text still went out while paused, and that was deliberately changed. Plus 'a code by text that waited for another try is not sent once sending is paused'. paused.ts HOLDS (0 texts)."
+   },
+   {
+    "item": "Check: fake-payment-notice filter over texts (retry path)",
+    "status": "done",
+    "how": "The retry guard and code requests both run textGuard, which calls emailRefusal.",
+    "test": "The filter part of '... held by the pause, the fake-notice filter and the daily limit ...'."
+   },
+   {
+    "item": "Check: someone who reported, declined or muted gets no more texts (retry path)",
+    "status": "done",
+    "how": "The retry guard handles each case. reported() now uses reporterKey, so a person without an email address is matched correctly too.",
+    "test": "'a text tried again by the timer is decided again ...': report, decline, finished, muted reminder."
+   },
+   {
+    "item": "Check: device pass cookie (same-inbox swap inherits, no server age) + new bugs 'another person at the same inbox inherits the pass' and 'pass cookie one fixed value, never expires on server' + overclaims (linkStamp comment, README 'for a day')",
+    "status": "done",
+    "how": "linkStamp and deviceStamp now include person_gen. It adds nothing when 0, so older records still count. The pass cookie is now '<issued ms>.<hmac(deviceStamp, issued)>', and gateOf refuses it after SIGNER_PASS_HOURS (24, new in policy.ts). It also refuses a time more than a minute in the future, and no two devices hold the same value. checkBits records 'the one-time code that was passed ... no longer counts' when person_gen changes. correctWithCheck and saveChecks now treat a non-samePerson name at the same address as another person. The phone typed for the first person must then be given again when a text is still asked for, with words that say so. The comment above linkStamp was rewritten.",
+    "test": "'another person at the same address never keeps the code the first one passed ...' (device locked, API line 'not passed', certificate shows Alex's own pass time). '... needs their own mobile number ... through Correct and through the editor'. 'a device that passed is let in for a day counted by the server, and two devices never hold the same pass' (Date.now shifted 25 hours). certificate.ts #3 HOLDS. stranger.ts #6 now reports that the 'one fixed value' statement no longer holds."
+   },
+   {
+    "item": "Check: limits do not lock out a legitimate person + new bugs 'stranger uses up a mailbox's 15 codes' and '15 an hour per address locks out an office' + overclaim '15 an hour per caller'",
+    "status": "done",
+    "how": "signer_codes has a new bucket column. The daily limit per mailbox or number is counted per (destination, sender account). A public form visitor counts against 'form:<id>' only, so form codes never block the owner's real document to the same person. Nothing is counted across accounts, as the owner decided. The caller limit is now per (ip, sender account) and counts only codes that were never typed in. SIGNER_CODES_PER_CALLER_HOUR was raised from 15 to 100. The 429 messages name the sender.",
+    "test": "The existing limits test was updated (deliberate change). New: 'limits on codes never let a stranger lock a person out of other senders' documents, and an office behind one address all get theirs' (20 colleagues on one address, another account's 15 codes, 16 public form starts). lockout.ts HOLDS 3 of 3."
+   },
+   {
+    "item": "New bug: a link holder who never passed the code can silently switch off texts (mute/report)",
+    "status": "done",
+    "how": "POST /sign/:token/mute answers 401 {code:'code_first'} while the code gate is open. The signing page keeps a 'stop reminders' email link pending: it shows 'Reminders stop once the code is typed...' and mutes as soon as the page unlocks. Reporting still works without the code on purpose, but it is no longer silent: alsoText and the retry guard write 'Text not sent ... reported ...' and tell the sender once a day.",
+    "test": "'a link holder who never passed the code cannot switch the reminders and texts off ...'; the report part is in the retry test. Checked in a browser: tests/out/repair-signercode/05-mute-before-code-phone.png, 05-mute-before-code-desk.png and 06-mute-after-code-phone.png (muted=1 on the server). stranger.ts #3 still prints BROKEN because it expects texts to keep going after a report. I disagree with that part: a report has to stop texts, and the sender is now told."
+   },
+   {
+    "item": "New bug + overclaim: a code email sent on a timer retry keeps the code in our copy",
+    "status": "done",
+    "how": "signercode.ts registers onMailOutcome('signercode'). On 'sent' or 'gave_up' for an envelope email that carries expires_at, it finds the code in the heading and removes it from html and payload.",
+    "test": "'a code email the mail server took only on a later try is not kept readable in our copy'. mailretry.ts HOLDS."
+   },
+   {
+    "item": "Check 1 still_broken + new bug: envelope id in the locked view plus the public lookup",
+    "status": "done",
+    "how": "lockedView leaves envelope.id and impact out. The locked screen does not use them, and the Help link already falls back without the id.",
+    "test": "'before the code the envelope id and the page count are not given out ...'. lookup.ts HOLDS."
+   },
+   {
+    "item": "New bug: the code screen tells a 'link shared by the sender' person that the link in their email keeps working",
+    "status": "done",
+    "how": "The lockedView check now carries `shared`. CodeCheck says 'The link <sender> gave you keeps working.'",
+    "test": "Same test: check.shared is true for a link_by_sender recipient with sms_code and false otherwise, plus a source check of CodeCheck."
+   },
+   {
+    "item": "New bug: premium-rate and international-network numbers accepted",
+    "status": "done",
+    "how": "NOT_MOBILE in src/lib/checks.ts refuses +800 to +809, +870, +878, +881, +882, +883, +888, +979, +991, unassigned +28x, +83x, +89x, +969, +978, +990, +997 and +999, plus +1 900, +1 976 and +44 9. PHONE_HOW now says these cannot be texted. premiumPhone() gives its own sentence in the editor (CheckFields) and in the bulk CSV.",
+    "test": "'premium-rate, satellite and unassigned numbers are never texted, and are refused in words'. It also checks that +880, +886, +998 and +971 still pass."
+   },
+   {
+    "item": "Check + new bug + overclaim: Correct dialog at 390 px (7x13 checkbox, clipped select)",
+    "status": "done",
+    "how": "In checks.css the box is now flex:none and 22x22. The check names are shorter ('Code by email', 'Code by text message'), because a select cannot wrap. The 'I checked' box is also offered for a recipient who only has text_link.",
+    "test": "Source test of the CSS and dialog. In a browser (tests/out/repair-signercode/screens.cjs and select.cjs): label 280x44, checkbox 22x22, select text 'Code by text message' shown in full, no horizontal overflow, tapping the line ticks it, Space toggles it, saving lifts the stop and the held link text goes. Screenshots 03-correct-confirm-phone.png and 07-correct-check-phone.png."
+   },
+   {
+    "item": "Certificate evidence: in-person and link-shared-by-sender lines dropped how the link travelled",
+    "status": "done",
+    "how": "checkLine puts 'Signed in person on a device of the sender, who was emailed the link. ' or 'Link shared by the sender. ' before the passed-code sentence.",
+    "test": "'the certificate keeps how the link travelled ...'. certificate.ts lines 1 and 2 HOLD."
+   },
+   {
+    "item": "New bug: the per-caller limit is off or spoofable depending on TRUSTED_PROXY_HOPS",
+    "status": "done",
+    "how": "Documented in the README config table, README 'Checking who signs' and .env.example: an unknown address is not counted, and the limits per recipient and per mailbox or number hold either way. The code behaviour was kept.",
+    "test": "Documentation only. The limits per recipient and per account are tested."
+   },
+   {
+    "item": "Overclaim: README 'a refusal for good (a number that does not exist) ends at once'",
+    "status": "words_changed",
+    "how": "The README now says 'sent' means the provider took the text, that a landline or unassigned number can be accepted and fail later without us being told, and that 'I do not get the code' is the way out. Twilio status callbacks were not built.",
+    "left_open": "No delivery receipts from Twilio or the hook."
+   },
+   {
+    "item": "Overclaims in the builder report (browser check, abuse_and_stuck)",
+    "status": "done",
+    "how": "Each claim is now true in the code: not-my-number, pause and filter on retries and codes, the limits, and the dialog. The README rows were updated."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/signercode.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/sms.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-sign.ts (mute route only)",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts (text_stops table, signer_codes.bucket column)",
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts (one sentence added to PAUSED_MEANS)",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts (number_confirmed description)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/checks.ts (NOT_MOBILE, premiumPhone, PHONE_HOW, CHECK_NAMES, checkLine)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts (SIGNER_PASS_HOURS; SIGNER_CODES_PER_CALLER_HOUR 15 -> 100 with new meaning)",
+   "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx (mute note 'code', 4 small edits)",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/CodeCheck.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/CheckFields.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/csv.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/dialogs.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/Recipients.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/checks.css",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example",
+   "/home/user/treegens-app/sign-and-grow/tests/signercode.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-signercode/screens.cjs, select.cjs, screens-notes.json and screenshots 01-07"
+  ],
+  "suite": "tests/signercode.test.ts: 44 of 44 pass (30 at the start; 14 new). Existing tests I changed on purpose:\n- the limits test: per-sender counting and the new caller rule\n- the pause test: no code by text while paused\n- the not-my-number test now uses its own number, because the stop now holds for the whole account\n- three message regexes: 'Send \"phone\" with the number of Nia New'; '...from this account, on any envelope, until the sender confirms it with them.'; '...after someone using a signing link had said it was not, so texts go to it again.'\n\nFull npm test: 736 tests, 734 pass, 2 fail. Neither is mine, and both still failed when re-run:\n1. tests/gaps-nonus-words.test.ts:830 expects `replyTo={answerComesTo(me)}` in src/app/sign/[token]/page.tsx. That was removed in commit 50cdd82 (payment repairs); my edits there only touch mute.\n2. tests/witness.test.ts:823 signs up 'cora@deed.example', which line 242 of the same file already uses, so it gets a 409 at sign-up. That is the witness engineer's test.\n\nnpx tsc --noEmit -p .: one error, src/lib/witness.ts(110,144) 'k' is of type 'unknown'. That file is not mine; no errors in files I touched.",
+  "needs_from_billing": "Nothing. Texts are still not charged, and routes-billing.ts, credits.ts and the Billing() component were not touched.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n1. While an account is paused, no one-time code goes out by text. The signer gets 503 'texts for this document are on hold'. The sender is told and can switch the person to a code by email. PAUSED_MEANS (envelopes.ts) now says this, so the promise in the pause emails stays true.\n2. 'This is not my number' now holds for the whole sending account (table text_stops) until number_confirmed. Correcting the person to another number does not lift it. number_confirmed also works for a recipient who only has text_link, and sends a link text that was held back.\n3. POST /sign/:token/mute answers 401 {code:'code_first'} until a code check is passed. The signing page waits for the code, then stops the reminders.\n4. Code limits are counted per sender account: 15 a day per mailbox or number, counted per form for a form visitor. The caller limit is 100 an hour per (address, sender), counting only codes that were never typed in.\n5. Pass cookies changed format and are checked on the server for 24 hours (SIGNER_PASS_HOURS), so devices that passed before this change have to type a code once more. A pass is tied to person_gen.\n6. A correction to another person at the same address with an sms_code or text_link needs a new \"phone\", like a change of address already did.\n7. The locked view no longer carries envelope.id or envelope.impact.\n8. normalPhone refuses premium-rate, satellite and unassigned numbers. PHONE_HOW is one sentence longer.\n9. The select options are now 'Code by email' and 'Code by text message'.\n10. Every later try of a text is decided again (sms.ts onTextRetry). cron.ts already imports signercode.ts, which registers the guard.\n\nDecisions for the owner to confirm:\n- Code emails still go while paused (only texts stop).\n- Reports still stop texts without the code. The skeptic's stranger.ts #3 counts that as broken; I think a report must stop texts, and the sender is now told.\n- A recipient with person_gen > 0 who passed a code before this change loses that pass record. It cannot be told apart from the person-swap bug, and the feature has not shipped, so this only matters for development databases.\n\nSeen but out of scope:\n- tests/witness.test.ts reuses an email address (line 242 and line 823).\n- tests/gaps-nonus-words.test.ts expects replyTo={answerComesTo(me)}, which was removed from the signing page in commit 50cdd82.\n- tsc error in src/lib/witness.ts.\n- Each public form start emails the address the visitor typed. Stopping one person's address from being started many times is the public-form owner's to decide.\n- The SMS hook accepts http:// URLs.\n\nThe rename was not touched; new copy says Sign&Grow.",
+  "abuse_and_stuck": [
+   "Abuse, held by a test: a text waiting for another try is used to reach a number the sender has since corrected, or a decliner, reporter, paused sender or finished signer. The retry guard decides it again at that moment.",
+   "Abuse, held by a test: a stranger with many accounts, or at a public form, uses up a person's codes. Limits are per sender or per form, so other senders' documents still send.",
+   "Abuse, held by a test: a paused sender opens its own links to text numbers it typed. Code texts are refused while paused.",
+   "Abuse, held by a test: a stranger with the link silences texts. Mute needs the code. A report still stops texts, and the sender is now told.",
+   "Abuse, held by a test: a copied or forged pass cookie. It is HMAC'd with the time it was issued, refused after 24 hours, and refused with a time in the future.",
+   "Abuse, left open: an attacker with N accounts can send N x 15 code emails a day to one mailbox. Each account still has to send envelopes to that person under its own daily limits. The owner chose not to count across accounts.",
+   "Abuse, left open: premium ranges of countries other than the US, Canada and the UK are not refused; the README points to the provider's country settings. International MVNO numbers on +882 or +883 used by real people are refused.",
+   "Abuse, left open: a stranger who has one link can say 'not my number' and stop the sender's texts to that number on every envelope. It is limited to 3 a day per link, and the sender is told and can confirm the number.",
+   "Stuck, held by a test: an office signing a bulk send behind one address. 20 colleagues all get codes; the caller limit is per sender and counts only codes never typed in.",
+   "Stuck, held by a test: a spelling fix of the same person's name keeps their pass.",
+   "Stuck, checked in a browser: a 'stop reminders' link on a page behind a code explains why, and stops the reminders once the code is typed (checked on phone and desktop).",
+   "Stuck, left open: a signer whose sender is paused cannot open a document with a code by text until the sender switches them to email (the sender is told) or the pause is lifted.",
+   "Stuck, left open: a page left open for more than 24 hours gets 401 'Type the one-time code first.' on save or Finish. I did not check how the page shows that mid-signing.",
+   "Stuck, left open: a sender who meant to type a disowned number again for a new envelope finds texts held. They are told and confirm with the box in Correct; there is no way to confirm at send time."
+  ],
+  "settings": [
+   "No new environment settings.",
+   "New constant SIGNER_PASS_HOURS = 24 in src/lib/policy.ts.",
+   "SIGNER_CODES_PER_CALLER_HOUR is now 100 per (address, sender account), counting only codes never typed in (was 15 per address).",
+   "SIGNER_CODES_PER_DESTINATION_DAY (15) now counts per sender account, per form for a form visitor.",
+   "The README and .env.example now say the caller limit depends on TRUSTED_PROXY_HOPS."
+  ]
+ },
+ "repair:bounces": {
+  "found": "I reproduced every finding by running the skeptic's probes in tests/out/verify-bounces/ against the code as it stood. Before outputs are in /tmp/claude-0/-home-user-treegens-app/9d40e5b6-b8c5-5afe-af61-9b17cf0ca38e/scratchpad/repair-bounces/before/, after outputs in .../after/ and .../final/. Everything the skeptic reported reproduced exactly:\n- p1 A: three address-only Resend complaints all landed on the honest account. It was paused with 3 reports; the spammer had 0.\n- p1 B: Vera's login got the banner from a stranger's email.\n- p1 C: Hal's first \"try later\" became a hard mark because of another account's days.\n- p10: an exact Postmark id of a deleted envelope fell back to Vic's own invitation. Vic got the banner and his boss got the \"not arriving\" email.\n- p11: 0 reports against the deleter, 2 against the honest account.\n- p12: a delivered email kept bounce_kind 'soft', so the page said \"Not delivered yet\".\n- p13: the third soft day made the email 'hard'; its later delivery cleared nothing and reminders gave 409.\n- p2: a soft bounce after \"delivered\" wrote \"has not arrived yet\"; an address-only bounce marked the delivered email.\n- p3: the stranger's \"security notice\" with www. and a phone number was quoted verbatim in the sender's email, HTML and text, and in the record. cleanReason let hxxps, mailto, bare domains, bidi and zero-width characters through. SendGrid \"dropped\" was always hard with the \"came back\" wording; Mailgun suppress-complaint read \"refused\".\n- p4: a secret with + pasted raw gave 401.\n- p5: correcting away and back cleared complained_at and emailed the complainer; a second login undid the complaint with the copied link; reports still counted after undo.\n- p6: three copies to the old address stayed after the login was deleted.\n- p7: the S3 hosts and an Unsubscribe link were fetched and called \"confirmed\"; an unknown SNS inner shape and an UnsubscribeConfirmation got 200 and were not logged.\n- p8: 2001 events gave events:2000, so the last one was dropped silently.\n- p9: a queued reminder went to the complainer and to the dead address by the timer.\nAt the start tests/bounces.test.ts passed 18 of 18. The builder's code was otherwise as described in research/continue.json.",
+  "done": [
+   {
+    "item": "New bug (high): an event with our exact id fell back to address matching when its email row was gone; void and delete evaded complaint reports and moved them onto other accounts and logins (check 2b, p10, p11)",
+    "status": "done",
+    "how": "findMail (routes-bounces.ts): when the news names our id or Message-ID and no email with that address matches, it answers 'unmatched'. The address is never tried instead, and a log line says so. forgetEnvelopes (routes-trust.ts, one line) now calls rememberGoneMail (bounces.ts) before an envelope's emails are deleted. That keeps, in the new table mail_gone for 30 days: mail id, Message-ID, account and a keyed HMAC of the address, never the address. News naming a gone email is handled by goneNews. A complaint counts against that account through reportAbuse (the e.gone path) and is kept for the account. A hard bounce goes on that account's do-not-mail list. Nobody else is touched. Rows of a deleted envelope that were still waiting to send are matched to their kept line as well.",
+    "test": "tests/bounces.test.ts 'news that names our id is never moved onto another email, and still counts against a sender who deleted the envelope'. p10 now: Vic banner null, boss not emailed. p11 now: deleter 3 reports, honest 0."
+   },
+   {
+    "item": "New bug (high): address-only matching crossed accounts, so complaints about one account's mail paused another (checks 2b and 4b, p1 A)",
+    "status": "done",
+    "how": "Address-only news only looks at emails that left in the last 3 days. Each email gets an owner: the account of its envelope, or '' for our own emails to a login (a sender's own copy counts as login mail). If more than one owner wrote to that address, the news is 'unmatched', touches nobody, and is logged for the operator. This follows the owner's decision.",
+    "test": "'news that names only an address touches only the one sender who wrote to it, never another account or a login'. p1 A now: nobody paused, 0 and 0 reports."
+   },
+   {
+    "item": "Check 4c: a stranger could mark a customer's own address as bouncing (banner, team admins emailed), p1 B and p10",
+    "status": "done",
+    "how": "hardBounce now calls loginBounce only for an email about the login itself: no envelope and no about_user, or the sender's own envelope email. A missing envelope never counts, and neither does an invitation or team notice, which carries about_user. The stranger's envelope email plus our reset email is ambiguous by address and touches nobody. A stranger's invitation that bounces by exact id leaves the customer alone.",
+    "test": "Covered in both tests above: Vera, Vic, and an invitation from a stranger. I changed the existing login-bounce test to bounce a password-reset email, because an invitation bounce no longer marks the login. This is a deliberate behaviour change."
+   },
+   {
+    "item": "New bug (high): the sender could undo a recipient's spam complaint by correcting the address away and back, or with a second login and the copied link (check 4a, p5 A and C)",
+    "status": "done",
+    "how": "Following the owner's decision, a complaint is now kept for the account: new table mail_complaints, keyed by account and address. db.ts migrate replaces the recipients_address_changed trigger and adds an AFTER INSERT trigger. Together they put complained_at back on any recipient of that account's envelopes at that address: after a correction away and back, through the editor, or on a new envelope. complaint() marks every open envelope of the account at that address, writes the record on each, and fires envelope.updated. Correcting to such an address answers {not_emailed:'marked_as_spam'} and writes 'Not emailed' to the record; the correct dialog's toast says no email went out. POST /sign/:token/mail-again no longer trusts the link. Without a code it emails a 6-digit code to the address: at most 3 a day per account and address (across all links), valid 30 minutes, 5 wrong tries. The code is never in the subject, and our stored copy loses it once the mail server takes it. With the code it clears the complaint across the account and marks the provider's report 'withdrawn'. The 403 for a sender who is signed in stays. MailAgain.tsx now asks for the code, at 44px tap size, with a label. An old DB's existing complaints are copied into the new table once.",
+    "test": "'a complaint is the person's own: a correction away and back, a new envelope or the copied link do not undo it', and 'the code that starts emails again reaches only the mailbox...'. p5 now: complained_at kept after the round trip, 0 emails to them, reminder 409. The second login only triggers a code email."
+   },
+   {
+    "item": "Low: a complaint still counted toward a pause after the recipient asked for emails again (p5 E)",
+    "status": "done",
+    "how": "When the right code is typed, the open mail-provider report from that address against the account is set to status 'withdrawn'. The pause count only counts open and upheld reports. A report an operator already upheld stays as it is.",
+    "test": "Same complaint test: counted(acc) is 0 and the status is 'withdrawn'.",
+    "left_open": "I followed the skeptic's suggestion here, but it is not in the list of owner decisions. The owner should confirm it."
+   },
+   {
+    "item": "New bug (medium): the mail timer delivered a queued reminder to someone who had complained or whose address had bounced since (check 3a, p9)",
+    "status": "done",
+    "how": "mail.ts tooLate() now drops quietly, and records why on the row: any email to a recipient row that is complained at the same address, and a request or reminder (untilDone) to one that is bounced.",
+    "test": "'an email waiting for another try is not delivered to someone who complained, or to an address that came back, since'. p9 now: dropped 1, and 0 reminders to the dead address."
+   },
+   {
+    "item": "New bug (medium): text written by a stranger's mail server was sent to our customer under our name (check 11, p3 A)",
+    "status": "done",
+    "how": "Following the owner's decision: emails.bounce_reason now holds only our plain words. The mail server's text goes into the new column emails.bounce_said, which only the dev outbox shows. 'Their mail server said' is gone from the sender's email, the record and the soft-bounce line. Old rows are split once at migration. Classification still reads the full one-line text. cleanReason (operator-only) now also strips any scheme, mailto/javascript/data/hxxps, www., bare domains, and bidi and zero-width characters.",
+    "test": "'what a mail server wrote never reaches a customer...': the sender's HTML and text part, the record and GET /envelopes/:id never contain it; the dev outbox shows it cleaned. I updated the existing hard-bounce test's record assertion, a deliberate change."
+   },
+   {
+    "item": "New bug (medium): SendGrid 'dropped' was always a hard bounce worded 'came back'; Mailgun suppress-complaint read 'refused'; '(suppressed)' prefix (p3 B)",
+    "status": "done",
+    "how": "SendGrid dropped maps by reason:\n- Bounced Address: hard, 'came back'.\n- Invalid: hard, 'no such mailbox'.\n- Spam Reporting Address: hard, with the spam wording, and not counted as a report against this account.\n- Unsubscribed, Invalid SMTPAPI header, quota and anything else: a new internal kind 'not_sent'. It marks nobody and lists nothing, shows 'our mail provider did not send it, because of a setting on our side' on the email and in the record, and logs the provider's words for the operator.\nMailgun suppress-bounce, suppress-complaint and suppress-unsubscribe map the same way. A list that does not say why (Postmark ManuallyDeactivated, SES OnAccountSuppressionList) now reads 'after earlier emails to it came back or were marked as spam'. The '(suppressed)' prefix is gone.",
+    "test": "Same test: dropped mapping, Mailgun suppress-complaint, ManuallyDeactivated, and not_sent end to end (log line, no mark, no list, record line, no email to the sender)."
+   },
+   {
+    "item": "New bug (medium): after a deferral, a delivered email read 'Not delivered yet' for ever; a soft bounce after 'delivered' wrote 'has not arrived yet' (check 7, p12, p2 A/B)",
+    "status": "done",
+    "how": "delivered() sets bounce_kind from 'soft' to NULL and writes 'Email delivered ... after all' to the record when the record had said it had not arrived. softBounce() answers 'repeat' and writes nothing when the email was already delivered.",
+    "test": "'\"try later\" counts for each sender apart, gives way to \"delivered\" in either order, and a third day that then arrives clears its marks'"
+   },
+   {
+    "item": "New bug (medium): the third 'try later' day escalated the email to hard, and its later delivery cleared nothing (check 3b, p13)",
+    "status": "done",
+    "how": "On the third day, hardBounce runs in an escalated mode: the person, the do-not-mail list and the sender's email are handled, and the email itself stays 'soft'. delivered() then also clears marks up to that email's own soft-bounce time, on recipients, the list and the login.",
+    "test": "Same test (the Full Box part). p13 now: marks and list cleared, reminder 200."
+   },
+   {
+    "item": "New bug (medium): 'try later' days were counted across accounts (check 3c, p1 C)",
+    "status": "done",
+    "how": "soft_bounce_days is now keyed by an HMAC of owner and address. The owner is the account, or '' for our own emails to a login. Rows written under the old key simply age out.",
+    "test": "Same test (the Hal part). p1 C now: Hal not marked, not told, not listed."
+   },
+   {
+    "item": "New bug (medium): moving a login to another address left copies to the old address after deletion (check 12, p6)",
+    "status": "done",
+    "how": "In /me/email/confirm, emails to the old address that have no envelope and no about_user get about_user set to the login. The 'address was changed' notice to the old address is sent with about set to the login. purgeUser already deletes by about_user, so DELETED_WITH_ACCOUNT is true again.",
+    "test": "'a login that moved to another address and is then deleted takes our copies of the emails to the old address along'. p6 now: no copies left."
+   },
+   {
+    "item": "Low: an address-only hard bounce preferred an email that was already delivered (p2 C)",
+    "status": "done",
+    "how": "The OPEN rule for bounce, soft_bounce and not_sent now requires delivered_at to be empty.",
+    "test": "In the address-only test (Carl Clash part). p2 C now: the first email is marked, the delivered second is not."
+   },
+   {
+    "item": "Low / check 8: the SNS check accepted S3 bucket hosts and fetched Unsubscribe links",
+    "status": "done",
+    "how": "The host must look like sns.<region>.amazonaws.com(.cn), where the region is letters, letters and digits such as eu-west-1. S3 hosts fail that. The link must also have Action=ConfirmSubscription and a TopicArn equal to the message's TopicArn.",
+    "test": "'Amazon SNS: only the confirmation of the topic itself is fetched...': the S3 hosts, an unsubscribe link, another topic and a link without a topic are not fetched; eu, cn and gov hosts are confirmed."
+   },
+   {
+    "item": "Low / check 9: unknown SNS-wrapped shapes got 200 understood:true and were never logged; a 2001st event was dropped silently",
+    "status": "done",
+    "how": "JSON inside a Notification that no adapter knows now gets 202 with understood:false and is logged once. A text Message, the SES connect notice, is still understood. An UnsubscribeConfirmation is logged every time. readEvents no longer cuts arrays; a batch up to 5000 events is read to its end, and more than that answers 413 with nothing read.",
+    "test": "The SNS test above, and 'a batch is read to its end or refused whole...' (2001 all read, 5001 gives 413)."
+   },
+   {
+    "item": "Low: a full webhook batch was worked through inside the request, with one SMTP hand-over per sender email",
+    "status": "done",
+    "how": "The route races the batch against 8 seconds. Marks are written at once; if emails to senders are still going after that, it answers 202 with the counts so far and a note, and the rest finishes in the process. Tests can shorten the wait with g.__tsmailEventsAnswerMs and wait on g.__tsmailEventsWork.",
+    "test": "In the batch test: a slow fake mail server, a 202 within the time, the recipient marked at once, and the sender's email arrives afterwards.",
+    "left_open": "If the process stops in the seconds after a 202, the rest of that batch is lost, because the provider will not resend it. There is no persistent queue for these."
+   },
+   {
+    "item": "Check 2a: a secret with + pasted raw into ?token= gave 401 for ever",
+    "status": "done",
+    "how": "mailEventsAuth also compares the raw query value decoded without turning + into a space. README and .env.example say such a secret works.",
+    "test": "'a secret with \"+\" in it works pasted into the address as it is'. p4 now: 200."
+   },
+   {
+    "item": "Overclaims: README, test name, continue.json claims, MailStopHint, help 'We email you at once', openapi unknown shapes and SNS, DELETED_WITH_ACCOUNT",
+    "status": "done",
+    "how": "Copy that now matches the code:\n- README: the bounces section (matching rules, mail_gone, ambiguity, mail server text kept for operators only, complaints kept for the account, batch limits and the 202 when slow, SES row, dropped reasons), the test table row and the 'bad reviews' row.\n- The test is renamed to 'news is matched by our ids when it carries them, and by the address only among recent emails that left'.\n- The help page now says we email you at once unless you switched off 'When something needs you' under Settings, Notifications.\n- COMPLAINT_MEANS in policy.ts, MailStopHint and MailStopLines: the complaint is per account, survives corrections and new envelopes, and is undone with a code.\n- openapi: /mail/events (unmatched ids, ambiguity, 413 over 5000, 202 when slow, SNS topic rule, signatures not checked), complained_at, bounce_reason in our own words only, the correct answer's not_emailed, and a new /sign/{token}/mail-again entry shown when MAIL_EVENTS_TOKEN is on.\n- The processing page: who sees the raw reason, mail_gone, and mail_complaints.\n- DELETED_WITH_ACCOUNT is now true (see the address-move item).\nI cannot edit research/continue.json, the builder's report; its claims are overtaken by this report."
+   },
+   {
+    "item": "Screens",
+    "status": "done",
+    "how": "I ran a dev server on 3601 (MAIL_EVENTS_TOKEN set), drove it with tests/out/repair-bounces/screens.cjs, and looked at every screenshot in tests/out/repair-bounces/shots/. Checked at 390x844 and 1280x900:\n- The signing page of a complainer: stopped, then code asked, then wrong code (role=alert says why), then done. Driven by keyboard only.\n- The envelope page with the 'Marked as spam' card.\n- The correct dialog's toast 'Updated, but no email went out...'.\n- The dev outbox.\nResults: scrollWidth equal to the viewport everywhere, every control in the notices at least 44px, the code field labelled, no em dash, no page errors. The two remaining screen notes are not problems:\n- The outbox table's own clip at 390px is from before this work, and the page does not scroll sideways.\n- On a dev server with no mail server, 'Email not delivered' wins over the provider's 'delivered'. That cannot happen in production: provider news only exists for emails a real mail server took, whose status is 'sent'.\nI stopped the dev server, deleted .next-repair-bounces, and removed only my two lines from tsconfig.json.",
+    "test": "tests/out/repair-bounces/screens.cjs (report printed: phone and desktop, sign page code flow, toast text)"
+   },
+   {
+    "item": "Check 5 still_broken (outside the brief, the check holds): POST /envelopes/:id/correct to an address on the do-not-mail list sends without a warning",
+    "status": "not_done",
+    "how": "Not changed. Doing it properly needs the 409 + send_anyway flow in the correct dialog (dialogs.tsx), and a 409 without that UI would be a dead end.",
+    "left_open": "A correction to an address that bounced in the last 30 days goes out without the warning that a new envelope gives."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-bounces.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/bounces.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/mail.ts (tooLate: one block)",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts (3 tables in SCHEMA, column emails.bounce_said, trigger replaced plus an INSERT trigger, one-time migration of old bounce reasons and complaints)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts (one import, one line in forgetEnvelopes)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts (correct route: not_emailed answer and record line)",
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts (two record sentences: 'from this account' instead of 'about this envelope')",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts (dev outbox selects bounce_said)",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/MailAgain.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/MailNews.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/dialogs.tsx (correct dialog toast only)",
+   "/home/user/treegens-app/sign-and-grow/src/app/dev/outbox/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx (#bounced, two sentences)",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/processing/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts (COMPLAINT_MEANS)",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example",
+   "/home/user/treegens-app/sign-and-grow/tests/bounces.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-bounces/screens.cjs and shots/ (new)",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (only removed the two .next-repair-bounces lines next dev added)"
+  ],
+  "suite": "tests/bounces.test.ts: 29 of 29 pass (18 before; 11 new tests, 3 existing ones updated on purpose: the record line no longer quotes the mail server, mail-again needs the emailed code, and the login-bounce test uses a reset email instead of an invitation).\n\nnpm test: 743 tests, 737 pass, 6 fail. None of the failures touch bounces. I re-ran the failing files several minutes later and 4 still fail:\n- lifecycle.test.ts:588: POST /envelopes with a used Idempotency-Key now answers 409. That comes from another engineer's new hidden-envelope rule in routes-envelopes.ts.\n- lifecycle.test.ts:1259: a source regex on the PowerForms page markup.\n- gaps-nonus-words.test.ts:830: a regex on sign/[token]/page.tsx (replyTo={answerComesTo(me)}).\n- gaps-mobile-sign.test.ts:265: a regex on the sign page's Finish handling.\nThe other two (mobile-repair.test.ts 240 and 276, 'no such column: balance') passed on the re-run; they were a half-finished edit by the mobile-repair engineer.\n\nnpx tsc --noEmit -p .: no errors. An earlier run showed one error in src/lib/witness.ts, someone else's file; it has since cleared.",
+  "settings": [
+   "No new setting. MAIL_EVENTS_TOKEN: a value containing '+' now also works pasted raw into ?token= (README config table and .env.example say so).",
+   "Test-only globals, not settings: globalThis.__tsmailEventsAnswerMs (default 8000) and globalThis.__tsmailEventsWork."
+  ],
+  "abuse_and_stuck": [
+   "Abuse, matching: a provider id that names another account's email (only possible with the secret) must match on address too, otherwise it is 'unmatched' and logged (tested).",
+   "Abuse, matching: void and delete to escape complaints. The kept mail_gone line still counts the complaint against the deleter, and the account's complaint is kept (tested). Left open: deleting the whole account removes mail_gone, mail_complaints and the account's reports together; that is the existing account-deletion behaviour.",
+   "Abuse, matching: hiding behind address-only news by having another account email the same people. Ambiguous news touches nobody, so with Resend (no ids) such a complaint counts against no one; it is logged. Left open: Resend or SES without original headers on a busy multi-tenant server will see many complaints that cannot be attributed. The README says to use a provider that hands back our ids.",
+   "Abuse, complaint: undoing it by correcting the address away and back, by trying again, by a new envelope, or with a copied link from another login. All refused or re-marked (tested). Left open: a new account by the same person is not bound by the old account's complaint.",
+   "Abuse, mail-again code: guessing gets 5 tries per code and 3 codes a day per account and address, counted across all of that address's links (tested). The code never appears in the subject the sender sees, or in the stored copy after hand-over (tested). Left open: the 3-a-day count is in memory and resets when the process restarts. A sender holding the link can still cause up to 3 code emails a day to someone who complained; the email says to ignore it.",
+   "Abuse, mail server text: what a stranger's mail server writes never reaches a customer (tested); the operator sees it with links and domains stripped.",
+   "Stuck, honest recipient: they marked spam by mistake, but their mail provider now suppresses our emails, so the code never arrives (Postmark deactivates an address after a spam complaint). The page tells them to look in the spam folder, and their link still opens and signs the document. Left open: only an operator reactivating the address at the provider fixes their emails.",
+   "Stuck, honest sender: they send a new envelope to someone who complained earlier to their account. It goes out without the email, the record says 'Not emailed', and the envelope page card explains it. Left open: there is no warning before sending, only after.",
+   "Stuck, honest sender: they correct a person back to the complained address. They now get a toast saying no email went out and to copy the link (checked in the browser), and the API answers not_emailed.",
+   "Stuck, honest sender: a mailbox that was full for three days and then took the email. Reminders start again on their own (tested).",
+   "Stuck, honest sender: provider news in any order (deferred and delivered swapped) now reads correctly on the page (tested).",
+   "Stuck, operator: a SendGrid quota, header or unsubscribe drop is logged with the provider's words and marks nobody (tested). Left open: the sender is not emailed about it; the envelope page and the record say 'not sent' and suggest copying the link.",
+   "Stuck, operator: an SNS unsubscribe is logged every time (tested). Left open: SNS message signatures are still not verified; the secret in the address is what protects it.",
+   "Left open, public forms: a form visitor whose address complained against the account earlier is marked by the insert trigger, so their completed copy is not emailed. They can still download it on the page, or undo the complaint with a code."
+  ],
+  "needs_from_billing": "Nothing. Renewal reminders and receipts in routes-billing.ts are untouched. They are emails with no envelope and no about_user, so their hard bounce still marks the login as before.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n1. A spam complaint is now kept per account and address (table mail_complaints). Two triggers in db.ts put recipients.complained_at back whenever an address that complained turns up on that account's envelopes, including new ones and corrections. The old trigger recipients_address_changed is dropped and recreated in migrate. Undoing a complaint now needs a 6-digit code emailed to the recipient; POST /sign/:token/mail-again answers code_sent first, then changed. Undoing withdraws the mail provider's report (abuse_reports.status 'withdrawn', a new value; the operator queue only lists 'open').\n2. emails.bounce_reason now holds only our plain words. The mail server's text is in the new column emails.bounce_said, shown only in the dev outbox. The evidence export (evidence.ts) reads bounce_reason and so now carries plain words only.\n3. Address-only provider news is applied only when one sender wrote to that address in 3 days. A provider id that matches nothing is never matched by address.\n4. A hard bounce of an email that has about_user set (an invitation, a team notice) no longer marks the login.\n5. POST /envelopes/:id/correct may answer {ok, not_emailed:'marked_as_spam'}, and writes a 'Not emailed' line to the record.\n6. mail.ts tooLate() drops a queued email to a complained recipient, and a queued request or reminder to a bounced one.\n7. forgetEnvelopes (routes-trust.ts) calls rememberGoneMail before deleting an envelope's emails while the account stays.\n8. /mail/events can answer 202 with a note after 8 seconds; more than 5000 events gets 413.\n\nPromises in copy (all shown only when MAIL_EVENTS_TOKEN is set):\n- help #bounced: the email at once depends on the 'When something needs you' setting; a person can undo by mistake on the signing page.\n- COMPLAINT_MEANS: account-wide, survives correction, try again and new envelope, undone with a code.\n- The processing page: who sees the raw reason, mail_gone kept 30 days as a fingerprint, mail_complaints kept until undone or the account is deleted.\nNew copy says 'Sign&Grow' where the brand appears, for the rename pass.\n\nFor the owner to confirm:\n- Complaints apply to the whole account (all team members), which is how I read 'a new envelope' in your decision.\n- Withdrawing the report on undo.\n- The 3 codes a day.\n\nSeen but out of scope: the four still-failing suite tests listed under suite belong to other engineers' work in progress (idempotency on hidden envelopes, PowerForms page, sign page source regexes)."
+ },
+ "repair:tplroles": {
+  "found": "The builder's work was all there (tplroles.ts, routes-templates.ts, lib/tplroles.ts, WhoCanUse.tsx, tests/templates.test.ts with 8 passing tests). I ran the skeptic's three probes (tests/out/verify-tplroles/probe.ts, probe2.ts, probe3.ts) before changing anything, and every finding reproduced as the report described.\n- Copy bypass (check 3, high): reproduced. (a) On a \"chosen\" template, Otto's /clone answered 200 with no belongs_to, his PUT access {use:'team'} answered 200, and Chad then listed and used the copy. The same happened through Save as template. (b) Chad, chosen to change a locked template, cloned it, and the copy was his. Unlock and widen answered 200, a public form answered 200, and Otto used it.\n- Check 2, file by id: reproduced. Otto's GET /files/<id>/content on an admins-only template answered 200 with 864 bytes.\n- Check 4: reproduced. Otto replaced the template's note and dropped the access code (200), set verify to 'none' (200) and turned the Client into a group (200). The email carried the new note.\n- Check 5: reproduced. A clone of an envelope from before the lock came out unlocked, and its fee and message could be changed (200).\n- Check 6: reproduced. Maya and the admin got 400 on a Plan column after the lock. A bulk replay after the template became admins-only sent 2.\n- Check 8: reproduced. After deleting her own locked template, Maya's PUT on her own envelope answered 403.\n- Lows: reproduced. No history line when a chosen member left, the sentence read \"A and B and C\", and {use:['team']} answered '\"use\" is \"team\"'.\nChecks 1, 7, 9, 10, 11 and 13 held, as the report said.",
+  "done": [
+   {
+    "item": "Check 3 + new bug (high): a copy of a restricted or locked template belongs to the copier, who can unlock it and open it to the team or the public",
+    "status": "done",
+    "how": "Followed the owner's decision. New copyIsTheirs(c, t) in src/server/tplroles.ts: a copy is the copier's only when they may set the template's rules (its owner, an admin or the account owner), or when the template is for everyone and unlocked. cloneOwner uses it, so a copy otherwise belongs to the template's owner and keeps the same rule, chosen people and lock. Chosen changers keep their can_change line, so they can still change its wording, as they can the original's, but never its rules. The same covers /clone, POST /envelopes {kind:'template', template_id}, and Save as template on an envelope started from such a template. A template made from an envelope whose template the caller may no longer use is refused with template_not_for_you. noteCopy writes a 'Copied' history line naming who made the copy. The /clone answer's 'locked' is now the real value; it used to be always true. GET access carries copy_is_yours. The changeRefusal and PowerForm refusal no longer tell people to copy a restricted template. On the template page (envelopes/[id]/page.tsx), Otto sees Use and plain words instead of 'Make my own copy: the copy is yours', and the toast says whose the copy is.",
+    "test": "tests/templates.test.ts: 'a copy of a template not for everyone, or of a locked one, stays with its owner...' covers probe A (a) for /clone, POST kind template and Save as template, by browser and key; probe O (b) for Chad by /clone and key; admin and Maya copies; and the refusal for a template no longer usable. The existing copy test was updated because it pinned the old behaviour.",
+    "left_open": "When Otto saves as a template an envelope he edited freely from an unlocked restricted template, the copy lands in Maya's list under her name with his edits. The 'Copied' history line names him, but the list does not. Owner to confirm, or make that case a refusal."
+   },
+   {
+    "item": "Check 7: public forms (only failed through the copy bypass)",
+    "status": "done",
+    "how": "Fixed by the copy rule. Chad's copy is now Maya's: he cannot unlock or widen it. He can still publish it as a form, exactly as he can the original, which the brief allows to whoever may change a template.",
+    "test": "Same test (b), and probe3 O after the fix: copy owner is Maya, lift lock 403, Otto use 403."
+   },
+   {
+    "item": "Check 2 + new bug: the template's document stays readable by file id",
+    "status": "done",
+    "how": "New fileHeldBack(c, fileId) in tplroles.ts. GET /files/:id/content (routes-envelopes.ts) now answers the same 404 as for a missing file when the file belongs to a template the caller may not use, unless they can open some envelope or template that holds it. That keeps the editor working on their own envelopes and keeps an envelope Otto started before the rule changed readable. Admins and the account owner are never stopped. A freshly uploaded file is served as before.",
+    "test": "templates.test.ts '...files by id' part (e): Otto 404 by browser and key; Maya and admin 200; Otto 200 through his own earlier envelope; his own new upload 200. Probe E after the fix: 404."
+   },
+   {
+    "item": "Check 4 + new bug: on a locked envelope the template's note, identity check and signer could be changed",
+    "status": "done",
+    "how": "At copy time carryRules records what the template gave each person: private note, code check (channel) and access code. They go in a new column, envelopes.wording_people, and clones carry it. assertWordingKept now refuses: a changed, emptied or omitted template note; taking off a code check (email to text is allowed); taking off the access code (changing it is allowed); a person turned into a signing group or back; and a witness moved to another signer. The same person rules hold on POST /envelopes/:id/correct (assertCorrectionKept). A note or check the template left empty stays free. The subject stays open on purpose, as the builder left it, and is now said plainly in LOCK_MEANS, lockedBanner, help and openapi. The editor shows it before anyone types: a read-only note marked '(from the template, locked)', no 'No extra check' option (new optional keepCode prop on CheckFields), an access code hint, and a LockedLine saying what stays and who to ask. wording_lock.people goes to the editor and is documented in openapi.",
+    "test": "templates.test.ts 'a locked wording keeps what the template gave each person...': 6 refusals by API key, a group swap, two refusals through /correct after send, the allowed changes (another code, name, a note for a person the template gave none, the subject), and Maya not held to it. Browser: tests/out/repair-tplroles/03-locked-editor-otto-phone.png (note readOnly true, check choices only email_code, autosave of a name accepted, note kept). Probes B, I and I2 after the fix: 403, nothing saved, email without the new note.",
+    "left_open": "The subject stays open; the owner decides whether to lock it. A comment 'for everyone' pinned on a locked envelope (probe2 K) is still allowed: it was not a finding, but it can say anything next to the locked wording."
+   },
+   {
+    "item": "Check 5 + new bug: cloning an envelope from before the lock gives a fresh unlocked envelope",
+    "status": "done",
+    "how": "cloneOwner, kind envelope: an envelope with no wording_from whose template is locked now is refused with wording_locked when the copier may not change that template. The message says to use the template instead and who to ask. Maya, chosen changers and admins can still clone. The early draft itself stays unlocked, as documented ('locking does not reach back').",
+    "test": "templates.test.ts part (a): Otto by browser and key 403 with the message; Maya and admin 200. Browser: 05-clone-early-otto-phone.png (the toast says it plainly). tests/out/repair-tplroles/probeJ.ts: 403."
+   },
+   {
+    "item": "Check 8 + new bug: the template's owner is locked out after deleting her own locked template",
+    "status": "done",
+    "how": "New column envelopes.wording_owner. templateGoes(t), called inside the DELETE /envelopes/:id transaction, writes the template's owner onto every envelope it locked. wordingLock then lets that person through, and refusals for others name her ('Maya Lopez or an admin of your team ... to change this envelope for you', because the template no longer exists). She can also save such an envelope as a template again.",
+    "test": "templates.test.ts part (b). Existing test 3 updated, since it pinned 'ask an admin of your team' only. Probe3 N after the fix: 200.",
+    "left_open": "wording_owner is the owner at the moment of deletion. If she then leaves, a member successor does not inherit it. Admins still can."
+   },
+   {
+    "item": "Check 6a + new bug: a bulk column on a prefilled field refused for the template's owner and admins once locked",
+    "status": "done",
+    "how": "forRows(c, t) in tplroles.ts sets locked_for_rows (locked and the sender may not change it). planValues in logic.ts (one line) reads that before tpl_locked. POST /bulk passes it for the caller, and sendBatch passes it for the batch's sender, so the copy still gets carryRules' lock marks.",
+    "test": "templates.test.ts part (c): Maya, admin and Maya's key 200 with Plan = Silver; Otto 400. Probe C after the fix: Maya 200, admin 200."
+   },
+   {
+    "item": "Check 6b + new bug (low): bulk replay with the same Idempotency-Key keeps sending after the caller lost the template",
+    "status": "done",
+    "how": "sendBatch asks mayUse for the batch sender before every new copy (asMember builds who they are now). A row it may not make fails with 'Not sent. The template \"X\" is no longer one the person who started this bulk send may use. Ask ...'. The replay answers the batch record (rows already sent, rows refused and why) rather than a bare 403, because that is kinder to the caller.",
+    "test": "templates.test.ts part (d): replay sends 1 of 2 and the second row says why. Probe2 G after the fix: sent 1, failed with the reason."
+   },
+   {
+    "item": "Check 1 / check 9 + new bug (low): no history line when a chosen member leaves or is removed",
+    "status": "done",
+    "how": "forgetChosen now writes a 'Who can use and change it' line on each template that chose the person, with the rule after and before, under the actor who did it. handOver in routes-trust.ts passes the actor (one argument added).",
+    "test": "templates.test.ts 'the smaller things...': a line on leave, and a line on removal written under the admin. Probe3 P after the fix: 1 then 2 lines."
+   },
+   {
+    "item": "Check 1 + new bug (low): PUT access with a list or object for use gave a false message",
+    "status": "done",
+    "how": "pick() in routes-templates.ts refuses non-strings with their JSON text, e.g. '\"use\" is [\"team\"], and it has to be one of team, admins, chosen, written as text in quotes. Nothing was changed.'",
+    "test": "templates.test.ts 'the smaller things...': exact messages for a list and an object, and nothing changed."
+   },
+   {
+    "item": "Check 11 + new bug (low): the rule sentence is wrong with two or more chosen people",
+    "status": "done",
+    "how": "accessSentence in src/lib/tplroles.ts builds one listNames over the whole, de-duplicated list: 'Only admins, Maya Lopez, Chad Chosen and Otto Other can use it.'",
+    "test": "templates.test.ts 'the smaller things...' checks the API rule and both sentences. Probe3 Q after the fix."
+   },
+   {
+    "item": "Screen (low): radio drawn smaller next to a long owner name on a phone",
+    "status": "done",
+    "how": "Added flex-shrink: 0 to the shared .sn-choice input rule in src/app/styles/sender.css, so no radio is squeezed anywhere.",
+    "test": "templates.test.ts checks the CSS rule. Browser 01-dialog-maya-phone.png: all 6 radios 13x13, no choice under 44px, page width 390."
+   },
+   {
+    "item": "Check 12 + overclaims: help, openapi, developers page, template page, LOCK_MEANS, builder report",
+    "status": "done",
+    "how": "help/page.tsx 'template-access' now says what the code keeps: the copy rule for restricted and locked templates, the lock on the note and checks, the subject left open, pre-lock envelopes that cannot be copied, deleted templates not locking out their owner, and files by id. openapi was updated for PUT /envelopes/{id}, the clone description, the wording_lock.people property, TemplateAccess.copy_is_yours and the bulk 'fields' wording. The developers page clone line, LOCK_MEANS and lockedBanner were reworded, and README got its feature bullet, its 'What the bad reviews taught us' row and the new columns. The overclaim in research/continue.json (Abuse 3) is the builder's report; I left it alone, and it is now true in the code.",
+    "test": "templates.test.ts 'the pages promise what the repaired code keeps...', plus the updated LOCK_MEANS assertion in test 8."
+   }
+  ],
+  "files_changed": [
+   "src/server/tplroles.ts (copyIsTheirs, noteCopy, cloneOwner, fileHeldBack, Kept/peopleOf, carryRules records wording_people, wordingLock with wording_owner and people, templateGoes, personProblem, assertCorrectionKept, asMember, forRows, forgetChosen with history)",
+   "src/server/routes-envelopes.ts (GET /files/:id/content check, clone answer and noteCopy, POST /envelopes noteCopy, PowerForm refusal tail, DELETE calls templateGoes, /correct calls assertCorrectionKept, POST /bulk forRows, sendBatch mayUse per row and forRows, imports)",
+   "src/server/routes-templates.ts (pick() for non-strings)",
+   "src/server/routes-trust.ts (handOver passes actor to forgetChosen)",
+   "src/server/logic.ts (one line in planValues: locked_for_rows)",
+   "src/server/db.ts (COLUMNS: envelopes.wording_people, envelopes.wording_owner)",
+   "src/server/openapi.ts",
+   "src/lib/tplroles.ts (LOCK_MEANS, KeptForPerson, keptLine, accessSentence lists, lockedBanner)",
+   "src/components/editor/StepAdd.tsx (note read-only, access code hint, LockedLine, keepCode)",
+   "src/components/editor/shared.ts (wording.people type)",
+   "src/components/sender/CheckFields.tsx (optional keepCode prop)",
+   "src/app/app/envelopes/[id]/page.tsx (tplHeld, Use instead of Make my own copy, toast)",
+   "src/app/styles/sender.css (.sn-choice input flex-shrink: 0)",
+   "src/app/help/page.tsx",
+   "src/app/developers/page.tsx",
+   "README.md",
+   "tests/templates.test.ts (5 new tests, 3 existing assertions updated for deliberate changes)",
+   "tests/out/repair-tplroles/ (screens.cjs, probeJ.ts, screenshots 01-05, suite.log, tsc logs, rerun.log)",
+   "tsconfig.json: only the two .next-repair-tplroles lines my dev server added were removed; other engineers' added lines were left"
+  ],
+  "suite": "tests/templates.test.ts: 13 of 13 pass, on the final run against the code as it stood at the end. npx tsc --noEmit -p .: the first run found 2 errors in my pick() change (routes-templates.ts), which I fixed; the re-run exits 0 with no errors anywhere. Full npm test: 827 tests, 796 pass, 31 fail, none in my file and none in code I changed.\n- 27 were the whole of tests/witness.test.ts, failing to load because src/server/logic.ts briefly lacked the export 'hiddenAfter' (the logic repair was mid-edit; my one line there is inside planValues). Re-run after two minutes: 27 of 27 pass.\n- #346 gaps-mobile-sign and #396 gaps-nonus-words (processing summary page, the encryption repair) passed on the re-run.\n- Two still fail, both because src/app/sign/[token]/page.tsx lacks the regex /no longer open|already finished|not your turn/i that the in-progress mobile repair (lost Finish answer, 409 as success) is adding: gaps-mobile-sign 'a Finish sent again after its answer was lost...' and gaps-nonus-words 'the screens offer the choice, hand the sender the link...'. I never touched that page.\nExisting tests I updated for deliberate changes, all in tests/templates.test.ts:\n- test 3: refusals for a deleted template now name its owner, and wording_lock carries people: {}\n- test 4: a copy of an unlocked 'chosen' template is now the owner's, not the copier's\n- test 8: LOCK_MEANS wording\nProbes re-run after the fix: every finding in probe.ts, probe2.ts and probe3.ts now gives the refused or correct answer. Probe2 J stops at its own console.log, because the clone it expected to succeed is now refused (403); tests/out/repair-tplroles/probeJ.ts prints that answer.",
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n1. A copy of a template that is not for everyone, or is locked, made by someone who may not set its rules (only its owner, an admin or the account owner may), now belongs to the template's owner. This covers /clone, POST /envelopes {kind:'template', template_id} and Save as template. Before, only locked copies made by non-changers did. The /clone answer's 'locked' is now the real value, not always true. A 'Copied' history line names who made the copy.\n2. On an envelope from a locked template, an API caller that sends 'recipients' without 'note' or 'access_code' (which empties them) gets 403 wording_locked when the template gave that person a note or code. The editor always sends both.\n3. POST /envelopes/:id/correct can no longer take off a code check or access code the locked template gave.\n4. Cloning an envelope from before its template was locked is refused (403 wording_locked) for whoever the lock is for.\n5. GET /files/:id/content answers 404 for a document of a template the caller may not use, unless an envelope or template they can open holds the same file.\n6. The shared .sn-choice input rule gets flex-shrink: 0.\n7. CheckFields has an optional keepCode prop; nothing changes unless it is passed.\nDecisions for the owner to confirm:\n(a) The subject of a locked envelope stays open, as the builder left it; it is now said plainly everywhere. An altered subject is emailed.\n(b) A template saved from an envelope by a member who may not set the rules lands under the owner's name with that member's edits. The history line says who; the list does not.\n(c) A member can still clone their own envelope as an envelope after its template became admins-only. They already hold the document; only the lock case is refused.\nSeen, out of scope:\n- GET /files/:id/content still serves any other member's envelope file by id inside the account. Envelopes are private to their sender, but files are account-wide. This existed before; the template case is now closed.\n- probe2 K: a comment 'for everyone' pinned on a locked envelope can contradict the locked wording.\n- The lifecycle invite-address clash the builder noted is unrelated.",
+  "abuse_and_stuck": [
+   "Abuse, handled and tested: copy a restricted HR template and open it to the team, by /clone, by POST kind template, by Save as template, by browser or key. The copy stays Maya's; widening and unlocking are refused; Chad and Otto still cannot reach it.",
+   "Abuse, handled and tested: a chosen changer copies a locked template to lift the lock or publish it unlocked. The copy is Maya's and locked; he cannot set its rules or delete it. He can still publish it as a form, as he can the original.",
+   "Abuse, handled and tested: on a locked envelope, replace the template's 'Note for you', drop the code check or access code, or turn the signer into a signing group, by PUT or by /correct after sending. Each is refused 403, nothing is saved, and the email keeps the template's note.",
+   "Abuse, handled and tested: keep minting unlocked envelopes by cloning a draft from before the lock. Refused with words; the template is the way.",
+   "Abuse, handled and tested: read the HR PDF by its file id after the template became admins-only. 404, the same as a missing file.",
+   "Abuse, handled and tested: repeat a bulk call with its Idempotency-Key after losing the template. The rows left are not sent and say why.",
+   "Abuse, left open: the subject of a locked envelope can be changed to something misleading (owner decision); a comment for everyone can sit beside the locked wording; any member can still upload their own altered PDF (help says so).",
+   "Abuse, left open: Save as template from a freely edited envelope of an unlocked restricted template puts that member's edits under the owner's name. The history line names the member.",
+   "Stuck, handled: Otto wants his own version of a restricted template. The page offers Use, not 'Make my own copy', and says a copy would be Maya's and to ask her (screen 02). Refusals say the same.",
+   "Stuck, handled: Otto's old draft cannot be cloned after the lock. The toast says why and to use the template (screen 05).",
+   "Stuck, handled: Otto needs to remove the code check for someone. The editor does not offer 'none' and says the check comes from the template and who to ask (screen 03); the admin and Maya can.",
+   "Stuck, handled and tested: Maya deleted her own locked template. She can still change her envelopes and save one as a template; others are told to ask her or an admin.",
+   "Stuck, handled and tested: Maya's or the admin's bulk send fills a prefilled column on a locked template and goes out.",
+   "Stuck, handled and tested: a chosen member leaves. The template history says so, with who did it, so Maya sees why the rule sentence changed.",
+   "Stuck, left open: if Maya deletes a locked template and then leaves, her member successor does not inherit the right to change those envelopes. Admins can."
+  ],
+  "settings": []
+ },
+ "repair:signin": {
+  "found": "The probe (tests/out/verify-signin/probe.ts) run before any change: 12 of 36 checks failed (log: /home/user/treegens-app/sign-and-grow/tests/out/repair-signin/probe-before.log). Each finding as I reproduced it:\n- Reclaimed login keeps what the stranger set up (medium): reproduced. The stranger's POST /webhooks answered 200. After a vouched Google sign-in by the real owner, these all stayed: the stranger's name (\"Customer Support Team\"), title, company, signature, workspace name and brand colour, and the webhook. The owner's first send (subject \"Real owner salary agreement\") was delivered to the stranger's URL.\n- Expired or overwritten Connect (medium): reproduced. The callback went to /login?signin_error=expired. Pressing \"Continue with Google\" there, still signed in, made a second login (slow.private@gmail.com) and switched the browser to it.\n- Vouched link made before the second step (low): reproduced. The identity was stored and \"Google can now open your login\" was emailed before the code was typed. Midway through my run, the two-step repair engineer moved this into linkProvider() (routes-signin.ts), which POST /auth/two-step calls only after the code. They also merged my reclaim edits into it.\n- Probe check 3c (a stranger's authenticator holds back the real owner): broken at first. The probe writes a two-step secret straight into the database of an unconfirmed login. During my run the two-step engineer made POST /me/two-step/setup and /confirm refuse an unconfirmed address, so the API can no longer reach that state.\n- Connection email to a passwordless login talks about its password (low): reproduced. It said \"Your password is unchanged\" and \"change your password\".\n- Started sign-ins never swept (low): reproduced. A signin_states row with the deleted user_id was still there after deletion, and cron.ts had no sweep.\n- Google hd not matched to the address's domain (low): reproduced. hd \"attacker.example\" linked to and signed in to hdvictim@corp.example.\n- Error words starting with a lowercase letter: reproduced through signInErrorText.\n- /security and README saying there is no two-step login of our own: already fixed by the two-step engineer when I looked. /security now says \"and by our own two-step login when it is switched on\". The README line is gone.\n- Overclaims (the notice and email told the owner to look at \"the team, the API keys and the webhooks\"; README said \"team members, webhooks, drafts\" stay): reproduced in the copy.\nThe tree was being edited by others the whole time. auth.ts cutEarlierAccess was changed 2 minutes before I started, and routes-signin.ts was rewritten in the middle of my edits.",
+  "done": [
+   {
+    "item": "New bug (medium): reclaimed login keeps the stranger's webhook, name, signature and branding, and the owner's documents leak to the stranger",
+    "status": "done",
+    "how": "New file src/server/reclaim.ts, function forgetEarlierSetup(userId, name). It runs in the same transaction as cutEarlierAccess on both paths where an owner takes a login back: linkProvider in routes-signin.ts (Google or Microsoft vouches) and POST /auth/reset (password link to a never-confirmed login).\n- In every workspace that login is alone in, it deletes the webhooks with their delivery log, invitations nobody accepted, the API keys and the stamps.\n- It clears name, title, company, signature, initials and email settings. The name becomes the provider's name, or the part of the address before the @ on the reset path.\n- It resets the workspace name, brand colour, logo and two-step rule.\n- It switches off public forms and click-to-agree pages. Otherwise, confirming the address would open a form the stranger made.\n- Drafts, templates, contacts and signing groups stay, and are counted.\n- POST /webhooks now answers 403 until the login's address is confirmed.\n- Workspaces with other people in them are untouched.",
+    "test": "tests/signin.test.ts: 'taking back a login somebody else started removes everything they set up, and says exactly what' (also covers: Theo's shared team is untouched, a confirmed login loses nothing, and the owner's send reaches no stranger webhook). Also 'choosing a password by email for a login nobody had confirmed removes the same things, and says so'. Probe section 4 now holds."
+   },
+   {
+    "item": "Owner decision: tell the owner exactly what was removed (overclaim: 'look at the team, the API keys and the webhooks')",
+    "status": "done",
+    "how": "New Removed type and removedText() in src/lib/signin.ts. It gives counts, the webhook hosts (at most 5, because the note travels in a cookie), what went from the profile and workspace, what was switched off, the new name and what is still there to look at. The same words are used in four places:\n- the first-screen notice (signInNotice);\n- the reclaim email (tellConnected);\n- the reset page (AuthForm, which now explains why first: 'Nobody had confirmed this address before...');\n- a new email, 'What we removed from your Sign&Grow login', sent from the reset path only when something was removed.\nThe false 'team, API keys, webhooks' wording is gone. The help page has a paragraph for the honest person who finds their own setup gone.",
+    "test": "Tests named above, plus 'the list of what was removed reads as plain sentences, one thing or many, and is empty when nothing went'. Seen in the browser: 04-reset-removed-*, 05-first-screen-reclaimed-*."
+   },
+   {
+    "item": "New bug (medium) and check 'Errors come back in words...': an expired or overwritten Connect sends a signed-in person to /login, and 'start again' makes a second login",
+    "status": "done",
+    "how": "In the routes-signin.ts callback:\n- A missing, expired or replaced state in a browser that has a session goes to /app/settings?tab=profile&signin_error=expired.\n- A login or sign-up that would create a new login while the browser is signed in is refused with a new code, signed_in. Settings then says the person is already signed in, to press Connect next to the provider, or to sign out first for a separate login. A carried invitation is the exception, because a login for that address is what it asks for.\n- On /login and /signup, AuthForm reads /me. For a signed-in visitor it shows 'You are signed in as X...' with 'Open Settings, Profile' and 'Sign out' buttons instead of the provider buttons.",
+    "test": "'a signed-in person whose Connect took too long goes back to Settings, and is never made a second login' covers: expired state, state replaced by a second Connect, signed_in refusal (no user made, same session), not signed in still creates, a known identity still switches, an invitation still creates. Probe section 6 holds. Browser at 390x844 and 1280x800 (01-, 02-, 03-*.png): no sideways scroll, no long dashes, the new buttons are 44 px, and the Tab order reaches Open Settings, then Sign out. Sign out by keyboard brings the provider buttons back."
+   },
+   {
+    "item": "Owner decision: no way of signing in with Google or Microsoft skips two-step login (including new bug 'vouched link happens before the second step')",
+    "status": "done",
+    "how": "The deferral itself was written by the two-step repair engineer while I worked: secondStepWaits plus linkProvider called from POST /auth/two-step, with the setup gate requiring a confirmed address. I checked every place a provider sign-in can make a session. Only two remain: signInAs, which holds for the code, and createLogin, used only for brand-new logins, which cannot have two-step.",
+    "test": "New 'no way of signing in with Google or Microsoft skips two-step login' covers:\n- a vouched Google link to a password login with two-step is held, with no identity and no email before the code, and linked after it, with the note not leaked to the browser;\n- a known Google identity is held, and a recovery code finishes it;\n- a vouched Microsoft (xms_edov) link is held;\n- a Google-made login with two-step on is held;\n- Connect under Settings gives no new session;\n- an unconfirmed login cannot switch two-step on, so a reclaim is not held by a stranger's phone.\nProbe 3b holds."
+   },
+   {
+    "item": "Probe check 3c: a stranger's authenticator holds the real owner at the second step",
+    "status": "disagree",
+    "how": "The probe reaches this state only by writing two_step_secret into the database of an unconfirmed login. Through the product it can no longer happen: setup and confirm both refuse an unconfirmed address (two-step engineer's change), and email_verified never goes from 1 back to 0 anywhere in the server.",
+    "test": "The last part of 'no way of signing in with Google or Microsoft skips two-step login' asserts that setup answers confirm_first for an unconfirmed login, and that the real owner's Google sign-in then lands signed in.",
+    "left_open": "A login that had two-step switched on while unconfirmed before that gate existed would still hold its owner at the second step. Two-step ships in the same unreleased batch, so there should be no such rows. If a database ever had them, a one-off clean-up is needed, and that is the two-step owner's decision."
+   },
+   {
+    "item": "Check 'Linking only when the provider vouches' and new bug 'Google hd trusted without matching the address's domain'",
+    "status": "done",
+    "how": "In identityOf (src/server/oidc.ts), Google vouches for a Workspace address only when the address ends with '@' + hd (lowercased). An address in another domain of that organization gets our own confirmation email, which is the safe failure. README updated.",
+    "test": "'a Google Workspace address is vouched for only by its own domain' covers: a different hd is refused with 'exists'; the same domain in another letter case links; a subdomain is not the domain. Probe 15 holds."
+   },
+   {
+    "item": "Check 'Owner is emailed on every new connection, in words that are true' and new bug 'connection email to a passwordless login talks about its password'",
+    "status": "done",
+    "how": "tellConnected says 'Your password is unchanged' only when the login has a password. 'Then change your password' is said only for a login with a password that was not just reclaimed. Otherwise the email says to disconnect any other way in they do not know.",
+    "test": "'the email about a new connection only talks about a password the login has' covers a Microsoft-made confirmed login, a Settings connect on a Google-only login, and a password login that still gets both sentences. Probe 5 holds."
+   },
+   {
+    "item": "Check 'Nothing personal kept after deletion' and new bug 'started sign-ins are never swept'",
+    "status": "done",
+    "how": "sweepSignIns() in reclaim.ts is called from the timer (cron.ts, 'signins_cleared'). purgeUser in routes-trust.ts now deletes the login's signin_states rows together with the login.",
+    "test": "'started sign-ins are cleared by the timer once they ran out, and at once with the login they name'. Probe 12 holds (both checks)."
+   },
+   {
+    "item": "New bug: error words start with a lowercase letter when the provider is unknown",
+    "status": "done",
+    "how": "signInErrorText capitalises the first letter. The hostile provider text is still never printed.",
+    "test": "'words for a sign-in that failed start with a capital letter, whatever the provider in the address says'."
+   },
+   {
+    "item": "Check 'Docs and public pages say what the code does' and new bug '/security and README still say there is no two-step login of our own'",
+    "status": "done",
+    "how": "Already reworded by the two-step engineer before I got to it. I checked /security (the 'No single sign-on' point now names our own two-step login and the team rule), the README Two-step section, and the absence of the old sentences in help, developers and home.",
+    "test": "grep for the old sentences finds nothing."
+   },
+   {
+    "item": "Overclaims: README 'Things to decide before launch' and builder left_open ('team members, webhooks, drafts stay'); builder STUCK 3 ('took too long: handled')",
+    "status": "done",
+    "how": "README changes:\n- The launch bullet now says what is removed and what stays.\n- The 'Signing in with Google or Microsoft' section lists everything reclaim.ts removes or switches off, the webhook rule, the signed-in rule, the Settings return and the sweep.\n- The signin.test.ts row in the test table names the repairs.\n- New row in 'What the bad reviews taught us', from the complaints about duplicate accounts: a signed-in person is never made a second login.\nThe STUCK 3 case is fixed by the Connect repair above. openapi.ts: POST /webhooks now documents the 403 until the address is confirmed.",
+    "test": "The existing openapi test passes. The README matches code that is covered by the tests above."
+   },
+   {
+    "item": "Screens (all held in the skeptic's report); screens I changed",
+    "status": "done",
+    "how": "Dev server on port 3604 with made-up provider ids, driven by tests/out/repair-signin/shots.cjs, with every non-localhost request aborted. Screens: the signed-in /login, sign-out by keyboard, the Settings expired and signed_in messages, the reset page with the removed list, and the first screen after a reclaim, each at 390x844 and 1280x800. I looked at them. All have 0 px sideways scroll and no long dashes. Every new control is at least 44 px. The only items under 44 px are pre-existing ones that are not mine: the 'Sign in' submit at 41 px, Settings tabs at 43 px, 'Resend email' and 'OK' at 34 px.",
+    "test": "tests/out/repair-signin/shots.log and the 12 PNGs in tests/out/repair-signin/"
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/reclaim.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-signin.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/oidc.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/cron.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/signin.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/AuthForm.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/tests/signin.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (only removed the two .next-repair-signin lines next dev added)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-signin/ (probe-before.log, probe-after.log, shots.cjs, shots.log, 12 screenshots, suite logs, tsc.log)"
+  ],
+  "suite": "tests/signin.test.ts alone: 35 tests, 35 pass, 0 fail (was 26). I added 9 tests and updated 1 existing test whose wording I deliberately changed: 'a login somebody started...' now expects the exact list of what was removed instead of 'look at the team, the API keys and the webhooks'.\n\nnpm test, three runs:\n1. 256 failures. Nearly all were \"./logic.ts does not provide an export named 'hiddenAfter'\", from the logic engineer's half-finished edit.\n2. 190 failures. 189 were 'AsyncLocalStorage is not defined', from the billing owner's half-finished edit in routes-billing.ts.\n3. 842 tests, 833 pass, 9 fail, none in my file:\n   - 8 in tests/comments.test.ts (500 errors while the comments engineer was mid-edit). They pass when the file is re-run alone.\n   - 1 in tests/gaps-nonus-words.test.ts, 'the screens offer the choice...'. It expects /replyTo=\\{answerComesTo\\(me\\)\\}/ in src/app/sign/[token]/page.tsx, another engineer's file, and still fails alone.\n\nThe skeptic's probe after the fixes: 35 of 36 checks hold. The one left is 3c, which needs a direct database write (see the 'disagree' item).\n\nnpx tsc --noEmit -p .: exit 0, no errors, after my last edit.",
+  "settings": [
+   "No new settings. GOOGLE_*, MICROSOFT_* and MICROSOFT_TENANT are as before."
+  ],
+  "abuse_and_stuck": [
+   "ABUSE reclaim 1: wipe a real owner's setup by triggering a reclaim. Handled: it only runs for a login whose address was never confirmed, and only for someone who proves the address (provider vouches or mailbox link). A confirmed login loses nothing (test: kim@gmail.com keeps name and webhook).",
+   "ABUSE reclaim 2: leave a public form or click-to-agree page that opens once the owner confirms the address. Handled: switched off and named (test). Leave a webhook: deleted, and POST /webhooks is 403 before confirmation (test).",
+   "ABUSE reclaim 3: hide behind a shared team so 'alone' does not apply. Not possible: an unconfirmed login cannot invite (403), and joining another team needs an invitation emailed to the victim's mailbox. Shared teams are deliberately untouched (test: Theo's team).",
+   "ABUSE reclaim 4 (LEFT OPEN): a stranger's template, contact or signing group naming the stranger's address stays. It does nothing until the owner uses it. The notice and email say 'Still there from before: ... Look at who they name before you use them.'",
+   "ABUSE signed-in 1: make a signed-in victim's browser come back from a provider so it creates and switches to a login. Refused with signed_in (test). A bogus state for a signed-in browser now lands on that person's own Settings, which is harmless.",
+   "ABUSE signed-in 2: login CSRF with someone else's code and state still ends at 'expired' (the cookie must match). Unchanged, covered by the existing state tests.",
+   "ABUSE sweep: filling signin_states with abandoned starts is bounded by signin:ip (30 per 15 min) and now cleared by the timer (test).",
+   "ABUSE hd: a token whose hd names another domain no longer opens a login (test).",
+   "STUCK 1: an honest person who made the unconfirmed login themselves loses their own name, signature, branding or webhook. Told exactly what was removed (screen and email, tests), with 'If you set it up yourself, set it up again under Settings', and a new help paragraph.",
+   "STUCK 2: after a password reset the name becomes the part of the address before the @. Told 'Your name is now ... change it under Settings, Profile' (test).",
+   "STUCK 3: an honest unconfirmed person cannot add a webhook. 403 with words on how to confirm (test).",
+   "STUCK 4: a signed-in person wants a separate login with Google. /login and Settings say to sign out first, and /login has a Sign out button (test plus browser check by keyboard).",
+   "STUCK 5: a signed-in person opens an invitation for another address. Allowed, so the invitation works (test).",
+   "STUCK 6: a Workspace user whose address is in a secondary domain is no longer vouched for by Google. They get 'exists' (sign in with the password once, then connect) or our confirmation email. Said in the README.",
+   "STUCK 7 (LEFT OPEN): a Connect that ran out lands in Settings with 'Please start again from this page'. That is correct there, but the words are shared with /login and are generic."
+  ],
+  "needs_from_billing": "Nothing. routes-billing.ts, credits.ts and Billing() are untouched. One run failed 189 tests with 'AsyncLocalStorage is not defined' from routes-billing.ts while the billing owner was mid-edit; it cleared on the next run.",
+  "notes_for_integrator": "These behaviour changes will be noticed elsewhere:\n- POST /webhooks answers 403 until the login's address is confirmed. Any test that adds a webhook for an unconfirmed login would now fail; none did in the suite.\n- POST /auth/reset also returns `removed`. For a never-confirmed login it clears profile and branding, deletes webhooks, invitations, keys and stamps, switches off forms and click-to-agree pages, and emails 'What we removed from your Sign&Grow login' when anything went.\n- The provider callback has a new error code, signed_in, added to SIGNIN_ERRORS. A browser with a session no longer gets a new login from Google or Microsoft unless it carries an invitation. An expired or replaced state for a signed-in browser goes to /app/settings?tab=profile&signin_error=expired instead of /login.\n- AuthForm on /login and /signup fetches /me. A signed-in visitor sees 'You are signed in as X' with 'Open Settings, Profile' and 'Sign out' in place of the provider buttons. The password form is unchanged.\n- signInErrorText always starts with a capital letter.\n- Google vouches for a Workspace address only when it is in the hd domain itself.\n- The timer answer has a new key, signins_cleared. purgeUser deletes the login's signin_states rows.\n\nShared code: the two-step repair engineer rewrote the reclaim block of routes-signin.ts into linkProvider() while I was editing it, and kept my forgetEarlierSetup call inside it. If anyone moves linkProvider again, the forgetEarlierSetup + cutEarlierAccess pair must stay together in one tx. The words for the screen, the reset page and both emails all come from removedText() in src/lib/signin.ts.\n\nPromises in copy I added, each kept by code and tested: 'What had been set up in it was removed: ...', 'We switched off ...', 'Your name is now ...', 'Still there from before: ...', 'We emailed you the same list', and the signed_in words. Also the help paragraph 'Your name, signature, branding or webhooks were gone afterwards?'. The README now documents the reclaim list, the webhook rule, the signed-in rule and the sweep.\n\nDecisions the owner may want to confirm:\n1. Drafts, templates, contacts and signing groups stay after a reclaim and are named, rather than deleted. Deleting them would destroy an honest person's own work.\n2. On the password-link path the new name is the part of the address before the @, because that page asks for no name.\n3. The workspace's two-step rule is cleared. The person's own two-step is left alone, by the two-step engineer's design.\n\nSeen but out of scope:\n- An unconfirmed login can still publish a click-to-agree page that is live before confirmation; I only switch it off on reclaim. The click-to-agree owner should decide whether publishing needs a confirmed address.\n- tests/gaps-nonus-words.test.ts 'the screens offer the choice...' fails on src/app/sign/[token]/page.tsx (expects replyTo={answerComesTo(me)}). That is another engineer's file.\n- Orphaned stamp pictures are cleaned up by pruneStampImages, which the stamp engineer already calls from the timer."
+ },
+ "repair:industry": {
+  "found": "The previous engineer's payment link (item I) and items A to H were in place. tests/gaps-industry.test.ts had 25 tests and all passed. Before changing anything I re-ran every skeptic probe (outputs saved as tests/out/repair-industry/before-*.json and before-*.txt). Every finding reproduced exactly as reported:\n- HIGH: probe-attach. The \"Completed: Mail cert\" emails to the signer, the cc and the sender each carried \"Mail cert.pdf\", and the text of that PDF contained https://buy.stripe.com/mail_cert. probe-pay showed the cc's download printing 'Payment link added \u00b7 \"Pay the deposit\" opens https://buy.stripe.com/gus_cert_deposit ... never in an email'.\n- HIGH: after the owner removed member Max, the signer got Max's https://paypal.me/maxpersonal with the name \"Olga Owner\" on it.\n- MEDIUM: these were all accepted: bit.ly, tinyurl, t.co, www.google.com/url?q=..., l.facebook.com, 192.168.1.1.nip.io, 127.0.0.1.sslip.io, localtest.me, localhost.localdomain, router.home.arpa, nas.alt and *.example.com.\n- MEDIUM: after a change, the sender's page showed old show and press times under the new address.\n- MEDIUM: a deleted, completed envelope kept showing del_dep, and the sender got 404 on both GET and PUT.\n- MEDIUM: the sender, and the owner countersigning a public form, were each asked to pay.\n- MEDIUM: on a phone the long host made the page 1301 px wide (screenshot).\n- LOW: a press after a void, and a press with no showing, both answered recorded:true. PUT {kind:'fee'} removed the link. An address of 494 typed characters became 2844 stored ones. A partial refund hid every link and emailed nobody. The bulk check said nothing about reminders (bulkCheckSaysReminders=false, and the old template sent with reminder_days 0). Searching for \"%\" or \"_\" listed every template.\n- Check WHO_CAN_SEE did not hold: the text message provider was not named.",
+  "done": [
+   {
+    "item": "HIGH: the payment address goes out in every Completed email, inside the attached certificate (also check 'never put in our emails', and the overclaim 'never in an email')",
+    "status": "done",
+    "how": "The root cause was that audit lines held the address. Those lines go into the certificate, the export, the evidence pack and every attachment. Every payment line in the record now names the address only by a fingerprint: the first 16 hex characters of its SHA-256 (payPrint in the new src/server/paydrop.ts). The text of each line changed: 'Payment link added/changed', 'removed', 'Shown', 'Opened', and the new 'Payment link taken off'. The full address is shown only on the envelope page, next to its fingerprint, and on the signer's screen after Finish. Audit lines written before this repair still hold the address, and the hash chain keeps them as they are. For those, the certificate now prints '[the address, kept on the envelope page]' instead (payLineForPrint in src/lib/paylink.ts, a one-line edit in pdf.ts). Changed copy: PAY_FOR_SENDER, /security, /help and openapi now say 'never put in an email, a certificate or an export'.",
+    "test": "'the payment address is in no email, attached certificate, export or evidence pack'. It sets a mail server on a closed local port so attachments are kept, then reads the PDF attached to each of the 5 Completed emails, the cc's download, GET /export and GET /envelopes/:id/evidence. It also writes a line in the old format and checks the certificate leaves the address out. After the fix, probe-attach says 'pdf names the pay address: false' for all three emails."
+   },
+   {
+    "item": "HIGH: a removed member's personal link keeps showing, under the name of whoever took over (also check 'The signer sees the sender's name with the link')",
+    "status": "done",
+    "how": "There is a new column, envelopes.pay_set_by, holding the person who saved the address. copyEnvelope now carries it, so envelopes made from a template keep the setter. handOver in routes-trust.ts (one line) calls dropPayLinksOf. handOver is the path for removal, for leaving, and for closing a login. dropPayLinksOf takes off every link that person set in the account, on envelopes and templates. It writes an audit line with the fingerprint and stores pay_gone_at and pay_gone_note. The envelope page and the editor print that note ('The payment link Max Member set was taken off: Max Member was removed from the team, and a payment link belongs to the person who set it. Nobody is shown it any more.'). When a link is shown, the setter must still be a member of the account, which covers any path that forgot to take it off. The signer now sees the name of the setter (the person whose page it is), not the sender. One existing test assertion changed: test 24 now expects 'Tom Tutor' (the template owner who set the link) instead of 'Mia Tutor' (the member who sent it).",
+    "test": "'a payment link belongs to the person who set it' covers four cases: removal, leaving, a template and an envelope made from it, and a link set in the database by hand after the person left. Probe section 8 now gives afterHandOver: null."
+   },
+   {
+    "item": "MEDIUM: shorteners and open redirects are accepted, so the named host is not where the payment goes (also check 'the exact address it leads to', and the 500-character message recommending short links)",
+    "status": "done",
+    "how": "PAY_SHORTENERS (about 60 hosts, and every name under them) and a short list of forwarding paths (google.*/url, youtube /redirect, facebook /l, bing /ck, duckduckgo /l, vk /away and others) are in src/lib/paylink.ts. They are refused with a sentence saying why. The length message no longer recommends short links. Following the owner's decision, the signer card shows payWhere: 'The button opens exactly this address. Sign&Grow does not check where that site sends you after that...'. PAY_FOR_SENDER and the envelope page say the same to the sender. A payment provider's own short links (square.link, paypal.me) stay allowed.",
+    "test": "'a link shortener or a forwarding page is refused and says why'. Probe section 1 now refuses all five.",
+    "left_open": "I did not build the skeptic's other suggestion, refusing any address with a URL in its query string. Real PayPal buttons carry return=https://... in the query, so it would refuse genuine links. An open redirect on the payer's own site is said, not detected, as the owner decided."
+   },
+   {
+    "item": "MEDIUM: private-network hosts pass the 'public internet' check",
+    "status": "done",
+    "how": "By name: home.arpa, arpa, alt, localdomain and private are now refused, along with nip.io, sslip.io, xip.io, localtest.me, lvh.me, vcap.me, traefik.me, localho.st, fuf.me and local.gd. Every part of the host name must be letters, digits or hyphens (no * or _). By address: the new src/server/paydns.ts asks the DNS (dns.lookup all, with a 3 second limit) when a link is saved (400 'leads to 192.168.1.1, which is an address inside a private network...') and again in GET /sign/:token/pay each time it would be shown. It refuses if any answer is a special address: the IPv4 special-purpose ranges, IPv6 outside 2000::/3, ULA, link-local, documentation, Teredo and 6to4, and mapped or NAT64 addresses judged by the IPv4 they carry. A name that does not exist is refused. A lookup that fails is refused at save ('try again in a minute'). When showing, a failed lookup is not shown, and the signer is told to come back in a few minutes. The sender's GET returns host_why, and the setter and sender get one email (without the address or its host) when a signer was not shown the link for this reason.",
+    "test": "'a host on a private network or at a special address is refused when the link is saved, and again each time it would be shown'. It uses a DNS stub in the test file that answers only that file's own names and hands every other name to the real lookup.",
+    "left_open": "DNS rebinding: the signer's browser looks the name up again by itself, and a name can answer differently a moment later. The page only opens a page with nothing of the signer's in it, and the account has earned trust. This is written in paydns.ts."
+   },
+   {
+    "item": "MEDIUM: a long host makes the signing page scroll sideways on a phone (screen)",
+    "status": "done",
+    "how": "In PayLink.tsx the button now has maxWidth 100%, overflowWrap anywhere and wordBreak break-word. The person list on the envelope page wraps too.",
+    "test": "A source assertion in the last test. In the browser (tests/out/repair-industry/pay.cjs) with the 150-character host at 390x844: scrollWidth is 390 on the signing page and on the envelope page, and the button is 324 px wide and wraps (sign-pay-long-phone.png, sign-pay-long-phone-full.png)."
+   },
+   {
+    "item": "MEDIUM: after the link changes, the sender's page shows people as shown and pressed for an address they never saw (also check 'The record of who was shown it and who pressed it is accurate')",
+    "status": "done",
+    "how": "There is a new table, pay_seen, with one row for each person and address. The sender's GET returns shown_at and opened_at for the current address, and 'earlier' for each address shown before, with its URL and fingerprint. The envelope page prints 'Earlier shown <url> (fingerprint ...) on ..., pressed on ...'. recipients.pay_shown_url and pay_shown_at now hold the last address shown (the COALESCE was removed). A press is recorded only for an address that person was shown (the page now sends the URL it showed). A middle click counts (onAuxClick). The page says 'not recorded as pressed', never 'not pressed'.",
+    "test": "'after the link changes, the sender sees who was shown and pressed which address...'. Browser check: envelope-pay-changed-phone.png and envelope-pay-changed-desktop.png."
+   },
+   {
+    "item": "MEDIUM: a deleted completed envelope keeps asking signers to pay and its sender cannot remove the link (also check 'can only be removed')",
+    "status": "done",
+    "how": "notShown() refuses when hidden_at is set, both for showing and for pressing. Deleting stops all payment requests. If an admin restores the envelope, the link comes back.",
+    "test": "'a completed envelope its sender deleted, or one that was voided, asks nobody for money and records no press'"
+   },
+   {
+    "item": "MEDIUM: the sender, or the account's own countersigner, is asked to pay their own deposit (also check 'Shown only after Finish and only to people who sign')",
+    "status": "done",
+    "how": "notShown() skips anyone whose address belongs to a member of the envelope's account (case-insensitive match against memberships and users). The sender's view marks them on_team, and the envelope page says 'not asked, because they are on your team.'",
+    "test": "'the sender, and anyone on the sender's team, is never asked to pay' covers the sender, a colleague, and the owner countersigning a public form, whose visitor is still shown the link."
+   },
+   {
+    "item": "LOW: pay-opened records a press after a void, and without a showing",
+    "status": "done",
+    "how": "Pressing goes through the same notShown() rule as showing, and needs a pay_seen row for that person and address. The UPDATE has 'opened_at IS NULL', so it records once.",
+    "test": "Covered by the voided/deleted test and the changed-address test. Probe sections 3 and 11 now give recorded:false."
+   },
+   {
+    "item": "LOW: PUT pay-link with only a new button kind deletes the link",
+    "status": "done",
+    "how": "A body without 'url' changes only the kind and keeps the address. It answers 400 when there is no link. '' or null removes the link. The audit line says the button changed and the address stayed.",
+    "test": "'changing only the button keeps the address, a removal has to be asked for...'"
+   },
+   {
+    "item": "LOW: the 500-character limit is on the input, not on the stored address (also the overclaim)",
+    "status": "done",
+    "how": "checkPayUrl also checks u.href.length and gives the real written-out count.",
+    "test": "In the same test: 470 Cyrillic letters is refused with 'that address is 2844 characters long'."
+   },
+   {
+    "item": "LOW: a partial refund of unused signatures silently hides all of a sender's Pay buttons",
+    "status": "done",
+    "how": "I kept the trust rule (hasNotPaid is shared with the sending limits). When a signer who would otherwise see a link is not shown it because of the account, the owner and admins get one email: 'Your payment links are not being shown: <team>'. It gives the reason and contains no address. It is sent again only after a link was shown in between (accounts.pay_told_at).",
+    "test": "'when an account may no longer show its links, its owner and admins are told once...'. The refund probe now shows 1 email to the sender.",
+    "left_open": "Whether a refund of unused signatures alone should keep the trust is the owner's decision. See notes_for_integrator."
+   },
+   {
+    "item": "LOW: bulk sends and public forms never say the reminder setting (also check 'Reminders on by default and said before every send' and the README overclaim)",
+    "status": "done",
+    "how": "POST /bulk/check now returns reminder_days and reminders. The bulk page prints reminderText for the template next to BatchCost, and the Send button's aria-describedby points at it. GET /powerforms returns 'reminders' for each form, and the forms list prints it under the template name.",
+    "test": "'bulk sends and public forms say whether people are reminded...'"
+   },
+   {
+    "item": "LOW: template search treats % and _ as wildcards",
+    "status": "done",
+    "how": "routes-envelopes.ts now uses LIKE ... ESCAPE '\\' with %, _ and \\ escaped (likeWord).",
+    "test": "The same test: '%' finds only 'Discount 50% offer', '_' finds only 'Under_score plan', and '\\' finds nothing."
+   },
+   {
+    "item": "Check: WHO_CAN_SEE is exact (text message provider)",
+    "status": "done",
+    "how": "policy.ts has WHO_CARRIES and WHO_CARRIES_TEXTS. /security adds the sentence about the text message provider to 'The companies that carry it.' only when smsProvider() is set. So a server without texts does not mention them.",
+    "test": "The last test in the file."
+   },
+   {
+    "item": "Edge noted inside a passing check: /bulk/check counted 600 rows as 500 while POST /bulk refuses",
+    "status": "done",
+    "how": "/bulk/check now counts all the rows and returns refusal {400, 'Send up to 500 envelopes per batch.'}, the same words POST /bulk uses.",
+    "test": "The bulk reminders test."
+   },
+   {
+    "item": "Overclaims in research/continue.json gaps:industry",
+    "status": "words_changed",
+    "how": "I did not edit the research files: this report replaces those claims. The code, /help, /security, openapi and the README now say only what the code does: fingerprint instead of address, setter's name, shorteners, DNS at save and at show, team members not asked, who saw which address, the deleted envelope, and reminders said in the editor, bulk and forms."
+   },
+   {
+    "item": "Screens",
+    "status": "done",
+    "how": "Checked on my dev server (port 3605, with a DNS answer preload) using tests/out/repair-industry/pay.cjs and pay2.cjs. At 390x844 and 1280x900 there is no sideways scroll on the signing page or the envelope page. Tabbing reaches the Pay button (54 px tall, aria-describedby sg-pay-url sg-pay-where sg-pay-not-us, with a visible focus ring in sign-pay-desktop-focus.png). Shown in screenshots: the long host wraps, the earlier-address lines, and the 'Taken off' note after a member is removed. The bit.ly and private-host refusals were also checked through the running app. The dev server is stopped, .next-repair-industry is deleted, and its two tsconfig lines are removed."
+   }
+  ],
+  "files_changed": [
+   "sign-and-grow/src/server/paydns.ts (new: DNS lookup, special-address check, refusal sentences)",
+   "sign-and-grow/src/server/paydrop.ts (new: payPrint fingerprint, dropPayLinksOf)",
+   "sign-and-grow/src/server/routes-paylink.ts (notShown, onTeam, tellNotShown, sender GET, PUT, signer GET and pay-opened reworked)",
+   "sign-and-grow/src/lib/paylink.ts (name lists, shorteners, forwarding pages, host-part check, href length, payWhere, payLater, payLineForPrint, PAY_FOR_SENDER and header comment)",
+   "sign-and-grow/src/components/sign/PayLink.tsx (later notice, payWhere, wrapping button, onAuxClick, sends the url)",
+   "sign-and-grow/src/components/sender/PayLinkNote.tsx (setter, fingerprint, host_why, gone note, earlier addresses, on_team, 'not recorded as pressed')",
+   "sign-and-grow/src/components/editor/PayLinkChoice.tsx (host_why, gone note)",
+   "sign-and-grow/src/server/db.ts (6 COLUMNS lines; table pay_seen in SCHEMA)",
+   "sign-and-grow/src/server/envelopes.ts (copyEnvelope INSERT carries pay_set_by)",
+   "sign-and-grow/src/server/routes-trust.ts (handOver calls dropPayLinksOf; one import)",
+   "sign-and-grow/src/server/pdf.ts (certificate prints payment lines through payLineForPrint; one import)",
+   "sign-and-grow/src/server/routes-envelopes.ts (LIKE ESCAPE in search; /bulk/check reminders and 500-row refusal; /powerforms reminders; one import)",
+   "sign-and-grow/src/server/openapi.ts (pay-link GET/PUT, /bulk/check, /powerforms)",
+   "sign-and-grow/src/app/app/bulk/page.tsx (reminder sentence before Send)",
+   "sign-and-grow/src/app/app/powerforms/page.tsx (reminder sentence under each form)",
+   "sign-and-grow/src/app/security/page.tsx (text provider sentence; No payment collection point)",
+   "sign-and-grow/src/app/help/page.tsx (payment-link question)",
+   "sign-and-grow/src/lib/policy.ts (WHO_CARRIES, WHO_CARRIES_TEXTS)",
+   "sign-and-grow/README.md (feature bullet, reviews table row, test table row)",
+   "sign-and-grow/tests/gaps-industry.test.ts (DNS stub, 4 assertions updated, 11 new tests)",
+   "sign-and-grow/tests/out/repair-industry/ (before/after probe outputs, with-dns.ts, dns-preload.mjs, pay.cjs, pay2.cjs, screenshots, suite.log)",
+   "sign-and-grow/tsconfig.json (removed only the two .next-repair-industry lines next dev added)"
+  ],
+  "suite": "tests/gaps-industry.test.ts: 36 of 36 pass. 25 were existing; 4 of their assertions were updated on purpose: audit text without the address, the setter's name in test 24, and the `api<Answer>` regex.\n\nFull `npm test`: 887 tests, 885 pass, 2 fail.\n1. lifecycle.test.ts:1260 'the screens offer what the server allows' failed because of my edit. I had put the reminder line between the `<td>` line and the `may_change` line that the test's regex expects. I moved it onto the `<td>` line, and the test now passes alone.\n2. flow.test.ts:256 'the published API description matches the routes that exist' fails with \"not documented: GET /envelopes/:id/disputes\". That route is in src/server/routes-evidence.ts (another engineer's repair-disputes work in progress), not mine.\n\nAll the skeptic probes, re-run after the fix through tests/out/repair-industry/with-dns.ts (this machine has no DNS, so every name gets one public answer), show every finding fixed. Outputs are in tests/out/repair-industry/after-*.\n\n`npx tsc --noEmit -p .`: there are no errors in files I touched. The last run reported one error, in src/server/chat.ts:163 ('limit' is not a known property). That file is another engineer's work in progress, and I did not touch it.",
+  "needs_from_billing": "Nothing has to change in routes-billing.ts, credits.ts or Billing(). One question for the owner of the trust rule. hasNotPaid in src/server/envelopes.ts drops trust on any refunded_cents > 0. That includes the refund of unused signatures. This also hides payment links. I left it, and the owner and admins are now emailed once when that happens. If a refund of unused signatures alone should keep trust, that is a one-condition change there.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n- Saving a payment link now does a DNS lookup, and so does every showing (GET /sign/:token/pay) and the sender's GET /envelopes/:id/pay-link. The limit is 3 seconds.\n  - In tests, set `resolver.lookup` from src/server/paydns.ts, as tests/gaps-industry.test.ts does. This machine has no DNS, so without that every PUT pay-link answers 400 'No site answers'.\n  - For a dev server, run it with `NODE_OPTIONS=--import tests/out/repair-industry/dns-preload.mjs`.\n- Payment audit lines changed wording. They name the address by 'address fingerprint <16 hex>', never the address. There is a new action, 'Payment link taken off'. The certificate now leaves URLs out of any line whose action contains 'payment link' (payLineForPrint).\n- GET /sign/:token/pay can answer `{ pay: null, later: '<sentence>' }`. POST pay-opened takes an optional `{ url }`.\n- GET /envelopes/:id/pay-link gained fingerprint, host_why, set_by, gone, and on_team and earlier on each person.\n- PUT pay-link without 'url' now keeps the address. Before, it removed the link.\n- A signer is told the name of the person who set the link, which can differ from the sender.\n- Team members, matched by email, are never shown a link. Nor is anyone on a deleted envelope.\n- handOver (routes-trust.ts) now takes off the links of the person who leaves.\n- /bulk/check returns reminder_days and reminders, and for more than 500 rows it returns rows=N and refusal 400. GET /powerforms returns reminders.\n- Template search treats % and _ literally.\n\nPromises in copy I added or changed:\n- PAY_FOR_SENDER, payWhere, payLater, the envelope page card, the /help payment question, the /security 'No payment collection' point, WHO_CARRIES_TEXTS and the README bullets and rows.\n- All new copy says Sign&Grow, for the rename pass.\n\nFor the owner to confirm:\n- Host names appear in the not-shown email? No: that email names neither the address nor its host. The sender sees the host only on the envelope page.\n- The envelope page shows the full addresses, earlier ones included, with fingerprints.\n- A fingerprint lets someone confirm a guessed address (paypal.me/name) from a certificate. Random payment-link tokens cannot be guessed. Tell me if you would rather have a keyed fingerprint.\n\nNot done or outside my scope:\n- Audit lines written before this repair still hold addresses in the online trail, the export and the evidence pack. Rewriting them would break the hash chain, so only the certificate hides them.\n- I sent no email line to the person removed or to the heir about links taken off. The envelope page and the audit trail say it, which is what the owner decided.\n- In /bulk/check, a row naming the sender under their own name and address still holds one signature. POST /bulk does the same, so the two agree. It is the payment owner's rule.\n- tests/out/repair-industry/envelope-pay-gone-phone.png was taken before a last copy tweak. The card no longer lists 'Ana Client: not shown it' when there is no link and nobody saw one.",
+  "settings": [
+   "No new setting. There is nothing to add to .env.example or the README config table. The DNS lookup is always on, with a fixed 3 second limit (LOOKUP_MS in src/server/paydns.ts)."
+  ],
+  "abuse_and_stuck": [
+   "ABUSE, tested: a trusted sender, or a stolen trusted login, points the Pay button at bit.ly, a google.com/url forwarding page or a .nip.io name. It is refused with the reason, and nothing is saved.",
+   "ABUSE, tested: a name that looked public when saved is later pointed at 127.0.0.1 or 10.0.0.1. It is not shown, a press records nothing, and the sender is emailed once without the address. A name with mixed public and private answers is refused.",
+   "ABUSE, tested: a member sets their own PayPal link and is removed, or leaves. The link is taken off every envelope and template they set it on, also envelopes made from their template, and is never shown under a colleague's name, even if a path forgot to take it off.",
+   "ABUSE, tested: the address would travel under our name in the certificate attached to Completed emails, the export or the evidence pack. Only a fingerprint is there now. Old-format lines are hidden in the certificate.",
+   "ABUSE, tested: someone records a press by hand: after a void, on a deleted envelope, without a showing, or for an address never shown. Nothing is recorded.",
+   "ABUSE, left_open: DNS rebinding between our lookup and the signer's browser, and open redirects on the payer's own site. Both are said plainly to the sender and the signer, and not detected.",
+   "ABUSE, left_open: a fingerprint lets someone confirm a guessed public address from a certificate.",
+   "STUCK, tested: a sender signs their own envelope to test it and sees no Pay button. The envelope page says 'not asked, because they are on your team'.",
+   "STUCK, tested: a signer finishes while the DNS fails for a moment. They are told the payment page could not be checked and to open the page again in a few minutes. Their signature stands.",
+   "STUCK, tested: an owner's links stop showing after a partial refund. The owner and admins get one email with the reason.",
+   "STUCK, tested: a sender finds the link gone after a colleague left. The envelope page and the editor say who set it, when and why, and how to add their own.",
+   "STUCK, tested: a sender changed the link after someone paid on the old one. The envelope page lists the earlier address that person saw and pressed, with times.",
+   "STUCK, tested: an old account's template sends a bulk batch with reminders off. The bulk page and /bulk/check say 'Automatic reminders are off' before Send.",
+   "STUCK, tested: someone searches templates for '50%'. They find it, and '%' alone no longer lists everything.",
+   "STUCK, left_open: a long-press 'open in new tab' on a phone sends nothing to us. The sender's page says 'not recorded as pressed' rather than claiming the person did not press it."
+  ]
+ },
+ "repair:disputes": {
+  "found": "The disputes and evidence work from today (\"gaps:disputes-evidence\") was in the tree, with 19 passing tests in tests/gaps-disputes-evidence.test.ts. I ran the skeptic's probes (tests/out/verify-disputes/probe1.ts, probe2.ts, probe3.ts, render-pdf.cjs, threshold.cjs) before changing anything. The output is saved as tests/out/repair-disputes/before-probe1.json, before-probe2.json and before-probe3.json. On the first try the code base would not load, because someone else's routes-paylink.ts was half edited. It loaded a minute later. Every finding reproduced exactly as reported:\n- Q1 (sender changed the address and signed under Alice's name): 404 \"nothing can be marked here\".\n- Q2 (link passed on): 404 by code, 410 by the old link.\n- P3: the sender's audit line and evidence pack carried ip 198.51.100.77 and the full browser string.\n- P5: after the account was deleted, /verify and the lookup said \"deleted\" with no dispute. The alert still held the names, the title and \"my ex did\".\n- P6: a disputed declined envelope could be deleted for good (envelope, disputes and audit rows all 0, lookup 404).\n- P2: a second \"for the first time\" line was written.\n- P8: the early sender copy had no mark.\n- probe2/threshold: 0 of the mark's pixels survived a 50% threshold, and 0 were in the lower right.\n- P9: the visitor's typed lure text was in the owner's email.\n- P11/Q3: the pack README said \"by Kim Keymaker\".\n- Q5: the 404 message said nothing about never-completed deletions.\n- Q6: \"did not sign\" for an approver.\nThe certificate-page and NotMe overclaims were present as quoted.",
+  "done": [
+   {
+    "item": "new_bug high / check F: the person named can dispute after the sender re-routed or replaced their link (Q1, Q2)",
+    "status": "done",
+    "how": "New disputeReplaced in src/server/evidence.ts.\n- POST /public/check/dispute and POST /sign/:token/dispute now accept a code or link from retired_tokens, so any email we ever sent the person works.\n- It is about the place on the document that email was for. It is allowed when that place was signed, approved or declined since, when the person's own signature was set aside (earlier_signatures), or when the hand-over itself was done through their link. Otherwise the answer is 409 nothing_signed, saying the same code keeps working for later.\n- Each replaced code is its own disputer: the key is recipient id plus a hash of the token. So whoever holds the place now cannot use up the real person's dispute by disputing first. A dispute filed while that code was still live counts as already filed.\n- The audit line reads \"Someone holding the email we sent to Alice Real <alice@...>, before the address for that place on the document was changed, said that ...\".\n- The replaced-link screen (deadEnds.tsx) now tells the person that the security code still works for this.\n- Q1 and Q2 now give 200 (after-probe3.json).",
+    "test": "'Repair 1' tests (3, plus a wording test): correct-then-sign with the occupant disputing first; reassign by code, then by old link (already:true); taken off after signing (200) and taken off before anything was done (409); 404 for an unknown link."
+   },
+   {
+    "item": "new_bug medium / check F: a sender can erase a dispute by deleting the envelope or the account (P5, P6)",
+    "status": "done",
+    "how": "- deleting.ts keptOnDelete now also keeps an envelope with an open dispute. DELETE only hides it, with the audit line \"kept, because a person named on it disputes it\" (keptLine). The delete dialog wording follows.\n- Account deletion: keepDispute writes forgotten_disputes (envelope_id, file_sha256, disputed_on as a day, status, at). No names, addresses, title or words. It stays until the dispute is closed.\n- forgottenFile and lookupEnvelope return disputed_on/dispute_open. A deleted never-completed one answers status deleted, with \"was\" giving the state it was in.\n- /verify (deleted card) and ById show \"Disputed\".\n- Closing a not-me alert in the operator queue (one line in routes-support.ts) or POST /operator/disputes/:id closes the dispute. That writes a \"Dispute closed\" audit line, removes the kept record and lets the sender delete again.",
+    "test": "'Repair 2' tests (3): P6 kept and hidden; operator-only route with 400s; after closing, the next one deletes for good. Account deletion keeps exactly those columns with no names, /verify and the lookup keep saying disputed, closing the alert forgets the record, and the timer then deletes the alert."
+   },
+   {
+    "item": "new_bug medium: dispute alert keeps names, title and words forever after deletion",
+    "status": "done",
+    "how": "Followed the owner's rule: the alert follows the support rules for deletion. keepDispute sets forget=1 and clears account_id and user_id on the not-me alert, so it is kept while open. supportTick deletes it SUPPORT_REOPEN_DAYS after it is closed. KEPT_AFTER_DELETION (policy.ts) and DISPUTE_KEPT (lib/evidence.ts) now say so, and so does the /verify deleted card (\"apart from the alert our team works from while the dispute is open\").",
+    "test": "'Repair 2: deleting the account keeps the dispute...' checks forget=1, account_id null, then gone after close plus 31 days and cron.tick; also the KEPT_AFTER_DELETION line.",
+    "left_open": "While the alert is open it still holds names and words. The owner's rule allows that, and it is disclosed."
+   },
+   {
+    "item": "new_bug medium / check F: the disputer's IP address and browser went to the sender (P3); screens say what the sender sees",
+    "status": "done",
+    "how": "- The Disputed audit line is written without ip or ua. The disputes row keeps both for operators. A guarded one-off migration nulls user_agent on old Disputed lines; the ip is hashed, so it stays.\n- Owner's decision: the sender now gets the person's own words and the time, in the email and on the envelope page (new GET /envelopes/:id/disputes and Disputed.tsx), and in the pack as disputes.txt. The words are quoted with \"we have not checked any of it, do not call a number or open a link in it\".\n- Operators get the IP and browser in their email and queue row.\n- Before sending, every screen shows disputeSenderSees(): exactly what the sender gets, and that the IP and browser go only to operators. That is the sign dialog, /check and NotMe.\n- The dialog's first line no longer says \"not to the sender\" for not-me.\n- The /check header no longer says a dispute can pause the sender.\n- The not-me choice is hidden on /check for a document deleted before any dispute, because it would always fail.",
+    "test": "'Repair 3' tests (2); the F test was updated because sender emails now carry the words, by the owner's decision. After the fix, probe1 P3 shows sender_sees_ip, pack_ip and pack_ua all null."
+   },
+   {
+    "item": "new_bug medium / check E: closed-copy mark misses corners and vanishes in black and white; copies made while out unmarked (probe2, P8)",
+    "status": "done",
+    "how": "stamp.ts drawStamp now draws:\n- the large see-through words in the middle;\n- the words again, small and dark, in rows along both diagonals over the whole page, corners included. The colour is rgb(0.5,0.07,0.05) at 0.85, which stays below half-grey;\n- the words at the bottom of the page as well as the top.\nNew markFields frames each signature, initials and stamp, crosses it and writes the word inside. renderEnvelopePdf has an `unfinished` option: copies of an envelope still out say NOT COMPLETED YET / NOT EVERYONE HAS SIGNED this way. buildPdf defaults it on. The stored copy of what someone signed before a change is built without it, because withNotice marks it.\nAfter the fix, threshold.cjs gives 4492 mark pixels surviving the 50% threshold and 3203 in the lower right. Renders are tests/out/repair-disputes/voided-2.png, voided-2-bw.png and early-1.png. P8 early_copy_marked is now true.",
+    "test": "'Repair 4' tests (2): every square of a 4x4 grid holds dark words on portrait, landscape and a page turned 90 degrees, with a computed grey below 128; the signature is labelled; the sender, signer and pack copies while out are marked; the voided copy has rows plus a bottom line; the completed copy and the kept earlier copy carry no NOT COMPLETED.",
+    "left_open": "A PDF editor can still remove drawn marks; the certificate page now says so. Each marked page carries about 80 more text runs, which may slow the build for very long documents."
+   },
+   {
+    "item": "new_bug medium / check D: 'Completed copy opened ... for the first time' written for people who opened it before this shipped (P2)",
+    "status": "done",
+    "how": "New column envelopes.opens_noted_from. When it is first added on an existing database, db.ts sets it to that moment for every envelope already completed. noteCopyOpened then writes \"... That is the first time since we began writing this down on <day>; they may have opened it before that.\" New envelopes are worded as before.\nThe skeptic's P2 probe still prints \"for the first time\" because it only blanks copy_opened_at and never runs the upgrade. My test runs the real upgrade: it drops the column and reopens the database, as a restart does.",
+    "test": "'Repair 5' test."
+   },
+   {
+    "item": "new_bug low: approver dispute recorded as 'did not sign' (Q6)",
+    "status": "done",
+    "how": "didNot(r) gives approve, decline, confirm, witness or sign. Emails name the document (titled()).",
+    "test": "'Repair 6' and the 'Repair 1' wording test. Q6 now reads 'did not approve this'."
+   },
+   {
+    "item": "new_bug low: public form visitor's typed text lands in the owner's email (P9)",
+    "status": "disagree",
+    "how": "I did not refuse disputes from the form visitor row. A visitor can type someone else's address, and that person gets our completion email with its code. They must be able to say it was not them. Instead, our email never puts visitor-typed text in the subject or heading (\"Someone disputes an entry made through your form\"). In the body it is quoted as typed: 'the person who filled in your form as \"...\"'.",
+    "test": "'Repair 6': the subject has no lure text, the heading is generic, the quote is labelled, and the owner of the typed-in address can dispute with the code.",
+    "left_open": "A visitor can still finish their own form entry and dispute it to put quoted text in the owner's email: one per entry, 10 an hour per connection, and each entry uses one of the owner's signatures."
+   },
+   {
+    "item": "new_bug low: a forwarded completion email lets anyone dispute, and nobody can clear the mark (P4)",
+    "status": "partly",
+    "how": "Operators can now close disputes: POST /operator/disputes/:id with how 'handled' or 'in_error', or by closing the alert in the queue. 'in_error' is shown next to the mark on /verify by file and by ID (dispute_in_error_on), and an audit line records it. The mark itself stays, as the brief says.",
+    "test": "'Repair 2: a dispute closed as filed in error...'",
+    "left_open": "There is no 'filed in error' button in the operator page UI; it is an API call or closing from the queue (handled). A forwarded email still lets a stranger dispute, as before."
+   },
+   {
+    "item": "new_bug low: evidence pack README says a person made it when an API key did (Q3)",
+    "status": "done",
+    "how": "It now says \"by an API key that <name> <email> created\". The probe's own regex expects the old phrase, so P11 still prints false; Q3 shows the new line.",
+    "test": "'Repair 6'."
+   },
+   {
+    "item": "new_bug low: lookup 404 for a deleted never-completed envelope suggests a typo (Q5)",
+    "status": "done",
+    "how": "The 404 now says the sender may have deleted it, and what we keep: a year for a completed one, nothing for one never completed, unless someone named on it disputes it.",
+    "test": "'Repair 6'."
+   },
+   {
+    "item": "check H / overclaims: certificate page, CHAIN_TRUTH, closed-copy mark, Sender after hand-over, witness lines",
+    "status": "done",
+    "how": "- CHAIN_TRUTH now says the chain head covers lines up to completion only.\n- The certificate page now says:\n  - the closed mark is on every copy made after closing, plus the NOT COMPLETED YET copies, with the layers described and what drawn marks cannot prove;\n  - Sender is the login holding the envelope at completion (hand-over noted);\n  - Chain head does not cover later lines;\n  - it adds Witness, Witnessed and the witness lines.\n- The security page says a dispute line has no IP or browser.",
+    "test": "The A and H tests still pass (H checks every label drawCertificate prints)."
+   },
+   {
+    "item": "overclaims: NotMe 'that you did and when'; verify deleted card 'no names'; KEPT_AFTER_DELETION 'the day'; README line 154 and continue.json F; D first time; 'nothing deleted, mark stays'",
+    "status": "done",
+    "how": "- NotMe states exactly what the sender gets (words, when, which email or link) and not (IP, browser). It no longer says only a fingerprint is kept after deletion.\n- The verify deleted card is corrected.\n- forgotten_files now stores the day it was completed. The lookup and file check return days for deleted ones (the B and C tests updated to the day, deliberately).\n- README rows and sections are rewritten, and the developers page is updated.\n- research/continue.json is left as the earlier engineer's record; this report supersedes it.",
+    "test": "'Repair 3' screen test and the updated B and C tests."
+   },
+   {
+    "item": "screens at 390x844 and 1280",
+    "status": "done",
+    "how": "Own dev server on 3606 with tests/out/repair-disputes/shots.cjs. The screenshots are in tests/out/repair-disputes/ and listed in shots.txt:\n- signing page dialog with not-me chosen by keyboard (arrow keys), and after sending;\n- /check dispute form and answer;\n- replaced link page;\n- /check with a replaced code;\n- /verify?id disputed;\n- envelope page on a phone and at 1280 with the words quoted;\n- /security/certificate;\n- /help#not-me;\n- /verify file and ID for a deleted, disputed document.\nNo sideways scroll, no em dash and no page errors. The textarea has a label and aria-describedby pointing at the what-the-sender-sees text. The Send dispute button is 44 px. I then made two small changes: a gap above the new replaced-link paragraph, and the name each quoted dispute belongs to. The server was stopped, .next-repair-disputes deleted, and only the two lines next dev added for my folder were removed from tsconfig.json.",
+    "test": "Visual check plus the source assertions in 'Repair 3'."
+   }
+  ],
+  "files_changed": [
+   "src/server/evidence.ts",
+   "src/server/routes-evidence.ts",
+   "src/server/stamp.ts",
+   "src/server/deleting.ts",
+   "src/server/db.ts (forgotten_disputes table; disputes.closed_at/closed_how/closed_note; envelopes.opens_noted_from; two one-off migrations guarded by column presence)",
+   "src/server/pdf.ts (renderEnvelopePdf: unfinished option, one mark variable, markFields; import)",
+   "src/server/envelopes.ts (buildPdf gets an `unfinished` parameter; the earlier copy is built unmarked)",
+   "src/server/routes-envelopes.ts (DELETE audit line from keptLine; import)",
+   "src/server/routes-support.ts (closing a not-me alert closes the dispute; import)",
+   "src/server/routes-account.ts (the file check adds disputeFacts; import)",
+   "src/server/openapi.ts",
+   "src/lib/evidence.ts",
+   "src/lib/policy.ts (one KEPT_AFTER_DELETION line)",
+   "src/components/sign/dialogs.tsx (ReportDialog wording for not-me)",
+   "src/components/sign/deadEnds.tsx (ReplacedLink paragraph)",
+   "src/components/sender/Disputed.tsx (rewritten whole: an 18-line file of this feature)",
+   "src/app/check/CheckForm.tsx",
+   "src/app/help/NotMe.tsx",
+   "src/app/verify/page.tsx",
+   "src/app/verify/ById.tsx",
+   "src/app/security/certificate/page.tsx",
+   "src/app/security/page.tsx",
+   "src/app/developers/page.tsx",
+   "src/app/app/envelopes/[id]/page.tsx (delete dialog wording for a dispute)",
+   "README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example",
+   "tests/gaps-disputes-evidence.test.ts (13 new tests; the F, B and C assertions updated)",
+   "tests/out/repair-disputes/ (before and after probe output, marks.ts, renders, shots.cjs, screenshots)",
+   "tsconfig.json (only the lines next dev added for .next-repair-disputes were removed again)"
+  ],
+  "suite": "My file, tests/gaps-disputes-evidence.test.ts: 32 of 32 pass.\n\nnpm test: 945 tests, 942 pass, 3 fail. The 3 failures are all in tests/stamps.test.ts: \"one ink...\", \"the same picture and seed...\", \"rubber texture...\". They come from src/lib/stampink.ts, which another engineer is reworking right now (task \"stamp-look 1\"; the file was modified at 22:06). I re-ran stamps.test.ts afterwards and the same 3 still fail. None of them touch stamp.ts or anything I changed.\n\nnpx tsc --noEmit -p .: no errors. An earlier run showed one error in someone else's src/server/chat.ts; it was gone on the final run.\n\nProbes after the fix:\n- tests/out/repair-disputes/after-probe1.json and after-probe3.json.\n- Q1 200; Q2 200 by code and 200 by old link; P3 ip and ua all null; P6 kept, with envelope, disputes and audit rows still there.\n- P5 shows disputed_on and dispute_open in both lookups.\n- P8 early copy marked; threshold shows 4492 dark mark pixels after a 50% threshold, 3203 in the lower right.\n- P2 still prints \"first time\" only because the probe skips the upgrade (see that item).",
+  "abuse_and_stuck": [
+   "Replaced-code dispute, abuse 1: whoever holds the place now (the sender after a correction) disputes first to use up the real person's dispute. Each replaced code is its own disputer (tested in Repair 1).",
+   "Replaced-code dispute, abuse 2: a stranger holding an old forwarded email disputes. That is the same exposure as a live code: one per code, 10 an hour per connection, closable by an operator as in_error (tested).",
+   "Replaced-code dispute, abuse 3: disputing a place where nothing was ever done, to block deletion. Refused with 409 nothing_signed (tested for a correction before signing and for a person taken off first).",
+   "Replaced-code dispute, stuck 1: nothing was signed in that place yet. Told so, and that the same code keeps working later (tested).",
+   "Replaced-code dispute, stuck 2: the person only has the old link. The link route accepts it, and the replaced-link screen points to /check with the code (tested).",
+   "Replaced-code dispute, stuck 3: the document was deleted before any dispute. The /check screen no longer offers the dispute choice, and the API says nothing is left to mark (source test).",
+   "Deletion block, abuse 1: someone with a forwarded code disputes a declined envelope so the sender cannot delete it for good. The sender can still hide it, and an operator can close it as in_error; left_open: nothing stops that dispute being filed.",
+   "Deletion block, abuse 2: a sender deletes the account to erase a dispute. A minimal record is kept and both /verify answers still say disputed (tested).",
+   "Deletion block, abuse 3: an operator closes a dispute quietly. The envelope gets a 'Dispute closed' audit line and the mark stays (tested).",
+   "Deletion block, stuck 1: the sender wonders why delete only hid it. The dialog, the toast and the audit line say why (tested).",
+   "Deletion block, stuck 2: after the dispute closes, a hidden envelope stays hidden; an admin can put it back and delete it (as for completed ones).",
+   "Deletion block, stuck 3: the person checks a file after the account is gone. The deleted card says disputed and what is still held (browser-checked and tested).",
+   "Words to the sender, abuse 1: lure text in the words. Escaped, quoted, and the email and page tell the reader not to call numbers or open links; left_open: not run through the fake-notice filter.",
+   "Words to the sender, abuse 2: a form visitor's lure name. Kept out of the subject and heading, and quoted (tested).",
+   "Words to the sender, abuse 3: fishing for the disputer's IP or browser through the pack or the API. Absent from the audit line, the pack and /disputes (tested).",
+   "Words to the sender, stuck: what the sender will see is said before sending, on all three screens (tested and browser-checked).",
+   "Marks, abuse 1: cropping a corner. Rows cover all 16 squares of a 4x4 grid (tested).",
+   "Marks, abuse 2: a black-and-white copier. Computed grey below 128, and a render shows them surviving.",
+   "Marks, abuse 3: an early copy passed off as signed. Marked NOT COMPLETED YET (tested).",
+   "Marks, stuck: a signer printing a copy while the envelope is still out now sees the mark across it. It says plainly 'not everyone has signed', and the document stays readable (looked at in early-1.png).",
+   "First-open line, abuse: a link scanner as the first opener. Unchanged and left open, as before.",
+   "First-open line, stuck: a person who opened before the upgrade is not falsely called first (tested)."
+  ],
+  "settings": [
+   "No new settings. OPERATOR_EMAILS now also gates POST /api/operator/disputes/:id, and its README row and .env.example say that until an operator closes a dispute its envelope cannot be deleted for good."
+  ],
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour others will notice:\n- Every copy of an envelope that is still out is now marked NOT COMPLETED YET / NOT EVERYONE HAS SIGNED across every page. That covers the sender's View/Download while out, the signer's \"View document so far\" and Download before completion, and the pack's document-so-far.pdf. buildPdf(e, false, ...) marks by default; pass unfinished=false only when the caller adds its own mark, as the earlier-copy build does.\n- Closed copies are now tiled with dark rows and a bottom line, and each signature, initials and stamp field is framed with the word.\n- Disputes:\n  - The sender now receives the disputer's words (owner's decision).\n  - The Disputed audit line has no ip or user_agent.\n  - Operators get IP and browser in their email and queue row.\n  - New GET /envelopes/:id/disputes and POST /operator/disputes/:id.\n  - Closing a topic not-me alert in the queue closes the dispute (one line in routes-support.ts).\n  - Reopening that alert does not reopen the dispute.\n  - DELETE on an envelope with an open dispute only hides it.\n- forgotten_files.completed_at is now stored as a day. The deleted answers of /public/verify and /public/verify/:id give days for completed_at, deleted_at and kept_until, and add disputed_on/dispute_open (lookup: disputed_at, dispute_open, was). Live lookups add disputes_open and dispute_in_error_on.\n- KEPT_AFTER_DELETION has a new line, shown on Settings, /help, /security/processing and in the chat knowledge base.\n\nDecisions for the owner to confirm:\n- Form visitor disputes: I disagreed with refusing them; see that item.\n- Whether operators need a \"filed in error\" button in the operator page. Today it is API only, and closing from the queue means 'handled'.\n- Whether dispute words should go through the fake-notice filter.\n\nSeen and not fixed (out of scope):\n- The certificate itself (drawCertificate) still prints \"the history cannot be edited without breaking the chain\". That belongs to the certificate engineer.\n- Disputed lines written before this change keep their ip, because it is inside the hash; only their user_agent was removed.\n- CERTIFICATE_PAGE_VERSION stays 2026-11-20, the same day as these page changes.\n- src/lib/stampink.ts is mid-rework by another engineer, so 3 tests in stamps.test.ts fail.\n\nAll new copy says \"Sign&Grow\" for the rename pass."
  }
 }

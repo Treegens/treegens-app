@@ -721,3 +721,50 @@ test('a signing link that reports a new time zone again and again writes one lin
   // Same zone at Finish as on record: no second line (the earlier test checks one consent and one Finish).
   assert.equal((await c.get(`/envelopes/${e.id}`)).data.chain.ok, true);
 });
+
+test('a reminder held for the morning is dropped when the sender turns reminders off, and the sender gets one "pass on" email however many sleep', async () => {
+  const c = await signUp('Mo Sender', 'mo-held@example.com', ip());
+  const night = zoneWhereItIs(2);
+  const past = new Date(Date.now() - 2 * 864e5).toISOString();
+  const rem = (em: string) => mailTo(em).filter((x: any) => x.subject.startsWith('Reminder: ')).length;
+  const e = await sendTo(c, [{ name: 'Off Later', email: 'off-later@example.com' }, { name: 'Muted Later', email: 'muted-later@example.com' }, { name: 'Kept Later', email: 'kept-later@example.com' }], { reminder_days: 1 });
+  for (const em of ['off-later@example.com', 'muted-later@example.com', 'kept-later@example.com']) assert.equal((await new Client().post(`/sign/${tokenFor(e.id, em)}/consent`, { tz: night })).status, 200);
+  s.db.run('UPDATE envelopes SET sent_at=?, last_reminder_at=NULL WHERE id=?', past, e.id);
+  s.db.run('UPDATE recipients SET sent_at=? WHERE envelope_id=?', past, e.id);
+  await s.env.cronTick();
+  assert.equal(s.db.all('SELECT reminder_held_at h FROM recipients WHERE envelope_id=? AND reminder_held_at IS NOT NULL', e.id).length, 3);
+  // A second envelope with the same people asleep, whose sender keeps reminders on: the control.
+  // On the first, the sender turns automatic reminders off during the night (a correction of a sent envelope).
+  const cur = (await c.get(`/envelopes/${e.id}`)).data.envelope;
+  const put = await c.put(`/envelopes/${e.id}`, { reminder_days: 0, subject: cur.subject, documents: cur.documents.map((d: any) => ({ id: d.id, file_id: d.file_id, name: d.name })), recipients: cur.recipients.map((r: any) => ({ id: r.id, role: r.role, name: r.name, email: r.email })), fields: cur.fields, edit_version: cur.edit_version });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  // Morning comes.
+  s.db.run('UPDATE recipients SET tz=? WHERE envelope_id=?', zoneWhereItIs(9), e.id);
+  await s.env.cronTick();
+  assert.deepEqual([rem('off-later@example.com'), rem('muted-later@example.com'), rem('kept-later@example.com')], [0, 0, 0]);
+  assert.equal(s.db.all('SELECT 1 FROM recipients WHERE envelope_id=? AND reminder_held_at IS NOT NULL', e.id).length, 0);
+
+  // The same with reminders left on: the one who turned reminders off on their page gets none, the other gets one.
+  const e2 = await sendTo(c, [{ name: 'Muted Two', email: 'muted-two@example.com' }, { name: 'Kept Two', email: 'kept-two@example.com' }], { reminder_days: 1, subject: 'Held two' });
+  for (const em of ['muted-two@example.com', 'kept-two@example.com']) assert.equal((await new Client().post(`/sign/${tokenFor(e2.id, em)}/consent`, { tz: night })).status, 200);
+  s.db.run('UPDATE envelopes SET sent_at=?, last_reminder_at=NULL WHERE id=?', past, e2.id);
+  s.db.run('UPDATE recipients SET sent_at=? WHERE envelope_id=?', past, e2.id);
+  await s.env.cronTick();
+  assert.equal((await new Client().post(`/sign/${tokenFor(e2.id, 'muted-two@example.com')}/mute`)).status, 200);
+  s.db.run('UPDATE recipients SET tz=? WHERE envelope_id=?', zoneWhereItIs(9), e2.id);
+  await s.env.cronTick();
+  assert.deepEqual([rem('muted-two@example.com'), rem('kept-two@example.com')], [0, 1]);
+
+  // One person asleep and three whose link the sender passes on: one email to the sender, as with nobody asleep.
+  const file = await upload(c, 1);
+  const people = [{ name: 'Asleep One', email: 'asleep-one@example.com' }, { name: 'Hand A', email: '', link_by_sender: true }, { name: 'Hand B', email: '', link_by_sender: true }, { name: 'Hand C', email: '', link_by_sender: true }];
+  const e3 = (await c.post('/envelopes', { subject: 'Pass on once', reminder_days: 1, documents: [{ id: 'd', file_id: file.id }], recipients: people.map((p, i) => ({ id: `r${i}`, role: 'signer', ...p })), fields: people.map((_, i) => ({ document_id: 'd', recipient_id: `r${i}`, type: 'signature', page: 0, x: 0.1, y: 0.1 + i * 0.15, w: 0.3, h: 0.05 })), send: true })).data.envelope;
+  assert.equal((await new Client().post(`/sign/${tokenFor(e3.id, 'asleep-one@example.com')}/consent`, { tz: night })).status, 200);
+  s.db.run('UPDATE envelopes SET sent_at=?, last_reminder_at=NULL WHERE id=?', past, e3.id);
+  s.db.run('UPDATE recipients SET sent_at=?, unopened_alerted_at=? WHERE envelope_id=?', past, past, e3.id);
+  const passOn = () => mailTo('mo-held@example.com').filter((x: any) => x.subject === 'Reminder to pass on: Pass on once');
+  await s.env.cronTick();
+  assert.equal(passOn().length, 1);
+  assert.match(passOn()[0].html, /Hand A, Hand B and Hand C have not finished yet/);
+  assert.equal(rem('asleep-one@example.com'), 0, 'and the one asleep waits for the morning');
+});

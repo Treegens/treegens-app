@@ -7,7 +7,7 @@ import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
 import { STANDING_PAYMENT, personGen } from './credits.ts';
-import { DATE_FORMATS, momentText, momentForEmail, isDaytime, validZone, REMINDER_DAY_START } from '../lib/dates.ts';
+import { DATE_FORMATS, momentText, momentForEmail, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { PAID_TRUST_DAYS, paidTrustText, TEAM_INVITES_PER_DAY } from '../lib/policy.ts';
@@ -316,6 +316,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     // unseen. New wording is a change: it replaces the empty line, and the signer is told (content_version).
     const answered = correcting && !!old && !senderOwned && old.value !== old.prefill && (finished || old.value != null || String(f.value ?? '') === String(old.prefill));
     const value = answered ? old.value : prefilled ? fit(f.value, 4000, `${which}: the value`) || null : correcting && old ? old.value : null;
+    // A date the sender fills in is held to the rule a signer's is (applyValues): a real day, written year-month-day.
+    if (f.type === 'date' && value && !answered && !isDateValue(value)) throw bad(`${which}, a date field, was sent with "${String(value).slice(0, 40)}". ${DATE_PROBLEM} Nothing was saved.`);
     const readonly = ro || SENDER_MARK(f.type) ? 1 : 0;
     // The sender's own wording in a field its signer may still change. Kept beside the value: see db.ts. A signer
     // who emptied the field did not change what the sender wrote, so a save that leaves it empty keeps the wording.
@@ -1868,6 +1870,13 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
   const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !AUTO_TYPES.includes(f.type));
   // One answer per group of radio buttons: two at once is refused, and one takes the others off (logic.ts).
   values = oneChoice(mine, values);
+  // A date field takes a real day as year-month-day, what the date picker sends, so the PDF can print it in the
+  // envelope's format. "2026-02-31" would print as 31/02/2026 and "next Tuesday" as itself. Checked before anything
+  // is written, so a refused save or Finish changes nothing.
+  for (const f of mine) {
+    const v = f.type === 'date' && f.id in values && !f.formula ? str(values[f.id], 4000) : '';
+    if (v && !isDateValue(v)) throw bad(`"${v.slice(0, 40)}" in ${f.label || 'a date field'}: ${DATE_PROBLEM} Nothing was saved.`);
+  }
   for (const f of mine) {
     // A calculated field is the server's to work out: whatever the browser sent for it is not taken (logic.ts). A
     // stamp is put on and taken off by its own request (POST /sign/:token/stamp), never by the answers.
@@ -2615,11 +2624,17 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       unopenedAlerts += unopened.length;
     }
     // An automatic reminder that waited for someone's morning (see below) goes out once it is day where they are.
-    // If they have finished, turned reminders off or handed the request on since, it is simply dropped.
+    // If they have finished, turned reminders off or handed the request on since, or the sender has turned automatic
+    // reminders off for the envelope, it is simply dropped. One held back because of how the envelope reads is not
+    // dropped without a word: the sender is told, as for any reminder (noteHeld).
     for (const r of e.recipients.filter((r: any) => r.reminder_held_at)) {
       if (!isDaytime(t, r.tz)) continue;
       run('UPDATE recipients SET reminder_held_at=NULL WHERE id=?', r.id);
-      if (held || (r.status !== 'sent' && r.status !== 'viewed') || !r.sent_at || r.sent_at > r.reminder_held_at) continue;
+      if (!(e.reminder_days > 0) || r.muted || (r.status !== 'sent' && r.status !== 'viewed') || !r.sent_at || r.sent_at > r.reminder_held_at) continue;
+      if (held) {
+        if (no!.status !== 403) await noteHeld(e, no!, 'The automatic reminder was not sent.');
+        continue;
+      }
       const how = await notifyRecipient(e, r, 'reminder');
       if (how && how !== 'failed') {
         audit(e.id, { name: 'System' }, 'Reminder sent', `${r.name}, once it was morning where they are (${r.tz})`);
@@ -2636,7 +2651,11 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       // Someone whose link the sender passes on gets no email, so their night does not matter: the sender is told.
       const asleep: any[] = due && !held ? e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && !r.muted && !r.link_by_sender && validZone(r.tz) && !isDaytime(t, r.tz)) : [];
       if (asleep.length) {
-        for (const r of e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && !asleep.includes(r))) reminded += (await remindEnvelope(e, { name: 'System' }, r.id)) ? 1 : 0;
+        // Everyone awake is reminded now, one by one. The people whose link the sender passes on are put to the
+        // sender in one email for all of them, as when nobody is asleep, not in one email each.
+        const awake = e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && !asleep.includes(r));
+        await remindThroughSender(e, awake, { name: 'System' });
+        for (const r of awake.filter((r: any) => !r.link_by_sender)) reminded += (await remindEnvelope(e, { name: 'System' }, r.id)) ? 1 : 0;
         for (const r of asleep) run('UPDATE recipients SET reminder_held_at=? WHERE id=?', t, r.id);
         run('UPDATE envelopes SET last_reminder_at=? WHERE id=?', t, e.id);
         audit(e.id, { name: 'System' }, 'Reminder waits for the morning', `${asleep.map((r: any) => `${r.name} (${r.tz})`).join(', ')}: it is night where they are, so the reminder goes out at ${REMINDER_DAY_START}:00 their time.`);

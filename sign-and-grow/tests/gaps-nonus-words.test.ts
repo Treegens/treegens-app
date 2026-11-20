@@ -404,7 +404,9 @@ test('the review step shows the warning without switching Send off, and the help
 });
 
 test('every country note is dated, hedged and rests on a source the research names', () => {
-  const research = read('research/gaps-partial.json');
+  // The research for this note lives in gaps-partial.json; the EU's own copy of eIDAS was named by the research on
+  // government services (government.json), which a later repair links in place of the UK's copy.
+  const research = ['gaps-partial', 'gaps', 'government'].map((f) => { try { return read(`research/${f}.json`); } catch { return ''; } }).join('\n');
   assert.deepEqual(COUNTRY_NOTES.map((n) => n.id), ['eu', 'de', 'uk', 'in', 'id', 'za-ke', 'sg-ng', 'br', 'au', 'mx']);
   for (const n of COUNTRY_NOTES) {
     assert.match(n.checked, /^(January|February|March|April|May|June|July|August|September|October|November|December) 20\d\d$/, n.id);
@@ -1072,4 +1074,33 @@ test('the check reads file names as people write them: underscores, dots, CamelC
   const w = await ada.get(`/envelopes/${d.id}/warnings`);
   assert.equal(w.status, 200);
   assert.deepEqual(kinds(w.data.warnings), ['attorney', 'employment', 'will']);
+});
+
+test('the country notes say which part of a country they are about, link the EU\'s own text, give every claim a source and state rather than instruct', () => {
+  const note = (id: string) => COUNTRY_NOTES.find((n) => n.id === id)!;
+  // The UK note is England and Wales law, and says so; HM Land Registry covers England and Wales only.
+  assert.equal(note('uk').place, 'United Kingdom: England and Wales');
+  assert.match(note('uk').text, /^This note is about England and Wales\. Scotland and Northern Ireland have their own law on deeds, wills and land/);
+  assert.match(note('uk').text, /HM Land Registry, which covers England and Wales only/);
+  // The EU note links EUR-Lex as the official text; the UK-kept copy is said to be what it is and not called official.
+  const eu = note('eu').sources;
+  assert.equal(eu[0].url, 'https://eur-lex.europa.eu/eli/reg/2014/910/oj');
+  assert.equal(eu[0].official, true);
+  const kept = eu.find((s) => s.url.includes('legislation.gov.uk'))!;
+  assert.equal(kept.official, false);
+  assert.match(kept.label, /as the United Kingdom kept and changed it after leaving the EU, not the EU's own current text/);
+  assert.ok(!eu.some((s) => /the 2014 text as kept/.test(s.label)));
+  // Singapore has a source of its own, and Nigeria's law is named.
+  const sg = note('sg-ng');
+  assert.ok(sg.sources.some((s) => s.url.startsWith('https://www.imda.gov.sg/') && /2019/.test(s.label)));
+  assert.match(sg.text, /section 17\(2\) of the Cybercrimes Act 2015 leaves out wills and birth and death certificates/);
+  // India: what the research confirmed, and what it did not.
+  assert.match(note('in').text, /Our research confirmed that wills and trusts are still on it after a 2022 amendment\. It did not confirm the rest of that list, which has also named powers of attorney and contracts for the sale of land/);
+  // An old source says how old it is.
+  assert.match(note('za-ke').sources[0].label, /^De Rebus \(2012\)/);
+  // No note tells the reader what to do; they say what the law asks and what Sign&Grow is and is not made for.
+  for (const n of COUNTRY_NOTES) assert.doesNotMatch(n.text, /\b(Do not (sign|use)|use one of those|buy the|Check your state|Add the stamped page)\b/, n.id);
+  assert.doesNotMatch(stampNote('India'), /\bbuy the\b/);
+  // Every note still carries its month, and the help page prints the month next to its sources.
+  assert.match(src('app/help/outside.tsx'), /Looked at in \{n\.checked\}\./);
 });

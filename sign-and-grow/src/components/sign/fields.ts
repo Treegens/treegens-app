@@ -1,5 +1,6 @@
 // What a signer's fields mean, shared by the document view, the text view and the phone sheet.
 import { NUMBER_RULE, NUMBER_PROBLEM } from '../../lib/numbers.ts';
+import { isDateValue, DATE_PROBLEM } from '../../lib/dates.ts';
 
 export const AUTO = ['date_signed', 'full_name', 'email'];
 /** Fields that are typed into. On a phone these open a sheet with a large input. */
@@ -45,6 +46,8 @@ export function buildItems(ordered: any[], filled: (f: any) => boolean): Item[] 
 const RULES: Record<string, RegExp> = { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, number: NUMBER_RULE, phone: /^[+()\d][\d\s().-]{5,}$/ };
 export function problemWith(f: any, value: string): string {
   if (!value || isSig(f) || isBox(f) || f.type === 'dropdown' || f.type === 'attachment') return '';
+  // The same rule the server holds a date to at Finish (isDateValue in src/lib/dates.ts).
+  if (f.type === 'date') return isDateValue(value) ? '' : DATE_PROBLEM;
   const rule = f.type === 'number' ? 'number' : f.validation;
   if (!rule) return '';
   let re: RegExp | null = RULES[rule] || null;
