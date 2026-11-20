@@ -45,7 +45,7 @@
   /* The menu is hidden on paper, but on paper wider than the phone layout (landscape, A3) the grid would keep its
      column and squeeze the sheet into it. */
   body.qr-printing .shell { display: block; }
-  body.qr-printing .main { padding: 0; }
+  body.qr-printing .main { padding: 0; max-width: none; }
   body.qr-printing .main > *:not(.qr-page), body.qr-printing .qr-noprint, body.qr-printing .toasts { display: none !important; }
   body.qr-printing .qr-page { max-width: none; }
   body.qr-printing .qr-sheet { border: 0; border-radius: 0; padding: 12mm 0 0; }

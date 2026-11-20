@@ -11,6 +11,7 @@ import { SendMyself } from './SendMyself';
 import { LIMITS, PAPER_HINT, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
 import { LockedLine, WhoCanUse } from '../templates/WhoCanUse';
+import { GroupRow, AddGroup, useGroups, isGroupRow } from './GroupRecipient';
 
 const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy' };
 
@@ -28,6 +29,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
   // The example shows today's date where the sender is, which is how a signer's own day is found as well.
   const zone = deviceZone();
   const was = (id: string) => (correcting ? base.recipients.find((r: any) => r.id === id) : null);
+  // The account's signing groups: a recipient can be one of them instead of a person (editor/GroupRecipient.tsx).
+  const groups = useGroups();
 
   return (
     <div className="main stack ed-narrow">
@@ -117,6 +120,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                   <div className="muted small ed-lockline" style={{ marginTop: 6 }}><Lock /><span>Finished{old?.completed_at ? ` on ${fmtDate(old.completed_at)}` : ''}. Their details and their own fields stay as they are.</span></div>
                 </div>
               );
+            if (isGroupRow(r)) return <GroupRow key={r.id} ed={ed} r={r} groups={groups} old={old} />;
             return (
               <div key={r.id} className="rcpt" style={{ ['--fc' as any]: ed.color(r.id) }}>
                 <div className="row wrap">
@@ -161,6 +165,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
         {!wording && <div className="row wrap" style={{ marginTop: 12 }}>
           <button type="button" className="btn" disabled={rcps.length >= MAX_RECIPIENTS} onClick={() => ed.addRcp()}>Add {isTpl ? 'role' : 'recipient'}</button>
           {!isTpl && rcps.length < MAX_RECIPIENTS && !rcps.some((r) => r.email.toLowerCase() === me.user.email.toLowerCase()) && <button type="button" className="btn ghost" onClick={() => ed.addRcp({ name: me.user.name, email: me.user.email })}>Add myself</button>}
+          <AddGroup ed={ed} groups={groups} />
           {rcps.length >= MAX_RECIPIENTS && <span className="muted small">An envelope can have up to {MAX_RECIPIENTS} recipients.</span>}
         </div>}
         {!isTpl && rcps.length > 0 && !rcps.some(SIGNS) && <p className="muted small" style={{ margin: '10px 0 0' }}>Nobody signs yet. Fields can only be placed for people who sign.</p>}

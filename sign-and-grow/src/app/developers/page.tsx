@@ -27,7 +27,8 @@ const GROUPS: [string, Endpoint[]][] = [
     ['POST', '/api/envelopes/:id/clone', 'Copy as a new draft or template. A copy of a template keeps who can use and change it, and a copy of a locked template made by someone who may not change it stays with its owner.'],
     ['GET', '/api/envelopes/:id/access', 'Who can use and change a template (everyone, admins only or chosen members; its owner and admins, chosen members as well or everyone), and whether its wording is locked. A template you may not use answers 403 with who to ask, wherever it is read or used.'],
     ['PUT', '/api/envelopes/:id/access', 'Set that rule and the chosen members. Only for the person the template belongs to and admins. Written to the template\'s history.'],
-    ['GET', '/api/envelopes/:id/download', 'The signed PDF with its certificate, or a preview while signing is in progress.'],
+    ['GET', '/api/envelopes/:id/download', 'The signed PDF with its certificate, or a preview while signing is in progress. A voided, declined or expired envelope comes with a first page that says so and a mark across every page.'],
+    ['GET', '/api/envelopes/:id/evidence', 'The evidence pack as a ZIP: the signed PDF, the certificate alone, the audit trail as text and JSON with its chain values, every stored email about it with what became of it, the consent wording and a README.'],
   ]],
   ['While an envelope is out', [
     ['POST', '/api/envelopes/:id/remind', 'Remind everyone whose turn it is. Send a recipient_id to remind one person only.', true],
@@ -58,7 +59,9 @@ const GROUPS: [string, Endpoint[]][] = [
     ['POST', '/api/webhooks/deliveries/:id/redeliver', `Send a past delivery again, exactly as it was. Works for the latest ${KEEP_BODIES} deliveries of each webhook.`, true],
   ]],
   ['No key needed', [
-    ['POST', '/api/public/verify', 'Check whether a PDF is an unmodified completed document.'],
+    ['POST', '/api/public/verify', 'Check whether a PDF is, byte for byte, a completed document we hold. A match shows it is unchanged since signing finished, not who signed. For a completed document whose sender deleted it in the last year, "deleted" says so.'],
+    ['GET', '/api/public/verify/:id', 'Look an envelope up by the ID printed on every page: status, dates, pages, signers, the fingerprint of the signed file and whether it is disputed. Never a name, an address or the title.'],
+    ['POST', '/api/public/check/dispute', '"I did not sign this, or this was not me", with the security code of an email we sent. Marks the envelope as disputed; nothing is deleted.'],
     ['POST', '/api/public/check', 'Check the security code from a signing email.', true],
     ['GET', '/api/auth/providers', 'Which of Google and Microsoft people can sign in with on this server, next to email and password. Empty when the operator has set up neither. Signing in itself is for a person in a browser, never for a key.', true],
     ['GET', '/api/openapi.json', 'This API as an OpenAPI 3 description, for code generators and API clients.'],

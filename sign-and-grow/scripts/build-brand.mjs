@@ -406,15 +406,16 @@ async function buildExports() {
     const p = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: dsf });
     await p.route(`${ORIGIN}/**`, (r) => {
       const rel = decodeURIComponent(new URL(r.request().url()).pathname);
+      if (rel === '/') return r.fulfill({ status: 200, body: '<!doctype html><title>blank</title>', contentType: 'text/html' });
       const file = path.join(root, rel);
-      if (!file.startsWith(root + path.sep) || !fs.existsSync(file)) return r.fulfill({ status: 404, body: 'not found' });
+      if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return r.fulfill({ status: 404, body: 'not found' });
       r.fulfill({ status: 200, body: fs.readFileSync(file), contentType: TYPES[path.extname(file)] || 'application/octet-stream' });
     });
     return p;
   };
   const shoot = async (w, h, body, { transparent = true, dsf = 1 } = {}) => {
     const p = await page(w, h, dsf);
-    await p.goto(`${ORIGIN}/brand/`);
+    await p.goto(`${ORIGIN}/`);
     await p.setContent(`<!doctype html><html><head><style>
       @font-face { font-family: 'Lora'; font-weight: 500; src: url('${ORIGIN}/node_modules/@fontsource/lora/files/lora-latin-500-normal.woff2') format('woff2'); }
       html, body { margin: 0; width: ${w}px; height: ${h}px; overflow: hidden; background: transparent; }
@@ -459,12 +460,18 @@ async function buildExports() {
   // The guide.
   const gp = await page(1600, 1000, 2);
   await gp.goto(`${ORIGIN}/brand/guide.html`, { waitUntil: 'load' });
-  await gp.evaluate(() => document.fonts.ready);
-  await gp.waitForTimeout(100);
+  await gp.evaluate(() => Promise.all([document.fonts.ready, window.__ready]));
   const guide = await gp.screenshot({ fullPage: true });
   fs.writeFileSync(at('brand', 'guide.png'), guide);
   console.log(`[build-brand] brand/guide.png  ${guide.length} bytes`);
   await browser.close();
+
+  // Copies that Next serves from src/app by its file conventions (brand/README.md, "Wiring it in"). Refreshed only
+  // when they are already there: this script never wires anything into the app by itself.
+  for (const [from, to] of [['brand/icon.svg', 'src/app/icon.svg'], ['public/brand/favicon.ico', 'src/app/favicon.ico'],
+    ['public/brand/apple-touch-icon.png', 'src/app/apple-icon.png'], ['public/brand/og-image.png', 'src/app/opengraph-image.png']]) {
+    if (fs.existsSync(at(to))) { fs.copyFileSync(at(from), at(to)); console.log(`[build-brand] ${to} refreshed`); }
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

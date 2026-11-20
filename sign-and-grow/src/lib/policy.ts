@@ -354,3 +354,23 @@ export const GROUP_MAX_MEMBERS = 20;
 export const GROUPS_PER_ACCOUNT = 200;
 /** How a group recipient works, in the words the Contacts page, the editor and the help page share. */
 export const GROUP_RULE = 'Every member gets their own email with their own link. The first one who agrees to sign takes the document on, and the others are then told who has it. The record names the person who signed and the group. A group that signs uses one signature, like one person.';
+
+// Two-step login with an authenticator app (src/server/twostep.ts). Settings, the sign-in page, /help and /security
+// quote these, and the server enforces them from here.
+
+/** Wrong codes in a row, at sign-in or when a code is asked for under Settings, before that login's second step pauses. */
+export const TWO_STEP_TRIES = 5;
+export const TWO_STEP_PAUSE_MINUTES = 15;
+/** "Remember this device": that browser skips the second step of that one login for this many days from the day it was ticked. */
+export const TWO_STEP_REMEMBER_DAYS = 30;
+export const TWO_STEP_RECOVERY_CODES = 10;
+/** A reset by email takes effect this many days after it was started from the emailed link. */
+export const TWO_STEP_EMAIL_RESET_DAYS = 3;
+/** How long the second screen waits for the code after the password, or after Google or Microsoft. */
+export const TWO_STEP_SIGNIN_MINUTES = 10;
+export const TWO_STEP_API_KEYS = 'API keys are not affected: a program that uses one is never asked for a code. Treat a key like a password, and revoke it under Settings, API and webhooks if it may have leaked.';
+/** What someone who lost their phone and their recovery codes can do, in the words Settings and the sign-in screen share. */
+export const TWO_STEP_LOST: string[] = [
+  'On a team: an owner or an admin of the team can switch your second step off under Settings, Team. You are emailed at once, and it is written down who did it. Then you sign in with your password and set it up again.',
+  `The owner of an account (nobody else can reset it for you): ask for a reset by email on the sign-in screen, after your password. Open the link we email you, and your second step is switched off ${TWO_STEP_EMAIL_RESET_DAYS} days later. We email you when it starts and every day until then. Signing in with your code or a recovery code stops it, and so does Stop under Settings in a browser where you are still signed in. The wait is there so that someone who has only got into your mailbox cannot get into your login quietly.`,
+];

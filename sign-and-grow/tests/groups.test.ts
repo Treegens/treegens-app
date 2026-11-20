@@ -5,6 +5,7 @@
 // each of those can be abused or get an honest person stuck.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { boot, Client, signUp, upload, mailTo, PNG, type Server } from './helpers.ts';
 
 let s: Server;
@@ -322,4 +323,23 @@ test('two members who agree at the same moment: one takes it on, the other is to
   assert.equal((await agree(winner)).status, 200);
   assert.equal(said(e.id, 'Taken on for a group').length, 1);
   assert.equal(said(e.id, 'Agreed to electronic records and signatures').length, 1);
+});
+
+// ---- The API description and the screens that manage groups ------------------------------------------------------
+
+const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+
+test('the API describes groups, and the Contacts page lets admins manage them', async () => {
+  const { openapi } = await import('../src/server/openapi.ts');
+  const spec: any = openapi();
+  for (const [p, m] of [['/groups', 'get'], ['/groups', 'post'], ['/groups/{id}', 'put'], ['/groups/{id}', 'delete'], ['/envelopes/{id}/recipients/{rid}/release', 'post']]) assert.ok(spec.paths[p]?.[m], `${m} ${p}`);
+  for (const k of ['group_id', 'group_name', 'members', 'claimed_by']) assert.ok(spec.components.schemas.Recipient.properties[k], k);
+  assert.ok(spec.paths['/envelopes/{id}/recipient-view'].post.requestBody.content['application/json'].schema.properties.member_id);
+  // The Contacts page carries the groups, and only an admin is offered the buttons that change them.
+  assert.match(read('src/app/app/contacts/page.tsx'), /<SigningGroups \/>/);
+  const ui = read('src/components/sender/SigningGroups.tsx');
+  assert.match(ui, /may_change/);
+  assert.match(ui, /\{admin && !draft && <button id="sn-group-new"/);
+  assert.match(ui, /\{admin && \(\s*<div className="sn-contact-actions">/);
+  assert.match(read('src/app/layout.tsx'), /styles\/groups\.css/);
 });

@@ -22,5 +22,11 @@ export const CHAIN_TRUTH = 'Each line of the audit trail carries a SHA-256 finge
 /** What the certificate's names, times and places are. */
 export const WHO_WHEN_WHERE = 'A name is the one the sender typed, attached to whoever used that person\'s link, which can be the sender. Times are in UTC. An internet address is a connection, not a place: many people can share one, and it can be the sender\'s own.';
 
+/**
+ * The day /security/certificate was last written from drawCertificate() in src/server/pdf.ts. Whoever changes what the
+ * certificate prints changes that page and this date in the same change.
+ */
+export const CERTIFICATE_PAGE_VERSION = '2026-11-20';
+
 /** After a deletion: what /verify still knows about a completed file, and for how long. */
 export const FINGERPRINT_KEPT_DAYS = 365;

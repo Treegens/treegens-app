@@ -281,19 +281,22 @@ test('the invoice the provider makes for a top-up is not a second payment, and i
 });
 
 test('cancelling: the cases where "you will not be charged again" used to be wrong', async () => {
-  // A payment is failing AND the plan was already set to end: cancelling really ends it.
+  // A payment is failing AND the plan was already set to end: there is no paid month to run out, so it really ends,
+  // decided from what the provider says (no need to press Cancel a second time), with the same reference.
   const p = await person('Both');
   await subscribe(p);
-  await p.c.post('/billing/cancel');
+  const ref = (await p.c.post('/billing/cancel')).data.reference;
   Object.assign(stripe.sub(p.sub), { status: 'past_due', latest_invoice: 'in3_both_open' });
   stripe.invoices.in3_both_open = { id: 'in3_both_open', status: 'open' };
   await event('customer.subscription.updated', { id: p.sub, customer: p.cus, status: 'past_due', cancel_at_period_end: true, current_period_end: unix(30) });
-  assert.equal((await state(p)).can_cancel, true);
-  const r = await p.c.post('/billing/cancel');
-  assert.equal(r.data.ended_now, true);
-  assert.match(r.data.reference, /^SG-/);
+  assert.equal(acct(p.id).subscription_status, 'canceled');
+  assert.equal(acct(p.id).cancel_ref, ref);
   assert.equal(stripe.sub(p.sub).status, 'canceled');
   assert.equal(stripe.invoices.in3_both_open.status, 'void');
+  assert.match(mailTo(p.email).filter((m) => m.subject === 'Your Grove plan is cancelled').at(-1)!.html, /Cancelled earlier\.[\s\S]*The last payment had not gone through, so the plan ends today/);
+  const r = await p.c.post('/billing/cancel');
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /nothing to cancel and nothing will be charged/);
 
   // The new month has started but its payment has not been taken yet: it is withdrawn, not left to go through.
   const q = await person('Hour');
@@ -308,6 +311,7 @@ test('cancelling: the cases where "you will not be charged again" used to be wro
   // Cancelled on the provider's own page: same reference, history line and email as in the app.
   const s = await person('Portal');
   await subscribe(s);
+  stripe.sub(s.sub).cancel_at_period_end = true; // what the provider shows once it is set on its page
   await event('customer.subscription.updated', { id: s.sub, customer: s.cus, status: 'active', cancel_at_period_end: true, current_period_end: unix(20) });
   let st = await state(s);
   assert.ok(st.ends_at);
@@ -317,6 +321,7 @@ test('cancelling: the cases where "you will not be charged again" used to be wro
   // A cancellation given as a date, not as "at the end of the period", is understood too.
   const s2 = await person('PortalDate');
   await subscribe(s2);
+  stripe.sub(s2.sub).cancel_at = unix(10);
   await event('customer.subscription.updated', { id: s2.sub, customer: s2.cus, status: 'active', cancel_at: unix(10), current_period_end: unix(20) });
   assert.ok((await state(s2)).ends_at);
 

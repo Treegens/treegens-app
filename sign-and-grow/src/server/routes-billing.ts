@@ -57,7 +57,15 @@ export const backfillPrices = () => fillPrices();
 const mailLeft = (status: string) => status === 'sent' || (status === 'outbox' && (process.env.NODE_ENV !== 'production' || process.env.DEV_OUTBOX === '1'));
 const trees = (cents: number) => `${mangrovesFor(cents / 100).toLocaleString('en')} mangrove trees`;
 const planUrl = () => `${baseUrl()}/app/settings?tab=billing`;
-const account = (accountId: any) => (accountId ? get('SELECT * FROM accounts WHERE id=?', accountId) : null);
+// An account with a subscription always has its price written down (fillPrices does that at start). Should one turn
+// up without it anyway (a row restored from an old backup while the server runs), it is written down the same way
+// before anything about money reads it, so it is never taken to be on the price for new customers.
+const account = (accountId: any) => {
+  const a = accountId ? get('SELECT * FROM accounts WHERE id=?', accountId) : null;
+  if (!a || a.price_cents != null || !a.stripe_subscription_id) return a;
+  fillPrices();
+  return get('SELECT * FROM accounts WHERE id=?', accountId);
+};
 
 // Dates in emails are written in each reader's own time zone, the same one the Plan page uses in their browser, so
 // the email and the page never show different days. day() leaves a marker; dated() fills it in per reader.
@@ -256,7 +264,7 @@ function offerFor(acct: any, p: any): Offer | null {
     payment_id: p.id, cents, amount: money(cents, p.currency), signatures: unused, of: p.credits, kind: p.kind, paid_at: p.at,
     // Said in terms of the balance, not of "these very signatures": signatures are not told apart once they are on it.
     reason: unused === p.credits ? `you have enough unused signatures to hand back all ${p.credits} it bought`
-      : `you have ${unused} unused paid ${unused === 1 ? 'signature' : 'signatures'} to hand back out of the ${p.credits} it bought${freeToo ? ' (free signatures, the ones every new account gets and any from a code, count as used first)' : ''}`,
+      : `you have ${unused} unused ${unused === 1 ? 'signature' : 'signatures'} to hand back out of the ${p.credits} it bought${freeToo ? ' (free signatures, the ones every new account gets and any from a code, count as used first)' : ''}`,
   };
 }
 // What the Plan page offers up front: the latest payment. Earlier ones inside the window are offered next to each
@@ -1678,7 +1686,8 @@ async function applySubscription(a: any, o: any, at: number, ended: boolean) {
     if (['canceled', 'incomplete_expired'].includes(fresh?.status)) return applySubscription(account(a.id), fresh, at, true);
     // Undone again since: nothing to work out.
     if (!plannedEnd(fresh) && LIVE.includes(fresh?.status)) return;
-    await cancelPlan(account(a.id), pressedBy(a.id) || "on the payment provider's page", false, fresh);
+    // Already cancelled before, and now the payment is failing: the same cancellation, ending sooner.
+    await cancelPlan(account(a.id), pressedBy(a.id) || (a.cancel_at ? 'earlier' : "on the payment provider's page"), false, fresh);
   } else if (live && !endsAt && a.cancel_at) {
     unstop(a.id);
     log(a.id, 'resumed', "On the payment provider's page.", a.cancel_ref || '');
@@ -2040,8 +2049,14 @@ route('POST', '/operator/billing/price-notice', async (c) => {
   const out = { told: 0, already_told: 0, not_affected: 0, withdrawn: 0, not_told: [] as string[], new_price: money(cents), from, from_day: priceChangeDay(from) };
   for (const row of all('SELECT id FROM accounts WHERE promo_code IS NULL AND stripe_subscription_id IS NOT NULL ORDER BY created_at')) {
     await serial(row.id, async () => {
-      const a = account(row.id);
+      let a = account(row.id);
       if (!a || !hasSub(a)) return;
+      // A notice whose first day has passed, and that was given in time, is the price this account is on now: it is
+      // written down as that before anything is compared, so a new notice neither withdraws it nor writes over it.
+      if (noticed(a, now())) {
+        run('UPDATE accounts SET price_cents=MAX(COALESCE(price_cents, 0), price_notice_cents), price_notice_cents=NULL, price_notice_from=NULL, price_notice_at=NULL WHERE id=?', a.id);
+        a = account(a.id);
+      }
       const nowCents = a.price_cents || PLAN_CENTS();
       const had = a.price_notice_cents && a.price_notice_cents > nowCents ? { cents: a.price_notice_cents, from: a.price_notice_from, at: a.price_notice_at } : null;
       // The same or a lower price needs no notice, and withdraws an earlier notice of a higher one. Whoever was told

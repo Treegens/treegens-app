@@ -80,7 +80,11 @@ export function StopView() {
       else if (e.status === 429) setError('That is too many tries for now. Wait an hour, or use the help page and a person will stop it for you.');
       // The server's own words already say what to do when they can (and whether anything changed). Only a bare
       // answer from the payment provider gets ours added.
-      else if (e.status >= 500) setError(/try again/i.test(e.message || '') ? e.message : `${e.message} Press the button again in a minute. If it keeps failing, use the help page and a person will stop it for you.`);
+      else if (e.status >= 500) {
+        const said = String(e.message || '');
+        const fallback = /a person/i.test(said) ? '' : ' If it keeps failing, use the help page and a person will stop it for you.';
+        setError(/try again/i.test(said) ? `${said}${fallback}` : `${said} Press the button again in a minute.${fallback}`);
+      }
       // The server found no monthly plan to stop (for example a plan that is free with a code). That is good news, not an error.
       else setNothing(e.message);
     } finally {

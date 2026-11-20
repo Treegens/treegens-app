@@ -314,6 +314,30 @@ CREATE TABLE IF NOT EXISTS template_members (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, can_change INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (template_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS template_members_user ON template_members(account_id, user_id);
+-- Two-step login (src/server/twostep.ts). two_step_pending: a sign-in that passed its first step (or typed a wrong
+-- password for a login that has two-step login: password_ok says which, and nothing outside the server ever does) and
+-- waits for the code. id is the fingerprint of a secret in an HttpOnly cookie of that browser, so only that browser
+-- can finish it. two_step_devices: browsers that skip the second step of one login ("Remember this device"), id the
+-- fingerprint of the secret in their cookie. two_step_resets: the emailed link that starts a reset by email.
+-- two_step_log: what happened to a person's second step and who did it, shown to them under Settings. All of it
+-- goes with the login.
+CREATE TABLE IF NOT EXISTS two_step_pending (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, password_ok INTEGER NOT NULL DEFAULT 0,
+  invite TEXT, next TEXT, note TEXT, via TEXT, ip TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS two_step_devices (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, ua TEXT,
+  created_at TEXT NOT NULL, last_used_at TEXT, expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS two_step_devices_user ON two_step_devices(user_id);
+CREATE TABLE IF NOT EXISTS two_step_resets (
+  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS two_step_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, at TEXT NOT NULL,
+  what TEXT NOT NULL, by_id TEXT, by_name TEXT, account_id TEXT, account_name TEXT
+);
+CREATE INDEX IF NOT EXISTS two_step_log_user ON two_step_log(user_id, id);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -628,6 +652,25 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // does not close their start for being idle.
   ['recipients', 'form_waits_at', 'TEXT'],
   ['recipients', 'form_ready_at', 'TEXT'],
+  // Two-step login (src/server/twostep.ts). two_step_secret: the base32 secret the authenticator app shares, and
+  // two_step_on_at when it was switched on (a code that matched first). two_step_last_step: the 30-second step of the
+  // last code used, so no code works twice. two_step_codes: a JSON list of fingerprints of the recovery codes that are
+  // left. two_step_new_secret: a secret being set up, not on until a code from it was typed. two_step_wrong counts
+  // wrong codes in a row (two_step_wrong_known: how many of them came after the right password), and
+  // two_step_paused_until is set when there were too many. two_step_reset_at: when a reset by email takes effect,
+  // two_step_reset_noticed_at the last email about it. accounts.two_step_required_at: the owner asks every member.
+  ['users', 'two_step_secret', 'TEXT'],
+  ['users', 'two_step_on_at', 'TEXT'],
+  ['users', 'two_step_last_step', 'INTEGER'],
+  ['users', 'two_step_codes', 'TEXT'],
+  ['users', 'two_step_new_secret', 'TEXT'],
+  ['users', 'two_step_new_at', 'TEXT'],
+  ['users', 'two_step_wrong', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'two_step_wrong_known', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'two_step_paused_until', 'TEXT'],
+  ['users', 'two_step_reset_at', 'TEXT'],
+  ['users', 'two_step_reset_noticed_at', 'TEXT'],
+  ['accounts', 'two_step_required_at', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

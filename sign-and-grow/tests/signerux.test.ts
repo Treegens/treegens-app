@@ -686,3 +686,308 @@ test('the signing screens keep what they promise in markup: new tab, labels, rea
   assert.match(read('components/editor/StepAdd.tsx'), /scanWarning\(d\) && <p className="notice warn small"/);
   assert.match(read('components/editor/StepReview.tsx'), /docs\.filter\(\(d\) => scanWarning\(d\)\)\.map/);
 });
+
+// ---- After the second look (research/verify-owed-partial.json, "verify2:signerux") -----------------------------------
+// Each test below failed on the code that look was made against, and holds the fix. The new tests have senders of
+// their own, so the people they reach do not count towards the daily limit of the sender above.
+
+let ipN = 0;
+const sender = (name: string, email: string) => signUp(name, email, `192.0.2.${++ipN}`);
+// Alex opens a request at the inbox a family shares, agrees, signs, initials and types an answer, and the page saves
+// it all, as it does by itself ("Finish later").
+async function startedByAlex(by: Client, subject: string) {
+  const file = await upload(by, 1);
+  const r = await by.post('/envelopes', {
+    subject, send: true, documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'a', role: 'signer', name: 'Alex Rivera', email: 'home.rivera@example.com' }],
+    fields: [
+      { document_id: 'd', recipient_id: 'a', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 },
+      { document_id: 'd', recipient_id: 'a', type: 'initials', page: 0, x: 0.6, y: 0.5, w: 0.1, h: 0.05 },
+      { document_id: 'd', recipient_id: 'a', type: 'text', label: 'Account number', page: 0, x: 0.1, y: 0.7, w: 0.3, h: 0.03 },
+    ],
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const id = r.data.envelope.id as string;
+  const rec = db.get('SELECT id, token FROM recipients WHERE envelope_id=?', id);
+  const alex = visitor();
+  await alex.post(`/sign/${rec.token}/consent`);
+  const v = (await alex.get(`/sign/${rec.token}`)).data;
+  const values = Object.fromEntries(v.fields.map((f: any) => [f.id, f.type === 'text' ? 'Alex private 12345' : '1']));
+  assert.equal((await alex.post(`/sign/${rec.token}/save`, saveBody(values, v.version, { sig: PNG, ini: PNG2 }, { sig: null, ini: null }))).status, 200);
+  return { id, rid: rec.id as string, token: rec.token as string };
+}
+// What a fresh browser on that link finds, once it has agreed: the answers by field type, and the marks the screen starts from.
+async function openedFresh(token: string) {
+  const c = visitor();
+  const first = (await c.get(`/sign/${token}`)).data;
+  if (!first.recipient.consented) await c.post(`/sign/${token}/consent`);
+  const v = (await c.get(`/sign/${token}`)).data;
+  const start = restoreMarks(v.fields, v.recipient, { sig: null, ini: null });
+  const by = (type: string) => start.values[v.fields.find((f: any) => f.type === type).id];
+  return { c, agreed: first.recipient.consented as boolean, v, start, answers: [by('signature'), by('initials'), by('text')], marks: [v.recipient.signature_png, v.recipient.initials_png] };
+}
+
+test('a signature and answers stay with the person who made them: another person at the same address starts empty, a new spelling keeps them', async () => {
+  const kim = await sender('Kim Sender', 'kim.marks@example.com');
+  // The sender corrects the name with Correct to Blair, who shares the inbox. The link stays (it went to that inbox),
+  // but nothing Alex agreed to, typed or signed is on Blair's page, and she cannot finish with Alex's signature.
+  const a = await startedByAlex(kim, 'Marks belong to their maker');
+  assert.equal((await kim.post(`/envelopes/${a.id}/correct`, { recipient_id: a.rid, name: 'Blair Rivera' })).status, 200);
+  assert.equal(db.get('SELECT token FROM recipients WHERE id=?', a.rid).token, a.token);
+  let b = await openedFresh(a.token);
+  assert.equal(b.agreed, false, 'Blair agrees for herself');
+  assert.equal(b.v.recipient.name, 'Blair Rivera');
+  assert.deepEqual(b.marks, [null, null]);
+  assert.deepEqual(b.answers, ['', '', ''], "nothing of Alex's is on Blair's page");
+  assert.deepEqual([b.start.sig, b.start.ini], [null, null]);
+  assert.equal((await full(kim, a.id)).envelope.recipients[0].progress.filled, 0, 'and the sender sees nothing filled in');
+  const fin = await b.c.post(`/sign/${a.token}/complete`, { values: Object.fromEntries(b.v.fields.map((f: any) => [f.id, f.type === 'text' ? 'Blair 1' : '1'])), version: b.v.version });
+  assert.equal(fin.status, 400);
+  assert.match(fin.data.error, /Adopt a signature/);
+  assert.match((await full(kim, a.id)).audit.find((x: any) => x.action === 'Recipient corrected').detail, /another person at the same address, so nothing that Alex Rivera had agreed to, filled in or signed was kept/);
+
+  // A browser tab both of them use keeps its copy under the name it was made for, and never hands it to the other.
+  const store = new Map<string, string>();
+  const tab = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) };
+  writeKept(a.token, PNG, PNG2, 'Alex Rivera', tab);
+  assert.deepEqual(readKept(a.token, 'Blair Rivera', tab), { sig: null, ini: null });
+  assert.deepEqual(readKept(a.token, 'Alex Rivera', tab), { sig: PNG, ini: PNG2 });
+
+  // The same through the editor (Edit envelope, PUT /envelopes/{id}).
+  const ed = await startedByAlex(kim, 'The editor clears them too');
+  const cur = (await full(kim, ed.id)).envelope;
+  const put = await kim.put(`/envelopes/${ed.id}`, { subject: cur.subject, message: cur.message, ordered: cur.ordered, documents: cur.documents, recipients: cur.recipients.map((r: any) => ({ ...r, name: 'Casey Rivera' })), fields: cur.fields });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  b = await openedFresh(ed.token);
+  assert.deepEqual([b.agreed, b.v.recipient.name, b.marks, b.answers], [false, 'Casey Rivera', [null, null], ['', '', '']]);
+
+  // A spelling fixed by the sender is the same person: everything stays, also the agreement.
+  const s = await startedByAlex(kim, 'A spelling keeps them');
+  assert.equal((await kim.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Alexander Rivera' })).status, 200);
+  b = await openedFresh(s.token);
+  assert.deepEqual([b.agreed, b.marks, b.answers], [true, [PNG, PNG2], ['1', '1', 'Alex private 12345']]);
+
+  // "Fix my name" cannot hand Alex's request to Casey (the sender is asked, and Alex's marks stay on Alex's request),
+  // and a spelling of Alex's own keeps what Alex did.
+  const f = await startedByAlex(kim, 'Fix my name keeps them');
+  assert.equal((await visitor().post(`/sign/${f.token}/name`, { name: 'Casey Rivera' })).data.applied, false);
+  assert.deepEqual((await openedFresh(f.token)).marks, [PNG, PNG2]);
+  assert.equal((await visitor().post(`/sign/${f.token}/name`, { name: 'Alex Riviera' })).data.applied, true);
+  b = await openedFresh(f.token);
+  assert.deepEqual([b.agreed, b.v.recipient.name, b.marks, b.answers], [true, 'Alex Riviera', [PNG, PNG2], ['1', '1', 'Alex private 12345']]);
+});
+
+test('"Fix my name" keeps the sender\'s own free signature free only under the name on their account, and never counts anything itself', async () => {
+  const was = process.env.STRIPE_SECRET_KEY;
+  process.env.STRIPE_SECRET_KEY = 'sk_test_signerux'; // signatures are counted; nothing here calls the payment provider
+  try {
+    const mo = await sender('Maria Garcia', 'maria.own@example.com');
+    const acct = (await mo.get('/me')).data.account.id;
+    const balance = () => db.get('SELECT COALESCE(SUM(delta),0) n FROM credits WHERE account_id=?', acct).n;
+    const start = balance();
+    const own = async (subject: string) => {
+      const e = await simple(mo, 'maria.own@example.com', { subject, recipients: [{ id: 'r', role: 'signer', name: 'Maria Garcia', email: 'maria.own@example.com' }] });
+      assert.equal((await mo.post(`/envelopes/${e.id}/send`)).status, 200);
+      const tok = tokenFor(e.id, 'maria.own@example.com');
+      const c = visitor();
+      await c.post(`/sign/${tok}/consent`);
+      return { id: e.id, tok, c, row: () => db.get('SELECT name, free FROM recipients WHERE token=?', tok) };
+    };
+    const a = await own('My own lease');
+    assert.deepEqual(a.row(), { name: 'Maria Garcia', free: 1 });
+    // One word more is still a spelling of the same person, but it is not the name on her account, so the signature
+    // would be somebody else's. Not applied: she is told what she can do, and asked by email.
+    const longer = (await a.c.post(`/sign/${a.tok}/name`, { name: 'Maria Garcia Lopez' })).data;
+    assert.equal(longer.applied, false);
+    assert.match(longer.message, /This is Maria Garcia's own document, and signing it is free under the name on their account only/);
+    assert.match(longer.message, /If you are Maria Garcia: change your name under Settings first/);
+    assert.deepEqual(a.row(), { name: 'Maria Garcia', free: 1 });
+    const asked = mailTo('maria.own@example.com').filter((m) => m.subject === 'Name change asked for: My own lease');
+    assert.equal(asked.length, 1);
+    assert.match(asked[0].html, /choose Correct next to Maria Garcia and type the name yourself\. It is then that person&#39;s signature and is counted like one/);
+    // A one-letter change is another name here too.
+    assert.equal((await a.c.post(`/sign/${a.tok}/name`, { name: 'Mario Garcia' })).data.applied, false);
+    // Her own name in capitals is still the name on her account (isSelf in credits.ts decides): applied, still free.
+    assert.equal((await a.c.post(`/sign/${a.tok}/name`, { name: 'MARIA GARCIA' })).data.applied, true);
+    assert.deepEqual(a.row(), { name: 'MARIA GARCIA', free: 1 });
+    const v = (await a.c.get(`/sign/${a.tok}`)).data;
+    assert.equal((await a.c.post(`/sign/${a.tok}/complete`, { values: { [v.fields[0].id]: '1' }, signature_png: PNG, version: v.version })).status, 200);
+    assert.equal(balance(), start, 'her own signature used nothing');
+    assert.equal(db.get("SELECT COUNT(*) n FROM credits WHERE account_id=? AND reason='signature'", acct).n, 0);
+
+    // What the refusal says works: with the longer name on her account, the same fix is applied and stays free.
+    const b = await own('My second lease');
+    assert.equal((await mo.call('PATCH', '/me', { name: 'Maria Garcia Lopez' })).status, 200);
+    assert.equal((await b.c.post(`/sign/${b.tok}/name`, { name: 'Maria Garcia Lopez' })).data.applied, true);
+    assert.deepEqual(b.row(), { name: 'Maria Garcia Lopez', free: 1 });
+    assert.equal(balance(), start);
+  } finally {
+    if (was === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = was;
+  }
+});
+
+test('"Fix my name" sees through look-alike letters, added titles and invisible characters, is fair to short names, and asks the sender once for each name', async () => {
+  const lu = await sender('Lu Sender', 'lu.names@example.com');
+  let k = 0;
+  // Each name is tried on an envelope of its own: one person can ask five times an hour.
+  const onPair = async (name: string) => {
+    const file = await upload(lu, 1);
+    const e = (await lu.post('/envelopes', { subject: `Look alike ${++k}`, send: true, documents: [{ id: 'd', file_id: file.id }],
+      recipients: [{ id: 'a', role: 'signer', name: 'Alex Rivera', email: 'pair.rivera@example.com' }, { id: 'b', role: 'signer', name: 'Blair Rivera', email: 'pair.rivera@example.com' }],
+      fields: ['a', 'b'].map((rid, i) => ({ document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x: 0.1 + i * 0.45, y: 0.5, w: 0.3, h: 0.06 })) })).data.envelope;
+    const alex = db.get("SELECT token FROM recipients WHERE envelope_id=? AND name='Alex Rivera'", e.id).token;
+    const r = (await visitor().post(`/sign/${alex}/name`, { name })).data;
+    return { ...r, names: db.all('SELECT name FROM recipients WHERE envelope_id=? ORDER BY position', e.id).map((x: any) => x.name) };
+  };
+  const onSolo = async (written: string, name: string) => {
+    const e = await simple(lu, 'solo.names@example.com', { subject: `Solo ${++k}`, recipients: [{ id: 'r', role: 'signer', name: written, email: 'solo.names@example.com' }] });
+    await lu.post(`/envelopes/${e.id}/send`);
+    const tok = tokenFor(e.id, 'solo.names@example.com');
+    return { ...(await visitor().post(`/sign/${tok}/name`, { name })).data, stored: db.get('SELECT name FROM recipients WHERE token=?', tok).name, tok };
+  };
+  // Another recipient's name in letters that look the same, one letter off, or cut down to what they share.
+  for (const name of ['Вlair Rivera', 'Blaır Rivera', 'Ｂlair Rivera', 'Blaire Rivera', 'Bliar Rivera', 'B. Rivera', 'Rivera']) {
+    const r = await onPair(name);
+    assert.equal(r.applied, false, name);
+    assert.deepEqual(r.names, ['Alex Rivera', 'Blair Rivera'], name);
+  }
+  // A word written in two alphabets at once, with nobody else on the document to look like.
+  const mixed = await onSolo('Sam Signer', 'Sаm Signer');
+  assert.deepEqual([mixed.applied, mixed.stored], [false, 'Sam Signer']);
+  assert.match(mixed.message, /written in two alphabets at once/);
+  // Titles and claims added to a name are not a spelling of it.
+  for (const name of ['Sam Signer, President of the United States', 'Sam Signer (on behalf of Blair Rivera, CEO)'])
+    assert.deepEqual([(await onSolo('Sam Signer', name)).applied, (await onSolo('Sam Signer', name)).stored], [false, 'Sam Signer'], name);
+  // Characters nobody can see are taken out before anything is compared or stored.
+  const turned = await onSolo('Sam Signer', 'Sam Signer‮');
+  assert.deepEqual([turned.applied, turned.stored], [true, 'Sam Signer']);
+  const hidden = await onSolo('Sam Signer', 'Sam Signr​');
+  assert.deepEqual([hidden.applied, hidden.stored], [true, 'Sam Signr']);
+  // Short names: a letter added is a spelling fix. "Li" to "Lee" changes two letters, and says so, not "a different name".
+  assert.equal((await onSolo('Jo', 'Joe')).applied, true);
+  assert.equal((await onSolo('Al', 'Ali')).applied, true);
+  const li = await onSolo('Li', 'Lee');
+  assert.equal(li.applied, false);
+  assert.match(li.message, /Only a small slip can be corrected here, such as a letter missing or two swapped, and "Lee" differs from "Li" by more than that/);
+  assert.doesNotMatch(li.message, /different name/);
+
+  // The same question is put to the sender once; another name is another question.
+  const q = await onSolo('Sam Signer', 'Morgan Lee');
+  for (let i = 0; i < 2; i++) assert.equal((await visitor().post(`/sign/${q.tok}/name`, { name: 'Morgan Lee' })).data.applied, false);
+  await visitor().post(`/sign/${q.tok}/name`, { name: 'Morgan Leigh' });
+  const subject = db.get('SELECT e.subject s FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.token=?', q.tok).s;
+  assert.equal(mailTo('lu.names@example.com').filter((m) => m.subject === `Name change asked for: ${subject}`).length, 2);
+  assert.equal(db.get("SELECT COUNT(*) n FROM audit a JOIN recipients r ON r.envelope_id=a.envelope_id WHERE r.token=? AND a.action='Name change asked for'", q.tok).n, 2);
+});
+
+test('"Find my documents" carries on after the last line it sent, so a document that arrives or changes in between is never left out', async () => {
+  const ny = await sender('Ny Sender', 'ny.docs@example.com');
+  const file = await upload(ny, 1);
+  const ids: Record<string, string> = {};
+  const sendOne = async (i: number) => {
+    const subject = `Nora ${String(i).padStart(3, '0')}`;
+    const r = await ny.post('/envelopes', { subject, send: true, documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Nora Newman', email: 'nora.docs@example.com' }],
+      fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    ids[subject] = r.data.envelope.id;
+  };
+  for (let i = 1; i <= 55; i++) await sendOne(i);
+  const ask = async () => {
+    const before = mailTo('nora.docs@example.com').length;
+    assert.equal((await visitor().post('/public/links/find', { email: 'nora.docs@example.com' })).status, 200);
+    const m = mailTo('nora.docs@example.com').slice(before);
+    assert.equal(m.length, 1);
+    return { html: m[0].html as string, listed: [...m[0].html.matchAll(/>(Nora \d{3})</g)].map((x: any) => x[1]) };
+  };
+  const first = await ask();
+  assert.equal(first.listed.length, 50);
+  assert.deepEqual([first.listed[0], first.listed[49]], ['Nora 055', 'Nora 006']);
+  assert.match(first.html, /These are numbers 1 to 50 of 55, newest first/);
+  // Between the two asks a new document arrives, and one from the first email is signed (so it moved to the top).
+  await sendOne(56);
+  assert.equal((await signAll(ids['Nora 030'], 'nora.docs@example.com')).status, 200);
+  const second = await ask();
+  assert.deepEqual(second.listed, ['Nora 030', 'Nora 056', 'Nora 005', 'Nora 004', 'Nora 003', 'Nora 002', 'Nora 001']);
+  assert.match(second.html, /The first 2 below are new, or changed, since the last email\. After them the list carries on where that email stopped, with numbers 52 to 56 of 56, newest first\./);
+  assert.match(second.html, /That was the last of them/);
+  // Between them, the two emails reached every document, and only the changed one twice.
+  const all56 = new Set([...first.listed, ...second.listed]);
+  assert.equal(all56.size, 56);
+  assert.equal(first.listed.length + second.listed.length, 57);
+});
+
+test('an email tried again later never asks someone who has finished, never carries a withdrawn invitation, and the sender\'s own is on the record', async () => {
+  // A stand-in for the mail server that refuses whatever `refuse` says. The real one is never contacted.
+  const g = globalThis as any;
+  const taken: any[] = [];
+  let refuse: (m: any) => boolean = () => true;
+  process.env.SMTP_URL = 'smtp://mail.invalid';
+  g.__tsmail = { sendMail: async (m: any) => { if (refuse(m)) throw new Error('421 try again later'); taken.push(m); } };
+  const due = () => db.run("UPDATE emails SET next_try_at=? WHERE status='failed' AND next_try_at IS NOT NULL", new Date(Date.now() - 1000).toISOString());
+  const to = (email: string) => taken.filter((m) => m.to === email).map((m) => m.subject);
+  try {
+    const mi = await sender('Mi Sender', 'mi.mail@example.com');
+    // The request cannot be sent. The sender passes the link on by hand, and the person signs with it. When the mail
+    // server is back, the completed copy goes out, and the request that asks them to sign does not.
+    const e = await simple(mi, 'byhand.mail@example.com', { subject: 'Signed by hand' });
+    assert.equal((await mi.post(`/envelopes/${e.id}/send`)).status, 200);
+    assert.equal((await signAll(e.id, 'byhand.mail@example.com')).status, 200);
+    refuse = () => false;
+    due();
+    await cron.tick();
+    assert.deepEqual(to('byhand.mail@example.com'), ['Completed: Signed by hand']);
+    assert.match(db.get("SELECT error FROM emails WHERE to_email='byhand.mail@example.com' AND subject='Signed by hand'").error, /the person it asks had already finished/);
+    assert.equal((await full(mi, e.id)).audit.some((a: any) => a.action === 'Email sent' && a.detail.startsWith('"Signed by hand"')), false, 'and the record does not say it was sent');
+
+    // A reminder that could not be sent is not delivered to the one who signed in the meantime, only to the other.
+    const two = await draft(mi, { ordered: false, subject: 'Reminder after signing', recipients: [
+      { id: 'r1', role: 'signer', name: 'Ada Signer', email: 'ada.mail@example.com', routing_order: 1 },
+      { id: 'r2', role: 'signer', name: 'Ben Signer', email: 'ben.mail@example.com', routing_order: 1 }] });
+    assert.equal((await mi.post(`/envelopes/${two.id}/send`)).status, 200);
+    refuse = () => true;
+    await mi.post(`/envelopes/${two.id}/remind`);
+    refuse = () => false;
+    assert.equal((await signAll(two.id, 'ada.mail@example.com')).status, 200);
+    taken.length = 0;
+    due();
+    await cron.tick();
+    assert.deepEqual(to('ada.mail@example.com'), [], 'Ada is not reminded of what she signed');
+    assert.deepEqual(to('ben.mail@example.com'), ['Reminder: Reminder after signing'], 'Ben still is');
+
+    // A copy asks nothing, so a copy that could not be sent still goes out later.
+    refuse = () => true;
+    const copied = await simple(mi, 'signs.copy@example.com', { subject: 'With a copy', recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'signs.copy@example.com' }, { id: 'c', role: 'cc', name: 'Cee Copy', email: 'cee.copy@example.com' }] });
+    await mi.post(`/envelopes/${copied.id}/send`);
+    refuse = () => false;
+    taken.length = 0;
+    due();
+    await cron.tick();
+    assert.deepEqual(to('cee.copy@example.com'), ['With a copy']);
+
+    // A team invitation that was withdrawn, or replaced by a newer one, is not delivered late. The newer one is.
+    refuse = () => true;
+    assert.equal((await mi.post('/account/invites', { email: 'gone.invite@example.com' })).status, 200);
+    assert.equal((await mi.call('DELETE', `/account/invites/${db.get("SELECT id FROM invites WHERE email='gone.invite@example.com'").id}`)).status, 200);
+    await mi.post('/account/invites', { email: 'twice.invite@example.com' });
+    await mi.post('/account/invites', { email: 'twice.invite@example.com' });
+    refuse = () => false;
+    taken.length = 0;
+    due();
+    await cron.tick();
+    assert.deepEqual(to('gone.invite@example.com'), []);
+    const twice = taken.filter((m) => m.to === 'twice.invite@example.com');
+    assert.equal(twice.length, 1);
+    assert.ok(twice[0].html.includes(`invite=${db.get("SELECT token FROM invites WHERE email='twice.invite@example.com'").token}`), 'the one that still works');
+
+    // The sender's own request on their own document is on the record like anyone's when it cannot be sent.
+    refuse = () => true;
+    const self = await simple(mi, 'mi.mail@example.com', { subject: 'My own, refused', recipients: [{ id: 'r', role: 'signer', name: 'Mi Sender', email: 'mi.mail@example.com' }] });
+    await mi.post(`/envelopes/${self.id}/send`);
+    const line = (await full(mi, self.id)).audit.find((a: any) => a.action === 'Email could not be sent yet');
+    assert.match(line?.detail || '', /"My own, refused" to Mi Sender <mi\.mail@example\.com>.*tried again automatically/);
+  } finally {
+    delete process.env.SMTP_URL;
+    delete g.__tsmail;
+    db.run("UPDATE emails SET next_try_at=NULL WHERE status='failed'");
+  }
+});

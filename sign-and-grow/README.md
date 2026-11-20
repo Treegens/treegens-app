@@ -34,6 +34,7 @@ What the test files cover:
 | `tests/billing3.test.ts` | What a second round of attacks found: provider messages handled in the same instant, a refund whose answer is lost on the way back, refunding again when signatures come back, card disputes, top-up invoices and invoices that are not ours, cancelling in the awkward moments, the unused-plan rule, who pays for which signature, and a free code that is switched off. |
 | `tests/billing4.test.ts` | What a third round of attacks found: a refund racing against a burst of sends, one customer's slow call not holding up another's, things on a shared provider account that are not ours, disputes the bank decides either way, a refund made by hand settling ours, cancelling when the provider cannot be asked, payments whose message was lost, and the corners of who pays for which signature. |
 | `tests/billing5.test.ts` | The last open ends of the payment code: the provider's messages are answered within a few seconds and kept in an inbox until applied (a slow provider, a failure, a restart in between, three days of failing), a plan on hold can pay its open payment from the Plan page and is read back when that was paid elsewhere, an invoice that names no subscription is matched by asking the provider what the customer is subscribed to, and the price rule: a renewal above the price an account is on is refunded the difference unless a notice went out 30 days before, with the operator's announcement and the reminder that states the true amount. |
+| `tests/billing7.test.ts` | The terms around the price, and what a third review found: a returning customer pays what their new checkout showed, every account has its price written down (also the ones from before), a price notice goes to every plan in any state and counts only once it left for every owner and admin, a lower notice withdraws a rise and says so, the day of a change is the same day everywhere, tax inside a price is not counted twice, the stop page and the emails quote the account's own price, a paused plan and a code that ended read as what they are, a member cannot stop the team's plan by card, other products' invoices on a shared provider account never crowd out or delete ours, a form visitor told to come back keeps what they filled in and is emailed, a form with a second signer and the emails at two and at none, a refund still on its way when an account is closed at once, and one signature per person at a shared address. |
 | `tests/finish.test.ts` | What was still open at the end: a member leaves a team by themselves, public forms on a shared device and on a closing account, the email check recognising codes of deleted documents from a fingerprint, and stored copies of emails going with a deleted person and after 90 days. |
 | `tests/integrity.test.ts` | What people sign is what they saw: every signer is shown everything the sender wrote, nothing printed changes after a signature unless the signer is asked to sign again, a signing page left open cannot finish on a document that was changed, the audit trail says what a correction changed, a replaced signer starts with empty fields, a save from an older copy of the editor is refused, a replaced email is still recognised as genuine, a changed signing order is enforced. A second round covers what a second look found: names and addresses that a field prints are wording too, what a finished signer left empty stays empty, the page loads a replaced file again before Finish works, a hand-over inside one inbox passes on nothing, changes made outside the editor count as a newer version, nothing in a request is dropped or cut short without a word, and whoever signed keeps the document as they signed it. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
@@ -54,6 +55,7 @@ What the test files cover:
 | `tests/gaps-nonus-text.test.ts` | Text, dates, numbers and names outside the US and outside the Latin alphabet: a signed PDF with Chinese, Japanese, Korean, Thai, Hindi, Arabic, Khmer and Cyrillic names read back out of it, a script with no font (flagged to sender and signer, marked on the page, listed in the certificate) and a font file that is missing, right-to-left text with digits and Latin words in it (order, alignment, the typed text kept in the PDF, every box a signer types words into taking its direction from what is typed), one date format for typed dates and the date of signing, the account's default format, the date of signing by the signer's own calendar with local time and zone on the certificate, deadlines with time and zone in emails (the warning three days before too) and in the Give more time dialog, reminders that wait for a signer's morning, numbers as they are written outside the US, and a signer fixing the spacing of their name or offering it in another script. |
 | `tests/encrypt.test.ts` | Encryption of stored files by the app itself: writing and reading with and without a key, old plain files beside new encrypted ones, a wrong key, a changed byte, a cut-short file, a file copied under another name, an upload that only looks encrypted, the server that stores nothing new when it finds files it has no key for (and says so at start), a key that is not a key, changing the key with the old one listed, the script on a folder with every kind of file (run twice, stopped half way, a leftover half-written copy, a file the server deleted meanwhile), and a whole send, sign, download, export and delete with the key set, with the files on the disk unreadable without it and the pages saying what is and is not encrypted. |
 | `tests/gaps-industry.test.ts` | What agents, clinics, contractors, HR teams and small firms ran into: who can really open a document (a forwarded link, the account's admins, exactly what the people who run the server see), no health information agreement said in three places from one text, reminders on by default and said before every send, what a bulk send holds and costs before the Send button in the numbers the send is held to, two people finishing the same envelope at the same moment (two addresses, one shared address, a late autosave crossing Finish), "filled in everything but has not pressed Finish", searching and moving templates, a "Strike out" field through to the signed PDF and the sign-again rule, and a link to the sender's own payment page after Finish (who may set one, the addresses refused, never before Finish or in an email, gone when trust goes). |
+| `tests/gaps-disputes-evidence.test.ts` | What happens around the certificate when a signature is disputed: what `/verify` and `/security` may claim (and what the hash chain really stops, checked against the code), the fingerprint kept for a year after an account is deleted, the public lookup by envelope ID (what it says and never says, its limit), the fingerprint in every completion email, the record of the completed copy (handed to the mail server, first opened, later visits once a day), the closed copy marked large across every page, "I did not sign this" from the check page and the signing link, the help topic that never reaches the sender, the evidence pack (the chain recomputed from it, no live links in its emails) and the page that explains each line of the certificate. |
 | `tests/templates.test.ts` | Who can use and change each template, and the lock on its wording: every route that lists, reads, uses, sends in bulk, copies, publishes as a public form, changes or deletes a template, for the owner of the account, an admin, the template's owner, a chosen member and another member, each by browser and by API key; the lock through the editor's whole save and through the plain API (what can be filled in, everything else refused with who to ask, nothing saved), once out too, unlocking and deleting the template; copies of templates and of locked envelopes; bulk sends and public forms; leaving and being removed; a database from before this. |
 
 ## What the bad reviews taught us
@@ -137,6 +139,14 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | The print is tiny on a phone, and there is no zoom. | 100, 150 and 200 percent above the pages, drawn again at that size at the phone's own density (up to 3, within 6 million points a page), sliding sideways in a strip of their own so the bars stay put. Pinch zoom is never switched off. |
 | Two signature boxes on top of each other, and the signer could never finish. | Sending and correcting refuse two fields of one person that cover each other by more than 60 percent, naming the person and the page, in the review step of the editor and on the server (`src/lib/stacked.ts`). On an envelope that was out before, Next that keeps coming back to the same field points to Text view. |
 | On my phone held sideways, or with large text, the Adopt button was off the screen. | The end of the adopt dialog (a problem, the sentence agreed to, Cancel and Adopt and sign) is pinned to its bottom edge. Checked at 390 by 844, 844 by 390, 320 by 568 and 195 by 422 (a phone at 200 percent). Below 300 px the title of the document gets a line of its own and the bar at the bottom stacks. |
+| The verify page called a file "authentic" when the sender had signed it for three of the four people. | `/verify` says "Unchanged since signing finished" and that this does not show who was behind each signature. "No match" lists its causes: changed, saved again by a viewer, printed or scanned, deleted long ago, never completed here. |
+| The sender closed their account, and my untouched signed copy turned into "no match". | The SHA-256 of each completed signed PDF, its envelope ID and its day stay for a year after the account is deleted, and nothing else. `/verify` then says the file was completed here on that day and deleted since. |
+| All I have is a printed copy, and nothing to check it against. | The envelope ID at the foot of every page can be looked up on `/verify`: status, day, pages, signers, the fingerprint of the signed file to compare a file with, and whether it is disputed. Never a name or an address. The fingerprint is also in every completion email. |
+| Nobody could tell whether the signed copy ever reached the other side, or was opened. | Audit lines for the completed copy handed to the mail server for each person, the first time each opens or downloads it (with internet address and browser), and later visits, once a day at most. |
+| The sender's own copy of a voided agreement showed every signature and no sign that it was voided. | That copy, and the signer's, opens with a page that says why it was not completed and carries "VOIDED, NOT A SIGNED DOCUMENT" large across every page. |
+| Someone signed in my name, and there was no way to say so. | "I did not sign this, or this was not me" on the signing page and on `/check`, also after completion: the envelope is marked as disputed wherever it is shown, the sender and the operators are told, and nothing is deleted. The help topic of that name is never passed to the sender, and its answer says exactly what we give out and to whom. |
+| Our lawyer told us to keep our own evidence, and all we could download was the PDF. | "Download evidence pack": the signed PDF, the certificate alone, the audit trail as text and as data with everything needed to recompute its chain, every email we stored about it with what became of it, and the consent wording each person agreed to. |
+| Nobody would explain what the lines of the certificate mean. | `/security/certificate` goes through every line: where it comes from, what it shows, what it does not. Dated, to attach to a letter. |
 
 ## What is in it
 
@@ -212,8 +222,31 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   could rewrite it unnoticed by the app; the chain head printed on the certificate in everyone's copy is what would
   show it (`CHAIN_TRUTH` in `src/lib/evidence.ts`, which the pages quote).
 - Public `/verify` page: drop in a PDF and see whether it is, byte for byte, a completed document we hold. A match
-  shows the file is unchanged since signing finished, not who was behind each signature. No account needed.
-- Everyone gets the completed copy by email.
+  shows the file is unchanged since signing finished, not who was behind each signature. No account needed. A "no
+  match" lists its possible causes. After a sender deletes their account, the SHA-256 of each completed signed PDF,
+  its envelope ID and its day are kept for a year (`forgotten_files`, nothing else), so the page can still say "completed
+  here on that day, deleted since".
+- `/verify?id=env_...`: the holder of a printed copy looks the envelope up by the ID at the foot of every page:
+  completed, voided, declined or ran out of time and when, pages, how many were asked to sign and did, the
+  fingerprint of the signed file with "Choose the file to compare" (hashed in the browser), and whether it is
+  disputed. Never a name, an address or the title. 60 lookups an hour per connection (`GET /api/public/verify/:id`).
+- Everyone gets the completed copy by email, with the SHA-256 fingerprint of the signed PDF in the email itself.
+- What happens after signing is in the live audit trail (the certificate is sealed at completion): the completed
+  copy handed to the mail server for each person (or not emailed, and why), the first time each person opens or
+  downloads it (with internet address and browser), and later visits, at most one line a day for each person.
+- A copy of an envelope that was voided, declined or ran out of time, whether the sender or a signer downloads it,
+  opens with a page that says why and is marked large across every page ("VOIDED, NOT A SIGNED DOCUMENT").
+- "I did not sign this, or this was not me", on the signing page and with the security code on `/check`, also for a
+  completed document: the envelope is marked as disputed (its page, `/verify`), the audit trail says who said it as
+  far as we know, the sender is told without what was written, the operators with it and in their queue, and
+  nothing is changed or deleted. A help topic of the same name is never passed on to the sender.
+- "Download evidence pack" on the envelope page (`GET /api/envelopes/:id/evidence`): the signed PDF, the certificate
+  alone, the audit trail as text and as JSON with every chain value and how to recompute them, every stored email
+  about it with its hand-off result (signing links and security codes taken out), the consent wording each person
+  agreed to, and a README.
+- `/security/certificate`: "How to read a Sign&Grow certificate", every line it prints, where it comes from, what it
+  shows and does not, dated (`CERTIFICATE_PAGE_VERSION` in `src/lib/evidence.ts`). A test fails when the certificate
+  prints a line the page does not explain.
 
 **Help and trust (public pages, no login)**
 - `/help`: answers for people who sign and people who send, with the tool to fix each thing on the page: find
@@ -465,10 +498,10 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_GROVE`, `STRIPE_WEBHOOK_SECRET` | Turns on paying. Without them nothing is counted and there is nothing to buy. `STRIPE_PRICE_GROVE` is the monthly price. Point a Stripe webhook at `/api/stripe/webhook` and send it these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `invoice.paid`, `invoice.upcoming`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`, `charge.dispute.created`. | none |
 | `STRIPE_COLLECT_TAX_ID` | Set to `1` and the payment page asks business buyers for their tax number (VAT, GST and the like) and billing address, and the provider prints both on the invoice. Put your own legal name, address and tax number on invoices in the provider's settings. Off by default: the provider refuses the request unless its settings allow it, so switch it on in test mode first and make one payment. Not tried against the real provider. | off |
 | `STRIPE_WEBHOOK_WAIT_MS` | How long a message from the payment provider is worked on before it is answered. The provider counts a late answer as a failure, so a message that takes longer (the provider or the mail server is slow) is answered "received", kept in an inbox table and finished in the background; the timer applies anything left over after a restart or a failure. | `5000` |
-| `STRIPE_API_VERSION` | Pins the version of the payment provider's API that calls are made with, for example the one shown in your Stripe dashboard when you tested. Set the webhook endpoint to the same version. Unset, the account's default version is used; both the older and the newer shapes of invoices and subscriptions are read. | account default |
+| `STRIPE_API_VERSION` | Pins the version of the payment provider's API that calls are made with, for example the one shown in your Stripe dashboard when you tested. Set the webhook endpoint to the same version. Unset, the account's default version is used (both the older and the newer shapes of invoices, subscriptions and their tax lines are read), and a production server logs a loud warning once, because that default can change under a running server. | account default |
 | `ACCEPT_DISPUTES_UP_TO_USD` | A card dispute always stops billing, takes the signatures the disputed payment bought off the balance (also ones held for envelopes that are out), switches new payments off until a person has looked (the operator page has the button to switch them back on), and tells the customer in writing. Disputes up to this amount are also accepted with the payment provider automatically instead of being fought; larger ones are left for a person to decide, and if the bank then lets the payment stand the signatures come back by themselves. `0` (or `ACCEPT_DISPUTES=0`) leaves every dispute to a person. | `25` |
 | `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, is told about every new help request and every late one (the answer is written in the operator queue, not by replying to that email; without this address those emails go to `OPERATOR_EMAILS`), and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and are kept in the operator queue. Set at least one of the two: with neither, nobody can open the queue and an alert is only a loud line in the server log. When set, the address is also printed in the footer of every public page and in the app's menu. A production server that starts without it logs a loud warning, because the pages promise that a person answers. | none |
-| `ABUSE_EMAIL` | Where reports of suspicious documents go. | `SUPPORT_EMAIL` |
+| `ABUSE_EMAIL` | Where reports of suspicious documents go, and disputes ("I did not sign this"), which also go to `OPERATOR_EMAILS` and into the operator queue. | `SUPPORT_EMAIL` |
 | `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. They are the people a help request can be taken by or handed to, and they are emailed when one is late. | nobody |
 | `SUPPORT_FIRST_REPLY_HOURS` | The published response time: a person answers a help request within this many hours of the message, counted in real hours (nights and weekends included). `/help`, the confirmation email and the request itself quote the actual time. Promised only while `SUPPORT_EMAIL` or `OPERATOR_EMAILS` is set. | `24` |
 | `SUPPORT_URGENT_REPLY_HOURS` | The same for urgent requests: cannot log in, charged wrongly, a stuck document or a near deadline. Never longer than `SUPPORT_FIRST_REPLY_HOURS`. | `8` |
@@ -477,7 +510,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `NEW_ACCOUNT_DAILY_RECIPIENTS` | How many people an account that has not paid can send to per day during its first week. "Has not paid" means: no payment for the plan or a top-up that is at least 14 days old and was neither refunded nor disputed (`PAID_TRUST_DAYS` in `src/lib/policy.ts`), and not marked as trusted in the operator queue. So an account that paid yesterday still has the limit, and its refusals give the day it ends. Everyone a sender newly emails counts: a first send, a person added or an address changed on an envelope that is out, a bulk row. The visitors of a public form are counted apart, against the same number for each form, so a stranger on a form never uses up what its owner may send. Team invitations have a limit of their own, 20 people a day for each account (`TEAM_INVITES_PER_DAY`). | `50` |
 | `UNPAID_DAILY_RECIPIENTS` | The same limit after the first week. A payment lifts both once it has stood for 14 days, and so does "Trust this account" in the operator queue, at once. The same two things lift the filter for fake payment notices. | `200` |
 | `ABUSE_SUSPEND_AFTER` | How many different recipients must report an account within 30 days before its sending is paused for review. Open reports and reports an operator confirmed as abuse both count, also reports made with the security code of an email whose document was deleted since. Reports from visitors of a public form are shown to operators and never count, because such a visitor typed their own name and address. | `3` |
-| `POWERFORM_IDLE_HOURS` | An unfinished start from a public form that nobody has touched for this long is closed, so it no longer counts against what the form can still take. Typing counts as touching. The visitor can start again. | `24` |
+| `POWERFORM_IDLE_HOURS` | An unfinished start from a public form that nobody has touched for this long is closed, so it no longer counts against what the form can still take. Typing counts as touching. The visitor can start again. Never a start whose visitor pressed Finish while no signature was free: they were told that what they filled in is kept, so it stays open until the form's deadline, and they are emailed once (at the address they gave) when the form can take their signature. | `24` |
 | `POWERFORM_SHARED_IDLE_MINUTES` | The same, for a form its owner marked as filled in on a shared device (a tablet at the front desk, one office network). Such a form also allows 30 unfinished starts from one address instead of 3, and offers "start a new form for the next person" when someone has finished. | `60` |
 | `DORMANT_AUTO_STOP_DAYS` | A paid plan that has sent nothing for this long is not renewed. `0` only warns. | `90` |
 | `UNOPENED_ALERT_HOURS` | How long a request sits unopened before the sender is told. | `48` |
@@ -700,26 +733,52 @@ the app itself (`src/server/filecrypt.ts` for the format, `src/server/filestore.
 - **Choices made around those prices**, each one line to change in `PRICING` or the settings above: a signature is
   one person signing one envelope; signatures never expire and roll over; a new account gets 3 free ones; top-ups
   need the monthly plan; unused signatures are refunded within 30 days of the payment that bought them, and
-  refunding a monthly payment ends the plan; an unused plan stops renewing after 90 days (once per renewal, and
+  refunding a monthly payment ends the plan; free signatures (the welcome ones and those from a code) count as used
+  first when working out what is unused (`paidAvailable` in `src/server/credits.ts`); a refund the software owes
+  that the payment provider refuses three times is left to a person, and the customer is told; an unused plan stops renewing after 90 days (once per renewal, and
   "keep it" is respected); a small card dispute is accepted rather than contested (`ACCEPT_DISPUTES_UP_TO_USD`);
   someone on a free code who was paying has their paid subscription ended the moment the code is applied; signing
   in person always uses a signature; signing your own document is free only under your own name and address;
-  being asked to sign again after a change is free; a public form holds none of its owner's signatures and
-  takes one at the moment a visitor finishes: if none is free then, the visitor is told politely, what they filled
-  in is kept and the owner is emailed; a form never takes a signature held for an envelope that is out and never
-  takes the balance below zero (a stranger can still use signatures up by really signing, 20 starts an hour per
-  address); only US dollars are accepted.
+  being asked to sign again after a change is free, for the same person (another person put in their place, also
+  under another name at the same address, needs a signature of their own); a public form holds none of its owner's
+  signatures and takes one at the moment a visitor finishes: if none is free then, the visitor is told politely,
+  what they filled in is kept until the form's deadline (the idle timer leaves that start alone), they are emailed
+  once at the address they gave when the form can take their signature, and the owner and the account's owners and
+  admins are emailed; a form whose template has other signers too (a colleague who countersigns) needs a signature
+  for each of them, and a visitor can start only while enough are free for the whole envelope; a form never takes
+  a signature held for an envelope that is out and never takes the balance below zero (a stranger can still use
+  signatures up by really signing, 20 starts an hour per address), and the emails at two left and at none go out
+  for forms as for any send; only US dollars are accepted.
+- **Free self-signing under a renamed profile** is a known limit, with no rule in the code. Signing your own
+  document is free under your own name and address, and that is decided when the request goes out. So someone can
+  rename their profile to a client's name, send to their own address, rename back, and the client signs for free.
+  It saves $1 a time and costs the person their own evidence: the certificate shows the client's name on the
+  sender's own address and login, which is a poor record to stand on if the signature is ever questioned. If it
+  shows up in practice, the option is a monthly cap on free self-signatures (say 20 a month), counted on the
+  ledger like any other line.
 - **After someone has signed**, any change to what is printed on the pages asks everyone who finished to sign
   again (the sender has to choose that; nothing changes silently). That lock covers the whole envelope, including
   a new empty field for someone who has not signed yet. It is deliberately strict; loosen it in `printedView()`
   in `src/server/envelopes.ts` if you prefer a per-document rule.
 - **Raising the price** has a rule, and the server holds you to it: 30 days of notice (`PRICE_NOTICE_DAYS` in
-  `src/lib/policy.ts`). In this order: (1) on `/app/operator`, "Announce a price change" with the new price and a
-  first day at least 30 days away. That emails every owner and admin of every paying account and records the
-  notice. (2) Change `PRICING.monthlyUsd` for new customers whenever you like. (3) With the payment provider, move
-  existing subscriptions to the new price so that it first applies on or after the announced day. Until an account
-  has had its notice, a renewal above the price it was on is refunded the difference automatically and you are
-  told; it still gets the full month of signatures. A lower price needs no notice.
+  `src/lib/policy.ts`). Every account has the price it is on written down: a new subscription takes the price its
+  checkout showed (a returning customer is never held to the price of a plan that ended), and when the server
+  starts, every account without one gets it from its last plan payment before tax, or with none from the price for
+  new customers at that moment, so deploy this code before you change `PRICING`. In this order: (1) on
+  `/app/operator`, "Announce a price change" with the new price and a first day at least 30 days away (a calendar
+  day in UTC, written that way in the email, on the Plan page and on the operator page). That emails every owner
+  and admin of every account with a subscription, in any state (paid up, failing, on hold, paused), and records the
+  notice for an account once the email has left for every one of them (taken by the mail server; the outbox counts
+  only on a development server). The page lists the accounts it could not reach; run it again once email works.
+  (2) Change `PRICING.monthlyUsd` for new customers whenever you like: an account that starts the plan after the
+  notice pays what its checkout shows, and needs a notice of its own for any rise after that. (3) With the payment
+  provider, move existing subscriptions to the new price so that it first applies on or after the announced day.
+  Until an account has had its notice, a renewal above the price it was on is refunded the difference
+  automatically and you are told; it still gets the full month of signatures. Tax the provider adds on top is
+  allowed; tax inside the price (Stripe's "inclusive" tax) adds nothing, so a raise is refunded in full. A lower
+  price needs no notice, and a notice for the same or a lower price than an account pays withdraws a rise announced
+  before: everyone who was told of the rise is told it is withdrawn. After the first day, the Plan page shows the
+  new price as the price.
 - **The free code** (`GROWalition` by default) is in this source code. If the repository is public, so is the
   code, and nothing limits how many accounts use it. Change it with `FREE_PLAN_CODES`.
 - **Impact factors** in the same file are commonly cited estimates. Check them against a source you are happy
@@ -739,8 +798,53 @@ the app itself (`src/server/filecrypt.ts` for the format, `src/server/filestore.
   whose shape changed between API versions; both shapes are read, but only test mode will prove it. Card
   statements show only your Stripe account's statement descriptor; set one that people will recognise. If the
   Stripe account is shared with something else: everything Sign&Grow starts there carries its own mark
-  (`sg_account` in the metadata), and invoices, checkouts, subscriptions and disputes without that mark or for
-  another price are left alone. Also send the webhook these events: `charge.dispute.closed`, `refund.failed`.
+  (`sg_account` in the metadata). An invoice for another price is set aside for good (never applied, never
+  refunded, never looked at again by the timer); one that names nothing is looked at again only once its customer
+  is one of ours, and one whose customer is ours is never deleted while it waits. A one-off invoice is a top-up's
+  receipt only with our mark. Also send the webhook these events: `charge.dispute.closed`, `refund.failed`.
+  Things only test mode can settle, one test each, on the API version you pin (`STRIPE_API_VERSION`; write down
+  the one you tested):
+  - Stop by card: make a charge on a card whose last four digits start with 0, stop it by card with its date and
+    amount (it should stop), then try a date outside the window (it should say the details do not match), and once
+    a minute after a fresh charge (search can lag).
+  - Both checkouts accept `adaptive_pricing[enabled]=false` (a refusal there would break every checkout and top-up).
+  - With `STRIPE_COLLECT_TAX_ID=1`, a plan checkout for a customer who has paid before and a top-up for a new one.
+  - One top-up: its `invoice.paid` carries `metadata.kind = sg_topup` and `sg_account`, and the Plan page shows its
+    invoice once.
+  - A renewal on a tax-inclusive price: `amount_paid` is the price itself and the tax lines say inclusive
+    (`total_taxes[].tax_behavior` or `total_tax_amounts[].inclusive`), so nothing is refunded and the reminder
+    states the price. Fairly sure (about 80 percent) that is how Stripe reports it.
+  - Cancel in the hour before a renewal (a test clock with the renewal's draft invoice raised): the draft must not
+    be charged. The code deletes a draft and, when Stripe refuses that (its documentation says only drafts that
+    belong to no subscription can be deleted, so it most likely will), sets `auto_advance=false` on it; check the
+    draft is never finalized or charged. If it is charged anyway, it must be refunded by itself.
+  - Cancel in the customer portal while a renewal is failing: the plan must end the same day here, the open invoice
+    must be voided, and a retry of the card must not be kept (if one goes through, it is refunded and the plan ends).
+  - Win a dispute on a top-up and lose one on a plan payment: check that the Plan page and the emails follow both.
+    We believe `charge.dispute.closed` carries `payment_intent` as well as `charge` (fairly sure); when it does not,
+    the charge is looked up, so this tests that lookup.
+  - Point the webhook at an endpoint that answers after 8 seconds and see whether the dashboard counts that as a
+    failure: `STRIPE_WEBHOOK_WAIT_MS` (5 seconds by default) must stay below the limit Stripe really applies, which
+    we remember as 10 to 20 seconds but have not checked.
+  - Set "if all retries for a payment fail" to "mark the invoice as uncollectible", let a renewal fail to the end,
+    and press "Pay the open payment": the provider's page must take the payment. We offer uncollectible invoices
+    there as well as open ones; fairly sure (about 70 percent) Stripe lets them be paid.
+  - Refund a renewal by hand in the dashboard: the Plan page must show it on that payment and the customer gets an
+    email. A charge is never matched to one of our payments by its amount alone any more, so this needs
+    `GET invoices/<id>?expand[]=payments` to name the charge's payment (likely right for 2025-03-31 and later); if it
+    does not, a person is asked instead (an operator alert "could not be matched to a payment for sure").
+  - A returning customer whose new invoice names no subscription: `GET subscriptions?customer=..&status=all` must
+    list the new subscription (`status=all` is documented; the shape of the answer is what to check).
+  - Pay a failing renewal a moment before pressing Cancel: the payment must stay (the code compares the invoice's
+    `status_transitions.paid_at` with the moment the provider confirmed the stop).
+  - Set the dashboard's "upcoming renewal events" to 7 days or more, or the operator's warning a week before a
+    renewal priced above what an account is on comes late (the customer's own reminders run on our timer either
+    way).
+- **Stopping a plan without logging in** works for its owners and admins only, as in the app: a stop link names
+  one of them, and stop by card with an email address finds only plans that address may stop. Stop by card
+  without an email address (the last four digits plus the date and amount of a charge) cannot tell who is asking:
+  anyone who knows those can stop the plan, and every plan charge is the same amount. Decide whether to keep it for
+  customers, or keep it only for the operators' lookup and send people to the contact form instead.
 - **Signing in with Google or Microsoft** has only been tested against a stand-in (`tests/signin.test.ts`), never
   against the live providers. Before switching it on for real, go through it once with real client ids: sign up,
   sign in again, cancel at the provider, connect and disconnect under Settings, and a Microsoft work account as well

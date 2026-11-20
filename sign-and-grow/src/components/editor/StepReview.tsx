@@ -13,6 +13,7 @@ import { PayLinkChoice } from './PayLinkChoice';
 import { PrintCheck } from './PrintCheck';
 import { LabelCheck } from './LabelCheck';
 import { phoneWeight } from '@/lib/phone';
+import { isGroupRow, groupLine } from './GroupRecipient';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -176,7 +177,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
                 <span className="dot" style={{ background: p.kind === 'removed' ? '#9aa39d' : ed.color(p.id) }} />
                 <div className="grow">
                   <div className="row wrap" style={{ gap: 8, rowGap: 2 }}><b className="ed-break">{p.name}</b><span className={`badge ${TONE[p.kind]}`}>{p.badge}</span></div>
-                  <div className="muted small ed-break">{p.email || 'No email yet'} · {ROLE_LABEL[p.role]}</div>
+                  <div className="muted small ed-break">{p.email || (isGroupRow(rcps.find((x) => x.id === p.id)) ? 'A group: every member has their own email' : 'No email yet')} · {ROLE_LABEL[p.role]}</div>
                   <div className="small" style={{ marginTop: 3 }}>{p.text}</div>
                 </div>
               </li>
@@ -196,7 +197,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
                   <span className="dot" style={{ background: ed.color(r.id) }} />
                   <div className="grow">
                     <b className="ed-break">{r.name || r.role_name || 'Unnamed'}</b>
-                    <div className="muted small ed-break">{r.email || (r.link_by_sender ? 'No email from us. You send them the link yourself after sending.' : 'Filled in when the template is used')}</div>
+                    <div className="muted small ed-break">{isGroupRow(r) && !r.claimed_by ? groupLine(r) : r.email || (r.link_by_sender ? 'No email from us. You send them the link yourself after sending.' : 'Filled in when the template is used')}</div>
                     <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
                   </div>
                 </li>

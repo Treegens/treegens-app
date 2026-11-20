@@ -243,6 +243,7 @@ test('cancelling never guesses: a failing payment cancelled on the provider\'s p
   Object.assign(stripe.sub(p.sub), { status: 'past_due', latest_invoice: 'in4_page_open' });
   stripe.invoices.in4_page_open = { id: 'in4_page_open', status: 'open' };
   await event('customer.subscription.updated', { id: p.sub, customer: p.cus, status: 'past_due', current_period_end: unix(20) });
+  stripe.sub(p.sub).cancel_at_period_end = true; // what the provider shows once it is set on its page
   await event('customer.subscription.updated', { id: p.sub, customer: p.cus, status: 'past_due', cancel_at_period_end: true, current_period_end: unix(20) });
   assert.equal(stripe.sub(p.sub).status, 'canceled');
   assert.equal(stripe.invoices.in4_page_open.status, 'void');

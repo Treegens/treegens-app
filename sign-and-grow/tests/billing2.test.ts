@@ -115,7 +115,9 @@ test('coming back after cancelling: the new plan is not mistaken for the old one
   assert.equal(acct(p.id).plan, 'grove');
   assert.equal(subjects(p.email).filter((s) => s === 'Your monthly plan has ended').length, ended);
 
-  // An older message about the current subscription does not undo a newer one.
+  // An older message about the current subscription does not undo a newer one. (The provider shows the end it
+  // tells us about: a plan set to end is worked out from what the provider says now.)
+  stripe.sub('sub_rita_new').cancel_at_period_end = true;
   await event('customer.subscription.updated', { id: 'sub_rita_new', customer: p.cus, status: 'active', cancel_at_period_end: true, current_period_end: unix(30) }, { created: unix(0) });
   assert.ok(acct(p.id).cancel_at);
   await event('customer.subscription.updated', { id: 'sub_rita_new', customer: p.cus, status: 'active', cancel_at_period_end: false, current_period_end: unix(30) }, { created: unix(-1) });

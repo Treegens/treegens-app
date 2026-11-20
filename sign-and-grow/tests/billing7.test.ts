@@ -225,6 +225,21 @@ test('once the announced day has passed, the Plan page shows the new price and n
   assert.equal(s.next_amount, '$12.00');
 });
 
+test('a notice that has taken effect is the price: a later notice neither withdraws it nor says the old price', async () => {
+  const p = await person('Effective');
+  await subscribe(p);
+  db.run('UPDATE accounts SET price_notice_cents=1200, price_notice_from=?, price_notice_at=? WHERE id=?', ago(2 * 864e5), ago(40 * 864e5), p.id);
+  // The same price again: nothing is withdrawn, and nobody is told the price is not changing.
+  const same = await asOperator(p, () => p.c.post('/operator/billing/price-notice', { new_usd: 12, from: day(45) }));
+  assert.equal(same.status, 200);
+  assert.equal(acct(p.id).price_cents, 1200, 'the price in effect is written down as the price');
+  assert.equal((await state(p)).plan_price, '$12.00');
+  assert.ok(!subjects(p.email).some((s) => s.startsWith('The price of your Sign&Grow plan is not changing')));
+  // A higher one: the email says what they pay today, which is the price in effect.
+  await asOperator(p, () => p.c.post('/operator/billing/price-notice', { new_usd: 15, from: day(45) }));
+  assert.match(lastMail(p.email, 'The price of your Sign&Grow plan changes on')!, /pays \$12\.00 a month\. From .+ the monthly plan costs \$15\.00 a month/);
+});
+
 test('the stop page and the emails quote the price this account is charged, not the price for new customers', async () => {
   const p = await person('Prices');
   await subscribe(p);

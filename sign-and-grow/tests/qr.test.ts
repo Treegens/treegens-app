@@ -766,6 +766,8 @@ test('each place a link is handed over in person offers a code, with its warning
   assert.match(css, /@media print \{[\s\S]*body\.qr-printing \.main > \*:not\(\.qr-page\), body\.qr-printing \.qr-noprint, body\.qr-printing \.toasts \{ display: none !important; \}/);
   // On paper wider than the phone layout the menu's grid column stayed and squeezed the sheet into 232 px.
   assert.match(css, /@media print \{[^@]*body\.qr-printing \.shell \{ display: block; \}/);
+  // And the column's screen width (1180 px) would leave the sheet on the left of a landscape A3 page.
+  assert.match(css, /@media print \{[^@]*body\.qr-printing \.main \{ padding: 0; max-width: none; \}/);
   assert.match(read('src/app/globals.css'), /\.shell \{ display: grid; grid-template-columns: 232px/, 'the grid this undoes is still the one the app uses');
   assert.match(sheet, /document\.body\.classList\.add\('qr-printing'\);\s*return \(\) => document\.body\.classList\.remove\('qr-printing'\);/);
   assert.match(css, /\(max-width: 900px\), \(pointer: coarse\) \{ \.btn\.qr-tap \{ min-height: 44px; \} \}/, 'a button a finger taps is 44 px high');

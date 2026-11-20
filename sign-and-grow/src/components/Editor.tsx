@@ -6,6 +6,7 @@ import { useHistory } from './editor/history';
 import { useMe } from './AppShell';
 import { checkTrouble } from './sender/CheckFields';
 import { sendMyselfTrouble } from './editor/SendMyself';
+import { isGroupRow, groupProblem } from './editor/GroupRecipient';
 import { finished, fingerprint, freshValues, outcomes, rebase, restoreLocked, signsAgain } from './editor/changes';
 import { precheck, uploadFile, fmtSize, MAX_BYTES } from './editor/upload';
 import { isPicture, shrinkPhoto } from './editor/photos';
@@ -114,7 +115,9 @@ export function Editor({ id }: { id: string }) {
       // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
       verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link,
       // "I will send the link myself": a name and no address, for envelopes only (editor/SendMyself.tsx).
-      link_by_sender: !isTpl && !!r.link_by_sender })),
+      link_by_sender: !isTpl && !!r.link_by_sender,
+      // A signing group instead of a person, and on an envelope that is out who can act for it (GroupRecipient.tsx).
+      group_id: r.group_id || null, ...(correcting && r.group_id && r.members ? { members: r.members.map((m: any) => ({ name: m.name, email: m.email })) } : {}) })),
     fields: flds,
   });
   latest.current = env && body();
@@ -311,6 +314,10 @@ export function Editor({ id }: { id: string }) {
       // Someone whose link the sender sends themselves needs a name and no address (editor/SendMyself.tsx).
       if (!isTpl && r.link_by_sender) {
         const no = sendMyselfTrouble(r, name, fields.value);
+        if (no) p.push(no);
+      } else if (isGroupRow(r)) {
+        // A group has no address of its own: its members have (editor/GroupRecipient.tsx).
+        const no = groupProblem(r);
         if (no) p.push(no);
       } else if (!isTpl && (!r.name.trim() || !validEmail(r.email))) p.push(`${name} needs a name and a valid email.`);
       if (isTpl && !r.role_name?.trim() && !r.email) p.push('Give every open recipient a role name, such as "Client".');

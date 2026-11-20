@@ -1229,5 +1229,251 @@
   ],
   "needs_from_billing": "Nothing is required. One note: tellOperators() in routes-billing.ts is private. filestore.ts files its alerts with the same row shape (support_requests, name 'Sign&Grow (automatic alert)', topic 'other') and emails SUPPORT_EMAIL and OPERATOR_EMAILS itself. If you ever export a shared helper for alerts, filestore.ts's fileAlert() could use it.",
   "notes_for_integrator": "Changes others will notice:\n- Every read of a stored file is now checked against its SHA-256 name, with or without a key. A missing or changed file used to throw ENOENT or be served as it was. Now it answers HttpError 500 {code:'file_damaged'} in plain words, and a one-time alert goes to the operator queue (support_requests row named 'Sign&Grow (automatic alert)'), to the log, and by email to SUPPORT_EMAIL/OPERATOR_EMAILS.\n- Writes are atomic (temporary file, fsync, rename). Storing contents that are already there now reads the existing copy and replaces it if it is damaged.\n- While storing is stopped, a correction that asks someone to sign again answers 503 storage_stopped and saves nothing.\n- At start the server reads the first 45 bytes of every stored file. I have not timed this on a very large folder.\n\nDecisions the owner should confirm:\n- A server with no key, finding encrypted files it cannot read, also stops storing files. That is stricter than \"no key means as today\", but otherwise new plain files would be mixed with files nobody can open, while the operator may believe everything is encrypted.\n- I added no row to \"What the bad reviews taught us\". research/complaints.json has no complaint about encryption at rest, and I would not invent one.\n\nFor the rename pass:\n- The constants in src/server/filecrypt.ts ('stored file key id', 'stored file v1 ...', the magic bytes) contain no product name on purpose: changing any of them would make every encrypted file unreadable. The test file checks this.\n- The alert name 'Sign&Grow (automatic alert)' now appears in filestore.ts as well as routes-support.ts and routes-billing.ts. All three must be renamed together.\n- The new copy says Sign&Grow where it names the product.\n\nLeft open:\n(1) On the signing page, the document viewer in src/app/sign/[token]/page.tsx shows its generic \"The document could not be opened here... download it\" for a locked or damaged file. The Download button then gets the 503/500 JSON. Showing the server's message there would need an edit in that busy file.\n(2) The server never removes its own half-written temporary files (.<sha>.w<pid>-<hex>) left by a crash; only the script clears them, once they are an hour old.\n(3) Running the script while the server runs leaves a tiny window in which a file the server deletes could come back encrypted. A check before the swap narrows it, and the README and the script say to stop the server first.\n(4) There is no decrypt script, and the database is never encrypted (by design; documented).\n(5) Someone with write access to the disk could stop storing by dropping a fake file, but with disk access they already have everything.\n(6) The email to operators is sent through a dynamic import('./mail.ts'). The tests confirm it under node, but in next dev only the branch without an operator address was seen.\n\nScreenshots and Playwright scripts are in tests/out/build-encrypt/. My dev server is stopped, .next-build-encrypt is deleted, and I removed the tsconfig lines it added. The two '.next-gaps-mobile-sign' lines now in tsconfig.json belong to another engineer and I left them."
+ },
+ "repair:lifecycle": {
+  "found": "My predecessor had done most of the work. The server side existed for all eight findings that are mine:\n- The bulk send stops when its sender is no longer on the team.\n- The welcome signatures are kept to once per address, using the `welcomed` table and wasWelcomed() in ownWorkspace.\n- An API key cannot change which workspace opens at the next sign-in.\n- A webhook's delivery log goes with it, with the account, and with the timer.\n- Public forms and contacts are limited to whoever may change the template, and to admins.\n- Admins can list removed envelopes (GET /envelopes?box=removed), open and download them, and put one back (POST /envelopes/:id/restore).\n- The help link carries the security code: help_code on the signing view, the link in signing emails, and POST /public/support/about.\n- Alerts get clean references, and the operator queue has a search.\n\nMost of the screens were done too: the \"Removed by its sender\" tab, Put back buttons and banner, the member's delete dialog wording, helpHref on the signing and dead-end screens, the help form naming the document, the PowerForms rights, the editor turning a member away from a colleague's template, and the lists in Settings > Your data.\n\ntests/lifecycle.test.ts had 25 tests and 23 passed. The two failures were test-data mistakes: the expected workspace name was out of date after the deliberate change to whole names, and the PowerForms test reused an address that test 10 already uses.\n\nNot finished:\n- src/server/openapi.ts did not describe restore or box=removed, so flow.test.ts failed.\n- The README support row still promised what no screen did.\n\nRe-running the skeptic's probes showed every server finding that is mine fixed. They also showed the payment-code owner's three fixes holding (3b, 3d, stored emails). The verify-after-delete finding, which belongs to another engineer, is still broken.",
+  "done": [
+   {
+    "item": "Check 2b: rows of a bulk send still running go out in the removed person's name",
+    "status": "done",
+    "how": "The predecessor's notTheirsAnyMore() in routes-envelopes.ts asks before every row whether the batch's sender is still a member. That covers being removed, leaving and a deleted login. I added the case where the sender leaves by themselves halfway through a send. Probe p1b-bulk-race.ts now gives: 4 sent, 36 not sent, every envelope with Sam (the successor).",
+    "test": "tests/lifecycle.test.ts: 'a bulk send that is still going out stops when its sender is removed...' (removal, plus the new leave-by-themselves case)"
+   },
+   {
+    "item": "Check 3b: the signer's address left in the credits ledger after deletion",
+    "status": "done",
+    "how": "Not mine, per the owner's notes: the payment-code owner fixed it. Checked with probe p7-leftovers.ts: the kept ledger line is now 'rcp_...|2', with no address."
+   },
+   {
+    "item": "Check 3c (1): the KEPT list says the money records hold no names or addresses",
+    "status": "done",
+    "how": "This is true now that 3b is fixed (probes p2 and p7). Nothing to change in the copy."
+   },
+   {
+    "item": "Check 3c (2): webhook delivery logs left behind after DELETE /webhooks/:id",
+    "status": "done",
+    "how": "The predecessor's fix deletes the log with its webhook, deletes earlier leftovers with the account, and the timer clears the rest. Probe p2-delete.ts now finds no delivery rows left.",
+    "test": "'the delivery log of a webhook goes with the webhook...'"
+   },
+   {
+    "item": "Check 3c (3) and new bug: a genuine signed PDF fails /verify after its sender's account is deleted",
+    "status": "not_done",
+    "how": "Not mine, per the owner's notes: another engineer is building it. Probe p8-verify-after-delete.ts still gives match:false after the deletion.",
+    "left_open": "The other engineer is working on it."
+   },
+   {
+    "item": "Check 3d and overclaims: closing twice while the provider is down; 'Any subscription has been stopped'; the 502 text",
+    "status": "done",
+    "how": "Not mine: the payment-code owner fixed it. Probe p9b gives 502 on both tries and nothing is deleted. Probe p9: the closing email now says the subscription is cancelled on our side and will be refunded if charged. I fixed the same overpromise in the closing list of Settings > Your data (the YourData component, not Billing()). It now reads: 'Any subscription is cancelled at once. If the payment provider still takes a payment before it has confirmed that, the software refunds it by itself.'",
+    "test": "'the screens offer what the server allows...' checks that the YourData part no longer says 'You will not be charged again'"
+   },
+   {
+    "item": "New bug and regression: deleting one account wipes other customers' stored emails",
+    "status": "done",
+    "how": "Not mine: the payment-code owner fixed it. Probe p3-closing.ts: 3.X3 shows 8 of 8 kept, 3.Y2 shows the invitation is still stored, and 3.X5 raises no false alert."
+   },
+   {
+    "item": "New bug: no screen names the envelope in a help request (plus the README overclaim and the signing-screen finding)",
+    "status": "done",
+    "how": "The predecessor added the server side, the help link and the help form. I checked them in a browser at both sizes. The signing screen's Help link is /help?topic=signing&code=XXXX-XXXX-XXXX#signing and never contains the signing link's secret. The form then shows the subject, the sender, the recipient, and whether the sender is told. I made the 'Do not mention the document' link a 44 px tap target on phones (support.css; it was 21 px, just above the Send button). I rewrote the README support row so it describes exactly what the product does.",
+    "test": "'the help link on the signing page and in signing emails...' plus the screen test (checks helpHref, the dead-end links and the tap target)"
+   },
+   {
+    "item": "New bug: a plain member can pause or delete a colleague's public form, and lock a colleague's template",
+    "status": "done",
+    "how": "The predecessor's server fix holds: probe p4 gives 403 for pausing, deleting and publishing on a colleague's template, and contacts are per member. On a phone the 'Only X or an admin can pause or delete it' note sat outside the table's visible width (it started at 365 px in a 360 px table). I moved it under the form's name. I also corrected the hint 'Only your own templates are listed' to 'Only templates you may change', since a template's rule can let a member change it. I added a sentence on this to the README PowerForms entry.",
+    "test": "'a public form is published, paused, changed and deleted by...' plus the screen test"
+   },
+   {
+    "item": "New bug: an envelope a member deleted is invisible to admins, with no way back (box=removed and restore)",
+    "status": "done",
+    "how": "API description in src/server/openapi.ts:\n- box=removed added to the box choices, with a description.\n- 'removed' count added to the list answer.\n- removed_at added to GET /envelopes/{id}.\n- The DELETE description now says that admins can still find the envelope and put it back.\n- New entry for POST /envelopes/{id}/restore.\n\nRestore permission: restore now checks admin inside the handler. A member gets 'Only an admin of the account can put back an envelope that its sender removed. Ask an admin of your team.' An admin's 'send' key can now put one back, as it can already list and open them.\n\nScreens: the envelope page banner said 'It is in no list'. It now says it is only in the tab Removed by its sender. Checked in a browser at both sizes: tab, notice, Put back (row and page), and the member's delete dialog.\n\nREADME: the copy-later row now says admins can find and put back an envelope its sender removed.",
+    "test": "'an envelope a member removed from their lists can still be found...' (member message, member key 403 on both calls, admin send key lists and restores). The flow.test.ts API description check no longer reports restore."
+   },
+   {
+    "item": "New bug: automatic alerts get the old kind of reference, and the queue has no search",
+    "status": "done",
+    "how": "The predecessor's fix holds. Probe p7b gives 8 clean references, and the hand-over email names the clean one. The search box exists in src/app/app/operator/tickets.tsx.",
+    "test": "'an alert the software files has a reference nobody can misread...'"
+   },
+   {
+    "item": "New bug: an API key can change which workspace opens at the next sign-in",
+    "status": "done",
+    "how": "The predecessor's fix holds: probe p1 (8a.6) gives 403 with a plain message.",
+    "test": "'an API key cannot change which workspace its owner lands in...'"
+   },
+   {
+    "item": "New bug: deleting at once and signing up again hands out the welcome signatures again",
+    "status": "done",
+    "how": "The predecessor's fix holds: probe p3 (3.W1) gives [3,0].\n\nI found and closed a second way in: a login could move to another address (POST /me/email/confirm), and a new login under the old address was then welcomed again, with no deletion needed. routes-bounces.ts now records the fingerprint of a confirmed, welcomed address when its login moves away. The KEPT_AFTER_DELETION line now says that too. Someone who used an address they never confirmed and then moved away does not use up the welcome of the person the address belongs to.",
+    "test": "Existing: 'the welcome signatures are given once per email address...' (the expected workspace name was corrected). New: 'a login that moves to another address does not free its old address...'"
+   },
+   {
+    "item": "Overclaim: research/fix-batch2.json says hand-over moves bulk batches",
+    "status": "done",
+    "how": "The claim is now true in the code (2b). I did not edit the research file."
+   },
+   {
+    "item": "Screen: a member who types the editor address of a colleague's template",
+    "status": "done",
+    "how": "The predecessor sends the member to the template's page, with a message. I changed the check to follow the server's envelope.access.may_change instead of the role alone, so a member whom the template's rule allows can still edit. The template-permissions engineer has since built their locked-template message on this. Checked in a browser at both sizes.",
+    "test": "the screen test checks for the access.may_change condition"
+   },
+   {
+    "item": "Screen: Settings > Your data shows no lists to an owner who still has other people in the workspace",
+    "status": "done",
+    "how": "The predecessor already shows both lists in that state. I checked the code."
+   },
+   {
+    "item": "Screens: tap targets on phones",
+    "status": "done",
+    "how": "The sender pages used 42 px buttons and tabs on phones. I raised both minimums to 44 in sender.css (two numbers). Measured at 390x844: Put back, Put it back and every list tab are now 44 px. No screen scrolls sideways at either size.",
+    "test": "the screen test checks the CSS rules"
+   },
+   {
+    "item": "Test data errors left by the predecessor",
+    "status": "done",
+    "how": "Corrected the workspace name the test expects, and gave the PowerForms test addresses of its own."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/tests/lifecycle.test.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-bounces.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/Editor.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/powerforms/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/envelopes/[id]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/support.css",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/sender.css",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-lifecycle/ui.cjs",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-lifecycle/pf.cjs",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-lifecycle/p4-templates-hidden.ts"
+  ],
+  "suite": "tests/lifecycle.test.ts: 27 of 27 pass.\n\nnpm test (full suite): 480 of 490 pass. None of the 10 failures is in my file, and none is in code I changed:\n- billing2.test.ts (1), billing3.test.ts (2) and billing4.test.ts (1): the payment-code owner's work in progress (cancel_at, the new \"paid signatures\" wording, past_due). During the run, routes-billing.ts briefly did not parse at all.\n- flow.test.ts, \"the published API description\": fails only on POST /envelopes/:id/recipients/:rid/release, a new route of another engineer. Restore is no longer reported.\n- gaps-industry.test.ts 209: the PayLinkChoice markup in StepReview.\n- gaps-nonus-words.test.ts 267 and 271: a sentence on /help and StopView.tsx. I checked that pattern against openapi.ts, README.md, policy.ts, the settings page and the PowerForms page, all of which I edited, and none matches.\n- signerux.test.ts 428: a rule in sign.css.\n- trust.test.ts 489: \"Signer corrected their name\", the \"Fix my name\" work in progress.\n\nnpx tsc --noEmit -p .: one error, in src/components/templates/WhoCanUse.tsx(52,16) (the template-permissions engineer's new file). None in files I touched.",
+  "abuse_and_stuck": [
+   "Abuse, restore: a member puts back or lists removed envelopes, by session or with their own key: 403 (tested).",
+   "Abuse, restore: an admin of another account names an envelope id: 404 (tested).",
+   "Abuse, restore: asking twice, or two calls at once, writes only one line in the audit trail (tested).",
+   "Stuck, restore: a member deletes a completed envelope by mistake. The dialog tells them an admin can find it under 'Removed by its sender' and put it back (seen in a browser).",
+   "Stuck, restore: a solo owner is the admin of their own workspace, finds the tab and the dialog says so. The tab only appears when there is something in it, so it is never a dead button.",
+   "Abuse, help link: the signing link's secret is never in the help address, and a page still waiting for an access code gives no code (tested).",
+   "Abuse, help link: someone holding a code reaches the sender at most once a day per recipient, and never with their own words unless they are signed in under their own confirmed address (tested).",
+   "Abuse, help link: /public/support/about is limited to 40 an hour per internet address, against a code space of 31 to the power 12. I did not test this limit.",
+   "Stuck, help link: a signer writing from another address is recognised by the code (tested).",
+   "Stuck, help link: a code whose link was replaced since says so (tested).",
+   "Stuck, help link: someone without the link can type the code into the form (seen).",
+   "Abuse, welcome signatures: deleting the login and signing up again gives nothing new (tested).",
+   "Abuse, welcome signatures: moving the login to another address and signing up again under the old one gives nothing new (tested, fixed today).",
+   "Abuse, welcome signatures: a squatter who never confirmed the address does not use up the real owner's welcome (tested).",
+   "Abuse, welcome signatures: plus-addressing (a+1@...) is a new address each time, by the 'once per address' rule. Left open, as before.",
+   "Stuck, welcome signatures: an honest person who comes back after deleting gets no welcome signatures, and is only told so in the KEPT list (Settings, /help, /security), not at sign-up. Left open.",
+   "Abuse, bulk send: a removed member's batch keeps sending after they are removed or leave: it stops (both tested).",
+   "Stuck, bulk send: the successor sees the rows that were not sent, with names and addresses, so they can send them again (tested).",
+   "Abuse, PowerForms: pausing, deleting or publishing on a colleague's template: 403 (tested). A colleague's contacts can be neither read nor changed (tested).",
+   "Stuck, PowerForms: a member is told whose form it is (now visible on a phone) and how to get a form of their own (copy the template)."
+  ],
+  "needs_from_billing": "Nothing is required. For you to review: I changed one line in YourData() in src/app/app/settings/page.tsx. That is not the Billing() component. It sits in the list shown before closing an account. It said \"Any subscription stops at once. You will not be charged again.\" It now says \"Any subscription is cancelled at once. If the payment provider still takes a payment before it has confirmed that, the software refunds it by itself.\" This matches your closing email for the case where the provider has not confirmed. src/components/Public.tsx still says \"Any subscription has been stopped and you will not be charged again\" after closed=now. That stays true, because deleting at once only happens after the provider has confirmed (probe p9b).",
+  "notes_for_integrator": "Behaviour others will notice:\n- POST /envelopes/:id/restore is no longer an admin-level route in the router. It checks admin itself, so an admin's \"send\" API key may put an envelope back. A member, or a member's key, gets 403 with \"Only an admin of the account can put back an envelope that its sender removed. Ask an admin of your team.\"\n- On phones (max-width 900px), every .sn button and tab now has a minimum height of 44 px instead of 42 (sender.css). All sender screens grow by 2 px per button there.\n- A confirmed, welcomed address that a login moves away from (POST /me/email/confirm in routes-bounces.ts) is now fingerprinted in `welcomed`, so a new login under it gets no welcome signatures. KEPT_AFTER_DELETION in src/lib/policy.ts says so.\n- The PowerForms page shows \"Only X or an admin can pause or delete it.\" under the form's name, instead of in the last column.\n\nCopy changed:\n- The README support row now describes the help link and its security code exactly, including when the sender gets the writer's words. I also changed the README copy-later row, the PowerForms entry and my test file's row. New copy keeps \"Sign&Grow\" for the rename pass.\n\nLeft as is:\n- No new settings, so .env.example and the README config table are unchanged.\n- /contacts is not in the API description at all (no path there). The per-member visibility of contacts is therefore undocumented for API users.\n- The verify-after-delete finding belongs to the engineer building PDF fingerprints. Probe p8 still shows match:false.\n\nHousekeeping:\n- tsconfig.json had two .next-repair-lifecycle lines left by my predecessor. I removed only those. Another engineer has since cleaned up their own lines.\n- The dev server on port 3493 is stopped and .next-repair-lifecycle is deleted.\n- Probes, screenshots and logs are in tests/out/repair-lifecycle/. p4-templates-hidden.ts there is the skeptic's probe with one line guarded, because Bob's form is now correctly refused.\n- While I worked, someone committed the working tree (fe1a413 \"work in progress by the engineers\"), which includes my changes. I ran no git command that changes anything.",
+  "settings": []
+ },
+ "build:tplroles": {
+  "found": "Nothing of this task existed. There was no tests/templates.test.ts, no probes under tests/out, no table or columns for template rules, no routes, and nothing in the screens. The only template change in today's commits (7d3096a) was another engineer's search, folders and Move on src/app/app/templates/page.tsx, which I kept. So I built the feature from the start. The baseline full suite was 438 of 446 passing; the 8 failures all belonged to other work. One of them, the lifecycle PowerForm test, fails only because an earlier test in the same file uses the same address. On its own it passes, with my changes too.",
+  "done": [
+   {
+    "item": "1. Three settings per template, stored on the template, set by its owner and admins",
+    "status": "done",
+    "how": "New columns on envelopes (COLUMNS in src/server/db.ts): tpl_use ('team', 'admins' or 'chosen'), tpl_change ('owner', 'chosen' or 'team'), tpl_locked, wording_from and wording_fixed. An empty value means the old default. New table template_members (template_id, account_id, user_id, can_change) in SCHEMA. The rules are in src/server/tplroles.ts (mayUse, mayChange, maySetRules, the refusals). GET and PUT /envelopes/:id/access are in src/server/routes-templates.ts, which is registered in tests/helpers.ts and in src/app/api/[...path]/route.ts. Only the template's owner and admins can set the rule; members chosen to change it cannot. A choice that cannot work is refused (\"change\": \"team\" without \"use\": \"team\", an unknown value, a non-boolean, a member from another team). Every change writes one line to the template's own audit list (\"Who can use and change it\"), giving the rule after and before. Saving the same rule twice writes nothing. The account owner and admins can always use and change everything. Where the lock stops: whoever may not change the template can still fill in names, email addresses, access codes, notes, checks, reminders, the deadline, the subject, the date format and the value of any field the template left empty. They cannot change the documents (files, names, order), the fields (position, size, settings, owner), the template's own wording (notes, strike-outs and any field the template filled in), the message, the payment link, the people on it, their roles or the signing order.",
+    "test": "tests/templates.test.ts tests 1, 2 and 3",
+    "left_open": "Two decisions for the owner to confirm. First, deleting a template stays with its owner and admins even when others may change it (deleting takes it from everyone). Second, the subject is not locked, because it is how envelopes are told apart."
+   },
+   {
+    "item": "2. Enforced everywhere a template is read, used or changed, for a browser and for an API key",
+    "status": "done",
+    "how": "One check in mine() (routes-envelopes.ts) covers reading, download, warnings, the access route, use (POST /envelopes with template_id), clone, /bulk/check, /bulk, POST /powerforms, PUT, PATCH, DELETE and the pay link. The list filters in SQL, so templates someone may not use are hidden, and so are their folders. GET /powerforms hides forms on such templates. may_change on forms now follows the template's change rule. Refusals say who to ask: \"Ask Maya Lopez or an admin of your team\". Existing default messages are unchanged, so lifecycle stays green. Copies: one line in copyEnvelope calls carryRules. A copy of a template, or a template made from an envelope, keeps the rule and the chosen people. A copy of a locked template made by someone who may not change it belongs to the template's owner (cloneOwner, used by /clone and by POST /envelopes with kind template), and the answer says so in belongs_to. A clone of a locked envelope stays locked on its own fields. The lock is checked in PUT for drafts and for corrections once sent (assertWordingKept), in POST /envelopes with a message of its own, and in PUT pay-link. Leaving or removal: handOver in routes-trust.ts now calls forgetChosen, which covers POST /account/leave, DELETE /account/members/:id and closing a login. Templates still pass to the successor with their rules. Unlocking a template, or giving someone the right to change it, frees envelopes already started from it. Deleting the template keeps them locked for everyone but admins.",
+    "test": "tests/templates.test.ts tests 1 to 6, each run for the account owner, an admin, the template's owner, a chosen member and another member, by browser and by API key",
+    "left_open": "Locking does not reach back: envelopes started before the lock was turned on stay unlocked. The dialog, help page and openapi say so."
+   },
+   {
+    "item": "Bug found while testing: a save that left out field values wiped the template's fixed wording",
+    "status": "done",
+    "how": "The check accepted an omitted value because an empty prefill matched it. A missing value on a fixed field now counts as a change. Refusals name a note by its text and page.",
+    "test": "tests/templates.test.ts test 3, cases \"every value left out\" and \"the fee left out\""
+   },
+   {
+    "item": "Bug found while reviewing: POST /envelopes with kind template and a template_id copied a locked template to the caller",
+    "status": "done",
+    "how": "It now uses the same cloneOwner rule as /clone.",
+    "test": "tests/templates.test.ts test 4 (viaCreate)"
+   },
+   {
+    "item": "3. Screens",
+    "status": "done",
+    "how": "New component file src/components/templates/WhoCanUse.tsx and stylesheet src/app/styles/tplroles.css (one import added to layout.tsx). Template list: \"Admins only\", \"Chosen members\" and \"Wording locked\" marks; a \"Who can use this\" button, 44 px, on phone and desktop; Delete shown only when may_delete. The dialog states the rule as a sentence for everyone; for the owner and admins it has radio groups, the member list with Can use and Can change, Lock the wording, and a live preview of the new sentence. Template editor: a \"Who can use this\" card in step 1. Envelope editor with locked wording: a banner saying what is locked and who can unlock it. In step 1 the documents, roles, order, Remove and Add buttons and the message are shown as locked. In step 2 the palette and Find are switched off, and a selected field says why it stays and can be filled in if the template left it empty. The pay link choice is hidden. Envelope page: the template text and buttons follow access; a locked template offers Use, not \"Make my own copy\", and \"Save as template\" says when the copy belongs to someone else. Checked with Playwright at 390x844 and 1280x900 (screenshots in tests/out/build-tplroles/): no script errors, no sideways scroll, every new target at least 44 px, keyboard focus lands on the ticked choice once the dialog loads, and the locked editor's autosave of a typed name is accepted by the server.",
+    "test": "tests/templates.test.ts test 8 (markup and copy), plus the browser run in tests/out/build-tplroles/shots.cjs"
+   },
+   {
+    "item": "4. Tests",
+    "status": "done",
+    "how": "tests/templates.test.ts holds 8 tests: use rule, change rule, lock, copies, bulk and public forms, leaving and removal, a database from before this (columns dropped and the database reopened, so the migration adds them, and old templates behave as the defaults), and screens and docs.",
+    "test": "node --experimental-strip-types --no-warnings --test tests/templates.test.ts: 8 of 8 pass"
+   },
+   {
+    "item": "5. Docs",
+    "status": "done",
+    "how": "openapi.ts: GET and PUT /envelopes/{id}/access, a TemplateAccess schema, access and wording_lock on the envelope, and the list, PUT, PATCH, DELETE, clone, pay-link and PowerForm descriptions. Developers page: the two routes and the copy rule. Help page: a new question, \"Who can use and change a template, and what does a locked wording mean?\", which says rules differ by country and kind of document and tells people to check. Security page: the claim \"Everyone on a team can use every template\" was rewritten because it is no longer true. README: a feature bullet naming the file, columns, table and routes; a row in \"What the bad reviews taught us\"; a row in the tests table. Nothing to take out of \"What is not in it\". No new setting, so .env.example and the config table are unchanged.",
+    "test": "tests/templates.test.ts test 8; the flow and gaps-nonus-words checks on docs pass for my parts"
+   }
+  ],
+  "files_changed": [
+   "src/server/tplroles.ts (new)",
+   "src/server/routes-templates.ts (new)",
+   "src/lib/tplroles.ts (new)",
+   "src/components/templates/WhoCanUse.tsx (new)",
+   "src/app/styles/tplroles.css (new)",
+   "tests/templates.test.ts (new)",
+   "src/server/db.ts (table template_members, five COLUMNS)",
+   "src/server/routes-envelopes.ts (mine, assertMayChange, list and folders, GET /envelopes/:id, PUT, DELETE, POST from template, clone, PowerForms)",
+   "src/server/envelopes.ts (one carryRules line in copyEnvelope, one import)",
+   "src/server/routes-paylink.ts (lock check on PUT)",
+   "src/server/routes-trust.ts (forgetChosen in handOver)",
+   "src/server/openapi.ts",
+   "src/app/api/[...path]/route.ts (import routes-templates)",
+   "tests/helpers.ts (import routes-templates in boot)",
+   "src/app/app/templates/page.tsx",
+   "src/app/app/envelopes/[id]/page.tsx",
+   "src/components/Editor.tsx",
+   "src/components/editor/shared.ts (Ed.wording)",
+   "src/components/editor/StepAdd.tsx",
+   "src/components/editor/StepFields.tsx",
+   "src/components/editor/StepReview.tsx",
+   "src/app/layout.tsx (tplroles.css import)",
+   "src/app/help/page.tsx",
+   "src/app/security/page.tsx",
+   "src/app/developers/page.tsx",
+   "README.md",
+   "tests/gaps-industry.test.ts (line 1034: PayLinkChoice is now hidden on locked envelopes, a deliberate change)",
+   "tests/out/build-tplroles/ (screenshots, shots.cjs, probe.cjs, dev.log)"
+  ],
+  "suite": "npm test, final run: 536 tests, 528 pass, 8 fail. None of the 8 is in code I touched. billing2/3 #66, #83, #86 and #96: the payment owner's work in progress; routes-billing.ts did not even compile for a while during my run. flow #208, API description: POST /envelopes/:id/recipients/:rid/release (groups work) is not documented; my two routes are. gaps-nonus-words #314: US$ wording in app/billing/stop/StopView.tsx. signerux #471: a .sg-foot-links rule missing from sign.css. trust #535: the \\\"Signer corrected their name\\\" audit line, from the name-correction work in progress. Two failures that were mine are fixed. First, gaps-industry pinned the old PayLinkChoice line; I updated the test for the deliberate change. Second, gaps-nonus-words banned \\\"will hold up\\\" even negated in my help text; I reworded it. npx tsc --noEmit -p . exits 0 for the whole project.",
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour changes others will notice. (1) GET /envelopes?kind=template and its folders leave out templates the caller may not use. Each row now carries access {use, change, locked, may_use, may_change, may_delete, may_set}. (2) GET /powerforms hides forms on such templates. may_change on a form follows the template's change rule. (3) Deleting a template stays with its owner and admins even when chosen members or the whole team may change it. Please confirm. (4) A copy of a locked template made by someone who may not change it belongs to the template's owner. This applies to /clone and to POST /envelopes with kind template. The answer then carries belongs_to and locked. (5) On an envelope started from a locked template, the subject, date format, reminders, deadline, access codes, notes and checks stay changeable. Please confirm that leaving the subject open is right. (6) Locking does not reach back: it applies to envelopes started from then on. Unlocking does free the ones already started. Deleting the template keeps them locked for everyone but admins. (7) Another engineer had already switched the editor's redirect to access.may_change (Editor.tsx around line 79). I kept that and only changed its toast for locked templates. (8) The lifecycle test \\\"a public form is published, paused, changed and deleted...\\\" fails when its whole file runs, because it invites ann.member@example.com, which an earlier test already made a login for (an invite to an existing login now answers 409). It passes on its own. Whoever owns lifecycle.test.ts should give it new addresses. (9) In tsconfig.json I removed only the two .next-build-tplroles lines my dev server added. The dev server is stopped and .next-build-tplroles is deleted. Seen but out of scope: /api/files/:id/content opens any file of the account by its id, so someone who saw a template document's file id before the template was restricted could still fetch the PDF.",
+  "abuse_and_stuck": [
+   "Abuse 1, handled and tested: a member who may only use a locked template tries every way to change it. A PUT with a new message, field, note, document or order; a POST with a message of its own; the pay link; a clone; Save as template; POST /envelopes with kind template; an API key. All are refused with who to ask and nothing saved, or the copy stays locked with Maya as owner.",
+   "Abuse 2, handled and tested: a member who was not chosen reaches an HR-only template by its id, by search, by folder name, through bulk or bulk check, through download, warnings or the access route, or through the forms list. They get 403 \"template_not_for_you\" naming who to ask, or the item is hidden.",
+   "Abuse 3, handled and tested: a member chosen to change a template tries to widen who can use it, lift the lock or delete it, and an owner adds a user from another team as a chosen member. All are refused and nothing changes.",
+   "Abuse, left open: /api/files/:id/content opens any file of the account by id, so a template's PDF stays reachable to someone who already saw its file id. A member can also always upload the same PDF with different words as a new envelope. The lock protects envelopes made from the template, and the help page says exactly that. The subject of a locked envelope can be changed.",
+   "Stuck 1, handled and tested: a member cannot find a template a colleague mentions. It is not listed, and opening it by link says \"Ask Maya Lopez or an admin of your team to add you\".",
+   "Stuck 2, handled and tested: a sender sees a wrong word in locked wording. The editor shows it as locked, with who can change the template, before they type. The server refusal says the same, and nothing is saved.",
+   "Stuck 3, handled and tested: a template is deleted while envelopes from it are locked. The editor and the refusal say to ask an admin, and an admin can change it.",
+   "Stuck 4, handled and tested: the template's owner leaves or is removed. The templates pass to the successor with their rules, the people who left come off every chosen list, and refusals name the new owner.",
+   "Stuck 5, said on screen, in help and in openapi: a template is locked after a member already started a draft. That draft is not locked.",
+   "Stuck 6, handled: a member is removed and invited back. They are no longer chosen, and the refusal tells them to ask to be added."
+  ],
+  "settings": []
  }
 }

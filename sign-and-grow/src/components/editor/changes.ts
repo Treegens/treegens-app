@@ -264,7 +264,9 @@ export function fingerprint(e: { subject?: any; message?: any; ordered?: any; re
     s(e.subject), s(e.message), e.ordered ? 1 : 0, Number(e.reminder_days) || 0, s(e.date_format),
     c.documents.map((d) => [d.id, d.file_id, s(d.name)]),
     // The check before the document opens is part of what a correction saves: "none" and nothing are the same.
-    c.recipients.map((r) => [r.id, r.role, s(r.role_name), s(r.name).trim(), s(r.email).trim(), order(r), s(r.access_code).trim(), s(r.note), s(r.verify) || 'none', s(r.phone).trim(), r.text_link ? 1 : 0]),
+    // A signing group and who is in it on this envelope are part of it too (editor/GroupRecipient.tsx).
+    c.recipients.map((r) => [r.id, r.role, s(r.role_name), s(r.name).trim(), s(r.email).trim(), order(r), s(r.access_code).trim(), s(r.note), s(r.verify) || 'none', s(r.phone).trim(), r.text_link ? 1 : 0,
+      s(r.group_id), ((r as any).members || []).map((m: any) => `${s(m.name).trim()}<${s(m.email).trim().toLowerCase()}>`).join(',')]),
     c.fields.map((f) => [f.id, f.document_id, f.recipient_id || '', f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), s(f.value),
       (f.options || []).join('\n'), s(f.group_name), s(f.validation), f.readonly || f.type === 'note' ? 1 : 0]).sort(byFirst),
   ]);

@@ -189,6 +189,10 @@
 /* ---- Verify ----------------------------------------------------------------------------------- */
 .pub-drop { display: block; padding: 44px 16px; }
 .pub-drop:focus-within { outline: 2px solid var(--green); outline-offset: 2px; border-color: var(--green); }
+/* How to read a certificate (/security/certificate): one block per printed line. */
+.pub-cert-line { border-top: 1px solid var(--line); padding: 12px 0 10px; }
+.pub-cert-line h3 { font-size: 16px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.pub-cert-line p { margin: 0 0 6px; }
 /* A button that is a label around a hidden file input (Choose the file to compare on /verify). */
 .pub-pick { position: relative; min-height: 44px; cursor: pointer; }
 .pub-pick:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }

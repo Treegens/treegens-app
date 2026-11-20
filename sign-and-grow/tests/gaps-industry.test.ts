@@ -1031,7 +1031,8 @@ test('the screens show the payment link only where the rules say, and every page
   assert.match(pl.payNotUs('Gus'), /^Sign&Grow takes no part in this payment\. We do not see what you pay, cannot confirm that it was paid and cannot refund it\./);
   assert.match(pl.payNotUs('Gus'), /If you did not expect to pay Gus anything, do not pay/);
   // The sender's screens: next to the Send button, absent for an account that may not show one, and on the envelope.
-  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && <PayLinkChoice envelopeId=\{env\.id\} isTpl=\{isTpl\} \/>\}/);
+  // Not offered on an envelope whose template wording is locked: the link is part of that wording (tests/templates.test.ts).
+  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && !ed\.wording && <PayLinkChoice envelopeId=\{env\.id\} isTpl=\{isTpl\} \/>\}/);
   const choice = read('src/components/editor/PayLinkChoice.tsx');
   assert.match(choice, /if \(!envelopeId \|\| !st \|\| \(!st\.may && !st\.pay_link\)\) return null;/, 'no dead control for an account that may not');
   assert.match(choice, /<span>Address of your own payment page<\/span>/);

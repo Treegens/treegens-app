@@ -1612,7 +1612,8 @@ export async function formVisitorsReady(): Promise<number> {
 // When a signer's address changes to a different person, is the new person's signature free (the sender signing
 // their own document) or paid for? Sending to yourself is free, so pointing that request at somebody else afterwards
 // has to need a signature like any other, or it would be a way round paying. Returns the new value of `free`.
-function takeOverCost(e: any, r: any, newEmail: string, newName: string): number {
+// `bySigner` is a signer passing the document on: they cannot buy signatures, so they are told who can sort it out.
+function takeOverCost(e: any, r: any, newEmail: string, newName: string, bySigner = false): number {
   const sender = senderOf(e) || { email: '', name: '' };
   const free = isSelf({ role: r.role, email: newEmail, name: newName }, sender) ? 1 : 0;
   // A signature that is already paid for by this same person (someone asked to sign again after a change, whose
@@ -1622,7 +1623,8 @@ function takeOverCost(e: any, r: any, newEmail: string, newName: string): number
   if (paidFor(e.account_id, { ...(same ? r : nextPerson(r)), email: newEmail })) return r.free ? 1 : free;
   if (creditsEnabled() && ACTS(r.role) && !isChargeable(r, sender) && !free) {
     const have = available(e.account_id);
-    if (have < 1) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have), 402);
+    if (have < 1 && bySigner) throw bad(`This document cannot be passed on to ${newName} right now: their signature would be a new one, and ${sender.name || 'the sender'} has none free. Nothing was changed. Sign it yourself, or ask ${sender.name || 'the sender'}${sender.email ? ` (${sender.email})` : ''} to put the right person on it.`, 402);
+    if (have < 1) throw bad(`${same ? '' : `${newName} is not ${r.name} (another person, also at the same address, signs with a signature of their own), so this needs a new one. `}${outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have)}`, 402);
   }
   return free;
 }
@@ -1902,7 +1904,7 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // Passing a request on emails a new person in the sender's name, so the sender's pause and daily limit hold here
   // too (or a sender could send to themselves and pass each one on). The signer is not told the sender's business.
   if (emailRefusal(e, [email])) throw bad(`This document cannot be passed on to someone else right now. Reply to the email you got and ask ${senderOf(e)?.name || 'the sender'} to send it to the right person.`, 403);
-  const free = takeOverCost(e, r, email, name);
+  const free = takeOverCost(e, r, email, name, true);
   retireToken(r, 'handed');
   // The new person starts with empty fields: nothing the first one typed, ticked, uploaded or drew is passed on.
   // That holds whatever the address is. A hand-over is to another person by definition, and two people can share
@@ -2181,7 +2183,9 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
     await ask(`This request is the sender's own signature on their own document, which is free under the name on the sender's account only, and "${name}" is not that name`,
       [`Someone using the signing link of ${labelOf(r)} asked for the name on the document to be "${name}". This request is your own signature on your own document, which is free under the name on your account, "${from}", and under that name only. So we did not change it.`,
         `If "${name}" is another person, open the envelope, choose Correct next to ${r.name} and type the name yourself. It is then that person's signature and is counted like one. If it is you, and only the spelling of your name on your account is off, change your name under Settings first: after that the signing page accepts it and the signature stays free. If you do nothing, the name stays "${r.name}".`]);
-    return { applied: false, name: r.name, message: `We did not change it. ${from} is signing their own document here, and that is free under the name on their account only, which is "${from}". "${name}" is not that name, so we asked ${from} instead, and only they can change it, from the envelope with Correct.` };
+    // Whoever reads this is usually the sender: they are told what they can do themselves, and someone else is told
+    // whose link this is.
+    return { applied: false, name: r.name, message: `We did not change it. This is ${from}'s own document, and signing it is free under the name on their account only, which is "${from}". If you are ${from}: change your name under Settings first, then fix it here and it stays free. Or change it on the envelope with Correct, where it counts as another person's signature. If you are not ${from}, this link is not yours, and we have asked ${from} to put your name on it.` };
   }
   // Where a full name field prints this name on pages someone has already signed, a new spelling changes what that
   // person signed. Only the sender can decide that, by asking them to sign again, so the sender is asked.

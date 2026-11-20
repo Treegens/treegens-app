@@ -4,6 +4,7 @@ import { api, useLoad, toast } from '@/components/ui';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
+import { SigningGroups } from '@/components/sender/SigningGroups';
 
 type Contact = { id: string; name: string; email: string; company: string | null };
 const EMPTY = { name: '', email: '', company: '' };
@@ -132,6 +133,9 @@ export default function Contacts() {
           </ul>
         )}
       </section>
+
+      {/* Named groups of people, any one of whom can sign for the group: see SigningGroups.tsx. */}
+      <SigningGroups />
 
       {removing && (
         <ConfirmDialog title={`Remove ${removing.name}`} confirmLabel="Remove contact" keepLabel="Keep" onClose={() => setRemoving(null)}

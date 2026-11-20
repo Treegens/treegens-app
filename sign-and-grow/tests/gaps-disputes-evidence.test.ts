@@ -515,3 +515,118 @@ test('F: the screens offer it, and the help topic "I am named on a document I di
   assert.ok(!auditOf(e.id).some((a: any) => a.action === 'Help requested'));
   assert.equal(db.get("SELECT topic FROM support_requests WHERE email='helper@disputes.example'").topic, 'not-me');
 });
+
+// ---- G. The evidence pack ----------------------------------------------------------------------------------------
+
+// The entries of a ZIP the app made (stored, not compressed), as tests/encrypt.test.ts reads them.
+function unzip(z: Uint8Array): Record<string, Buffer> {
+  const b = Buffer.from(z);
+  const out: Record<string, Buffer> = {};
+  for (let i = 0; b.readUInt32LE(i) === 0x04034b50;) {
+    const size = b.readUInt32LE(i + 18), nameLen = b.readUInt16LE(i + 26), extra = b.readUInt16LE(i + 28);
+    const name = b.subarray(i + 30, i + 30 + nameLen).toString('utf8');
+    out[name] = b.subarray(i + 30 + nameLen + extra, i + 30 + nameLen + extra + size);
+    i += 30 + nameLen + extra + size;
+  }
+  return out;
+}
+
+test('G: the evidence pack holds the signed PDF, the certificate alone, the trail as text and JSON with its chain, every email with its result, the consent words and a README', async () => {
+  const sender = await person('Pack Sender', 'pack@disputes.example');
+  const e = await completed(sender, 'pack-signer@disputes.example', { subject: 'Garden lease' });
+  const res = await sender.get(`/envelopes/${e.id}/evidence`);
+  assert.equal(res.status, 200);
+  const zip = unzip(res.data);
+  const names = Object.keys(zip);
+  for (const want of ['signed.pdf', 'certificate.pdf', 'audit-trail.txt', 'audit-trail.json', 'emails/index.csv', 'consent.txt', 'README.txt']) assert.ok(names.includes(want), `${want} in ${names.join(', ')}`);
+  assert.equal(sha256(zip['signed.pdf']), e.final_sha256, 'the stored file, byte for byte');
+  const cert = await pagesOf(zip['certificate.pdf']);
+  assert.ok(cert.length >= 1);
+  assert.match(cert[0], /Certificate of Completion/);
+  assert.ok(!cert.some((p) => /Agreement page/.test(p)), 'only the certificate');
+
+  const json = JSON.parse(zip['audit-trail.json'].toString());
+  assert.equal(json.chain.ok, true);
+  assert.match(json.chain.how, /SHA-256 of JSON\.stringify\(\[prev_hash, envelope_id, at, actor, action, detail, ip or ""\]\)/);
+  // Anyone can recompute the chain from the JSON alone.
+  let prev = '';
+  for (const a of json.events) {
+    assert.equal(a.prev_hash, prev);
+    assert.equal(a.hash, sha256(JSON.stringify([prev, e.id, a.at, a.actor, a.action, a.detail, a.ip || ''])));
+    prev = a.hash;
+  }
+  assert.ok(json.events.every((a: any) => 'user_agent' in a));
+  assert.match(zip['audit-trail.txt'].toString(), /Record intact/);
+  assert.match(zip['audit-trail.txt'].toString(), /Envelope completed/);
+
+  // Every stored email, with what became of it, and nothing in it that would still open the document.
+  const stored = db.all('SELECT html, to_email FROM emails WHERE envelope_id=? ORDER BY id', e.id);
+  const mails = names.filter((n) => n.startsWith('emails/') && n.endsWith('.html'));
+  assert.equal(mails.length, stored.length);
+  const index = zip['emails/index.csv'].toString();
+  assert.match(index, /mail_server/);
+  assert.match(index, /none set up, not sent/);
+  for (const s of stored) assert.ok(index.includes(sha256(s.html)), 'the fingerprint of each email as stored');
+  const tok = tokenFor(e.id, 'pack-signer@disputes.example');
+  const code = codeOf(e.id, 'pack-signer@disputes.example');
+  const all = mails.map((n) => zip[n].toString()).join('\n');
+  assert.ok(stored.some((s: any) => s.html.includes(tok)), 'the stored emails do hold the link');
+  assert.ok(!all.includes(tok), 'the copies do not');
+  assert.ok(!all.includes(code) && !all.includes(code.replace(/(.{4})(?=.)/g, '$1-')), 'nor the security code');
+  assert.match(all, /\/sign\/\[link removed\]/);
+
+  const consent = zip['consent.txt'].toString();
+  assert.match(consent, /Sam Signer <pack-signer@disputes\.example>/);
+  assert.match(consent, /Wording 2026-11/);
+  assert.match(consent, /I agree to use electronic records and signatures\./);
+  const readme = zip['README.txt'].toString();
+  for (const f of ['signed.pdf', 'certificate.pdf', 'audit-trail.txt', 'audit-trail.json', 'emails/', 'consent.txt']) assert.ok(readme.includes(f), f);
+  assert.match(readme, /no secret key/);
+  assert.match(readme, /does not say that a signature is valid/);
+});
+
+test('G: a voided envelope\'s pack carries its marked copy; a draft has none; another member cannot take one; the page offers it', async () => {
+  const sender = await person('Pack Void', 'packvoid@disputes.example');
+  const v = await halfSigned(sender, 'pack');
+  assert.equal((await sender.post(`/envelopes/${v.id}/void`, { reason: 'Changed my mind' })).status, 200);
+  const zip = unzip((await sender.get(`/envelopes/${v.id}/evidence`)).data);
+  assert.ok(zip['document-not-completed.pdf']);
+  assert.ok(!zip['signed.pdf'] && !zip['certificate.pdf']);
+  assert.match((await pagesOf(zip['document-not-completed.pdf']))[1], /VOIDED/);
+  const draft = await simple(sender, 'pdraft@disputes.example');
+  const d = await sender.get(`/envelopes/${draft.id}/evidence`);
+  assert.equal(d.status, 400);
+  assert.match(d.data.error, /has not been sent/);
+  const stranger = await person('Not Theirs', 'stranger@disputes.example');
+  assert.equal((await stranger.get(`/envelopes/${v.id}/evidence`)).status, 404);
+  assert.equal((await from().get(`/envelopes/${v.id}/evidence`)).status, 401);
+  assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /href=\{`\/api\/envelopes\/\$\{e\.id\}\/evidence`\}/);
+  assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /Download evidence pack/);
+});
+
+// ---- H. How to read a certificate --------------------------------------------------------------------------------
+
+test('H: the public page explains every line the certificate prints, is dated, and is linked from where people need it', async () => {
+  const page = src('src/app/security/certificate/page.tsx');
+  const { CERTIFICATE_PAGE_VERSION } = await import('../src/lib/evidence.ts');
+  assert.match(CERTIFICATE_PAGE_VERSION, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(page, /Version of this page: \{CERTIFICATE_PAGE_VERSION\}/);
+  // Every label drawCertificate prints has a block here. When the certificate changes, this fails until the page is
+  // revised too: that is on purpose.
+  const pdf = src('src/server/pdf.ts');
+  const body = pdf.slice(pdf.indexOf('async function drawCertificate'), pdf.indexOf('// ---- Fillable forms'));
+  const labels = new Set([...body.matchAll(/s\.(?:kv|h2)\('([^']+)'/g)].map((m) => m[1]));
+  for (const m of body.matchAll(/\? '([^']+)' : '([^']+)', certGroup/g)) (labels.add(m[1]), labels.add(m[2]));
+  assert.ok(labels.size >= 20, `found ${labels.size} labels`);
+  const covered = (l: string) => page.toLowerCase().includes(l.toLowerCase()) || (/their time$/.test(l) && /times in their own zone/.test(page)) || (l === 'Recipients' && page.includes('<h2>Recipients</h2>'));
+  for (const l of labels) assert.ok(covered(l), `the certificate prints "${l}" and /security/certificate does not explain it: revise the page and CERTIFICATE_PAGE_VERSION`);
+  for (const l of ['Signed via Sign&Grow', 'Sign&Grow Envelope ID at the foot of every page', 'Signed without paper', 'Characters this PDF could not print']) assert.ok(page.includes(l), l);
+  assert.match(page, /\{CHAIN_TRUTH\}/);
+  assert.match(page, /\{WHO_WHEN_WHERE\}/);
+  assert.match(page, /not a sworn statement, and not legal advice/);
+  assert.match(page, /depends on the country and on the kind of document/);
+  // Linked from the security page, /verify and the help answer.
+  assert.match(src('src/app/security/page.tsx'), /href="\/security\/certificate"/);
+  assert.match(src('src/app/verify/page.tsx'), /href="\/security\/certificate"/);
+  assert.match(src('src/app/help/NotMe.tsx'), /href="\/security\/certificate"/);
+});
