@@ -27,7 +27,7 @@ import { carryRules } from './tplroles.ts';
 // Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
 import { fingerprintLines, noteCopyMailed } from './evidence.ts';
 // A witness for one signer: asked straight after that signer, never charged, a statement of their own (witness.ts).
-import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames, withWitnesses, witnessBits, witnessesSetAside, witnessedBy, assertWitnessesAfter } from './witness.ts';
+import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames, withWitnesses, witnessBits, witnessesSetAside, witnessedBy, assertWitnessesAfter, witnessesWaiting } from './witness.ts';
 import { waitsForName } from '../lib/witness.ts';
 // Conditional fields and formulas: checked when saved, worked out again from what is stored (logic.ts).
 import { saveLogic, settleLogic, hiddenAfter, hiddenOf, copyLogic, logicChanges } from './logic.ts';
@@ -2493,7 +2493,7 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       run('UPDATE envelopes SET expiry_warned_at=? WHERE id=?', t, e.id);
       const waiting = e.recipients.filter((r: any) => r.status === 'sent' || r.status === 'viewed');
       if (!held) for (const r of waiting) await notifyRecipient(e, r, 'expiring');
-      await notifySender(e, 'problems', `Expires soon: ${e.subject}`, 'This envelope expires in three days', [`It closes on ${momentForEmail(e.expires_at, senderZone(e))}. Still waiting on ${waiting.map((r: any) => r.name).join(', ') || 'nobody'}. You can extend the deadline if they need longer.`, ...untoldLines(waiting)], { label: 'Extend deadline', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
+      await notifySender(e, 'problems', `Expires soon: ${e.subject}`, 'This envelope expires in three days', [`It closes on ${momentForEmail(e.expires_at, senderZone(e))}. Still waiting on ${[...waiting.map((r: any) => r.name), ...witnessesWaiting(e)].join(', ') || 'nobody'}. You can extend the deadline if they need longer.`, ...untoldLines(waiting)], { label: 'Extend deadline', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
       warned++;
     }
     // "I never got it": if a request sits unopened, tell the sender once so they can share the link another way.

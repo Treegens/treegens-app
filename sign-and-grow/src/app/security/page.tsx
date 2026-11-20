@@ -7,7 +7,7 @@ import { WHO_CAN_SEE, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER } fr
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
 import { CHECK_PROVES, CHECK_LIMITS, smsProvider } from '@/lib/checks';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODES_PER_HOUR } from '@/lib/policy';
-import { SESSION_DAYS, HAND_OVER_TRIES } from '@/lib/policy';
+import { SESSION_MAX_DAYS, sessionWords, HAND_OVER_TRIES } from '@/lib/policy';
 import { TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES, TWO_STEP_REMEMBER_DAYS, TWO_STEP_RECOVERY_CODES, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_API_KEYS } from '@/lib/policy';
 import { MAIL_COPY_DAYS } from '@/lib/policy';
 import { IN_PERSON_LOCK, IN_PERSON_LIMITS } from '@/lib/phone';
@@ -140,7 +140,7 @@ export default function Security() {
           {signIn && <Point title={`With ${signIn}, you are known by the id they have for you, never by an email address alone.`}>When you sign in with {signIn} we check their signed answer ourselves and recognise you by the id it carries for you. An email address in that answer opens a login that already exists only when {signIn} itself confirms to us that the address is yours. Otherwise you sign in with your password once and connect it under Settings, and the owner of a login is emailed whenever a new way to sign in is connected to it.</Point>}
           <Point title="API keys and login sessions are stored as fingerprints.">An API key is shown once, when you create it. After that we only hold its hash.</Point>
           {/* The numbers are the ones the server holds sessions to (src/server/auth.ts reads them from policy.ts). */}
-          <Point title="A browser stays signed in while you use it, and you can see where you are signed in.">A browser is signed out {SESSION_DAYS} days after you last used Sign&Grow in it, and every visit starts the {SESSION_DAYS} days again. So a phone you use at least once a month does not ask you to sign in again, and a browser nobody uses is signed out by itself. Signing in on another device signs nothing out. Under Settings, Profile you see every browser that is signed in, with the device and browser it said it was and when it was last used, and you can sign out one of them or all the others at once. Changing your password also signs out every other browser.</Point>
+          <Point title={`A browser is signed out ${SESSION_MAX_DAYS} days after you signed in on it, and you can see where you are signed in.`}>{sessionWords()} Signing in on another device signs nothing out. Under Settings, Profile you see every browser that is signed in, with the device and browser it said it was and when it was last used, and you can sign out one of them or all the others at once. Signing out all the others also stops every other device from skipping the code of two-step login. Changing your password also signs out every other browser.</Point>
           {/* In-person signing: the lock is src/server/handover.ts, and the sentences are in src/lib/phone.ts. */}
           <Point title="Signing in person locks the host's account on that device.">
             {IN_PERSON_LOCK} After {HAND_OVER_TRIES} wrong passwords that browser is signed out. The signer&apos;s last screen asks them to hand the device back. The lock covers Sign&Grow in that one browser, and nothing else. What the person holding the device could still reach:{' '}

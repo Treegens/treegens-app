@@ -8,7 +8,7 @@ import { api, useLoad, fmtDate } from '@/components/ui';
 type Row = { id: string; device: string; browser: string; signed_in_at: string | null; last_used_at: string | null; current: boolean; handed_over: boolean };
 
 export function SignedIn() {
-  const [d, reload, failed] = useLoad<{ sessions: Row[]; days: number; noted_every_minutes: number }>(() => api('/me/sessions'));
+  const [d, reload, failed] = useLoad<{ sessions: Row[]; days: number; max_days: number; noted_every_minutes: number }>(() => api('/me/sessions'));
   const [busy, setBusy] = useState(false);
   // What the last thing done here led to. It stays on screen, and a screen reader is told.
   const [said, setSaid] = useState<{ text: string; err?: boolean } | null>(null);

@@ -46,7 +46,9 @@
     ".next-verify-comments/types/**/*.ts",
     ".next-verify-comments/dev/types/**/*.ts",
     ".next-repair-signercode/types/**/*.ts",
-    ".next-repair-signercode/dev/types/**/*.ts"
+    ".next-repair-signercode/dev/types/**/*.ts",
+    ".next-repair-bounces/types/**/*.ts",
+    ".next-repair-bounces/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

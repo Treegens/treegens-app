@@ -81,6 +81,16 @@ const statementStands = (e: any, w: any): boolean => {
   return !!w.witness_said_at && !!s?.completed_at && w.witness_saw === s.completed_at;
 };
 
+/**
+ * The witnesses an envelope waits for although nobody has been asked: their signer has signed, and the witness said
+ * "I was not there" or has not been named yet. In words for the sender's "expires soon" email (cronTick), which
+ * otherwise lists only the people who have the document.
+ */
+export function witnessesWaiting(e: any): string[] {
+  return (e?.recipients || []).filter((w: any) => isWitness(w) && w.status === 'pending' && signerOf(e, w)?.status === 'completed' && (w.witness_absent_at || waitsForName(w)))
+    .map((w: any) => `a witness for ${signerOf(e, w).name} (${w.witness_absent_at ? `${w.name} said they were not there, and nobody else has been named` : 'not named yet'})`);
+}
+
 /** Is it this witness's turn: their signer has signed, they have a name and an address, and they did not say "not there". */
 export function witnessDue(e: any, w: any): boolean {
   const s = signerOf(e, w);
