@@ -433,6 +433,8 @@ export async function witnessDone(e: any, w: any, actor: Actor) {
   if (!me || !s) return;
   const marks: string[] = [];
   if (sameEmail(me.email, s.email)) marks.push('address');
+  // The signer's own name (or a spelling of it) under another address: perhaps a namesake, perhaps the signer.
+  else if (samePerson(me.name, s.name)) marks.push('name');
   if (me.device_hash && me.device_hash === s.device_hash) marks.push('device');
   else if (me.ip && me.ip === s.ip && me.user_agent && me.user_agent === s.user_agent) marks.push('network');
   run('UPDATE recipients SET witness_marks=? WHERE id=?', marks.join(',') || null, w.id);

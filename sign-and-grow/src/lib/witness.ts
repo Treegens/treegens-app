@@ -43,7 +43,7 @@ export const statementText = (signer: string, date: string): string => `I was ph
 // browser or a private window on that device is not caught, so the words say browser. "network": the same internet
 // address and the same kind of browser, which can also be two devices in one place, so it is said as exactly that.
 // "name": the signer's own name (another spelling counts), at another address.
-export const MARK_WORDS: Record<string, string> = { address: 'same email address as the signer', device: 'same device and browser as the signer', network: 'same internet address and browser as the signer', name: 'same name as the signer' };
+export const MARK_WORDS: Record<string, string> = { address: 'same email address as the signer', device: 'same device and browser as the signer', network: 'same internet address and browser as the signer', name: 'same name as the signer, or a spelling of it, at another address' };
 export const marksOf = (stored: any): string[] => String(stored || '').split(',').filter((m) => m in MARK_WORDS);
 
 /** Same device: the only thing a sender is shown of the comparison is yes or no, next to what it can and cannot show. */
