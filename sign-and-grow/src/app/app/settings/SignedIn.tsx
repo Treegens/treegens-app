@@ -54,8 +54,8 @@ export function SignedIn() {
         : (
           <div className="row wrap" style={{ marginTop: 12 }}>
             <button className="btn" style={{ minHeight: 44 }} disabled={busy}
-              onClick={() => act(() => api('/me/sessions/sign-out-others', { method: 'POST' }).then((r) => setSaid({ text: `Signed out of ${r.signed_out} other ${r.signed_out === 1 ? 'browser' : 'browsers'}. This one stays signed in.` })))}>Sign out everywhere else</button>
-            <span className="muted small">Lost a phone, or used a computer that is not yours? This signs out every browser except this one. Changing your password does the same.</span>
+              onClick={() => act(() => api('/me/sessions/sign-out-others', { method: 'POST' }).then((r) => setSaid({ text: `Signed out of ${r.signed_out} other ${r.signed_out === 1 ? 'browser' : 'browsers'}. This one stays signed in.${r.two_step_devices_forgotten ? ` ${r.two_step_devices_forgotten === 1 ? 'One other device' : `${r.two_step_devices_forgotten} other devices`} will be asked for the two-step code again.` : ''}` })))}>Sign out everywhere else</button>
+            <span className="muted small">Lost a phone, or used a computer that is not yours? This signs out every browser except this one, and if you use two-step login, no other device skips the code any more. Changing your password signs the other browsers out too.</span>
           </div>
         )}
     </section>
