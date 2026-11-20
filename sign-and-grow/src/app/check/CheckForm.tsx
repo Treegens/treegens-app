@@ -193,10 +193,12 @@ export function CheckForm() {
           <p>Code {answer.code} belongs to an email that Sign&Grow really sent. It is not a fake.</p>
           <p>The document it was about was deleted on {fmtDate(answer.deleted_at, true)}, by its sender or together with the sender&apos;s account. When a document is deleted we delete what we knew about it too, so we can no longer tell you who sent it or what it was called. That is why the link in the email no longer opens anything.</p>
           <p><b>What to do.</b> There is nothing left to sign. If you were expecting this document, ask the person who sent it whether they will send it again. If you had already signed it, the copy that was emailed to you when it was completed is yours to keep.</p>
+          <p>If the email looked wrong to you, you can still report it below. We no longer know who it was sent to, but we do know which account sent it, and your report counts against that account like any other.</p>
           <div className="pub-actions-row">
             <button type="button" className="btn primary" onClick={again}>Check another code</button>
             <Link href="/help?topic=signing#contact" className="btn">Ask us about this email</Link>
           </div>
+          <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} />
         </div>
       )}
 

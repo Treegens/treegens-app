@@ -145,6 +145,22 @@ export function saveBody(values: Record<string, string>, version: number | null,
   };
 }
 
+/**
+ * Where the signing screen loads the pages of a document from. The address carries the fingerprint of the file, so
+ * a file the sender replaced has a new address, and the pages are fetched and drawn again instead of staying as they
+ * were while only the fields around them change.
+ */
+export const docUrl = (base: string, d: { id: string; sha256?: string | null }): string => `/api${base}/doc/${d.id}${d.sha256 ? `?v=${d.sha256}` : ''}`;
+
+/**
+ * Finish only works while the file of every document, as it is on the envelope now, is the one on the screen.
+ * `onScreen` holds, for each document, the fingerprint of the file whose pages have been drawn (or read out, in the
+ * text view). After the sender replaces a file this is false until the new pages are there, so nobody can finish on
+ * pages they were not shown.
+ */
+export const allOnScreen = (documents: { id: string; sha256?: string | null }[] | undefined | null, onScreen: Record<string, string>): boolean =>
+  !!documents && documents.every((d) => onScreen[d.id] === (d.sha256 || ''));
+
 export type Box = { x: number; y: number; w: number; h: number };
 export type FlagSide = 'above' | 'below' | 'right' | 'left';
 const overlap = (a: Box, b: Box) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));

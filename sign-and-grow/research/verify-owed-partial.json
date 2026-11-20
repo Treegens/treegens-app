@@ -443,5 +443,404 @@
    "Not a product problem, noted so nobody chases it: my dev server answered 500 on /api/public/check for an unknown code until I restarted it, because the forgotten_codes table was added to the schema while it was running; after a restart the existing database had the table. For a few minutes every public page reloaded in a loop while other people's dev servers were starting in the same folder and rewriting tsconfig.json."
   ],
   "suite": "npx tsc --noEmit -p .: 0 errors. npm test: 224 tests, 223 pass, 1 fail: tests/billing3.test.ts 'the plan nobody uses: stopped once, and \\\"keep it\\\" means keep it' (TypeError reading 'subject' at line 389). That file, src/server/routes-billing.ts, tests/helpers.ts and tests/stripe-fake.ts were being edited by someone else at that moment, so it looked like work in progress; two minutes later tests/billing3.test.ts alone passed 10 of 10. tests/integrity.test.ts, tests/billing2.test.ts, tests/trust.test.ts and tests/autoplace.test.ts run together: 55 of 55 pass. I changed no source file and no existing test. My dev server on port 3461 is stopped, .next-verify2-integrity and the throwaway data folder are deleted, and my two lines are out of tsconfig.json (the lines other people's dev servers added are theirs and still there). Probes, browser scripts, screenshots and the test log are in /home/user/treegens-app/sign-and-grow/tests/out/verify2-integrity/."
+ },
+ "verify2:lifecycle": {
+  "checks": [
+   {
+    "item": "1. A removed team member can sign in, gets a workspace of their own (welcome signatures once), and an existing user can accept an invitation",
+    "holds": true,
+    "evidence": "Probe tests/out/verify2-lifecycle/p1-teams.ts. Audit repro B1-B5 now: remove 200, login 200 with fresh:true, workspace \"Pat's workspace\", inbox 200, second sign-up 409, one welcome row of 3. New angles: (a) forgot password then reset then sign in after removal works (200, fresh). (b) Two sign-ins at the same moment make one workspace and one welcome row. (c) Leave by POST /account/leave, invited back, accepted while signed in, removed again: 1 membership, still one welcome row of 3. (d) Invitation in other capitals accepted; second accept 400; a stranger holding somebody else's token 400. (e) A nonsense or object invite never blocks the sign-in (200 with invite_error). (f) Existing database built with the code from commit c7b8e4f~1 (p6-existing-db.ts): welcomed_at, last_account_id, closing_reminded, hidden_at, ref, forget all arrive; backfill marks the self-made users welcomed and the invited one not; the invited one gets 3 on first own workspace, the self-made one gets nothing new. Browser (ui1.cjs, 1280x900 and 390x844): removed member signs in and sees \"You are no longer on a team, so we made you a workspace of your own...\"; an existing login follows /login?invite=... and lands in the team with \"You have joined Uma's workspace\". Left open by the fixer (no email to the removed person) is closed now: \"You were removed from X on Sign&Grow\" is sent. Notes, not failures: an existing login whose address was never confirmed joins by invitation (as admin too) and stays unconfirmed, while a new login made from the same invitation is confirmed at once; \"Forgot password?\" on /login?invite=... drops the invitation from the address.",
+    "still_broken": "",
+    "suggested_fix": "Optional: mark the address confirmed when an existing unconfirmed login joins with a valid invitation token (the token only ever went to that mailbox), and carry ?invite= through the Forgot password link."
+   },
+   {
+    "item": "2a. Nobody removes themselves; the successor is another member who stays; an unknown successor is a 400",
+    "holds": true,
+    "evidence": "p1-teams.ts. Audit repro I: DELETE /account/members/<own id> is 400 with \"You cannot remove yourself ... use \\\"Leave this team\\\" on the Team tab (POST /account/leave)\", also with ?to=<someone>. The route named in the message exists and the Team tab shows \"Leave this team\" to a member (ui1.cjs, both sizes), so the fixer's left-open note is closed. With an admin-scope API key: 403 \"An API key cannot remove someone from the team\" for self and for others, and 403 for leave. ?to= values usr_nobody, the leaver's own id, a space, a SQL fragment, 'null', 'undefined' and an account id are all 400 \"Choose another member ... Nothing was changed\" and the envelope keeps its sender. Empty ?to= falls back to the caller (documented). One gap: ?to= naming a member who is closing their own login is accepted by DELETE (200) although POST /account/leave refuses the same person; the envelopes then move a second time, to the owner, when that login is purged.",
+    "still_broken": "",
+    "suggested_fix": "In DELETE /account/members/:id refuse a successor whose users.closing_at is set, with the words POST /account/leave already uses."
+   },
+   {
+    "item": "2b. Hand-over takes bulk batches along and writes an audit line on every handed-over envelope",
+    "holds": false,
+    "evidence": "For a batch that has finished it holds: batch sender_id moves, successor opens and reminds it, each envelope has \"Handed over: From X <x> to Y <y>: X was removed from the team\" with the admin as actor, chain still verifies (fixer's test and p1-teams.ts 2.S4). It does not hold for a batch that is still going out: tests/out/verify2-lifecycle/p1b-bulk-race.ts.",
+    "still_broken": "Run node --experimental-strip-types --no-warnings tests/out/verify2-lifecycle/p1b-bulk-race.ts (a mail transport that takes 4 ms per email stands in for a real mail server). Bea starts POST /bulk with 40 rows; after 3 rows have gone out the owner calls DELETE /account/members/<Bea>?to=<Sam> (200, handed_over 5). The bulk call carries on and answers 200 sent 40. Result: 36 of the 40 envelopes have sender_id = Bea, who is no longer in the account; only 4 belong to Sam. Sam owns the batch and its page lists those envelopes, but GET /envelopes/<one of them> is 404 for him; they carry no \"Handed over\" line; when its signer finishes, \"Completed: Bea template\" with the PDF is emailed to Bea and nothing to Sam; Bea, signed in again, cannot see them either; the owner's report lists \"Bea Bulk: 36 sent\". This is the audited outcome (the person who left keeps receiving the team's signed documents) by another route. Cause: sendBatch() in src/server/routes-envelopes.ts keeps the sender_id it was started with (copyEnvelope(... senderId: b.sender_id ...)) for every later row. The same happens with POST /account/leave and with a login that is deleted mid-send.",
+    "suggested_fix": "In sendBatch read the batch's current sender for each row (SELECT sender_id FROM bulk_batches WHERE id=?) and stop with a row error when that person is no longer a member of the account; or have handOver() refuse or wait while the batch id is in sendingNow."
+   },
+   {
+    "item": "3a. After an account is deleted (at once or after the grace period) nothing personal from its envelopes remains: audit rows, email copies, signer uploads, unreferenced blobs",
+    "holds": true,
+    "evidence": "tests/out/verify2-lifecycle/p2-delete.ts scans every text column of every table and the blob folder, in both modes (now, grace), with billing on. Gone after deletion: the owner's IP, user id, signer IP, both addresses of a corrected recipient, reporter IP and report text, bulk row person, public form visitor and their IP, invited address, contact, document text, help text, audit rows, replaced links, reports, the completed envelope the sender had hidden, the signer's attached file and its blob (7 blobs before, 2 after, both belong to another account, none orphaned). Another account's envelope, blob, signer link and stored emails survived that run. Two small leftovers: (1) a file the signer uploaded and did not attach stays up to 30 days (files row with no account, name \"wrong\"), which the timer removes later and no list mentions; (2) delivery logs of a webhook the owner had deleted before closing stay for good, see 3c.",
+    "still_broken": "",
+    "suggested_fix": "In purgeUser also delete account-less files uploaded through the tokens of the account's envelopes, or say \"within 30 days\" in the list."
+   },
+   {
+    "item": "3b. Money records that stay carry no more personal detail than needed",
+    "holds": false,
+    "evidence": "payments.receipt_url is NULL and billing_log.detail is blank after deletion, refunds.why holds no name. But the signature ledger keeps email addresses.",
+    "still_broken": "p2-delete.ts (either mode): after the account is gone, SELECT ref FROM credits WHERE account_id=<deleted> returns \"rcp_...|sig.ner@example.com\" and \"rcp_...|hidden.signer@example.com\": one line for every paid signature, each with the signer's address (sigRef() in src/server/credits.ts is recipient id + address). p7-leftovers.ts: a sender who had a client sign under the sender's own address (paid, as the rules say) and then deletes the account leaves \"rcp_...|olive.private@example.com\" in credits, while the goodbye email they just received says \"What we keep ...: the record of payments, refunds and of signatures bought and used, without your name or your email address.\" The fixer's test did not catch it because it runs without a payment provider, so no signature lines exist there.",
+    "suggested_fix": "In purgeUser, for each deleted account: UPDATE credits SET ref = substr(ref, 1, instr(ref, '|') - 1) WHERE account_id=? AND reason='signature' AND instr(ref, '|') > 0 (the recipient id alone is unique, so UNIQUE(account_id, reason, ref) still holds). Add a test with STRIPE_SECRET_KEY set."
+   },
+   {
+    "item": "3c. /security, Settings > Your data and /help say exactly what is deleted and what is kept",
+    "holds": false,
+    "evidence": "All three print DELETED_WITH_ACCOUNT and KEPT_AFTER_DELETION from src/lib/policy.ts (seen in the browser at 1280x900 and 390x844 for a solo owner; an owner with other people sees the \"make someone else the owner first\" notice instead; a member is told \"After 30 days your login is removed for good\"). No em dash, no sideways scroll. Most lines match what the code does (see 3a). Two lines do not.",
+    "still_broken": "(1) KEPT list line 1 and both closing emails: \"signatures bought and used, without your name or your email address\". The ledger keeps signer addresses, and the owner's own address when a client signed under it (3b). (2) DELETED list line 3: \"webhooks and their delivery logs\". p2-delete.ts: create a webhook, send and complete envelopes, DELETE /webhooks/<id>, then delete the account: 11 webhook_deliveries rows remain with envelope ids and bodies that hold the envelope subjects (DELETE /webhooks/:id never removes its log, and purgeUser only removes logs of webhooks that still exist). (3) Not in either list: a recipient's genuine signed PDF is answered with \"No match ... is not a completed document from this service, or it was changed after signing\" on /verify once the sender's account is deleted (p8-verify-after-delete.ts: match true before, match false after).",
+    "suggested_fix": "Fix 3b. Delete webhook_deliveries in DELETE /webhooks/:id, and in purgeUser also WHERE envelope_id IN (the account's envelopes). For /verify keep a fingerprint of final_sha256 for deleted documents as forgotten_codes does for security codes, answer \"this was a completed document, its sender has since deleted it\", and add that to the KEPT list."
+   },
+   {
+    "item": "3d. Closing uses stopBillingFor(account) instead of the raw fetch that ignored failures",
+    "holds": false,
+    "evidence": "POST /me/delete calls stopBillingFor for every owned account. p9-billing-at-close.ts with the provider down: \"delete now\" answers 502 and deletes nothing, closing with 30 days goes ahead and queues the cancel, the queued cancel still completes after the account row is gone once the provider is back, and a charge that slips through for the deleted account is refunded in full. So the money is safe. But the guard itself can be walked past and one email then says something untrue.",
+    "still_broken": "p9b-delete-now-twice.ts: provider down for subscription calls. POST /me/delete {now:true} answers 502 \"...nothing was deleted...Try again in a few minutes\". The same call again seconds later, provider still down, answers 200 {closed:\"now\"}: the account is deleted while the subscription is still \"active\" at the provider and the cancel is still queued (billing_todo done_at NULL). The first try ended the plan locally, so on the second try stopBillingFor has nothing left to stop and reports success. Same root in p9-billing-at-close.ts: after a failed \"delete now\", choosing the ordinary close sends \"Any subscription has been stopped and you will not be charged again\" although the provider has confirmed nothing.",
+    "suggested_fix": "Treat an open 'cancel' row in billing_todo for the account (done_at IS NULL) as not confirmed: either inside stopBillingFor or in /me/delete before deciding `confirmed`."
+   },
+   {
+    "item": "4a. While an account is closing: keys off, no invitations, no joining, no sending, with a message that says the owner signing in restores it",
+    "holds": true,
+    "evidence": "tests/out/verify2-lifecycle/p3-closing.ts, audit repro (audit2 section 7) rerun: admin-scope and send-scope keys get 403 on export, invite, send, bulk, correct and remind with \"This account is being closed, so the key is switched off ... Signing in to the app before then restores everything\". Sign-up with an invitation made before the closing: 403 \"<name> is being closed and will be deleted on <date>. Nobody can join it now. If its owner signs in before that day, the account is restored at once\" and no login row is created. POST /invites/accept while signed in: 403 same words. Sign-in from the invitation: 200, not joined, invite_error with the same words; the account still has 1 member. Public form: page says closed:true, start is 503 with the neutral text, nothing of the visitor kept (the fixer's left-open note was closed by a later change). New angles: a password reset alone does not restore (key still 403), signing in does (restored:true, key 200, form open); a team member who closes only their own login has their key switched off with its own message, cannot be made owner (400), and at purge their envelope passes to the owner with a \"Handed over ... closed their login\" audit line by System and the key stays listed as stopped under their name. Noted, acceptable: timer reminders for envelopes already out keep going to signers during the 30 days, and signers can finish them.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "4b. Seven days before the purge the owner is emailed the date, how to keep the account and how to export first",
+    "holds": true,
+    "evidence": "p3-closing.ts: no email at 30 or 7.5 days left; one at 6.9 days; still one at 6.5, 3 and 0.5 days. Subject \"Your Sign&Grow account will be deleted on 2026-11-27\", text names the date, \"To keep the account: sign in before that day\", \"To take a copy of everything first: sign in, go to Settings, then Your data, and choose Export everything ... close it again afterwards ... That starts a new 30 days\", button to /login. Restored and closed again: exactly one new reminder. Settings says \"We email you 7 days before the end\" (seen in the browser).",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "5. Members use every template but change or delete only their own; admins change any; a member sees only the folders and batches of what they can see",
+    "holds": true,
+    "evidence": "tests/out/verify2-lifecycle/p4-templates-hidden.ts. Audit repros now: member PUT on a colleague's template 403, DELETE of the owner's template 403, folders [] and batches [] for a member who has none. New angles: the same with the member's API key (PUT, PATCH, DELETE all 403; folders [], batches 0, batch page 404, batch void 404, batch remind 404, export of the batch 400 nothing to export); correct, extend, void, send and recipient-view on a template are 404; PUT with kind switched in the body 403; template untouched; use, clone and changing the clone work; an admin who is not the owner can change it; ?folder= and ?sender= of a colleague return nothing of theirs; reports are own only. Browser (both sizes): a member sees Use and Send to a list on the owner's template and Edit and Delete only on their own; the template page shows only Use. Template folders stay shared, as stated in the README.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "6. A completed envelope its sender deletes leaves the sender's lists; every recipient's link, download and \"sent to me\" list keep working; the dialog says so",
+    "holds": true,
+    "evidence": "p4-templates-hidden.ts. Audit repro S4 now: after DELETE (200, kept_for_recipients:true) signer link 200, signer download 200, copy recipient link and download 200, Find my documents emails the second signer, the signer's /inbox lists it, /public/check with the email's code says genuine and gives the link. Sender side: list, search by name, search by id and box=completed are empty; open, download, clone, recipient-view, void, extend, remind, correct, PUT and PATCH are all 404; export says nothing to export; reports show 0; /impact still counts it (decided); /public/verify of the signer's PDF matches with chain ok; one audit line \"Removed from the sender's lists\". New angles: API key delete hides too; two deletes at once give 200 and 404 with one audit line; a delete that crosses the last signature is refused (\"Void this envelope before deleting it\") and nothing is hidden; a member-deleted envelope survives the member's removal and the signer still downloads it; an envelope that was voided after one person signed is now also only hidden (someone changed this while I was checking; link and download stay 200). Browser, both sizes: dialog \"...leaves your lists, your search, your export and your reports. You cannot bring it back ... It is a completed document, so it is not only yours. Everyone who was on it keeps their copy ... It is removed for everyone when this account is closed\", button \"Delete from my account\"; an unsigned voided envelope still says \"Delete for good\". Confirmed in the browser and the signer download stayed 200. Left open and thin: no way back, also not for an admin (see new bugs); a batch whose completed envelope was hidden reads \"0 of 1\" for a batch of 2 and its row still names an envelope that answers 404.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "7. Support references use a short code from the unambiguous alphabet",
+    "holds": true,
+    "evidence": "tests/out/verify2-lifecycle/p5-support.ts: 300 requests, 300 references matching ^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$, all distinct, the same one in the answer, the acknowledgement subject, the email to the people who answer and the stored row; a follow-up request opened through the private link after the reopening window gets one of the same kind; a request from an old database keeps the reference it was answered with (p6-existing-db.ts). Not covered: alerts the software files itself, see new bugs.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "8a. Sign-in opens the workspace used last",
+    "holds": true,
+    "evidence": "p1-teams.ts: after joining a team sign-in opens the team; after POST /auth/switch to the own workspace sign-in opens that; when the last one used was a team the person was removed from, sign-in opens the workspace they still have and is not \"fresh\"; switching into a team you are not in is 403 and does not change last_account_id. Browser: after signing in from an invitation the menu shows the team as current. Small thing: POST /auth/switch with an API key answers 200 and rewrites its owner's last_account_id (see new bugs).",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "8b. A signed-in person sees their own support requests and their status",
+    "holds": true,
+    "evidence": "Browser (ui1.cjs, 1280x900 and 390x844): the \"Your requests\" card is on /help under the form for a signed-in person, shows the reference just filed, no sideways scroll; nothing is shown to someone not signed in. p5-support.ts: audit repro A1-A3 now returns 0 requests to a login whose address is not confirmed; once the address is confirmed the request is listed with its words held back (held:true, message empty) because the writer was unknown. A request filed while signed in for another address is listed without thread or reply. Status goes open to answered after an operator answers. Another user gets 0 in the list and 404 on reply and solved. An API key gets 403. Not signed in: 401.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "8c. A support request about signing that names an envelope the writer is a recipient of also tells the sender and adds an audit line",
+    "holds": true,
+    "evidence": "Through the API it holds (p5-support.ts): one \"Problem signing: <subject>\" email to the sender, one audit line \"Help requested\" by \"Sign&Grow help form\", once a day per recipient, junk envelope ids ignored, the answer has the same keys whether or not it matched, the chain still verifies, a stranger's words are never passed on (also not from a signed-in but unconfirmed writer, and not when a confirmed user types a third party's address). What does not hold is that any screen ever sends such a request: see the first new bug. Also: it fires for an envelope that is already completed (\"Sam Signer may be stuck on your document\"), and for one the sender deleted from their lists, where the button in the email opens a 404.",
+    "still_broken": "",
+    "suggested_fix": "In helpAsked() return early unless e.status is 'sent' (or 'expired'), and skip the email when e.hidden_at is set."
+   },
+   {
+    "item": "8d. Help links on /f/[slug], /verify-email, every mode of the sign-in form and the editor top bar; support address in the public footer and the app menu; a loud warning in production without SUPPORT_EMAIL",
+    "holds": true,
+    "evidence": "Browser, both sizes, no sideways scroll anywhere: /login, /forgot, /reset and /login?invite= show \"Cannot get in? Get help\" to /help?topic=cannot-log-in#contact; /signup shows \"Help\"; /verify-email shows \"Need a hand? Get help\"; /f/<slug> shows \"Something not working? Get help\"; the editor top bar has Help (\"?\" on the phone) to /help?topic=sending#sending in a new tab. With SUPPORT_EMAIL=help@signgrow.example the footer of /security prints the address as a mailto link and the app menu prints it under Help. Production: I made a real build into .next-verify2-lifecycle and ran next start twice. Without SUPPORT_EMAIL the log has \"[config] SUPPORT_EMAIL IS NOT SET. ... nobody is emailed when a help request arrives ...\" exactly once; with it set, zero times. The build folder is deleted again.",
+    "still_broken": "",
+    "suggested_fix": ""
+   },
+   {
+    "item": "8e. A paid or multi-person workspace with one owner or admin shows a prompt on the home page to add a second admin",
+    "holds": true,
+    "evidence": "Browser, both sizes: an owner with two people and one admin sees \"This workspace depends on one person. ... Add a second admin\" with a button to the Team tab; a solo free workspace does not; a plain member does not. The condition in src/app/app/page.tsx is role not member, admins < 2, and (members > 1 or plan not seedling). GET /me returns admins and members (fixer's test). The Team tab carries the matching notice. Wording no longer claims the account can never be stuck.",
+    "still_broken": "",
+    "suggested_fix": ""
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Deleting one account wipes other customers' stored emails, and makes their next renewal look unreminded",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts, purgeUser(): the two DELETE FROM emails statements that match on esc(user.name) and on the address anywhere in the html",
+    "detail": "Steps (tests/out/verify2-lifecycle/p3-closing.ts, section 3): a paying customer Vic has 8 stored emails that belong to no envelope (confirmation, welcome, receipt, \"Heads up: your plan renews on ...\", an invitation he sent, a password reset, a help request and its acknowledgement). A stranger signs up under the name \"Sent with\" (two words, so the name rule applies; every email of ours ends \"Sent with Sign&Grow\") and calls POST /me/delete {now:true}. Result: all 8 of the other people's copies are gone (0 left). Vic's next renewal then files the operator alert \"Vic's workspace was renewed without a reminder reaching them first\", because routes-billing.ts counts a reminder only when its email row exists. Everyday version: two customers called John Smith; when one deletes his account the stored copy of the invitation the other John Smith sent disappears (3.Y1, 3.Y2). The address match is a substring match as well, so deleting joe@example.com also matches billy.joe@example.com wherever that is printed. Nothing that is still waiting to be sent is touched, so no email is lost in transit; what is lost is the 90-day record of what was sent to other customers, plus false alerts for the operators. Suggested fix: never match on the name. Record on each emails row who it is about (user id or account id) when it is written and delete by that; until then match the address only as a whole (to_email equal, or \"<address>\" in brackets, or bounded by non-address characters)."
+   },
+   {
+    "title": "No screen ever names the envelope in a help request, so a stuck signer's message never reaches the sender",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/components/sign/parts.tsx (Help link), src/components/sign/deadEnds.tsx (three \"Get help from a person\" links), src/app/help/tools.tsx (ContactForm)",
+    "detail": "The server side of item 8c only fires when the request carries envelope_id. The help form sends one only when the page was opened as /help?envelope=env_..., it has no field to type one, and no page links that way: grep finds no link with envelope=, and in the browser (ui1.cjs, both sizes) the signing screen's only help link is plain \"/help\". The signing email does not contain the envelope id either. So a real signer who clicks Help and writes \"I cannot sign\" produces a request with no envelope: the sender is not told and no audit line is written. README claims \"A message about signing that names an envelope the writer is on also reaches its sender, who can usually fix it at once\". Suggested fix: make the signing screen and the dead-end screens link to /help?topic=signing&envelope=<id>#contact (the signing view already returns envelope.id), and on the server, when topic is signing and no envelope is named, tell the senders of the envelopes that are out for that address."
+   },
+   {
+    "title": "A genuine signed PDF fails the public verify page once its sender's account is deleted",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts POST /public/verify; src/app/verify/page.tsx",
+    "detail": "tests/out/verify2-lifecycle/p8-verify-after-delete.ts: a signer downloads the completed PDF; /public/verify answers match:true. The sender deletes the envelope from their lists: still match:true. The sender deletes the account (POST /me/delete now:true): the same file now gets {match:false} and the page prints \"No match. <file> is not a completed document from this service, or it was changed after signing.\" Both halves of that sentence are false for this file. The KEPT list tells the sender \"Signed PDFs your recipients downloaded or were emailed. Those are theirs\", and the export README says to check any signed PDF at /verify. The fixer listed this as broken but outside the list. Suggested fix: when an envelope is forgotten keep sha256(final PDF) with a date, as forgotten_codes does for security codes, and answer \"This is an untouched document that was completed here on <date>. Its sender has since deleted it, so we can no longer show who signed.\""
+   },
+   {
+    "title": "A plain member can pause or delete any colleague's public form, and lock a colleague's template",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts: GET, PATCH and DELETE /powerforms/:id, POST /powerforms",
+    "detail": "Same class as item 5, one step to the side (p4-templates-hidden.ts 5.N1 to 5.N8). Ann (member) makes a public form on her template. Bob (member) lists it by name with GET /powerforms, pauses it with PATCH /powerforms/<id> {active:false} (200, active is 0) and deletes it with DELETE (200, row gone). Bob can also put a form of his own on Ann's template; Ann then gets 400 \"A PowerForm still uses this template. Delete the PowerForm first\" on her own template, and envelopes started from Bob's form go out in Ann's name. Also: GET /contacts shows every member the name and address of everyone any colleague sent to, and any member can delete them. Suggested fix: store who made a form and allow PATCH and DELETE to that person and admins only; let the template's owner or an admin delete a template together with forms others put on it, or refuse POST /powerforms on a template the caller may not change."
+   },
+   {
+    "title": "An envelope a member deleted is invisible to the account's admins too, with no way back",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts: mine(), GET /envelopes, GET /export (hidden_at)",
+    "detail": "p4-templates-hidden.ts 6.M1 to 6.M5: an admin opens a member's completed envelope (200). The member deletes it. The admin now gets 404 on it, it is in no list and not in the export (400 nothing to export), although the document, its signed PDF and its audit trail are still stored and every recipient still has it. Nobody can undo it. Before the fix the envelope was destroyed outright, so this is not worse than it was, but the company is now the only party to its own signed contract that cannot get it. Suggested fix: let admins list hidden envelopes (a \"Deleted by sender\" filter) and restore them, or include them in the admin's export."
+   },
+   {
+    "title": "Alerts the software files for operators still get the old kind of reference",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts tellOperators(); src/server/routes-support.ts refOf()",
+    "detail": "tests/out/verify2-lifecycle/p7b-alert-ref.ts: eight automatic alerts show in the operator queue as E3XEQMVW, J-ZKUU3A, XV_GGSWA, K03VDL4R, ZUWMDPQI, FQRJAULO, L7GTNRWA, SCN4OZ-M (dashes, underscores, 0 and O, I and L). Handing one to a colleague sends \"Request J-ZKUU3A was handed to you\". Customers never see these. tellOperators inserts the row without ref, so refOf falls back to the upper-cased tail of the id. Suggested fix: give alerts a shortCode() too and tell them apart by a flag instead of by the missing ref (isAlert relies on it today). Also: GET /operator/support has no search, so a reference a customer reads out cannot be looked up except by eye in the list."
+   },
+   {
+    "title": "An API key can change which workspace its owner lands in at the next sign-in",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts POST /auth/switch",
+    "detail": "p1-teams.ts 8a.6: POST /auth/switch {account_id:<another workspace the person is in>} with a send-scope key answers 200. No session changes, but users.last_account_id is rewritten, so the person's next sign-in opens that workspace. Suggested fix: refuse the route for API keys (it is about a browser session), or skip the last_account_id update when c.auth.via is api_key."
+   },
+   {
+    "title": "Deleting an account at once and signing up again hands out the welcome signatures again",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts ownWorkspace(); src/server/routes-trust.ts purgeUser()",
+    "detail": "p3-closing.ts 3.W1: sign up (3 welcome signatures), POST /me/delete {now:true}, sign up again with the same address: 3 more. welcomed_at lives on the user row, which is deleted. It can be repeated up to the sign-up limit of 10 an hour per address. The brief for item 1 asked that the same person is not given free signatures twice; this is the same person by address. Suggested fix: keep a fingerprint of the address (a keyed hash, no name) with the date the welcome signatures were given, and skip the grant when it is found."
+   }
+  ],
+  "regressions": [
+   "Account deletion now deletes other customers' stored emails. Before the fix batch purgeUser left the emails table alone. Now: user A has stored copies of emails that belong to no envelope; user B signs up with a two-word name that appears in those emails (\"Sent with\" matches all of them, \"John Smith\" matches another John Smith's invitation) and deletes their account with POST /me/delete {now:true}; A's copies are gone and A's next renewal raises a false \"renewed without a reminder\" alert. Steps and output: tests/out/verify2-lifecycle/p3-closing.ts, lines 3.X1 to 3.Y3.",
+   "Not from the lifecycle work, and it looked like work in progress by someone else: during my runs the tree was being edited (src/server/envelopes.ts, a new src/server/fakenotice.ts, db.ts). npm test went 144 of 228 passing (every failure was \"no such column: edited_how\" from envelopes.ts writeContent), then 224 of 228, then 227 of 234, with a different set of failing tests each time, all in abuse, integrity, billing and the API description tests. I waited and retried three times over about fifteen minutes. tests/lifecycle.test.ts passed 15 of 15 on every run."
+  ],
+  "overclaims": [
+   {
+    "where": "src/lib/policy.ts KEPT_AFTER_DELETION line 1 (printed on /security, /help and Settings > Your data) and both closing emails in src/server/routes-trust.ts",
+    "claim": "\"The record of payments, refunds and of signatures bought and used, without your name or your email address\"",
+    "reality": "credits.ref keeps \"<recipient id>|<address>\" for every paid signature: every signer's address, and the owner's own when a client signed under it. Proved after deletion in p2-delete.ts and p7-leftovers.ts."
+   },
+   {
+    "where": "src/lib/policy.ts DELETED_WITH_ACCOUNT line 3",
+    "claim": "\"Its contacts, API keys, webhooks and their delivery logs, bulk send records, public forms and reports from recipients\" are deleted for good",
+    "reality": "The delivery log of a webhook that was deleted before the account stays for good: 11 rows with envelope ids and subjects were left in p2-delete.ts."
+   },
+   {
+    "where": "\"Your Sign&Grow account is closing\" email, src/server/routes-trust.ts POST /me/delete",
+    "claim": "\"Any subscription has been stopped and you will not be charged again.\"",
+    "reality": "After a \"delete now\" that failed with 502 because the provider was down, the ordinary close sends this sentence while the cancel is still queued and the subscription is still active at the provider (p9-billing-at-close.ts). A charge in between is refunded by the software, so the money comes back, but the sentence is not true when it is sent."
+   },
+   {
+    "where": "research/fix-batch2.json, fix:lifecycle item 3, and the 502 text of POST /me/delete",
+    "claim": "\"deleting at once answers 502 until [the provider] has [confirmed]\"; \"so nothing was deleted ... Try again in a few minutes\"",
+    "reality": "Asking a second time, seconds later and with the provider still down, answers 200 and deletes the account with the subscription still active at the provider (p9b-delete-now-twice.ts)."
+   },
+   {
+    "where": "src/app/verify/page.tsx, the \"No match\" result",
+    "claim": "\"<file> is not a completed document from this service, or it was changed after signing.\"",
+    "reality": "Shown for an untouched, genuinely completed PDF once its sender's account has been deleted (p8-verify-after-delete.ts)."
+   },
+   {
+    "where": "README.md, row \"Support is a chatbot loop...\"",
+    "claim": "\"A message about signing that names an envelope the writer is on also reaches its sender, who can usually fix it at once.\"",
+    "reality": "True for a call to the API. No page ever fills in the envelope: the signing screen and the dead-end screens link to plain /help and the form has no field for it, so in the product the sender is never told."
+   },
+   {
+    "where": "research/fix-batch2.json, fix:lifecycle item 2",
+    "claim": "Hand-over \"moves envelopes, drafts, templates and bulk_batches ... and writes one 'Handed over' audit line per envelope\"",
+    "reality": "True for what exists at that moment. Rows of a bulk send that is still running are sent afterwards in the removed person's name: 36 of 40 in p1b-bulk-race.ts, with no audit line and invisible to the successor."
+   }
+  ],
+  "screens": [
+   "Signing screen, envelope out for signature, 1280x900 and 390x844: the only help link is \"Help\" to plain /help. It does not carry the topic or the envelope, so the help form cannot tell the sender (see the new bug on item 8c).",
+   "Editor of a template that belongs to a colleague, opened by a plain member by typing /app/envelopes/<template id>/edit, 1280x900 and 390x844: the whole editor opens with Replace file, Remove and every input enabled. After a change the red bar says \"Your latest changes are not saved yet. This template belongs to Uma Owner. You can use it and copy it, but only Uma Owner or an admin of your team can change or delete it...\" with a \"Try now\" button that can never succeed. Nothing is saved, so no harm, but the page should open read-only or send the member back with an offer to copy. Screenshot: tests/out/verify2-lifecycle/shots/5-desktop-member-edits-owner-template.png.",
+   "Settings > Your data as an owner who has other people in the workspace, both sizes: the two lists of what is deleted and kept are not shown at all, only the notice to hand the account over first. Acceptable, but the lists are then only on /help and /security for that person.",
+   "No sideways scroll at 390x844 or 1280x900 on any screen I opened: /login, /signup, /forgot, /reset, /verify-email, /f/<slug>, /security, /help, app home, Settings Team and Your data, Templates, a completed envelope with its delete dialog, the editor. No em dash in any of that text or in src, README.md and .env.example.",
+   "Checked and fine at both sizes: the second-admin prompt on the home page, the remove-member dialog (\"...bulk sends pass to the person you choose ... keeps their own login ... you can invite them back\"), the delete dialogs for a completed envelope, for one voided after someone signed (\"Someone has already signed it, so it is not only yours\") and for an unsigned voided one (\"Delete for good\"), the Templates page for a member (no Edit or Delete on a colleague's), the \"Your requests\" card on /help, the support address in the footer and the app menu, the first-screen notices for a removed member and for joining from an invitation."
+  ],
+  "suite": "npx tsc --noEmit -p .: clean (exit 0) on the first and on the last run. In between it failed twice in src/server/envelopes.ts (\\\"Import declaration conflicts with local declaration of 'posesAs'\\\", \\\"Cannot find name 'notOpen'\\\") while another engineer was moving the scam filter into a new src/server/fakenotice.ts; it was clean again about two minutes later.\\n\\nnpm test, three full runs because the tree was being edited under me: (1) 228 tests, 144 pass, 84 fail, every failure a 500 from \\\"no such column: edited_how\\\" in envelopes.ts writeContent (a column used before it was added to db.ts). (2) 228 tests, 224 pass, 4 fail: abuse.test.ts \\\"the filter for fake payment notices...\\\" (200 !== 422) and \\\"the daily limit...\\\" (200 !== 503), integrity.test.ts \\\"what a signer does in their own field...\\\" and \\\"a signer cannot finish on a page that shows the document as it was...\\\". (3) 234 tests, 227 pass, 7 fail: abuse.test.ts tests 1, 2, 3, 5, 6, billing.test.ts \\\"the code GROWalition makes the monthly plan free\\\" (403 !== 200), and \\\"the published API description matches the routes that exist\\\". The failing set changed on every run and none of it is in the lifecycle files, so I report it as someone else's work in progress, not as a lifecycle regression. tests/lifecycle.test.ts alone: 15 of 15 pass on every run, including the last.\\n\\nA production build (next build into .next-verify2-lifecycle) succeeded and was started twice to check the SUPPORT_EMAIL warning. tests/e2e.mjs was not run.\\n\\nHousekeeping: my dev server and both production starts on port 3463 are stopped, .next-verify2-lifecycle is deleted, and tsconfig.json no longer holds my two lines (it still holds two lines of another server, .next-verify2-signerux, which I left alone). I changed no source file and no existing test. Probes, logs and screenshots are in /home/user/treegens-app/sign-and-grow/tests/out/verify2-lifecycle/ (p1-teams.ts, p1b-bulk-race.ts, p2-delete.ts, p3-closing.ts, p4-templates-hidden.ts, p5-support.ts, p6-existing-db.ts, p7-leftovers.ts, p7b-alert-ref.ts, p8-verify-after-delete.ts, p9-billing-at-close.ts, p9b-delete-now-twice.ts, ui1.cjs, ui2.cjs, shots/). The earlier skeptic's folder tests/out/verify-lifecycle/ did not exist, so nothing from it was used."
+ },
+ "verify2:signerux": {
+  "checks": [
+   {
+    "item": "1. Saved account signature at a shared address: never applied unseen, only offered when the account's name and address both match",
+    "holds": true,
+    "evidence": "Auditor's browser2.mjs B redone in tests/out/verify2-signerux/ui-1.cjs at 390x844 and 1280x900. Alex Rivera has an account at the family address with a saved signature and is signed in. On Blair Rivera's own link a tap on Sign opens the adopt dialog with tabs Type, Draw, Upload only, 0 pictures on the field, count stays '1 of 1 left'. Same through Text view. On Alex's own link the tabs are Saved, Type, Draw, Upload with Saved selected ('This is the signature saved on your Sign&Grow account. Nothing is on the document yet'), 0 pictures before 'Use this signature' and 1 after; initials behave the same. By function (p5-scan-progress-marks.ts): accountMarks gives nothing for 'A. Rivera' against the account 'Alex Rivera', nothing in person."
+   },
+   {
+    "item": "1, new angle. A signature saved WITH THE DOCUMENT (the item 2 autosave) is put on another person's page unseen when the name on the request changes at a shared address",
+    "holds": false,
+    "evidence": "ui-2.cjs part 1b (both window sizes, shots/1b-phone-review.png) and p5-scan-progress-marks.ts section 1b. Passing the document on to someone at the same address showed the same at 16:56 UTC; another engineer changed reassignRecipient in the working tree during my run (it now always clears), and ui-2.cjs part 1 now finds 0 pictures. The two routes below are still open on the current code.",
+    "still_broken": "(a) Jo sends to 'Alex Rivera' at the family address with a signature field. Alex opens the link on a phone, adopts a typed signature, the page autosaves it. Jo fixes the request with Correct: POST /envelopes/:id/correct {recipient_id, name:'Blair Rivera'}, same address (200, link unchanged). Blair opens that link in a fresh browser: she is not asked to agree again, her signature field already shows Alex's picture with the label 'Your signature. Change or clear it', the bar says '2 of 3 left', no dialog. The review sheet says 'You are signing as Blair Rivera' above 'Your signature: Alex Rivera'. Finish answers 200. Alex's typed answer ('Alex private 12345') is on her page too. (b) Same result when Fix my name changes 'Alex Rivera' to 'Blair Rivera' on an envelope where Blair is not another recipient (applied, because 'Rivera' is shared).",
+    "suggested_fix": "src/server/envelopes.ts: in the same-inbox branch of correctRecipient and in renameSelf, when the new name is not the old one in another spelling (not sameName and not a one-letter fix), treat it as another person: clear signature_png, initials_png, consent_at and the signed state of signature and initials fields (clearAnswers does all of it). Or store the name the marks were made under and have restoreMarks ignore marks made under another name."
+   },
+   {
+    "item": "2. Finish later carries the adopted signature and initials; another device gets them back; opening never wipes marks",
+    "holds": true,
+    "evidence": "Auditor's browser2.mjs A redone in ui-2.cjs part 2 at both sizes. Device A: the autosave body held values, version, signature_png (29,094 characters) and initials_png (5,634); 'Finish later' said 'Saved. Use the link in your email to come back and finish.' Fresh device B: 2 signed pictures, 0 save calls in the 4 seconds after opening, sender's count unchanged at 2 of 3. A field cleared on B and tapped again opened the dialog with Saved first ('the signature you chose for this document earlier, on another device or in another tab'), nothing applied until confirmed. Reload keeps the marks. API (p5): B typing does not remove A's signature; null, oversize, text, SVG and empty pictures leave the stored one alone; a save after Finish is 400 and changes nothing. Left open, and understated by the fixer: not only a 'large' drawn signature misses the closing-page save, every drawn one does (132,358 characters at 390x844, 63,882 at 1280x900, limit 60,000). Drawn and left within 1.5 seconds: the server holds the field as signed with no picture, the sender sees '1 of 3 filled' while the signer is asked again. Acceptable as a known gap."
+   },
+   {
+    "item": "3. Fix my name cannot make the name equal to another recipient's or a name with no word in common; the sender always hears; audit trail",
+    "holds": true,
+    "evidence": "p1-name.ts with all four of the sender's notification settings off. 'Blair Rivera' on Alex's link: {applied:false}, names unchanged, email 'Name change asked for' to the sender, audit line 'Name change asked for'; the review sheet shows the refusal in words at both sizes (ui-1.cjs, shots/3-phone-fix-name-refused.png). Also refused: 'Blair  RIVERA', 'Rivera, Blair', with a zero-width space, 'Blair-Rivera', 'Bl\u00e4ir Rivera', 'Mrs Blair Rivera', 'Blair Rivera Jr'. 'Peter Pan' for 'Jon Smyth' is refused and compared with the sender's wording even after an earlier fix. An applied fix ('John Smith') emails 'Name corrected' with settings off. Two fixes at the same moment keep sender_name. After the sender corrects the name, the next fix is compared with the sender's new wording. The left-open note is not accurate for short names: 'Jo' to 'Joe', 'Al' to 'Ali', 'Li' to 'Lee', 'Bob' to 'Bobby' are refused and go to the sender (nobody is locked out: they can sign under the old name). Two holes around this rule are listed under new bugs: look-alike names, and a free signature that stays free."
+   },
+   {
+    "item": "4. Dead links: flag cleared by more time, reopen, resend; own flag for the access-code alert; expired behind a code still alerts; replaced link opened tells the sender once",
+    "holds": true,
+    "evidence": "Auditor's S9 redone and widened in p2-deadlinks.ts. Expired link opened twice: 1 'Could not open'. After reopen and a second expiry: 2. Ten opens at the same moment after a third expiry: 3 in all. More time given with an API key clears the mark. Three wrong codes, then expiry behind a code that was never typed: two alerts with different words ('wrong access code three times', 'deadline passed'). Each envelope of a bulk batch alerts once. A public form start that ran out alerts its owner once. Replaced links: handed on, person removed, role changed each gave one 'Old link opened' with the right words and one audit line, also when the old tab only called /save (410). A replaced link opened after voiding tells nobody. Left open (alerts follow the 'When something needs you' setting; unknown links tell nobody) is acceptable."
+   },
+   {
+    "item": "5. 'Email me the current link' answers honestly",
+    "holds": true,
+    "evidence": "Auditor's S9 removedRecipient redone in p2-deadlinks.ts and on the page in ui-2.cjs part 5 at both sizes (shots/5-phone-removed.png). Address corrected: 'Sent.' and exactly 1 email to the new address, none to the old. Person removed: 'There is no current link to send. The person this link was for is no longer on the document...', 0 emails to them. Voided, declined, expired: the same sentence for all three ('it was cancelled, declined or ran out of time'), 0 emails. Not their turn yet: 'waiting', 0 emails. Mail server refusing: 'delayed'. Tokens that are null, a number, an object, an array, 5,000 characters or SQL: 'unknown' with 200. No name or address in any answer. No sideways scroll at 390. Notes for other owners: 10 asks an hour per connection each email the current holder, and the route still emails in the name of a paused sender."
+   },
+   {
+    "item": "6. Find my documents: signed-but-unfinished included, people named at a shared address, more than fit is said with how to get them",
+    "holds": true,
+    "evidence": "Auditor's S5 and S6 redone in p3-find-copy.ts through POST /public/links/find. Signed while others have not: listed as 'you signed it, others have not finished yet', whatever letter case the address is typed or stored in. Three people on one address (two signers and a copy): 'for Alex Rivera', 'for Blair Rivera', 'for Casey Rivera \u00b7 your copy', each name next to its own link. Voided and then deleted by the sender after one signature: still listed ('you signed it, and it was not completed by everyone'). 120 documents: three asks gave 1 to 50, 51 to 100, 101 to 120 with 'N more did not fit' and 'That was the last of them'; the fourth ask in the hour is 429. Nothing found: 200 and no email. In person: not listed. The paging goes wrong when a new document arrives between two asks: see new bugs. Left open (3 asks an hour, place kept in memory) is acceptable apart from that."
+   },
+   {
+    "item": "7. Scans: PNG and JPEG always flagged, PDF pages without text named, flag stored and returned, shown on reopening and at Review",
+    "holds": true,
+    "evidence": "Auditor's S12 redone in p5-scan-progress-marks.ts, uploads made with an API key: PNG [true,[1]], JPEG [true,[1]], PDF with pages 1 and 3 as pictures [true,[1,3]], a page of spaces flagged. The flag comes back on POST /envelopes, GET and PUT /envelopes/:id, on a clone, on a template made from it and after sending; replacing the picture with a typed file removes it. Editor at 1280x900 and 390x844 (ui-3.cjs, shots/7-phone-review.png): both warnings at upload, again after leaving and opening the draft, again at Review with 'Go to the documents', which goes back to step 1; no sideways scroll. Limits, not failures of the brief: a scan with any printed text on each page (a page number, a scanner app's stamp) is not flagged ([false,[]]); files from before the change have no flag (left open, acceptable)."
+   },
+   {
+    "item": "8. Small things: tab title, sender's count, 'Sign here' pointer, 44 px controls on a phone",
+    "holds": true,
+    "evidence": "Title (ui-title.cjs, both sizes): 'Lease for 12 Elm Street \u00b7 Sign&Grow' on consent, document, after signing, done screen and after reload; also on the closed screen. Count (p5 section 8): 15 fields with a 3-button group over two pages, an optional 2-button group, a lone radio, optional initials and checkbox, automatic, read-only and prefilled fields and a note: signer's screen 8 things, sender's progress 8; after one radio, a text and the signature both say 4 done, 0 required left; the envelope page shows '1 of 3 fields filled in so far' for a 3-button group, a text and a signature (ui-3.cjs). Pointer (ui-1.cjs): signature box with a printed line right above and two right below; the pointer went to the right of the box at both sizes and covers no text and no field (shots/8-phone-pointer-at-signature.png, 8-desktop-pointer-at-signature.png). Sizes measured at 390x844: Report this request 126x44, Fix my name 204x44, How we count 110x44, sender's email link 206x44, and Help, Other actions, the view switch, Download, Change, Save name all 44 high."
+   },
+   {
+    "item": "9. Refused emails are tried again with growing gaps, queued rows picked up, the record tells the truth, the sender is told at the end, the envelope page shows it, expired one-time links are not sent",
+    "holds": true,
+    "evidence": "Auditor's a5-delivery redone in p4-mail.ts with a stand-in mail server. Refused at send: audit 'Envelope sent', 'Email could not be sent yet', no 'Sent to recipient'; deliveries (read with an API key too) failed, tries 1, next try set. Two timers at the same moment against a slow mail server: handed over once, audit 'Email sent'. Voided meanwhile: the request is dropped ('its link no longer opens the document'), the 'Voided' notice is still delivered. Older than two days: dropped, audit 'Email could not be sent', sender told. Sender's setting off: no email, record and page still say it. Mail server down for everything: 2 emails in all, no loop. Bulk of 3: three 'could not be sent yet', three deliveries on retry. Rows from before the change: a queued one is closed with a reason, a failed one is left alone. Envelope page at 1280x900 and 390x844 (ui-3.cjs, ui-3b.cjs, shots/9-phone-delayed.png): badge 'Email delayed', 'Not sent yet. The mail server would not take it on ... We try again around ...', then 'Email failed', 'Could not be sent after 6 tries ... We have stopped trying'; queued says 'Waiting to go out since ...'. The fixer's test covers the reset link's expiry and passes. Three smaller holes are under new bugs (late request and reminder, withdrawn invitation, the sender's own request). Left open (bounces, timer interval) is acceptable."
+   },
+   {
+    "item": "10a. Completion screen: 'How we count' opens in a new tab, nothing sells",
+    "holds": true,
+    "evidence": "ui-1.cjs at 390x844 after finishing in the browser: link has target=_blank and rel=noreferrer, text 'How we count (opens in a new tab)', 110x44; no 'Everything paid' sentence; no 'Start free', 'Sign up', 'Start signing' or 'trial' on the screen."
+   },
+   {
+    "item": "10b. Someone who signed can still download what they signed after void, decline or expiry, marked as not completed",
+    "holds": true,
+    "evidence": "Auditor's S13 and S4 redone in p3-find-copy.ts and on the page in ui-2.cjs part 10 (shots/10b-phone-closed-with-download.png). Voided, declined by the other signer, expired, voided through a bulk batch, and voided then deleted by the sender (answer kept_for_recipients:true): the signer's download is 200 and opens with 'Not completed by everyone ... so this is not a finished agreement' and the reason; people who had not signed, the one who declined and copy recipients get 403. Approver, viewer and in-person signer who finished: 200. Behind an access code: 401 without it, the closed screen offers 'Enter your access code to download it', the right code unlocks and the download is 200. Closed screen at both sizes shows 'Download what you signed' (54 px high) and the file is a PDF. One case answered 403 at 16:56 (signed, set aside by the sender's change, then voided) and answers 200 now: another engineer added keepsCopy and earlierCopy to the working tree during my run. The left-open point (sender deleting) is closed as well. One way to lose the copy remains: see new bugs, frozen access code on a closed envelope."
+   },
+   {
+    "item": "10c. Two signers on one address each get their own completion email with their own link",
+    "holds": true,
+    "evidence": "p3-find-copy.ts 10c: three people on one address written in three letter cases (two signers, one copy) plus the sender as a signer. Four 'Completed' emails, each with its own recipient_id and its own link; headings 'For Alex Rivera: Your document is complete', 'For Blair Rivera: ...', 'For Casey Rivera: ...', plain for the sender; with a mail server each carried the PDF. The fixer's test passes."
+   },
+   {
+    "item": "10d. Document view for screen-reader and keyboard users",
+    "holds": true,
+    "evidence": "ui-1.cjs at both sizes: a visually hidden sentence before the view switch says the pages are pictures and that Text view has the whole document; the canvas has role=img and 'Page 1 of 1, shown as a picture'; the tick box is a native input in a label ('Read the terms, optional'); radio buttons are native, share the name f-Colour and sit in role=radiogroup 'Colour' with aria-required; no div with role checkbox or radio is left. Keyboard at 1280x900: Space ticked the box, Space then ArrowRight moved the choice to the second button, the focused control shows a 3 px outline. Not checked with a real screen reader (left open, acceptable)."
+   },
+   {
+    "item": "10e. Wrong-code and too-many-tries messages say how long to wait and whom to ask",
+    "holds": true,
+    "evidence": "ui-2.cjs part 10 at both sizes (shots/10e-phone-wait.png). Wrong code: 'That access code is not right. Jo Sender chose the code and can tell you what it is: <email>. It is not in the email we sent you.' Sixth wrong code: 'That makes 5 wrong codes from your internet connection in a quarter of an hour. Wait 15 minutes and try again, or ask Jo Sender for the code: <email>. Nothing you filled in is lost.' General limit (answer simulated in the browser): 'Wait 10 minutes, then try again. If you do not have the code, ask Jo Sender for it: <email>.' The 10 minutes still match the window in find() in routes-sign.ts. No sideways scroll at 390."
+   },
+   {
+    "item": "Overclaim fix: emails to people who only sign carry no marketing line",
+    "holds": true,
+    "evidence": "p8-footer.ts and p3: the request, a reminder, 'Your documents on Sign&Grow', the voided notice, the completion email and the help form's acknowledgement to a signer all end with 'Sent with Sign&Grow.' and none contains 'every dollar plants'."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "'Fix my name' keeps a free own-signature free under another person's name",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts renameSelf (free is never looked at again)",
+    "detail": "Steps (p1-name.ts section J, STRIPE_SECRET_KEY set): Maria Garcia, maria@example.com, sends a document to herself under her own name. recipients.free is 1, balance 3. Open the signing link, agree, POST /sign/:token/name {name:'Pedro Garcia'}: answer {applied:true}. Finish. Result: free is still 1, the balance is still 3 and there is no 'signature' line in credits, so Pedro Garcia signed at the sender's address for nothing. The same change made by the sender with Correct sets free to 0 (J2). The rule is: free only under the sender's own name and address. Fix: in renameSelf, when the recipient is free and the new name is no longer the sender's own (isSelf is false), either do not apply it and ask the sender, or do what takeOverCost does: check the balance and set free=0."
+   },
+   {
+    "title": "A stored signature and typed answers stay on the request when its name is changed to another person at the same address",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts correctRecipient (same-inbox branch) and renameSelf; src/components/sign/fields.ts restoreMarks",
+    "detail": "Full steps and result are in the check '1, new angle'. In short: Alex signs a field (autosaved), the sender corrects the name to Blair Rivera at the same address, Blair opens the same link and finds 'Your signature: Alex Rivera' already on her field, with Alex's typed answers, and can finish (200). Fix as given there: clear marks and consent when the name changes to something that is not a spelling of the old one."
+   },
+   {
+    "title": "'Fix my name' accepts look-alike and one-letter-off versions of another recipient's name, and added titles",
+    "severity": "low",
+    "where": "src/server/envelopes.ts renameSelf (the `taken` check compares exact words only)",
+    "detail": "Steps (p1-name.ts section B): envelope with Alex Rivera and Blair Rivera. On Alex's link POST /sign/:token/name with each of: 'Blaire Rivera', 'Blai Rivera', 'Bliar Rivera', 'Bla\u0131r Rivera' (dotless i), '\u0412lair Rivera' (Cyrillic first letter), 'B. Rivera', 'Rivera'. Result: all applied; the envelope then lists for example '\u0412lair Rivera' and 'Blair Rivera', which read the same on screen and on the certificate. Also applied (p6-odd.ts): 'Sam Signer, President of the United States', 'Sam Signer (on behalf of Blair Rivera, CEO)', and a name ending in the direction mark U+202E. The sender is told each time. A refused request can be repeated 5 times an hour per recipient and each one emails the sender whatever their settings (5 emails in section G). Fix: compare with other recipients using sameWord (one letter off) after folding look-alike letters, refuse a word that mixes scripts, strip control and direction characters, treat added words that are not in the sender's wording as a question for the sender, and send the question once per distinct name."
+   },
+   {
+    "title": "'Find my documents' skips the newest document when one arrives between two asks, and says the list is complete",
+    "severity": "low",
+    "where": "src/server/envelopes.ts emailMyLinks (the place is an offset kept in memory per address)",
+    "detail": "Steps (p3-find-copy.ts 6c2): 60 documents for nora@example.com. Ask once: the email lists New 060 down to New 011 ('numbers 1 to 50 of 60'). The sender sends document 61. Ask again within a day. Result: the second email says 'These are numbers 51 to 61 of 61, newest first' and 'That was the last of them', lists New 011 a second time down to New 001, and New 061, the one just sent and waiting for a signature, is in neither email. Only a third ask shows it. Anyone who types the address also moves the place. Fix: remember the (updated_at, id) of the last line sent and continue after it, and put anything newer than the first line of the previous email at the top; or send all parts at once as several emails."
+   },
+   {
+    "title": "A refused request or reminder is delivered after the person has already signed",
+    "severity": "low",
+    "where": "src/server/mail.ts tooLate()",
+    "detail": "Steps (p4-mail.ts B and C, mail server refusing): (B) send; the request fails; the sender copies the signing link and passes it on; the person signs and the envelope completes; the mail server comes back; the timer runs. Result: the signer now gets '<sender> sent you a document to sign' with the button 'Review and sign', and the audit trail gets 'Email sent' after 'Envelope completed'. (C) A reminder is refused, Ada signs, the timer runs: Ada gets 'Reminder: ...' after signing. Fix: mark emails that ask someone to act in the payload and drop them quietly in tooLate() when that recipient is completed or declined."
+   },
+   {
+    "title": "A withdrawn or replaced team invitation is still delivered later, with a link that no longer works",
+    "severity": "low",
+    "where": "src/server/mail.ts tooLate(); src/server/routes-account.ts POST /account/invites (no expiresAt, no validity check)",
+    "detail": "Steps (p4b-invite.ts): mail server refuses; POST /account/invites {email}; DELETE /account/invites/:id; mail server back; run the timer. Result: '<name> invited you to ...' is handed to the mail server, and its invite token is no longer in the invites table. The same happens to the first email when an invitation is sent a second time (the old token is deleted). Fix: in tooLate(), for a link with ?invite=, drop the email quietly unless that token is still an open invitation."
+   },
+   {
+    "title": "An access code frozen after the envelope was closed can never be reset, so the signer's copy is lost and the screen tells them to ask for something the sender cannot do",
+    "severity": "low",
+    "where": "src/server/routes-sign.ts POST /sign/:token/unlock and ask-code; src/server/envelopes.ts correctRecipient, requestAccessCode",
+    "detail": "Steps (p7-frozen-copy.ts): Ada (access code 123456) signs; the sender voids the envelope; ten wrong codes are typed on her link from any device (401 nine times, then 423). The right code from a new browser: 423 'This access code was entered wrongly 10 times, so it is frozen ... Jo Sender has been told and can set a new code. Ask them for the new one.' Download: 401. The sender tries POST /envelopes/:id/correct {recipient_id, access_code:'654321'}: 400 'Only envelopes that are out for signature can be corrected.' 'Ask the sender' on the frozen screen: 400 'This document is not waiting for an access code.' Result: the copy promised after closing cannot be reached again from any new browser. Fix: once an envelope is closed keep only the per-device wait and do not count towards the freeze, or allow a new access code and ask-code on a closed envelope for recipients who keep a copy."
+   },
+   {
+    "title": "A damaged PDF answers 500 'Something went wrong on our side' to a signer who attaches it (and to a sender who uploads it)",
+    "severity": "low",
+    "where": "src/server/pdf.ts inspectPdf (doc.getPages() is outside the try); was the same before this batch",
+    "detail": "Steps (p6-odd.ts): POST /sign/:token/upload with a file that starts with %PDF and is cut short ('%PDF-1.4 this is not really a pdf'). Result: 500 'Something went wrong on our side. Please try again. If it keeps happening, tell us this reference: req_...', and the signing screen adds 'Choose the file again, or try a PDF, PNG or JPEG.' A file of just '%PDF' gets the proper 400 'That file could not be read as a PDF.' Fix: put getPages() and the size reading inside the same try and answer 400 with that sentence."
+   },
+   {
+    "title": "When the sender's own request email is refused, the record says nothing at all about it",
+    "severity": "low",
+    "where": "src/server/envelopes.ts advance() and the onMailOutcome listener",
+    "detail": "Steps (p4-mail.ts K): the sender signs their own document, the mail server refuses the email. Result: the audit trail holds only 'Envelope sent': neither 'Sent to recipient' nor 'Email could not be sent yet', because advance() writes nothing for a refused email and the listener skips emails to the sender's own address. Fix: let the listener write the audit lines for any recipient email and only skip the extra notice to the sender, or write the line in advance()."
+   }
+  ],
+  "regressions": [
+   "Before this batch a signature adopted in the browser reached the server only with Finish, so a second person at the same address who opened the request after a name change found an empty signature field (the audit's browser2.mjs A: 'Signature, required. Sign here', 0 signed pictures). Now the page saves the signature with the document, and that person finds the first person's signature on their field. Steps: send to 'Alex Rivera' at a shared address; Alex adopts a signature and waits 2 seconds; the sender corrects the name to 'Blair Rivera' (same address); open the same link in a fresh browser at 390x844 or 1280x900. Result: the field shows Alex's signature as 'Your signature', the bar says '2 of 3 left', the review says 'You are signing as Blair Rivera' above the picture 'Alex Rivera', and Finish is accepted (ui-2.cjs part 1b). The same after Fix my name within the shared surname."
+  ],
+  "overclaims": [
+   {
+    "where": "Frozen-code screen in src/app/sign/[token]/page.tsx, frozenText in src/server/routes-sign.ts, and the 'Access code frozen' email to the sender (newCodeHow in src/server/envelopes.ts)",
+    "claim": "'<Sender> has been told and can set a new code. Ask them for the new one, then open your link again.' and to the sender: 'open the envelope, choose Correct next to their name and type a new access code'.",
+    "reality": "On a voided, declined or expired envelope Correct answers 400 'Only envelopes that are out for signature can be corrected', and 'Ask the sender' answers 400 'This document is not waiting for an access code' (p7-frozen-copy.ts)."
+   },
+   {
+    "where": "Consent wording in src/lib/policy.ts (practical) and the closed screen",
+    "claim": "'afterwards you can download what you signed from this same link, also if the document is later cancelled, declined or runs out of time.'",
+    "reality": "True in every case I tried except one: after ten wrong codes on a closed envelope the code is frozen for good and the copy cannot be opened from a new browser again (p7-frozen-copy.ts)."
+   },
+   {
+    "where": "'Here are your documents' email, emailMyLinks in src/server/envelopes.ts",
+    "claim": "'These are numbers 51 to 61 of 61, newest first.' and 'That was the last of them.'",
+    "reality": "When a document arrived after the first email, the second email repeats one old document and leaves out the newest one, which is in neither email (p3-find-copy.ts 6c2)."
+   },
+   {
+    "where": "Refusal shown under 'Fix my name' (message built in renameSelf)",
+    "claim": "'\"Joe\" is a different name from \"Jo\", not another spelling of it'",
+    "reality": "It is a one-letter spelling fix. Names of fewer than three letters never count as a spelling of each other, so 'Jo' to 'Joe', 'Al' to 'Ali' and 'Li' to 'Lee' are all sent to the sender with these words. The fixer's note that a one-letter fix of a single-word name still works does not hold for them."
+   },
+   {
+    "where": "Email sent by 'Email me the current link' when the envelope is already completed (notifyRecipient kind 'resent')",
+    "claim": "Button 'Review and sign' under 'You asked for a fresh link. Here it is.'",
+    "reality": "The document is complete and there is nothing to sign; the link opens the finished document (p2-deadlinks.ts '5 completed')."
+   }
+  ],
+  "screens": [
+   "Signing screen, any state, 390x844 and 1280x900, dev server only: after a hot reload caused by another engineer saving a file, the tab title went back to 'Sign&Grow \u00b7 e-signatures that plant trees' and stayed there (the effect sets the title only when the subject changes). In a quiet run the title held through consent, document, done screen and reload (ui-title.cjs), so I could not prove this outside a dev server.",
+   "No other screen problem found at 390x844 or 1280x900 on: consent, document view, adopt dialog with Saved, review sheet with the name refusal, done screen, closed screen with download, locked screen with wrong-code and wait messages, replaced-link page in all three answers, envelope page with a delayed and a failed email, editor step 1 and Review with scan warnings. None of them scrolls sideways at 390."
+  ],
+  "suite": "npm test, run once from 17:21 to 17:23 UTC: 240 tests, 239 pass, 1 fail. The failure is tests/billing.test.ts 'the code GROWalition makes the monthly plan free' (403 instead of 200 at line 360) and it still failed alone two minutes later. Cause (p9-billing-fail.ts): the test confirms the address by reading users.verify_token and calling POST /auth/verify, which no longer confirms it, so the send answers 'Confirm your email address before you send'. tests/helpers.ts was being changed by another engineer at the same time, so this looked like work in progress and is not one of my items. tests/signerux.test.ts alone: 12 of 12 pass (one run at 17:23 could not load because './envelopes.ts does not provide an export named notifySender'; gone a minute later, someone else's edit in progress). npx tsc --noEmit -p .: errors only in new files of other engineers, at 17:22 and again at 17:25: src/server/pdftext.ts (TS2322, PDFDict is not assignable to PDFOperatorArg) and src/server/signercode.ts (TS2459, notifySender and senderOf are not exported from envelopes.ts). No error in any file of the signerux list; looked like work in progress. During my run the other engineers' edits stopped my dev server three times (columns edited_how and via not yet in db.ts, a function declared twice in envelopes.ts, an npm install); I waited and restarted my own server with a fresh data folder and touched no source. Cleanup: my dev server on port 3464 is stopped, .next-verify2-signerux is deleted, tsconfig.json is back to the committed text (git diff is empty). next-env.d.ts (generated, git-ignored, not mine to edit) still names my deleted folder until the next dev server rewrites it. Probes, their output and screenshots are in /home/user/treegens-app/sign-and-grow/tests/out/verify2-signerux/."
  }
 }

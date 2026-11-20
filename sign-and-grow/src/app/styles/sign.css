@@ -61,7 +61,9 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 .sg-actions { margin-top: 16px; }
 .sg-state .sg-actions { justify-content: center; }
 .sg-state .sg-actions .btn.lg { width: auto; flex: 1 1 220px; }
-.sg-top { margin-bottom: 12px; }
+/* A notice can quote what the sender changed, and that may hold a word with no place to break (a file fingerprint, a
+   long address). It wraps anywhere, so the page never becomes wider than a phone. */
+.sg-top { margin-bottom: 12px; overflow-wrap: anywhere; }
 .sg-gap { margin-top: 14px; }
 .sg-problem { margin: 12px 0; text-align: left; }
 .sg-confirmed { margin: 4px 0 0; padding: 14px 16px; text-align: left; font-size: 16px; }
@@ -253,3 +255,12 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
   .sg-who dd a { display: inline-flex; align-items: center; min-height: 44px; }
   .sg-who > div { align-items: center; }
 }
+
+/* A name the handwriting fonts cannot write: one plain style, not four that look alike. */
+.sg-sigplain .sigstyle { cursor: default; font-size: 26px; min-height: 60px; display: flex; align-items: center; }
+.sg-sigplain p { margin: 6px 0 0; }
+/* Characters the signed PDF cannot print, listed before the person finishes. */
+.sg-cannot-print ul { margin: 6px 0; padding-left: 18px; }
+.sg-cannot-print li { overflow-wrap: anywhere; }
+/* A value in a right-to-left script starts at the right edge of its box, like the stamp on the signed PDF. */
+.sg-doc .sg-val[dir], .sg-doc .field.other[dir] { text-align: start; }

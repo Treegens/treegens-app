@@ -10,7 +10,8 @@ import { loadEnvelope, reportAbuse } from './envelopes.ts';
 import { audit, helpAsked, type Actor } from './envelopes.ts';
 import { stopBillingFor } from './routes-billing.ts';
 import { sameEmail } from './credits.ts';
-import { unpaidDailyRecipients } from '../lib/policy.ts';
+import { unpaidDailyRecipients, PAID_TRUST_DAYS } from '../lib/policy.ts';
+import { advance, emailRefusal, hasNotPaid, dailyCap, PAUSED_MEANS } from './envelopes.ts';
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
 
@@ -64,10 +65,24 @@ route('POST', '/public/check/report', async (c) => {
     const old = get('SELECT * FROM retired_tokens WHERE check_code=? ORDER BY retired_at DESC LIMIT 1', code);
     const to = old?.envelope_id ? get('SELECT to_email FROM emails WHERE envelope_id=? AND recipient_id=? AND at <= ? ORDER BY id DESC LIMIT 1', old.envelope_id, old.recipient_id, old.retired_at)?.to_email : null;
     e = to ? loadEnvelope(old.envelope_id) : null;
-    who = e ? { name: old.sent_to || to, email: to } : null;
+    // The id says whether this was the visitor of a public form (see reportAbuse).
+    who = e ? { id: old.recipient_id, name: old.sent_to || to, email: to } : null;
   }
-  if (!who && code.length === 12 && get('SELECT 1 x FROM forgotten_codes WHERE code_hash=?', sha256(code)))
-    throw bad('That code is from an email we really sent, but the document it was about has been deleted since, and with it everything that said who sent it. So we cannot file a report against it here. If the email worries you, use the contact form on the help page and tell us what it says: a person will look into it.', 404);
+  const gone = !who && code.length === 12 ? get('SELECT * FROM forgotten_codes WHERE code_hash=?', sha256(code)) : null;
+  if (gone) {
+    // The code of an email whose document was deleted since. Nothing says who it was sent to any more, but the
+    // account it came from is known, so the report is filed against that account and counts like any other: voiding
+    // and deleting what was sent does not put a sender out of reach of the people who still hold the email. One
+    // code is one person, counted once, also when they had reported the document before it was deleted.
+    const account = gone.account_id ? get('SELECT id FROM accounts WHERE id=?', gone.account_id) : null;
+    if (!account) throw bad('That code is from an email we really sent, but the document it was about has been deleted since, and nothing is left that says who sent it. So we cannot file a report against it here. If the email worries you, use the contact form on the help page and tell us what it says: a person will look into it.', 404);
+    if (!gone.reported) {
+      const holder = `the holder of an email about a deleted document (${sha256(code).slice(0, 10)})`;
+      await reportAbuse({ id: '', gone: true, account_id: account.id }, { name: `Someone, as ${holder}`, email: holder }, b, { name: 'Someone holding the email', ip: c.ip, ua: c.ua });
+      run('UPDATE forgotten_codes SET reported=1 WHERE code_hash=?', gone.code_hash);
+    }
+    return { ok: true, deleted: true };
+  }
   if (!who) throw bad('We do not recognise that security code, so we cannot tell which email you mean. Use the contact form on the help page and tell us what the email says.', 404);
   await reportAbuse(e, who, b, { name: `${who.name} <${who.email}>`, ip: c.ip, ua: c.ua });
   return { ok: true };
@@ -145,11 +160,11 @@ route('GET', '/export', (c) => {
   return new Response(zipStream(entries()), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="sign-and-grow-export-${now().slice(0, 10)}.zip"` } });
 });
 
-// A stored file is taken off the disk once nothing points at it any more: no uploaded file, no signed PDF, and no
-// email that is still waiting to be sent with it attached.
+// A stored file is taken off the disk once nothing points at it any more: no uploaded file, no signed PDF, no copy
+// of what someone signed before a correction, and no email that is still waiting to be sent with it attached.
 export function removeUnusedBlobs(shas: string[]) {
   for (const sha of new Set(shas.filter(Boolean))) {
-    if (get('SELECT 1 x FROM files WHERE sha256=?', sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)) continue;
+    if (get('SELECT 1 x FROM files WHERE sha256=?', sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)) continue;
     fs.rmSync(path.join(dataDir(), 'blobs', sha), { force: true });
   }
 }
@@ -174,12 +189,20 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
       if (f) (shas.push(f.sha256), run('DELETE FROM files WHERE id=?', fid));
     }
     shas.push(get('SELECT final_sha256 s FROM envelopes WHERE id=?', eid)?.s);
+    // The copies of what people signed before a correction go with the envelope too (earlier_signatures.copy_sha256).
+    shas.push(...all('SELECT copy_sha256 s FROM earlier_signatures WHERE envelope_id=? AND copy_sha256 IS NOT NULL', eid).map((x) => x.s));
     // The emails about this document are still in people's inboxes, each with its security code. Only a fingerprint
     // of each code is kept, so the check page can still tell their holders the email was real. It says nothing
-    // about who or what, and goes after a year (see purge).
-    for (const r of all(`SELECT check_code c FROM recipients WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL
-        UNION SELECT check_code FROM retired_tokens WHERE check_code IS NOT NULL AND (envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?))`, eid, eid, eid))
-      run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at) VALUES (?,?)', sha256(r.c), now());
+    // about who or what, and goes after a year (see purge). While the account stays, the fingerprint also keeps
+    // the account's id (which names nobody), so the holder of such an email can still report it and the report
+    // counts against the sender. `reported` notes that this person had reported the document already, so their
+    // report is not counted a second time under the code.
+    const owner = account ? null : get('SELECT account_id a FROM envelopes WHERE id=?', eid)?.a;
+    for (const r of all(`SELECT check_code c, email to_email FROM recipients WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL
+        UNION SELECT t.check_code, (SELECT m.to_email FROM emails m WHERE m.envelope_id=? AND m.recipient_id=t.recipient_id AND m.at <= t.retired_at ORDER BY m.id DESC LIMIT 1)
+          FROM retired_tokens t WHERE t.check_code IS NOT NULL AND (t.envelope_id=? OR t.recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?))`, eid, eid, eid, eid))
+      run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at, account_id, reported) VALUES (?,?,?,?)', sha256(r.c), now(), owner,
+        r.to_email && get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', eid, r.to_email) ? 1 : 0);
     run('DELETE FROM audit WHERE envelope_id=?', eid);
     run(`DELETE FROM emails WHERE envelope_id=?${account ? '' : ` AND ${NOT_WAITING}`}`, eid);
     run('DELETE FROM retired_tokens WHERE envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?)', eid, eid);
@@ -235,7 +258,7 @@ export async function tellTeamsAboutKeys(who: { id: string; name: string }, keys
         'Anything that still uses one of them gets an error that says the key has stopped. To carry on, create a new key and put it into the integration. The stopped keys stay on your list until you clear them.']],
     }[what] as [string, string, string[]];
     for (const a of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin') AND m.user_id!=?", accountId, who.id))
-      await sendMail({ to: a.email, subject: `${n} of ${team} ${state}: ${why}`, heading: `${n} ${state}`, lines, cta: { label: 'Open API keys', url: `${baseUrl()}/app/settings?tab=developers` } });
+      await sendMail({ to: a.email, about: who.id, subject: `${n} of ${team} ${state}: ${why}`, heading: `${n} ${state}`, lines, cta: { label: 'Open API keys', url: `${baseUrl()}/app/settings?tab=developers` } });
   }
 }
 // The same list for the person who is closing, in the email they get about it.
@@ -284,6 +307,9 @@ export function purgeUser(userId: string): any[] {
       run('DELETE FROM webhook_deliveries WHERE webhook_id IN (SELECT id FROM webhooks WHERE account_id=?)', a.id);
       run('DELETE FROM bulk_batches WHERE account_id=?', a.id);
       run("UPDATE billing_log SET detail='' WHERE account_id=?", a.id);
+      // The ledger of signatures stays (accounts have to be kept), but each "signature used" line is named after
+      // the recipient and their address. The address goes; the line keeps a name of its own.
+      run("UPDATE credits SET ref = substr(ref, 1, instr(ref, '|')) || id WHERE account_id=? AND reason='signature' AND instr(ref, '|') > 0", a.id);
       run('UPDATE payments SET receipt_url=NULL WHERE account_id=?', a.id);
       run('DELETE FROM accounts WHERE id=?', a.id);
     }
@@ -305,14 +331,12 @@ export function purgeUser(userId: string): any[] {
     // notices) or name them as "Name <address>" (a help request passed on to the people who answer). Emails about
     // a document somebody else sent them are part of that sender's record and stay with it.
     run("DELETE FROM emails WHERE envelope_id IS NULL AND (lower(to_email)=lower(?) OR instr(lower(html), '&lt;' || lower(?) || '&gt;') > 0)", user.email, user.email);
-    // Copies of emails to OTHER people that mention the person: an invitation they sent, a notice to a team's admins
-    // about their API keys or that they left. Matched on the address anywhere in the email, and on the name when it
-    // is a full name (two words or more), which is how those emails name people. A copy that still has to be
-    // delivered is left alone and goes with the rest after MAIL_COPY_DAYS.
-    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND instr(lower(html), lower(?)) > 0`, esc(user.email));
-    if (user.name.trim().split(/\s+/).length > 1)
-      run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND (instr(html, ?) > 0 OR instr(subject, ?) > 0)`, esc(user.name), user.name);
+    // Copies of emails to OTHER people that are about the person: an invitation they sent, a notice to a team's
+    // admins about their API keys or that they left. Each such email is marked with the login it is about when it
+    // is written (emails.about_user), and only that mark decides: never a name or a part of an address, which
+    // other customers can share. A copy that still has to be delivered is left alone; it goes with every other
+    // copy outside a document's record after MAIL_COPY_DAYS.
+    run(`DELETE FROM emails WHERE about_user=? AND envelope_id IS NULL AND ${NOT_WAITING}`, userId);
     run('DELETE FROM password_resets WHERE user_id=?', userId);
     // A key they made in a team is on that team's list, not theirs to take along. It stops for good and stays
     // listed as stopped, with the maker's name, so an admin can see what happened to whatever used it. The keys of
@@ -436,8 +460,12 @@ route('GET', '/operator/queue', (c) => {
     support: all(`SELECT s.*, a.id about_account, ${about} FROM support_requests s
       LEFT JOIN accounts a ON a.id=COALESCE(s.account_id, (SELECT m.account_id FROM users u JOIN memberships m ON m.user_id=u.id AND m.role='owner' WHERE u.email=s.email AND u.email_verified=1 LIMIT 1))
       WHERE s.status='open' ORDER BY s.at LIMIT 200`),
-    reports: all(`SELECT r.*, e.subject, e.message, u.name sender_name, u.email sender_email, a.id about_account, ${about}
-      FROM abuse_reports r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id JOIN accounts a ON a.id=r.account_id WHERE r.status='open' ORDER BY r.at LIMIT 200`),
+    // A report stays in the queue when the envelope it was about has been deleted since (envelope_deleted): a sender
+    // who voids and deletes what was reported must not make the earlier reports disappear from a person's view.
+    // via_form marks a report from the visitor of a public form, which does not count towards the automatic pause.
+    reports: all(`SELECT r.*, e.subject, e.message, e.id IS NULL envelope_deleted, u.name sender_name, u.email sender_email, a.id about_account, ${about}
+      FROM abuse_reports r LEFT JOIN envelopes e ON e.id=r.envelope_id LEFT JOIN users u ON u.id=e.sender_id JOIN accounts a ON a.id=r.account_id WHERE r.status='open' ORDER BY r.at LIMIT 200`)
+      .map((r) => ({ ...r, envelope_deleted: !!r.envelope_deleted, via_form: !!r.via_form })),
     paused: all('SELECT id, name, plan, created_at, trusted_at, suspended_at, suspended_reason FROM accounts WHERE suspended_at IS NOT NULL ORDER BY suspended_at DESC'),
   };
 });
@@ -456,16 +484,27 @@ route('POST', '/operator/accounts/:id', async (c) => {
   const a = get('SELECT * FROM accounts WHERE id=?', c.params.id);
   if (!a) throw bad('Account not found.', 404);
   const admins = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", a.id);
-  if ('trusted' in b) {
+  // The call has to say what it wants, as true or false. A body that names neither is a mistake to point out: it
+  // used to be read as "lift the pause", which dismissed every open report and told the owner they could send again.
+  if (typeof b.trusted !== 'boolean' && typeof b.paused !== 'boolean')
+    throw bad('Say what to change: "paused": true (with a "reason") or false, or "trusted": true or false. Nothing was changed.');
+  if (typeof b.trusted === 'boolean') {
     run('UPDATE accounts SET trusted_at=? WHERE id=?', b.trusted ? a.trusted_at || now() : null, a.id);
-    // Told either way, so a limit never lifts or comes back without a word.
-    if (!!b.trusted !== !!a.trusted_at)
+    // Told either way, so a limit never lifts or comes back without a word. The numbers are the ones that apply
+    // to this account now: the first-week limit in its first week, and nothing at all when a payment of its own
+    // is old enough to have lifted the checks anyway.
+    const { cap, firstWeek } = dailyCap(a);
+    const again = hasNotPaid({ ...a, trusted_at: null })
+      ? `Until the account has a payment that is at least ${PAID_TRUST_DAYS} days old and was not refunded or disputed, it can send to at most ${cap} people a day${firstWeek ? ` (${unpaidDailyRecipients()} a day after its first week)` : ''} and is checked for fake payment notices again.`
+      : `For you nothing changes: the account has a payment that is more than ${PAID_TRUST_DAYS} days old and was not refunded or disputed, so the daily limit and the check for fake payment notices do not apply to it.`;
+    if (b.trusted !== !!a.trusted_at)
       for (const u of admins)
         await sendMail({ to: u.email, subject: b.trusted ? 'A person has cleared your Sign&Grow account' : 'The sending limits apply to your Sign&Grow account again', heading: b.trusted ? 'Your account is cleared' : 'Your account is no longer marked as trusted',
           lines: b.trusted ? [`Someone on the Sign&Grow team looked at ${a.name} and marked it as trusted. The daily limit on how many people you can send to, and the check for fake payment notices, no longer apply to it.`, 'If something you tried to send was refused, send it again now.']
-            : [`Someone on the Sign&Grow team removed the trusted mark from ${a.name}. While the account has not paid for anything, it can send to at most ${unpaidDailyRecipients()} people a day and is checked for fake payment notices again. Paying for anything lifts both.`, 'If this is a mistake, reply to this email or use the contact form and a person will review it.'],
+            : [`Someone on the Sign&Grow team removed the trusted mark from ${a.name}. ${again}`, 'If this is a mistake, reply to this email or use the contact form and a person will review it.'],
           cta: { label: b.trusted ? 'Open Sign&Grow' : 'Contact us', url: b.trusted ? `${baseUrl()}/app` : `${baseUrl()}/help` } });
-    return { trusted: !!b.trusted };
+    if (b.trusted) await releaseHeld(a.id);
+    return { trusted: b.trusted };
   }
   const reason = str(b.reason, 300).trim() || 'Paused by the Sign&Grow team';
   if (b.paused) run('UPDATE accounts SET suspended_at=?, suspended_reason=? WHERE id=?', now(), reason, a.id);
@@ -476,9 +515,22 @@ route('POST', '/operator/accounts/:id', async (c) => {
   }
   for (const u of admins)
     await sendMail({ to: u.email, subject: b.paused ? 'Sending is paused on your Sign&Grow account' : 'Sending is back on for your Sign&Grow account', heading: b.paused ? 'Sending is paused' : 'You can send again',
-      lines: b.paused ? [`Reason: ${reason.replace(/[.\s]+$/, '')}.`, 'Until a person has looked at it, nothing new goes out: no new envelopes, no new or changed recipients, no reminders and no reopening.', 'You can still open, download and export everything in your account, and people who already have a document can still open, sign and download it.', 'If this is a mistake, reply to this email or use the contact form and a person will review it.'] : ['A person looked at it and lifted the pause. Sorry for the interruption.'],
+      lines: b.paused ? [`Reason: ${reason.replace(/[.\s]+$/, '')}.`, PAUSED_MEANS, 'You can still open, download and export everything in your account, and people who already have a document can still open, sign and download it.', 'If this is a mistake, reply to this email or use the contact form and a person will review it.']
+        : ['A person looked at it and lifted the pause. Sorry for the interruption.', 'Anyone who was waiting further down a signing order while it lasted is being asked now. Reminders start again by themselves.'],
       cta: { label: 'Contact us', url: `${baseUrl()}/help` } });
+  if (!b.paused) await releaseHeld(a.id);
 });
+
+// What the guard held back for an account (people waiting further down a signing order) goes out as soon as a person
+// lifts the pause or clears the account. The timer does the same for everything else, the next time it runs.
+async function releaseHeld(accountId: string) {
+  for (const row of all("SELECT id FROM envelopes WHERE account_id=? AND status='sent' AND kind='envelope' AND held_at IS NOT NULL", accountId)) {
+    const e = loadEnvelope(row.id);
+    if (!e || emailRefusal(e, [], { extra: [e.last_change] })) continue;
+    run('UPDATE envelopes SET held_at=NULL WHERE id=?', e.id);
+    await advance(e.id);
+  }
+}
 
 // Used by the app shell to decide what to show.
 export const trustInfo = (c: Ctx) => ({ operator: isOperator(c.user), support_email: process.env.SUPPORT_EMAIL || null });

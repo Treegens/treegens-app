@@ -21,7 +21,9 @@ test('signup, session and CSRF protection', async () => {
   const early = await draft(sender);
   assert.equal((await sender.post(`/envelopes/${early.id}/send`)).status, 403);
   const vt = db.get("SELECT verify_token t FROM users WHERE email='jo@example.com'").t;
-  assert.equal((await new Client().post('/auth/verify', { token: vt })).status, 200);
+  // The link alone confirms nothing in a browser that is not signed in to the login: see tests/abuse.test.ts.
+  assert.equal((await new Client().post('/auth/verify', { token: vt })).status, 401);
+  assert.equal((await sender.post('/auth/verify', { token: vt })).status, 200);
   assert.equal((await sender.get('/me')).data.user.email, 'jo@example.com');
   assert.equal((await new Client().get('/envelopes')).status, 401);
   assert.equal((await sender.call('POST', '/envelopes', {}, { origin: 'https://evil.example' })).status, 403);

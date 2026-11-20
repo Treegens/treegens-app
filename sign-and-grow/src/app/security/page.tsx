@@ -2,8 +2,10 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
-import { CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
+import { CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION, LANGUAGE_NOTE } from '@/lib/policy';
+import { WHO_CAN_SEE, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER } from '@/lib/policy';
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
+import { WhereYourDataIs } from './DataPlace';
 
 export const metadata = { title: 'Security and trust', description: 'What Sign&Grow does to protect signers, senders and documents, in plain words. And what it does not do.' };
 
@@ -44,7 +46,9 @@ export default function Security() {
             <a href="#scams">Keeping scams out</a>
             <a href="#proof">Proof you can check</a>
             <a href="#your-documents">Your documents stay yours</a>
+            <a href="#who">Who can see your documents</a>
             <a href="#privacy">Privacy and AI</a>
+            <a href="#data">Where your data is</a>
             <a href="#access">Accounts and access</a>
             <a href="#not">What this is not</a>
           </nav>
@@ -60,12 +64,12 @@ export default function Security() {
           <Point title="Extra protection when the sender wants it.">A sender can put an access code of at least {abuse.codeMin} characters on a document. They give it to you themselves. It is never in our email. After {abuse.codeTries} wrong tries the code is frozen, so it cannot be guessed, until the sender sets a new one.</Point>
         </Block>
 
-        <Block id="scams" title="Keeping scams out" lead="E-signature services get abused to send fake invoices. These checks run whenever a sender causes an email to someone: a first send, a correction to a document that is out, a reminder, a bulk send and a public form.">
-          <Point title="Senders confirm their email address first.">An account cannot send anything until its address is confirmed.</Point>
-          <Point title="Accounts that have not paid have a daily limit.">An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone newly emailed counts, however they are reached. A payment lifts the limit, and so can a person on our team.</Point>
-          <Point title="Fake payment notices are stopped.">An account that has not paid cannot send something that reads like a payment notice from a well-known brand with a phone number to call, and cannot send under a name that reads like such a brand. We read the subject, the message, notes to recipients, document names and the names the email goes out under, also when they are spelled with look-alike letters. It is a filter for the common trick, not a guarantee. A person can clear a genuine sender.</Point>
-          <Point title="Every request can be reported.">Each signing email has a report link that needs only its security code, and the signing page has one too. Reports go to a person.</Point>
-          <Point title="Enough reports pause the sender.">When {abuse.reportsToPause} different recipients report one account, everything it sends stops until a person has reviewed it: new documents, new or changed recipients, reminders and reopening. People who already have a document can still sign it, and the account keeps access to its own documents meanwhile.</Point>
+        <Block id="scams" title="Keeping scams out" lead="E-signature services get abused to send fake invoices. These checks are made where a sender starts something that emails a person (a first send, a correction to a document that is out, a reminder, reopening, a bulk send, a public form, a team invitation) and again where the email to the next person in a signing order is written.">
+          <Point title="Senders confirm their email address first.">An account cannot send anything or invite anyone until its address is confirmed. The link in the confirmation email works in the browser that signed up. Anywhere else it asks for the password of the login, so the owner of a mailbox cannot confirm a login that someone else made in their name by clicking a link out of habit.</Point>
+          <Point title="New accounts have a daily limit.">An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone a sender newly emails counts, however they are reached. A public form has the same limit of its own, counted for that form alone, so strangers filling in a form never use up what its owner may send. A team can invite {abuse.invitesPerDay} people a day. Paying does not lift the limit at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed. A person on our team can lift it sooner.</Point>
+          <Point title="Fake payment notices are stopped.">Until that same day an account cannot send something that reads like a payment notice from a well-known brand with a phone number to call, and cannot send or invite under a name that reads like such a brand. We read what the emails print: the subject, the message, notes to recipients, document names, what the sender wrote on the pages, the reason for voiding and the names the email goes out under, also when a brand is glued to another word or spelled with look-alike letters. It is a filter for the common trick, not a guarantee: a scam worded another way passes it, which is what reports are for. A refusal says which words set it off, and a person can clear a genuine sender.</Point>
+          <Point title="Every request can be reported.">Each signing email has a report link that needs only its security code, and the signing page has one too. The code still works for a report after the sender has deleted the document. Reports go to a person.</Point>
+          <Point title="Enough reports pause the sender.">When {abuse.reportsToPause} different recipients report one account, it is paused until a person has reviewed it. Nothing its senders start is emailed to anyone meanwhile: no new documents, no new or changed recipients, no reminders, no reopening, no invitations and no email about a change, and people further down a signing order are asked only once the pause is lifted. What recipients do themselves still works and is confirmed to them: people who already have a document can sign it, decline it and get their copy. The account keeps access to its own documents. A report from a visitor of a public form reaches a person but does not count towards the pause, because a form takes whatever name and address is typed into it.</Point>
           <Point title="We never ask for money or passwords by email.">Not for a password, not for a card number, not for a payment. An email that does is not from us. <Link href="/help#unexpected">Report it</Link>.</Point>
         </Block>
 
@@ -84,7 +88,12 @@ export default function Security() {
           <Point title="What stays after a deletion, and why.">{KEPT_AFTER_DELETION.join(' ')}</Point>
           <Point title="A team does not lose documents when someone leaves.">What they sent (envelopes, drafts, templates and bulk sends) passes to a member an admin chooses, each envelope&apos;s audit trail says who handed it to whom, and the owner can hand the account to someone else. The person who was removed keeps their login and gets a workspace of their own.</Point>
           <Point title="Templates are shared, not up for grabs.">Everyone on a team can use every template. Only the person it belongs to and the admins can change or delete it. Members see their own envelopes, folders and bulk sends, and admins see all of them.</Point>
-          <Point title="Only the right people can open a document.">The people it was sent to, the person who sent it, and the admins of the sender&apos;s account. A recipient cannot open it before their turn, or after it has been voided, declined or left to expire. On a public form, typing someone else&apos;s email address never opens their document: an unfinished one is only given back to the browser that started it.</Point>
+          <Point title="A signing link opens the document for whoever holds it.">So do the sender&apos;s login and the logins of the owner and admins of the sender&apos;s account. The whole list, with what the people who run this server can see, is under <a href="#who">Who can see your documents</a>. A recipient cannot open a document before their turn. On a public form, typing someone else&apos;s email address never opens their document: an unfinished one is only given back to the browser that started it.</Point>
+        </Block>
+
+        {/* Every sentence of this block is kept in src/lib/policy.ts (WHO_CAN_SEE), with the code that makes it true. */}
+        <Block id="who" title="Who can see your documents" lead="In one list, so nobody has to guess. A signing link is the key to its document: read the first line before you forward one.">
+          {WHO_CAN_SEE.map((w) => <Point key={w.who} title={w.who}>{w.what}</Point>)}
         </Block>
 
         <Block id="privacy" title="Privacy and AI">
@@ -92,6 +101,9 @@ export default function Security() {
           <Point title="Search stays inside your account.">The text of PDFs you upload is indexed so you can search your own envelopes. Files that signers attach are not indexed.</Point>
           <Point title="A file you verify is not stored.">The verify page works out the fingerprint of the file and discards it. In the result, signers&apos; email addresses are partly hidden.</Point>
         </Block>
+
+        {/* Where the server is and who else handles data, read from the settings this server runs on. */}
+        <WhereYourDataIs />
 
         <Block id="access" title="Accounts and access">
           <Point title="Passwords are never stored as written.">Only a salted scrypt hash is kept. Password reset links work once and for one hour.</Point>
@@ -105,11 +117,13 @@ export default function Security() {
 
         <Block id="not" title="What this is not" lead="Being straight about the limits, so you can decide whether this fits." not>
           <Point title="Not certificate-based digital signatures.">A signed PDF is not sealed with a cryptographic certificate inside the file. Its integrity rests on the recorded fingerprint, the audit trail and the verify page.</Point>
-          <Point title="Not advanced or qualified signatures.">These are standard electronic signatures with an audit trail. If a law or the other party requires an advanced or a qualified signature, use a service that provides those. For high-stakes documents, ask a lawyer whether a standard electronic signature fits your case and country.</Point>
+          <Point title="Not advanced or qualified signatures.">These are standard electronic signatures with an audit trail. If a law or the other party requires an advanced or a qualified signature, use a service that provides those. For high-stakes documents, ask a lawyer whether a standard electronic signature fits your case and country. <Link href="/help#outside-us">What we know about signing outside the United States, and which documents not to sign here</Link>.</Point>
+          <Point title="Not translated yet.">{LANGUAGE_NOTE} That includes the text every signer agrees to before signing, and the certificate.</Point>
           <Point title="No identity check yet.">We do not check ID documents and we do not send codes by SMS or phone. A signer is identified by access to their email inbox, plus an access code if the sender sets one.</Point>
           {signIn
             ? <Point title="No two-step login of our own, and no single sign-on for a whole organization.">Accounts are protected by a password, or by signing in with {signIn}. A second step at sign-in is whatever your account there has. We add none of our own, and a team cannot make its members sign in one particular way.</Point>
             : <Point title="No two-step login or single sign-on yet.">Accounts are protected by a password.</Point>}
+          <Point title={NO_BAA_TITLE}>{NO_BAA_TEXT} What would have to be true first: {NO_BAA_FIRST.map((x, i) => `(${i + 1}) ${x}`).join(' ')} {NO_BAA_AFTER}</Point>
           <Point title="No security certification.">We have not been audited against a security standard, and we will not hint that we have.</Point>
           <Point title="No claim about encrypted storage.">The software does not add its own encryption to stored documents. How the disk is protected depends on where the service is hosted.</Point>
         </Block>

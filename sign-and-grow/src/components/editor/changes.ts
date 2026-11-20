@@ -27,11 +27,14 @@ const has = (v: any) => v != null && v !== '';
 // Mirrors writeContent() and senderText() on the server.
 function wording(base: Content): (f: any) => string {
   const was = new Map<string, any>(base.fields.map((f) => [f.id, f]));
+  const done = new Set<string>(finished(base.recipients).map((r) => r.id));
   return (f) => {
     const old = was.get(f.id);
     const mine = SENDER_VALUE.includes(f.type);
     const owned = f.type === 'note' || !!(old ? old.readonly : f.readonly);
-    const answered = !!old && !owned && has(old.value) && s(old.value) !== s(old.prefill);
+    // What a finished person left in their field is their answer, also where they emptied a line or unticked a box
+    // the sender had filled in. The server never puts the sender's value back there.
+    const answered = !!old && !owned && (old.value ?? null) !== (old.prefill ?? null) && (done.has(old.recipient_id) || has(old.value));
     const value = answered ? s(old.value) : mine ? s(f.value) : old ? s(old.value) : '';
     if (f.readonly || f.type === 'note') return value;
     if (answered) return s(old.prefill);
@@ -39,26 +42,38 @@ function wording(base: Content): (f: any) => string {
   };
 }
 
+// A full name field and an email field print the name and the address the sender gave their owner. Those are words
+// on the page like any other the sender wrote. Mirrors printedWords() on the server.
+function printedWords(x: Content, text: (f: any) => string): (f: any) => string {
+  const who = new Map<string, any>(x.recipients.map((r) => [r.id, r]));
+  return (f) => (f.type === 'full_name' ? s(who.get(f.recipient_id)?.name).trim() : f.type === 'email' ? s(who.get(f.recipient_id)?.email).trim() : text(f));
+}
+
 // What one person is asked to read and fill in. If this changes while they have the document, they are told. They
-// are shown what the sender wrote in other people's fields too, so that counts as well.
+// are shown what the sender wrote in other people's fields too, so that counts as well, and so does their own name:
+// the screen asks them to sign under it.
 function askView(x: Content, recipientId: string, text: (f: any) => string): string {
+  const words = printedWords(x, text);
   return JSON.stringify({
     docs: x.documents.map((d) => [d.file_id, s(d.name)]),
+    me: s(x.recipients.find((r) => r.id === recipientId)?.name).trim(),
     fields: x.fields.filter((f) => !f.recipient_id || f.recipient_id === recipientId)
-      .map((f) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), text(f)]).sort(byFirst),
-    words: x.fields.filter((f) => f.recipient_id && f.recipient_id !== recipientId && text(f))
-      .map((f) => [f.id, f.document_id, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), text(f)]).sort(byFirst),
+      .map((f) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), words(f)]).sort(byFirst),
+    words: x.fields.filter((f) => f.recipient_id && f.recipient_id !== recipientId && words(f))
+      .map((f) => [f.id, f.document_id, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), words(f)]).sort(byFirst),
   });
 }
 
 // What is printed on the pages whoever fills them in: the files in their order, where every field sits and whose it
-// is, the sender's own wording, and how dates are written. Once someone has finished, a change to any of it is only
-// saved if the sender chooses to ask them to sign again. Mirrors printedView() on the server.
+// is, the sender's own wording (names and addresses printed by a field included), and how dates are written. Once
+// someone has finished, a change to any of it is only saved if the sender chooses to ask them to sign again.
+// Mirrors printedView() on the server.
 function printedView(x: Content, text: (f: any) => string, dates: string): string {
+  const words = printedWords(x, text);
   return JSON.stringify({
     docs: x.documents.map((d) => [d.id, d.file_id]),
     dates,
-    fields: x.fields.map((f) => [f.id, f.document_id, f.recipient_id || null, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly || f.type === 'note' ? 1 : 0, text(f)]).sort(byFirst),
+    fields: x.fields.map((f) => [f.id, f.document_id, f.recipient_id || null, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly || f.type === 'note' ? 1 : 0, words(f)]).sort(byFirst),
   });
 }
 

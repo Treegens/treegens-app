@@ -2,7 +2,7 @@
 import { useState, type FormEvent } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { Tickets } from './tickets';
-import { PRICE_NOTICE_DAYS } from '@/lib/policy';
+import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS } from '@/lib/policy';
 
 // The queue for the people who run the service: help requests, reports from recipients, and paused accounts.
 // Only visible to the addresses listed in OPERATOR_EMAILS.
@@ -101,7 +101,7 @@ export default function Operator() {
   // refusals for both promise. It changes nothing else: a trusted account can still be reported and paused.
   const trust = (id: string, name: string, on: boolean) => {
     const ask = on ? `Trust "${name}"? The daily limit on how many people it can send to, and the check for fake payment notices, stop applying to it. The account admins are told.`
-      : `Remove trust from "${name}"? If it has not paid, the daily limit and the check for fake payment notices apply to it again. The account admins are told.`;
+      : `Remove trust from "${name}"? Unless it has a payment that is at least ${PAID_TRUST_DAYS} days old and was not refunded or disputed, the daily limit and the check for fake payment notices apply to it again. The account admins are told.`;
     if (window.confirm(ask)) act(api(`/operator/accounts/${id}`, { body: { trusted: on } }), on ? 'Trusted. The account admins were emailed.' : 'Trust removed. The account admins were emailed.');
   };
   const plan = (p: string) => (p === 'seedling' ? 'free plan' : p === 'grove' ? 'monthly plan' : p);
@@ -122,12 +122,13 @@ export default function Operator() {
       <Tickets accountActions={(a) => trustButton(a.id, a.name, a.trusted_at)} />
 
       <div className="card pad0">
-        <div style={{ padding: '14px 16px' }}><h2>Reports from recipients <span className="muted" style={{ fontWeight: 400 }}>({q.reports.length})</span></h2><div className="muted small">Three different recipients reporting one account pauses it automatically. Reports you mark as abuse keep counting towards that. Reports you dismiss do not.</div></div>
+        <div style={{ padding: '14px 16px' }}><h2>Reports from recipients <span className="muted" style={{ fontWeight: 400 }}>({q.reports.length})</span></h2><div className="muted small">Three different recipients reporting one account pauses it automatically. Reports you mark as abuse keep counting towards that. Reports you dismiss do not, and neither do reports from visitors of a public form: such a visitor typed their own name and address, so only you decide what those mean. A report stays here when the sender has deleted the document since.</div></div>
         {q.reports.length === 0 && <div className="empty" style={{ padding: 24 }}>No open reports.</div>}
         {q.reports.map((r: any) => (
           <div key={r.id} className="queue-item">
-            <div className="row between wrap"><b>{r.subject}</b><span className="muted small">{r.reason} · {fmtDate(r.at, true)}</span></div>
-            <div className="small">Sent by {r.sender_name} ({r.sender_email}). Reported by {r.reporter}.</div>
+            <div className="row between wrap"><b>{r.envelope_deleted ? 'A document its sender has deleted since' : r.subject}</b><span className="muted small">{r.reason} · {fmtDate(r.at, true)}</span></div>
+            <div className="small">{r.envelope_deleted ? 'Nothing of the document is left. ' : `Sent by ${r.sender_name} (${r.sender_email}). `}Reported by {r.reporter}.</div>
+            {r.via_form && <div className="small" style={{ marginTop: 4 }}><span className="badge">Public form</span> This person came through a public form and typed their own name and address. The report does not count towards the automatic pause.</div>}
             {about(r)}
             {r.message && <pre>{r.message}</pre>}
             {r.detail && <div className="small" style={{ marginBottom: 10 }}>The recipient wrote: {r.detail}</div>}
@@ -136,14 +137,14 @@ export default function Operator() {
               <button className="btn sm" onClick={() => act(api(`/operator/reports/${r.id}`, { body: { status: 'upheld' } }), 'Marked as abuse')}>This was abuse</button>
               {!r.suspended_at && <button className="btn sm danger" onClick={() => pause(r.account_id, r.account_name)}>Pause this sender</button>}
               {trustButton(r.account_id, r.account_name, r.account_trusted_at)}
-              <a className="btn sm ghost" href={`mailto:${r.reporter}`}>Email the reporter</a>
+              {/@/.test(r.reporter || '') && <a className="btn sm ghost" href={`mailto:${r.reporter}`}>Email the reporter</a>}
             </div>
           </div>
         ))}
       </div>
 
       <div className="card pad0">
-        <div style={{ padding: '14px 16px' }}><h2>Paused accounts <span className="muted" style={{ fontWeight: 400 }}>({q.paused.length})</span></h2><div className="muted small">Pausing stops everything that emails a recipient: new sends, new or changed recipients, reminders and reopening. The account keeps every document and can export, and people who already have a document can still sign it. Lifting a pause closes the reports that led to it.</div></div>
+        <div style={{ padding: '14px 16px' }}><h2>Paused accounts <span className="muted" style={{ fontWeight: 400 }}>({q.paused.length})</span></h2><div className="muted small">Pausing stops everything a sender starts from being emailed: new sends, new or changed recipients, reminders, reopening, team invitations and notices about a change, and people further down a signing order are not asked. The account keeps every document and can export, can still void (the notice goes without the reason), and people who already have a document can still sign it. Lifting a pause closes the reports that led to it and asks everyone who was held back.</div></div>
         {q.paused.length === 0 && <div className="empty" style={{ padding: 24 }}>No accounts are paused.</div>}
         {q.paused.map((a: any) => (
           <div key={a.id} className="queue-item row between wrap">

@@ -7,6 +7,7 @@ import { AdoptSignature } from '@/components/SignaturePad';
 import { PRICING, mangrovesFor } from '@/lib/impact';
 // Plain constants only: the rest of policy.ts reads the environment and is for the server.
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
+import { DEFAULT_REMINDER_DAYS, reminderText } from '@/lib/policy';
 // The same holds for signin.ts: the names and the words only.
 import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
 
@@ -116,7 +117,7 @@ function SignInWays() {
       {said && (
         <div className={`notice${said.err ? ' err' : ''}`} role={said.err ? 'alert' : 'status'} style={{ margin: '10px 0' }}>
           {said.text}
-          {said.confirm && <div style={{ marginTop: 8 }}><button className="btn sm" style={{ minHeight: 44 }} onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => setSaid({ text: `We sent the confirmation link to ${me.user.email} again. Open it, then come back here.` })).catch(oops)}>Send the confirmation email again</button></div>}
+          {said.confirm && <div style={{ marginTop: 8 }}><button className="btn sm" style={{ minHeight: 44 }} onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => setSaid({ text: `We sent the confirmation link to ${me.user.email} again. Open it in this browser while you are signed in, then come back here.` })).catch(oops)}>Send the confirmation email again</button></div>}
         </div>
       )}
       <ul className="ways">
@@ -192,9 +193,11 @@ function Account() {
             {f.brand_logo && <button className="btn sm ghost" onClick={() => setF({ ...f, brand_logo: '' })}>Remove</button>}
           </div>
         </div>
-        <label className="f"><span>Default reminder <span className="hint">(days, 0 for never)</span></span><input type="number" min={0} max={60} value={f.default_reminder_days} onChange={(e) => setF({ ...f, default_reminder_days: Number(e.target.value) })} /></label>
+        <label className="f"><span>Remind people every <span className="hint">(days, 0 for never)</span></span><input type="number" min={0} max={60} value={f.default_reminder_days} aria-describedby="set-reminders" onChange={(e) => setF({ ...f, default_reminder_days: Number(e.target.value) })} /></label>
         <label className="f"><span>Default deadline <span className="hint">(days)</span></span><input type="number" min={1} max={365} value={f.default_expire_days} onChange={(e) => setF({ ...f, default_expire_days: Number(e.target.value) })} /></label>
       </div>
+      {/* Said in full, because a new account has reminders on without anyone having chosen that. */}
+      <p className="muted small" id="set-reminders"><b>New envelopes start like this.</b> {reminderText(f.default_reminder_days)} A new account starts at {DEFAULT_REMINDER_DAYS} days. Whoever sends sees the setting on the last step before sending and can change it for that envelope. Envelopes that are already out keep what they were sent with.</p>
       <p className="muted small">Emails to your recipients come from "{me.user.name} via Sign&Grow" and replies go straight to you.</p>
       <button className="btn primary" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (toast('Saved'), me.reload())).catch(oops)}>Save</button>
     </div>

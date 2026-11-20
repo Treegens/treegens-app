@@ -185,8 +185,8 @@ export function StopView() {
           <dt>Account</dt>
           <dd>{info.account}</dd>
           <dt>Plan</dt>
-          <dd>{planName('grove')}, ${info.price} a month{info.failing ? ' (the last payment did not go through)' : ''}</dd>
-          {info.renews_at && <><dt>Next charge</dt><dd>${info.price} on {billDay(info.renews_at)}</dd></>}
+          <dd>{planName('grove')}, US${info.price} a month{info.failing ? ' (the last payment did not go through)' : ''}</dd>
+          {info.renews_at && <><dt>Next charge</dt><dd>US${info.price} on {billDay(info.renews_at)}</dd></>}
           {typeof n === 'number' && <><dt>Signatures left</dt><dd>{n}<small>They stay yours after you stop</small></dd></>}
         </dl>
         {error && <div className="notice err" role="alert" style={{ marginBottom: 14 }}>{error}</div>}

@@ -5,7 +5,7 @@ import { useMe } from '../AppShell';
 import { DATE_FORMATS, formatDate } from '@/lib/dates';
 import { scanWarning } from '@/lib/scans';
 import { Lock } from './parts';
-import { LIMITS, fmtSize } from './upload';
+import { LIMITS, PAPER_HINT, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
 
 const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy' };
@@ -31,10 +31,13 @@ export function StepAdd({ ed }: { ed: Ed }) {
             onDragOver={(e) => (e.preventDefault(), setOver(true))} onDragLeave={() => setOver(false)}
             onDrop={(e) => (e.preventDefault(), setOver(false), ed.addFiles(e.dataTransfer.files))}>
             <input type="file" className="ed-sr" multiple accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg" onChange={(e) => (ed.addFiles(e.target.files), (e.target.value = ''))} />
-            <b>{uploading ? 'Uploading. You can add more.' : 'Drop files here or click to upload'}</b>
+            {/* A phone can neither drop nor click, so a touch screen is told what it can do: tap, and the phone offers
+                its files, its photos and its camera. Only one of the two lines is shown (editor.css). */}
+            <b>{uploading ? 'Uploading. You can add more.' : <><span className="ed-fine">Drop files here or click to choose them</span><span className="ed-touch">Tap to choose files or take a photo</span></>}</b>
             <div className="muted small">{LIMITS}</div>
           </label>
         )}
+        <p className="muted small ed-touch" style={{ margin: '8px 0 0' }}>{PAPER_HINT}</p>
 
         {uploads.length > 0 && (
           <ul className="ed-uploads" aria-label="Uploads">
@@ -44,12 +47,12 @@ export function StepAdd({ ed }: { ed: Ed }) {
                   <span className="truncate"><b>{u.name}</b> <span className="muted small">{fmtSize(u.size)}</span></span>
                   {u.state === 'error'
                     ? <button type="button" className="btn sm ghost" onClick={() => ed.dismissUpload(u.key)} aria-label={`Dismiss the message about ${u.name}`}>Dismiss</button>
-                    : <span className="muted small num" aria-hidden="true">{u.state === 'waiting' ? 'Waiting' : u.state === 'checking' ? 'Checking the pages' : `${Math.round(u.progress * 100)}%`}</span>}
+                    : <span className="muted small num" aria-hidden="true">{u.state === 'waiting' ? 'Waiting' : u.state === 'preparing' ? 'Making it smaller' : u.state === 'checking' ? 'Checking the pages' : `${Math.round(u.progress * 100)}%`}</span>}
                 </div>
                 {u.state === 'error'
                   ? <div className="small" role="alert">{u.error}</div>
                   : <div className="ed-progress" role="progressbar" aria-label={`Uploading ${u.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(u.progress * 100)}
-                      aria-valuetext={u.state === 'waiting' ? 'Waiting' : u.state === 'checking' ? 'Uploaded. Checking the pages.' : `${Math.round(u.progress * 100)} percent`}>
+                      aria-valuetext={u.state === 'waiting' ? 'Waiting' : u.state === 'preparing' ? 'Making the picture smaller before it is uploaded.' : u.state === 'checking' ? 'Uploaded. Checking the pages.' : `${Math.round(u.progress * 100)} percent`}>
                       <i className={u.state === 'checking' ? 'busy' : ''} style={{ width: `${Math.round(u.progress * 100)}%` }} />
                     </div>}
               </li>

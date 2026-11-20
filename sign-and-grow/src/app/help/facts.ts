@@ -7,6 +7,7 @@
 import { refundDays, dormantStopDays, CLOSE_GRACE_DAYS } from '@/lib/policy';
 import { newAccountDailyRecipients, unpaidDailyRecipients, abuseSuspendAfter, ACCESS_CODE_MIN, ACCESS_CODE_TRIES, powerformIdleHours } from '@/lib/policy';
 import { supportReachable, supportFirstReplyHours, supportUrgentReplyHours, SUPPORT_REOPEN_DAYS } from '@/lib/policy';
+import { PAID_TRUST_DAYS, TEAM_INVITES_PER_DAY } from '@/lib/policy';
 
 export type Facts = {
   refundDays: number; // unused signatures from the latest payment are refunded on request within this many days
@@ -23,6 +24,8 @@ export function abuseFacts() {
   return {
     firstWeekDaily: newAccountDailyRecipients(), // people a day for an account that has not paid, in its first week
     unpaidDaily: unpaidDailyRecipients(), // and after that
+    paidTrustDays: PAID_TRUST_DAYS, // a payment lifts the limit and the filter once it is this old and was not refunded or disputed
+    invitesPerDay: TEAM_INVITES_PER_DAY, // people one account can invite to its team in 24 hours
     reportsToPause: abuseSuspendAfter(), // different recipients reporting one account before it is paused
     codeMin: ACCESS_CODE_MIN, // shortest access code a sender may set
     codeTries: ACCESS_CODE_TRIES, // wrong tries before an access code is frozen

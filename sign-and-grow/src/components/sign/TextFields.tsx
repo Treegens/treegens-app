@@ -53,7 +53,7 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
     return (
       <div className="sg-row">
         <div className="sg-row-label">{name}</div>
-        <div>{shown} <span className="muted small">{f.readonly ? 'Filled in by the sender.' : 'Added for you.'}</span></div>
+        <div><bdi>{shown}</bdi> <span className="muted small">{f.readonly ? 'Filled in by the sender.' : 'Added for you.'}</span></div>
       </div>
     );
   }
@@ -92,7 +92,8 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
     );
   }
   const problem = problemWith(f, c.values[f.id] || '');
-  const shared = { id, value: c.values[f.id] || '', 'aria-required': !!f.required, 'aria-invalid': !!problem, 'aria-describedby': [described, problem ? `${id}-err` : ''].filter(Boolean).join(' ') || undefined };
+  // dir="auto": right-to-left text (Arabic, Hebrew, Persian) starts at the right edge, by what is typed.
+  const shared = { dir: 'auto' as const, id, value: c.values[f.id] || '', 'aria-required': !!f.required, 'aria-invalid': !!problem, 'aria-describedby': [described, problem ? `${id}-err` : ''].filter(Boolean).join(' ') || undefined };
   return (
     <div className="sg-row">
       <label className="f"><span>{name}<Need f={f} /></span>
@@ -154,7 +155,7 @@ export function PageOthers({ others, senderName }: { others: any[]; senderName: 
       <ul>
         {others.map((f) => (
           <li key={f.id}>
-            {f.label || LABEL[f.type] || 'Field'}: {f.image ? <img src={f.image} alt="Signed" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'ticked' : 'not ticked') : f.value}
+            {f.label || LABEL[f.type] || 'Field'}: {f.image ? <img src={f.image} alt="Signed" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'ticked' : 'not ticked') : <bdi>{f.value}</bdi>}
             {' '}<span className="muted small">{otherSource(f, senderName)}</span>
           </li>
         ))}

@@ -351,12 +351,25 @@ async function endOrQueue(subId: string | null, accountId?: string | null): Prom
   return false;
 }
 // Used when an account is closed: whatever state its plan is in, nothing may be charged afterwards.
+// The answer is true only when the provider has confirmed that nothing is left to charge.
 export const stopBillingFor = (acct: any): Promise<boolean> => serial(acct?.id, async () => {
   const a = account(acct?.id);
-  if (!a || !billingEnabled() || !hasSub(a)) return true;
-  const ok = await endOrQueue(a.stripe_subscription_id, a.id);
-  run("UPDATE accounts SET plan=CASE WHEN promo_code IS NULL THEN 'seedling' ELSE plan END, subscription_status='canceled', cancel_at=NULL, renews_at=NULL, sub_event_at=? WHERE id=?", unixNow(), a.id);
-  log(a.id, 'ended', 'Ended because the account was closed.');
+  if (!a || !billingEnabled()) return true;
+  let ok = true;
+  let tried = '';
+  if (hasSub(a)) {
+    tried = a.stripe_subscription_id;
+    ok = await endOrQueue(a.stripe_subscription_id, a.id);
+    run("UPDATE accounts SET plan=CASE WHEN promo_code IS NULL THEN 'seedling' ELSE plan END, subscription_status='canceled', cancel_at=NULL, renews_at=NULL, sub_event_at=? WHERE id=?", unixNow(), a.id);
+    log(a.id, 'ended', 'Ended because the account was closed.');
+  }
+  // An ending that an earlier try left with the provider unconfirmed is still open, even though the plan is over
+  // on our side. It is tried again now, and "stopped" is not said until every one of them has been confirmed:
+  // asking twice must never turn "we could not reach the provider" into "done".
+  for (const t of all("SELECT * FROM billing_todo WHERE kind='cancel' AND account_id=? AND done_at IS NULL", a.id)) {
+    if (t.ref !== tried && (await endSubscription(t.ref, true))) run('UPDATE billing_todo SET done_at=? WHERE id=?', now(), t.id);
+    else ok = false;
+  }
   return ok;
 });
 

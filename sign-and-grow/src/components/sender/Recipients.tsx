@@ -47,7 +47,8 @@ function EmailFact({ d, role }: { d: Delivery | null; role: string }) {
 
 // One card per person: what really happened to their email, when they opened it, when they finished,
 // and ways to reach them that do not depend on email.
-export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorrect }: { envelope: any; deliveries: Delivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void }) {
+// `paused` is true while sending is paused on the account: a reminder would be refused, so the button says so.
+export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorrect, paused }: { envelope: any; deliveries: Delivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void; paused?: boolean }) {
   const [links, setLinks] = useState<Record<string, string>>({});
   const [shown, setShown] = useState('');
   const [busy, setBusy] = useState('');
@@ -193,7 +194,7 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
             {(turn || (out && r.status === 'pending')) && (
               <div className="sn-person-actions">
                 {turn && (isMe || r.role === 'inperson') && <button className="btn sm primary" disabled={!!busy} onClick={() => signNow(r)}>{r.role === 'inperson' ? 'Host signing now' : `${r.role === 'approver' ? 'Review' : r.role === 'viewer' ? 'View' : 'Sign'} now`}</button>}
-                {reachable && !r.muted && <button className="btn sm" disabled={!!busy} onClick={() => nudge(r)} aria-label={`Nudge ${r.name} with a reminder email`}>{busy === `nudge:${r.id}` ? 'Sending…' : 'Nudge'}</button>}
+                {reachable && !r.muted && <button className="btn sm" disabled={!!busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out. You can still copy the link and send it yourself.' : undefined} onClick={() => nudge(r)} aria-label={`Nudge ${r.name} with a reminder email`}>{busy === `nudge:${r.id}` ? 'Sending…' : 'Nudge'}</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => copy(r)} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>Share on WhatsApp</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'sms')} aria-label={`Share link with ${r.name} by text message`}>Share by text message</button>}

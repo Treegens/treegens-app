@@ -7,6 +7,9 @@ import { formatDate } from '@/lib/dates';
 import { scanWarning } from '@/lib/scans';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
+import { PaperCheck, EnoughLink } from './PaperCheck';
+import { ReminderChoice } from './ReminderChoice';
+import { PrintCheck } from './PrintCheck';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -131,6 +134,9 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {docs.filter((d) => scanWarning(d)).map((d) => (
         <div key={d.id} className="notice warn"><b>{d.name || 'A document'}:</b> {scanWarning(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the documents</button></div>
       ))}
+      {/* The check before sending: a word that often means paper, a witness or a notary. It warns and never blocks. */}
+      {!closed && <PrintCheck subject={env.subject || ''} docs={docs} rcps={rcps} fields={fields} />}
+      {!closed && <PaperCheck envelopeId={env.id} subject={env.subject || ''} docs={docs} sending={!isTpl && !correcting} />}
 
       <div className="card">
         <h2>{env.subject || '(no subject)'}</h2>
@@ -140,6 +146,9 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
           {correcting ? (env.expires_at ? ` · closes on ${fmtDate(env.expires_at)}` : '') : ` · expires after ${plural(env.expire_days, 'day')}`} · dates written like {formatDate(new Date(), env.date_format)}
         </div>
       </div>
+
+      {/* Reminders are on for a new account without anyone having chosen that, so the choice stands by the Send button. */}
+      {!closed && <ReminderChoice days={env.reminder_days} isTpl={isTpl} onChange={(n) => ed.patchEnv({ reminder_days: n })} />}
 
       {correcting && result ? (
         <div className="card">
@@ -203,6 +212,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
         <button type="button" className="btn primary lg" disabled={blocked} onClick={onSubmit}>{label}</button>
       </div>
       {correcting && !changed && !closed && <p className="muted small" style={{ textAlign: 'right' }}>Save changes turns on once you change something.</p>}
+      {!isTpl && !correcting && <EnoughLink />}
     </div>
   );
 }

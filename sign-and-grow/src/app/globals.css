@@ -132,6 +132,8 @@ table.t tr.click:hover td { background: #fbfaf6; }
 .toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast { background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px; box-shadow: var(--shadow); max-width: 90vw; }
 .toast.err { background: var(--red); }
+/* A web address in a message is a link. The toasts let clicks through to the page, so the link takes them back. */
+.toast a { color: inherit; text-decoration: underline; pointer-events: auto; overflow-wrap: anywhere; }
 
 /* PDF pages and fields */
 .pdfdoc { display: flex; flex-direction: column; align-items: center; gap: 14px; }

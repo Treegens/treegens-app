@@ -71,6 +71,29 @@ export function FindDocuments() {
 }
 
 // "I am being charged and cannot find where": emails every paid plan tied to the address, each with a stop link.
+// "I wrote to you and lost the email": the private links to that address's requests are sent to it again.
+export function FindRequests() {
+  const [email, setEmail] = useState('');
+  const a = useAction<string>();
+  if (a.done)
+    return (
+      <Result show>
+        <p><b>Check the inbox of {a.done}.</b> If anyone wrote to us from that address in the last 90 days, an email with the link to each request is on its way. Only that inbox receives it.</p>
+        <p>Nothing after a few minutes? Look in the spam folder. If you wrote from another address, try that one. If nothing comes, write to us again with the form above and mention the reference if you still have it.</p>
+        <button type="button" className="pub-link" onClick={a.reset}>Try another address</button>
+      </Result>
+    );
+  return (
+    <form className="pub-form" onSubmit={(e) => a.run(e, async () => (await api('/public/support/find', { body: { email: email.trim() } }), email.trim()), (err) => explain(err, 'We have already sent the links to this address a few times today. Check the inbox and the spam folder, or try again tomorrow.'))}>
+      <div className="pub-form-row">
+        <label className="f"><span>The email address you wrote to us from</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>
+        <button className="btn" disabled={a.busy}>{a.busy ? 'Sending' : 'Send me the links again'}</button>
+      </div>
+      {a.error && <div className="notice err" role="alert">{a.error}</div>}
+    </form>
+  );
+}
+
 export function FindSubscription({ label = 'Your email address' }: { label?: string }) {
   const [email, setEmail] = useState('');
   const a = useAction<string>();

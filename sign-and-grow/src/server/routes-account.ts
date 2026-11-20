@@ -3,26 +3,32 @@ import { all, get, run, tx } from './db.ts';
 import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, SESSION_COOKIE } from './auth.ts';
 import { PROVIDER_NAMES, isProviderId } from '../lib/signin.ts';
+import { smsProvider } from '../lib/checks.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
 import { billingEnabled, verifyChain, notifyPrefs, closingText } from './envelopes.ts';
+import { nameRefusal, hasNotPaid, inviteRefusal, noteInvited } from './envelopes.ts';
 import { grant, creditSummary, findFreeCode, sameEmail } from './credits.ts';
 import { tick } from './cron.ts';
 import { redeemCode } from './routes-billing.ts';
 import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
+import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 
 const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
 
 // `via` names the provider when the login was made by signing in with Google or Microsoft and the provider did not
 // stand behind the address. Whoever reads the email is then told how the login came about, so someone who did not
-// make it knows not to confirm it.
+// make it knows not to confirm it. The email does not repeat the name the login was made under: anyone can sign up
+// with anyone's address, and a name is words a stranger typed.
 export async function sendVerification(u: any, via?: string) {
   await sendMail({
     to: u.email, subject: 'Confirm your email for Sign&Grow', heading: 'Confirm your email',
-    lines: [`Hi ${u.name}, confirm this address so documents sent to you show up in your inbox.`,
-      ...(via ? [`This Sign&Grow login was made by someone who signed in with ${via} and gave this address. If that was you, confirm it. If it was not you, do not confirm: without that, the login cannot send anything and sees nothing that was sent to you.`] : [])],
+    lines: ['Someone signed up for Sign&Grow with this email address. Confirm it so documents sent to you show up in your inbox, and so you can send.',
+      `Only confirm if you signed up for Sign&Grow yourself just now. The link works in the browser you signed up in. Anywhere else ${hasPassword(u) ? 'it asks for the password that was chosen at sign-up' : `you are asked to sign in first${via ? ` with ${via}` : ''}`}, so nobody else can confirm the login for you.`,
+      via ? `This Sign&Grow login was made by someone who signed in with ${via} and gave this address. If it was not you, do not confirm: without that, the login cannot send anything and sees nothing that was sent to you.`
+        : 'If you did not sign up, ignore this email. Without your confirmation that login cannot send anything and sees nothing that was sent to you.'],
     cta: { label: 'Confirm email', url: `${baseUrl()}/verify-email?token=${u.verify_token}` },
   });
 }
@@ -32,7 +38,9 @@ export async function sendVerification(u: any, via?: string) {
 // however many workspaces are made for them.
 function ownWorkspace(userId: string, name: string, t = now()): string {
   const accountId = id('acc');
-  run('INSERT INTO accounts (id, name, created_at) VALUES (?,?,?)', accountId, `${name.split(' ')[0]}'s workspace`, t);
+  // A new account starts with automatic reminders on (DEFAULT_REMINDER_DAYS in src/lib/policy.ts), because the
+  // public pages promise reminders. The review step shows the choice before every send, and Settings changes it.
+  run('INSERT INTO accounts (id, name, created_at, default_reminder_days) VALUES (?,?,?,?)', accountId, `${name.split(' ')[0]}'s workspace`, t, DEFAULT_REMINDER_DAYS);
   run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'owner',?)", accountId, userId, t);
   if (run('UPDATE users SET welcomed_at=? WHERE id=? AND welcomed_at IS NULL', t, userId).changes) grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
   return accountId;
@@ -157,10 +165,24 @@ route('POST', '/auth/logout', (c) => {
   return { ok: true };
 }, 'public');
 
+// Confirming an address has to show two things: that the person can read the mailbox (the link), and that they are
+// the one who made the login (its session, or its password). The link alone is not enough. Anyone can sign up with
+// somebody else's address, and if the owner of the mailbox then clicked the link out of habit, a stranger's login
+// would count as theirs: it could send in their name and read what was sent to them. So the link confirms at once
+// only in a browser that is signed in to that login. Anywhere else it asks for the login's password, and a login
+// that has none (made with Google or Microsoft) is confirmed after signing in.
 route('POST', '/auth/verify', async (c) => {
-  const t = str((await c.body()).token);
-  const u = t ? get('SELECT id FROM users WHERE verify_token=?', t) : null;
+  const b = await c.body();
+  const t = str(b.token);
+  const u = t ? get('SELECT id, email_verified, password_hash FROM users WHERE verify_token=?', t) : null;
   if (!u) throw bad('This confirmation link is not valid any more.');
+  if (u.email_verified) return { ok: true };
+  if (!(c.auth?.via === 'session' && c.user.id === u.id)) {
+    if (!hasPassword(u)) throw bad('This link confirms the address of a Sign&Grow login. To show that the login is yours, sign in first, the same way you signed up, and then open this link again in the same browser. If you did not sign up for Sign&Grow, close this page: nothing was confirmed.', 401, { code: 'sign_in_first' });
+    if (b.password === undefined || b.password === null || b.password === '') throw bad('This link confirms the address of a Sign&Grow login. To show that the login is yours, type the password you chose when you signed up. If you did not sign up for Sign&Grow, close this page: nothing was confirmed.', 401, { code: 'password_needed' });
+    rateLimit(`confirm:${u.id}`, 10, 900_000);
+    if (!checkPassword(str(b.password, 200), u.password_hash)) throw bad('That password is not right, so nothing was confirmed. Type the password you chose when you signed up, or sign in to Sign&Grow first and open this link again.', 401, { code: 'password_needed' });
+  }
   run('UPDATE users SET email_verified=1 WHERE id=?', u.id);
   return { ok: true };
 }, 'public');
@@ -250,6 +272,8 @@ route('GET', '/me', (c) => {
     accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', c.user.id),
     billing: { enabled: billingEnabled(), signatures: billingEnabled() ? creditSummary(a.id) : null },
     outbox: devOutbox(),
+    // Whether the operator of this server has switched text messages on. When not, nothing offers them.
+    text_messages: !!smsProvider(),
   };
 }, 'public');
 
@@ -257,6 +281,11 @@ route('PATCH', '/me', async (c) => {
   const b = await c.body();
   for (const k of ['signature_png', 'initials_png']) if (b[k] != null && b[k] !== '' && !okImage(b[k])) throw bad('That signature image is too large or not a PNG or JPEG.');
   const notify = b.notify && typeof b.notify === 'object' ? JSON.stringify({ ...notifyPrefs(c.user), ...Object.fromEntries(Object.entries(b.notify).filter(([k, v]) => k in notifyPrefs(null) && typeof v === 'boolean')) }) : c.user.notify;
+  // Emails to recipients go out under this name, also the ones about envelopes that are already out. So a name
+  // that reads like a well-known brand is refused here, while the checks apply to the account, and not only at
+  // the next send.
+  const renamed = b.name != null && str(b.name, 120).trim() !== c.user.name && hasNotPaid(c.account) ? nameRefusal([str(b.name, 120)]) : null;
+  if (renamed) throw bad(`${renamed} Nothing was changed.`, 422);
   run('UPDATE users SET name=?, title=?, company=?, signature_png=?, initials_png=?, notify=? WHERE id=?',
     str(b.name ?? c.user.name, 120).trim() || c.user.name, str(b.title ?? c.user.title, 120) || null, str(b.company ?? c.user.company, 120) || null,
     b.signature_png === undefined ? c.user.signature_png : b.signature_png || null, b.initials_png === undefined ? c.user.initials_png : b.initials_png || null, notify, c.user.id);
@@ -283,6 +312,9 @@ route('PATCH', '/account', async (c) => {
   if (b.brand_logo && !okImage(b.brand_logo, 300_000)) throw bad('Logo must be a PNG or JPEG under 200 KB.');
   const a = c.account;
   const days = (v: any, lo: number, hi: number, d: number) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : d);
+  // The account's name is the brand line of every email, also for envelopes that are already out: see PATCH /me.
+  const renamed = b.name != null && str(b.name, 120).trim() !== a.name && hasNotPaid(a) ? nameRefusal([str(b.name, 120)]) : null;
+  if (renamed) throw bad(`${renamed} Nothing was changed.`, 422);
   run('UPDATE accounts SET name=?, brand_color=?, brand_logo=?, default_reminder_days=?, default_expire_days=? WHERE id=?',
     str(b.name ?? a.name, 120).trim() || a.name, b.brand_color === undefined ? a.brand_color : b.brand_color || null,
     b.brand_logo === undefined ? a.brand_logo : b.brand_logo || null, days(b.default_reminder_days, 0, 60, a.default_reminder_days), days(b.default_expire_days, 1, 365, a.default_expire_days), a.id);
@@ -302,13 +334,20 @@ route('POST', '/account/invites', async (c) => {
   // Nobody is invited into an account that is about to be deleted.
   if (c.account.closing_at) throw bad(closingText(c.account, 'Nobody can be invited to it now'), 403);
   if (get('SELECT 1 x FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND u.email=?', c.account.id, email)) throw bad('That person is already on the team.');
+  // An invitation is an email to an address the inviter typed, under names the inviter chose. So it has the rules an
+  // envelope has: a confirmed address first, then the pause, the check on the names it prints and a daily limit of
+  // its own (inviteRefusal). Without them it was a way to mail any words to anyone from a login one minute old.
+  if (!c.user.email_verified) throw bad('Confirm your email address before you invite anyone. We emailed you a link when you signed up, and you can resend it from the banner at the top of the app.', 403);
+  const no = inviteRefusal(c.account, c.user, email);
+  if (no) throw bad(no.message, no.status);
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
   const t = token();
   run('INSERT INTO invites (id, token, account_id, email, role, created_at) VALUES (?,?,?,?,?,?)', id('inv'), t, c.account.id, email, role, now());
+  noteInvited(c.account.id, email);
   // Someone who already has a login joins by signing in. Everyone else makes a login first. The email goes to the
   // invited address only, so it tells the person inviting nothing about who has an account.
   const known = !!get('SELECT 1 x FROM users WHERE email=?', email);
-  await sendMail({ to: email, subject: `${c.user.name} invited you to ${c.account.name} on Sign&Grow`, heading: `Join ${c.account.name}`,
+  await sendMail({ to: email, about: c.user.id, subject: `${c.user.name} invited you to ${c.account.name} on Sign&Grow`, heading: `Join ${c.account.name}`,
     lines: [`${c.user.name} invited you to send and sign documents together. Every subscription plants trees.`, ...(known ? ['You already have a Sign&Grow login with this address. Sign in with it and you are on the team. Anything you already have on Sign&Grow stays as it is.'] : [])],
     cta: { label: known ? 'Sign in to accept' : 'Accept invitation', url: `${baseUrl()}/${known ? 'login' : 'signup'}?invite=${t}&email=${encodeURIComponent(email)}` } });
   return { ok: true };
@@ -364,7 +403,7 @@ route('DELETE', '/account/members/:id', async (c) => {
     const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
     const list = keyList(keys);
     for (const a of admins)
-      await sendMail({ to: a.email, subject: `${n} stopped working: ${m.name} was removed from ${c.account.name}`, heading: `${n} stopped working`,
+      await sendMail({ to: a.email, about: c.params.id, subject: `${n} stopped working: ${m.name} was removed from ${c.account.name}`, heading: `${n} stopped working`,
         lines: [`${c.user.name} removed ${m.name} from ${c.account.name}. The API keys ${m.name} created stopped working at that moment:`, list, 'Anything that used one of them now gets an error that says the key has stopped. To carry on, create a new key and put it into the integration.'],
         cta: { label: 'Open API keys', url: `${baseUrl()}/app/settings?tab=developers` } });
   }
@@ -405,7 +444,7 @@ route('POST', '/account/leave', async (c) => {
   // The people who run the team hear it from us, not from a missing name in a list.
   const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
   for (const a of others.filter((o) => o.role !== 'member' || o.user_id === heir.user_id))
-    await sendMail({ to: a.email, subject: `${me.name} left ${c.account.name}`, heading: `${me.name} left the team`,
+    await sendMail({ to: a.email, about: me.id, subject: `${me.name} left ${c.account.name}`, heading: `${me.name} left the team`,
       lines: [`${me.name} (${me.email}) left ${c.account.name} on Sign&Grow and no longer has access to it.`,
         left.handed ? `What ${me.name} sent stays with the team: ${left.handed} ${left.handed === 1 ? 'envelope, draft or template' : 'envelopes, drafts and templates'} and any bulk sends now belong to ${a.user_id === heir.user_id ? 'you' : `${heir.name}`}. Anything out for signature carries on, and each audit trail says who handed it to whom.` : `${me.name} had sent nothing, so there was nothing to hand over.`,
         ...(keys.length ? [`${n} that ${me.name} created stopped working at that moment:`, keyList(keys), 'Anything that used one of them now gets an error that says the key has stopped. To carry on, create a new key and put it into the integration.'] : []),
@@ -579,5 +618,6 @@ route('GET', '/dev/outbox', (c) => {
     const m = get('SELECT html FROM emails WHERE id=?', Number(c.q.get('id')));
     return new Response(m?.html || 'Not found', { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'" } });
   }
-  return json({ emails: all('SELECT id, to_email, subject, link, status, at FROM emails ORDER BY id DESC LIMIT 100') });
+  // Text messages land here too on a machine without a provider (SMS_DEV_OUTBOX=1), with the number masked.
+  return json({ emails: all('SELECT id, to_email, subject, link, status, at FROM emails ORDER BY id DESC LIMIT 100'), texts: all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100') });
 }, 'public');

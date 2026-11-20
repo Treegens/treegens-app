@@ -50,6 +50,12 @@ export const PRICING = {
 
 export const mangrovesFor = (usd: number) => Math.floor(usd * PRICING.treesPerUsd);
 
+// How a price is written on a public page. A bare "$9" reads as nine local dollars in Australia, Canada, Singapore,
+// New Zealand or Mexico, and only US dollars are accepted, so the country is always written out.
+export const usd = (amount: number | string): string => `US$${amount}`;
+/** The one line about currency under every public price list. */
+export const CURRENCY_NOTE = 'Prices are in US dollars, and so is every payment. If your card is in another currency, your bank converts the amount and may add a fee of its own.';
+
 // Signing is always free for recipients. Everything paid goes to tree planting.
 export const PLANS = {
   seedling: { name: 'Seedling', price: 0, blurb: `Try it with ${PRICING.welcomeSignatures} free signatures. Signing your own documents is always free.` },

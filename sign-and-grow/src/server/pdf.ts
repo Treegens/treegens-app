@@ -1,11 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { PDFDocument, PDFPage, PDFFont, PDFName, PDFDict, PDFRef, PDFArray, PDFNumber, PDFStream, rgb, degrees, pushGraphicsState, popGraphicsState, translate, drawObject } from 'pdf-lib';
+import { PDFDocument, PDFPage, PDFFont, PDFName, PDFDict, PDFRef, PDFArray, PDFNumber, PDFStream, rgb, degrees, pushGraphicsState, popGraphicsState, translate, drawObject, concatTransformationMatrix } from 'pdf-lib';
+import { jpegOrientation, markUpright, uprightMatrix, liesOnItsSide } from './exif.ts';
 import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad } from './util.ts';
 import { impactOf, fmtTrees, fmtNum, PRICING } from '../lib/impact.ts';
 import { formatDate } from '../lib/dates.ts';
+import { typesetterFor } from './pdftext.ts';
+import { isolate, hasRtl } from './bidi.ts';
+import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -43,19 +47,35 @@ export async function inspectPdf(buf: Uint8Array): Promise<{ pages: number; size
 }
 
 // Wrap a PNG or JPEG in a single-page PDF so images can be sent for signature too.
-export async function imageToPdf(buf: Uint8Array, mime: string): Promise<Uint8Array> {
+export const imageToPdf = (buf: Uint8Array, mime: string): Promise<Uint8Array> => imagesToPdf([{ bytes: buf, png: mime === 'image/png' }]);
+
+// One PDF from one or more pictures, a page each, in the order given. Each page is A4, upright or on its side to
+// suit the picture, so fields are a normal size whatever the camera's resolution.
+// A phone photo says which way up it is in a note beside the picture (see exif.ts), and a PDF has no such note. So
+// the picture is drawn turned the way the note says, and the note in the bytes we keep is set to "upright". Without
+// the first, the photo is sideways in the signed PDF. Without the second, a viewer that does read the note (the
+// browser, drawing the page on screen) turns it once more. Either way the sender would place a field on a line
+// that is somewhere else in the PDF people download.
+export async function imagesToPdf(list: { bytes: Uint8Array; png: boolean; name?: string }[]): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  let img;
-  try {
-    img = mime === 'image/png' ? await doc.embedPng(buf) : await doc.embedJpg(buf);
-  } catch {
-    throw bad('That image could not be read. Use a PNG or JPEG.');
+  for (const it of list) {
+    const o = it.png ? null : jpegOrientation(it.bytes);
+    const turn = o && o.value > 1 ? o.value : 1;
+    let img;
+    try {
+      img = it.png ? await doc.embedPng(it.bytes) : await doc.embedJpg(turn > 1 ? markUpright(it.bytes, o!) : it.bytes);
+    } catch {
+      throw bad(list.length > 1 ? `${it.name ? `"${it.name}"` : 'One of the pictures'} could not be read, so no document was made. Use PNG or JPEG pictures, or leave that one out and try again.` : 'That image could not be read. Use a PNG or JPEG.');
+    }
+    // The size of the picture as it is looked at: a photo stored on its side is as wide as its stored height.
+    const side = liesOnItsSide(turn);
+    const iw = side ? img.height : img.width;
+    const ih = side ? img.width : img.height;
+    const [W, H] = iw > ih ? [841.89, 595.28] : [595.28, 841.89];
+    const scale = Math.min((W - 48) / iw, (H - 48) / ih, 1);
+    const page = doc.addPage([W, H]);
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...uprightMatrix(turn, (W - iw * scale) / 2, (H - ih * scale) / 2, iw * scale, ih * scale)), drawObject(page.node.newXObject('Image', img.ref)), popGraphicsState());
   }
-  const W = 595.28;
-  const H = 841.89;
-  const scale = Math.min((W - 48) / img.width, (H - 48) / img.height, 1);
-  const page = doc.addPage([W, H]);
-  page.drawImage(img, { x: (W - img.width * scale) / 2, y: (H - img.height * scale) / 2, width: img.width * scale, height: img.height * scale });
   return doc.save();
 }
 
@@ -117,10 +137,13 @@ async function image(ctx: Ctx, dataUrl: string | null | undefined) {
   return img;
 }
 
+// A name or an email field prints the name and the address the sender gave its owner, from the start: they are
+// wording on the page, shown to every signer before signing, so a copy made at any time prints them too. The date
+// of signing is different. It only exists once its signer has finished.
 export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null): string {
   switch (f.type) {
-    case 'full_name': return r?.status === 'completed' ? r.name : '';
-    case 'email': return r?.status === 'completed' ? r.email : '';
+    case 'full_name': return r?.name || '';
+    case 'email': return r?.email || '';
     case 'date_signed': return r?.completed_at ? formatDate(r.completed_at, dateFormat) : '';
     default: return f.value || '';
   }
@@ -167,18 +190,25 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
   if (!text) return;
   const base = Math.max(6, Math.min(11, vh * 0.62));
   const multi = vh > base * 2.6 || text.includes('\n');
+  // The typesetter picks a font for every script, puts right-to-left text in its reading order with digits and
+  // Latin words left to right, and says how wide a line is. A line that reads right to left starts at the right
+  // edge of its box, as it would on paper.
+  const ts = typesetterFor(ctx.doc, ctx.font, ctx.bold);
+  const left = (ln: { width: number; rtl: boolean }, size: number) => (ln.rtl ? vx + vw - 2 - (ln.width * size) / 1000 : vx + 2);
   if (multi) {
     const size = Math.min(base, 10);
     const lh = size * 1.3;
-    const lines = wrap(ctx.font, text, size, vw - 4).slice(0, Math.max(1, Math.floor(vh / lh)));
+    const lines = ts.wrap(text, size, vw - 4).slice(0, Math.max(1, Math.floor(vh / lh)));
     lines.forEach((ln, i) => {
-      const p = m.pt(vx + 2, vy + size + 1 + i * lh);
-      page.drawText(ln, { x: p.x, y: p.y, size, font: ctx.font, color: INK, rotate: m.rotate });
+      const p = m.pt(left(ln, size), vy + size + 1 + i * lh);
+      ts.draw(page, ln, { x: p.x, y: p.y, size, color: INK, rotate: m.rotate });
     });
   } else {
-    const size = fitText(ctx.font, text, vw - 4, base);
-    const p = m.pt(vx + 2, vy + vh / 2 + size * 0.35);
-    page.drawText(text, { x: p.x, y: p.y, size, font: ctx.font, color: INK, rotate: m.rotate });
+    const ln = ts.layout(text);
+    // As large as fits the box, in half-point steps, never below 5 points.
+    const size = Math.max(5, Math.min(base, Math.floor((((vw - 4) * 1000) / Math.max(1, ln.width)) * 2) / 2));
+    const p = m.pt(left(ln, size), vy + vh / 2 + size * 0.35);
+    ts.draw(page, ln, { x: p.x, y: p.y, size, color: INK, rotate: m.rotate });
   }
 }
 
@@ -211,11 +241,13 @@ class Sheet {
   }
   text(s: string, o: { size?: number; bold?: boolean; color?: any; x?: number; gap?: number; maxW?: number } = {}) {
     const size = o.size ?? 9;
-    const font = o.bold ? this.bold : this.font;
     const x = o.x ?? this.L;
-    for (const ln of wrap(font, clean(s), size, o.maxW ?? this.W - x - this.L)) {
+    // The certificate is written in English, left to right. A name or a subject in a right-to-left script stands
+    // inside its line in its own reading order (see isolate() where the lines are put together).
+    const ts = typesetterFor(this.doc, this.font, this.bold);
+    for (const ln of ts.wrap(s, size, o.maxW ?? this.W - x - this.L, { bold: o.bold, dir: 'ltr' })) {
       this.need(size * 1.45);
-      this.page.drawText(ln, { x, y: this.y - size, size, font, color: o.color ?? INK });
+      ts.draw(this.page, ln, { x, y: this.y - size, size, color: o.color ?? INK });
       this.y -= size * 1.45;
     }
     this.y -= o.gap ?? 0;
@@ -251,19 +283,25 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   s.page.drawText('Certificate of Completion', { x: s.L + 40, y: s.H - 52, size: 20, font: ctx.bold, color: rgb(1, 1, 1) });
   s.page.drawText('Sign&Grow · e-signatures that plant trees', { x: s.L + 40, y: s.H - 68, size: 9, font: ctx.font, color: rgb(0.85, 0.94, 0.88) });
   s.y = s.H - 112;
+  // A name, a subject or a file name in a right-to-left script is ordered by itself inside our English line, so
+  // "ABC" or a number in it stays where its writer put it. In the audit lines, which were written earlier as plain
+  // sentences, the names and titles of this envelope are found again and treated the same way.
+  const iso = (x: any) => (hasRtl(String(x ?? '')) ? isolate(String(x)) : String(x ?? ''));
+  const own = [...new Set<string>([e.subject, sender?.name, ...e.documents.map((d: any) => d.name), ...e.recipients.map((r: any) => r.name)].filter((x: any) => x && hasRtl(x)))].sort((a, b) => b.length - a.length);
+  const known = (text: string) => own.reduce((t, name) => t.split(name).join(isolate(name)), text);
 
   s.h2('Envelope');
   s.kv('Envelope ID', e.id);
-  s.kv('Subject', e.subject || '(no subject)');
+  s.kv('Subject', iso(e.subject) || '(no subject)');
   s.kv('Status', e.status === 'completed' ? 'Completed' : e.status);
-  s.kv('Sender', sender ? `${sender.name} <${sender.email}>` : '-');
+  s.kv('Sender', sender ? `${iso(sender.name)} <${sender.email}>` : '-');
   s.kv('Sent', ts(e.sent_at));
   s.kv('Completed', ts(e.completed_at));
   s.kv('Signing order', e.ordered ? 'Sequential' : 'Everyone at once');
 
   s.h2('Documents');
   for (const d of e.documents) {
-    s.text(`${d.name} (${d.pages} page${d.pages === 1 ? '' : 's'})`, { size: 9, bold: true });
+    s.text(`${iso(d.name)} (${d.pages} page${d.pages === 1 ? '' : 's'})`, { size: 9, bold: true });
     s.text(`SHA-256 of the original: ${d.sha256}`, { size: 7, color: MUTED, gap: 3 });
   }
 
@@ -271,7 +309,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   for (const r of e.recipients) {
     s.need(96);
     const top = s.y;
-    s.text(`${r.name}  <${r.email}>`, { size: 10, bold: true, maxW: 330 });
+    s.text(`${iso(r.name)}  <${r.email}>`, { size: 10, bold: true, maxW: 330 });
     s.kv('Role', ROLE_LABEL[r.role] || r.role);
     s.kv('Status', r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : 'Signed') : r.status);
     s.kv('Sent', ts(r.sent_at));
@@ -285,10 +323,13 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
         if (earlier.length > 1) s.kv('Completed again', earlier.slice(1).map(ts).join(', '));
         s.kv(r.completed_at ? 'Completed again' : 'Completed', r.completed_at ? `${ts(r.completed_at)}, after the sender changed the document` : 'Not yet, since the sender changed the document');
       } else s.kv('Completed', ts(r.completed_at));
-      s.kv('Identity check', r.access_code ? 'Email link and access code' : 'Email link');
+      // How this person was checked before the document opened, and nothing more than happened: "Link sent by email
+      // only" when there was no check. The words are made in src/lib/checks.ts (checkLine) and put on the recipient
+      // by buildPdf, which knows whether a one-time code was passed by whoever holds the link now.
+      s.kv('Identity check', r.check_line || (r.access_code ? 'Link sent by email and an access code chosen by the sender' : 'Link sent by email only'));
       s.kv('E-record consent', ts(r.consent_at));
       s.kv('IP address', r.ip || '-');
-      if (r.reassigned_from) s.kv('Reassigned from', r.reassigned_from);
+      if (r.reassigned_from) s.kv('Reassigned from', known(r.reassigned_from));
     }
     const img = await image(ctx, r.signature_png);
     if (img && s.y < top) {
@@ -306,10 +347,19 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     s.need(24);
     const y0 = s.y;
     s.page.drawText(ts(a.at), { x: s.L, y: y0 - 8, size: 7.5, font: ctx.font, color: MUTED });
-    s.text(`${a.action}${a.detail ? ` · ${a.detail}` : ''}`, { size: 8, x: s.L + 118, maxW: 330 });
-    s.text(`${a.actor}${a.ip ? ` · ${a.ip}` : ''} · ${a.hash.slice(0, 16)}`, { size: 6.5, x: s.L + 118, color: MUTED, gap: 3 });
+    s.text(known(`${a.action}${a.detail ? ` · ${a.detail}` : ''}`), { size: 8, x: s.L + 118, maxW: 330 });
+    s.text(known(`${a.actor}${a.ip ? ` · ${a.ip}` : ''} · ${a.hash.slice(0, 16)}`), { size: 6.5, x: s.L + 118, color: MUTED, gap: 3 });
   }
   if (audit.length) s.kv('Chain head', audit[audit.length - 1].hash, s.L, 70);
+
+  // A character none of our fonts has is never left as an empty box. It is marked wherever it stood, and listed here
+  // by its Unicode number, so what was typed can be put back together from this record.
+  const gone = [...typesetterFor(ctx.doc, ctx.font, ctx.bold).missing].join('');
+  if (gone) {
+    const n = [...gone].length;
+    s.h2('Characters this PDF could not print');
+    s.text(`The fonts of this PDF do not have ${n === 1 ? 'one character' : `${n} different characters`} used in this envelope. Wherever ${n === 1 ? 'it' : 'one of them'} stood, the pages and this certificate show the mark ${PRINT_MARK} instead. By Unicode number, in the order they first appear: ${codePoints(gone)}. On screen and in emails they show as they were typed.`, { size: 8, gap: 4 });
+  }
 
   const i = impactOf(e.sheets || 0);
   s.need(90);
@@ -427,6 +477,38 @@ async function flatPages(doc: PDFDocument, sha256: string): Promise<PDFPage[]> {
   return doc.copyPages(flat, flat.getPageIndices());
 }
 
+// The page a copy opens with when it must not pass for a finished agreement: a red band with the title, then the
+// reasons in plain sentences.
+function noticeSheet(doc: PDFDocument, font: PDFFont, bold: PDFFont, footer: string, notice: { title: string; lines: string[] }) {
+  const s = new Sheet(doc, font, bold, footer);
+  s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: rgb(0.66, 0.2, 0.16) });
+  s.page.drawText(clean(notice.title), { x: s.L, y: s.H - 56, size: 20, font: bold, color: rgb(1, 1, 1) });
+  s.y = s.H - 120;
+  for (const line of notice.lines) s.text(line, { size: 11, gap: 8 });
+}
+
+// Puts such a page in front of a PDF that was stored earlier: the document as one person signed it, kept when the
+// sender changed the document afterwards. Every page of it is marked as well (`mark`), so no single page of it can
+// pass for the document as it is now.
+export async function withNotice(pdf: Uint8Array, envelopeId: string, notice: { title: string; lines: string[] }, mark: string): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  doc.registerFontkit(fontkit);
+  const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
+  const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
+  noticeSheet(doc, font, bold, `Sign&Grow · ${mark} · Envelope ${envelopeId}`, notice);
+  const src = await PDFDocument.load(pdf, { updateMetadata: false });
+  for (const page of await doc.copyPages(src, src.getPageIndices())) {
+    doc.addPage(page);
+    const m = mapper(page);
+    const p = m.pt(12, 22);
+    page.drawText(clean(`${mark.toUpperCase()}, see the first page`), { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+  }
+  doc.setTitle(notice.title);
+  doc.setProducer('Sign&Grow');
+  doc.setCreator('Sign&Grow');
+  return doc.save();
+}
+
 // Builds the signed PDF: every document with field values stamped in, signer attachments, then the certificate.
 // `notice` is for a copy of an envelope that was never completed (voided, declined or out of time), made for someone
 // who had signed it: the copy opens with a page that says so and why, and every page carries the words too.
@@ -435,13 +517,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
-  if (opts.notice) {
-    const s = new Sheet(doc, font, bold, `Sign&Grow · Not completed · Envelope ${e.id}`);
-    s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: rgb(0.66, 0.2, 0.16) });
-    s.page.drawText(clean(opts.notice.title), { x: s.L, y: s.H - 56, size: 20, font: bold, color: rgb(1, 1, 1) });
-    s.y = s.H - 120;
-    for (const line of opts.notice.lines) s.text(line, { size: 11, gap: 8 });
-  }
+  if (opts.notice) noticeSheet(doc, font, bold, `Sign&Grow · Not completed · Envelope ${e.id}`, opts.notice);
   const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format };
   // A copy made for one recipient (`viewer`) while others are still at work shows the pages as that recipient's
   // screen does: everything the sender wrote, what people who have finished filled in, and what the viewer has

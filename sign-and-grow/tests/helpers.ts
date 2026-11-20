@@ -22,6 +22,7 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-signin.ts');
   await import('../src/server/routes-envelopes.ts');
   await import('../src/server/routes-sign.ts');
+  await import('../src/server/routes-signercode.ts');
   await import('../src/server/routes-trust.ts');
   await import('../src/server/routes-support.ts');
   await import('../src/server/openapi.ts');
@@ -61,7 +62,8 @@ export async function signUp(name: string, email: string, ip?: string): Promise<
   const r = await c.post('/auth/signup', { name, email, password: 'correct horse battery' });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const t = server.db.get('SELECT verify_token t FROM users WHERE email=?', email).t;
-  assert.equal((await new Client().post('/auth/verify', { token: t })).status, 200);
+  // In the browser that signed up: the link confirms nothing for a browser that is not signed in to the login.
+  assert.equal((await c.post('/auth/verify', { token: t })).status, 200);
   return c;
 }
 

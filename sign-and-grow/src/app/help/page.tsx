@@ -1,12 +1,14 @@
 import { refundRuleText, priceRuleText, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
+import { BULK_COST_NOTE, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER, reminderText, DEFAULT_REMINDER_DAYS } from '@/lib/policy';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
-import { PRICING } from '@/lib/impact';
+import { PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
 import { publicFacts, abuseFacts, supportFacts } from './facts';
 import { replyPromise } from '@/lib/support';
-import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord } from './tools';
+import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord, FindRequests } from './tools';
+import { ConsentWords, SignatureKind } from './outside';
 
 export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in and without a chatbot. Find your documents, stop a subscription, or write to a person.' };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
@@ -75,7 +77,7 @@ export default function Help() {
               <li>Or open the document and choose <b>Report this request</b> on the signing page.</li>
               <li>Or use the contact form on this page with the topic <b>Something looks suspicious</b>.</li>
             </ul>
-            <p>Every report goes to a person. When {abuse.reportsToPause} different people report the same sender, sending from that account is paused until a person has reviewed it: no new documents, no new recipients and no reminders go out.</p>
+            <p>Every report goes to a person. When {abuse.reportsToPause} different people who were sent documents report the same sender, sending from that account is paused until a person has reviewed it: nothing its senders start is emailed to anyone, and people further down a signing order are not asked. You can report an email with its security code also after the sender has deleted the document. A report from someone who filled in a public form goes to a person too, but does not count towards that number, because a form takes whatever name and address is typed into it.</p>
             <p><a href="#contact" data-topic="suspicious" className="btn sm">Report with the contact form</a></p>
           </QA>
 
@@ -94,7 +96,7 @@ export default function Help() {
           <QA id="while-signing" q="What else can I do on the signing page?">
             <ul className="pub-list">
               <li>Ask the sender a question before you sign.</li>
-              <li>Fix the spelling of your own name.</li>
+              <li>Fix a slip in the spelling of your own name. A small one, such as a letter missing or two swapped, is corrected at once. When the software cannot tell that the new name is still you, for example a name written in another alphabet, it changes nothing and asks the sender, who can correct it for you.</li>
               <li>Pass the document to someone else who should sign instead.</li>
               <li>Decline, with a reason.</li>
               <li>Stop for now and finish later. Your link brings you back to where you were.</li>
@@ -102,6 +104,7 @@ export default function Help() {
             </ul>
             <p className="muted small">Asked for an access code? The sender chose it and can tell you what it is. It is never in our email. The page that asks for it has an <b>Ask the sender</b> button. After {abuse.codeTries} wrong tries a code is frozen so it cannot be guessed, and the sender sets a new one.</p>
           </QA>
+          <ConsentWords />
         </section>
 
         {/* ---- People who send ---- */}
@@ -146,12 +149,13 @@ export default function Help() {
           </QA>
 
           <QA id="signatures" q="How do signatures work, and what is free?">
-            <p>A signature is one person signing one envelope. A new account gets {sigs(P.welcomeSignatures)} free to try the product. {P.planName} is ${P.monthlyUsd} a month and adds {sigs(P.monthlySignatures)} with every payment. On {P.planName} you can buy more at ${P.topUpUsd} each, whenever you need them.</p>
+            <p>A signature is one person signing one envelope. A new account gets {sigs(P.welcomeSignatures)} free to try the product. {P.planName} is {usd(P.monthlyUsd)} a month and adds {sigs(P.monthlySignatures)} with every payment. On {P.planName} you can buy more at {usd(P.topUpUsd)} each, whenever you need them. {CURRENCY_NOTE}</p>
             <ul className="pub-list">
               <li><b>Used up:</b> only when someone actually signs.</li>
               <li><b>Held, then given back:</b> sending holds one signature for each signer, so nobody is stopped halfway. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves. One that was already used stays used.</li>
               <li><b>Always free:</b> signing your own documents. Approvers, viewers and people who get a copy. Reminders, more time and corrections. A signer you add in a correction needs a signature like any other.</li>
               <li><b>Public forms:</b> one signature for each person who signs the form.</li>
+              <li id="bulk-cost"><b>Bulk send:</b> {BULK_COST_NOTE} A list of 40 people needs 40 signatures before it is sent. The bulk send page shows how many a list holds, how many you have, what is missing and what that costs, before you press Send. An account that has not paid yet can also newly email only {abuse.firstWeekDaily} people a day in its first week and {abuse.unpaidDaily} a day after that.</li>
             </ul>
             <p>Signatures never expire. What you do not use is still there next month, also after you cancel.</p>
             <p>We email you when you are down to two and when you reach none. With none left, sending pauses until you choose to add more. It never turns into a charge. Signing, downloads and export keep working, and envelopes already out can still be signed.</p>
@@ -181,8 +185,8 @@ export default function Help() {
 
           <QA id="fix-after-sending" q="I sent a document with a mistake">
             <p>You do not need to void it. Open the envelope and correct it in place: fix a name or an email address, move or add fields, add or remove people.</p>
-            <p>Until someone has finished, anything can change. After that, you can still fix names, email addresses and the signing order of the people who are left. A change to the pages themselves (a different file, new wording, a field added, moved or removed) is only saved if you choose to ask the people who already finished to sign again. You are asked first, in plain words, and nothing is saved if you say no.</p>
-            <p>Signatures already collected stay unless you make that choice. People whose part changed get an email that says what changed. Someone who is asked to sign again keeps their link, their first signature stays on record, and it does not use another signature. A correction never counts as a new envelope, and the audit trail says what each one changed.</p>
+            <p>Until someone has finished, anything can change. After that, you can still fix names, email addresses and the signing order of the people who are left. A change to the pages themselves (a different file, new wording, a field added, moved or removed, or a name or address that a field prints on the page) is only saved if you choose to ask the people who already finished to sign again. You are asked first, in plain words, and nothing is saved if you say no. When a name is printed on pages someone has signed, make that change with Edit envelope, where the question is asked: the quick Correct next to a name says so and changes nothing.</p>
+            <p>Signatures already collected stay unless you make that choice, and so does what a signer who has finished left empty or unticked. People whose part changed get an email that says what changed, and a signing page that is open at that moment loads the changed document before anyone can finish on it. Someone who is asked to sign again keeps their link, their first signature stays on record with the document as they signed it, which they can still download, and it does not use another signature. A correction never counts as a new envelope, and the audit trail says what each one changed.</p>
           </QA>
 
           <QA id="not-received" q="The recipient says they never got the email">
@@ -195,12 +199,29 @@ export default function Help() {
             <p className="muted small">If a request sits unopened for a couple of days, we email you so you can help before anyone has to ask.</p>
           </QA>
 
+          <QA id="reminders" q="Are people reminded by themselves?">
+            <p>On an account made today, yes. It starts with a reminder every {DEFAULT_REMINDER_DAYS} days: {reminderText(DEFAULT_REMINDER_DAYS).replace(/^Automatic reminders are on: /, '')}</p>
+            <p>You see the setting on the last step before every send and can change it there for that one envelope, or switch it off. An owner or admin sets what new envelopes start with under Settings, then Account. An account that was made before reminders were on by default keeps the number it had, which may be none: the last step before sending says which.</p>
+            <p>A reminder to someone who has filled in everything and only has to press Finish says exactly that, and the envelope page shows you who is at that point. Reminders are sent by the service&apos;s own timer, so one can arrive a little after it is due, and none go out while sending is paused on an account.</p>
+          </QA>
+
+          <SignatureKind />
+
+          {/* The same words as on /security and under the pricing rules: NO_BAA_* in src/lib/policy.ts. */}
+          <QA id="patient-information" q="Can I use it for patient forms or other health information?">
+            <p><b>{NO_BAA_TITLE}</b> {NO_BAA_TEXT}</p>
+            <p>What would have to be true first:</p>
+            <ul className="pub-list">{NO_BAA_FIRST.map((x) => <li key={x}>{x}</li>)}</ul>
+            <p>{NO_BAA_AFTER}</p>
+            <p className="muted small">Nobody here is a lawyer and this is not legal advice. It is a statement of what Sign&Grow does not have. <Link href="/security#not">The other limits are on Security and trust</Link>.</p>
+          </QA>
+
           <QA id="cannot-send" q="Why can I not send?">
             <ul className="pub-list">
               <li><b>Your email address is not confirmed yet.</b> We sent a link when you signed up. The banner at the top of the app sends it again.</li>
-              <li><b>The account has reached its daily limit.</b> An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone newly emailed counts, also people added or changed on a document that is already out, bulk sends and public forms. The limit looks at the last 24 hours, and the message says when there is room again. Paying for anything lifts it. So does a person: <a href="#contact" data-topic="sending">write to us</a>.</li>
-              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account that has not paid cannot send those. We read the subject, the message, notes to recipients, document names, your name and the account name. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a> and a person will clear your account.</li>
-              <li><b>Sending is paused.</b> This happens when {abuse.reportsToPause} different recipients report documents from one account, or when our team pauses it. The message and the banner in the app give the reason. A person reviews every pause. Until then nothing new goes out: no new documents, no new or changed recipients, no reminders and no reopening. You can still open, download and export everything, and people who already have a document can still sign it. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>
+              <li><b>The account has reached its daily limit.</b> An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone you newly email counts, also people added or changed on a document that is already out and every row of a bulk send. A public form has the same limit of its own for the people who start it, counted for that form alone, and a team can invite {abuse.invitesPerDay} people a day. The limit looks at the last 24 hours, and the message says when there is room again. Paying does not lift it at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed, and the message then gives the date. A person can lift it sooner: <a href="#contact" data-topic="sending">write to us</a>.</li>
+              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account cannot send those, or invite under such a name, until it has a payment that is {abuse.paidTrustDays} days old and was not refunded or disputed. We read what the emails print: the subject, the message, notes to recipients, document names, what you wrote on the pages, the reason for voiding, your name and the account name. The message says which words set it off, so you can see whether it is a misreading. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a> and a person will clear your account.</li>
+              <li><b>Sending is paused.</b> This happens when {abuse.reportsToPause} different recipients report documents from one account, or when our team pauses it. The message and the banner in the app give the reason. A person reviews every pause. Until then nothing you start is emailed to anyone: no new documents, no new or changed recipients, no reminders, no reopening, no team invitations and no email about a change you make, and people who are waiting further down a signing order are asked only once the pause is lifted. You can still open, download and export everything, give a document that is out more time, and void one (the people on it are told, without your reason). People who already have a document can still sign it. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>
               <li><b>An access code is too short.</b> A code you set needs at least {abuse.codeMin} characters.</li>
               <li><b>You are out of signatures.</b> See <a href="#signatures">how signatures work</a>.</li>
             </ul>
@@ -239,6 +260,10 @@ export default function Help() {
             {support.promised && <ReplyRecord />}
           </QA>
           <div style={{ marginTop: 12 }}><ContactForm /></div>
+          <QA id="lost-link" q="I wrote to you and cannot find the email with the link">
+            <p>Enter the address you wrote from. We send the link to each of your requests again, to that inbox only. The links are the same as before, so an older email still works too.</p>
+            <FindRequests />
+          </QA>
           <YourRequests />
         </section>
       </main>

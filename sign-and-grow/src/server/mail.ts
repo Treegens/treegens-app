@@ -1,6 +1,7 @@
 import { run, get, all, saveBlob, readBlob } from './db.ts';
 import { esc, now, baseUrl, fmtCode } from './util.ts';
 import { PRICING } from '../lib/impact.ts';
+import { cannotOpenLine } from '../lib/policy.ts';
 
 export type Mail = {
   to: string;
@@ -11,12 +12,16 @@ export type Mail = {
   links?: { label: string; url: string; note?: string }[]; // a list of documents, each with its own link
   envelopeId?: string;
   recipientId?: string; // which recipient this was for, so two people sharing an address are not mixed up
+  about?: string | null; // the login (user id) this email to somebody else is about; our copy goes when that login does
   brand?: { name?: string; color?: string | null; logo?: string | null };
   footnote?: string;
   attachments?: { filename: string; content: Buffer }[];
   replyTo?: string; // replies go to a person, never to a dead no-reply box
   fromName?: string; // shown as "<name> via Sign&Grow"
   code?: string; // security code the recipient can type into /check
+  // The sender's name, on an email that asks someone to open a signing page and whose replies reach that sender.
+  // The footer then says what to do when the page will not open where the reader is: ask the sender for a PDF.
+  askForPdf?: string;
   expiresAt?: string; // when a one-time link or code in it stops working. It is never sent again after that.
 };
 
@@ -46,6 +51,8 @@ function fromHeader(name?: string): string {
 // "Report this email": the check page with the security code filled in. Reporting from there needs no signing link.
 const reportUrl = (code: string) => `${baseUrl()}/check?code=${fmtCode(code)}&report=1`;
 
+// A line of an email may hold a word with nowhere to break, such as a SHA-256 fingerprint or a long address. Lines
+// wrap anywhere (overflow-wrap), so the email never becomes wider than the phone it is read on.
 export function renderMail(m: Mail): string {
   const color = /^#[0-9a-f]{6}$/i.test(m.brand?.color || '') ? m.brand!.color! : '#1f6f43';
   const logo = m.brand?.logo?.startsWith('data:image/')
@@ -56,7 +63,7 @@ export function renderMail(m: Mail): string {
   <div style="padding:0 4px 16px">${logo}</div>
   <div style="background:#fff;border-radius:14px;padding:32px;border:1px solid #e4dfd3">
     <h1 style="font-size:20px;margin:0 0 16px;line-height:1.3">${esc(m.heading)}</h1>
-    ${m.lines.map((l) => `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;white-space:pre-wrap">${esc(l)}</p>`).join('')}
+    ${m.lines.map((l) => `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word">${esc(l)}</p>`).join('')}
     ${(m.links || []).map((l) => `<p style="font-size:15px;line-height:1.45;margin:0 0 12px"><a href="${esc(l.url)}" style="color:${color};font-weight:600">${esc(l.label)}</a>${l.note ? `<br><span style="font-size:13px;color:#6b776f">${esc(l.note)}</span>` : ''}</p>`).join('')}
     ${m.cta ? `<p style="margin:24px 0 8px"><a href="${esc(m.cta.url)}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;font-weight:600;padding:13px 26px;border-radius:10px;font-size:15px">${esc(m.cta.label)}</a></p>` : ''}
     ${m.footnote ? `<p style="font-size:12px;color:#6b776f;margin:18px 0 0;line-height:1.5">${esc(m.footnote)}</p>` : ''}
@@ -74,6 +81,7 @@ export function renderMail(m: Mail): string {
     ? 'Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow.'
     : `Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`}
     ${m.cta ? `<br>If the button does not work, copy this link: ${esc(m.cta.url)}` : ''}
+    ${m.askForPdf ? `<br>${esc(cannotOpenLine(m.askForPdf))}` : ''}
     ${m.code ? '<br>Do not forward this email. The link is personal to you.' : ''}
     <br>Need a hand? ${esc(baseUrl())}/help
   </p>
@@ -149,13 +157,14 @@ export async function sendMail(m: Mail): Promise<MailStatus> {
   const payload = {
     from: fromHeader(m.fromName), replyTo: m.replyTo || process.env.SUPPORT_EMAIL || null,
     text: [m.heading, ...m.lines, ...(m.links || []).map((l) => `${l.label}${l.note ? ` (${l.note})` : ''}: ${l.url}`), m.cta ? `${m.cta.label}: ${m.cta.url}` : '', m.footnote || '',
+      m.askForPdf ? cannotOpenLine(m.askForPdf) : '',
       m.code ? `Not sure this email is real? Go to ${baseUrl()}/check and enter the security code ${fmtCode(m.code)}.` : '',
       m.code ? `Did not expect this, or does it look wrong? Report this email: ${reportUrl(m.code)}` : ''].filter(Boolean).join('\n\n'),
     attachments: process.env.SMTP_URL ? (m.attachments || []).map((a) => ({ filename: a.filename, sha256: saveBlob(a.content) })) : [],
   };
   const r = run(
-    'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null,
+    'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null,
   );
   return deliver(r.lastInsertRowid);
 }

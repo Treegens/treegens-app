@@ -69,7 +69,9 @@
 .sn-mails li { padding: 7px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .sn-audit { margin-top: 10px; max-height: 320px; overflow: auto; border-radius: 6px; }
 .sn-audit:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
-.sn-audit-item { padding: 7px 0; border-bottom: 1px solid var(--line); }
+/* Audit lines carry SHA-256 fingerprints, 64 characters with nowhere to break. They wrap anywhere, so the page stays
+   as wide as the phone it is read on. */
+.sn-audit-item { padding: 7px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .sn-audit-item:last-child { border-bottom: 0; }
 
 /* ---- Lists ---- */

@@ -1,0 +1,105 @@
+{
+ "build:support": {
+  "built": [
+   {
+    "item": "1. A ticket: reference, status, owner, priority by topic, thread with internal notes; existing form, acknowledgement, reference and signer-to-sender path keep working",
+    "status": "done",
+    "how": "New src/server/routes-support.ts holds all support routes (moved out of routes-trust.ts). Columns appended to support_requests (priority, owner_id, due_at, escalated_for, first_reply_at, closed_at, closed_how, updated_at, secret_hash, verified, tz, follows) and a new support_messages table (customer / answer / question / note / event) that hangs on the request with ON DELETE CASCADE. Status is open / waiting / answered / closed. The customer is shown the owner's first name only (\"Maya is looking at this\"). Two topics were added so the urgent cases can be chosen: 'stuck' (a document is stuck or a deadline is near) and 'charged-wrongly'; with 'cannot-log-in' they are urgent, everything else normal. Existing reference, acknowledgement subject and heading, and helpAsked() for signers are unchanged.",
+    "test": "tests/support.test.ts: 'the whole life of a request, from both sides' and 'response times are published...' (topic decides priority; an unknown topic is normal). Existing tests/lifecycle.test.ts, trust.test.ts and abuse.test.ts still pass.",
+    "left_open": "Priority can be gamed by picking an urgent topic. An operator can change the priority, but a time already promised is never moved later."
+   },
+   {
+    "item": "2. Published response times, the actual time everywhere, honest lateness, one escalation per overdue ticket, late first in the queue, nothing promised when nobody can be reached",
+    "status": "done",
+    "how": "supportFirstReplyHours() / supportUrgentReplyHours() / supportReachable() in src/lib/policy.ts; words shared by emails and screens in src/lib/support.ts (replyPromise, whenText, standing). The help page states the promise and says real hours; the form shows the actual time before sending (\"Send it now and a person will have answered by Saturday 21 November, 01:55, your time\"), the result and the acknowledgement email give the stored due time (reader's zone from the browser or users.tz, else UTC and said so), and the request shows it. Asking the customer stops the clock; their reply starts a full new time. supportTick() in cron.ts: once per due time it emails SUPPORT_EMAIL plus every operator, emails the customer \"We are late. Sorry.\", and writes a history line; the request then says \"We are late with this. Sorry. ... It has been passed to everyone on the support team\". Queue is ordered by due time so late ones lead. With neither SUPPORT_EMAIL nor OPERATOR_EMAILS set, due_at is empty and no page, form or email mentions a time.",
+    "test": "tests/support.test.ts: 'response times are published, settable and counted in real hours...', 'with nobody to reach, no response time is promised anywhere', 'a late request says so to the customer, the operators are emailed once for it, and the queue shows it first' (clock moved by writing due_at; second tick sends nothing; late again after a reopen is told again).",
+    "left_open": "Lateness is noticed when the timer runs (every 15 minutes built in), not to the second. In the nobody-reachable case the form's last sentence no longer says \"Reply to that email\": it points to the link, because that is what now works. The extra email to the customer when we are late was my addition, not in the brief."
+   },
+   {
+    "item": "3. Customer side: answers emailed in full, private no-login link with a hashed secret, read / reply / mark solved, Your requests for signed-in people, reopen rules, never closed without a written answer, emails say do not reply",
+    "status": "done",
+    "how": "Every operator answer, question and closing answer is emailed in full with the same link /help/request/<id>/<secret>. The secret is an HMAC of the request id under the server secret; only its SHA-256 is stored. The link is never returned by the form, only emailed. New page src/app/help/request/[id]/[key]/page.tsx (noindex, no-referrer) with src/app/help/RequestView.tsx: status, owner, due time, thread, reply box, \"This is solved\", and \"I did not write to you\". Under Help, \"Your requests\" lists each request with state, owner, due time and thread and lets the confirmed owner reply or mark solved. A reply to an answered or closed request reopens it; more than 30 days after closing it opens a new request that names the old one (follows). Operators cannot close without a written answer; closing emails it (or resends the answer already given). Every email says \"Please do not reply to this email: a reply does not reach your request\" and points to the button.",
+    "test": "tests/support.test.ts: 'the whole life...', 'a reply reopens an answered or closed request, and after 30 days it starts a new one that names the old', 'the private link opens one request with the right secret, and nothing with a wrong one or with another request's'.",
+    "left_open": "Replying by email is not built (as briefed). Someone who lost every email has no tool to get the link sent again; they must write again or wait for our next email. The link works for as long as the request exists. One deliberate exception to 'never closed without an answer': \"Nobody at this address wrote this\" (see point 4); it still sends the address a short note."
+   },
+   {
+    "item": "4. Operator side: queue by due time with late and urgent marked, filters, take / hand over, answer, ask, internal note, close with answer, account facts, history of every action",
+    "status": "done",
+    "how": "GET /operator/support?filter=open|mine|unowned|waiting|all, GET /operator/support/:id, POST /operator/support/:id with action take / assign / answer / ask / note / close / spam / reopen / priority. New src/app/app/operator/tickets.tsx replaces the old \"Help requests\" card (the mailto \"Reply by email\" and \"Mark as answered\" buttons are gone). Hand-over only to a confirmed login in OPERATOR_EMAILS, who is emailed. Next to a request: whether the writer was signed in under that address, whether a login exists, and the account read-only (plan, paused or not, renewal, last payment with refunds), with the existing \"Trust this account\" button. Every action writes an event with who and when. Someone removed from OPERATOR_EMAILS no longer owns anything.",
+    "test": "tests/support.test.ts: 'the queue: mine, nobody's, waiting and all, taking and handing over, and the account next to the request', 'the operator routes refuse everyone who is not an operator, and every API key', 'closing without an answer is only for a request nobody at the address wrote...'.",
+    "left_open": "No drafts: text typed and not sent is lost on reload. Two operators answering at the same moment both send. \"spam\" and \"priority\" actions are additions beyond the brief."
+   },
+   {
+    "item": "5. Honest numbers: real median time to a first answer over 30 days with the count, only from 10 requests",
+    "status": "done",
+    "how": "replyStats() in routes-support.ts, served by GET /public/support as median {minutes, count, days, late_now} or null; ReplyRecord in src/app/help/tools.tsx prints it on the help page and prints nothing when it is null. Also says how many requests are late right now.",
+    "test": "tests/support.test.ts: 'the help page gets the real median time to a first answer, and only when it covers enough requests' (9 gives nothing, 10 gives 55 minutes, an answer older than 30 days drops out, notes and taking do not count).",
+    "left_open": "The median covers requests that got an answer; ones still unanswered are not in it (the late-now count is shown beside it). Requests deleted with an account drop out of the number."
+   },
+   {
+    "item": "6. Privacy: threads go with the ticket, the link shows nothing but the ticket, limits on the public reply",
+    "status": "done",
+    "how": "Messages cascade with the request in the database, so the existing purgeUser() delete removes threads. purgeUser now also keeps a request on which we wait for the customer's reply (not only an unanswered one); answering a kept request emails the answer and deletes it; an unanswered question of ours is deleted after 30 more days by the timer. The link view carries no address, name, account, id, note or history. Limits counted in the database: 10 customer messages a day per request, 30 a day per address (new requests and replies together), plus per-device limits. The words of a first message from someone not signed in under the address are neither mailed back nor shown on the linked page until an operator has written back. A signed-in person who wrote under somebody else's address sees no answers.",
+    "test": "tests/support.test.ts: 'the link cannot be used to flood...', 'deleting an account removes its requests with their threads...', 'a customer never sees internal notes or another customer's request, and answers go only to the mailbox they were written to', and the key list assertion in the link test.",
+    "left_open": "Requests from people with no account are never deleted (as before). An operator's name stays in thread history after that operator's own account is deleted. Our stored copy of an email holds the link in clear, like signing links do."
+   },
+   {
+    "item": "7. Tests",
+    "status": "done",
+    "how": "tests/support.test.ts, 14 tests, covering every case listed in the brief. The payment alert is raised by the real payment code (billing.applyStripeEvent with tests/stripe-fake.ts imported, not edited). Three lines in tests/lifecycle.test.ts were updated because closing now needs a written answer (deliberate change).",
+    "test": "node --experimental-strip-types --no-warnings --test tests/support.test.ts: 14 pass.",
+    "left_open": "The screens were checked by driving a browser and looking at screenshots (tests/out/build-support/), not by an automated browser test. Not looked at in a browser: the nobody-reachable variant of the help page, and the follow-up-after-30-days redirect."
+   },
+   {
+    "item": "8. Docs",
+    "status": "done",
+    "how": "README: a new complaint row, a \"How support works\" section, two config rows, the SUPPORT_EMAIL / OPERATOR_EMAILS / CRON_SECRET rows, \"What is not in it\", \"Things to decide before launch\" (it used to say no response time is promised) and the test table. .env.example: both settings and the corrected SUPPORT_EMAIL note. Help page: \"What happens after I write?\". Landing, security and developers pages: one sentence each. Deletion lists in policy.ts updated. openapi.ts not changed: support routes are for people, not keys.",
+    "test": "Copy was read against the code; the flow test that checks documented routes still passes.",
+    "left_open": ""
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-support.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/support.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/RequestView.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/request/[id]/[key]/page.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/operator/tickets.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/support.css (new)",
+   "/home/user/treegens-app/sign-and-grow/tests/support.test.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/build-support/ (new: drive.cjs, shots.cjs, facts.cjs and screenshots)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/cron.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/api/[...path]/route.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/layout.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/tools.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/facts.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/operator/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example",
+   "/home/user/treegens-app/sign-and-grow/tests/helpers.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/lifecycle.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (lines added by next dev, left as told)"
+  ],
+  "suite": "npm test: 228 tests, 228 pass, 0 fail (last run, after my final edit). tests/support.test.ts alone: 14 pass. npx tsc --noEmit -p .: no errors. One earlier tsc run showed an error in src/server/routes-envelopes.ts (formNeedsSignatures) from someone else's half-finished edit; it was gone on the next run.",
+  "settings": [
+   "SUPPORT_FIRST_REPLY_HOURS: default 24. A person answers a help request within this many real hours.",
+   "SUPPORT_URGENT_REPLY_HOURS: default 8, never longer than the first. For cannot log in, charged wrongly, a stuck document or a near deadline.",
+   "Not settings, constants in src/lib/policy.ts: SUPPORT_REOPEN_DAYS 30, SUPPORT_MEDIAN_DAYS 30, SUPPORT_MEDIAN_MIN 10, SUPPORT_REPLIES_PER_REQUEST 10 a day, SUPPORT_REPLIES_PER_ADDRESS 30 a day."
+  ],
+  "abuse_and_stuck": [
+   "Abuse 1, typing a stranger's address into the form (to put text in their inbox or on our page, to read answers meant for them, or to flood them): handled. The words are not mailed back or shown through the link until an operator has written back; the form never returns the link; a signed-in writer under another address sees no answers; 30 messages a day per address; \"I did not write to you\" closes it. Tests: 'the private link opens one request...', 'a customer never sees internal notes...', 'the link cannot be used to flood...'.",
+   "Abuse 2, guessing or misusing the private link: handled. A wrong secret, another request's secret and an unknown id get the same 404 and cannot write or close; only the SHA-256 is stored; 10 replies a day per request and one notification per reopening. Tests: 'the private link opens one request...', 'the link cannot be used to flood...'. Left open: the link does not expire while the request exists, and whoever is forwarded the email can use it.",
+   "Abuse 3, getting at the operator side: handled. Strangers and a signed-up but unconfirmed staff address get 404, operator API keys of both scopes get 403, customer keys get 403 on the support routes, and one customer cannot write into another's request. Test: 'the operator routes refuse everyone who is not an operator, and every API key'. Left open: choosing an urgent topic to get the shorter time.",
+   "Stuck 1, locked out and cannot sign in to read the answer: handled. The answer is emailed in full and the link works without a login. Test: 'the whole life of a request...'. Left open: someone who lost every email has no way to have the link sent again.",
+   "Stuck 2, a real person's request closed as not theirs, or closed and not solved: handled. The address gets a short note with the way back, the page says what happened, a reply reopens it, and after 30 days a reply starts a linked new request. Tests: 'closing without an answer is only for a request nobody at the address wrote, and even then the address is told', 'a reply reopens...'.",
+   "Stuck 3, replying to our email instead of using the link: partly handled. Every email says plainly not to and where to write. Left open: the reply itself is not read into the thread. With SUPPORT_EMAIL set it lands in that inbox (mail.ts sets it as reply-to on every email); without it, it goes to the no-reply address."
+  ],
+  "notes_for_integrator": "Behaviour changes others will notice:\n- POST /operator/support/:id with {status:'closed'} and no text now answers 400. I updated three lines in tests/lifecycle.test.ts for that. The old body shape still works when it carries text.\n- The operator page no longer has \"Reply by email\" (mailto) or \"Mark as answered\"; answers are written in the queue. GET /operator/queue still returns `support` as before, but the page reads GET /operator/support.\n- The new-request email to staff no longer has the customer as reply-to, carries the reference in the subject, and goes to OPERATOR_EMAILS when SUPPORT_EMAIL is unset. supportWarning()'s wording changed to match; the existing regex tests still pass.\n- The acknowledgement no longer says \"Reply to this email if you want to add anything\". It carries the private link, and help request emails end without the \"every dollar plants\" line.\n- POST /public/support: two new topics (stuck, charged-wrongly), a limit of 30 messages a day per address (429), and the answer now also carries priority, due_at and reply_hours.\n- GET /support/mine refuses API keys, matches the address without regard to case, leaves out payment alerts, and leaves `message` empty for a first message nobody has verified yet.\n- tick() returns an extra `support` key. purgeUser keeps requests in state 'waiting' as well as 'open'; the timer deletes a kept unanswered question after 30 days.\n- I moved the support routes out of routes-trust.ts into routes-support.ts.\n\nPromises in copy I added or changed: the response time on /help (only while SUPPORT_EMAIL or OPERATOR_EMAILS is set); \"If we are late, we say so\"; \"Every answer is emailed to you in full\"; \"A request is never closed on you without a written answer\" with the stated exception; landing page \"Nobody closes your request without writing to you\"; the two deletion lists in policy.ts; README \"Things to decide before launch\" now says a response time IS promised. Whoever runs this must set hours the team can keep.\n\nFrom billing: nothing needed. tellOperators is untouched. Its alerts are recognised by their name ('Sign&Grow (automatic alert)'), no reference and no user. If that name ever changes, ALERT_NAME in routes-support.ts must follow; an exported constant or a marker column would be sturdier.\n\nOut of scope, seen along the way: mail.ts sets SUPPORT_EMAIL as reply-to on every email, so replies to request emails land outside the thread; requests from people without an account are kept for ever; GET /operator/queue returns whole rows, now including secret_hash (a fingerprint only).\n\nHousekeeping: I committed nothing. Commit aee64d9, made by someone else while I worked, includes an in-progress snapshot of my files; the working tree has the finished versions. My dev server is stopped and .next-build-support is deleted. One throwaway data folder from my first dev-server start is still somewhere under /tmp (a mktemp name I no longer have)."
+ }
+}

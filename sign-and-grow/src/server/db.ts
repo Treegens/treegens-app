@@ -205,6 +205,41 @@ CREATE TABLE IF NOT EXISTS signin_states (
   id TEXT PRIMARY KEY, provider TEXT NOT NULL, nonce TEXT NOT NULL, verifier TEXT NOT NULL, mode TEXT NOT NULL,
   invite TEXT, code TEXT, next TEXT, user_id TEXT, expires_at TEXT NOT NULL
 );
+-- Checking who signs (src/server/signercode.ts). One line for every one-time code that was made: who it was for,
+-- how it travelled (email_code or sms_code), where to (masked, for the record) and a keyed fingerprint of that
+-- address or number, so the limits on one mailbox or one phone can be counted without storing either here. The code
+-- itself is never stored: code_hash is a keyed fingerprint of it. fails counts wrong tries at this code. ended_at is
+-- set when it was used, replaced by a newer one, or made void by a correction. stamp ties it to the link and the
+-- check it was made for. The lines go with the recipient.
+CREATE TABLE IF NOT EXISTS signer_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, recipient_id TEXT NOT NULL REFERENCES recipients(id) ON DELETE CASCADE,
+  envelope_id TEXT NOT NULL, account_id TEXT NOT NULL, channel TEXT NOT NULL, dest TEXT NOT NULL, dest_hash TEXT NOT NULL,
+  code_hash TEXT NOT NULL, stamp TEXT NOT NULL, fails INTEGER NOT NULL DEFAULT 0, ip TEXT, at TEXT NOT NULL,
+  expires_at TEXT NOT NULL, ended_at TEXT, ended_how TEXT, delivery TEXT
+);
+CREATE INDEX IF NOT EXISTS signer_codes_recipient ON signer_codes(recipient_id, id);
+CREATE INDEX IF NOT EXISTS signer_codes_dest ON signer_codes(dest_hash, at);
+CREATE INDEX IF NOT EXISTS signer_codes_ip ON signer_codes(ip, at);
+-- Every text message, like emails for email (src/server/sms.ts). kind is 'code', 'link' or 'reminder'. to_phone
+-- holds the number only while the text still has to be handed to the provider, and is emptied after that: the
+-- number is kept on the recipient and nowhere else. to_masked is what the sender and the record are shown. The body
+-- of a text that carried a code is blanked once the provider has taken it. status, tries, tried_at, next_try_at and
+-- expires_at work as they do on emails. The lines go with the envelope and with the account.
+CREATE TABLE IF NOT EXISTS texts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  envelope_id TEXT REFERENCES envelopes(id) ON DELETE CASCADE, recipient_id TEXT, kind TEXT NOT NULL,
+  to_phone TEXT, to_masked TEXT NOT NULL, dest_hash TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
+  tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, tried_at TEXT, next_try_at TEXT, expires_at TEXT, provider TEXT, provider_id TEXT
+);
+CREATE INDEX IF NOT EXISTS texts_envelope ON texts(envelope_id, id);
+CREATE INDEX IF NOT EXISTS texts_due ON texts(status, next_try_at);
+-- One line for every new text message an account caused, whatever became of it. SMS_DAILY_PER_ACCOUNT counts these
+-- lines and not the texts table, so voiding or deleting an envelope never hands the day's allowance back.
+CREATE TABLE IF NOT EXISTS sms_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, dest_hash TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sms_usage_account ON sms_usage(account_id, at);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -239,6 +274,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['payments', 'credits', 'INTEGER NOT NULL DEFAULT 0'],
   ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
   ['powerforms', 'alerted_at', 'TEXT'],
+  // The login an email to somebody else is about (an invitation someone sent, a notice about someone's API keys or
+  // that they left a team), so our copy of it can be deleted with that login without guessing from names.
+  ['emails', 'about_user', 'TEXT'],
   // The monthly price this account is on, before tax: what its last plan payment was held to. And the notice of a
   // higher price, if one was sent: the new price, the day it starts, and when the email about it left.
   ['accounts', 'price_cents', 'INTEGER'],
@@ -382,6 +420,45 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['support_requests', 'tz', 'TEXT'],
   // The older request this one continues: a reply that came after the time for reopening had passed.
   ['support_requests', 'follows', 'TEXT'],
+  // What the latest change to an envelope was when it was not a save from the editor: a quick correction of one
+  // person, a signer passing the document on or fixing their name, or sending. It finishes the sentence that starts
+  // with edited_by ("passed this document on to Mary Deputy"), and is empty after an ordinary save.
+  ['envelopes', 'edited_how', 'TEXT'],
+  // Which count a line in `reached` belongs to. Empty: someone a sender chose to email. 'form:' and a form's id: a
+  // visitor of that public form, counted for the form alone. 'invite': someone invited to the team.
+  ['reached', 'via', 'TEXT'],
+  // When the sender was told that emails for this envelope are being held back (the account is paused, or the
+  // envelope reads like a fake payment notice). Said once, and cleared when they go out.
+  ['envelopes', 'held_at', 'TEXT'],
+  // 1 on a report made by the visitor of a public form. That person typed their own name and address, so three of
+  // them are not three recipients: the report is kept and shown to operators, and never counts towards a pause.
+  ['abuse_reports', 'via_form', 'INTEGER NOT NULL DEFAULT 0'],
+  // The account a deleted document's email came from (an id, nothing about a person), so the holder of that email
+  // can still report it against the account. reported is 1 when that same person had reported it before the
+  // document was deleted, so the two never count as two people.
+  ['forgotten_codes', 'account_id', 'TEXT'],
+  ['forgotten_codes', 'reported', 'INTEGER NOT NULL DEFAULT 0'],
+  // Checking who signs (src/server/signercode.ts). verify is the check the sender asked for before the document
+  // opens for this person: 'email_code' or 'sms_code', empty for none. phone is the mobile number the sender typed
+  // for them, in international form, kept here and nowhere else. text_link is 1 when the signing link is also sent
+  // by text message. check_gen goes up whenever the check or the number changes, which makes every device pass the
+  // check again. checked_at, checked_how and checked_for are the record of a code typed correctly: when, what it
+  // was sent as and to where (masked), and a fingerprint of the link it was passed under, so the record stops
+  // counting the moment the link passes to another person. check_stop is set when someone using the link said the
+  // number is not theirs: no more codes go to it until the sender corrects it. texted_at is the last text with a
+  // link or a reminder to this person, so reminders by text follow at most once a day.
+  ['recipients', 'verify', 'TEXT'],
+  ['recipients', 'phone', 'TEXT'],
+  ['recipients', 'text_link', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'check_gen', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'checked_at', 'TEXT'],
+  ['recipients', 'checked_how', 'TEXT'],
+  ['recipients', 'checked_for', 'TEXT'],
+  ['recipients', 'check_stop', 'TEXT'],
+  ['recipients', 'texted_at', 'TEXT'],
+  // The document exactly as this person signed it, as a stored PDF (its fingerprint), made at the moment their
+  // signature was set aside. It is what they download when they ask for what they signed the first time.
+  ['earlier_signatures', 'copy_sha256', 'TEXT'],
 ];
 
 function migrate(d: any) {

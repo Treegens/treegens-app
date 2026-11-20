@@ -5,6 +5,7 @@ import './styles/sender.css';
 import './styles/settings.css';
 import './styles/public.css';
 import './styles/support.css';
+import './styles/abroad.css';
 import type { Metadata, Viewport } from 'next';
 import { Toasts } from '@/components/ui';
 

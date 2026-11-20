@@ -4,7 +4,9 @@ import { useRouter } from 'next/navigation';
 import { api, COLORS, Modal, fmtDate, newId, toast } from './ui';
 import { useHistory } from './editor/history';
 import { finished, fingerprint, freshValues, outcomes, rebase, restoreLocked, signsAgain } from './editor/changes';
-import { precheck, uploadFile } from './editor/upload';
+import { precheck, uploadFile, fmtSize, MAX_BYTES } from './editor/upload';
+import { isPicture, shrinkPhoto } from './editor/photos';
+import { PhotoAsk } from './editor/PhotoAsk';
 import { StepAdd } from './editor/StepAdd';
 import { StepFields } from './editor/StepFields';
 import { StepReview } from './editor/StepReview';
@@ -33,8 +35,12 @@ export function Editor({ id }: { id: string }) {
   const [conflict, setConflict] = useState<string[]>([]);
   const [closed, setClosed] = useState('');
   const [ask, setAsk] = useState<Confirm | null>(null);
+  // The files a sender chose, while they are asked whether the pictures among them are one document.
+  const [photoAsk, setPhotoAsk] = useState<File[] | null>(null);
   // Set when someone else saved this envelope after it was opened here, so saving now would wipe their work.
-  const [stale, setStale] = useState<{ by: string; at: string } | null>(null);
+  // `how` says what the newer version was when it was not a save from an editor: a quick correction of one person, a
+  // signer passing the document on or fixing their name, or sending ("passed this document on to Mary Deputy").
+  const [stale, setStale] = useState<{ by: string; at: string; how?: string } | null>(null);
   // The edit_version this editor's copy is based on. It goes with every save, and the server refuses a save that
   // comes from an older copy than the one it holds.
   const loaded = useRef<number | null>(null);
@@ -105,7 +111,7 @@ export function Editor({ id }: { id: string }) {
         setState((s) => (s === 'saving' ? 'saved' : s));
       } catch (e: any) {
         // Someone else saved since this copy was loaded. Nothing was written over their work: ask what to do.
-        if (e?.code === 'stale') setStale({ by: e.data?.edited_by || 'Someone', at: e.data?.edited_at || '' });
+        if (e?.code === 'stale') setStale({ by: e.data?.edited_by || 'Someone', at: e.data?.edited_at || '', how: e.data?.edited_how || '' });
         // Connection trouble and server hiccups are retried quietly. Anything else waits for the next change.
         setStuck((p) => ({ message: friendly(e), retry: !e?.status || e.status >= 500, tries: (p?.tries || 0) + 1 }));
         setState((s) => (s === 'saving' ? 'stuck' : s));
@@ -164,26 +170,43 @@ export function Editor({ id }: { id: string }) {
   const undo = () => (fields.undo(), tidy(), dirty());
   const redo = () => (fields.redo(), tidy(), dirty());
 
-  function addFiles(list: FileList | File[] | null) {
+  // Several pictures chosen at once are most often the pages of one paper document. `oneDocument` is the sender's
+  // answer to that question (see PhotoAsk); until it is given, nothing is uploaded.
+  function addFiles(list: FileList | File[] | null, oneDocument?: boolean) {
     if (!list?.length) return;
+    const files = Array.from(list);
+    if (oneDocument === undefined && files.filter((f) => isPicture(f) && !precheck(f, true)).length > 1) {
+      opener.current = document.activeElement as HTMLElement | null;
+      return setPhotoAsk(files);
+    }
+    // The pictures of one document travel together, and the document takes the place of the first of them.
+    const pics = oneDocument ? files.filter((f) => isPicture(f) && !precheck(f, true)) : [];
+    const groups = files.flatMap((f) => (!pics.includes(f) ? [[f]] : f === pics[0] ? [pics] : []));
     let room = MAX_DOCS - live.current.docs.length - uploads.filter((u) => u.state !== 'error').length;
-    for (const file of Array.from(list)) {
+    for (const group of groups) {
       const key = newId('up');
-      const problem = precheck(file) || (room <= 0 ? `An envelope can hold up to ${MAX_DOCS} documents. Remove one to add this file.` : '');
+      const name = group.length > 1 ? `${group[0].name} and ${plural(group.length - 1, 'more picture')}` : group[0].name;
+      const sizeOf = (l: File[]) => l.reduce((n, f) => n + f.size, 0);
+      // A picture is made smaller before it leaves, so whether it is too large is only known after that.
+      const problem = precheck(group[0], isPicture(group[0])) || (room <= 0 ? `An envelope can hold up to ${MAX_DOCS} documents. Remove one to add this file.` : '');
       if (problem) {
-        setUploads((u) => [...u, { key, name: file.name, size: file.size, progress: 0, state: 'error', error: problem }]);
+        setUploads((u) => [...u, { key, name, size: sizeOf(group), progress: 0, state: 'error', error: problem }]);
         continue;
       }
       room--;
-      setUploads((u) => [...u, { key, name: file.name, size: file.size, progress: 0, state: 'waiting' }]);
+      setUploads((u) => [...u, { key, name, size: sizeOf(group), progress: 0, state: 'waiting' }]);
       const patch = (p: Partial<Upload>) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, ...p } : x)));
       // One at a time, in the order they were chosen, so the documents end up in that order too.
       queue.current = queue.current.then(async () => {
-        patch({ state: 'uploading' });
         try {
-          const f = await uploadFile(file, (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
+          if (group.some(isPicture)) patch({ state: 'preparing' });
+          const ready: File[] = [];
+          for (const one of group) ready.push(await shrinkPhoto(one));
+          if (sizeOf(ready) > MAX_BYTES) throw new Error(ready.length > 1 ? `Together these pictures are ${fmtSize(sizeOf(ready))}, and one document can be up to 25 MB. Choose fewer pictures at a time and add the rest as a second document.` : precheck(ready[0]));
+          patch({ state: 'uploading', size: sizeOf(ready) });
+          const f = await uploadFile(ready.length > 1 ? ready : ready[0], (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
           setUploads((u) => u.filter((x) => x.key !== key));
-          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages }]);
+          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size }]);
           setEnv((e: any) => (e.subject ? e : { ...e, subject: e.kind === 'template' ? f.name : `Please sign: ${f.name}` }));
           dirty();
         } catch (e: any) {
@@ -203,12 +226,15 @@ export function Editor({ id }: { id: string }) {
   // moves to the last page so nothing disappears quietly.
   async function replaceDoc(did: string, file: File | null | undefined) {
     if (!file) return;
-    const problem = precheck(file);
+    const problem = precheck(file, isPicture(file));
     if (problem) return toast(problem, true);
     try {
       toast('Uploading the new file…');
-      const f = await uploadFile(file, () => {});
-      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages } : x)));
+      // A photo is made smaller first, as when it is added (see photos.ts).
+      const ready = await shrinkPhoto(file);
+      if (precheck(ready)) return toast(precheck(ready), true);
+      const f = await uploadFile(ready, () => {});
+      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size } : x)));
       fields.set((l) => l.map((x) => (x.document_id === did && x.page >= f.pages ? { ...x, page: f.pages - 1 } : x)), { record: false });
       dirty();
       toast('File replaced. Your fields are where you left them. Check they still line up.');
@@ -391,7 +417,7 @@ export function Editor({ id }: { id: string }) {
       leave(`/app/envelopes/${id}`);
     } catch (e: any) {
       if (e?.code === 'sign_again') return askSignAgain(e.data?.sign_again || []);
-      if (e?.code === 'stale') return setStale({ by: e.data?.edited_by || 'Someone', at: e.data?.edited_at || '' });
+      if (e?.code === 'stale') return setStale({ by: e.data?.edited_by || 'Someone', at: e.data?.edited_at || '', how: e.data?.edited_how || '' });
       setError(friendly(e));
       // The server turned it down because someone finished in the last moment. Find out who, so it can be put right.
       if (e?.status === 409) await catchUp().then((c) => !c.ok && setError('')).catch(() => {});
@@ -436,7 +462,13 @@ export function Editor({ id }: { id: string }) {
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, docs, rcps, fields, contacts, uploads, color,
     patchEnv, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
-    setFields, undo, redo, modalOpen: !!ask, go,
+    setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
+  };
+  // Closing the question about pictures hands focus back to the upload box it came from.
+  const closePhotoAsk = () => {
+    setPhotoAsk(null);
+    const el = opener.current;
+    setTimeout(() => el?.isConnected && el.focus(), 0);
   };
   // Wrapped so a click never arrives as the answer to "ask them to sign again". Only that question says yes.
   const submit = correcting ? () => saveCorrection() : send;
@@ -481,23 +513,29 @@ export function Editor({ id }: { id: string }) {
       {step === 3 && <StepReview ed={ed} problems={problems} busy={busy} changed={changed} error={error} conflict={conflict} closed={closed} result={result} onSubmit={submit} onRestore={restore} onSignAgain={() => saveCorrection(true)} onDiscard={discard} />}
 
       {stale && (
-        <Modal title={`${stale.by} saved a newer version`} onClose={() => setStale(null)}>
+        <Modal title={stale.how ? `This ${isTpl ? 'template' : 'envelope'} changed after you opened it` : `${stale.by} saved a newer version`} onClose={() => setStale(null)}>
+          {/* The newer version is not always a save from an editor. When it was something else (a quick correction,
+              a signer passing the document on or fixing their name, sending), the dialog says what it was. */}
           <p className="muted">
-            {stale.by} saved this {isTpl ? 'template' : correcting ? 'envelope' : 'draft'}{stale.at ? ` on ${fmtDate(stale.at, true)}` : ''}, after you opened it here. That may have been you, in another tab or window.
-            Your changes were not saved over theirs, so nothing is lost.
+            {stale.how
+              ? <>{stale.by} {stale.how}{stale.at ? ` on ${fmtDate(stale.at, true)}` : ''}, after you opened it here. Your changes were not saved, so that is not undone and nothing is lost.</>
+              : <>{stale.by} saved this {isTpl ? 'template' : correcting ? 'envelope' : 'draft'}{stale.at ? ` on ${fmtDate(stale.at, true)}` : ''}, after you opened it here. That may have been you, in another tab or window.
+                Your changes were not saved over theirs, so nothing is lost.</>}
           </p>
           <p className="muted">
             {correcting
-              ? 'Load their version to carry on from what is saved, then make your changes again. Go back if you first want to note down what you changed.'
-              : 'Load their version to carry on from what is saved, or keep what you have here as a separate copy and sort it out later.'}
+              ? `Load ${stale.how ? 'it as it is now' : 'their version'} to carry on from what is saved, then make your changes again. Go back if you first want to note down what you changed.`
+              : `Load ${stale.how ? 'it as it is now' : 'their version'} to carry on from what is saved, or keep what you have here as a separate copy and sort it out later.`}
           </p>
           <div className="actions">
             <button type="button" className="btn" autoFocus onClick={() => setStale(null)}>Go back</button>
             {!correcting && <button type="button" className="btn" disabled={busy} onClick={keepMineAsCopy}>Keep mine as a copy</button>}
-            <button type="button" className="btn primary" onClick={loadTheirs}>Load their version</button>
+            <button type="button" className="btn primary" onClick={loadTheirs}>{stale.how ? 'Load it as it is now' : 'Load their version'}</button>
           </div>
         </Modal>
       )}
+
+      {photoAsk && <PhotoAsk files={photoAsk} onClose={closePhotoAsk} onPick={(files, one) => (closePhotoAsk(), addFiles(files, one))} />}
 
       {ask && (
         <Modal title={ask.title} onClose={closeAsk}>

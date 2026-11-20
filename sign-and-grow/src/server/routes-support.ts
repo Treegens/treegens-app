@@ -308,6 +308,24 @@ function customerCloses(t: any, notMine: boolean, userId: string | null) {
 }
 
 // The private link from our emails. It works without a login, because the people who need help most are locked out.
+// "I lost the email with the link." The links to an address's requests are sent again, to that address only. The
+// answer is the same whether or not there are any, so the form tells nobody who has written to us. The link of a
+// request never changes, so nothing an earlier email carries stops working.
+route('POST', '/public/support/find', async (c) => {
+  const email = str((await c.body()).email, 254).trim().toLowerCase();
+  if (!isEmail(email)) throw bad('Enter the email address you wrote to us from.');
+  rateLimit(`support-find:${c.ip}`, 6, 3600_000);
+  rateLimit(`support-find:${email}`, 3, 864e5);
+  const since = new Date(Date.now() - 90 * 864e5).toISOString();
+  const found = all('SELECT * FROM support_requests WHERE lower(email)=? AND at > ? ORDER BY at DESC LIMIT 20', email, since).filter((t) => !isAlert(t));
+  if (found.length)
+    await sendMail({ to: email, subject: `Your requests to Sign&Grow: ${found.length === 1 ? 'the link' : 'the links'} again`, heading: found.length === 1 ? 'Here is the link to your request' : 'Here are the links to your requests',
+      lines: ['Someone, we hope you, asked on our help page for the links to the requests written from this address. Each link opens one request without signing in: there you read everything written so far and reply.',
+        'If you did not ask for this, you can ignore it: nothing was changed, and only this inbox received the links.', NO_REPLY],
+      links: found.map((t) => ({ label: `Request ${refOf(t)}`, url: linkFor(t), note: `${TOPIC_LABEL[t.topic] || 'Help request'}, written ${t.at.slice(0, 10)}, ${t.status === 'open' ? 'waiting for our answer' : t.status === 'waiting' ? 'waiting for your answer' : t.status}` })) });
+  return { ok: true };
+}, 'public');
+
 route('GET', '/public/support/ticket/:id/:key', (c) => ({ request: forCustomer(byLink(c)) }), 'public');
 route('POST', '/public/support/ticket/:id/:key/reply', async (c) => {
   const t = byLink(c);

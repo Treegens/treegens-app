@@ -1,9 +1,10 @@
-import { refundRuleText, PRICE_NOTICE_DAYS } from '@/lib/policy';
+import { refundRuleText, PRICE_NOTICE_DAYS, LANGUAGE_NOTE } from '@/lib/policy';
 import Link from 'next/link';
 import { Leaf } from '@/components/ui';
 import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/Public';
-import { PLANS, PRICING } from '@/lib/impact';
-import { publicFacts } from '@/app/help/facts';
+import { PLANS, PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
+import { publicFacts, abuseFacts } from '@/app/help/facts';
+import { BULK_COST_NOTE, DEFAULT_REMINDER_DAYS, IN_PERSON_ONLINE, NO_BAA_TITLE, NO_BAA_TEXT } from '@/lib/policy';
 
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
 export const dynamic = 'force-dynamic';
@@ -11,11 +12,11 @@ export const dynamic = 'force-dynamic';
 const FEATURES: [string, string][] = [
   ['Send for signature', 'Upload PDFs or images, add signers, approvers, viewers and people who get a copy. Sign in order or all at once.'],
   ['Drag and drop fields', 'Signatures, initials, dates, text, checkboxes, radio buttons, dropdowns, attachments and notes. Required or optional, prefilled or validated.'],
-  ['Sign anywhere', 'Recipients sign from any phone or computer with no account. Type, draw or upload a signature. Finish later, decline or pass it to someone else.'],
-  ['Templates and bulk send', 'Set a document up once and reuse it. Send one template to hundreds of people from a spreadsheet.'],
-  ['PowerForms', 'A public link or QR code that lets anyone fill in and sign a form on their own. Good for waivers, sign-ups and consent forms.'],
-  ['In-person signing', 'Host a signing on your own tablet or laptop when the signer is standing next to you.'],
-  ['Reminders and deadlines', 'Automatic nudges, a warning before a deadline, and more time in one click. An expired envelope can be reopened, and nobody signs twice.'],
+  ['Sign anywhere', `Recipients sign from any phone or computer with no account. Type, draw or upload a signature. Finish later, decline or pass it to someone else. ${LANGUAGE_NOTE}`],
+  ['Templates and bulk send', `Set a document up once and reuse it. Send one template to hundreds of people from a spreadsheet. ${BULK_COST_NOTE} The page shows the count and the price before you send.`],
+  ['PowerForms', 'A public link that lets anyone fill in and sign a form on their own. Put it on your website or in an email. For a poster, turn the link into a QR code with a tool of your own: we do not make one yet. Good for waivers, sign-ups and permission slips. Not for patient forms: there is no HIPAA agreement to sign with us, as the rules under the prices say.'],
+  ['In-person signing', `Host a signing on your own tablet or laptop when the signer is standing next to you. ${IN_PERSON_ONLINE}`],
+  ['Reminders and deadlines', `A new account reminds whoever has not finished by email every ${DEFAULT_REMINDER_DAYS} days. You see that setting before every send and can change it or switch it off. A warning before a deadline, and more time in one click. An expired envelope can be reopened, and nobody signs twice.`],
   ['Proof you can check', 'Every envelope gets a certificate of completion and a hash-chained audit trail. Anyone can verify a signed PDF on our public page.'],
   ['Teams and branding', 'Invite colleagues, share templates, set roles, and put your own logo and colour on emails and the signing screen.'],
   ['API and webhooks', 'Create envelopes, embed signing in your own product and get notified of every event. Included on every plan.'],
@@ -39,7 +40,7 @@ const COMPARE: [string, string, string][] = [
   ['Refunds', 'Automatic for what you have not used', 'Usually decided case by case'],
   ['If you stop paying', 'Nothing is deleted or locked', 'Access can be cut off'],
   ['Taking your documents with you', 'One free export, any time', 'Often one at a time, or a paid add-on'],
-  ['API, webhooks, bulk send, public forms', 'Every plan, including free', 'Often a separate, pricier plan'],
+  ['API, webhooks, bulk send, public forms', 'On both plans. Each person who signs uses one signature, as on any envelope', 'Often a separate, pricier plan'],
   ['Check a signed PDF', 'Public page, no account needed', 'Usually needs an account or the sender'],
   ['Audit trail', 'Hash chained, tampering is detectable', 'Event log'],
   ['Environmental impact', 'Shown on every envelope, with the maths published', 'Rarely shown'],
@@ -50,6 +51,12 @@ const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 export default function Landing() {
   const { refundDays, dormantStopDays } = publicFacts();
   const P = PRICING;
+  // "Bulk send is on every plan" needs its price said with it. A worked example from the same numbers the server
+  // charges by: a list of 40 on the monthly plan is the month's signatures plus a top-up for the rest.
+  const LIST = 40;
+  const listTopUp = Math.max(0, LIST - P.monthlySignatures);
+  const listUsd = P.monthlyUsd + listTopUp * P.topUpUsd;
+  const { firstWeekDaily, unpaidDaily } = abuseFacts();
 
   const PROMISES: Pledge[] = [
     { said: 'A typo means voiding the document and starting over.', title: 'Fix a sent document without voiding it', text: 'Wrong email, misspelled name, a field in the wrong place? Correct the envelope while it is out. Signatures already collected stay, and it does not count as a new envelope.', href: '/help#fix-after-sending', link: 'How correcting works' },
@@ -139,7 +146,7 @@ export default function Landing() {
           <div className="pub-plans">
             <div className="card pub-plan">
               <h3>{PLANS.seedling.name}</h3>
-              <div className="price">${PLANS.seedling.price}</div>
+              <div className="price">{usd(PLANS.seedling.price)}</div>
               <p className="muted">Try it, and sign your own documents for free.</p>
               <ul>
                 <li><b>{sigs(P.welcomeSignatures)} free</b> to try the product</li>
@@ -152,11 +159,11 @@ export default function Landing() {
             </div>
             <div className="card pub-plan best">
               <h3>{P.planName}</h3>
-              <div className="price">${P.monthlyUsd}<small> / month</small></div>
+              <div className="price">{usd(P.monthlyUsd)}<small> / month</small></div>
               <p className="muted">For people who send regularly.</p>
               <ul>
                 <li><b>{sigs(P.monthlySignatures)} added every month</b></li>
-                <li>More when you need them, ${P.topUpUsd} a signature</li>
+                <li>More when you need them, {usd(P.topUpUsd)} a signature</li>
                 <li>What you do not use rolls over and never expires</li>
                 <li>One price for the whole team, not per person</li>
                 <li>Month to month. Cancel in one click</li>
@@ -166,6 +173,10 @@ export default function Landing() {
           </div>
 
           <p className="muted small pub-code-note">Were you given a code? Some communities get {P.planName} free. Enter it when you <Link href="/signup">sign up</Link>, or later on the Plan page.</p>
+          {/* A bare "$9" reads as local dollars in half the world, and a simple signature is not enough for every
+              document in every country. Both are said here, before anyone signs up. */}
+          <p className="muted small pub-code-note" id="currency">{CURRENCY_NOTE}</p>
+          <p className="muted small pub-code-note">Sign&Grow makes simple electronic signatures. Whether that is enough depends on your country and on the kind of document: <Link href="/help#enough">check before you rely on it</Link>.</p>
 
           <div className="card pub-rules">
             <h3>The rules</h3>
@@ -174,14 +185,16 @@ export default function Landing() {
               <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves.</li>
               <li><b>What is always free.</b> Signing your own documents. Approvers, viewers and people who get a copy. Corrections, reminders and more time. And signing, for everyone you send to.</li>
               <li><b>Signatures never expire.</b> What you do not use this month is there next month, also after you cancel.</li>
-              <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at ${P.topUpUsd} a signature, with the total shown before you pay. There are no overage charges.</li>
-              <li><b>Month to month.</b> {P.planName} is ${P.monthlyUsd} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
+              <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at {usd(P.topUpUsd)} a signature, with the total shown before you pay. There are no overage charges.</li>
+              <li><b>Month to month.</b> {P.planName} is {usd(P.monthlyUsd)} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
               <li><b>Refunds are automatic.</b> {refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
               <li><b>No surprise price rises.</b> If the monthly price ever goes up, you are told by email at least {PRICE_NOTICE_DAYS} days before your first renewal at the new price, and a renewal that charges more without that notice refunds the difference by itself.</li>
               {dormantStopDays > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you.</li>}
               <li><b>Same features on both plans.</b> Templates, bulk send, public forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
+              <li id="bulk-cost"><b>What a bulk send costs.</b> {BULK_COST_NOTE} A list of {LIST} people needs {sigs(LIST)}: starting from none on {P.planName}, that is the {P.monthlySignatures} of the month and {listTopUp} more at {usd(P.topUpUsd)} each, {usd(listUsd)} in all, paid before the batch goes out. The bulk send page shows your own numbers before you press Send. What nobody signs comes back to your balance when you void the batch or it runs out of time, and the refund rule applies to it. An account that has not paid yet can newly email {firstWeekDaily} people a day in its first week and {unpaidDaily} a day after that.</li>
               <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>
               <li><b>Where the money goes.</b> 100% of what you pay goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees.</li>
+              <li id="not-for-patients"><b>{NO_BAA_TITLE}</b> {NO_BAA_TEXT} <Link href="/security#not">What would have to be true first</Link>.</li>
             </ul>
           </div>
         </section>

@@ -30,8 +30,22 @@ export const abuseSuspendAfter = (): number => Number(process.env.ABUSE_SUSPEND_
 /** How many people a new, unpaid account may send to per day in its first week. */
 export const newAccountDailyRecipients = (): number => Number(process.env.NEW_ACCOUNT_DAILY_RECIPIENTS) || 50;
 
-/** How many people an account that has not paid may send to per day after its first week. Paying for anything, or being cleared by a person, lifts both limits. */
+/** How many people an account that has not paid may send to per day after its first week. A payment that has stood for PAID_TRUST_DAYS, or being cleared by a person, lifts both limits. */
 export const unpaidDailyRecipients = (): number => Number(process.env.UNPAID_DAILY_RECIPIENTS) || 200;
+
+/**
+ * Paying does not lift the protections at once. The daily limit and the filter for fake payment notices apply until
+ * an account has a payment that is at least this many days old and was neither refunded nor disputed, or until a
+ * person has marked the account as trusted. Otherwise a few dollars would buy a day of sending anything to anyone,
+ * and could be taken back the same evening.
+ */
+export const PAID_TRUST_DAYS = 14;
+/** The rule above as one sentence, for the refusals and the pages that explain the limits. */
+export const paidTrustText = (days = PAID_TRUST_DAYS): string =>
+  `These checks stop applying once the account has a payment that is at least ${days} days old and was not refunded or disputed, or once a person on our team has cleared it.`;
+
+/** How many people one account can invite to its team in 24 hours. A person on our team can lift it by marking the account as trusted. */
+export const TEAM_INVITES_PER_DAY = 20;
 
 /** An access code a sender sets must have at least this many characters. */
 export const ACCESS_CODE_MIN = 4;
@@ -79,7 +93,7 @@ export const KEPT_AFTER_DELETION: string[] = [
   'What you sent as a member of a team you do not own. It belongs to that team and passes to its owner, and its audit trail says so. An API key you made there stays on the team\'s list as stopped, under your name.',
   'Signed PDFs your recipients downloaded or were emailed. Those are theirs. The links in our emails to them stop working.',
   'A fingerprint of the security code in each email about a document you sent, for one year. It holds no name, address or title. It only lets someone who still has that email learn that it was real and that the document has been deleted.',
-  `If you go by a single name: our stored copies of emails to other people that mention it and belong to no document, such as an invitation you sent. Those go with all such copies, ${MAIL_COPY_DAYS} days after they were sent. Copies that carry your email address or a full name are deleted with the account.`,
+  `Our stored copies of emails to other people are deleted with the account when we know they are about you: an invitation you sent, or a notice to a team about your API keys or that you left. Any other copy that happens to mention your name goes with all such copies, ${MAIL_COPY_DAYS} days after it was sent.`,
 ];
 
 /**
@@ -126,3 +140,163 @@ export const SUPPORT_MEDIAN_MIN = 10;
 /** How many messages a customer may add in 24 hours, to one request and from one address, so a link cannot be used to flood the people who answer. */
 export const SUPPORT_REPLIES_PER_REQUEST = 10;
 export const SUPPORT_REPLIES_PER_ADDRESS = 30;
+
+// ---- What a signer agrees to before any field opens ------------------------------------------------
+// The signing screen shows these words, the server writes their version into the audit line when the signer agrees,
+// and /help prints them with the version, so a certificate that says "wording 2026-11" can be read back by anyone.
+// The words say what kind of signature this is and what the software does not check. They never say that a
+// signature is valid or equal to a handwritten one: that depends on the country and on the kind of document, and
+// the software knows neither. To change a word, add a new version here, keep the old one, and move CONSENT_VERSION.
+// Plain functions with no environment in them, so a 'use client' file may import them.
+export type ConsentWording = { version: string; legal: string; practical: string; agree: string };
+export const CONSENT_VERSION = '2026-11';
+const CONSENT_WORDINGS: Record<string, (sender: string, signs: boolean) => Omit<ConsentWording, 'version'>> = {
+  '2026-11': (sender, signs) => ({
+    legal: signs
+      ? `You are about to review and sign this document on screen, with a simple electronic signature: your name or mark on the page and a record of when and from where you signed. In many countries a signature like this can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not check which kind this document is. If you are not sure, ask ${sender} or a lawyer before you sign. By continuing, you accept this electronic method as a valid way for you and the other parties to sign this document.`
+      : `You are about to review this document on screen. What you do here is recorded electronically, not on paper. In many countries that can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not check which kind this document is. If you are not sure, ask ${sender} or a lawyer before you continue.`,
+    practical: `You can download or print a copy before you ${signs ? 'sign' : 'finish'}, and afterwards you can download what you ${signs ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask ${sender} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.`,
+    agree: 'I agree to use electronic records and signatures.',
+  }),
+};
+/** Whether a version is one we have shown. A screen that was open across a change of wording sends its own. */
+export const isConsentVersion = (v: unknown): v is string => typeof v === 'string' && Object.hasOwn(CONSENT_WORDINGS, v);
+/** The words of one version. `signs` is false for someone who approves or only reads. */
+export const consentWording = (sender: string, signs: boolean, version: string = CONSENT_VERSION): ConsentWording =>
+  ({ version: isConsentVersion(version) ? version : CONSENT_VERSION, ...CONSENT_WORDINGS[isConsentVersion(version) ? version : CONSENT_VERSION](sender, signs) });
+/**
+ * What the audit line says after the signer's name. The certificate prints it, so it says where the words can be
+ * read. `stated` is false when the call that agreed did not say which wording its screen showed: the line then
+ * names the wording in use at that moment and says that it is not the screen's own word.
+ */
+export const consentAuditNote = (version: string, stated = true): string =>
+  `${stated ? `Wording ${version}` : `The screen did not say which wording it showed. The wording in use was ${version}`}, as printed on the help page under "What you agree to before you sign".`;
+/** The line under "Adopt and sign". It says what the mark is, not what a court will make of it. */
+export const adoptLine = (word: 'signature' | 'initials'): string => `I agree that this mark stands for my ${word}.`;
+
+// ---- Language ----------------------------------------------------------------------------------------
+// One sentence, quoted by the landing page, /help, /security and the README. Whoever adds languages changes it here.
+export const LANGUAGE_NOTE = 'The signing screen and our emails are in English for now. Your document can be in any language.';
+
+// ---- When the signing page will not open where the signer is -----------------------------------------
+// Some countries and some office networks do not let a page through, and we have not tested from where this one can
+// be reached. So every email that asks someone to open a signing page ends with a way round that needs no page: its
+// reply goes to the sender, who can send the document as a PDF. /help tells senders what to do then.
+export const cannotOpenLine = (sender: string): string => `Page will not open where you are? Reply to this email and ask ${sender} to send the document as a PDF.`;
+
+// ---- Checking who signs ----------------------------------------------------------------------------
+// A one-time code sent by email or by text message before a document opens. The server enforces these
+// (src/server/signercode.ts), and the signing screen, the help page and the security page quote them.
+
+/** A one-time code has this many digits. */
+export const SIGNER_CODE_DIGITS = 6;
+/** A one-time code works for this many minutes after it was sent. */
+export const SIGNER_CODE_MINUTES = 10;
+/** After this many wrong tries a one-time code no longer works and a new one has to be asked for. */
+export const SIGNER_CODE_TRIES = 5;
+/** A new one-time code can be asked for this many seconds after the last one. */
+export const SIGNER_CODE_WAIT_SECONDS = 60;
+/** How many one-time codes one recipient can be sent in an hour. */
+export const SIGNER_CODES_PER_HOUR = 5;
+/** How many one-time codes one device address can ask for in an hour, over every link it opens. An office shares one address. */
+export const SIGNER_CODES_PER_CALLER_HOUR = 15;
+/** How many one-time codes can go to one mailbox or one phone number in a day, whoever asks and for whichever document. */
+export const SIGNER_CODES_PER_DESTINATION_DAY = 15;
+/** How many texts with a signing link or a reminder can go to one phone number from one account in a day. */
+export const LINK_TEXTS_PER_NUMBER_DAY = 4;
+
+/**
+ * The most text messages one account can cause in 24 hours: codes, signing links and reminders, every new one counted.
+ * A text costs the operator money and customers are not charged for it, so this is a hard stop. 0 lets none through.
+ */
+export const smsDailyPerAccount = (env: Record<string, string | undefined> = process.env): number => {
+  const n = Number((env.SMS_DAILY_PER_ACCOUNT ?? '').trim() === '' ? NaN : env.SMS_DAILY_PER_ACCOUNT);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 200;
+};
+
+// ---- Reminders ---------------------------------------------------------------------------------------
+// A new account starts with automatic reminders on: whoever has their turn and has not finished is emailed again
+// every DEFAULT_REMINDER_DAYS days, until they finish or the deadline passes. The landing page promises reminders,
+// and that has to be true without the sender finding a setting first. The choice is shown on the review step before
+// every send, an admin changes the default under Settings, Account, and each recipient can stop the reminders to
+// themselves. Accounts made before this default keep the number they had. Plain constants and functions with no
+// environment in them, so a 'use client' file may import them.
+export const DEFAULT_REMINDER_DAYS = 3;
+/** The choices the review step offers. A number set elsewhere (the API, an older draft) is shown as it is. */
+export const REMINDER_CHOICES: number[] = [0, 1, 2, 3, 5, 7, 14];
+/** One choice, in words. */
+export const reminderChoice = (days: number): string => (days <= 0 ? 'Never' : days === 1 ? 'Every day' : days === 7 ? 'Every week' : days === 14 ? 'Every two weeks' : `Every ${days} days`);
+/** What a reminder setting means, in one sentence. The review step, the envelope page and Settings all print it. */
+export const reminderText = (days: any): string => {
+  const n = Math.max(0, Math.round(Number(days)) || 0);
+  return n > 0
+    ? `Automatic reminders are on: whoever has not finished is emailed again every ${n === 1 ? 'day' : `${n} days`}, until they finish or the deadline passes. Each person can stop the reminders to themselves.`
+    : 'Automatic reminders are off: nobody is reminded unless you send a reminder yourself.';
+};
+
+// ---- Signing in person ---------------------------------------------------------------------------------
+// Said wherever in-person signing is offered. There is no offline mode: the document is opened from the server, and
+// the time and the internet address in the audit trail are taken by the server when Finish arrives.
+export const IN_PERSON_ONLINE = 'It needs an internet connection from opening the document to pressing Finish. There is no offline mode.';
+
+// ---- Bulk send: what it costs -------------------------------------------------------------------------
+// "Bulk send is on every plan" is true of the feature and misleading about the price unless this is said with it.
+// The server holds a batch to it (POST /bulk and POST /bulk/check in src/server/routes-envelopes.ts).
+export const BULK_COST_NOTE = 'Each person who signs uses one signature, like on any envelope, and a batch only goes out when all of its signatures are already in your balance.';
+
+// ---- Not for patient information ------------------------------------------------------------------------
+// One statement, kept here once. /security prints it under "What this is not", the landing page under the pricing
+// rules, and /help as a question. Nobody who wrote it is a lawyer: it says what does not exist here (an agreement
+// nobody can sign with us, at any price), what that means for the people it matters to, and what would have to be
+// true before it could change. It is deliberately not softened into "ask us", and there is no click-through
+// agreement: one signed in a minute with nothing behind it is the false comfort the research complains about.
+// Whoever can one day stand behind such an agreement changes the words here, and only here.
+export const NO_BAA_TITLE = 'Not for patient information.';
+export const NO_BAA_TEXT = 'There is no HIPAA business associate agreement (BAA) for Sign&Grow. Nobody can sign one with us, on any plan, at any price. HIPAA is the United States law on health information, and it asks a healthcare provider to have such an agreement with every service that handles patient information for them. So if you are a healthcare provider in the United States, or work for one, do not put protected health information through Sign&Grow: no patient intake forms, no consent forms that name a patient or a treatment, nothing else that says who a patient is together with anything about their health, their care or their bills.';
+/** What would have to be true before that sentence could change. Every line is something that does not exist today. */
+export const NO_BAA_FIRST: string[] = [
+  'A business associate agreement written by a lawyer, signed by whoever runs this service.',
+  'The same kind of agreement between them and every company that handles the data for them: the host of the server, and the mail provider that carries the emails and the signed PDFs attached to them.',
+  'Stored files encrypted by the software itself. Today it adds no encryption of its own.',
+  'A record of who opened which document, and a written way of telling you about a breach.',
+];
+export const NO_BAA_AFTER = 'None of that exists today, and this page will say so on the day it does. Rules about health information differ by country and by kind of document: outside the United States too, check what applies to you before you send anything about a person\'s health.';
+
+// ---- Who can see your documents ---------------------------------------------------------------------
+// The block of that name on /security, kept here once. Every line says what the code does, and where a line is a
+// promise that code cannot keep by itself (what the people with the server's disk do with it, that nothing is sold)
+// it says so in so many words. Before changing a line, find the code that makes it true:
+//   the link         src/server/routes-sign.ts (every signing route is authorised by the token in the link alone)
+//   members, admins  mine() in src/server/routes-envelopes.ts
+//   the operator     GET /operator/queue in src/server/routes-trust.ts, forOperator() in src/server/routes-support.ts
+//                    and the card lookup in the payment routes: no route there returns a document, a signed PDF, a
+//                    signature, an answer or an audit trail
+//   stored files     saveBlob() in src/server/db.ts writes them as they are
+export const WHO_CAN_SEE: { who: string; what: string }[] = [
+  { who: 'The people it was sent to, and anyone they pass their link to.',
+    what: 'A signing link opens the document for whoever holds it. There is no login behind it, so forwarding the email, or sharing an inbox, shares the document. That is why a sender can put an access code on a document, which they give to the signer themselves and which is never in our email, or ask for a one-time code that is sent to the signer when they open the link. A recipient cannot open a document before their turn in a signing order. After it has been voided, declined or left to expire, only someone who already signed can still open the copy of what they signed.' },
+  { who: 'The person who sent it.',
+    what: 'They see the document, what each person filled in, the signatures, the audit trail, and whether each email left and each person opened it.' },
+  { who: 'The owner and the admins of the sender\'s account.',
+    what: 'On a team, the owner and every admin can open every envelope, template and bulk send of every member. A member sees only what they sent themselves, and every template. If you send from a team, its admins can read what you send.' },
+  { who: 'The people who run this server.',
+    what: 'Inside the app they work a queue of help requests and reports. There they see what somebody wrote to them. For a reported document they see its subject, the sender\'s message, the sender\'s name and address and who reported it. For an account they see its name, its plan, its age, its last payment, the names and addresses of its owner and admins, and whether it is paused. The queue has no screen and no function that opens a document, a signed PDF, a signature, an answer typed into a field or an audit trail. Outside the app it is different: the software adds no encryption of its own to stored files, so whoever has the disk and the database of the server can read everything on them. The rule for that is: only to answer a help request or a report about that document, or to repair the service, and never for anything else. That rule is a promise by the people who run the server. Software cannot enforce it.' },
+  { who: 'The companies that carry it.',
+    what: 'The host of the server, and the mail provider that delivers the emails with the signed PDF attached. Who they are on this server is listed under "Where your data is" on this page.' },
+  { who: 'Nobody else.',
+    what: 'These pages load no advertising and no tracking of any kind. No document, contact, name or address is sold or handed to an advertiser, a data broker, a parent company or a partner. Nothing you upload or sign is sent to an AI service or used to train one. The first and the last of these you can check in the code. That nothing is sold is a promise by the people who run this server.' },
+];
+
+// ---- Sending from a phone ----------------------------------------------------------------------------
+// Photos of paper, staying signed in, and documents that are heavy for a phone. Plain numbers, no environment:
+// the editor, Settings, /security and the server all quote them.
+
+/** A picture with a longer side than this many pixels is made smaller in the browser before it is uploaded. On an A4 page that is about 170 dots per inch: small print stays readable, and a phone photo shrinks to a fraction of its size. */
+export const PHOTO_MAX_SIDE = 2000;
+/** How many pictures one upload can join into one document, a page for each. */
+export const MAX_PHOTOS_PER_DOCUMENT = 50;
+
+/** A browser stays signed in for this many days after it was last used. Using the app moves the end forward. */
+export const SESSION_DAYS = 30;
+/** How often, at most, a browser's "last used" time is written down. Shown times are this exact, no more. */
+export const SESSION_TOUCH_MINUTES = 60;

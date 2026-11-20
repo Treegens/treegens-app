@@ -5,6 +5,11 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
 import { boot, Client, PNG, draft, simple, upload, tokenFor, signUp, signAll, mailTo, type Server } from './helpers.ts';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { docUrl, allOnScreen } from '../src/components/sign/fields.ts';
+import { touchesLocked } from '../src/components/editor/changes.ts';
 
 let db: Server['db'];
 let env: Server['env'];
@@ -240,7 +245,11 @@ test('what a signer does in their own field is never mistaken for a change by th
 
   // Ben empties the field. The sender saves again from what is on the server: nothing printed has changed, so Ada
   // is not asked for anything, and the words the sender first put there are still on record as the sender's.
-  await ben.c.post(`/sign/${ben.tok}/save`, { values: { [field]: '' }, version: ben.view.version });
+  // (Ben's new name is a newer version for his own screen, which asks him to sign under it: his page loads again.)
+  assert.equal((await ben.c.post(`/sign/${ben.tok}/save`, { values: { [field]: '' }, version: ben.view.version })).data.code, 'changed');
+  const reloaded = (await ben.c.get(`/sign/${ben.tok}`)).data;
+  assert.equal(reloaded.recipient.name, 'Ben S. Signer');
+  assert.equal((await ben.c.post(`/sign/${ben.tok}/save`, { values: { [field]: '' }, version: reloaded.version })).status, 200);
   assert.equal((await rename('Benjamin Signer', await current(id))).status, 200);
   assert.deepEqual([(await terms()).value, (await terms()).prefill], [null, 'Net 30 days']);
   assert.equal(statusOf(id, 'ada@example.com'), 'completed');
@@ -322,7 +331,7 @@ test('a signer cannot finish on a page that shows the document as it was before 
   const calm = await open(e1.id, 'calm@example.com');
   const b1 = await current(e1.id);
   b1.subject = 'Calm, renamed';
-  b1.recipients[0].name = 'Sam S. Signer';
+  b1.reminder_days = 3;
   assert.equal((await jo.put(`/envelopes/${e1.id}`, b1)).status, 200);
   assert.equal((await full(jo, e1.id)).envelope.content_version, 1);
   assert.equal((await calm.finish()).status, 200);
@@ -758,4 +767,469 @@ test('after an address is corrected, the sender hears "not opened yet" two days 
   assert.equal(await alerts(), 0);
   age(c.id, 49);
   assert.equal(await alerts(), 1);
+});
+
+// ================================================================================================================
+// Second round. What a second look at the fixes above still found: names that a field prints, answers a finished
+// signer left empty, a page that kept showing the old file, and changes made to an envelope outside the editor.
+// ================================================================================================================
+
+const textOf = async (bytes: Uint8Array) => (await import('../src/server/text.ts')).extractText(bytes);
+// The pages of the sender's download, without the certificate that follows them.
+const pagesOf = async (id: string) => (await pdfText(id)).split('Certificate of Completion')[0];
+const plain = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&quot;/g, '"').replace(/\s+/g, ' ');
+// The standard envelope (Ada and Ben sign, Cee gets a copy) with a full name field for Cee, and a full name field
+// and an email field for Ben, all on the page that Ada signs. Sent.
+async function withPrintedNames(over: any = {}, edit?: (b: any) => void) {
+  const e = await draft(jo, { ordered: false, ...over });
+  const b = await current(e.id);
+  const at = (rid: string, type: string, y: number) => ({ document_id: b.documents[0].id, recipient_id: rid, type, page: 0, x: 0.1, y, w: 0.7, h: 0.03 });
+  b.fields.push(at(person(b, 'cee@example.com').id, 'full_name', 0.2), at(person(b, 'ben@example.com').id, 'full_name', 0.25), at(person(b, 'ben@example.com').id, 'email', 0.3));
+  edit?.(b);
+  assert.equal((await jo.put(`/envelopes/${e.id}`, b)).status, 200);
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  return e;
+}
+
+// ---- 1 again. Names and addresses that a field prints are wording on the page -----------------------------------
+
+test('a name or an address that a field prints is shown to every signer before they sign, also for someone who only gets a copy', async () => {
+  const fee = 'Ada also owes a fee of 5000 dollars';
+  // Signed in order. The person whose name carries the sentence comes last and only gets a copy.
+  const e = await withPrintedNames({ ordered: true }, (b) => { person(b, 'cee@example.com').name = fee; });
+  const shown = (view: any, value: string) => view.others.find((o: any) => o.value === value);
+  const ada = await open(e.id, 'ada@example.com');
+  assert.deepEqual([shown(ada.view, fee)?.type, shown(ada.view, fee)?.from], ['full_name', 'sender'], 'the name of the copy recipient, as the sender wrote it');
+  assert.equal(shown(ada.view, 'Ben Signer')?.from, 'sender', 'the name of a signer who has not had the document yet');
+  assert.equal(shown(ada.view, 'ben@example.com')?.type, 'email');
+  // The copy Ada downloads before she signs prints the same words as her screen.
+  assert.ok((await textOf((await ada.c.get(`/sign/${ada.tok}/download`)).data)).includes(fee));
+  assert.equal((await ada.finish()).status, 200);
+  const ben = await open(e.id, 'ben@example.com', '4242');
+  assert.equal(shown(ben.view, fee)?.from, 'sender');
+  assert.equal((await ben.finish()).data.envelope_status, 'completed');
+  assert.ok((await pagesOf(e.id)).includes(fee), 'and those are the words the signed pages print');
+});
+
+test('once someone has signed, a name printed on their pages only changes if the sender asks them to sign again, by every route', async () => {
+  const e = await withPrintedNames();
+  assert.equal((await (await open(e.id, 'ada@example.com')).finish()).status, 200);
+  const before = (await full(jo, e.id)).envelope;
+  const benId = before.recipients.find((r: any) => r.email === 'ben@example.com').id;
+
+  // The editor and the API: a new name for the copy recipient, whose name is printed above Ada's signature.
+  const renamed = await current(e.id);
+  person(renamed, 'cee@example.com').name = 'The price is changed to 1 dollar';
+  const put = await jo.put(`/envelopes/${e.id}`, renamed);
+  assert.equal([put.status, put.data.code].join(), '409,sign_again');
+  assert.match(put.data.error, /The name printed on page 1 changed from "Cee Copy" to "The price is changed to 1 dollar"\./);
+  // The editor works out the same question before it saves.
+  assert.equal(touchesLocked(before, { ...before, recipients: renamed.recipients }), true);
+  assert.equal(touchesLocked(before, before), false);
+
+  // The quick correction of one person: a name, then an address.
+  const quick = await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, name: 'Ada pays a penalty of 9000 dollars' });
+  assert.equal([quick.status, quick.data.code].join(), '409,sign_again');
+  assert.match(quick.data.error, /^The name of Ben Signer is printed on the document, and Ada Signer has already finished\. Nothing was changed\. To change it, edit the envelope itself/);
+  const address = await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, email: 'penalty.of.9000@example.com' });
+  assert.equal(address.status, 409);
+  assert.match(address.data.error, /^The email address of Ben Signer is printed on the document/);
+  // An access code is printed nowhere, so that still goes through.
+  assert.equal((await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, access_code: '987654' })).status, 200);
+
+  // The signer himself: passing the document on, and "Fix my name".
+  const ben = await open(e.id, 'ben@example.com', '987654');
+  const handed = await ben.c.post(`/sign/${ben.tok}/reassign`, { name: 'Ada pays a penalty', email: 'someone@example.com' });
+  assert.equal(handed.status, 409);
+  assert.match(handed.data.error, /^Your name or email address is printed on this document, and Ada Signer has already finished it, so it cannot be passed on from here\. Nothing was changed\. Ask Jo Sender \(jo@example\.com\)/);
+  const fixed = await ben.c.post(`/sign/${ben.tok}/name`, { name: 'Benn Signer' });
+  assert.equal(fixed.data.applied, false);
+  assert.match(fixed.data.message, /Your name is printed on the document and Ada Signer has already finished, so only Jo Sender can change it now\. We asked them for you\./);
+  assert.match(mailTo('jo@example.com').at(-1)!.subject, /^Name change asked for:/);
+
+  // None of it reached the envelope: Ada is still finished, and the names are the ones she signed over.
+  assert.deepEqual((await full(jo, e.id)).envelope.recipients.map((r: any) => `${r.name} <${r.email}> ${r.status}`),
+    ['Ada Signer <ada@example.com> completed', 'Ben Signer <ben@example.com> viewed', 'Cee Copy <cee@example.com> completed']);
+
+  // With the sender's choice the name changes, and Ada is told what changed and asked again.
+  const again = await current(e.id);
+  person(again, 'cee@example.com').name = 'The price is changed to 1 dollar';
+  assert.equal((await jo.put(`/envelopes/${e.id}`, { ...again, resign: true })).status, 200);
+  assert.equal(statusOf(e.id, 'ada@example.com'), 'sent');
+  const told = mailTo('ada@example.com').at(-1)!;
+  assert.match(told.subject, /^Changed after you finished:/);
+  assert.ok(plain(told.html).includes('The name printed on page 1 changed from "Cee Copy" to "The price is changed to 1 dollar".'));
+});
+
+test('a new spelling of a name is a newer version: an open page cannot finish under the old one, and whoever sees the name is told', async () => {
+  const guarantor = 'Sam Signer, guarantor for every debt of Jo';
+  // One signer, whose name is also printed by a full name field.
+  const make = async (email: string) => {
+    const e = await simple(jo, email, { subject: `Name of ${email}` });
+    const b = await current(e.id);
+    b.fields.push({ document_id: b.documents[0].id, recipient_id: b.recipients[0].id, type: 'full_name', page: 0, x: 0.1, y: 0.2, w: 0.7, h: 0.03 });
+    assert.equal((await jo.put(`/envelopes/${e.id}`, b)).status, 200);
+    assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+    return e;
+  };
+  const refused = async (e: any, s: any, email: string, said: string) => {
+    assert.equal((await full(jo, e.id)).envelope.content_version, 2);
+    const old = await s.finish();
+    assert.equal([old.status, old.data.code].join(), '409,changed', 'the page that still shows the old name signs nothing');
+    const mail = mailTo(email).at(-1)!;
+    assert.match(mail.subject, /^Updated:/);
+    assert.ok(plain(mail.html).includes(said), plain(mail.html));
+    const fresh = (await s.c.get(`/sign/${s.tok}`)).data;
+    assert.deepEqual([fresh.recipient.name, fresh.changed], [guarantor, said]);
+    assert.equal((await s.finish({ version: fresh.version })).status, 200);
+  };
+
+  // By the quick correction.
+  const a = await make('name.quick@example.com');
+  const sa = await open(a.id, 'name.quick@example.com');
+  assert.equal((await jo.post(`/envelopes/${a.id}/correct`, { recipient_id: (await full(jo, a.id)).envelope.recipients[0].id, name: guarantor })).status, 200);
+  await refused(a, sa, 'name.quick@example.com', `The name "Sam Signer" is now written "${guarantor}".`);
+
+  // By the editor or the API.
+  const b = await make('name.put@example.com');
+  const sb = await open(b.id, 'name.put@example.com');
+  const body = await current(b.id);
+  body.recipients[0].name = guarantor;
+  assert.equal((await jo.put(`/envelopes/${b.id}`, body)).status, 200);
+  await refused(b, sb, 'name.put@example.com', `The name printed on page 1 changed from "Sam Signer" to "${guarantor}".`);
+
+  // By the signer ("Fix my name"). Their own page carries on with the new version. Ada, who sees Ben's name
+  // printed on the page, is told, and her open page has to load it before it can finish.
+  const c = await withPrintedNames();
+  const ada = await open(c.id, 'ada@example.com');
+  const ben = await open(c.id, 'ben@example.com', '4242');
+  const fix = await ben.c.post(`/sign/${ben.tok}/name`, { name: 'Benn Signer' });
+  assert.deepEqual([fix.data.applied, fix.data.version], [true, 2]);
+  assert.equal((await ben.finish({ version: fix.data.version })).status, 200, 'the page that made the change carries on');
+  assert.equal((await ada.finish()).data.code, 'changed');
+  assert.match(mailTo('ada@example.com').at(-1)!.subject, /^Updated:/);
+  assert.ok((await ada.c.get(`/sign/${ada.tok}`)).data.others.some((o: any) => o.type === 'full_name' && o.value === 'Benn Signer'));
+});
+
+// ---- 2 again. What a finished signer left empty is their answer ---------------------------------------------------
+
+test('what a finished signer left empty or unticked is their answer, and a save from an older copy does not fill it in again', async () => {
+  const e = await draft(jo, { ordered: false, subject: 'Left empty' });
+  const b = await current(e.id);
+  const adaId = person(b, 'ada@example.com').id;
+  const at = (over: any) => ({ document_id: b.documents[0].id, recipient_id: adaId, required: false, page: 0, x: 0.1, w: 0.6, h: 0.03, ...over });
+  b.fields.push(at({ type: 'checkbox', value: '1', label: 'I waive all rights', y: 0.3, w: 0.03, h: 0.02 }), at({ type: 'text', value: 'Non-compete for 10 years applies', label: 'Non-compete', y: 0.35 }), at({ type: 'text', value: 'Payment within 30 days', label: 'Payment', y: 0.4 }));
+  assert.equal((await jo.put(`/envelopes/${e.id}`, b)).status, 200);
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const stale = await current(e.id); // an editor that was opened before Ada signed holds this copy
+
+  // Ada unticks the box, empties the line, leaves the payment line as the sender wrote it, and signs.
+  const ada = await open(e.id, 'ada@example.com');
+  const by = (label: string) => ada.view.fields.find((f: any) => f.label === label).id;
+  const values = { ...Object.fromEntries(ada.view.fields.map((f: any) => [f.id, f.type === 'text' ? f.value || 'filled in' : '1'])), [by('I waive all rights')]: '', [by('Non-compete')]: '' };
+  assert.equal((await ada.finish({ values })).status, 200);
+  const stored = () => db.all("SELECT value, prefill FROM fields WHERE envelope_id=? AND label IN ('I waive all rights','Non-compete') ORDER BY label", e.id).map((f: any) => [f.value, f.prefill]);
+  assert.deepEqual(stored(), [[null, '1'], [null, 'Non-compete for 10 years applies']]);
+  assert.equal((await pdfText(e.id)).includes('Non-compete for 10 years applies'), false);
+
+  // The older copy is saved. It carries the box ticked and the line filled in, as the sender first had them.
+  assert.equal((await jo.put(`/envelopes/${e.id}`, stale)).status, 200);
+  assert.deepEqual(stored(), [[null, '1'], [null, 'Non-compete for 10 years applies']], 'her answers stand, and the first wording stays on record as the sender\'s');
+  assert.equal(statusOf(e.id, 'ada@example.com'), 'completed');
+  assert.deepEqual(await audits(e.id, 'Envelope corrected'), [], 'nothing changed, so nothing is written down');
+  assert.equal((await pdfText(e.id)).includes('Non-compete for 10 years applies'), false);
+
+  // Where she left the sender's wording as it was, changing it is a change to what she signed, and that is asked.
+  const changed = await current(e.id);
+  changed.fields.find((f: any) => f.label === 'Payment').value = 'Payment within 90 days';
+  const r = await jo.put(`/envelopes/${e.id}`, changed);
+  assert.equal([r.status, r.data.code].join(), '409,sign_again');
+  assert.match(r.data.error, /Wording from the sender on page 1, in the part for Ada Signer, changed from "Payment within 30 days" to "Payment within 90 days"/);
+
+  // The signed document carries her answers, not the sender's first wording.
+  assert.equal((await benSigns(e.id)).data.envelope_status, 'completed');
+  assert.equal((await pagesOf(e.id)).includes('Non-compete for 10 years applies'), false);
+});
+
+// ---- 3 again. The page shows the file that is signed ------------------------------------------------------------
+
+test('the signing page is given the fingerprint of each file, loads a replaced file again, and Finish waits for its pages', async () => {
+  const first = await uploadNamed(jo, 'ORIGINAL CONTRACT', 1), second = await uploadNamed(jo, 'SWAPPED CONTRACT', 1);
+  const made = await jo.post('/envelopes', { subject: 'Swap', send: true, documents: [{ id: 'd', file_id: first.id, name: 'Contract' }],
+    recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'swap@example.com' }], fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const id = made.data.envelope.id;
+  const s = await open(id, 'swap@example.com');
+  const base = `/sign/${s.tok}`;
+  const sha = (bytes: Uint8Array) => crypto.createHash('sha256').update(bytes).digest('hex');
+  // What the page fetches for a document: the address the page itself uses, without the "/api" the browser adds.
+  const fetched = async (doc: any) => (await s.c.get(docUrl(base, doc).replace(/^\/api/, ''))).data;
+  const doc = s.view.documents[0];
+  assert.match(doc.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(docUrl(base, doc), `/api${base}/doc/${doc.id}?v=${doc.sha256}`);
+  assert.equal(sha(await fetched(doc)), doc.sha256, 'the fingerprint is that of the file the page draws');
+  // Nothing is on the screen yet, so Finish does not work. It does once the pages of this file have been drawn.
+  assert.equal(allOnScreen(s.view.documents, {}), false);
+  assert.equal(allOnScreen(s.view.documents, { [doc.id]: doc.sha256 }), true);
+  assert.equal(allOnScreen(undefined, {}), false);
+
+  // The sender replaces the file. The document keeps its id, as "Replace file" in the editor does.
+  const body = await current(id);
+  body.documents[0].file_id = second.id;
+  assert.equal((await jo.put(`/envelopes/${id}`, body)).status, 200);
+  const fresh = (await s.c.get(base)).data;
+  assert.equal(fresh.documents[0].id, doc.id);
+  assert.notEqual(fresh.documents[0].sha256, doc.sha256);
+  // The page has the new data, but the pages on it are still those of the old file: Finish waits. The new file
+  // has a new address, so it is fetched and drawn again, and only then does Finish work.
+  assert.equal(allOnScreen(fresh.documents, { [doc.id]: doc.sha256 }), false);
+  assert.notEqual(docUrl(base, fresh.documents[0]), docUrl(base, doc));
+  assert.ok((await textOf(await fetched(fresh.documents[0]))).includes('SWAPPED CONTRACT'));
+  assert.equal(allOnScreen(fresh.documents, { [doc.id]: fresh.documents[0].sha256 }), true);
+});
+
+// ---- 5 again. A hand-over is to another person, whatever the address ------------------------------------------------
+
+test('handing a request over to another person at the same address passes on nothing either', async () => {
+  const e = await simple(jo, 'family@example.com', { subject: 'Family inbox', recipients: [{ id: 'r', role: 'signer', name: 'Jon Family', email: 'family@example.com' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'g', document_id: 'd', recipient_id: 'r', type: 'text', label: 'Answer', page: 0, x: 0.1, y: 0.6, w: 0.3, h: 0.03 }] });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const jon = await open(e.id, 'family@example.com');
+  const sig = jon.view.fields.find((f: any) => f.type === 'signature').id, txt = jon.view.fields.find((f: any) => f.type === 'text').id;
+  assert.equal((await jon.c.post(`/sign/${jon.tok}/save`, { version: jon.view.version, signature_png: PNG, values: { [sig]: '1', [txt]: 'Jon private answer' } })).status, 200);
+  assert.equal((await jon.c.post(`/sign/${jon.tok}/reassign`, { name: 'Mary Family', email: 'family@example.com' })).status, 200);
+  const mary = (await new Client().get(`/sign/${tokenFor(e.id, 'family@example.com')}`)).data;
+  assert.deepEqual([mary.recipient.name, mary.recipient.signature_png, mary.recipient.consented], ['Mary Family', null, false]);
+  assert.deepEqual(mary.fields.map((f: any) => [f.type, f.value]), [['signature', null], ['text', null]]);
+  assert.match((await audits(e.id, 'Reassigned')).at(-1)!, /^Jon Family <family@example\.com> assigned this to Mary Family <family@example\.com>\. Nothing that Jon Family had filled in or signed was passed on\.$/);
+});
+
+// ---- 6 again. Every change is a newer version ---------------------------------------------------------------------
+
+test('every way an envelope changes counts as a newer version: a save from a copy opened before it is refused and told what happened', async () => {
+  const e = await draft(jo, { ordered: false, subject: 'Newer version' });
+  // A second tab holds the draft. The first tab sends it.
+  const tab = (await full(jo, e.id)).envelope;
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const lateDraft = { ...asBody(tab), edit_version: tab.edit_version };
+  person(lateDraft, 'ben@example.com').email = 'someone.else@example.com';
+  const sent = await jo.put(`/envelopes/${e.id}`, lateDraft);
+  assert.equal([sent.status, sent.data.code, sent.data.edited_how].join(), '409,stale,sent this envelope');
+  assert.match(sent.data.error, /^Jo Sender sent this envelope on \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC, after you opened it\. Your changes were not saved, so that is not undone\. Load the envelope as it is now and make your changes again\.$/);
+  assert.equal(statusOf(e.id, 'someone.else@example.com'), undefined, 'the envelope that went out still goes to Ben');
+
+  // The editor is opened on the envelope that is out. Each of these then happens without it, and each time the
+  // save of its copy is refused with what happened.
+  const editor = async () => {
+    const cur = (await full(jo, e.id)).envelope;
+    return { ...asBody(cur), edit_version: cur.edit_version, message: 'A small change' };
+  };
+  const refusedWith = async (copy: any, says: RegExp) => {
+    const r = await jo.put(`/envelopes/${e.id}`, copy);
+    assert.equal([r.status, r.data.code].join(), '409,stale');
+    assert.match(r.data.error, says);
+  };
+  let copy = await editor();
+  const benId = person(copy, 'ben@example.com').id;
+  assert.equal((await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, email: 'ben.right@example.com' })).status, 200);
+  await refusedWith(copy, /^Jo Sender changed Ben Signer <ben@example\.com> to Ben Signer <ben\.right@example\.com> on /);
+
+  copy = await editor();
+  const ada = await open(e.id, 'ada@example.com');
+  assert.equal((await ada.c.post(`/sign/${ada.tok}/reassign`, { name: 'Mary Deputy', email: 'mary.deputy@example.com' })).status, 200);
+  await refusedWith(copy, /^Ada Signer passed this document on to Mary Deputy on /);
+
+  copy = await editor();
+  const mary = await open(e.id, 'mary.deputy@example.com');
+  assert.equal((await mary.c.post(`/sign/${mary.tok}/name`, { name: 'Marie Deputy' })).data.applied, true);
+  await refusedWith(copy, /^Mary Deputy corrected their name to "Marie Deputy" on /);
+
+  copy = await editor();
+  assert.equal((await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, name: 'Benjamin Signer' })).status, 200);
+  await refusedWith(copy, /^Jo Sender changed the name of Ben Signer to Benjamin Signer on /);
+
+  // Nothing of it was undone, and a copy that is loaded now saves as always.
+  assert.deepEqual((await full(jo, e.id)).envelope.recipients.map((r: any) => `${r.name} <${r.email}>`), ['Marie Deputy <mary.deputy@example.com>', 'Benjamin Signer <ben.right@example.com>', 'Cee Copy <cee@example.com>']);
+  const saved = await jo.put(`/envelopes/${e.id}`, await editor());
+  assert.equal(saved.status, 200, JSON.stringify(saved.data));
+  assert.deepEqual([saved.data.envelope.message, saved.data.envelope.edited_how], ['A small change', null]);
+});
+
+// ---- 9 again. Nothing is dropped without a word --------------------------------------------------------------------
+
+test('nothing in a request is dropped, cut short or moved without a word', async () => {
+  const file = await upload(jo, 1);
+  const base = (): any => ({ subject: 'Said out loud', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'sam.loud@example.com' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+  const text = { document_id: 'd', recipient_id: 'r', type: 'text', page: 0, x: 0.1, y: 0.1, w: 0.2, h: 0.03 };
+  const cases: [string, (b: any) => void, RegExp][] = [
+    ['two recipients with one id', (b) => b.recipients.push({ id: 'r', role: 'signer', name: 'Second Person', email: 'second@example.com' }), /^Recipients 1 and 2 have the same id "r", so the second one \(Second Person\) would be left out\./],
+    ['two fields with one id', (b) => b.fields.push({ ...text, id: 'f' }), /^Field 2 has the same id "f" as field 1\./],
+    ['two documents with one id', (b) => b.documents.push({ id: 'd', file_id: file.id }), /^Documents 1 and 2 have the same id "d"\./],
+    ['a page the document does not have', (b) => b.fields.push({ ...text, page: 99 }), /^Field 2, a text field, has "page": 99, and its document has 1 page\. Pages are counted from 0, so use 0\./],
+    ['a date format that does not exist', (b) => { b.date_format = 'YYYY/DD/MM'; }, /^The date format "YYYY\/DD\/MM" does not exist\. Use one of: YYYY-MM-DD, /],
+    ['a kind that does not exist', (b) => { b.kind = 'templat'; }, /^"kind" is "templat", which does not exist\. Use "envelope" or "template"/],
+    ['a value on a signature', (b) => { b.fields[0].value = 'pre-signed'; }, /^Field 1, a signature field, was sent with a value\. Only the signer can fill that in\. Leave "value" out\./],
+    ['a value that is too long', (b) => b.fields.push({ ...text, readonly: true, value: 'x'.repeat(6000) }), /^Field 2: the value is 6,000 characters long, and the most that fits is 4,000\. Shorten it and save again\./],
+    ['a subject that is too long', (b) => { b.subject = 'Said out loud'.padEnd(201, '.'); }, /^The subject is 201 characters long, and the most that fits is 200\./],
+    ['recipients that are not a list', (b) => { b.recipients = 'sam.loud@example.com'; }, /^"recipients" must be a list, written with square brackets, and it is not\./],
+    ['fields that are not a list', (b) => { b.fields = { 0: b.fields[0] }; }, /^"fields" must be a list, written with square brackets, and it is not\./],
+    ['a place in the signing order that does not exist', (b) => { b.recipients[0].routing_order = 0; }, /^The place in the signing order \(routing_order\) of recipient 1 \(Sam Signer\) must be a whole number from 1 to 99, and "0" is not\./],
+    ['a deadline that is out of range', (b) => { b.expire_days = 1000; }, /^The number of days until the deadline \(expire_days\) must be a whole number from 1 to 365, and "1000" is not\./],
+  ];
+  for (const [what, edit, says] of cases) {
+    const b = base();
+    edit(b);
+    const r = await jo.post('/envelopes', b);
+    assert.equal(r.status, 400, `${what}: ${JSON.stringify(r.data).slice(0, 200)}`);
+    assert.match(r.data.error, says, what);
+    assert.match(r.data.error, /Nothing was (saved|created)\.$/, what);
+  }
+  assert.equal(db.get("SELECT COUNT(*) n FROM envelopes WHERE subject LIKE 'Said out loud%'").n, 0, 'and none of them leaves a draft behind');
+
+  // A draft: what a request leaves out stays as it is, and that goes for the three lists too.
+  const d = await draft(jo, { subject: 'Left out' });
+  const only = await jo.put(`/envelopes/${d.id}`, { subject: 'Only the subject' });
+  assert.equal(only.status, 200, JSON.stringify(only.data));
+  const kept = only.data.envelope;
+  assert.deepEqual([kept.subject, kept.ordered, kept.documents.length, kept.recipients.length, kept.fields.length], ['Only the subject', 1, 1, 3, 5]);
+
+  // An envelope that is out and signed in order: a correction that does not mention the order leaves it on, and
+  // the next signer is not emailed before their turn.
+  const e = await draft(jo, { ordered: true, subject: 'Order kept' });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const body = await current(e.id);
+  delete body.ordered;
+  body.message = 'Please sign soon.';
+  const mails = mailTo('ben@example.com').length;
+  assert.equal((await jo.put(`/envelopes/${e.id}`, body)).status, 200);
+  assert.equal((await full(jo, e.id)).envelope.ordered, 1);
+  assert.equal(statusOf(e.id, 'ben@example.com'), 'pending');
+  assert.equal(mailTo('ben@example.com').length, mails);
+
+  // Someone who has finished: their access code and private note are not part of what they signed, and are saved.
+  assert.equal((await (await open(e.id, 'ada@example.com')).finish()).status, 200);
+  const after = await current(e.id);
+  Object.assign(person(after, 'ada@example.com'), { access_code: '777777', note: 'Added after she signed' });
+  assert.equal((await jo.put(`/envelopes/${e.id}`, after)).status, 200);
+  assert.deepEqual({ ...db.get('SELECT access_code, note, status FROM recipients WHERE envelope_id=? AND email=?', e.id, 'ada@example.com') }, { access_code: '777777', note: 'Added after she signed', status: 'completed' });
+  assert.match((await audits(e.id, 'Envelope corrected')).at(-1)!, /Ada Signer <ada@example\.com>: access code added, private note changed\./);
+});
+
+// ---- People who signed are told, and keep what they signed ---------------------------------------------------------
+
+test('a finished signer whose place is given to someone else is told', async () => {
+  const e = await draft(jo, { ordered: false, subject: 'Place given away' });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'ada@example.com')).status, 200);
+  const body = await current(e.id);
+  Object.assign(person(body, 'ada@example.com'), { name: 'Zed Other', email: 'zed.other@example.com' });
+  assert.equal((await jo.put(`/envelopes/${e.id}`, { ...body, resign: true })).status, 200);
+  const told = mailTo('ada@example.com').at(-1)!;
+  assert.equal(told.subject, 'No longer needed: Place given away');
+  assert.match(plain(told.html), /Jo Sender changed the document and gave your place on it to someone else\. What you signed on [\d: -]+ UTC is no longer part of it, and it is kept on record\. There is nothing more for you to do\./);
+  assert.match(mailTo('zed.other@example.com').at(-1)!.subject, /Place given away/);
+});
+
+test('someone who signed keeps the document as they signed it, also when the sender changes it and then closes the envelope', async () => {
+  const first = await uploadNamed(jo, 'ORIGINAL CONTRACT', 1), second = await uploadNamed(jo, 'SWAPPED CONTRACT', 1);
+  const sig = (id: string, rid: string, x: number) => ({ id, document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x, y: 0.5, w: 0.3, h: 0.06 });
+  const made = await jo.post('/envelopes', { subject: 'Kept copy', send: true, documents: [{ id: 'd', file_id: first.id, name: 'Contract' }],
+    recipients: [{ id: 'a', role: 'signer', name: 'Ada Keeper', email: 'ada.keeper@example.com' }, { id: 'b', role: 'signer', name: 'Ben Keeper', email: 'ben.keeper@example.com' }], fields: [sig('fa', 'a', 0.1), sig('fb', 'b', 0.6)] });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const id = made.data.envelope.id;
+  const ada = await open(id, 'ada.keeper@example.com');
+  assert.equal((await ada.finish()).status, 200);
+  const download = async (query = '') => {
+    const r = await ada.c.get(`/sign/${ada.tok}/download${query}`);
+    return { status: r.status, text: r.status === 200 ? (await textOf(r.data)).replace(/\s+/g, ' ') : JSON.stringify(r.data) };
+  };
+  assert.ok((await download()).text.includes('ORIGINAL CONTRACT'));
+
+  // The sender replaces the file and asks Ada to sign again.
+  const body = await current(id);
+  body.documents[0].file_id = second.id;
+  assert.equal((await jo.put(`/envelopes/${id}`, { ...body, resign: true })).status, 200);
+  assert.equal((await ada.c.get(`/sign/${ada.tok}`)).data.recipient.earlier_copy, true);
+  // Her link now opens the changed document, and what she signed the first time is still hers to download.
+  assert.ok((await download()).text.includes('SWAPPED CONTRACT'));
+  const earlier = await download('?earlier=1');
+  assert.match(earlier.text, /Signed before the document was changed/);
+  assert.match(earlier.text, /It shows "Kept copy" exactly as Ada Keeper signed it on /);
+  assert.ok(earlier.text.includes('ORIGINAL CONTRACT') && !earlier.text.includes('SWAPPED CONTRACT'), earlier.text);
+
+  // The sender voids instead of waiting for her. She signed, so she keeps her copy: the document as she signed it.
+  assert.equal((await jo.post(`/envelopes/${id}/void`, { reason: 'Changed my mind' })).status, 200);
+  const closed = (await ada.c.get(`/sign/${ada.tok}`)).data;
+  assert.deepEqual([closed.envelope.status, !!closed.recipient.signed_before, closed.recipient.earlier_copy], ['voided', true, true]);
+  const kept = await download();
+  assert.equal(kept.status, 200, kept.text);
+  assert.match(kept.text, /Not completed by everyone/);
+  assert.match(kept.text, /Jo Sender changed the document and asked Ada Keeper to sign again, and the envelope was closed before that happened/);
+  assert.match(kept.text, /The pages show the document exactly as Ada Keeper signed it/);
+  assert.ok(kept.text.includes('ORIGINAL CONTRACT') && !kept.text.includes('SWAPPED CONTRACT') && !kept.text.includes('Certificate of Completion'), kept.text);
+  // Ben never signed, and gets nothing once it is closed.
+  assert.equal((await new Client().get(`/sign/${tokenFor(id, 'ben.keeper@example.com')}/download`)).status, 403);
+  // "Find my documents" still finds it for her, and deleting it from the sender's lists does not take her copy.
+  assert.equal(await env.emailMyLinks('ada.keeper@example.com'), 1);
+  assert.equal((await jo.call('DELETE', `/envelopes/${id}`)).data.kept_for_recipients, true);
+  assert.equal((await download()).status, 200);
+
+  // The stored copy is a file of this envelope. Nothing else removes it, and it goes when the envelope goes for good.
+  const copy = db.get('SELECT copy_sha256 s FROM earlier_signatures WHERE envelope_id=?', id).s;
+  const onDisk = () => fs.existsSync(path.join(process.env.DATA_DIR!, 'blobs', copy));
+  const trust = await import('../src/server/routes-trust.ts');
+  trust.removeUnusedBlobs([copy]);
+  assert.equal(onDisk(), true);
+  const shas = db.tx(() => {
+    const s = trust.forgetEnvelopes([id]);
+    db.run('DELETE FROM envelopes WHERE id=?', id);
+    return s;
+  });
+  trust.removeUnusedBlobs(shas);
+  assert.equal(onDisk(), false);
+});
+
+// ---- Small things people read ---------------------------------------------------------------------------------------
+
+test('signers are told what changed without the long fingerprints, which stay in the record and can wrap on a phone', async () => {
+  const e = await simple(jo, 'wrap@example.com', { subject: 'Wrap' });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const s = await open(e.id, 'wrap@example.com');
+  const other = await uploadNamed(jo, 'Another file', 1);
+  const body = await current(e.id);
+  body.documents[0].file_id = other.id;
+  assert.equal((await jo.put(`/envelopes/${e.id}`, body)).status, 200);
+  // The signer's page and the "Updated" email say that the file was replaced, in words that fit on a phone.
+  assert.match((await s.c.get(`/sign/${s.tok}`)).data.changed, /^The file of document "[^"]+" was replaced\. Before: 1 page\. Now: 1 page\.$/);
+  const mail = mailTo('wrap@example.com').at(-1)!;
+  assert.match(mail.subject, /^Updated:/);
+  assert.ok(plain(mail.html).includes('was replaced. Before: 1 page. Now: 1 page.'));
+  assert.equal(mail.html.includes('SHA-256'), false);
+  assert.match(mail.html, /overflow-wrap:anywhere/, 'and a long word in an email can break');
+  // The record keeps both fingerprints.
+  assert.match((await audits(e.id, 'Envelope corrected')).at(-1)!, /was replaced\. Before: 1 page, SHA-256 [0-9a-f]{64}\. Now: 1 page, SHA-256 [0-9a-f]{64}\./);
+  // Where a fingerprint is shown on a page (a notice on the signing page, the audit trail on the sender's envelope
+  // page) the line may break anywhere, so the page stays as wide as the phone.
+  const css = (name: string) => fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'app', 'styles', name), 'utf8');
+  assert.match(css('sign.css'), /\.sg-top \{[^}]*overflow-wrap: anywhere/);
+  assert.match(css('sender.css'), /\.sn-audit-item \{[^}]*overflow-wrap: anywhere/);
+});
+
+test('someone whose turn was taken back is told to wait, not that the envelope is closed', async () => {
+  const e = await draft(jo, { ordered: true, subject: 'Held' });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const ada = await open(e.id, 'ada@example.com');
+  const body = await current(e.id);
+  person(body, 'ada@example.com').routing_order = 2;
+  person(body, 'ben@example.com').routing_order = 1;
+  assert.equal((await jo.put(`/envelopes/${e.id}`, body)).status, 200);
+  assert.equal(statusOf(e.id, 'ada@example.com'), 'pending');
+  const tries: [string, any][] = [['save', { values: {}, version: ada.view.version }], ['decline', { reason: 'no' }], ['reassign', { name: 'X Y', email: 'xy@example.com' }], ['name', { name: 'Ada Signer Smith' }]];
+  for (const [what, b] of tries) {
+    const r = await ada.c.post(`/sign/${ada.tok}/${what}`, b);
+    assert.equal(r.status, 400, what);
+    assert.equal(r.data.error, 'It is not your turn yet. Someone before you has to finish first, and we will email you when the document is ready for you. Nothing you filled in is lost.', what);
+  }
+  assert.equal(statusOf(e.id, 'ada@example.com'), 'pending');
 });

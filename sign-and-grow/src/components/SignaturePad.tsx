@@ -1,8 +1,13 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Dialog } from './sign/Dialog';
+import { adoptLine } from '@/lib/policy';
+import { handwritingWrites } from '@/lib/scripts';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
+// The handwriting fonts have Latin letters only. A name with none of them is typed in the device's own plain font:
+// one style, said as such, instead of four buttons that would all show the same picture.
+const PLAIN = 'system-ui, sans-serif';
 const INK = '#10243a';
 // The server stores signatures up to 700,000 characters. Stay well inside that.
 const MAX_CHARS = 600_000;
@@ -35,7 +40,7 @@ function trim(src: HTMLCanvasElement): string | null {
   return out.toDataURL('image/png');
 }
 
-function typed(text: string, font: string): string | null {
+function typed(text: string, family: string): string | null {
   const c = document.createElement('canvas');
   c.width = 900;
   c.height = 220;
@@ -44,9 +49,13 @@ function typed(text: string, font: string): string | null {
   ctx.textBaseline = 'middle';
   let size = 110;
   do {
-    ctx.font = `${size}px '${font}', cursive`;
+    ctx.font = `${size}px ${family}`;
     size -= 6;
   } while (ctx.measureText(text).width > 860 && size > 24);
+  // A name whose first letter is Arabic or Hebrew is laid out as right-to-left text, so a number or a Latin word in
+  // it stands on the correct side. It is still drawn from the left edge: the picture is trimmed afterwards.
+  ctx.direction = /^[^\p{L}]*[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/u.test(text) ? 'rtl' : 'ltr';
+  ctx.textAlign = 'left';
   ctx.fillText(text, 20, 110);
   return trim(c);
 }
@@ -204,7 +213,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
     else if (tab === 'type') {
       if (!text.trim()) return setError(kind === 'signature' ? 'Type your name first.' : 'Type your initials first.');
       await document.fonts?.load(`110px '${font}'`, text).catch(() => {});
-      image = typed(text.trim(), font);
+      image = typed(text.trim(), handwritingWrites(text) ? `'${font}', cursive` : PLAIN);
       if (!image) return setError('Type at least one letter or number, then try again.');
     } else if (tab === 'draw') {
       image = strokes.current.length && pad.current ? trim(pad.current) : null;
@@ -266,14 +275,21 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
         )}
         {tab === 'type' && (
           <div className="stack">
-            <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input value={text} onChange={(e) => setText(e.target.value)} maxLength={60} autoComplete="off" /></label>
-            <div className="grid g2 sg-sigstyles" role="group" aria-label="Choose a style">
-              {STYLES.map((f, i) => (
-                <button key={f} type="button" className={`sigstyle${font === f ? ' on' : ''}`} style={{ fontFamily: `'${f}', cursive` }} onClick={() => setFont(f)} aria-pressed={font === f} aria-label={`Style ${i + 1}: ${text || 'Your name'}`}>
-                  {text || 'Your name'}
-                </button>
-              ))}
-            </div>
+            <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input dir="auto" value={text} onChange={(e) => setText(e.target.value)} maxLength={60} autoComplete="off" /></label>
+            {handwritingWrites(text) ? (
+              <div className="grid g2 sg-sigstyles" role="group" aria-label="Choose a style">
+                {STYLES.map((f, i) => (
+                  <button key={f} type="button" className={`sigstyle${font === f ? ' on' : ''}`} style={{ fontFamily: `'${f}', cursive` }} onClick={() => setFont(f)} aria-pressed={font === f} aria-label={`Style ${i + 1}: ${text || 'Your name'}`}>
+                    {text || 'Your name'}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="sg-sigplain">
+                <div className="sigstyle on" style={{ fontFamily: PLAIN }} role="img" aria-label={`Your ${word} in plain letters: ${text}`}><bdi>{text}</bdi></div>
+                <p className="muted small">Our handwriting styles only have Latin letters, so this is shown in one plain style. For a handwritten look, choose Draw or Upload.</p>
+              </div>
+            )}
           </div>
         )}
         {tab === 'draw' && (
@@ -304,7 +320,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
       </div>
       {error && <div className="notice err sg-problem" role="alert">{error}</div>}
       <p className="muted small sg-siglegal">
-        By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}, I agree that this mark is the electronic representation of my {word} and is as valid as one made with pen on paper.
+        By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}, {adoptLine(word)}
       </p>
       <div className="actions">
         <button type="button" className="btn" onClick={onClose}>Cancel</button>

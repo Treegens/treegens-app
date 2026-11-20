@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, useLoad, Leaf } from './ui';
-import { fmtNum, fmtTrees, IMPACT } from '@/lib/impact';
+import { fmtNum, fmtTrees, IMPACT, usd } from '@/lib/impact';
 
 // Shared frame of the public pages: the top navigation, the footer and the live impact numbers.
 
@@ -114,7 +114,7 @@ export function ImpactBand() {
           <div className="stat"><div className="k">Sheets of paper saved</div><div className="v num">{v((i) => fmtNum(i.sheets))}</div></div>
           <div className="stat"><div className="k">Trees left standing</div><div className="v num">{v((i) => fmtTrees(i.trees))}</div></div>
           <div className="stat"><div className="k">Litres of water not used</div><div className="v num">{v((i) => fmtNum(i.litresWater))}</div></div>
-          <div className="stat"><div className="k">Sent to tree planting</div><div className="v num">{v((i) => `$${fmtNum(i.donatedUsd)}`)}</div><div className="s">{imp?.treesFunded != null ? `${fmtNum(imp.treesFunded)} mangrove trees funded` : 'everything customers pay'}</div></div>
+          <div className="stat"><div className="k">Sent to tree planting</div><div className="v num">{v((i) => usd(fmtNum(i.donatedUsd)))}</div><div className="s">{imp?.treesFunded != null ? `${fmtNum(imp.treesFunded)} mangrove trees funded` : 'everything customers pay'}</div></div>
         </div>
         <p className="small pub-band-foot">Live numbers from this service. <Link href="/impact">See exactly how we count</Link>.</p>
       </div>

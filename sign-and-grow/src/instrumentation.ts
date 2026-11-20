@@ -13,6 +13,15 @@ export async function register() {
   const { signInWarning } = await import('./lib/signin');
   const signIn = signInWarning();
   if (signIn) console.error(signIn);
+  // And when the security page has to tell visitors that the operator has not said where the server is or who
+  // else handles data: the operator hears it here first, with the settings that fill it in.
+  const { dataPlaceWarning } = await import('./lib/dataplace');
+  const where = dataPlaceWarning();
+  if (where) console.error(where);
+  // And when text messages were half set up: they stay switched off, and the operator hears which setting is missing.
+  const { smsWarning } = await import('./lib/checks');
+  const sms = smsWarning();
+  if (sms) console.error(sms);
   const { tick } = await import('./server/cron');
   g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
   g.__tscron.unref?.();

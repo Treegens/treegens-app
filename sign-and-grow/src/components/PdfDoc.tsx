@@ -11,7 +11,7 @@ function pdfjs(): Promise<any> {
   return lib;
 }
 
-function Page({ pdf, index, width, children, onClick }: { pdf: any; index: number; width: number; children?: ReactNode; onClick?: (e: React.MouseEvent<HTMLDivElement>) => void }) {
+function Page({ pdf, index, width, children, onClick, onDrawn }: { pdf: any; index: number; width: number; children?: ReactNode; onClick?: (e: React.MouseEvent<HTMLDivElement>) => void; onDrawn?: () => void }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [page, setPage] = useState<any>(null);
@@ -43,7 +43,8 @@ function Page({ pdf, index, width, children, onClick }: { pdf: any; index: numbe
     c.width = Math.floor(v.width);
     c.height = Math.floor(v.height);
     const task = page.render({ canvasContext: c.getContext('2d')!, viewport: v });
-    task.promise.catch(() => {});
+    // Said once the page is really on the screen. A drawing that was cancelled (the file was replaced) says nothing.
+    task.promise.then(() => onDrawn?.()).catch(() => {});
     return () => task.cancel();
   }, [page, visible, width]);
 
@@ -57,7 +58,9 @@ function Page({ pdf, index, width, children, onClick }: { pdf: any; index: numbe
   );
 }
 
-export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, onPages, onDocument }: {
+export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, onPages, onDocument, onShown }: {
+  /** Called when the first page of the file at `url` has been drawn, so the parent knows which file is on screen. */
+  onShown?: () => void;
   url: string;
   maxWidth?: number;
   zoom?: number;
@@ -111,7 +114,7 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
       {!pdf && !error && <div className="muted" style={{ padding: 40 }}>Loading document…</div>}
       {pdf && avail > 0 &&
         Array.from({ length: pdf.numPages }, (_, i) => (
-          <Page key={i} pdf={pdf} index={i} width={width}
+          <Page key={i} pdf={pdf} index={i} width={width} onDrawn={i === 0 ? onShown : undefined}
             onClick={onPageClick ? (e) => {
               const r = e.currentTarget.getBoundingClientRect();
               onPageClick(i, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);

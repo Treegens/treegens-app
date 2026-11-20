@@ -30,6 +30,18 @@
 @keyframes ed-slide { from { background-position: 200% 0; } to { background-position: 0 0; } }
 @media (prefers-reduced-motion: reduce) { .ed-progress > i.busy { animation: none; } .ed-progress > i { transition: none; } }
 .ed-doc { margin-top: 10px; }
+/* The upload box says what this device can do: a mouse can drop and click, a finger taps. One of the two is shown. */
+.ed-touch { display: none; }
+@media (pointer: coarse) { .ed-fine { display: none; } .ed-touch { display: revert; } }
+/* The pictures a sender chose at once, in page order, before they become one document. */
+.ed-photos { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 6px; max-height: 42vh; overflow-y: auto; }
+.ed-photos li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; min-width: 0; }
+.ed-photos li > .num { flex: none; min-width: 1.6em; text-align: right; }
+.ed-photos img { flex: none; width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: #ece8dd; }
+.ed-photos .btn { flex: none; min-width: 44px; min-height: 44px; }
+.ed-photo-actions { flex-wrap: wrap; }
+.ed-photo-actions .btn { min-height: 44px; white-space: normal; }
+@media (max-width: 520px) { .ed-photo-actions { flex-direction: column-reverse; } .ed-photo-actions .btn { width: 100%; } }
 .ed-lockline { display: flex; gap: 8px; align-items: flex-start; }
 .ed-lockline svg { margin-top: 3px; }
 .rcpt.ed-locked { background: #faf8f2; }
@@ -67,7 +79,15 @@
 @media (pointer: coarse) {
   .field.edit .grip { width: 16px; height: 16px; right: -8px; bottom: -8px; }
   .field.edit.box .grip { right: -17px; bottom: -17px; }
-  .field.edit .grip::after { content: ''; position: absolute; inset: 0 -14px -14px 0; } /* a bigger target for a finger */
+  /* A thumb needs about 44px. The corner's area grows away from the field only (16px and 28px more, down and to the
+     right), so it never lies over the field itself: a tick box is smaller than the area and could not be moved. */
+  .field.edit .grip::after { content: ''; position: absolute; inset: 0 -28px -28px 0; }
+  /* The same for the field. At phone width a tick box is about 9px, so every field gets an area of at least 44px
+     around its middle to tap and drag by. The areas lie behind every real field (the overlay is its own stacking
+     order), so where two areas meet, the field that is drawn there still wins. */
+  .ed .pdfpage .overlay { z-index: 0; }
+  .field.edit { overflow: visible; }
+  .field.edit::before { content: ''; position: absolute; z-index: -1; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
 }
 /* The line a field snapped to while it is being dragged. */
 .ed-guide { position: absolute; z-index: 6; pointer-events: none; background: #d6249f; }

@@ -5,8 +5,8 @@ import { pageTexts, textNear, type PageText } from './pdfText';
 // The document as plain text, page by page, with this signer's fields for each page as an ordinary form.
 // It is the same document and the same answers as the visual view, just readable by a screen reader or at any size.
 
-function DocText({ doc, url, showName, fields, others, senderName, onAsk }: {
-  doc: any; url: string; showName: boolean; fields: (page: number, near: (f: any) => string) => ReactNode; others: (page: number) => ReactNode; senderName: string; onAsk?: () => void;
+function DocText({ doc, url, showName, fields, others, senderName, onAsk, onShown }: {
+  doc: any; url: string; showName: boolean; fields: (page: number, near: (f: any) => string) => ReactNode; others: (page: number) => ReactNode; senderName: string; onAsk?: () => void; onShown?: (doc: any) => void;
 }) {
   const [pages, setPages] = useState<PageText[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -14,11 +14,14 @@ function DocText({ doc, url, showName, fields, others, senderName, onAsk }: {
   useEffect(() => {
     let live = true;
     setFailed(false);
-    pageTexts(url).then((p) => live && setPages(p)).catch(() => live && setFailed(true));
+    // A new address is a new file (the sender replaced it): the words of the old one must not stay on the screen
+    // while the new ones are read. The parent is told once the words of this file are there.
+    setPages(null);
+    pageTexts(url).then((p) => live && (setPages(p), onShown?.(doc))).catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
-  }, [url, attempt]);
+  }, [url, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fields still work even when the words cannot be read, so the page count falls back to what the server told us.
   const count = pages?.length || doc.pages || 1;
@@ -54,7 +57,9 @@ function DocText({ doc, url, showName, fields, others, senderName, onAsk }: {
   );
 }
 
-export function TextView({ documents, urlFor, fields, others, senderName, onAsk }: {
+export function TextView({ documents, urlFor, fields, others, senderName, onAsk, onShown }: {
+  /** Called with a document once the words of its file, as it is now, have been read and are on the screen. */
+  onShown?: (doc: any) => void;
   documents: any[];
   urlFor: (docId: string) => string;
   fields: (docId: string, page: number, near: (f: any) => string) => ReactNode;
@@ -65,7 +70,7 @@ export function TextView({ documents, urlFor, fields, others, senderName, onAsk 
   return (
     <div className="stack">
       {documents.map((d) => (
-        <DocText key={d.id} doc={d} url={urlFor(d.id)} showName={documents.length > 1} fields={(p, near) => fields(d.id, p, near)} others={(p) => others(d.id, p)} senderName={senderName} onAsk={onAsk} />
+        <DocText key={d.id} doc={d} url={urlFor(d.id)} showName={documents.length > 1} fields={(p, near) => fields(d.id, p, near)} others={(p) => others(d.id, p)} senderName={senderName} onAsk={onAsk} onShown={onShown} />
       ))}
     </div>
   );

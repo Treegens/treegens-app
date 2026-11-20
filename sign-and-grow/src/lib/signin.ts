@@ -88,7 +88,7 @@ export const SIGNIN_NOTE_COOKIE = 'sg_signin_note';
 
 export function signInNotice(r: SignInNote): string {
   const said: string[] = [];
-  if (r.created) said.push(`Welcome. Your Sign&Grow login was made with ${r.created}, so use "Continue with ${r.created}" to sign in from now on. It has no password. You can set one under Settings, Profile.${r.confirm ? ' We emailed you a link to confirm your address. You can send documents once you have opened it.' : ''}`);
+  if (r.created) said.push(`Welcome. Your Sign&Grow login was made with ${r.created}, so use "Continue with ${r.created}" to sign in from now on. It has no password. You can set one under Settings, Profile.${r.confirm ? ' We emailed you a link to confirm your address. Open it in this browser while you are signed in, and you can send documents.' : ''}`);
   if (r.reclaimed) said.push(`${r.linked} confirmed that this address is yours. A Sign&Grow login had been started with it earlier, but the address was never confirmed, so we could not know who started it. To be safe${r.reclaimed === 'password' ? ' the password that was set before no longer works and' : ''} every other browser was signed out. From now on you sign in with ${r.linked}${r.reclaimed === 'password' ? ', and you can choose a new password under Settings, Profile' : ''}. If you did not start that login yourself, look at the team, the API keys and the webhooks under Settings.`);
   else if (r.linked) said.push(`${r.linked} is now connected to your login, because it confirmed your address to us. You can sign in with ${r.linked} or with your password. We emailed you a note about it.`);
   if (r.invite_error) said.push(`You are signed in, but you did not join the team. ${r.invite_error}`);

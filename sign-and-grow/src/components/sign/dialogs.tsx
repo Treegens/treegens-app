@@ -4,6 +4,7 @@ import { api } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { Icon } from './parts';
 import { fieldName, isMulti, problemWith, type Item } from './fields';
+import { cannotPrintText } from '@/lib/scripts';
 
 // Runs one request and keeps its error next to the form, where the person is looking.
 function useSend() {
@@ -91,7 +92,7 @@ export function AskDialog({ base, sender, replyTo, onClose }: { base: string; se
         if (await send(() => api(`${base}/ask`, { body: { message } }), `You can also email ${sender.email} directly.`)) setSent(true);
       }}>
         <p className="muted">Nothing is signed by asking. {sender.name} gets your question by email and replies to {replyTo}.</p>
-        <label className="f"><span>Your question</span><textarea data-autofocus rows={4} maxLength={2000} value={message} onChange={(e) => setMessage(e.target.value)} /></label>
+        <label className="f"><span>Your question</span><textarea dir="auto" data-autofocus rows={4} maxLength={2000} value={message} onChange={(e) => setMessage(e.target.value)} /></label>
         <Problem>{error}</Problem>
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
@@ -166,7 +167,7 @@ export function DeclineDialog({ base, sender, title = 'Decline to sign', onClose
         if (await send(() => api(`${base}/decline`, { body: { reason } }), 'Nothing was declined. Try again, or close this and carry on.')) onDone();
       }}>
         <p className="muted">Declining closes the document for everyone. {sender.name} is told why. If you only have a question, ask it instead and nothing is closed.</p>
-        <label className="f"><span>Your reason</span><textarea data-autofocus rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+        <label className="f"><span>Your reason</span><textarea dir="auto" data-autofocus rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
         <Problem>{error}</Problem>
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Go back</button>
@@ -188,7 +189,7 @@ export function ReassignDialog({ base, sender, onClose, onDone }: { base: string
         if (await send(() => api(`${base}/reassign`, { body: form }), 'Check the details and try again.')) onDone(form.name.trim());
       }}>
         <p className="muted">Not the right person to sign? Pass it on. They get their own link by email, yours stops working, and {sender.name} is told.</p>
-        <label className="f"><span>Their name</span><input data-autofocus autoComplete="off" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+        <label className="f"><span>Their name</span><input dir="auto" data-autofocus autoComplete="off" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="f"><span>Their email</span><input type="email" autoComplete="off" autoCapitalize="off" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
         <label className="f"><span>Reason <span className="hint">(optional)</span></span><input value={form.reason} maxLength={300} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>
         <Problem>{error}</Problem>
@@ -249,7 +250,7 @@ function FixName({ name, onRename }: { name: string; onRename: (name: string) =>
     <div className="sg-fixname">
       <label htmlFor={id} className="small">Your name as it should appear</label>
       <div className="row wrap">
-        <input id={id} value={value} maxLength={120} autoComplete="name" onChange={(e) => setValue(e.target.value)} />
+        <input id={id} dir="auto" value={value} maxLength={120} autoComplete="name" onChange={(e) => setValue(e.target.value)} />
         <button type="button" className="btn sm primary" disabled={busy || value.trim().length < 2} onClick={save}>Save name</button>
         <button type="button" className="btn sm ghost" onClick={() => setOpen(false)}>Cancel</button>
       </div>
@@ -259,11 +260,22 @@ function FixName({ name, onRename }: { name: string; onRename: (name: string) =>
   );
 }
 
-export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename }: {
+export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename, printCheck }: {
   me: any; sender: any; items: Item[]; sig: string | null; ini: string | null; usesSig: boolean; usesIni: boolean; approving?: boolean;
   busy: boolean; error: string; onChangeSig: (kind: 'signature' | 'initials') => void; onBack: () => void; onFinish: () => void;
   onRename?: (name: string) => Promise<string | void>;
+  /** Asks the server whether this person's name or answers hold a character the signed PDF cannot print. */
+  printCheck?: () => Promise<{ problems?: { field_id: string | null; label: string; chars: string }[] }>;
 }) {
+  // Said before the person finishes, never found out from the finished document. Asked again when the name changes.
+  const [cannotPrint, setCannotPrint] = useState<{ field_id: string | null; label: string; chars: string }[]>([]);
+  useEffect(() => {
+    let on = true;
+    printCheck?.().then((r) => on && setCannotPrint(r?.problems || [])).catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [me.name]); // eslint-disable-line react-hooks/exhaustive-deps
   const filled = items.filter((i) => i.done).length;
   const optionalEmpty = items.filter((i) => !i.done && !i.required).length;
   return (
@@ -271,7 +283,7 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
       <dl className="sg-review">
         <div>
           <dt>{approving ? 'You are approving as' : 'You are signing as'}</dt>
-          <dd><b>{me.name}</b><br /><span className="muted">{me.email}</span>{onRename && <div style={{ marginTop: 6 }}><FixName name={me.name} onRename={onRename} /></div>}</dd>
+          <dd><b><bdi>{me.name}</bdi></b><br /><span className="muted">{me.email}</span>{onRename && <div style={{ marginTop: 6 }}><FixName name={me.name} onRename={onRename} /></div>}</dd>
         </div>
         {usesSig && sig && (
           <div>
@@ -304,6 +316,15 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
       <p className="muted small">
         {approving ? `Choosing Approve and send records your approval and tells ${sender.name}.` : `Choosing Finish and send signs the document and tells ${sender.name}.`} You can still go back and change anything first.
       </p>
+      {cannotPrint.length > 0 && (
+        <div className="notice warn sg-problem sg-cannot-print" role="status">
+          <b>The signed PDF cannot print part of this.</b> {cannotPrintText([...new Set(cannotPrint.flatMap((p) => [...p.chars]))].join(''))}
+          <ul>{cannotPrint.map((p) => <li key={p.field_id || 'name'}>{p.label}: <bdi>{[...p.chars].slice(0, 12).join(' ')}</bdi></li>)}</ul>
+          {cannotPrint.some((p) => p.field_id) && 'To have an answer readable on the PDF, go back and add the same in Latin letters as well, for example in brackets after it. '}
+          {cannotPrint.some((p) => !p.field_id) && `For your name, ask ${sender.name} to add it in Latin letters as well. They can change it without sending the document again. `}
+          You can also finish as it is.
+        </div>
+      )}
       <Problem>{error}</Problem>
       <div className="actions">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>Go back</button>
@@ -323,7 +344,7 @@ export function FieldSheet({ field, value, onChange, onDone, onNext }: { field: 
   const problem = problemWith(field, value);
   // The sheet stays open while moving from one field to the next, so move focus by hand.
   useEffect(() => input.current?.focus({ preventScroll: true }), [field.id]);
-  const shared = { ref: input, 'aria-label': name, 'aria-describedby': hint, 'aria-required': !!field.required, 'aria-invalid': !!problem, className: 'sg-big-input', value, 'data-autofocus': true } as const;
+  const shared = { dir: 'auto' as const, ref: input, 'aria-label': name, 'aria-describedby': hint, 'aria-required': !!field.required, 'aria-invalid': !!problem, className: 'sg-big-input', value, 'data-autofocus': true } as const;
   return (
     <Dialog title={name} onClose={onDone} variant="field" light>
       <form onSubmit={(e) => {

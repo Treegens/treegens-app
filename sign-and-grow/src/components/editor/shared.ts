@@ -34,7 +34,8 @@ export function makeField(type: string, documentId: string, page: number, recipi
   };
 }
 
-export type Upload = { key: string; name: string; size: number; progress: number; state: 'waiting' | 'uploading' | 'checking' | 'error'; error?: string };
+// 'preparing': a photo is being made smaller in the browser before it is uploaded (photos.ts).
+export type Upload = { key: string; name: string; size: number; progress: number; state: 'waiting' | 'preparing' | 'uploading' | 'checking' | 'error'; error?: string };
 export type Confirm = { title: string; body: string; yes: string; no?: string; danger?: boolean; onYes: () => void };
 
 // Everything the three steps share. The Editor owns the state; the steps only draw it and ask for changes.

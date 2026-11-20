@@ -244,10 +244,23 @@ test('the code of a genuine email is still recognised after its document was del
   // What is kept is a fingerprint. The code itself, the names and the subject are nowhere.
   const kept = JSON.stringify(db.all('SELECT * FROM forgotten_codes'));
   for (const gone of [first, second, 'gone.example', 'Lease', 'Gina']) assert.ok(!kept.includes(gone), `${gone} is not kept`);
-  // A report against it cannot be filed, and the person is told why and where to go instead.
+  // Whoever still holds the email can report it all the same. The fingerprint keeps the account's id (it names
+  // nobody), so the report is filed against the account that sent it, once for each code however often it is made.
+  const gid = (await sender.get('/me')).data.account.id;
+  assert.ok(db.all('SELECT account_id a FROM forgotten_codes').every((f: any) => f.a === gid));
   const report = await anon.post('/public/check/report', { code: first, reason: 'phishing' });
-  assert.equal(report.status, 404);
-  assert.match(report.data.error, /really sent, but the document it was about has been deleted since/);
+  assert.equal(report.status, 200);
+  assert.deepEqual(report.data, { ok: true, deleted: true });
+  assert.equal((await anon.post('/public/check/report', { code: first, reason: 'spam' })).status, 200);
+  const filed = db.all('SELECT envelope_id, reporter, reason FROM abuse_reports WHERE account_id=?', gid);
+  assert.equal(filed.length, 1, 'one code is one person, counted once');
+  assert.equal(filed[0].envelope_id, '', 'nothing of the envelope is left to point at');
+  assert.ok(!/gone\.example|Gina|Lease/.test(JSON.stringify(filed)), 'and the report names nobody');
+  // Only when nothing says which account it came from (the account is gone too) is the person sent to the contact form.
+  db.run('UPDATE forgotten_codes SET account_id=NULL WHERE code_hash != (SELECT code_hash FROM forgotten_codes ORDER BY reported DESC LIMIT 1)');
+  const orphan = await anon.post('/public/check/report', { code: second, reason: 'phishing' });
+  assert.equal(orphan.status, 404);
+  assert.match(orphan.data.error, /really sent, but the document it was about has been deleted since/);
   // A code we never issued is still not recognised.
   assert.equal((await check('AAAA-BBBB-CCCC')).genuine, false);
   // After a year the fingerprints go too.
@@ -317,4 +330,64 @@ test('deleting a voided envelope that someone had already signed takes it out of
   assert.equal(del.status, 200);
   assert.equal(del.data?.kept_for_recipients, undefined);
   assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', none.id).n, 0);
+});
+
+// ---- Lost the email about a help request ---------------------------------------------------------------------
+
+test('someone who lost every email about their help request gets its link again, and the form tells nobody who has written to us', async () => {
+  const { SUPPORT_TOPICS } = await import('../src/lib/policy.ts');
+  const topic = (SUPPORT_TOPICS as readonly string[])[0];
+  const asked = await visitor().post('/public/support', { email: 'Lost.Mail@help.example', name: 'Lou Lost', topic, message: 'I cannot open my document and I need a person to look at it.' });
+  assert.equal(asked.status, 200, JSON.stringify(asked.data));
+  const first = mailTo('Lost.Mail@help.example').concat(mailTo('lost.mail@help.example')).find((m: any) => /\/help\/request\//.test(m.link || m.html));
+  assert.ok(first, 'the confirmation carries the link');
+  const original = /https?:\/\/[^"\s<]+\/help\/request\/[\w-]+\/[\w-]+/.exec(first.html)![0];
+
+  // Asked for again from the help page, with the address written differently.
+  const before = db.get('SELECT MAX(id) m FROM emails').m;
+  const found = await visitor().post('/public/support/find', { email: ' lost.mail@HELP.example ' });
+  assert.deepEqual([found.status, found.data], [200, { ok: true }]);
+  const again = db.all('SELECT to_email, subject, html FROM emails WHERE id > ?', before);
+  assert.equal(again.length, 1);
+  assert.match(again[0].subject, /^Your requests to Sign&Grow: the link again$/);
+  assert.ok(again[0].html.includes(original.replace(/&/g, '&amp;')) || again[0].html.includes(original), 'the same link as before, so older emails keep working');
+  assert.match(again[0].html, new RegExp(asked.data.reference));
+  const path = original.replace(/^https?:\/\/[^/]+/, '').replace('/help/request/', '/public/support/ticket/');
+  assert.equal((await visitor().get(path)).status, 200);
+
+  // An address nobody wrote from gets the same answer and no email.
+  const sofar = db.get('SELECT MAX(id) m FROM emails').m;
+  const nobody = await visitor().post('/public/support/find', { email: 'never.wrote@help.example' });
+  assert.deepEqual([nobody.status, nobody.data], [200, { ok: true }]);
+  assert.equal(db.get('SELECT COUNT(*) n FROM emails WHERE id > ?', sofar).n, 0);
+  assert.equal((await visitor().post('/public/support/find', { email: 'not an address' })).status, 400);
+
+  // It cannot be used to fill someone's inbox: three times a day for one address, whoever asks.
+  for (let i = 0; i < 2; i++) assert.equal((await visitor().post('/public/support/find', { email: 'lost.mail@help.example' })).status, 200);
+  assert.equal((await visitor().post('/public/support/find', { email: 'lost.mail@help.example' })).status, 429);
+});
+
+test('deleting one account never removes the stored emails of another customer, whatever the two are called', async () => {
+  const copies = (email: string) => db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id IS NULL AND lower(to_email)=lower(?)', email).n;
+  // Vic has copies of emails that belong to no document: his confirmation, and an invitation he sent.
+  const vic = await person('John Smith', 'vic@samename.example');
+  assert.equal((await vic.post('/account/invites', { email: 'vics.colleague@samename.example' })).status, 200);
+  const billy = await person('Billy Joe', 'billy.joe@samename.example');
+  const before = { vic: copies('vic@samename.example'), invite: copies('vics.colleague@samename.example'), billy: copies('billy.joe@samename.example') };
+  assert.ok(before.vic > 0 && before.invite > 0 && before.billy > 0);
+
+  // A stranger whose name is words that every email of ours ends with, another John Smith, and someone whose
+  // address is the tail of Billy's: each deletes their account at once.
+  for (const [name, email] of [['Sent with', 'stranger@samename.example'], ['John Smith', 'other.john@samename.example'], ['Joe Short', 'joe@samename.example']]) {
+    const c = await person(name, email);
+    assert.equal((await c.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  }
+  assert.deepEqual({ vic: copies('vic@samename.example'), invite: copies('vics.colleague@samename.example'), billy: copies('billy.joe@samename.example') }, before, 'nobody else lost a thing');
+
+  // When Vic himself goes, the copies that are his or about him go: the ones to him, and the invitation he sent.
+  assert.equal((await vic.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  assert.equal(copies('vic@samename.example') - db.get("SELECT COUNT(*) n FROM emails WHERE lower(to_email)='vic@samename.example' AND at > ?", new Date(Date.now() - 5000).toISOString()).n <= 0, true);
+  assert.equal(copies('vics.colleague@samename.example'), 0);
+  assert.equal(copies('billy.joe@samename.example'), before.billy);
+  void billy;
 });

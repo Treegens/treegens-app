@@ -411,3 +411,47 @@ test('the payment page asks for a tax number and address only when the operator 
     delete process.env.STRIPE_COLLECT_TAX_ID;
   }
 });
+
+test('closing an account: asking twice does not turn "the provider has not confirmed" into "done", and the ledger that stays names nobody', async () => {
+  const PW = 'correct horse battery';
+  const p = await person('Closer');
+  await subscribe(p);
+  // Somebody signs something of theirs, so the ledger has a "signature used" line named after that person.
+  const { simple } = await import('./helpers.ts');
+  const e = await simple(p.c, 'private.signer@five.example');
+  assert.equal((await p.c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'private.signer@five.example')).status, 200);
+  assert.match(db.get("SELECT ref FROM credits WHERE account_id=? AND reason='signature'", p.id).ref, /private\.signer@five\.example/);
+  const uid = (await p.c.get('/me')).data.user.id;
+
+  // The payment provider cannot be reached for cancellations.
+  stripe.fail('DELETE', /^subscriptions\//, 50);
+  const first = await p.c.post('/me/delete', { password: PW, now: true });
+  assert.equal(first.status, 502);
+  assert.match(first.data.error, /nothing was deleted/);
+  // Seconds later, the same again. The plan is already over on our side, but the provider still has not said so.
+  const second = await p.c.post('/me/delete', { password: PW, now: true });
+  assert.equal(second.status, 502, 'still not confirmed, so still not deleted');
+  assert.equal(db.get('SELECT COUNT(*) n FROM users WHERE id=?', uid).n, 1);
+  assert.equal(stripe.sub(p.sub).status, 'active', 'the subscription really is still running at the provider');
+  // Choosing the ordinary close instead does not claim it either.
+  assert.equal((await p.c.post('/me/delete', { password: PW })).data.closed, 'scheduled');
+  const said = text(mailTo(p.email).at(-1)!.html);
+  assert.doesNotMatch(said, /you will not be charged again/);
+  assert.match(said, /did not confirm it straight away, so we keep trying/);
+
+  // The provider is back. Now it goes through, the queued ending is settled, and the account is deleted.
+  stripe.failing.length = 0;
+  const back = new Client();
+  back.ip = '198.51.105.250';
+  assert.equal((await back.post('/auth/login', { email: p.email, password: PW })).data.restored, true);
+  assert.equal((await back.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  assert.equal(stripe.sub(p.sub).status, 'canceled');
+  assert.equal(db.get("SELECT COUNT(*) n FROM billing_todo WHERE kind='cancel' AND ref=? AND done_at IS NULL", p.sub).n, 0);
+  assert.equal(db.get('SELECT COUNT(*) n FROM users WHERE id=?', uid).n, 0);
+
+  // What stays of the ledger carries no address: the line is still there, under a name of its own.
+  const left = db.all("SELECT ref FROM credits WHERE account_id=? AND reason='signature'", p.id);
+  assert.equal(left.length, 1);
+  assert.doesNotMatch(JSON.stringify(left), /@|private\.signer/);
+});

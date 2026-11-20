@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { api, useLoad } from '@/components/ui';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { ImpactStats, Methodology } from '@/components/ImpactView';
-import { fmtNum } from '@/lib/impact';
+import { fmtNum, usd } from '@/lib/impact';
 
 export default function PublicImpact() {
   const [d] = useLoad(() => api('/public/impact'));
@@ -19,7 +19,7 @@ export default function PublicImpact() {
         <div className="card row between wrap" style={{ background: 'var(--green-deep)', color: '#fff', borderColor: 'var(--green-deep)' }}>
           <div>
             <div className="small" style={{ color: '#b5cfbc', fontWeight: 600 }}>Paid by customers and sent to tree planting</div>
-            <div className="serif num" style={{ fontSize: 40, fontWeight: 700 }}>${d ? fmtNum(d.donatedUsd, 2) : '…'}</div>
+            <div className="serif num" style={{ fontSize: 40, fontWeight: 700 }}>{usd(d ? fmtNum(d.donatedUsd, 2) : '…')}</div>
             {d?.treesFunded != null && <div style={{ color: '#cfe2d3' }}>{fmtNum(d.treesFunded)} mangrove trees funded</div>}
           </div>
           <Link href="/signup" className="btn lg" style={{ background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>Start signing</Link>

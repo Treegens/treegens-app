@@ -869,7 +869,12 @@ test('a first password is set through a link to the mailbox, and then the provid
   assert.equal(early.status, 409);
   assert.equal(early.data.code, 'confirm_first');
   assert.match(early.data.error, /Confirm your email address first.*una@corp\.example.*would disconnect Microsoft from your login/);
-  assert.equal((await new Client().post('/auth/verify', { token: user('una@corp.example').verify_token })).status, 200);
+  // The link confirms only in a browser that is signed in to the login. Anywhere else, a login that has no password
+  // is told to sign in first: whoever merely holds the link cannot confirm somebody else's login.
+  const cold = await new Client().post('/auth/verify', { token: user('una@corp.example').verify_token });
+  assert.equal(cold.status, 401);
+  assert.equal(cold.data.code, 'sign_in_first');
+  assert.equal((await m.post('/auth/verify', { token: user('una@corp.example').verify_token })).status, 200);
   assert.equal((await m.post('/me/signin/password-link')).status, 200);
   const una = mailTo('una@corp.example').filter((x) => /Choose a password for Sign/.test(x.subject)).at(-1)!;
   const done = await browser().post('/auth/reset', { token: new URL(una.link).searchParams.get('token'), password: PW });

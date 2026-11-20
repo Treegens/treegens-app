@@ -31,17 +31,20 @@ export function toast(msg: string, err = false) {
   push({ id: Date.now() + Math.random(), msg, err });
 }
 export const oops = (e: any) => toast(e?.message || 'Something went wrong.', true);
+// A web address in a message is shown as a link, so "use the contact form at .../help" can be followed from the toast.
+const withLinks = (msg: string) => msg.split(/(https?:\/\/[^\s]*[^\s.,;:!?)])/g).map((part, i) => (/^https?:\/\//.test(part) ? <a key={i} href={part} target="_blank" rel="noreferrer">{part}</a> : part));
 export function Toasts() {
   const [list, setList] = useState<T[]>([]);
   useEffect(() => {
     push = (t) => {
       setList((l) => [...l, t]);
-      setTimeout(() => setList((l) => l.filter((x) => x.id !== t.id)), t.err ? 6000 : 3200);
+      // A refusal can be a paragraph (why sending is paused, and what still works). It stays long enough to be read.
+      setTimeout(() => setList((l) => l.filter((x) => x.id !== t.id)), t.err ? Math.min(30000, Math.max(6000, t.msg.length * 60)) : 3200);
     };
   }, []);
   return (
     <div className="toasts" role="status" aria-live="polite">
-      {list.map((t) => <div key={t.id} className={`toast${t.err ? ' err' : ''}`}>{t.msg}</div>)}
+      {list.map((t) => <div key={t.id} className={`toast${t.err ? ' err' : ''}`}>{withLinks(t.msg)}</div>)}
     </div>
   );
 }

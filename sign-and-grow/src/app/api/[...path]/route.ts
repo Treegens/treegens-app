@@ -2,6 +2,7 @@ import '@/server/routes-account';
 import '@/server/routes-signin';
 import '@/server/routes-envelopes';
 import '@/server/routes-sign';
+import '@/server/routes-signercode';
 import '@/server/routes-billing';
 import '@/server/routes-trust';
 import '@/server/routes-support';

@@ -5,9 +5,11 @@ import { useParams, useRouter } from 'next/navigation';
 import { api, useLoad, Status, fmtDate, toast, Leaf } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { fmtNum, fmtTrees, impactOf } from '@/lib/impact';
+import { reminderText } from '@/lib/policy';
 import { Recipients, lastEmailTo, type Delivery } from '@/components/sender/Recipients';
 import { ConfirmDialog, CorrectDialog, ExtendDialog, VoidDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
+import { PrintNotice } from '@/components/sender/PrintNotice';
 import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
@@ -79,6 +81,8 @@ export default function EnvelopeDetail() {
   const noMailServer = out && deliveries.some((d) => d.status === 'outbox');
   const editHref = `/app/${isTpl ? 'templates' : 'envelopes'}/${e.id}/edit`;
   const costLine = voidCostLine(readAllowance(null, me));
+  // While sending is paused the server refuses reminders and reopening. The buttons say so before they are pressed.
+  const paused = !!me.account?.paused;
 
   async function remindAll() {
     await act(async () => {
@@ -113,6 +117,9 @@ export default function EnvelopeDetail() {
         </div>
       </div>
 
+      {/* A name or wording in a script the signed PDF has no font for: said here, before anyone signs. */}
+      {(data.print_problems || []).length > 0 && <PrintNotice problems={data.print_problems} />}
+
       {e.status === 'draft' && (
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
@@ -131,9 +138,13 @@ export default function EnvelopeDetail() {
               {unopened.length > 0 && <p className="sn-now-sub warn">{joinNames(unopened.map((r: any) => r.name))} {unopened.length === 1 ? 'has' : 'have'} not opened it yet. See below for ways to reach them.</p>}
               {allMuted && <p className="sn-now-sub">They turned reminder emails off, so reach them with their link instead. It is below.</p>}
               <p className={`sn-now-sub${closingSoon(e.expires_at) ? ' warn' : ''}`}>{e.expires_at ? `${deadlineLine(e.expires_at)}.` : 'No closing date.'}{closingSoon(e.expires_at) ? ' Give more time if they need it.' : ''}</p>
+              {/* Whether anyone is reminded without the sender doing anything, in a full sentence (reminderText in src/lib/policy.ts). */}
+              {!paused && <p className="sn-now-sub" id="sn-reminders">{reminderText(e.reminder_days)} To change it, use Edit envelope.</p>}
+              {paused && <p className="sn-now-sub warn">Sending is paused on this account, so reminders are off, nobody is emailed about a change you make, and people further down the signing order are asked only once the pause is lifted. You can still give more time, change the envelope and void it.</p>}
+              {!paused && e.held_at && <p className="sn-now-sub warn">We are holding back emails about this envelope. We emailed you why, and the history below says it too.</p>}
             </div>
             <div className="sn-now-actions">
-              {canRemind && <button className="btn" disabled={busy} onClick={remindAll}>Send reminder</button>}
+              {canRemind && <button className="btn" disabled={busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out.' : undefined} onClick={remindAll}>Send reminder</button>}
               <button className={`btn${closingSoon(e.expires_at) ? ' sn-amber' : ''}`} onClick={() => setDialog('extend')}>Give more time</button>
             </div>
           </div>
@@ -153,9 +164,9 @@ export default function EnvelopeDetail() {
             <div>
               <p className="sn-now-line">{e.expires_at ? `${deadlineLine(e.expires_at)}` : 'This closed'} before everyone had finished.</p>
               {unfinished.length > 0 && <p className="sn-now-sub">Still needed: <b>{joinNames(unfinished.map((r: any) => r.name))}</b>.</p>}
-              <p className="sn-now-sub">Reopen it with a new closing date. Nobody who already signed has to sign again.</p>
+              <p className="sn-now-sub">{paused ? 'Sending is paused on this account. Reopening emails everyone who still has to sign, so it has to wait until the pause is lifted.' : 'Reopen it with a new closing date. Nobody who already signed has to sign again.'}</p>
             </div>
-            <div className="sn-now-actions"><button className="btn primary" onClick={() => setDialog('extend')}>Reopen</button></div>
+            <div className="sn-now-actions"><button className="btn primary" disabled={paused} title={paused ? 'Sending is paused on this account, so this has to wait.' : undefined} onClick={() => setDialog('extend')}>Reopen</button></div>
           </div>
         </section>
       )}
@@ -205,7 +216,7 @@ export default function EnvelopeDetail() {
           </div>
         )}
         {e.recipients.length === 0 ? <div className="empty">Nobody has been added yet.</div> : (
-          <Recipients envelope={e} deliveries={deliveries} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} />
+          <Recipients envelope={e} deliveries={deliveries} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} paused={paused} />
         )}
       </section>
 

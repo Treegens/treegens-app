@@ -1,7 +1,7 @@
 import { route, json, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
 import { bad, id, token, now, str, rateLimit, isEmail, baseUrl, sha256, HttpError } from './util.ts';
-import { inspectPdf, imageToPdf } from './pdf.ts';
+import { inspectPdf, imageToPdf, imagesToPdf } from './pdf.ts';
 import { extractPages, textOf } from './text.ts';
 import { sendMail } from './mail.ts';
 import { creditsEnabled, available, isChargeable } from './credits.ts';
@@ -11,23 +11,39 @@ import {
   advance, assertMayEmail, formNeedsSignatures, type Actor,
 } from './envelopes.ts';
 import { hmac, safeEqual } from './util.ts';
+import { correctWithCheck, assertBulkChecks, assertFormChecks, textsOf } from './signercode.ts';
 import { cookie, readCookie } from './auth.ts';
 import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
-import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes } from '../lib/policy.ts';
+import { sendWarnings } from './warnings.ts';
+import { printProblems, unprintable } from './pdftext.ts';
+import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
 export async function storeUpload(c: Ctx, accountId: string | null) {
   const form = await c.req.formData().catch(() => null);
-  const file = form?.get('file');
-  if (!file || typeof file === 'string') throw bad('Choose a file to upload.');
-  if (file.size > 25_000_000) throw bad('That file is larger than 25 MB. Save it with smaller images or split it into parts, then upload again.');
+  // Several "file" parts in one upload are the pages of one paper document, photographed one after the other. They
+  // become one document, a page for each picture, in the order they were sent. That only works for pictures.
+  const parts = (form?.getAll('file') || []).filter((f): f is File => typeof f !== 'string');
+  const file = parts[0];
+  if (!file) throw bad('Choose a file to upload.');
+  if (parts.length > MAX_PHOTOS_PER_DOCUMENT) throw bad(`One document can be made from up to ${MAX_PHOTOS_PER_DOCUMENT} pictures, and this upload has ${parts.length}. Send fewer at a time and add the rest as a second document.`);
+  if (parts.reduce((n, f) => n + f.size, 0) > 25_000_000) throw bad(parts.length > 1 ? 'Together these pictures are larger than 25 MB. Make them smaller or send fewer at a time, then upload again.' : 'That file is larger than 25 MB. Save it with smaller images or split it into parts, then upload again.');
   let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
   const isPdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
   const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
   const isJpg = bytes[0] === 0xff && bytes[1] === 0xd8;
   if (!isPdf && !isPng && !isJpg) throw bad('Upload a PDF, PNG or JPEG. Export Word or Google Docs files as PDF first.');
-  if (!isPdf) bytes = await imageToPdf(bytes, isPng ? 'image/png' : 'image/jpeg');
+  if (parts.length > 1) {
+    const pictures: { bytes: Uint8Array; png: boolean; name: string }[] = [];
+    for (const f of parts) {
+      const b = f === file ? bytes : new Uint8Array(await f.arrayBuffer());
+      const png = b[0] === 0x89 && b[1] === 0x50;
+      if (!png && !(b[0] === 0xff && b[1] === 0xd8)) throw bad(`Several files in one upload are joined into one document, a page for each picture. That works for PNG and JPEG pictures only, and "${str(f.name, 200) || 'one of the files'}" is not one. Upload PDFs one at a time. No document was made.`);
+      pictures.push({ bytes: b, png, name: str(f.name, 200) });
+    }
+    bytes = await imagesToPdf(pictures);
+  } else if (!isPdf) bytes = await imageToPdf(bytes, isPng ? 'image/png' : 'image/jpeg');
   const info = await inspectPdf(bytes);
   if (info.pages > 500) throw bad('That document has more than 500 pages. Split it into smaller documents and add them one by one.');
   const fid = id('fil');
@@ -42,7 +58,7 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   // Files that signers attach are not looked at.
   const scanPages = !accountId ? [] : !isPdf || !read.some((p) => p.trim()) ? Array.from({ length: info.pages }, (_, i) => i + 1) : read.flatMap((p, i) => (p.trim() ? [] : [i + 1]));
   run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages) VALUES (?,?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), text || null, scanPages.length ? JSON.stringify(scanPages) : null);
-  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, is_scan: scanPages.length > 0, scan_pages: scanPages };
+  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages };
 }
 
 route('POST', '/files', (c) => storeUpload(c, c.account.id));
@@ -131,6 +147,9 @@ route('GET', '/inbox', (c) => {
 
 route('POST', '/envelopes', async (c) => {
   const b = await c.body();
+  // A kind we do not have is a mistake to point out. A misspelled "template" must never become an envelope.
+  if (b.kind != null && b.kind !== '' && b.kind !== 'template' && b.kind !== 'envelope')
+    throw bad(`"kind" is "${str(b.kind, 40)}", which does not exist. Use "envelope" or "template", or leave it out for an envelope. Nothing was created.`);
   const kind = b.kind === 'template' ? 'template' : 'envelope';
   // A retried or timed-out call with the same Idempotency-Key gets the envelope the first call made instead of
   // sending twice. A key belongs to whoever used it (a person, or the owner of the API key), so two members of a
@@ -156,7 +175,9 @@ route('POST', '/envelopes', async (c) => {
   } else {
     eid = createEnvelope(c.account, c.user.id, kind, b);
     try {
-      if (b.documents || b.recipients || b.fields) saveDraft(loadEnvelope(eid), b, c.account.id);
+      // Anything the body says about the envelope goes through the same checks as a save, so a setting that cannot
+      // be carried out (a date format that does not exist, say) is refused here too and never dropped.
+      if (['documents', 'recipients', 'fields', 'ordered', 'date_format', 'reminder_days', 'expire_days'].some((k) => b[k] != null && b[k] !== '')) saveDraft(loadEnvelope(eid), b, c.account.id);
     } catch (e) {
       // A request that is turned down (a field for a recipient who is not on it, say) leaves no empty draft behind.
       run('DELETE FROM envelopes WHERE id=?', eid);
@@ -176,7 +197,9 @@ route('POST', '/envelopes', async (c) => {
       throw e;
     }
   }
-  return { envelope: publicEnvelope(loadEnvelope(eid)) };
+  const made = loadEnvelope(eid);
+  // What was sent goes out with what the check before sending found. It is a list to read, never a refusal.
+  return { envelope: publicEnvelope(made), ...(b.send && kind === 'envelope' ? { warnings: sendWarnings(made) } : {}) };
 });
 
 route('GET', '/envelopes/:id', (c) => {
@@ -199,7 +222,24 @@ route('GET', '/envelopes/:id', (c) => {
     const list = [...things.values()];
     r.progress = { fields: list.length, filled: list.filter((x) => x.filled).length, required_left: list.filter((x) => x.required && !x.filled).length };
   }
-  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries };
+  // Names and wording in a script the signed PDF has no font for, said here so the sender hears it from the
+  // envelope page and not from the finished document. Each entry says where the text stands and which characters.
+  const print_problems = e.status === 'completed' && e.final_sha256 ? [] : printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id));
+  // texts: what became of every text message about this envelope, like deliveries for email. Numbers are masked.
+  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems };
+});
+
+// The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.
+// Answers, for each text that holds a character the signed PDF cannot print, where it is and which characters.
+route('POST', '/print-check', async (c) => {
+  const b = await c.body();
+  if (!Array.isArray(b.texts)) throw bad('"texts" must be a list of { "where": "...", "text": "..." }.');
+  const problems: { where: string; chars: string }[] = [];
+  for (const t of b.texts.slice(0, 3000)) {
+    const chars = unprintable(str(t?.text, 4000));
+    if (chars) problems.push({ where: str(t?.where, 200), chars });
+  }
+  return { problems };
 });
 
 // Reading a request body means waiting, and while a handler waits another request can send, sign, void or complete
@@ -243,7 +283,8 @@ route('DELETE', '/envelopes/:id', (c) => {
   assertMayChange(c, e);
   if (e.status === 'sent') throw bad('Void this envelope before deleting it.');
   if (e.kind === 'template' && get('SELECT 1 x FROM powerforms WHERE template_id=?', e.id)) throw bad('A PowerForm still uses this template. Delete the PowerForm first.');
-  const signed = e.kind === 'envelope' && e.status !== 'draft' && e.recipients.some((r: any) => r.status === 'completed' && ['signer', 'inperson', 'approver'].includes(r.role));
+  // Someone who signed and was then asked to sign again (signed_before) signed too, and keeps their copy as well.
+  const signed = e.kind === 'envelope' && e.status !== 'draft' && e.recipients.some((r: any) => (r.status === 'completed' || r.signed_before) && ['signer', 'inperson', 'approver'].includes(r.role));
   if (e.kind === 'envelope' && (e.status === 'completed' || signed)) {
     run('UPDATE envelopes SET hidden_at=? WHERE id=?', now(), e.id);
     audit(e.id, c.actor, 'Removed from the sender\'s lists', 'The sender deleted this envelope from their account. Everyone on it keeps their link and their copy.');
@@ -261,8 +302,15 @@ route('DELETE', '/envelopes/:id', (c) => {
 route('POST', '/envelopes/:id/send', async (c) => {
   const e = mine(c, c.params.id, 'envelope');
   await sendEnvelope(e.id, c.actor);
-  return { envelope: publicEnvelope(loadEnvelope(e.id)) };
+  const sent = loadEnvelope(e.id);
+  return { envelope: publicEnvelope(sent), warnings: sendWarnings(sent) };
 });
+
+// The check before sending, for the review step of the editor and for anyone who wants to look before they send:
+// words in the subject, a document's name or a document's text that name a kind of document which often needs paper,
+// a witness, a notary or a qualified signature. The same list comes back with the answer to sending. It only ever
+// warns: `blocks` is always false, and it is there so that no integration has to guess.
+route('GET', '/envelopes/:id/warnings', (c) => ({ warnings: sendWarnings(mine(c, c.params.id)), blocks: false }));
 
 route('POST', '/envelopes/:id/void', async (c) => {
   // Two Void requests at the same moment, or a void that crosses the last signature: the second one sees the
@@ -278,12 +326,15 @@ route('POST', '/envelopes/:id/remind', async (c) => {
 
 route('POST', '/envelopes/:id/correct', async (c) => {
   const b = await c.body();
-  await correctRecipient(mine(c, c.params.id, 'envelope'), str(b.recipient_id), b, c.actor);
+  // With their check too ("verify", "phone", "text_link"): correctWithCheck does all of the call or none of it.
+  await correctWithCheck(mine(c, c.params.id, 'envelope'), str(b.recipient_id), b, c.actor);
 });
 
 route('POST', '/envelopes/:id/clone', async (c) => {
   const e = mine(c, c.params.id);
   const b = await c.req.json().catch(() => ({}));
+  if (b?.kind != null && b.kind !== '' && b.kind !== 'template' && b.kind !== 'envelope')
+    throw bad(`"kind" is "${str(b.kind, 40)}", which does not exist. Use "envelope" or "template", or leave it out to copy it as what it is. Nothing was copied.`);
   const kind = b?.kind === 'template' || (e.kind === 'template' && b?.kind !== 'envelope') ? 'template' : 'envelope';
   const eid = copyEnvelope(e, { accountId: c.account.id, senderId: c.user.id, kind, subject: kind === e.kind ? `${e.subject} (copy)`.trim() : e.subject });
   return { id: eid };
@@ -368,7 +419,9 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
 function batchResult(bulkId: string) {
   const results: any[] = all('SELECT envelope_id, sent_at, error FROM bulk_rows WHERE bulk_id=? ORDER BY position', bulkId)
     .map((r) => (r.sent_at ? { ok: true, id: r.envelope_id } : r.error ? { ok: false, error: r.error } : { ok: false, pending: true }));
-  return { id: bulkId, sent: results.filter((r) => r.ok).length, failed: results.filter((r) => r.error), pending: results.filter((r) => r.pending).length, results };
+  // Every row is a copy of one template, so what the check before sending finds is said once for the batch.
+  const tpl = get('SELECT e.id, e.subject FROM bulk_batches b JOIN envelopes e ON e.id=b.template_id WHERE b.id=?', bulkId);
+  return { id: bulkId, sent: results.filter((r) => r.ok).length, failed: results.filter((r) => r.error), pending: results.filter((r) => r.pending).length, results, warnings: tpl ? sendWarnings(tpl) : [] };
 }
 
 route('POST', '/bulk', async (c) => {
@@ -398,6 +451,9 @@ route('POST', '/bulk', async (c) => {
       if (!v || !str(v.name).trim() || !isEmail(str(v.email).trim())) throw bad(`Row ${i + 1}: "${r.role_name || 'Recipient'}" needs a name and a valid email.`);
     }
   });
+  // A role the template checks or reaches by text message needs a mobile number ("phone") in every row, and the
+  // account must be allowed that many texts today. Refused for the whole batch, like everything below.
+  assertBulkChecks(tpl, rows, open);
   // A pause, the fake-notice filter and the daily limit refuse the whole batch before anything is written, instead of
   // failing it row by row. Every address in every row counts as a person emailed.
   assertMayEmail({ ...tpl, sender_id: c.user.id }, [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))].filter(Boolean));
@@ -491,7 +547,8 @@ route('GET', '/powerforms', (c) => ({
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();
   const tpl = mine(c, str(b.template_id), 'template');
-  powerformTemplate(tpl.id);
+  // A visitor types their own details, so the open role can be checked with a code by email and never by text.
+  assertFormChecks(powerformTemplate(tpl.id).open);
   const pid = id('pwf');
   run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at, shared_device) VALUES (?,?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), str(b.name, 120) || tpl.subject || 'PowerForm', now(), b.shared_device ? 1 : 0);
   return { id: pid };
@@ -554,7 +611,7 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     const most = p.shared_device ? POWERFORM_SHARED_OPEN_STARTS : POWERFORM_OPEN_STARTS;
     const cleared = p.shared_device ? `${powerformSharedIdleMinutes()} minutes` : `${powerformIdleHours()} hours`;
     if (unfinished >= most)
-      throw bad(`This form has been started ${most} times from your internet connection and not finished yet. Finish one of those first: the link is in the email we sent each time. Ones that stay unfinished are cleared after ${cleared}, and then you can start again here.${p.shared_device ? '' : ' If many people fill this form in at the same place, ask whoever gave you the link to mark it as used on a shared device.'}`, 429);
+      throw bad(`This form has been started ${most} times from your internet connection and not finished yet. Finish one of those first: ${process.env.SMTP_URL ? 'the link is in the email we sent each time' : 'use the page that opened when you started it'}. Ones that stay unfinished are cleared after ${cleared}, and then you can start again here.${p.shared_device ? '' : ' If many people fill this form in at the same place, ask whoever gave you the link to mark it as used on a shared device.'}`, 429);
   }
   // A public form uses one of its owner's signatures for each person who signs, taken at the moment they finish
   // (see completeRecipient). Starting holds nothing and other people's unfinished starts are not counted, so a

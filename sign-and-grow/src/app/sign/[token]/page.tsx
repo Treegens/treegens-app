@@ -5,6 +5,7 @@ import { api, toast, fmtDate } from '@/components/ui';
 import { PdfDoc } from '@/components/PdfDoc';
 import { AdoptSignature, type SavedMark } from '@/components/SignaturePad';
 import { formatDate } from '@/lib/dates';
+import { consentWording } from '@/lib/policy';
 import { fmtNum } from '@/lib/impact';
 import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
@@ -13,6 +14,7 @@ import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 import { pageTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
+import { docUrl, allOnScreen } from '@/components/sign/fields';
 import { pageBoxes } from '@/components/sign/pdfText';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
@@ -62,6 +64,11 @@ export default function SignPage() {
   // Set when the sender changed the document while this page was open: the page has loaded the new version and
   // asks the person to look again before they finish.
   const [changedOpen, setChangedOpen] = useState(false);
+  // Which file of each document is on this screen right now: the fingerprint of the file whose pages are drawn, or
+  // read out in the text view. When the sender replaces a file, the page loads the new one, and Finish does not
+  // work until its pages are here. Nobody finishes on pages they were not shown.
+  const [onScreen, setOnScreen] = useState<Record<string, string>>({});
+  const markShown = useCallback((d: any) => setOnScreen((s) => (s[d.id] === (d.sha256 || '') ? s : { ...s, [d.id]: d.sha256 || '' })), []);
   const touch = useMedia(TOUCH);
   // The content version this page shows. It goes back with consent, every save and Finish, and the server refuses
   // a save or a Finish that comes from an older version than the one on the envelope.
@@ -171,6 +178,7 @@ export default function SignPage() {
 
   const me = data?.recipient;
   const env = data?.envelope;
+  const allShown = allOnScreen(data?.documents, onScreen);
   const fields: any[] = useMemo(() => data?.fields || [], [data?.fields]);
   const acts = me?.role === 'signer' || me?.role === 'inperson';
   const closed = !!env && (env.status === 'voided' || env.status === 'declined' || env.status === 'expired' || me.status === 'declined');
@@ -251,9 +259,13 @@ export default function SignPage() {
       // The sender changed the document while it was open here. Nothing was saved over the new version: load it,
       // keep what was typed for the fields that are still there, and say so.
       if (e?.code === 'changed') {
+        // The last step before sending ("Finish and send") is closed too: it must never be taken on top of a
+        // document that changed underneath it. The person sees the notice and the new pages first.
+        setOpen((o) => (o === 'review' ? '' : o));
         setChangedOpen(true);
         setSave('idle');
         load();
+        window.scrollTo({ top: 0 });
         return false;
       }
       // The document changed underneath us (voided, corrected, finished elsewhere): show what is true now.
@@ -386,7 +398,11 @@ export default function SignPage() {
     }
   }
 
+  // Said instead of finishing while the pages of the document, as it is now, are not on the screen yet.
+  const NOT_SHOWN = 'The document is still loading. You can finish as soon as its pages are on your screen.';
+
   function pressFinish() {
+    if (!allShown) return toast(NOT_SHOWN, true);
     if (me.role === 'viewer') return complete();
     const wrong = acts && ordered.find((f) => problemWith(f, values[f.id] || ''));
     if (wrong) {
@@ -399,6 +415,9 @@ export default function SignPage() {
   }
 
   async function complete() {
+    // The server refuses a Finish from an older version. This is the other half: the version this page sends is only
+    // ever one whose pages it has drawn.
+    if (!allShown) return (setOpen(''), toast(NOT_SHOWN, true));
     setBusy(true);
     setFinishError('');
     try {
@@ -570,9 +589,13 @@ export default function SignPage() {
           )}
           {/* What someone signed stays theirs to download, also after the document was closed. The copy says on its
               first page that it was not completed by everyone, and why. */}
-          {me.status === 'completed' && me.role !== 'cc' && (
+          {/* The same holds for someone who signed, was asked to sign again because the sender changed the document,
+              and had not done so when it was closed (signed_before): the copy is the document as they signed it. */}
+          {(me.status === 'completed' || me.signed_before) && me.role !== 'cc' && (
             <>
-              <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this before it was closed, and you can still download a copy of that. Its first page says that the document was not completed by everyone, so nobody takes it for a finished agreement.</p>
+              {me.status === 'completed'
+                ? <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this before it was closed, and you can still download a copy of that. Its first page says that the document was not completed by everyone, so nobody takes it for a finished agreement.</p>
+                : <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {sender.name} changed the document and asked you to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again, and it was closed before you did. You can still download {me.earlier_copy ? `the document as you ${acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it` : 'a copy of the document as it stood when it was closed'}. Its first page says what happened, so nobody takes it for a finished agreement.</p>}
               <div className="row wrap sg-actions">
                 {data.locked
                   ? <button type="button" className="btn lg" onClick={() => setWantCopy(true)}><Icon name="lock" /> Enter your access code to download it</button>
@@ -625,6 +648,14 @@ export default function SignPage() {
         {notice}
         <StateCard tone="wait" title="It is not your turn yet">
           <p>Others need to finish first. We will email {myEmail} as soon as the document is ready for you. There is nothing to do until then.</p>
+          {/* Someone who signed, and is asked to sign again after a change, waits here for their turn. What they
+              signed the first time is still theirs to download meanwhile. */}
+          {me.signed_before && me.earlier_copy && !data.locked && (
+            <>
+              <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {sender.name} changed the document, so you will be asked to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again when it is your turn. What you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} then is kept on record, and you can download it.</p>
+              <div className="row wrap sg-actions"><a className="btn lg" href={`${downloadUrl}?earlier=1`}><Icon name="download" /> Download the document as you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it</a></div>
+            </>
+          )}
           <Sender env={env} brand={data.brand} lead="Questions? Contact" />
         </StateCard>
         {dialogs}
@@ -651,6 +682,7 @@ export default function SignPage() {
 
   if (stage === 'consent') {
     const ask = me.role === 'approver' ? 'You have been asked to approve' : me.role === 'viewer' ? 'You have been asked to read' : 'You have been asked to sign';
+    const wording = consentWording(sender.name, acts);
     return (
       <Shell data={data} bar={other} footer={report} helpInNewTab>
         {notice}
@@ -668,19 +700,21 @@ export default function SignPage() {
           </div>
           <hr className="sg-rule" />
           <h2>Electronic records and signatures</h2>
-          <p className="muted sg-legal">
-            You are about to review{acts ? ' and sign' : ''} this document on screen. An electronic signature has the same legal effect as a handwritten one.
-            You can download or print a copy before you {acts ? 'sign' : 'finish'}, and afterwards you can download what you {acts ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask {sender.name} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.
-          </p>
+          {/* The words come from src/lib/policy.ts with a version, and the version goes back with the agreement, so the
+              audit trail says which wording this person was shown. */}
+          <div id="sg-legal">
+            <p className="muted sg-legal">{wording.legal}</p>
+            <p className="muted sg-legal">{wording.practical}</p>
+          </div>
           <label className="check sg-agree">
-            <input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setFormError(''))} aria-describedby={formError ? 'sg-agree-err' : undefined} /> <span>I agree to use electronic records and signatures.</span>
+            <input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setFormError(''))} aria-describedby={formError ? 'sg-legal sg-agree-err' : 'sg-legal'} /> <span>{wording.agree}</span>
           </label>
           {formError && <div id="sg-agree-err" className="notice err sg-problem" role="alert">{formError}</div>}
           <button type="button" className="btn primary lg sg-continue" disabled={busy} onClick={async () => {
             if (!agree) return setFormError('Tick the box above to agree, then choose Continue.');
             setBusy(true);
             try {
-              await api(`${base}/consent`, { body: { version: version.current } });
+              await api(`${base}/consent`, { body: { version: version.current, wording: wording.version } });
               await load();
             } catch (e: any) {
               setFormError(`${e?.message || 'Something went wrong on our side.'} Try again in a moment.`);
@@ -702,7 +736,7 @@ export default function SignPage() {
   const count = !acts ? '' : !required.length ? 'Nothing is required' : left.length ? `${left.length} of ${required.length} left` : 'Ready to finish';
   const mainButton = (big: boolean) => hasNext
     ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => goTo(nextField)}>Next</button>
-    : <button type="button" className={`btn go finish${big ? ' sg-big' : ''}`} disabled={busy} onClick={pressFinish}>{finishLabel}</button>;
+    : <button type="button" className={`btn go finish${big ? ' sg-big' : ''}`} disabled={busy || !allShown} aria-describedby={allShown ? undefined : 'sg-guide'} onClick={pressFinish}>{finishLabel}</button>;
   const done = required.length - left.length;
   const bar = (
     <>
@@ -742,8 +776,8 @@ export default function SignPage() {
         </button>
       );
     }
-    if (AUTO.includes(f.type)) return <div key={f.id} {...common} title="Added for you"><span className="sg-val">{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : dateText}</span></div>;
-    if (f.readonly) return <div key={f.id} {...common}><span className="sg-val">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}</span></div>;
+    if (AUTO.includes(f.type)) return <div key={f.id} {...common} title="Added for you"><span className="sg-val" dir="auto">{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : dateText}</span></div>;
+    if (f.readonly) return <div key={f.id} {...common}><span className="sg-val" dir="auto">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}</span></div>;
     // Tick boxes and radio buttons are the browser's own controls, drawn in the place the page gives them. So the
     // keyboard works as everywhere else (Space ticks, the arrow keys move through a group of radio buttons) and a
     // screen reader says what they are, whether they are on, and which group a radio button belongs to.
@@ -773,7 +807,7 @@ export default function SignPage() {
     if (usesSheet(f))
       return (
         <button key={f.id} type="button" {...common} onClick={() => goTo(f)} aria-label={`${name}${need}. ${value ? `Your answer: ${value}` : 'Empty'}. Opens a box to type in`}>
-          <span className={`sg-val${value ? '' : ' ph'}`}>{value || name + (f.required ? ' *' : '')}</span>
+          <span className={`sg-val${value ? '' : ' ph'}`} dir="auto">{value || name + (f.required ? ' *' : '')}</span>
         </button>
       );
     if (f.type === 'dropdown')
@@ -785,7 +819,8 @@ export default function SignPage() {
           </select>
         </div>
       );
-    const shared = { 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, placeholder: name + (f.required ? ' *' : ''), value, title: wrong ? problemWith(f, value) : undefined };
+    // dir="auto": the direction comes from what is typed, so right-to-left text starts at the right edge of its box.
+    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, placeholder: name + (f.required ? ' *' : ''), value, title: wrong ? problemWith(f, value) : undefined };
     return (
       <div key={f.id} {...common}>
         {isMulti(f)
@@ -828,7 +863,7 @@ export default function SignPage() {
       {/* Everything already on the page that is not this person's to fill in: the sender's own wording, whoever it
           is assigned to, and what people who have finished put there. */}
       {data.others.filter((f: any) => f.document_id === docId && f.page === page).map((f: any) => (
-        <div key={f.id} className={`field other${isBox(f) ? ' box' : ''}`} style={pos(f)} title={otherSource(f, sender.name)}>
+        <div key={f.id} dir="auto" className={`field other${isBox(f) ? ' box' : ''}`} style={pos(f)} title={otherSource(f, sender.name)}>
           {f.image ? <img src={f.image} alt="Signature of another signer" /> : isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}
         </div>
       ))}
@@ -853,14 +888,17 @@ export default function SignPage() {
         <div className="notice warn sg-top" role="alert">
           <b>{sender.name} changed this document while you had it open.</b> Nothing was signed. What you filled in is still here wherever its field still exists. Look at the document again before you finish.
           {data.changed ? ` What changed: ${data.changed}` : ''}{' '}
-          <button type="button" className="sg-link" onClick={() => setChangedOpen(false)}>I have looked</button>
+          {/* The pages below are the changed ones once they have loaded. Until then there is nothing to have looked at. */}
+          {allShown ? <button type="button" className="sg-link" onClick={() => setChangedOpen(false)}>I have looked</button> : <span role="status">The changed pages are loading. You can finish once they are on your screen.</span>}
         </div>
       )}
       {me.signed_before && !changedOpen && (
         <div className="notice warn sg-top" role="status">
           <b>{sender.name} changed this document after you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it on {fmtDate(me.signed_before, true)}.</b> What you did then no longer counts, and it is kept on record together with the change.
           Look at the document again and {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again if you agree. Your earlier answers are still filled in for you to check.
-          {data.changed ? ` What changed: ${data.changed}` : ''}
+          {data.changed ? ` What changed: ${data.changed}` : ''}{' '}
+          {/* What they signed the first time is kept exactly as it was, and is theirs to download. */}
+          {me.earlier_copy && <a className="sg-link" href={`${downloadUrl}?earlier=1`}>Download the document as you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it the first time</a>}
         </div>
       )}
       {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now.</div>}
@@ -868,6 +906,9 @@ export default function SignPage() {
         {!acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
           : hasNext ? <>Choose <b>Next</b> and we take you to each place that needs you, one at a time.</>
           : <>Everything needed is filled in. Choose <b>Finish</b> to check it and send.</>}
+        {/* Finish is switched off until the pages of the document, as it is now, are on the screen. Said here, so a
+            button that does nothing is never the only sign of it. */}
+        {!allShown && !hasNext && <> The document is still loading: you can {acts ? 'finish' : me.role === 'approver' ? 'approve' : 'confirm'} as soon as its pages are on your screen. If they do not appear, reload this page.</>}
       </p>
       {/* Said once, before the pages, to someone who cannot see them: the Document view shows each page as a picture. */}
       {view === 'doc' && <p className="sg-vh">The pages below are shown as pictures, with your fields placed on them. To have the whole document read as text, with the same fields as an ordinary form, choose Text view, the next button.</p>}
@@ -884,12 +925,14 @@ export default function SignPage() {
           {data.documents.map((d: any) => (
             <div key={d.id}>
               {data.documents.length > 1 && <h2 className="sg-docname">{d.name}</h2>}
-              <PdfDoc url={`/api${base}/doc/${d.id}`} overlay={overlay(d.id)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }} />
+              {/* The address and the key carry the fingerprint of the file. A file the sender replaced is fetched and
+                  drawn afresh, and onShown says when its first page is really on the screen. */}
+              <PdfDoc key={d.sha256 || d.id} url={docUrl(base, d)} overlay={overlay(d.id)} onShown={() => markShown(d)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }} />
             </div>
           ))}
         </div>
       ) : (
-        <TextView documents={data.documents} urlFor={(id) => `/api${base}/doc/${id}`} senderName={sender.name} onAsk={go('ask')}
+        <TextView documents={data.documents} urlFor={(id) => docUrl(base, data.documents.find((d: any) => d.id === id) || { id })} onShown={markShown} senderName={sender.name} onAsk={go('ask')}
           fields={(docId, page, near) => <PageFields docId={docId} page={page} c={ctx} near={near} />}
           others={(docId, page) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} />} />
       )}
@@ -909,12 +952,16 @@ export default function SignPage() {
         <ReviewDialog me={me} sender={sender} items={items} sig={sig} ini={ini} approving={me.role === 'approver'} busy={busy} error={finishError}
           usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
           onChangeSig={changeMark} onBack={() => setOpen('')} onFinish={complete}
+          printCheck={() => api(`${base}/print-check`, { body: { values } })}
           onRename={async (name) => {
             // A name that reads like a different person's is not changed: the sender is asked instead, and the
             // answer says so in words. Those words are handed back to be shown under the name.
             const r = await api(`${base}/name`, { body: { name } });
             if (r?.applied === false) return String(r.message || 'We did not change it, and asked the sender instead.');
-            setData((d: any) => (d ? { ...d, recipient: { ...d.recipient, name: r?.name || name } } : d));
+            // A new spelling is a newer version of the envelope. This page made the change and shows it, so it
+            // carries on with that version. Anyone else who has the page open is asked to look again.
+            if (r?.version != null) version.current = r.version;
+            setData((d: any) => (d ? { ...d, version: r?.version ?? d.version, recipient: { ...d.recipient, name: r?.name || name } } : d));
             return '';
           }} />
       )}

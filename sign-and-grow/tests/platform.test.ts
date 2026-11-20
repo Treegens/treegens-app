@@ -38,7 +38,7 @@ async function signUp(name: string, email: string) {
   const c = person();
   const r = await c.post('/auth/signup', { name, email, password: 'correct horse battery' });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal((await new Client().post('/auth/verify', { token: db.get('SELECT verify_token t FROM users WHERE email=?', email).t })).status, 200);
+  assert.equal((await c.post('/auth/verify', { token: db.get('SELECT verify_token t FROM users WHERE email=?', email).t })).status, 200);
   return c;
 }
 // A team member who joined through an invitation.
