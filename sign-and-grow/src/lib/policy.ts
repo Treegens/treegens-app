@@ -2,6 +2,8 @@
 // code that enforces them can never disagree. This file has no side effects and registers nothing, which makes it
 // safe to import from pages as well as from the server. It reads the environment, so use it in server code and
 // server components only, not in 'use client' files.
+// Which language a legal text is shown in, and the sentence when that is English (src/lib/i18n.ts, no environment).
+import { legalLocale, legalNote, languageWords, normalizeLocale, SOURCE_LOCALE } from './i18n.ts';
 
 /** Unused signatures from the latest payment are refunded on request within this many days. */
 export const refundDays = (): number => Number(process.env.REFUND_DAYS) || 30;
@@ -194,7 +196,12 @@ export const SUPPORT_KEEP_DAYS = 90;
 // signature is valid or equal to a handwritten one: that depends on the country and on the kind of document, and
 // the software knows neither. To change a word, add a new version here, keep the old one, and move CONSENT_VERSION.
 // Plain functions with no environment in them, so a 'use client' file may import them.
-export type ConsentWording = { version: string; legal: string; practical: string; agree: string };
+// Each version is kept by language. A language is added to a version only when a person who can answer for it has
+// checked the words, never from a machine translation, and its entry in SUPPORTED_LOCALES (src/lib/i18n.ts) says
+// legal: 'reviewed'. Until then that person reads the English words with `note`, one sentence in their language.
+// `language` is the language of the words returned, which the audit line records.
+export type ConsentWording = { version: string; legal: string; practical: string; agree: string; language: string; note: string };
+type ConsentWords = Omit<ConsentWording, 'version' | 'language' | 'note'>;
 export const CONSENT_VERSION = '2026-11';
 /**
  * The wording the signing screen showed before versions were recorded (until 20 November 2026). Its audit lines
@@ -203,8 +210,8 @@ export const CONSENT_VERSION = '2026-11';
  * we no longer say ("the same legal effect as a handwritten one"). A screen cannot claim to have shown it.
  */
 export const UNVERSIONED_CONSENT = 'before-2026-11';
-const CONSENT_WORDINGS: Record<string, (sender: string, signs: boolean) => Omit<ConsentWording, 'version'>> = {
-  [UNVERSIONED_CONSENT]: (sender, signs) => ({
+const CONSENT_WORDINGS: Record<string, Record<string, (sender: string, signs: boolean) => ConsentWords>> = {
+  [UNVERSIONED_CONSENT]: { en: (sender, signs) => ({
     legal: `You are about to review${signs ? ' and sign' : ''} this document on screen. An electronic signature has the same legal effect as a handwritten one.`,
     practical: `You can download or print a copy before you ${signs ? 'sign' : 'finish'}, and afterwards you can download what you ${signs ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask ${sender} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.`,
     agree: 'I agree to use electronic records and signatures.',
