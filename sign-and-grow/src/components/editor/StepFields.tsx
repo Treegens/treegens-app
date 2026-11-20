@@ -12,8 +12,8 @@ import { WordingField } from '../templates/WhoCanUse';
 import { FieldLogic, withoutField } from './FieldLogic';
 import { WitnessBlockButton } from './WitnessChoice';
 // A stamp field: who puts it on, which of the team's stamps, its real size (StampChoice.tsx, src/server/stamps.ts).
-import { StampChoice, useStamps, editorStampSrc } from './StampChoice';
-import { stampBox, STAMP_DEFAULT_MM } from '@/lib/stamps';
+import { StampChoice, useStamps, editorStampSrc, editorStampTurn } from './StampChoice';
+import { stampBox, STAMP_DEFAULT_MM, turnStyle } from '@/lib/stamps';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
@@ -417,7 +417,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                 <PdfDoc url={`/api/files/${d.file_id}/content`} zoom={zoom} onPageClick={(p, x, y) => place(d, p, x, y)} onDocument={(pdf) => setPdfs((m) => ({ ...m, [d.id]: pdf }))}
                   // Stamps on the page, printed like ink the way the signing page and the PDF print them.
                   // eslint-disable-next-line @next/next/no-img-element
-                  ink={(page) => list.filter((f) => f.document_id === d.id && f.page === page && editorStampSrc(f, env.id, stamps)).map((f) => <span key={f.id} className="st-print" style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` }}><img src={editorStampSrc(f, env.id, stamps)!} alt="" /></span>)}
+                  ink={(page) => list.filter((f) => f.document_id === d.id && f.page === page && editorStampSrc(f, env.id, stamps)).map((f) => <span key={f.id} className="st-print" style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` }}><img src={editorStampSrc(f, env.id, stamps)!} alt="" style={turnStyle(editorStampTurn(f, stamps))} /></span>)}
                   overlay={(page) => (
                     <>
                       {list.filter((f) => f.document_id === d.id && f.page === page).map((f) => {

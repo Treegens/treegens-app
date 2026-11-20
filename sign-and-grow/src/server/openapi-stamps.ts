@@ -12,11 +12,12 @@ const idParam = { name: 'id', in: 'path', required: true, schema: s };
 const token = { name: 'token', in: 'path', required: true, schema: s };
 const sha = { name: 'sha', in: 'path', required: true, schema: s, description: 'The SHA-256 of the picture, as a stamp field holds it in "value".' };
 
-const IMAGE = `A data URL of a PNG (data:image/png;base64,...): the finished impression, 8 bits per channel with a see-through background (RGBA), at least ${STAMP_OUT_MIN_SIDE} and at most ${STAMP_OUT_MAX_SIDE} pixels on each side, up to ${STAMP_PNG_MAX_BYTES / 1e6} MB. The stamp screen in the app makes it from a photo or a design: paper taken away, one ink, a rubber texture and a small tilt. A picture with no see-through parts would print as a box and is refused, as is anything else (SVG, PDF, JPEG, WebP), in words. Only what draws the picture is kept: text, dates and camera notes inside the file are left out.`;
+const IMAGE = `A data URL of a PNG (data:image/png;base64,...): the finished impression, 8 bits per channel with a see-through background (RGBA), at least ${STAMP_OUT_MIN_SIDE} and at most ${STAMP_OUT_MAX_SIDE} pixels on each side, up to ${STAMP_PNG_MAX_BYTES / 1e6} MB. The stamp screen in the app makes it from a photo or a design: paper taken away, one ink and the texture of a rubber stamp, sized in millimetres at the size it prints. Its small natural tilt is not drawn in: send it as "turn", and the page turns the picture when it prints it, so the stamp keeps the size of its field. A picture with no see-through parts would print as a box and is refused, as is anything else (SVG, PDF, JPEG, WebP), in words. Only what draws the picture is kept: text, dates and camera notes inside the file are left out.`;
 const look = {
   ink: { type: 'string', enum: [...INKS], description: 'The ink the impression is in. Kept with it.' },
   seed: { type: 'integer', minimum: 1, maximum: 2147483646, description: 'The number its texture and tilt were made from, so it can be made again exactly. Given one when left out.' },
-  tilt: { type: 'number', minimum: -TILT_MAX, maximum: TILT_MAX, description: 'Degrees it was turned by.' },
+  tilt: { type: 'number', minimum: -TILT_MAX, maximum: TILT_MAX, description: 'The tilt it was made with, in degrees. Kept with it as a record.' },
+  turn: { type: 'number', minimum: -TILT_MAX, maximum: TILT_MAX, description: 'How far the page turns the picture when it prints it, in degrees clockwise, about its middle, on screen and in the signed PDF. The stamp screen sends its tilt here and leaves the picture straight. Left out or 0: the picture prints as it is, so a picture with its tilt drawn in stays as it was.' },
   texture: { type: 'number', minimum: 0, maximum: 1, description: '0 is even ink, 1 a well-worn stamp.' },
 };
 

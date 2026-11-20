@@ -78,7 +78,7 @@ function StampForm({ stamp, onClose, onSaved }: { stamp?: any; onClose: () => vo
         <input ref={camera} type="file" className="sg-vh" tabIndex={-1} aria-hidden="true" accept="image/*" capture="environment" onChange={chosen('camera')} />
         {file && (
           <>
-            <StampMaker file={file.f} from={file.from} onMade={setMade} sizeLabel={mm >= STAMP_MIN_MM && mm <= STAMP_MAX_MM ? `A stamp field for it starts at its real size, ${mm} mm across.` : ''} />
+            <StampMaker file={file.f} from={file.from} onMade={setMade} mm={mm >= STAMP_MIN_MM && mm <= STAMP_MAX_MM ? mm : undefined} sizeLabel={mm >= STAMP_MIN_MM && mm <= STAMP_MAX_MM ? `A stamp field for it starts at its real size, ${mm} mm across.` : ''} />
             <button type="button" className="btn sm st-other" onClick={() => (setFile(null), setMade(null))}>Use another picture</button>
           </>
         )}

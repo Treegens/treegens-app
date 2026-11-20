@@ -101,7 +101,8 @@ test('the audit line for consent names the wording the signer was shown', async 
   assert.equal(r1.data.wording, CONSENT_VERSION);
   let lines = await consentLines(e1.id);
   assert.equal(lines.length, 1);
-  assert.equal(lines[0].detail, `Sam Signer. Wording ${CONSENT_VERSION}, as printed on the help page under "What do I agree to before I sign?".`);
+  // The language too, since lang-core (tests/i18n.test.ts): a screen that names none only shows English.
+  assert.equal(lines[0].detail, `Sam Signer. Wording ${CONSENT_VERSION}, in English (en), as printed on the help page under "What do I agree to before I sign?".`);
   // Agreeing twice writes one line, and the chain still holds.
   await s1.post(`/sign/${tokenFor(e1.id, 'wording1@example.com')}/consent`, { wording: CONSENT_VERSION });
   lines = await consentLines(e1.id);
@@ -117,7 +118,7 @@ test('the audit line for consent names the wording the signer was shown', async 
     const r = await new Client().call('POST', `/sign/${tokenFor(e.id, email)}/consent`, body);
     assert.equal(r.status, 200, JSON.stringify(body));
     const [line] = await consentLines(e.id);
-    assert.equal(line.detail, `Sam Signer. The screen did not say which wording it showed. The wording in use was ${CONSENT_VERSION}, as printed on the help page under "What do I agree to before I sign?".`);
+    assert.equal(line.detail, `Sam Signer. The screen did not say which wording it showed. The wording in use was ${CONSENT_VERSION}, in English (en), as printed on the help page under "What do I agree to before I sign?".`);
   }
 
   // The help page prints the words under that heading, with the version, so the line can be read back by anyone.
@@ -1103,4 +1104,22 @@ test('the country notes say which part of a country they are about, link the EU\
   assert.doesNotMatch(stampNote('India'), /\bbuy the\b/);
   // Every note still carries its month, and the help page prints the month next to its sources.
   assert.match(src('app/help/outside.tsx'), /Looked at in \{n\.checked\}\./);
+});
+
+test('the processing summary and /security list the time zones we keep, and the Find my documents email says whose reply to use', async () => {
+  const processing = src('app/security/processing/page.tsx');
+  assert.match(processing, /the time zone their browser reports, which decides the day written for their signers when a signer&apos;s own device says none/);
+  assert.match(processing, /and the time zone their device reports, which decides the date printed for them and is on the certificate/);
+  assert.match(src('app/security/page.tsx'), /the time zone each person&apos;s device reports, which decides the date printed for them \(the first time, and again at Finish if it changed\)/);
+  // The help page no longer says that every email which leads to a signing page carries the line; it says which do.
+  const help = src('app/help/outside.tsx');
+  assert.doesNotMatch(help, /Every email that asks someone to sign therefore ends with this line/);
+  assert.match(help, /The list a signer gets from Find my documents comes from us and can name several senders, so it tells them to reply to your own email about the document instead\./);
+  // And the Find my documents email does say it.
+  const e = await simple(ada, 'finds.links@example.com');
+  await ada.post(`/envelopes/${e.id}/send`);
+  assert.equal((await new Client().post('/public/links/find', { email: 'finds.links@example.com' })).status, 200);
+  const list = mailTo('finds.links@example.com').find((m: any) => m.subject === 'Your documents on Sign&Grow')!;
+  assert.ok(list, 'the list was emailed');
+  assert.match(list.html, /Page will not open where you are\? Reply to the email the sender sent you about that document and ask them to send it as a PDF\. This list comes from Sign&amp;Grow, not from them, so a reply to it does not reach them\./);
 });

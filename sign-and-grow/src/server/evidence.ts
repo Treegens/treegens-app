@@ -5,7 +5,7 @@ import { sendMail, type MailStatus } from './mail.ts';
 import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnvelope, type Actor } from './envelopes.ts';
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
-import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording } from '../lib/policy.ts';
+import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf } from '../lib/policy.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
 import { deviceName } from '../lib/phone.ts';
@@ -381,7 +381,8 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const named = /Wording (\S+?),/.exec(a.detail)?.[1] || /wording in use was (\S+?),/.exec(a.detail)?.[1];
       const version = named || UNVERSIONED_CONSENT;
       const r = people.find((p: any) => labelOf(p) === a.actor);
-      const w = consentWording(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version);
+      // In the language the line names (English for a line from before languages were recorded): policy.ts.
+      const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
       const how = !named ? ' (their audit line names no wording, because it was written before Sign&Grow recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line and its date, not stated by their screen)'
         : /did not say/.test(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
       return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];

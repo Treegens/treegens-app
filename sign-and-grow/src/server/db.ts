@@ -942,6 +942,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // The help chat a person chose to send with a help request, as JSON lines (src/server/chat.ts attachedChat). It goes
   // with the request. Nothing else of any chat is ever stored.
   ['support_requests', 'chat', 'TEXT'],
+  // The language the editor starts each new recipient in (src/server/locales.ts). NULL: each person's browser decides,
+  // then English. recipients.locale, above, is the language set for one person.
+  ['accounts', 'default_locale', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

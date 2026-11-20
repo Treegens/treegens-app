@@ -4,7 +4,9 @@
    is multiplied into the page's pixels and the printed words show through it. Nothing in it can be clicked. */
 .pdfpage .ink { position: absolute; inset: 0; pointer-events: none; }
 .pdfpage .ink .st-print { position: absolute; display: flex; align-items: center; justify-content: center; }
-.pdfpage .ink .st-print img { width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; opacity: 0.9; }
+/* Turned by the stamp's natural tilt (a transform on the picture, about its middle), as in the PDF: the design keeps
+   the size of its field and its corners may reach a little past it. */
+.pdfpage .ink .st-print img { width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; opacity: 0.97; }
 
 /* A stamp field of the signer: a yellow box to tap while empty, see-through once the stamp is on, outlined on hover
    and focus so it is still clear where to tap to change it. */
@@ -25,7 +27,7 @@
 .st-sigline { border-bottom: 1px solid #333; height: 28px; margin-top: 10px; position: relative; }
 .st-sig { font-family: 'Caveat', 'Segoe Script', cursive; font-size: 20px; position: absolute; bottom: 0; left: 8px; color: #1a2a6b; }
 .st-on { position: absolute; left: 36%; top: 30%; width: 58%; height: 58%; object-fit: contain; }
-.st-on.st-ink { mix-blend-mode: multiply; opacity: 0.9; }
+.st-on.st-ink { mix-blend-mode: multiply; opacity: 0.97; }
 
 .st-inks { display: flex; flex-wrap: wrap; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .st-inks legend { font-weight: 600; font-size: 13px; margin-bottom: 6px; padding: 0; }

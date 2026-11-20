@@ -124,7 +124,7 @@ export function backstop(answer: string): string[] {
   return out;
 }
 // Em dashes never reach the page, whatever the model writes.
-const plain = (s: string) => s.replace(/\s*—\s*/g, ', ');
+const plain = (s: string) => s.replace(/\s*\u2014\s*/g, ', ');
 
 // ---- The model -------------------------------------------------------------------------------------------------------
 function callModel(p: ChatProvider, screen: ChatScreen, turns: ChatTurn[], tuned: boolean, signal: AbortSignal): Promise<Response> {

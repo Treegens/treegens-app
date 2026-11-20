@@ -230,10 +230,10 @@ test('a provider that cannot be reached, is slow or says nothing is answered wit
 
 test('what a model may never say is put right at the end of its answer, and em dashes never reach the page', async () => {
   provider('openrouter');
-  stub(answerWith('Yes — your signature is valid in Germany.'));
+  stub(answerWith('Yes \u2014 your signature is valid in Germany.'));
   const r = await ask(visitor(), 'Is my signature valid in Germany?');
   const text = streamed(r);
-  assert.ok(!text.includes('—'));
+  assert.ok(!text.includes('\u2014'));
   assert.ok(text.endsWith(chat.CORRECT_VALID));
   assert.equal(events(r).find((e) => e.done).sig, chat.signAnswer(text), 'the signature covers the answer as the page shows it');
   assert.deepEqual(chat.backstop('Nobody can say whether it is valid there.'), []);
@@ -596,7 +596,7 @@ test('the system prompt is built from policy.ts, the help topics and README, so 
   for (const rule of ['You are an AI and you can be wrong', 'The rules printed on Sign&Grow\'s own pages are what count', 'Never give legal advice', '"is valid"', '"will hold up"',
     'Never promise a refund', 'Answer in the language the person writes in', 'screens and emails are in English for now', 'Never use em dashes', 'say plainly that you do not know, and offer a person'])
     assert.ok(p.includes(rule), rule);
-  assert.ok(!p.includes('—'), 'no em dash in what the model is shown either');
+  assert.ok(!p.includes('\u2014'), 'no em dash in what the model is shown either');
   // Our contact address comes from SUPPORT_EMAIL, and no other address is ever in the prompt.
   const emails = (s: string) => s.match(/[^\s@()"]+@[^\s@()"]+\.[a-z]{2,}/gi) || [];
   assert.deepEqual(emails(kb.systemPrompt('help', { ...process.env, SUPPORT_EMAIL: '' })), []);
@@ -606,7 +606,7 @@ test('the system prompt is built from policy.ts, the help topics and README, so 
   // The built-in answers promise nothing the model may not.
   for (const f of kb.FAQ) {
     const a = f.answer();
-    assert.ok(!a.includes('—'), f.id);
+    assert.ok(!a.includes('\u2014'), f.id);
     assert.deepEqual(chat.backstop(a), [], f.id);
   }
 });

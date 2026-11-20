@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../ui';
 import { who } from './shared';
-import { stampBox, fieldMm, STAMP_DEFAULT_MM, STAMP_IS_TEAM } from '@/lib/stamps';
+import { stampBox, fieldMm, STAMP_DEFAULT_MM, STAMP_IS_TEAM, stampTurn } from '@/lib/stamps';
 import { INK_WORD } from '@/lib/stampink';
 
 // A stamp field in the editor (src/server/stamps.ts): who puts it on, which of the team's stamps when it is the
@@ -30,6 +30,11 @@ export function editorStampSrc(f: any, envelopeId: string | undefined, stamps: a
   if (f.value && envelopeId) return `/api/envelopes/${envelopeId}/stamp-image/${f.value}`;
   if (!f.recipient_id && f.stamp_id) return stamps.find((s) => s.id === f.stamp_id)?.image_url || null;
   return null;
+}
+/** How far the page turns that picture: what the field was put on with, or the chosen stamp's own turn. */
+export function editorStampTurn(f: any, stamps: any[]): number {
+  if (f.value) return stampTurn(f.stamp_meta);
+  return stampTurn(stamps.find((s) => s.id === f.stamp_id)?.turn);
 }
 
 export function StampChoice({ field, open, envelopeId, page, patch }: {

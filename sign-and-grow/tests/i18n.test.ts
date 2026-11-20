@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { boot, Client, simple, signUp, tokenFor, type Server } from './helpers.ts';
 import {
   t, translate, parseMessage, placeholders, formatMessage, fallbackChain, dir, normalizeLocale, browserLocales, browserLocale, chooseLocale,
   uiLocale, legalLocale, legalNote, languageWords, shippedLocales, isShipped, SUPPORTED_LOCALES, CATALOGUES, SOURCE_LOCALE, type Language,
@@ -165,4 +166,120 @@ test('a language whose legal texts no person has checked shows them in English; 
   // German is checked but not switched on: its screens and legal texts are English.
   assert.equal(uiLocale('de', MORE), 'en');
   assert.equal(legalLocale('de', undefined, MORE), 'en');
+});
+
+// ---- 3. Which language a person sees ------------------------------------------------------------------------------
+
+let db: Server['db'];
+let ada: Client;
+before(async () => {
+  ({ db } = await boot());
+  ada = await signUp('Ada Sender', 'ada.lang@example.com', '198.51.100.31');
+});
+const sent = async (email: string, over: any = {}) => {
+  const e = await simple(ada, email, over);
+  assert.equal((await ada.post(`/envelopes/${e.id}/send`)).status, 200);
+  return e;
+};
+const auditOf = (id: string, action: string) => db.all('SELECT detail FROM audit WHERE envelope_id=? AND action=? ORDER BY seq', id, action).map((x: any) => x.detail as string);
+
+test('the sender\'s choice first, then the browser among the languages switched on, then English', () => {
+  assert.equal(chooseLocale({ chosen: 'fr', acceptLanguage: 'pt-BR' }, MORE), 'fr', 'the sender set it');
+  assert.equal(chooseLocale({ chosen: 'de', acceptLanguage: 'pt-BR,fr;q=0.5' }, MORE), 'pt-BR', 'what the sender set is not switched on: the browser decides');
+  assert.equal(chooseLocale({ acceptLanguage: 'fr-CA,en;q=0.5' }, MORE), 'fr', 'fr-CA is served by fr');
+  assert.equal(chooseLocale({ acceptLanguage: 'pt-PT' }, MORE), 'pt');
+  assert.equal(chooseLocale({ acceptLanguage: 'de-DE,de;q=0.9,fr;q=0.4' }, MORE), 'fr', 'German is not switched on, the next one the browser asks for is');
+  assert.equal(chooseLocale({ acceptLanguage: 'en;q=0.2,fr;q=0.8' }, MORE), 'fr', 'by weight, not by order');
+  assert.equal(chooseLocale({ acceptLanguage: 'de,ja' }, MORE), 'en', 'nothing it asks for: English');
+  assert.equal(chooseLocale({ acceptLanguage: 'fr;q=0,*' }, MORE), 'en', 'q=0 means no, and * is not a language');
+  for (const h of [undefined, '', ';;;,,,', 'q=1', `${'x-'.repeat(2000)}fr`, 'fr;q=abc', 42]) assert.equal(chooseLocale({ acceptLanguage: h }, MORE), 'en', String(h).slice(0, 20));
+  assert.deepEqual(browserLocales('fr-CA,fr;q=0.8,en;q=0.5'), ['fr-CA', 'fr', 'en']);
+  // With the languages that really are switched on (English alone), every browser gets English.
+  assert.equal(chooseLocale({ chosen: 'fr', acceptLanguage: 'fr-FR' }), 'en');
+  assert.equal(browserLocale('am-ET,om;q=0.8'), null);
+});
+
+test('the signing page is told the language, its direction and who chose it; the sender\'s choice is kept on the recipient', async () => {
+  const e = await sent('lang.page@example.com');
+  const tok = tokenFor(e.id, 'lang.page@example.com');
+  const look = (h: Record<string, string>) => new Client().call('GET', `/sign/${tok}`, undefined, h);
+  let r = await look({ 'accept-language': 'fr-FR,fr;q=0.9' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data.language, { locale: 'en', dir: 'ltr', set_by: 'default' }, 'French is not switched on: English, and nobody chose it');
+  r = await look({ 'accept-language': 'en-GB' });
+  assert.deepEqual(r.data.language, { locale: 'en', dir: 'ltr', set_by: 'browser' });
+  db.run('UPDATE recipients SET locale=? WHERE envelope_id=?', 'en', e.id);
+  r = await look({ 'accept-language': 'fr' });
+  assert.deepEqual(r.data.language, { locale: 'en', dir: 'ltr', set_by: 'sender' });
+  // A language stored before it was switched off is not used: the browser decides again.
+  db.run('UPDATE recipients SET locale=? WHERE envelope_id=?', 'fr', e.id);
+  r = await look({ 'accept-language': 'en-US' });
+  assert.deepEqual(r.data.language, { locale: 'en', dir: 'ltr', set_by: 'browser' });
+  // A page behind an access code is told its language too: the code screen is a screen.
+  const locked = await sent('lang.locked@example.com', { recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'lang.locked@example.com', access_code: '4242' }] });
+  r = await new Client().get(`/sign/${tokenFor(locked.id, 'lang.locked@example.com')}`);
+  assert.equal(r.data.locked, true);
+  assert.equal(r.data.language.locale, 'en');
+});
+
+// ---- 4. Legal texts: checked by a person in that language, or English with one sentence -------------------------
+
+test('legal texts: in the person\'s language only once a person checked it, else English with one sentence in their language', async () => {
+  const { consentWording, consentWordingAsRecorded, isConsentLanguage, CONSENT_VERSION, UNVERSIONED_CONSENT } = await import('../src/lib/policy.ts');
+  const sentence = en['legal.in_english'];
+  assert.equal(sentence, 'This part is in English because its translation has not yet been checked by a person.');
+  // French switched on, its legal texts a machine draft: English legal text, the sentence in French.
+  const fr = { 'legal.in_english': 'Cette partie est en anglais, car sa traduction n\'a pas encore été vérifiée par une personne.' };
+  assert.equal(legalNote('fr-CA', undefined, MORE, { en, fr }), fr['legal.in_english']);
+  assert.equal(legalNote('fr', undefined, MORE, { en }), sentence, 'a French catalogue without the sentence gives the English one, never nothing');
+  assert.equal(legalNote('pt-BR', undefined, MORE), '', 'Portuguese legal texts were checked: no sentence');
+  assert.equal(legalNote('pt-BR', ['en'], MORE), sentence, 'a text that exists only in English gets the sentence');
+  assert.equal(legalNote('de', undefined, MORE), '', 'screens in English (German is off): nothing to explain');
+  assert.equal(legalNote('en'), '');
+  // Every version of the consent wording exists in English, and in no language a person has not checked.
+  for (const v of [CONSENT_VERSION, UNVERSIONED_CONSENT]) {
+    assert.equal(isConsentLanguage(v, 'en'), true, v);
+    for (const l of SUPPORTED_LOCALES.filter((x) => x.legal !== 'reviewed')) assert.equal(isConsentLanguage(v, l.tag), false, `${v} ${l.tag}`);
+  }
+  assert.equal(isConsentLanguage('2019-01', 'en'), false);
+  assert.equal(isConsentLanguage(CONSENT_VERSION, '__proto__'), false);
+  // A screen in French today (not switched on) is shown the English wording, without the sentence (its screens are English).
+  const w = consentWording('Ada Sender', true, CONSENT_VERSION, 'fr');
+  assert.equal(w.language, 'en');
+  assert.equal(w.note, '');
+  assert.deepEqual(consentWording('Ada Sender', true), { ...w }, 'the same as asking without a language');
+  // What an audit line recorded is read back in that language, even one that is not held: English then.
+  assert.equal(consentWordingAsRecorded('Ada Sender', true, CONSENT_VERSION, 'en').legal, w.legal);
+  assert.equal(consentWordingAsRecorded('Ada Sender', true, CONSENT_VERSION, 'xx').language, 'en');
+});
+
+test('the audit line records the wording and the language actually shown, and the evidence pack reads it back', async () => {
+  const { consentLanguageOf, CONSENT_VERSION } = await import('../src/lib/policy.ts');
+  const agree = async (email: string, body: any) => {
+    const e = await sent(email);
+    assert.equal((await new Client().post(`/sign/${tokenFor(e.id, email)}/consent`, body)).status, 200);
+    return { e, line: auditOf(e.id, 'Agreed to electronic records and signatures')[0] };
+  };
+  const tail = 'as printed on the help page under "What do I agree to before I sign?".';
+  // Today's signing page names the wording and no language: it shows English, and the line says so.
+  let { line, e } = await agree('lang.c1@example.com', { wording: CONSENT_VERSION });
+  assert.equal(line, `Sam Signer. Wording ${CONSENT_VERSION}, in English (en), ${tail}`);
+  assert.equal(consentLanguageOf(line), 'en');
+  ({ line } = await agree('lang.c2@example.com', { wording: CONSENT_VERSION, language: 'EN' }));
+  assert.equal(line, `Sam Signer. Wording ${CONSENT_VERSION}, in English (en), ${tail}`, 'a language this wording exists in is written as it is');
+  // A language the wording does not exist in is not believed, and is said to be one. Nothing the call sent is copied.
+  for (const [i, language] of ['fr', 'am', '<b>x</b>', 'x'.repeat(500), 7, { a: 1 }].entries()) {
+    ({ line } = await agree(`lang.c3${i}@example.com`, { wording: CONSENT_VERSION, language }));
+    assert.equal(line, `Sam Signer. Wording ${CONSENT_VERSION}, in English (en), ${tail} The screen named a language this wording does not exist in, so this names the English wording.`, String(language));
+    assert.equal(consentLanguageOf(line), 'en');
+  }
+  ({ line } = await agree('lang.c4@example.com', {}));
+  assert.equal(line, `Sam Signer. The screen did not say which wording it showed. The wording in use was ${CONSENT_VERSION}, in English (en), ${tail}`);
+  // Lines from before languages were recorded name none: they are read as English, which is all there was.
+  assert.equal(consentLanguageOf('Sam Signer'), 'en');
+  assert.equal(consentLanguageOf(`Sam Signer. Wording ${CONSENT_VERSION}, ${tail}`), 'en');
+  assert.equal(consentLanguageOf(`Sam Signer. Wording ${CONSENT_VERSION}, in French (fr), ${tail}`), 'fr');
+  // The evidence pack prints the words in the language the line names.
+  const zip = Buffer.from((await ada.get(`/envelopes/${e.id}/evidence`)).data);
+  assert.ok(zip.includes(Buffer.from('simple electronic signature')), 'the English words of the wording are in the pack');
 });

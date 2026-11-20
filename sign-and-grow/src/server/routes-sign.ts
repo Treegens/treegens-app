@@ -17,7 +17,9 @@ import { printedWords, printsName, notOpen, keepsCopy, earlierCopy } from './env
 import { ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { unprintable } from './pdftext.ts';
 import { gateOf, lockedView } from './signercode.ts';
-import { CONSENT_VERSION, isConsentVersion, consentAuditNote } from '../lib/policy.ts';
+import { CONSENT_VERSION } from '../lib/policy.ts';
+// Which language this person's screens are in, and the audit line for agreeing with its language (locales.ts).
+import { signerLanguage, consentLine } from './locales.ts';
 import { labelOf } from '../lib/bysender.ts';
 // A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
 import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup, memberReported, memberWrongCode } from './groups.ts';
@@ -112,6 +114,8 @@ route('GET', '/sign/:token', (c) => {
     // link_by_sender: we have no address for this person, so the page never promises an email (src/lib/bysender.ts).
     recipient: { id: r.id, name: r.name, email: r.email, link_by_sender: !!r.link_by_sender && !r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, mail_stopped: !!(r.complained_at || r.reported_at), mail_stopped_why: r.complained_at ? 'complaint' : r.reported_at ? 'report' : null, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
       earlier_copy: r.status !== 'completed' && !!r.signed_before && !!get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? AND copy_sha256 IS NOT NULL', e.id, r.id) },
+    // The language this person's screens are in and its direction, with who chose it (signerLanguage in locales.ts).
+    language: signerLanguage(r, c.req),
   };
   // Someone ran into the deadline. The sender is told before anything else is decided here, so an access code that
   // was not typed yet does not keep the news from them: the screen says "expired" before it asks for a code.
@@ -262,7 +266,8 @@ route('POST', '/sign/:token/consent', async (c) => {
   noteZone(e, r, b?.tz, actor);
   if (!r.consent_at) {
     run('UPDATE recipients SET consent_at=? WHERE id=?', now(), r.id);
-    audit(e.id, actor, 'Agreed to electronic records and signatures', `${r.name}. ${isConsentVersion(b?.wording) ? consentAuditNote(b.wording) : consentAuditNote(CONSENT_VERSION, false)}`);
+    // The wording and the language the screen showed (consentLine in locales.ts).
+    audit(e.id, actor, 'Agreed to electronic records and signatures', `${r.name}. ${consentLine(b)}`);
   }
   return { ok: true, version: e.content_version, wording: CONSENT_VERSION };
 }, 'public');
