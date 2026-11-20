@@ -1,18 +1,20 @@
 import { route, json, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
-import { bad, id, token, sha256, hmac, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
+import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { hashPassword, checkPassword, createSession, cookie, SESSION_COOKIE } from './auth.ts';
 import { sendMail } from './mail.ts';
-import { assertPublicUrl, WEBHOOK_EVENTS } from './webhooks.ts';
-import { billingEnabled, usageThisMonth, cronTick, verifyChain } from './envelopes.ts';
+import { assertPublicUrl, WEBHOOK_EVENTS, redeliver } from './webhooks.ts';
+import { billingEnabled, usageThisMonth, verifyChain, notifyPrefs } from './envelopes.ts';
+import { tick } from './cron.ts';
+import { trustInfo } from './routes-trust.ts';
 import { impactOf, PLANS } from '../lib/impact.ts';
 
-const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, signature_png: u.signature_png, initials_png: u.initials_png });
+const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
 
 async function sendVerification(u: any) {
   await sendMail({
-    to: u.email, subject: 'Confirm your email for Treegens Sign', heading: 'Confirm your email',
+    to: u.email, subject: 'Confirm your email for Sign&Grow', heading: 'Confirm your email',
     lines: [`Hi ${u.name}, confirm this address so documents sent to you show up in your inbox.`],
     cta: { label: 'Confirm email', url: `${baseUrl()}/verify-email?token=${u.verify_token}` },
   });
@@ -61,8 +63,14 @@ route('POST', '/auth/login', async (c) => {
   if (!u || !checkPassword(str(b.password, 200), u.password_hash)) throw bad('That email and password do not match.', 401);
   const m = get('SELECT account_id FROM memberships WHERE user_id=? ORDER BY created_at LIMIT 1', u.id);
   if (!m) throw bad('This user no longer belongs to any account.', 403);
+  // Signing in during the grace period after closing an account brings it straight back.
+  const restored = !!u.closing_at;
+  if (restored) {
+    run('UPDATE users SET closing_at=NULL WHERE id=?', u.id);
+    run("UPDATE accounts SET closing_at=NULL WHERE id IN (SELECT account_id FROM memberships WHERE user_id=? AND role='owner')", u.id);
+  }
   c.cookies.push(createSession(u.id, m.account_id, c.secure));
-  return { user: publicUser(u) };
+  return { user: publicUser(u), restored };
 }, 'public');
 
 route('POST', '/auth/logout', (c) => {
@@ -92,7 +100,7 @@ route('POST', '/auth/forgot', async (c) => {
   if (u) {
     const t = token();
     run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)', sha256(t), u.id, new Date(Date.now() + 3600_000).toISOString());
-    await sendMail({ to: u.email, subject: 'Reset your Treegens Sign password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url: `${baseUrl()}/reset?token=${t}` } });
+    await sendMail({ to: u.email, subject: 'Reset your Sign&Grow password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url: `${baseUrl()}/reset?token=${t}` } });
   }
   return { ok: true }; // same answer either way, so emails cannot be probed
 }, 'public');
@@ -121,7 +129,9 @@ route('GET', '/me', (c) => {
   return {
     user: publicUser(c.user),
     role: c.role,
-    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, subscription_status: a.subscription_status },
+    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.cancel_at },
+    admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
+    ...trustInfo(c),
     accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', c.user.id),
     billing: { enabled: billingEnabled(), used: usageThisMonth(a.id), limit: a.plan === 'seedling' && billingEnabled() ? PLANS.seedling.envelopesPerMonth : null },
     outbox: devOutbox(),
@@ -131,9 +141,10 @@ route('GET', '/me', (c) => {
 route('PATCH', '/me', async (c) => {
   const b = await c.body();
   for (const k of ['signature_png', 'initials_png']) if (b[k] != null && b[k] !== '' && !okImage(b[k])) throw bad('That signature image is too large or not a PNG or JPEG.');
-  run('UPDATE users SET name=?, title=?, company=?, signature_png=?, initials_png=? WHERE id=?',
+  const notify = b.notify && typeof b.notify === 'object' ? JSON.stringify({ ...notifyPrefs(c.user), ...Object.fromEntries(Object.entries(b.notify).filter(([k, v]) => k in notifyPrefs(null) && typeof v === 'boolean')) }) : c.user.notify;
+  run('UPDATE users SET name=?, title=?, company=?, signature_png=?, initials_png=?, notify=? WHERE id=?',
     str(b.name ?? c.user.name, 120).trim() || c.user.name, str(b.title ?? c.user.title, 120) || null, str(b.company ?? c.user.company, 120) || null,
-    b.signature_png === undefined ? c.user.signature_png : b.signature_png || null, b.initials_png === undefined ? c.user.initials_png : b.initials_png || null, c.user.id);
+    b.signature_png === undefined ? c.user.signature_png : b.signature_png || null, b.initials_png === undefined ? c.user.initials_png : b.initials_png || null, notify, c.user.id);
   return { user: publicUser(get('SELECT * FROM users WHERE id=?', c.user.id)) };
 });
 
@@ -174,7 +185,7 @@ route('POST', '/account/invites', async (c) => {
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
   const t = token();
   run('INSERT INTO invites (id, token, account_id, email, role, created_at) VALUES (?,?,?,?,?,?)', id('inv'), t, c.account.id, email, role, now());
-  await sendMail({ to: email, subject: `${c.user.name} invited you to ${c.account.name} on Treegens Sign`, heading: `Join ${c.account.name}`, lines: [`${c.user.name} invited you to send and sign documents together. Every subscription plants trees.`], cta: { label: 'Accept invitation', url: `${baseUrl()}/signup?invite=${t}&email=${encodeURIComponent(email)}` } });
+  await sendMail({ to: email, subject: `${c.user.name} invited you to ${c.account.name} on Sign&Grow`, heading: `Join ${c.account.name}`, lines: [`${c.user.name} invited you to send and sign documents together. Every subscription plants trees.`], cta: { label: 'Accept invitation', url: `${baseUrl()}/signup?invite=${t}&email=${encodeURIComponent(email)}` } });
   return { ok: true };
 }, 'admin');
 
@@ -204,11 +215,26 @@ route('PATCH', '/account/members/:id', async (c) => {
 route('DELETE', '/account/members/:id', (c) => {
   const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
   if (!m) throw bad('Member not found.', 404);
-  if (m.role === 'owner') throw bad('The owner cannot be removed.');
+  if (m.role === 'owner') throw bad('The owner cannot be removed. Make someone else the owner first.');
+  // Their envelopes and templates stay with the team: they pass to a chosen successor, or to whoever removed them.
+  const to = c.q.get('to');
+  const successor = to && get('SELECT user_id FROM memberships WHERE account_id=? AND user_id=? AND user_id!=?', c.account.id, to, c.params.id) ? to : c.user.id;
+  run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', successor, c.account.id, c.params.id);
   run('DELETE FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
   run('DELETE FROM sessions WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
   run('DELETE FROM api_keys WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
 }, 'admin');
+
+// Hand the account to someone else, so it never depends on one person's mailbox.
+route('POST', '/account/transfer-owner', async (c) => {
+  if (c.role !== 'owner') throw bad('Only the current owner can hand the account over.', 403);
+  const to = str((await c.body()).user_id);
+  if (to === c.user.id || !get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)) throw bad('Choose another member of this team.');
+  tx(() => {
+    run("UPDATE memberships SET role='admin' WHERE account_id=? AND user_id=?", c.account.id, c.user.id);
+    run("UPDATE memberships SET role='owner' WHERE account_id=? AND user_id=?", c.account.id, to);
+  });
+});
 
 // ---- Contacts ------------------------------------------------------------------------------
 
@@ -218,6 +244,12 @@ route('POST', '/contacts', async (c) => {
   if (!str(b.name).trim() || !isEmail(str(b.email).trim())) throw bad('Enter a name and a valid email address.');
   run('INSERT INTO contacts (id, account_id, name, email, company, created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(account_id, email) DO UPDATE SET name=excluded.name, company=excluded.company',
     id('con'), c.account.id, str(b.name, 120).trim(), str(b.email, 254).trim(), str(b.company, 120) || null, now());
+});
+route('PATCH', '/contacts/:id', async (c) => {
+  const b = await c.body();
+  if (!str(b.name).trim() || !isEmail(str(b.email).trim())) throw bad('Enter a name and a valid email address.');
+  if (get('SELECT 1 x FROM contacts WHERE account_id=? AND email=? AND id!=?', c.account.id, str(b.email).trim(), c.params.id)) throw bad('Another contact already uses that email address.');
+  run('UPDATE contacts SET name=?, email=?, company=? WHERE id=? AND account_id=?', str(b.name, 120).trim(), str(b.email, 254).trim(), str(b.company, 120) || null, c.params.id, c.account.id);
 });
 route('DELETE', '/contacts/:id', (c) => {
   run('DELETE FROM contacts WHERE id=? AND account_id=?', c.params.id, c.account.id);
@@ -238,7 +270,7 @@ route('DELETE', '/api-keys/:id', (c) => {
 route('GET', '/webhooks', (c) => ({
   events: WEBHOOK_EVENTS,
   webhooks: all('SELECT id, url, events, active, secret, created_at FROM webhooks WHERE account_id=?', c.account.id),
-  deliveries: all('SELECT d.id, d.event, d.envelope_id, d.status, d.error, d.attempts, d.at, w.url FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE w.account_id=? ORDER BY d.id DESC LIMIT 30', c.account.id),
+  deliveries: all('SELECT d.id, d.event, d.envelope_id, d.status, d.error, d.attempts, d.at, d.body IS NOT NULL can_redeliver, w.url FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE w.account_id=? ORDER BY d.id DESC LIMIT 30', c.account.id),
 }), 'admin');
 route('POST', '/webhooks', async (c) => {
   const b = await c.body();
@@ -249,6 +281,12 @@ route('POST', '/webhooks', async (c) => {
   }
   const events = Array.isArray(b.events) && b.events.length ? b.events.filter((e: any) => WEBHOOK_EVENTS.includes(e)).join(',') : '*';
   run('INSERT INTO webhooks (id, account_id, url, secret, events, created_at) VALUES (?,?,?,?,?,?)', id('whk'), c.account.id, str(b.url, 500), `whsec_${token(24)}`, events || '*', now());
+}, 'admin');
+route('POST', '/webhooks/deliveries/:id/redeliver', async (c) => {
+  const d = get('SELECT d.*, w.account_id FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE d.id=?', Number(c.params.id));
+  if (!d || d.account_id !== c.account.id) throw bad('Delivery not found.', 404);
+  if (!d.body) throw bad('This delivery is too old to send again.');
+  redeliver(d.webhook_id, d.event, d.envelope_id, d.body);
 }, 'admin');
 route('DELETE', '/webhooks/:id', (c) => {
   run('DELETE FROM webhooks WHERE id=? AND account_id=?', c.params.id, c.account.id);
@@ -269,14 +307,14 @@ route('GET', '/reports/summary', (c) => {
 
 function globalImpact() {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE kind='envelope' AND status='completed'");
-  const pay = get('SELECT COALESCE(SUM(amount_cents),0) cents FROM payments');
+  const pay = get('SELECT COALESCE(SUM(amount_cents),0) cents FROM payments WHERE refunded_at IS NULL');
   const treeCost = Number(process.env.TREE_COST_USD) || null;
   return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: treeCost ? Math.floor(pay.cents / 100 / treeCost) : null };
 }
 route('GET', '/public/impact', () => globalImpact(), 'public');
 route('GET', '/impact', (c) => {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE account_id=? AND kind='envelope' AND status='completed'", c.account.id);
-  const pay = get('SELECT COALESCE(SUM(amount_cents),0) cents FROM payments WHERE account_id=?', c.account.id);
+  const pay = get('SELECT COALESCE(SUM(amount_cents),0) cents FROM payments WHERE account_id=? AND refunded_at IS NULL', c.account.id);
   return { account: { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100 }, everyone: globalImpact() };
 });
 
@@ -299,71 +337,12 @@ route('POST', '/public/verify', async (c) => {
   };
 }, 'public');
 
-// ---- Billing (Stripe, optional) ------------------------------------------------------------
-
-async function stripe(path: string, params: Record<string, string>) {
-  const res = await fetch(`https://api.stripe.com/v1/${path}`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params),
-  });
-  const data: any = await res.json();
-  if (!res.ok) throw bad(data?.error?.message || 'The payment provider returned an error.', 502);
-  return data;
-}
-
-route('POST', '/billing/checkout', async (c) => {
-  if (!billingEnabled() || !process.env.STRIPE_PRICE_GROVE) throw bad('Billing is not set up on this server yet.', 501);
-  const a = c.account;
-  const s = await stripe('checkout/sessions', {
-    mode: 'subscription', 'line_items[0][price]': process.env.STRIPE_PRICE_GROVE, 'line_items[0][quantity]': '1',
-    client_reference_id: a.id, success_url: `${baseUrl()}/app/settings?tab=billing&upgraded=1`, cancel_url: `${baseUrl()}/app/settings?tab=billing`,
-    ...(a.stripe_customer_id ? { customer: a.stripe_customer_id } : { customer_email: c.user.email }),
-  });
-  return { url: s.url };
-}, 'admin');
-
-route('POST', '/billing/portal', async (c) => {
-  if (!billingEnabled() || !c.account.stripe_customer_id) throw bad('There is no subscription to manage yet.');
-  const s = await stripe('billing_portal/sessions', { customer: c.account.stripe_customer_id, return_url: `${baseUrl()}/app/settings?tab=billing` });
-  return { url: s.url };
-}, 'admin');
-
-export function verifyStripeSignature(raw: string, header: string, secret: string, toleranceSec = 300): boolean {
-  const parts = Object.fromEntries(header.split(',').map((p) => p.split('=') as [string, string]));
-  if (!parts.t || !parts.v1) return false;
-  if (Math.abs(Date.now() / 1000 - Number(parts.t)) > toleranceSec) return false;
-  return safeEqual(hmac(`${parts.t}.${raw}`, secret), parts.v1);
-}
-
-export function applyStripeEvent(ev: any) {
-  const o = ev?.data?.object || {};
-  if (ev.type === 'checkout.session.completed' && o.client_reference_id) {
-    run("UPDATE accounts SET plan='grove', stripe_customer_id=?, stripe_subscription_id=?, subscription_status='active' WHERE id=?", o.customer, o.subscription, o.client_reference_id);
-  } else if (ev.type === 'invoice.paid' && o.amount_paid > 0) {
-    const a = get('SELECT id FROM accounts WHERE stripe_customer_id=?', o.customer);
-    run('INSERT OR IGNORE INTO payments (id, account_id, amount_cents, currency, at) VALUES (?,?,?,?,?)', o.id, a?.id ?? null, o.amount_paid, o.currency || 'usd', now());
-  } else if (ev.type === 'customer.subscription.updated' || ev.type === 'customer.subscription.deleted') {
-    const live = ev.type !== 'customer.subscription.deleted' && ['active', 'trialing', 'past_due'].includes(o.status);
-    run('UPDATE accounts SET plan=?, subscription_status=? WHERE stripe_customer_id=?', live ? 'grove' : 'seedling', ev.type === 'customer.subscription.deleted' ? 'canceled' : o.status, o.customer);
-  }
-}
-
-route('POST', '/stripe/webhook', async (c) => {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret) throw new HttpError(501, 'Billing is not set up.');
-  const raw = await c.req.text();
-  if (!verifyStripeSignature(raw, c.req.headers.get('stripe-signature') || '', secret)) throw new HttpError(400, 'Bad signature.');
-  applyStripeEvent(JSON.parse(raw));
-  return { received: true };
-}, 'public');
-
 // ---- Scheduler and dev outbox --------------------------------------------------------------
 
 route('POST', '/cron', async (c) => {
   const secret = process.env.CRON_SECRET;
   if (!secret || !safeEqual(c.req.headers.get('authorization') || '', `Bearer ${secret}`)) throw new HttpError(401, 'Unauthorized.');
-  return cronTick();
+  return tick();
 }, 'public');
 
 // Without SMTP, emails are only stored. The outbox shows them so every flow can be tried locally.

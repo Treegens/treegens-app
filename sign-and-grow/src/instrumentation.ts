@@ -4,7 +4,7 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   const g = globalThis as any;
   if (g.__tscron) return;
-  const { cronTick } = await import('./server/envelopes');
-  g.__tscron = setInterval(() => cronTick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
+  const { tick } = await import('./server/cron');
+  g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
   g.__tscron.unref?.();
 }

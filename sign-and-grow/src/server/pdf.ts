@@ -5,6 +5,7 @@ import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad } from './util.ts';
 import { impactOf, fmtTrees, fmtNum } from '../lib/impact.ts';
+import { formatDate } from '../lib/dates.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -98,7 +99,7 @@ function wrap(font: PDFFont, text: string, size: number, maxW: number): string[]
   return out;
 }
 
-type Ctx = { doc: PDFDocument; font: PDFFont; bold: PDFFont; images: Map<string, any>; recipients: Map<string, any> };
+type Ctx = { doc: PDFDocument; font: PDFFont; bold: PDFFont; images: Map<string, any>; recipients: Map<string, any>; dateFormat?: string | null };
 
 async function image(ctx: Ctx, dataUrl: string | null | undefined) {
   if (!dataUrl) return null;
@@ -116,11 +117,11 @@ async function image(ctx: Ctx, dataUrl: string | null | undefined) {
   return img;
 }
 
-export function fieldDisplayValue(f: any, r: any): string {
+export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null): string {
   switch (f.type) {
     case 'full_name': return r?.status === 'completed' ? r.name : '';
     case 'email': return r?.status === 'completed' ? r.email : '';
-    case 'date_signed': return r?.completed_at ? r.completed_at.slice(0, 10) : '';
+    case 'date_signed': return r?.completed_at ? formatDate(r.completed_at, dateFormat) : '';
     default: return f.value || '';
   }
 }
@@ -142,7 +143,7 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
     page.drawImage(img, { x: p.x, y: p.y, width: w, height: h, rotate: m.rotate });
     if (caption) {
       const c = m.pt(vx, vy + vh - 1);
-      page.drawText(`Signed via Treegens Sign · ${String(r.id).slice(-8)}`, { x: c.x, y: c.y, size: 4.5, font: ctx.font, color: GREEN, rotate: m.rotate });
+      page.drawText(`Signed via Sign&Grow · ${String(r.id).slice(-8)}`, { x: c.x, y: c.y, size: 4.5, font: ctx.font, color: GREEN, rotate: m.rotate });
     }
     return;
   }
@@ -162,7 +163,7 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
   }
   if (f.type === 'attachment') return;
 
-  const text = clean(fieldDisplayValue(f, r));
+  const text = clean(fieldDisplayValue(f, r, ctx.dateFormat));
   if (!text) return;
   const base = Math.max(6, Math.min(11, vh * 0.62));
   const multi = vh > base * 2.6 || text.includes('\n');
@@ -243,12 +244,12 @@ const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approv
 const ts = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '-');
 
 async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
-  const s = new Sheet(ctx.doc, ctx.font, ctx.bold, `Treegens Sign · Certificate of Completion · Envelope ${e.id}`);
+  const s = new Sheet(ctx.doc, ctx.font, ctx.bold, `Sign&Grow · Certificate of Completion · Envelope ${e.id}`);
   // Header band
   s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: GREEN });
   s.page.drawSvgPath('M0 22 C0 8 10 0 24 0 C24 14 16 24 2 24 Z', { x: s.L, y: s.H - 30, color: rgb(1, 1, 1), scale: 1.2 });
   s.page.drawText('Certificate of Completion', { x: s.L + 40, y: s.H - 52, size: 20, font: ctx.bold, color: rgb(1, 1, 1) });
-  s.page.drawText('Treegens Sign · e-signatures that plant trees', { x: s.L + 40, y: s.H - 68, size: 9, font: ctx.font, color: rgb(0.85, 0.94, 0.88) });
+  s.page.drawText('Sign&Grow · e-signatures that plant trees', { x: s.L + 40, y: s.H - 68, size: 9, font: ctx.font, color: rgb(0.85, 0.94, 0.88) });
   s.y = s.H - 112;
 
   s.h2('Envelope');
@@ -313,7 +314,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     { x: s.L + 14, y: s.y - 36, size: 8.5, font: ctx.font, color: INK },
   );
   s.page.drawText(
-    clean(`(${fmtTrees(i.trees)} of a tree, estimated). 100% of Treegens Sign subscription revenue goes to Treegens tree planting.`),
+    clean(`(${fmtTrees(i.trees)} of a tree, estimated). 100% of Sign&Grow subscription revenue goes to Treegens tree planting.`),
     { x: s.L + 14, y: s.y - 49, size: 8.5, font: ctx.font, color: INK },
   );
 }
@@ -324,7 +325,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
-  const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])) };
+  const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format };
 
   for (const d of e.documents) {
     const src = await PDFDocument.load(readBlob(d.sha256), { updateMetadata: false });
@@ -343,7 +344,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     for (const page of pages) {
       const m = mapper(page);
       const p = m.pt(12, 13);
-      page.drawText(`Treegens Sign Envelope ID: ${e.id}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+      page.drawText(`Sign&Grow Envelope ID: ${e.id}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
     }
   }
   for (const f of e.fields.filter((f: any) => f.type === 'attachment' && f.value)) {
@@ -358,7 +359,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   }
   if (opts.certificate) await drawCertificate(ctx, e, audit, opts.sender);
   doc.setTitle(e.subject || 'Signed document');
-  doc.setProducer('Treegens Sign');
-  doc.setCreator('Treegens Sign');
+  doc.setProducer('Sign&Grow');
+  doc.setCreator('Sign&Grow');
   return doc.save();
 }

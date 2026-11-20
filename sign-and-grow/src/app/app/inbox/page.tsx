@@ -8,7 +8,7 @@ export default function Inbox() {
       <div className="pagehead"><div><h1 className="serif">Inbox</h1><div className="muted">Documents other people sent to you.</div></div></div>
       {data?.needs_verification && <div className="notice warn" style={{ marginBottom: 14 }}>Confirm your email address first. Until then we cannot show documents sent to it.</div>}
       <div className="card pad0">
-        {data && data.items.length === 0 ? <div className="empty"><h3>Your inbox is empty</h3>When someone sends you a document through Treegens Sign, it appears here as well as in your email.</div> : (
+        {data && data.items.length === 0 ? <div className="empty"><h3>Your inbox is empty</h3>When someone sends you a document through Sign&Grow, it appears here as well as in your email.</div> : (
           <div className="tablewrap"><table className="t">
             <thead><tr><th>Subject</th><th>From</th><th>Status</th><th>Received</th><th /></tr></thead>
             <tbody>

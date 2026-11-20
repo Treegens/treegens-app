@@ -1,8 +1,8 @@
 import { route, pdfResponse, type Ctx } from './router.ts';
 import { get, run, readBlob } from './db.ts';
-import { bad, hmac, now, str, rateLimit, safeEqual } from './util.ts';
+import { bad, hmac, now, str, rateLimit, safeEqual, HttpError } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
-import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf } from './envelopes.ts';
+import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, askSender } from './envelopes.ts';
 import { fieldDisplayValue } from './pdf.ts';
 import { storeUpload } from './routes-envelopes.ts';
 import { impactOf } from '../lib/impact.ts';
@@ -12,7 +12,11 @@ import { impactOf } from '../lib/impact.ts';
 function find(c: Ctx, needUnlocked = true) {
   rateLimit(`sign:${c.ip}`, 600, 600_000);
   const r = get('SELECT * FROM recipients WHERE token=?', c.params.token);
-  if (!r) throw bad('This signing link is not valid any more. Ask the sender for a new one.', 404);
+  if (!r) {
+    // 410 tells the page this link was replaced, so it can offer to send the current one instead of a dead end.
+    if (get('SELECT 1 x FROM retired_tokens WHERE token=?', c.params.token)) throw new HttpError(410, 'This link was replaced by a newer one.');
+    throw bad('We do not recognise this link. It may have been copied incompletely.', 404);
+  }
   const e = loadEnvelope(r.envelope_id);
   const locked = !!r.access_code && !safeEqual(readCookie(c.req, `ts_ac_${r.id}`) || '', hmac(`ac:${r.id}:${r.access_code}`));
   if (locked && needUnlocked) throw bad('Enter the access code first.', 401);
@@ -32,8 +36,8 @@ route('GET', '/sign/:token', (c) => {
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', e.account_id);
   const base = {
     brand: a,
-    envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, sender, impact: impactOf(e.sheets) },
-    recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at },
+    envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets) },
+    recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted },
   };
   if (locked) return { ...base, locked: true };
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
@@ -53,7 +57,7 @@ route('GET', '/sign/:token', (c) => {
       const done = !f.recipient_id || o?.status === 'completed';
       return {
         id: f.id, document_id: f.document_id, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h,
-        value: done ? fieldDisplayValue(f, o) : '',
+        value: done ? fieldDisplayValue(f, o, e.date_format) : '',
         image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
       };
     }).filter((f: any) => f.value || f.image),
@@ -116,6 +120,31 @@ route('POST', '/sign/:token/decline', async (c) => {
 route('POST', '/sign/:token/reassign', async (c) => {
   const { e, r, actor } = find(c);
   await reassignRecipient(e, r, await c.body(), actor);
+}, 'public');
+
+// Ran out of time: ask the sender for more instead of starting over.
+route('POST', '/sign/:token/request-extension', async (c) => {
+  const { e, r, actor } = find(c, false);
+  rateLimit(`ext:${r.id}`, 2, 86400_000);
+  await requestExtension(e, r, actor);
+}, 'public');
+
+route('POST', '/sign/:token/ask', async (c) => {
+  const { e, r, actor } = find(c);
+  rateLimit(`ask:${r.id}`, 5, 3600_000);
+  await askSender(e, r, (await c.body()).message, actor);
+}, 'public');
+
+route('POST', '/sign/:token/mute', (c) => {
+  const { e, r, actor } = find(c, false);
+  muteReminders(e, r, actor);
+}, 'public');
+
+// "This looks wrong": goes to a person, and enough reports pause the sender.
+route('POST', '/sign/:token/report', async (c) => {
+  const { e, r, actor } = find(c, false);
+  rateLimit(`report:${c.ip}`, 10, 3600_000);
+  await reportAbuse(e, r, await c.body(), actor);
 }, 'public');
 
 route('GET', '/sign/:token/download', async (c) => {

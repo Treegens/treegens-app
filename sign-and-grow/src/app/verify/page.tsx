@@ -30,7 +30,7 @@ export default function Verify() {
       <PublicNav />
       <main className="wrap" style={{ maxWidth: 760, paddingTop: 24 }}>
         <h1 className="serif" style={{ fontSize: 36 }}>Verify a signed document</h1>
-        <p className="muted" style={{ fontSize: 17, margin: '10px 0 22px' }}>Got a PDF that claims to be signed with Treegens Sign? Drop it here. We compare its fingerprint with the one recorded when signing finished. If a single byte was changed, it will not match.</p>
+        <p className="muted" style={{ fontSize: 17, margin: '10px 0 22px' }}>Got a PDF that claims to be signed with Sign&Grow? Drop it here. We compare its fingerprint with the one recorded when signing finished. If a single byte was changed, it will not match.</p>
         <label className={`drop${over ? ' over' : ''}`} style={{ display: 'block', padding: 44 }}
           onDragOver={(e) => (e.preventDefault(), setOver(true))} onDragLeave={() => setOver(false)} onDrop={(e) => (e.preventDefault(), setOver(false), check(e.dataTransfer.files[0]))}>
           <input type="file" accept="application/pdf" hidden onChange={(e) => check(e.target.files?.[0])} />

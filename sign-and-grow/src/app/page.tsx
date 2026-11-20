@@ -39,8 +39,8 @@ export default function Landing() {
         <section className="wrap hero">
           <div>
             <div className="badge completed" style={{ marginBottom: 16 }}>100% of subscription revenue plants trees</div>
-            <h1>Sign it digitally.<br /><em>Leave the tree standing.</em></h1>
-            <p className="lead">Treegens Sign does what you expect from an e-signature tool: send, sign, track and store agreements. The difference is where the money goes. Every cent of subscription revenue funds Treegens tree planting.</p>
+            <h1>You sign.<br /><em>Trees grow.</em></h1>
+            <p className="lead">Sign&Grow does what you expect from an e-signature tool: send, sign, track and store agreements. The difference is where the money goes. Every cent of subscription revenue funds Treegens tree planting.</p>
             <div className="row wrap">
               <Link href="/signup" className="btn primary lg">Start free</Link>
               <Link href="/impact" className="btn lg">See the impact</Link>
@@ -56,7 +56,7 @@ export default function Landing() {
                 <div>
                   <div style={{ fontFamily: "'Sig Dancing', cursive", fontSize: 34, color: '#10243a', lineHeight: 1 }}>Wangari M.</div>
                   <div style={{ borderTop: '1.5px solid #17241c', width: 190, marginTop: 4 }} />
-                  <div className="muted small">Signed via Treegens Sign</div>
+                  <div className="muted small">Signed via Sign&Grow</div>
                 </div>
                 <div style={{ background: 'var(--green-soft)', borderRadius: 12, padding: '10px 14px', textAlign: 'center' }}>
                   <Leaf color="#1f6f43" size={22} />
@@ -71,7 +71,7 @@ export default function Landing() {
           <div className="wrap">
             <h2>Paper has a cost. So we count it.</h2>
             <p style={{ maxWidth: 640, margin: '8px 0 24px', color: '#c5dbc9' }}>
-              One tree makes roughly {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper, and each sheet takes about {IMPACT.litresWaterPerSheet} litres of water to produce. Everyone using Treegens Sign has so far kept this much out of the printer:
+              One tree makes roughly {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper, and each sheet takes about {IMPACT.litresWaterPerSheet} litres of water to produce. Everyone using Sign&Grow has so far kept this much out of the printer:
             </p>
             <div className="grid g4 keep2">
               <div className="stat"><div className="k">Sheets of paper saved</div><div className="v num">{imp ? fmtNum(imp.sheets) : '…'}</div></div>
@@ -93,7 +93,7 @@ export default function Landing() {
           <h2>How it compares</h2>
           <div className="card pad0" style={{ marginTop: 16 }}>
             <div className="tablewrap"><table className="t cmp">
-              <thead><tr><th /><th>Treegens Sign</th><th>Typical e-signature tools</th></tr></thead>
+              <thead><tr><th /><th>Sign&Grow</th><th>Typical e-signature tools</th></tr></thead>
               <tbody>{COMPARE.map(([k, a, b]) => <tr key={k}><td>{k}</td><td style={{ color: 'var(--green-deep)', fontWeight: 600 }}>{a}</td><td className="muted">{b}</td></tr>)}</tbody>
             </table></div>
           </div>

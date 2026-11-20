@@ -25,7 +25,7 @@ export default function Impact() {
         {me.account.plan !== 'grove' && <Link href="/app/settings?tab=billing" className="btn" style={{ background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>See plans</Link>}
       </div>
       <div>
-        <h2 style={{ marginBottom: 10 }}>Everyone on Treegens Sign, together</h2>
+        <h2 style={{ marginBottom: 10 }}>Everyone on Sign&Grow, together</h2>
         <ImpactStats i={d.everyone} dark />
       </div>
       <Methodology />

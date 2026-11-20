@@ -150,7 +150,7 @@ function Developers() {
       {admin && (
         <div className="card">
           <h2>Webhooks</h2>
-          <p className="muted small">We POST JSON to your URL when an envelope is sent, viewed, signed, completed, declined, voided or expires. Verify the <span className="mono">X-Treegens-Sign-Signature</span> header with the signing secret.</p>
+          <p className="muted small">We POST JSON to your URL when an envelope is sent, viewed, signed, completed, declined, voided or expires. Verify the <span className="mono">X-SignAndGrow-Signature</span> header with the signing secret.</p>
           {(hooks?.webhooks || []).map((h: any) => (
             <div key={h.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
               <div className="row between"><b className="truncate">{h.url}</b><button className="btn sm ghost danger" onClick={() => api(`/webhooks/${h.id}`, { method: 'DELETE' }).then(reloadHooks).catch(oops)}>Delete</button></div>
@@ -158,7 +158,7 @@ function Developers() {
             </div>
           ))}
           <form className="row" style={{ marginTop: 12 }} onSubmit={(e) => { e.preventDefault(); api('/webhooks', { body: { url } }).then(() => (setUrl(''), reloadHooks())).catch(oops); }}>
-            <input placeholder="https://example.com/hooks/treegens-sign" value={url} onChange={(e) => setUrl(e.target.value)} required aria-label="Webhook URL" />
+            <input placeholder="https://example.com/hooks/sign-and-grow" value={url} onChange={(e) => setUrl(e.target.value)} required aria-label="Webhook URL" />
             <button className="btn">Add webhook</button>
           </form>
           {hooks?.deliveries?.length > 0 && (
@@ -182,7 +182,7 @@ function Billing() {
     <div className="stack">
       <div className="card" style={{ background: 'var(--green-deep)', color: '#fff', borderColor: 'var(--green-deep)' }}>
         <h2 className="serif" style={{ fontSize: 22 }}>100% of what you pay plants trees</h2>
-        <p style={{ color: '#cfe2d3', margin: '6px 0 0', maxWidth: 640 }}>Not profit, not a percentage. All subscription revenue from Treegens Sign goes to Treegens tree planting. People who sign your documents never pay anything.</p>
+        <p style={{ color: '#cfe2d3', margin: '6px 0 0', maxWidth: 640 }}>Not profit, not a percentage. All subscription revenue from Sign&Grow goes to Treegens tree planting. People who sign your documents never pay anything.</p>
       </div>
       <div className="grid g2">
         {(['seedling', 'grove'] as const).map((id) => {

@@ -1,4 +1,4 @@
-# Treegens Sign
+# Sign&Grow
 
 E-signatures that plant trees. Send, sign, track and store agreements without paper.
 100% of subscription revenue goes to Treegens tree planting.

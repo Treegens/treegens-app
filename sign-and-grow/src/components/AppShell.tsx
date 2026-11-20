@@ -49,12 +49,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <MeCtx.Provider value={{ ...me, reload }}>
       <div className="mobilebar">
-        <Link href="/app" className="row" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}><Leaf color="#9ed88f" /> Treegens Sign</Link>
+        <Link href="/app" className="row" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}><Leaf color="#9ed88f" /> Sign&Grow</Link>
         <button className="btn sm" onClick={() => setOpen(!open)} aria-expanded={open}>Menu</button>
       </div>
       <div className="shell">
         <aside className={`side${open ? ' open' : ''}`}>
-          <Link href="/app" className="brand"><Leaf color="#9ed88f" size={22} /> Treegens Sign</Link>
+          <Link href="/app" className="brand"><Leaf color="#9ed88f" size={22} /> Sign&Grow</Link>
           <Link href="/app/envelopes/new" className="btn" style={{ margin: '0 4px 10px', background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>New envelope</Link>
           {NAV.map(([href, label]) => <Link key={href} href={href} className={`nav${on(href) ? ' on' : ''}`}>{label}</Link>)}
           {me.outbox && <a className="nav" href="/dev/outbox" target="_blank">Dev outbox ↗</a>}

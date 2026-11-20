@@ -1,5 +1,6 @@
 node_modules
 .next
+.next-*
 data
 public/pdfjs
 public/fonts

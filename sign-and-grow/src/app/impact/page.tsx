@@ -13,7 +13,7 @@ export default function PublicImpact() {
       <main className="wrap stack" style={{ paddingTop: 24 }}>
         <div>
           <h1 className="serif" style={{ fontSize: 40 }}>Fewer printers. More trees.</h1>
-          <p className="muted" style={{ fontSize: 17, maxWidth: 680, marginTop: 10 }}>Signing digitally keeps paper out of the world. Then we go one step further: 100% of Treegens Sign subscription revenue goes to Treegens tree planting. These are the live totals.</p>
+          <p className="muted" style={{ fontSize: 17, maxWidth: 680, marginTop: 10 }}>Signing digitally keeps paper out of the world. Then we go one step further: 100% of Sign&Grow subscription revenue goes to Treegens tree planting. These are the live totals.</p>
         </div>
         {d ? <ImpactStats i={d} /> : <div className="muted">Loading…</div>}
         <div className="card row between wrap" style={{ background: 'var(--green-deep)', color: '#fff', borderColor: 'var(--green-deep)' }}>

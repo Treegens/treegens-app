@@ -67,8 +67,8 @@ curl -H "Authorization: Bearer $KEY" -o signed.pdf https://YOUR_HOST/api/envelop
           <p>Add a URL under Settings. We POST JSON for these events: <span className="mono">envelope.sent, envelope.completed, envelope.declined, envelope.voided, envelope.expired, recipient.viewed, recipient.completed</span>. Failed deliveries are retried twice.</p>
           <Code>{`// Verify a delivery (Node.js)
 const expected = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET)
-  .update(req.headers["x-treegens-sign-timestamp"] + "." + rawBody).digest("hex");
-const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-treegens-sign-signature"]));`}</Code>
+  .update(req.headers["x-signandgrow-timestamp"] + "." + rawBody).digest("hex");
+const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-signandgrow-signature"]));`}</Code>
         </div>
 
         <div className="card">

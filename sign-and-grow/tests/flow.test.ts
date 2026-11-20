@@ -1,95 +1,27 @@
 // End-to-end tests of the API, run straight against the request handler with a throwaway database.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import { PDFDocument } from 'pdf-lib';
+import { boot, Client, PNG, upload, draft, tokenFor, signUp, type Server } from './helpers.ts';
 
-process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tsign-'));
-process.env.APP_URL = 'http://test.local';
-
-let handle: (req: Request) => Promise<Response>;
-let db: typeof import('../src/server/db.ts');
-let acct: typeof import('../src/server/routes-account.ts');
-let env: typeof import('../src/server/envelopes.ts');
-
+let db: Server['db'];
+let acct: Server['billing'];
+let env: Server['env'];
 before(async () => {
-  acct = await import('../src/server/routes-account.ts');
-  await import('../src/server/routes-envelopes.ts');
-  await import('../src/server/routes-sign.ts');
-  handle = (await import('../src/server/router.ts')).handle;
-  db = await import('../src/server/db.ts');
-  env = await import('../src/server/envelopes.ts');
+  ({ db, billing: acct, env } = await boot());
 });
-
-const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
-
-class Client {
-  cookies: Record<string, string> = {};
-  async call(method: string, url: string, body?: any, headers: Record<string, string> = {}) {
-    const init: any = { method, headers: { cookie: Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; '), 'x-forwarded-for': '203.0.113.9', ...headers } };
-    if (body instanceof FormData) init.body = body;
-    else if (body !== undefined) (init.body = JSON.stringify(body)), (init.headers['content-type'] = 'application/json');
-    const res = await handle(new Request(`http://test.local/api${url}`, init));
-    for (const c of res.headers.getSetCookie()) {
-      const [kv] = c.split(';');
-      const i = kv.indexOf('=');
-      this.cookies[kv.slice(0, i)] = kv.slice(i + 1);
-    }
-    const type = res.headers.get('content-type') || '';
-    return { status: res.status, data: type.includes('json') ? await res.json() : new Uint8Array(await res.arrayBuffer()) } as { status: number; data: any };
-  }
-  get = (u: string) => this.call('GET', u);
-  post = (u: string, b: any = {}) => this.call('POST', u, b);
-}
-
-async function samplePdf(pages = 2) {
-  const d = await PDFDocument.create();
-  for (let i = 0; i < pages; i++) d.addPage([612, 792]).drawText(`Agreement page ${i + 1}`, { x: 72, y: 700 });
-  return d.save();
-}
-
-async function upload(c: Client, pages = 2) {
-  const f = new FormData();
-  f.append('file', new Blob([await samplePdf(pages)], { type: 'application/pdf' }), 'Agreement.pdf');
-  const r = await c.call('POST', '/files', f);
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  return r.data;
-}
-
-const tokenFor = (envelopeId: string, email: string) => db.get('SELECT token FROM recipients WHERE envelope_id=? AND email=?', envelopeId, email).token;
-
-async function draft(c: Client, over: any = {}) {
-  const file = await upload(c);
-  const body = {
-    subject: 'Tree planting agreement', message: 'Please sign.', ordered: true,
-    documents: [{ id: 'd1', file_id: file.id, name: 'Agreement' }],
-    recipients: [
-      { id: 'r1', role: 'signer', name: 'Ada Signer', email: 'ada@example.com', routing_order: 1 },
-      { id: 'r2', role: 'signer', name: 'Ben Signer', email: 'ben@example.com', routing_order: 2, access_code: '4242' },
-      { id: 'r3', role: 'cc', name: 'Cee Copy', email: 'cee@example.com', routing_order: 3 },
-    ],
-    fields: [
-      { id: 'f1', document_id: 'd1', recipient_id: 'r1', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
-      { id: 'f2', document_id: 'd1', recipient_id: 'r1', type: 'text', label: 'Trees pledged', page: 0, x: 0.1, y: 0.7, w: 0.25, h: 0.03 },
-      { id: 'f3', document_id: 'd1', recipient_id: 'r1', type: 'date_signed', page: 0, x: 0.4, y: 0.8, w: 0.2, h: 0.03 },
-      { id: 'f4', document_id: 'd1', recipient_id: 'r2', type: 'signature', page: 1, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
-      { id: 'f5', document_id: 'd1', recipient_id: 'r2', type: 'checkbox', page: 1, x: 0.1, y: 0.7, w: 0.03, h: 0.02, required: false },
-    ],
-    ...over,
-  };
-  const r = await c.post('/envelopes', body);
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  return r.data.envelope;
-}
 
 const sender = new Client();
 
 test('signup, session and CSRF protection', async () => {
   const r = await sender.post('/auth/signup', { name: 'Jo Sender', email: 'jo@example.com', password: 'correct horse' });
   assert.equal(r.status, 200);
+  // Nobody can send until they have proved the email address is theirs.
+  const early = await draft(sender);
+  assert.equal((await sender.post(`/envelopes/${early.id}/send`)).status, 403);
+  const vt = db.get("SELECT verify_token t FROM users WHERE email='jo@example.com'").t;
+  assert.equal((await new Client().post('/auth/verify', { token: vt })).status, 200);
   assert.equal((await sender.get('/me')).data.user.email, 'jo@example.com');
   assert.equal((await new Client().get('/envelopes')).status, 401);
   assert.equal((await sender.call('POST', '/envelopes', {}, { origin: 'https://evil.example' })).status, 403);
@@ -170,7 +102,7 @@ test('decline, void, reassign and correct', async () => {
   await sender.post(`/envelopes/${b.id}/send`);
   const t1 = tokenFor(b.id, 'ada@example.com');
   assert.equal((await new Client().post(`/sign/${t1}/reassign`, { name: 'Dee Deputy', email: 'dee@example.com' })).status, 200);
-  assert.equal((await new Client().get(`/sign/${t1}`)).status, 404, 'old link stops working');
+  assert.equal((await new Client().get(`/sign/${t1}`)).status, 410, 'old link is retired');
   assert.ok(tokenFor(b.id, 'dee@example.com'));
   const rid = (await sender.get(`/envelopes/${b.id}`)).data.envelope.recipients.find((r: any) => r.email === 'ben@example.com').id;
   assert.equal((await sender.post(`/envelopes/${b.id}/correct`, { recipient_id: rid, email: 'benjamin@example.com' })).status, 200);
@@ -227,6 +159,19 @@ test('approver, viewer and in-person roles; documents stay private until it is y
   await sender.post(`/envelopes/${v.id}/void`, { reason: 'Wrong version' });
   assert.equal((await new Client().get(`/sign/${t}/doc/${v.documents[0].id}`)).status, 403);
   assert.equal((await new Client().get(`/sign/${t}/download`)).status, 403);
+});
+
+test('API callers may leave ids off fields', async () => {
+  const file = await upload(sender, 1);
+  const r = await sender.post('/envelopes', {
+    subject: 'No ids', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'A', email: 'a@example.com' }],
+    fields: [
+      { document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 },
+      { document_id: 'd', recipient_id: 'r', type: 'text', page: 0, x: 0.1, y: 0.6, w: 0.3, h: 0.03 },
+    ],
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.envelope.fields.length, 2);
 });
 
 test('templates, bulk send and PowerForms', async () => {
@@ -293,7 +238,7 @@ test('expiry and automatic reminders', async () => {
   assert.equal((await sender.get(`/envelopes/${e.id}`)).data.envelope.status, 'expired');
 });
 
-test('stripe webhook: signature check and revenue ledger', () => {
+test('stripe webhook: signature check and revenue ledger', async () => {
   const secret = 'whsec_test';
   const raw = JSON.stringify({ type: 'invoice.paid', data: { object: { id: 'in_1', customer: 'cus_1', amount_paid: 1200, currency: 'usd' } } });
   const t = Math.floor(Date.now() / 1000);
@@ -301,7 +246,7 @@ test('stripe webhook: signature check and revenue ledger', () => {
   assert.equal(acct.verifyStripeSignature(raw, `t=${t},v1=${sig}`, secret), true);
   assert.equal(acct.verifyStripeSignature(raw + ' ', `t=${t},v1=${sig}`, secret), false);
   assert.equal(acct.verifyStripeSignature(raw, `t=${t - 4000},v1=${sig}`, secret), false);
-  acct.applyStripeEvent(JSON.parse(raw));
-  acct.applyStripeEvent(JSON.parse(raw)); // replays are ignored
+  await acct.applyStripeEvent(JSON.parse(raw));
+  await acct.applyStripeEvent(JSON.parse(raw)); // replays are ignored
   assert.equal(db.get('SELECT SUM(amount_cents) c FROM payments').c, 1200);
 });

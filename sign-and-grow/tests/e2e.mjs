@@ -64,7 +64,7 @@ try {
 
   // Landing
   await page.goto(BASE);
-  await page.getByRole('heading', { name: /Leave the tree standing/ }).waitFor();
+  await page.getByRole('heading', { name: /Trees grow/ }).waitFor();
   await shot(page, '01-landing', true);
 
   // Sign up

@@ -107,7 +107,50 @@ CREATE TABLE IF NOT EXISTS bulk_batches (
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY, account_id TEXT, amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, retired_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS abuse_reports (
+  id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL, account_id TEXT NOT NULL, reporter TEXT, reason TEXT NOT NULL, detail TEXT,
+  ip TEXT, status TEXT NOT NULL DEFAULT 'open', at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS support_requests (
+  id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, topic TEXT NOT NULL, message TEXT NOT NULL, envelope_id TEXT,
+  user_id TEXT, account_id TEXT, status TEXT NOT NULL DEFAULT 'open', at TEXT NOT NULL
+);
 `;
+
+// Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
+// one is added here if it is missing. Only ever append to this list.
+const COLUMNS: [table: string, column: string, definition: string][] = [
+  ['users', 'notify', 'TEXT'],
+  ['users', 'locale', 'TEXT'],
+  ['accounts', 'suspended_at', 'TEXT'],
+  ['accounts', 'suspended_reason', 'TEXT'],
+  ['accounts', 'renews_at', 'TEXT'],
+  ['accounts', 'cancel_at', 'TEXT'],
+  ['payments', 'receipt_url', 'TEXT'],
+  ['payments', 'charge_id', 'TEXT'],
+  ['payments', 'refunded_at', 'TEXT'],
+  ['recipients', 'check_code', 'TEXT'],
+  ['recipients', 'locale', 'TEXT'],
+  ['envelopes', 'test_mode', 'INTEGER NOT NULL DEFAULT 0'],
+  ['envelopes', 'locale', 'TEXT'],
+  ['webhook_deliveries', 'body', 'TEXT'],
+  ['envelopes', 'expiry_warned_at', 'TEXT'],
+  ['recipients', 'muted', 'INTEGER NOT NULL DEFAULT 0'],
+  ['accounts', 'cancel_ref', 'TEXT'],
+  ['accounts', 'dormant_nudged_at', 'TEXT'],
+  ['envelopes', 'date_format', 'TEXT'],
+  ['users', 'closing_at', 'TEXT'],
+  ['accounts', 'closing_at', 'TEXT'],
+];
+
+function migrate(d: any) {
+  for (const [table, column, definition] of COLUMNS) {
+    const have = d.prepare(`PRAGMA table_info(${table})`).all().some((c: any) => c.name === column);
+    if (!have) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+  d.exec('CREATE INDEX IF NOT EXISTS recipients_check ON recipients(check_code)');
+}
 
 export function db(): any {
   if (!g.__tsdb) {
@@ -117,6 +160,7 @@ export function db(): any {
     const d = new DatabaseSync(path.join(dir, 'sign.db'));
     d.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
     d.exec(SCHEMA);
+    migrate(d);
     g.__tsdb = d;
   }
   return g.__tsdb;

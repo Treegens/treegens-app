@@ -15,7 +15,7 @@ function Shell({ data, children, bar }: { data?: any; children: React.ReactNode;
     <div style={{ minHeight: '100vh' }}>
       <div className="signbar" style={brand?.brand_color ? ({ ['--brand' as any]: brand.brand_color }) : undefined}>
         {brand?.brand_logo ? <img src={brand.brand_logo} alt={brand.name} style={{ maxHeight: 30, maxWidth: 140, background: '#fff', borderRadius: 6, padding: 3 }} /> : <Leaf size={22} color="#9ed88f" />}
-        <div className="grow truncate" style={{ fontWeight: 600 }}>{data?.envelope?.subject || 'Treegens Sign'}</div>
+        <div className="grow truncate" style={{ fontWeight: 600 }}>{data?.envelope?.subject || 'Sign&Grow'}</div>
         {bar}
       </div>
       <div className="signwrap">{children}</div>
@@ -33,7 +33,7 @@ function Impact({ impact, title }: { impact: any; title: string }) {
           <b>{title}</b>
           <p style={{ margin: '4px 0 0' }}>
             About <b>{fmtNum(impact.sheets)} sheets of paper</b>, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e were not used
-            (that is {fmtTrees(impact.trees)} of a tree). And 100% of Treegens Sign subscription revenue goes to planting more. <a href="/impact">How we count</a>
+            (that is {fmtTrees(impact.trees)} of a tree). And 100% of Sign&Grow subscription revenue goes to planting more. <a href="/impact">How we count</a>
           </p>
         </div>
       </div>
@@ -196,7 +196,7 @@ export default function SignPage() {
           <Impact impact={finished?.impact || env.impact} title="Signed without paper" />
           <div className="card center">
             <b>Need signatures yourself?</b>
-            <p className="muted" style={{ margin: '4px 0 12px' }}>Treegens Sign is free to start, and every subscription plants trees.</p>
+            <p className="muted" style={{ margin: '4px 0 12px' }}>Sign&Grow is free to start, and every subscription plants trees.</p>
             <a className="btn" href="/signup">Create a free account</a>
           </div>
         </div>

@@ -3,7 +3,7 @@ import net from 'node:net';
 import { all, get, run } from './db.ts';
 import { hmac, now } from './util.ts';
 
-export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'recipient.viewed', 'recipient.completed'];
+export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'envelope.corrected', 'recipient.viewed', 'recipient.completed'];
 
 function isPrivate(ip: string): boolean {
   if (net.isIPv4(ip)) {
@@ -45,10 +45,10 @@ async function deliver(hook: any, event: string, envelopeId: string, body: strin
         signal: AbortSignal.timeout(10_000),
         headers: {
           'content-type': 'application/json',
-          'user-agent': 'TreegensSign-Webhook/1',
-          'x-treegens-sign-event': event,
-          'x-treegens-sign-timestamp': String(ts),
-          'x-treegens-sign-signature': `sha256=${hmac(`${ts}.${body}`, hook.secret)}`,
+          'user-agent': 'SignAndGrow-Webhook/1',
+          'x-signandgrow-event': event,
+          'x-signandgrow-timestamp': String(ts),
+          'x-signandgrow-signature': `sha256=${hmac(`${ts}.${body}`, hook.secret)}`,
         },
         body,
       });
@@ -60,7 +60,15 @@ async function deliver(hook: any, event: string, envelopeId: string, body: strin
     }
     if (attempts < 3) await new Promise((r) => setTimeout(r, attempts * 2000));
   }
-  run('INSERT INTO webhook_deliveries (webhook_id, event, envelope_id, status, error, attempts, at) VALUES (?,?,?,?,?,?,?)', hook.id, event, envelopeId, status, error, attempts, now());
+  run('INSERT INTO webhook_deliveries (webhook_id, event, envelope_id, status, error, attempts, at, body) VALUES (?,?,?,?,?,?,?,?)', hook.id, event, envelopeId, status, error, attempts, now(), body);
+  // Keep the log useful but small: bodies of older deliveries are dropped.
+  run('UPDATE webhook_deliveries SET body=NULL WHERE webhook_id=? AND id < (SELECT MAX(id) - 200 FROM webhook_deliveries WHERE webhook_id=?)', hook.id, hook.id);
+}
+
+// Send a past delivery again, exactly as it was, after fixing whatever made it fail.
+export function redeliver(webhookId: string, event: string, envelopeId: string, body: string) {
+  const hook = get('SELECT * FROM webhooks WHERE id=?', webhookId);
+  if (hook) void deliver(hook, event, envelopeId, body).catch(() => {});
 }
 
 // Fire and forget: signing never waits on someone else's server.
@@ -68,6 +76,7 @@ export function fireWebhooks(accountId: string, event: string, envelopeId: strin
   const hooks = all('SELECT * FROM webhooks WHERE account_id=? AND active=1', accountId).filter((h) => h.events === '*' || h.events.split(',').includes(event));
   if (!hooks.length) return;
   const e = get('SELECT id, status, subject, sent_at, completed_at FROM envelopes WHERE id=?', envelopeId);
-  const body = JSON.stringify({ event, created_at: now(), envelope: e, ...extra });
+  // "text" lets the same URL be a Slack or Teams incoming webhook with no code in between.
+  const body = JSON.stringify({ event, created_at: now(), envelope: e, ...extra, text: `${e?.subject || 'Envelope'}: ${event.replace('.', ' ')}` });
   for (const h of hooks) void deliver(h, event, envelopeId, body).catch(() => {});
 }

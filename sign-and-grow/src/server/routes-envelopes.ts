@@ -4,7 +4,7 @@ import { bad, id, token, now, str, rateLimit, isEmail, baseUrl } from './util.ts
 import { inspectPdf, imageToPdf } from './pdf.ts';
 import {
   loadEnvelope, publicEnvelope, createEnvelope, saveDraft, copyEnvelope, sendEnvelope, voidEnvelope, remindEnvelope,
-  correctRecipient, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl,
+  correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl,
 } from './envelopes.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
@@ -63,7 +63,7 @@ route('GET', '/envelopes', (c) => {
   const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, u.name sender
     FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE ${where.join(' AND ')} ORDER BY e.updated_at DESC LIMIT ? OFFSET ?`, ...p, limit, Number(c.q.get('offset')) || 0);
   for (const e of rows) {
-    e.recipients = all('SELECT name, email, role, role_name, status FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
+    e.recipients = all('SELECT name, email, role, role_name, status, sent_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
   }
   const folders = all("SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND folder IS NOT NULL AND folder != ''", c.account.id, kind).map((r) => r.folder);
@@ -97,14 +97,20 @@ route('POST', '/envelopes', async (c) => {
 
 route('GET', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
-  return { envelope: publicEnvelope(e), audit: auditTrail(e.id), chain: verifyChain(e.id) };
+  // Whether each email actually left, so "I never got it" can be answered without guessing.
+  const deliveries = all('SELECT to_email, subject, status, error, at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
+  return { envelope: publicEnvelope(e), audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries };
 });
 
+// Drafts are simply saved. An envelope that is already out is corrected in place: no void, no resend, no extra count.
 route('PUT', '/envelopes/:id', async (c) => {
   const e = mine(c, c.params.id);
-  saveDraft(e, await c.body(), c.account.id);
+  if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, await c.body(), c.account.id, c.actor);
+  else saveDraft(e, await c.body(), c.account.id);
   return { envelope: publicEnvelope(loadEnvelope(e.id)) };
 });
+
+route('POST', '/envelopes/:id/extend', async (c) => ({ expires_at: await extendEnvelope(mine(c, c.params.id, 'envelope'), (await c.body()).days, c.actor) }));
 
 route('PATCH', '/envelopes/:id', async (c) => {
   const e = mine(c, c.params.id);
@@ -129,7 +135,10 @@ route('POST', '/envelopes/:id/void', async (c) => {
   await voidEnvelope(mine(c, c.params.id, 'envelope'), str((await c.body()).reason, 500), c.actor);
 });
 
-route('POST', '/envelopes/:id/remind', async (c) => ({ reminded: await remindEnvelope(mine(c, c.params.id, 'envelope'), c.actor) }));
+route('POST', '/envelopes/:id/remind', async (c) => {
+  const b = await c.req.json().catch(() => ({}));
+  return { reminded: await remindEnvelope(mine(c, c.params.id, 'envelope'), c.actor, b?.recipient_id ? str(b.recipient_id) : undefined) };
+});
 
 route('POST', '/envelopes/:id/correct', async (c) => {
   const b = await c.body();
@@ -197,6 +206,36 @@ route('POST', '/bulk', async (c) => {
   return { id: bid, sent: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok), results };
 });
 
+// A batch is one thing: see everyone's status, nudge the stragglers, or void what is still open, in one go.
+function batch(c: Ctx, bulkId: string) {
+  const b = get('SELECT * FROM bulk_batches WHERE id=? AND account_id=?', bulkId, c.account.id);
+  if (!b || (!c.admin && b.sender_id !== c.user.id)) throw bad('Batch not found.', 404);
+  return b;
+}
+route('GET', '/bulk/:id', (c) => {
+  const b = batch(c, c.params.id);
+  const envelopes = all('SELECT id, status, subject, sent_at, completed_at FROM envelopes WHERE bulk_id=? ORDER BY created_at', b.id);
+  for (const e of envelopes) e.recipients = all('SELECT name, email, role, status, viewed_at, completed_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
+  return { batch: b, envelopes };
+});
+route('POST', '/bulk/:id/remind', async (c) => {
+  const b = batch(c, c.params.id);
+  let reminded = 0;
+  for (const row of all("SELECT id FROM envelopes WHERE bulk_id=? AND status='sent'", b.id)) reminded += await remindEnvelope(loadEnvelope(row.id), c.actor);
+  return { reminded };
+});
+route('POST', '/bulk/:id/void', async (c) => {
+  const b = batch(c, c.params.id);
+  const reason = str((await c.body()).reason, 500);
+  if (!reason.trim()) throw bad('Give a reason for voiding. Recipients will see it.');
+  let voided = 0;
+  for (const row of all("SELECT id FROM envelopes WHERE bulk_id=? AND status='sent'", b.id)) {
+    await voidEnvelope(loadEnvelope(row.id), reason, c.actor);
+    voided++;
+  }
+  return { voided };
+});
+
 // ---- PowerForms: a public link anyone can use to sign a template ---------------------------
 
 function powerformTemplate(templateId: string) {
@@ -242,6 +281,9 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   const email = str(b.email, 254).trim();
   if (!name || !isEmail(email)) throw bad('Enter your name and a valid email address.');
   const { tpl, open } = powerformTemplate(p.template_id);
+  // Opening the form twice must not create two envelopes: pick up the one this person already started.
+  const again = get("SELECT r.token FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.powerform_id=? AND e.status='sent' AND r.email=? AND r.status IN ('sent','viewed') ORDER BY e.sent_at DESC LIMIT 1", p.id, email);
+  if (again) return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
   const eid = copyEnvelope(tpl, { accountId: p.account_id, senderId: tpl.sender_id, kind: 'envelope', subject: p.name, fill: { [open.id]: { name, email } }, extra: { powerform_id: p.id } });
   await sendEnvelope(eid, { name: `${name} <${email}> via PowerForm`, ip: c.ip, ua: c.ua });
   run('UPDATE powerforms SET uses=uses+1 WHERE id=?', p.id);

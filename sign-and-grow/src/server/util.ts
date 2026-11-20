@@ -15,6 +15,13 @@ export const token = (bytes = 32) => crypto.randomBytes(bytes).toString('base64u
 export const sha256 = (b: string | Uint8Array) => crypto.createHash('sha256').update(b).digest('hex');
 export const hmac = (data: string, key = secret()) => crypto.createHmac('sha256', key).update(data).digest('hex');
 export const now = () => new Date().toISOString();
+
+// Short code printed in every signing email. Typing it into /check proves the email is genuine without
+// clicking anything. No look-alike characters (0/O, 1/I/L).
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export const checkCode = () => Array.from(crypto.randomBytes(12), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+export const fmtCode = (c: string) => c.replace(/(.{4})(?=.)/g, '$1-');
+export const parseCode = (s: any) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 export const isEmail = (s: any): s is string => typeof s === 'string' && s.length < 255 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 export const str = (v: any, max = 2000): string => (typeof v === 'string' ? v.slice(0, max) : v == null ? '' : String(v).slice(0, max));
 export const esc = (s: any) =>

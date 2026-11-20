@@ -13,7 +13,7 @@ export default function VerifyEmail() {
       <div className="card center">
         <h1 className="serif" style={{ fontSize: 24 }}>{state === 'wait' ? 'Confirming…' : state === 'ok' ? 'Email confirmed' : 'That did not work'}</h1>
         <p className="muted" style={{ margin: '10px 0 16px' }}>{state === 'ok' ? 'Documents sent to this address will now show up in your inbox.' : state === 'wait' ? '' : state}</p>
-        <Link href="/app" className="btn primary">Go to Treegens Sign</Link>
+        <Link href="/app" className="btn primary">Go to Sign&Grow</Link>
       </div>
     </div>
   );
