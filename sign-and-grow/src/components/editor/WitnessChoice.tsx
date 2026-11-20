@@ -41,7 +41,7 @@ export function WitnessChoice({ r, rcps, isTpl, onChange }: { r: any; rcps: any[
         <span>{target ? `${who(target)} names the witness` : 'The person who signs names the witness'}<span className="muted"> on {isTpl ? 'their' : 'the'} signing page, before Finish</span></span>
       </label>
       <div id={`${id}-how`} className="muted small ed-witness-how">
-        <p>We email the witness straight after {target ? who(target) : 'that person'} has signed, whatever the signing order says, and nobody else waits for them. A witness uses none of your signatures. On their first screen they confirm, in their own words, that they were physically present and saw the signature, or say that they were not there. Place their block in step 2, near the signature they witness.</p>
+        <p>We email the witness straight after {target ? who(target) : 'that person'} has signed, whatever the signing order says, and nobody else waits for them. A witness uses none of your signatures. On their first screen they tick a statement as their own, that they were physically present and saw the signature, or say that they were not there. Place their block in step 2, near the signature they witness.</p>
         <p>{WHO_MAY_WITNESS}</p>
         <p>{WITNESS_RECORDS}</p>
       </div>

@@ -217,7 +217,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                   {r.access_code && r.code_frozen_at ? <> · <b>This code is frozen</b> after too many wrong tries and opens nothing now. Choose Correct and set a new one to let them in.</> : null}
                   {/* The check the sender asked for before the document opens, and whether it has been passed. */}
                   {r.verify === 'sms_code' || r.verify === 'email_code' ? <> · Checked with a one-time code by {r.verify === 'sms_code' ? <>text message to <b className="sn-code">{r.phone}</b></> : 'email'}{r.check?.passed_at ? <>, passed on {dayTime(r.check.passed_at)}</> : ', not typed in yet'}</> : null}
-                  {r.check?.stopped ? <> · <b>They said this is not their number</b>, so no more texts are sent to it. Choose Correct and put in the right number, or confirm it with them if it is right after all, to let them in.</> : null}
+                  {r.check?.stopped ? <> · <b>Someone using one of your signing links said this is not their number</b>, so no more texts are sent to it. Choose Correct and put in the right number, or confirm it with them if it is right after all, to let them in.</> : null}
                   {r.text_link && r.role !== 'inperson' ? <> · Link also sent by text message{r.verify === 'sms_code' ? '' : <> to <b className="sn-code">{r.phone}</b></>}</> : null}
                 </div>
               </div>

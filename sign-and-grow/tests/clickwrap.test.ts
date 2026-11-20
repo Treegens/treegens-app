@@ -170,7 +170,7 @@ test('our page shows the terms and what is recorded before the click; a visitor 
   assert.equal(page.data.version.text, TERMS);
   assert.equal(page.data.identity, 'typed', 'without a link from the website the visitor types their details');
   assert.match(page.data.recorded, /the name and email address you type, the date and time, your internet address, your browser, the page you came from/);
-  assert.match(page.data.shows, /Someone using this browser ticked the box and pressed the button on these exact terms/);
+  assert.match(page.data.shows, /The browser that pressed reported that the box was ticked and the button pressed, on these exact terms/);
   assert.match(page.data.not, /does not show who that person really was/);
   assert.equal(page.data.person, null);
 
@@ -396,9 +396,11 @@ test('an acceptance is never changed afterwards, and a record that was changed b
   assert.match(await pdfText(cert.data), /CHANGED: this record no longer fits its seal/);
 });
 
-test('the person gets a copy of what they accepted by email when an address was given, and can download it; nobody else can', async () => {
+test('the person gets a copy of what they accepted by email when the website gave the address, and can download it; nobody else can', async () => {
   const { slug, secret, id } = await published('Copy terms');
-  const { res, c } = await accept(slug, { name: 'Cora Copy', email: 'cora@visit.example' });
+  const cora = sign(secret, { id: 'c-cora', name: 'Cora Copy', email: 'cora@visit.example', exp: soon() });
+  const { res, c } = await accept(slug, {}, `who=${cora.who}&sig=${cora.sig}`);
+  assert.equal(res.data.email, true, 'the page offers the copy');
   const sent = await c.post('/public/agree/receipt/email', { receipt: res.data.receipt });
   assert.equal(sent.status, 200, JSON.stringify(sent.data));
   assert.equal(sent.data.to, 'c***@visit.example');
@@ -407,26 +409,39 @@ test('the person gets a copy of what they accepted by email when an address was 
   const words = text(mail.html);
   assert.match(words, /accepted version 1 of "Copy terms"/);
   assert.match(words, /does not show who that person really was/);
-  assert.match(words, /If that was not you, you can ignore this email/);
+  assert.match(words, /We send one copy for each acceptance, only when it is asked for on the page, and only to an address the website gave us/);
+  assert.equal(/nothing else will come of it/.test(words), false, 'no promise the code does not keep');
   assert.match(words, /Report this page/);
   const row = db.get("SELECT about_user, payload FROM emails WHERE to_email='cora@visit.example' ORDER BY id DESC");
   assert.equal(row.about_user, `clickwrap:${id}`, 'our copy is marked, so it goes with the account');
-  // Once an hour for each acceptance: the address is a stranger's to type.
-  assert.equal((await c.post('/public/agree/receipt/email', { receipt: res.data.receipt })).status, 429);
+  // Once for each acceptance, ever.
+  const twice = await c.post('/public/agree/receipt/email', { receipt: res.data.receipt });
+  assert.equal(twice.status, 409);
+  assert.equal(twice.data.code, 'copy_sent');
+  assert.match(twice.data.error, /emailed to c\*\*\*@visit\.example on .* Download the copy instead/);
   // A receipt that is not one finds nothing.
   assert.equal((await from().post('/public/agree/receipt/email', { receipt: 'cwr_made_up' })).status, 404);
   // The certificate by receipt: the terms are in it, and what the record shows and does not.
   const pdf = await from().get(`/public/agree/receipt/${res.data.receipt}/certificate`);
   assert.equal(pdf.status, 200);
   const t = await pdfText(pdf.data);
-  for (const re of [/Record of acceptance/, /Copy terms/, /Cora Copy/, /cora@visit\.example/, /Typed by the visitor, not checked/, /does not show who that person really was/, /garden planner/, /Unchanged since it was recorded/, /depends on the country/])
+  for (const re of [/Record of acceptance/, /Copy terms/, /Cora Copy/, /cora@visit\.example/, /Given by the website in a signed link/, /does not show who that person really was/, /garden planner/, /Unchanged since it was recorded/, /depends on the country/])
     assert.match(t, re);
+  // An address typed on the page is anybody's: no copy goes to it, and the page does not offer one.
+  const typed = await accept(slug, { name: 'Tom Typed', email: 'tom@visit.example' });
+  assert.equal(typed.res.data.email, false);
+  const refused = await typed.c.post('/public/agree/receipt/email', { receipt: typed.res.data.receipt });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.data.code, 'not_vouched');
+  assert.match(refused.data.error, /typed on the page, and we cannot know that it is yours/);
+  assert.equal(mailTo('tom@visit.example').length, 0);
+  assert.equal((await typed.c.get(`/public/agree/receipt/${typed.res.data.receipt}/certificate`)).status, 200, 'the download still works');
   // No address, no email: the person is told to download instead.
   const w = sign(secret, { id: 'no-mail', exp: soon() });
   const quiet = await accept(slug, {}, `who=${w.who}&sig=${w.sig}`);
   const none = await quiet.c.post('/public/agree/receipt/email', { receipt: quiet.res.data.receipt });
   assert.equal(none.status, 409);
-  assert.match(none.data.error, /Download it instead/);
+  assert.match(none.data.error, /nowhere to send a copy\. Download the copy instead/);
 });
 
 test('terms in a PDF: shown as pages, fingerprinted as the file, and the certificate carries the pages', async () => {
@@ -498,8 +513,8 @@ test('the words say what is recorded before the click, what a record shows and d
   const lib = await import('../src/lib/clickwrap.ts');
   for (const via of ['hosted', 'embed'] as const) {
     const w = lib.recordShows('typed', via, 'shop.example');
-    assert.match(w.shows, /Someone using this browser/);
-    assert.match(w.not, /does not show who that person really was/);
+    assert.match(w.shows, /The browser that pressed reported/);
+    assert.match(w.not, /does not show who that person really was, that they read the terms, or whether a person or a program pressed/);
   }
   const api = lib.recordShows('api', 'api');
   assert.match(api.shows, /did not show these terms to the person and did not see a click/);
@@ -681,9 +696,10 @@ test('rate limits per address: ten acceptances an hour on one agreement from one
 
 test('acceptances belong to the account and go when it is deleted, with the versions, the reports and our copies of the emails', async () => {
   const { purgeUser } = await import('../src/server/routes-trust.ts');
-  const { slug, owner, id } = await published('Deleted terms');
-  const { res, c } = await accept(slug, { name: 'Del Visitor', email: 'del@visit.example' });
-  await c.post('/public/agree/receipt/email', { receipt: res.data.receipt });
+  const { slug, owner, id, secret } = await published('Deleted terms');
+  const del = sign(secret, { id: 'del-1', name: 'Del Visitor', email: 'del@visit.example', exp: soon() });
+  const { res, c } = await accept(slug, {}, `who=${del.who}&sig=${del.sig}`);
+  assert.equal((await c.post('/public/agree/receipt/email', { receipt: res.data.receipt })).status, 200);
   await from().post(`/public/agree/${slug}/report`, { reason: 'spam', email: 'rep@visit.example' });
   const me = (await owner.get('/me')).data;
   assert.ok(db.get("SELECT 1 x FROM emails WHERE about_user=?", `clickwrap:${id}`));
@@ -769,4 +785,78 @@ test('the scam filter reads every word the page shows: the box, the button and t
   // The same page for a visitor with an ordinary name is open.
   const fine = sign(k2, { id: 'v2', name: 'Ada Lovelace', exp: soon() });
   assert.equal((await from().get(`/public/agree/${s2}?who=${fine.who}&sig=${fine.sig}`)).data.closed, false);
+});
+
+test('the receipt and the copy go only to the browser that accepted: a replayed signed link learns that the person accepted, and nothing more', async () => {
+  const { slug, secret, owner } = await published('Receipt terms');
+  const cass = sign(secret, { id: 'cust-1', name: 'Cass Customer', email: 'cass@inbox.example', exp: soon() });
+  const q = `who=${cass.who}&sig=${cass.sig}`;
+  const mine = from();
+  const { page, res } = await accept(slug, {}, q, mine);
+  assert.match(res.data.receipt, /^cwr_/, 'her own browser gets it in the answer to its press');
+  // The same page load pressing twice (an answer that never arrived) gets it again.
+  const again = await mine.post(`/public/agree/${slug}/accept`, { view: page.data.view, agree: true, who: cass.who, sig: cass.sig });
+  assert.deepEqual([again.data.already, again.data.receipt], [true, res.data.receipt]);
+  // Somebody else with the same link: a forwarded email, a shared screen, a browser history.
+  const other = from();
+  const seen = await other.get(`/public/agree/${slug}?${q}`);
+  assert.equal(seen.data.already.id, res.data.acceptance.id, 'they are told she accepted');
+  assert.equal(JSON.stringify(seen.data).includes('cwr_'), false, 'and get no receipt from the page');
+  const pressed = await other.post(`/public/agree/${slug}/accept`, { view: seen.data.view, agree: true, who: cass.who, sig: cass.sig });
+  assert.equal(pressed.data.already, true);
+  assert.equal(pressed.data.receipt, undefined, 'nor from pressing');
+  assert.equal(pressed.data.email, false);
+  // A paused account sends no copy; the person can still download the record.
+  const acc = (await owner.get('/me')).data.account.id;
+  db.run("UPDATE accounts SET suspended_at=?, suspended_reason='reports' WHERE id=?", new Date().toISOString(), acc);
+  const paused = await mine.post('/public/agree/receipt/email', { receipt: res.data.receipt });
+  assert.equal(paused.status, 409);
+  assert.equal(paused.data.code, 'closed');
+  assert.match(paused.data.error, /cannot send a copy by email right now\. Nothing was sent\. Download the copy instead/);
+  assert.equal(mailTo('cass@inbox.example').length, 0);
+  assert.equal((await mine.get(`/public/agree/receipt/${res.data.receipt}/certificate`)).status, 200);
+  db.run('UPDATE accounts SET suspended_at=NULL WHERE id=?', acc);
+  // One copy, ever: also hours later and from other addresses.
+  const real = Date.now;
+  let shift = 0;
+  Date.now = () => real() + shift;
+  try {
+    const statuses: number[] = [];
+    for (let h = 0; h < 4; h++) {
+      shift = h * 3601_000;
+      statuses.push((await from().post('/public/agree/receipt/email', { receipt: res.data.receipt })).status);
+    }
+    assert.deepEqual(statuses, [200, 409, 409, 409]);
+  } finally {
+    Date.now = real;
+  }
+  assert.equal(mailTo('cass@inbox.example').length, 1);
+  // Two presses of "Email me a copy" at the same moment send one.
+  const dan = sign(secret, { id: 'cust-2', name: 'Dan', email: 'dan@inbox.example', exp: soon() });
+  const d = await accept(slug, {}, `who=${dan.who}&sig=${dan.sig}`);
+  const both = await Promise.all([from().post('/public/agree/receipt/email', { receipt: d.res.data.receipt }), from().post('/public/agree/receipt/email', { receipt: d.res.data.receipt })]);
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 409]);
+  assert.equal(mailTo('dan@inbox.example').length, 1);
+  // The page never hands the receipt out and keeps it in the browser that accepted.
+  const agree = read('src/app/agree/[slug]/page.tsx');
+  assert.equal(/already\.receipt/.test(agree), false);
+  assert.match(agree, /localStorage/);
+});
+
+test('copies by email from an account that has not earned trust count against a daily limit of their own', async () => {
+  const { slug, secret, owner } = await published('Busy copy terms');
+  const { dailyCap } = await import('../src/server/envelopes.ts');
+  const acc = db.get('SELECT * FROM accounts WHERE id=?', (await owner.get('/me')).data.account.id);
+  const cap = dailyCap(acc).cap;
+  let ok = 0, refused: any = null;
+  for (let i = 0; i <= cap; i++) {
+    const w = sign(secret, { id: `cap-${i}`, email: `cap${i}@inbox.example`, exp: soon() });
+    const { res, c } = await accept(slug, {}, `who=${w.who}&sig=${w.sig}`);
+    const r = await c.post('/public/agree/receipt/email', { receipt: res.data.receipt });
+    if (r.status === 200) ok++;
+    else refused = r;
+  }
+  assert.equal(ok, cap);
+  assert.equal(refused.status, 429);
+  assert.match(refused.data.error, /cannot send more copies by email for this organisation today\. Nothing was sent/);
 });

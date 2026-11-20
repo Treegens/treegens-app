@@ -12,6 +12,27 @@ const tell = (msg: Record<string, any>) => {
   // Only to a page around this frame, and never anything secret: the receipt stays in this frame.
   if (window.parent !== window) window.parent.postMessage({ source: 'signgrow-clickwrap', ...msg }, '*');
 };
+// The receipt is given once, in the answer to this browser's press, and the server never hands it out again. It is
+// kept in this browser so a reload still offers the copy. Storage can be missing or blocked (a private window, a frame
+// on another site): then the copy is offered only until the page is left.
+const keepReceipt = (id: string, receipt: string) => {
+  try {
+    localStorage.setItem(`cwr:${id}`, receipt);
+  } catch {}
+};
+// Whether this browser can say if something covers the button (IntersectionObserver v2: Chrome and Edge).
+const canTell = () => typeof IntersectionObserver !== 'undefined' && typeof IntersectionObserverEntry !== 'undefined' && 'isVisible' in IntersectionObserverEntry.prototype;
+// A reading counts as uncovered only when the whole box of the button is in view and the browser says nothing covers
+// it or makes it see-through. Cropped by a few pixels, scrolled half away or transparent: covered.
+const uncovered = (e: IntersectionObserverEntry) => e.isIntersecting && e.intersectionRatio > 0.99 && !!(e as any).isVisible;
+const COVERED = 'Part of this button is out of view, or something on the page around these terms covers it, so it cannot be pressed. Scroll so that the whole button shows. If it still cannot be pressed, open the terms on their own page with the link below, or tell the website.';
+const keptReceipt = (id: string): string | null => {
+  try {
+    return localStorage.getItem(`cwr:${id}`);
+  } catch {
+    return null;
+  }
+};
 
 export default function Agree() {
   const { slug } = useParams<{ slug: string }>();
@@ -28,9 +49,20 @@ export default function Agree() {
   const [report, setReport] = useState(false);
   // Whether the browser says the button can be seen: true, false, or null where it cannot tell.
   const [visible, setVisible] = useState<boolean | null>(null);
+  const seen = useRef<boolean | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const go = useRef<HTMLDivElement>(null);
-  const embed = !!q?.get('embed');
+  // A frame counts as one only when this page really is inside a frame and was asked to be: only ?embed=1 may be
+  // framed at all (next.config.mjs), and ?embed=1 opened on its own is our own page, and recorded as such.
+  const [framed, setFramed] = useState(false);
+  useEffect(() => {
+    try {
+      setFramed(window.self !== window.top);
+    } catch {
+      setFramed(true);
+    }
+  }, []);
+  const embed = q?.get('embed') === '1' && framed;
 
   const load = (params: URLSearchParams) => {
     setError('');
@@ -67,19 +99,34 @@ export default function Agree() {
     return () => clearTimeout(t);
   }, [data]);
 
-  // Where the browser can tell (Chrome and Edge), a button that something on the page around the frame covers, or
-  // makes see-through, cannot be pressed. Elsewhere this cannot be known, and the record says so.
+  // Inside a frame, where the browser can tell (Chrome and Edge), the button can be pressed only while the whole of it
+  // is in view and nothing on the page around the frame covers it or makes it see-through. Every reading counts: one
+  // that says the button is cropped, half scrolled away, transparent or covered stops it at once, whatever came before.
+  // Elsewhere this cannot be known, and the record says so. On our own page nothing is around the terms to cover them.
   useEffect(() => {
     // The box around the button is watched, not the button: a button that waits is drawn see-through, and the browser
-    // would count that as covered. Only a reading taken while the whole box is on the screen counts.
+    // would count that as covered.
     const el = go.current;
-    if (!el || typeof IntersectionObserver === 'undefined' || !('isVisible' in (window as any).IntersectionObserverEntry.prototype)) return;
+    if (!embed || !el || !canTell()) return;
     const io = new IntersectionObserver((entries) => {
-      for (const e of entries) if (e.isIntersecting && e.intersectionRatio > 0.99) setVisible(!!(e as any).isVisible);
+      for (const e of entries) (seen.current = uncovered(e)), setVisible(seen.current);
     }, { trackVisibility: true, delay: 100, threshold: [0, 1] } as any);
     io.observe(el);
     return () => io.disconnect();
-  }, [data, done]);
+  }, [data, done, embed]);
+  // One more reading, taken at the press by a new observer, which reports at once what the browser sees now. A page
+  // that makes the frame see-through for the moment of a click is caught by this one or by the one before it.
+  const pressReading = (): Promise<boolean | null> => new Promise((resolve) => {
+    const el = go.current;
+    if (!el) return resolve(null);
+    const io = new IntersectionObserver((entries) => {
+      clearTimeout(t);
+      io.disconnect();
+      resolve(uncovered(entries[entries.length - 1]));
+    }, { trackVisibility: true, delay: 100, threshold: [0, 1] } as any);
+    const t = setTimeout(() => (io.disconnect(), resolve(null)), 1500);
+    io.observe(el);
+  });
 
   async function accept(e: React.FormEvent) {
     e.preventDefault();
@@ -89,11 +136,26 @@ export default function Agree() {
     try {
       page = embed ? (window.location as any).ancestorOrigins?.[0] || document.referrer || null : document.referrer || null;
     } catch {}
+    // Uncovered only when the last reading before the press and a fresh one at the press both say so. Null where the
+    // browser cannot tell, or gave no fresh reading in time: the record then says it did not report it.
+    let unobscured: boolean | null = null;
+    if (embed && canTell()) {
+      const now = await pressReading();
+      if (seen.current !== true || now === false) {
+        seen.current = false;
+        setVisible(false);
+        setMsg(COVERED);
+        setBusy(false);
+        return;
+      }
+      unobscured = now;
+    }
     try {
       const r = await api(`/public/agree/${slug}/accept`, {
-        body: { view: data.view, agree: ticked, scrolled: data.version.scroll ? scrolled : undefined, embed, page_url: page, unobscured: visible,
+        body: { view: data.view, agree: ticked, scrolled: data.version.scroll ? scrolled : undefined, embed, page_url: page, unobscured,
           who: q?.get('who') || undefined, sig: q?.get('sig') || undefined, ...(data.identity === 'typed' ? who : {}) },
       });
+      if (r.receipt) keepReceipt(r.acceptance.id, r.receipt);
       setDone(r);
       tell({ type: 'accepted', acceptance: r.acceptance.id, version: r.acceptance.version });
     } catch (err: any) {
@@ -116,6 +178,8 @@ export default function Agree() {
 
   const v = data?.version;
   const finished = done || data?.already;
+  const ref = done?.acceptance.id || data?.already?.id;
+  const receipt: string | null = done?.receipt || (ref ? keptReceipt(ref) : null);
   const covered = visible === false;
   const blocked = !ticked || (v?.scroll && !scrolled) || covered || busy;
 
@@ -147,13 +211,15 @@ export default function Agree() {
           </div>
           {finished ? (
             <div className="cw-done" role="status" aria-live="polite">
-              <div className="notice">{done?.already === false ? 'Recorded.' : 'You have accepted these terms.'} {done ? `You accepted version ${done.acceptance.version} on ${fmtDate(done.acceptance.at, true)}.` : `You accepted version ${data.already.version} on ${fmtDate(data.already.at, true)}.`} The reference of the record is {done?.acceptance.id || data.already.id}.</div>
-              <div className="cw-actions">
-                <a className="btn" href={`/api/public/agree/receipt/${done?.receipt || data.already.receipt}/certificate`}>Download your copy (PDF)</a>
-                {(done ? done.email : data.already.email) && <button className="btn" type="button" onClick={() => mailCopy(done?.receipt || data.already.receipt)}>Email me a copy</button>}
-              </div>
-              {mailed && <p className="small" style={{ marginTop: 8 }} role="status">{mailed}</p>}
-              <p className="cw-why">The copy holds the terms and everything the record says. Keep it: only this browser has the link to it.</p>
+              <div className="notice">{done?.already === false ? 'Recorded.' : 'You have accepted these terms.'} {done ? `You accepted version ${done.acceptance.version} on ${fmtDate(done.acceptance.at, true)}.` : `You accepted version ${data.already.version} on ${fmtDate(data.already.at, true)}.`} The reference of the record is {ref}.</div>
+              {receipt ? <>
+                <div className="cw-actions">
+                  <a className="btn" href={`/api/public/agree/receipt/${receipt}/certificate`}>Download your copy (PDF)</a>
+                  {(done ? done.email : data.already.email) && !mailed && <button className="btn" type="button" onClick={() => mailCopy(receipt)}>Email me a copy</button>}
+                </div>
+                {mailed && <p className="small" style={{ marginTop: 8 }} role="status">{mailed}</p>}
+                <p className="cw-why">The copy holds the terms and everything the record says. Only the browser you accepted in was given the way to it, and we do not hand it out again, so download it now if you want to keep it. If you lose it, ask {data.account.name}: they keep the record.</p>
+              </> : <p className="cw-why">Your copy was offered in the browser you accepted in, and only there. This browser does not have it. If you need one, ask {data.account.name}: they keep the record and can give you its certificate.</p>}
             </div>
           ) : (
             <form onSubmit={accept} noValidate>
@@ -168,16 +234,16 @@ export default function Agree() {
               ) : (
                 <div className="cw-grid" style={{ gap: 10 }}>
                   <label className="f"><span>Your full name</span><input dir="auto" value={who.name} onChange={(e) => setWho({ ...who, name: e.target.value })} required autoComplete="name" /></label>
-                  <label className="f"><span>Your email <span className="hint">(for a copy, if you ask for one)</span></span><input type="email" value={who.email} onChange={(e) => setWho({ ...who, email: e.target.value })} required autoComplete="email" /></label>
+                  <label className="f"><span>Your email <span className="hint">(kept with the record; we do not write to it)</span></span><input type="email" value={who.email} onChange={(e) => setWho({ ...who, email: e.target.value })} required autoComplete="email" /></label>
                 </div>
               )}
               <label className="cw-tick"><input type="checkbox" checked={ticked} onChange={(e) => setTicked(e.target.checked)} /> <span>{v.checkbox}</span></label>
               {msg && <div className="notice err" role="alert" style={{ marginBottom: 10 }}>{msg}</div>}
               <div ref={go}><button className="btn primary cw-go" type="submit" disabled={!!blocked} aria-describedby="cw-why">{busy ? 'Recording…' : v.button}</button></div>
               <p id="cw-why" className="cw-why" aria-live="polite">
-                {covered ? 'Something on the page around these terms covers this button, so it cannot be pressed. Tell the website, or open the terms on their own page.'
-                  : v.scroll && !scrolled ? 'Scroll to the end of the terms to accept them.' : !ticked ? `Tick "${v.checkbox}" to accept.` : ''}
+                {covered ? COVERED : v.scroll && !scrolled ? 'Scroll to the end of the terms to accept them.' : !ticked ? `Tick "${v.checkbox}" to accept.` : ''}
               </p>
+              {covered && <p className="cw-foot" style={{ textAlign: 'left' }}><a href={`/agree/${slug}${q?.get('who') ? `?who=${encodeURIComponent(q.get('who')!)}&sig=${encodeURIComponent(q.get('sig') || '')}` : ''}`} target="_blank" rel="noopener">Open these terms on their own page</a></p>}
             </form>
           )}
         </div>

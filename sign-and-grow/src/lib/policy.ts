@@ -86,6 +86,11 @@ export const POWERFORM_OPEN_STARTS = 3;
 // from is cleared after an hour instead of a day so it does not stand in the next person's way.
 export const POWERFORM_SHARED_OPEN_STARTS = 30;
 export const powerformSharedIdleMinutes = (): number => Number(process.env.POWERFORM_SHARED_IDLE_MINUTES) || 60;
+// Every start emails an address a stranger typed, so starts from one internet connection are limited per hour as
+// well: across all ordinary public forms together, and for each shared-device form on its own, with room for a
+// steady stream of people at a front desk (two a minute). Unfinished ones are still capped by the numbers above.
+export const POWERFORM_STARTS_PER_HOUR = 20;
+export const POWERFORM_SHARED_STARTS_PER_HOUR = 120;
 
 /** This many days before a closed account is deleted, its owner is reminded by email, with how to keep it and how to export first. */
 export const CLOSING_REMINDER_DAYS = 7;
@@ -348,6 +353,18 @@ export const JPEG_MAX_PIXELS = 50_000_000;
 
 /** A browser stays signed in for this many days after it was last used. Using the app moves the end forward. */
 export const SESSION_DAYS = 30;
+/**
+ * However often it is used, a browser is signed out this many days after it signed in, and the person signs in
+ * again. Without it a cookie copied off a device, used once a month from anywhere, stayed signed in for ever (a test
+ * kept one alive for three years). The owner's decision of 2026-11-20. A session from before its sign-in time was
+ * kept is no longer moved forward at all (src/server/auth.ts).
+ */
+export const SESSION_MAX_DAYS = 30;
+/** How long a browser stays signed in, in the words /security and Settings print, from the two numbers above. */
+export const sessionWords = (days = SESSION_DAYS, maxDays = SESSION_MAX_DAYS): string =>
+  maxDays <= days
+    ? `A browser is signed out ${maxDays} days after you signed in on it, however often you use it in between, and then you sign in again. That way a sign-in copied off a device, or left on a computer you no longer use, does not last.`
+    : `A browser stays signed in while you use it: it is signed out ${days} days after you last used Sign&Grow in it, and in any case ${maxDays} days after you signed in on it, however often you use it. Then you sign in again. That way a sign-in copied off a device, or left on a computer you no longer use, does not last.`;
 /** How often, at most, a browser's "last used" time is written down. Shown times are this exact, no more. */
 export const SESSION_TOUCH_MINUTES = 60;
 /** After this many wrong passwords on a device that was handed to a signer, that browser is signed out. */

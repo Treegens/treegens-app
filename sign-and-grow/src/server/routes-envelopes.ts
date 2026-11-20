@@ -1,6 +1,6 @@
 import { route, json, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
-import { bad, id, token, now, str, rateLimit, isEmail, baseUrl, sha256, HttpError } from './util.ts';
+import { bad, id, token, now, str, rateLimit, rateWait, isEmail, baseUrl, sha256, HttpError } from './util.ts';
 import { inspectPdf, imageToPdf, imagesToPdf } from './pdf.ts';
 import { extractPages, textOf } from './text.ts';
 import { sendMail } from './mail.ts';
@@ -25,6 +25,7 @@ import { emailRefusal, fieldProgress, formPageRefusal, yesNo } from './envelopes
 import { PRICING } from '../lib/impact.ts';
 import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
+import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner } from './tplroles.ts';
 // A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
@@ -807,9 +808,28 @@ const formClosed = (p: any, tpl: any): boolean => {
   return !get('SELECT email_verified v FROM users WHERE id=?', tpl.sender_id)?.v || !!a?.s || !!a?.c;
 };
 
+// Every start emails an address a stranger typed, so one internet connection may start ordinary public forms only
+// so often an hour, all of them together. A form its owner marked as filled in on a shared device has a much larger
+// count of its own: a front desk sends everyone through one connection, and two people a minute must not lock it.
+// The refusal says what the limit is, how long to wait and what the owner can do.
+function formStartLimit(c: Ctx, p: any) {
+  const shared = !!p?.shared_device;
+  const [key, most] = shared ? [`pfs:${p.id}:${c.ip}`, POWERFORM_SHARED_STARTS_PER_HOUR] : [`pf:${c.ip}`, POWERFORM_STARTS_PER_HOUR];
+  try {
+    rateLimit(key, most, 3600_000);
+  } catch (e) {
+    if (!(e instanceof HttpError) || e.status !== 429) throw e;
+    const mins = Math.max(1, Math.ceil(rateWait(key, most) / 60_000));
+    const wait = `Please try again in ${mins} minute${mins === 1 ? '' : 's'}.`;
+    throw bad(shared
+      ? `This form has been started ${most} times within an hour from this internet connection, which is as many as a form on a shared device takes in an hour. ${wait} Until then, people can fill it in on their own phones: whoever runs the form can show them its QR code.`
+      : `Public forms have been started ${most} times within an hour from your internet connection, which is as many as we allow. ${wait} If many people fill this form in at the same place, ask whoever gave you the link to mark it as used on a shared device: such a form takes up to ${POWERFORM_SHARED_STARTS_PER_HOUR} people an hour.`, 429);
+  }
+}
+
 route('POST', '/public/powerforms/:slug/start', async (c) => {
-  rateLimit(`pf:${c.ip}`, 20, 3600_000);
   const p = get('SELECT * FROM powerforms WHERE slug=? AND active=1', c.params.slug);
+  formStartLimit(c, p);
   if (!p) throw bad('This form is not available.', 404);
   const b = await c.body();
   const name = str(b.name, 120).trim();

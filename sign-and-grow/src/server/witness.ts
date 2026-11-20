@@ -8,7 +8,8 @@ import { passCheckOn } from './signercode.ts';
 import { audit, notifySender, senderOf, signUrl, retireToken, samePerson, yesNo, emailRefusal, noteReached, newerVersion, clearAnswers, advance, notOpen, type Actor } from './envelopes.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { formatDate, validZone } from '../lib/dates.ts';
-import { isWitness, waitsForName, openWitnessName, statementText, marksOf, MARK_WORDS, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_NAMES_MAX, WITNESS_CERT_NOTE, witnessProblem, sameDevice, SAME_DEVICE_LIMITS } from '../lib/witness.ts';
+import { isWitness, waitsForName, openWitnessName, statementText, marksOf, MARK_WORDS, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_NAMES_MAX, WITNESS_CERT_NOTE, sameDevice, SAME_DEVICE_LIMITS, sameName, PARTY_ROLES } from '../lib/witness.ts';
+import { witnessProblem as sharedProblem } from '../lib/witness.ts';
 
 // A witness for one signer (role "witness", recipients.witness_for). The rules and words are in src/lib/witness.ts.
 // envelopes.ts, routes-sign.ts and pdf.ts call in here at the places where a witness differs from anyone else:
@@ -24,7 +25,39 @@ const SYSTEM: Actor = { name: 'System' };
 /** The cookie that tells whether a witness finished in the same browser as the person they witnessed. */
 const DEVICE_COOKIE = 'ts_dev';
 
-export { witnessProblem };
+/**
+ * The rules of src/lib/witness.ts, and on the server the looser reading of a name that a person would make (another
+ * spelling, an initial, a middle name: samePerson). One check for sending, the editor's save of an envelope that is
+ * out, a correction and a hand-over. The editor shows the strict part before Send.
+ */
+export function witnessProblem(r: any, e: any): string | null {
+  const said = sharedProblem(r, e);
+  if (said || !isWitness(r) || waitsForName(r)) return said;
+  const name = String(r.name || '').trim() || 'A witness';
+  const target = (e?.recipients || []).find((x: any) => x.id === r.witness_for);
+  if (target && sameEmail(r.email, target.email) && samePerson(r.name, target.name)) return `${name} would be the witness of their own signature (the same address, and the same name in another spelling). A witness has to be somebody else.`;
+  const party = (e?.recipients || []).find((x: any) => x.id !== r.id && x.id !== target?.id && !isWitness(x) && PARTY_ROLES.includes(x.role) && sameEmail(x.email, r.email) && samePerson(x.name, r.name));
+  if (party) return `${name} is the witness for ${target?.name || 'the signer'} and is also on this document as ${party.name}, who ${party.role === 'approver' ? 'approves' : 'signs'} it, so they are a party to it, and a witness should not be. Name somebody else as the witness.`;
+  return null;
+}
+
+/**
+ * POST /envelopes/:id/correct and a signer passing the document on (correctRecipient and reassignRecipient in
+ * envelopes.ts): the same rules as sending, for the envelope as it will be after the change, so neither can make a
+ * witness who is the signer, or a party. Only a problem this change makes is refused: an envelope that went out under
+ * older rules can still be put right. `passing` is the signer handing it on, who is told in their own words.
+ */
+export function assertWitnessesAfter(e: any, r: any, name: string, email: string, passing = false) {
+  const after = { ...e, recipients: e.recipients.map((x: any) => (x.id === r.id ? { ...x, name, email } : x)) };
+  for (const w of after.recipients.filter(isWitness)) {
+    // A witness the person passing it on had named goes with them (forgetNamedWitness), so there is nothing to check.
+    if (passing && w.witness_for === r.id && w.status === 'pending' && w.signer_named_at) continue;
+    const is = witnessProblem(w, after);
+    if (!is || is === witnessProblem(e.recipients.find((x: any) => x.id === w.id), e)) continue;
+    const sender = senderOf(e);
+    throw bad(passing ? `This document cannot be passed on to ${name}: ${name} is on it as a witness, and a witness cannot also sign it. Pass it on to someone else, or ask ${sender?.name || 'the sender'}${sender?.email ? ` (${sender.email})` : ''} to change who is on it. Nothing was changed.` : `${is} Nothing was changed.`);
+  }
+}
 
 /** A role of a template that a bulk row or a form's visitor fills in: no address yet, and nobody else names them. */
 export const rowFills = (r: any): boolean => !r.email && !r.group_name && !(isWitness(r) && r.named_by_signer);
@@ -87,9 +120,10 @@ export function saveWitnesses(e: any, asked: { rid: string; r: any; i: number }[
     const open = bySigner && !str(saved.email).trim();
     run(`UPDATE recipients SET witness_for=?, named_by_signer=?${open ? ', name=?' : ''} WHERE id=?`, target, bySigner ? 1 : 0, ...(open ? [openWitnessName(signer)] : []), rid);
     // Another person in the witness's place starts with nothing of the one before: no statement, no "not there", no
-    // marks, and the sender's choice replaces a name the signer gave.
+    // marks, and the sender's choice replaces a name the signer gave. A person the sender names on an envelope that is
+    // out is the sender's choice from then on: the signer cannot replace them, unless the request says so.
     if (old && (!sameEmail(old.email, saved.email) || (old.name !== saved.name && !samePerson(old.name, saved.name))))
-      run('UPDATE recipients SET witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL WHERE id=?', rid);
+      run(`UPDATE recipients SET witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL, witness_chosen=NULL${correcting && str(saved.email).trim() && r?.named_by_signer !== true ? ', named_by_signer=0' : ''} WHERE id=?`, rid);
   }
 }
 
@@ -145,18 +179,36 @@ export async function witnessCorrected(envelopeId: string, recipientId: string, 
   const w = get('SELECT * FROM recipients WHERE id=? AND envelope_id=?', recipientId, envelopeId);
   if (!w || !isWitness(w) || !before) return;
   if (!sameEmail(before.email, w.email) || (before.name !== w.name && !samePerson(before.name, w.name))) {
-    run('UPDATE recipients SET witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL WHERE id=?', w.id);
+    // The person the sender puts in the place is the sender's choice: the signer cannot replace them from their link
+    // (only after that person, too, says they were not there).
+    run('UPDATE recipients SET witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL, witness_chosen=NULL, named_by_signer=0 WHERE id=?', w.id);
     await advance(envelopeId);
   }
 }
 
-/** copyEnvelope(): a witness stays the witness of the same person in the copy. One the signer named is named afresh. */
+/** The witness the sender chose, kept while the signer's choice is in the place (witness_chosen), or null. */
+const chosenOf = (w: any): { name: string; email: string } | null => {
+  try {
+    const c = w?.witness_chosen ? JSON.parse(w.witness_chosen) : null;
+    return c && typeof c.name === 'string' && typeof c.email === 'string' ? c : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * copyEnvelope(): a witness stays the witness of the same person in the copy. One the signer named is named afresh.
+ * Where the sender chose the witness and the signer named another after "I was not there", the copy has the sender's
+ * own choice again: the copy is the sender's, and the signer's choice was for that one signing.
+ */
 export function copyWitnesses(src: any, rmap: Map<string, string>) {
   for (const r of src.recipients.filter(isWitness)) {
     const to = rmap.get(r.id);
     const target = r.witness_for ? rmap.get(r.witness_for) ?? null : null;
     if (!to) continue;
     run('UPDATE recipients SET witness_for=?, named_by_signer=? WHERE id=?', target, r.named_by_signer ? 1 : 0, to);
+    const chosen = !r.named_by_signer ? chosenOf(r) : null;
+    if (chosen) run('UPDATE recipients SET name=?, email=? WHERE id=?', chosen.name, chosen.email, to);
     if (r.named_by_signer) run("UPDATE recipients SET name=?, email='' WHERE id=?", openWitnessName(target ? get('SELECT name FROM recipients WHERE id=?', target) : null), to);
   }
 }
@@ -170,9 +222,11 @@ export function forgetNamedWitness(signerId: string) {
   for (const w of all("SELECT * FROM recipients WHERE witness_for=? AND role='witness' AND status='pending' AND signer_named_at IS NOT NULL", signerId)) {
     if (w.sent_at || w.witness_absent_at) retireToken(w, 'removed');
     const s = get('SELECT name FROM recipients WHERE id=?', signerId);
-    run("UPDATE recipients SET name=?, email='', token=?, check_code=?, sent_at=NULL, viewed_at=NULL, consent_at=NULL, witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL, person_gen=COALESCE(person_gen,0)+1 WHERE id=?",
-      openWitnessName(s), token(), checkCode(), w.id);
-    audit(w.envelope_id, SYSTEM, 'Witness cleared', `${labelOf(w)} had been named as the witness by the person whose place on the document went to ${s?.name || 'someone else'}. ${s?.name || 'The new person'} names their own witness.`);
+    // In a place the sender filled, the sender's own choice comes back. Otherwise the new person names their own.
+    const chosen = !w.named_by_signer ? chosenOf(w) : null;
+    run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, sent_at=NULL, viewed_at=NULL, consent_at=NULL, witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=NULL, witness_chosen=NULL, named_by_signer=?, person_gen=COALESCE(person_gen,0)+1 WHERE id=?",
+      chosen ? chosen.name : openWitnessName(s), chosen ? chosen.email : '', token(), checkCode(), chosen ? 0 : 1, w.id);
+    audit(w.envelope_id, SYSTEM, 'Witness cleared', `${labelOf(w)} had been named as the witness by the person whose place on the document went to ${s?.name || 'someone else'}. ${chosen ? `The witness is ${chosen.name} <${chosen.email}> again, whom the sender had chosen.` : `${s?.name || 'The new person'} names their own witness.`}`);
   }
 }
 
@@ -190,9 +244,14 @@ export function openNames(envelopeId: string) {
 type WitnessState = 'open' | 'waiting' | 'asked' | 'absent' | 'done';
 const stateOf = (e: any, w: any): WitnessState => (w.status === 'completed' ? 'done' : w.witness_absent_at ? 'absent' : waitsForName(w) ? 'open' : w.status === 'sent' || w.status === 'viewed' ? 'asked' : 'waiting');
 
-/** May this signer name their witness now? Before they finish, and after "I was not there" while nobody has been asked. */
+/**
+ * May this signer name their witness now? Where the sender left it to them: before they finish. Wherever the witness
+ * said "I was not there", also one the sender chose: until somebody else has been asked. That right belongs to the
+ * "not there" and ends with it: a person the sender puts in the place afterwards is the sender's choice again.
+ */
+const signerMayName = (w: any): boolean => !!w.named_by_signer || !!w.witness_absent_at;
 function mayName(e: any, s: any, w: any): boolean {
-  if (e.status !== 'sent' || !w.named_by_signer || w.status !== 'pending' || (Number(w.witness_names) || 0) >= WITNESS_NAMES_MAX) return false;
+  if (e.status !== 'sent' || !signerMayName(w) || w.status !== 'pending' || (Number(w.witness_names) || 0) >= WITNESS_NAMES_MAX) return false;
   return s.status === 'sent' || s.status === 'viewed' || (s.status === 'completed' && (waitsForName(w) || !!w.witness_absent_at));
 }
 
@@ -204,7 +263,7 @@ function mayName(e: any, s: any, w: any): boolean {
 export function witnessFacts(e: any, r: any): Record<string, any> {
   if (isWitness(r)) {
     const s = signerOf(e, r);
-    return { witness_of: s ? { name: s.name, signed: s.status === 'completed', statement: currentStatement(e, r) || null, said: statementStands(e, r), said_at: statementStands(e, r) ? r.witness_said_at : null, absent_at: r.witness_absent_at || null, sender_named: !r.signer_named_at } : null };
+    return { witness_of: s ? { name: s.name, signed: s.status === 'completed', statement: currentStatement(e, r) || null, said: statementStands(e, r), said_at: statementStands(e, r) ? r.witness_said_at : null, absent_at: r.witness_absent_at || null, sender_named: !r.signer_named_at, signer_told: signerTold(s) } : null };
   }
   const w = witnessOf(e, r);
   if (!w) return {};
@@ -220,7 +279,7 @@ export async function nameWitness(e: any, s: any, body: any, actor: Actor) {
   const from = sender?.name || 'the sender';
   if (!w) throw bad('Nobody witnesses your signature on this document, so there is no witness to name. Nothing was changed.');
   if (e.status !== 'sent') throw notOpen(e, s);
-  if (!w.named_by_signer) throw bad(`${from} chose your witness: ${w.name}. To have someone else, ask ${from}${sender?.email ? ` (${sender.email})` : ''}. Nothing was changed.`, 409);
+  if (!signerMayName(w)) throw bad(`${from} chose your witness: ${w.name}. To have someone else, ask ${from}${sender?.email ? ` (${sender.email})` : ''}. Nothing was changed.`, 409);
   if ((Number(w.witness_names) || 0) >= WITNESS_NAMES_MAX) throw bad(`A witness has been named ${WITNESS_NAMES_MAX} times for your signature on this document, which is as many times as it can be done here. Ask ${from}${sender?.email ? ` (${sender.email})` : ''} to change the witness for you. Nothing was changed.`, 429);
   if (!mayName(e, s, w)) throw bad(`${w.name} has already been asked to witness your signature, so the witness can no longer be changed here. If that is wrong, ask ${from}${sender?.email ? ` (${sender.email})` : ''}. Nothing was changed.`, 409);
   // Characters nobody sees have no place in a name on a certificate, as in "Fix my name".
@@ -230,32 +289,37 @@ export async function nameWitness(e: any, s: any, body: any, actor: Actor) {
   // A witness has to be somebody else, and not a party to the document: the paragraph on the screen says so, and
   // these are the cases software can see for itself. The same address as the signer is allowed (a household shares
   // one) and marked on the certificate when the witness finishes.
-  if (samePerson(name, s.name) && (sameEmail(email, s.email) || name.toLowerCase() === s.name.toLowerCase())) throw bad('That is your own name. A witness has to be somebody else, who is with you and watches you sign. Nothing was changed.');
-  const party = e.recipients.find((x: any) => x.id !== w.id && x.id !== s.id && !isWitness(x) && ['signer', 'inperson', 'approver'].includes(x.role) && sameEmail(x.email, email) && samePerson(x.name, name));
+  if (samePerson(name, s.name) && (sameEmail(email, s.email) || sameName(name, s.name))) throw bad('That is your own name. A witness has to be somebody else, who is with you and watches you sign. Nothing was changed.');
+  const party = e.recipients.find((x: any) => x.id !== w.id && x.id !== s.id && !isWitness(x) && PARTY_ROLES.includes(x.role) && sameEmail(x.email, email) && samePerson(x.name, name));
   if (party) throw bad(`${party.name} is on this document as a person who ${party.role === 'approver' ? 'approves' : 'signs'} it, so they are a party to it, and a witness should not be. Name someone else. Nothing was changed.`);
   if (sameEmail(email, w.email) && w.name === name && !w.witness_absent_at) return witnessFacts(e, s);
   // A witness is a new person emailed in the sender's name: not while paused, read by the fake-notice filter, and
   // counted towards the daily limit like a person passed a document. For a visitor of a public form it counts
   // against that form's own limit, like the visitor's own address. The signer is not told the sender's business.
+  // The name they type is read with the rest: it is the heading of emails in the sender's name and to the sender.
   const viaForm = !!e.powerform_id && e.form_recipient_id === s.id;
-  if (viaForm ? emailRefusal(e, [], { visitor: email }) : emailRefusal(e, [email]))
+  if (viaForm ? emailRefusal(e, [], { visitor: email, extra: [name] }) : emailRefusal(e, [email], { extra: [name] }))
     throw bad(`We cannot email a witness for this document right now. Reply to the email you got and ask ${from} to add your witness. Nothing was changed.`, 403);
   const before = { ...w };
   const known = !waitsForName(w);
+  // The person in a place the sender filled is the sender's choice: kept, so a copy or a hand-over can go back to it.
+  const senders = known && !w.named_by_signer && !w.signer_named_at;
   // A link a witness before was emailed stops working: their part is over.
   if (known && (w.sent_at || w.witness_absent_at)) retireToken(w, 'removed');
   clearAnswers(w.id);
   run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='pending', sent_at=NULL, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL,
       witness_absent_at=NULL, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, signer_named_at=?, witness_names=COALESCE(witness_names,0)+1,
-      person_gen=COALESCE(person_gen,0)+? WHERE id=?`, name, email, token(), checkCode(), now(), known && !(sameEmail(before.email, email) && samePerson(before.name, name)) ? 1 : 0, w.id);
+      person_gen=COALESCE(person_gen,0)+?${senders ? ', witness_chosen=?' : ''} WHERE id=?`, name, email, token(), checkCode(), now(), known && !(sameEmail(before.email, email) && samePerson(before.name, name)) ? 1 : 0,
+    ...(senders ? [JSON.stringify({ name: before.name, email: before.email })] : []), w.id);
   noteReached(e, [email], viaForm ? `form:${e.powerform_id}` : null);
   audit(e.id, actor, 'Witness named', `${labelOf(s)} named ${name} <${email}> as the witness for their signature${known ? `, in place of ${labelOf(before)}${before.witness_absent_at ? ', who said they were not there' : ''}` : ''}.`);
   newerVersion(e.id, actor, `named ${name} as their witness`);
   // A one-time code the sender asked for goes with the place, and a code the person before passed does not count.
   await passCheckOn(e, before, actor);
-  if (before.witness_absent_at)
+  // Whenever a witness who was there before is replaced, and always where it was the sender's choice, the sender hears.
+  if (before.witness_absent_at || senders)
     await notifySender(e, 'always', `New witness named: ${e.subject}`, `${s.name} named ${name} as their witness`,
-      [`${before.name} said they were not there when ${s.name} signed. ${s.name} has now named ${name} <${email}> as their witness instead, and we have emailed them.`, `If nobody else saw ${s.name} sign, a new witness cannot truthfully say they did. If you are not sure, void the envelope and send it again, so that ${s.name} signs with the witness there.`]);
+      [`${before.witness_absent_at ? `${before.name} said they were not there when ${s.name} signed. ` : ''}${s.name} has now named ${name} <${email}> as their witness instead${senders ? ` of ${before.name}, whom you had chosen` : ''}${s.status === 'completed' ? ', and we have emailed them' : ', and we email them straight after they sign'}.`, `If nobody else saw ${s.name} sign, a new witness cannot truthfully say they did. If you are not sure, void the envelope and send it again, so that ${s.name} signs with the witness there.`]);
   // Someone who has signed already: the witness is asked now. Before that, they are asked straight after Finish.
   if (s.status === 'completed') await advance(e.id);
   const fresh = get('SELECT * FROM recipients WHERE id=?', w.id);
@@ -278,6 +342,13 @@ export function makeStatement(e: any, w: any, shown: any, actor: Actor) {
   return { said: true, statement: text };
 }
 
+/**
+ * Whether "I was not there" reaches the signer by email: not someone who signed in person (the sender hosted that and
+ * is told), not someone with no address (the sender passes their link on), not someone who stopped our emails, and
+ * not an address the last email came back from. The witness's screen and the sender's email say it as it is.
+ */
+export const signerTold = (s: any): boolean => !!s && s.role !== 'inperson' && !!String(s.email || '').trim() && !s.complained_at && !s.bounced_at;
+
 /** "I was not there" (POST /sign/:token/not-present). The document stays unwitnessed until another witness signs. */
 export async function notPresent(e: any, w: any, note: any, actor: Actor) {
   if (!isWitness(w)) throw bad('Only a witness can say this. If you are not the right person to sign, use "Assign to someone else" or decline.');
@@ -286,24 +357,30 @@ export async function notPresent(e: any, w: any, note: any, actor: Actor) {
   const s = signerOf(e, w);
   const sender = senderOf(e);
   const said = str(note, 500).trim();
-  run("UPDATE recipients SET status='pending', witness_absent_at=?, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, named_by_signer=1, signer_named_at=NULL WHERE id=?", now(), w.id);
+  // Whoever chose this witness, the signer may now name another (signerMayName). named_by_signer stays the sender's
+  // choice: a copy of the envelope, or a witness the sender names next, is the sender's again.
+  run("UPDATE recipients SET status='pending', witness_absent_at=?, witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL WHERE id=?", now(), w.id);
   audit(e.id, actor, 'Witness was not there', `${labelOf(w)} said they were not physically present when ${s?.name} signed, so they did not witness it.${said ? ` They wrote: "${said}"` : ''} The document is not witnessed. ${s?.name} can name another witness, and the sender can change the witness.`);
   newerVersion(e.id, actor, 'said they were not there to witness it');
   // The signer is told on their own link, where they can name someone else. Someone who signed in person has no
-  // email of their own here: the sender hosted that signing and is told below.
+  // email of their own here: the sender hosted that signing and is told below. What the witness wrote is a stranger's
+  // words: it goes to the sender and the record, like a reason for declining, never into the signer's inbox.
+  const told = signerTold(s);
+  // An address the last email came back from is tried all the same, and the sender is not told it arrived.
   if (s && s.role !== 'inperson' && s.email && !s.complained_at)
     await sendMail({ to: s.email, recipientId: s.id, envelopeId: e.id, replyTo: sender?.email, fromName: sender?.name, code: s.check_code,
       subject: `Your witness was not there: ${e.subject}`, heading: `${w.name} said they did not see you sign`,
       lines: [`${w.name} said that they were not physically with you when you signed "${e.subject}", so they did not sign as your witness. Your own signature is kept, and the document is not witnessed yet.`,
-        ...(said ? [`They wrote: "${said}"`] : []),
         `If someone else was with you and watched you sign, open your link and name them as your witness. If nobody else saw you sign, ask ${sender?.name || 'the sender'} what to do: a witness has to see the signature being made, so you may have to sign again with a witness there.`,
-        WHO_MAY_WITNESS],
+        WHO_MAY_WITNESS, WITNESS_RECORDS],
       cta: { label: 'Name another witness', url: signUrl(s) } });
+  // The sender reads what happened to the signer's email as it is, never "we told them" when we could not.
+  const why = !s?.email ? 'we have no email address for them, because you send them their link yourself' : s.complained_at ? 'they marked an earlier email from this account as spam, so we do not email them' : 'the last email to them came back, so ours may not reach them either';
   await notifySender(e, 'always', `Witness was not there: ${e.subject}`, `${w.name} said they were not there when ${s?.name} signed`,
     [`${labelOf(w)} said they were not physically present when ${s?.name} signed "${e.subject}", so they did not witness it.${said ? ` They wrote: "${said}"` : ''} The document is not witnessed and cannot be completed until a witness has signed.`,
-      `${s?.role === 'inperson' ? `${s?.name} signed in person on your device, so you can name another witness for them: open the envelope and choose Correct next to ${w.name}.` : `We told ${s?.name}, who can name another witness from their signing link. You can also change the witness yourself: open the envelope and choose Correct next to ${w.name}.`}`,
+      `${s?.role === 'inperson' ? `${s?.name} signed in person on your device, so you can name another witness for them: open the envelope and choose Correct next to ${w.name}.` : told ? `We told ${s?.name}, who can name another witness from their signing link. You can also change the witness yourself: open the envelope and choose Correct next to ${w.name}.` : `We could not tell ${s?.name}: ${why}. Pass on their signing link yourself (they can name another witness there), or change the witness: open the envelope and choose Correct next to ${w.name}.`}`,
       `If nobody else saw ${s?.name} sign, a new witness cannot truthfully say they did. Then void the envelope and send it again, so that ${s?.name} signs with a witness there.`]);
-  return { ok: true };
+  return { ok: true, signer_told: told };
 }
 
 /** Why a witness cannot decline the document or pass it on, and what they can do instead. */
@@ -378,8 +455,8 @@ export function witnessMailLines(e: any, w: any, kind: string, sender: any): str
   const s = signerOf(e, w);
   const who = s?.name || 'the signer';
   return [w.signer_named_at ? `${who} has signed "${e.subject}" and named you as their witness.` : `${sender?.name || 'The sender'} named you as the witness for ${who}, who has signed "${e.subject}".`,
-    `Open the link only if you were physically with ${who} and watched them sign. The page asks you to confirm that in your own words, and then to sign as witness. If you were not there, say so on the same page: nothing is signed then, and ${who} and ${sender?.name || 'the sender'} are told.`,
-    'Being a witness uses none of your money and needs no account.'];
+    `Open the link only if you were physically with ${who} and watched them sign. The page shows a statement that you were, for you to tick as your own if it is true, and then asks you to sign as witness. If you were not there, say so on the same page: nothing is signed then, and ${signerTold(s) ? `${who} and ${sender?.name || 'the sender'} are` : `${sender?.name || 'the sender'} is`} told.`,
+    'Being a witness uses none of your money and needs no account.', WITNESS_RECORDS];
 }
 
 // ---- The certificate (pdf.ts) ----------------------------------------------------------------------------------

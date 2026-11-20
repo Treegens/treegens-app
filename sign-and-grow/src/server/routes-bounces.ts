@@ -454,10 +454,14 @@ route('POST', '/sign/:token/mail-again', async (c) => {
     const k = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const until = new Date(Date.now() + MAIL_AGAIN_MINUTES * 60_000).toISOString();
     run('INSERT OR REPLACE INTO mail_again_codes (recipient_id, code_hash, tries, expires_at) VALUES (?,?,0,?)', r.id, hmac(`mail-again:${r.id}:${k}`), until);
-    // Not as one of the envelope's emails to them (no recipient id): those stay stopped until the code is typed.
-    const delivery = await sendMail({ to: r.email, envelopeId: e.id, expiresAt: until, subject: `Your code: ${k}`, heading: 'Your code to get our emails again',
-      lines: [`Someone asked, on the signing page of "${str(e.subject, 200)}", for our emails about it to start again. You had marked one of them as spam, so we had stopped. If that was you, type this code on that page: ${k}`,
-        `The code works for ${MAIL_AGAIN_MINUTES} minutes. If you did not ask for it, ignore this email. Nothing changes, and we send you nothing more unless you ask on that page.`] });
+    // Not as one of the envelope's emails to them (no recipient id): those stay stopped until the code is typed. The
+    // code is never in the subject, which the sender sees in the envelope's list of emails, and our stored copy loses
+    // it once the mail server has taken it (here, and on a later try by the listener in signercode.ts, which knows
+    // "... is your code").
+    const delivery = await sendMail({ to: r.email, envelopeId: e.id, expiresAt: until, subject: 'Your code to get our emails again', heading: 'Your code to get our emails again',
+      lines: [`Someone asked, on the signing page of "${str(e.subject, 200)}", for our emails about it to start again. You had marked one of them as spam, so we had stopped. If that was you, type this code on that page.`,
+        `${k} is your code. It works for ${MAIL_AGAIN_MINUTES} minutes. If you did not ask for it, ignore this email. Nothing changes, and we send you nothing more unless you ask on that page.`] });
+    if (delivery === 'sent') run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND expires_at=?)", k, k, e.id, until);
     audit(e.id, actor, 'Code sent to start emails again', `${r.name} <${r.email}> asked on the signing page for our emails again. A code went to that address. Nothing changes until it is typed there.`);
     return { ok: true, code_sent: true, sent_to: r.email, minutes: MAIL_AGAIN_MINUTES, delivery };
   }

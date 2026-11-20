@@ -27,11 +27,13 @@ import { carryRules } from './tplroles.ts';
 // Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
 import { fingerprintLines, noteCopyMailed } from './evidence.ts';
 // A witness for one signer: asked straight after that signer, never charged, a statement of their own (witness.ts).
-import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames, withWitnesses, witnessBits, witnessesSetAside, witnessedBy } from './witness.ts';
+import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames, withWitnesses, witnessBits, witnessesSetAside, witnessedBy, assertWitnessesAfter } from './witness.ts';
 import { waitsForName } from '../lib/witness.ts';
 // Conditional fields and formulas: checked when saved, worked out again from what is stored (logic.ts).
 import { saveLogic, settleLogic, hiddenAfter, hiddenOf, copyLogic, logicChanges } from './logic.ts';
 import { ruleOf, logicKey } from '../lib/logic.ts';
+// A public form's visitor whose start was closed is offered a fresh form, and the owner is not emailed (formstart.ts).
+import { closedFormStart, closedStartText } from './formstart.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson', 'witness'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike'];
@@ -1720,6 +1722,8 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   // Someone whose link the sender passes on has no address, and keeps none when only the name or the code changes.
   // An address given for them means we email them from now on (the tick goes, below).
   if (!name || (!isEmail(email) && !(r.link_by_sender && !email))) throw bad(r.link_by_sender && !name ? 'Enter a name.' : 'Enter a name and a valid email address.');
+  // A witness who would be the signer, or a party, is refused here as it is when sending (witness.ts).
+  assertWitnessesAfter(e, r, name, email);
   const code = patch.access_code === undefined ? r.access_code : str(patch.access_code, 50).trim() || null;
   // A code that is set or changed must be long enough. A new code starts clean: wrong tries at the old one are
   // forgotten and a frozen code opens again, which is how the sender lets a signer back in.
@@ -1845,7 +1849,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // A second Finish (a double tap, a retry) is a conflict with the first, not a mistake in the request: 409. Asked
   // before anything else, because the first Finish may have completed the whole envelope by now.
   if (r.status === 'completed') throw bad('You have already finished this document.', 409);
-  if (e.status !== 'sent') throw bad('This envelope is no longer open for signing.');
+  if (e.status !== 'sent') throw bad(closedFormStart(e, r) ? closedStartText(e) : 'This envelope is no longer open for signing.');
   if (r.status !== 'sent' && r.status !== 'viewed') throw bad('It is not your turn to sign yet.');
   // What is on this person's screen must be what is on the envelope now. The signing screen sends the content
   // version it was given. A caller that sends none is held to the version the server last showed them. If the
@@ -1961,6 +1965,8 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   const name = str(to.name, 120).trim();
   const email = str(to.email, 254).trim();
   if (!name || !isEmail(email)) throw bad('Enter the name and email of the person who should sign instead.');
+  // Not to a witness on the same document: their own witness would then watch themselves sign (witness.ts).
+  assertWitnessesAfter(e, r, name, email, true);
   // Where this person's name or address is printed on pages someone has already signed, another name there would
   // change what that person signed. Only the sender can decide that, by asking them to sign again.
   const over = signedOverName(e, r, true, true);
@@ -2033,6 +2039,10 @@ export async function extendEnvelope(e: any, days: any, actor: Actor) {
 // A signer who ran out of time asks the sender for more, in one click.
 export async function requestExtension(e: any, r: any, actor: Actor) {
   if (r.status === 'completed' || r.status === 'declined' || (e.status !== 'expired' && e.status !== 'sent')) throw bad('This document is not waiting for you.');
+  // A start of a public form that was cleared is nobody's but the visitor's to redo, and an envelope its sender
+  // removed from their lists has no page left to give more time from: an email would only lead them to an error.
+  if (closedFormStart(e, r)) throw bad(closedStartText(e), 409);
+  if (e.hidden_at) throw bad(`${senderOf(e)?.name || 'The sender'} has removed this document from their list, so it cannot be opened again from here and we did not ask them for more time. If you still need to sign it, ask them to send it again.`, 409);
   audit(e.id, actor, 'More time requested', `${r.name} asked for the deadline to be extended`);
   await notifySender(e, 'always', `More time needed: ${e.subject}`, `${r.name} asked for more time to sign`,
     [e.status === 'expired' ? 'The deadline has passed. You can reopen the envelope and nobody has to start again.' : `The deadline is ${momentText(e.expires_at)}. You can push it back.`],
@@ -2278,6 +2288,9 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
 // asked. Told once for each recipient until the sender does something about it: more time, reopening or sending
 // again clears the mark (see extendEnvelope, remindEnvelope and the corrections), and the next time is news again.
 export async function noteDeadLink(e: any, r: any, why: string) {
+  // Not for an envelope its sender removed from their lists (the link in the email would lead to an error), nor for
+  // a public form's start that was cleared: the visitor is offered a fresh form, and the owner has nothing to do.
+  if (e.hidden_at || closedFormStart(e, r)) return;
   if (r.status === 'completed' || !run('UPDATE recipients SET dead_link_alerted_at=? WHERE id=? AND dead_link_alerted_at IS NULL', now(), r.id).changes) return;
   await notifySender(e, 'problems', `Could not open: ${e.subject}`, `${r.name} tried to open your document and could not`, [why]);
 }

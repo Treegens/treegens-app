@@ -141,7 +141,7 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
       <div className="card sg-narrow sg-code">
         <div className="sg-state-icon warn"><Icon name="lock" size={26} /></div>
         <h1 className="serif" id="sg-h1" tabIndex={-1}>We stopped sending codes to this number</h1>
-        <p>Someone using this link told us that {check.to} is not their number, so no more codes go to it. That leaves whoever owns the number alone.</p>
+        <p>Someone using a link from {sender.name} told us that {check.to} is not their number, so no more codes go to it. That leaves whoever owns the number alone.</p>
         <p>{sender.name} has been told and has to put in the right number. Until they have, this document cannot be opened. There is nothing you need to do on this page.</p>
         {toldNote}
         <Sender env={env} brand={brand} lead="Ask" />

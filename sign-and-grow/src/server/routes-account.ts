@@ -2,11 +2,12 @@ import { route, json, type Ctx } from './router.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
-import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, SESSION_COOKIE } from './auth.ts';
+import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, sessionEnd, SESSION_COOKIE } from './auth.ts';
+import { rememberedDevice } from './twostep.ts';
 import { PROVIDER_NAMES, isProviderId } from '../lib/signin.ts';
 import { deviceName } from '../lib/phone.ts';
 import { handedOver } from './handover.ts';
-import { SESSION_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
+import { SESSION_DAYS, SESSION_MAX_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
 import { smsProvider } from '../lib/checks.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
@@ -348,19 +349,24 @@ route('POST', '/me/password', async (c) => {
 // names a session to the page is a short fingerprint of its row, never the cookie or the hash we look it up by.
 // No API key reaches these routes (PERSON_ONLY in router.ts).
 const sessionHandle = (s: any): string => sha256(`session:${s.id}`).slice(0, 16);
-const sessionsOf = (userId: string): any[] => all('SELECT * FROM sessions WHERE user_id=? AND expires_at > ?', userId, now());
+// Only what still signs in: also not a row past the most a session may last (sessionEnd in auth.ts).
+const sessionsOf = (userId: string): any[] => all('SELECT * FROM sessions WHERE user_id=? AND expires_at > ?', userId, now()).filter((s) => sessionEnd(s) > Date.now());
 route('GET', '/me/sessions', (c) => {
   const mine = sessionsOf(c.user.id).map((s) => ({
-    id: sessionHandle(s), ...deviceName(s.ua), signed_in_at: s.created_at || null, last_used_at: s.last_used_at || null, signs_out_at: s.expires_at,
+    id: sessionHandle(s), ...deviceName(s.ua), signed_in_at: s.created_at || null, last_used_at: s.last_used_at || null, signs_out_at: new Date(sessionEnd(s)).toISOString(),
     current: s.id === c.auth?.sessionId, handed_over: !!s.locked_at,
   }));
   // This browser first, then the most recently used.
   mine.sort((a, b) => Number(b.current) - Number(a.current) || String(b.last_used_at || b.signed_in_at || '').localeCompare(String(a.last_used_at || a.signed_in_at || '')));
-  return { sessions: mine, days: SESSION_DAYS, noted_every_minutes: SESSION_TOUCH_MINUTES };
+  return { sessions: mine, days: SESSION_DAYS, max_days: SESSION_MAX_DAYS, noted_every_minutes: SESSION_TOUCH_MINUTES };
 });
 route('POST', '/me/sessions/sign-out-others', (c) => {
   const n = Number(run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '').changes);
-  return { ok: true, signed_out: n };
+  // "Every browser except this one" covers two-step login too: a lost phone that is remembered there would sign in
+  // again with a saved password alone. Only this browser stays remembered.
+  const keep = rememberedDevice(c, c.user)?.id || '';
+  const forgot = Number(run('DELETE FROM two_step_devices WHERE user_id=? AND id != ?', c.user.id, keep).changes);
+  return { ok: true, signed_out: n, ...(forgot ? { two_step_devices_forgotten: forgot } : {}) };
 });
 route('DELETE', '/me/sessions/:id', (c) => {
   const s = sessionsOf(c.user.id).find((x) => sessionHandle(x) === c.params.id);

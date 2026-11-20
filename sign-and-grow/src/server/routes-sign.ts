@@ -10,6 +10,7 @@ import { storeUpload } from './routes-envelopes.ts';
 import { impactOf } from '../lib/impact.ts';
 import { rateWait } from './util.ts';
 import { wrongAccessCode, requestAccessCode } from './envelopes.ts';
+import { closedFormStart, startAgainSlug } from './formstart.ts';
 import { shownVersion, changedSince } from './envelopes.ts';
 import { noteReplacedLink, notCompletedNotice } from './envelopes.ts';
 import { printedWords, printsName, notOpen, keepsCopy, earlierCopy } from './envelopes.ts';
@@ -96,7 +97,11 @@ route('GET', '/sign/:token', (c) => {
     brand: a,
     envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets),
       // For someone who came through a public form on a shared device: where the next person starts.
-      next_person: (e.powerform_id && e.form_recipient_id === r.id && get('SELECT slug FROM powerforms WHERE id=? AND active=1 AND shared_device=1', e.powerform_id)?.slug) || null },
+      next_person: (e.powerform_id && e.form_recipient_id === r.id && get('SELECT slug FROM powerforms WHERE id=? AND active=1 AND shared_device=1', e.powerform_id)?.slug) || null,
+      // A public form's start that was cleared before the visitor finished: they start again (start_again is the
+      // form's slug while it takes people), and nobody is asked for more time (formstart.ts). removed: the sender
+      // took this expired envelope out of their lists, so it cannot be reopened and the page does not offer that.
+      form_cleared: closedFormStart(e, r), start_again: closedFormStart(e, r) ? startAgainSlug(e) : null, removed: e.status === 'expired' && !!e.hidden_at },
     // signed_before: when this person finished, if the sender changed the document after that and asked them to
     // sign again. A closed envelope says so too, because that person still has the right to a copy. earlier_copy:
     // whether the document as they signed it then was kept, so the page only offers that download when it exists.

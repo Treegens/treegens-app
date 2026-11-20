@@ -33,10 +33,12 @@ export function WitnessFirst({ data, base, onDone }: { data: any; base: string; 
   const [said, setSaid] = useState(false);
   const ids = useId();
 
+  // Who we told is said as it is: the sender always, the signer only when we have a way to email them (signerTold).
+  const told = w.signer_told ? `${w.name} and ${sender.name}` : sender.name;
   if (said || w.absent_at)
     return (
       <StateCard tone="ok" title="Thank you. You said you were not there">
-        <p>Nothing was signed in your name. We told {w.name} and {sender.name}, and {w.name} can ask the person who was there instead. There is nothing more for you to do.</p>
+        <p>Nothing was signed in your name. We told {told}{w.signer_told ? `, and ${w.name} can ask the person who was there instead` : `, who can ask the person who was there instead`}. There is nothing more for you to do.</p>
         <Sender env={env} brand={data.brand} lead="Questions? Contact" />
       </StateCard>
     );
@@ -70,7 +72,7 @@ export function WitnessFirst({ data, base, onDone }: { data: any; base: string; 
     try {
       await api(`${base}/not-present`, { body: { note } });
       setSaid(true);
-      toast(`Done. We told ${w.name} and ${sender.name}.`);
+      toast(`Done. We told ${told}.`);
     } catch (e: any) {
       setError(e?.message || 'Something went wrong on our side. Try again in a moment.');
     } finally {
@@ -97,8 +99,8 @@ export function WitnessFirst({ data, base, onDone }: { data: any; base: string; 
       </div>
       {away && (
         <div className="wt-form">
-          <p className="wt-note">Then do not sign as witness. We tell {w.name} and {sender.name} that you were not there, nothing is signed in your name, and {w.name} can name the person who was.</p>
-          <label><span>Anything they should know <span className="muted">(optional)</span></span>
+          <p className="wt-note">Then do not sign as witness. We tell {told} that you were not there, nothing is signed in your name, and {w.name} can name the person who was.</p>
+          <label><span>Anything {sender.name} should know <span className="muted">(optional, only {sender.name} sees it)</span></span>
             <textarea dir="auto" value={note} maxLength={500} rows={2} onChange={(e) => setNote(e.target.value)} /></label>
           <div className="wt-actions"><button type="button" className="btn lg" disabled={busy} onClick={notThere}>{busy ? 'Sending' : 'Tell them I was not there'}</button></div>
         </div>
@@ -114,7 +116,7 @@ export function WitnessNotice({ me }: { me: any }) {
   if (!w || w.state === 'done') return null;
   return (
     <div className="notice warn sg-top">
-      <b>This document needs a witness.</b> {w.name ? `Your witness is ${w.name}.` : 'You name your witness before you finish.'} They have to be with you, in the same room, and watch you sign. Straight after you finish, we email them a link to confirm that and sign as witness.
+      <b>This document needs a witness.</b> {w.name ? `Your witness is ${w.name}.` : 'You name your witness before you finish.'} They have to be with you, in the same room, and watch you sign. Straight after you finish, we email them a link to confirm that and sign as witness. {WITNESS_RECORDS}
     </div>
   );
 }
@@ -186,6 +188,7 @@ export function WitnessAfter({ me, base, onNamed }: { me: any; base: string; onN
     <div className="notice wt-card" role="status">
       <h3>Your witness</h3>
       <p className="wt-who">{w.state === 'done' ? <><b>{w.name}</b> confirmed that they saw you sign, and signed as your witness.</> : <><b>{w.name}</b> has been emailed and is asked to confirm that they were with you and saw you sign. We tell you if they say they were not there.</>}</p>
+      <p className="muted small wt-note">{WITNESS_RECORDS}</p>
     </div>
   );
 }

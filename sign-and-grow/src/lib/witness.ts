@@ -65,6 +65,21 @@ export const WITNESS_BLOCK: { type: string; label: string; w: number; h: number;
 
 const norm = (s: any) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 const nameOf = (r: any) => String(r?.name || r?.role_name || '').trim();
+/** One name written two ways is one name: case, accents, dots and spaces make no difference ("Ánn  signer" is "Ann Signer"). */
+export const sameName = (a: any, b: any): boolean => {
+  const k = (s: any) => String(s ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ');
+  return !!k(a) && k(a) === k(b);
+};
+/** The roles that make someone a party to the document: they sign or approve it. */
+export const PARTY_ROLES = ['signer', 'inperson', 'approver'];
+
+/**
+ * What a witness may fill in: their block and nothing more. A witness uses no signature, so a "witness" given the
+ * fields of a party (an amount to repay, initials on a clause, a tick to agree) would be a free signature for
+ * somebody who is really a party. Counted per type, so the block can be placed again after it was moved.
+ */
+export const WITNESS_FIELDS: Record<string, number> = WITNESS_BLOCK.reduce((m: Record<string, number>, f) => ({ ...m, [f.type]: (m[f.type] || 0) + 1 }), {});
+const FIELD_WORDS: Record<string, string> = { signature: 'signature', full_name: 'name', text: 'text', date_signed: 'date' };
 
 /**
  * Why this witness cannot go out like this, or null. One rule for the editor (before Send) and the server (when an
@@ -78,14 +93,21 @@ export function witnessProblem(r: any, e: { recipients?: any[]; fields?: any[]; 
   if (!r.witness_for) return `${name} is a witness, and a witness is there for one person who signs. Choose whose signature they witness.`;
   if (!target) return `${name} is the witness for someone who is no longer on this document. Choose one of the people who sign, or remove the witness.`;
   const whose = nameOf(target) || 'the person they witness';
-  if (r.group_id || r.group_name) return `A witness is one named person, and ${name} is a group. Name the person who will watch ${whose} sign.`;
+  if (r.group_id || r.group_name) return `A witness is one named person, not a group. Name the person who will watch ${whose} sign.`;
   if (target.group_id || target.group_name) return `${whose} is a group, so nobody knows in advance who will sign for it, and a witness watches one person sign. Remove the witness, or put the person who signs on the document by name.`;
   if (!WITNESSED_ROLES.includes(target.role)) return `${name} is the witness for ${whose}, who does not sign this document. A witness can only be there for someone who signs.`;
   const second = people.find((x) => x.id !== r.id && isWitness(x) && x.witness_for === r.witness_for);
   if (second) return `${whose} has two witnesses here. A person who signs has one witness on Sign&Grow. Remove one of them.`;
   if (r.link_by_sender) return `${name} is a witness, and a witness gets their own email straight after ${whose} signs. Untick "I will send the link myself" for them.`;
   if (r.named_by_signer && r.verify === 'sms_code') return `${whose} names the witness, so there is no mobile number for them to check a code with. Choose a code by email or no extra check for the witness.`;
-  if (!waitsForName(r) && norm(r.email) === norm(target.email) && norm(r.name) === norm(target.name)) return `${name} would be the witness of their own signature. A witness has to be somebody else.`;
-  if (!(e?.fields || []).some((f) => f.recipient_id === r.id && f.type === 'signature')) return `${name} is a witness and has no signature field yet. Place the witness block for them near the signature of ${whose}.`;
+  if (!waitsForName(r) && norm(r.email) === norm(target.email) && sameName(r.name, target.name)) return `${name} would be the witness of their own signature. A witness has to be somebody else.`;
+  // Not a party: someone who signs or approves the same document, at the same address and under the same name.
+  const party = waitsForName(r) ? null : people.find((x) => x.id !== r.id && x.id !== target.id && !isWitness(x) && PARTY_ROLES.includes(x.role) && norm(x.email) === norm(r.email) && sameName(x.name, r.name));
+  if (party) return `${name} is the witness for ${whose} and also ${party.role === 'approver' ? 'approves' : 'signs'} this document, so they are a party to it, and a witness should not be. Name somebody else as the witness.`;
+  const mine = (e?.fields || []).filter((f) => f.recipient_id === r.id);
+  if (!mine.some((f) => f.type === 'signature')) return `${name} is a witness and has no signature field yet. Place the witness block for them near the signature of ${whose}.`;
+  // Only the block: a witness never uses a signature, so fields of a party would make a free one.
+  const extra = Object.entries(mine.reduce((m: Record<string, number>, f) => ({ ...m, [f.type]: (m[f.type] || 0) + 1 }), {})).find(([t, k]) => k > (WITNESS_FIELDS[t] || 0));
+  if (extra) return `${name} is a witness, and a witness fills in only their witness block: one signature, their name, their address and occupation (two text fields) and the date. ${WITNESS_FIELDS[extra[0]] ? `They have ${extra[1]} ${FIELD_WORDS[extra[0]]} fields, and the block has ${WITNESS_FIELDS[extra[0]]}` : `They have ${/^[aeiou]/.test(extra[0]) ? 'an' : 'a'} ${extra[0].replace('_', ' ')} field`}. Remove it, or make them a signer if they agree to the document themselves.`;
   return null;
 }

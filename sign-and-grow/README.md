@@ -41,7 +41,7 @@ What the test files cover:
 | `tests/integrity.test.ts` | What people sign is what they saw: every signer is shown everything the sender wrote, nothing printed changes after a signature unless the signer is asked to sign again, a signing page left open cannot finish on a document that was changed, the audit trail says what a correction changed, a replaced signer starts with empty fields, a save from an older copy of the editor is refused, a replaced email is still recognised as genuine, a changed signing order is enforced. A second round covers what a second look found: names and addresses that a field prints are wording too, what a finished signer left empty stays empty, the page loads a replaced file again before Finish works, a hand-over inside one inbox passes on nothing, changes made outside the editor count as a newer version, nothing in a request is dropped or cut short without a word, and whoever signed keeps the document as they signed it. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
 | `tests/autoplace.test.ts` | Placing fields automatically from the text of a document. |
-| `tests/bounces.test.ts` | Knowing when an email did not arrive: the ids every email carries, the address for the mail provider and its secret, one sample of each provider read like our own shape, hard and soft bounces, complaints and deliveries, matching by id and by address, reminders that stop and start again, the warning before sending to an address that bounced, a login whose own address bounces, odd and huge bodies, and the Amazon SNS confirmation. |
+| `tests/bounces.test.ts` | Knowing when an email did not arrive: the ids every email carries, the address for the mail provider and its secret, one sample of each provider read like our own shape, hard and soft bounces, complaints and deliveries, matching by id (also after the envelope was deleted) and by address (only when one sender wrote to it), reminders that stop and start again, a complaint that no correction or new envelope undoes and only a code from the person's mailbox does, emails waiting for another try, news in any order, mail server text kept from customers, the warning before sending to an address that bounced, a login whose own address bounces, odd, huge and slow batches, and the Amazon SNS confirmation. |
 | `tests/qr.test.ts` | QR codes made by the app itself: every version from 1 to 40 read back by a reader written apart from the encoder (format and version bits, the mask taken off, the blocks put back together, Reed-Solomon checked, the text out), fixed matrices that outside decoders read from pixels, the fixed parts of the picture, the four penalty rules and the choice among all eight masks, the SVG with its light margin and nothing of the text in it, what is refused (too long, not a web link, a user name in front of the address), the words on the dialog and the sheet, the public address a form's code is drawn from, and a personal code that stops opening the document when its link is replaced. |
 | `tests/platform.test.ts` | Platform and security: links in emails never come from a request header, the caller's address behind a proxy, what an API key may do and what it says when it cannot be used, keys when a member is removed, closes their own login or an account is closing, and webhooks (logged before the first try, sent to the address that was checked, sent again, paged). |
 | `tests/abuse.test.ts` | Keeping scammers and strangers out: the filter for fake payment notices where an email is started and where it is written (first send, correction, reminder, bulk, public form, void, the next person in a signing order, a decline notice, a team invitation), with the spellings it is known to catch (spaced, glued, look-alike letters and digits, phone numbers however they are punctuated) and the honest senders it must let through; a payment that lifts the checks only after 14 days; the daily limit on people newly emailed, with its own count for each public form and for team invitations; what a paused account can and cannot do, and what is held back and released; reports that count, reports through a public form that do not, and reports about documents that were deleted; who may read a support message and who may confirm an address (and that a new password confirms it too); access codes that freeze; public forms that never hand out someone else's document, and whose page never prints a fake payment notice; and reporting an email with its security code. |
@@ -93,10 +93,10 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | Signing links expire or stop after a few opens. | A link works for as long as the envelope is open, with no limit on opens. A replaced link offers to send the current one. `/help` emails anyone their documents again. An expired envelope is reopened, not rebuilt, and signers can ask for more time. |
 | Signers are pushed to create an account. | Signers never need an account or a password, and are never sent marketing. |
 | A signer has no way to ask about a clause before signing, and the answer is lost somewhere in email. | "Questions and comments" next to the document: a question goes to the sender's side (the sender and the admins of their account) privately unless the signer chooses everyone, the sender answers on the envelope page, and the answer is on the signing page and in one email. Nobody else on the envelope ever reads a private thread. The sender sees who waits for an answer, and someone who presses Finish with a question unanswered is told so and can still finish. Comments are not part of what is signed, and the audit trail records who wrote and when, never the words. |
-| The text message code never arrives, my number is refused, and only the sender can change the check. | A sender can ask for a one-time code by email, or by text message to a mobile number they type where the operator has switched texts on. A number is checked for its country code when the sender types it, with one rule for every screen and the API, so a number that cannot be texted is caught before anything is sent. The code screen shows where the code went (masked) and when a new one can be asked for, and offers "I do not get the code" and "This is not my number": both reach the sender at once, whatever their email settings, and tell the signer honestly that only the sender can fix it. After "not my number" no more codes go to that number. A text the provider would not take is tried again like an email, and the sender is told when it never goes through. Texts are not charged to customers. See "Checking who signs". |
+| The text message code never arrives, my number is refused, and only the sender can change the check. | A sender can ask for a one-time code by email, or by text message to a mobile number they type where the operator has switched texts on. A number is checked for its country code when the sender types it, with one rule for every screen and the API, so a number that cannot be texted is caught before anything is sent. The code screen shows where the code went (masked) and when a new one can be asked for, and offers "I do not get the code" and "This is not my number": both reach the sender at once, whatever their email settings, and tell the signer honestly that only the sender can fix it. After "not my number" no more codes or links go to that number from that sender, on any envelope. A text the provider would not take is tried again like an email, decided again at that moment (a corrected number, a decline, the pause), and the sender is told when it never goes through. Limits on codes are counted per sender, so nobody can lock a person out of another sender's documents, and a whole office behind one internet connection gets its codes. Texts are not charged to customers. See "Checking who signs". |
 | "I cannot tell a real request from a scam." | Every signing email names the sender and carries a security code that anyone can type into `/check`. Senders must confirm their email, and the confirmation link only works together with the login's session or password, so nobody confirms a login that a stranger made in their name. Until an account has a payment that is 14 days old and was not refunded or disputed (`PAID_TRUST_DAYS` in `src/lib/policy.ts`), or a person has cleared it, it has a daily limit on how many people it newly emails, however it reaches them, and cannot send what reads like a fake payment notice or send or invite under the name of a well-known brand. A public form named like such a notice is refused, because its page would print it on our address to anyone with the link. Paying does not switch that off at once. Recipients can report a request from the email itself or from the signing page, also after the sender has deleted the document, and enough reports pause the sender until a person has looked. The filter (`src/server/fakenotice.ts`) catches the common trick in the spellings the tests list, not every scam: a notice worded another way, or a brand that is not on its list, passes. Reports and the pause are the backstop. |
 | "They say they never got the email." | The envelope shows whether each email left, and the audit trail only says "Sent to recipient" when the mail server took it. An email it would not take is tried again by the timer for about a day and a half, and the sender is told when that fails for good. The sender is told when a request sits unopened, and can copy the signing link, remind one person or correct the address. |
-| An email bounced and nobody said so: reminders kept going to a dead address, and the sender found out weeks later. | On a server connected to its mail provider (`MAIL_EVENTS_TOKEN`), an email that comes back for good tells the sender at once, says "Could not be delivered" with the reason in plain words on the envelope and in the list, and stops reminders to that address until the sender corrects it or chooses "Try again". For 30 days a new envelope to the same address warns first and goes out when the sender says so. Someone who marks our email as spam is not emailed about that envelope again unless they ask on their signing page, and it counts as a report like the "Report this email" link. When our own emails to a customer come back, every page of the app says so, with a way to move the login to another address. "Delivered" only ever means that their mail server took it. |
+| An email bounced and nobody said so: reminders kept going to a dead address, and the sender found out weeks later. | On a server connected to its mail provider (`MAIL_EVENTS_TOKEN`), an email that comes back for good tells the sender at once, says "Could not be delivered" with the reason in plain words on the envelope and in the list, and stops reminders to that address until the sender corrects it or chooses "Try again". For 30 days a new envelope to the same address warns first and goes out when the sender says so. Someone who marks our email as spam is not emailed by that account again, also after a correction away and back or on a new envelope, unless they ask on a signing page with a code we email them (the sender holds the link, so the link alone is not enough), and it counts as a report like the "Report this email" link, also after the sender deleted the envelope. News that names no email of ours, or only an address that two senders wrote to, touches nobody. What a recipient's mail server wrote is never shown or emailed to a customer, only our own words for it. When our own emails to a customer come back, every page of the app says so, with a way to move the login to another address. "Delivered" only ever means that their mail server took it. |
 | The account was locked with our contracts in it. | Cancelling, a failed payment or a pause never deletes or locks a document. Pausing stops what a sender starts from being emailed (new sends, new or changed recipients, reminders, reopening, team invitations, notices about a change, and people further down a signing order wait until it is lifted). People who already have a document can still sign it and are sent their copy, a document that is out can be given more time, and it can be voided (the people on it are told, without the reason). |
 | There is no way to get everything out. | One free export of every signed PDF, audit trail and a CSV index, on every plan, also after cancelling (`GET /api/export`). |
 | The account belonged to someone who left. | Ownership can be handed over by the owner. When a member is removed, what they sent (envelopes, drafts, templates and bulk sends) passes to a member the admin chooses, and each envelope's audit trail says who handed it to whom. Nobody can remove themselves and stay the sender. The person removed keeps their login: signing in gives them a workspace of their own, and they can be invited again. A paid or shared workspace with one admin shows a prompt on the home page to add a second. Billing can be stopped with the card, without the mailbox. |
@@ -588,13 +588,13 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | Variable | What it does | Default |
 | --- | --- | --- |
 | `APP_URL` | Public address of the app, for example `https://sign.example.com`. **Required on a real deployment:** every link in every email is built from it. The address of a request is never used for a real host, because a request header can be forged. Without `APP_URL` the app logs a warning and links only work on your own machine. | `http://localhost:3000`, or the localhost address you opened the app on |
-| `TRUSTED_PROXY_HOPS` | How many proxies of your own sit in front of the app (load balancer, CDN, the platform's router). The caller's address, used for rate limits and the audit trail, is read that many places from the right of `X-Forwarded-For`; anything further left is whatever the caller typed. `0` means nothing is in front: the header is ignored and every visitor shares one set of rate limits. | `1` |
+| `TRUSTED_PROXY_HOPS` | How many proxies of your own sit in front of the app (load balancer, CDN, the platform's router). The caller's address, used for rate limits and the audit trail, is read that many places from the right of `X-Forwarded-For`; anything further left is whatever the caller typed. `0` means nothing is in front: the header is ignored and every visitor shares one set of rate limits. The limit on one-time codes per caller address (see "Checking who signs") is not counted at all then, and with `1` on a server that has no proxy in front a caller can name any address; the limits per recipient and per mailbox or number hold either way. | `1` |
 | `DATA_DIR` | Where the database and files live. Must be a persistent disk. | `./data` |
 | `APP_SECRET` | Secret for access-code cookies and stop links. | generated and kept in `DATA_DIR` |
 | `FILE_ENCRYPTION_KEY` | Encrypts every file the app stores from now on (uploaded documents, signed PDFs, attachments) with AES-256-GCM. 32 random bytes as base64: make one with `openssl rand -base64 32`, and keep a copy apart from the server and its backups. Not the database. See "Encrypting stored files" for what it protects and what it does not, how to encrypt the files stored before, and what happens when the key does not fit the files. Set to something that is not a key, the server stores no file at all until it is corrected. | off: files are stored as they are |
 | `FILE_ENCRYPTION_KEYS_OLD` | Earlier keys, separated by commas, so files written with them can still be read after the key was changed. `node scripts/encrypt-files.mjs` moves those files to the current key. | none |
 | `SMTP_URL`, `MAIL_FROM` | Mail server, for example `smtps://user:pass@smtp.example.com`. Without it nothing is delivered, and the audit trail of an envelope says "Not emailed" instead of "Sent to recipient". An email the mail server will not take is kept and tried again by the timer (see `CRON_SECRET`): after 5 minutes, 30 minutes, 2 hours, 6 hours and a day, six tries in all. The envelope page and the audit trail say how it goes, and after the last try the sender is told. A mail server that stops answering is given up on after 10 seconds to connect, 10 for its greeting and 20 of silence (that try counts as failed); add `?connectionTimeout=&greetingTimeout=&socketTimeout=` in milliseconds to the address to change it. | none |
-| `MAIL_EVENTS_TOKEN` | A secret of at least 16 characters (`openssl rand -hex 24`) that lets your mail provider tell this server what became of an email after it took it: delivered, bounced, marked as spam. Give the provider the address `https://<your domain>/api/mail/events?token=<the secret>` (or the secret as HTTP Basic password or `Authorization: Bearer`). See "Knowing when an email did not arrive". Without it the address answers 404 and nothing in the product mentions bounces. | none |
+| `MAIL_EVENTS_TOKEN` | A secret of at least 16 characters (`openssl rand -hex 24`; one with `+` in it also works pasted into the address as it is) that lets your mail provider tell this server what became of an email after it took it: delivered, bounced, marked as spam. Give the provider the address `https://<your domain>/api/mail/events?token=<the secret>` (or the secret as HTTP Basic password or `Authorization: Bearer`). See "Knowing when an email did not arrive". Without it the address answers 404 and nothing in the product mentions bounces. | none |
 | `CRON_SECRET` | Lets a scheduler call `POST /api/cron`. Call it at least once an hour: it sends signer reminders and renewal reminders, tries emails again that the mail server would not take (so the gaps between tries are never shorter than the gap between calls), expires envelopes, retries refunds and cancellations the payment provider could not take the first time, closes accounts, and tells the operators and the customer when a help request has passed its response time. A renewal that is charged with no reminder on record raises an alert. | none |
 | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_GROVE`, `STRIPE_WEBHOOK_SECRET` | Turns on paying. Without them nothing is counted and there is nothing to buy. `STRIPE_PRICE_GROVE` is the monthly price. Point a Stripe webhook at `/api/stripe/webhook` and send it these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `invoice.paid`, `invoice.upcoming`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`, `charge.dispute.created`. | none |
 | `STRIPE_COLLECT_TAX_ID` | Set to `1` and the payment page asks business buyers for their tax number (VAT, GST and the like) and billing address, and the provider prints both on the invoice. Put your own legal name, address and tax number on invoices in the provider's settings. Off by default: the provider refuses the request unless its settings allow it, so switch it on in test mode first and make one payment. Not tried against the real provider. | off |
@@ -639,8 +639,22 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 
 The mail server only says that it took an email. What happened next is told later by the mail provider, at
 `POST /api/mail/events`, once `MAIL_EVENTS_TOKEN` is set. Every email goes out with a Message-ID of ours and an
-`X-SG-Mail` header with its number, and the news is matched by those, or else by the address among the emails of
-the last 3 days. Code: `src/server/bounces.ts` (reading) and `src/server/routes-bounces.ts` (what is done).
+`X-SG-Mail` header with its number, and the news is matched by those. News that names an id of ours which matches no
+email (or one to another address) is logged and left alone, never guessed at by the address. When an envelope is
+deleted, the number, Message-ID and account of each of its emails are kept for 30 days with a keyed fingerprint of
+the address (never the address), so a spam complaint about it still counts against the account that sent it. News
+without ids (Resend always, SES without "include original headers") is matched by the address among the emails of
+the last 3 days, and only when they all come from one sender: one account, or our own emails to a login. When two
+senders wrote to that address the news touches nobody and is logged, because nobody can tell whose email it was.
+Code: `src/server/bounces.ts` (reading) and `src/server/routes-bounces.ts` (what is done).
+
+What a recipient's mail server writes about a bounce is kept for the people who run the server (the dev outbox,
+`emails.bounce_said`) and never reaches a customer: senders, the record and the pages say what it means in our own
+words. A complaint is kept for the account (`mail_complaints`): nothing more is emailed to that address about the
+account's documents, whatever the sender does (a correction away and back, "Try again", a new envelope), until the
+person asks on a signing page and types a code we email to that address. "Try later" counts for each sender apart.
+A batch is read to its end (up to 5000 events, a larger one is answered 413 whole), and after 8 seconds the answer
+goes while the emails to senders are still being written, so a slow mail server never makes the provider resend.
 
 | Provider | What to set up |
 | --- | --- |
@@ -648,11 +662,13 @@ the last 3 days. Code: `src/server/bounces.ts` (reading) and `src/server/routes-
 | SendGrid | The Event Webhook (bounce, dropped, deferred, blocked, spam report, delivered) to the address above. `SMTP_URL` on `smtp.sendgrid.net` sends our number in `X-SMTPAPI`. |
 | Mailgun | Webhooks for permanent and temporary failure, complained and delivered. `SMTP_URL` on `smtp.mailgun.org` sends our number as a variable. |
 | Resend | A webhook for `email.bounced`, `email.complained`, `email.delivery_delayed` and `email.delivered`. Resend does not hand back our ids, so news is matched by the address. |
-| Amazon SES | Bounce, complaint and delivery notifications (or event publishing) to an SNS topic with an HTTPS subscription to the address above. The subscription is confirmed by itself, only when its link leads to `sns.<region>.amazonaws.com`. Switch on "include original headers" so our number comes back. |
+| Amazon SES | Bounce, complaint and delivery notifications (or event publishing) to an SNS topic with an HTTPS subscription to the address above. The subscription is confirmed by itself, only when its link is the `ConfirmSubscription` of that same topic at `sns.<region>.amazonaws.com`. An unsubscribe is written to the log each time. SNS signatures are not checked: the secret in the address is what protects it. Switch on "include original headers" so our number comes back. |
 | Anything else | Post our own shape: `{"type": "bounce" \| "soft_bounce" \| "complaint" \| "delivered", "email": "...", "reason": "...", "message_id": "...", "mail_id": "..."}`, or a list of them. |
 
 The five provider adapters were written from each provider's documentation and tested with one sample each. None
-has been tried against the real service. A shape the server does not know is answered 202 and logged once. Try
+has been tried against the real service. A shape the server does not know (also inside an SNS notification) is
+answered 202 and logged once. SendGrid's "dropped" for its unsubscribe list, a header it could not read or a quota
+is about our setup, not the person: it marks nobody, says "not sent" on the envelope and is logged. Try
 your provider's "send test webhook" button and look at the dev outbox or the log before relying on it.
 
 ### Checking who signs
@@ -672,11 +688,18 @@ document.
 
 **The code.** Six digits from `crypto.randomInt`, never stored (only an HMAC of it under `APP_SECRET`), valid for
 10 minutes, dead after 5 wrong tries, compared in constant time. A new code at most once a minute and 5 an hour
-for one recipient, 15 an hour for one caller address over every link it opens, 15 a day for one mailbox or phone
-number whoever asks, all counted in the database (`signer_codes`). The numbers are in `src/lib/policy.ts`. Our
-stored copy of a code email or text loses the code once the mail server or the provider has taken it. A device
-that passed stays passed for that link for a day, with a cookie made the same way as the one for a correct access
-code. Changing the check or the number, or the link passing to another person, makes every device pass again.
+for one recipient; 15 a day to one mailbox or phone number from one sender's documents; and 100 an hour from one
+caller address for one sender's documents that are then not typed in. All are counted in the database
+(`signer_codes`), and the numbers are in `src/lib/policy.ts`. The limits are counted per sender on purpose: another
+account, or a stranger typing an address into a public form (whose codes count for that form alone), can never
+use up what someone else's document may send, and an office behind one internet address signing a bulk send all
+get their codes. The caller limit needs `TRUSTED_PROXY_HOPS` to be right: an address the server cannot tell apart
+is not counted at all, and the other limits hold anyway. Our stored copy of a code email or text loses the code
+once the mail server or the provider has taken it, also when that happened on a later try. A device that passed
+opens the document for that link for 24 hours, counted by the server from the moment the code was typed (the
+cookie carries that moment, signed, so a copied cookie stops working at the same time and no two devices hold the
+same one). Changing the check or the number, the link passing to another person, or another person taking the
+place at the same address, makes every device pass again, and a pass is never written on another person's record.
 
 **Before the code is typed** `GET /api/sign/:token` answers with less than it does behind an access code alone: no
 subject, no message, no documents, no other recipients, no reason for a void, and the email address and the
@@ -684,36 +707,51 @@ number only masked (`j***@example.com`, `+44 *** *** 4321`). No answer of any ro
 
 **When the code does not come** the screen has "I do not get the code" and, for a text, "This is not my number".
 Both are written to the audit trail and emailed to the sender whatever their notification settings, because only
-the sender can fix it. After "not my number" no further code and no text with the link goes to that number until
-the sender corrects it, or confirms with the person that it is right after all (a box in the Correct dialog,
-`"number_confirmed": true` in the API).
+the sender can fix it. After "not my number" no further code and no text with the link goes to that number from
+that sender's account, on any of its envelopes, also not a text that was waiting for another try, until the sender
+confirms with the person that it is right after all (a box in the Correct dialog, `"number_confirmed": true` in
+the API). Correcting the person to another number lets them in, and still leaves the disowned number alone.
+Someone using the link can stop reminders only after typing the code (`POST /api/sign/:token/mute` answers 401
+with `"code": "code_first"` before), so a stranger with the link cannot silence the signer; reporting the document
+works without the code, and when a report stops texts the sender is told.
 
 **The record.** The audit trail gets a line when a code is sent (the channel and the masked destination), when a
 wrong code is typed, when the check is passed, and for every correction of a check. The certificate of completion
 says for each signer how they were checked, for example "One-time code sent by text message to +44 \*\*\* \*\*\*
-4321, passed 12 March 2026 14:02 UTC", and "Link sent by email only" when there was no check.
+4321, passed 12 March 2026 14:02 UTC", and "Link sent by email only" when there was no check. For someone who
+signed in person or whose link the sender shared, the line starts with that, then the code.
 
 **Text messages** are off until the operator sets a provider up: Twilio, or any other through `SMS_WEBHOOK_URL`
 (see the table above). While they are off the editor does not offer them, `GET /api/me` says `text_messages:
 false`, and the API refuses `"sms_code"` and `"text_link": true` with a sentence that says the operator has not
 switched them on. A text the provider would not take is tried again by the timer like an email (`POST /api/cron`),
-a refusal for good (a number that does not exist) ends at once, and either way the envelope page, the audit trail
-and an email to the sender say what happened. In development, `SMS_DEV_OUTBOX=1` writes texts to `/dev/outbox`.
+and each later try is decided again by everything that applies at that moment, exactly as a first try is: the
+number on file now, "not my number", a report, a decline, someone who has finished or switched reminders off, the
+pause, the fake-notice filter and the daily limits. A refusal the provider gives at once (a number in the wrong
+form, one whose owner opted out) ends trying, and the envelope page, the audit trail and an email to the sender
+say what happened. "Sent" means the provider took the text, not that it arrived: a provider can accept a text to a
+landline or a number nobody has and fail to deliver it later, and we are not told of that, which is what "I do not
+get the code" is for. Premium-rate, satellite and international network numbers are refused when they are typed
+(`NOT_MOBILE` in `src/lib/checks.ts`); premium ranges of other countries are left to the provider's own country
+settings. In development, `SMS_DEV_OUTBOX=1` writes texts to `/dev/outbox`.
 
 **"Also text the signing link"** (`text_link`, off unless chosen) sends a short text when the request goes out:
 "Sign&Grow, sent for Ada Sender: "Lease" is waiting for you to sign." and the link. Reminders by text follow at
 most once a day, and one number gets at most 4 such texts a day from one account. Someone who declined or reported
 the document is not texted again, and someone who switched reminders off gets no reminder by text. A text counts like an email to that person: none while the
 sender is paused or the envelope reads like a fake payment notice, and an account under the daily limit on emails
-can text as many phone numbers a day as people it may email.
+can text as many phone numbers a day as people it may email. While sending is paused not even a code goes out by
+text (a paused sender could otherwise keep texting the numbers it typed by opening its own links): the signer is
+told neutrally that texts for this document are on hold, and the sender is told they can switch that person to a
+code by email with Correct. A code by email still goes, to the mailbox that already has the link.
 
 **What a text costs.** Texts are not charged to customers. `SMS_DAILY_PER_ACCOUNT` (200) is a hard stop per account
 and 24 hours, every new text counted (`sms_usage`), and deleting an envelope hands nothing back.
 
 **Corrections.** `POST /api/envelopes/:id/correct` and the editor take the check and the number. A change resets
 any passed check for that person, clears "not my number", and is written to the audit trail with the numbers
-masked. Changing the email address to another person's needs their number in the same call when a text is still
-asked for. When a signer passes a document on themselves, the number is dropped, a check by text becomes a code
+masked. Changing the email address to another person's, or the name to another person's at the same address,
+needs their number in the same call when a text is still asked for. When a signer passes a document on themselves, the number is dropped, a check by text becomes a code
 by email to the new person, and the sender is told.
 
 **Templates, bulk send and public forms.** A template keeps the check of each role. A bulk send takes a `phone`

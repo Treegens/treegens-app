@@ -17,7 +17,7 @@ import { sheetPdf } from './pdf.ts';
 import { clickwrapMonthlyLimit, CLICKWRAP_WARN_PERCENT, paidTrustText } from '../lib/policy.ts';
 import {
   CLICK_LAW, DEFAULT_BUTTON, DEFAULT_CHECKBOX, IDENTITY_LABEL, LABEL_MAX, NAME_MAX, TERMS_MAX_CHARS, VIA_LABEL, VIEW_MAX_HOURS, WHO_MAX_DAYS,
-  recordShows, termsPlain, usageLine, type Identity, type Via,
+  VIEW_MATCH_LABEL, coverLine, recordShows, termsPlain, usageLine, type Identity, type Via,
 } from '../lib/clickwrap.ts';
 
 export const pageUrl = (slug: string) => `${baseUrl()}/agree/${slug}`;
@@ -174,16 +174,42 @@ export function signWho(secret: string, person: { id?: string; name?: string; em
   return { who, sig: crypto.createHmac('sha256', secret).update(who).digest('base64url') };
 }
 
-// The page hands out a "view" with the terms: which version it showed and when. Accepting needs it, so a press always
-// belongs to the version that was on the screen, and the record can say how long the terms were open.
-export const viewToken = (versionId: string, t = Date.now()) => `${versionId}.${t}.${hmac(`cwview:${versionId}:${t}`).slice(0, 32)}`;
-export function readView(view: any, cur: any): number {
-  const [vid, t, mac] = str(view, 200).split('.');
-  if (!vid || !t || !mac || !safeEqual(mac, hmac(`cwview:${vid}:${t}`).slice(0, 32))) throw bad('Load the page again and press the button there.', 400, { code: 'no_view' });
+// One internet address, for limits and comparisons: an IPv6 address by its /64, the block one household or phone is
+// given (its last half changes by itself for privacy), and an IPv4 address written as IPv6 (::ffff:1.2.3.4) as IPv4.
+export function addressKey(ip: any): string {
+  const s = str(ip, 100).trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  const v4 = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/.exec(s);
+  if (v4 || !s.includes(':')) return v4 ? v4[1] : s;
+  const [head, tail = ''] = s.split('::');
+  const a = head ? head.split(':') : [], b = tail ? tail.split(':') : [];
+  const all8 = s.includes('::') ? [...a, ...Array(Math.max(0, 8 - a.length - b.length)).fill('0'), ...b] : a;
+  return `${all8.slice(0, 4).map((x) => (x || '0').replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
+
+// The page hands out a "view" with the terms: which version it showed, when, and to which address and browser (as
+// fingerprints). Accepting needs it, so a press always belongs to the version that was on the screen, the record can
+// say how long the terms were open, and whether the press came from where the terms were handed out to.
+const whoFor = (ip?: string, ua?: string) => (ip === undefined && ua === undefined ? '-' : `${hmac(`cwvip:${addressKey(ip)}`).slice(0, 12)}~${hmac(`cwvua:${ua || ''}`).slice(0, 12)}`);
+export const viewToken = (versionId: string, t = Date.now(), ip?: string, ua?: string) => {
+  const who = whoFor(ip, ua);
+  return `${versionId}.${t}.${who}.${hmac(`cwview:${versionId}:${t}:${who}`).slice(0, 32)}`;
+};
+/** Whether the address and the browser that press are the ones the terms were handed to: 'same', or which differ. */
+export type ViewMatch = 'same' | 'address' | 'browser' | 'both' | null;
+export function readView(view: any, cur: any, ip?: string, ua?: string): { open: number; match: ViewMatch } {
+  const [vid, t, who, mac] = str(view, 200).split('.');
+  if (!vid || !t || !who || !mac || !safeEqual(mac, hmac(`cwview:${vid}:${t}:${who}`).slice(0, 32))) throw bad('Load the page again and press the button there.', 400, { code: 'no_view' });
   if (vid !== cur.id) throw bad(`These terms were changed while the page was open. The page now shows version ${cur.number}: read it, then accept again if you agree. Nothing was recorded.`, 409, { code: 'terms_changed' });
   const open = Date.now() - Number(t);
   if (open > VIEW_MAX_HOURS * 3600_000) throw bad(`This page was open for more than ${VIEW_MAX_HOURS} hours. Load it again to make sure you see the current terms, then accept. Nothing was recorded.`, 409, { code: 'view_old' });
-  return Math.max(0, open);
+  // A phone that moves from wifi to its own network changes address between the page and the press, so a difference
+  // is recorded and said, never refused.
+  let match: ViewMatch = null;
+  if (who !== '-' && (ip !== undefined || ua !== undefined)) {
+    const [hi, hu] = who.split('~'), [ni, nu] = whoFor(ip, ua).split('~');
+    match = hi === ni ? (hu === nu ? 'same' : 'browser') : hu === nu ? 'address' : 'both';
+  }
+  return { open: Math.max(0, open), match };
 }
 
 // ---- Why terms cannot be accepted right now ------------------------------------------------------------------------
@@ -221,7 +247,10 @@ export async function tellOwnerClosed(cw: any, why: string) {
 // ---- Recording an acceptance ---------------------------------------------------------------------------------------
 
 const SEALED = ['id', 'clickwrap_id', 'account_id', 'version_id', 'version', 'terms_sha256', 'identity', 'person_id', 'name', 'email', 'via', 'page_url', 'ip', 'ua', 'given_ip', 'given_ua', 'shown_ms', 'scrolled', 'unobscured', 'recorded_by', 'at'];
-const sealOf = (row: any) => hmac(`cwseal:${JSON.stringify(SEALED.map((k) => row[k] ?? null))}`);
+// Sealed since they were added, and only when set: a row written before them still fits the seal it was given, and
+// setting or clearing one afterwards breaks the seal like any other change.
+const SEALED_LATER = ['view_match'];
+const sealOf = (row: any) => hmac(`cwseal:${JSON.stringify([...SEALED.map((k) => row[k] ?? null), ...SEALED_LATER.filter((k) => row[k] != null).map((k) => [k, row[k]])])}`);
 export const intact = (row: any) => safeEqual(row.seal || '', sealOf(row));
 /** The secret a visitor's browser holds for their own acceptance: the copy by email and the certificate. Never stored. */
 export const receiptOf = (acceptanceId: string) => `cwr_${hmac(`cwreceipt:${acceptanceId}`).slice(0, 40)}`;
@@ -245,7 +274,7 @@ export function cleanUrl(raw: any): string | null {
 export type AcceptIn = {
   cw: any; v: any; identity: Identity; person: Person; via: Via; page_url?: string | null; ip: string; ua: string;
   given_ip?: string | null; given_ua?: string | null; shown_ms?: number | null; scrolled?: boolean | null; unobscured?: boolean | null; recorded_by?: string | null;
-  view?: string | null;
+  view?: string | null; view_match?: ViewMatch;
 };
 export class LimitReached extends HttpError {}
 
@@ -270,13 +299,13 @@ export async function recordAcceptance(a: AcceptIn, visitorWords = false): Promi
     id: id('cwa'), clickwrap_id: cw.id, account_id: cw.account_id, version_id: v.id, version: v.number, terms_sha256: v.terms_sha256, identity: a.identity,
     person_id: person.id, name: person.name, email: person.email, via: a.via, page_url: a.page_url ?? null, ip: a.ip || null, ua: str(a.ua, 400) || null,
     given_ip: a.given_ip ?? null, given_ua: a.given_ua ?? null, shown_ms: a.shown_ms ?? null, scrolled: a.scrolled == null ? null : a.scrolled ? 1 : 0,
-    unobscured: a.unobscured == null ? null : a.unobscured ? 1 : 0, recorded_by: a.recorded_by ?? null, at: now(),
+    unobscured: a.unobscured == null ? null : a.unobscured ? 1 : 0, recorded_by: a.recorded_by ?? null, at: now(), view_match: a.view_match ?? null,
   };
   row.receipt_hash = sha256(receiptOf(row.id));
   row.seal = sealOf(row);
   // The page load that pressed: only it is given the receipt again when it presses twice (mayHaveReceipt).
   row.view_hash = a.view ? sha256(String(a.view)) : null;
-  const cols = [...SEALED, 'receipt_hash', 'seal', 'view_hash'];
+  const cols = [...SEALED, ...SEALED_LATER, 'receipt_hash', 'seal', 'view_hash'];
   run(`INSERT INTO clickwrap_acceptances (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((k) => row[k]));
   await tellAdmins(cw.account_id);
   return { row, already: false };
@@ -289,7 +318,8 @@ export function acceptanceView(r: any, cw?: any) {
     id: r.id, agreement_id: r.clickwrap_id, agreement: ag?.name ?? null, version: r.version, terms_sha256: r.terms_sha256, accepted_at: r.at,
     identity: r.identity, person: { id: r.person_id, name: r.name, email: r.email }, via: r.via, page_url: r.page_url, ip: r.ip, user_agent: r.ua,
     given_ip: r.given_ip, given_user_agent: r.given_ua, seconds_open: r.shown_ms == null ? null : Math.round(r.shown_ms / 100) / 10,
-    scrolled: r.scrolled == null ? null : !!r.scrolled, button_uncovered: r.unobscured == null ? null : !!r.unobscured, recorded_by: r.recorded_by, intact: intact(r),
+    scrolled: r.scrolled == null ? null : !!r.scrolled, button_uncovered: r.unobscured == null ? null : !!r.unobscured, recorded_by: r.recorded_by,
+    terms_handed_to: r.view_match ?? null, intact: intact(r),
   };
 }
 
@@ -331,8 +361,9 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
     s.kv('Version', `${v.number}, published ${stamp(v.published_at)}${v.note ? `. What changed: ${v.note}` : ''}`);
     s.kv('SHA-256 of the terms', v.terms_sha256);
     if (r.via !== 'api') {
-      s.kv('How it was accepted', `The box "${v.checkbox}" was ticked, then the button "${v.button}" was pressed.`);
-      s.kv('Scrolling', v.scroll ? `The page asked for the terms to be scrolled to the end first${r.scrolled ? ', and its browser said they were' : ''}.` : 'Not asked for.');
+      // What the browser reported, never more: this server sees what a browser sends, not a screen or a hand.
+      s.kv('How it was accepted', `The page reported that the box "${v.checkbox}" was ticked and the button "${v.button}" was pressed. This server cannot see a screen: this is what the browser, or a program acting as one, sent it.`);
+      s.kv('Scrolling', v.scroll ? `The page asked for the terms to be scrolled to the end first${r.scrolled ? ', and the browser reported that they were' : ''}.` : 'Not asked for.');
     }
     s.h2('Who, as given');
     s.kv('Name', r.name || '-');
@@ -350,8 +381,9 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
       s.kv('Visitor browser, as given', r.given_ua || '-');
       s.kv('Recorded by', r.recorded_by || '-');
     } else {
-      s.kv('Open before the press', r.shown_ms == null ? '-' : `${Math.round(r.shown_ms / 1000)} seconds, measured by this server from when it handed out the terms`);
-      s.kv('Button covered?', r.unobscured == null ? 'The browser could not tell.' : r.unobscured ? 'No: the browser said nothing covered the button.' : 'The browser said something covered the button.');
+      s.kv('Open before the press', r.shown_ms == null ? '-' : `${Math.round(r.shown_ms / 1000)} seconds between when this server handed out the terms and when it received the press. That is how long the page was open, not that anyone read it.`);
+      s.kv('Terms handed out to', r.view_match ? VIEW_MATCH_LABEL[r.view_match] : 'Not recorded: this acceptance is from before it was kept.');
+      s.kv('Button covered?', coverLine(r.via, r.unobscured));
     }
     s.h2('What this record shows');
     s.text(words.shows, { size: 9, gap: 4 });
@@ -436,12 +468,12 @@ const cell = (v: any) => {
   const s = String(v ?? '');
   return `"${(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s).replace(/"/g, '""')}"`;
 };
-export const CSV_HEAD = ['acceptance_id', 'agreement', 'version', 'terms_sha256', 'accepted_at', 'identity', 'person_id', 'name', 'email', 'via', 'page_url', 'ip', 'browser', 'visitor_ip_as_given', 'visitor_browser_as_given', 'seconds_open', 'scrolled', 'button_uncovered', 'recorded_by', 'intact'];
+export const CSV_HEAD = ['acceptance_id', 'agreement', 'version', 'terms_sha256', 'accepted_at', 'identity', 'person_id', 'name', 'email', 'via', 'page_url', 'ip', 'browser', 'visitor_ip_as_given', 'visitor_browser_as_given', 'seconds_open', 'scrolled', 'button_uncovered', 'recorded_by', 'intact', 'terms_handed_to'];
 export function csvOf(rows: any[]): string {
   const yes = (b: any) => (b == null ? '' : b ? 'yes' : 'no');
   return '﻿' + [CSV_HEAD.map(cell).join(','), ...rows.map((r) => {
     const a = acceptanceView(r);
-    return [a.id, a.agreement, a.version, a.terms_sha256, a.accepted_at, a.identity, a.person.id, a.person.name, a.person.email, a.via, a.page_url, a.ip, a.user_agent, a.given_ip, a.given_user_agent, a.seconds_open, yes(a.scrolled), yes(a.button_uncovered), a.recorded_by, yes(a.intact)].map(cell).join(',');
+    return [a.id, a.agreement, a.version, a.terms_sha256, a.accepted_at, a.identity, a.person.id, a.person.name, a.person.email, a.via, a.page_url, a.ip, a.user_agent, a.given_ip, a.given_user_agent, a.seconds_open, yes(a.scrolled), yes(a.button_uncovered), a.recorded_by, yes(a.intact), a.terms_handed_to].map(cell).join(',');
   })].join('\r\n');
 }
 

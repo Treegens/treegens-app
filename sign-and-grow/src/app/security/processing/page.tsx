@@ -49,7 +49,7 @@ export default function ProcessingSummary() {
           <li><b>Documents:</b> the files you upload, the text read from PDFs so that you can search your own envelopes, the fields placed on them, the signed PDFs with their certificates, and files that signers attach.</li>
           <li><b>About the people you send to:</b> the name and email address you typed, an access code or a mobile number if you set one, what they filled in, their signature and initials as pictures, and when they opened, agreed, signed or declined.</li>
           <li><b>The audit trail of every envelope:</b> each step with its time, the internet address it came from and the kind of browser.</li>
-          <li><b>Emails:</b> a copy of every email this server sends, and whether the mail server took it.{mailEventsOn() && ' Afterwards, what the mail provider tells us about it: that it reached the recipient\'s mail server, came back, or was marked as spam, with the reason the mail server gave.'}</li>
+          <li><b>Emails:</b> a copy of every email this server sends, and whether the mail server took it.{mailEventsOn() && ' Afterwards, what the mail provider tells us about it: that it reached the recipient\'s mail server, came back, or was marked as spam, with the reason the mail server gave. That reason is seen only by the people who run this service; senders are told what it means in our own words.'}</li>
           <li><b>Payments, if you pay:</b> what was paid, refunded and bought, and the provider&apos;s reference for it. A full card number never reaches this server.</li>
           <li><b>Help requests:</b> what was written, by whom, and the answers.</li>
         </ul>

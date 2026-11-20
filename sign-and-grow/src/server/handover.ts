@@ -14,8 +14,8 @@
 // pages that offer in-person signing say so (IN_PERSON_LOCK in src/lib/phone.ts).
 import { route, type Ctx } from './router.ts';
 import { get, run } from './db.ts';
-import { bad, now, sha256, str } from './util.ts';
-import { checkPassword, hasPassword, readCookie, cookie, SESSION_COOKIE } from './auth.ts';
+import { bad, now, rateLimit, sha256, str } from './util.ts';
+import { checkPassword, hasPassword, readCookie, cookie, sessionEnd, SESSION_COOKIE } from './auth.ts';
 import { HAND_OVER_TRIES } from '../lib/policy.ts';
 
 const note = (s: any): { envelope_id?: string; signer?: string; wrong?: number } => {
@@ -27,7 +27,8 @@ const note = (s: any): { envelope_id?: string; signer?: string; wrong?: number }
 };
 const lockedSession = (req: Request): any => {
   const t = readCookie(req, SESSION_COOKIE);
-  return t ? get('SELECT * FROM sessions WHERE id=? AND expires_at > ? AND locked_at IS NOT NULL', sha256(t), now()) : null;
+  const s = t ? get('SELECT * FROM sessions WHERE id=? AND expires_at > ? AND locked_at IS NOT NULL', sha256(t), now()) : null;
+  return s && sessionEnd(s) > Date.now() ? s : null;
 };
 
 // Called when a signing page is opened (GET /sign/:token). Locks the browser's session when the page belongs to
@@ -37,7 +38,7 @@ export function handDevice(c: Ctx, e: any, r: any): void {
   if (r?.role !== 'inperson' || r.status === 'completed' || e?.status !== 'sent') return;
   if (c.auth?.via !== 'session' || !c.auth.sessionId) return;
   if (!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', e.account_id, c.user.id)) return;
-  run('UPDATE sessions SET locked_at=?, locked_note=? WHERE id=? AND locked_at IS NULL', now(), JSON.stringify({ envelope_id: e.id, signer: str(r.name, 120) }), c.auth.sessionId);
+  run('UPDATE sessions SET locked_at=?, locked_note=?, unlock_tries=0 WHERE id=? AND locked_at IS NULL', now(), JSON.stringify({ envelope_id: e.id, signer: str(r.name, 120) }), c.auth.sessionId);
 }
 
 // What the app's lock screen needs to know about this browser, or null when it is not locked: whose it is (the name
@@ -48,32 +49,42 @@ export function handedOver(req: Request): { name: string; has_password: boolean;
   if (!s) return null;
   const u = get('SELECT name, password_hash FROM users WHERE id=?', s.user_id);
   const n = note(s);
-  return u ? { name: u.name, has_password: hasPassword(u), signer: n.signer || null, envelope_id: n.envelope_id || null, tries_left: Math.max(0, HAND_OVER_TRIES - (n.wrong || 0)) } : null;
+  return u ? { name: u.name, has_password: hasPassword(u), signer: n.signer || null, envelope_id: n.envelope_id || null, tries_left: Math.max(0, HAND_OVER_TRIES - (s.unlock_tries || 0)) } : null;
 }
+
+// The browser is signed out for good: the sign-in page, with its own limits, is the only way back. An answer, not a
+// thrown error, because a thrown error would lose the cookie that clears it.
+const signOut = (c: Ctx, sessionId: string): Response => {
+  run('DELETE FROM sessions WHERE id=?', sessionId);
+  c.cookies.push(cookie(SESSION_COOKIE, '', 0, c.secure));
+  return new Response(JSON.stringify({ error: `That was ${HAND_OVER_TRIES} wrong passwords, so this browser has been signed out. Sign in again from the sign-in page. Nothing in the account was changed.`, code: 'signed_out' }), { status: 401, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+};
 
 // "I am ...": the owner of the session types their password and the lock comes off. Public, because a locked
 // session counts as nobody. Nothing here says more than the lock screen already shows.
 route('POST', '/auth/unlock', async (c) => {
+  // The body is read first, so that nothing waits between counting a try and checking it below. Read after the
+  // session, forty tries sent at once all started from the same count and all had their password checked.
+  const password = str((await c.body().catch(() => ({}))).password, 200);
+  // Each check costs the server real work, and one address has no business trying more than a few devices' locks.
+  rateLimit(`unlock:${c.ip}`, 30, 900_000);
   const s = lockedSession(c.req);
   if (!s) throw bad('This browser is not locked. If you are not signed in any more, sign in again.', 409, { code: 'not_locked' });
+  rateLimit(`unlock:${s.id}`, 20, 900_000);
   const u = get('SELECT * FROM users WHERE id=?', s.user_id);
   if (!u || !hasPassword(u)) throw bad('This login has no password, because you sign in with Google or Microsoft. Sign in again that way to come back to your account.', 400, { code: 'no_password' });
-  const password = str((await c.body()).password, 200);
   if (!password) throw bad('Type your password to come back to your account.', 400, { code: 'wrong_password' });
+  // The try is counted before the password is looked at, in one statement that only changes the row while tries
+  // are left. However many arrive together, from however many server processes, only HAND_OVER_TRIES of them get a
+  // number; every later one finds nothing to change and is refused unchecked, even with the right password: once
+  // the last try is used, the lock is shut for everyone and the browser is signed out.
+  const tryNo = Number(get('UPDATE sessions SET unlock_tries=unlock_tries+1 WHERE id=? AND locked_at IS NOT NULL AND unlock_tries < ? RETURNING unlock_tries n', s.id, HAND_OVER_TRIES)?.n || 0);
+  if (!tryNo) return signOut(c, s.id);
   if (!checkPassword(password, u.password_hash)) {
-    const n = note(s);
-    const wrong = (n.wrong || 0) + 1;
-    if (wrong >= HAND_OVER_TRIES) {
-      // Enough guesses. The browser is signed out, and the sign-in page with its own limits is the only way back.
-      run('DELETE FROM sessions WHERE id=?', s.id);
-      c.cookies.push(cookie(SESSION_COOKIE, '', 0, c.secure));
-      // Thrown after the cookie is queued would lose it, so this one is an answer, not an error.
-      return new Response(JSON.stringify({ error: `That was ${HAND_OVER_TRIES} wrong passwords, so this browser has been signed out. Sign in again from the sign-in page. Nothing in the account was changed.`, code: 'signed_out' }), { status: 401, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
-    }
-    run('UPDATE sessions SET locked_note=? WHERE id=?', JSON.stringify({ ...n, wrong }), s.id);
-    const left = HAND_OVER_TRIES - wrong;
+    if (tryNo >= HAND_OVER_TRIES) return signOut(c, s.id);
+    const left = HAND_OVER_TRIES - tryNo;
     throw bad(`That password is not right, so the account stays locked on this device. ${left === 1 ? 'One more try' : `${left} more tries`}, then this browser is signed out.`, 401, { code: 'wrong_password', tries_left: left });
   }
-  run('UPDATE sessions SET locked_at=NULL, locked_note=NULL WHERE id=?', s.id);
+  run('UPDATE sessions SET locked_at=NULL, locked_note=NULL, unlock_tries=0 WHERE id=?', s.id);
   return { ok: true, envelope_id: note(s).envelope_id || null };
 }, 'public');

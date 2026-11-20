@@ -133,7 +133,7 @@ export default function Help() {
               <li>A code works for {SIGNER_CODE_MINUTES} minutes and for {SIGNER_CODE_TRIES} tries. Only the newest one works.</li>
               <li>You can ask for a new code after a minute, up to {SIGNER_CODES_PER_HOUR} times an hour. The button says when.</li>
               <li><b>The code does not arrive?</b> A code by email goes to the same mailbox as the link, so look in the spam folder.{textsOn ? ' A text can take a minute.' : ''} If it still does not come, <b>I do not get the code</b> on the same screen tells the sender.</li>
-              {textsOn && <li><b>The number is not yours?</b> Press <b>This is not my number</b>. We stop texting it at once, codes and links alike, and tell the sender.</li>}
+              {textsOn && <li><b>The number is not yours?</b> Press <b>This is not my number</b>. We stop texting it at once, codes and links alike, and tell the sender. That holds for every document from the same sender, until they have checked the number with you.</li>}
               <li>Only the sender can change where the code goes, or take the check off. We cannot do that for you, because we cannot know who is asking.</li>
             </ul>
             <p className="muted small">Nobody at Sign&Grow will ever ask you for this code, and neither should the sender. If a code arrives that you did not ask for, someone else has opened your link: do not pass the code on.</p>

@@ -266,7 +266,7 @@ route('GET', '/public/agree/:slug', async (c) => {
     closed: false, slug: cw.slug, account: { name: a.name, color: a.brand_color, logo: a.brand_logo },
     version: { number: v.number, title: v.title, format: v.format, text: v.format === 'text' ? v.body : null, pages: v.pages, checkbox: v.checkbox, button: v.button, scroll: !!v.scroll, sha256: v.terms_sha256, published_at: v.published_at, pdf: v.format === 'pdf' ? `/api/public/agree/${cw.slug}/terms?v=${v.number}` : null },
     identity, person, already, earlier, recorded: recordedBefore(identity, a.name), shows: words.shows, not: words.not, law: CLICK_LAW,
-    view: viewToken(v.id),
+    view: viewToken(v.id, Date.now(), c.ip, c.ua),
   };
 }, 'public');
 
@@ -292,7 +292,7 @@ route('POST', '/public/agree/:slug/accept', async (c) => {
     if (v) await tellOwnerClosed(cw, why);
     throw bad(CLOSED_TEXT, 503, { code: 'closed' });
   }
-  const shown = readView(b.view, v);
+  const shown = readView(b.view, v, c.ip, c.ua);
   if (b.agree !== true) throw bad(`Tick "${v.checkbox}" first, then press "${v.button}". Nothing was recorded.`, 400, { code: 'not_ticked' });
   if (v.scroll && b.scrolled !== true) throw bad('Scroll to the end of the terms first: these terms ask to be read to the end before they are accepted. Nothing was recorded.', 400, { code: 'not_scrolled' });
   let person = readWho(cw, b.who, b.sig);
@@ -311,8 +311,10 @@ route('POST', '/public/agree/:slug/accept', async (c) => {
   }
   const via = b.embed === true ? 'embed' : 'hosted';
   const { row, already } = await recordAcceptance({
-    cw, v, identity, person, via, page_url: cleanUrl(b.page_url), ip: c.ip, ua: c.ua, shown_ms: shown,
-    scrolled: v.scroll ? true : null, unobscured: typeof b.unobscured === 'boolean' ? b.unobscured : null, view: str(b.view, 200),
+    cw, v, identity, person, via, page_url: cleanUrl(b.page_url), ip: c.ip, ua: c.ua, shown_ms: shown.open, view_match: shown.match,
+    // Whether the button was covered only means something inside a frame on another website: on our own page
+    // nothing is around the terms, so nothing is kept for it there, whatever a client sends.
+    scrolled: v.scroll ? true : null, unobscured: via === 'embed' && typeof b.unobscured === 'boolean' ? b.unobscured : null, view: str(b.view, 200),
   }, true);
   // The receipt only to the browser that accepted (mayHaveReceipt): somebody else pressing with the same signed link
   // learns that the person accepted already, and nothing more.

@@ -693,6 +693,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // is where to go back to afterwards: the envelope and the signer's name, as JSON.
   ['sessions', 'locked_at', 'TEXT'],
   ['sessions', 'locked_note', 'TEXT'],
+  // Tries at the owner's password since the lock went on, counted before each one is checked (handover.ts), so
+  // tries sent at the same moment cannot all pass on one count.
+  ['sessions', 'unlock_tries', 'INTEGER NOT NULL DEFAULT 0'],
   // The envelope through whose signing link a signer uploaded this file. Such a file belongs to no account, so
   // this is what lets it go with the envelope (or its account) also when it was never attached to a field.
   ['files', 'via_envelope', 'TEXT'],
@@ -807,6 +810,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['clickwrap_versions', 'account_name', 'TEXT'],
   ['accounts', 'clickwrap_typed_warned', 'TEXT'],
   ['accounts', 'clickwrap_typed_full', 'TEXT'],
+  // recipients.witness_chosen: JSON {name, email} of the witness the sender chose, kept when the signer names another
+  // one after "I was not there", so a copy of the envelope and a hand-over go back to the sender's own choice. Cleared
+  // when the sender names a witness again (src/server/witness.ts).
+  ['recipients', 'witness_chosen', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

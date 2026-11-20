@@ -1,10 +1,14 @@
 import crypto from 'node:crypto';
 import { all, get, run } from './db.ts';
 import { sha256, token, now, HttpError } from './util.ts';
-import { SESSION_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
+import { SESSION_DAYS, SESSION_MAX_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
 
 export const SESSION_COOKIE = 'ts_session';
 const DAYS = SESSION_DAYS;
+// The latest a session can end, however much it is used: SESSION_MAX_DAYS after it signed in, so a copied cookie
+// that keeps being used still runs out. A session from before created_at was kept has no known start, so it never
+// moves forward again and ends where it stands (at most SESSION_DAYS after its last move, before this rule).
+export const sessionEnd = (s: any): number => Math.min(Date.parse(s.expires_at) || 0, s.created_at ? Date.parse(s.created_at) + SESSION_MAX_DAYS * 864e5 : Infinity);
 
 export function hashPassword(pw: string): string {
   const salt = crypto.randomBytes(16);
@@ -55,9 +59,10 @@ export function createSession(userId: string, accountId: string, secure: boolean
   const t = token();
   // Signing in here adds a browser. It never signs another one out: each has a row of its own. Rows that ran out
   // are cleared on the way, so the list under Settings is only what is still signed in.
-  run('DELETE FROM sessions WHERE user_id=? AND expires_at <= ?', userId, now());
-  run('INSERT INTO sessions (id, user_id, account_id, expires_at, created_at) VALUES (?,?,?,?,?)', sha256(t), userId, accountId, new Date(Date.now() + DAYS * 864e5).toISOString(), now());
-  return cookie(SESSION_COOKIE, t, DAYS * 86400, secure);
+  run('DELETE FROM sessions WHERE user_id=? AND (expires_at <= ? OR created_at <= ?)', userId, now(), new Date(Date.now() - SESSION_MAX_DAYS * 864e5).toISOString());
+  const days = Math.min(DAYS, SESSION_MAX_DAYS);
+  run('INSERT INTO sessions (id, user_id, account_id, expires_at, created_at) VALUES (?,?,?,?,?)', sha256(t), userId, accountId, new Date(Date.now() + days * 864e5).toISOString(), now());
+  return cookie(SESSION_COOKIE, t, days * 86400, secure);
 }
 
 // A browser that is used stays signed in. Each use moves the end of its session to SESSION_DAYS from now, so
@@ -66,15 +71,22 @@ export function createSession(userId: string, accountId: string, secure: boolean
 // the use is written down at most once every SESSION_TOUCH_MINUTES, together with what the browser calls itself:
 // Settings shows both under "Where you are signed in". The end moves at most once a day. When it does, true comes
 // back and the router sends the cookie again (renewedCookie), because the browser forgets a cookie on the date it
-// was given with, whatever the database says.
+// was given with, whatever the database says. Never past sessionEnd(): from SESSION_MAX_DAYS after signing in,
+// the person signs in again however often they come.
 function touch(s: any, req: Request): boolean {
   const t = Date.now();
   if (t - (Date.parse(s.last_used_at || '') || 0) < SESSION_TOUCH_MINUTES * 60_000) return false;
-  const slide = Date.parse(s.expires_at) - t < (DAYS - 1) * 864e5;
-  run('UPDATE sessions SET last_used_at=?, ua=?, expires_at=? WHERE id=?', new Date(t).toISOString(), (req.headers.get('user-agent') || '').slice(0, 300) || null, slide ? new Date(t + DAYS * 864e5).toISOString() : s.expires_at, s.id);
+  const end = Math.min(t + DAYS * 864e5, s.created_at ? Date.parse(s.created_at) + SESSION_MAX_DAYS * 864e5 : Date.parse(s.expires_at));
+  const slide = end - Date.parse(s.expires_at) > 864e5;
+  run('UPDATE sessions SET last_used_at=?, ua=?, expires_at=? WHERE id=?', new Date(t).toISOString(), (req.headers.get('user-agent') || '').slice(0, 300) || null, slide ? new Date(end).toISOString() : s.expires_at, s.id);
   return slide;
 }
-export const renewedCookie = (req: Request, secure: boolean): string => cookie(SESSION_COOKIE, readCookie(req, SESSION_COOKIE) || '', DAYS * 86400, secure);
+// The cookie again, given with the time its session has left, never more.
+export const renewedCookie = (req: Request, secure: boolean): string => {
+  const t = readCookie(req, SESSION_COOKIE) || '';
+  const row = t ? get('SELECT expires_at, created_at FROM sessions WHERE id=?', sha256(t)) : null;
+  return cookie(SESSION_COOKIE, t, row ? Math.max(0, Math.floor((sessionEnd(row) - Date.now()) / 1000)) : 0, secure);
+};
 
 // A key's scope: 'send' does the everyday work, 'admin' may also change account settings. What each can reach is
 // decided in one place, router.ts.
@@ -109,7 +121,9 @@ export function authenticate(req: Request, required = false): Auth | null {
     return { user, account, role: m.role, via: 'api_key', scope: k.scope === 'admin' ? 'admin' : 'send' };
   }
   const t = readCookie(req, SESSION_COOKIE);
-  const s = t ? get('SELECT * FROM sessions WHERE id=? AND expires_at > ?', sha256(t), now()) : null;
+  const found = t ? get('SELECT * FROM sessions WHERE id=? AND expires_at > ?', sha256(t), now()) : null;
+  // Past the most a session may last (a row that slid before that rule existed): nobody, like one that ran out.
+  const s = found && sessionEnd(found) > Date.now() ? found : null;
   // A browser that was handed to someone to sign in person opens nothing until its owner has typed their password
   // (src/server/handover.ts). Until then it counts as nobody, and is not noted as used.
   if (s?.locked_at) return refuse(401, 'This device was handed to someone to sign in person, so your account is locked in this browser. Open Sign&Grow here and type your password to come back.', { code: 'handed_over' });

@@ -792,7 +792,8 @@ const byWhat = (v: any) => (v === 'sms_code' ? 'text message' : 'email');
 /**
  * The way out when the code never arrives: "This is not my number" and "I do not get the code". Both are written to
  * the record and told to the sender whatever their email settings, because nobody gets in until the sender acts,
- * and the screen says so. After "not my number" no further code goes to that number until the sender corrects it.
+ * and the screen says so. After "not my number" nothing more is texted to that number from the sender's account, on
+ * any envelope, until the sender confirms it with the person (see numberStopped).
  */
 export async function codeProblem(e: any, r: any, what: any, actor: Actor): Promise<{ told: true; stopped: boolean }> {
   if (!isCodeCheck(r.verify)) throw bad('This document does not ask for a one-time code.', 409);
@@ -812,9 +813,9 @@ export async function codeProblem(e: any, r: any, what: any, actor: Actor): Prom
     if (d.to) run('INSERT OR REPLACE INTO text_stops (account_id, dest_hash, envelope_id, at) VALUES (?,?,?,?)', e.account_id, phoneKey(d.to), e.id, now());
     run("UPDATE signer_codes SET ended_at=?, ended_how='stopped' WHERE recipient_id=? AND ended_at IS NULL", now(), r.id);
     dropTexts(r.id, 'someone using the signing link said the number is not theirs');
-    audit(e.id, actor, 'One-time code: not my number', `Someone using the signing link of ${r.name} said the mobile number ${d.masked} is not theirs. No more codes or links are texted to it until the sender corrects it or confirms it with them.`);
+    audit(e.id, actor, 'One-time code: not my number', `Someone using the signing link of ${r.name} said the mobile number ${d.masked} is not theirs. No more codes or links are texted to it from this account, on any envelope, until the sender confirms it with them.`);
     await notifySender(e, 'always', `Wrong number: ${e.subject}`, `${r.name} says the mobile number is not theirs`,
-      [`Someone using the signing link of ${r.name} told us that ${d.masked}, the number you typed for the one-time code, is not their number. We have stopped sending codes to it, so whoever owns that number is left alone.`,
+      [`Someone using the signing link of ${r.name} told us that ${d.masked}, the number you typed for the one-time code, is not their number. We have stopped sending codes to it, and nothing else is texted to it from your account either, so whoever owns that number is left alone.`,
         `${r.name} cannot open "${e.subject}" until you fix this. ${fix} If the number turns out to be right after all, tick "I checked with ${r.name} that this is their number" there, and codes go to it again.`, careful]);
     return { told: true, stopped: true };
   }

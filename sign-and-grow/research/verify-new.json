@@ -3483,5 +3483,467 @@
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/s-settings-390x844.png",
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/s-settings-320x568.png"
   ]
+ },
+ "verify:qr-encrypt": {
+  "checks": [
+   {
+    "item": "QR encoder: every version 1 to 40, link lengths 1 to 300, odd characters, all eight masks, read back byte for byte by an outside decoder",
+    "holds": true,
+    "evidence": "tests/out/verify-qr-encrypt/qr-decode.ts renders 523 codes from src/lib/qr.ts to pixels and decodes them with jsQR 1.4 (installed in /tmp/qrv, not the project): 523 of 523 byte for byte, 40 versions, masks 0-7 seen. Cases: every version full/least/middle, every length 1-300 of random signing links, UTF-8 (German, Hebrew, Arabic, Japanese, emoji, zero-width, BOM, lone surrogate), control characters, <script>, quotes and </svg>, IDN and percent-encoded links through qrForLink, every mask forced on versions 1,2,5,7,10,13,20,27,33,40. OpenCV 4 (qr-cv.py): 441 right, 0 wrong, 82 not found; qr-ref.py shows QRCodeDetectorAruco or a rescale reads 81 of those 82, the last is a text starting with NUL bytes that OpenCV cuts at the NUL. python-qrcode draws the identical matrix at our version and mask for 522 of 523 (the one difference was my probe stripping a BOM, not the encoder). Nayuki's reference encoder (qr-nayuki.py), choosing its own mask, draws exactly our matrix for 442 of 442 free-mask cases, so the penalty scoring and mask choice match the reference."
+   },
+   {
+    "item": "The SVG as the app draws it scans after a browser renders it (app CSS, phone and desktop, 1x/2x/3x)",
+    "holds": true,
+    "evidence": "tests/out/verify-qr-encrypt/svg-browser.cjs puts qrForLink(...).svg inside .qr-code with src/app/styles/qr.css in Chromium, screenshots the element and decodes with jsQR: 140 renders, 132 decode. Every render at the sizes the app uses decodes (300 px box at 390x844 1x, 2x, 3x and 1280x900; 240 px own-phone box on desktop), up to the 300-character limit (version 13) and a 379-character otpauth URI. The 8 failures are boxes of 200 px and 150 px at 1x with links of 260+ characters, which the app does not show."
+   },
+   {
+    "item": "Codes on the real screens hold the right link: envelope dialog, own-link person, PowerForms sheet on screen and in print",
+    "holds": true,
+    "evidence": "tests/out/verify-qr-encrypt/screens.cjs on my dev server (port 3575, seeded with scripts/dev-seed.mjs): at 390x844 (3x and 1x) and 1280x900, the dialog code for Ada and for Dee (access code) decodes to exactly their /sign/ token; the own-link person (link_by_sender) decodes to theirs; the sheet decodes to APP_URL/f/<slug>, matches the link written on it, and still decodes under print media with no owner note visible. Form name '<b>bold</b> & \"quotes\"' shows as text. No horizontal scroll at 390 (scrollWidth 390). Facts in screens-facts.json, screenshots dlg-*.png, sheet-*.png, sheet.pdf."
+   },
+   {
+    "item": "The code is made in the browser and the link is sent nowhere to draw it",
+    "holds": true,
+    "evidence": "Network log while opening each dialog (screens.cjs): the only request is POST /api/envelopes/<id>/recipient-view; no request to any other host and no request carrying the token. src/lib/qr.ts has no imports and no fetch."
+   },
+   {
+    "item": "Shown only to the person it is for: warning, code removed after 2 minutes, focus returns",
+    "holds": true,
+    "evidence": "screens.cjs installs Playwright's clock, fast-forwards 121 s: .qr-dialog svg count goes to 0 (removed from the DOM, not hidden) and 'The code was taken off the screen after 2 minutes...' shows; Escape returns focus to 'Show a QR code with the signing link for Ada Sponsor'. Holds for signer, approver and own-link people; see the witness wording bug for the gap."
+   },
+   {
+    "item": "A code shown again after the sender corrects the address opens the new link",
+    "holds": false,
+    "evidence": "tests/out/verify-qr-encrypt/stale-qr.cjs at 1280x900: Show QR code for Ada (decodes .../sign/0dQk...), Escape, Correct name or email of Ada, new email, 'Save and send new email', then Show QR code again: it decodes the same old link .../sign/0dQk..., which now answers 410, while recipient-view returns .../sign/kcKw....",
+    "still_broken": "Recipients.tsx caches links by recipient id (linkFor: if (links[r.id]) return links[r.id]) and never clears the cache when the envelope reloads after a correction or reassignment.",
+    "suggested_fix": "Clear `links` whenever the envelope is reloaded (useEffect on e.updated_at or on the recipients' tokens/link versions), or key the cache by recipient id plus a link version the API returns, or always fetch for the QR dialog."
+   },
+   {
+    "item": "The public form's own-phone code on a real page",
+    "holds": false,
+    "evidence": "Not proven on a real page. The button is hidden on localhost by design, and under any other host name (192.0.2.2 or a mapped name, ownphone.cjs/ownphone2.cjs) next dev never leaves 'Loading...' because its socket is refused. Only the static render at 240 px (svg-browser.cjs) and the code path were checked.",
+    "suggested_fix": "Check it once on a production build behind a non-localhost name, as the build report describes."
+   },
+   {
+    "item": "Pages and README say what is now true about QR codes; no em dash; 390 px",
+    "holds": true,
+    "evidence": "Landing (src/app/page.tsx:19), help (help/page.tsx:229), /security point 'A QR code is the link.', README 'What is in it'; no em dash in any of the QR files or in the dialog, sheet or page texts; no overflow at 390."
+   },
+   {
+    "item": "With the key set every reader works for every kind of caller, and the disk shows nothing readable",
+    "holds": true,
+    "evidence": "tests/out/verify-qr-encrypt/enc-probe.ts (FILE_ENCRYPTION_KEY set): owner download, API key (Bearer) download, team admin download, signer download, signer /doc, evidence pack, /public/verify/:id pages, export through an API key: all 200 with a real PDF. Every blob starts with \\0enc; neither the subject nor '%PDF' appears in any blob."
+   },
+   {
+    "item": "A changed byte is refused by every reader, never served as garbage",
+    "holds": true,
+    "evidence": "enc-probe.ts flips one byte of the signed PDF: owner, API key, admin and signer downloads all 500 JSON {code:file_damaged}, no PDF bytes; export (API key) 200 with the file left out; evidence pack 200 ZIP with a note; operator alert filed once per file."
+   },
+   {
+    "item": "Two writes of the same file at the same moment; a damaged copy repaired by storing it again",
+    "holds": true,
+    "evidence": "enc-probe.ts: the same new PDF uploaded through a session and an API key in Promise.all: both 200, file reads back, no hidden temp files left. After flipping a byte of that stored file, uploading it again answers 200 and the file reads back."
+   },
+   {
+    "item": "Wrong key at start: loud, key ids only, nothing new stored, refusal in words",
+    "holds": true,
+    "evidence": "Dev server restarted on the same DATA_DIR with a different key (dev2.log): 'STORING FILES IS STOPPED. 7 stored files were encrypted with a key this server does not have (key id 2b710a27ebe037d6: 7 files)...'; neither key appears in the log (grep count 0 for both). A real PDF upload answers 503 storage_stopped 'We cannot store files at the moment, so nothing was saved...'; sender and signer downloads 503 file_locked. With no key at all (dev3.log) the same stop with 'It has no key at all'."
+   },
+   {
+    "item": "Migration script: stopped half way, run twice, run twice at once, key change",
+    "holds": true,
+    "evidence": "tests/out/verify-qr-encrypt/script-kill.sh: 400 plain files of 400 KB, SIGKILL after 0.8 s: 211 plain + 189 encrypted, 0 unreadable, one half-written .e<pid> copy and a stale lock left. Second run: 'Encrypted now: 211 ... Already done before: 189. Removed 1 half-written copy', exit 0. Third run: 'Already done before: 400', exit 0. Same 400 names, nothing lost, no hidden files. Two runs at the same moment with a new key and the old listed: one exits 1 with 'Another run of this script is going', the other moves all 400; --check with only the new key: 400 read back, exit 0."
+   },
+   {
+    "item": "Startup scan cost",
+    "holds": true,
+    "evidence": "scan-time.ts: scanStore on 50,000 files (half encrypted) takes 416 ms with the right key and 484 ms with an unknown key, on local disk."
+   },
+   {
+    "item": "/security and the processing summary say exactly what is and is not protected",
+    "holds": false,
+    "evidence": "db-text.ts with the key set: a PDF containing 'SALARY-OF-MARTA-IS-987654' and a bank account number is uploaded, sent, signed. No blob holds the text, but sign.db does, in files.text (plain). /security (key on, read in the browser) says the uploaded documents 'are encrypted before they are written to disk ... That protects a copy of the disk', and its database sentence lists names, emails, field answers, signatures and audit trails but not the documents' text; the processing summary says the same. Only the README mentions 'the text of uploaded PDFs kept for search'.",
+    "still_broken": "Someone with a copy of the disk reads the full text of every uploaded document from the database, while the public page says the documents are encrypted on disk.",
+    "suggested_fix": "Encrypt files.text with the file key when a key is set (or do not keep it), or at the least add 'the text of every uploaded PDF, kept for search' to DATABASE in src/lib/storedfiles.ts and to PROCESSING_ENCRYPTED, and stop saying a disk copy is protected for the documents."
+   },
+   {
+    "item": "'A signed PDF is made later by the timer, once files can be stored again'",
+    "holds": false,
+    "evidence": "enc-probe2.ts: five envelopes whose own source document has one changed byte are completed; a sixth completes while storing is stopped (wrong key). The old key is listed again and cronTick runs 6 times: the sixth still has final_sha256 null; the timer's query (envelopes.ts:2436, LIMIT 5 with no order and no record of tries) returns the same five stuck envelopes every tick. Both of its completion emails said 'being prepared and will be at the link below shortly'.",
+    "still_broken": "Any five envelopes whose signed PDF can never be built block the signed PDF of every other envelope for good.",
+    "suggested_fix": "Record each try (final_tried_at, final_tries), select ORDER BY final_tried_at NULLS FIRST, back off envelopes that fail with file_damaged and file one operator alert for them."
+   },
+   {
+    "item": "Locked file in the export is described correctly",
+    "holds": false,
+    "evidence": "enc-probe.ts: signed PDF written under one key, server given a different key: export 200, README.txt says 'Their stored copy failed its check, so nothing damaged was put in ... can put the files back from a backup', but the file is not damaged, only locked (download answers 503 file_locked).",
+    "suggested_fix": "In routes-trust.ts keep the error code per left-out file and write a separate sentence for file_locked: 'is locked with an encryption key this server was not given; it is not lost, export again once the operator has set the key'."
+   },
+   {
+    "item": "A signer facing a locked or damaged document gets a way out that works",
+    "holds": false,
+    "evidence": "locked-screens2.cjs, 390x844: after consent the signing page says 'The document could not be opened here. Try again in a moment. If it keeps happening, download it, or ask Demo Sender to check it.' The download answers 503 JSON {code:file_locked}. The author listed this as left open.",
+    "suggested_fix": "In src/app/sign/[token]/page.tsx show the server's error text for file_locked/file_damaged and hide the download suggestion."
+   },
+   {
+    "item": "Completion emails with an attachment that wait for another try",
+    "holds": false,
+    "evidence": "enc-probe.ts: SMTP stub fails the first completion emails (payload has 1 attachment each), then the signed PDF gets one changed byte, then cron tick: both emails stay failed, tries 2, error 'We could not open this file: the copy stored on our server failed its check...', delivered 0. With MAIL_RETRY_MINUTES [5,30,120,360,1440] they give up after about 32 hours; the same happens to a locked attachment during a key mistake.",
+    "suggested_fix": "In mail.ts deliver(), when readBlob throws an HttpError, send the email without that attachment and add a line that the copy is at the link (or, for file_locked only, retry without counting the try)."
+   },
+   {
+    "item": "/security with no key when encrypted files exist",
+    "holds": false,
+    "evidence": "security.cjs on my server with FILE_ENCRYPTION_KEY unset and 7 encrypted files in blobs: 'the people who run this server have not switched that on, so those files are on the disk as they were uploaded and signed.' The README's own switch-off path (key moved to FILE_ENCRYPTION_KEYS_OLD) gives the same sentence while older files are encrypted.",
+    "suggested_fix": "Word the off state as 'new files are stored as they are' unless the scan finds no encrypted file, or read the scan in notEncryptedPoint."
+   },
+   {
+    "item": "Em dashes and phone width on the encryption pages",
+    "holds": true,
+    "evidence": "No em dash in filecrypt.ts, filestore.ts, storedfiles.ts, encrypt-files.mjs, .env.example, security pages or the README section; /security and /security/processing have no horizontal scroll at 390 with the key on and off (sec-*.png)."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Documents' full text sits unencrypted in the database while /security says the documents are encrypted on disk",
+    "severity": "high",
+    "where": "src/lib/storedfiles.ts (DATABASE, encryptedFilesPoint, PROCESSING_ENCRYPTED); files.text in src/server/db.ts",
+    "detail": "Steps: node --experimental-strip-types --no-warnings tests/out/verify-qr-encrypt/db-text.ts (key set, upload a PDF with 'SALARY-OF-MARTA-IS-987654' and an IBAN, send, sign). Result: {blobHits:0, dbHits:['sign.db'], where:['files.text']}. /security says the uploaded documents are encrypted before they are written to disk and that this protects a copy of the disk; the list of what the database holds omits the documents' text. Fix: encrypt files.text under the file key (HKDF info 'search text v1 <sha>') when a key is set, or drop it; until then add it to DATABASE and PROCESSING_ENCRYPTED and soften 'protects a copy of the disk'."
+   },
+   {
+    "title": "Five unbuildable envelopes block every other signed PDF the timer should make",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts:2436 (cronTick: SELECT ... final_sha256 IS NULL LIMIT 5)",
+    "detail": "Steps: tests/out/verify-qr-encrypt/enc-probe2.ts: 5 envelopes whose source file has one flipped byte are completed, a 6th completes during a storage stop, the key is listed again, cronTick x6. Result: waitingFinal null, the same 5 ids picked each time; its completion emails promised the PDF 'shortly'. The new file check turns a flipped byte into a permanent build failure, so this case now arises. Fix: track tries per envelope, order by last try, back off and alert on file_damaged."
+   },
+   {
+    "title": "Show QR code after a correction shows the old, dead link",
+    "severity": "medium",
+    "where": "src/components/sender/Recipients.tsx linkFor (links cache keyed by recipient id)",
+    "detail": "Steps: tests/out/verify-qr-encrypt/stale-qr.cjs: Show QR code for Ada, Escape, Correct, new email, 'Save and send new email', Show QR code. Result: second code decodes to the old /sign/0dQk... which answers 410; recipient-view gives /sign/kcKw.... The person scans and is told the link was replaced. Copy link has the same stale cache. Fix: reset links on envelope reload or key it by a link version."
+   },
+   {
+    "title": "The QR dialog for a witness understates what a scanner can do",
+    "severity": "medium",
+    "where": "src/lib/qrlink.ts DOES and AS (no 'witness' entry)",
+    "detail": "Steps: tests/out/verify-qr-encrypt/witness-screen.cjs (deed with Ann and witness Will, Ann signs, Show QR code for Will Witness at 390x844). Result: 'they read it there' and 'Whoever scans it ... can open the document as Will Witness'. The link lets whoever scans it make the witness statement and sign as the witness. Fix: DOES.witness = 'read it and witness the signature', AS.witness = 'witness the signature'; test every role in ROLES."
+   },
+   {
+    "title": "A completion email waiting for a retry is never delivered when its attachment is damaged or locked",
+    "severity": "low",
+    "where": "src/server/mail.ts deliver() (attachments map readBlob inside the send try)",
+    "detail": "Steps: enc-probe.ts part 7 (SMTP stub fails first, then one byte of the signed PDF changes, cron tick). Result: status failed, tries 2, error is the user-facing 'We could not open this file...' text, delivered 0; it gives up after the retry schedule (about 32 hours). Fix: on an HttpError from readBlob drop that attachment and add a line; for file_locked keep retrying without giving up."
+   },
+   {
+    "title": "Export README calls a locked file damaged and tells people to restore it from a backup",
+    "severity": "low",
+    "where": "src/server/routes-trust.ts export README lines",
+    "detail": "Steps: enc-probe.ts part 6 (signed PDF under one key, server set to another). Result: README.txt 'Their stored copy failed its check ... can put the files back from a backup' while the download answers 503 file_locked. Fix: separate wording per code."
+   },
+   {
+    "title": "Signing page suggests downloading a document that cannot be downloaded",
+    "severity": "low",
+    "where": "src/app/sign/[token]/page.tsx document viewer error",
+    "detail": "Steps: locked-screens2.cjs at 390x844 with a key that does not fit. Result: 'If it keeps happening, download it'; /api/sign/<t>/download answers 503 JSON. Author listed it as left open. Fix: show the server's message, no download hint, for file_locked and file_damaged."
+   },
+   {
+    "title": "/security says files are on the disk as uploaded when older files are encrypted",
+    "severity": "low",
+    "where": "src/lib/storedfiles.ts notEncryptedPoint",
+    "detail": "Steps: server with FILE_ENCRYPTION_KEY unset over a folder of encrypted files (security.cjs off). Result: 'have not switched that on, so those files are on the disk as they were uploaded and signed'. Fix: say 'new files are stored as they are' or read the scan."
+   },
+   {
+    "title": "Plain copies of files stored before encryption may survive on the disk and in older backups",
+    "severity": "low",
+    "where": "README 'Encrypting stored files', storedfiles.ts encryptedFilesPoint",
+    "detail": "scripts/encrypt-files.mjs renames the encrypted copy over the plain one; the plain bytes stay in the filesystem's free blocks and in every backup taken before. The pages say this protects a copy of the disk. Fix: say that earlier files stay readable in older backups and possibly in the disk's free space, and recommend rotating those backups and encrypting the disk."
+   },
+   {
+    "title": "Click-to-agree certificate says the terms pages follow when a refused file was left out",
+    "severity": "low",
+    "where": "src/server/clickwrap.ts certificatePdf (after-callback catch around readBlob)",
+    "detail": "Code reading, not probed: the sheet prints 'They follow this page, exactly as they were stored' before the pages are added; a damaged or locked terms PDF is caught and silently left out. Fix: build the pages first and print 'could not be read from storage' when they fail."
+   },
+   {
+    "title": "A signer's attachment that fails its check is silently left out of the sealed signed PDF",
+    "severity": "low",
+    "where": "src/server/pdf.ts renderEnvelopePdf ('skip unreadable attachments')",
+    "detail": "Code reading, existed before this work: with a changed byte in an attachment, readStored refuses it, the catch skips it, and the signed PDF is stored for good without it (the operator gets an alert). Fix: treat file_damaged like the stop: fail the build so the timer retries, or print a page saying the attachment could not be read."
+   },
+   {
+    "title": "Group members can copy their link but get no QR code",
+    "severity": "low",
+    "where": "src/components/sender/GroupMembers.tsx",
+    "detail": "Brief 2(c): anywhere a link is handed over in person. Each member card has Copy link only. Fix: add Show QR code that calls recipient-view with member_id and opens QrDialog."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "/security 'Stored files are encrypted by the software.' and the processing summary",
+    "claim": "The uploaded documents are encrypted before they are written to disk; this protects a copy of the disk or a backup.",
+    "reality": "The full text of each uploaded PDF is stored in plain text in sign.db (files.text), on the same disk; the page's list of what the database holds leaves it out."
+   },
+   {
+    "where": "README 'Encrypting stored files' (A mistake with the key loses nothing) and build:encrypt",
+    "claim": "A signed PDF is made later by the timer, once files can be stored again.",
+    "reality": "The timer tries only the same first five envelopes; five that cannot be built (a damaged source) keep any other from ever getting its signed PDF."
+   },
+   {
+    "where": "build:qr abuse_and_stuck",
+    "claim": "Correcting the address replaces the link (old code answers 410).",
+    "reality": "True on the server, but the envelope page then shows the old, dead link again in Show QR code."
+   },
+   {
+    "where": "build:qr item 2c",
+    "claim": "Each place a link is handed over in person offers a code.",
+    "reality": "Group members' Copy link has no QR code, and the public form's own-phone code was not verified on a real page in this environment."
+   },
+   {
+    "where": "README 'What is protected'",
+    "claim": "The people who run the server get an alert in the operator queue, by email and in the log.",
+    "reality": "Email goes only when SUPPORT_EMAIL or OPERATOR_EMAILS is set; my dev run logged 'NOBODY WAS TOLD BY EMAIL'."
+   },
+   {
+    "where": "build:encrypt item 1",
+    "claim": "Every reader of files is covered, attachments in emails included.",
+    "reality": "Only the first send was tested. An email that waits for a retry fails entirely if its attachment fails its check or is locked."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "jsQR and OpenCV read screenshots, not a phone camera pointed at a lit screen. I am fairly sure (about 75%) real cameras read these codes: signing and form links are versions 4 to 6, shown at 300 CSS px, which is coarse. The fact that 200 px boxes at 1x fail for 260+ character links says the margin is thin only for links the app never makes.",
+   "OpenCV could not find 82 of 523 codes. I am confident (90%+) this is OpenCV's detector and not the encoder: its Aruco detector or a rescale read 81 of them, the last starts with NUL bytes that OpenCV cuts at, and python-qrcode and Nayuki draw identical matrices.",
+   "Whether old plain bytes survive after the script depends on the filesystem and on SSD TRIM; ext4 and xfs do not zero freed blocks by default, and older backups keep them in any case.",
+   "The operator email in filestore.ts is sent through a dynamic import; my dev runs had no SUPPORT_EMAIL, so I saw only the 'nobody was told by email' branch, not a real send.",
+   "How a real mail provider treats a retried email without its attachment was not tested; the stub only shows that our side never hands it over."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/dlgfull-phone-Codeagreement.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/dlgfull-desk-Waitingagreement.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/sheetfull-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/sheet.pdf",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/witness-dialog.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/stale-qr.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/locked-signer2-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/sec-on-security-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/sec-off-security-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/screens-facts.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-qr-encrypt/enc-probe.json"
+  ]
+ },
+ "verify:twostep": {
+  "checks": [
+   {
+    "item": "Code algorithm against the published RFC 6238 (and RFC 4226) test values",
+    "holds": true,
+    "evidence": "tests/out/verify-twostep/algo.ts: all 18 values of RFC 6238 appendix B (SHA-1, SHA-256, SHA-512, 8 digits, typed from the RFC) match both the server's totp() and an independent TOTP written in the probe; the 6-digit form equals the last 6 digits; RFC 4226 appendix D HOTP 0..9 match; RFC 4648 section 10 base32 vectors round-trip (upper, lower, padded); 200 random 20-byte secrets: matchStep accepts the code an independent app computes from the base32 text, accepts one step either side, refuses two steps back; odd input (empty, 5/7 digits, letters, full-width digits, spaces) does not throw. Output: ALL ALGORITHM CHECKS PASS."
+   },
+   {
+    "item": "No way of signing in gives a session before the second step (password, Google/Microsoft, password reset, confirm-email link)",
+    "holds": false,
+    "evidence": "For a confirmed address it holds: the author's every-route test passes, /auth/verify and /auth/reset create no session, the Google callback redirects to /login/two-step. But for a login whose address was never confirmed, two-step login is silently removed by cutEarlierAccess (src/server/auth.ts:36-39) and the thief is signed in at once. Probe attack.ts A-unconfirmed-reset: sign up una.unconfirmed@example.com without confirming, switch two-step on (setup does not ask for a confirmed address), then from another browser POST /auth/forgot, open the emailed link, POST /auth/reset {password:'thief password 1'} -> {two_step:false}; POST /auth/login with that password -> 200 and a ts_session. The only email the owner got was 'Reset your Sign&Grow password'; nothing says two-step login was removed. Probe B-unconfirmed-google: same login at gus.unconfirmed@gmail.com, Google sign-in with a new subject and email_verified=true -> 302 /signin/done, session, two_step_on_at now NULL.",
+    "still_broken": "A thief with only the mailbox gets in immediately, with no 3-day wait and no notice, whenever the owner switched two-step on before clicking the confirmation link.",
+    "suggested_fix": "Refuse POST /me/two-step/setup (and the TwoStepRequired screen) until users.email_verified=1. Then the stranger case cutEarlierAccess guards against cannot arise, and cutEarlierAccess no longer needs to clear two-step state; or, if it is kept, start the 3-day email reset there instead of clearing, and say so in the reset answer and in an email."
+   },
+   {
+    "item": "Reset by email: a thief with only the mailbox does not get in quietly; the link is only sent after a right password",
+    "holds": false,
+    "evidence": "Probe attack.ts C-google-mailbox-thief-verified (run alone): confirmed login vera.verified@gmail.com with two-step on; the owner is signed in in their own browser. Thief controls only the Gmail account: Google sign-in with an unknown subject -> the identity is inserted into identities BEFORE any code (routes-signin.ts:198, signInAs comes at :224), 302 /login/two-step; the waiting row has password_ok=1 although no password was typed (twostep.ts:255 holdForSecondStep -> hold(c,u,true)); POST /auth/two-step/lost -> {ok:true} and the reset link is emailed (routes-twostep.ts:62); opening it starts the reset. The email says 'Someone who knew the password of your Sign&Grow login...', which is false. The owner's browser stays signed in throughout; GET /me carries two_step.reset_at but the app home shows nothing (screenshot s8-app-home-during-reset.png); only Settings, Profile shows the warning (s9). After the days pass (DB time moved, cron.tick), Google alone signs the thief in: ['/signin/done?next=/app', true]. Every notice went only to the mailbox the thief holds.",
+    "still_broken": "Someone with only the Gmail or Microsoft account behind the address gets a permanent way in (connected identity) and, after 3 days, a session, with no password and no phone; the owner sees nothing unless they open Settings, Profile.",
+    "suggested_fix": "In the provider callback, connect a new identity only after the second step passes (keep it in the waiting row's note and add it in POST /auth/two-step). Treat a provider sign-in as password_ok=0 for /auth/two-step/lost, or require the password for the email reset. Show a reset under way as a banner on every app page (AppShell, from me.two_step.reset_at) and sign out other sessions only when it takes effect. Fix the email wording for provider sign-ins."
+   },
+   {
+    "item": "The owner can stop the reset by signing in",
+    "holds": false,
+    "evidence": "Probe attack.ts D-remembered-device-does-not-stop-reset: owner ticks 'Remember this device'; a thief who knows the password starts the reset by email; the owner signs in on the remembered laptop with the password -> 200, session, reset_stopped absent; users.two_step_reset_at is still set. holdForSecondStep (twostep.ts:253-254) returns null on a remembered device before stopEmailReset ever runs. The policy text TWO_STEP_LOST and the emails say 'Signing in with your code or a recovery code stops it', but on that device no code is asked, and the app home does not show the reset (s8).",
+    "still_broken": "An owner who signs in daily from their remembered device never stops the reset and never sees it unless they open Settings, Profile.",
+    "suggested_fix": "In holdForSecondStep, when a remembered device is used and two_step_reset_at is set, call stopEmailReset (the device is the second factor), or refuse the device skip while a reset is under way so the code is asked; plus the app-wide banner."
+   },
+   {
+    "item": "A code cannot be used twice (also across places, and at the same moment)",
+    "holds": true,
+    "evidence": "attack.ts H-replay-across-places: the code that switched it on, reused at sign-in -> 401; a code used under Settings (new recovery codes, 200) then at sign-in -> 401; the same recovery code from two browsers at once -> [200, 401]. The author's test covers the same TOTP code from two browsers at once."
+   },
+   {
+    "item": "Five wrong codes pause that login's second step for 15 minutes, in words, without locking out the legitimate person",
+    "holds": false,
+    "evidence": "attack.ts I-lockout-by-stranger: someone who knows only the address does POST /auth/login with 'no idea' then 5 codes '000000', three rounds; in each round the real owner with the right password and the right code gets 429 two_step_paused (recovery codes are refused too, the pause is checked first in useCode). 3 'Wrong codes were typed' emails were sent; there is no cap, so one round per 15 minutes is 96 emails a day and no new sign-in for the owner. Per-IP limits (login 30/15 min, two-step 60/15 min) let one address keep about 6 logins paused, many addresses any number. Also J-guess-rate: with the password, 5 tries per 15 minutes forever with no escalation is 480 tries a day: about 4% to hit a code within 30 days and 41% within a year (3 valid codes per try).",
+    "still_broken": "A stranger can keep any two-step login out of every new browser indefinitely and flood its inbox; a password holder has no growing delay.",
+    "suggested_fix": "Keep the answers identical but stop counting wrong-password attempts against the login: count them on the waiting row and its IP, and answer a sixth try there with the same 429 text. Escalate the login pause (15 min, 1 h, 4 h...) for right-password failures, send at most one pause email per day, and let a remembered device or a recovery code through a pause caused by wrong-password tries."
+   },
+   {
+    "item": "No answer tells a guesser whether the password was right",
+    "holds": true,
+    "evidence": "Author's test plus my reading: wrong and right password get the same 200 body, the same waiting cookie, the same /auth/two-step GET, the same 401 text and shared try count; /lost answers {ok:true} either way with the same rate key. Caveat (attack.ts K-enumerate-two-step): POST /auth/login with any password returns 200 {two_step,minutes,paused_until} for a login with two-step on and 401 for one without or for no login, so anyone can learn which addresses have two-step login on (and therefore which ones a stolen password opens alone).",
+    "suggested_fix": "Optional: answer every address the same way (a waiting row for unknown and non-two-step logins too) so the second screen does not mark which logins are protected."
+   },
+   {
+    "item": "Remember this device: tied to the login, withdrawable, a copied or withdrawn cookie",
+    "holds": true,
+    "evidence": "attack.ts L-device-cookie: the cookie is HttpOnly (Playwright shows sg_device_xxx httpOnly=true). Copied into another browser it skips the second step there with the password (200, session): expected for a bearer cookie, so it is as strong as the cookie's secrecy. After Withdraw the copied cookie asks for the code again; after switching off and on again the old cookie asks for the code. Note: withdrawing does not sign that browser out (the browser that was remembered still gets 200 on /envelopes), and the Settings text 'Withdraw one you no longer use, or that was not yours' does not say so.",
+    "suggested_fix": "When a device is withdrawn, also end sessions created from it (store the device id on the session), or say on the card that signing it out is under 'Where you are signed in'."
+   },
+   {
+    "item": "A session made before two-step was switched on",
+    "holds": true,
+    "evidence": "attack.ts G-sessions-before-switch-on: a browser signed in before setup and one signed in between setup and confirm both get 401 after confirm (signed_out: 2); the browser that switched it on keeps working."
+   },
+   {
+    "item": "A waiting sign-in ends when the password changes",
+    "holds": false,
+    "evidence": "attack.ts F-pending-survives-password-change: attacker types the current password (waiting row, password_ok=1); the owner then changes the password with a code (200) and also does a password reset by email; the attacker's waiting row is still there and the attacker's next code signs in: [200, true]. Neither POST /me/password (routes-account.ts:339-340) nor POST /auth/reset deletes two_step_pending.",
+    "still_broken": "For up to 10 minutes after the owner changed or reset the password, a phisher who has the old password and one fresh code still gets in.",
+    "suggested_fix": "DELETE FROM two_step_pending WHERE user_id=? in POST /me/password and POST /auth/reset (and on 'sign out other browsers')."
+   },
+   {
+    "item": "Admin reset: only an owner or admin of the person's team; an owner's second step is nobody else's to reset; emailed and recorded",
+    "holds": false,
+    "evidence": "Emailed and recorded holds (author's test, and attack.ts O: email to the member names the admin). But attack.ts E-admin-resets-owner-of-other-account: Owen owns his own account and is a member of Bea's team; Ada, an admin of Bea's team with no two-step login of her own, POST /account/members/{owen}/two-step/reset {} -> 200, no code asked, Owen's two-step login is off for his whole login, including the account he owns. The check is only m.member_role==='owner' in this account (routes-twostep.ts:281), while TWO_STEP_LOST says to owners 'nobody else can reset it for you'.",
+    "still_broken": "An admin of any team a person joined (possibly phished, with password only) can strip the second step that protects an account the person owns.",
+    "suggested_fix": "Refuse the reset when ownsAnAccount(m.id) (send them to the reset by email), and require the acting admin to have two-step login on."
+   },
+   {
+    "item": "A team that requires it: members without it can only set it up",
+    "holds": true,
+    "evidence": "attack.ts N-team-gate: an admin member without two-step gets 403 two_step_setup on /envelopes, /account/members, POST /api-keys, POST /account/invites, GET /account/two-step; GET /me/two-step works; POST /public/support answers on its own rules. Screen s12-required-setup.png shows only the setup at 390x844. Low note: GET /me/sessions and POST /me/delete are also refused, so a person who joined only through the invitation cannot see or end their other browsers or close their login until they set it up (they can leave the team)."
+   },
+   {
+    "item": "API keys are not affected and no key can see or change two-step login",
+    "holds": false,
+    "evidence": "Two-step paths are refused to keys (author's test). But tests/out/verify-twostep/keypause.ts: a 'send' scope key calls POST /me/password with the current password and 5 wrong codes -> 429 two_step_paused and a pause email; with the right code a send key changes the login's password -> 200 {ok:true} (which also signs out every browser of that person). /me/password is not in PERSON_ONLY.",
+    "still_broken": "A leaked send key plus the password can pause the owner's second step or, with one code, take over the password.",
+    "suggested_fix": "Add /^POST \\/me\\/password$/ (and PATCH /me) to PERSON_ONLY in router.ts."
+   },
+   {
+    "item": "Recovery codes: shown once, stored hashed, each works once, count left said",
+    "holds": true,
+    "evidence": "Only salted sha256 fingerprints in users.two_step_codes; the same code from two browsers at once -> [200, 401] (H); author's test covers count left and replacement. 31^10 code space."
+   },
+   {
+    "item": "Screens at 390x844 and em dashes",
+    "holds": true,
+    "evidence": "tests/out/verify-twostep/shots.cjs against a dev server on 3584: 12 screens (settings on, second screen, wrong code, lost open and sent, reset page and started, app home during reset, settings with reset under way, after code, settings devices, required setup) all have scrollWidth 390, no em or en dash in page text, no button or input under 44 px in the two-step containers. grep finds no em dash in the changed server, screen, policy, README, /security or /help text. (s11 showed stale data because Playwright navigated to the same URL with a hash and did not reload; the database had the reset stopped and the device saved, so that is my script's artifact, not a bug.)"
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Gmail/Microsoft mailbox alone opens a two-step login after 3 days; identity connected before the code; reset link sent without a password",
+    "severity": "high",
+    "where": "src/server/routes-signin.ts:186-203 and :224; src/server/twostep.ts:251-256; src/server/routes-twostep.ts:58-64 and :84",
+    "detail": "Steps (tests/out/verify-twostep/attack.ts C-google-mailbox-thief-verified): confirmed login x@gmail.com with two-step on, owner signed in elsewhere. Thief with only the Google account signs in with Google (new subject): identities row is added immediately, browser goes to /login/two-step with a waiting row password_ok=1. POST /auth/two-step/lost emails the reset link (text claims 'Someone who knew the password'). Open link, start reset. After 3 days Google alone gives a session. Owner was never signed out; app home shows nothing (s8). Fix: add the identity only after POST /auth/two-step succeeds; treat provider sign-ins as password_ok=0 for /lost; app-wide banner while a reset is under way; correct the email wording."
+   },
+   {
+    "title": "Unconfirmed-address login: password reset or Google sign-in silently removes two-step login and signs the thief in at once",
+    "severity": "high",
+    "where": "src/server/auth.ts:36-39 (cutEarlierAccess), src/server/routes-account.ts:261-263, src/server/routes-signin.ts:190-196, src/server/routes-twostep.ts:150 (setup does not check email_verified)",
+    "detail": "Steps (attack.ts A and B): sign up without clicking the confirmation link, switch two-step on. Thief with the mailbox: /auth/forgot, /auth/reset -> {two_step:false}; /auth/login -> 200 with session. Or Google sign-in for a gmail.com address -> session at once. No email says two-step was removed. Fix: require a confirmed address before setup; then stop clearing two-step in cutEarlierAccess (or start the 3-day reset there and tell the owner)."
+   },
+   {
+    "title": "Sign-in on a remembered device does not stop a reset by email, and the reset is visible only under Settings, Profile",
+    "severity": "medium",
+    "where": "src/server/twostep.ts:251-256; src/components/AppShell.tsx (no banner); src/app/app/settings/TwoStep.tsx:53",
+    "detail": "attack.ts D: thief with password and mailbox starts the reset; the owner signs in on the remembered laptop: 200, reset_stopped absent, two_step_reset_at still set. Screens s8 (home, nothing) and s9 (Settings shows it). Fix: stop the reset (or ask the code) when a remembered device is used with a reset under way; show the reset on every app page."
+   },
+   {
+    "title": "Anyone who knows the address can keep a two-step login paused forever and flood its inbox",
+    "severity": "medium",
+    "where": "src/server/twostep.ts:150-191 (wrong-password tries count toward the login pause), :178 (one email per pause, no cap)",
+    "detail": "attack.ts I: wrong password then 5 codes, every 15 minutes: the owner's right password + right code (and recovery codes) get 429 each round; one email per round (96 a day). Fix: count wrong-password tries on the waiting row/IP with the same answer text, not on the login; cap pause emails per day; let a remembered device through."
+   },
+   {
+    "title": "An admin of any team can switch off the second step of someone who owns another account, without a code of their own",
+    "severity": "medium",
+    "where": "src/server/routes-twostep.ts:276-295 (owner check only in this account; needCode skipped when the admin has no two-step)",
+    "detail": "attack.ts E: Ada (admin of Bea's team, no two-step) resets Owen (member there, owner of his own account): 200, Owen's two-step off for his whole login. Contradicts 'The owner of an account (nobody else can reset it for you)'. Fix: refuse when ownsAnAccount(target), and require the admin to have two-step on."
+   },
+   {
+    "title": "A waiting sign-in survives a password change and a password reset",
+    "severity": "low",
+    "where": "src/server/routes-account.ts:331-342 and :252-270",
+    "detail": "attack.ts F: attacker's waiting row (old password, password_ok=1) stays after POST /me/password and /auth/reset; attacker's next code gives a session. Fix: delete two_step_pending for the user in both routes."
+   },
+   {
+    "title": "Pause never grows: 480 code guesses a day for whoever has the password",
+    "severity": "low",
+    "where": "src/server/twostep.ts:172-185",
+    "detail": "attack.ts J: 5 tries per 15 minutes, counter reset at each pause: about 4% chance of a hit in 30 days, 41% in a year. Owner is emailed each pause, which helps. Fix: escalating pause or a daily ceiling per login."
+   },
+   {
+    "title": "POST /auth/login tells anyone which addresses have two-step login on",
+    "severity": "low",
+    "where": "src/server/routes-account.ts:133-138",
+    "detail": "attack.ts K: any password for a two-step login -> 200 {two_step,minutes,paused_until}; without two-step or no login -> 401. Fix: optional uniform second screen for all addresses."
+   },
+   {
+    "title": "A send-scope API key reaches the code check on POST /me/password: it can pause the second step, and with a code change the password",
+    "severity": "low",
+    "where": "src/server/router.ts:71-92 (PERSON_ONLY lacks /me/password)",
+    "detail": "tests/out/verify-twostep/keypause.ts: send key + current password + 5 wrong codes -> 429 two_step_paused and pause email; + right code -> 200 password changed (all browsers signed out). Fix: add POST /me/password and PATCH /me to PERSON_ONLY."
+   },
+   {
+    "title": "Withdrawing a remembered device does not sign that browser out",
+    "severity": "low",
+    "where": "src/server/routes-twostep.ts:226-236; src/app/app/settings/TwoStep.tsx:85",
+    "detail": "attack.ts L: after Withdraw, the remembered browser's session still gets 200. The card says 'Withdraw one you no longer use, or that was not yours' without saying it stays signed in. Fix: end its sessions too, or say where to sign it out."
+   },
+   {
+    "title": "Required team blocks seeing/ending sessions and closing the login",
+    "severity": "low",
+    "where": "src/server/twostep.ts:269 (OPEN_WHILE_REQUIRED)",
+    "detail": "attack.ts N: GET /me/sessions and POST /me/delete -> 403 two_step_setup for a member without two-step. These are about the login, not the account. Fix: add /^[A-Z]+ \\/me\\/sessions/ and /^POST \\/me\\/delete$/ to OPEN_WHILE_REQUIRED."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "research/continue.json build:twostep, abuse_and_stuck",
+    "claim": "The email-reset link is only sent after a right password (tested).",
+    "reality": "After a Google or Microsoft sign-in the waiting row has password_ok=1 with no password typed, so whoever controls the Gmail/Microsoft account gets the link (attack.ts C)."
+   },
+   {
+    "where": "src/lib/policy.ts TWO_STEP_LOST, emails in src/server/twostep.ts and routes-twostep.ts",
+    "claim": "The wait is there so that someone who has only got into your mailbox cannot get into your login quietly; signing in stops it.",
+    "reality": "With only the Gmail account the thief gets in after 3 days while the owner stays signed in and sees nothing outside Settings, Profile; a sign-in on a remembered device does not stop it (C, D)."
+   },
+   {
+    "where": "src/server/routes-twostep.ts:84 (email 'Reset two-step login...'), :301 reset-started email",
+    "claim": "Someone who knew the password of your Sign&Grow login said they lost the phone...",
+    "reality": "Also sent after a Google/Microsoft sign-in where no password was typed. The emails and /two-step-reset also say 'your password alone signs in', which is wrong for a login that has no password."
+   },
+   {
+    "where": "src/lib/policy.ts TWO_STEP_LOST; comment at routes-twostep.ts:274-275",
+    "claim": "The owner of an account (nobody else can reset it for you).",
+    "reality": "An admin of any team the owner is a member of can reset it (E)."
+   },
+   {
+    "where": "README.md '### Two-step login'; builder report item 6",
+    "claim": "Every sign-in ends in signInAs ... With two-step login on it gives no session; no route gives a session before the second step is done; a password reset by email still needs the code.",
+    "reality": "For a login with an unconfirmed address, /auth/reset and a vouched Google sign-in clear two-step login and give a session at once (A, B)."
+   },
+   {
+    "where": "research/continue.json build:twostep item 3",
+    "claim": "The record stores only the admin's name and login id ... so it does not outlive the admin's own login.",
+    "reality": "The stored copy of the email to the member contains the admin's address and is not marked about_user, so it stays for MAIL_COPY_DAYS (90) after the admin deletes their login (attack.ts O). That matches the general privacy text, but not the builder's claim."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Google: I assumed that whoever controls a gmail.com account gets email_verified=true for it and is treated as vouched (oidc.ts identityOf). That is how Google ID tokens behave, so I am highly confident that findings B and C hold against the real Google. The stand-in in my probe signs tokens the same way the author's test does.",
+   "Microsoft: I did not run it. The callback and signInAs code is shared, so the same holds when xms_edov is true. I am moderately confident, because whether tenants send xms_edov depends on the app registration's optional claims.",
+   "Authenticator apps: the otpauth label is 'Sign%26Grow%3Aemail' and the issuer is 'Sign%26Grow'. Google Authenticator, Authy and 1Password decode percent-encoding and accept an encoded colon, and the Key URI Format allows it. I am fairly confident, but I could not scan the QR code with a real app.",
+   "The daily reminder emails depend on the operator calling POST /api/cron at least once a day. If it runs less often, a day is skipped, but the reset still takes effect at the next sign-in.",
+   "Running the probes: run tests/out/verify-twostep/attack.ts with one scenario key at a time (for example: node --experimental-strip-types --no-warnings tests/out/verify-twostep/attack.ts C-google-mailbox-thief-verified). In 'all' mode the Date.now skew from one scenario leaks into the next. I reran every scenario on its own, and the results above are from those separate runs."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s1-settings-on.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s2-second-screen.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s3-wrong-code.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s4-lost-open.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s5-lost-sent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s6-reset-page.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s7-reset-started.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s8-app-home-during-reset.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s9-settings-reset-under-way.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s10-after-code.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s11-settings-devices.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-twostep/s12-required-setup.png"
+  ]
  }
 }

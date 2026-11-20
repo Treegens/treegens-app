@@ -542,3 +542,42 @@ test('someone an admin removes is told where they will be the next time they sig
   assert.equal((await o1.call('DELETE', `/account/members/${await idOf(q)}`)).status, 200);
   assert.match(text(mailTo('quinn@removed-lands.example').find((x: any) => /You were removed/.test(x.subject)).html), /you are in a workspace of your own/);
 });
+
+test('a shared-device form takes a steady stream of people from one front desk, and every limit says what it is', async () => {
+  const keep = { n: process.env.NEW_ACCOUNT_DAILY_RECIPIENTS, u: process.env.UNPAID_DAILY_RECIPIENTS };
+  // The daily limit for new accounts is a separate rule with its own words; here it is out of the way.
+  process.env.NEW_ACCOUNT_DAILY_RECIPIENTS = process.env.UNPAID_DAILY_RECIPIENTS = '1000';
+  try {
+    const { POWERFORM_SHARED_STARTS_PER_HOUR, POWERFORM_STARTS_PER_HOUR } = await import('../src/lib/policy.ts');
+    assert.ok(POWERFORM_SHARED_STARTS_PER_HOUR >= 60);
+    const desk = await person('Dana Busy', 'dana@frontdesk.example');
+    const kiosk = await formOf(desk, 'Front desk waiver', true);
+    const plain = await formOf(desk, 'Ordinary form');
+    const here = ip();
+    const at = () => Object.assign(new Client(), { ip: here });
+    // Each person finishes before the next one starts (marked done here, to keep the test quick).
+    const done = (url: string) => db.run("UPDATE recipients SET status='completed' WHERE token=?", url.split('/sign/')[1]);
+    for (let i = 0; i < POWERFORM_SHARED_STARTS_PER_HOUR; i++) {
+      const s = await at().post(`/public/powerforms/${kiosk.slug}/start`, { name: `Guest ${i}`, email: `g${i}@frontdesk.example` });
+      assert.equal(s.status, 200, `person ${i + 1}: ${JSON.stringify(s.data)}`);
+      done(s.data.url);
+    }
+    const full = await at().post(`/public/powerforms/${kiosk.slug}/start`, { name: 'One More', email: 'more@frontdesk.example' });
+    assert.equal(full.status, 429);
+    assert.match(full.data.error, new RegExp(`started ${POWERFORM_SHARED_STARTS_PER_HOUR} times within an hour .* Please try again in \\d+ minutes?\\. .*own phones`));
+    assert.doesNotMatch(full.data.error, /Too many attempts/);
+    // The front desk's stream does not use up what the same connection may start on ordinary forms.
+    for (let i = 0; i < POWERFORM_STARTS_PER_HOUR; i++) {
+      const s = await at().post(`/public/powerforms/${plain.slug}/start`, { name: `Walker ${i}`, email: `w${i}@frontdesk.example` });
+      assert.equal(s.status, 200, `ordinary ${i + 1}: ${JSON.stringify(s.data)}`);
+      done(s.data.url);
+    }
+    const ordinary = await at().post(`/public/powerforms/${plain.slug}/start`, { name: 'Walker More', email: 'wmore@frontdesk.example' });
+    assert.equal(ordinary.status, 429);
+    assert.match(ordinary.data.error, new RegExp(`started ${POWERFORM_STARTS_PER_HOUR} times within an hour .* mark it as used on a shared device: such a form takes up to ${POWERFORM_SHARED_STARTS_PER_HOUR} people an hour`));
+    // Another connection is not affected.
+    assert.equal((await visitor().post(`/public/powerforms/${kiosk.slug}/start`, { name: 'Elsewhere', email: 'else@frontdesk.example' })).status, 200);
+  } finally {
+    for (const [k, v] of [['NEW_ACCOUNT_DAILY_RECIPIENTS', keep.n], ['UNPAID_DAILY_RECIPIENTS', keep.u]] as const) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});

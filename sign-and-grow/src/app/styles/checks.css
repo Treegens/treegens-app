@@ -42,7 +42,11 @@
 /* The dialog is narrow: one control to a line, so the name of the check is never cut short. */
 .sn-check-fix .ed-check-row { grid-template-columns: 1fr; }
 /* "I checked with them that this is their number": a whole line to tap, 44px at least. */
-.sn-check-fix label.sn-check-confirm { min-height: 44px; display: flex; align-items: center; gap: 8px; margin: 0; }
+.sn-check-fix label.sn-check-confirm { min-height: 44px; display: flex; align-items: center; gap: 10px; margin: 0; }
+/* The box itself keeps its size when the sentence wraps on a phone, instead of being squeezed to a sliver. */
+.sn-check-fix label.sn-check-confirm input, .ed-check label.check input { flex: none; width: 22px; height: 22px; margin: 0; }
+/* The check's name never runs past the edge of its box: it gets the room it needs, and a long one wraps. */
+.ed-check label.f select { text-overflow: ellipsis; white-space: normal; }
 
 /* The security and help pages: what each check proves, one to a line. */
 .pub-proof { display: block; margin: 6px 0 0; }

@@ -1089,7 +1089,7 @@ test('after "This is not my number" no text of any kind goes to it, and a sender
   assert.equal((await c.post(`/sign/${s.tok}/code/problem`, { what: 'not_mine' })).status, 200);
   // The sender is told how to undo it when the number was right after all.
   assert.match(toAda('Wrong number: Shed lease').pop()!.html, /If the number turns out to be right after all, tick (&quot;|")I checked with Sam Signer that this is their number(&quot;|") there, and codes go to it again\./);
-  assert.match((await line(ada, s.id, 'One-time code: not my number')).detail, /No more codes or links are texted to it until the sender corrects it or confirms it with them\.$/);
+  assert.match((await line(ada, s.id, 'One-time code: not my number')).detail, /No more codes or links are texted to it from this account, on any envelope, until the sender confirms it with them\.$/);
   // A reminder a day later: the email goes, the text with the link does not go to a number someone disowned.
   db.run('UPDATE recipients SET texted_at=? WHERE id=?', new Date(Date.now() - 25 * 3600_000).toISOString(), s.rid);
   const reminders = () => mailTo(s.email).filter((m) => m.subject.startsWith('Reminder:')).length;
@@ -1453,4 +1453,90 @@ test('a code by text that waited for another try is not sent once sending is pau
     provider({ SMS_DEV_OUTBOX: '1' });
     sms.answers.length = 0;
   }
+});
+
+test('a link holder who never passed the code cannot switch the reminders and texts off, and the page asks for the code first', async () => {
+  const s = await one(ada, { verify: 'email_code', phone: '+44 7700 900435', text_link: true });
+  const stranger = visitor();
+  const no = await stranger.post(`/sign/${s.tok}/mute`);
+  assert.deepEqual([no.status, no.data.code], [401, 'code_first']);
+  assert.equal(no.data.error, 'This document asks for a one-time code first. Type it, and the reminders stop straight after.');
+  assert.equal(db.get('SELECT muted FROM recipients WHERE id=?', s.rid).muted, 0);
+  // The reminder by text still goes.
+  db.run('UPDATE recipients SET texted_at=NULL WHERE id=?', s.rid);
+  await ada.post(`/envelopes/${s.id}/remind`);
+  assert.deepEqual(texts(s.rid).map((t: any) => t.kind), ['link', 'reminder']);
+  // Whoever passes the code can.
+  const signer = visitor();
+  await pass(signer, s);
+  assert.equal((await signer.post(`/sign/${s.tok}/mute`)).status, 200);
+  assert.equal(db.get('SELECT muted FROM recipients WHERE id=?', s.rid).muted, 1);
+  // The "stop reminders" link from an email lands on the code screen, says why, and stops them once the code is typed.
+  const page = fs.readFileSync(new URL('../src/app/sign/[token]/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /e\?\.code === 'code_first'/);
+  assert.match(page, /muteNote === 'code' && data && !data\.locked\) mute\(true\)/);
+  assert.match(page, /Reminders stop once the code is typed\./);
+});
+
+test('a code email the mail server took only on a later try is not kept readable in our copy', async () => {
+  const g = globalThis as any;
+  process.env.SMTP_URL = 'smtp://mail.invalid';
+  let fail = true;
+  const taken: any[] = [];
+  try {
+    const s = await one(ada, { verify: 'email_code' });
+    g.__tsmail = { sendMail: async (m: any) => { if (fail && m.to === s.email) throw new Error('451 try later'); taken.push(m); } };
+    assert.equal((await visitor().post(`/sign/${s.tok}/code`)).status, 502);
+    fail = false;
+    const row = db.get("SELECT id FROM emails WHERE to_email=? AND subject LIKE 'Your code%' ORDER BY id DESC LIMIT 1", s.email);
+    db.run('UPDATE emails SET next_try_at=? WHERE id=?', new Date(Date.now() - 1000).toISOString(), row.id);
+    await cron.tick();
+    const code = /(\d{6}) is your code/.exec(taken.find((m) => m.to === s.email).html)![1];
+    const kept = db.get('SELECT status, html, payload FROM emails WHERE id=?', row.id);
+    assert.equal(kept.status, 'sent');
+    assert.equal(`${kept.html}${kept.payload}`.includes(code), false, 'our copy kept the code after the mail server took it');
+  } finally {
+    delete process.env.SMTP_URL;
+    delete g.__tsmail;
+  }
+});
+
+test('before the code the envelope id and the page count are not given out, so the public lookup tells a link holder nothing', async () => {
+  const s = await one(ada, { verify: 'email_code' });
+  const v = (await visitor().get(`/sign/${s.tok}`)).data;
+  assert.equal(v.locked, true);
+  assert.deepEqual([v.envelope.id, v.envelope.impact], [undefined, undefined]);
+  assert.equal(JSON.stringify(v).includes(s.id), false);
+  // Someone whose link the sender shared is not told that "the link in your email" keeps working.
+  const file = await upload(ada, 1);
+  const e = (await ada.post('/envelopes', { subject: 'By hand', send: true, documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'r', role: 'signer', name: 'Wanjiru Kamau', email: '', link_by_sender: true, verify: 'sms_code', phone: '+44 7700 900436' }],
+    fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] }));
+  assert.equal(e.status, 200, JSON.stringify(e.data));
+  const tok = db.get('SELECT token FROM recipients WHERE envelope_id=?', e.data.envelope.id).token;
+  assert.equal((await visitor().get(`/sign/${tok}`)).data.check.shared, true);
+  assert.equal(v.check.shared, false);
+  assert.match(fs.readFileSync(new URL('../src/components/sign/CodeCheck.tsx', import.meta.url), 'utf8'), /check\.shared \? `The link \$\{sender\.name\} gave you keeps working\.` : 'The link in your email keeps working\.'/);
+});
+
+test('premium-rate, satellite and unassigned numbers are never texted, and are refused in words', async () => {
+  for (const n of ['+44 909 879 0000', '+1 900 555 0100', '+1 976 555 0100', '+882 1234 5678', '+881 6 1234 5678', '+999 1234 5678', '+800 1234 5678', '+870 7712 3456'])
+    assert.equal(normalPhone(n), null, n);
+  // Ordinary mobiles still go, among them countries whose codes start like the refused ones.
+  for (const n of ['+44 7700 900123', '+1 415 555 0100', '+880 1712 345678', '+886 912 345 678', '+998 90 123 4567', '+971 50 123 4567'])
+    assert.notEqual(normalPhone(n), null, n);
+  const r = await tryOne(ada, { verify: 'sms_code', phone: '+1 900 555 0100' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /"\+1 900 555 0100", the mobile number of Sam Signer, is not a number we can text\. .*Premium-rate, satellite and international network numbers cannot be texted\./);
+  const { readRecipients } = await import('../src/components/sender/csv.ts');
+  assert.deepEqual(readRecipients('Volunteer name,Volunteer email,Volunteer phone\nAda,ada@example.org,+44 909 879 0000', [{ key: 'Volunteer', label: 'Volunteer', phone: true }]).rows[0].problems, ['"+44 909 879 0000" is a premium-rate, satellite or international network number, and those are never texted']);
+  // The editor says the same before anything is sent.
+  assert.match(fs.readFileSync(new URL('../src/components/sender/CheckFields.tsx', import.meta.url), 'utf8'), /premiumPhone\(typed\) \? `The number for \$\{name\} is a premium-rate, satellite or international network number, and those are never texted\. Type their mobile number\.`/);
+});
+
+test('in the Correct dialog the box "I checked with them" keeps its size on a phone, and is offered for a link by text too', () => {
+  const css = fs.readFileSync(new URL('../src/app/styles/checks.css', import.meta.url), 'utf8');
+  assert.match(css, /label\.sn-check-confirm input, \.ed-check label\.check input \{ flex: none; width: 22px; height: 22px;/);
+  const dialog = fs.readFileSync(new URL('../src/components/sender/dialogs.tsx', import.meta.url), 'utf8');
+  assert.match(dialog, /!newAddress && \(was\.verify === 'sms_code' \|\| was\.text_link\) && \(/);
 });

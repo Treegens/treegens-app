@@ -46,13 +46,30 @@ export function recordShows(identity: Identity, via: Via, embedHost = ''): { sho
   if (via === 'api' || identity === 'api')
     return { shows: 'The website recorded this acceptance itself, through the API, with the details it sent. Sign&Grow did not show these terms to the person and did not see a click: the record shows what the website said happened, and when it said so.', not: 'It does not show that the person saw the terms or pressed anything, or who that person really was.' };
   const details = identity === 'website' ? 'with the name, email address and customer number the website put in a signed link' : 'with the name and email address that were typed in';
-  const where = via === 'embed' ? ` The terms were shown inside a frame on ${embedHost || 'another website'}.` : '';
-  return { shows: `Someone using this browser ticked the box and pressed the button on these exact terms at this time, ${details}.${where}`, not: `It does not show who that person really was. Sign&Grow did not check the name or the email address${identity === 'website' ? ': they are what the website knows about its visitor' : ''}.` };
+  const where = via === 'embed' ? ` The terms were shown inside a frame on ${embedHost || 'another website'}, as the browser reported it.` : '';
+  // Said as what the browser reported: Sign&Grow sees what a browser sends, never a screen or a hand.
+  return { shows: `The browser that pressed reported that the box was ticked and the button pressed, on these exact terms and at this time, ${details}.${where}`, not: `It does not show who that person really was, that they read the terms, or whether a person or a program pressed. Sign&Grow did not check the name or the email address${identity === 'website' ? ': they are what the website knows about its visitor' : ''}.` };
+}
+
+/** Whether the press came from where the terms were handed out, as the certificate says it. */
+export const VIEW_MATCH_LABEL: Record<string, string> = {
+  same: 'The same internet address and browser that pressed the button.',
+  address: 'The same browser, from another internet address. A phone that moves from wifi to its own network does this.',
+  browser: 'Another browser at the same internet address.',
+  both: 'Another internet address and another browser than the ones that pressed. The press did not come from where the terms were handed out; a program can do this.',
+};
+
+/** What the browser said about the button being covered, as the certificate prints it. */
+export function coverLine(via: string, unobscured: number | boolean | null): string {
+  if (unobscured === 1 || unobscured === true) return 'The browser reported that the whole button was in view and that nothing covered it or made it see-through, just before the press and again just after it. Only Chrome and Edge can tell this. It is what the browser sent; a program can send the same.';
+  if (unobscured === 0 || unobscured === false) return 'The browser reported that the button was covered, or not wholly in view.';
+  return via === 'embed' ? 'The browser in the frame did not report it. Only Chrome and Edge can tell, so the frame may have been covered or hidden without anyone noticing.'
+    : 'Not checked: the terms were on our own page, not inside a frame on another website.';
 }
 
 /** What a frame on another website can and cannot guarantee, on the team's screen and in the README. */
-export const EMBED_CAN = 'The box and the button are inside our frame. The page around the frame cannot tick the box or press the button with its own code, and it cannot read or change what the frame shows. The record says the acceptance came through a frame, and on which page the browser said the frame was.';
-export const EMBED_CANNOT = 'It cannot stop the page around it from hiding the frame, making it very small or covering it with something else so a visitor presses without seeing the terms. Where the browser can tell (Chrome and Edge), the button cannot be pressed while something covers it, and the record says whether that was checked. A program can also open our page itself, so a website that holds the agreement\'s key can make acceptances that look like clicks. Only acceptances the website sends through the API are marked as recorded by the website.';
+export const EMBED_CAN = 'The box and the button are inside our frame. The page around the frame cannot tick the box or press the button with its own code, and it cannot read or change what the frame shows. Only the address that ends in ?embed=1 may be shown in a frame at all, so an acceptance through a frame is always recorded as one, with the page the browser said the frame was on.';
+export const EMBED_CANNOT = 'It cannot stop the page around it from hiding the frame, making it very small or covering it with something else so a visitor presses without seeing the terms. Where the browser can tell (Chrome and Edge), the button can be pressed only while all of it is in view and nothing covers it or makes it see-through, checked just before the press and again at it, and the record says what the browser reported. A change made in the last tenth of a second before a press can still be missed, and other browsers cannot tell at all. A program can also open our page itself, so a website that holds the agreement\'s key can make acceptances that look like clicks. Only acceptances the website sends through the API are marked as recorded by the website.';
 
 /** The parts of the signed link a website makes for a visitor, as the snippet and the developer page explain it. */
 export const WHO_FIELDS: { key: string; what: string }[] = [
