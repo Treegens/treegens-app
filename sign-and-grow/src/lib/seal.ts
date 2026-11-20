@@ -19,7 +19,7 @@ export function sealCertificateLine(o: { name: string; issuer: string; level: Se
   const time = o.level === 'B-T'
     ? `The seal carries a time-stamp from a time-stamp service, so its time does not rest on this server's clock alone. A reader shows which service.`
     : o.tsaFailed
-      ? `The time-stamp service did not answer, so the time in the seal is this server's clock.`
+      ? `The time-stamp service could not give a time-stamp that checks out when this file was sealed, so the time in the seal is this server's clock.`
       : `The time in the seal is this server's clock: no time-stamp service is used.`;
   return `This file carries a digital seal applied by ${o.name} (certificate issued by ${o.issuer}) when it was completed, at level PAdES ${o.level}. A reader such as Acrobat can check that the file has not changed since. It does not show who stood behind each signature: it is a seal of the server that made the file, not a signature of the people who signed. ${time}`;
 }

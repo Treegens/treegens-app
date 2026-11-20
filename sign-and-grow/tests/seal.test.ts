@@ -278,3 +278,102 @@ test('a key the seal must not use is refused: the file is made as before, the re
   await complete();
   assert.equal(s.db.get("SELECT COUNT(*) n FROM support_requests WHERE message LIKE 'Completed PDFs are not being sealed%'").n, before);
 });
+
+// ---- The time-stamp (B-T) --------------------------------------------------------------------
+
+const tokenOf = async (pdf: Buffer) => {
+  const cms = await import('../src/server/sealcms.ts');
+  const sd = cms.parseSignedData(cmsOf(pdf));
+  const v = cms.attrValue(sd.signers[0].unsignedAttrs, cms.OID.signatureTimeStamp);
+  return { token: v ? Buffer.from(derMod.whole(v)) : null, signature: sd.signers[0].signature };
+};
+
+test('with a time-stamp service the seal is B-T: the token is over the signature value and openssl verifies it', async () => {
+  settings({ ...pemSettings(), TSA_URL: 'https://tsa.test/stamp', TSA_USER: 'seal-user', TSA_PASSWORD: 'tsa pass', TSA_TRUST: write('tsa-trust.pem', tsaRoot.pem) });
+  const stub = stubTsa((req) => tsaAnswer(req, tsa, [tsaRoot]));
+  try {
+    const { id, pdf } = await complete();
+    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.calls[0].auth, `Basic ${Buffer.from('seal-user:tsa pass').toString('base64')}`);
+    assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-T');
+    const check = seal.checkSeal(pdf)!;
+    assert.equal(check.intact, true);
+    assert.equal(check.level, 'B-T');
+    assert.ok(check.timestamp_at);
+    const { token, signature } = await tokenOf(pdf);
+    assert.ok(token, 'the token is in the unsigned attributes');
+    assert.match(s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail, /PAdES B-T, with a time-stamp from tsa\.test/);
+    if (PDFTOTEXT) assert.match(text(pdf), /at level PAdES B-T.*carries a time-stamp from a time-stamp service/);
+    if (PDFSIG) assert.match(pdfsig(write('bt.pdf', pdf)), /Signature is Valid/);
+    if (OPENSSL) {
+      const digest = crypto.createHash('sha256').update(signature).digest('hex');
+      const out = execFileSync('openssl', ['ts', '-verify', '-in', write('token.der', token!), '-token_in', '-digest', digest, '-CAfile', write('tsaroot.pem', tsaRoot.pem)], { encoding: 'utf8', stdio: 'pipe' });
+      assert.match(out, /Verification: OK/);
+      // and it is not over anything else
+      const other = crypto.createHash('sha256').update('another signature').digest('hex');
+      assert.throws(() => execFileSync('openssl', ['ts', '-verify', '-in', write('token2.der', token!), '-token_in', '-digest', other, '-CAfile', write('tsaroot2.pem', tsaRoot.pem)], { stdio: 'pipe' }));
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('a time-stamp that does not check out is never used: the seal goes out at B-B at once, and the certificate and the record say so', async () => {
+  const otherRoot = makeCert({ cn: 'Unrelated Root', ca: true });
+  const noEku = makeCert({ cn: 'Not A TSA', issuer: tsaRoot });
+  const bad: [string, (req: Buffer) => Buffer | number, Record<string, string>, RegExp][] = [
+    ['refused', (req) => tsaAnswer(req, tsa, [tsaRoot], { status: 2 }), {}, /refused \(status 2\)/],
+    ['old answer', (req) => tsaAnswer(req, tsa, [tsaRoot], { nonce: 12345n }), {}, /nonce/],
+    ['other imprint', (req) => tsaAnswer(req, tsa, [tsaRoot], { imprint: crypto.randomBytes(32) }), {}, /not over our signature/],
+    ['server error', () => 503, {}, /HTTP 503/],
+    ['garbage', () => Buffer.from('<html>hello</html>'), {}, /cannot read|could not be checked/],
+    ['not a TSA certificate', (req) => tsaAnswer(req, noEku, [tsaRoot]), {}, /not meant for time-stamping/],
+    ['outside the trust list', (req) => tsaAnswer(req, tsa, [tsaRoot]), { TSA_TRUST: write('other-trust.pem', otherRoot.pem) }, /does not lead to one in TSA_TRUST/],
+  ];
+  for (const [what, answer, extra, why] of bad) {
+    settings({ ...pemSettings(), TSA_URL: 'https://tsa.test/stamp', ...extra });
+    const stub = stubTsa(answer);
+    try {
+      const { id, pdf } = await complete();
+      assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-B', what);
+      const check = seal.checkSeal(pdf)!;
+      assert.equal(check.intact, true, what);
+      assert.equal(check.level, 'B-B', what);
+      assert.equal((await tokenOf(pdf)).token, null, `${what}: no token in the file`);
+      const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail;
+      assert.match(line, /B-B/, what);
+      assert.match(line, why, what);
+      if (PDFTOTEXT) assert.match(text(pdf), /time-stamp service could not give a time-stamp|did not answer/, what);
+      // Nobody waits: the signed PDF was there when the envelope completed.
+      assert.ok(s.db.get('SELECT final_sha256 FROM envelopes WHERE id=?', id).final_sha256);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('several services are tried in order; the first that answers well gives the time-stamp', async () => {
+  settings({ ...pemSettings(), TSA_URL: 'https://down.test/ts, https://tsa.test/stamp' });
+  const stub = stubTsa((req, url) => (url.includes('down.test') ? 500 : tsaAnswer(req, tsa, [tsaRoot])));
+  try {
+    const { id } = await complete();
+    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['down.test', 'tsa.test']);
+    assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-T');
+  } finally {
+    stub.restore();
+  }
+});
+
+test('a service that never answers is given up after 10 seconds, and the seal goes out at B-B', async () => {
+  settings({ ...pemSettings(), TSA_URL: 'https://slow.test/ts' });
+  const stub = stubTsa(() => 'hang');
+  try {
+    const t0 = Date.now();
+    const { id } = await complete();
+    assert.ok(Date.now() - t0 >= 9_500, 'it waited for the timeout');
+    assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-B');
+    assert.match(s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail, /did not answer within 10 seconds/);
+  } finally {
+    stub.restore();
+  }
+});
