@@ -13,6 +13,7 @@ import { replyPromise } from '@/lib/support';
 import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord, FindRequests } from './tools';
 import { ConsentWords, SignatureKind } from './outside';
 import { SigningOnPhone } from './phone';
+import { NotMeAnswer } from './NotMe';
 import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
 import { PAID_TRUST_DAYS } from '@/lib/policy';
 
@@ -93,6 +94,8 @@ export default function Help() {
             <p><a href="#contact" data-topic="suspicious" className="btn sm">Report with the contact form</a></p>
           </QA>
 
+          <QA id="not-me" q="I am named on a document I did not sign"><NotMeAnswer /></QA>
+
           <QA id="more-time" q="I ran out of time">
             <p>Open your link anyway. If the deadline has passed, the page has a button that asks the sender for more time.</p>
             <p>When the sender reopens the document, the same link works again. Anyone who already signed does not have to sign again.</p>
@@ -156,7 +159,7 @@ export default function Help() {
               <p className="muted small">For when you no longer have that mailbox, for example after leaving a job, or do not know which address the account is under. The card proves you are the one paying: its last four digits, plus either the account email or the date and amount of a charge.</p>
               <StopByCard />
             </div>
-            <p><b>What happens next.</b> You get a cancellation reference on screen and by email. The plan runs until the end of the month you already paid for, and no payment is taken after that. (If the last payment had failed there is no paid month, so it ends the same day and the failed payment is not tried again.) The signatures you have left stay yours and never expire. Nothing is deleted. If a charge ever arrives after that, the software refunds it by itself and keeps trying until the refund has gone through.</p>
+            <p><b>What happens next.</b> You get a cancellation reference on screen and by email. The plan runs until the end of the month you already paid for, and no payment is taken after that. (If the last payment had failed there is no paid month, so it ends the same day and the failed payment is not tried again.) The signatures you have left stay yours and never expire. Nothing is deleted. If a charge ever arrives after that, the software refunds it by itself and tells you. If the payment provider refuses that refund three times, a person here sends it by hand and we tell you so.</p>
           </QA>
 
           <QA id="refunds" q="Can I get a refund?">
@@ -166,7 +169,7 @@ export default function Help() {
               <li><b>It covers every payment inside that time,</b> the monthly plan and top-ups alike, and you can come back for more: signatures held for envelopes that are still out count as in use, and when they come back (a voided envelope, say) they can be refunded too.</li>
               <li><b>Refunding a monthly payment ends the monthly plan.</b> Refunding a top-up changes nothing else.</li>
               <li id="price"><b>If the price ever changes:</b> {priceRuleText()}</li>
-              <li><b>Charged after you cancelled, charged twice, or charged more than the reminder said:</b> that should never happen. If it does, the software refunds it by itself and tells you. If the payment provider is down at that moment it keeps trying until the refund has gone through.</li>
+              <li><b>Charged after you cancelled, charged twice, or charged more than the reminder said:</b> that should never happen. If it does, the software refunds it by itself and tells you. If the payment provider is down at that moment it keeps trying until the refund has gone through; if the provider refuses it three times, a person here sends it by hand and we tell you so.</li>
             </ul>
             <p>The money goes back to the card that paid. Banks usually show it within 5 to 10 working days. Your documents stay where they are.</p>
             <p>Outside this rule, or about an older payment? <a href="#contact" data-topic="billing">Write to us</a> and a person will look at it.</p>
@@ -274,6 +277,12 @@ export default function Help() {
             <p>Sign&Grow does not take payments. What it can do is show a link to your own payment page, such as one from your card provider, right after a person presses Finish. {PAY_FOR_SENDER}</p>
             <p>{payNotYet(PAID_TRUST_DAYS)} Once it is offered, it is on the last step of the editor, next to the Send button, and a template&apos;s link goes with every envelope made from it.</p>
             <p>If you signed something and were shown a Pay button: your signature is complete whether you pay or not. The page names the sender and the full address the button opens. Sign&Grow cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
+          </QA>
+
+          <QA id="template-access" q="Who can use and change a template, and what does a locked wording mean?">
+            <p>Each template has three settings, under <b>Who can use this</b> on the Templates page and in the template editor. <b>Who can use it</b>: everyone on the team (the usual), admins only, or members you choose. Nobody else sees it in their list. <b>Who can change it</b>: the person it belongs to and admins (the usual), members you choose as well, or everyone on the team. <b>Lock the wording</b>: someone who may not change the template can still fill in names, email addresses and the fields left empty for them, but not the documents, the fixed wording, the fields, the message or who signs in what order. The editor shows those parts as locked from the start, so nobody types and is turned down at the end.</p>
+            <p>Only the person a template belongs to and admins can change these settings or delete the template, and every change is written to the template&apos;s history. The owner and admins of the account can always use and change every template. A copy of a template keeps who can use it, and a copy of a locked one stays with its owner, so a copy is no way round the lock. Locking holds for envelopes started from then on; unlocking frees the ones already started. When someone leaves the team or is removed, they are taken off every list of chosen members, and their templates pass to the person who takes over their work.</p>
+            <p>A locked wording keeps your team from sending an altered contract from the template. It does not stop anyone from uploading a different document of their own, and it says nothing about whether a document will hold up: the rules differ by country and by kind of document, so check what yours needs.</p>
           </QA>
 
           <QA id="cannot-send" q="Why can I not send?">

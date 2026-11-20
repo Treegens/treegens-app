@@ -86,7 +86,7 @@ function Page({ pdf, index, width, children, onClick, onDrawn }: { pdf: any; ind
     <div ref={box} className="pdfpage" data-page={index} style={{ width, height, ['--pw' as any]: `${width}px` }} onClick={onClick}>
       {/* A drawn page is a picture to a screen reader, and says so: which page it is, and that it is one. Its picture
           starts empty (0 by 0): a canvas left at the browser's default size would hold memory for nothing. */}
-      <canvas ref={canvas} width={0} height={0} role="img" aria-label={`Page ${index + 1} of ${pdf.numPages}, shown as a picture`} />
+      <canvas ref={canvas} role="img" aria-label={`Page ${index + 1} of ${pdf.numPages}, shown as a picture`} width={0} height={0} />
       {failed && visible && (
         <div className="pdf-redraw" role="alert">
           This page could not be drawn. <button type="button" className="btn sm" onClick={(e) => (e.stopPropagation(), setFailed(false), setAgain((n) => n + 1))}>Draw it again</button>

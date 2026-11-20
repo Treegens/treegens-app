@@ -3,6 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtDate } from '@/components/ui';
 import { PublicNav, PublicFooter } from '@/components/Public';
+import { MATCH_MEANS, NO_MATCH_CAUSES } from '@/lib/evidence';
+import { ById } from './ById';
+
+// A day as people say it, in the reader's own calendar: "20 November 2026".
+const longDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : 'a day we no longer know');
 
 export default function Verify() {
   const [res, setRes] = useState<any>(null);
@@ -50,9 +55,11 @@ export default function Verify() {
         {error && <div className="notice err" role="alert" style={{ marginTop: 16 }}>{error}</div>}
         {res && res.match && (
           <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
-            <span className="badge completed">Authentic and unchanged</span>
+            <span className="badge completed">Unchanged since signing finished</span>
             <h2>{res.envelope.subject}</h2>
             <div className="muted">Sent by {res.envelope.sender}. Completed {fmtDate(res.envelope.completed_at, true)}.</div>
+            <p className="small" style={{ margin: '10px 0 0' }}>{MATCH_MEANS}</p>
+            {res.envelope.disputed_at && <div className="notice warn" style={{ marginTop: 12 }}><b>Disputed.</b> On {fmtDate(res.envelope.disputed_at, true)}, a person named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that, and this page cannot tell you who is right. Ask the sender.</div>}
             <table className="t" style={{ marginTop: 12 }}>
               <caption className="pub-vh">Who took part</caption>
               <tbody>
@@ -63,14 +70,26 @@ export default function Verify() {
             <div className="mono muted" style={{ marginTop: 6 }}>Envelope {res.envelope.id}<br />SHA-256 {res.hash}</div>
           </div>
         )}
-        {res && !res.match && (
-          <div ref={result} tabIndex={-1} role="status" className="card pub-verdict bad pub-focus" style={{ marginTop: 18 }}>
-            <span className="badge declined">No match</span>
-            <p style={{ margin: '10px 0 6px' }}><b>{res.name}</b> is not a completed document from this service, or it was changed after signing.</p>
-            <p className="muted small">Make sure you have the original download, not a copy that was saved again, printed or scanned. Those have a different fingerprint. The sender or any signer can send you the original.</p>
+        {res && !res.match && res.deleted && (
+          <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
+            <span className="badge completed">Completed here, deleted since</span>
+            <h2>This file was completed with Sign&amp;Grow on {longDay(res.deleted.completed_at)}</h2>
+            <p>Its fingerprint matches the signed PDF of envelope <span className="mono">{res.deleted.envelope_id}</span>, which everyone had finished on that day. So the file is unchanged since then.</p>
+            <p>Its sender has since deleted it, together with their account, on {longDay(res.deleted.deleted_at)}. We deleted what we knew about it too, so we no longer hold the document, the names on it or its audit trail, and cannot tell you anything about who signed it. The certificate inside the file is what is left: read it with <Link href="/security/certificate">How to read a Sign&amp;Grow certificate</Link>.</p>
+            <p className="muted small">We keep only this fingerprint, the envelope ID and the day it was completed, until {longDay(res.deleted.kept_until)}. After that this check answers &ldquo;no match&rdquo; for this file.</p>
             <div className="mono muted" style={{ marginTop: 8 }}>SHA-256 {res.hash}</div>
           </div>
         )}
+        {res && !res.match && !res.deleted && (
+          <div ref={result} tabIndex={-1} role="status" className="card pub-verdict bad pub-focus" style={{ marginTop: 18 }}>
+            <span className="badge declined">No match</span>
+            <p style={{ margin: '10px 0 6px' }}><b>{res.name}</b> does not match any completed document we hold. That can have several causes:</p>
+            <ul className="pub-list small">{NO_MATCH_CAUSES.map((x) => <li key={x}>{x}</li>)}</ul>
+            <p className="muted small">What to do: ask the sender or a signer for the file exactly as it was downloaded or emailed, and choose that one. A printed or scanned copy cannot be checked this way: look it up by its envelope ID below instead.</p>
+            <div className="mono muted" style={{ marginTop: 8 }}>SHA-256 {res.hash}</div>
+          </div>
+        )}
+        <ById />
         <section className="pub-aside" aria-labelledby="else-h">
           <h2 id="else-h">Looking for something else?</h2>
           <p>To find out whether an email is genuine before you open anything, use <Link href="/check">Check an email</Link>. To get your copy of a document again, use <Link href="/help#find-documents">Find my documents</Link>.</p>

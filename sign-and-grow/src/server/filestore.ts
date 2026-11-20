@@ -53,7 +53,7 @@ export function storeState(dir: string, fresh = false): StoreState {
   const warning = stop || notes.length ? `\n[files] ${stop ? `STORING FILES IS STOPPED. ${stop}` : 'STORED FILES NEED A LOOK.'}${notes.length ? `\n[files] ${notes.join('\n[files] ')}` : ''}\n` : null;
   const state = { dir, scan, stop, warning };
   g.__tsfilestate = { cacheKey, state };
-  if (stop) tell(`stop:${cacheKey}`, 'Storing files is stopped: the encryption key cannot read the files that are there', [stop, 'Until this is fixed nobody can upload a document or attach a file, and signed PDFs are made later, once files can be stored again. Everything already stored that can be read is still served.']);
+  if (stop) tell(`stop:${dir}:${sha256hex(Buffer.from(sig()))}`, k.badCurrent ? 'Storing files is stopped: FILE_ENCRYPTION_KEY is not a key' : 'Storing files is stopped: the encryption key cannot read the files that are there', [stop, 'Until this is fixed nobody can upload a document or attach a file, and signed PDFs are made later, once files can be stored again. Everything already stored that can be read is still served.']);
   return state;
 }
 

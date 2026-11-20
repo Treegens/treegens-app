@@ -24,7 +24,9 @@ const GROUPS: [string, Endpoint[]][] = [
     ['DELETE', '/api/envelopes/:id', 'Delete a draft, a template or a closed envelope for good. A completed envelope, or any envelope somebody has already signed, is taken out of your lists, search, export and reports, and its recipients keep their link and their copy.'],
     ['POST', '/api/envelopes/:id/send', 'Send a draft. The answer carries "warnings": what the check before sending found. The envelope has gone out either way.'],
     ['GET', '/api/envelopes/:id/warnings', 'The check before sending, to read before you send: words in the subject, a document name or the text of a document that name a kind of document which often needs paper, a witness, a notary or a qualified signature. It warns and never refuses.', true],
-    ['POST', '/api/envelopes/:id/clone', 'Copy as a new draft or template.'],
+    ['POST', '/api/envelopes/:id/clone', 'Copy as a new draft or template. A copy of a template keeps who can use and change it, and a copy of a locked template made by someone who may not change it stays with its owner.'],
+    ['GET', '/api/envelopes/:id/access', 'Who can use and change a template (everyone, admins only or chosen members; its owner and admins, chosen members as well or everyone), and whether its wording is locked. A template you may not use answers 403 with who to ask, wherever it is read or used.'],
+    ['PUT', '/api/envelopes/:id/access', 'Set that rule and the chosen members. Only for the person the template belongs to and admins. Written to the template\'s history.'],
     ['GET', '/api/envelopes/:id/download', 'The signed PDF with its certificate, or a preview while signing is in progress.'],
   ]],
   ['While an envelope is out', [

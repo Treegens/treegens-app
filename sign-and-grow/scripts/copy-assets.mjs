@@ -22,6 +22,9 @@ cp(nm('pdfjs-dist/cmaps'), out('public/pdfjs/cmaps'));
 cp(nm('pdfjs-dist/standard_fonts'), out('public/pdfjs/standard_fonts'));
 for (const f of ['caveat', 'dancing-script', 'great-vibes', 'sacramento'])
   cp(nm(`@fontsource/${f}/files/${f}-latin-400-normal.woff2`), out(`public/fonts/${f}.woff2`));
+// The heading font, Lora (SIL OFL 1.1): the growsigning wordmark is drawn in it. Loaded by src/app/styles/brand.css.
+for (const w of [500, 600])
+  cp(nm(`@fontsource/lora/files/lora-latin-${w}-normal.woff2`), out(`public/fonts/lora-${w}.woff2`));
 for (const f of ['DejaVuSans.ttf', 'DejaVuSans-Bold.ttf'])
   cp(nm('dejavu-fonts-ttf/ttf', f), out('assets/fonts', f));
 // The fonts for Chinese, Japanese, Korean, Thai, Devanagari and Khmer in signed PDFs (see scripts/build-fonts.mjs).

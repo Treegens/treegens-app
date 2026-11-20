@@ -13,6 +13,7 @@ import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
 import { strikeLines } from '../lib/strike.ts';
 import { certName, certGroup } from '../lib/groups.ts';
 import { labelOf } from '../lib/bysender.ts';
+import { drawStamp, stampFor, stampForMark } from './stamp.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -553,6 +554,7 @@ export async function withNotice(pdf: Uint8Array, envelopeId: string, notice: { 
     const m = mapper(page);
     const p = m.pt(12, 22);
     page.drawText(clean(`${mark.toUpperCase()}, see the first page`), { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+    drawStamp(page, bold, stampForMark(mark)); // large across the page as well (stamp.ts)
   }
   doc.setTitle(notice.title);
   doc.setProducer('Sign&Grow');
@@ -594,13 +596,14 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
       const m = mapper(page);
       const p = m.pt(12, 13);
       page.drawText(`Sign&Grow Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+      if (opts.notice) drawStamp(page, bold, stampFor(e.status)); // and large across the page (stamp.ts)
     }
   }
   for (const f of fields.filter((f: any) => f.type === 'attachment' && f.value)) {
     const file = get('SELECT sha256 FROM files WHERE id=?', f.value);
     if (!file) continue;
     try {
-      (await flatPages(doc, file.sha256)).forEach((p) => doc.addPage(p));
+      (await flatPages(doc, file.sha256)).forEach((p) => (doc.addPage(p), opts.notice && drawStamp(p, bold, stampFor(e.status))));
     } catch {
       /* skip unreadable attachments */
     }

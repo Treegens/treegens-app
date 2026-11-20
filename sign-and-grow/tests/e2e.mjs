@@ -243,7 +243,7 @@ try {
     assert.ok((await PDFDocument.load(fs.readFileSync(signed))).getPageCount() >= 3);
     await page.goto(`${BASE}/verify`);
     await page.locator('input[type=file]').setInputFiles(signed);
-    await page.getByText('Authentic and unchanged').waitFor();
+    await page.getByText('Unchanged since signing finished').waitFor();
     const tampered = path.join(OUT, 'tampered.pdf');
     fs.writeFileSync(tampered, Buffer.concat([fs.readFileSync(signed), Buffer.from('\n')]));
     await page.locator('input[type=file]').setInputFiles(tampered);

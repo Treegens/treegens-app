@@ -19,6 +19,7 @@ import { emailProblem } from './bounces.ts';
 import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
+import { forgottenFile } from './evidence.ts';
 
 const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
@@ -665,12 +666,15 @@ route('POST', '/public/verify', async (c) => {
   if (!file || typeof file === 'string') throw bad('Choose a PDF to verify.');
   if (file.size > 40_000_000) throw bad('That file is too large.');
   const hash = sha256(new Uint8Array(await file.arrayBuffer()));
-  const e = get("SELECT e.id, e.subject, e.completed_at, e.sheets, u.name sender FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.final_sha256=? AND e.status='completed'", hash);
-  if (!e) return { match: false, hash };
+  const e = get("SELECT e.id, e.subject, e.completed_at, e.sheets, e.disputed_at, u.name sender FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.final_sha256=? AND e.status='completed'", hash);
+  // A file of a completed document whose sender deleted it with their account: we kept its fingerprint, its id and
+  // its day, nothing else (keepFingerprint in evidence.ts). "match" stays for a document we still hold.
+  if (!e) return { match: false, hash, deleted: forgottenFile({ sha256: hash }) };
   const chain = verifyChain(e.id);
   const mask = (email: string) => email.replace(/^(.).*(@.*)$/, '$1***$2');
   return {
-    match: true, hash, envelope: { id: e.id, subject: e.subject, completed_at: e.completed_at, sender: e.sender }, chain,
+    // disputed_at: when a person named on it first said they did not sign it, or that it was not them (evidence.ts).
+    match: true, hash, envelope: { id: e.id, subject: e.subject, completed_at: e.completed_at, sender: e.sender, disputed_at: e.disputed_at || null }, chain,
     signers: all("SELECT name, email, role, completed_at FROM recipients WHERE envelope_id=? AND role != 'cc' ORDER BY routing_order, position", e.id).map((r) => ({ ...r, email: mask(r.email) })),
   };
 }, 'public');

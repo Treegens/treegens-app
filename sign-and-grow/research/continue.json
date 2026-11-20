@@ -1,0 +1,1233 @@
+{
+ "repair:abuse": {
+  "found": "The previous engineer had done nearly all of the report before the limit stopped them; they just never reported. tests/abuse.test.ts had 19 tests and all 19 passed. Already in the code:\n- Filter: rewritten in src/server/fakenotice.ts, covering glued words, look-alike letters, money words by their stems, phone numbers however they are punctuated, and exceptions for honest senders.\n- One guard (emailRefusal in envelopes.ts), also asked where the next person in a signing order is emailed (advance) and inside notifyRecipient. Held-back emails are recorded (envelopes.held_at, an audit line 'Held back', and the sender is emailed). They go out when an operator lifts the pause or clears the account, or on the next timer run.\n- PAID_TRUST_DAYS = 14 and TEAM_INVITES_PER_DAY = 20 in src/lib/policy.ts. hasNotPaid() reads the payments table.\n- Team invitations need a confirmed address, are refused while paused, have their names read, and have a limit of 20 a day.\n- Reports from public-form visitors are kept (via_form) but do not count towards the pause.\n- Each form counts its starts against an allowance of its own (reached.via).\n- forgotten_codes.account_id is filled, the operator queue uses LEFT JOIN, and tests/finish.test.ts was already updated.\n- POST /auth/verify needs the session of that login or its password, and the email says \"Only confirm if you signed up for Sign&Grow yourself just now\".\n- Operator route: a body without a boolean is refused with 400. Saving the same frozen access code is refused with 400. More time is allowed while paused. A reminder the filter holds back is told to the sender once.\n- Copy fixed in help, security, README, openapi and the pause texts. Toasts turn addresses into links. Envelope page buttons are disabled with a reason while paused.\n\nI re-ran every skeptic probe into tests/out/repair-abuse/probes/. Every finding holds now except two:\n- a1-rerun.ts and a7-rerun.ts crash, because they confirm the address from a fresh browser, which is now refused on purpose. Copies that confirm in the browser that signed up hold.\n- p1 still showed `publicPageShowsName`: a public form named as the lure printed it, phone number and all, on our page. That was still open, and I fixed it (below).\n\nScreens: the previous engineer had screenshots, but the confirm page had not been checked step by step, by keyboard, at both sizes.",
+  "done": [
+   {
+    "item": "Check 1b: the filter reads everything a recipient reads, on every path (rename after sending, note fields, recipient names, void reason)",
+    "status": "done",
+    "how": "Previous engineer's fix, verified: p1-filter cases 5-8 now give 422 or hold back. Renames are refused at PATCH /me and PATCH /account. A name that got in anyway holds back the next person in a signing order (audit line 'Held back', email to the sender). Note fields, labels, names printed at a shared address and the void reason (read together with the subject) are read.",
+    "test": "tests/abuse.test.ts 'everything an email prints is read wherever an email is written...' and 'the filter for fake payment notices reads everything...'"
+   },
+   {
+    "item": "Check 1c: normalisation (glued words, money words, phone formats, look-alike letters)",
+    "status": "done",
+    "how": "Previous engineer's fakenotice.ts, verified: p1 cases 1-4 all give 422. I closed one more way through: 'Your Microsoft Teams subscription was charged $399, call +1 (888)...' passed, because any program name after Microsoft cancelled the brand. Now a program followed by a company word (subscription, renewal, billing...) counts as the brand again.",
+    "test": "tests/abuse.test.ts 'the filter reads glued words...' (added: the Microsoft Teams subscription case is refused; 'Join the Microsoft Teams call' passes)",
+    "left_open": "A brand not on the list (e.g. 'Chase Bank alert'), a lure inside the PDF or the logo image, or a phone number spelled in words passes. Reports and the pause are the backstop, and the security page says the filter is not a guarantee. A new false match: 'Microsoft Excel invoice template ... call 555 123 4567' is now refused for unpaid accounts. The refusal names the words and says how to be cleared."
+   },
+   {
+    "item": "Check 1d: the filter must not refuse honest senders",
+    "status": "done",
+    "how": "Verified: p1 case 9 and p10-existing all give 200 (Sarah McAfee, digits read as Zelle, amounts, Apple Street, Microsoft Word). A brand match needs real letters, and an everyday brand counts only beside company words.",
+    "test": "tests/abuse.test.ts honest list in 'the filter reads glued words...' (added an honest Microsoft Teams call)"
+   },
+   {
+    "item": "Check 1 left open: paid accounts not checked at all",
+    "status": "done",
+    "how": "hasNotPaid() lifts the checks only for a plan or top-up payment that is at least 14 days old, applied, not refunded in any part and not disputed, or for an account an operator trusted. Verified: p2g-paid now gives lure 422, 0 people mailed.",
+    "test": "tests/abuse.test.ts 'paying does not lift the checks at once...'"
+   },
+   {
+    "item": "Check 3a: a paused account emails nobody new by any path",
+    "status": "done",
+    "how": "Verified p3-pause A/C/D/E. The next people in a signing order are held, with an audit line and an email to the sender, and are released when the pause is lifted. No 'Updated' emails while paused. A void notice goes without the reason. A copy promoted to signer is not emailed. Invitations give 403.",
+    "test": "tests/abuse.test.ts 'while an account is paused nothing its sender starts is emailed...'"
+   },
+   {
+    "item": "Check 7b: unfinished form starts and the balance",
+    "status": "done",
+    "how": "Not touched, per owner note (1): the payment owner reworked this (formNeedsSignatures). Verified p7b A: after three walked-away starts an honest visitor gets 200 and the balance stays 3.",
+    "test": "tests/abuse.test.ts 'unfinished starts on a public form... hold none of the owner's signatures' (and tests/billing4.test.ts, not mine)"
+   },
+   {
+    "item": "New bug (high): team invitations carry any text to any address",
+    "status": "done",
+    "how": "Server (previous engineer, verified p9 A: 0 of 60; p3 E: 0 of 120): confirmed address required, 403 while paused with the reason, names read for brands and the lure, 20 different people a day (re-inviting is free, cancelling gives nothing back, an operator's trust lifts it). An admin API key goes through the same guard (probe key-invite.ts: send scope 403, admin scope 200). I added: POST /account/invites in openapi.ts. On the Team tab the 'Send invite' button is disabled, with the reason linked by aria-describedby, while paused or unconfirmed. The invite controls are 44 px. Checked in a browser at 390x844 and 1280x900.",
+    "test": "tests/abuse.test.ts 'team invitations need a confirmed address...' and the paused-account test",
+    "left_open": "Inviting the same address again and again is unlimited (one person can be emailed repeatedly; the text is fixed and the names are read). An offensive team name is not read."
+   },
+   {
+    "item": "New bug (high): one stranger can pause any sender with a public form",
+    "status": "done",
+    "how": "Reports from visitors of a public form are stored with via_form, shown to operators and not counted towards the automatic pause. Verified p4 D: never paused, owner can still send.",
+    "test": "tests/abuse.test.ts 'a stranger on a public form cannot pause its owner with made-up reporters'",
+    "left_open": "A real victim of a scam form cannot trigger the automatic pause: only a person acts on form reports (owner's decision)."
+   },
+   {
+    "item": "New bug (high): pay 9 dollars, send the lure to hundreds, take the 9 dollars back",
+    "status": "done",
+    "how": "Payments count only after 14 days, not refunded or disputed (PAID_TRUST_DAYS in policy.ts). The refusal gives the date the checks lift. Verified p2g: 0 people mailed.",
+    "test": "tests/abuse.test.ts 'paying does not lift the checks at once...'",
+    "left_open": "Per the owner's rule, any kept payment that stands 14 days lifts everything, a $1 top-up included. A dispute that arrives after day 14 comes after the damage."
+   },
+   {
+    "item": "Owner note: the Plan page sentence on how long the protections last after paying",
+    "status": "partly",
+    "how": "I may not change GET /billing or Billing(). The exact sentence and the code change are in needs_from_billing. The Plan page now says 'A payment, or a word with support, lifts both', which is no longer true."
+   },
+   {
+    "item": "New bug (medium): a stranger can use up an unpaid owner's daily limit through their form",
+    "status": "done",
+    "how": "Form starts are counted per form (reached.via = 'form:<id>') against an allowance as high as the account's. The owner's own count is untouched. Verified p2 C: owner's send to a real customer gives 200.",
+    "test": "tests/abuse.test.ts 'the daily limit counts every person newly emailed...' (form part)",
+    "left_open": "A stranger can still fill one form's own daily allowance and close that form for real visitors until the next day. Each stranger who declines sends the owner a 'Declined' email (20 an hour per address)."
+   },
+   {
+    "item": "New bug (medium): three walked-away starts shut a new owner's form and the owner is told the balance is empty",
+    "status": "done",
+    "how": "Fixed by the payment owner, per note (1). Verified p7b A: an honest visitor gets 200 and the owner gets no false email.",
+    "test": "tests/abuse.test.ts unfinished-starts test, billing4 (not mine)"
+   },
+   {
+    "item": "New bug (medium): a public form plus the owner's sends use more signatures than the account has",
+    "status": "done",
+    "how": "Fixed by the payment owner: the signature is taken at Finish. Verified p7b B: final balance 0, 3 used of 3 owned (form finishes refused with 503 while none were free).",
+    "test": "billing tests (not mine)"
+   },
+   {
+    "item": "New bug (medium): voiding and deleting makes emails unreportable and hides earlier reports",
+    "status": "done",
+    "how": "forgotten_codes keeps account_id. A report by code on a deleted document is filed against the account and counts towards a pause. The queue uses LEFT JOIN and shows envelope_deleted. Verified p9 D/E. tests/finish.test.ts was already updated to the new behaviour.",
+    "test": "tests/abuse.test.ts 'voiding and deleting what was sent does not put a sender out of reach of reports'; tests/finish.test.ts"
+   },
+   {
+    "item": "New bug (medium) and owner note 2: confirming an address proves only a click",
+    "status": "done",
+    "how": "POST /auth/verify confirms only in a session of that login or with its password, and the email has the owner's sentence. I tried the page in a real browser at 390x844 and 1280x900. It asks for the password in plain words, focus starts in the labelled Password field, Enter and Tab work, a wrong password gives a plain message, and the right one confirms. I added: 'Forgotten it? Choose a new password' (a reset link goes to the same mailbox and confirms the address while signing every other browser out). The button says 'Checking\u2026' while the password is checked. Every control is 44 px.",
+    "test": "tests/abuse.test.ts 'a support message is shown only to the person who wrote it...' and new 'someone who has forgotten the password they just chose confirms with a new one...'"
+   },
+   {
+    "item": "Public form page printed a fake payment notice (left over in p1 output: publicPageShowsName)",
+    "status": "done",
+    "how": "New formPageRefusal() in envelopes.ts. POST /powerforms now refuses, with 422 and the words that set it off, a form whose starts would all be refused. GET /public/powerforms/:slug returns closed:true, name:null and brand:null for such a form made earlier, and emails the owner once a day (shared helper tellFormOwner, also used by the start). Checked in a browser at both sizes: the closed card prints nothing of it. Help, security and README say the form name is read.",
+    "test": "tests/abuse.test.ts new 'a public form's page never prints a fake payment notice...' and the updated public form part of the first test"
+   },
+   {
+    "item": "New bug (low): saving the same frozen code answers ok",
+    "status": "done",
+    "how": "Answers 400 with a sentence. Verified p6 B.",
+    "test": "tests/abuse.test.ts access codes test"
+   },
+   {
+    "item": "New bug (low): POST /operator/accounts/:id with an empty body lifts a pause",
+    "status": "done",
+    "how": "Needs a boolean 'paused' or 'trusted', otherwise 400 and nothing changes. Verified p2 F.",
+    "test": "tests/abuse.test.ts 'the operator route does only what it is told...'"
+   },
+   {
+    "item": "New bug (low): plain 'Give more time' refused while paused",
+    "status": "done",
+    "how": "More time for an open envelope is allowed while paused; reopening is still refused. Verified p3 B extend 200.",
+    "test": "tests/abuse.test.ts paused-account test"
+   },
+   {
+    "item": "Regression: honest free accounts lose reminders without a word",
+    "status": "done",
+    "how": "False matches fixed (p10: reminders go). When the filter does hold a reminder back, the sender is told once and the audit trail says why. Sending resumes by itself.",
+    "test": "tests/abuse.test.ts 'an honest free account keeps its reminders...'"
+   },
+   {
+    "item": "Overclaim: README test row 'on every path and in every spelling'",
+    "status": "done",
+    "how": "The row names the paths and 'the spellings it is known to catch'. I added the form page and that a new password confirms."
+   },
+   {
+    "item": "Overclaim: security #scams lead 'whenever a sender causes an email'",
+    "status": "done",
+    "how": "The lead now lists where the checks run, including the next person in a signing order. I added the form name to the list of what is read (security and help)."
+   },
+   {
+    "item": "Overclaim: pausedText, banner, pause emails, help and security pause texts",
+    "status": "done",
+    "how": "PAUSED_MEANS lists exactly what the code holds back, and the code now holds all of it (p3 A/C/E)."
+   },
+   {
+    "item": "Overclaim: the earlier fixer's left_open 'the refusal comes at the next send'",
+    "status": "done",
+    "how": "Behaviour changed: a name that got in some other way holds back the next person in order, with the sender told."
+   },
+   {
+    "item": "Overclaim: email 'Your form has run out of signatures' while the balance is 3",
+    "status": "done",
+    "how": "Payment owner's (note 1). That email is now sent only when no signature is free (formNeedsSignatures). Verified p7b A: no such email."
+   },
+   {
+    "item": "Overclaim: comment 'a form can never collect more signatures than its owner has'",
+    "status": "done",
+    "how": "The comment is gone from src (grep). The behaviour is true now that the signature is taken at Finish."
+   },
+   {
+    "item": "Overclaim: 'Remove trust' email states 200 in the first week",
+    "status": "done",
+    "how": "States the limit that applies (50 in the first week). I also made the pause and trust-removed emails offer 'reply to this email' only when SUPPORT_EMAIL is set; otherwise only the contact form, with its address.",
+    "test": "tests/abuse.test.ts 'the operator route does only what it is told...' (added reply/contact-form assertions)"
+   },
+   {
+    "item": "Overclaim: unlock 429 '5 wrong codes in a row from this device'",
+    "status": "done",
+    "how": "Now 'from your internet connection in a quarter of an hour'.",
+    "test": "tests/abuse.test.ts access codes test"
+   },
+   {
+    "item": "Screen: paused sender's envelope page buttons look available, and the toast prints the help address as plain text",
+    "status": "done",
+    "how": "Previous engineer: Send reminder, Nudge and Reopen are disabled with a reason, and toasts turn web addresses into links (checked in their screenshots). I did the same for 'Send invite' on the Team tab and checked it in a browser at both sizes.",
+    "left_open": "A long refusal toast (global component) can cover most of a phone screen for up to 30 seconds. It is now rarely reached, because the buttons say they are off."
+   },
+   {
+    "item": "Screen: Correct dialog with a frozen code accepts the same code",
+    "status": "done",
+    "how": "The server answers 400 with the sentence, so the dialog shows the refusal instead of 'Updated'."
+   },
+   {
+    "item": "Screen: fourth form start says 'the link is in the email we sent' on a server with no mail",
+    "status": "done",
+    "how": "Wording depends on whether mail is set up.",
+    "test": "tests/abuse.test.ts unfinished-starts test"
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts (formPageRefusal; nameRefusal comment)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts (POST /powerforms refusal, GET /public/powerforms/:slug closed for a notice, tellFormOwner shared with the start)",
+   "/home/user/treegens-app/sign-and-grow/src/server/fakenotice.ts (program exception narrowed)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts (mistakeLine: reply offered only with SUPPORT_EMAIL)",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts (POST /account/invites, one sentence in the top description)",
+   "/home/user/treegens-app/sign-and-grow/src/app/verify-email/page.tsx (new-password link, 'Checking\u2026', 44 px controls)",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx (Team() only: invite button held with reason, 44 px controls)",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx (one clause)",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/page.tsx (one clause)",
+   "/home/user/treegens-app/sign-and-grow/README.md (abuse test row, scam row)",
+   "/home/user/treegens-app/sign-and-grow/tests/abuse.test.ts (first test's public form part updated, assertions added to the spelling and operator tests, two new tests: 21 in all)",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (only removed the two .next-repair-abuse lines my dev server added)",
+   "Scratch only: /home/user/treegens-app/sign-and-grow/tests/out/repair-abuse/ (probes/ with all re-run probe results and patched a1/a7, ui2.cjs, ui3.cjs, ui4.cjs, shots2/, key-invite.ts, reset-probe.ts, name-probe.ts, npm-test-*.log)"
+  ],
+  "suite": "tests/abuse.test.ts: 21 of 21 pass, run again after every change. npx tsc --noEmit -p . exits 0.\n\nFull suite (npm test, last run): 447 tests, 440 pass, 7 fail, none in a file I touched:\n- tests/flow.test.ts 'the published API description matches the routes that exist': POST /envelopes/:id/restore is not in openapi.ts. Known from the checkpoint; another task.\n- tests/lifecycle.test.ts 'the welcome signatures are given once per email address...': expects \"Loop's workspace\", gets \"Loop Er's workspace\".\n- tests/lifecycle.test.ts 'a public form is published, paused, changed and deleted...': an invite join answers 409 'You already have a Sign&Grow login'. Lifecycle work.\n- tests/gaps-mobile-send.test.ts 206 (editor focus regex) and 207 (slow-document hint): another engineer's work in progress.\n- tests/signerux.test.ts 393: expects a 44 px rule in sign.css. Another engineer's work in progress.\n- tests/trust.test.ts 'small things that stop people getting stuck', line 384: I reproduced it (tests/out/repair-abuse/name-probe.ts). The signer's name fix now applies only small slips and asks the sender for bigger changes ('Name change asked for'), so the 'Name corrected:' email the test expects never comes. The signer-screen engineer needs to update that test.\n\nDuring my first run, others' half-finished edits stopped the code base loading: src/server/routes-paylink.ts, then src/lib/policy.ts line 304 (an apostrophe inside a single-quoted string). That gave 256 failures at once and broke my dev server. I waited until both loaded again (about 18:36) and re-ran everything.",
+  "needs_from_billing": "1) src/server/routes-billing.ts, billingState(): `const limited = (acct.plan === 'seedling' || !!acct.promo_code) && !acct.trusted_at && !hasPaid(acct.id);` uses its own hasPaid (any payment not fully refunded). So a paying account in its first 14 days, or one with a disputed or partly refunded payment, is shown as not limited, while the server still limits it. Replace it with `const limited = hasNotPaid(acct);` (exported from src/server/envelopes.ts; it already includes trusted_at and the 14-day, refund and dispute rule). Add to `limits`: `paid_trust_days: PAID_TRUST_DAYS` (from src/lib/policy.ts), and when the account has a payment that will count, the day it lifts: its `at` plus 14 days. Also update the hasPaid comment ('stop applying once it has').\n2) Billing() in src/app/app/settings/page.tsx, the 'The limits, as numbers' item (around line 663): replace 'A payment, or a word with support, lifts both.' with exactly: \"Paying does not lift them at once: they stop, together with the check for fake payment notices, once the account has a payment that is at least {PAID_TRUST_DAYS} days old and was not refunded or disputed. A person on our team can lift them sooner: use the contact form on the help page.\" (import PAID_TRUST_DAYS from '@/lib/policy'). Keep '(that is you, for now)' driven by the corrected `limited`. If you add the date: \"Your payment of {date} lifts them on {date + 14 days}, provided it is not refunded or disputed.\"",
+  "notes_for_integrator": "Behaviour changes others will notice:\n- POST /powerforms now answers 422, with the words that set it off and 'The form was not made.', when the account is still checked and the form's starts would all be refused as a fake payment notice (the form name is read as the subject, together with the template). GET /public/powerforms/:slug answers closed:true, name:null, brand:null for such a form made earlier, and emails the owner at most once a day. The start's owner email is the same helper (tellFormOwner).\n- Filter: 'Microsoft <Word/Teams/...> <company word>' now counts as the brand. 'Microsoft Excel invoice template ... call ...' from an unchecked-in account is a new false match; the refusal says why and how to be cleared.\n- The pause email and the 'limits apply again' email offer 'reply to this email' only when SUPPORT_EMAIL is set. Otherwise they offer only the contact form with its address, because replies go to the no-reply sender.\n- Team tab: 'Send invite' is disabled, with the reason shown, while sending is paused or the address is not confirmed.\n- Confirm page: a 'Forgotten it? Choose a new password' link and a 'Checking\u2026' state. The promise that a new password confirms the address is true (POST /auth/reset sets email_verified=1 and deletes every session) and is tested.\n\nNew copy promises, all kept by code and tests: help and security say the name of a public form is read; README rows say the same.\n\nNo new settings or env variables from me. The previous engineer's constants PAID_TRUST_DAYS=14 and TEAM_INVITES_PER_DAY=20 are in src/lib/policy.ts.\n\nSeen but out of scope:\n- App-wide controls below 44 px: .btn is 41 px; Menu 34 px, Sign out 30 px, settings tabs 43 px, 'Contact us' in the paused banner 34 px, 'Resend email' 34 px. I fixed only the controls on the two screens I touched, inline.\n- In the dev server, Next's route announcer is also role=alert, so scripts that wait on [role=alert] return at once.\n- The skeptic's a1-rerun.ts and a7-rerun.ts crash because they confirm from a fresh browser (now refused on purpose). Patched copies that hold are in tests/out/repair-abuse/probes/.\n- tsconfig.json carries include lines from other engineers' dev servers (.next-repair-integrity and others); I removed only mine.",
+  "settings": [
+   "No new settings from this task. SUPPORT_EMAIL (existing) now also decides whether the pause and trust-removed emails offer replying.",
+   "Constants (not env), from the previous engineer: PAID_TRUST_DAYS = 14 and TEAM_INVITES_PER_DAY = 20 in src/lib/policy.ts. Existing env still in use: NEW_ACCOUNT_DAILY_RECIPIENTS (50), UNPAID_DAILY_RECIPIENTS (200), ABUSE_SUSPEND_AFTER (3), already in .env.example and the README table."
+  ],
+  "abuse_and_stuck": [
+   "Fake-notice filter, abuse 1: glued, spaced and look-alike brand spellings and odd phone formats. Handled: test 'the filter reads glued words...'.",
+   "Fake-notice filter, abuse 2: the lure moved to fields, notes, names, the void reason or a later rename. Handled: tests 'everything an email prints is read...' and the first filter test.",
+   "Fake-notice filter, abuse 3: an unlisted brand, the lure inside the PDF or a logo image, or a phone number spelled in words. Left open: the security page says the filter is not a guarantee, and reports are the backstop.",
+   "Fake-notice filter, stuck 1: honest family names, addresses and program names. Handled: honest list in the spelling test.",
+   "Fake-notice filter, stuck 2: the refusal names the words that set it off and how to be cleared. Handled: test asserts 'What set this off'.",
+   "Fake-notice filter, stuck 3: a reminder held back silently. Handled: test 'an honest free account keeps its reminders...'.",
+   "14-day payment trust, abuse 1: pay, blast, refund. Handled: test 'paying does not lift the checks at once'.",
+   "14-day payment trust, abuse 2: a partly refunded or disputed payment. Handled: same test.",
+   "14-day payment trust, abuse 3: a $1 top-up held 14 days, or a stolen card disputed after day 14. Left open: owner's rule.",
+   "14-day payment trust, stuck 1: an honest new payer is limited for 14 days; the refusal gives the date. Tested.",
+   "14-day payment trust, stuck 2: the Plan page says the opposite. Left open: needs_from_billing.",
+   "14-day payment trust, stuck 3: GROWalition accounts never pay, so they need a person to clear them. Left open.",
+   "Pause, abuse 1: queue victims in a signing order before a pause. Handled: paused test.",
+   "Pause, abuse 2: void reason or 'Updated' email carrying sender words while paused. Handled: paused test.",
+   "Pause, abuse 3: invitations while paused. Handled: paused and invitation tests.",
+   "Pause, stuck 1: a signer waiting further down the order is told nothing until the pause lifts. The sender is emailed 'Held back' and the help text says so.",
+   "Pause, stuck 2: a document running out of time during a review. Handled: more time is allowed while paused, tested.",
+   "Pause, stuck 3: buttons that look available. Handled: disabled with a reason on the envelope page and Team tab, checked in a browser.",
+   "Form reports, abuse 1: three made-up visitors pause the owner. Handled: test 'a stranger on a public form cannot pause...'.",
+   "Form reports, abuse 2: flooding the operator queue with form reports. Rate limited to 10 an hour per address; left open beyond that.",
+   "Form reports, abuse 3: the owner deletes reported envelopes. Handled: reports stay, test 'voiding and deleting...'.",
+   "Form reports, stuck: a real victim of a scam form cannot trigger the automatic pause. Left open by the owner's decision; a person sees every form report.",
+   "Per-form daily limit, abuse 1: a stranger uses up the owner's own limit. Handled: daily-limit test.",
+   "Per-form daily limit, abuse 2: a stranger fills one form's day and closes it for real visitors until tomorrow. Left open.",
+   "Per-form daily limit, abuse 3: the owner gets a 'Declined' email per stranger decline. Left open.",
+   "Confirm address, abuse 1: the mailbox owner clicks a squatter's link. Handled: test, 401 without password.",
+   "Confirm address, abuse 2: guessing the password through the confirm route needs the emailed token and is limited to 10 tries in 15 minutes per login.",
+   "Confirm address, abuse 3: a squatter staying in after the real owner resets. Handled: new test, every session ends.",
+   "Confirm address, stuck 1: opened on another device. Handled: asks for the password, tried in a browser on a phone.",
+   "Confirm address, stuck 2: password forgotten. Handled: new link, plus a test that a reset confirms.",
+   "Confirm address, stuck 3: a login made with Google or Microsoft has no password. Handled by the 'sign in first' screen (previous engineer).",
+   "Team invitations, abuse 1: an unconfirmed login inviting. Handled: invitation test.",
+   "Team invitations, abuse 2: posing names. Handled: invitation test.",
+   "Team invitations, abuse 3: re-inviting one address repeatedly. Left open: unlimited, fixed text.",
+   "Team invitations, stuck 1: a school with 30 staff gets 429 with when and how to lift. Tested.",
+   "Team invitations, stuck 2: unconfirmed or paused. The button says why, checked in a browser.",
+   "Team invitations, stuck 3: an admin API key uses the same rules, now in openapi.",
+   "Form page name check, abuse 1: a lure-named form shown on our domain. Handled: new test.",
+   "Form page name check, abuse 2: the lure split between form name and template message. The page then shows only part of it, and the start is refused by fakeNotice. Covered by the first test's form part.",
+   "Form page name check, abuse 3: the lure in the account logo. Left open.",
+   "Form page name check, stuck 1: an honest owner's name falsely matches. Refused at creation with the words that set it off, and owners of old forms are emailed once a day. Tested.",
+   "Form page name check, stuck 2: a form mentioning PayPal as a way to pay. Allowed, tested."
+  ]
+ },
+ "repair:integrity": {
+  "found": "The previous engineer on this task (same KEY, repair-integrity) had done almost all of it before being stopped. In the code: names and addresses printed by full_name and email fields count as sender wording (printsName, printedWords, printedView, seenView, askView, signedOverName). A finished signer's fields are never written by a correction, so what they emptied stays empty. Quick Correct, hand-over and \"Fix my name\" refuse a printed name change once someone has finished. newerVersion() raises edit_version in correctRecipient, reassignRecipient, renameSelf and sendEnvelope. clearAnswers runs on every hand-over. GET /sign/:token returns sha256 per document, and the signing page keys PdfDoc and TextView by it (docUrl, allOnScreen in src/components/sign/fields.ts), with Finish off until the new pages are drawn. A replaced finished signer gets \"No longer needed\". A signer asked to sign again keeps the copy they signed after a void, decline or expiry (keepsCopy, earlierCopy). The 9b cases are refused with 400. \"ordered\" left out is kept. Signers are told about a replaced file without fingerprints; .sg-top, .sn-audit-item and email lines wrap anywhere. The API description, README row and help answer were reworded to match. Tests: 12 new ones in tests/integrity.test.ts (from line 797) plus adjustments; all 27 passed when I started. Their copies of the skeptic's probes are in tests/out/repair-integrity/ (h.ts only changed so sign-up is confirmed in the same browser, as the app now requires), with before/after outputs and browser runs (ui-swap, ui-screens, ui-pending). I re-ran all nine probes on the current code: every finding showed the fixed behaviour. One check was left ambiguous: on the phone, Finish was enabled at the moment the banner appeared, which could simply mean the new pages had already drawn.",
+  "done": [
+   {
+    "item": "Check 1b: nothing the sender wrote is printed on the final PDF that a signer was never shown (names in full_name/email fields)",
+    "status": "done",
+    "how": "Previous engineer's fix, verified. GET /sign/:token lists every other person's full_name and email field from the first look, marked from 'sender' (copy recipients too), and the signer's download prints the same. Probe p1-seen C: Ada and Ben are both shown 'Ada also owes a fee of 5000 dollars' before signing.",
+    "test": "tests/integrity.test.ts 'a name or an address that a field prints is shown to every signer before they sign, also for someone who only gets a copy'"
+   },
+   {
+    "item": "Check 2b: once someone has finished, nothing printed changes without asking them again (emptied fields, printed names by PUT and quick Correct)",
+    "status": "done",
+    "how": "Previous engineer: writeContent never writes a finished signer's field, so emptied or unticked stays an answer. Printed names are in printedView, quick Correct, hand-over and Fix my name answer 409 or ask the sender. Probes p2-lock B (values stay null, PDF unchanged, no audit line) and p1-seen D/E (409 sign_again) confirm. I added the same protection for someone who has NOT finished yet: an older editor copy used to refill a line they had emptied, with no notice (probe p12). Now a body carrying the sender's wording unchanged leaves it empty, and new wording replaces it and raises content_version so their page must look again.",
+    "test": "'once someone has signed, a name printed on their pages only changes if the sender asks them to sign again, by every route'; 'what a finished signer left empty or unticked is their answer...'; mine: 'a line that a signer emptied before finishing stays empty when an older copy is saved, and new wording is said'"
+   },
+   {
+    "item": "Check 3b / new bug (high): signing page keeps showing the old PDF after the file is replaced and lets the signer finish",
+    "status": "done",
+    "how": "Previous engineer: sha256 per document, PdfDoc and TextView keyed by it, Finish and auto-review gated by allOnScreen, banner says 'The changed pages are loading' until then. I proved the gate in a browser by holding the new file back 5 s (tests/out/repair-integrity/ui-gate.cjs): at 1280x900, at 390x844 and in Text view on a phone, Finish is off and the banner says it is loading while the file is held back. Once drawn, Finish works and the envelope completes on the new file. I also found a stuck case caused by another engineer's lazy page drawing in PdfDoc (pages drawn only near the screen): a replaced document further down sometimes never counted as shown, so Finish stayed off even after scrolling to it (ui-multi.cjs, first run). Fix in PdfDoc's Page: a first page far from view counts once it has loaded, since nothing of the old file is left on screen. Re-run 3 times: deterministic, and the in-view gate still waits.",
+    "test": "'the signing page is given the fingerprint of each file, loads a replaced file again, and Finish waits for its pages' (extended with the PdfDoc rule)",
+    "left_open": "If a document's file never loads (no network, very old browser), Finish stays off and the page says to reload; another engineer is adding plain words for browsers that cannot show documents. Screenshots: ui-gate-*-1-loading.png, ui-gate-*-2-loaded.png, ui-multi-*.png."
+   },
+   {
+    "item": "Check 5b / new bug (medium): hand-over to another person at the same address passes on answers and signature",
+    "status": "done",
+    "how": "Previous engineer: clearAnswers on every hand-over (probe p4 B5: Mary gets no signature and empty fields). For the honest person who only wanted their name spelled differently, I added to the 'Assign to someone else' dialog that nothing filled in or signed goes along, and that a misspelled name can be fixed in the check before finishing.",
+    "test": "'handing a request over to another person at the same address passes on nothing either' (extended with the dialog wording)"
+   },
+   {
+    "item": "Check 6b / new bug (medium): quick Correct, hand-over, Fix my name and sending do not count as a newer version",
+    "status": "done",
+    "how": "Previous engineer: newerVersion() in all four. Probe p6 B6: the stale editor save gets 409 'Ada Signer passed this document on to Mary Deputy on ...', and Mary stays on. C6: a stale draft tab after sending gets 409 'sent this envelope'.",
+    "test": "'every way an envelope changes counts as a newer version: a save from a copy opened before it is refused and told what happened'"
+   },
+   {
+    "item": "Check 9b: nothing in the request is ignored or dropped without a word",
+    "status": "done",
+    "how": "Previous engineer fixed every case the skeptic named (probe p8 N9: all 400 with the part named; access code and note of a finished person saved; 'ordered' kept). My probe p11 found more of the same class: readonly/required/ordered sent as \"false\" counted as yes, \"send\": \"false\" sent the envelope and emailed people, x/y/w/h that are not numbers moved the field to the corner or a default size, a subject or name sent as an object was saved as \"[object Object]\", and a document without file_id got a message naming no document. New yesNo() and share() in envelopes.ts, an object check in fit(), named document messages, and send checked in POST /envelopes. All answer 400 with the key named and 'Nothing was saved.' Values 1/0 and real booleans still work (the editor sends those). The API description lists them, and the 'two things are adjusted' sentence became three (tiny sizes are made 0.005). A note's recipient_id is documented as not read.",
+    "test": "'nothing in a request is dropped, cut short or moved without a word' (11 more cases)",
+    "left_open": "Integrations that sent yes/no values as text now get 400 instead of a guess. Named in notes."
+   },
+   {
+    "item": "New bug (high): a finished signer's emptied field or unticked box is filled in again by a correction",
+    "status": "done",
+    "how": "See check 2b. Probe p2-lock B: after the stale PUT the fields stay null, Ada stays completed, the PDF does not print the line, no audit line.",
+    "test": "'what a finished signer left empty or unticked is their answer, and a save from an older copy does not fill it in again'"
+   },
+   {
+    "item": "New bug (high): names and addresses printed by full_name and email fields are not treated as sender wording",
+    "status": "done",
+    "how": "All three effects verified with the probes. (1) p1 C: both signers are shown the name. (2) p1 D/E: PUT and quick Correct answer 409 sign_again. (3) p3 D/D2: content_version goes to 2, Finish from the old page answers 409 'changed', and 'Updated' is emailed.",
+    "test": "tests 'a name or an address that a field prints...', 'once someone has signed, a name printed...', 'a new spelling of a name is a newer version...'"
+   },
+   {
+    "item": "New bug (medium): quick Correct, hand-over and sending do not count as a newer version",
+    "status": "done",
+    "how": "Same as check 6b.",
+    "test": "'every way an envelope changes counts as a newer version...'"
+   },
+   {
+    "item": "New bug (medium): hand-over at the same address passes on answers and signature",
+    "status": "done",
+    "how": "Same as check 5b.",
+    "test": "'handing a request over to another person at the same address passes on nothing either'"
+   },
+   {
+    "item": "New bug (low): a finished signer replaced through the sign-again choice is never told",
+    "status": "done",
+    "how": "Previous engineer. Probe p2 C: Ada gets 'No longer needed: Tree planting agreement'.",
+    "test": "'a finished signer whose place is given to someone else is told'"
+   },
+   {
+    "item": "New bug (low): after being asked to sign again, the signer loses their copy if the envelope is then closed",
+    "status": "done",
+    "how": "Previous engineer: keepsCopy counts signed_before. Probe p10: download is 200 after void, and the copy is the document as they signed it, with a 'Not completed by everyone' page. Declined and expired go through the same rule.",
+    "test": "'someone who signed keeps the document as they signed it, also when the sender changes it and then closes the envelope'; 'someone who is asked to sign again and has to wait for their turn can still download what they signed'"
+   },
+   {
+    "item": "New bug (low): a name fix for someone asked to sign again is refused for want of signatures",
+    "status": "done",
+    "how": "Not mine, per the brief: the owner of the payment code fixed takeOverCost, and I left it alone. Probe p9 A: quick Correct and editor name fixes for the person asked again both answer 200, and the balance stays '1 left, 1 held'.",
+    "test": "probe tests/out/repair-integrity/p9-credits.ts (A_quick_name_fix_for_resigner 200)"
+   },
+   {
+    "item": "New bug (low): long SHA-256 fingerprints push banners and the envelope page off a phone screen",
+    "status": "done",
+    "how": "Previous engineer: signers are told 'the file was replaced. Before: 1 page. Now: 1 page.' without fingerprints (the audit trail keeps both), .sg-top and .sn-audit-item wrap anywhere, email lines wrap anywhere, and the verify page's .mono already breaks anywhere. My browser runs: both banners at 390x844 measure '390 in 390'. I also made 'I have looked' in the banner 44 px tall on phones; it was 88x34, now 88x44 (ui-taps.cjs).",
+    "test": "'signers are told what changed without the long fingerprints, which stay in the record and can wrap on a phone' (extended with the 44 px rule)"
+   },
+   {
+    "item": "New bug (low): a correction that leaves out \"ordered\" turns signing order off",
+    "status": "done",
+    "how": "Previous engineer: ordered is kept when left out. Probe p8 C8: ordered 1, Ben not emailed. Now it is also refused when it is not true or false.",
+    "test": "'nothing in a request is dropped, cut short or moved without a word'"
+   },
+   {
+    "item": "Regression: sender's envelope page scrolls sideways on a phone after a correction with fingerprints",
+    "status": "done",
+    "how": "Previous engineer: .sn-audit-item overflow-wrap anywhere. Their browser run (tests/out/repair-integrity/ui-screens.out) measured the envelope page at 390 in 390 after 'ask to sign again' on a replaced file. I did not re-run that screen myself; the CSS rule is asserted by a test.",
+    "test": "'signers are told what changed without the long fingerprints...' (asserts sender.css)"
+   },
+   {
+    "item": "Overclaim: the signing page banner after a 409 'changed' (old pages still shown, Finish works)",
+    "status": "done",
+    "how": "Now true: the page fetches and draws the new file, and the banner says the pages are loading until they are on screen (ui-gate.cjs at both sizes and in Text view).",
+    "test": "'the signing page is given the fingerprint of each file...'"
+   },
+   {
+    "item": "Overclaim: API description PUT /envelopes/{id}, README 'A typo after sending', help 'I sent a document with a mistake'",
+    "status": "words_changed",
+    "how": "Every claim checked against the code and the probes. I added the new refusals, the third adjustment, a note's recipient_id not being read, the rule for a line emptied before finishing, and \"send\" on POST /envelopes. The README API row now says a request is refused with the part named, never guessed at. The help answer and README row were already true."
+   },
+   {
+    "item": "Overclaim: consent text 'you can download what you signed ... also if the document is later cancelled, declined or runs out of time'",
+    "status": "done",
+    "how": "Now true for someone asked to sign again (keepsCopy covers voided, declined and expired). Probe p10: 200 after a void.",
+    "test": "'someone who signed keeps the document as they signed it...'"
+   },
+   {
+    "item": "Overclaims in research/fix-batch2.json (items 2, 3, 5, 6, 7, 9)",
+    "status": "done",
+    "how": "The code now does what items 2, 3, 5, 6 and 9 claim (see above). Item 7 is out of date in the good direction: a deleted envelope's codes answer genuine, deleted (probe p7b). Item 2's in-person note is out of date: an in-person signer asked again is neither held nor charged again (probe p9 B: '2 left, 1 held' before and after). I did not rewrite that research file, which records an earlier round; this report replaces those statements.",
+    "left_open": "research/fix-batch2.json still carries the old wording."
+   },
+   {
+    "item": "Screens: old pages under the banner with Finish active; banner overflow on phone; signed-again banner overflow; envelope page 539 wide",
+    "status": "done",
+    "how": "Looked at in my own browser runs at 390x844 and 1280x900: ui-gate-*-1-loading.png shows 'Loading document\u2026' with Finish off, ui-gate-*-2-loaded.png shows SWAPPED CONTRACT, and ui-taps-phone-*.png shows both banners inside 390 px. The envelope page width comes from the previous engineer's run (ui-screens.out: 390 in 390)."
+   }
+  ],
+  "files_changed": [
+   "src/server/envelopes.ts (yesNo, share, the object check in fit, ordered/readonly/required/x/y/w/h checks, named document file messages, the answered rule for a line emptied before finishing)",
+   "src/server/routes-envelopes.ts (\"send\" must be true or false on POST /envelopes)",
+   "src/server/openapi.ts (POST and PUT descriptions, Field.recipient_id)",
+   "src/components/PdfDoc.tsx (a first page far from view counts as shown once loaded)",
+   "src/components/sign/dialogs.tsx (hand-over dialog says nothing goes along, and where to fix a name)",
+   "src/app/styles/sign.css (.sg-top .sg-link 44 px on phones)",
+   "README.md (row 'The API costs extra and needs a go-live review')",
+   "tests/integrity.test.ts (1 new test, 4 extended; 28 tests)",
+   "tests/out/repair-integrity/p11-more-silent.ts, p12-unfinished-empty.ts, ui-gate.cjs, ui-taps.cjs, ui-multi.cjs, ui-look.cjs, ui-lib.cjs (added quiet()), screenshots ui-gate-*, ui-taps-*, ui-multi-*"
+  ],
+  "suite": "tests/integrity.test.ts: 28 of 28 pass, alone and in the full run. Last full run (npm test): 483 tests, 474 pass, 9 fail, none in my file and none caused by my changes (none of my new refusal messages appears in the log). The 9: billing2/3/4/5 (the payment owner editing now), flow 'the published API description matches the routes that exist' (POST /envelopes/:id/restore not documented, someone else's lifecycle work), gaps-industry 'the screens show the payment link only where the rules say' and gaps-nonus-words 'every price on a public page is written as US$' (others' work), signerux 'the signing screens keep what they promise in markup' (expects the old canvas line that the long-documents engineer changed in PdfDoc to width={0} height={0}), and trust 'small things that stop people getting stuck' (its 'Ada S. Signer' to 'Ada Signer-Lovelace' is now asked of the sender under the stricter Fix my name rule from the checkpoint commit; that test or rule belongs to the Fix my name owner). One run in between failed 114 tests in whole files with 500s during someone's half-finished edit; my file passed alone right after, and the next full run was clean for it. npx tsc --noEmit -p .: no errors in any file I touched. At the very end it showed one error in src/components/templates/WhoCanUse.tsx (TS2347), another engineer's new template-roles file.",
+  "abuse_and_stuck": [
+   "Abuse: \"send\": \"false\" in quotes used to send the envelope and email real people. Now 400, nothing created (test).",
+   "Abuse: \"readonly\": \"false\" made a signer's field the sender's, so the signer could not change wording put there. Now 400 (test).",
+   "Abuse: \"x\": \"left\" or a size that is not a number stacked a field in the top corner over printed text. Now 400 (test).",
+   "Abuse: an editor copy from before a signer emptied a line (non-compete) silently refilled it, so the signer might sign it later without noticing. Now kept empty, and new wording makes their page look again (test).",
+   "Abuse: a sender renames a copy recipient into a sentence after someone signed. 409 sign_again by PUT, quick Correct, hand-over and Fix my name (previous engineer's tests).",
+   "Abuse: replacing a file while the signer's page is open. The server refuses the old version, and the page shows nothing old and keeps Finish off until the new pages are drawn (test plus ui-gate.cjs with the file held back 5 s).",
+   "Stuck: a replaced document further down kept Finish off for good under lazy page drawing. Fixed in PdfDoc and checked 3 times in the browser (test).",
+   "Stuck: Jon hands over at the same address expecting his answers to go along, or only wants his name spelled right. The dialog now says nothing goes along and where to fix a name (test).",
+   "Stuck: 'I have looked' was 34 px tall on a phone. Now 44 px (test plus measurement 88x44).",
+   "Stuck: an integration that sent yes/no values as text now gets 400. The message names the key and says to write true or false without quotes. Named in notes.",
+   "Stuck (left open): a document whose file never loads keeps Finish off. The page says to reload, and another engineer is adding words for browsers that cannot show documents.",
+   "Stuck (left open, seen while reading, not changed): quick Correct on a copy recipient who has 'completed' answers 'has already finished ... asking them to sign again', which reads oddly for someone who only gets a copy."
+  ],
+  "needs_from_billing": "Nothing. The takeOverCost fix for 'a name fix for someone asked to sign again is refused for want of signatures' is in place: probe p9 A answers 200 by quick Correct and by the editor, and the balance stays '1 left, 1 held'. I did not touch any payment file.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n(1) POST and PUT /envelopes now refuse, with 400 and the key named, yes/no values that are not true/false/1/0 (\"false\" in quotes for ordered, readonly, required, send), x/y/w/h that are not numbers, and text sent as a list or an object. A document without file_id, or whose file is gone, now names the document. The editor sends booleans or 0/1, so it is unaffected.\n(2) A line that a signer who has not finished emptied is no longer refilled by a save that carries the sender's wording unchanged. New wording still replaces it, and their page must look again.\n(3) PdfDoc: a first page far from view now reports onShown once loaded. The long-documents engineer, who is editing PdfDoc, should keep the effect `if (page && !visible) onDrawn?.()`; tests/integrity.test.ts asserts it, and without it a replaced document further down can keep Finish off for good.\n(4) The hand-over dialog has a new sentence: nothing filled in or signed goes along; fix your name in the check before you finish.\nCopy promises added: API description (POST /envelopes 'send', PUT refusals, three adjustments, a note's recipient_id not read, the emptied-line rule) and the README API row. All are backed by tests.\nOwners to tell: signerux.test.ts's markup test expects the old canvas line (PdfDoc owner and signerux owner). trust.test.ts 'small things that stop people getting stuck' conflicts with the stricter Fix my name rule (that rule's owner).\nSeen but out of scope: quick Correct on a copy recipient who has 'completed' gives a 'sign again' message meant for signers. The approver's hand-over text says 'before you finish' where their button says Approve.\nDev-server note: other engineers' edits make next dev pages reload constantly, so my browser scripts pass the hot-reload socket through tests/out/repair-integrity/ui-lib.cjs quiet() minus reload messages.\nMy dev server on 3492 is stopped, .next-repair-integrity and its data folder are deleted, and my tsconfig.json lines were already gone. No commits, no git changes.",
+  "settings": []
+ },
+ "gaps:nonus-words": {
+  "found": "The previous engineer had built items A to E in full before the usage limit stopped them. My test file had 15 tests and all of them passed when I started. Their code lives in src/lib/paperwork.ts, src/lib/dataplace.ts, src/server/warnings.ts, src/app/help/outside.tsx, src/app/security/DataPlace.tsx, src/app/security/processing/, src/components/editor/PaperCheck.tsx and src/app/styles/abroad.css, plus the consent wording in src/lib/policy.ts. Their screenshots and notes are in tests/out/gaps-nonus-words (shots.cjs, shots2.cjs, notes*.json). I checked their work against the brief and the research entries (priorities 1, 8, 12, 13, 16, 19, 20, 21, 22 and 24, and false_promises) and kept all of it. A few examples of what it covers: the consent text no longer says \"same legal effect\" and its wording version (2026-11) is written into the consent audit line; public prices are written as US$ with a line about currency conversion; the word check warns and never blocks, and sending answers with \"warnings\"; \"Where your data is\" is filled from settings; the \"page will not open\" line is in the email footer. Item F (priority 14, \"I will send the link myself\") had not been started: no column, no code, no tests. I built F.",
+  "done": [
+   {
+    "item": "A. Words that were not true (consent sentence, adopt dialog, QR claim, English only, fixing your name, wording version in the consent audit line)",
+    "status": "done",
+    "how": "Done by the previous engineer and checked by me. src/lib/policy.ts has consentWording (simple electronic signature, rules differ by country and kind of document, ask the sender or a lawyer, plus the need-16 sentence that the parties accept the method), CONSENT_VERSION and consentAuditNote (the version goes into 'Agreed to electronic records and signatures'), adoptLine, LANGUAGE_NOTE and cannotOpenLine. The landing page now speaks of the QR code the app really draws. /help says what 'fix my name' actually does. I also corrected CHECK_LIMITS in src/lib/checks.ts so it stays true for F.",
+    "test": "tests/gaps-nonus-words.test.ts, tests 1 to 5"
+   },
+   {
+    "item": "B. Prices as US$ on public pages, with a line about conversion",
+    "status": "done",
+    "how": "Done by the previous engineer: usd() and CURRENCY_NOTE in src/lib/impact.ts, used on the landing page, /help, /impact, the stop page and the Public footer. I grepped the public pages again and found no bare $ price left.",
+    "test": "test 6"
+   },
+   {
+    "item": "C. Help section 'Signing outside the United States...', and a warning before sending based on a shared word list",
+    "status": "done",
+    "how": "Done by the previous engineer. The word lists are in src/lib/paperwork.ts (PAPER_KINDS, COUNTRY_NOTES, each note dated and linked to its source). The server side is src/server/warnings.ts. The review step shows PaperCheck.tsx, which warns and never blocks. The API has 'warnings' in the answer to sending and to bulk, plus GET /envelopes/:id/warnings, and both are in openapi. /help#outside-us and /help#enough exist.",
+    "test": "tests 7 to 12"
+   },
+   {
+    "item": "D. 'Where your data is' on /security, filled from settings, and a printable data processing summary",
+    "status": "done",
+    "how": "Done by the previous engineer. dataPlace() in src/lib/dataplace.ts reads OPERATOR_NAME, DATA_REGION, DATA_HOST, DATA_BACKUPS, MAIL_PROVIDER_NAME/COUNTRY, PAYMENT_PROVIDER_COUNTRY and SMS_PROVIDER_NAME/COUNTRY. When one is empty the page says 'The operator of this server has not said ... Ask them.' /security/processing has a 'Print or save as PDF' button and says a signed agreement is between the customer and whoever runs the server. The settings are in .env.example and the README, and production logs a warning when they are missing.",
+    "test": "tests 13 and 14"
+   },
+   {
+    "item": "E. Footer line in signing emails for people who cannot open the page, and the matching help for senders",
+    "status": "done",
+    "how": "Done by the previous engineer: askForPdf in renderMail and notifyRecipient (not on in-person emails), and /help#cannot-open.",
+    "test": "test 15"
+   },
+   {
+    "item": "F. A recipient the sender reaches themselves ('I will send the link myself')",
+    "status": "done",
+    "how": "New column recipients.link_by_sender. The shared rules and words are in src/lib/bysender.ts and the server logic in src/server/bysender.ts, with small hooks in envelopes.ts. Server: a person may have a name and no address. Nothing is ever emailed to them (notifyRecipient hands off to bySenderNotice; the void and correction emails skip them). The audit line says 'Not emailed ... The sender said they would send the link themselves'. The certificate and audit name them 'Name (link shared by the sender)' (labelOf, whoIs, certName), and the identity line reads 'Link shared by the sender only'. They count toward the daily limit (reachKey 'link:<id>') and the automatic pause (reporterKey). A signature by them is never the sender's free one. A nudge by hand is refused in words. The timer's reminder goes to the sender instead ('Reminder to pass on'). The sender gets an email when their turn comes after someone else finishes. 'Not opened yet' and 'expires soon' use wording that fits. No copy is emailed at completion: the record says so and the sender's completion email tells them to pass the copy on. Correct can rename them and keep the link, or add an address, which clears the tick and emails them. Reassigning to someone with an address clears the tick. A clone keeps the tick, a template refuses it, and the fake-notice filter still applies. Things that cannot work without an address are refused at send or correction: email plus tick, copy-only role, in-person role, groups, code by email, texted link, and an Email field. Screens: the editor tick replaces the email box, with its explanation, a 44px target and the same rule list above Send. The review step and the correction preview say 'no email from us'. The envelope page shows an own card: Show link, Copy link, QR code, WhatsApp, text message, shown while it is their turn and after they finished, with no Nudge, no 'Sent' badge and no 'Send reminder' just for them. AfterSend says 'Now send X the link yourself'. On the signing page, the done and waiting states and the question dialog never promise an email, and say that Find my documents cannot find this document. An old replaced link answers 'ask_sender'. Docs: /help#no-email, a Find my documents note, a /security point, the developers page, openapi (Recipient.link_by_sender, remind not_reminded) and README rows. I checked phone 390x844 and desktop in a browser: no sideways scroll, all the new buttons and the tick are at least 44px, and the tick works by keyboard and has aria-describedby.",
+    "test": "tests 16 to 27 in tests/gaps-nonus-words.test.ts (words; no email and record and certificate; cost; refusals; limit and pause; turn, reminders, unopened, nudge, question, rename; corrections; clone, template, decline; screens; fake notice and reassign; correction preview; replaced link)",
+    "left_open": "See notes_for_integrator, under 'Left open for F'."
+   }
+  ],
+  "files_changed": [
+   "sign-and-grow/src/lib/bysender.ts (new)",
+   "sign-and-grow/src/server/bysender.ts (new)",
+   "sign-and-grow/src/components/editor/SendMyself.tsx (new)",
+   "sign-and-grow/src/components/sender/OwnLink.tsx (new)",
+   "sign-and-grow/src/components/sign/NoEmail.tsx (new)",
+   "sign-and-grow/src/server/db.ts (COLUMNS: recipients.link_by_sender)",
+   "sign-and-grow/src/server/envelopes.ts (writeContent, assertSendable, sendEnvelope reach, notifyRecipient, advance, completeEnvelope, notifyActive, correctEnvelope reach and mails, copyEnvelope, remindEnvelope, correctRecipient, reassignRecipient, resendFromRetired, renameSelf wording, askSender, reportAbuse, cronTick)",
+   "sign-and-grow/src/server/routes-envelopes.ts (remind not_reminded, correct guard, 'Signing link issued' wording)",
+   "sign-and-grow/src/server/routes-sign.ts (actor label, recipient.link_by_sender)",
+   "sign-and-grow/src/server/pdf.ts (time-zone key uses labelOf)",
+   "sign-and-grow/src/server/openapi.ts",
+   "sign-and-grow/src/lib/groups.ts (whoIs, certName)",
+   "sign-and-grow/src/lib/checks.ts (checkLine, CHECK_LIMITS)",
+   "sign-and-grow/src/components/Editor.tsx",
+   "sign-and-grow/src/components/editor/StepAdd.tsx",
+   "sign-and-grow/src/components/editor/StepReview.tsx",
+   "sign-and-grow/src/components/editor/ReminderChoice.tsx",
+   "sign-and-grow/src/components/editor/changes.ts",
+   "sign-and-grow/src/components/sender/Recipients.tsx",
+   "sign-and-grow/src/components/sender/AfterSend.tsx",
+   "sign-and-grow/src/components/sender/dialogs.tsx (CorrectDialog)",
+   "sign-and-grow/src/components/sign/deadEnds.tsx (NOT_SENT.ask_sender)",
+   "sign-and-grow/src/app/sign/[token]/page.tsx (four small edits)",
+   "sign-and-grow/src/app/app/envelopes/[id]/page.tsx",
+   "sign-and-grow/src/app/app/operator/page.tsx (reporter shown in words)",
+   "sign-and-grow/src/app/help/outside.tsx",
+   "sign-and-grow/src/app/help/page.tsx",
+   "sign-and-grow/src/app/security/page.tsx",
+   "sign-and-grow/src/app/developers/page.tsx",
+   "sign-and-grow/src/app/styles/abroad.css",
+   "sign-and-grow/README.md",
+   "sign-and-grow/tests/gaps-nonus-words.test.ts",
+   "sign-and-grow/tsconfig.json (only removed the two .next-gaps-nonus-words lines that next dev added)",
+   "sign-and-grow/tests/out/gaps-nonus-words/shots3.cjs, shots4.cjs, notes3.json, notes4.json and the *-f-*.png screenshots"
+  ],
+  "suite": "My file: tests/gaps-nonus-words.test.ts, 27 of 27 pass. Full suite (npm test): 459 tests, 456 pass, 3 fail, and none of the three is mine. (1) flow.test.ts:256 'the published API description matches the routes that exist' fails with 'not documented: POST /envelopes/:id/restore'. This was already failing at the checkpoint and belongs to whoever is adding the restore route. (2) signerux.test.ts:653 fails on the PDF viewer canvas markup; that is another engineer's viewer work. (3) trust.test.ts:365 'small things that stop people getting stuck' expects 'Ada S. Signer' to 'Ada Signer-Lovelace' to count as a small spelling fix. The name-fix rules no longer accept it, and this test was already failing at the checkpoint (it was not ok 386 in my first run). The wording I changed in renameSelf does not touch that decision. npx tsc --noEmit -p . is clean. Part way through, src/lib/policy.ts line 304 had an unescaped apostrophe from another engineer for a few minutes; it was fixed by its owner.",
+  "settings": [
+   "No new settings for F. Items A to E (previous engineer) added OPERATOR_NAME, DATA_REGION, DATA_HOST, DATA_BACKUPS, MAIL_PROVIDER_NAME, MAIL_PROVIDER_COUNTRY, PAYMENT_PROVIDER_COUNTRY, SMS_PROVIDER_NAME and SMS_PROVIDER_COUNTRY. All of them are already in .env.example and the README config table.",
+   "New API field: recipients[].link_by_sender (boolean in requests; answers carry 1 or 0). Recipient.required in openapi is now ['name'] only.",
+   "POST /envelopes/:id/remind: not_reminded[].why can now be 'link_by_sender'.",
+   "POST /public/links/resend: a new result 'ask_sender'."
+  ],
+  "abuse_and_stuck": [
+   "Attack: a sender uses no-address recipients to get round the daily limit on new people. Handled: each one counts as 'link:<recipient id>' at send and at correction. Test: 'the daily limit and the automatic pause...' (3 such viewers with a cap of 2 are refused with 429 'would add 3').",
+   "Attack: before this change, reports from people without an address would all have counted as the same empty reporter, so the automatic pause would never come. Handled with reporterKey. Same test: two reports from two such people pause the account.",
+   "Attack: send a lure page by WhatsApp to skip the fake-notice filter. Handled: the same guard runs at send. Test: 'a link the sender passes on is read by the fake-notice filter like an email' (422).",
+   "Attack: a sender ticks it for themselves to get a free signature. Not possible: with no address it is never the sender's own, so it counts. Test: 'it costs a signature like anyone who is not the sender'.",
+   "Attack: the audit trail or certificate overstates the delivery. Handled: it says only 'link shared by the sender' and 'Link shared by the sender only'. Test 17 checks the certificate text has no '<>'.",
+   "Honest person stuck: the sender forgets to send the link. Handled by the AfterSend banner, the 'Not opened yet' email worded for this case, the reminder sent to the sender, and the 'Your turn to pass it on' email in an ordered envelope. Test: 'reminders, turns and questions reach the sender'.",
+   "Honest person stuck: the signer loses the link and tries Find my documents. Handled: the done screen and /help say it cannot find this one and to ask the sender, and the envelope page keeps showing the link after completion. Tests 16 and 24.",
+   "Honest person stuck: the sender later learns the address. Handled: Correct with the address clears the tick, emails them and retires the shared link. An old link then answers 'ask_sender' instead of promising an email. Tests 22 and 27.",
+   "Honest person stuck: the sender combines the tick with a code by email, the copy-only role or an Email field. Handled: plain refusals that say what to do, shown above Send in the editor using the same rule. Test 19 and the browser check (notes4.json)."
+  ],
+  "needs_from_billing": "Nothing. A recipient with no address is never isSelf in credits.ts (sameEmail('', sender) is false), so it already holds and uses a signature like any other signer. No change is needed in routes-billing.ts, credits.ts or the Billing() component.",
+  "notes_for_integrator": "Behaviour others will notice: (1) Audit lines written by a signer with no address have the actor 'Name (link shared by the sender)'. Everyone else is named exactly as before; labelOf, whoIs and certName are unchanged for recipients with an address. (2) The keys 'link:<recipient id>' now appear in reached.email and abuse_reports.reporter. The operator page shows these in words. (3) The Recipient schema in openapi now requires only 'name'. (4) I made small targeted edits in other engineers' files: lib/groups.ts (whoIs, certName), lib/checks.ts (checkLine, CHECK_LIMITS sentence), editor/changes.ts (the outcome sentence for these people), sign/deadEnds.tsx (a new NOT_SENT entry), sender/dialogs.tsx (CorrectDialog), sender/Recipients.tsx, envelopes/[id]/page.tsx and the signing page. I left MailNews.remindedText untouched: the envelope page filters 'link_by_sender' out before calling it. New promises in copy, each backed by tests: /help#no-email, the note under 'Find my documents', the /security point 'A link the sender passed on themselves.', the developers page paragraph, and two README entries (Sending, and a bad-reviews row).\n\nDecisions for the owner: (a) The tick is refused on templates. Saving an envelope that has such a person as a template, or cloning it into one, drops the tick, so that person becomes an open role in the template. Bulk send and public forms therefore cannot use it. (b) Copy-only (cc) recipients cannot be ticked, because their copy only ever goes by email.\n\nLeft open for F: (1) Someone who gets the link by WhatsApp has no security code to check at /check. The page shows the sender's name and address and the 'Not expecting it? report' link, but nothing else proves the request is real. (2) The 'Your turn to pass it on' email also goes out when a correction adds such a person after someone else has finished. That is accurate but slightly noisy. (3) The line about their copy in the sender's completion email only goes out while the sender has completion emails switched on. The envelope page says it in every case. (4) The WhatsApp and text-message share buttons reuse the existing code; I did not test a real phone handing off to WhatsApp.\n\nOut of scope, seen in passing: the trust.test.ts name-fix expectation, the signerux canvas markup test, and the undocumented POST /envelopes/:id/restore all belong to other engineers."
+ },
+ "gaps:nonus-text": {
+  "found": "The previous engineer had built nearly all six items (A to F), and all 19 tests in tests/gaps-nonus-text.test.ts passed. They are in commits 9b0ee8f, 7d3096a and 7739e4e. What was there:\n- A: six Noto font packages from @fontsource (SIL OFL 1.1). scripts/build-fonts.mjs, called from scripts/copy-assets.mjs, turns them into TrueType files in assets/fonts/noto with an index. If the step fails, install still succeeds. src/server/pdftext.ts does the font choice, shaping, the \ufffd mark and the list of what could not be printed. The /print-check routes and PrintNotice are in place, the review dialog warns the signer, and handwritingWrites gives one plain style instead of four identical ones. The README section \"Scripts and fonts in the signed PDF\" names the licences.\n- B: src/server/bidi.ts, with right alignment and ActualText in the PDF.\n- C: accounts.default_date_format with a Settings control, typed dates use the envelope's format everywhere, and the editor sentence is true.\n- D: tz is sent with consent and Finish and stored on the recipient. The date of signing uses that zone. The certificate gives local time and UTC. Emails give the moment, reminders wait for the signer's morning, and the README says so.\n- E: src/lib/numbers.ts is the one rule both sides use.\n- F: renameSelf accepts spacing changes, says \"may be the same name in another script\", and no greeting uses a guessed first name.\nThe README rows were done, and openapi had /print-check and date_format.\nI checked every item against research/gaps.json and the false promises, and found five small gaps:\n- three boxes where a signer types words had no dir=\"auto\": the public form's name, the report dialog's detail box, and the reassign reason;\n- the sender's Give more time dialog and its message gave the new deadline as a bare day;\n- the sender's \"Expires soon\" email gave no moment at all;\n- a doc comment in src/lib/dates.ts did not match the code;\n- the safety of the bidi pass against direction-override characters was not tested.\nThe old screenshots were out of date. A fresh run shows the warning text reading cleanly now.",
+  "done": [
+   {
+    "item": "A. Scripts the PDF fonts could not print (priority 2), plus the false promises 'every value stamped in' and 'four handwriting styles'",
+    "status": "done",
+    "how": "Built by the previous engineer; I checked it in code and in a browser. Noto fonts for Chinese, Japanese, Korean, Thai, Devanagari and Khmer are embedded only when a document needs them. Any other script prints the mark \ufffd (never an empty box) and the certificate lists those characters by Unicode number. The sender is warned on the envelope page and in the editor's review step before sending (POST /print-check). The signer is warned in the check before finishing (POST /sign/:token/print-check). A missing or broken font file counts as not printable instead of crashing. A typed signature shows one plain style when the handwriting fonts cannot write the name. The README names the packages and the SIL Open Font License 1.1, and the README lines about 'every value' were made true. Fresh phone and desktop screenshots of the warnings and the adopt dialog are in tests/out/gaps-nonus-text/.",
+    "test": "tests/gaps-nonus-text.test.ts: 'a signed PDF prints Chinese, Japanese, Korean, Thai, Hindi, Arabic, Khmer and Cyrillic names...', 'a script with no font: the sender is told...', 'a Noto font file that is missing or broken...', 'a typed signature offers four handwriting styles only when...'",
+    "left_open": "The warning lists each character once, so in scripts with vowel signs a sign can stand alone on a dotted circle (for example the subject '\u0b9a\u0bc6\u0ba9\u0bcd\u0ba9\u0bc8' is shown as '\u0b9a\u0bc6\u0ba9\u0bcd\u0bc8'). It is readable, but not pretty."
+   },
+   {
+    "item": "B. Right-to-left text (priority 3), plus the false promise about house number 42 printing as 24",
+    "status": "done",
+    "how": "The bidi pass and right alignment on the PDF and certificate were already built and tested with both examples. I added dir=\"auto\" to the three signer boxes that lacked it: the public form's 'Your full name' (src/app/f/[slug]/page.tsx), the report dialog's 'Anything else we should know', and the reassign 'Reason' (src/components/sign/dialogs.tsx). In a browser, the public form's name box turns right to left when Arabic is typed. I also added assertions that the invisible characters which turn text round (RLO and others) cannot make 1234 print as 4321.",
+    "test": "New test 'every box a signer types words into takes its direction from what is typed' (scans the signing page, its dialogs, the signature pad and the public form; it fails on the three boxes I fixed). New assertions in 'right-to-left text is put in reading order...'. Existing: 'a Hebrew address with house number 42 and Arabic text with \"ABC 123\" are printed right...'."
+   },
+   {
+    "item": "C. Dates (priority 4), plus the false promise in the editor sentence",
+    "status": "done",
+    "how": "Built by the previous engineer; checked. A typed date uses the envelope's format on the signing page, the text view, what the next signer sees, and the PDF. Settings, Account has 'Dates are written as' next to the reminder and deadline defaults, and new envelopes and templates start with it. An unknown format is refused with 400. The formats with the month as a word come first. The editor sentence about the date of signing is now true.",
+    "test": "'a date a signer picks is written in the format the sender chose...', 'every format writes a typed date the same way...', 'an account sets the date format its new envelopes start with'"
+   },
+   {
+    "item": "D. Time zones (priorities 5 and 9), plus the false promises about days and deadlines",
+    "status": "done",
+    "how": "Mostly built by the previous engineer. The zone is sent with consent and Finish, stored on recipients.tz, and anything that is not a valid zone is ignored. The date of signing uses the signer's zone, then the sender's, then UTC. The certificate gives local time with its zone and UTC for each of that signer's steps and audit lines. Emails say 'closes on 20 March 2027 at 16:40 UTC', plus the signer's own zone once known. The signing page gives the deadline in the device's zone, with the zone named. Automatic reminders wait for 8:00 to 20:00 in the signer's zone, and the README says so. I added two things. First, the sender's Give more time dialog (its preview and the message after saving) now gives the new deadline with its time and zone, through a new closingText() in src/components/sender/lib.ts; I checked it in a browser at phone and desktop size and by keyboard. Second, the sender's 'Expires soon' email now says 'It closes on <UTC moment>, which is <moment in the sender's zone>'.",
+    "test": "New: 'the warning three days before a deadline names the moment, to the sender in their own zone and to the signer' and 'the sender's Give more time dialog gives the new deadline with its time and zone, never a bare day'. Existing: 'the date of signing is the calendar day where the signer is...', 'with no zone from the signer the sender's zone decides the day...', 'a moment reads the same everywhere...', 'emails give a deadline with its time in UTC...', 'an automatic reminder waits for the morning...'",
+    "left_open": "The daytime window is fixed at 8:00 to 20:00. The research also suggested a 'Send reminders at' hour for the sender, which was not in the brief and is not built."
+   },
+   {
+    "item": "E. Numbers written outside the US (priority 11)",
+    "status": "done",
+    "how": "Built by the previous engineer; checked. One rule in src/lib/numbers.ts is used by the signing page (src/components/sign/fields.ts) and the server (VALIDATORS in src/server/envelopes.ts). It accepts 1.234,56, 1 234,56, 1'234.56, Indian grouping, currency signs and digits from other scripts. The PDF prints exactly what was typed. The hint says 'Type the number as you write it... It is printed exactly as you type it.'",
+    "test": "'the signing page and the server use one rule for numbers...', 'a number field takes 1.234,56, 1 234,56, 1'234.56 and Indian grouping...'"
+   },
+   {
+    "item": "F. Fix my name and greetings (priority 10), plus the false promise on /help and in the README",
+    "status": "done",
+    "how": "Built by the previous engineer; I re-read renameSelf as it is now. A change of spacing, hyphens or dots ('\u5c71\u7530 \u592a\u90ce' to '\u5c71\u7530\u592a\u90ce', 'Mary-Ann' to 'Mary Ann', 'J.R.' to 'JR') is applied. A name in another script is passed to the sender with 'This may be the same name in another script, but software cannot tell, so we asked <sender> to confirm it.' New workspaces, share texts and the home greeting use the whole name. /help and the README describe what the fix really does.",
+    "test": "'a signer can fix the spacing, a hyphen or a dot of their own name...', 'nobody is greeted by a guessed first name...'",
+    "left_open": "Default initials in SignaturePad.tsx are still the first letter of each word, which gives \u738b for \u738b\u5c0f\u660e. This was in the research but not in my brief."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/app/f/[slug]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/dialogs.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/lib.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/dialogs.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/dates.ts",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/tests/gaps-nonus-text.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (only removed the two .next-gaps-nonus-text lines my dev server added; other engineers' lines left)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/gaps-nonus-text/shots2.cjs (new screenshot script; screenshots refreshed in the same folder)"
+  ],
+  "suite": "My file: 22 of 22 pass.\n\nFull npm test: 482 tests, 473 passed, 9 failed. I re-ran the failing files with mine: the same failures persisted except billing5 (a timing check, 'answered in 162 ms', which passed the second time). One new failure appeared, from a help page another engineer is editing. None of the failures comes from my changes:\n- billing2.test.ts:94, billing3.test.ts:283, billing4.test.ts:239: the cancelling state in the payment code (cancel_at not set, 'past_due' instead of 'canceled').\n- billing5.test.ts:63: timing on a busy machine; passed on re-run.\n- flow.test.ts:256: 'not documented: POST /envelopes/:id/recipients/:rid/release', another engineer's new route missing from openapi.ts.\n- gaps-industry.test.ts:1015: the payment link in the Billing component.\n- gaps-nonus-words.test.ts:176: a price without US$ in app/billing/stop/StopView.tsx.\n- gaps-nonus-words.test.ts:74: app/help/page.tsx (the consent-wording engineer is editing it). Appeared on the re-run.\n- signerux.test.ts:653: a comment in the signing page CSS that the test reads, changed by another engineer.\n- trust.test.ts:384 (fails at line 384 of the test starting at :365): 'Ada S. Signer' to 'Ada Signer-Lovelace' is no longer applied as a small fix. The stricter samePerson rule from the signerux brief (in checkpoint 7d3096a) refuses a dropped initial plus an added surname. That test file is unchanged.\n\ntsc --noEmit: one error, in src/components/templates/WhoCanUse.tsx(52,16) TS2347, another engineer's template-roles work. No errors in files I touched.",
+  "needs_from_billing": "Nothing for my task. For the record, four failing tests are in the payment code: billing2.test.ts:94, billing3.test.ts:283, billing4.test.ts:239 (the cancelling state), and billing5.test.ts:63 (a timing check that passed on re-run).",
+  "notes_for_integrator": "- What people will notice: the sender's Give more time dialog and the message after it now give the deadline as a moment ('30 December 2026 at 20:01 Europe/Berlin time (UTC+01:00)'), not a bare day; the label 'New closing date' is unchanged because another engineer's probe looks for it. The sender's 'Expires soon' email now starts its text with 'It closes on <moment in UTC>, which is <moment in the sender's zone>.' Three more signer boxes take their direction from what is typed.\n- Copy: I updated the README row 'The email said the 20th...' (emails now give the reader's own zone, sender or signer, and the Give more time dialog is covered) and the README line for tests/gaps-nonus-text.test.ts. Every promise there is kept by code and tested.\n- For the owner to decide: tests/trust.test.ts:384 conflicts with the stricter samePerson rule from the signerux brief. Either the signerux owner updates that test (for example to 'Ada Signer' to 'Ada Signer-Lovelace', one word added) or loosens the rule. I did not touch either, because the rule belongs to that brief.\n- Dependencies (added by the previous engineer, allowed by my brief for item A only): @fontsource-variable/noto-sans-sc, -jp, -kr and @fontsource/noto-sans-thai, -devanagari, -khmer. They add about 17 MB to node_modules and generate about 16 MB in assets/fonts/noto (gitignored) on install. Licence: SIL OFL 1.1, named in the README.\n- openapi.ts describes the developer API only. It has POST /print-check and date_format, but by design it has no /sign/... routes and no PATCH /account, so /sign/{token}/print-check, the tz field on consent and complete, and default_date_format are not in it, the same as their neighbours. No .env setting was added.\n- Seen but out of scope: flow.test.ts fails on the undocumented POST /envelopes/:id/recipients/:rid/release; WhoCanUse.tsx has a type error. tsconfig.json still carries .next-build-tplroles and .next-gaps-mobile-sign lines from other engineers' dev servers.\n- Screenshots and scripts are in /home/user/treegens-app/sign-and-grow/tests/out/gaps-nonus-text/. My dev server is stopped, and its .next-gaps-nonus-text folder and temp data folders are deleted.",
+  "settings": [
+   "Settings, Account: 'Dates are written as' (accounts.default_date_format; PATCH /account default_date_format, one of YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, D MMM YYYY, MMM D, YYYY, or empty for none). New envelopes and templates start with it. Built by the previous engineer.",
+   "Per envelope: date_format, chosen on the editor's first step, then fixed once someone has signed.",
+   "No environment settings were added. The fonts are installed by npm install (scripts/build-fonts.mjs). If they are missing, those scripts count as not printable and nothing breaks."
+  ],
+  "abuse_and_stuck": [
+   "Abuse: a signer types the invisible characters that turn text round (RLO and others) so that 1234 prints as 4321 on the signed page. Handled: the bidi pass drops them, and renameSelf strips them from names. Tested in 'right-to-left text is put in reading order...'.",
+   "Abuse: someone floods /print-check or /sign/:token/print-check with huge text. Handled: /print-check needs a login and takes at most 3000 texts of 4000 characters. The signer route checks only that signer's own fields, each capped at 4000 characters.",
+   "Abuse: a signer reports a time zone they are not in (one 14 hours ahead, say) to move the printed date of signing by a day. Left open: we take the device's word. The certificate prints UTC beside it and says 'as reported by their device', and a value that is not a real zone is ignored (tested).",
+   "Abuse: a signer fills fields with thousands of different Chinese characters, so the signed PDF embeds many font pieces (CPU and file size at completion). Left open: bounded only by the field length limits.",
+   "Abuse: using 'Fix my name' to become someone else by respacing. Handled: only the same letters in the same order pass as a respacing, and a name that borrows from another recipient is refused (renameSelf 'taken'). Tested in the F test and in signerux.",
+   "Stuck: a signer whose name the PDF cannot print. Handled: told in the check before finishing, told to ask the sender to add it in Latin letters, and allowed to finish anyway. Tested.",
+   "Stuck: a sender whose own name, subject or document name cannot be printed. Handled: told in the editor before sending ('Your own name', 'The subject') and on the envelope page. Tested through /print-check and print_problems.",
+   "Stuck: a signer abroad gets a deadline that reads as another day. Handled: every email, the signing page and the sender's pages, including the Give more time dialog and the three-days-before warning, give the moment with its time and zone. Tested.",
+   "Stuck: a reminder arrives at night. Handled: automatic reminders wait for 8:00 there once the zone is known, and a reminder sent by hand still goes at once. Tested.",
+   "Stuck: a Japanese or Russian signer offers their name in Latin letters and is told it is 'a different name'. Handled: they are told it may be the same name in another script and that the sender was asked. Tested.",
+   "Stuck (left open): a device that reports no time zone. The signing page then shows the UTC day, while the PDF uses the sender's zone if known, so the two can differ by a day for that rare signer.",
+   "Stuck (left open): in the 'cannot print' warning, a vowel sign can stand alone on a dotted circle, because each character is listed once."
+  ]
+ },
+ "gaps:mobile-sign": {
+  "found": "Nothing for this task had been started. There was no tests/gaps-mobile-sign.test.ts and no tests/out/gaps-mobile-sign folder, and grep found no mobile-sign work in the commits since 265b20d. Earlier commits had touched the signing files, but those changes belonged to other briefs: right-to-left and plain-script signatures in SignaturePad, onShown in PdfDoc, IN_PERSON_ONLINE on the landing page, and HandBack. scripts/copy-assets.mjs still copied the modern pdf.js build, so I built all seven items from scratch. Baseline suite: 360 of 368 passing; none of the 8 failures were mine. While I worked, other engineers committed some of my new files in their \"work in progress\" commits (cef9ced, 72cdbcd). I did not commit anything.",
+  "done": [
+   {
+    "item": "A. Legacy PDF viewer, words instead of a blank page, browsers on /help, email link check",
+    "status": "done",
+    "how": "scripts/copy-assets.mjs now copies pdfjs-dist/legacy/build (I also copied it into public/pdfjs by hand for testing). PdfDoc never prints the viewer's own error text. It sorts the failure into one of three cases (browser too old, offline, damaged file; src/components/viewFailure.ts), offers Try again, and fetches the viewer again on retry. The signing page shows src/components/sign/NoViewer.tsx in place of the pages. It says the person cannot sign in that browser and gives three ways on: copy the link into another browser, download the PDF, or ask the sender. It also lists the browsers that work, and when offline it retries by itself once the connection is back. When the pages cannot be shown, Next now says so instead of 'still loading'. /help has a new question, 'Can I sign on my phone?' (src/app/help/phone.tsx). It names the browsers (iOS 16.4+, Chrome/Edge/Firefox 111+, the floor Next.js builds for), says which iPhones are too old, says what was actually tested, and gives the same three ways on. 'Any phone' is gone from the landing page and README, which now say no app and a 2023-or-later browser.",
+    "test": "Test 1 imports whichever build copy-assets names, deletes Promise.withResolvers and opens a real 2-page PDF (the modern build fails this). Tests 2 and 3 check the failure sorting and wording, /help, and that no page says 'any phone'. Test 4: the email link goes straight to /sign/<token>, a browser with no cookies gets the document, no cookie is set and the email mentions no app. In the browser, with withResolvers removed from the page and the worker: the legacy build drew the pages; the modern build showed the notice (a-older-phone-*.png)."
+   },
+   {
+    "item": "B. A tap is not a signature",
+    "status": "done",
+    "how": "src/lib/ink.ts holds pure functions. drawnProblem refuses: a tap (under 12 px of line); a mark under a quarter of the box width (a twelfth for initials) or that fits in 40 by 12 px; and lines covering nearly half the box. inkShare and pictureProblem refuse uploads with no ink or almost all ink, measuring ink against the paper colour so grey paper and blue ink still pass. Every message ends by offering Draw again or Type. SignaturePad's adopt() and upload() call these, and the pen width comes from the same constant.",
+    "test": "Tests 5 and 6 cover a dot, several taps, a tick, a speck, a filled box, a blank, black or transparent picture, and half ink, all refused. A real wave, a short signature, an X mark, a flat line, the initial I and two-letter initials pass, as do grey paper, blue ink and a transparent PNG. In the browser at 390x844, one tap and then Adopt shows the message (b-tap-refused.png)."
+   },
+   {
+    "item": "C. Finish or save without a connection",
+    "status": "done",
+    "how": "src/components/sign/offline.ts has the words, the check for a connection error (no answer, or 502/503/504) and a sessionStorage store for unsaved answers. In page.tsx, Finish without a connection keeps the review open and says: not sent, nothing was signed, your answers are safe on this page. It then retries by itself on the 'online' event, and every 15 s while the device claims to be online, but only while the review stays open; opening the review again resets this. A 500 says 'Nothing was signed. Try again'; 'Go back, put it right' stays only for 4xx answers. The save warning is shown once per outage, never from inside a state update, never over an open dialog, and saving retries on 'online'. Unsaved answers are kept per link and per name, come back after a reload, and are cleared once saved or when the person finishes, declines or passes the document on. The done screen still appears only after the server answers. SIGNING_ONLINE is now on the landing page, in both in-person notices and on /help, with a paragraph on what happens with a weak signal.",
+    "test": "Tests 7, 8 and 10 cover the wording, the classifier, the store (other name, other link, damaged entry, a store that throws) and the page wiring. Test 9 is a server test: Finish sent twice signs once (409 'already finished', which the page reads as done). In the browser: with saves blocked, the answer survived a reload; going offline at Finish showed the message and no done screen; back online, the done screen appeared by itself (c-*.png)."
+   },
+   {
+    "item": "D. Long documents: memory and Next",
+    "status": "done",
+    "how": "In PdfDoc's Page, a page is drawn when it comes within 1 screen of view and gives its picture back (canvas set to 0x0, page.cleanup) beyond 3 screens; canvases start at 0x0. Pages are drawn at the phone's real pixel ratio up to 3, capped at 6 million points per page (src/components/pdfMemory.ts). A page that fails to draw shows 'This page could not be drawn' with a Draw it again button. In bringIntoView, a field more than 2 screens away is jumped to instead of glided to, the landing is checked on scrollend plus a 900 ms fallback, and a zoomed strip is panned sideways to the field. Measured on 100 pages at 390x844 in Chromium (tests/out/gaps-mobile-sign/d-measure.cjs). Before: 25.8 MB at start (every undrawn canvas held its default 300x150 bitmap) and 277.3 MB after scrolling to the end; one tap on Next towards page 51 left the field off screen (top -18 px). After, at pixel ratio 2: 8.3 to 11.1 MB at start, 19.4 MB after scrolling to the end (7 pages drawn); Next lands with the field at 340 px of 844 on the first tap; page 1 is drawn again when you scroll back. At pixel ratio 3: 43.7 MB after scrolling to the end.",
+    "test": "Tests 11 and 12 cover nearScreen, pixelRatio (including the ceiling at 200%), jumpRatherThanGlide, the release code, the empty starting canvas and the scrollend check. The browser measurements were run before, after and final."
+   },
+   {
+    "item": "E. Zoom control",
+    "status": "done",
+    "how": "src/components/sign/Zoom.tsx adds 100/150/200% buttons (a labelled group, aria-pressed, 44 px tall), shown only in Document view. It keeps the same part of the document in the middle of the screen when the size changes. PdfDoc redraws the pages at the new width, so they stay sharp. When zoomed, the pages scroll sideways inside their own .sg-pan strip, so the page never gets wider than the screen and the top and bottom bars stay put. Pinch zoom is untouched: the viewport sets no maximum and the signing styles have no touch-action. /help explains it and says Text view leaves out pictures and layout.",
+    "test": "Test 13. In the browser at 390x844, 844x390 and 320x568: no sideways page scroll at any size, the bars stay at full width, and Next brought the right-edge field into view at 200%. In portrait the pages were drawn at the full pixel ratio (3, and 2.94 at 200%)."
+   },
+   {
+    "item": "F. Stacked fields refused at send; Finish and Decline reachable",
+    "status": "done",
+    "how": "src/lib/stackedFields() uses overlap() from autoplace. Two fields of the same person on the same page that overlap by more than 60% of the smaller one, at least one of which the person fills in, give one sentence naming the person, the page and (when there are several) the document. Notes and fields filled in for the signer are ignored. The server refuses in assertSendable, which covers send, correction (PUT on an envelope that is out), bulk and public forms. The editor review step lists the problem with the others, and Send stays off. On envelopes already out, the second time Next lands on the same empty field it points to Text view (src/components/sign/stuck.ts). Other actions (where Decline lives) and Next in the top bar are now 44 px on any touch screen; before, Other actions was 40 px on a phone held sideways. openapi.ts documents the 400.",
+    "test": "Tests 14 and 15: the pure rule, including the cases that must pass; send gives 400 with the exact sentence, the envelope stays a draft and nobody is emailed; after moving the fields apart it sends; a correction that stacks them again is refused and the envelope is unchanged. In the browser, the review step shows the problem and Send is disabled (f-review.png). No other test in the suite stacks fields."
+   },
+   {
+    "item": "G. Adopt dialog in landscape and at large text",
+    "status": "done",
+    "how": "In SignaturePad, the error, the sentence the person agrees to and the two buttons now sit in .sg-adopt-foot, pinned to the bottom edge of the dialog (src/app/styles/signphone.css, loaded after sign.css). When space runs out, the sentence shrinks and scrolls first, so the buttons and the error never leave the screen. On a phone held sideways the dialog uses more of the height and the drawing box is 150 px tall. Below 300 px wide (a 390 px phone at 200%): the title gets its own line instead of shrinking to one letter, the bottom bar stacks, the dialog buttons wrap their words, the Undo/Clear row wraps, and signature pictures in Text view are capped at the card width.",
+    "test": "Test 16. In the browser after a tap on the pad, Adopt and sign, Cancel and the error were all fully on screen, with nothing wider than the dialog, at 390x844, 844x390, 320x568 and 195x422 (text doubled), on the Draw and Type tabs (g-*.png, tools-*.png)."
+   }
+  ],
+  "files_changed": [
+   "sign-and-grow/scripts/copy-assets.mjs",
+   "sign-and-grow/src/components/PdfDoc.tsx",
+   "sign-and-grow/src/components/viewFailure.ts (new)",
+   "sign-and-grow/src/components/pdfMemory.ts (new)",
+   "sign-and-grow/src/components/SignaturePad.tsx",
+   "sign-and-grow/src/components/sign/NoViewer.tsx (new)",
+   "sign-and-grow/src/components/sign/Zoom.tsx (new)",
+   "sign-and-grow/src/components/sign/offline.ts (new)",
+   "sign-and-grow/src/components/sign/stuck.ts (new)",
+   "sign-and-grow/src/components/sign/parts.tsx (bringIntoView only)",
+   "sign-and-grow/src/app/sign/[token]/page.tsx (small edits: imports, zoom state, restoring kept answers in load, save warning, offline Finish and retry effect, in-person notices, Next hint, NoViewer and zoom on PdfDoc, wording when Next has nowhere to go)",
+   "sign-and-grow/src/lib/mobile.ts (new)",
+   "sign-and-grow/src/lib/ink.ts (new)",
+   "sign-and-grow/src/lib/stacked.ts (new)",
+   "sign-and-grow/src/server/envelopes.ts (assertSendable plus one import)",
+   "sign-and-grow/src/server/openapi.ts (send description)",
+   "sign-and-grow/src/components/Editor.tsx (problems list plus one import)",
+   "sign-and-grow/src/app/styles/signphone.css (new)",
+   "sign-and-grow/src/app/layout.tsx (one import)",
+   "sign-and-grow/src/app/help/phone.tsx (new)",
+   "sign-and-grow/src/app/help/page.tsx (import plus <SigningOnPhone />)",
+   "sign-and-grow/src/app/page.tsx (Sign anywhere text plus import)",
+   "sign-and-grow/README.md (test table row, 7 rows in the bad-reviews table, Signing bullets, a line in What is not in it)",
+   "sign-and-grow/tests/gaps-mobile-sign.test.ts (new, 16 tests)",
+   "sign-and-grow/tests/out/gaps-mobile-sign/ (probes and screenshots)"
+  ],
+  "suite": "tests/gaps-mobile-sign.test.ts: 16 of 16 pass. npx tsc --noEmit -p . is clean. Last full npm test run: 479 of 490 passed, 11 failed, none of them mine. 1) flow 171: openapi is missing POST /envelopes/:id/restore (also failing at baseline). 2) trust 489, 'small things that stop people getting stuck' (also at baseline). 3) billing2, billing3 and billing4 (66, 86, 96): payment code. 4) gaps-industry 209: PayLinkChoice markup. 5) gaps-nonus-words 267: someone's new /help text says 'will hold up', which the promise check forbids. 6) gaps-nonus-words 271: US$ wording in billing/stop/StopView.tsx. 7) gaps-nonus-words 287 and 290: transient 500s that passed on rerun. 8) signerux 428: someone added '.sg-top .sg-link' to the 44 px rule in sign.css, so the test's regex no longer matches. Its canvas check, which my PdfDoc change had broken in an earlier run, now passes because I put the attribute order back. Several times during the work, other people's half-finished edits briefly broke loading: a syntax error in policy.ts, a stale Turbopack chunk from paylink.ts, and a missing column visit_noted_at in my long-running dev database. Each time I waited or restarted my dev server and reran.",
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour changes: (1) The server now refuses to send or correct an envelope where two fields of one person cover each other by more than 60%. API users get a 400 naming the person and page. A template or draft with stacked fields shows the problem in the editor review step and cannot be saved from the editor until fixed. (2) Every browser now gets the pdf.js legacy build (about 46 KB bigger). The editor also uses PdfDoc, so it too releases far pages and draws at up to 3x pixel ratio. (3) /help has a new answer at #phone. (4) Copy I added or changed, all quoting src/lib/mobile.ts so the rename pass finds it ('Sign&Grow' kept). The landing page 'Sign anywhere' line; the /help phone answer, which says we have tested only in Chrome, not on a real iPhone; the NoViewer notice; the offline wording; the ink refusals; the stacked-field sentence; and the README rows. The browser list is the floor Next.js 16 builds for (modern-browserslist-target). Test 3 fails if that floor ever moves, so the words move with it. (5) Owners should confirm: the 6 MP per-page ceiling; the 3-screen release window; the tap thresholds (a quarter of the pad width, 40x12 px); and that the ink rule runs in the browser only, so the API still accepts any PNG or JPEG as a signature (on purpose: the existing tests sign with a 1x1 PNG). (6) Seen in passing, not mine, still open: the dev server, and so any Turbopack build, broke on a regex in src/lib/paylink.ts while it was being edited. A fresh restart of my dev server compiled fine, but its owner should check it. The other failures are listed in suite. Probes, measurements and screenshots are in sign-and-grow/tests/out/gaps-mobile-sign/ (make.mjs makes envelopes on a dev server seeded by scripts/dev-seed.mjs).",
+  "abuse_and_stuck": [
+   "A abuse: a malicious PDF aimed at the older build. The legacy build is the same pdf.js 4.10.38, just with extra code so it runs in older browsers. Named, not tested.",
+   "A abuse: 'Copy this link' puts the signing link on the person's own clipboard. That is their own link, and nothing goes to a third party.",
+   "A stuck: a browser too old for the viewer gets words and three ways on instead of a blank page (tests 1-2 and browser check). Offline while opening: the notice retries by itself when the connection is back (test 2). Pressing Next with no pages now says the document cannot be shown on this device, not 'still loading' (test 2).",
+   "B abuse: a signer can still post a blank or dot PNG straight to the API. Left open on purpose: the rule is in the browser only, as the mapping said, and the existing tests sign with a 1x1 PNG.",
+   "B stuck: someone who cannot draw well is told to draw larger or choose Type, and Type is always offered. An X mark and one-letter initials pass (test 5). A grey photo or blue ink passes (test 6). Very faint pencil may be refused as having no ink; named, not tested.",
+   "C abuse: Finish sent twice (a retry after a lost answer) signs once and uses one signature (test 9). Answers kept for the tab are never handed to a different name on the request (test 8), are kept per link, and are cleared on done, closed or passed on. On an in-person device, someone with developer tools could read that tab's storage before it is cleared; named.",
+   "C stuck: a captive portal or weak signal where the device claims to be online is retried every 15 s (test 7). Someone who goes back to change something is not finished behind their back, because retries stop when the review closes. A reload while fully offline still shows the browser's own offline page, since the page itself needs the server; the answers survive in the tab for when the connection is back. Named.",
+   "D abuse: a 500-page or huge-page upload is bounded per page by the 6 MP ceiling and by the release window (test 11 and measurements). Left open: the whole file still downloads before page 1, because the document route serves no byte ranges (the mapping's later step), and the editor's upload limits are unchanged.",
+   "D stuck: a page that fails to draw (a phone short of memory) says so, with Draw it again (test 11). Scrolling fast can show white pages for a moment until they redraw; named. Safari without scrollend is covered by the 900 ms check (test 12).",
+   "E stuck: when zoomed, Next pans the strip to the field (browser check). The zoom choice is not remembered after a reload; named. In landscape at 150 and 200 percent, the page is drawn with 1.75 and 1.31 points per CSS pixel (the 6 MP ceiling): readable and sharper than before, but not full device sharpness. Drawing the page in tiles would be the next step. Left open.",
+   "F abuse: an API sender, a correction, a bulk send or a public form that would stack fields all go through assertSendable (test 15 covers send and correction).",
+   "F stuck: envelopes already out with stacked fields get the Text view hint the second time Next comes back (test 14). Two fields of different people in the same spot still pass, because each signer sees only their own (test 14).",
+   "G stuck: buttons and the error stay on screen at four sizes including 200 percent (browser check). At 195 px wide with an error, the agreement sentence scrolls in its own few lines. Not tried with VoiceOver or TalkBack on a real phone, and not on a real iPhone at all. Named in /help via SIGNING_TESTED."
+  ],
+  "settings": [
+   "No new settings. .env.example and the README config table are unchanged."
+  ]
+ },
+ "gaps:industry": {
+  "found": "The previous engineer had built A to H almost completely and left tests/gaps-industry.test.ts with 20 tests. 19 passed. One failed: test 6 (reminders on by default) checked that IN_PERSON_ONLINE comes straight after \"standing next to you.\" on the landing page, and another engineer has since put IN_PERSON_SHORT between the two. What was already there:\n- A: WHO_CAN_SEE, NO_BAA_*, BULK_COST_NOTE, DEFAULT_REMINDER_DAYS=3, reminderText and IN_PERSON_ONLINE in src/lib/policy.ts, printed on /security, the landing page, /help, the review step (ReminderChoice.tsx), the envelope page and Settings.\n- D: POST /bulk/check and BatchCost.tsx.\n- E: the race tests.\n- F: progress.ready, autoReview.ts, the \"Filled in, not finished\" badge and the reminder email wording.\n- G: template search, folder filter and Move.\n- H: the strike field (src/lib/strike.ts, the PDF line, the sign-again rule through SENDER_MARK).\n- README bullets for reminders, bulk cost and in-person.\nItem I (payment link) had not been started. There were no README rows for B, C, F, G or H and no row for the test file.\nTheir browser note \"reminder email says one button is left: false\" was a false alarm: /dev/outbox does not return the html of an email, so that check could never pass. Test 14 reads the real email and passes.\nThe previous engineer's own changes also broke 4 tests in other files: autoplace \"the review step says what really happens to each person\" (reminder_days 3 against 0), two signerux tests and one trust test (progress now carries `ready`).",
+  "done": [
+   {
+    "item": "A. /security: who can open a document",
+    "status": "done",
+    "how": "Already built as WHO_CAN_SEE. I made the operator line exact to what the operator routes return now: renewal or end date, free code, card dispute, signatures left, trusted mark (it left these out before).",
+    "test": "Test 2 compares the keys that GET /operator/billing/disputed returns with the words of the sentence. If that list grows, the test fails."
+   },
+   {
+    "item": "A. Public forms 'good for consent forms' with no word about health data",
+    "status": "done",
+    "how": "Already built: the landing page says 'Not for patient forms'.",
+    "test": "Test 4"
+   },
+   {
+    "item": "A. Bulk send 'on every plan' without the cost",
+    "status": "done",
+    "how": "Already built: BULK_COST_NOTE on the landing page, /help and the README.",
+    "test": "Test 5"
+   },
+   {
+    "item": "A. 'Automatic nudges' while reminders were off",
+    "status": "done",
+    "how": "Already built: new accounts remind every 3 days, the setting is shown at send time, on the envelope and in Settings, and 0 switches it off. I only loosened one test assertion so it does not depend on another engineer's sentence.",
+    "test": "Test 6"
+   },
+   {
+    "item": "B. No HIPAA BAA, said in policy.ts, /security, under the pricing rules and on /help",
+    "status": "done",
+    "how": "Already built from one text (NO_BAA_*). There is no click-through BAA. I added a README 'What is not in it' line and a row in the reviews table.",
+    "test": "Test 4"
+   },
+   {
+    "item": "C. 'Who can see your documents' block",
+    "status": "done",
+    "how": "Already built. I made the operator line exact (see the first item).",
+    "test": "Tests 1, 2 and 3"
+   },
+   {
+    "item": "D. Bulk page shows what a batch holds and costs before Send",
+    "status": "done",
+    "how": "Already built: POST /bulk/check and BatchCost.tsx use the server's own count, and the previous engineer checked it in a browser.",
+    "test": "Tests 7, 8 and 9"
+   },
+   {
+    "item": "E. Two signers finishing at the same moment (two addresses, one shared address)",
+    "status": "done",
+    "how": "Already built as tests. They pass, including a late autosave that crosses Finish. I found no product bug to fix.",
+    "test": "Tests 10 to 13"
+   },
+   {
+    "item": "F. Check step opens by itself; 'filled in everything but has not pressed Finish'; reminder says so",
+    "status": "done",
+    "how": "Already built. I updated the 4 tests in other files that broke because progress now carries `ready`.",
+    "test": "Tests 14 and 15; signerux and trust updated"
+   },
+   {
+    "item": "G. Templates page: search, folder filter, Move",
+    "status": "done",
+    "how": "Already built.",
+    "test": "Test 16"
+   },
+   {
+    "item": "H. Strike out field",
+    "status": "done",
+    "how": "Already built. The sign-again rule covers it through the edit to SENDER_MARK and FIELD_TYPES. printedView itself was not changed: it already lists every field's place, so adding, moving or removing a strike-out counts as a change to what people signed.",
+    "test": "Tests 17 to 20"
+   },
+   {
+    "item": "I. Payment link shown after Finish ('Pay the deposit')",
+    "status": "done",
+    "how": "New files: src/lib/paylink.ts, src/server/routes-paylink.ts, src/components/sign/PayLink.tsx, src/components/editor/PayLinkChoice.tsx, src/components/sender/PayLinkNote.tsx.\nHow it works:\n- Routes: GET and PUT /envelopes/:id/pay-link for the sender, GET /sign/:token/pay and POST /sign/:token/pay-opened for the signer.\n- Who may set one: an account with a payment at least 14 days old that was not refunded or disputed, or one a person cleared. The same hasNotPaid rule as the sending limits.\n- Checked again each time the link would be shown, so a pause, a dispute or lost trust hides every link at once.\n- Addresses refused: anything not https, an IP address, a port, a name or password before @, spaces or invisible characters, a host that is not on the public internet, this server, and anything over 500 characters.\n- The button text comes from a fixed list.\n- Shown only to people who sign, only after they finish, only while the envelope is out or completed. Never in an email.\n- The signer sees the sender's name and the full address before the button. The link opens with noreferrer, so the payment site never sees the signing link.\n- The page says the signature does not depend on paying and that Sign&Grow takes no part in the payment.\n- Each change is written to the audit trail, and so is the first time each person is shown the link and presses it. The envelope page shows who was shown it and who pressed it.\n- Once an envelope is completed or closed, the link can only be removed.\n- A template's link goes with every envelope copied from it.\nOther files touched: two new column pairs in db.ts, a one-line edit to the copyEnvelope INSERT, assertMayChange exported, openapi, README, /help question, a /security 'No payment collection' point, and the README line 'payments collected during signing' replaced.\nChecked on a 390x844 phone and on a desktop: the controls are 44 px, everything works by keyboard, there is no sideways scrolling, an untrusted account sees no control, and no email carried the link. Screenshots are pay-*.png in tests/out/gaps-industry/, the script is pay.cjs and the results are notes-pay.json.",
+    "test": "Tests 21 to 25 in tests/gaps-industry.test.ts",
+    "left_open": "See abuse_and_stuck."
+   }
+  ],
+  "files_changed": [
+   "sign-and-grow/src/lib/paylink.ts (new)",
+   "sign-and-grow/src/server/routes-paylink.ts (new; another engineer has since added assertNotLocked from tplroles.ts to its PUT, kept)",
+   "sign-and-grow/src/components/sign/PayLink.tsx (new)",
+   "sign-and-grow/src/components/editor/PayLinkChoice.tsx (new)",
+   "sign-and-grow/src/components/sender/PayLinkNote.tsx (new)",
+   "sign-and-grow/tests/out/gaps-industry/pay.cjs and pay-*.png, notes-pay.json (new scratch)",
+   "sign-and-grow/src/server/db.ts (6 COLUMNS lines)",
+   "sign-and-grow/src/server/envelopes.ts (copyEnvelope INSERT carries pay_url, pay_kind)",
+   "sign-and-grow/src/server/routes-envelopes.ts (assertMayChange exported)",
+   "sign-and-grow/src/app/sign/[token]/page.tsx (one import, one line in the done stage)",
+   "sign-and-grow/src/components/editor/StepReview.tsx (one import, one line)",
+   "sign-and-grow/src/app/app/envelopes/[id]/page.tsx (one import, one line)",
+   "sign-and-grow/src/app/help/page.tsx (payment-link question, imports)",
+   "sign-and-grow/src/app/security/page.tsx (No payment collection point)",
+   "sign-and-grow/src/lib/policy.ts (operator account sentence in WHO_CAN_SEE)",
+   "sign-and-grow/src/server/openapi.ts (pay-link routes, pay_url and pay_kind on Envelope)",
+   "sign-and-grow/src/app/api/[...path]/route.ts and tests/helpers.ts (import routes-paylink)",
+   "sign-and-grow/README.md (reviews table rows for C, B, D, F, G, H, I; feature bullets; test table row; What is not in it)",
+   "sign-and-grow/tests/gaps-industry.test.ts",
+   "sign-and-grow/tests/autoplace.test.ts (asBody carries reminder_days)",
+   "sign-and-grow/tests/signerux.test.ts and tests/trust.test.ts (progress now includes ready:false)",
+   "sign-and-grow/tsconfig.json (removed only the two .next-gaps-industry lines)"
+  ],
+  "suite": "tests/gaps-industry.test.ts: 25 of 25 pass. npx tsc --noEmit -p . reports no errors.\nLast full run (npm test): 452 tests, 446 pass, 6 fail. None of the 6 is mine:\n1. flow.test.ts 'the published API description matches the routes that exist': POST /envelopes/:id/restore is not documented in openapi (another engineer's route).\n2. lifecycle.test.ts:820: the workspace is now named \"Loop Er's workspace\" where the test expects \"Loop's workspace\" (another engineer's sign-up change).\n3. lifecycle.test.ts:976: joining by invite answers 409 (invites or template roles work in progress).\n4. qr.test.ts 'a form comes with its public address': a 500 during the full run. It passes when run alone, so it was another engineer's half-finished edit.\n5. signerux.test.ts:653: the PdfDoc canvas markup changed (another engineer's PDF memory work).\n6. trust.test.ts:365 'small things that stop people getting stuck': the \"Name corrected:\" email to the sender is missing. The correction itself is applied and audited, and this is the name-correction or mail work of another engineer. It is not in the checkpoint's failure list.\nThe tests I fixed are mine to fix because the previous engineer's deliberate changes broke them: the autoplace review test, two signerux progress tests and one trust progress assertion. All four pass now.",
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n- New accounts start with reminders every 3 days. The previous engineer built this and I kept it.\n- GET /envelopes/:id now also returns pay_url and pay_kind, plus pay_shown_url, pay_shown_at, pay_opened_url and pay_opened_at on each recipient.\n- The editor's review step has a 'Payment at signing' card, but only for a trusted account.\n- The envelope page shows a 'Payment link' card when a link is set.\n\nPromises in copy I added or changed:\n- /security 'What this is not' now says 'No payment collection'.\n- /help has a question 'Can someone pay a deposit when they sign?'.\n- The README no longer lists 'payments collected during signing' as missing, and now names the missing HIPAA BAA there.\n- The operator sentence in WHO_CAN_SEE now lists exactly what the queue, help requests and card lookup show.\n\nFor the owner to confirm:\n- The payment link reuses the hasNotPaid trust rule (14 days) and also hides links on a pause or a card dispute.\n- The button wording is a fixed list: deposit, retainer, fee, payment.\n\nOut of scope, seen in passing:\n- The README sentence 'Four areas were not researched ... industry-specific workflows' is now outdated. I left it because other engineers' areas share that sentence.\n- tsconfig.json still has lines left by other engineers' dev servers (.next-gaps-mobile-send, .next-build-qr and others). I removed only my own .next-gaps-industry lines.\n- Another engineer is reworking the WHO_CAN_SEE operator sentence for stored-file encryption. For about 4 minutes it held an unescaped apostrophe that stopped the code base from loading. It is fixed now.\n- The Write tool turned \\u escapes in my files into literal characters (an invisible character in a regex, an em dash, Cyrillic). I rewrote those lines from a script. Others may want to check their new files for the same.\n\nRename: all new copy says Sign&Grow.",
+  "abuse_and_stuck": [
+   "ABUSE, tested: an account nobody trusts adds a Pay button. Refused with 403 and the reason, and a payment younger than 14 days is not enough (test 21).",
+   "ABUSE, tested: addresses that hide where they go (paypal.com@other.site, an IP address, a port, an invisible character, http, javascript:, this server). Each is refused in a sentence, and a host in another alphabet is stored and shown as xn-- (test 21).",
+   "ABUSE, tested: a trusted account that is later paused, disputed or loses its trusted mark. Its links are no longer shown to anyone, and pressing one records nothing (test 23).",
+   "ABUSE, tested: a stolen login swaps the link after people signed. Once an envelope is completed or closed the link can only be removed, and every change is in the audit trail (tests 21 and 23).",
+   "ABUSE, tested: the link is never in an email and never before Finish (test 22). The page never hands the signing link to the payment site: rel=noreferrer and referrerPolicy=no-referrer, checked in a browser (empty referrer).",
+   "ABUSE, tested: a team member cannot change or remove a colleague's template link (test 24).",
+   "ABUSE, left_open: while an envelope is still out, a stolen login can change the link. People who already finished see the new address if they come back. It is audited and shown in full, but nobody is emailed about it.",
+   "ABUSE, left_open: a member of a trusted team can point a link at their own personal payment page. The admins see it on the envelope page and in the audit trail, but nothing stops it.",
+   "STUCK, tested: a signer thinks they must pay before their signature counts. The card says it stays signed whether they pay or not (test 25).",
+   "STUCK, tested: a signer closed the tab before paying. The same signing link shows the link again on any device, and the first showing is recorded once (test 22).",
+   "STUCK, tested: a sender wants to know whether someone paid. The envelope page shows who was shown the link and who pressed it, and says that only their payment provider knows whether anyone paid (test 22, browser check).",
+   "STUCK, tested: the envelope was voided after someone signed. Nobody is asked to pay for a deal that is off (test 23).",
+   "STUCK, left_open: a sender on an untrusted account looks for the option and sees nothing in the editor (no dead control). Only /help explains when it appears.",
+   "Verified by reading the code, not by a test: in a group, a member whose colleague took the document is refused by the MAY table in groups.ts, so only the member who signed sees the link."
+  ],
+  "settings": [
+   "No new setting. .env.example and the README configuration table needed no change."
+  ]
+ },
+ "gaps:mobile-send": {
+  "found": "The previous engineer had finished A, B, C and D. All 14 tests in tests/gaps-mobile-send.test.ts passed when I started.\n\nWhat was there:\n- **A, photos:** reading the camera's orientation note in src/server/exif.ts, the upright page in imagesToPdf(), joining several pictures, PhotoAsk.tsx and photos.ts with shrinking in the browser.\n- **B, staying signed in:** the sliding session in auth.ts, `GET /me/sessions`, `DELETE /me/sessions/:id` and `POST /me/sessions/sign-out-others` in routes-account.ts, and SignedIn.tsx in Settings.\n- **C, the switch after sending:** sender/AfterSend.tsx.\n- **D, signing in person:** the lock in src/server/handover.ts with `POST /auth/unlock`, HandedOver.tsx, HandBack.tsx on the in-person done screen, AppShell relocking, and the IN_PERSON_* sentences in src/lib/phone.ts.\n- **E:** the CSS was in editor.css, but there was no test, and the resize corner really measured 42 px, not 44, because of box-sizing.\n- **F:** LabelCheck.tsx and the jump into step 2 were built but untested. On a phone the \"Add a label\" buttons were 40 px, the example always said \"required\", and after the jump the settings sheet covered the field.\n- **G:** the touch wording of the upload box was done, and /security and the README were already conditional on the operator's settings (other engineers' work). The warning for documents that are slow on a phone was not built: upload.ts pointed to phone.ts, which had nothing.\n\nNo README rows existed for any of A to G. The previous engineer's script for B, C and D (tests/out/gaps-mobile-send/bcd.cjs) had never finished, so none of its screenshots existed.\n\nAt the start the whole suite had 368 tests, 360 passing. None of the 8 failures was in my file.",
+  "done": [
+   {
+    "item": "A. Phone photos upright, several pictures as one document, each made smaller",
+    "status": "done",
+    "how": "Kept the previous engineer's work: it is sound and its tests pass. I added one thing found while thinking as an attacker. A 316 KB PNG that claims 10,000 by 10,000 pixels made the server use 800 MB of memory (measured), and one upload could carry 50 of them. pictureSize() and pictureLimit() in src/server/exif.ts read the width and height from the header before anything is unpacked. A PNG may have up to PNG_MAX_PIXELS (25 million) and a JPEG up to JPEG_MAX_PIXELS (50 million, so a 50 megapixel phone photo fits). A larger picture is refused with a sentence that names it. imagesToPdf() in pdf.ts now packs each picture as it goes (img.embed()), so memory no longer grows with the number of pictures: six 25 MP PNGs went from 544 MB to 234 MB at peak. openapi.ts and /developers state both limits.",
+    "test": "tests 1 to 6 (previous engineer) and 'a picture that claims more pixels than a page could use is refused in words before it costs the server memory'",
+    "left_open": "HEIC photos from an iPhone are not tested on a real iPhone (Safari normally converts them to JPEG for this file box)."
+   },
+   {
+    "item": "B. The session slides; a new device signs nothing out; Settings shows where you are signed in, with Sign out everywhere else",
+    "status": "done",
+    "how": "Previous engineer's work, kept unchanged. I checked it in the browser at 390x844: the list, the 'This browser' badge, a locked browser marked as such, 'Sign out everywhere else'.",
+    "test": "tests 7 to 9",
+    "left_open": "There is no maximum lifetime: a stolen cookie that keeps being used stays valid until the person signs it out in Settings or changes their password."
+   },
+   {
+    "item": "C. One switch after sending: email me for each signature",
+    "status": "done",
+    "how": "Previous engineer's work, kept. Checked in the browser: tapping on the phone and Space on the desktop both turn it on, it says what was saved, and the server preference becomes signed:true.",
+    "test": "'the switch on the page after sending turns on one email per signature, and only that'"
+   },
+   {
+    "item": "D. In-person done screen says hand the device back; the host's account is not left open",
+    "status": "done",
+    "how": "Previous engineer's work, kept. I extended their script and ran the whole flow on a phone:\n- Host signing now, then Back, shows the lock with no account content.\n- Typing /app/contacts shows the lock.\n- A wrong password says how many tries are left; the right one unlocks.\n- Hosting again, Pat signs and sees 'Thank you, Pat Present. Please hand this device back to Demo Sender.'\n- 'I am Demo Sender' (54 px) opens the password screen, not the account.\n- After the password, the envelope shows the next person waiting under 'Host signing now'.\nThe only link into the app on the done screen is that button.",
+    "test": "tests 11 to 14",
+    "left_open": "The decline screen of an in-person signer has no hand-back card (the account stays locked, but nothing asks them to give the device back). That is on the signing page, which belongs to another engineer. What the lock does not cover is listed in IN_PERSON_LIMITS."
+   },
+   {
+    "item": "E. 44 px touch areas for fields and the resize corner in the editor",
+    "status": "done",
+    "how": "Fixed the corner area: it used inset 0 -28px -28px 0 inside a 2 px border, which measured 42 px. It is now -2px -30px -30px -2px, measured 44x44 from the dot's outer edge. Measured at 390x844 with touch: a 9x9 px tick box answers over 44x44, a 12.6 px tall text field over 44 px of height, and a finger drag that starts at the edge of the corner area resizes and keeps the field selected. Desktop is unchanged. Also raised every editor button on a phone from 40 to 44 px (the .ed .btn rule overrode the 44 px rule for the unlabelled list).",
+    "test": "'in the editor on a touch screen every field and its resize corner answer a thumb over at least 44 px', which works the sizes out from the stylesheet the way the browser does",
+    "left_open": "A tap within 22 px of a tiny field selects that field instead of placing a new one. Zooming in avoids it."
+   },
+   {
+    "item": "F. Fields without a label listed at the review step, with why it matters for screen reader users and a link to each",
+    "status": "done",
+    "how": "Kept LabelCheck and the jump, and fixed three things:\n- The 'Add a label' buttons were 40 px tall on a phone; they are now 44.\n- The example said 'Checkbox, required' for every field; it now says ', optional' when the field is not required, as the signing page does.\n- On a phone the settings sheet covered the field after the jump; it is now scrolled above the sheet.\nChecked by touch on a phone and by keyboard on a desktop: focus lands in the Label box, the field is in view, and typing a label takes it off the list.",
+    "test": "'fields a screen reader can only call by their type are listed before sending, with a way to each'. It checks which types are listed, that HEARD_AS matches the signing page's LABEL, the optional/required wording and the wiring."
+   },
+   {
+    "item": "G. Upload hint and limits true for a phone; warn when a document is slow on a phone; /security and README lines about two-step login and texts",
+    "status": "done",
+    "how": "Measured on the signing page in Chromium at 390x844 with Chrome's 'Slow 4G' (1.6 megabits a second): 5 MB took 28.6 s, 10 MB 56.4 s, 20 MB 113.3 s, so 5.7 s a megabyte. With 'Fast 4G' it was about 1.1 s a megabyte. Page 1 was drawn within 0.3 s of the last byte, because the file is served without range requests.\n\nWhat I built:\n- policy.ts: PHONE_SLOW_BYTES (5 MB) and PHONE_SECONDS_PER_MB (5.7, with the measurement in a comment).\n- phone.ts: phoneWait() and phoneWeight().\n- The editor shows the warning under the document in step 1 and again at review, for example: 'This file is 12.3 MB. Every signer's phone downloads all of it, which takes about 70 seconds on a slow mobile connection...'. It warns and never blocks.\n- The hint under the upload box now reads: 'PDF, PNG or JPEG. Up to 25 MB and 500 pages each. A signer on a phone waits about 6 seconds for each MB on a slow connection.'\n- openapi.ts File.size no longer says the first page waits for the whole file, which would stop being true if range requests are added.\n- The /security and README lines about two-step login and texts were already written to depend on the operator's settings (signInProviders() and smsProvider()), so I left them as they are.",
+    "test": "'a document large enough to be slow on a phone is pointed out with the time it took, and the upload hint says what is true'. It uploads a real 6 MB PDF and checks the size the warning needs comes back with the upload and with a reopened draft.",
+    "left_open": "I did not add a warning based on page count. Memory per drawn page is what made long documents fail on a phone, and the signing-page engineer has marked 'long documents release memory' done. A page-count warning would have become untrue. The 500 pages limit is stated as what the server accepts."
+   },
+   {
+    "item": "README and API documentation",
+    "status": "done",
+    "how": "README:\n- A row for tests/gaps-mobile-send.test.ts in the test table.\n- Eight rows in 'What the bad reviews taught us': sideways photos, five photos becoming five documents, being signed out on a phone, a handed-over tablet, no word when someone signs, fields too small for a finger, unlabelled fields, documents slow on a phone.\n- Lines under Sending, and under Team and admin.\nopenapi.ts and /developers give the pixel limits. Nothing needed taking out of 'What is not in it'.",
+    "test": "the openapi and developers page assertions in the G and pixel-limit tests"
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/tests/gaps-mobile-send.test.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/editor.css",
+   "/home/user/treegens-app/sign-and-grow/src/components/editor/LabelCheck.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/editor/StepFields.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/editor/StepAdd.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/editor/StepReview.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/editor/upload.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/phone.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/exif.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/pdf.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/README.md"
+  ],
+  "suite": "My file, tests/gaps-mobile-send.test.ts: 18 of 18 pass (the previous engineer's 14 and 4 new ones). `npx tsc --noEmit -p .`: no errors, run twice.\n\nWhole suite (`npm test`): 471 tests, 434 passed, 37 failed. 34 of those failed while other engineers were part way through an edit: signing up hit 'fillPrices is not defined', and finishing hit 'fingerprintLines is not defined'. I waited two minutes and re-ran those files (support, trust, templates, flow, signerux, plus mine): all pass except three, none of them mine:\n1. flow.test.ts 'the published API description matches the routes that exist': `POST /envelopes/:id/recipients/:rid/release` is not documented yet. Someone's new route.\n2. signerux.test.ts 'the signing screens keep what they promise in markup': a .sg-foot-links rule in sign.css. The signing-page engineer.\n3. trust.test.ts 'small things that stop people getting stuck': no 'Signer corrected their name' audit line. It also failed at my start.\n\nAt my start the suite had 368 tests with 8 failing, none in my file.",
+  "settings": [
+   "No new environment settings. All numbers are constants in src/lib/policy.ts.",
+   "New: PHONE_SLOW_BYTES = 5_000_000. A document this size or larger gets the phone warning.",
+   "New: PHONE_SECONDS_PER_MB = 5.7. Measured on 2026-11-20 with Chrome's 'Slow 4G'; the measurement is written beside it.",
+   "New: PNG_MAX_PIXELS = 25_000_000 and JPEG_MAX_PIXELS = 50_000_000. Read from the picture's header, refused with a 400 that names the picture.",
+   "Kept from the previous engineer: PHOTO_MAX_SIDE = 2000, MAX_PHOTOS_PER_DOCUMENT = 50, SESSION_DAYS = 30, SESSION_TOUCH_MINUTES = 60, HAND_OVER_TRIES = 5.",
+   "Kept from the previous engineer: database columns sessions.created_at, last_used_at, ua, locked_at and locked_note (COLUMNS in db.ts)."
+  ],
+  "abuse_and_stuck": [
+   "Abuse, A: a JPEG whose camera note points outside the file, or is cut off anywhere. No answer and no crash (test 1).",
+   "Abuse, A: a small PNG or JPEG claiming a huge pixel count, or many of them in one upload. Refused from the header before anything is unpacked, and pictures are packed one at a time (pixel-limit test). Before this, one 316 KB PNG cost 800 MB of memory.",
+   "Abuse, A: a PDF slipped in among pictures, or more than 50 pictures. Refused in words and nothing kept (test 4).",
+   "Abuse, B: using another person's session handle to sign them out. 404, and their session stays (test 8).",
+   "Abuse, B: an API key reading or ending sessions. 403 with a sentence (test 8).",
+   "Abuse, B: a stolen cookie that keeps being used never runs out. Remedy: Settings, Sign out everywhere else, or a password change. Left open for the owner to decide whether to add a maximum lifetime.",
+   "Abuse, D: guessing the host's password on the lock screen. Five tries, then the browser is signed out (test 12).",
+   "Abuse, D: reaching the account by Back, by typing an /app address, or from another tab. The server refuses every call with code 'handed_over' (test 11). The screen relocks on visibilitychange and pageshow. A tab already open elsewhere shows its page until it is brought to the front, and the copy says so.",
+   "Abuse, D: a signer who opens their own link in their own account is not locked (test 13).",
+   "Stuck, A: one picture of several cannot be read, or is too large. It is named, and nothing is made (tests 4 and pixel-limit).",
+   "Stuck, B: 31 days without a visit means signed out; signing in again works and clears the expired row (test 7).",
+   "Stuck, D: a login with no password (Google or Microsoft) is told to sign in again that way (test 12).",
+   "Stuck, D: a colleague hosts the signing; their own browser is locked, not the sender's (test 13).",
+   "Stuck, D: an in-person signer who declines gets no hand-back card. The lock still holds. The decline screen is on the signing page, another engineer's file. Left open.",
+   "Stuck, E: tapping close to a tiny field selects it instead of placing a new field. Zoom avoids it. Left open.",
+   "Stuck, F: a sender who cannot find the field on a phone after the jump. Fixed: the field is scrolled above the settings sheet (tested in source, checked in the browser).",
+   "Stuck, F: fields a signer has already signed are not listed, since they cannot be changed (tested).",
+   "Stuck, G: a document whose size is not known gets no warning rather than a wrong one (test).",
+   "Stuck, G: a sender who does not know how to make a PDF smaller. The warning names 'reduce file size' and splitting. It warns and never blocks."
+  ],
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n- Every editor button on a phone (up to 900 px wide) is now at least 44 px tall and wide, up from 40. At 390 px the active step label (\"Place fields\") wraps onto two lines in the top bar.\n- POST /files now refuses a PNG over 25 million pixels or a JPEG over 50 million with a 400 that names the picture. imagesToPdf() calls img.embed() after each picture.\n- The hint under the upload box now gives the measured wait on a phone.\n\nWording for /security and the README about two-step login and text messages: already written to depend on the operator's settings (signInProviders() and smsProvider()), so I changed nothing. Once Google or Microsoft sign-in is switched on, /security already renders: \"No two-step login of our own, and no single sign-on for a whole organization. Accounts are protected by a password, or by signing in with Google or Microsoft. A second step at sign-in is whatever your account there has...\". The README's \"What is not in it\" already says \"two-factor login of our own ... Signing in with Google or Microsoft is in\". If the one-time-codes engineer adds codes at sign-in (not only for signers), both sentences must change in that same release.\n\nThe memory-per-page problem on the signing page is the signing-page engineer's. I built no page-count warning because their \"release memory\" task is done. If range requests are added to the document route, PHONE_SECONDS_PER_MB stays right for the full download, but should be measured again for time to the first page.\n\n/me/sessions and /auth/unlock are not in openapi.ts on purpose: an API key cannot call them, and that file documents what a key can call.\n\nSeen but out of scope: the consent text on the signing page says \"you accept this electronic method as a valid way for you and the other parties to sign this document\". That leans against the rule never to promise a signature \"is valid\"; the owner of the consent text should look at it.\n\nScratch scripts and screenshots are in /home/user/treegens-app/sign-and-grow/tests/out/gaps-mobile-send/ (ignored by git): g-rate.cjs and g-measure.cjs for the measurement, ef.cjs for E and F, bcd.cjs for B, C and D, g-ui.cjs for G. My dev server is stopped, .next-gaps-mobile-send is deleted, and tsconfig.json already had no lines of mine."
+ },
+ "build:signercode": {
+  "found": "The previous engineer had built nearly all of the feature, and it was committed in 9b0ee8f, 8e55464 and 7d3096a. New files: src/server/signercode.ts (checks, codes, limits, corrections, link texts, the record), src/server/sms.ts (Twilio and the generic hook by fetch, the outbox, retries, the daily count), src/server/routes-signercode.ts (POST /sign/:token/code, /code/check, /code/problem; loaded in tests/helpers.ts and the catch-all route), src/lib/checks.ts (CHECKS, masking, normalPhone, checkLine, CHECK_PROVES, smsProvider), src/components/sign/CodeCheck.tsx, src/components/sender/CheckFields.tsx and src/app/styles/checks.css. Hooks were already in envelopes.ts, routes-sign.ts (gateOf / lockedView), routes-envelopes.ts, pdf.ts (the \"Identity check\" line), cron.ts (retryTexts), db.ts (signer_codes, texts, sms_usage and the recipient columns), the dev outbox, the editor, the Correct dialog, the help, security, developers and landing pages, openapi, .env.example and README (\"Checking who signs\", settings rows, \"What is not in it\"). tests/signercode.test.ts had 27 tests and all of them passed when I started. Screenshots and a Playwright script were in tests/out/build-signercode/, and their notes were all \"ok\". No dev server or .next-build-signercode folder was left behind. tsc was clean. None of the checkpoint's failing tests belonged to this task. What was missing or wrong: (1) after \"This is not my number\", reminder texts carrying the signing link still went to the disowned number; (2) a sender whose number was right after all (the signer pressed it by mistake) could not let codes go to it again, because saving the same number changes nothing; (3) no row in the README table \"What the bad reviews taught us\"; (4) no test of the fake-payment-notice filter on a text, and none of the bulk CSV \"phone\" column; (5) the README row for the hook said only 400 or 422 are final, which is narrower than the code.",
+  "done": [
+   {
+    "item": "1. Per recipient check: none, access code, email_code, sms_code, phone in E.164 kept on the recipient",
+    "status": "done",
+    "how": "Found complete: readCheck, saveChecks and checkProblem in signercode.ts, normalPhone and PHONE_HOW in lib/checks.ts, CheckFields in the editor and the Correct dialog. The access code is asked for first and can be combined with a code.",
+    "test": "tests/signercode.test.ts: refusals in words, the access code plus one-time code test, and the masking tests"
+   },
+   {
+    "item": "2. Text providers by fetch (Twilio, generic hook), off when not configured, outbox, retry, sender told",
+    "status": "done",
+    "how": "Found complete in sms.ts and lib/checks.ts smsProvider; GET /me text_messages; dev outbox page shows texts; retryTexts in the timer; onTextOutcome tells the sender on gave_up. I made the README hook row match the code: which 4xx answers are final, and the 15-second time-out.",
+    "test": "Twilio body and Basic credentials, the hook POST {to,text} with the Bearer token, the provider failure and retry test, texts not offered and refused without a provider"
+   },
+   {
+    "item": "3. The code: randomInt, hashed, 10 min, 5 tries, 1/min and 5/hour per recipient, per caller, constant time, masked, device remembered, nothing shown before the check",
+    "status": "done",
+    "how": "Found complete: requestCode, checkCode, waitFor, lockedView and passCookie. The pass is an HMAC cookie made like the access-code cookie and tied to check_gen. Before the check, GET /sign/:token returns less than the access-code screen: no subject, message, documents or other recipients, and the address is masked.",
+    "test": "before-the-code test, email code test (no code in any answer, including via an API key), the ten minutes / five tries test, the limits test"
+   },
+   {
+    "item": "4. Signing page code screen, numeric keypad and autofill, resend timer, way out when the code never arrives",
+    "status": "done",
+    "how": "Found complete in CodeCheck.tsx, with autocomplete=one-time-code and inputmode=numeric. The text ends with an @host #code line so phones can autofill. I looked at the previous screenshots (phone and desktop, wrong code, trouble panel, stopped state). Codes and texts stop after not_mine. The help page now says texting stops for codes and links alike.",
+    "test": "source check of the code screen in the last test of the file, plus the \"not my number\" / \"no code\" test"
+   },
+   {
+    "item": "5. Audit lines, certificate line per signer, security and help pages",
+    "status": "done",
+    "how": "Found complete: audit lines for sent / not delivered, failed and accepted. checkLine prints for example \"One-time code sent by text message to +44 *** *** 0123, passed 20 November 2026 14:02 UTC\", or \"Link sent by email only\". CHECK_PROVES is printed on /help and /security, two sentences each.",
+    "test": "certificate text read from the PDF in three tests"
+   },
+   {
+    "item": "6. Also text the signing link: off by default, short, reminders at most once a day, abuse rules, no texts after report or decline",
+    "status": "done",
+    "how": "Found mostly complete in alsoText. Fixed: alsoText now also stops when check_stop is set. Before, a number someone said was not theirs still got the signing link and reminders by text.",
+    "test": "New test: after \"This is not my number\" no text of any kind goes to it (fails without the fix). New test: the fake-payment-notice filter over a text (fails if the guard in alsoText is removed). Existing tests cover pause, report and decline."
+   },
+   {
+    "item": "7. Corrections reset the check and are audited; templates, bulk phone column, public forms",
+    "status": "done",
+    "how": "Found complete: correctWithCheck, passCheckOn on reassign, copyCheck, assertBulkChecks and assertFormChecks. Public forms allow email_code only and refuse sms_code and text_link with words. Added: \"number_confirmed\": true on POST /envelopes/:id/correct, and a box in the Correct dialog: \"I checked with <name> that this is their number. Send codes to it again.\" It lifts a not-my-number stop only when the sender says so in so many words. A full recipient sent back unchanged does not lift it. It is audited with the number masked, and it is rolled back when the rest of the call is refused. The wrong-number email to the sender now mentions the box.",
+    "test": "New test covering number_confirmed: stop kept by a plain correction, lifted only by number_confirmed, audit line, codes go again, no-op when not stopped, rolled back on a refused call. New test of the CSV phone column (header, missing, not full, headerless order, not taken for a role that is not texted). Checked in a browser on phone and desktop: tests/out/build-signercode/confirm.cjs, 21-desk-confirm-number.png, 21-phone-confirm-number.png, 22-phone-confirmed.png (44 px line, Space ticks it, toast, stop lifted)."
+   },
+   {
+    "item": "8. SMS_DAILY_PER_ACCOUNT hard stop, resends counted, not charged",
+    "status": "done",
+    "how": "Found complete: sms_usage counts every new text, smsDailyPerAccount() in policy.ts (default 200, 0 lets none through), clear refusals. Billing not touched.",
+    "test": "SMS_DAILY_PER_ACCOUNT test and the per-number daily test"
+   },
+   {
+    "item": "9. Tests with the provider stubbed",
+    "status": "done",
+    "how": "30 tests in tests/signercode.test.ts. The fetch stub only answers api.twilio.com and texts.provider.test, passes other calls on, and is restored afterwards. I added 3 tests.",
+    "test": "node --experimental-strip-types --no-warnings --test tests/signercode.test.ts: 30/30 pass"
+   },
+   {
+    "item": "10. Docs: README, .env.example, openapi, developers, help, security",
+    "status": "done",
+    "how": "Found complete. Added a README \"What the bad reviews taught us\" row for the identity-verification complaint (codes never arrive, numbers refused, only the sender can switch). Made the hook row exact. Documented number_confirmed in openapi, on the developers page and in README \"Checking who signs\".",
+    "test": "source checks in the last test of the file (settings in .env.example and README, CHECK_PROVES on both pages); the help sentence is asserted in the new not-my-number test"
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/signercode.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/dialogs.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/Recipients.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/checks.css",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/tests/signercode.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (only removed the two .next-build-signercode lines my dev server added)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/build-signercode/confirm.cjs (scratch probe) and screenshots 21-desk-confirm-number.png, 21-phone-confirm-number.png, 22-phone-confirmed.png"
+  ],
+  "suite": "tests/signercode.test.ts: 30 of 30 pass. npx tsc --noEmit -p .: no errors. Last full npm test: 421 tests, 417 pass, 4 fail, none mine: flow.test.ts \"the published API description matches the routes that exist\" (POST /envelopes/:id/restore not documented, someone else's restore work); lifecycle.test.ts:820 (workspace named \"Loop Er's workspace\" instead of \"Loop's workspace\"); lifecycle.test.ts:976 (409 \"You already have a Sign&Grow login with this address\"); trust.test.ts:365 (no \"Signer corrected their name\" audit line). All four also failed in my first run, before any change of mine. One earlier run failed 335 of 359 tests because src/lib/paylink.ts (someone else's half-written file) had an invalid regular expression. I waited until it loaded and ran again. Earlier runs also showed tests/gaps-industry.test.ts not loading (\"await isn't allowed in non-async function\") and autoplace / signerux snapshot failures; those were gone in the last run.",
+  "abuse_and_stuck": [
+   "Abuse: guessing a code. 6 digits, 5 tries per code, a new code at most once a minute and 5 an hour per recipient, 15 an hour per caller address, 15 a day per mailbox or number. The code is stored as an HMAC and compared in constant time. Tested.",
+   "Abuse: text bombing or toll fraud through a sender account. SMS_DAILY_PER_ACCOUNT is a hard stop. An unpaid account can text as many numbers a day as it may email, and one number gets at most 4 link texts a day. Public forms can never text. \"Not my number\" stops all texts to that number, now including link texts. Tested.",
+   "Abuse: getting a code, the number or the document from an answer, or forging a pass. No answer holds the code. The number and address are masked before the check. A hand-made cookie, or one taken from another link, is refused. Tested.",
+   "Abuse: a fake-notice sender using texts. Pause and the fake-payment-notice filter are re-checked at the moment of every link text. Tested, including a new direct test of the filter.",
+   "Abuse: a sender lifting a stop with number_confirmed to keep texting a stranger. It needs an explicit true, is written to the record with the masked number, stays inside every limit above, and the number's owner can say \"not my number\" again (3 times a day per link). Named in left_open.",
+   "Stuck: the code never arrives, especially abroad. The \"I do not get the code\" button emails the sender whatever their settings and tells the signer plainly that only the sender can fix it. Tested.",
+   "Stuck: the signer pressed \"This is not my number\" by mistake, and the sender could only change the number to undo it. Fixed with number_confirmed and the box in the Correct dialog. Tested and checked in a browser.",
+   "Stuck: the sender types a number without a country code. It is refused in the editor, the Correct dialog, the API and the bulk CSV with the same sentence and an example. Tested, now including the CSV.",
+   "Stuck: a code arrives late (expired) or after a newer one. The message says why and asks for a new one, and the box is emptied. Tested."
+  ],
+  "needs_from_billing": "Nothing. Texts are not charged to customers and nothing in routes-billing.ts, credits.ts or the Billing() component was touched.",
+  "notes_for_integrator": "Behaviour changes: (1) after someone presses \"This is not my number\", no link or reminder texts go to that number either, not only codes. The audit line now reads \"No more codes or links are texted to it until the sender corrects it or confirms it with them.\" (2) New API field \"number_confirmed\": true on POST /api/envelopes/:id/correct, documented in openapi, on the developers page and in the README. It only lifts a not-my-number stop on an sms_code recipient whose number and address are unchanged. A box in the Correct dialog sends it, and the wrong-number email to the sender mentions the box. Decisions the owner should confirm: the \"This is not my number\" and \"I do not get the code\" emails to the sender use notifySender 'always' (the previous engineer's choice) rather than the 'problems' preference, because the signer's screen promises the sender was told and the signer is blocked until the sender acts. The certificate keeps the label \"Identity check\" that existed before, but its value now says only what happened (\"Link sent by email only\" and so on). Left open: Twilio and the hook were only tested against a stub, never a live provider. The README says so and asks the operator to send one real text in test mode. Premium-rate or high-cost destination countries are not blocked by this code; that depends on the provider's own geographic permissions. After two failed attempts the signer is not offered a fallback check chosen in advance by the sender (a requirement in research/complaints.json, not in this brief); the sender switches it with Correct. A sender who keeps confirming a disowned number can keep codes going to it, within the per-number and per-account limits; the record shows every confirmation. Out of scope but seen: tsconfig.json carries include lines left by other engineers' dev servers (.next-gaps-mobile-send, .next-build-qr, .next-repair-abuse). The rename to GrowSigning was not touched, and new copy says Sign&Grow.",
+  "settings": [
+   "TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM or TWILIO_MESSAGING_SERVICE_SID (already present: switch texts on through Twilio)",
+   "SMS_WEBHOOK_URL, SMS_WEBHOOK_TOKEN (already present: any other provider; README row now states exactly which answers are final)",
+   "SMS_DAILY_PER_ACCOUNT (already present, default 200, 0 lets none through)",
+   "SMS_DEV_OUTBOX=1 (already present, development only)",
+   "No new settings were added in this session; one new API field: number_confirmed on POST /api/envelopes/:id/correct"
+  ]
+ },
+ "build:bounces": {
+  "found": "The previous engineer had built most of the server side, all of it in checkpoint commit 7d3096a. There was no test file and no scratch folder. Already in place: src/server/bounces.ts, which checks the secret, has adapters for Postmark, SendGrid, Mailgun, Resend, SES/SNS and our own plain shape, turns a mail server's answer into plain words, keeps the do-not-mail list and counts soft-bounce days. src/server/routes-bounces.ts had POST /mail/events, the hard/soft/complaint/delivered handling, POST /envelopes/:id/try-again, POST /sign/:token/mail-again, POST /me/email-works, and a new way to move a login to another address (POST /me/email and /me/email/confirm). mail.ts set a Message-ID of ours plus X-SG-Mail and provider headers. db.ts had the new columns and tables, and a trigger that clears the marks when an address changes. envelopes.ts gave the send-time warning with send_anyway, stopped reminders and copies after a complaint, and kept the 'not opened' alert away from bounced people. routes-envelopes.ts had the new fields, send_anyway on send, create and bulk, and not_reminded on remind. /me had email_problem and the dev outbox listed the new columns. Both route files were registered in helpers.ts and in the API route. Missing: every screen (only a server field existed, nothing showed it), the /change-email page that the confirmation email links to, the README, .env.example, openapi, help and processing-page docs, and all tests. My tests found five real bugs: (1) a far-future timestamp crashed the route with a 500; (2) the 'expires in 3 days' notice still went to a bounced address; (3) 'domain does not exist' was read as 'no such mailbox'; (4) 'delivered' took the address off the do-not-mail list but left the 'could not be delivered' mark on the account's other open envelopes; (5) a body that was not JSON got 400, so providers would keep resending it. Testing by hand I found one more: a sender could undo a recipient's spam complaint with their own copy of the signing link.",
+  "done": [
+   {
+    "item": "1. Our own id on every email (Message-ID, X-SG-Mail, the new columns)",
+    "status": "done",
+    "how": "Kept what was there (mail.ts newMessageId and mailHeaders, the columns in db.ts). The Message-ID stays the same when the timer retries an email. A header for one provider is only sent through that provider's SMTP host.",
+    "test": "tests/bounces.test.ts: 'every email goes out with a Message-ID of ours and the number of its row, the same on every try' (a fake transport records the headers on the failed try and on the retry)"
+   },
+   {
+    "item": "2. POST /mail/events: the secret, the provider shapes, unknown shapes, SNS",
+    "status": "done",
+    "how": "Kept the adapters and the secret check. Fixed iso(): a timestamp past year 275760 made toISOString throw, and the route answered 500. Changed: a body that is not JSON now gets 202 with understood:false and is logged once, like any shape we do not know (before: 400, which makes providers resend for days). The SNS confirmation is stricter than the brief asked: https, host sns.<region>.amazonaws.com, no user/password, no other port, no redirects.",
+    "test": "Tests for: the secret in all three forms, a wrong or missing secret, a cookie that is not a secret, too short or unset (404), and 429 after 30 wrong guesses; each provider's sample read into our shape; a huge body (with and without content-length), non-JSON, unknown shapes and odd values (none gives a 500, logged once, field values never logged); SNS confirmation fetched only for the real SNS host, with a fetch stub that passes other calls through and restores fetch.",
+    "left_open": "The adapters were written from the providers' documentation and never tried against the real services (the README says so). SNS message signatures are not verified; the secret in the URL is what protects the route."
+   },
+   {
+    "item": "Matching by our ids, else by address within 3 days",
+    "status": "done",
+    "how": "Kept as built. Our number with a different address does not match, and an email the mail server never took has no news.",
+    "test": "'news is matched by our ids when it carries them, by the address otherwise, and never to the wrong email' (wrong address, Message-ID in another case with angle brackets, older than 3 days, failed email, unknown mails answered 200 as unmatched)"
+   },
+   {
+    "item": "3. Hard bounce to a recipient: mark, audit, tell the sender, envelope page and list, reminders stop until corrected or 'Try again', webhook, no 'not opened' alert",
+    "status": "done",
+    "how": "Server was there. Fixed: the 'expires in 3 days' notice is now held back like a reminder (envelopes.ts notifyRecipient). Built the screens: src/components/sender/MailNews.tsx (what the provider said, the hint on the card, the Try again button, the summary lines, the reminder toast), with small edits to Recipients.tsx (badge 'Could not be delivered', no Nudge and no 'may be in spam' advice for a stopped person), envelopes/[id]/page.tsx and envelopes/page.tsx (list flag 'could not be delivered', remind toasts that name who was skipped). Checked with Playwright on a phone and on a desktop, and pressed Try again by keyboard alone.",
+    "test": "'a hard bounce marks the recipient, tells the sender at once, stops reminders until \"Try again\", and fires envelope.updated'; 'correcting the address clears the mark, and a bounce of a closed envelope says there is nothing to send again'; 'a hard bounce from each provider leaves the same marks as one in our own shape'",
+    "left_open": "Only that envelope's recipient is marked. Another envelope of the same account that is already out to the same address keeps sending reminders until its own email bounces (then that one is marked and the sender told). A member of a group (groups.ts) whose email bounces is written in the record and the sender is told, but the member is not marked and keeps getting reminders. The sender's email uses the 'problems' notification setting, so a sender who turned that off only sees it on the envelope page."
+   },
+   {
+    "item": "3. Hard bounce to a login: banner on every page, 'It works now, try again', tell the other admins",
+    "status": "done",
+    "how": "Server was there. Built src/components/EmailProblem.tsx: the banner, rendered from AppShell; the form to move the login to another address; and a card in Settings, Profile (the confirm route's error message already pointed there). Built src/app/change-email/page.tsx for the link in the confirmation email; it handles 'sign in first'. Focus goes into the form when it opens. Buttons are 44 px.",
+    "test": "'a login whose emails come back sees it on every page...': GET /me email_problem, other admins emailed once, 'It works now' clears it and sends one test email, a second bounce brings it back, moving the address (wrong password, another person's browser, used link 410, address taken 409), a login with no other admins, 6 presses then 429 with only one email, an API key refused",
+    "left_open": "The full-screen editor has no app shell, so the banner does not show there. Someone whose mailbox is dead and who has forgotten their password cannot move the login: the move needs the password, and a reset link would go to the dead mailbox. They need support. The old email address also stays the login's Google/Microsoft identity if one is linked."
+   },
+   {
+    "item": "3. Soft bounce, and 3 separate days counts as hard",
+    "status": "done",
+    "how": "Kept as built. Several events on the same day count as one day.",
+    "test": "'a soft bounce is noted and stops nothing, until the same address said \"try later\" on three separate days'"
+   },
+   {
+    "item": "4. Complaint: stop emails about that envelope, tell the sender only the recipient can undo it, count as a report (reusing reportAbuse)",
+    "status": "done",
+    "how": "Kept as built (it reuses reportAbuse from envelopes.ts). Fixed a hole: the sender holds the signing link (Copy link) and could undo the complaint through POST /sign/:token/mail-again. Now refused with 403 when the caller is signed in to the sending account and is not that recipient. Built src/components/sign/MailAgain.tsx: a notice and a button on every stage of the signing page (two-line edit in sign/[token]/page.tsx).",
+    "test": "'a complaint stops every email about that envelope...' (abuse report row, sender's email wording, remind and try-again refused with codes, repeat counted once, sender refused 403, recipient's own button works, reminders start again); 'complaints from three different recipients pause the sending account'",
+    "left_open": "A sender in a private window (not signed in) can still use their copy of the link. The audit trail records it as 'Emails started again', with the IP address."
+   },
+   {
+    "item": "5. Do-not-mail list across envelopes for 30 days, clear warning, send anyway",
+    "status": "done",
+    "how": "Server was there. Moved the warning wording into src/lib/mailnews.ts so the server and the pages say the same thing. Built 'Send anyway' everywhere the server's refusal says it exists: the editor's Send (a confirm dialog that takes only a literal true, never a click event), 'Use template' on the templates page (the draft is kept), and the bulk send dialog (shows the list from POST /bulk/check, or from a 409). Added forgetOldBounces() to the timer (cron.ts) so the list really is emptied after 30 days, as the processing page now says.",
+    "test": "'a new envelope to an address that bounced warns first in plain words, and goes out when the sender says so' (exact wording 'x bounced on 20 November: no such mailbox. Check the address.', draft kept, create+send leaves nothing behind, send_anyway, another account not warned, gone after 31 days); 'the timer forgets addresses that bounced...'; editor checked in a browser by keyboard on phone and desktop"
+   },
+   {
+    "item": "6. 'Delivered to the mail server of example.com' instead of only 'Sent'",
+    "status": "done",
+    "how": "Badge 'Delivered' and the line 'Delivered to the mail server of example.com on ...' on the card and in the list of every email. Without such news the page reads exactly as before. Never says 'read'. Fixed: a delivery after a bounce now clears the mark on every open envelope of the account to that address, writes 'Address works again' in each record and fires envelope.updated (before, it cleared the list but left the marks).",
+    "test": "'\"delivered\" is kept on the email, and an email that arrives later takes an older bounce away' (news about an email from before the bounce clears nothing)"
+   },
+   {
+    "item": "7. Operator mail log: dev outbox shows delivered, bounced, complained",
+    "status": "done",
+    "how": "src/app/dev/outbox/page.tsx shows a status line per email. Stored copies of emails keep their existing deletion schedule (MAIL_COPY_DAYS in routes-trust.ts). Nothing is kept longer.",
+    "test": "'the dev outbox shows what the mail provider said about each email'"
+   },
+   {
+    "item": "8. Tests",
+    "status": "done",
+    "how": "tests/bounces.test.ts: 18 tests, all passing alone and inside npm test.",
+    "test": "node --experimental-strip-types --no-warnings --test tests/bounces.test.ts: 18 pass"
+   },
+   {
+    "item": "9. Docs: README, .env.example, openapi, help, security",
+    "status": "done",
+    "how": "README: a test-table row, a complaint-table row, a MAIL_EVENTS_TOKEN row in the config table, and a new section 'Knowing when an email did not arrive' (what to set up at each provider, and that the adapters were never tried against the real services). .env.example: MAIL_EVENTS_TOKEN. openapi: the new recipient and delivery fields, send_anyway and the 409 on send and bulk, POST /envelopes/{id}/try-again (always), and /mail/events only while the setting is on. Help: a new question #bounced, shown only when the setting is on. Data processing summary: two lines, only when on. Developers page: an envelope.updated line, only when on (the page now reads settings on each request, as help and security do).",
+    "test": "Covered in the secret test: /mail/events is absent from the API description without the setting, and try-again is present.",
+    "left_open": "The README section 'What is not in it' and the public pages never claimed bounce tracking was missing, so nothing had to be removed."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/tests/bounces.test.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/mailnews.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/MailNews.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/components/EmailProblem.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/MailAgain.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/change-email/page.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/bounces.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-bounces.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts (one line: no 'expires soon' notice to a bounced address)",
+   "/home/user/treegens-app/sign-and-grow/src/server/cron.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/Recipients.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/AppShell.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/Editor.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/envelopes/[id]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/envelopes/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/templates/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/bulk/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/bulk/BatchCost.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx (two lines in Profile only, Billing untouched)",
+   "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx (three small lines)",
+   "/home/user/treegens-app/sign-and-grow/src/app/dev/outbox/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/processing/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example",
+   "/home/user/treegens-app/sign-and-grow/tests/out/build-bounces/ (Playwright scripts shots.cjs, editor.cjs, help.cjs and screenshots 01-12)"
+  ],
+  "suite": "npm test: 462 tests, 459 pass, 3 fail, none of them mine. (1) flow.test.ts 'the published API description matches the routes that exist': POST /envelopes/:id/restore and POST /envelopes/:id/recipients/:rid/release are undocumented, both added by other engineers. My try-again route is documented. (2) signerux.test.ts 408: markup of the PdfDoc canvas, someone else's work in progress. (3) trust.test.ts 461 'small things that stop people getting stuck': the 'Signer corrected their name' audit line. It was already failing in my baseline run before I changed anything. tests/bounces.test.ts: 18/18 alone and inside the suite. npx tsc --noEmit -p .: exit 0, no errors. A short while earlier tsc and the test runner broke for a minute on other engineers' half-finished edits (policy.ts line 304, a regex in paylink.ts); both cleared by themselves.",
+  "settings": [
+   "MAIL_EVENTS_TOKEN: new (it existed in code only). At least 16 characters. Without it POST /api/mail/events answers 404, the API description leaves it out, and help, developers and the processing summary say nothing about bounces. Documented in the README config table, the new README section and .env.example."
+  ],
+  "abuse_and_stuck": [
+   "Abuse: forging bounce or complaint news to stop a sender's emails or pause their account. Needs the secret (all three forms tested), compared in constant time; wrong guesses get 429 after 30 per IP in 15 minutes (tested). Whoever holds the secret, which is the operator's mail provider, can still forge news (left open, by design).",
+   "Abuse: a mail_id guessed or reused from another account. It only matches when the address matches too (tested).",
+   "Abuse: SSRF through an SNS SubscribeURL. Only https sns.<region>.amazonaws.com is fetched, with no redirects, no user/password and no other port (tested with 7 bad links).",
+   "Abuse: a huge body or a flood of events. 1 MB limit while streaming, at most 2000 events per call, every value cleaned (tested).",
+   "Abuse: a link or control characters in a mail server's reason ending up in emails and pages. cleanReason strips both and cuts to 240 characters (tested).",
+   "Abuse: the sender undoing a recipient's spam complaint with their own copy of the link. Refused with 403 when signed in to the sending account (tested); still possible from a private window (left open).",
+   "Abuse: 'It works now, try again' used to send endless emails. 6 a day, one email each time the mark is cleared (tested).",
+   "Abuse: moving a login's address to take it over. Needs the password and the same browser, and the link works once, for one hour (tested).",
+   "Stuck: a sender who reads 'could not be delivered' and does not know what to do. The hint names Correct, Try again and Copy link, links to help #bounced, and the Nudge button is hidden instead of failing (checked in the browser).",
+   "Stuck: a false 'bounced' warning at send time. 'Send anyway' on the editor, template and bulk paths; the warning is never a final refusal (tested; checked in the browser by keyboard).",
+   "Stuck: a recipient who marked our email as spam by mistake. Their signing page says so and offers 'Email me about this document again' (tested; checked on a phone).",
+   "Stuck: a customer whose own mailbox is dead. A banner on every app page with two ways on (tested via GET /me; checked on a phone). Still stuck if they also forgot their password (left open)."
+  ],
+  "needs_from_billing": "Nothing has to change. Renewal reminders and receipts in routes-billing.ts still go to an address that bounces; I did not stop them, because they are owed. The person sees the banner instead, and the other owners and admins of their teams get one email. If the billing owner wants payment emails to also go to another admin while a login's email_bounced_at is set, that would be their change; it is not needed for this feature.",
+  "notes_for_integrator": "Behaviour changes others will notice: (1) notifyRecipient in envelopes.ts no longer sends the 'expires in 3 days' notice to a recipient with bounced_at (one line). (2) A body that is not JSON at /mail/events now gets 202 with understood:false instead of 400. (3) 'delivered' news now clears 'could not be delivered' marks on all of the account's open envelopes to that address, with an 'Address works again' audit line and an envelope.updated webhook with change 'email_works_again'. (4) The developers page now reads settings on each request (export const dynamic = 'force-dynamic'), as help and security already do. (5) The timer result has a new field, bounces_forgotten. (6) Settings, Profile has a new 'Email address' card that lets any login move to another address; the server route came from the previous engineer and was not exposed before. Copy promises added (all conditional on MAIL_EVENTS_TOKEN): the help question #bounced, the processing summary lines about the delivery news kept and the 30-day list (the new timer cleanup keeps that true), the developers webhook line, and the README section. Decisions for the owner to confirm: the sender's bounce email still follows their 'problems' notification setting; 'Try again' is refused for a complaint; marks apply per envelope, not to every open envelope of the account. Seen but out of scope: .btn.sm buttons on the envelope card (Copy link, Share, Correct) measure 42 px on a phone, under the 44 px rule (my new buttons are set to 44). The dev outbox clips long lines at 390 px. developers/page.tsx imports from @/server/webhooks and @/server/envelopes, which breaks the 'never import src/server from a page' rule (pre-existing). The scratchpad is shared with other engineers, and some of my early scratch files there (datadir, dev.log, tsconfig.before.json) were overwritten by others. My final scratch is in scratchpad/build-bounces and tests/out/build-bounces. tsconfig.json: next dev's two .next-build-bounces lines are gone (someone else tidied the file); the lines left there belong to .next-build-encrypt. My dev server is stopped and its .next-build-bounces folder deleted. Rename pass: new copy says 'Sign&Grow' in EmailProblem.tsx, change-email/page.tsx and routes-bounces.ts messages."
+ },
+ "build:encrypt": {
+  "found": "The previous engineer had done nothing on this task. Nothing in src, scripts, tests, README or .env.example mentioned FILE_ENCRYPTION, encrypt-files or AES. There was no tests/encrypt.test.ts and no tests/out/build-encrypt folder, and git log -S FILE_ENCRYPTION over today's commits found only the brief. Files were written as they are: saveBlob() in src/server/db.ts did a plain writeFileSync if the file was missing (not atomic), and readBlob() did a plain readFileSync with no check at all. /security (\"No claim about encrypted storage\"), /security/processing, NO_BAA_FIRST and WHO_CAN_SEE[3] in src/lib/policy.ts, and the README line under \"What is not in it\" all said the app adds no encryption of its own. None of the failures at the checkpoint belonged to this task. I built everything from scratch and found nothing half done to remove.",
+  "done": [
+   {
+    "item": "1. Read how files are stored, and every place that reads or deletes one",
+    "status": "done",
+    "how": "Stored files are written by saveBlob in three places: uploads and signer attachments (storeUpload), the signed PDF (buildFinal) and the copy of what someone signed before a change (correctEnvelope); attachments to emails waiting to be sent (sendMail) go through it too. They are read by GET /files/:id/content, /sign/:token/doc/:doc, pdf.ts (the source documents and signer attachments merged into the signed PDF), finalPdf and earlierCopy in envelopes.ts, mail.ts deliver() and the /export ZIP. They are deleted only by removeUnusedBlobs in routes-trust.ts, by name. saveBlob and readBlob in db.ts now hand over to my own file src/server/filestore.ts, so every one of those callers is covered without being changed. Names stay the same, so removeUnusedBlobs and the existing tests that look for a file on disk by name still work.",
+    "test": "tests/encrypt.test.ts: 'a whole send, sign, download, verify, export and delete with the key set' goes through every one of those readers and the delete; 'with the key set and a mail server' covers the attachment path."
+   },
+   {
+    "item": "2. FILE_ENCRYPTION_KEY: AES-256-GCM under a key made for each file, a header with format version and key id, earlier plain files stay readable, scripts/encrypt-files.mjs",
+    "status": "done",
+    "how": "src/server/filecrypt.ts holds the format and is shared by the server and the script. An encrypted file is \"\\0enc\", version 1, an 8-byte key id (an HMAC of the key, which says nothing about the key), a 16-byte salt, a 12-byte nonce, a 4-byte header check, then the contents and the GCM tag. The key for each file is HKDF-SHA256 of the server's key with the salt and the file's name. The header and the name are part of what GCM checks. Every write goes to a temporary file, is flushed to the disk, then renamed into place in one step. Plain files written before stay readable. scripts/encrypt-files.mjs, for each file: encrypts it into a hidden temporary file, flushes it, reads it back and checks it with the current key and the fingerprint, checks that the original has not changed since it was read, then renames over it. It has --check and --new-key, reads .env.local and .env as the server does, allows one run at a time (a lock left by a run that was killed is taken over), clears half-written copies left by an earlier run, and names damaged files and files under keys it does not have, leaving them as they are. Exit codes: 0 when done, 1 when something needs a look, 2 when a setting is wrong. How to make a key (openssl rand -base64 32) is in .env.example, the README and the script.",
+    "test": "'with a key a file is encrypted under a header...', 'files written before the key was set stay readable...', 'the script encrypts a folder with every kind of file...' (run twice), 'the script can be stopped at any point...' (stopped after the copy is written and after it is checked), 'the script keeps the original when the copy does not read back...', 'the script from the command line...'"
+   },
+   {
+    "item": "3. Changing the key: FILE_ENCRYPTION_KEYS_OLD and re-encryption by the script",
+    "status": "done",
+    "how": "FILE_ENCRYPTION_KEYS_OLD is a list separated by commas or spaces, and files under a listed key are read. The script moves them to the current key. An entry that is not a key is named in the log and stops nothing by itself. With only an old key listed and no current key, new files are stored as they are and the old ones stay readable; that is how encryption is switched off. There is no script that decrypts files.",
+    "test": "'a server started with a key that cannot read...' (listing the old key puts it right, and new files use the new key), the folder test (old key moved to the current one), the command-line test (.env.local with a new key and the old one listed), 'a FILE_ENCRYPTION_KEY that is not a key...' (bad entry in the old list)"
+   },
+   {
+    "item": "4. Nothing lost by a mistake with the key: loud at start, no new files written until the old key is listed, damaged files reported and never served, no key works as today",
+    "status": "done",
+    "how": "At start, instrumentation.ts calls fileStoreWarning(), which reads the first 45 bytes of every stored file. If any file was written with a key the server does not hold, or FILE_ENCRYPTION_KEY is set to something that is not a key, it logs 'STORING FILES IS STOPPED' with the key ids (never the keys), files an alert in the operator queue and emails SUPPORT_EMAIL and OPERATOR_EMAILS. From then on every write answers 503 \"storage_stopped\" with plain words that nothing was saved and nothing is lost; reads go on wherever they can. A correction that asks someone to sign again also waits with 503, because otherwise the copy of what they signed would be lost (one line in correctEnvelope). Signing still finishes, and the timer makes the signed PDF once files can be stored again. A file under a key nobody listed that turns up after the start stops writes from then on. An uploaded file that only looks encrypted cannot cause a stop: a file whose bytes match its own name is always plain. Every read checks the file, plain or encrypted. A damaged file answers 500 \"file_damaged\", a file whose key is missing answers 503 \"file_locked\", and each damaged or missing file is reported once (log, queue, email). The export leaves an unreadable signed PDF out and names it in README.txt. Storing a file that is already there with the same contents replaces a damaged copy. The warning also says what to do if a key is lost for good. With no key and no encrypted file in the folder, behaviour is as before, apart from the new check on reads and atomic writes.",
+    "test": "'with no key a file is stored as it is...', 'a changed byte anywhere, a file cut short, or a file under another name...', 'an uploaded file that only looks like an encrypted one...', 'a server started with a key that cannot read...', 'a FILE_ENCRYPTION_KEY that is not a key...', 'while storing is stopped, uploads are refused in words...', 'the export leaves out a signed PDF that fails its check...'"
+   },
+   {
+    "item": "5. The name stays the fingerprint of the readable contents, and the README says what that reveals and what it does not",
+    "status": "done",
+    "how": "A file is still named by the SHA-256 of its readable contents, so duplicates are still one file, /verify still compares fingerprints and the database rows are unchanged. The README section 'Encrypting stored files' has a bullet 'What the names give away': which stored files are the same, roughly how large each is, and that someone who already has a copy of a document can check whether that exact file is stored here. The same fingerprints are in the database, and nobody learns from a name what a file says.",
+    "test": "'with a key a file is encrypted...' (name equals the sha of the plain contents), the whole-product test (/public/verify matches the downloaded file), the README test"
+   },
+   {
+    "item": "6. Say exactly what is and is not protected on /security and in the README; change the 'What is not in it' line",
+    "status": "done",
+    "how": "New file src/lib/storedfiles.ts holds the sentences and the key check that both the pages and the server use. /security shows 'Stored files are encrypted by the software.' under 'Your documents stay yours' only when a valid key is set: AES-256-GCM, a key for each file, a check on every read, protects copies of the disk and of backups but not a break-in to the running server, and earlier files are encrypted when the operator runs the script. Under 'What this is not' it always says the database is not encrypted (names, addresses, what people typed, signatures, audit trails; readable from the disk unless the disk itself is encrypted). When no key is set it also says the files are not encrypted on this server. /security/processing has the same switch and keeps the 'adds no encryption of its own' wording for the off state. In policy.ts, NO_BAA_FIRST[2] now asks for database encryption, and WHO_CAN_SEE[3] says the key is in the server's settings. The README has the 'What is not in it' line, two config rows, the new section, a launch bullet ('Encryption at rest': encrypt the disk too and keep the key apart from the backups), and a row for tests/encrypt.test.ts. The API description in openapi.ts names the three error codes, and .env.example has both settings. I looked at both pages with my dev server at 390x844 and 1280x900, with the key on and off: no horizontal scroll and the text reads correctly. I also saw the editor's upload refusal and the signing page while storing was stopped.",
+    "test": "'the pages say what is encrypted and what is not...', 'the README, the settings example and the API description...'. Screenshots are in tests/out/build-encrypt/ (security-*-on/off-*.png, processing-*.png, upload-stopped-*.png, sign-locked-phone.png)."
+   },
+   {
+    "item": "7. Tests: with and without a key, mixed files, wrong key, changed byte, truncated file, the script on every kind of file (twice, stopped half way), key change, every reader under the setting",
+    "status": "done",
+    "how": "tests/encrypt.test.ts has 17 tests and all pass. The product run uses the flow helpers (signUp, simple, upload, signAll, tokenFor) with the key set: upload, signer attachment, signing, owner and signer downloads, /public/verify, export ZIP, completion email attachment, a correction, the timer and deleting the account. Temporary folders are removed afterwards.",
+    "test": "node --experimental-strip-types --no-warnings --test tests/encrypt.test.ts: 17 of 17 pass"
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/filecrypt.ts (new: format, keys, sealing and opening, atomic write, folder scan)",
+   "/home/user/treegens-app/sign-and-grow/src/server/filestore.ts (new: the check on every read, the stop on a key mismatch, startup warning, operator alerts, storeFile/readStored/assertCanStore)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/storedfiles.ts (new: key decoding, fileEncryptionOn, the sentences for /security and the processing summary)",
+   "/home/user/treegens-app/sign-and-grow/scripts/encrypt-files.mjs (new: the script that encrypts files stored before and moves files to a new key)",
+   "/home/user/treegens-app/sign-and-grow/tests/encrypt.test.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts (saveBlob/readBlob hand over to filestore.ts; one import)",
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts (one import, and assertCanStore() before a correction that asks someone to sign again)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts (the export skips an unreadable signed PDF and names it in README.txt)",
+   "/home/user/treegens-app/sign-and-grow/src/instrumentation.ts (startup warning)",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/page.tsx (one import, two variables, one point added, one point replaced)",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/processing/page.tsx (one import, the line switches on the setting)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts (NO_BAA_FIRST[2], WHO_CAN_SEE[3] sentence, the code-pointer comment)",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts (one sentence in the API description: file_damaged, file_locked, storage_stopped)",
+   "/home/user/treegens-app/sign-and-grow/.env.example (FILE_ENCRYPTION_KEY, FILE_ENCRYPTION_KEYS_OLD)",
+   "/home/user/treegens-app/sign-and-grow/README.md (test-file row, 'What is not in it' line, two config rows, section 'Encrypting stored files', launch bullet 'Encryption at rest')"
+  ],
+  "suite": "npx tsc --noEmit -p . runs with no errors. tests/encrypt.test.ts: 17 of 17 pass.\n\nLast full npm test: 483 tests, 474 pass, 9 fail, none of them in my file and none touching stored files. I checked the log: every '[files]' line comes from tests/encrypt.test.ts.\n- billing2:94, billing3:283, billing4:239, billing5:63 ('answered in 169 ms, before the provider call returned'): payment code that the payment owner is still changing.\n- flow.test.ts:256: POST /envelopes/:id/restore is not in openapi.ts. Already known at the checkpoint.\n- gaps-industry.test.ts:1015: PayLinkChoice markup on the envelope page (payment-link work).\n- gaps-nonus-words.test.ts:176: a price in app/billing/stop/StopView.tsx is not written as US$.\n- signerux.test.ts:653: canvas markup in the PDF viewer (signer-screen work).\n- trust.test.ts:365: 'Fix my name' now refuses anything beyond a small slip. Someone tightened that rule without updating this test. I confirmed with a probe that the API answers applied:false.\n\nAn earlier full run failed 161 tests with 'fillPrices is not defined', a half-done edit in db.ts/routes-billing.ts by the payment owner. It was fixed when I re-ran.\n\nLogs are in tests/out/build-encrypt/npm-test-3.log (and npm-test.log, npm-test-2.log).",
+  "settings": [
+   "FILE_ENCRYPTION_KEY: 32 random bytes as base64 (openssl rand -base64 32, or node scripts/encrypt-files.mjs --new-key). Unset means files are stored as they are. Set to something that is not a key, the server stores no file until it is corrected.",
+   "FILE_ENCRYPTION_KEYS_OLD: earlier keys, separated by commas, so files written with them can still be read; the script moves those files to the current key."
+  ],
+  "abuse_and_stuck": [
+   "Abuse: uploading a file built to look encrypted under a key nobody has, to stop every upload after it. Handled: a file whose bytes match its own name is plain, and the startup scan reads such a file whole before counting it. Tested.",
+   "Abuse: copying one encrypted file over another on the disk so one document is shown as another. Handled: the file's name is part of what GCM checks, and the fingerprint is checked after decryption. Tested.",
+   "Abuse: flipping or cutting bytes so that garbage is served or the PDF parser is fed something it should not get. Handled: the GCM tag and SHA-256 check refuse it with 500 file_damaged. Tested for contents, tag, salt, key id, version, cut short, cut inside the header and empty.",
+   "Abuse: reading a damaged file over and over to flood the operators. Handled: one alert and one email per file per process, and never a second while an open alert with the same text is in the queue. Tested.",
+   "Abuse: getting the key out of a log line, an error, an alert or the script's output. Handled: only key ids are ever printed. Tested for the warning, the alert, the script report and the command-line output.",
+   "Abuse (named, not fixed): the names give away that two stored files are the same, and let someone who already has a copy of a document check whether it is stored here. This is written in the README.",
+   "Stuck: a typo in the key. Storing stops, the log says how to make a key and the value is not echoed, and the pages do not claim encryption. Tested.",
+   "Stuck: a new key set in place of the old one, or the key left out after a move. Storing stops, the log gives the key ids and says to add the old key to FILE_ENCRYPTION_KEYS_OLD, reads go on where they can, and signing still finishes with the signed PDF made later by the timer. Tested.",
+   "Stuck: the key is lost for good. The warning and the README say to move those files out (and keep them) and restart, and storing works again. Tested.",
+   "Stuck: the script is interrupted, or started without the settings. A rerun clears its half-written copies and finishes. The script reads .env.local and .env and says plainly when FILE_ENCRYPTION_KEY is missing. Tested.",
+   "Stuck: a sender or signer uploads while storing is stopped. They get plain words that nothing was saved, everything stored is safe, and to try later. Tested, and seen in the editor on a phone.",
+   "Stuck: an export with a damaged signed PDF. The ZIP still downloads whole, and README.txt names what is missing and why. Tested."
+  ],
+  "needs_from_billing": "Nothing is required. One note: tellOperators() in routes-billing.ts is private. filestore.ts files its alerts with the same row shape (support_requests, name 'Sign&Grow (automatic alert)', topic 'other') and emails SUPPORT_EMAIL and OPERATOR_EMAILS itself. If you ever export a shared helper for alerts, filestore.ts's fileAlert() could use it.",
+  "notes_for_integrator": "Changes others will notice:\n- Every read of a stored file is now checked against its SHA-256 name, with or without a key. A missing or changed file used to throw ENOENT or be served as it was. Now it answers HttpError 500 {code:'file_damaged'} in plain words, and a one-time alert goes to the operator queue (support_requests row named 'Sign&Grow (automatic alert)'), to the log, and by email to SUPPORT_EMAIL/OPERATOR_EMAILS.\n- Writes are atomic (temporary file, fsync, rename). Storing contents that are already there now reads the existing copy and replaces it if it is damaged.\n- While storing is stopped, a correction that asks someone to sign again answers 503 storage_stopped and saves nothing.\n- At start the server reads the first 45 bytes of every stored file. I have not timed this on a very large folder.\n\nDecisions the owner should confirm:\n- A server with no key, finding encrypted files it cannot read, also stops storing files. That is stricter than \"no key means as today\", but otherwise new plain files would be mixed with files nobody can open, while the operator may believe everything is encrypted.\n- I added no row to \"What the bad reviews taught us\". research/complaints.json has no complaint about encryption at rest, and I would not invent one.\n\nFor the rename pass:\n- The constants in src/server/filecrypt.ts ('stored file key id', 'stored file v1 ...', the magic bytes) contain no product name on purpose: changing any of them would make every encrypted file unreadable. The test file checks this.\n- The alert name 'Sign&Grow (automatic alert)' now appears in filestore.ts as well as routes-support.ts and routes-billing.ts. All three must be renamed together.\n- The new copy says Sign&Grow where it names the product.\n\nLeft open:\n(1) On the signing page, the document viewer in src/app/sign/[token]/page.tsx shows its generic \"The document could not be opened here... download it\" for a locked or damaged file. The Download button then gets the 503/500 JSON. Showing the server's message there would need an edit in that busy file.\n(2) The server never removes its own half-written temporary files (.<sha>.w<pid>-<hex>) left by a crash; only the script clears them, once they are an hour old.\n(3) Running the script while the server runs leaves a tiny window in which a file the server deletes could come back encrypted. A check before the swap narrows it, and the README and the script say to stop the server first.\n(4) There is no decrypt script, and the database is never encrypted (by design; documented).\n(5) Someone with write access to the disk could stop storing by dropping a fake file, but with disk access they already have everything.\n(6) The email to operators is sent through a dynamic import('./mail.ts'). The tests confirm it under node, but in next dev only the branch without an operator address was seen.\n\nScreenshots and Playwright scripts are in tests/out/build-encrypt/. My dev server is stopped, .next-build-encrypt is deleted, and I removed the tsconfig lines it added. The two '.next-gaps-mobile-sign' lines now in tsconfig.json belong to another engineer and I left them."
+ }
+}

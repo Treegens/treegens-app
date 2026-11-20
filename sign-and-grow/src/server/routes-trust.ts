@@ -8,7 +8,7 @@ import { sendMail } from './mail.ts';
 import { auditTrail, emailMyLinks, resendFromRetired } from './envelopes.ts';
 import { loadEnvelope, reportAbuse } from './envelopes.ts';
 import { audit, helpAsked, type Actor } from './envelopes.ts';
-import { stopBillingFor } from './routes-billing.ts';
+import { stopBillingFor, pendingRefundLines } from './routes-billing.ts';
 import { sameEmail } from './credits.ts';
 import { unpaidDailyRecipients, PAID_TRUST_DAYS } from '../lib/policy.ts';
 import { advance, emailRefusal, hasNotPaid, dailyCap, PAUSED_MEANS } from './envelopes.ts';
@@ -16,6 +16,7 @@ import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
 import { memberForCode } from './groups.ts';
 import { forgetChosen } from './tplroles.ts';
+import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -208,6 +209,8 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
       const f = get('SELECT sha256 FROM files WHERE id=? AND account_id IS NULL', fid);
       if (f) (shas.push(f.sha256), run('DELETE FROM files WHERE id=?', fid));
     }
+    // A completed one leaves the fingerprint of its signed PDF, its id and its day behind, nothing else (evidence.ts).
+    keepFingerprint(eid);
     shas.push(get('SELECT final_sha256 s FROM envelopes WHERE id=?', eid)?.s);
     // The copies of what people signed before a correction go with the envelope too (earlier_signatures.copy_sha256).
     shas.push(...all('SELECT copy_sha256 s FROM earlier_signatures WHERE envelope_id=? AND copy_sha256 IS NOT NULL', eid).map((x) => x.s));
@@ -420,6 +423,8 @@ export async function purgeClosedAccounts(): Promise<number> {
   run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND at < ?`, new Date(Date.now() - MAIL_COPY_DAYS * 864e5).toISOString());
   // The fingerprint of a security code from a deleted document is kept for a year, then that goes too.
   run('DELETE FROM forgotten_codes WHERE at < ?', new Date(Date.now() - 365 * 864e5).toISOString());
+  // And so does the fingerprint of a signed PDF whose document was deleted (src/server/evidence.ts).
+  forgetOldFingerprints();
   // A delivery log whose webhook is gone belongs to nothing any more. Deleting a webhook takes its log along; this
   // clears what was left behind before that was so.
   run('DELETE FROM webhook_deliveries WHERE webhook_id NOT IN (SELECT id FROM webhooks)');
@@ -459,9 +464,13 @@ route('POST', '/me/delete', async (c) => {
     'A question you sent through the help form that nobody has answered yet is kept until it has been answered, and deleted then.',
     'Documents other people sent you to sign belong to them, so those are not affected.'];
   if (b.now) {
+    // A refund still on its way when the account goes: the money still reaches the card, and the email says so,
+    // because there is no Plan page any more to show it and no account to send "Refund sent" to.
+    const owed = pendingRefundLines(owned.map((a) => a.id));
     await tellTeamsAboutKeys(c.user, purgeUser(c.user.id), 'stopped');
     await sendMail({ to: c.user.email, subject: CLOSED_SUBJECT, heading: 'Account closed and deleted',
       lines: [owned.length ? `Your login has been deleted, and with it ${owned.map((a) => `"${a.name}"`).join(' and ')} and everything in it: envelopes, drafts and templates, uploaded and signed documents, files signers attached, audit trails, contacts, API keys, webhooks and our copies of the emails about them. Any subscription has been stopped. You will not be charged again.` : 'Your login has been deleted.',
+        ...owed,
         ...(teams ? [`What you sent as a member of ${teams} was not deleted. It belongs to that team and has passed to its owner.`] : []),
         ...ownKeyLines(keys, keys.length === 1 ? 'This API key of yours no longer works:' : 'These API keys of yours no longer work:'), ...kept] });
     // Its stored copy is not kept either once the mail server has taken it (see purgeClosedAccounts for the rest).

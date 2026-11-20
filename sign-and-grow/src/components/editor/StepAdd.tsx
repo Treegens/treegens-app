@@ -10,6 +10,7 @@ import { CheckFields } from '../sender/CheckFields';
 import { SendMyself } from './SendMyself';
 import { LIMITS, PAPER_HINT, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
+import { LockedLine, WhoCanUse } from '../templates/WhoCanUse';
 
 const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy' };
 
@@ -17,6 +18,8 @@ const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', app
 export function StepAdd({ ed }: { ed: Ed }) {
   const me = useMe();
   const { env, base, isTpl, correcting, anyLocked, lockedIds, lockedNames, docs, rcps, contacts, uploads } = ed;
+  // The wording of a template that is locked for this person: the documents, the roles and the message stay (tplroles.ts).
+  const wording = ed.wording;
   const [over, setOver] = useState(false);
   const [more, setMore] = useState<string | null>(null);
   const uploading = uploads.some((u) => u.state !== 'error');
@@ -31,7 +34,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
       <div className="card">
         <h2 style={{ marginBottom: 12 }}>Documents</h2>
         {anyLocked && <div className="notice warn ed-lockline" style={{ marginBottom: 10 }}><Lock size={16} /><span>{lockedNames} already finished. If you add, replace, remove or reorder a document, they have to sign again. You are asked before anything is saved. Renaming a document is always fine.</span></div>}
-        {(
+        {wording && <LockedLine>The documents come from the template{wording.template ? ` "${wording.template}"` : ''} and stay as they are. To change them, ask {wording.ask}.</LockedLine>}
+        {!wording && (
           <label className={`drop ed-drop${over ? ' over' : ''}`}
             onDragOver={(e) => (e.preventDefault(), setOver(true))} onDragLeave={() => setOver(false)}
             onDrop={(e) => (e.preventDefault(), setOver(false), ed.addFiles(e.dataTransfer.files))}>
@@ -68,9 +72,9 @@ export function StepAdd({ ed }: { ed: Ed }) {
         {docs.map((d, i) => (
           <div key={d.id}>
           <div className="row ed-doc">
-            <input value={d.name} aria-label="Document name" maxLength={200} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
+            <input value={d.name} aria-label="Document name" maxLength={200} readOnly={!!wording} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
             <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}</span>
-            {(
+            {!wording && (
               <>
                 <label className="btn sm ghost" title="Swap in a corrected version. Your fields stay where they are.">
                   Replace file
@@ -93,9 +97,10 @@ export function StepAdd({ ed }: { ed: Ed }) {
       <div className="card">
         <div className="row between wrap" style={{ marginBottom: 12 }}>
           <h2>{isTpl ? 'Roles' : 'Recipients'}</h2>
-          <label className="check ed-tap"><input type="checkbox" checked={!!env.ordered} onChange={(e) => ed.patchEnv({ ordered: e.target.checked ? 1 : 0 })} /> Set signing order</label>
+          <label className="check ed-tap"><input type="checkbox" checked={!!env.ordered} disabled={!!wording} onChange={(e) => ed.patchEnv({ ordered: e.target.checked ? 1 : 0 })} /> Set signing order</label>
         </div>
         {isTpl && <p className="muted small">Leave name and email empty for roles you fill in each time you use the template.</p>}
+        {wording && <LockedLine>Fill in each person&rsquo;s name and email address. Who signs, what each person does and the order come from the template and stay as they are.</LockedLine>}
         <datalist id="contact-emails">{contacts.map((c) => <option key={c.id} value={c.email}>{c.name}</option>)}</datalist>
         <div style={{ display: 'grid', gap: 10 }}>
           {rcps.map((r) => {
@@ -115,7 +120,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
             return (
               <div key={r.id} className="rcpt" style={{ ['--fc' as any]: ed.color(r.id) }}>
                 <div className="row wrap">
-                  {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
+                  {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
                   {isTpl && <input placeholder="Role, e.g. Client" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
                   <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
                   {/* No address for someone whose link the sender sends themselves (SendMyself.tsx, below). */}
@@ -124,11 +129,11 @@ export function StepAdd({ ed }: { ed: Ed }) {
                       const c = contacts.find((x) => x.email.toLowerCase() === e.target.value.toLowerCase());
                       ed.patchRcp(r.id, { email: e.target.value, ...(c && !r.name ? { name: c.name } : {}) });
                     }} />}
-                  <select value={r.role} aria-label="Role" style={{ flex: '0 1 170px' }} onChange={(e) => ed.patchRcp(r.id, { role: e.target.value })}>
+                  <select value={r.role} aria-label="Role" style={{ flex: '0 1 170px' }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { role: e.target.value })}>
                     {Object.entries(ROLE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                   </select>
                   <button type="button" className="btn sm ghost" onClick={() => setMore(more === r.id ? null : r.id)} aria-expanded={more === r.id} aria-label={`More options for ${who(r)}`}>More</button>
-                  <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${who(r)}`}>✕</button>
+                  {!wording && <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${who(r)}`}>✕</button>}
                 </div>
                 <SendMyself r={r} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
                 {more === r.id && (
@@ -153,18 +158,18 @@ export function StepAdd({ ed }: { ed: Ed }) {
             );
           })}
         </div>
-        <div className="row wrap" style={{ marginTop: 12 }}>
+        {!wording && <div className="row wrap" style={{ marginTop: 12 }}>
           <button type="button" className="btn" disabled={rcps.length >= MAX_RECIPIENTS} onClick={() => ed.addRcp()}>Add {isTpl ? 'role' : 'recipient'}</button>
           {!isTpl && rcps.length < MAX_RECIPIENTS && !rcps.some((r) => r.email.toLowerCase() === me.user.email.toLowerCase()) && <button type="button" className="btn ghost" onClick={() => ed.addRcp({ name: me.user.name, email: me.user.email })}>Add myself</button>}
           {rcps.length >= MAX_RECIPIENTS && <span className="muted small">An envelope can have up to {MAX_RECIPIENTS} recipients.</span>}
-        </div>
+        </div>}
         {!isTpl && rcps.length > 0 && !rcps.some(SIGNS) && <p className="muted small" style={{ margin: '10px 0 0' }}>Nobody signs yet. Fields can only be placed for people who sign.</p>}
       </div>
 
       <div className="card">
         <h2 style={{ marginBottom: 12 }}>{isTpl ? 'Template details' : 'Message'}</h2>
         <label className="f"><span>{isTpl ? 'Template name and email subject' : 'Email subject'}</span><input value={env.subject} maxLength={200} onChange={(e) => ed.patchEnv({ subject: e.target.value })} /></label>
-        <label className="f"><span>Message <span className="hint">(optional)</span></span><textarea value={env.message} maxLength={5000} onChange={(e) => ed.patchEnv({ message: e.target.value })} /></label>
+        <label className="f"><span>Message <span className="hint">{wording ? '(from the template, locked)' : '(optional)'}</span></span><textarea value={env.message} maxLength={5000} readOnly={!!wording} onChange={(e) => ed.patchEnv({ message: e.target.value })} /></label>
         <div className="grid g2">
           <label className="f"><span>Remind every <span className="hint">(days, 0 for never)</span></span><input type="number" inputMode="numeric" min={0} max={60} value={env.reminder_days} onChange={(e) => ed.patchEnv({ reminder_days: Number(e.target.value) })} /></label>
           {correcting
@@ -183,6 +188,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
           </div>
         </div>
       </div>
+      {/* Who can use and change this template, and its lock: said in a sentence, changed by its owner and admins. */}
+      {isTpl && <WhoCanUse templateId={env.id} name={env.subject || 'Untitled template'} access={env.access} />}
     </div>
   );
 }

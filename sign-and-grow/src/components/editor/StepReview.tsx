@@ -159,7 +159,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {/* Reminders are on for a new account without anyone having chosen that, so the choice stands by the Send button. */}
       {!closed && <ReminderChoice days={env.reminder_days} isTpl={isTpl} bySender={!isTpl && rcps.some((r) => r.link_by_sender)} onChange={(n) => ed.patchEnv({ reminder_days: n })} />}
       {/* A link to the sender's own payment page, shown to signers after Finish. Absent for an account that may not show one. */}
-      {!closed && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} />}
+      {/* The payment link comes with a template's wording, so it is not offered where that wording is locked (tplroles.ts). */}
+      {!closed && !ed.wording && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} />}
 
       {correcting && result ? (
         <div className="card">

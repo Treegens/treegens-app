@@ -28,7 +28,7 @@ const root = path.join(import.meta.dirname, '..');
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8');
 const signPage = () => read('src/app/sign/[token]/page.tsx');
 const requireCjs = createRequire(import.meta.url);
-const noDash = (text: string, where: string) => assert.ok(!/—/.test(text), `no em dash in ${where}`);
+const noDash = (text: string, where: string) => assert.ok(!/\u2014/.test(text), `no em dash in ${where}`);
 
 // ---- A. An older phone ---------------------------------------------------------------------------------
 
@@ -84,6 +84,8 @@ test('a browser that cannot show the document is told so in words, with a way fo
   assert.ok(notice.includes('You cannot sign in it'), 'it says plainly that signing cannot happen in that browser');
   assert.equal(CANNOT_SHOW_WAYS.length, 3);
   noDash(notice, 'NoViewer.tsx');
+  // Next, with no pages to go to, does not promise that waiting will help.
+  assert.match(signPage(), /document\.querySelector\('\.sg-noview'\) \? 'The document cannot be shown on this device, so its fields cannot be reached here\./);
 });
 
 test('/help names the browsers that can show the document, and no page promises any phone', () => {
@@ -271,7 +273,8 @@ test('a Finish sent again after its answer was lost signs once, uses one signatu
   const v = (await phone.get(`/sign/${tok}`)).data;
   const body = { values: { [v.fields[0].id]: '1' }, signature_png: PNG, version: v.version };
   const used = () => s.db.get("SELECT COUNT(*) n FROM recipients WHERE envelope_id=? AND status='completed'", e.id).n;
-  assert.equal((await phone.post(`/sign/${tok}/complete`, body)).status, 200);
+  const first = await phone.post(`/sign/${tok}/complete`, body);
+  assert.equal(first.status, 200, JSON.stringify(first.data));
   // The answer never reached the phone, so it sends Finish again by itself.
   const again = await phone.post(`/sign/${tok}/complete`, body);
   assert.equal(again.status, 409);
@@ -316,7 +319,7 @@ test('pages far from view give their picture back, are drawn again when they com
   assert.ok(zoomed * 732 > 366 * 3 * 1.4, 'and is still drawn with more points than at 100 percent');
   // The viewer: pages start with an empty picture, give it back when far, and say so when one cannot be drawn.
   const viewer = read('src/components/PdfDoc.tsx');
-  assert.match(viewer, /<canvas ref=\{canvas\} width=\{0\} height=\{0\}/);
+  assert.ok(viewer.includes('shown as a picture`} width={0} height={0} />'), 'a page starts with an empty picture');
   assert.match(viewer, /if \(!visible\) \{[^}]*c\.width = 0;\s+c\.height = 0;/);
   assert.match(viewer, /pixelRatio\(width, /);
   assert.ok(!/Math\.min\(window\.devicePixelRatio \|\| 1, 2\)/.test(viewer), 'no fixed cap of 2 any more');
@@ -428,4 +431,29 @@ test('the server refuses to send or correct into stacked fields, and nothing goe
   assert.equal(again.status, 400);
   assert.match(again.data.error, /^Two fields for Pat Phone sit on top of each other on page 1/);
   assert.deepEqual((await c.get(`/envelopes/${e.id}`)).data.envelope.fields.map((f: any) => f.y).sort(), [0.3, 0.5]);
+});
+
+// ---- G. The adopt dialog on its side, at large text and at 200 percent --------------------------------------
+
+test('the adopt dialog keeps its buttons, the sentence and any problem on screen, and narrow screens keep their bars whole', () => {
+  // Measured with tests/out/gaps-mobile-sign/g-adopt.cjs after a tap on the pad: Adopt and sign, Cancel and the
+  // problem all on screen without scrolling at 390x844, 844x390, 320x568 and 195x422 (a 390 px phone at 200 percent).
+  const pad = read('src/components/SignaturePad.tsx');
+  const foot = pad.slice(pad.indexOf('<div className="sg-adopt-foot">'), pad.indexOf('</Dialog>'));
+  assert.ok(foot.includes('role="alert">{error}</div>'), 'the problem is read out, and shown next to the buttons');
+  assert.ok(foot.includes('sg-siglegal') && foot.includes('Adopt and sign') && foot.includes('>Cancel</button>'));
+  assert.ok(!pad.slice(0, pad.indexOf('<div className="sg-adopt-foot">')).includes('role="alert"'), 'only one place for the problem');
+  const css = read('src/app/styles/signphone.css');
+  assert.match(css, /\.sg-adopt-foot \{ position: sticky; bottom: calc\(-1 \* var\(--sg-dpb\)\);/);
+  assert.match(css, /\.sg-adopt-foot > \.sg-siglegal \{ flex: 0 1 auto; min-height: 2\.8em; overflow-y: auto; \}/, 'the sentence gives way before the buttons');
+  // The signing page at 195 px: the title on its own line, the bottom bar stacked, pictures inside their card.
+  const narrow = css.slice(css.indexOf('@media (max-width: 300px)'));
+  for (const rule of ['.sg-bar { flex-wrap: wrap; }', '.sg-bottom { flex-wrap: wrap;', '.sg-bottom .btn.sg-big { flex: 1 1 100%; }', 'white-space: normal;']) assert.ok(narrow.includes(rule), rule);
+  assert.match(css, /\.sg-row-sig img \{ max-width: min\(240px, 100%\); \}/);
+  // Decline is under Other actions in the top bar: 44 px on any touch screen, also on a phone held sideways.
+  assert.match(css, /@media \(pointer: coarse\) \{\s+\.sg-bar \.btn\.sm, \.sg-bar \.btn\.go \{ min-height: 44px; \}/);
+  // The new styles are loaded after the ones they extend.
+  const layout = read('src/app/layout.tsx');
+  assert.ok(layout.indexOf("import './styles/signphone.css';") > layout.indexOf("import './styles/sign.css';"));
+  noDash(css, 'signphone.css');
 });

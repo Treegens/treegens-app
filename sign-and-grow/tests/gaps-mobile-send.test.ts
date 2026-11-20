@@ -769,7 +769,7 @@ test('a document large enough to be slow on a phone is pointed out with the time
   const said = phoneWeight({ size: 12_340_000 });
   assert.equal(said, `This file is 12.3 MB. Every signer's phone downloads all of it, which takes ${phoneWait(12_340_000)} on a slow mobile connection and longer where the signal is weak. If people will sign on a phone, save it with smaller pictures (many PDF programs have "reduce file size") or split it into parts. Under 5 MB is best.`);
   // It says what the sender can do, never that the document will not open or must be changed.
-  assert.doesNotMatch(said, /will not open|cannot be opened|must|—/);
+  assert.doesNotMatch(said, /will not open|cannot be opened|must|\u2014/);
 
   // The size it needs comes from the server: with the upload, and with the envelope when a draft is opened again.
   const c = await signUp('Wren Weighty', 'wren@example.com', ip());

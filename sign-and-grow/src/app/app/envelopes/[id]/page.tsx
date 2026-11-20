@@ -15,6 +15,7 @@ import { PrintNotice } from '@/components/sender/PrintNotice';
 import { PayLinkNote } from '@/components/sender/PayLinkNote';
 import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { ownLink } from '@/components/sender/OwnLink';
+import { Disputed } from '@/components/sender/Disputed';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
 const MAIL_STATUS: Record<string, string> = { sent: 'Handed to the mail server', outbox: 'Not delivered, no mail server set up', failed: 'Could not be sent', queued: 'Waiting to go out' };
@@ -61,8 +62,10 @@ export default function EnvelopeDetail() {
   const e = data.envelope;
   const deliveries: Delivery[] = data.deliveries || [];
   const isTpl = e.kind === 'template';
-  // Everyone on the team can use a template. Changing or deleting it is for the person it belongs to and for admins.
-  const mayChange = !isTpl || me.role !== 'member' || e.sender_id === me.user.id;
+  // A template says who may change it (access, src/server/tplroles.ts): the person it belongs to and admins, and
+  // whoever its rule adds. A locked one is not copied as a way to change it: the copy would be locked too.
+  const mayChange = !isTpl || (e.access ? e.access.may_change !== false : me.role !== 'member' || e.sender_id === me.user.id);
+  const tplLocked = isTpl && !!e.access?.locked && !mayChange;
   const done = e.status === 'completed';
   // Set when its sender removed this envelope from their lists. Only an admin gets to see it then: they can read
   // it, download it and put it back, and nothing else until it is back.
@@ -108,6 +111,8 @@ export default function EnvelopeDetail() {
   }
   const clone = (kind: 'envelope' | 'template') => act(async () => {
     const r = await api(`/envelopes/${e.id}/clone`, { body: { kind } });
+    // A template made from a locked one stays with the person that one belongs to, and its wording stays locked.
+    if (r.belongs_to) return (toast(`Saved as a template. Its wording is locked like the template it came from, so it belongs to ${r.belongs_to}, and only they or an admin can change it.`), router.push('/app/templates'));
     router.push(`/app/${kind === 'template' ? 'templates' : 'envelopes'}/${r.id}/edit`);
   });
 
@@ -128,7 +133,7 @@ export default function EnvelopeDetail() {
           {!removed && <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>}
           {!removed && !isTpl && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
           {out && <button className="btn danger" onClick={() => setDialog('void')}>Void</button>}
-          {!removed && !out && mayChange && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
+          {!removed && !out && mayChange && (!isTpl || e.access?.may_delete !== false) && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
         </div>
       </div>
 
@@ -137,7 +142,7 @@ export default function EnvelopeDetail() {
           <div className="sn-now-main">
             <div>
               <p className="sn-now-line">Removed from its sender&apos;s lists on {longDate(removed)}.</p>
-              <p className="sn-now-sub">It is in no list, search, export or report of your team. Everyone who was on it still has their link and their copy. You can open it because you are an admin of this account.</p>
+              <p className="sn-now-sub">It is only under Envelopes, in the tab Removed by its sender: in no other list, search, export or report of your team. Everyone who was on it still has their link and their copy. You can open it because you are an admin of this account.</p>
               <p className="sn-now-sub">Put it back and it is an ordinary envelope again, for its sender and for the admins. The audit trail records who removed it and who put it back.</p>
             </div>
             <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => act(() => api(`/envelopes/${e.id}/restore`, { method: 'POST' }), 'Put back. It is in the lists, the search, the export and the reports again.')}>Put it back</button></div>
@@ -145,14 +150,18 @@ export default function EnvelopeDetail() {
         </section>
       )}
 
+      {/* Someone named on it said they did not sign it, or that it was not them (src/server/evidence.ts). */}
+      <Disputed envelope={e} audit={data.audit} />
+
       {/* A name or wording in a script the signed PDF has no font for: said here, before anyone signs. */}
       {(data.print_problems || []).length > 0 && <PrintNotice problems={data.print_problems} />}
 
       {e.status === 'draft' && (
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
-            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To change something, make your own copy: the copy is yours and the original stays as it is.'}</p></div>
+            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : tplLocked ? `Use it to start a new envelope. Its wording is locked: you fill in names, email addresses and the fields left empty for you. To change it, ask ${e.access.owner} or an admin of your team.` : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To change something, make your own copy: the copy is yours and the original stays as it is.'}</p></div>
             {mayChange ? <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>
+              : tplLocked ? <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Use</button></div>
               : <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('template')}>Make my own copy</button></div>}
           </div>
         </section>

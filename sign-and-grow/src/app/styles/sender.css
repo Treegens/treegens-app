@@ -189,12 +189,13 @@ table.sn-batch tr.cont td { border-bottom: 0; padding-bottom: 2px; }
 
 /* ---- Phones and small tablets ---- */
 @media (max-width: 900px) {
-  .sn .btn { min-height: 42px; }
+  /* 44 px: the smallest a finger can hit reliably. */
+  .sn .btn { min-height: 44px; }
   /* 16px keeps phones from zooming the page when a box is tapped. */
   .sn input:not([type='checkbox']):not([type='radio']), .sn select, .sn textarea { font-size: 16px; min-height: 44px; }
   .sn .btn.sm { padding: 8px 13px; font-size: 14px; }
   .sn .tabs { flex-wrap: wrap; overflow: visible; }
-  .sn .tabs button { min-height: 42px; }
+  .sn .tabs button { min-height: 44px; }
   .sn-back { min-height: 40px; }
   .sn-mails summary { min-height: 40px; display: flex; align-items: center; gap: 6px; }
   .sn-mails summary::before { content: '▸'; }

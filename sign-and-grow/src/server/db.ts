@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { storeFile, readStored } from './filestore.ts';
+import { PRICING } from '../lib/impact.ts';
 
 // SQLite via Node's built-in driver: no native build step, one file on disk.
 // getBuiltinModule keeps bundlers from trying to resolve `node:sqlite` themselves.
@@ -133,6 +134,17 @@ CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id 
 -- The security codes of emails about documents that were deleted since, as fingerprints only: no name, no address,
 -- no subject. They let the check page say "that email was real, the document has been deleted" instead of "fake".
 CREATE TABLE IF NOT EXISTS forgotten_codes (code_hash TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- The same for the signed PDF of a completed envelope that was deleted with its account: the SHA-256 of the file,
+-- the envelope id and the day it was completed, nothing else (no name, no address, no title). /verify can then say
+-- "completed here on that day, deleted by its sender since" instead of "no match". Kept a year (src/server/evidence.ts).
+CREATE TABLE IF NOT EXISTS forgotten_files (file_sha256 TEXT PRIMARY KEY, envelope_id TEXT NOT NULL, completed_at TEXT, at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS forgotten_files_env ON forgotten_files(envelope_id);
+-- "I did not sign this, or this was not me", from a person named on the envelope (src/server/evidence.ts). One row
+-- per person and envelope. Nothing is ever deleted because of one; the row goes with the envelope.
+CREATE TABLE IF NOT EXISTS disputes (
+  id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, recipient_id TEXT NOT NULL,
+  name TEXT NOT NULL, email TEXT, via TEXT NOT NULL, detail TEXT, ip TEXT, user_agent TEXT, at TEXT NOT NULL, UNIQUE (envelope_id, recipient_id)
+);
 -- A signature that was set aside because the sender changed the document afterwards and asked for a new one. The
 -- audit trail says so in words. This keeps the signature itself and the answers exactly as they were.
 CREATE TABLE IF NOT EXISTS earlier_signatures (
@@ -596,7 +608,38 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // change the documents, the fields, that wording or the message of the envelope.
   ['envelopes', 'wording_from', 'TEXT'],
   ['envelopes', 'wording_fixed', 'TEXT'],
+  // Around the certificate (src/server/evidence.ts). disputed_at: the first time a person named on the envelope said
+  // they did not sign it, or that it was not them. final_pages: how many pages the signed PDF has, counted once for
+  // the lookup by envelope ID. copy_opened_at: when this person first opened or downloaded the completed copy.
+  // visit_noted_at: the last later visit written to the audit trail (once a day at most).
+  ['envelopes', 'disputed_at', 'TEXT'],
+  ['envelopes', 'final_pages', 'INTEGER'],
+  ['recipients', 'copy_opened_at', 'TEXT'],
+  ['recipients', 'visit_noted_at', 'TEXT'],
+  // When the timer last looked at a payment that is still not applied, so it takes the least recently looked at first.
+  ['payments', 'checked_at', 'TEXT'],
+  // Goes up each time the request passes to another person (another address, or another name at the same address
+  // that is not a spelling of the old one). It is part of the signature's ledger line once above zero (sigRef in
+  // src/server/credits.ts), so a second person never signs on what the first one paid for. 0 keeps every line from
+  // before valid.
+  ['recipients', 'person_gen', 'INTEGER NOT NULL DEFAULT 0'],
+  // A visitor of a public form who pressed Finish while no signature was free: when they were told that what they
+  // filled in is kept and that we email them, and when that email went (form_ready_at). While they wait, the timer
+  // does not close their start for being idle.
+  ['recipients', 'form_waits_at', 'TEXT'],
+  ['recipients', 'form_ready_at', 'TEXT'],
 ];
+
+// The monthly price each account is on, written down once when the server starts for every account that has none
+// (accounts from before it was kept, and any made since that has not started a plan): what its last plan payment was
+// before tax, or, with none, the price for new customers at that moment. A new subscription sets its own when it is
+// taken up (adopt in routes-billing.ts), so a returning customer is never held to the price of a plan that ended.
+export function fillPrices(d: any = db()): number {
+  return Number(d.prepare(`UPDATE accounts SET price_cents = COALESCE(
+      (SELECT p.amount_cents - accounts.renewal_tax_cents FROM payments p WHERE p.account_id = accounts.id AND p.kind = 'plan'
+        AND p.applied_at IS NOT NULL AND p.credits > 0 AND p.currency = 'usd' ORDER BY p.at DESC, p.rowid DESC LIMIT 1),
+      ?) WHERE price_cents IS NULL`).run(Math.round(PRICING.monthlyUsd * 100)).changes);
+}
 
 function migrate(d: any) {
   const hadPrefill = d.prepare('PRAGMA table_info(fields)').all().some((c: any) => c.name === 'prefill');
@@ -628,6 +671,8 @@ function migrate(d: any) {
     d.exec('UPDATE users SET welcomed_at=created_at WHERE NOT EXISTS (SELECT 1 FROM invites i WHERE i.email=users.email AND i.accepted_at=users.created_at)');
   // One batch per person per Idempotency-Key, whatever else happens.
   d.exec('CREATE UNIQUE INDEX IF NOT EXISTS bulk_batches_idem ON bulk_batches(account_id, sender_id, idem_key) WHERE idem_key IS NOT NULL');
+  // Every account has the monthly price it is on written down (src/server/routes-billing.ts, priceFor).
+  fillPrices(d);
   // idempotency_keys used to be keyed by account alone and kept rows whose envelope had been deleted. The new shape
   // has a different primary key and a foreign key, which SQLite cannot add to a table that exists, so a table in the
   // old shape is made again once. Keys whose envelope still exists move to that envelope's sender; the rest pointed

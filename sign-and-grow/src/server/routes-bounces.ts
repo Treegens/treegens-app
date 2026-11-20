@@ -6,6 +6,7 @@ import { checkPassword, hasPassword } from './auth.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { audit, assertMayEmail, loadEnvelope, notifyRecipient, notifySender, reportAbuse, senderOf } from './envelopes.ts';
 import { find } from './routes-sign.ts';
+import { welcomeMark } from './routes-trust.ts';
 import {
   mailEventsAuth, readEvents, bounceWhy, softBounceDays, forgetSoftDays, noteBounced, forgetBounced, mailStop, mailStopText, sameAddress as same, type MailEvent,
 } from './bounces.ts';
@@ -376,6 +377,9 @@ route('POST', '/me/email/confirm', async (c) => {
     if (get('SELECT 1 x FROM users WHERE email=? AND id != ?', row.new_email, c.user.id)) throw bad(`In the meantime a Sign&Grow login was made with ${row.new_email}, so this one cannot move there. Nothing was changed.`, 409);
     // The new address is proven, and whatever was known about the old one is not about this one.
     run('UPDATE users SET email=?, email_verified=1, email_bounced_at=NULL, email_bounce_reason=NULL WHERE id=?', row.new_email, c.user.id);
+    // The welcome signatures are given once per address (welcomeMark in routes-trust.ts). The confirmed address this
+    // login leaves was welcomed, so a new login made under it now is not welcomed a second time.
+    if (c.user.welcomed_at && c.user.email_verified) run('INSERT OR IGNORE INTO welcomed (email_hash, at) VALUES (?,?)', welcomeMark(old), String(c.user.welcomed_at).slice(0, 10));
     run('DELETE FROM email_changes WHERE user_id=?', c.user.id);
     // Links that were mailed to the old address open nothing any more, and other browsers are signed out.
     run('DELETE FROM password_resets WHERE user_id=?', c.user.id);

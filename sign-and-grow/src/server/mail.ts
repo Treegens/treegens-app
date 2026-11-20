@@ -38,7 +38,16 @@ async function transport() {
   if (!process.env.SMTP_URL) return null;
   if (!g.__tsmail) {
     const nodemailer = (await import('nodemailer')).default;
-    g.__tsmail = nodemailer.createTransport(process.env.SMTP_URL);
+    // A mail server that takes the connection and then says nothing must not hold up whatever is waiting for this
+    // email (a payment step, say) for nodemailer's own limits of up to ten minutes. These limits apply unless the
+    // address names its own (?connectionTimeout=...&greetingTimeout=...&socketTimeout=..., in milliseconds).
+    let url = process.env.SMTP_URL;
+    try {
+      const u = new URL(url);
+      for (const [k, v] of [['connectionTimeout', '10000'], ['greetingTimeout', '10000'], ['socketTimeout', '20000']]) if (!u.searchParams.has(k)) u.searchParams.set(k, v);
+      url = u.toString();
+    } catch {}
+    g.__tsmail = nodemailer.createTransport(url);
   }
   return g.__tsmail;
 }

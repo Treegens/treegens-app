@@ -1,7 +1,7 @@
 // Encryption of stored files by the app itself (FILE_ENCRYPTION_KEY): the format, the check on every read, the stop
 // when the key does not fit the files that are there, changing the key, the script that encrypts what was stored
 // before, and the whole product run with a key set. Then what the pages and the README say about it.
-import { test, before, afterEach } from 'node:test';
+import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -35,7 +35,9 @@ const setKeys = (current?: string, old: string[] = []) => {
   else delete process.env.FILE_ENCRYPTION_KEYS_OLD;
 };
 afterEach(() => setKeys());
-const folder = () => fs.mkdtempSync(path.join(os.tmpdir(), 'sg-encrypt-'));
+const made: string[] = [];
+const folder = () => (made.push(fs.mkdtempSync(path.join(os.tmpdir(), 'sg-encrypt-'))), made[made.length - 1]);
+after(() => made.forEach((d) => fs.rmSync(d, { recursive: true, force: true })));
 const sha = (b: Uint8Array) => crypto.createHash('sha256').update(b).digest('hex');
 const bytes = (text: string) => Buffer.from(`%PDF-1.7 ${text} ${crypto.randomBytes(8).toString('hex')}`);
 const refused = (fn: () => any): HttpError => {
@@ -182,6 +184,19 @@ test('a changed byte anywhere, a file cut short, or a file under another name is
   assert.equal(filed.length, 1);
   assert.match(filed[0], new RegExp(`A stored file could not be read \\(damaged\\)[\\s\\S]*${other}[\\s\\S]*Put it back from a backup`));
   assert.ok(!filed[0].includes(K1), 'never the key');
+  // With an address to tell, it is emailed too.
+  process.env.SUPPORT_EMAIL = 'files-help@crypt.example';
+  try {
+    refused(() => readStored(dir, other)); // reported above already
+    fs.writeFileSync(file, Buffer.alloc(0));
+    refused(() => readStored(dir, name)); // newly damaged
+    await new Promise((r) => setTimeout(r, 300));
+    const mails = db.all("SELECT subject FROM emails WHERE to_email='files-help@crypt.example'").map((m) => m.subject);
+    assert.deepEqual(mails, ['A stored file could not be read (damaged)'], 'one email for the newly damaged file, none again for the one already reported');
+  } finally {
+    delete process.env.SUPPORT_EMAIL;
+    fs.writeFileSync(file, sealed);
+  }
   // A damaged header does not stop the server from storing files: that is one bad file, not a wrong key.
   fs.writeFileSync(file, sealed.subarray(0, 30));
   const st = storeState(dir, true);
@@ -261,7 +276,7 @@ test('a server started with a key that cannot read the files there says so loudl
   assert.ok(storeFile(dir, bytes('stored again')));
 });
 
-test('a FILE_ENCRYPTION_KEY that is not a key stops storing files and says how to make one, and the pages never claim encryption', () => {
+test('a FILE_ENCRYPTION_KEY that is not a key stops storing files and says how to make one, and the pages never claim encryption', async () => {
   const dir = folder();
   storeFile(dir, bytes('before'));
   for (const bad of ['change-me', K1.slice(0, -2), crypto.randomBytes(32).toString('hex'), crypto.randomBytes(16).toString('base64'), `${K1.slice(0, 10)}!${K1.slice(11)}`]) {
@@ -275,6 +290,8 @@ test('a FILE_ENCRYPTION_KEY that is not a key stops storing files and says how t
     assert.ok(!w.includes(bad), 'the wrong value is not printed either');
     assert.equal(refused(() => storeFile(dir, bytes('new'))).data?.code, 'storage_stopped', 'never stored as it is while the operator believes it is encrypted');
   }
+  await tick();
+  assert.ok(alerts().some((a) => a.startsWith('Storing files is stopped: FILE_ENCRYPTION_KEY is not a key') && !a.includes('change-me')), 'filed for the people who run the server, without the value');
   // Both ways of writing base64 are keys, and a key with spaces around it is the same key.
   const raw = crypto.randomBytes(32);
   assert.deepEqual(decodeFileKey(raw.toString('base64url')), raw);

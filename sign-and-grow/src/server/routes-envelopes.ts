@@ -19,6 +19,7 @@ import { assertBySenderCorrection } from './bysender.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { cookie, readCookie } from './auth.ts';
 import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
+import { CLOSED, senderNotice } from './evidence.ts';
 import { sendWarnings } from './warnings.ts';
 import { emailRefusal, fieldProgress, formPageRefusal, yesNo } from './envelopes.ts';
 import { PRICING } from '../lib/impact.ts';
@@ -207,7 +208,8 @@ route('POST', '/envelopes', async (c) => {
     const tpl = mine(c, str(b.template_id), 'template');
     // A locked template keeps its own message for whoever may not change it. The subject is the envelope's name.
     assertMessageKept(c, tpl, b.message);
-    eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: c.user.id, kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
+    // "kind": "template" with a template_id is a copy of the template, held to the same rule as /clone (cloneOwner).
+    eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: cloneOwner(c, tpl, kind), kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
   } else {
     eid = createEnvelope(c.account, c.user.id, kind, b);
     try {
@@ -343,13 +345,15 @@ route('DELETE', '/envelopes/:id', (c) => {
 // Puts an envelope its sender removed from their lists back where it was: in the sender's lists, the search, the
 // export and the reports. For admins, because the member who removed it cannot see it any more and the account
 // must not be the one party to a signed document that cannot get at it. One statement decides, so two calls at the
-// same moment leave one line in the record.
+// same moment leave one line in the record. Checked here rather than by the router's admin level, so an admin's
+// "send" key, which can already list and open these, is not told that this is an account setting.
 route('POST', '/envelopes/:id/restore', (c) => {
+  if (!c.admin) throw bad('Only an admin of the account can put back an envelope that its sender removed. Ask an admin of your team.', 403);
   const e = mine(c, c.params.id, 'envelope', { removed: true });
   if (run('UPDATE envelopes SET hidden_at=NULL WHERE id=? AND hidden_at IS NOT NULL', e.id).changes)
     audit(e.id, c.actor, 'Put back in the sender\'s lists', 'An admin of the account put this envelope back after it had been removed from the sender\'s lists.');
   return { envelope: publicEnvelope(loadEnvelope(e.id)) };
-}, 'admin');
+});
 
 // A send to an address at which an email of this account came back for good in the last weeks is answered 409 with
 // "code": "bounced_address" and which address, when and why. Nothing was sent. The same call with a body of
@@ -439,7 +443,9 @@ route('GET', '/envelopes/:id/download', async (c) => {
   const e = mine(c, c.params.id, undefined, { removed: true });
   if (!e.documents.length) throw bad('This envelope has no documents yet.');
   const done = finalPdf(e);
-  return pdfResponse(done || (await buildPdf(e, false)), e.subject || 'document', c.q.get('inline') === '1');
+  // A closed envelope's copy opens with a page that says it was not completed, and is marked across every page, so
+  // the signatures already on it never pass for a signed document (senderNotice in evidence.ts).
+  return pdfResponse(done || (await buildPdf(e, false, undefined, CLOSED.includes(e.status) ? senderNotice(e) : undefined)), e.subject || 'document', c.q.get('inline') === '1');
 });
 
 // ---- Bulk send -----------------------------------------------------------------------------
@@ -813,8 +819,13 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   // (see completeRecipient). Starting holds nothing and other people's unfinished starts are not counted, so a
   // stranger who starts and walks away stands in nobody's way. When the owner has none free the form says so
   // before anyone fills it in, and the owner is told (once a day at most) instead of finding out from a customer.
-  if (creditsEnabled() && isChargeable({ role: open.role, email, name }, get('SELECT email, name FROM users WHERE id=?', tpl.sender_id) || '') && available(p.account_id) < 1) {
-    await formNeedsSignatures(p.account_id, p.id);
+  // What one visitor's envelope needs is worked out the way sending counts it: the visitor, and anyone else the
+  // template has who signs (a colleague who countersigns, say). A start is refused only when what is free does not
+  // cover that.
+  const owner = get('SELECT email, name FROM users WHERE id=?', tpl.sender_id) || '';
+  const need = creditsEnabled() ? tpl.recipients.filter((r: any) => isChargeable(r.id === open.id ? { role: r.role, email, name } : { role: r.role, email: r.email, name: r.name }, owner)).length : 0;
+  if (need > 0 && available(p.account_id) < need) {
+    await formNeedsSignatures(p.account_id, p.id, 'start', need);
     throw bad('This form cannot take new signatures right now. Please try again a little later, or contact the people who sent you here.', 503);
   }
   const eid = copyEnvelope(tpl, { accountId: p.account_id, senderId: tpl.sender_id, kind: 'envelope', subject: p.name, fill: { [open.id]: { name, email } }, extra: { powerform_id: p.id } });

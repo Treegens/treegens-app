@@ -1,0 +1,517 @@
+// What happens around the certificate when a document is disputed: the words of /verify and /security, what is kept
+// after a deletion, the lookup by envelope ID, the record of the completed copy, closed copies that cannot pass for
+// signed ones, "this was not me", the evidence pack and the page that explains a certificate.
+import { test, before } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { boot, Client, signUp, simple, signAll, mailTo, tokenFor, type Server } from './helpers.ts';
+import { MATCH_MEANS, NO_MATCH_CAUSES, CHAIN_TRUTH } from '../src/lib/evidence.ts';
+import { sha256 } from '../src/server/util.ts';
+
+let db: Server['db'];
+let env: Server['env'];
+let cron: Server['cron'];
+before(async () => {
+  ({ db, env, cron } = await boot());
+});
+
+let n = 0;
+const ip = () => `10.77.${++n % 250}.${1 + Math.floor(n / 250)}`;
+const person = (name: string, email: string) => signUp(name, email, ip());
+const from = () => Object.assign(new Client(), { ip: ip() });
+const src = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+const auditOf = (envelopeId: string) => db.all('SELECT actor, action, detail, ip, user_agent FROM audit WHERE envelope_id=? ORDER BY seq', envelopeId);
+const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ');
+
+const ago = (days: number) => new Date(Date.now() - days * 864e5).toISOString();
+const PW = 'correct horse battery';
+// A file dropped on /verify by someone with no account.
+async function verify(bytes: Uint8Array, name = 'signed.pdf') {
+  const f = new FormData();
+  f.append('file', new Blob([bytes], { type: 'application/pdf' }), name);
+  return from().call('POST', '/public/verify', f);
+}
+
+// One envelope, sent and signed by Sam, so it is completed.
+async function completed(sender: Client, email: string, over: any = {}) {
+  const e = await simple(sender, email, over);
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, email)).status, 200);
+  return db.get('SELECT * FROM envelopes WHERE id=?', e.id);
+}
+
+// ---- A. What /verify, /security and the home page promise ---------------------------------------------------
+
+test('A: the pages say what a match shows and what it does not, list the causes of "no match", and say how far the chain goes', () => {
+  const verify = src('src/app/verify/page.tsx');
+  assert.doesNotMatch(verify, /Authentic/, '"authentic" reads as "these people really signed"');
+  assert.match(verify, /Unchanged since signing finished/);
+  assert.match(verify, /\{MATCH_MEANS\}/);
+  assert.match(MATCH_MEANS, /does not show who was behind each signature/);
+  assert.match(verify, /NO_MATCH_CAUSES\.map/);
+  for (const cause of [/changed after signing/, /saved again by a PDF viewer/, /printout or a scan/, /deleted it/, /never completed here/]) assert.ok(NO_MATCH_CAUSES.some((c) => cause.test(c)), String(cause));
+  assert.doesNotMatch(verify, /is not a completed document from this service, or it was changed after signing/);
+
+  const security = src('src/app/security/page.tsx');
+  assert.doesNotMatch(security, /who signed, when, from where/);
+  assert.doesNotMatch(security, /Changing or removing an old entry breaks the chain, and the app shows that it is broken/);
+  assert.match(security, /\{CHAIN_TRUTH\}/);
+  assert.match(security, /\{WHO_WHEN_WHERE\}/);
+  assert.match(CHAIN_TRUTH, /no secret key/);
+  assert.match(CHAIN_TRUTH, /whoever can write to that database/);
+  assert.match(CHAIN_TRUTH, /chain head printed on the certificate/);
+  assert.match(CHAIN_TRUTH, /browser description stored with a line is not part of its fingerprint/);
+  assert.match(src('src/app/page.tsx'), /Every completed envelope gets a certificate of completion/);
+  assert.doesNotMatch(src('README.md'), /Editing any past event breaks the chain, and the app shows it\./);
+});
+
+test('A: what the chain text says is what verifyChain does: a careless edit shows, a recomputed rewrite does not, and the browser string is outside it', async () => {
+  const sender = await person('Chain Sender', 'chain@disputes.example');
+  const e = await completed(sender, 'chain-signer@disputes.example');
+  assert.equal(env.verifyChain(e.id).ok, true);
+  const rows = db.all('SELECT * FROM audit WHERE envelope_id=? ORDER BY seq', e.id);
+  // The browser description is stored but not hashed: changing it leaves the chain intact.
+  db.run("UPDATE audit SET user_agent='Changed browser' WHERE seq=?", rows[0].seq);
+  assert.equal(env.verifyChain(e.id).ok, true);
+  // A careless edit of one line breaks it.
+  db.run("UPDATE audit SET detail='edited' WHERE seq=?", rows[1].seq);
+  assert.equal(env.verifyChain(e.id).ok, false);
+  // Someone with the database who recomputes every later hash is not caught by the app.
+  let prev = rows[0].hash;
+  for (const a of db.all('SELECT * FROM audit WHERE envelope_id=? AND seq>? ORDER BY seq', e.id, rows[0].seq)) {
+    const h = sha256(JSON.stringify([prev, e.id, a.at, a.actor, a.action, a.detail, a.ip || '']));
+    db.run('UPDATE audit SET prev_hash=?, hash=? WHERE seq=?', prev, h, a.seq);
+    prev = h;
+  }
+  assert.equal(env.verifyChain(e.id).ok, true, 'which is why the pages say so');
+});
+
+// ---- B. What is kept after a deletion --------------------------------------------------------------------------
+
+test('B: after the account is deleted, /verify still knows the signed file by its fingerprint, its id and its day, and nothing else, for a year', async () => {
+  const sender = await person('Gone Sender', 'gone-sender@disputes.example');
+  const e = await completed(sender, 'kept-signer@disputes.example', { subject: 'Lease for Flat 3' });
+  const pdf = (await sender.get(`/envelopes/${e.id}/download`)).data as Uint8Array;
+  const live = await verify(pdf);
+  assert.equal(live.data.match, true);
+  assert.equal(live.data.deleted, undefined);
+
+  // A file that was never completed here is still no match, with no deleted document behind it.
+  const other = await verify(Buffer.concat([Buffer.from(pdf), Buffer.from('\n')]));
+  assert.equal(other.data.match, false);
+  assert.equal(other.data.deleted, null);
+
+  assert.equal((await sender.post('/me/delete', { password: PW, now: true })).status, 200);
+  assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', e.id).n, 0);
+  const kept = db.all('SELECT * FROM forgotten_files WHERE envelope_id=?', e.id);
+  assert.equal(kept.length, 1);
+  assert.deepEqual(Object.keys(kept[0]).sort(), ['at', 'completed_at', 'envelope_id', 'file_sha256']);
+  assert.equal(kept[0].completed_at, e.completed_at);
+  for (const gone of ['Lease', 'Flat 3', 'Gone Sender', 'disputes.example', 'Sam Signer']) assert.ok(!JSON.stringify(kept).includes(gone), `${gone} is not kept`);
+
+  const after = await verify(pdf);
+  assert.equal(after.status, 200);
+  assert.equal(after.data.match, false, 'match is for a document we still hold');
+  assert.equal(after.data.deleted.envelope_id, e.id);
+  assert.equal(after.data.deleted.completed_at, e.completed_at);
+  assert.ok(after.data.deleted.kept_until > after.data.deleted.deleted_at);
+  assert.ok(!/Lease|Gone Sender|Sam Signer|disputes\.example/.test(JSON.stringify(after.data)), 'nothing about who or what');
+  // The page says so, and the pages that list what stays after a deletion say it too.
+  assert.match(src('src/app/verify/page.tsx'), /res\.deleted && /);
+  assert.match(src('src/app/verify/page.tsx'), /Its sender has since deleted it/);
+  const { KEPT_AFTER_DELETION } = await import('../src/lib/policy.ts');
+  assert.ok(KEPT_AFTER_DELETION.some((l) => /fingerprint \(SHA-256\) of its signed PDF, its envelope ID and the day it was completed, for one year/.test(l)));
+
+  // A year later that goes too, and the file is no match like any other.
+  db.run('UPDATE forgotten_files SET at=? WHERE envelope_id=?', ago(366), e.id);
+  await cron.tick();
+  assert.equal(db.get('SELECT COUNT(*) n FROM forgotten_files WHERE envelope_id=?', e.id).n, 0);
+  assert.equal((await verify(pdf)).data.deleted, null);
+});
+
+test('B: a draft, a voided envelope and a closed one nobody completed leave no fingerprint when their account goes', async () => {
+  const sender = await person('Never Done', 'never-done@disputes.example');
+  const draft = await simple(sender, 'd@disputes.example', { subject: 'Draft only' });
+  const voided = await simple(sender, 'v@disputes.example', { subject: 'Voided one' });
+  assert.equal((await sender.post(`/envelopes/${voided.id}/send`)).status, 200);
+  assert.equal((await sender.post(`/envelopes/${voided.id}/void`, { reason: 'Wrong file' })).status, 200);
+  assert.equal((await sender.post('/me/delete', { password: PW, now: true })).status, 200);
+  for (const id of [draft.id, voided.id]) assert.equal(db.get('SELECT COUNT(*) n FROM forgotten_files WHERE envelope_id=?', id).n, 0);
+});
+
+// ---- C. Looking a document up by its envelope ID -------------------------------------------------------------
+
+test('C: the envelope ID on a printed copy leads to its status, day, pages, signers and fingerprint, never to a name, an address or the title', async () => {
+  const sender = await person('Lookup Sender', 'lookup@disputes.example');
+  const e = await completed(sender, 'lookup-signer@disputes.example', { subject: 'Private loan between friends' });
+  const anon = from();
+  const r = await anon.get(`/public/verify/${e.id}`);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.status, 'completed');
+  assert.equal(r.data.completed_at, e.completed_at);
+  assert.equal(r.data.sha256, e.final_sha256);
+  assert.equal(r.data.pages.documents, 1);
+  const pdf = (await sender.get(`/envelopes/${e.id}/download`)).data as Uint8Array;
+  const { PDFDocument } = await import('pdf-lib');
+  assert.equal(r.data.pages.signed_file, (await PDFDocument.load(pdf)).getPageCount(), 'the pages of the signed file, certificate included');
+  assert.equal(db.get('SELECT final_pages n FROM envelopes WHERE id=?', e.id).n, r.data.pages.signed_file, 'counted once and kept');
+  assert.equal(r.data.signers, 1);
+  assert.equal(r.data.signed, 1);
+  assert.equal(r.data.disputed_at, null);
+  for (const secret of ['Private loan', 'Lookup Sender', 'lookup@', 'lookup-signer', 'Sam Signer', 'disputes.example']) assert.ok(!JSON.stringify(r.data).includes(secret), `${secret} is not given out`);
+
+  // Still out, voided: said as what they are, with no fingerprint because there is no signed file.
+  const out = await simple(sender, 'out@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${out.id}/send`)).status, 200);
+  const o = (await anon.get(`/public/verify/${out.id}`)).data;
+  assert.equal(o.status, 'sent');
+  assert.equal(o.sha256, null);
+  assert.equal(o.signed, 0);
+  const v = await simple(sender, 'voided@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${v.id}/send`)).status, 200);
+  assert.equal((await sender.post(`/envelopes/${v.id}/void`, { reason: 'Wrong amount in it' })).status, 200);
+  const vo = (await anon.get(`/public/verify/${v.id}`)).data;
+  assert.equal(vo.status, 'voided');
+  assert.ok(vo.closed_at);
+  assert.ok(!JSON.stringify(vo).includes('Wrong amount'), 'not the reason either');
+
+  // A draft and a template are not found; something that is not an ID is told what an ID looks like.
+  const draft = await simple(sender, 'draft@disputes.example');
+  assert.equal((await anon.get(`/public/verify/${draft.id}`)).status, 404);
+  const bad = await anon.get('/public/verify/not-an-id');
+  assert.equal(bad.status, 400);
+  assert.match(bad.data.error, /starts with env_ and stands at the foot of every page/);
+  const unknown = await anon.get('/public/verify/env_AAAAAAAAAAAAAAAA');
+  assert.equal(unknown.status, 404);
+  assert.match(unknown.data.error, /Check that you typed it exactly as printed/);
+
+  // After the account is deleted, the ID still says completed on that day, deleted since, with the fingerprint.
+  assert.equal((await sender.post('/me/delete', { password: PW, now: true })).status, 200);
+  const gone = (await anon.get(`/public/verify/${e.id}`)).data;
+  assert.equal(gone.status, 'deleted');
+  assert.equal(gone.completed_at, e.completed_at);
+  assert.equal(gone.sha256, e.final_sha256);
+  assert.equal((await anon.get(`/public/verify/${out.id}`)).status, 404, 'one that was never completed leaves nothing');
+});
+
+test('C: the lookup is limited per connection, and the completion email carries the fingerprint of the file it sends', async () => {
+  const sender = await person('Print Sender', 'print@disputes.example');
+  const e = await completed(sender, 'print-signer@disputes.example');
+  const done = mailTo('print-signer@disputes.example').filter((m: any) => m.subject.startsWith('Completed:')).pop();
+  assert.ok(done);
+  assert.match(text(done.html), new RegExp(`SHA-256 fingerprint: ${e.final_sha256}\\. Keep it with your copy\\.`));
+  assert.match(text(done.html), new RegExp(`look the document up there by its envelope ID, ${e.id}`));
+  const own = mailTo('print@disputes.example').filter((m: any) => m.subject.startsWith('Completed:')).pop();
+  assert.match(text(own.html), new RegExp(e.final_sha256), 'the sender\'s too');
+
+  const one = from();
+  let last = 0;
+  for (let i = 0; i < 61; i++) last = (await one.get(`/public/verify/${e.id}`)).status;
+  assert.equal(last, 429);
+  assert.equal((await from().get(`/public/verify/${e.id}`)).status, 200, 'another connection is not held up');
+});
+
+test('C: /verify offers the lookup by ID with "Choose the file to compare" beside it, and opens /verify?id= looked up', () => {
+  const page = src('src/app/verify/page.tsx');
+  assert.match(page, /<ById \/>/);
+  const byId = src('src/app/verify/ById.tsx');
+  assert.match(byId, /api\(`\/public\/verify\/\$\{encodeURIComponent\(clean\)\}`\)/);
+  assert.match(byId, /get\('id'\)/);
+  assert.match(byId, /Choose the file to compare/);
+  assert.match(byId, /crypto\.subtle\.digest\('SHA-256'/, 'compared in the browser, so the file stays on the device');
+  assert.match(byId, /never shows names, addresses or the title/);
+});
+
+// ---- D. What happens after signing is in the record ----------------------------------------------------------
+
+const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
+test('D: the completed copy handed to the mail server is a line for each person, and with no mail server the record says no email went out', async () => {
+  const sender = await person('Copy Sender', 'copy@disputes.example');
+  // No mail server: nothing went out, and the record says so for the signer and for the sender.
+  const quiet = await completed(sender, 'copy-signer@disputes.example');
+  const q = auditOf(quiet.id).filter((a: any) => a.action === 'Completed copy not emailed');
+  assert.equal(q.length, 2, JSON.stringify(auditOf(quiet.id).map((a: any) => a.action)));
+  assert.ok(q.some((a: any) => /To Sam Signer <copy-signer@disputes\.example>: no mail server is set up/.test(a.detail)));
+  assert.ok(q.some((a: any) => /To the sender, Copy Sender <copy@disputes\.example>/.test(a.detail)));
+  assert.ok(!auditOf(quiet.id).some((a: any) => a.action === 'Completed copy sent'), 'never called sent when it was not');
+
+  // A mail server that takes it: "sent", with the PDF attached, and never more than the hand-over.
+  const g = globalThis as any;
+  process.env.SMTP_URL = 'smtp://stand-in.invalid';
+  const taken: any[] = [];
+  g.__tsmail = { sendMail: async (m: any) => void taken.push(m) };
+  try {
+    const e = await completed(sender, 'copy-signer2@disputes.example');
+    const lines = auditOf(e.id).filter((a: any) => a.action === 'Completed copy sent');
+    assert.equal(lines.length, 2);
+    assert.ok(lines.some((a: any) => /To Sam Signer <copy-signer2@disputes\.example>: handed to the mail server with the signed PDF attached\. Whether it arrived is not known at this point\./.test(a.detail)));
+    assert.ok(taken.some((m: any) => m.to === 'copy-signer2@disputes.example' && m.attachments?.length === 1));
+    // The certificate was sealed before: those lines come after "Envelope completed".
+    const actions = auditOf(e.id).map((a: any) => a.action);
+    assert.ok(actions.indexOf('Completed copy sent') > actions.indexOf('Envelope completed'));
+    assert.equal(env.verifyChain(e.id).ok, true);
+  } finally {
+    delete process.env.SMTP_URL;
+    delete g.__tsmail;
+  }
+});
+
+test('D: the first time each person opens or downloads the completed copy is a line with their address and browser, once', async () => {
+  const sender = await person('Open Sender', 'open@disputes.example');
+  const e = await completed(sender, 'open-signer@disputes.example');
+  const tok = tokenFor(e.id, 'open-signer@disputes.example');
+  const phone = Object.assign(from(), { ip: '198.51.100.23' });
+  const call = (u: string) => phone.call('GET', u, undefined, { 'user-agent': UA });
+  assert.equal((await call(`/sign/${tok}/download?inline=1`)).status, 200);
+  assert.equal((await call(`/sign/${tok}/download`)).status, 200);
+  assert.equal((await call(`/sign/${tok}/download`)).status, 200);
+  const opened = auditOf(e.id).filter((a: any) => a.action === 'Completed copy opened');
+  assert.equal(opened.length, 1, 'the first time only');
+  assert.equal(opened[0].ip, '198.51.100.23');
+  assert.equal(opened[0].user_agent, UA, 'the browser string is kept with the line');
+  assert.match(opened[0].detail, /Sam Signer opened the completed document on screen for the first time, in Safari on an iPhone\./);
+  // The sender's own download is not a recipient opening their copy.
+  assert.equal((await sender.get(`/envelopes/${e.id}/download`)).status, 200);
+  assert.equal(auditOf(e.id).filter((a: any) => a.action === 'Completed copy opened').length, 1);
+  // Before everything is finished, a download is not the completed copy and is not written down as one.
+  const open = await simple(sender, 'early@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${open.id}/send`)).status, 200);
+  const early = tokenFor(open.id, 'early@disputes.example');
+  await from().post(`/sign/${early}/consent`);
+  assert.equal((await from().get(`/sign/${early}/download`)).status, 200);
+  assert.ok(!auditOf(open.id).some((a: any) => a.action === 'Completed copy opened'));
+});
+
+test('D: visits after the first open are written down at most once a day for each person', async () => {
+  const sender = await person('Visit Sender', 'visit@disputes.example');
+  const e = await simple(sender, 'visit-signer@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const tok = tokenFor(e.id, 'visit-signer@disputes.example');
+  const c = Object.assign(from(), { ip: '198.51.100.44' });
+  const look = () => c.call('GET', `/sign/${tok}`, undefined, { 'user-agent': UA });
+  await look();
+  await look();
+  await look();
+  const count = (action: string) => auditOf(e.id).filter((a: any) => a.action === action).length;
+  assert.equal(count('Viewed'), 1);
+  assert.equal(count('Opened again'), 0, 'a reload on the same day says nothing');
+  // The next day it does, once.
+  db.run('UPDATE recipients SET viewed_at=? WHERE envelope_id=?', ago(1.1), e.id);
+  await look();
+  await look();
+  assert.equal(count('Opened again'), 1);
+  const line = auditOf(e.id).find((a: any) => a.action === 'Opened again');
+  assert.equal(line.ip, '198.51.100.44');
+  assert.match(line.detail, /Sam Signer opened the envelope again, in Safari on an iPhone\. Later visits on the same day are not written down\./);
+  db.run('UPDATE recipients SET visit_noted_at=? WHERE envelope_id=?', ago(1.1), e.id);
+  await look();
+  assert.equal(count('Opened again'), 2, 'and again the day after');
+  // After signing too: coming back to a completed document is a visit.
+  await signAll(e.id, 'visit-signer@disputes.example');
+  db.run('UPDATE recipients SET visit_noted_at=? WHERE envelope_id=?', ago(1.1), e.id);
+  await look();
+  assert.equal(count('Opened again'), 3);
+  assert.equal(env.verifyChain(e.id).ok, true);
+  // The security page no longer says every step is recorded, and says what is not.
+  const security = src('src/app/security/page.tsx');
+  assert.doesNotMatch(security, /Every step is recorded/);
+  assert.match(security, /Not written down: whether an email was opened in the mailbox/);
+});
+
+// ---- E. A closed envelope's copy can never pass for a signed one ---------------------------------------------
+
+const pagesOf = async (bytes: Uint8Array) => (await import('../src/server/text.ts')).extractPages(bytes);
+
+// Two signers in order. The first signs, then the envelope is closed with their signature on it.
+async function halfSigned(sender: Client, tag: string) {
+  const { draft } = await import('./helpers.ts');
+  const e = await draft(sender, { recipients: [
+    { id: 'r1', role: 'signer', name: 'Ada Signer', email: `ada-${tag}@disputes.example`, routing_order: 1 },
+    { id: 'r2', role: 'signer', name: 'Ben Signer', email: `ben-${tag}@disputes.example`, routing_order: 2 },
+  ], fields: [
+    { id: 'f1', document_id: 'd1', recipient_id: 'r1', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
+    { id: 'f4', document_id: 'd1', recipient_id: 'r2', type: 'signature', page: 1, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
+  ] });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, `ada-${tag}@disputes.example`)).status, 200);
+  return e;
+}
+
+test('E: the sender\'s download of a voided, declined or expired envelope opens with the notice and is marked large across every page', async () => {
+  const sender = await person('Closed Sender', 'closed@disputes.example');
+  const v = await halfSigned(sender, 'void');
+  assert.equal((await sender.post(`/envelopes/${v.id}/void`, { reason: 'Terms changed' })).status, 200);
+  const pdf = (await sender.get(`/envelopes/${v.id}/download`)).data as Uint8Array;
+  const pages = await pagesOf(pdf);
+  assert.equal(pages.length, 3, 'the notice, then the two pages of the document');
+  assert.match(pages[0], /Not completed by everyone/);
+  assert.match(pages[0], /Closed Sender cancelled \(voided\) it/);
+  assert.match(pages[0], /Terms changed/);
+  assert.match(pages[0], /This is the sender's copy/);
+  assert.match(pages[0], new RegExp(`/verify with its envelope ID, ${v.id}`));
+  for (const p of pages.slice(1)) {
+    assert.match(p, /VOIDED/);
+    assert.match(p, /NOT A SIGNED DOCUMENT/);
+    assert.match(p, /NOT COMPLETED BY EVERYONE, see the first page/);
+  }
+  // The signer's own copy of the same envelope carries the large mark too.
+  const ada = tokenFor(v.id, 'ada-void@disputes.example');
+  const theirs = await pagesOf((await from().get(`/sign/${ada}/download`)).data);
+  assert.match(theirs[0], /This copy is for Ada Signer/);
+  for (const p of theirs.slice(1)) assert.match(p, /VOIDED.*NOT A SIGNED DOCUMENT|NOT A SIGNED DOCUMENT.*VOIDED/s);
+
+  // Declined, and run out of time: their own word across the page.
+  const d = await halfSigned(sender, 'decl');
+  const ben = tokenFor(d.id, 'ben-decl@disputes.example');
+  await from().post(`/sign/${ben}/consent`);
+  assert.equal((await from().post(`/sign/${ben}/decline`, { reason: 'Not mine to sign' })).status, 200);
+  const dp = await pagesOf((await sender.get(`/envelopes/${d.id}/download`)).data);
+  assert.match(dp[0], /Ben Signer declined to sign/);
+  assert.match(dp[1], /DECLINED/);
+  const x = await halfSigned(sender, 'exp');
+  db.run("UPDATE envelopes SET status='expired' WHERE id=?", x.id);
+  assert.match((await pagesOf((await sender.get(`/envelopes/${x.id}/download`)).data))[1], /EXPIRED/);
+
+  // A completed document and one still out are not marked.
+  const done = await completed(sender, 'fine@disputes.example');
+  const dpdf = await pagesOf((await sender.get(`/envelopes/${done.id}/download`)).data);
+  assert.ok(!dpdf.some((p) => /NOT A SIGNED DOCUMENT/.test(p)));
+});
+
+test('E: the copy of what someone signed before a change is marked across every page as well', async () => {
+  const { withNotice } = await import('../src/server/pdf.ts');
+  const { samplePdf } = await import('./helpers.ts');
+  const out = await withNotice(await samplePdf(2), 'env_test', { title: 'Signed before the document was changed', lines: ['A line.'] }, 'Signed before a change');
+  const pages = await pagesOf(out);
+  assert.equal(pages.length, 3);
+  for (const p of pages.slice(1)) assert.match(p, /SIGNED BEFORE A CHANGE/), assert.match(p, /NOT THE CURRENT DOCUMENT/);
+  const closed = await pagesOf(await withNotice(await samplePdf(1), 'env_test', { title: 'Not completed by everyone', lines: ['A line.'] }, 'Not completed by everyone'));
+  assert.match(closed[1], /NOT A SIGNED DOCUMENT/);
+});
+
+// ---- F. "I did not sign this, or this was not me" ------------------------------------------------------------
+
+const codeOf = (envelopeId: string, email: string) => db.get('SELECT check_code c FROM recipients WHERE envelope_id=? AND email=?', envelopeId, email).c as string;
+
+test('F: with the security code, a person named on a completed document disputes it: marked, on record, sender and operators told, nothing deleted', async () => {
+  process.env.OPERATOR_EMAILS = 'ops-disputes@disputes.example';
+  try {
+    const sender = await person('Dispute Sender', 'dsender@disputes.example');
+    const e = await completed(sender, 'denies@disputes.example', { subject: 'Car sale' });
+    const before = db.get('SELECT final_sha256, status FROM envelopes WHERE id=?', e.id);
+    const anon = from();
+    const r = await anon.post('/public/check/dispute', { code: codeOf(e.id, 'denies@disputes.example'), detail: 'I was abroad that day and never saw this.' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.already, false);
+    const after = db.get('SELECT * FROM envelopes WHERE id=?', e.id);
+    assert.ok(after.disputed_at);
+    assert.equal(after.final_sha256, before.final_sha256, 'nothing about the signed file changes');
+    assert.equal(after.status, 'completed');
+    const line = auditOf(e.id).find((a: any) => a.action === 'Disputed');
+    assert.match(line.detail, /Someone holding the email we sent to Sam Signer <denies@disputes\.example> said that Sam Signer did not sign this, or that it was not them\. Nothing was changed or deleted/);
+    assert.doesNotMatch(line.detail, /abroad/, 'what they wrote is not in the record the sender reads');
+    assert.equal(env.verifyChain(e.id).ok, true);
+
+    // The sender is told, without the words; the operators are told with them, and it is in their queue.
+    const told = mailTo('dsender@disputes.example').filter((m: any) => m.subject === 'Disputed: Car sale');
+    assert.equal(told.length, 1);
+    assert.match(text(told[0].html), /Nothing was changed or deleted/);
+    assert.match(text(told[0].html), /We do not decide who is right/);
+    assert.doesNotMatch(text(told[0].html), /abroad/);
+    const ops = mailTo('ops-disputes@disputes.example').filter((m: any) => m.subject === `Disputed: envelope ${e.id}`);
+    assert.equal(ops.length, 1);
+    assert.match(text(ops[0].html), /They wrote: I was abroad that day and never saw this\./);
+    const queued = db.get("SELECT * FROM support_requests WHERE envelope_id=? AND topic='not-me'", e.id);
+    assert.equal(queued.name, 'Sign&Grow (automatic alert)');
+    assert.equal(queued.status, 'open');
+
+    // It shows where people look: the envelope (and so its page), /verify by file and by ID.
+    assert.ok((await sender.get(`/envelopes/${e.id}`)).data.envelope.disputed_at);
+    const pdf = (await sender.get(`/envelopes/${e.id}/download`)).data as Uint8Array;
+    assert.ok((await verify(pdf)).data.envelope.disputed_at);
+    const looked = (await from().get(`/public/verify/${e.id}`)).data;
+    assert.ok(looked.disputed_at);
+    assert.equal(looked.disputes, 1);
+
+    // Saying it again changes nothing and tells nobody again.
+    const again = await anon.post('/public/check/dispute', { code: codeOf(e.id, 'denies@disputes.example') });
+    assert.equal(again.data.already, true);
+    assert.equal(auditOf(e.id).filter((a: any) => a.action === 'Disputed').length, 1);
+    assert.equal(mailTo('dsender@disputes.example').filter((m: any) => m.subject === 'Disputed: Car sale').length, 1);
+    // The signer can still download what they have.
+    assert.equal((await from().get(`/sign/${tokenFor(e.id, 'denies@disputes.example')}/download`)).status, 200);
+  } finally {
+    delete process.env.OPERATOR_EMAILS;
+  }
+});
+
+test('F: from the signing link too, also behind an access code; and only for something done in that person\'s name', async () => {
+  const sender = await person('Link Dispute', 'ldsender@disputes.example');
+  // Signed behind an access code by whoever had the code. The person named can still say it was not them.
+  const e = await simple(sender, 'coded@disputes.example', { recipients: [{ id: 'r', role: 'signer', name: 'Cody Coded', email: 'coded@disputes.example', access_code: '7777' }] });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const tok = tokenFor(e.id, 'coded@disputes.example');
+  const holder = from();
+  assert.equal((await holder.post(`/sign/${tok}/unlock`, { code: '7777' })).status, 200);
+  await holder.post(`/sign/${tok}/consent`);
+  const v = (await holder.get(`/sign/${tok}`)).data;
+  assert.equal((await holder.post(`/sign/${tok}/complete`, { values: Object.fromEntries(v.fields.map((f: any) => [f.id, '1'])), signature_png: (await import('./helpers.ts')).PNG })).status, 200);
+  const stranger = from();
+  const r = await stranger.post(`/sign/${tok}/dispute`, { detail: 'Not me' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(auditOf(e.id).find((a: any) => a.action === 'Disputed').detail, /Someone using the signing link of Cody Coded <coded@disputes\.example>/);
+
+  // Nothing done in their name yet: told to report instead. A copy-only recipient has nothing to dispute.
+  const open = await simple(sender, 'notyet@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${open.id}/send`)).status, 200);
+  const early = await from().post('/public/check/dispute', { code: codeOf(open.id, 'notyet@disputes.example') });
+  assert.equal(early.status, 409);
+  assert.equal(early.data.code, 'nothing_signed');
+  assert.match(early.data.error, /Nothing has been signed, approved or declined in Sam Signer's name on this document so far.*report it instead/);
+  assert.ok(!db.get('SELECT disputed_at FROM envelopes WHERE id=?', open.id).disputed_at);
+  const cc = await simple(sender, 'signs@disputes.example', { recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'signs@disputes.example' }, { id: 'c', role: 'cc', name: 'Cee Copy', email: 'copy-only@disputes.example' }] });
+  assert.equal((await sender.post(`/envelopes/${cc.id}/send`)).status, 200);
+  await signAll(cc.id, 'signs@disputes.example');
+  const copy = await from().post('/public/check/dispute', { code: codeOf(cc.id, 'copy-only@disputes.example') });
+  assert.equal(copy.status, 409);
+  assert.match(copy.data.error, /only sent a copy/);
+
+  // A code we never issued, or a garbled one, is told so; and the route is limited per connection.
+  assert.equal((await from().post('/public/check/dispute', { code: 'AAAA-BBBB-CCCC' })).status, 404);
+  assert.equal((await from().post('/public/check/dispute', { code: 'ABC' })).status, 400);
+  const busy = from();
+  let last = 0;
+  for (let i = 0; i < 11; i++) last = (await busy.post('/public/check/dispute', { code: 'AAAA-BBBB-CCCC' })).status;
+  assert.equal(last, 429);
+});
+
+test('F: the screens offer it, and the help topic "I am named on a document I did not sign" is never passed on to the sender', async () => {
+  const dialogs = src('src/components/sign/dialogs.tsx');
+  assert.match(dialogs, /\['not-me', 'I did not sign this, or this was not me'/);
+  assert.match(dialogs, /api\(`\$\{base\}\/dispute`/);
+  const check = src('src/app/check/CheckForm.tsx');
+  assert.match(check, /\['not-me', 'I did not sign this, or this was not me'\]/);
+  assert.match(check, /api\('\/public\/check\/dispute'/);
+  assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /<Disputed envelope=\{e\} audit=\{data\.audit\} \/>/);
+  assert.match(src('src/app/verify/page.tsx'), /res\.envelope\.disputed_at/);
+  const help = src('src/app/help/page.tsx');
+  assert.match(help, /<QA id="not-me" q="I am named on a document I did not sign"><NotMeAnswer \/><\/QA>/);
+  const answer = src('src/app/help/NotMe.tsx');
+  for (const who of ['Anyone with the envelope ID', 'Anyone with the signed file itself', 'Anyone holding an email we sent about it', 'The sender, and the owner and admins', 'The people who run Sign&amp;Grow']) assert.ok(answer.includes(who), who);
+  assert.match(answer, /It is not passed on to the sender/);
+
+  // A message under that topic about a document whose recipient writes it is not passed to the sender.
+  const { SUPPORT_TOPICS } = await import('../src/lib/policy.ts');
+  const { TOPIC_LABEL } = await import('../src/lib/support.ts');
+  assert.ok(SUPPORT_TOPICS.includes('not-me'));
+  assert.equal(TOPIC_LABEL['not-me'], 'I am named on a document I did not sign');
+  const sender = await person('Help Sender', 'hsender@disputes.example');
+  const e = await simple(sender, 'helper@disputes.example', { subject: 'Help topic test' });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const r = await from().post('/public/support', { email: 'helper@disputes.example', name: 'Sam Signer', topic: 'not-me', message: 'My name is on this and I never signed it.', code: codeOf(e.id, 'helper@disputes.example') });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(mailTo('hsender@disputes.example').filter((m: any) => /Problem signing/.test(m.subject)).length, 0);
+  assert.ok(!auditOf(e.id).some((a: any) => a.action === 'Help requested'));
+  assert.equal(db.get("SELECT topic FROM support_requests WHERE email='helper@disputes.example'").topic, 'not-me');
+});

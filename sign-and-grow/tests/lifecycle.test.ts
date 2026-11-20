@@ -848,6 +848,27 @@ test('the welcome signatures are given once per email address, also after the lo
   assert.equal(welcome('real.owner@example.com'), PRICING.welcomeSignatures);
 });
 
+test('a login that moves to another address does not free its old address for a second set of welcome signatures', async () => {
+  const move = async (c: Client, to: string) => {
+    assert.equal((await c.post('/me/email', { email: to, password: PW })).status, 200);
+    const t = /change-email\?token=([A-Za-z0-9_-]+)/.exec(mailTo(to).at(-1)!.html)?.[1];
+    assert.equal((await c.post('/me/email/confirm', { token: t })).status, 200);
+  };
+  const mover = await person('Mo Ver', 'mover.first@example.com');
+  assert.equal(welcome('mover.first@example.com'), PRICING.welcomeSignatures);
+  await move(mover, 'mover.second@example.com');
+  // A new login under the address the first one left: no welcome, and the login it moved keeps what it had.
+  await person('Mo Ver', 'mover.first@example.com');
+  assert.deepEqual([welcome('mover.first@example.com'), welcome('mover.second@example.com')], [0, PRICING.welcomeSignatures]);
+  // Somebody who signed up with an address that is not theirs, never confirmed it and moved away has not used up
+  // the welcome of the person the address belongs to.
+  const squatter = from();
+  assert.equal((await squatter.post('/auth/signup', { name: 'Not Really', email: 'squat.first@example.com', password: PW })).status, 200);
+  await move(squatter, 'squat.second@example.com');
+  await person('Real Person', 'squat.first@example.com');
+  assert.equal(welcome('squat.first@example.com'), PRICING.welcomeSignatures);
+});
+
 test('someone who is closing their own login cannot be named to take over what a removed member sent', async () => {
   const owner = await person('Hea Dd', 'hea.dd@example.com');
   const goer = await join(owner, 'Go Er', 'go.er@example.com');
@@ -909,6 +930,21 @@ test('a bulk send that is still going out stops when its sender is removed, and 
     assert.equal((await signAll(made[0].id, 'row0@race.example')).status, 200);
     assert.ok(mailTo('hei.ress@example.com').some((m) => m.subject === 'Completed: Bea template'));
     assert.deepEqual(mailTo('bea.bulk@example.com').slice(before).map((m) => m.subject), []);
+
+    // The same when the sender leaves by themselves while their batch is going out: the rest stops, and what was
+    // made belongs to the owner, who takes over when nobody else is named.
+    const lev = await join(owner, 'Lev Leaver', 'lev.leaver@example.com');
+    const levTpl = await template(lev, 'Lev template');
+    const levRows = Array.from({ length: 12 }, (_, i) => ({ Member: { name: `Lev ${i}`, email: `lev${i}@race.example` } }));
+    const levSending = lev.call('POST', '/bulk', { template_id: levTpl.id, rows: levRows });
+    const levSent = () => db.get('SELECT COUNT(*) n FROM bulk_rows r JOIN bulk_batches b ON b.id=r.bulk_id WHERE b.template_id=? AND r.sent_at IS NOT NULL', levTpl.id).n;
+    for (let i = 0; i < 200000 && levSent() < 2; i++) await new Promise((r) => setImmediate(r));
+    assert.equal((await lev.post('/account/leave', {})).status, 200);
+    const levRes = (await levSending).data;
+    assert.ok(levRes.sent >= 2 && levRes.sent < 12, JSON.stringify(levRes.sent));
+    assert.equal(levRes.failed.length, 12 - levRes.sent);
+    assert.match(levRes.failed[0].error, /The batch now belongs to Rae Lead/);
+    assert.deepEqual([...new Set(db.all('SELECT sender_id FROM envelopes WHERE bulk_id=?', levRes.id).map((e: any) => e.sender_id))], [await idOf(owner)]);
   } finally {
     delete process.env.SMTP_URL;
     delete g.__tsmail;
@@ -1048,7 +1084,12 @@ test('an envelope a member removed from their lists can still be found, opened a
   const no = await mem.get('/envelopes?box=removed');
   assert.equal(no.status, 403);
   assert.match(no.data.error, /shown to the admins of the account only\. Ask an admin of your team/);
-  assert.equal((await mem.post(`/envelopes/${e.id}/restore`)).status, 403);
+  const refused = await mem.post(`/envelopes/${e.id}/restore`);
+  assert.equal(refused.status, 403);
+  assert.match(refused.data.error, /^Only an admin of the account can put back an envelope that its sender removed\. Ask an admin of your team\.$/);
+  // The member's own key cannot either, whatever its scope.
+  const memKey = (await mem.post('/api-keys', { name: 'mem key' })).data.key;
+  assert.deepEqual([(await withKey(memKey)('POST', `/envelopes/${e.id}/restore`)).status, (await withKey(memKey)('GET', '/envelopes?box=removed')).status], [403, 403]);
   assert.equal('removed' in (await mem.get('/envelopes')).data, false);
 
   // The account is a party to the document too. An admin does not see it in the ordinary list or the export, is
@@ -1065,6 +1106,10 @@ test('an envelope a member removed from their lists can still be found, opened a
   // Somebody from another account finds nothing.
   assert.equal((await (await person('Far Away', 'far.away@example.com')).post(`/envelopes/${e.id}/restore`)).status, 404);
 
+  // An admin's everyday ("send") key finds it as well. Putting one back is not an account setting, so it is not
+  // refused as one (the key's own restore is below, after the person's).
+  const adminKey = (await owner.post('/api-keys', { name: 'admin send key' })).data.key;
+  assert.deepEqual((await withKey(adminKey)('GET', '/envelopes?box=removed')).data.envelopes.map((x: any) => x.id), [e.id]);
   // Put back: it is an ordinary envelope again for its sender and for the admins, and the record says who did it, once.
   const back = await owner.post(`/envelopes/${e.id}/restore`);
   assert.equal(back.status, 200);
@@ -1076,6 +1121,10 @@ test('an envelope a member removed from their lists can still be found, opened a
   assert.ok((await mem.get('/envelopes')).data.envelopes.some((x: any) => x.id === e.id));
   assert.equal((await mem.get(`/export?ids=${e.id}`)).status, 200);
   assert.equal((await owner.get('/envelopes')).data.removed, 0);
+  // Removed a second time, the admin's key puts it back.
+  assert.equal((await mem.call('DELETE', `/envelopes/${e.id}`)).data.kept_for_recipients, true);
+  assert.equal((await withKey(adminKey)('POST', `/envelopes/${e.id}/restore`)).status, 200);
+  assert.equal(db.get('SELECT hidden_at h FROM envelopes WHERE id=?', e.id).h, null);
 });
 
 test('the help link on the signing page and in signing emails says which document it is about, never with the link\'s secret, and the sender is told', async () => {
@@ -1195,4 +1244,52 @@ test('an alert the software files has a reference nobody can misread, and the qu
     if (before === undefined) delete process.env.OPERATOR_EMAILS;
     else process.env.OPERATOR_EMAILS = before;
   }
+});
+
+// ---- The screens say what the server does ---------------------------------------------------------------------
+
+const source = (f: string) => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+// The text of one function of a page, from its name to the next function at the start of a line.
+function part(text: string, name: string) {
+  const at = text.indexOf(`function ${name}(`);
+  const end = text.indexOf('\nfunction ', at + 1);
+  return at < 0 ? '' : text.slice(at, end < 0 ? undefined : end);
+}
+
+test('the screens offer what the server allows, promise only what it does, and can be hit with a finger', () => {
+  // Help from a signing screen names the document by the email's security code or the envelope id, never the link.
+  const parts = source('components/sign/parts.tsx');
+  const helpHref = /export const helpHref = [^\n]+\n[^\n]+/.exec(parts)![0];
+  assert.match(helpHref, /help_code/);
+  assert.doesNotMatch(helpHref, /token/);
+  assert.match(parts, /href=\{helpHref\(data\)\}/);
+  for (const line of source('components/sign/deadEnds.tsx').split('\n').filter((l) => /Get help from a person/.test(l))) assert.match(line, /helpHref\(/);
+  // The editor sends away only someone the server would refuse: a template's own rule can let a member change it.
+  assert.match(source('components/Editor.tsx'), /e\.access \? e\.access\.may_change === false :/);
+  // An admin finds what a member removed, under its own tab, and can put it back from the list and from its page.
+  const list = source('app/app/envelopes/page.tsx');
+  assert.match(list, /isAdmin && \(inRemoved \|\| data\?\.removed > 0\)/);
+  assert.match(list, /\/restore`/);
+  const page = source('app/app/envelopes/[id]/page.tsx');
+  assert.match(page, /\/restore`/);
+  assert.match(page, /It is only under Envelopes, in the tab Removed by its sender: in no other list/);
+  assert.match(page, /An admin of your team still finds it under Envelopes, in the tab <b>Removed by its sender<\/b>/);
+  // A member sees whose public form it is under its name, where a phone shows it, and no buttons that would be refused.
+  const forms = source('app/app/powerforms/page.tsx');
+  assert.match(forms, /<td><b>\{p\.name\}<\/b>.*\{p\.may_change === false && <div className="muted small">Only \{p\.owner/);
+  assert.match(forms, /\{p\.may_change === false \? <td \/> : \(/);
+  assert.match(forms, /Only templates you may change are listed here/);
+  // Before closing, nobody is promised that the payment provider has already stopped the subscription.
+  const yourData = part(source('app/app/settings/page.tsx'), 'YourData');
+  assert.ok(yourData.length > 1000, 'the part of the page that closes an account was found');
+  assert.doesNotMatch(yourData, /You will not be charged again/);
+  assert.match(yourData, /refunds it by itself/);
+  // Tap targets: the help form's "Do not mention the document" and every button of the sender's pages on a phone.
+  assert.match(source('app/styles/support.css'), /\.pub-contact \.pub-link \{ display: inline-flex; align-items: center; min-height: 44px; \}/);
+  const sender = source('app/styles/sender.css');
+  assert.match(sender, /\.sn \.btn \{ min-height: 44px; \}/);
+  assert.match(sender, /\.sn \.tabs button \{ min-height: 44px; \}/);
+  // No em dash in what this work wrote.
+  for (const f of ['components/sign/parts.tsx', 'components/sign/deadEnds.tsx', 'app/help/tools.tsx', 'server/routes-support.ts', 'server/routes-trust.ts', 'lib/policy.ts'])
+    assert.equal(source(f).includes('—'), false, `${f} has an em dash`);
 });

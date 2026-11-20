@@ -336,7 +336,7 @@ test('a locked wording: names, addresses and the empty fields can be filled in, 
 // ---- 4. Copies -------------------------------------------------------------------------------------------------
 
 test('a copy of a template keeps its rule and its people, and a copy of a locked one is no way round the lock', async () => {
-  const { maya, chad, otto, ids } = await team();
+  const { maya, chad, otto, ids, keys } = await team();
   const tpl = await nda(maya);
   await setRule(maya, tpl.id, { use: 'chosen', locked: true, members: [{ id: ids.otto }] });
   // Otto may use it, not change it. His copy keeps the lock and the people, and stays with Maya.
@@ -351,6 +351,11 @@ test('a copy of a template keeps its rule and its people, and a copy of a locked
   assert.match(change.data.error, /^This template belongs to Maya Lopez\. .* Its wording is locked, and a copy of it is locked in the same way\.$/);
   assert.equal(await listed(chad, copy.data.id), false, 'the copy reaches nobody new');
   assert.equal((await chad.post(`/envelopes/${tpl.id}/clone`)).status, 403);
+  // The same copy made with POST /envelopes, "kind": "template" and the template_id, is held to the same rule.
+  const viaCreate = await keys.otto.post('/envelopes', { kind: 'template', template_id: tpl.id, subject: 'NDA, my version' });
+  assert.equal(viaCreate.status, 200, JSON.stringify(viaCreate.data));
+  assert.deepEqual({ ...db.get('SELECT sender_id, tpl_locked FROM envelopes WHERE id=?', viaCreate.data.envelope.id) }, { sender_id: ids.maya, tpl_locked: 1 });
+  assert.equal((await keys.otto.put(`/envelopes/${viaCreate.data.envelope.id}/access`, { locked: false })).status, 403, 'and its lock cannot be lifted by Otto');
 
   // An envelope Otto started from it, copied as an envelope, is locked in the same way, on the copy's own fields.
   const env = (await use(otto, tpl.id)).data.envelope;
@@ -484,4 +489,55 @@ test('templates in a database from before this have the usual rule: everyone use
   assert.equal((await admin.put(`/envelopes/${before.id}`, { message: 'Admins still can' })).status, 200);
   assert.equal((await maya.put(`/envelopes/${tpl.id}/access`, { use: 'admins' })).status, 200, 'and a rule can be set on it');
   assert.equal(await listed(otto, tpl.id), false);
+});
+
+// ---- 8. Screens and what the pages promise ------------------------------------------------------------------------
+
+const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+
+test('the screens show the rule and the lock before anyone types, and the pages promise only what the code keeps', async () => {
+  const list = read('src/app/app/templates/page.tsx');
+  assert.match(list, /<AccessMarks access=\{t\.access\} \/>/, 'the list marks "Admins only", "Chosen members" and "Wording locked"');
+  assert.equal(list.match(/onClick=\{\(\) => setRules\(t\)\} aria-label=\{`Who can use \$\{name\}`\}>Who can use this<\/button>/g)?.length, 2, 'on a phone and on a desktop, for everyone who sees the template');
+  assert.equal(list.match(/\(t\.access\?\.may_delete \?\? t\.may_change\) !== false && <button className="btn sm ghost danger"/g)?.length, 2, 'Delete only for its owner and admins');
+  assert.doesNotMatch(list, /Everyone on your team can use every template/);
+  const who = read('src/components/templates/WhoCanUse.tsx');
+  assert.match(who, /<legend>Who can use it<\/legend>/);
+  assert.match(who, /<legend>Who can change it<\/legend>/);
+  assert.match(who, /Lock the wording/);
+  assert.match(who, /aria-describedby=\{off \? 'tr-team-why' : undefined\}/, 'a choice that is switched off says why');
+  assert.match(who, /querySelector<HTMLElement>\('\[data-autofocus\]'\)\?\.focus\(\)/, 'focus moves into the dialog once the rule has loaded');
+  assert.match(read('src/app/styles/tplroles.css'), /\.tr-tap \{ min-height: 44px; \}/);
+  // The editor: the banner, and the locked parts drawn as locked.
+  const editor = read('src/components/Editor.tsx');
+  assert.match(editor, /\{wording && <WordingBanner lock=\{wording\} \/>\}/);
+  assert.match(editor, /const isLockedField = useCallback\(\(f: any\) => signedFields\.has\(f\.id\) \|\| !!wording/);
+  const add = read('src/components/editor/StepAdd.tsx');
+  for (const part of [/\{!wording && \(\s*<label className=\{`drop ed-drop/, /aria-label="Document name" maxLength=\{200\} readOnly=\{!!wording\}/, /aria-label="Role" style=\{\{ flex: '0 1 170px' \}\} disabled=\{!!wording\}/,
+    /\{!wording && <button type="button" className="btn sm ghost danger" onClick=\{\(\) => ed\.removeRcp/, /\{!wording && <div className="row wrap"/, /maxLength=\{5000\} readOnly=\{!!wording\}/, /\{isTpl && <WhoCanUse templateId=\{env\.id\}/])
+    assert.match(add, part);
+  const fieldsStep = read('src/components/editor/StepFields.tsx');
+  assert.match(fieldsStep, /title=\{again\} disabled=\{!!ed\.wording\}/, 'no field is added');
+  assert.match(fieldsStep, /disabled=\{!ready \|\| !!finding \|\| !active \|\| !!ed\.wording\}/, 'none is found and added');
+  assert.match(fieldsStep, /<WordingField field=\{selected\} lock=\{ed\.wording\}/, 'a field left empty can be filled in, and the rest says why it stays');
+  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && !ed\.wording && <PayLinkChoice/);
+  // The words the screens use say what the server does.
+  assert.match(LOCK_MEANS, /cannot change the documents, the fixed wording, the fields, the message or who signs in what order\.$/);
+  assert.equal(accessSentence({ use: 'team', change: 'owner', locked: false, owner: 'Maya Lopez' }), 'Everyone on the team can use it. Only Maya Lopez and admins can change it. Its wording is not locked: whoever uses it can change the envelope they make from it before sending. Only Maya Lopez and admins can change these rules or delete it.');
+  // The pages that described templates.
+  assert.doesNotMatch(read('src/app/security/page.tsx'), /Everyone on a team can use every template\./);
+  assert.match(read('src/app/security/page.tsx'), /unless it is set to admins only or to chosen members/);
+  const help = read('src/app/help/page.tsx');
+  assert.match(help, /<QA id="template-access" q="Who can use and change a template, and what does a locked wording mean\?">/);
+  assert.match(help, /the rules differ by country and by kind of document, so check what yours needs/);
+  assert.match(read('src/app/developers/page.tsx'), /\['PUT', '\/api\/envelopes\/:id\/access'/);
+  const { openapi } = await import('../src/server/openapi.ts');
+  const spec: any = openapi();
+  assert.ok(spec.paths['/envelopes/{id}/access'].get && spec.paths['/envelopes/{id}/access'].put);
+  assert.deepEqual(spec.components.schemas.TemplateAccess.properties.use.enum, ['team', 'admins', 'chosen']);
+  const readme = read('README.md');
+  assert.match(readme, /\| `tests\/templates\.test\.ts` \|/);
+  assert.match(readme, /the table `template_members`/);
+  assert.match(readme, /\| Anyone on the team could open our HR letters, and a salesperson sent the contract with the liability clause changed\. \|/);
+  for (const f of ['src/server/tplroles.ts', 'src/server/routes-templates.ts', 'src/lib/tplroles.ts', 'src/components/templates/WhoCanUse.tsx', 'tests/templates.test.ts']) assert.doesNotMatch(read(f), /\u2014/, `${f}: no em dashes`);
 });

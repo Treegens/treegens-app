@@ -38,6 +38,8 @@ const REPORT_REASONS: [string, string][] = [
   ['phishing', 'It looks like a scam: it asks for money or passwords, or pretends to be someone else'],
   ['spam', 'It is spam: I did not ask for this and do not know the sender'],
   ['not-for-me', 'It is not meant for me: it was sent to the wrong person'],
+  // A dispute, not a report: POST /public/check/dispute marks the envelope and tells its sender (src/server/evidence.ts).
+  ['not-me', 'I did not sign this, or this was not me'],
   ['other', 'Something else'],
 ];
 function ReportEmail({ code, startOpen }: { code: string; startOpen: boolean }) {
@@ -54,7 +56,7 @@ function ReportEmail({ code, startOpen }: { code: string; startOpen: boolean }) 
     setState('busy');
     setError('');
     try {
-      await api('/public/check/report', { body: { code: clean(code), reason, detail } });
+      await (reason === 'not-me' ? api('/public/check/dispute', { body: { code: clean(code), detail } }) : api('/public/check/report', { body: { code: clean(code), reason, detail } }));
       setState('sent');
     } catch (err: any) {
       setState('');
@@ -64,6 +66,8 @@ function ReportEmail({ code, startOpen }: { code: string; startOpen: boolean }) 
     }
   }
 
+  if (state === 'sent' && reason === 'not-me')
+    return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Your dispute is on record.</b> The document is now marked as disputed, for its sender and for anyone who checks it on our Verify page. The sender and the people who run Sign&amp;Grow have been told; the sender is not shown what you wrote. Nothing was deleted. We do not decide who is right. To hear from a person, write to us on the <Link href="/help?topic=not-me#contact">help page</Link> with the topic &ldquo;I am named on a document I did not sign&rdquo;.</div>;
   if (state === 'sent')
     return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Thank you. Your report is in.</b> You do not need to do anything else. If the email looks like a scam, do not sign it, do not reply to it and do not call any number it gives.</div>;
   if (!open)
@@ -82,6 +86,7 @@ function ReportEmail({ code, startOpen }: { code: string; startOpen: boolean }) 
           {REPORT_REASONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </label>
+      {reason === 'not-me' && <p className="small" style={{ margin: '-4px 0 12px' }}>This is for something that was signed, approved or declined in your name that you did not do, also on a completed document. It marks the document as disputed and tells its sender and the people who run Sign&amp;Grow. Nothing is deleted. The sender is told that you dispute it, not what you write below.</p>}
       <label className="f"><span>Anything else we should know <span className="hint">(optional)</span></span><textarea rows={3} maxLength={2000} value={detail} onChange={(e) => setDetail(e.target.value)} /></label>
       {error && <div className="notice err" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="pub-actions-row" style={{ marginTop: 0 }}>

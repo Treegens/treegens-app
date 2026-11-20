@@ -16,6 +16,7 @@ import { StepReview } from './editor/StepReview';
 import { MAX_DOCS, SIGNS, clamp, plural, who, type Confirm, type Ed, type Upload } from './editor/shared';
 import { sendAnywayAsk } from '@/lib/mailnews';
 import { stackedFields } from '@/lib/stacked';
+import { WordingBanner, type WordingLock } from './templates/WhoCanUse';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -72,11 +73,14 @@ export function Editor({ id }: { id: string }) {
         toast(`This envelope is ${e.status}, so it can no longer be edited. Clone it to send a new version.`);
         return router.replace(`/app/envelopes/${id}`);
       }
-      // A template can be changed by the person it belongs to and by admins (the server refuses everyone else).
-      // A member who opens a colleague's template for editing is not shown an editor whose every save fails: they
-      // are taken to the template's page, which offers to use it or to make a copy of their own.
-      if (e.kind === 'template' && me.role === 'member' && e.sender_id !== me.user.id) {
-        toast('This template belongs to a colleague, so only they or an admin of your team can change it. You can use it as it is, or make your own copy and change that.');
+      // A template can be changed by the person it belongs to, by admins and by whoever its rule lets change it (the
+      // server says which in access.may_change and refuses everyone else). A member who opens a template they may
+      // not change is not shown an editor whose every save fails: they are taken to the template's page, which
+      // offers to use it or to make a copy of their own.
+      if (e.kind === 'template' && (e.access ? e.access.may_change === false : me.role === 'member' && e.sender_id !== me.user.id)) {
+        // A copy of a locked template is locked too (tplroles.ts), so a copy is not offered as a way to change it.
+        toast(e.access?.locked ? `This template belongs to ${e.access.owner}, and its wording is locked. You can use it as it is. To change it, ask ${e.access.owner} or an admin of your team.`
+          : 'This template belongs to a colleague, so only they or an admin of your team can change it. You can use it as it is, or make your own copy and change that.');
         return router.replace(`/app/envelopes/${id}`);
       }
       loaded.current = e.edit_version ?? null;
@@ -164,7 +168,10 @@ export function Editor({ id }: { id: string }) {
   const lockedNames = listNames(rcps.filter((r) => lockedIds.has(r.id)).map(who));
   // The fields a finished person signed stay put in this editor. A field added for them here is new, and free to move.
   const signedFields = useMemo(() => new Set<string>(correcting && base ? base.fields.filter((f: any) => f.recipient_id && lockedIds.has(f.recipient_id)).map((f: any) => f.id) : []), [correcting, base, lockedIds]);
-  const isLockedField = useCallback((f: any) => signedFields.has(f.id), [signedFields]);
+  // Started from a template whose wording is locked for this person (src/server/tplroles.ts): every field stays where
+  // it is, and the steps show the documents, the roles and the message as locked, so nobody types and is refused.
+  const wording: WordingLock | null = env?.wording_lock || null;
+  const isLockedField = useCallback((f: any) => signedFields.has(f.id) || !!wording, [signedFields, wording]);
 
   // ---- Changes -------------------------------------------------------------------------------------------------
 
@@ -497,7 +504,7 @@ export function Editor({ id }: { id: string }) {
   if (!env) return <div className="muted center" style={{ padding: 80 }} role="status">Loading…</div>;
 
   const ed: Ed = {
-    env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, docs, rcps, fields, contacts, uploads, color,
+    env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, wording, docs, rcps, fields, contacts, uploads, color,
     patchEnv, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
     showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
@@ -533,6 +540,7 @@ export function Editor({ id }: { id: string }) {
           : <button type="button" className="btn primary hide-sm" disabled={submitOff} onClick={submit}>{isTpl ? 'Save template' : correcting ? 'Save changes' : 'Send'}</button>}
       </div>
 
+      {wording && <WordingBanner lock={wording} />}
       {correcting && (
         <div className="ed-banner" role="note">
           <b>This envelope is already out.</b> Change what you need to. Nobody has to start again, and nothing changes until you save.

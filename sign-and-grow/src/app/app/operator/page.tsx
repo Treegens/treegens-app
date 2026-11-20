@@ -2,7 +2,7 @@
 import { useState, type FormEvent } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { Tickets } from './tickets';
-import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS } from '@/lib/policy';
+import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS, priceChangeDay } from '@/lib/policy';
 
 // The queue for the people who run the service: help requests, reports from recipients, and paused accounts.
 // Only visible to the addresses listed in OPERATOR_EMAILS.
@@ -18,14 +18,14 @@ function PriceNotice() {
   const earliest = new Date(Date.now() + (PRICE_NOTICE_DAYS + 1) * 864e5).toISOString().slice(0, 10);
   const send = (e: FormEvent) => {
     e.preventDefault();
-    if (!window.confirm(`Email every owner and admin of every account on the monthly plan that the price becomes $${usd} a month from ${from}? This cannot be taken back once the emails are out.`)) return;
+    if (!window.confirm(`Email every owner and admin of every account with a monthly plan (also ones whose payment is failing, on hold or paused) that the price becomes $${usd} a month from ${priceChangeDay(`${from}T00:00:00.000Z`)}? Once the emails are out, a later notice can only withdraw it, and everyone told is then told that.`)) return;
     setBusy(true);
     api('/operator/billing/price-notice', { body: { new_usd: Number(usd), from } }).then(setOut).catch(oops).finally(() => setBusy(false));
   };
   return (
     <>
       <h3 style={{ marginTop: 18 }}>Announce a price change</h3>
-      <p className="muted small" style={{ margin: '4px 0 10px' }}>Nobody on the plan pays a higher price without {PRICE_NOTICE_DAYS} days&apos; notice. Announce it here first: every owner and admin is emailed the old price, the new one, the date and a link that stops their plan. Then change the price with the payment provider for that same date. A renewal that charges more without this notice has the difference refunded automatically, and you are told. Running it again is safe: accounts already told are skipped.</p>
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>Nobody on the plan pays a higher price without {PRICE_NOTICE_DAYS} days&apos; notice. Announce it here first: every owner and admin of every account with a plan, in any state, is emailed the old price, the new one, the day (a calendar day in UTC) and a link that stops their plan. An account counts as told only once the email has left for every one of its owners and admins; the ones that were not reached are listed below and keep their price until they are. Then change the price with the payment provider for that same day. A renewal that charges more without this notice has the difference refunded automatically, and you are told. Accounts that start the plan later pay what their checkout shows. Running it again is safe: accounts already told are skipped. A notice for the same price as now, or a lower one, withdraws a rise announced before and tells everyone who was told of it.</p>
       <form className="row wrap" onSubmit={send}>
         <input value={usd} onChange={(e) => setUsd(e.target.value)} placeholder="New price in dollars, for example 12" aria-label="New monthly price in dollars" inputMode="decimal" required style={{ maxWidth: 280 }} />
         <input type="date" value={from} min={earliest} onChange={(e) => setFrom(e.target.value)} aria-label="First day of the new price" required style={{ maxWidth: 170 }} />
@@ -33,8 +33,9 @@ function PriceNotice() {
       </form>
       {out && (
         <div className="notice" role="status" style={{ marginTop: 12 }}>
-          <b>{out.told} {out.told === 1 ? 'account was' : 'accounts were'} told</b> that the plan costs {out.new_price} a month from {fmtDate(out.from)}. {out.already_told > 0 && `${out.already_told} had been told already. `}{out.not_affected > 0 && `${out.not_affected} already pay that much or more, so nothing changes for them. `}
-          {out.not_told.length > 0 && <><b>{out.not_told.length} could not be told</b> because no email left the mail server ({out.not_told.join(', ')}). They keep their price until they have been. Fix the email problem and run this again.</>}
+          <b>{out.told} {out.told === 1 ? 'account was' : 'accounts were'} told</b> that the plan costs {out.new_price} a month from {out.from_day || priceChangeDay(out.from)}. {out.already_told > 0 && `${out.already_told} had been told already. `}{out.not_affected > 0 && `${out.not_affected} already pay that much or more, so nothing changes for them. `}
+          {out.withdrawn > 0 && `${out.withdrawn} had been told of a higher price before: that rise is withdrawn, and their owners and admins were emailed that it is. `}
+          {out.not_told.length > 0 && <><b>{out.not_told.length} could not be told</b> because the email did not leave the mail server for every owner and admin ({out.not_told.join('; ')}). They keep their price until they have been. Fix the email problem and run this again.</>}
         </div>
       )}
     </>

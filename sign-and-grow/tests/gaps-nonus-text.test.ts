@@ -10,10 +10,10 @@ import { extractPages } from '../src/server/text.ts';
 import { visualRuns, isolate } from '../src/server/bidi.ts';
 import { unprintable, fontsFrom } from '../src/server/pdftext.ts';
 import { PRINT_MARK, codePoints, handwritingWrites, cannotPrintText } from '../src/lib/scripts.ts';
-import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, formatDateValue, clockIn, momentText, momentForEmail, localStamp, isDaytime, validZone } from '../src/lib/dates.ts';
+import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, formatDateValue, clockIn, momentText, momentForEmail, localStamp, isDaytime, validZone, deviceZone } from '../src/lib/dates.ts';
 import { isNumber, NUMBER_HINT, NUMBER_PROBLEM } from '../src/lib/numbers.ts';
 import { problemWith } from '../src/components/sign/fields.ts';
-import { deadlineLine } from '../src/components/sender/lib.ts';
+import { deadlineLine, closingText } from '../src/components/sender/lib.ts';
 
 let s: Server;
 before(async () => {
@@ -197,6 +197,9 @@ test('right-to-left text is put in reading order, with digits and Latin words le
   assert.deepEqual(visualRuns(`Signed · ${isolate('شركة ABC')} <a@b.example>`, 'ltr').runs.map((r) => r.text), ['Signed · ', 'ABC', 'شركة ', ' <a@b.example>']);
   // English text that mentions a Hebrew word and a number keeps the usual order for a left-to-right line.
   assert.deepEqual(visualRuns('Flat 4, רחוב הרצל').runs.map((r) => [r.text, r.rtl]), [['Flat 4, ', false], ['רחוב הרצל', true]]);
+  // Someone who types the invisible marks that turn text round cannot make 1234 print as 4321: they are dropped.
+  assert.deepEqual(visualRuns('Pay ‮1234‬ now'), { rtl: false, runs: [{ text: 'Pay 1234 now', rtl: false }] });
+  assert.deepEqual(visualRuns('‮תל אביב 42').runs.map((r) => r.text), ['42', 'תל אביב ']);
 });
 
 test('a Hebrew address with house number 42 and Arabic text with "ABC 123" are printed right on the signed PDF and the certificate', async () => {
@@ -271,6 +274,28 @@ test('the first letter of a line decides which way it reads, and a line can be t
   assert.equal(ts.layout('תל אביב 42', { dir: 'ltr' }).rtl, false);
   const text = (await extractPages(await doc.save()))[0];
   assert.ok(has(text, 'תל אביב 42') && has(text, 'Tel Aviv 42'), text);
+});
+
+test('every box a signer types words into takes its direction from what is typed', () => {
+  // The signing page, its dialogs, the typed signature and the public form. Boxes for a code (the access code, the
+  // code from an email) hold digits and letters the sender chose, not words, and are left out.
+  const files = ['src/app/sign/[token]/page.tsx', 'src/app/f/[slug]/page.tsx', 'src/components/SignaturePad.tsx',
+    ...fs.readdirSync('src/components/sign').filter((f) => f.endsWith('.tsx')).map((f) => `src/components/sign/${f}`)];
+  const missing: string[] = [];
+  let boxes = 0;
+  for (const f of files) {
+    const src = fs.readFileSync(f, 'utf8');
+    // A box that spreads `shared` gets its dir from there, so every `shared` in these files must carry one.
+    for (const m of src.matchAll(/const shared = \{[^\n]*/g)) if (!/dir: 'auto'/.test(m[0])) missing.push(`${f}: ${m[0].slice(0, 80)}`);
+    for (const m of src.matchAll(/<(input|textarea)\b[\s\S]*?\/>/g)) {
+      const type = /\btype="([a-z]+)"/.exec(m[0])?.[1];
+      if ((m[1] === 'input' && type && type !== 'text') || /value=\{code\}/.test(m[0])) continue;
+      boxes++;
+      if (!/\bdir="auto"/.test(m[0]) && !/\{\.\.\.shared\}/.test(m[0])) missing.push(`${f}: ${m[0].slice(0, 80)}`);
+    }
+  }
+  assert.ok(boxes >= 12, `found ${boxes} boxes`);
+  assert.deepEqual(missing, []);
 });
 
 // ---- C. Dates ------------------------------------------------------------------------------------
@@ -484,6 +509,35 @@ test('emails give a deadline with its time in UTC, and in the signer\'s own zone
   const later = (await c.post(`/envelopes/${e.id}/extend`, { days: 10 })).data.expires_at;
   const line = (await c.get(`/envelopes/${e.id}`)).data.audit.find((a: any) => a.action === 'Deadline extended');
   assert.equal(line.detail, `New deadline ${momentText(later)}`);
+});
+
+test('the warning three days before a deadline names the moment, to the sender in their own zone and to the signer', async () => {
+  const c = await signUp('Wes Warned', 'wes-warned@example.com', ip());
+  assert.equal((await c.call('GET', '/me', undefined, { 'x-tz': 'Asia/Kolkata' })).status, 200);
+  const e = await sendTo(c, [{ name: 'Lia Late', email: 'lia-late@example.com' }], { expire_days: 30, reminder_days: 0 });
+  // Ten days out, two days left: the timer sends the one warning.
+  const closes = new Date(Date.now() + 2 * 864e5).toISOString();
+  s.db.run('UPDATE envelopes SET sent_at=?, expires_at=?, expiry_warned_at=NULL WHERE id=?', new Date(Date.now() - 10 * 864e5).toISOString(), closes, e.id);
+  await s.env.cronTick();
+  const toSender = mailTo('wes-warned@example.com').filter((m: any) => m.subject.startsWith('Expires soon: '));
+  assert.equal(toSender.length, 1);
+  assert.ok(toSender[0].html.includes(`It closes on ${momentForEmail(closes, 'Asia/Kolkata')}.`), toSender[0].html.slice(0, 1200));
+  const toSigner = mailTo('lia-late@example.com').filter((m: any) => m.html.includes('ask Wes Warned for more time'));
+  assert.equal(toSigner.length, 1);
+  assert.ok(toSigner[0].html.includes(`This request closes on ${momentText(closes)}.`));
+});
+
+test('the sender\'s Give more time dialog gives the new deadline with its time and zone, never a bare day', () => {
+  const at = '2027-03-20T16:40:00.000Z';
+  assert.equal(closingText(at), momentText(at, deviceZone()));
+  assert.match(closingText(at), / at \d\d:\d\d /);
+  assert.equal(closingText(null), '');
+  assert.equal(closingText('soon'), '');
+  // The dialog words both the preview and the message after saving this way.
+  const src = fs.readFileSync('src/components/sender/dialogs.tsx', 'utf8');
+  const dialog = src.slice(src.indexOf('export function ExtendDialog'), src.indexOf('export function', src.indexOf('export function ExtendDialog') + 10));
+  assert.ok(!/longDate\(/.test(dialog), 'no bare day');
+  assert.equal(dialog.match(/closingText\(/g)?.length, 3);
 });
 
 test('an automatic reminder waits for the morning of a signer whose time zone we know, and goes out at once to everyone else', async () => {

@@ -10,6 +10,7 @@ import '@/server/routes-trust';
 import '@/server/routes-support';
 import '@/server/routes-paylink';
 import '@/server/routes-templates';
+import '@/server/routes-evidence';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

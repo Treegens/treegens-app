@@ -395,7 +395,8 @@ export default function SignPage() {
 
   function goTo(f: any) {
     const el = document.getElementById(`${view === 'text' ? 't' : 'f'}-${f.id}`);
-    if (!el) return toast('The document is still loading. Try again in a moment.');
+    // When the pages cannot be shown on this device at all (NoViewer), waiting will not help: say so.
+    if (!el) return toast(document.querySelector('.sg-noview') ? 'The document cannot be shown on this device, so its fields cannot be reached here. The notice above the pages says what you can do.' : 'The document is still loading. Try again in a moment.', !!document.querySelector('.sg-noview'));
     if (usesSheet(f)) {
       bringIntoView(el, 0.25);
       setSheet(f.id);

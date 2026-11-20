@@ -53,6 +53,8 @@ export type Ed = {
   lockedNames: string;
   anyLocked: boolean;
   isLockedField: (f: any) => boolean;
+  /** Set when the envelope was started from a template whose wording is locked for this person (src/server/tplroles.ts). */
+  wording?: { template_id: string; template: string | null; ask: string; fixed: string[] } | null;
   docs: any[];
   rcps: any[];
   fields: History<any[]>;

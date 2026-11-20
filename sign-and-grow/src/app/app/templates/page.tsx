@@ -9,6 +9,8 @@ import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
 import { reminderText } from '@/lib/policy';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
+// Who can use and change each template, and the lock on its wording (src/server/tplroles.ts).
+import { AccessDialog, AccessMarks } from '@/components/templates/WhoCanUse';
 
 // With a waiver form for each state or client, one flat list stops working at about twenty. So the page has what
 // the envelope list has: a search (every word has to be found in the name, the folder, a role or the document), a
@@ -22,6 +24,7 @@ export default function Templates() {
   const [view, setView] = useState<View | null>(null);
   const [typed, setTyped] = useState('');
   const [moving, setMoving] = useState<any>(null);
+  const [rules, setRules] = useState<any>(null);
   // The last search and folder are remembered, so using a template and coming back does not lose the place.
   useEffect(() => {
     let v: View = { q: '', folder: '' };
@@ -114,7 +117,7 @@ export default function Templates() {
   return (
     <div className="sn">
       <div className="pagehead">
-        <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds. Everyone on your team can use every template. Only the person it belongs to or an admin can change or delete it.</div></div>
+        <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds. Each template says who can use and change it: usually everyone on your team can use it, and only the person it belongs to or an admin can change or delete it. Templates you cannot use are not listed.</div></div>
         <Link href="/app/envelopes/new?kind=template" className="btn primary">New template</Link>
       </div>
       {/* Shown once there is something to look through, and kept while a search or a folder hides everything. */}
@@ -157,7 +160,7 @@ export default function Templates() {
                 return (
                   <tr key={t.id}>
                     <td className="sn-main">
-                      <b>{name}</b>
+                      <b>{name}</b><AccessMarks access={t.access} />
                       <div className="muted small">by {t.sender}</div>
                       <div className="muted small sn-only-sm">Roles: {roles} · {t.pages} page{t.pages === 1 ? '' : 's'}{t.folder ? ` · Folder: ${t.folder}` : ''}</div>
                       <div className="sn-only-sm sn-inlineactions">
@@ -165,7 +168,8 @@ export default function Templates() {
                         {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
                         {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
                         {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
-                        {t.may_change !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
+                        <button className="btn sm ghost tr-tap" onClick={() => setRules(t)} aria-label={`Who can use ${name}`}>Who can use this</button>
+                        {(t.access?.may_delete ?? t.may_change) !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
                       </div>
                     </td>
                     <td className="small hide-sm">{roles}</td>
@@ -177,7 +181,8 @@ export default function Templates() {
                       {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
                       {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
                       {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
-                      {t.may_change !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
+                      <button className="btn sm ghost tr-tap" onClick={() => setRules(t)} aria-label={`Who can use ${name}`}>Who can use this</button>
+                      {(t.access?.may_delete ?? t.may_change) !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
                     </td>
                   </tr>
                 );
@@ -223,6 +228,7 @@ export default function Templates() {
       )}
 
       {moving && <MoveTemplate template={moving} folders={data?.folders || []} onClose={() => setMoving(null)} onDone={() => (setMoving(null), reload())} />}
+      {rules && <AccessDialog templateId={rules.id} name={rules.subject || 'Untitled template'} onClose={() => setRules(null)} onSaved={() => reload()} />}
     </div>
   );
 }

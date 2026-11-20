@@ -515,10 +515,14 @@ function Billing() {
       )}
 
       {b.price_change && (
-        <div className="notice warn" role="status"><b>The price of your plan changes on {utcDate(b.price_change.from)}.</b> It stays {b.price_change.now} a month until then. The first renewal on or after that day is {b.price_change.next}. Every owner and admin was told by email on {fmtDate(b.price_change.told_at)}. Nothing else changes, and you can cancel at any time before then and keep your signatures.</div>
+        <div className="notice warn" role="status"><b>The price of your plan changes on {b.price_change.from_day || utcDate(b.price_change.from)}.</b> It stays {b.price_change.now} a month until then. The first renewal on or after that day is {b.price_change.next}. Every owner and admin was told by email on {fmtDate(b.price_change.told_at)}. Nothing else changes, and you can cancel at any time before then and keep your signatures.</div>
       )}
       {b.refunds_pending?.map((r: any) => (
-        <div className="notice" role="status" key={r.payment_id + r.since}><b>A refund of {r.amount} is on its way.</b> You asked for it on {fmtDate(r.since, true)} and the payment provider has not confirmed it yet. We keep checking and email you as soon as it is through. You do not need to do anything.</div>
+        <div className="notice" role="status" key={r.payment_id + r.since}>
+          {r.by_hand ? <><b>We owe you a refund of {r.amount}{r.why ? `: ${r.why}` : ''}.</b> The payment provider would not send it automatically, so a person here will send it to your card by hand and write to you when it is on its way. You do not need to do anything.</>
+            : r.auto ? <><b>We owe you a refund of {r.amount}{r.why ? `: ${r.why}` : ''}.</b> It is on its way back to the card it was paid with, and the payment provider has not confirmed it yet. We keep checking and email you as soon as it is through. You do not need to do anything.</>
+            : <><b>A refund of {r.amount} is on its way.</b> You asked for it on {fmtDate(r.since, true)} and the payment provider has not confirmed it yet. We keep checking and email you as soon as it is through. You do not need to do anything.</>}
+        </div>
       ))}
 
       {s && (
@@ -542,7 +546,7 @@ function Billing() {
           {free && <span className="badge completed">Free with {b.free_with}</span>}
           {grove && !free && !b.ends_at && !b.problem && <span className="badge completed">Active</span>}
           {grove && !free && b.ends_at && !b.problem && <span className="badge expired">Ends {fmtDate(b.ends_at)}</span>}
-          {!free && b.problem && <span className="badge expired">Payment failed</span>}
+          {!free && b.problem && <span className="badge expired">{b.problem === 'paused' ? 'Paused' : b.problem === 'unpaid' ? 'On hold' : 'Payment failed'}</span>}
           {!grove && !b.problem && <span className="badge">{b.ended ? 'Ended' : 'Not started'}</span>}
         </div>
 
@@ -558,11 +562,20 @@ function Billing() {
             ) : b.problem === 'paused' ? (
               <div className="notice warn" style={{ marginBottom: 12 }}><b>Your plan is paused with the payment provider.</b> Nothing is charged while it is paused, nothing is locked, and the signatures you have still work. To end it for good, cancel.</div>
             ) : (
-              <div className="notice warn" style={{ marginBottom: 12 }}><b>The last payment did not go through.</b> Nothing is locked and nothing is deleted, and the signatures you have still work. The card will be tried again over the next days. To keep the plan, pay now or update the card. To stop it, cancel: the failed payment is then not tried again.</div>
+              <div className="notice warn" style={{ marginBottom: 12 }}><b>The last payment did not go through.</b> Nothing is locked and nothing is deleted, and the signatures you have still work. The card will be tried again over the next days. To keep the plan, pay now or update the card. To stop it, cancel: the failed payment is then not tried again.{b.ends_at ? <> It is already set to end on {longMoment(b.ends_at)}; pressing Cancel plan ends it today instead.</> : ''}</div>
             )}
             {admin && (
               <div className="row wrap">
-                {b.can_pay_open && <button className="btn primary" disabled={busy} onClick={() => go('/billing/pay-open').then(reload)}>Pay the open payment</button>}
+                {/* "Paid in the meantime" is good news, not an error: it is said plainly and the page is read again. */}
+                {b.can_pay_open && <button className="btn primary" disabled={busy} onClick={() => act(async () => {
+                  try {
+                    const r = await api('/billing/pay-open', { method: 'POST' });
+                    window.location.href = r.url;
+                  } catch (e: any) {
+                    if (e?.status !== 409) throw e;
+                    toast(e.message);
+                  }
+                })}>Pay the open payment</button>}
                 {b.problem !== 'paused' && <button className={b.can_pay_open ? 'btn' : 'btn primary'} disabled={busy} onClick={() => go('/billing/portal')}>Update the card</button>}
                 <button className="btn" onClick={() => setModal('cancel')}>Cancel plan</button>
               </div>
@@ -632,7 +645,7 @@ function Billing() {
                 <button className="btn primary" disabled={busy} onClick={() => go('/billing/topup', { quantity: q })}>Pay ${q * P.topUpUsd} and add {n(q)}</button>
               </div>
             </>
-          ) : <div className="notice">{b.problem ? 'Top-ups come with the monthly plan, and the last payment for yours did not go through. Update the card above and you can top up again.' : 'Top-ups come with the monthly plan. Start the plan above and you can add signatures whenever you need them.'}</div>}
+          ) : <div className="notice">{b.problem === 'paused' ? 'Top-ups come with the monthly plan, and yours is paused with the payment provider. Once it runs again you can top up.' : b.problem ? 'Top-ups come with the monthly plan, and yours is on hold because a payment did not go through. Pay the open payment above (you can use another card there) and you can top up again. A new card on file is not enough by itself.' : 'Top-ups come with the monthly plan. Start the plan above and you can add signatures whenever you need them.'}</div>}
         </div>
       )}
 
@@ -653,14 +666,14 @@ function Billing() {
           <li><b>Signatures never expire.</b> What you do not use this month is still there next month, and after you cancel.</li>
           <li><b>You only use one when somebody signs.</b> When an envelope is voided, declined or expires, the signatures held for people who had not signed yet come back. One that was already used stays used. Correcting a sent envelope and sending reminders are free.</li>
           <li><b>Some things are always free.</b> Signing your own documents, under your own name and address. People who approve, view or get a copy. Everyone who signs something you send. Your first {n(P.welcomeSignatures)}. Being asked to sign again after a change.</li>
-          <li><b>Some things always use one.</b> Someone signing in person on your device, whatever address you typed for them. Each visitor who signs a public form of yours: a form holds nothing while people fill it in, and takes one signature at the moment a visitor finishes. If none is free then, the visitor is told it is nothing they did, what they filled in is kept, and you get an email. A form never takes a signature that is held for an envelope you have out, and never takes your balance below zero.</li>
+          <li><b>Some things always use one.</b> Someone signing in person on your device, whatever address you typed for them. Each visitor who signs a public form of yours: a form holds nothing while people fill it in, and takes one signature at the moment a visitor finishes. If the form has other signers too (a colleague who countersigns, say), each of them uses one as well, and a visitor can start only while enough are free for everyone on it. If none is free when a visitor finishes, they are told it is nothing they did, what they filled in is kept until the form&apos;s deadline, and we email them once the form can take their signature. You get an email too. A form never takes a signature that is held for an envelope you have out, and never takes your balance below zero. The emails at two signatures left and at none come for forms as for anything you send.</li>
           <li><b>Nothing is charged unless you choose it.</b> When you run out, sending pauses and tells you. There are no automatic extra charges and no per-person fees.</li>
           <li><b>Month to month.</b> No yearly contract and no notice period. Cancel any time up to the minute before a charge. We remind you a week before and again about a day before, with the exact amount.</li>
           <li><b>Refunds are automatic.</b> {b.refund_rule}</li>
           <li><b>No surprise price rises.</b> {b.price_rule}</li>
           {b.dormant_stop_days > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {b.dormant_stop_days} days when a renewal comes up, we stop the renewal and tell you, with one click to keep it.</li>}
-          <li><b>Charged after cancelling?</b> That should never happen. If it does, the software refunds it by itself, and keeps trying until the refund has gone through. The same goes for being charged twice for the plan, or more than we told you.</li>
-          <li><b>A card dispute stops everything.</b> If a payment is disputed with the bank, billing stops at once, the unused signatures that payment bought go back with the money, and new payments stay off until a person has looked.</li>
+          <li><b>Charged after cancelling?</b> That should never happen. If it does, the software refunds it by itself and tells you. While the payment provider cannot be reached it keeps trying; if the provider refuses the refund three times, a person here sends it by hand and we tell you so. The same goes for being charged twice for the plan, or more than we told you.</li>
+          <li><b>A card dispute stops everything.</b> If a payment is disputed with the bank, billing stops at once and new payments stay off until a person has looked. The unused signatures that payment bought are set aside: they leave with the money if it goes back to the card, and come back if the bank decides the payment stands.</li>
           <li><b>Payments are in US dollars.</b> Anything paid in another currency is sent straight back.</li>
           <li><b>The limits, as numbers.</b> A top-up is at most {b.limits.top_up_max} signatures, a bulk send at most {b.limits.bulk_rows} rows, and top-ups need the monthly plan. To keep scammers out, an account that has not paid anything can send to {b.limits.new_account_daily} people a day in its first week{b.limits.first_week_daily ? ' (that is you, for now)' : ''} and to {b.limits.unpaid_daily} a day after that{b.limits.unpaid_daily_now ? ' (that is you, for now)' : ''}. A payment, or a word with support, lifts both.</li>
           <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is always free.</li>
@@ -723,13 +736,13 @@ function Billing() {
           </ul>
           <div className="actions">
             <button className="btn" onClick={() => setModal('')}>Keep the plan</button>
-            <button className="btn primary" disabled={busy} onClick={() => act(async () => { const r = await api('/billing/cancel', { method: 'POST' }); setDone({ kind: 'cancel', ...r }); setModal(''); })}>Cancel plan</button>
+            <button className="btn primary" disabled={busy} onClick={() => act(async () => { const r = await api('/billing/cancel', { method: 'POST' }); setDone({ kind: 'cancel', ...r }); setModal(''); window.scrollTo({ top: 0 }); })}>Cancel plan</button>
           </div>
         </Modal>
       )}
       {modal === 'refund' && offer && (
         <Modal title={`Refund ${offer.amount}`} onClose={() => setModal('')}>
-          <p>We will send {offer.amount} back to the card you paid with, for the {n(offer.signatures)} you have not used from your payment of {longDate(offer.paid_at)}. Those signatures leave your balance.{offer.kind === 'plan' ? (free ? ' Your free plan is not affected.' : ' Because this was a monthly payment, the monthly plan ends first, today. Nothing is deleted.') : ' Your plan is not affected.'}</p>
+          <p>We will send {offer.amount} back to the card you paid with, for the {n(offer.signatures)} you have not used from your payment of {longDate(offer.paid_at)}. Those signatures leave your balance.{offer.kind === 'plan' ? (free ? ' Your free plan is not affected.' : (grove || b.problem) ? ' Because this was a monthly payment, the monthly plan ends first, today. Nothing is deleted.' : ' Your monthly plan has already ended, so nothing else changes.') : ' Your plan is not affected.'}</p>
           <div className="actions">
             <button className="btn" onClick={() => setModal('')}>Not now</button>
             <button className="btn primary" disabled={busy} onClick={() => act(async () => { const r = await api('/billing/refund', { body: { payment_id: offer.payment_id } }); setDone({ kind: 'refund', ...r }); setModal(''); window.scrollTo({ top: 0 }); })}>Send my refund</button>
@@ -799,7 +812,8 @@ function YourData() {
         ) : (
           <>
             <ul className="rules">
-              <li>Any subscription stops at once. You will not be charged again.</li>
+              {/* Said before the payment provider has answered, so it promises only what the software does either way. */}
+              <li>Any subscription is cancelled at once. If the payment provider still takes a payment before it has confirmed that, the software refunds it by itself.</li>
               <li><b>Nothing is deleted for {CLOSE_GRACE_DAYS} days.</b> If you change your mind, or closed it by mistake, sign in again and the account comes straight back. We email you {CLOSING_REMINDER_DAYS} days before the end with the date and how to keep it.</li>
               <li>While it is closing, nothing new starts in it: nothing can be sent, nobody can be invited or join, and public forms take no new signatures.</li>
               <li>After {CLOSE_GRACE_DAYS} days {owned.length ? `the account and its ${owned.reduce((n, a) => n + a.envelopes, 0)} envelope(s) are` : 'your login is'} removed for good. Export first if you want copies. The lists below say exactly what goes and what stays.</li>

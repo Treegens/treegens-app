@@ -2,7 +2,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import { api, toast } from '@/components/ui';
 import { Dialog } from './Dialog';
-import { deadlineLine, explain, longDate, newDeadline, looksLikeEmail } from './lib';
+import { deadlineLine, explain, closingText, newDeadline, looksLikeEmail } from './lib';
 import { useMe } from '@/components/AppShell';
 import { CheckFields, checkTrouble, type CheckValue } from './CheckFields';
 
@@ -21,7 +21,8 @@ export function ExtendDialog({ envelope, onClose, onDone }: { envelope: { id: st
   const typed = Number(custom);
   const customOk = /^\d+$/.test(custom.trim()) && typed >= 1 && typed <= 365;
   const days = choice === 'custom' ? (customOk ? typed : 0) : choice;
-  const until = days ? longDate(newDeadline(envelope.status, envelope.expires_at, days).toISOString()) : '';
+  // The new deadline with its time and zone: a bare day can be another day for the people who sign.
+  const until = days ? closingText(newDeadline(envelope.status, envelope.expires_at, days).toISOString()) : '';
 
   async function save() {
     if (!days) return setError('Type a number of days from 1 to 365.');
@@ -29,7 +30,7 @@ export function ExtendDialog({ envelope, onClose, onDone }: { envelope: { id: st
     setError('');
     try {
       const { expires_at } = await api(`/envelopes/${envelope.id}/extend`, { body: { days } });
-      toast(expired ? `Reopened. It now closes on ${longDate(expires_at)}.` : `Done. It now closes on ${longDate(expires_at)}.`);
+      toast(expired ? `Reopened. It now closes on ${closingText(expires_at)}.` : `Done. It now closes on ${closingText(expires_at)}.`);
       onDone(expires_at);
     } catch (e: any) {
       setError(explain(e, 'Nothing was changed.'));

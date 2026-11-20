@@ -20,6 +20,10 @@ export const CLOSE_GRACE_DAYS = 30;
 export const PRICE_NOTICE_DAYS = 30;
 export const priceRuleText = (days = PRICE_NOTICE_DAYS): string =>
   `The price of your plan never goes up without notice. If the monthly price ever changes, every owner and admin is told by email at least ${days} days before the first renewal at the new price, with the old price, the new price, the date and a link that stops the plan in one click. A renewal that charges more than the price you were on without that notice has the difference refunded automatically. Signatures you already have are never touched by a price change.`;
+// The day a new monthly price starts, written the same way everywhere it is shown (the email that announces it, the
+// Plan page and the operator page): as a calendar day in UTC, and saying so, so nobody reads a different day.
+export const priceChangeDay = (iso: string | null | undefined): string =>
+  iso ? `${new Date(iso).toLocaleDateString('en', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })} (UTC)` : '';
 // How long we keep our own copy of an email that is not part of a document's record (invitations, notices, receipts,
 // reminders). A copy of an email about a document stays with that document and goes when the document goes.
 export const MAIL_COPY_DAYS = 90;
@@ -112,7 +116,8 @@ export const KEPT_AFTER_DELETION: string[] = [
   'What you sent as a member of a team you do not own. It belongs to that team and passes to its owner, and its audit trail says so. An API key you made there stays on the team\'s list as stopped, under your name.',
   'Signed PDFs your recipients downloaded or were emailed. Those are theirs. The links in our emails to them stop working.',
   'A fingerprint of the security code in each email about a document you sent, for one year. It holds no name, address or title. It only lets someone who still has that email learn that it was real and that the document has been deleted.',
-  'A fingerprint of your email address and the day you were given the welcome signatures, if your address was confirmed. The welcome signatures are given once per address, and this is how we know after your login is gone. It is made with a key only this server has, cannot be turned back into your address, and holds no name.',
+  'For each completed document you sent: the fingerprint (SHA-256) of its signed PDF, its envelope ID and the day it was completed, for one year. Nothing else: no name, address or title. It only lets someone who holds that exact file learn at Verify a document that it was completed here on that day and that its sender has deleted it since.',
+  'A fingerprint of your email address and the day you were given the welcome signatures, if your address was confirmed. The welcome signatures are given once per address, and this is how we know after your login is gone, or after it moved to another address (that fingerprint is kept from the day it moved). It is made with a key only this server has, cannot be turned back into your address, and holds no name.',
   `Our stored copies of emails to other people are deleted with the account when we know they are about you: an invitation you sent, or a notice to a team about your API keys or that you left. Any other copy that happens to mention your name goes with all such copies, ${MAIL_COPY_DAYS} days after it was sent.`,
 ];
 
@@ -148,7 +153,8 @@ export const supportReachable = (env: Record<string, string | undefined> = proce
   [env.SUPPORT_EMAIL || '', ...(env.OPERATOR_EMAILS || '').split(',')].some((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim()));
 
 /** What a help request can be about, in the order the form lists them. Plain constants, so a 'use client' file may import them. */
-export const SUPPORT_TOPICS: string[] = ['signing', 'stuck', 'sending', 'billing', 'charged-wrongly', 'cannot-log-in', 'suspicious', 'other'];
+// 'not-me' ("I am named on a document I did not sign") is never passed to the document's sender: only 'signing' is.
+export const SUPPORT_TOPICS: string[] = ['signing', 'stuck', 'sending', 'billing', 'charged-wrongly', 'cannot-log-in', 'suspicious', 'not-me', 'other'];
 
 /** The topics that make a request urgent: someone is locked out, money was taken wrongly, or a document or a deadline cannot wait. */
 export const SUPPORT_URGENT_TOPICS: string[] = ['cannot-log-in', 'charged-wrongly', 'stuck'];

@@ -97,7 +97,7 @@ export function momentText(iso: string | Date | null | undefined, tz?: string | 
 
 /**
  * The same moment for an email: always in UTC, and in the reader's own zone too once we know it. "20 March 2027 at
- * 16:40 UTC (21 March 2027 at 05:40 Pacific/Auckland time (UTC+13:00))".
+ * 16:40 UTC, which is 21 March 2027 at 05:40 Pacific/Auckland time (UTC+13:00)".
  */
 export function momentForEmail(iso: string | Date | null | undefined, tz?: string | null): string {
   const utc = momentText(iso);

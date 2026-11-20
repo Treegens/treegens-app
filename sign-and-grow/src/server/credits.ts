@@ -1,4 +1,4 @@
-import { get, run } from './db.ts';
+import { all, get, run } from './db.ts';
 import { now } from './util.ts';
 import { PRICING } from '../lib/impact.ts';
 
@@ -59,7 +59,8 @@ export function reserved(accountId: string): number {
       WHERE e.account_id=? AND e.kind='envelope' AND e.status='sent' AND r.status IN ('pending','sent','viewed')
         AND e.powerform_id IS NULL
         AND (r.role = 'inperson' OR (r.role = 'signer' AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))))
-        AND NOT EXISTS (SELECT 1 FROM credits c WHERE c.account_id = e.account_id AND c.reason = 'signature' AND c.ref = r.id || '|' || lower(r.email))`,
+        AND NOT EXISTS (SELECT 1 FROM credits c WHERE c.account_id = e.account_id AND c.reason = 'signature'
+          AND c.ref = r.id || '|' || lower(r.email) || CASE WHEN COALESCE(r.person_gen, 0) > 0 THEN '|' || r.person_gen ELSE '' END)`,
     accountId,
   ).n;
 }
@@ -86,10 +87,15 @@ export const isSelf = (r: any, s: Sender) =>
 export const isChargeable = (r: any, sender: Sender) =>
   r.role === 'inperson' || (r.role === 'signer' && (r.free == null ? !isSelf(r, sender) : !r.free));
 
-// One person's signature on one envelope is paid for once. The ledger line is named after the recipient and their
-// address, so being asked to sign again after a change costs nothing more, and a different person put in their
-// place is a new signature.
-export const sigRef = (r: any) => `${r.id}|${String(r.email || '').toLowerCase()}`;
+// One person's signature on one envelope is paid for once. The ledger line is named after the recipient, their
+// address and which person on that request they are (person_gen goes up each time the request passes to another
+// person: another address, or another name at the same address that is not a spelling of the old one, the test
+// "Fix my name" uses). So being asked to sign again after a change costs nothing more, and a different person put in
+// their place is a new signature, also at the same address. Lines from before person_gen have no third part, and a
+// request that never changed hands still has none, so they keep counting.
+export const sigRef = (r: any) => `${r.id}|${String(r.email || '').toLowerCase()}${Number(r.person_gen) > 0 ? `|${Number(r.person_gen)}` : ''}`;
+// The request passes to another person: the next one's signature is their own.
+export const nextPerson = (r: any) => ({ ...r, person_gen: (Number(r.person_gen) || 0) + 1 });
 export const paidFor = (accountId: string, r: any) => !!get("SELECT 1 x FROM credits WHERE account_id=? AND reason='signature' AND ref=?", accountId, sigRef(r));
 
 // How many signatures an envelope still needs: its signers who have not finished, not counting the sender signing
@@ -102,4 +108,30 @@ export function creditSummary(accountId: string) {
   const b = balance(accountId);
   const held = reserved(accountId);
   return { balance: b, held, available: b - held };
+}
+
+// How many of the signatures available right now were paid for, as far as a refund goes. Free signatures (the ones
+// every new account gets, and those from a free code) count as used first: the ledger is read in order, and each
+// signature used takes a free one while there is one, and a paid one only after that. Signatures held for people
+// who have not signed yet are counted the same way. So free signatures that arrive later (a code entered after the
+// paid ones were used up) never make a payment that was used up refundable again.
+export function paidAvailable(accountId: string): number {
+  balance(accountId); // writes this month's code signatures, if any are due
+  let free = 0;
+  let paid = 0;
+  for (const l of all('SELECT delta, reason FROM credits WHERE account_id=? ORDER BY at, id', accountId)) {
+    const d = Number(l.delta) || 0;
+    if (d > 0) {
+      if (l.reason === 'welcome' || l.reason === 'code' || l.reason === 'adjust') free += d;
+      else paid += d;
+    } else if (l.reason === 'refund' || l.reason === 'dispute') paid += d; // these always go with a payment
+    else {
+      const fromFree = Math.min(Math.max(0, free), -d);
+      free -= fromFree;
+      paid += d + fromFree;
+    }
+  }
+  const held = reserved(accountId);
+  const heldFromFree = Math.min(Math.max(0, free), held);
+  return Math.max(0, paid - (held - heldFromFree));
 }

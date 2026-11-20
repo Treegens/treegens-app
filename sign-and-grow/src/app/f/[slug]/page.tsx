@@ -40,7 +40,7 @@ export default function PowerForm() {
             </div>
             <h1 className="serif" style={{ fontSize: 24 }}>{form.name}</h1>
             <p className="muted" style={{ margin: '8px 0 16px' }}>Enter your details to review and sign. It takes a minute, and no paper is involved.</p>
-            <label className="f"><span>Your full name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>
+            <label className="f"><span>Your full name</span><input dir="auto" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>
             <label className="f"><span>Your email <span className="hint">(we send your signed copy here)</span></span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoComplete="email" /></label>
             {msg && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{msg}</div>}
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{busy ? 'Preparing your document…' : 'Continue to sign'}</button>

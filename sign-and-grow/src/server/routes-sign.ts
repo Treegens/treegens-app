@@ -20,6 +20,8 @@ import { CONSENT_VERSION, isConsentVersion, consentAuditNote } from '../lib/poli
 import { labelOf } from '../lib/bysender.ts';
 // A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
 import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup } from './groups.ts';
+// What happens around the certificate: later visits and the first look at the completed copy (evidence.ts).
+import { noteVisit, noteCopyOpened } from './evidence.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -117,6 +119,8 @@ route('GET', '/sign/:token', (c) => {
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   // A member whose colleague has the document, or who was taken out of the group, is told so and shown no more.
   if (r.member && (r.group_state === 'taken' || r.group_state === 'removed')) return { ...base, locked: false };
+  // A later visit, at most once a day for each person (noteVisit in evidence.ts). The first open is "Viewed" below.
+  noteVisit(e, r, actor);
   if (e.status === 'sent' && r.status === 'sent') markViewed(e, r, actor);
   if (r.member) memberOpened(e, r, actor);
   // The server keeps which content version this screen was given. The screen sends the number back with every save
@@ -344,7 +348,7 @@ route('POST', '/sign/:token/report', async (c) => {
 }, 'public');
 
 route('GET', '/sign/:token/download', async (c) => {
-  const { e, r } = find(c);
+  const { e, r, actor } = find(c);
   // Someone who has signed, approved or confirmed can always get a copy of what they put their name to, also after
   // the envelope was voided, declined or ran out of time. That copy opens with a page saying it was not completed
   // by everyone and why. Everyone else is held to the usual rule: nothing once the envelope is closed.
@@ -360,6 +364,8 @@ route('GET', '/sign/:token/download', async (c) => {
   if (earlier) return pdfResponse(earlier, `${e.subject || 'document'} (as first signed)`, c.q.get('inline') === '1');
   if (!keeps) assertViewable(e, r);
   const done = finalPdf(e);
+  // The first time this person opens or downloads the completed copy goes in the record (evidence.ts).
+  if (done) noteCopyOpened(e, r, actor, c.q.get('inline') === '1');
   // Until everyone has finished, the copy a recipient downloads is made for them: it shows what their screen shows.
   return pdfResponse(done || (await buildPdf(e, false, r.id, keeps ? notCompletedNotice(e, r) : undefined)), e.subject || 'document', c.q.get('inline') === '1');
 }, 'public');

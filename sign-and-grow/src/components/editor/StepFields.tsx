@@ -8,6 +8,7 @@ import { Lock, UndoRedo, Wand } from './parts';
 import { MAX_FIELDS, MIN_H, MIN_W, PREFILL, SIGNS, TLABEL, TYPES, clamp, makeField, plural, who, type Ed } from './shared';
 import { SENDER_MARK } from './shared';
 import { strikeClass, STRIKE_HELP } from '@/lib/strike';
+import { WordingField } from '../templates/WhoCanUse';
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
 const DRAG_START_PX = 3; // a press only becomes a drag after this much movement, so a click never moves anything
@@ -350,7 +351,7 @@ export function StepFields({ ed }: { ed: Ed }) {
 
         <div className="ed-row-b">
           <div className="ed-group ed-findbox">
-            <button type="button" className="btn sm ed-find" disabled={!ready || !!finding || !active} onClick={findForMe} aria-describedby="ed-find-help">
+            <button type="button" className="btn sm ed-find" disabled={!ready || !!finding || !active || !!ed.wording} onClick={findForMe} aria-describedby="ed-find-help">
               <Wand /> {finding ? 'Looking' : 'Find fields for me'}
             </button>
             <p id="ed-find-help" className="muted small ed-hide-sm">Looks for form fields, labels such as &ldquo;Signature:&rdquo; with a blank after them, and tags such as {'{{signature}}'}.</p>
@@ -363,7 +364,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                 // which is asked before the change is saved.
                 const again = anyLocked ? `${ed.lockedNames} already finished. Adding this means they have to sign again. You are asked before anything is saved.` : undefined;
                 return (
-                  <button key={t} type="button" className={tool === t ? 'on' : ''} title={again}
+                  <button key={t} type="button" className={tool === t ? 'on' : ''} title={again} disabled={!!ed.wording}
                     onClick={(e) => (e.detail === 0 ? addInView(t) : setTool(tool === t ? null : t))} aria-pressed={tool === t}>{label}</button>
                 );
               })}
@@ -373,8 +374,8 @@ export function StepFields({ ed }: { ed: Ed }) {
         {/* The result stays until the fields change again, so it never describes something that is no longer true. */}
         <p className="small ed-status" role="status">{finding ? `${finding}…` : note && note.count === list.length ? note.text : ''}</p>
         <p className="muted small ed-hint">
-          {tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Pick a field, then click where it goes.'}
-          <span className="ed-hide-sm">{tool ? '' : ' Drag to move, pull the corner to resize.'} Using the keyboard? Press Enter on a field type to drop it on the page in view, then move it with the arrow keys.</span>
+          {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Pick a field, then click where it goes.'}
+          {!ed.wording && <span className="ed-hide-sm">{tool ? '' : ' Drag to move, pull the corner to resize.'} Using the keyboard? Press Enter on a field type to drop it on the page in view, then move it with the arrow keys.</span>}
         </p>
       </div>
 
@@ -447,7 +448,8 @@ export function StepFields({ ed }: { ed: Ed }) {
             {selLocked ? (
               <div className="ed-sheetbody always">
                 <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
-                <div className="notice ed-lockline small"><Lock size={16} /><span>{who(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field stays where it is.</span></div>
+                {ed.wording && !lockedIds.has(selected.recipient_id) ? <WordingField field={selected} lock={ed.wording} onValue={(v) => patchField(selected.id, { value: v })} />
+                  : <div className="notice ed-lockline small"><Lock size={16} /><span>{who(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field stays where it is.</span></div>}
               </div>
             ) : (
               <div className="ed-sheetbody">

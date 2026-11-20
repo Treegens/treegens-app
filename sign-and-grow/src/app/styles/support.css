@@ -65,6 +65,8 @@
   .tk .btn, .tk select, .tk-filters button, .tk-kinds label, .rq .btn, .rq-item > summary { min-height: 44px; }
   .tk textarea, .tk select, .rq textarea { font-size: 16px; }
   .rq .pub-link, .rq .linklike { display: inline-flex; align-items: center; min-height: 44px; }
+  /* "Do not mention the document" sits just above the Send button of the help form. */
+  .pub-contact .pub-link { display: inline-flex; align-items: center; min-height: 44px; }
 }
 @media (max-width: 700px) {
   .tk-open { padding-left: 12px; padding-right: 12px; }

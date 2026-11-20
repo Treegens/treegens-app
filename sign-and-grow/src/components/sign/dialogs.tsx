@@ -111,6 +111,8 @@ const REASONS: [string, string, string][] = [
   ['phishing', 'It looks like a scam', 'For example, it asks for money or passwords, or pretends to be someone else.'],
   ['spam', 'It is spam', 'I did not ask for this and do not know the sender.'],
   ['not-for-me', 'It is not meant for me', 'It looks genuine, but it was sent to the wrong person.'],
+  // A dispute, not a report: it marks the envelope, tells the sender and goes to POST /sign/:token/dispute.
+  ['not-me', 'I did not sign this, or this was not me', 'Something was signed, approved or declined in my name that I did not do. The document is marked as disputed and nothing is deleted. The sender is told that you dispute it, not what you write below.'],
   ['other', 'Something else', ''],
 ];
 
@@ -120,6 +122,14 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
   const [sent, setSent] = useState(false);
   const { busy, error, setError, send } = useSend();
   const name = useId();
+  if (sent && reason === 'not-me')
+    return (
+      <Dialog title="Report this request" onClose={onClose}>
+        <Confirmed onClose={onClose}>
+          <b>Your dispute is on record.</b> The document is now marked as disputed, on {sender?.name || 'the sender'}&apos;s page and for anyone who checks it on our Verify page. {sender?.name || 'The sender'} and the people who run Sign&amp;Grow have been told. Nothing was deleted, and you can still download your copy. We do not decide who is right. To hear from a person, write to us on the help page with the topic &ldquo;I am named on a document I did not sign&rdquo;.
+        </Confirmed>
+      </Dialog>
+    );
   if (sent)
     return (
       <Dialog title="Report this request" onClose={onClose}>
@@ -133,7 +143,7 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
       <form onSubmit={async (e) => {
         e.preventDefault();
         if (!reason) return setError('Choose what is wrong, then send your report.');
-        if (await send(() => api(`${base}/report`, { body: { reason, detail } }), 'Your report was not sent. Try again in a minute.')) setSent(true);
+        if (await send(() => (reason === 'not-me' ? api(`${base}/dispute`, { body: { detail } }) : api(`${base}/report`, { body: { reason, detail } })), reason === 'not-me' ? '' : 'Your report was not sent. Try again in a minute.')) setSent(true);
       }}>
         <p className="muted">This goes to the Sign&Grow team, not to {sender?.name || 'the sender'}. A person reads every report.</p>
         <fieldset className="sg-choices">
@@ -145,7 +155,7 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
             </label>
           ))}
         </fieldset>
-        <label className="f"><span>Anything else we should know <span className="hint">(optional)</span></span><textarea rows={3} maxLength={2000} value={detail} onChange={(e) => setDetail(e.target.value)} /></label>
+        <label className="f"><span>Anything else we should know <span className="hint">(optional)</span></span><textarea dir="auto" rows={3} maxLength={2000} value={detail} onChange={(e) => setDetail(e.target.value)} /></label>
         <Problem>{error}</Problem>
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
@@ -196,7 +206,7 @@ export function ReassignDialog({ base, sender, onClose, onDone }: { base: string
         <p className="muted">Nothing you filled in or signed goes with it: they start with an empty document. If this is you and only your name is spelled wrong, go back instead. You can fix your name when you check the document before you finish.</p>
         <label className="f"><span>Their name</span><input dir="auto" data-autofocus autoComplete="off" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="f"><span>Their email</span><input type="email" autoComplete="off" autoCapitalize="off" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-        <label className="f"><span>Reason <span className="hint">(optional)</span></span><input value={form.reason} maxLength={300} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>
+        <label className="f"><span>Reason <span className="hint">(optional)</span></span><input dir="auto" value={form.reason} maxLength={300} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>
         <Problem>{error}</Problem>
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Go back</button>

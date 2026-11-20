@@ -143,7 +143,8 @@ export function StopByCard() {
         a.run(e, () => api('/public/billing/stop-by-card', { body: noEmail ? { last4, charged_on: on, amount } : { email: email.trim(), last4 } }), (err) =>
           explain(err, 'That is too many tries for now. Wait an hour, or use the contact form below and a person will stop it for you.', {
             501: 'This copy of Sign&Grow does not take payments, so there is nothing to stop here. If you see a charge anyway, use the contact form below.',
-            502: `${err.message} Nothing was changed. Try again in a minute, or use the contact form below.`,
+            // The server's own words already say what to do when they can. Only a bare answer from the provider gets ours.
+            502: /try again/i.test(err.message || '') ? err.message : `${err.message} Try again in a minute, or use the contact form below.`,
           }))
       }
     >

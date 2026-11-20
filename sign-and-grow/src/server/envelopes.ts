@@ -2,10 +2,10 @@ import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
 import { assertCanStore } from './filestore.ts';
 import { bad, id, token, sha256, now, isEmail, str, baseUrl, checkCode } from './util.ts';
 import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
-import { renderEnvelopePdf, withNotice } from './pdf.ts';
+import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
-import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary } from './credits.ts';
+import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
 import { DATE_FORMATS, momentText, momentForEmail, isDaytime, validZone, REMINDER_DAY_START } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
@@ -24,6 +24,8 @@ import { isOpenGroup, whoIs } from '../lib/groups.ts';
 import { saveBySender, bySenderProblem, reachKey, reporterKey, copyBySender, bySenderNotice, assertNudgeable, remindThroughSender, untoldLines, unopenedLines, noteNoCopy, senderCopyLines, answerLine } from './bysender.ts';
 import { labelOf, signerAt } from '../lib/bysender.ts';
 import { carryRules } from './tplroles.ts';
+// Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
+import { fingerprintLines, noteCopyMailed } from './evidence.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike'];
@@ -687,6 +689,9 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       // or an office can share an inbox (see samePerson). The link stays, because it went to that inbox. Nothing the
       // first person agreed to, typed, ticked, uploaded or drew stays with it: see below.
       const otherName = !otherPerson && old.name !== r.name && !samePerson(old.name, r.name);
+      // Another person is the next person on the request: what the one before paid for or signed is not theirs, so
+      // their signature is their own (sigRef in credits.ts), and the check for signatures below counts it.
+      if (otherPerson || otherName) run('UPDATE recipients SET person_gen=COALESCE(person_gen,0)+1 WHERE id=?', r.id);
       if (old.status === 'completed' && old.role === 'cc') {
         // Someone who only had a copy. A new address gets its own copy, and a new job means they are asked to do it.
         if (!otherPerson && r.role === 'cc') continue;
@@ -1136,30 +1141,34 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
   });
   fireWebhooks(e.account_id, 'envelope.sent', e.id);
   await advance(e.id);
-  // Running low never comes as a surprise: one email at two signatures left, one at none.
-  if (creditsEnabled() && need > 0 && !e.powerform_id) {
-    const after = before - need;
-    for (const mark of [2, 0])
-      if (before > mark && after <= mark) {
-        // Goes to the people who can buy more (owners and admins) as well as to whoever sent, so a member using the
-        // last signature never leaves the team stuck without anyone knowing.
-        const buyers = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", account.id).map((u) => u.email);
-        const isBuyer = buyers.some((b) => sameEmail(b, sender.email));
-        const more = account.promo_code ? `Your plan is free with the code ${account.promo_code}: ${PRICING.monthlySignatures} more arrive at the start of next month at no charge, and you can top up any time at $${PRICING.topUpUsd} a signature.`
-          : account.plan === 'grove' && account.cancel_at ? `Your monthly plan is cancelled, so no more are added by it. Until it ends you can still top up at $${PRICING.topUpUsd} a signature, or keep the plan after all on the Plan page.`
-          : account.plan === 'grove' ? `Your plan adds ${PRICING.monthlySignatures} more with each monthly payment, and you can top up any time at $${PRICING.topUpUsd} a signature.`
-          : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures.`;
-        for (const to of new Set([sender.email, ...buyers]))
-          await sendMail({ to, subject: after <= 0 ? 'You have used all your signatures' : `${after} signature${after === 1 ? '' : 's'} left`,
-            heading: after <= 0 ? 'That was your last signature' : `You have ${after} signature${after === 1 ? '' : 's'} left`,
-            lines: [`${account.name} has ${Math.max(0, after)} signature${after === 1 ? '' : 's'} left to send${sameEmail(to, sender.email) ? '' : `, after ${sender.name} sent "${e.subject || e.documents[0].name}"`}. Envelopes already out are covered and can still be signed.`,
-              more,
-              ...(sameEmail(to, sender.email) && !isBuyer ? ['Only an owner or admin of your team can buy more. We have told them too.'] : []),
-              `Nothing is ever charged without you choosing it. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`],
-            ...(sameEmail(to, sender.email) && !isBuyer ? {} : { cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } }) });
-        break;
-      }
-  }
+  // Running low never comes as a surprise: one email at two signatures left, one at none. A public form holds
+  // nothing when it is started, so for a form this is said when its visitor signs (completeRecipient).
+  if (creditsEnabled() && need > 0 && !e.powerform_id) await lowBalanceMail(account, sender, before, before - need, `${sender.name} sent "${e.subject || e.documents[0].name}"`);
+}
+
+// The email at two signatures left and the one at none. It goes to the people who can buy more (owners and admins)
+// as well as to the person whose envelope or form used them, so a member using the last signature never leaves the
+// team stuck without anyone knowing. `did` says what used them ("Ann sent "Lease"", "someone signed your form
+// "Join us""); `always` says it to the sender too, for a form, where they did not do it themselves.
+export async function lowBalanceMail(account: any, sender: { email: string; name: string }, before: number, after: number, did: string, always = false) {
+  for (const mark of [2, 0])
+    if (before > mark && after <= mark) {
+      const buyers = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", account.id).map((u) => u.email);
+      const isBuyer = buyers.some((b) => sameEmail(b, sender.email));
+      const more = account.promo_code ? `Your plan is free with the code ${account.promo_code}: ${PRICING.monthlySignatures} more arrive at the start of next month at no charge, and you can top up any time at $${PRICING.topUpUsd} a signature.`
+        : account.plan === 'grove' && account.cancel_at ? `Your monthly plan is cancelled, so no more are added by it. Until it ends you can still top up at $${PRICING.topUpUsd} a signature, or keep the plan after all on the Plan page.`
+        : account.plan === 'grove' ? `Your plan adds ${PRICING.monthlySignatures} more with each monthly payment, and you can top up any time at $${PRICING.topUpUsd} a signature.`
+        : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures.`;
+      for (const to of new Set([sender.email, ...buyers]))
+        await sendMail({ to, subject: after <= 0 ? 'You have used all your signatures' : `${after} signature${after === 1 ? '' : 's'} left`,
+          heading: after <= 0 ? 'That was your last signature' : `You have ${after} signature${after === 1 ? '' : 's'} left`,
+          lines: [`${account.name} has ${Math.max(0, after)} signature${after === 1 ? '' : 's'} left to send${sameEmail(to, sender.email) && !always ? '' : `, after ${did}`}. Envelopes already out are covered and can still be signed.`,
+            more,
+            ...(sameEmail(to, sender.email) && !isBuyer ? ['Only an owner or admin of your team can buy more. We have told them too.'] : []),
+            `Nothing is ever charged without you choosing it. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`],
+          ...(sameEmail(to, sender.email) && !isBuyer ? {} : { cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } }) });
+      break;
+    }
 }
 
 type Notice = 'new' | 'reminder' | 'updated' | 'reopened' | 'expiring' | 'resent' | 'again';
@@ -1409,6 +1418,10 @@ async function completeEnvelope(e: any) {
     `Because this was signed digitally, about ${fmtNum(i.sheets)} sheets of paper and ${fmtNum(i.litresWater)} litres of water were not used.`,
   ];
   const attachments = pdf && pdf.length < 8_000_000 ? [{ filename: `${(fresh.subject || 'signed').replace(/[^\w .-]+/g, '_').slice(0, 80)}.pdf`, content: Buffer.from(pdf) }] : undefined;
+  // The fingerprint of the signed PDF, so every person holds a reference of their own outside this service, and
+  // what became of each copy, in the record (evidence.ts).
+  const copy = !pdf ? 'not-ready' : attachments ? 'attached' : 'too-large';
+  lines.splice(1, 0, ...fingerprintLines(fresh, copy));
   const brand = brandOf(e.account_id);
   const sender = senderOf(e);
   const sent = new Set<string>();
@@ -1430,10 +1443,10 @@ async function completeEnvelope(e: any) {
     }
     sent.add(to);
     const shared = fresh.recipients.some((x: any) => x.id !== r.id && sameEmail(x.email, r.email));
-    await sendMail({ to: r.email, recipientId: r.id, subject: `Completed: ${fresh.subject}`, heading: `${shared ? `For ${r.name}: ` : ''}Your document is complete`, lines: [...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []), ...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their Sign&Grow account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code });
+    noteCopyMailed(e, r, copy, await sendMail({ to: r.email, recipientId: r.id, subject: `Completed: ${fresh.subject}`, heading: `${shared ? `For ${r.name}: ` : ''}Your document is complete`, lines: [...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []), ...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their Sign&Grow account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code }));
   }
   if (sender && !sent.has(sender.email.toLowerCase()) && notifyPrefs(sender).completed)
-    await sendMail({ to: sender.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, ...senderCopyLines(fresh)], cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand, attachments });
+    noteCopyMailed(e, { name: sender.name, email: sender.email, sender: true }, copy, await sendMail({ to: sender.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, ...senderCopyLines(fresh)], cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand, attachments }));
 }
 
 export function finalPdf(e: any): Buffer | null {
@@ -1547,19 +1560,53 @@ export async function remindEnvelope(e: any, actor: Actor, recipientId?: string)
   return reminded.length;
 }
 
-// The owner of a public form is told, once a day at most, that someone could not sign it for want of a signature,
-// with the numbers as they are.
-export async function formNeedsSignatures(accountId: string, powerformId: string): Promise<void> {
+// The owner of a public form, and the people who can buy signatures (owners and admins), are told, once a day at
+// most, that someone could not sign it for want of a signature, with the numbers as they are. `where` says when:
+// at 'start' nothing of the visitor's was kept (they were stopped before filling anything in); at 'finish' what they
+// filled in is kept and they are emailed when the form can take their signature. `need` is how many signatures one
+// visitor's envelope needs (more than one when the template has other signers too).
+export async function formNeedsSignatures(accountId: string, powerformId: string, where: 'start' | 'finish' = 'finish', need = 1): Promise<void> {
   const p = get('SELECT * FROM powerforms WHERE id=?', powerformId);
   if (!p || (p.alerted_at && Date.parse(p.alerted_at) > Date.now() - 864e5)) return;
   run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
   const owner = get('SELECT u.email FROM envelopes t JOIN users u ON u.id=t.sender_id WHERE t.id=?', p.template_id);
+  const buyers = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", accountId).map((u) => u.email);
   const s = creditSummary(accountId);
   const n = (x: number) => `${x} signature${x === 1 ? '' : 's'}`;
-  if (owner) await sendMail({ to: owner.email, subject: `Your form "${p.name}" has run out of signatures`, heading: 'Someone tried to sign your form and could not',
-    lines: [`"${p.name}" uses one signature for each person who signs it, and none is free right now: you have ${n(Math.max(0, s.balance))} on your balance${s.held > 0 ? `, and ${s.held === 1 ? 'it is' : `${s.held} of them are`} held for envelopes you have out` : ''}.`,
-      'The person was told that it is nothing they did, and what they filled in is saved. Top up or start the monthly plan (or void an envelope you no longer need) and the form takes signatures again at once.'],
-    cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
+  const free = Math.max(0, s.available);
+  for (const to of new Set([...(owner ? [owner.email] : []), ...buyers])) {
+    const canBuy = buyers.some((b) => sameEmail(b, to));
+    await sendMail({ to, subject: `Your form "${p.name}" has run out of signatures`, heading: 'Someone tried to sign your form and could not',
+      lines: [`"${p.name}" uses one signature for each person who signs it${need > 1 ? ` (${n(need)} for each visitor, because the form has other signers too)` : ''}, and ${free < 1 ? 'none is' : `only ${free} ${free === 1 ? 'is' : 'are'}`} free right now: you have ${n(Math.max(0, s.balance))} on your balance${s.held > 0 ? `, and ${s.held === 1 ? 'it is' : `${s.held} of them are`} held for envelopes you have out` : ''}.`,
+        where === 'start'
+          ? 'The person was stopped before they filled anything in, and told that the form cannot take new signatures right now and that it is nothing they did. Nothing of theirs was kept.'
+          : 'The person was told that it is nothing they did, and what they filled in is saved. We email them when the form can take their signature, and they finish with the same link.',
+        canBuy ? 'Top up or start the monthly plan (or void an envelope you no longer need) and the form takes signatures again at once.' : 'Only an owner or admin of your team can add signatures. We have told them too.'],
+      ...(canBuy ? { cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } } : {}) });
+  }
+}
+
+// Visitors who were told that what they filled in is saved and that we email them when the form can take their
+// signature are emailed once that is so: one email each, oldest first, and no more of them at a time than there are
+// signatures free (counting the ones already told who have not finished yet). Run on the timer.
+export async function formVisitorsReady(): Promise<number> {
+  if (!creditsEnabled()) return 0;
+  let told = 0;
+  const waiting = all(`SELECT r.*, e.account_id, e.subject, e.expires_at FROM recipients r JOIN envelopes e ON e.id=r.envelope_id
+    WHERE e.powerform_id IS NOT NULL AND e.status='sent' AND r.status IN ('sent','viewed') AND r.form_waits_at IS NOT NULL ORDER BY r.form_waits_at`);
+  const room = new Map<string, number>();
+  for (const r of waiting) {
+    if (!room.has(r.account_id)) room.set(r.account_id, available(r.account_id) - waiting.filter((x) => x.account_id === r.account_id && x.form_ready_at).length);
+    if (r.form_ready_at || !r.email || (room.get(r.account_id) || 0) < 1) continue;
+    room.set(r.account_id, (room.get(r.account_id) || 0) - 1);
+    run('UPDATE recipients SET form_ready_at=? WHERE id=?', now(), r.id);
+    await sendMail({ to: r.email, subject: `You can finish "${r.subject}" now`, heading: 'The form can take your signature now',
+      lines: [`Earlier the form "${r.subject}" could not take your signature. It can now. Everything you filled in is still there: open the link below and press Finish.${r.expires_at ? ` It stays open until ${momentForEmail(r.expires_at, r.tz)}.` : ''}`],
+      cta: { label: 'Finish the form', url: signUrl(r) }, envelopeId: r.envelope_id, recipientId: r.id });
+    audit(r.envelope_id, { name: 'System' }, 'Visitor told the form can take their signature', `${r.name} <${r.email}> was emailed that the form can take their signature again.`);
+    told++;
+  }
+  return told;
 }
 
 // When a signer's address changes to a different person, is the new person's signature free (the sender signing
@@ -1568,9 +1615,11 @@ export async function formNeedsSignatures(accountId: string, powerformId: string
 function takeOverCost(e: any, r: any, newEmail: string, newName: string): number {
   const sender = senderOf(e) || { email: '', name: '' };
   const free = isSelf({ role: r.role, email: newEmail, name: newName }, sender) ? 1 : 0;
-  // A signature that is already paid for under the new address (someone asked to sign again after a change, whose
-  // name is being put right) needs nothing more, and stays as it is.
-  if (paidFor(e.account_id, { id: r.id, email: newEmail })) return r.free ? 1 : free;
+  // A signature that is already paid for by this same person (someone asked to sign again after a change, whose
+  // name is being put right) needs nothing more, and stays as it is. Another person, also at the same address, is
+  // the next person on the request (nextPerson), and nothing is paid for them yet.
+  const same = sameSigner(r, { email: newEmail, name: newName });
+  if (paidFor(e.account_id, { ...(same ? r : nextPerson(r)), email: newEmail })) return r.free ? 1 : free;
   if (creditsEnabled() && ACTS(r.role) && !isChargeable(r, sender) && !free) {
     const have = available(e.account_id);
     if (have < 1) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have), 402);
@@ -1643,7 +1692,8 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
     // request: the new person agrees and signs for themselves, on the same link. A spelling fix keeps everything.
     const other = name !== r.name && !samePerson(r.name, name);
     if (other) clearAnswers(r.id);
-    run(`UPDATE recipients SET name=?, access_code=?, free=?${newCode ? `, ${fresh}` : ''}${other ? ", consent_at=NULL, viewed_at=NULL, muted=0, unopened_alerted_at=NULL, status=CASE WHEN status='viewed' THEN 'sent' ELSE status END" : ''} WHERE id=?`, name, code, free, r.id);
+    // Another person is the next person on the request: their signature is their own (sigRef in credits.ts).
+    run(`UPDATE recipients SET name=?, access_code=?, free=?${newCode ? `, ${fresh}` : ''}${other ? ", person_gen=COALESCE(person_gen,0)+1, consent_at=NULL, viewed_at=NULL, muted=0, unopened_alerted_at=NULL, status=CASE WHEN status='viewed' THEN 'sent' ELSE status END" : ''} WHERE id=?`, name, code, free, r.id);
     audit(e.id, actor, 'Recipient corrected', `${r.name} is now ${name}${code !== r.access_code ? ', access code changed' : ''}${other ? `. That is another person at the same address, so nothing that ${r.name} had agreed to, filled in or signed was kept` : ''}`);
     newerVersion(e.id, actor, name !== r.name ? `changed the name of ${r.name} to ${name}` : `changed the access code of ${r.name}`);
     // The person is asked to sign under their name, and others may see it printed. A screen that still shows the
@@ -1660,7 +1710,7 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   // request, and the wait before "not opened yet" is counted from the email that goes to the new address now.
   clearAnswers(r.id);
   // With an address we email them from now on, so a link the sender used to pass on is no longer theirs to pass.
-  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sent_at=?, status=?, free=?, link_by_sender=0, ${fresh} WHERE id=?`,
+  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sent_at=?, status=?, free=?, link_by_sender=0, person_gen=COALESCE(person_gen,0)+1, ${fresh} WHERE id=?`,
     name, email, code, token(), checkCode(), r.status === 'pending' ? r.sent_at : now(), r.status === 'pending' ? 'pending' : 'sent', free, r.id);
   noteReached(e, [email]);
   audit(e.id, actor, 'Recipient corrected', `${labelOf(r)} is now ${name} <${email}>. The link ${r.email ? `sent to ${r.email}` : 'the sender had shared'} stopped working, and anything filled in through it was cleared.`);
@@ -1755,13 +1805,16 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // A public form holds none of its owner's signatures while people fill it in, so this is the moment that decides:
   // a visitor's signature needs one that is free right now. It never takes one that is held for an envelope the
   // owner has out, and a form never takes the balance below zero. What the visitor filled in is kept, the owner is
-  // told (once a day at most), and the same link works again as soon as there is a signature.
+  // told (once a day at most), and the same link works again as soon as there is a signature. The start is not
+  // closed for being idle while they wait (cronTick), and they are emailed once when the form can take their
+  // signature (formVisitorsReady).
   if (e.powerform_id && creditsEnabled() && isChargeable(r, senderOf(e) || '') && !paidFor(e.account_id, r) && available(e.account_id) < 1) {
     try {
       applyValues(e, r, body.values || {}, false);
     } catch {}
-    await formNeedsSignatures(e.account_id, e.powerform_id);
-    throw bad('This form cannot take your signature at the moment. That is nothing you did: the people who run it need to add signatures first, and we have just told them. Everything you filled in is saved. Please try again a little later with the same link.', 503);
+    run('UPDATE recipients SET form_waits_at=?, form_ready_at=NULL WHERE id=?', now(), r.id);
+    await formNeedsSignatures(e.account_id, e.powerform_id, 'finish');
+    throw bad(`This form cannot take your signature at the moment. That is nothing you did: the people who run it need to add signatures first, and we have just told them. Everything you filled in is saved, and it stays saved while you wait${e.expires_at ? `, until ${momentForEmail(e.expires_at, r.tz)}` : ''}.${r.email ? ` We email you at ${r.email} once the form can take your signature.` : ''} Then open the same link and press Finish.`, 503);
   }
   const t = now();
   // Finishing is claimed by one statement that only changes a row while this recipient and the envelope are both
@@ -1787,7 +1840,16 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // Someone signing for the second time, after the sender changed the document, is recorded as exactly that.
   audit(e.id, actor, r.signed_before ? `${verb} again` : verb, whoIs(r)); // for a group: the person who acted, and the group
   fireWebhooks(e.account_id, 'recipient.completed', e.id, { recipient_id: r.id });
-  if (creditsEnabled() && isChargeable(r, senderOf(e) || '')) grant(e.account_id, -1, 'signature', sigRef(r));
+  if (creditsEnabled() && isChargeable(r, senderOf(e) || '')) {
+    const before = e.powerform_id ? available(e.account_id) : 0;
+    // A public form uses its owner's signatures at this moment, not when it is started, so the emails at two left
+    // and at none go out from here, as they do for any other send.
+    if (grant(e.account_id, -1, 'signature', sigRef(r)) && e.powerform_id) {
+      const owner = senderOf(e);
+      const form = get('SELECT name FROM powerforms WHERE id=?', e.powerform_id);
+      if (owner) await lowBalanceMail(get('SELECT * FROM accounts WHERE id=?', e.account_id), owner, before, before - 1, `${r.name} signed your public form "${form?.name || e.subject}"`, true).catch(() => {});
+    }
+  }
   const left = e.recipients.filter((x: any) => x.id !== r.id && x.status !== 'completed' && x.role !== 'cc');
   if (left.length) await notifySender(e, 'signed', `${verb}: ${e.subject}`, `${r.name} has ${verb.toLowerCase()} your document`, [`Still waiting on ${left.map((x: any) => x.name).join(', ')}.`]);
   await advance(e.id);
@@ -1848,7 +1910,9 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // The wait before the sender hears "not opened yet" starts again with the email that goes out now.
   clearAnswers(r.id);
   // The new person has an address and is emailed, also when the first one's link was passed on by the sender.
-  run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, reassigned_from=?, free=?, link_by_sender=0 WHERE id=?",
+  // Another person is the next person on the request, whose signature is their own (sigRef in credits.ts). The same
+  // name (or a spelling of it) at the same address stays the same person, as takeOverCost decided.
+  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, reassigned_from=?, free=?, link_by_sender=0${sameSigner(r, { email, name }) ? '' : ', person_gen=COALESCE(person_gen,0)+1'} WHERE id=?`,
     name, email, token(), checkCode(), now(), labelOf(r), free, r.id);
   noteReached(e, [email]);
   audit(e.id, actor, 'Reassigned', `${labelOf(r)} assigned this to ${name} <${email}>${to.reason ? `: ${str(to.reason, 300)}` : ''}${/[.!?]$/.test(str(to.reason, 300).trim()) ? '' : '.'} Nothing that ${r.name} had filled in or signed was passed on.`);
@@ -2318,7 +2382,9 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
     // person is already waiting. Typing counts as being there (answers are saved as people type). The visitor loses
     // nothing but the start: the form simply gives them a new one.
     const visitor = e.form_recipient_id && e.recipients.find((r: any) => r.id === e.form_recipient_id);
-    if (visitor && (visitor.status === 'sent' || visitor.status === 'viewed')) {
+    // A visitor who pressed Finish while no signature was free was told that what they filled in is kept and that
+    // we email them: that start is never closed for being idle (only the envelope's own deadline applies).
+    if (visitor && (visitor.status === 'sent' || visitor.status === 'viewed') && !visitor.form_waits_at) {
       const acted = get("SELECT MAX(at) at FROM audit WHERE envelope_id=? AND actor != 'System'", e.id)?.at || e.sent_at;
       const touched = visitor.touched_at && visitor.touched_at > acted ? visitor.touched_at : acted;
       const shared = !!get('SELECT shared_device s FROM powerforms WHERE id=?', e.powerform_id)?.s;
@@ -2345,7 +2411,7 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       run('UPDATE envelopes SET expiry_warned_at=? WHERE id=?', t, e.id);
       const waiting = e.recipients.filter((r: any) => r.status === 'sent' || r.status === 'viewed');
       if (!held) for (const r of waiting) await notifyRecipient(e, r, 'expiring');
-      await notifySender(e, 'problems', `Expires soon: ${e.subject}`, 'This envelope expires in three days', [`Still waiting on ${waiting.map((r: any) => r.name).join(', ') || 'nobody'}. You can extend the deadline if they need longer.`, ...untoldLines(waiting)], { label: 'Extend deadline', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
+      await notifySender(e, 'problems', `Expires soon: ${e.subject}`, 'This envelope expires in three days', [`It closes on ${momentForEmail(e.expires_at, senderZone(e))}. Still waiting on ${waiting.map((r: any) => r.name).join(', ') || 'nobody'}. You can extend the deadline if they need longer.`, ...untoldLines(waiting)], { label: 'Extend deadline', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
       warned++;
     }
     // "I never got it": if a request sits unopened, tell the sender once so they can share the link another way.

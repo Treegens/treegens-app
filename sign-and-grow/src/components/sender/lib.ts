@@ -81,6 +81,9 @@ export function newDeadline(status: string, expiresAt: string | null | undefined
   return new Date(from + days * DAY_MS);
 }
 
+/** A deadline is a moment, never a bare day: "4 December 2026 at 17:40 Europe/Berlin time (UTC+01:00)", by this device's clock. */
+export const closingText = (iso?: string | null): string => (valid(iso) ? momentText(iso, deviceZone()) : '');
+
 /** "Ada", "Ada and Ben", "Ada, Ben and Cee", "Ada, Ben and 3 others". */
 export function joinNames(names: string[]): string {
   const n = names.filter(Boolean);

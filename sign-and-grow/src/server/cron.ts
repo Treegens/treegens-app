@@ -1,4 +1,4 @@
-import { cronTick } from './envelopes.ts';
+import { cronTick, formVisitorsReady } from './envelopes.ts';
 import { dormancyNudges, renewalReminders, billingRetries, endRemovedCodes } from './routes-billing.ts';
 import { purgeClosedAccounts } from './routes-trust.ts';
 import { supportTick } from './routes-support.ts';
@@ -19,5 +19,7 @@ export async function tick() {
     // Help requests that have passed the time a person should have answered by: the operators are emailed and the customer is told.
     support: await supportTick(),
     // Addresses that bounced, and "try later" days, older than BOUNCE_WARN_DAYS (bounces.ts).
-    bounces_forgotten: forgetOldBounces() };
+    bounces_forgotten: forgetOldBounces(),
+    // Visitors of a public form who were told to come back once it can take their signature, emailed when it can.
+    forms_ready: await formVisitorsReady() };
 }

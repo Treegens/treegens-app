@@ -11,6 +11,7 @@ export const TOPIC_LABEL: Record<string, string> = {
   'charged-wrongly': 'I was charged and should not have been',
   'cannot-log-in': 'I cannot log in',
   suspicious: 'Something looks suspicious',
+  'not-me': 'I am named on a document I did not sign',
   other: 'Something else',
 };
 

@@ -336,13 +336,17 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
           </div>
         )}
       </div>
-      {error && <div className="notice err sg-problem" role="alert">{error}</div>}
-      <p className="muted small sg-siglegal">
-        By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}, {adoptLine(word)}
-      </p>
-      <div className="actions">
-        <button type="button" className="btn" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn primary" onClick={adopt}>{tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}</button>
+      {/* Pinned to the bottom of the dialog (signphone.css): on a phone held sideways, or with large text, the box
+          to draw in fills the screen, and the buttons, the sentence they agree to and any problem stay in view. */}
+      <div className="sg-adopt-foot">
+        {error && <div className="notice err sg-problem" role="alert">{error}</div>}
+        <p className="muted small sg-siglegal">
+          By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}, {adoptLine(word)}
+        </p>
+        <div className="actions">
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn primary" onClick={adopt}>{tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}</button>
+        </div>
       </div>
     </Dialog>
   );
