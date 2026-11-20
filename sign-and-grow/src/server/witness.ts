@@ -385,8 +385,9 @@ export async function notPresent(e: any, w: any, note: any, actor: Actor) {
 
 /** Why a witness cannot decline the document or pass it on, and what they can do instead. */
 export function witnessCannot(e: any, w: any, what: 'decline' | 'pass'): string {
-  const who = signerOf(e, w)?.name || 'the person who signed';
-  return `${what === 'decline' ? 'A witness cannot decline the document for the people who sign it' : 'A witness cannot pass this on to someone else: only a person who saw the signature being made can witness it'}. If you did not see ${who} sign, choose "I was not there". That tells ${who} and the sender, and ${who} can name the person who was there. Nothing was changed.`;
+  const s = signerOf(e, w);
+  const who = s?.name || 'the person who signed';
+  return `${what === 'decline' ? 'A witness cannot decline the document for the people who sign it' : 'A witness cannot pass this on to someone else: only a person who saw the signature being made can witness it'}. If you did not see ${who} sign, choose "I was not there". That tells ${signerTold(s) ? `${who} and the sender` : 'the sender'}, and ${who} can name the person who was there. Nothing was changed.`;
 }
 
 // ---- Finish --------------------------------------------------------------------------------------------------

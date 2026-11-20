@@ -243,7 +243,7 @@ test('a hard bounce from each provider leaves the same marks as one in our own s
 
 // ---- Matching ----------------------------------------------------------------------------------------------------
 
-test('news is matched by our ids when it carries them, by the address otherwise, and never to the wrong email', async () => {
+test('news is matched by our ids when it carries them, and by the address only among recent emails that left', async () => {
   const c = await person('Match Maker', 'match.maker@example.com');
   const a = await out(c, 'match.a@example.com');
   const b = await out(c, 'match.b@example.com');

@@ -860,3 +860,73 @@ test('copies by email from an account that has not earned trust count against a 
   assert.equal(refused.status, 429);
   assert.match(refused.data.error, /cannot send more copies by email for this organisation today\. Nothing was sent/);
 });
+
+test('the certificate says what the browser reported: a view handed to one browser and pressed by a program elsewhere, a covered button only in a frame, and only ?embed=1 may be framed', async () => {
+  const { slug, owner, secret } = await published('Timing terms');
+  const certOf = async (aid: string) => pdfText((await owner.get(`/clickwrap-acceptances/${aid}/certificate`)).data);
+  // Browser A loads the page; a program elsewhere presses with that view, claiming nothing covered the button.
+  const viewer = from();
+  const page = await viewer.get(`/public/agree/${slug}`);
+  const bot = from();
+  const r = await bot.call('POST', `/public/agree/${slug}/accept`, { view: page.data.view, agree: true, name: 'Bot', email: 'bot@inbox.example', unobscured: true }, { 'user-agent': 'curl/8.0' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const row = db.get('SELECT * FROM clickwrap_acceptances WHERE id=?', r.data.acceptance.id);
+  assert.deepEqual([row.view_match, row.unobscured], ['both', null], 'on our own page nothing is kept about covering, whatever a client sends');
+  let t = await certOf(row.id);
+  assert.match(t, /The page reported that the box "I have read these terms and I agree to them\." was ticked and the button "I agree" was pressed\. This server cannot see a screen/);
+  assert.match(t, /Another internet address and another browser than the ones that pressed/);
+  assert.match(t, /Not checked: the terms were on our own page, not inside a frame/);
+  assert.match(t, /how long the page was open, not that anyone read it/);
+  assert.equal(/nothing covered the button/.test(t), false);
+  // The same browser: said so. The same browser from another address (a phone that changed networks): said so, not refused.
+  const same = await accept(slug, { name: 'Sam Same', email: 'sam@inbox.example' }, '', viewer);
+  assert.equal(db.get('SELECT view_match m FROM clickwrap_acceptances WHERE id=?', same.res.data.acceptance.id).m, 'same');
+  const phone = from();
+  const p2 = await phone.get(`/public/agree/${slug}`);
+  phone.ip = '10.250.250.250';
+  const moved = await phone.post(`/public/agree/${slug}/accept`, { view: p2.data.view, agree: true, name: 'Moe Moved', email: 'moe@inbox.example' });
+  assert.equal(moved.status, 200);
+  assert.match(await certOf(moved.data.acceptance.id), /The same browser, from another internet address/);
+  // An IPv6 phone whose address changes inside its own block is the same address.
+  const { addressKey } = await import('../src/server/clickwrap.ts');
+  assert.equal(addressKey('2001:db8:1:1::1'), addressKey('2001:0db8:0001:0001:ffff::9'));
+  assert.notEqual(addressKey('2001:db8:1:1::1'), addressKey('2001:db8:1:2::1'));
+  assert.equal(addressKey('::ffff:192.0.2.1'), '192.0.2.1');
+  // Inside a frame: what the browser reported is printed as that.
+  const w = sign(secret, { id: 'framed-1', exp: soon() });
+  const framed = await accept(slug, { embed: true, unobscured: true }, `who=${w.who}&sig=${w.sig}&embed=1`);
+  t = await certOf(framed.res.data.acceptance.id);
+  assert.match(t, /The browser reported that the whole button was in view and that nothing covered it or made it see-through, just before the press and again just after it/);
+  assert.match(t, /a program can send the same/);
+  const w2 = sign(secret, { id: 'framed-2', exp: soon() });
+  const unknown = await accept(slug, { embed: true }, `who=${w2.who}&sig=${w2.sig}&embed=1`);
+  assert.match(await certOf(unknown.res.data.acceptance.id), /The browser in the frame did not report it\. Only Chrome and Edge can tell/);
+  // What the team sees and exports says the same.
+  const one = (await owner.get(`/clickwrap-acceptances/${row.id}`)).data.acceptance;
+  assert.equal(one.terms_handed_to, 'both');
+  const csv = new TextDecoder().decode((await owner.call('GET', '/clickwrap-acceptances/export')).data);
+  assert.match(csv.split('\r\n')[0], /"intact","terms_handed_to"$/);
+  // The new line is sealed: changing it afterwards breaks the seal; a record from before it was kept still fits.
+  assert.equal(one.intact, true);
+  db.run('DROP TRIGGER clickwrap_acceptances_fixed');
+  try {
+    db.run("UPDATE clickwrap_acceptances SET view_match='same' WHERE id=?", row.id);
+  } finally {
+    db.run("CREATE TRIGGER clickwrap_acceptances_fixed BEFORE UPDATE ON clickwrap_acceptances BEGIN SELECT RAISE(ABORT, 'An acceptance is never changed.'); END");
+  }
+  assert.equal((await owner.get(`/clickwrap-acceptances/${row.id}`)).data.acceptance.intact, false);
+  const api = (await (withKey((await owner.post('/api-keys', { name: 'Website', scope: 'admin' })).data.key)).post(`/clickwraps/${(await owner.get('/clickwraps')).data.agreements.find((a: any) => a.slug === slug).id}/acceptances`, { person: { id: 'api-1' } })).data;
+  assert.equal(api.acceptance.terms_handed_to, null);
+  assert.equal(api.acceptance.intact, true, 'a row with no such line fits the seal as before');
+  // Framing: only ?embed=1 may be framed; the page decides "frame" by whether it really is in one.
+  const config = read('next.config.mjs');
+  assert.match(config, /has: \[\{ type: 'query', key: 'embed', value: '1' \}\],\s*headers: \[\{ key: 'Content-Security-Policy', value: 'frame-ancestors \*' \}\]/);
+  assert.match(config, /missing: \[\{ type: 'query', key: 'embed', value: '1' \}\],\s*headers: \[\{ key: 'Content-Security-Policy', value: "frame-ancestors 'self'" \}\]/);
+  const agree = read('src/app/agree/[slug]/page.tsx');
+  assert.match(agree, /window\.self !== window\.top/);
+  assert.match(agree, /e\.isIntersecting && e\.intersectionRatio > 0\.99 && !!\(e as any\)\.isVisible/, 'a reading that is not wholly in view counts as covered');
+  assert.match(agree, /pressReading\(\)/, 'and the press takes a fresh reading');
+  const lib = await import('../src/lib/clickwrap.ts');
+  assert.match(lib.EMBED_CAN, /Only the address that ends in \?embed=1 may be shown in a frame at all/);
+  assert.match(lib.EMBED_CANNOT, /last tenth of a second before a press can still be missed/);
+});
