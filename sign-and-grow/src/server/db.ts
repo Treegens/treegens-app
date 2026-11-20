@@ -418,6 +418,8 @@ CREATE INDEX IF NOT EXISTS clickwrap_acceptances_email ON clickwrap_acceptances(
 CREATE INDEX IF NOT EXISTS clickwrap_acceptances_receipt ON clickwrap_acceptances(receipt_hash);
 CREATE TRIGGER IF NOT EXISTS clickwrap_acceptances_fixed BEFORE UPDATE ON clickwrap_acceptances BEGIN SELECT RAISE(ABORT, 'An acceptance is never changed.'); END;
 CREATE TRIGGER IF NOT EXISTS clickwrap_versions_fixed BEFORE UPDATE ON clickwrap_versions BEGIN SELECT RAISE(ABORT, 'A published version is never changed.'); END;
+-- The one copy by email an acceptance may have (clickwrap.ts copyClaim): a row here means it was asked for and sent.
+CREATE TABLE IF NOT EXISTS clickwrap_copies (acceptance_id TEXT PRIMARY KEY REFERENCES clickwrap_acceptances(id) ON DELETE CASCADE, at TEXT NOT NULL);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -795,6 +797,16 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // forgotten_codes.via_form: the code was the visitor's of a public form, who typed their own name and address. A
   // report with it never counts towards pausing the account, also after the start was deleted (reportAbuse).
   ['forgotten_codes', 'via_form', 'INTEGER NOT NULL DEFAULT 0'],
+  // clickwrap_acceptances.view_hash: SHA-256 of the "view" the page was given, so only that page load gets the receipt
+  // again (not part of the seal). view_match: whether the address and browser the terms were handed to are the ones
+  // that pressed ('same', 'address', 'browser', 'both'), sealed. clickwrap_versions.account_name: the account's name
+  // when the version was published, which the certificate prints. accounts.clickwrap_typed_*: as clickwrap_warned
+  // and clickwrap_full, for acceptances typed in by visitors, which have a monthly limit of their own.
+  ['clickwrap_acceptances', 'view_hash', 'TEXT'],
+  ['clickwrap_acceptances', 'view_match', 'TEXT'],
+  ['clickwrap_versions', 'account_name', 'TEXT'],
+  ['accounts', 'clickwrap_typed_warned', 'TEXT'],
+  ['accounts', 'clickwrap_typed_full', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

@@ -36,11 +36,23 @@ const countryCode = (digits: string): string => (digits[0] === '1' || digits[0] 
 export function normalPhone(typed: any): string | null {
   let s = String(typed ?? '').trim().replace(/\(0\)/g, '').replace(/[\s().\- ]/g, '');
   if (s.startsWith('00')) s = `+${s.slice(2)}`;
-  return /^\+[1-9]\d{7,14}$/.test(s) ? s : null;
+  return /^\+[1-9]\d{7,14}$/.test(s) && !NOT_MOBILE.test(s) ? s : null;
 }
 
+// Numbers that are not a mobile in a country, or where a text can be charged to whoever sends it, are never texted:
+// international networks and satellite phones (+800 to +809, +870, +878, +881, +882, +883, +888, +979, +991),
+// country codes nobody has been given (+28x, +83x, +89x, +969, +978, +990, +997, +999), and the premium-rate ranges
+// of North America (+1 900, +1 976) and the United Kingdom (+44 9). A text to one would cost the operator money or
+// reach nobody. Premium ranges of other countries are left to the provider's own country settings.
+const NOT_MOBILE = /^\+(?:80\d|870|878|881|882|883|888|979|991|28\d|83\d|89\d|969|978|990|997|999|1900|1976|449)/;
+/** Whether a number written in full international form is one of those we never text (see NOT_MOBILE). */
+export const premiumPhone = (typed: any): boolean => {
+  const digits = String(typed ?? '').replace(/\(0\)/g, '').replace(/[^\d+]/g, '').replace(/^00/, '+');
+  return /^\+[1-9]\d{7,14}$/.test(digits) && NOT_MOBILE.test(digits);
+};
+
 /** Said wherever a number is refused, so every screen and the API ask for the same thing. */
-export const PHONE_HOW = 'Write the mobile number with its country code, starting with a plus sign, for example +44 7700 900123.';
+export const PHONE_HOW = 'Write the mobile number with its country code, starting with a plus sign, for example +44 7700 900123. Premium-rate, satellite and international network numbers cannot be texted.';
 
 /** "+44 *** *** 4321": the country and the last digits, enough for its owner to recognise and nobody to dial. */
 export function maskPhone(phone: any): string {

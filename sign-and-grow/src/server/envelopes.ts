@@ -102,7 +102,8 @@ export function publicEnvelope(e: any) {
   return {
     ...e,
     // publicCheck: the check a sender asked for before the document opens, as words, without the server's own columns.
-    recipients: e.recipients.map(({ token: _t, signature_png, initials_png, user_agent: _u, ...r }: any) => publicCheck({ ...r, has_signature: !!signature_png }, _t)),
+    // device_hash and witness_saw are the server's own, for the witness's "same device" yes or no (witness.ts).
+    recipients: e.recipients.map(({ token: _t, signature_png, initials_png, user_agent: _u, device_hash: _d, witness_saw: _s, ...r }: any) => publicCheck({ ...r, has_signature: !!signature_png }, _t)),
   };
 }
 

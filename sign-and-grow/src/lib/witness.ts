@@ -39,10 +39,20 @@ export const WITNESS_CERT_NOTE = 'Sign&Grow recorded what the witness stated. It
 export const statementText = (signer: string, date: string): string => `I was physically present and saw ${signer} sign this document on ${date}.`;
 
 /** The words for the marks a challenge would look at, as the certificate and the sender's page print them. */
-// "device": the same browser on the same device finished both. "network": the same internet address and the same kind of
-// browser, which can also be two devices in one place, so it is said as exactly that.
-export const MARK_WORDS: Record<string, string> = { address: 'same email address as the signer', device: 'same device as the signer', network: 'same internet address and browser as the signer' };
+// "device": the same browser on the same device finished both (a cookie, compared for one document only). Another
+// browser or a private window on that device is not caught, so the words say browser. "network": the same internet
+// address and the same kind of browser, which can also be two devices in one place, so it is said as exactly that.
+// "name": the signer's own name (another spelling counts), at another address.
+export const MARK_WORDS: Record<string, string> = { address: 'same email address as the signer', device: 'same device and browser as the signer', network: 'same internet address and browser as the signer', name: 'same name as the signer' };
 export const marksOf = (stored: any): string[] => String(stored || '').split(',').filter((m) => m in MARK_WORDS);
+
+/** Same device: the only thing a sender is shown of the comparison is yes or no, next to what it can and cannot show. */
+export const sameDevice = (w: any): boolean | null => (w?.status === 'completed' ? marksOf(w.witness_marks).includes('device') : null);
+export const SAME_DEVICE_LIMITS =
+  'Yes means the witness finished in the browser the signer signed in. No means they did not: another browser or a private window on the same device, or a cleared cookie, would also say no. It cannot show where anyone was.';
+/** The browser cookie behind it, as /security describes it. */
+export const DEVICE_COOKIE_WORDS =
+  'When someone signs a document that has a witness, their browser gets a cookie with a random value. When the witness finishes, we compare it with the witness\'s browser for that one document, and the sender sees only "same device: yes" or "no". We keep a keyed fingerprint made for that document alone, never the cookie itself, so it cannot link one browser across documents or accounts, and nobody is shown it. It is used for nothing else and lasts up to 400 days.';
 
 /** The block the sender places for a witness, near the signature of the person they witness. Sizes are shares of the page. */
 export const WITNESS_BLOCK: { type: string; label: string; w: number; h: number; required: boolean }[] = [

@@ -484,3 +484,61 @@ test('reports made through a public form never count towards pausing its owner, 
   assert.equal((await visitor().post('/public/check/report', { code, reason: 'spam' })).status, 200);
   assert.equal(db.get('SELECT COUNT(*) n FROM abuse_reports WHERE account_id=? AND via_form=0', acc).n, 1);
 });
+
+test('handing over and leaving at the same moment never leave an account without exactly one owner, nor hand envelopes to someone who has gone', async () => {
+  const ownersOf = (accountId: string) => db.all("SELECT user_id FROM memberships WHERE account_id=? AND role='owner'", accountId).length;
+  // The owner hands the account to Lea while Lea presses Leave. Exactly one of the two happens, and the other says why.
+  const olga = await person('Olga Hand', 'olga@samemoment.example');
+  const lea = await join(olga, 'Lea Hand', 'lea@samemoment.example');
+  const team = (await me(olga)).account;
+  const [t, l] = await Promise.all([olga.post('/account/transfer-owner', { user_id: await idOf(lea) }), lea.post('/account/leave', {})]);
+  assert.equal(ownersOf(team.id), 1, 'one owner, never none');
+  assert.deepEqual([t.status, l.status].filter((s) => s === 200).length, 1, JSON.stringify([t.data, l.data]));
+  assert.match((t.status === 200 ? l : t).data.error, /You own .* cannot leave|not on the team now, so nothing was changed/);
+
+  // Bea leaves (her things go to the owner) while Ann leaves and names Bea. Whatever order they land in, Ann's
+  // envelope ends up with somebody who is still on the team.
+  const owner = await person('Otto Pair', 'otto@samemoment.example');
+  const ann = await join(owner, 'Ann Pair', 'ann@samemoment.example');
+  const bea = await join(owner, 'Bea Pair', 'bea@samemoment.example');
+  const pair = (await me(owner)).account;
+  const e = await simple(ann, 'client@samemoment.example', { subject: 'Ann in flight' });
+  assert.equal((await ann.post(`/envelopes/${e.id}/send`)).status, 200);
+  const [b, a] = await Promise.all([bea.post('/account/leave', {}), ann.post('/account/leave', { to: await idOf(bea) })]);
+  assert.equal(b.status, 200);
+  const holder = db.get('SELECT sender_id s FROM envelopes WHERE id=?', e.id).s;
+  assert.ok(db.get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', pair.id, holder), 'the envelope belongs to a member');
+  if (a.status !== 200) assert.match(a.data.error, /not on the team\. Nothing was changed/);
+  assert.equal((await owner.get(`/envelopes/${e.id}`)).status, 200);
+
+  // Leave pressed twice at once: one goes through, the other is told there was nothing to leave, and the owner gets
+  // one email, not a second one that says nothing was handed over.
+  const tom = await join(owner, 'Tom Twice', 'tom@samemoment.example');
+  const mine = await simple(tom, 'c2@samemoment.example', { subject: 'Tom in flight' });
+  assert.equal((await tom.post(`/envelopes/${mine.id}/send`)).status, 200);
+  const [x, y] = await Promise.all([tom.post('/account/leave', {}), tom.post('/account/leave', {})]);
+  assert.deepEqual([x.status, y.status].sort(), [200, 409]);
+  assert.match((x.status === 409 ? x : y).data.error, /no longer on the team .*nothing to leave\. Nothing was changed/);
+  assert.equal(mailTo('otto@samemoment.example').filter((m: any) => m.subject === `Tom Twice left ${pair.name}`).length, 1);
+  assert.equal(db.all("SELECT m.account_id FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email='tom@samemoment.example'").length, 1, 'one workspace of his own');
+});
+
+test('someone an admin removes is told where they will be the next time they sign in', async () => {
+  const o1 = await person('Olga Rem', 'olga@removed-lands.example');
+  const o2 = await person('Otto Rem', 'otto@removed-lands.example');
+  const rita = await join(o1, 'Rita Rem', 'rita@removed-lands.example');
+  assert.equal((await o2.post('/account/invites', { email: 'rita@removed-lands.example' })).status, 200);
+  assert.equal((await rita.post('/invites/accept', { token: inviteFor('rita@removed-lands.example') })).status, 200);
+  const other = (await me(o2)).account.name;
+  assert.equal((await o1.call('DELETE', `/account/members/${await idOf(rita)}`)).status, 200);
+  const m = mailTo('rita@removed-lands.example').find((x: any) => /You were removed/.test(x.subject));
+  assert.ok(text(m.html).includes(`The next time you sign in you are in ${other}, another workspace you belong to`), text(m.html));
+  assert.doesNotMatch(text(m.html), /a workspace of your own/);
+  const again = from();
+  assert.equal((await again.post('/auth/login', { email: 'rita@removed-lands.example', password: PW })).status, 200);
+  assert.equal((await me(again)).account.name, other, 'and that is where she lands');
+  // Someone in no other team is told they get a workspace of their own.
+  const q = await join(o1, 'Quinn Alone', 'quinn@removed-lands.example');
+  assert.equal((await o1.call('DELETE', `/account/members/${await idOf(q)}`)).status, 200);
+  assert.match(text(mailTo('quinn@removed-lands.example').find((x: any) => /You were removed/.test(x.subject)).html), /you are in a workspace of your own/);
+});

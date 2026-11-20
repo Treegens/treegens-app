@@ -28,7 +28,7 @@ export function BackNews({ d }: { d: News }) {
 export function MailStopHint({ r }: { r: any }) {
   if (r.complained_at) return (
     <p className="sn-hint warn">
-      <b>Marked as spam.</b> {r.name} marked our email about this document as spam, so we do not email them about it again: no reminders, no notice when you change it and no copy when it is completed. Only they can undo that, with the button on their signing page. You can still send them their link yourself. <Link href="/help#bounced">What this means</Link>
+      <b>Marked as spam.</b> {r.name} marked one of our emails for your account as spam, so we do not email them about its documents again, this one included: no reminders, no notice when you change it and no copy when it is completed. Correcting the address or sending a new envelope does not change that. Only they can undo it, with the button on their signing page. You can still send them their link yourself. <Link href="/help#bounced">What this means</Link>
     </p>
   );
   if (r.bounced_at) return (
@@ -68,7 +68,7 @@ export function MailStopLines({ people }: { people: any[] }) {
   return (
     <>
       {dead.length > 0 && <p className="sn-now-sub warn">Our email to {joinNames(dead.map((r) => r.name))} could not be delivered, so no reminders go to {dead.length === 1 ? 'that address' : 'those addresses'}. See below to correct {dead.length === 1 ? 'it' : 'them'} or try again.</p>}
-      {spam.length > 0 && <p className="sn-now-sub warn">{joinNames(spam.map((r) => r.name))} marked our email as spam, so we do not email {spam.length === 1 ? 'them' : 'any of them'} about this again. You can still send the link yourself.</p>}
+      {spam.length > 0 && <p className="sn-now-sub warn">{joinNames(spam.map((r) => r.name))} marked one of our emails for your account as spam, so we do not email {spam.length === 1 ? 'them' : 'any of them'} about this again. You can still send the link yourself.</p>}
     </>
   );
 }

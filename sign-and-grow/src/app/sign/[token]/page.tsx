@@ -81,7 +81,8 @@ export default function SignPage() {
   const [finished, setFinished] = useState<any>(null);
   const [save, setSave] = useState<Save>('idle');
   const [muted, setMuted] = useState(false);
-  const [muteNote, setMuteNote] = useState<'' | 'done' | 'failed'>('');
+  // 'code': the "stop reminders" link was followed to a document behind a one-time code, which is asked for first.
+  const [muteNote, setMuteNote] = useState<'' | 'done' | 'failed' | 'code'>('');
   const [moreTime, setMoreTime] = useState<'' | 'busy' | 'asked'>('');
   const [wantCopy, setWantCopy] = useState(false);
   // Set when the sender changed the document while this page was open: the page has loaded the new version and
@@ -202,6 +203,7 @@ export default function SignPage() {
       else toast('Reminder emails are off for this document.');
     } catch (e: any) {
       if (e?.status === 404 || e?.status === 410) return;
+      if (e?.code === 'code_first') return void (fromEmail ? setMuteNote('code') : toast(e.message, true));
       if (fromEmail) setMuteNote('failed');
       else toast(`${e?.message || 'We could not turn off reminders.'} Try again in a minute.`, true);
     }
@@ -214,6 +216,10 @@ export default function SignPage() {
     window.history.replaceState(null, '', window.location.pathname + (q.size ? `?${q}` : ''));
     mute(true);
   }, [mute]);
+  // Behind a one-time code the reminders stop once the code is typed (POST /sign/:token/mute asks for it first).
+  useEffect(() => {
+    if (muteNote === 'code' && data && !data.locked) mute(true);
+  }, [muteNote, data, mute]);
 
   const me = data?.recipient;
   const env = data?.envelope;
@@ -585,6 +591,8 @@ export default function SignPage() {
     <div className="notice sg-top" role="status">
       <b>Reminders are off.</b> We will not send you any more reminder emails about this document.{stillOpen ? ` You can still ${acts ? 'sign' : 'open'} it here whenever you are ready.` : ''}
     </div>
+  ) : muteNote === 'code' ? (
+    <div className="notice sg-top" role="status"><b>Reminders stop once the code is typed.</b> {sender.name} asked us to check who opens this document, so the code below comes first. We stop the reminder emails straight after.</div>
   ) : muteNote === 'failed' ? (
     <div className="notice warn sg-top" role="alert">We could not turn off reminders just now. <button type="button" className="sg-link" onClick={() => mute(true)}>Try again</button></div>
   ) : null}</>;

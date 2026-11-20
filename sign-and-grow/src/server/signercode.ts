@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { all, get, run, tx } from './db.ts';
 import { bad, hmac, now, str, safeEqual, sha256, baseUrl } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
-import { sendMail } from './mail.ts';
+import { sendMail, onMailOutcome } from './mail.ts';
 import { sendText, smsMode, phoneKey, textsLeft, numbersToday, linkTextsToday, textsRoomInHours, onTextOutcome, dropCodeTexts, onTextRetry, dropTexts } from './sms.ts';
 import { audit, emailRefusal, hasNotPaid, dailyCap, signUrl, notifySender, senderOf, correctRecipient, loadEnvelope, samePerson, type Actor } from './envelopes.ts';
 import { reporterKey } from './bysender.ts';
@@ -103,9 +103,12 @@ function waitFor(r: any): { seconds: number; why: 'minute' | 'hour' | '' } {
 export function lockedView(view: any, r: any, accessLocked: boolean, gate: string | null): any {
   if (!isCodeCheck(r.verify)) return view;
   const live = gate && !accessLocked ? liveCode(r) : null;
+  // No envelope id and no page count either: with the id, the public lookup (GET /public/verify/:id) would tell
+  // whoever holds the link how many people are on the document and how far they are. The code screen needs neither.
+  const { id: _id, impact: _impact, ...envelope } = view.envelope;
   return {
     ...view,
-    envelope: { ...view.envelope, subject: '', void_reason: null },
+    envelope: { ...envelope, subject: '', void_reason: null },
     recipient: { ...view.recipient, email: maskEmail(r.email) },
     // The access code comes first when there is one: it costs nothing to ask for, and a stranger who has only the
     // link cannot make us send a text.
@@ -118,6 +121,8 @@ export function lockedView(view: any, r: any, accessLocked: boolean, gate: strin
       // Someone using this link, or another link from the same account, said the number is not theirs. No code goes
       // to it until the sender has corrected or confirmed it.
       stopped: r.verify === 'sms_code' && stoppedFor(r),
+      // We have no address for this person: their link came from the sender, so the screen never mentions an email.
+      shared: !!r.link_by_sender && !r.email,
     },
   };
 }
@@ -402,7 +407,8 @@ export async function correctWithCheck(e: any, recipientId: string, patch: any, 
     }
   }
   if (bits.length) audit(e.id, actor, 'Check corrected', `${after.name} <${after.email}>: ${bits.join(', ')}.`);
-  if (changed) await textWaiting(e.id);
+  // A link by text that was held back while the number was stopped goes now that the sender confirmed it.
+  if (changed || confirm) await textWaiting(e.id);
 }
 
 /**
@@ -596,6 +602,15 @@ onTextOutcome('envelope', async (t, what) => {
 // ---- The one-time code ---------------------------------------------------------------------------------------
 
 const codeHash = (r: any, stamp: string, code: string) => hmac(`otp:${r.id}:${stamp}:${code}`);
+
+// Our copy of a code email holds the code only while it may still have to be sent. One the mail server took on a
+// later try (retryMail), or that will never be sent, loses it then, like one taken at once (see requestCode).
+onMailOutcome('signercode', (m, what) => {
+  if (what === 'delayed' || !m?.envelope_id) return;
+  const row = get('SELECT html, expires_at FROM emails WHERE id=?', m.id);
+  const code = row?.expires_at && new RegExp(`(\\d{${SIGNER_CODE_DIGITS}}) is your code`).exec(row.html || '')?.[1];
+  if (code) run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=?", code, code, m.id);
+});
 const brandOf = (accountId: string) => {
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', accountId);
   return { name: a?.name, color: a?.brand_color, logo: a?.brand_logo };

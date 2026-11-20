@@ -40,7 +40,11 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     ".next-verify-twostep/types/**/*.ts",
-    ".next-verify-twostep/dev/types/**/*.ts"
+    ".next-verify-twostep/dev/types/**/*.ts",
+    ".next-verify-qr-encrypt/types/**/*.ts",
+    ".next-verify-qr-encrypt/dev/types/**/*.ts",
+    ".next-verify-comments/types/**/*.ts",
+    ".next-verify-comments/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

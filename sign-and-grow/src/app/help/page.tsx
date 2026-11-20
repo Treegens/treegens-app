@@ -237,7 +237,7 @@ export default function Help() {
 
           {bouncesOn && (
             <QA id="bounced" q="An envelope says &quot;Could not be delivered&quot; or &quot;Marked as spam&quot;">
-              <p><b>Could not be delivered.</b> {BOUNCE_MEANS} We email you at once, and the envelope says it next to the person&apos;s name. {BOUNCE_STOPS}</p>
+              <p><b>Could not be delivered.</b> {BOUNCE_MEANS} The envelope says it next to the person&apos;s name, in our own words, and we email you at once unless you switched off &quot;When something needs you&quot; under Settings, Notifications. {BOUNCE_STOPS}</p>
               <ul className="pub-list">
                 <li>Address wrong? Choose <b>Correct</b> next to their name and type the right one. A new email goes out at once, and nothing is voided.</li>
                 <li>Address right, and the mailbox works again (it was full, or switched off for a while)? Choose <b>Try again</b>. We email them again at once and reminders start again. If it comes back again, you hear it again.</li>
@@ -245,7 +245,7 @@ export default function Help() {
               </ul>
               <p><b>Not delivered yet</b> means their mail server asked us to try later, often because the mailbox is full. Nothing is stopped. If the same address says that on {SOFT_BOUNCE_DAYS} separate days, we treat it as an address that does not work.</p>
               <p><b>Delivered to the mail server of example.com</b> means their mail server took the email. It does not mean they read it, and it may still be in a spam folder.</p>
-              <p><b>Marked as spam.</b> {COMPLAINT_MEANS} You cannot undo that for them, but you can still give them their link yourself.</p>
+              <p><b>Marked as spam.</b> {COMPLAINT_MEANS} You cannot undo that for them, but you can still give them their link yourself. If they marked it by mistake, they can choose &quot;Email me about these documents again&quot; on their signing page.</p>
               <p className="muted small">When our emails to your own address come back, the app says so at the top of every page. Choose &quot;It works now, try again&quot;, or move your login to an address that works under Settings, Profile.</p>
             </QA>
           )}

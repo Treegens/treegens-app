@@ -16,6 +16,7 @@ import { WhereYourDataIs } from './DataPlace';
 import { BY_SENDER_LINE } from '@/lib/bysender';
 import { encryptedFilesPoint, notEncryptedPoint } from '@/lib/storedfiles';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '@/lib/evidence';
+import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
 
 export const metadata = { title: 'Security and trust', description: 'What Sign&Grow does to protect signers, senders and documents, in plain words. And what it does not do.' };
 
@@ -127,6 +128,8 @@ export default function Security() {
           <Point title="Your documents are not sent to any AI system.">Nothing you upload or sign is passed to an AI service, and nothing is used to train one.</Point>
           <Point title="Search stays inside your account.">The text of PDFs you upload is indexed so you can search your own envelopes. Files that signers attach are not indexed.</Point>
           <Point title="A file you verify is not stored.">The verify page works out the fingerprint of the file and discards it. In the result, signers&apos; email addresses are partly hidden.</Point>
+          {/* src/server/witness.ts beforeFinish and witnessDone make this true. */}
+          <Point title="One cookie, only where a signature has a witness.">{DEVICE_COOKIE_WORDS}</Point>
         </Block>
 
         {/* Where the server is and who else handles data, read from the settings this server runs on. */}

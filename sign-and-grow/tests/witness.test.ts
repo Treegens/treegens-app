@@ -399,7 +399,7 @@ test('a witness at the signer\'s address, in the signer\'s browser, or from the 
   assert.ok(device.cookies.ts_dev, 'a signer with a witness is given the browser cookie');
   assert.equal((await witness(tokenFor(one.id, row(o.wit).email), device)).status, 200);
   assert.equal(row(o.wit).witness_marks, 'device');
-  assert.ok(auditOf(one.id).some((a: any) => a.action === 'Witness marked' && /with the same device as the signer/.test(a.detail)));
+  assert.ok(auditOf(one.id).some((a: any) => a.action === 'Witness marked' && /with the same device and browser as the signer/.test(a.detail)));
 
   // Another browser, from the same internet address with the same browser: said as exactly that.
   const two = await deed(s);
@@ -772,4 +772,48 @@ test('a finished witness cannot be moved to witness someone else without the sig
   assert.equal((await s.post(`/envelopes/${p.id}/send`)).status, 200);
   assert.equal((await edited(s, p.id, (r: any) => (r.id === pi.wit ? { ...r, witness_for: pi.ben } : r))).status, 200);
   assert.ok(auditOf(p.id).some((a: any) => a.action === 'Envelope corrected' && /now the witness for Ben Second/.test(a.detail)));
+});
+
+test('the device comparison stays inside one envelope: no fingerprint to any sender, only "same device: yes or no" and what it can show', async () => {
+  const alma = await person('Alma Account', 'alma@deed.example');
+  const bert = await person('Bert Account', 'bert@deed.example');
+  const same = browser();
+  // One person signs a deed of Alma's and a deed of Bert's in one browser, and a second person does in it too.
+  const pat = { name: 'Pat Person', email: `pat.${n}@deed.example` };
+  const mk = (c: Client, who: any) => deed(c, {}, { recipients: [{ id: 'ann', role: 'signer', ...who }, { id: 'wit', role: 'witness', witness_for: 'ann', name: 'Will Witness', email: `will.dev${n}@deed.example` }], fields: [{ document_id: 'd', recipient_id: 'ann', type: 'signature', page: 0, x: 0.1, y: 0.4, w: 0.25, h: 0.06 }, ...block('wit')] });
+  const e1 = await mk(alma, pat), e2 = await mk(bert, pat), e3 = await mk(bert, { name: 'Quinn Other', email: `quinn.${n}@deed.example` });
+  for (const [c, e] of [[alma, e1], [bert, e2], [bert, e3]] as const) {
+    assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+    assert.equal((await finish(row(e.recipients.find((r: any) => r.role === 'signer').id).token, same)).status, 200);
+  }
+  const signer = (e: any) => row(e.recipients.find((r: any) => r.role === 'signer').id);
+  const kept = [signer(e1).device_hash, signer(e2).device_hash, signer(e3).device_hash];
+  assert.ok(kept.every(Boolean));
+  assert.equal(new Set(kept).size, 3, 'one browser gives a different value on every envelope, so none can be linked');
+  for (const [c, e] of [[alma, e1], [bert, e2]] as const) {
+    const api = (await c.get(`/envelopes/${e.id}`)).data.envelope.recipients;
+    assert.ok(api.every((r: any) => !('device_hash' in r) && !('witness_saw' in r)), 'the sender API never carries the fingerprint');
+  }
+  // The witness in the signer's browser is still marked, and the sender sees yes; in another browser, no.
+  const w1 = e1.recipients.find((r: any) => r.role === 'witness').id;
+  assert.equal((await witness(row(w1).token, same)).status, 200);
+  assert.equal(row(w1).witness_marks, 'device');
+  const w2 = e2.recipients.find((r: any) => r.role === 'witness').id;
+  assert.equal((await witness(row(w2).token, browser())).status, 200);
+  assert.equal(row(w2).witness_marks, null);
+  const { SAME_DEVICE_LIMITS, DEVICE_COOKIE_WORDS, MARK_WORDS } = await import('../src/lib/witness.ts');
+  const cert = async (c: Client, e: any) => (await pdfText((await c.get(`/envelopes/${e.id}/download`)).data)).replace(/\s+/g, ' ');
+  const yes = await cert(alma, e1), no = await cert(bert, e2);
+  assert.ok(yes.includes(`Same device Yes. ${SAME_DEVICE_LIMITS}`), yes.slice(yes.indexOf('Witness for'), yes.indexOf('Witness for') + 600));
+  assert.ok(no.includes(`Same device No. ${SAME_DEVICE_LIMITS}`));
+  assert.doesNotMatch(yes, /Marked same device/, 'said once, as yes or no');
+  assert.match(SAME_DEVICE_LIMITS, /another browser or a private window on the same device.*would also say no\. It cannot show where anyone was\./);
+  assert.equal(MARK_WORDS.device, 'same device and browser as the signer');
+  assert.ok(mailTo('alma@deed.example').some((m: any) => /Check the witness/.test(m.subject) && text(m.html).includes(`About the device: ${SAME_DEVICE_LIMITS}`)));
+  // The envelope page shows the same yes or no, and /security says what the cookie is and is not used for.
+  const facts = read('src/components/sender/WitnessFacts.tsx');
+  assert.match(facts, /<dt>Same device<\/dt><dd>\{same \? <b className="sn-bad">Yes, the signer&apos;s browser\.<\/b> : 'No\.'\} <span className="muted">\{SAME_DEVICE_LIMITS\}<\/span>/);
+  assert.match(read('src/app/security/page.tsx'), /<Point title="One cookie, only where a signature has a witness\.">\{DEVICE_COOKIE_WORDS\}<\/Point>/);
+  assert.match(DEVICE_COOKIE_WORDS, /made for that document alone, never the cookie itself, so it cannot link one browser across documents or accounts/);
+  assert.doesNotMatch(read('src/server/witness.ts'), /hmac\(`device:\$\{dev\}`\)/);
 });

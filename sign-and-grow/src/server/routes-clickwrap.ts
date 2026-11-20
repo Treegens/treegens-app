@@ -7,7 +7,7 @@ import { bad, baseUrl, id, isEmail, now, rateLimit, sha256, str, token } from '.
 import { sendMail } from './mail.ts';
 import { ABUSE_REASONS } from './envelopes.ts';
 import {
-  acceptanceView, certificatePdf, cleanUrl, closedWhy, CLOSED_TEXT, csvOf, emailCopy, loadAgreement, minVersion, pageUrl, publish, readView, readWho,
+  acceptanceView, certificatePdf, cleanUrl, closedWhy, CLOSED_TEXT, copyClaim, csvOf, emailCopy, linkWhy, loadAgreement, mayHaveReceipt, minVersion, pageUrl, publish, readView, readWho,
   receiptOf, recordAcceptance, statusFor, tellOwnerClosed, usage, versionOf, viewToken, LABEL_MAX, NAME_MAX, TERMS_MAX_CHARS,
 } from './clickwrap.ts';
 import { CLICKWRAP_PER_ADDRESS_HOUR, CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR } from '../lib/policy.ts';
@@ -243,6 +243,12 @@ route('GET', '/public/agree/:slug', async (c) => {
     return { closed: true, text: CLOSED_TEXT };
   }
   const person = readWho(cw, c.q.get('who'), c.q.get('sig'));
+  // The page prints the name the website signed in ("You accept as ..."), so it is read with the terms.
+  const lure = linkWhy(cw, v, person);
+  if (lure) {
+    await tellOwnerClosed(cw, lure);
+    return { closed: true, text: CLOSED_TEXT };
+  }
   if (!person && cw.signed_only) return { closed: true, signed_only: true, text: 'These terms can only be accepted through a link from the website that asked you to accept them. Go back to that website and follow its link from there. Nothing was recorded.' };
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', cw.account_id);
   // Someone the website names who accepted before is told what they accepted and what changed since.
@@ -250,7 +256,9 @@ route('GET', '/public/agree/:slug', async (c) => {
     : all("SELECT * FROM clickwrap_acceptances WHERE clickwrap_id=? AND person_id IS NULL AND lower(email)=lower(?) AND identity != 'typed' ORDER BY version DESC, at DESC", cw.id, person.email)) : [];
   const best = mine[0];
   const need = minVersion(cw);
-  const already = best && best.version >= need ? { id: best.id, version: best.version, at: best.at, receipt: receiptOf(best.id), email: !!best.email } : null;
+  // Never the receipt: whoever opens this link is told that the person accepted, and only the browser that accepted
+  // holds the way to the copy (it keeps the receipt it was given in the answer to its press).
+  const already = best && best.version >= need ? { id: best.id, version: best.version, at: best.at, email: copyOffered(best) } : null;
   const earlier = best && !already ? { version: best.version, at: best.at, changes: all('SELECT number, note FROM clickwrap_versions WHERE clickwrap_id=? AND number > ? ORDER BY number', cw.id, best.version) } : null;
   const identity = person ? 'website' : 'typed';
   const words = recordShows(identity, c.q.get('embed') ? 'embed' : 'hosted');
@@ -288,6 +296,11 @@ route('POST', '/public/agree/:slug/accept', async (c) => {
   if (b.agree !== true) throw bad(`Tick "${v.checkbox}" first, then press "${v.button}". Nothing was recorded.`, 400, { code: 'not_ticked' });
   if (v.scroll && b.scrolled !== true) throw bad('Scroll to the end of the terms first: these terms ask to be read to the end before they are accepted. Nothing was recorded.', 400, { code: 'not_scrolled' });
   let person = readWho(cw, b.who, b.sig);
+  const lure = linkWhy(cw, v, person);
+  if (lure) {
+    await tellOwnerClosed(cw, lure);
+    throw bad(CLOSED_TEXT, 503, { code: 'closed' });
+  }
   const identity = person ? 'website' : 'typed';
   if (!person) {
     if (cw.signed_only) throw bad('These terms can only be accepted through a link from the website that asked you to accept them. Go back to that website and follow its link from there. Nothing was recorded.', 403, { code: 'signed_only' });
@@ -299,9 +312,12 @@ route('POST', '/public/agree/:slug/accept', async (c) => {
   const via = b.embed === true ? 'embed' : 'hosted';
   const { row, already } = await recordAcceptance({
     cw, v, identity, person, via, page_url: cleanUrl(b.page_url), ip: c.ip, ua: c.ua, shown_ms: shown,
-    scrolled: v.scroll ? true : null, unobscured: typeof b.unobscured === 'boolean' ? b.unobscured : null,
+    scrolled: v.scroll ? true : null, unobscured: typeof b.unobscured === 'boolean' ? b.unobscured : null, view: str(b.view, 200),
   }, true);
-  return { acceptance: { id: row.id, version: row.version, at: row.at, sha256: row.terms_sha256 }, receipt: receiptOf(row.id), already, email: !!row.email };
+  // The receipt only to the browser that accepted (mayHaveReceipt): somebody else pressing with the same signed link
+  // learns that the person accepted already, and nothing more.
+  const mine = !already || mayHaveReceipt(row, b.view);
+  return { acceptance: { id: row.id, version: row.version, at: row.at, sha256: row.terms_sha256 }, ...(mine ? { receipt: receiptOf(row.id) } : {}), already, email: mine && copyOffered(row) };
 }, 'public');
 
 // The visitor's own copy, by the receipt their browser was given. Nobody else holds it.
@@ -310,14 +326,15 @@ const byReceipt = (receipt: any) => {
   if (!r) throw bad('We cannot find that acceptance. The link may be from a record that was deleted with its account.', 404);
   return r;
 };
+// Whether the page offers "Email me a copy": only for an address the website signed in, and only once (copyClaim).
+const copyOffered = (r: any) => r.identity === 'website' && !!r.email && !get('SELECT 1 x FROM clickwrap_copies WHERE acceptance_id=?', r.id);
 route('POST', '/public/agree/receipt/email', async (c) => {
   rateLimit(`cwmail:${c.ip}`, 5, 3600_000);
   const r = byReceipt((await c.body()).receipt);
-  if (!r.email) throw bad('No email address was given with this acceptance, so there is nowhere to send a copy. Download it instead.', 409, { code: 'no_email' });
-  rateLimit(`cwmail:${r.id}`, 1, 3600_000);
-  const status = await emailCopy(r);
-  const [user, domain] = r.email.split('@');
-  return { sent: status === 'sent', status, to: `${user.slice(0, 1)}***@${domain}` };
+  const no = copyClaim(r);
+  if (no) throw bad(no.message, no.status, { code: no.code });
+  const { status, to } = await emailCopy(r);
+  return { sent: status === 'sent', status, to };
 }, 'public');
 route('GET', '/public/agree/receipt/:receipt/certificate', async (c) => {
   rateLimit(`cwcert:${c.ip}`, 30, 3600_000);

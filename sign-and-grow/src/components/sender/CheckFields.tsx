@@ -1,6 +1,6 @@
 'use client';
 import { useId } from 'react';
-import { CHECK_NAMES, CHECK_PROVES, PHONE_HOW, isCodeCheck, normalPhone } from '@/lib/checks';
+import { CHECK_NAMES, CHECK_PROVES, PHONE_HOW, isCodeCheck, normalPhone, premiumPhone } from '@/lib/checks';
 
 // The check a sender can ask for before a document opens for one recipient: none, a one-time code by email, or a
 // one-time code by text message to a mobile number the sender types here. Used in the editor (step 1, under "More")
@@ -23,7 +23,7 @@ export function checkTrouble(r: CheckValue & { role?: string }, textsOn: boolean
   const typed = String(r.phone || '').trim();
   const texts = verify === 'sms_code' || !!r.text_link;
   if (texts && !textsOn) return `This server cannot send text messages, because its operator has not switched them on. For ${name}, choose a one-time code by email or no extra check, and switch "also text the signing link" off.`;
-  if (typed && !normalPhone(typed)) return `The mobile number for ${name} is not complete. ${PHONE_HOW}`;
+  if (typed && !normalPhone(typed)) return premiumPhone(typed) ? `The number for ${name} is a premium-rate, satellite or international network number, and those are never texted. Type their mobile number.` : `The mobile number for ${name} is not complete. ${PHONE_HOW}`;
   if (r.text_link && r.role === 'inperson') return `${name} signs in person on your device, so there is no link to text them. Switch "also text the signing link" off for them.`;
   if (texts && !typed && !open) return `${name} needs a mobile number${verify === 'sms_code' ? ', because they are checked with a code by text message' : ' for the text with the signing link'}. ${PHONE_HOW}`;
   return null;

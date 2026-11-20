@@ -719,3 +719,54 @@ test('every click-to-agree route is in the API description, the setting is docum
   for (const f of ['src/app/page.tsx', 'src/app/help/page.tsx', 'src/app/security/page.tsx', 'src/app/developers/page.tsx'])
     assert.equal(/no clickwrap|clickwrap is not|not.{0,40}click-to-agree/i.test(read(f)), false, `${f} does not say it is missing`);
 });
+
+// ---- 9. Repairs after the skeptic's report (research/verify-new.json, "verify:clickwrap") ----------------------------
+
+test('the scam filter reads every word the page shows: the box, the button and the notes of what changed, and the details in a signed link', async () => {
+  const owner = await person('Una Unpaid', `una${++n}@terms.example`);
+  // A fake notice as the words next to the box, over harmless terms.
+  const box = await owner.post('/clickwraps', { name: 'Membership terms', text: 'Be kind to each other.', checkbox: NOTICE, button: 'Call +1 (888) 555-0142' });
+  const p1 = await owner.post(`/clickwraps/${box.data.id}/publish`, {});
+  assert.equal(p1.status, 422, JSON.stringify(p1.data));
+  assert.match(p1.data.error, /words shown with them \(next to the box, on the button, in a note of what changed\), read like a payment notice.*PayPal.*Nothing was published/);
+  // Split over three: the brand by the box, the money on the button, the phone number in the terms.
+  const split = await owner.post('/clickwraps', { name: 'Shop rules', text: 'Questions? +1 (888) 555-0142', checkbox: 'I accept the PayPal terms', button: 'Pay $499.99' });
+  assert.equal((await owner.post(`/clickwraps/${split.data.id}/publish`, {})).status, 422);
+  // A version note: every returning visitor is shown it.
+  const { id, slug, secret } = await published('Club terms', 'Version one.', owner);
+  const w = sign(secret, { id: 'p1', exp: soon() });
+  assert.equal((await accept(slug, {}, `who=${w.who}&sig=${w.sig}`)).res.status, 200);
+  await owner.call('PATCH', `/clickwraps/${id}`, { text: 'Version two.' });
+  const p3 = await owner.post(`/clickwraps/${id}/publish`, { note: NOTICE });
+  assert.equal(p3.status, 422);
+  assert.equal(db.get('SELECT COUNT(*) n FROM clickwrap_versions WHERE clickwrap_id=?', id).n, 1, 'nothing was published');
+  // An honest shop that names a brand, with no phone number to call, publishes.
+  const honest = await owner.post('/clickwraps', { name: 'Checkout terms', text: 'Pay within 30 days.', checkbox: 'I agree to pay with PayPal or a card', button: 'Pay now' });
+  assert.equal((await owner.post(`/clickwraps/${honest.data.id}/publish`, {})).status, 200);
+  // Published while the account was trusted, then trust is lost: the page closes by itself, labels or note alike.
+  const acc = (await owner.get('/me')).data.account.id;
+  db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), acc);
+  assert.equal((await owner.post(`/clickwraps/${box.data.id}/publish`, {})).status, 200);
+  const boxSlug = (await owner.get(`/clickwraps/${box.data.id}`)).data.agreement.slug;
+  assert.equal((await owner.post(`/clickwraps/${id}/publish`, { note: NOTICE })).status, 200);
+  db.run('UPDATE accounts SET trusted_at=NULL WHERE id=?', acc);
+  for (const s of [boxSlug, slug]) {
+    const page = await from().get(`/public/agree/${s}`);
+    assert.equal(page.data.closed, true, s);
+    assert.equal(JSON.stringify(page.data).includes('555-0142'), false);
+  }
+  // A website that puts the notice into the name of its signed link: the page would print it, so it is refused.
+  const { slug: s2, secret: k2, id: id2 } = await published('Garden terms', 'Questions? Call +1 (888) 555-0142.', owner);
+  const lure = sign(k2, { id: 'v1', name: 'PayPal: $499.99 charged to your card', email: 'victim@inbox.example', exp: soon() });
+  const page = await from().get(`/public/agree/${s2}?who=${lure.who}&sig=${lure.sig}`);
+  assert.equal(page.data.closed, true);
+  assert.equal(JSON.stringify(page.data).includes('PayPal'), false, 'the page prints nothing of it');
+  const view = (await from().get(`/public/agree/${s2}`)).data.view;
+  assert.equal((await from().post(`/public/agree/${s2}/accept`, { view, agree: true, who: lure.who, sig: lure.sig })).status, 503);
+  assert.equal(db.get('SELECT COUNT(*) n FROM clickwrap_acceptances WHERE clickwrap_id=?', id2).n, 0);
+  const told = mailTo((await owner.get('/me')).data.user.email).filter((m: any) => /Garden terms" could not be accepted/.test(m.subject));
+  assert.match(text(told.at(-1).html), /signed link for one visitor/);
+  // The same page for a visitor with an ordinary name is open.
+  const fine = sign(k2, { id: 'v2', name: 'Ada Lovelace', exp: soon() });
+  assert.equal((await from().get(`/public/agree/${s2}?who=${fine.who}&sig=${fine.sig}`)).data.closed, false);
+});

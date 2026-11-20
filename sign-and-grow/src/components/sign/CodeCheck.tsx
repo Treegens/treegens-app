@@ -17,6 +17,7 @@ export type CodeState = {
   resend_in: number;
   tries_left: number;
   stopped: boolean;
+  shared?: boolean; // the sender passed this link on themselves: we never emailed this person
 };
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -130,7 +131,7 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
       {told === 'not_mine'
         ? `No more codes go to ${check.to}. Only ${sender.name} can fix this: they have to put in your number, or choose another way to check that it is you. Until they have, this document stays closed.`
         : `Only ${sender.name} can fix this: they can correct the ${byText ? 'number' : 'address'} or choose another way to check that it is you. Until they have, this document stays closed.`}
-      {' '}You do not need to keep this page open. The link in your email keeps working.
+      {' '}You do not need to keep this page open. {check.shared ? `The link ${sender.name} gave you keeps working.` : 'The link in your email keeps working.'}
     </div>
   );
 

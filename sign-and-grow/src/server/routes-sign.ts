@@ -340,7 +340,11 @@ route('POST', '/sign/:token/request-extension', async (c) => {
 // (routes-comments.ts): one way to ask, and the answer comes back where the question was asked.
 
 route('POST', '/sign/:token/mute', (c) => {
-  const { e, r, actor } = find(c, false);
+  const { e, r, gate, actor } = find(c, false);
+  // Stopping reminders also stops the texts the sender chose for this person, so where the sender asked for a
+  // one-time code, only someone who passed it can do that: a stranger who has the link cannot silence the signer.
+  // The page asks for the code and stops the reminders straight after (src/app/sign/[token]/page.tsx).
+  if (gate) throw bad('This document asks for a one-time code first. Type it, and the reminders stop straight after.', 401, { code: 'code_first' });
   // One member of a group stops their own reminders. The others keep getting theirs (groups.ts).
   if (r.member) return void muteMember(e, r, actor);
   muteReminders(e, r, actor);

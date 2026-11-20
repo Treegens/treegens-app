@@ -8,7 +8,7 @@ import { passCheckOn } from './signercode.ts';
 import { audit, notifySender, senderOf, signUrl, retireToken, samePerson, yesNo, emailRefusal, noteReached, newerVersion, clearAnswers, advance, notOpen, type Actor } from './envelopes.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { formatDate, validZone } from '../lib/dates.ts';
-import { isWitness, waitsForName, openWitnessName, statementText, marksOf, MARK_WORDS, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_NAMES_MAX, WITNESS_CERT_NOTE, witnessProblem } from '../lib/witness.ts';
+import { isWitness, waitsForName, openWitnessName, statementText, marksOf, MARK_WORDS, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_NAMES_MAX, WITNESS_CERT_NOTE, witnessProblem, sameDevice, SAME_DEVICE_LIMITS } from '../lib/witness.ts';
 
 // A witness for one signer (role "witness", recipients.witness_for). The rules and words are in src/lib/witness.ts.
 // envelopes.ts, routes-sign.ts and pdf.ts call in here at the places where a witness differs from anyone else:
@@ -315,7 +315,10 @@ export function witnessCannot(e: any, w: any, what: 'decline' | 'pass'): string 
 // ---- Finish --------------------------------------------------------------------------------------------------
 
 // The browser a person finished in, kept as a keyed fingerprint of a cookie set on this site only, and only for the
-// people this is about: a signer who has a witness, and the witness. Nothing else reads it.
+// people this is about: a signer who has a witness, and the witness. The fingerprint is made for one envelope (its id
+// is in the key), so the same browser on two envelopes, of one account or of two, gives two values nobody can link.
+// It never leaves the server: publicEnvelope leaves it out, and the sender is shown only "same device: yes or no"
+// (sameDevice in src/lib/witness.ts). Nothing else reads the cookie. /security says all of this (DEVICE_COOKIE_WORDS).
 const deviceOf = (req: Request): string | null => {
   const v = readCookie(req, DEVICE_COOKIE);
   return v && /^[A-Za-z0-9_-]{20,64}$/.test(v) ? v : null;
@@ -337,7 +340,7 @@ export function beforeFinish(c: { req: Request; cookies: string[]; secure: boole
     dev = token(24);
     c.cookies.push(cookie(DEVICE_COOKIE, dev, 400 * 86400, c.secure));
   }
-  run('UPDATE recipients SET device_hash=? WHERE id=?', dev ? hmac(`device:${dev}`) : null, r.id);
+  run('UPDATE recipients SET device_hash=? WHERE id=?', dev ? hmac(`device:${e.id}:${dev}`) : null, r.id);
 }
 
 /**
@@ -359,7 +362,7 @@ export async function witnessDone(e: any, w: any, actor: Actor) {
   const words = marks.map((m) => MARK_WORDS[m]).join(' and the ');
   audit(e.id, SYSTEM, 'Witness marked', `${labelOf(me)} witnessed the signature of ${s.name} with the ${words}. That is allowed, and the certificate says so.`);
   await notifySender(e, 'always', `Check the witness: ${e.subject}`, `${me.name} witnessed ${s.name} with the ${words}`,
-    [`${me.name} signed as the witness of ${s.name} with the ${words}${marks.includes('network') ? ' (the same internet address and the same kind of browser, which can also be two devices in one place)' : ''}. That is allowed, and the certificate of completion marks it, because it is the first thing someone who challenges the document would look at.`,
+    [`${me.name} signed as the witness of ${s.name} with the ${words}${marks.includes('network') ? ' (the same internet address and the same kind of browser, which can also be two devices in one place)' : ''}. That is allowed, and the certificate of completion marks it, because it is the first thing someone who challenges the document would look at.${marks.includes('device') ? ` About the device: ${SAME_DEVICE_LIMITS}` : ''}`,
       `If ${me.name} was really with ${s.name}, there is nothing to do. If you have any doubt that a witness was there, ask them before you rely on the document. ${WITNESS_RECORDS}`]);
   void actor;
 }
@@ -396,8 +399,11 @@ export function witnessCertLines(e: any, r: any, ts: (s: any) => string): [strin
   const s = signerOf(e, r);
   const out: [string, string][] = [['Witness for', s ? s.name : 'a person no longer on the document']];
   if (r.witness_statement) out.push(['Their statement', `"${r.witness_statement}"`], ['Statement ticked', ts(r.witness_said_at)]);
-  const marks = marksOf(r.witness_marks);
+  // The device is said as yes or no with what that can show, never as anything that could tell one browser from another.
+  const marks = marksOf(r.witness_marks).filter((m) => m !== 'device');
   if (marks.length) out.push(['Marked', `${marks.map((m) => MARK_WORDS[m]).join('; ')}. Allowed, and marked because a challenge would look at it.`]);
+  const same = sameDevice(r);
+  if (same !== null) out.push(['Same device', `${same ? 'Yes' : 'No'}. ${SAME_DEVICE_LIMITS}`]);
   out.push(['Note', WITNESS_CERT_NOTE]);
   return out;
 }

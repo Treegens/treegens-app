@@ -45,7 +45,7 @@ export const BOUNCE_MATCH_DAYS = 3;
 /** What "Could not be delivered" means and does, in one sentence each, for the help page and the emails that say it. */
 export const BOUNCE_MEANS = 'The mail server of the address answered that it cannot take the email for good: the mailbox or the domain does not exist, or it refuses.';
 export const BOUNCE_STOPS = `Reminders to that address stop until you correct it or choose "Try again", and for ${BOUNCE_WARN_DAYS} days a new envelope to the same address warns you before it goes out.`;
-export const COMPLAINT_MEANS = 'The person marked one of our emails about the document as spam in their mail program. Nothing more is emailed to them about that document unless they ask for it themselves on their signing page, and it counts as one report against the sending account.';
+export const COMPLAINT_MEANS = 'The person marked one of our emails for your account as spam in their mail program. Nothing more is emailed to them about your account\'s documents, that one and any later one, unless they ask for it themselves on a signing page with a code we email them. Correcting the address, trying again or sending a new envelope does not change that. It also counts as one report against your account.';
 
 /** How many different recipients must report an account before its sending is paused for review. */
 export const abuseSuspendAfter = (): number => Number(process.env.ABUSE_SUSPEND_AFTER) || 3;

@@ -11,7 +11,7 @@ import { PDFDocument } from 'pdf-lib';
 import { all, get, run, readBlob } from './db.ts';
 import { bad, baseUrl, hmac, id, isEmail, now, safeEqual, sha256, str, HttpError } from './util.ts';
 import { sendMail } from './mail.ts';
-import { hasNotPaid, nameRefusal, pausedText } from './envelopes.ts';
+import { dailyCap, hasNotPaid, nameRefusal, noteReached, pausedText } from './envelopes.ts';
 import { lureIn, posesAs } from './fakenotice.ts';
 import { sheetPdf } from './pdf.ts';
 import { clickwrapMonthlyLimit, CLICKWRAP_WARN_PERCENT, paidTrustText } from '../lib/policy.ts';
@@ -84,17 +84,24 @@ function draftOf(cw: any) {
 
 // The scam filter (src/server/fakenotice.ts) reads the terms of every account it applies to (hasNotPaid): our page
 // prints them under our name to anyone with the link, so a page that reads like a fake payment notice must never be
-// shown. Answers what to tell the team, or null. `scan` says the terms are a PDF the filter could not read.
-export function termsRefusal(account: any, title: string, text: string, scan = false): string | null {
+// shown. Answers what to tell the team, or null. `scan` says the terms are a PDF the filter could not read. `words` is
+// everything else the page shows or a copy mails with them, read together with the terms as fakeNotice reads the
+// labels of fields with an envelope: the words next to the box and on the button, the notes of what changed (a
+// returning visitor is shown them), and the details a website put in its signed link.
+export function termsRefusal(account: any, title: string, text: string, scan = false, words: any[] = []): string | null {
   if (!account || !hasNotPaid(account)) return null;
   if (posesAs(account.name)) return nameRefusal([account.name]);
   const brand = posesAs(title);
   if (brand) return `The name "${str(title, 120)}" reads like ${brand}. A page that seems to come from a well-known company is how people get tricked, so terms cannot be published under a name like that. Use a name of your own. If you really do write for ${brand}, use the contact form at ${baseUrl()}/help and a person will clear your account. ${paidTrustText()}`;
   if (scan) return `We cannot read the words of this PDF: at least one page is a picture (a scan or a photo). Our page shows these terms under the Sign&Grow name to anyone with the link, and until this account has earned trust we read what it would show, to keep fake payment notices off it. Use a PDF made from a document, or write the terms as text. ${paidTrustText()}`;
-  const lure = lureIn([title, text, account.name]);
-  return lure ? `These terms read like a payment notice from a well-known brand with a phone number to call, which is how scams look. What set this off: the name ${lure.brand}, words about money ("${lure.money}") and what looks like a phone number (${lure.phone}). If that is not what you mean, take one of the three out. If it is genuine, use the contact form at ${baseUrl()}/help and a person will clear your account. ${paidTrustText()}` : null;
+  const lure = lureIn([title, text, account.name, ...words]);
+  return lure ? `These terms, or the words shown with them (next to the box, on the button, in a note of what changed), read like a payment notice from a well-known brand with a phone number to call, which is how scams look. What set this off: the name ${lure.brand}, words about money ("${lure.money}") and what looks like a phone number (${lure.phone}). If that is not what you mean, take one of the three out. If it is genuine, use the contact form at ${baseUrl()}/help and a person will clear your account. ${paidTrustText()}` : null;
 }
 const isScan = (file: any) => !file?.text?.trim() || !!file?.scan_pages;
+// The words a page shows beside its terms: the box, the button, and every note of what changed (a visitor who accepted
+// an earlier version is shown the notes of the versions since).
+const shownWords = (cw: any, v: { checkbox: string; button: string }): string[] =>
+  [v.checkbox, v.button, ...all('SELECT note FROM clickwrap_versions WHERE clickwrap_id=? AND note IS NOT NULL', cw.id).map((x) => x.note)];
 
 // Publishing makes the draft the next version. Any change to what the page shows (the terms, their name, the words of
 // the box or the button, the rule about scrolling) is a new version; nothing changed is refused, so a version number
@@ -106,12 +113,12 @@ export function publish(cw: any, user: any, note: string, askAgain: boolean) {
   if (d.format === 'text' && !termsPlain(d.text).trim()) throw bad('Write the terms first, or choose a PDF. Nothing was published.');
   if (d.format === 'pdf' && !d.file) throw bad('Choose the PDF with your terms first. Nothing was published.');
   const sha = d.format === 'pdf' ? d.file.sha256 : sha256(d.text);
-  const no = termsRefusal(account, d.title, d.format === 'pdf' ? d.file.text || '' : termsPlain(d.text), d.format === 'pdf' && isScan(d.file));
+  const why = str(note, 500).trim();
+  const no = termsRefusal(account, d.title, d.format === 'pdf' ? d.file.text || '' : termsPlain(d.text), d.format === 'pdf' && isScan(d.file), [...shownWords(cw, d), why]);
   if (no) throw bad(`${no} Nothing was published.`, 422);
   const cur = versionOf(cw);
   if (cur && cur.terms_sha256 === sha && cur.title === d.title && cur.checkbox === d.checkbox && cur.button === d.button && cur.scroll === d.scroll)
     throw bad(`Nothing has changed since version ${cur.number}, so there is nothing to publish. Change the terms, their name, the words next to the box or on the button, or the rule about scrolling first.`, 409);
-  const why = str(note, 500).trim();
   if (cur && !why) throw bad('Say in a sentence what changed. People who accepted an earlier version are shown it when they are asked to accept again, and it stays with the version. Nothing was published.');
   const number = (cur?.number || 0) + 1;
   // Version 1 always counts as asking everyone: nobody has accepted anything before it.
@@ -183,7 +190,7 @@ export function readView(view: any, cur: any): number {
 // For the team: the real reason. A visitor is told only that the terms cannot be accepted here right now, with
 // nothing recorded, so a stranger learns nothing about the account.
 export const CLOSED_TEXT = 'These terms cannot be accepted here right now. Nothing was recorded. Please contact the website that sent you here.';
-export function closedWhy(cw: any, v: any = versionOf(cw)): string | null {
+export function closedWhy(cw: any, v: any = versionOf(cw), extra: any[] = []): string | null {
   const account = get('SELECT * FROM accounts WHERE id=?', cw.account_id);
   if (!account) return 'The account no longer exists.';
   if (account.suspended_at) return `${pausedText(account)} While sending is paused, its click-to-agree pages are closed too.`;
@@ -192,7 +199,15 @@ export function closedWhy(cw: any, v: any = versionOf(cw)): string | null {
   if (!cw.active) return 'You closed these terms. Open them again to take acceptances.';
   // Read again every time: an account that loses its trust (a refund, a dispute) has its pages read like a new one.
   const file = v.format === 'pdf' ? get('SELECT text, scan_pages FROM files WHERE sha256=? AND account_id=? LIMIT 1', v.file_sha256, cw.account_id) : null;
-  return termsRefusal(account, v.title, v.format === 'text' ? termsPlain(v.body) : file?.text || '', v.format === 'pdf' && isScan(file));
+  return termsRefusal(account, v.title, v.format === 'text' ? termsPlain(v.body) : file?.text || '', v.format === 'pdf' && isScan(file), [...shownWords(cw, v), ...extra]);
+}
+// The same for one visitor named in a signed link: the page prints their name and address ("You accept as ...") and a
+// copy is mailed to them, so a website that puts a payment notice in its links is refused like terms that read as one.
+// For the team, the reason says it was the link.
+export function linkWhy(cw: any, v: any, person: Person | null): string | null {
+  if (!person) return null;
+  const why = closedWhy(cw, v, [person.name, person.email, person.id]);
+  return why && !closedWhy(cw, v) ? `The details your website put in its signed link for one visitor (name "${str(person.name || '', 80)}", id "${str(person.id || '', 80)}") are shown on the page with the terms, and together with them they read like a fake payment notice. That visitor was turned away. ${why}` : why;
 }
 // The team hears why a visitor was turned away, once a day at most, when it is something they did not choose.
 export async function tellOwnerClosed(cw: any, why: string) {
@@ -210,6 +225,10 @@ const sealOf = (row: any) => hmac(`cwseal:${JSON.stringify(SEALED.map((k) => row
 export const intact = (row: any) => safeEqual(row.seal || '', sealOf(row));
 /** The secret a visitor's browser holds for their own acceptance: the copy by email and the certificate. Never stored. */
 export const receiptOf = (acceptanceId: string) => `cwr_${hmac(`cwreceipt:${acceptanceId}`).slice(0, 40)}`;
+// The receipt goes only to the browser that accepted: in the answer to its press, and again only to the same page load
+// (the same "view") pressing twice, say after an answer that never arrived. Anyone else who opens the same signed link
+// (a forwarded email, a shared screen, a browser's history) is told the person accepted, and nothing more.
+export const mayHaveReceipt = (row: any, view: any) => !!row.view_hash && !!view && row.view_hash === sha256(String(view));
 
 // A web address of a page, as given: only http or https, and never more than 500 characters. Anything else is not kept.
 export function cleanUrl(raw: any): string | null {
@@ -226,6 +245,7 @@ export function cleanUrl(raw: any): string | null {
 export type AcceptIn = {
   cw: any; v: any; identity: Identity; person: Person; via: Via; page_url?: string | null; ip: string; ua: string;
   given_ip?: string | null; given_ua?: string | null; shown_ms?: number | null; scrolled?: boolean | null; unobscured?: boolean | null; recorded_by?: string | null;
+  view?: string | null;
 };
 export class LimitReached extends HttpError {}
 
@@ -254,7 +274,9 @@ export async function recordAcceptance(a: AcceptIn, visitorWords = false): Promi
   };
   row.receipt_hash = sha256(receiptOf(row.id));
   row.seal = sealOf(row);
-  const cols = [...SEALED, 'receipt_hash', 'seal'];
+  // The page load that pressed: only it is given the receipt again when it presses twice (mayHaveReceipt).
+  row.view_hash = a.view ? sha256(String(a.view)) : null;
+  const cols = [...SEALED, 'receipt_hash', 'seal', 'view_hash'];
   run(`INSERT INTO clickwrap_acceptances (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((k) => row[k]));
   await tellAdmins(cw.account_id);
   return { row, already: false };
@@ -353,23 +375,59 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
 }
 
 // ---- The copy by email -----------------------------------------------------------------------------------------------
-// Only when an address was given, only on the person's own request (their browser holds the receipt), and once an
-// hour for each acceptance. Our stored copy carries the agreement in about_user ("clickwrap:<id>") so it goes when
-// the account is deleted (forgetClickwraps).
-export async function emailCopy(r: any): Promise<string> {
+// Nothing a visitor or a stranger types ever reaches an inbox under our name. So a copy goes only to an address the
+// website put in the link it signed (it vouched for it): an address typed on the page is anybody's, and a copy would
+// be a way to make us write to a stranger under a customer's name. Only on the person's request (their browser holds
+// the receipt), and once for each acceptance, ever. Never while the account is paused or closing, or while what the
+// copy carries reads like a fake payment notice. For an account the checks apply to, the people reached this way in a
+// day count against a limit of their own, as visitors of a public form do. Our stored copy carries the agreement in
+// about_user ("clickwrap:<id>") so it goes when the account is deleted (forgetClickwraps).
+const masked = (email: string) => {
+  const [user, domain] = String(email).split('@');
+  return `${user.slice(0, 1)}***@${domain}`;
+};
+export const COPY_ELSEWHERE = 'Download the copy instead: it is the same record, with the terms.';
+export function copyClaim(r: any): { status: number; code: string; message: string } | null {
+  if (r.identity !== 'website') return { status: 409, code: 'not_vouched', message: `We email a copy only to an address the website gave us in its signed link. This one was typed on the page, and we cannot know that it is yours, so we do not write to it. ${COPY_ELSEWHERE}` };
+  if (!r.email) return { status: 409, code: 'no_email', message: `No email address was given with this acceptance, so there is nowhere to send a copy. ${COPY_ELSEWHERE}` };
+  const cw = get('SELECT * FROM clickwraps WHERE id=?', r.clickwrap_id);
+  const v = get('SELECT * FROM clickwrap_versions WHERE id=?', r.version_id);
+  const account = get('SELECT * FROM accounts WHERE id=?', r.account_id);
+  // What the copy carries is read as the page is: the terms of the accepted version, the words shown with them, the
+  // account's name and the details the website signed in.
+  const file = v?.format === 'pdf' ? get('SELECT text, scan_pages FROM files WHERE sha256=? AND account_id=? LIMIT 1', v.file_sha256, r.account_id) : null;
+  if (!cw || !v || !account || account.suspended_at || account.closing_at
+    || termsRefusal(account, v.title, v.format === 'text' ? termsPlain(v.body) : file?.text || '', v.format === 'pdf' && isScan(file), [...shownWords(cw, v), r.name, r.email, r.person_id]))
+    return { status: 409, code: 'closed', message: `We cannot send a copy by email right now. Nothing was sent. ${COPY_ELSEWHERE}` };
+  const had = get('SELECT at FROM clickwrap_copies WHERE acceptance_id=?', r.id);
+  if (had) return { status: 409, code: 'copy_sent', message: `A copy of this acceptance was emailed to ${masked(r.email)} on ${stamp(had.at)}. We send one copy for each acceptance. ${COPY_ELSEWHERE}` };
+  if (hasNotPaid(account)) {
+    const have = all("SELECT DISTINCT lower(email) e FROM reached WHERE account_id=? AND via='clickwrap' AND at > ?", r.account_id, new Date(Date.now() - 864e5).toISOString()).map((x) => x.e);
+    if (!have.includes(r.email.toLowerCase()) && have.length >= dailyCap(account).cap)
+      return { status: 429, code: 'copies_today', message: `We cannot send more copies by email for this organisation today. Nothing was sent. ${COPY_ELSEWHERE}` };
+  }
+  // Taken in one step with nothing in between that waits, so two presses at the same moment send one copy.
+  if (!run('INSERT OR IGNORE INTO clickwrap_copies (acceptance_id, at) VALUES (?,?)', r.id, now()).changes)
+    return { status: 409, code: 'copy_sent', message: `A copy of this acceptance was already sent. ${COPY_ELSEWHERE}` };
+  if (hasNotPaid(account)) noteReached({ account_id: r.account_id }, [r.email], 'clickwrap');
+  return null;
+}
+export async function emailCopy(r: any): Promise<{ status: string; to: string }> {
   const cw = get('SELECT * FROM clickwraps WHERE id=?', r.clickwrap_id);
   const v = get('SELECT * FROM clickwrap_versions WHERE id=?', r.version_id);
   const account = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', r.account_id);
+  const by = v.account_name || account?.name || 'a Sign&Grow customer';
   const words = recordShows(r.identity, r.via);
-  return sendMail({
+  const status = await sendMail({
     to: r.email, about: `clickwrap:${cw.id}`, subject: `Your copy: ${v.title}`, heading: `What you accepted: ${v.title}`, fromName: account?.name,
     brand: { name: account?.name, color: account?.brand_color, logo: account?.brand_logo },
-    lines: [`On ${stamp(r.at)} someone using a browser at ${r.ip || 'an unknown address'} accepted version ${v.number} of "${v.title}" from ${account?.name || 'a Sign&Grow customer'}, under the name ${r.name || 'that was not given'} and this email address, and asked for a copy here.`,
+    lines: [`On ${stamp(r.at)} someone using a browser at ${r.ip || 'an unknown address'} accepted version ${v.number} of "${v.title}" from ${by}, with the name ${r.name ? `"${r.name}"` : 'left out'} and this email address, which ${by} gave us in its link to these terms, and asked for a copy here.`,
       'The terms and the full record are in the attached PDF.', `Fingerprint (SHA-256) of the terms: ${v.terms_sha256}`, words.shows, words.not,
-      'If that was not you, you can ignore this email: nothing else will come of it. If it looks like a scam, report the page with the link below.'],
+      `We send one copy for each acceptance, only when it is asked for on the page, and only to an address the website gave us. If you did not accept these terms, tell ${by}: they put your address in the link. If this looks like a scam, report the page with the link below.`],
     links: [{ label: 'Report this page', url: `${pageUrl(cw.slug)}?report=1` }],
     attachments: [{ filename: `acceptance-${r.id}.pdf`, content: Buffer.from(await certificatePdf(r)) }],
   });
+  return { status, to: masked(r.email) };
 }
 
 // ---- CSV -------------------------------------------------------------------------------------------------------------

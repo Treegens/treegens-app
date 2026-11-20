@@ -2,7 +2,7 @@
 // any delimiter, columns in any order when there is a header row, any letter case, and a leading byte order mark.
 // No React in here, so it can be tested on its own.
 import { looksLikeEmail } from './lib.ts';
-import { normalPhone } from '../../lib/checks.ts';
+import { normalPhone, premiumPhone } from '../../lib/checks.ts';
 
 // `phone` is true for a role the template checks with a code by text message, or texts the signing link to: every
 // row then needs that person's mobile number, in a column of its own.
@@ -152,7 +152,7 @@ export function readRecipients(text: string, roles: Role[]): Reading {
       row.cells[r.key] = { name, email, ...(phone ? { phone: normalPhone(phone) || phone } : {}) };
       const who = alone ? '' : `${r.label}: `;
       if (r.phone && !phone) row.problems.push(`${who}mobile number is missing`);
-      else if (phone && !normalPhone(phone)) row.problems.push(`${who}"${phone}" is not a full mobile number. Write it with the country code, like +44 7700 900123`);
+      else if (phone && !normalPhone(phone)) row.problems.push(premiumPhone(phone) ? `${who}"${phone}" is a premium-rate, satellite or international network number, and those are never texted` : `${who}"${phone}" is not a full mobile number. Write it with the country code, like +44 7700 900123`);
       if (!name && !email) row.problems.push(`${who}name and email are missing`);
       else if (!name) row.problems.push(`${who}name is missing`);
       else if (!email) row.problems.push(`${who}email is missing`);

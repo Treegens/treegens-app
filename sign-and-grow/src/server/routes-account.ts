@@ -484,11 +484,16 @@ route('DELETE', '/account/members/:id', async (c) => {
   }
   // The person removed hears it from us, in words, and not from a sign-in that suddenly opens an empty workspace.
   const heir = get('SELECT name FROM users WHERE id=?', successor);
+  // Where they land is said as it is, by the rule signing in follows (signInAs): the workspace they used last if they
+  // still belong to it, else the one they joined first, else a new one of their own.
+  const mine: any[] = all('SELECT a.id, a.name FROM memberships x JOIN accounts a ON a.id=x.account_id WHERE x.user_id=? ORDER BY x.created_at', c.params.id);
+  const last = get('SELECT last_account_id l FROM users WHERE id=?', c.params.id)?.l;
+  const lands = (mine.find((a) => a.id === last) || mine[0])?.name;
   await sendMail({ to: m.email, subject: `You were removed from ${c.account.name} on Sign&Grow`, heading: `You are no longer on the team ${c.account.name}`,
     lines: [`${c.user.name} removed you from ${c.account.name}. You can no longer open that team's documents.`,
       handed ? `Nothing you sent there is lost: your envelopes, drafts, templates and bulk sends now belong to ${heir?.name || 'another member of the team'}, and anything out for signature carries on.` : 'You had sent nothing there, so there was nothing to hand over.',
       ...(keys.length ? [`The API keys you created there stopped working at that moment:`, keyList(keys), `If something still uses one of them, it now gets an error. Ask an admin of ${c.account.name} for a new key.`] : []),
-      'Your own login stays. The next time you sign in you are in a workspace of your own, and documents other people sent you to sign are still in your inbox there. If you think this was a mistake, ask the person who removed you: they can invite you back at any time.'],
+      `Your own login stays. The next time you sign in you are in ${lands ? `${lands}, another workspace you belong to` : 'a workspace of your own'}, and documents other people sent you to sign are still in your inbox there. If you think this was a mistake, ask the person who removed you: they can invite you back at any time.`],
     cta: { label: 'Sign in', url: `${baseUrl()}/login` } });
   return { ok: true, keys_stopped: keys, handed_over: handed, handed_to: successor };
 }, 'admin');
@@ -497,16 +502,22 @@ route('DELETE', '/account/members/:id', async (c) => {
 // it passes to the member they choose, or to the owner. The owner is the one person who cannot walk out, because
 // the account would have nobody responsible for it: they hand it over first, or close it.
 route('POST', '/account/leave', async (c) => {
-  if (c.role === 'owner') throw bad(`You own ${c.account.name}, so you cannot leave it. Make someone else the owner first (Team tab, Make owner) and then leave, or close the account under Settings, Your data.`);
-  const others: any[] = all('SELECT m.user_id, m.role, u.name, u.email, u.closing_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id!=?', c.account.id, c.user.id);
   const to = str((await c.body()).to);
-  // The successor is someone who stays. Without a choice it is the owner. A name we do not know is refused.
-  const heir = to ? others.find((o) => o.user_id === to) : others.find((o) => o.role === 'owner');
-  if (!heir) throw bad(`Choose a member of ${c.account.name} to take over what you sent. The person named in "to" is not on the team. Nothing was changed.`);
-  if (heir.closing_at) throw bad(`${heir.name} is closing their login, so they cannot take over what you sent. Choose someone else. Nothing was changed.`);
   const me = { id: c.user.id, name: c.user.name, email: c.user.email };
-  const keys = all('SELECT id, name, prefix, scope, last_used_at FROM api_keys WHERE account_id=? AND user_id=? AND stopped_at IS NULL', c.account.id, c.user.id);
-  const left = tx(() => {
+  // Everything is decided inside one transaction, after the body was read, from the rows as they are now and not
+  // from what the sign-in found. Two requests at the same moment (the owner handing the account to this person, the
+  // chosen successor leaving too, or Leave pressed twice) must never leave the account without an owner, hand what
+  // was sent to someone who is no longer on the team, or tell the admins twice.
+  const { others, heir, keys, ...left } = tx(() => {
+    const role = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', c.account.id, me.id)?.role;
+    if (!role) throw bad(`You are no longer on the team ${c.account.name}, so there was nothing to leave. Nothing was changed. Reload the page to see the workspace you are in now.`, 409);
+    if (role === 'owner') throw bad(`You own ${c.account.name}, so you cannot leave it. Make someone else the owner first (Team tab, Make owner) and then leave, or close the account under Settings, Your data.`);
+    const others: any[] = all('SELECT m.user_id, m.role, u.name, u.email, u.closing_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id!=?', c.account.id, me.id);
+    // The successor is someone who stays. Without a choice it is the owner. A name we do not know is refused.
+    const heir = to ? others.find((o) => o.user_id === to) : others.find((o) => o.role === 'owner');
+    if (!heir) throw bad(`Choose a member of ${c.account.name} to take over what you sent. The person named in "to" is not on the team. Nothing was changed.`);
+    if (heir.closing_at) throw bad(`${heir.name} is closing their login, so they cannot take over what you sent. Choose someone else. Nothing was changed.`);
+    const keys = all('SELECT id, name, prefix, scope, last_used_at FROM api_keys WHERE account_id=? AND user_id=? AND stopped_at IS NULL', c.account.id, me.id);
     const handed = handOver(c.account.id, me, heir.user_id, c.actor, `${me.name} left the team`);
     run('DELETE FROM memberships WHERE account_id=? AND user_id=?', c.account.id, me.id);
     run('UPDATE api_keys SET stopped_at=? WHERE account_id=? AND user_id=? AND stopped_at IS NULL', now(), c.account.id, me.id);
@@ -514,7 +525,7 @@ route('POST', '/account/leave', async (c) => {
     const next = get('SELECT account_id FROM memberships WHERE user_id=? ORDER BY created_at LIMIT 1', me.id)?.account_id || ownWorkspace(me.id, me.name);
     run('UPDATE sessions SET account_id=? WHERE account_id=? AND user_id=?', next, c.account.id, me.id);
     run('UPDATE users SET last_account_id=? WHERE id=?', next, me.id);
-    return { handed, next };
+    return { handed, next, others, heir, keys };
   });
   // The people who run the team hear it from us, not from a missing name in a list.
   const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
@@ -532,10 +543,15 @@ route('POST', '/account/leave', async (c) => {
 route('POST', '/account/transfer-owner', async (c) => {
   if (c.role !== 'owner') throw bad('Only the current owner can hand the account over.', 403);
   const to = str((await c.body()).user_id);
-  if (to === c.user.id || !get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)) throw bad('Choose another member of this team.');
-  // Someone who is closing their own login cannot be handed a team: it would be left without an owner when they go.
-  if (get('SELECT closing_at FROM users WHERE id=?', to)?.closing_at) throw bad('That person is closing their login, so the account cannot be handed to them. Choose someone else, or ask them to sign in again first (that keeps their login).');
+  // Checked again inside the transaction, after the body was read: the one handing over must still be the owner and
+  // the one taking over must still be on the team. Otherwise handing over while that person presses Leave would
+  // leave an account with no owner, which nobody could hand on or close.
   tx(() => {
+    if (get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.user.id)?.role !== 'owner') throw bad('Only the current owner can hand the account over.', 403);
+    if (to === c.user.id) throw bad('You own this account already. Choose another member of this team.');
+    if (!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)) throw bad('Choose another member of this team. The person you chose is not on the team now, so nothing was changed.');
+    // Someone who is closing their own login cannot be handed a team: it would be left without an owner when they go.
+    if (get('SELECT closing_at FROM users WHERE id=?', to)?.closing_at) throw bad('That person is closing their login, so the account cannot be handed to them. Choose someone else, or ask them to sign in again first (that keeps their login).');
     run("UPDATE memberships SET role='admin' WHERE account_id=? AND user_id=?", c.account.id, c.user.id);
     run("UPDATE memberships SET role='owner' WHERE account_id=? AND user_id=?", c.account.id, to);
   });
