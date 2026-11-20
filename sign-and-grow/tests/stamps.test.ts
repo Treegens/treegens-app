@@ -33,29 +33,67 @@ const trail = (envelopeId: string) => db.all('SELECT actor, action, detail FROM 
 type Px = { width: number; height: number; data: Uint8ClampedArray };
 /**
  * A photo-like picture of a round stamp: paper of a colour, light that falls off towards the right, a ring of ink,
- * a thick bar and a thin faint line inside it, and optionally a black line of printed text above it.
+ * a thick bar and a thin faint line inside it, and optionally a black line of printed text above it. `k` scales it
+ * up, `ry` makes the ring an oval (its height as a share of its width, as a slanted photo shows a round seal), and
+ * `noise` adds the grain of a phone camera (from a fixed seed), which is what makes it a photo and not a design.
  */
-function picture(o: { w?: number; h?: number; paper?: number[]; dark?: number; ink?: number[]; text?: boolean; faint?: number } = {}): Px {
-  const w = o.w ?? 300, h = o.h ?? 260, paper = o.paper ?? [244, 241, 232], dark = o.dark ?? 0, colour = o.ink ?? [40, 60, 160], faint = o.faint ?? 0.5;
+function picture(o: { w?: number; h?: number; paper?: number[]; dark?: number; ink?: number[]; text?: boolean; faint?: number; k?: number; ry?: number; noise?: number } = {}): Px {
+  const k = o.k ?? 1;
+  const w = o.w ?? 300 * k, h = o.h ?? 260 * k, paper = o.paper ?? [244, 241, 232], dark = o.dark ?? 0, colour = o.ink ?? [40, 60, 160], faint = o.faint ?? 0.5, ry = o.ry ?? 1;
   const data = new Uint8ClampedArray(w * h * 4);
-  const cx = w / 2, cy = h / 2 + 10, R = 90;
+  const cx = w / 2, cy = h / 2 + 10 * k, R = 90 * k;
+  let seed = 12345;
+  const grain = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296 - 0.5) * 2 * (o.noise ?? 0);
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
       const light = 1 - dark * (x / w);
-      const d = Math.hypot(x - cx, y - cy);
+      const d = Math.hypot(x - cx, (y - cy) / ry);
       let s = 0;
-      if (d > R - 9 && d < R) s = 1; // the ring
-      if (Math.abs(y - cy) < 6 && Math.abs(x - cx) < 40) s = 1; // a thick bar
-      if (x === Math.round(cx) && Math.abs(y - cy) > 12 && Math.abs(y - cy) < 50) s = faint; // a thin, fainter line
+      if (d > R - 9 * k && d < R) s = 1; // the ring
+      if (Math.abs(y - cy) < 6 * k && Math.abs(x - cx) < 40 * k) s = 1; // a thick bar
+      if (Math.abs(x - Math.round(cx)) < k && Math.abs(y - cy) > 12 * k && Math.abs(y - cy) < 50 * k) s = faint; // a thin, fainter line
       let px = paper.map((v, c) => v * (1 - s + (s * colour[c]) / 255));
-      if (o.text && y > 8 && y < 14 && x > 20 && x < w - 20 && (x >> 3) % 2) px = [30, 30, 30];
+      if (o.text && y > 8 * k && y < 14 * k && x > 20 * k && x < w - 20 * k && (x >> 3) % 2) px = [30, 30, 30];
       const i = (y * w + x) * 4;
-      data[i] = px[0] * light;
-      data[i + 1] = px[1] * light;
-      data[i + 2] = px[2] * light;
+      for (let c = 0; c < 3; c++) data[i + c] = px[c] * light + grain();
       data[i + 3] = 255;
     }
   return { width: w, height: h, data };
+}
+/** Paints a rectangle of one colour into a picture. */
+function fill(pic: Px, x0: number, y0: number, x1: number, y1: number, rgb: number[]) {
+  for (let y = Math.max(0, y0); y < Math.min(pic.height, y1); y++) for (let x = Math.max(0, x0); x < Math.min(pic.width, x1); x++) pic.data.set([...rgb, 255], (y * pic.width + x) * 4);
+}
+/** The colour a pixel of an impression prints as on white paper, at full opacity. */
+const onPaper = (img: ink.Rgba, p: number) => [0, 1, 2].map((c) => 255 - (img.data[p * 4 + 3] / 255) * (255 - img.data[p * 4 + c]));
+const hueOf = ([r, g, b]: number[]) => {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), c = mx - mn;
+  if (!c) return 0;
+  const h = mx === r ? ((g - b) / c + 6) % 6 : mx === g ? (b - r) / c + 2 : (r - g) / c + 4;
+  return h * 60;
+};
+const hueGap = (a: number, b: number) => Math.min(Math.abs(a - b) % 360, 360 - (Math.abs(a - b) % 360));
+/** The pieces of ink (alpha over `at`) in an impression, joined pixel to neighbouring pixel: how many, and how large. */
+function blobs(img: ink.Rgba, test: (p: number) => boolean): number[] {
+  const { width: w, height: h } = img;
+  const seen = new Uint8Array(w * h), sizes: number[] = [];
+  for (let s = 0; s < w * h; s++) {
+    if (seen[s] || !test(s)) continue;
+    let n = 0;
+    const stack = [s];
+    seen[s] = 1;
+    while (stack.length) {
+      const p = stack.pop()!;
+      n++;
+      const x = p % w, y = (p - x) / w;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy, q = ny * w + nx;
+        if (nx >= 0 && ny >= 0 && nx < w && ny < h && !seen[q] && test(q)) (seen[q] = 1, stack.push(q));
+      }
+    }
+    sizes.push(n);
+  }
+  return sizes;
 }
 const plain = (look: Partial<ink.Look> = {}): ink.Look => ({ ink: 'blue', seed: 7, tilt: 0, texture: 0, paper: 0.5, onlyInk: true, ...look });
 const alphaAt = (img: ink.Rgba, x: number, y: number) => img.data[(y * img.width + x) * 4 + 3];
