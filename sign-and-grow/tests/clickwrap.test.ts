@@ -542,9 +542,9 @@ test('the words say what is recorded before the click, what a record shows and d
 
 // ---- 5. Money and the monthly limit -----------------------------------------------------------------------------------
 
-test('an acceptance is not a signature and uses none; the monthly limit answers clearly and the admins are emailed at 80 percent and when it is reached', async () => {
+test('an acceptance is not a signature and uses none; the monthly limit answers clearly and the admins are emailed at 80 percent and when it is reached, for typed-in visitors and for the website apart', async () => {
   const { available } = await import('../src/server/credits.ts');
-  const { slug, owner, id } = await published('Limited terms');
+  const { slug, owner, id, secret } = await published('Limited terms');
   const me = (await owner.get('/me')).data;
   const acc = me.account.id;
   const had = available(acc);
@@ -555,27 +555,33 @@ test('an acceptance is not a signature and uses none; the monthly limit answers 
     assert.equal(available(acc), had, 'no signature is held or used');
     assert.equal(mailTo(me.user.email).filter((m: any) => /percent of this month/.test(m.subject)).length, 0);
     await accept(slug, { name: 'Visitor 4', email: 'v4@limit.example' });
-    const warn = mailTo(me.user.email).filter((m: any) => /80 percent of this month's click-to-agree acceptances used/.test(m.subject));
+    const warn = mailTo(me.user.email).filter((m: any) => /80 percent of this month's click-to-agree acceptances by typed-in visitors used/.test(m.subject));
     assert.equal(warn.length, 1, 'told at 80 percent');
-    assert.match(text(warn[0].html), /4 of 5 acceptances used this month/);
+    assert.match(text(warn[0].html), /4 of 5 acceptances by typed-in visitors this month/);
+    assert.match(text(warn[0].html), /are counted apart and still work \(0 of 5 used\)/);
     await accept(slug, { name: 'Visitor 5', email: 'v5@limit.example' });
-    const full = mailTo(me.user.email).filter((m: any) => /no more click-to-agree acceptances this month/.test(m.subject));
+    const full = mailTo(me.user.email).filter((m: any) => /no more click-to-agree acceptances by typed-in visitors this month/.test(m.subject));
     assert.equal(full.length, 1, 'and when it is reached');
     // The visitor is told plainly that nothing was recorded, and nothing about the account.
     const sixth = await accept(slug, { name: 'Visitor 6', email: 'v6@limit.example' });
     assert.equal(sixth.res.status, 429);
     assert.equal(sixth.res.data.code, 'monthly_limit');
     assert.match(sixth.res.data.error, /cannot be accepted here right now\. Nothing was recorded/);
-    // The website's server is told the numbers and the day it starts again.
+    // Strangers typing on a page cannot use up what the website needs: its signed links and its server still work.
     const key = withKey((await owner.post('/api-keys', { name: 'Website' })).data.key);
+    for (let i = 1; i <= 4; i++) assert.equal((await key.post(`/clickwraps/${id}/acceptances`, { person: { id: `api-${i}` } })).status, 200);
+    const w = sign(secret, { id: 'signed-5', exp: soon() });
+    assert.equal((await accept(slug, {}, `who=${w.who}&sig=${w.sig}`)).res.status, 200);
+    // Until the website's own count is full too.
     const api = await key.post(`/clickwraps/${id}/acceptances`, { person: { id: 'over' } });
     assert.equal(api.status, 429);
-    assert.match(api.data.error, /recorded 5 click-to-agree acceptances this month, and 5 is the most this server records for one account in a month\. Nothing was recorded\. The count starts again on \d{4}-\d{2}-01/);
-    assert.equal(db.get('SELECT COUNT(*) n FROM clickwrap_acceptances WHERE clickwrap_id=?', id).n, 5);
-    assert.equal(mailTo(me.user.email).filter((m: any) => /no more click-to-agree/.test(m.subject)).length, 1, 'once a month, not at every refusal');
+    assert.match(api.data.error, /recorded 5 click-to-agree acceptances this month from its website \(signed links and the API\), and 5 is the most this server records for one account in a month\. Nothing was recorded\. The count starts again on \d{4}-\d{2}-01/);
+    assert.equal(db.get('SELECT COUNT(*) n FROM clickwrap_acceptances WHERE clickwrap_id=?', id).n, 10);
+    assert.equal(mailTo(me.user.email).filter((m: any) => /no more click-to-agree acceptances by typed-in visitors/.test(m.subject)).length, 1, 'once a month, not at every refusal');
+    assert.equal(mailTo(me.user.email).filter((m: any) => /no more click-to-agree acceptances by your website/.test(m.subject)).length, 1);
     const list = (await owner.get('/clickwraps')).data;
-    assert.deepEqual([list.usage.used, list.usage.limit], [5, 5]);
-    assert.match(list.usage.line, /5 of 5 acceptances used this month, counted for the whole account/);
+    assert.deepEqual([list.usage.typed, list.usage.vouched, list.usage.limit], [5, 5, 5]);
+    assert.match(list.usage.line, /5 of 5 acceptances by people your website named in a signed link or sent through the API, and 5 of 5 by visitors who typed their own details\. The two are counted apart/);
     // 0 records none.
     process.env.CLICKWRAP_MONTHLY_LIMIT = '0';
     assert.match((await owner.get('/clickwraps')).data.usage.line, /records no acceptances at all/);
@@ -683,13 +689,14 @@ test('"report this page" reaches the people who review reports, never pauses the
   assert.match(page, /Report this page/);
 });
 
-test('rate limits per address: ten acceptances an hour on one agreement from one machine', async () => {
+test('rate limits per address: ten typed-in acceptances an hour on one agreement from one machine', async () => {
   const { slug } = await published('Busy terms');
   const c = from();
   let last: any;
   for (let i = 0; i < 11; i++) last = (await accept(slug, { name: `Same Machine ${i}`, email: `same${i}@visit.example` }, '', c)).res;
   assert.equal(last.status, 429, 'ten an hour on one agreement from one address');
-  assert.match(last.data.error, /Too many attempts/);
+  assert.equal(last.data.code, 'address_limit');
+  assert.match(last.data.error, /Several people can share one address \(an office, a school, a phone network\).*Nothing was recorded\. Try again in about \d+ minutes?, or ask the website for a link that names you/);
 });
 
 // ---- 7. Deleting -----------------------------------------------------------------------------------------------------
