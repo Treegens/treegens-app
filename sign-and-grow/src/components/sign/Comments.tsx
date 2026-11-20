@@ -9,8 +9,12 @@ import { Dialog } from './Dialog';
 import { audienceWords } from '@/lib/comments';
 import { COMMENT_MAX_CHARS } from '@/lib/policy';
 
-/** How many of this person's own questions wait for an answer. Asked again whenever `on` turns true (the dialog closes). */
-export function useMyQuestions(base: string, on: boolean): number {
+/**
+ * How many of this person's own questions wait for an answer. Asked again whenever `on` turns true (the dialog
+ * closes) and whenever `again` changes: the page passes whether the Finish step is open, so an answer that came while
+ * the page was open is known before the note about it is shown.
+ */
+export function useMyQuestions(base: string, on: boolean, again: unknown = null): number {
   const [n, setN] = useState(0);
   useEffect(() => {
     if (!on) return;
@@ -19,7 +23,7 @@ export function useMyQuestions(base: string, on: boolean): number {
     return () => {
       live = false;
     };
-  }, [base, on]);
+  }, [base, on, again]);
   return n;
 }
 
@@ -148,7 +152,8 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
 
       {error && <div className="notice err sg-problem" role="alert">{error}</div>}
 
-      {data && !data.may_write && <p className="notice">Everyone has finished, so these can be read and no longer added to. They are kept with the document.</p>}
+      {data?.away && <p className="notice warn" role="status">{data.away}</p>}
+      {data && !data.may_write && !data.away && <p className="notice">Everyone has finished, so these can be read and no longer added to. They are kept with the document.</p>}
       {data && data.may_write && data.left <= 0 && <p className="notice warn">You have written as many comments on this document as one person can. To say more, email {sender.name}{sender.email ? ` at ${sender.email}` : ''}.</p>}
       {canWrite && !replyTo && (
         <form className="cm-new" onSubmit={async (ev) => {

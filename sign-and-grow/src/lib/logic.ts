@@ -138,7 +138,8 @@ export function readNumber(text: any, dec?: '.' | ',' | null): ReadNumber | null
 export function notationOf(texts: any[]): Notation {
   let dec: '.' | ',' | null = null, group: string | null = null, indian = false;
   for (const t of texts) {
-    const n = readNumber(t);
+    // { text, dec }: a text whose mark before decimals is known (a calculated result, see markOf).
+    const n = t && typeof t === 'object' ? readNumber(t.text, t.dec) : readNumber(t);
     if (!n) continue;
     if (!dec && n.dec) dec = n.dec;
     if (!group && n.group && !n.ambiguous) (group = n.group), (indian = n.indian);
@@ -182,6 +183,14 @@ export function formatNumber(x: number, how: Notation, fixed?: number | null): s
     else int = int.replace(/\B(?=(\d{3})+$)/g, g);
   }
   return `${neg ? '-' : ''}${int}${frac ? `${how.dec}${frac}` : ''}`;
+}
+/** The mark before decimals in `text`, which is known to show the number `num`: the reading that gives that number. */
+export function markOf(text: string, num: number): '.' | ',' | null {
+  for (const d of ['.', ','] as const) {
+    const n = readNumber(text, d);
+    if (n && n.value === num) return n.dec;
+  }
+  return null;
 }
 /** A number written plainly: a dot before decimals and no grouping, the way a calculated result is kept (canon). */
 export const PLAIN: Notation = { dec: '.', group: null, indian: false };
@@ -384,9 +393,12 @@ export const CALC_RULES = 'Empty fields count as 0. A field that is not shown co
 export function evaluate(ast: Ast, input: (id: string) => { text?: string | null; num?: number | null; error?: string | null } | null, name: (id: string) => string): Calc {
   // An input with `num` (another calculated field) is taken as that number; its `text` only says how it is written.
   const refs = refsOf(ast);
-  const texts = refs.map((id) => input(id)?.text).filter((t) => t != null && String(t).trim() !== '');
+  // A calculated input shown as "1,233" says nothing on its own about its comma; its number (1.233) does. So its
+  // mark is known, and the result and a lone 1.234 typed next to it are written and read the same way.
+  const texts = refs.map((id) => input(id)).filter((g) => g?.text != null && String(g.text).trim() !== '')
+    .map((g) => (g!.num != null ? { text: String(g!.text), dec: markOf(String(g!.text), g!.num) } : g!.text));
   const how = notationOf(texts);
-  const hint = texts.map((t) => readNumber(t)).find((n) => n?.dec)?.dec ?? null;
+  const hint = texts.map((t: any) => (typeof t === 'object' ? readNumber(t.text, t.dec) : readNumber(t))).find((n) => n?.dec)?.dec ?? null;
   const ambiguous: string[] = [];
   let filled = 0;
   const shown = new Map<string, number>();

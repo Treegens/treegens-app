@@ -211,12 +211,15 @@ export function formulaInputs(e: any, rid: string): { key: string | null; fields
  * At Finish: the other people's answers that count in this person's formulas must still be the ones their screen
  * was given (GET /sign gives `inputs`, the screen sends it back). When someone has finished in between, their answer
  * now counts and the result changed under the person, so nothing is signed: 409 "changed", and the page loads the
- * document again with the new result. A caller that sends no `inputs` was shown nothing and is not held to it.
+ * document again with the new result. A caller that sends no `inputs` is held to the key the server last gave that
+ * person (recipients.seen_inputs, '-' for none), like the content version; one that was never given the document
+ * was shown nothing and is not held to anything.
  */
 export function assertInputs(e: any, r: any, body: any) {
-  if (!body || body.inputs === undefined) return;
+  const given = body?.inputs !== undefined ? body.inputs ?? null : r.seen_inputs == null ? undefined : r.seen_inputs === '-' ? null : r.seen_inputs;
+  if (given === undefined) return;
   const now = formulaInputs(e, r.id);
-  if ((body.inputs ?? null) === now.key) return;
+  if (given === now.key) return;
   const finished = [...new Set(now.fields.filter((x) => !x.pending && x.by).map((x) => x.by))];
   const results = e.fields.filter((f: any) => f.recipient_id === r.id && f.formula && f.type === 'number').map((f: any) => `'${nameOf(f)}'`);
   const who = finished.length ? `${finished.slice(0, 3).join(', ')}${finished.length > 3 ? ' and others' : ''} finished` : 'Someone else on this document finished';

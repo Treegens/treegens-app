@@ -176,7 +176,24 @@ export function TwoStepResetBanner({ me }: { me: any }) {
 // What a team that asks everyone for two-step login shows, in place of the app, to someone signed in without it.
 export function TwoStepRequired({ me }: { me: any }) {
   const [done, setDone] = useState(false);
+  const [resent, setResent] = useState('');
   const others = (me.accounts || []).filter((a: any) => a.id !== me.account.id);
+  // Two-step login needs a confirmed address (src/server/routes-twostep.ts), and this screen hides the rest of the
+  // app, with its banner that sends the confirmation again. So it is offered here.
+  if (!me.user.email_verified && !done) return (
+    <main className="authbox" style={{ maxWidth: 560 }}>
+      <div className="card twostep">
+        <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>Confirm your email address first</h1>
+        <p>{me.account.name} asks everyone on the team to sign in with two-step login, and it can only be switched on for a confirmed address. Open the link we sent to {me.user.email}, in this browser, then come back here to set it up.</p>
+        {resent && <p className="notice" role="status">{resent}</p>}
+        <div className="row wrap" style={{ gap: 8 }}>
+          <button className="btn primary" onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => setResent(`We sent the link again to ${me.user.email}. It can take a few minutes, and may land among spam.`)).catch((e: any) => setResent(e?.message || 'We could not send it. Try again in a minute.'))}>Send the link again</button>
+          <button className="btn" onClick={() => window.location.reload()}>I have confirmed it</button>
+          <button className="btn" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => window.location.assign('/'))}>Sign out</button>
+        </div>
+      </div>
+    </main>
+  );
   return (
     <main className="authbox" style={{ maxWidth: 560 }}>
       <div className="card twostep">

@@ -419,6 +419,17 @@ test('changing or deleting a stamp under Settings never changes a document it is
   const bad = await c.post('/envelopes', { documents: [{ id: 'd', file_id: f.id }], recipients: [{ id: 'r', name: 'R', email: 'r@x.example' }], fields: [{ document_id: 'd', type: 'stamp', stamp_id: foreign.id, page: 0, x: 0.1, y: 0.1, w: 0.2, h: 0.15 }] });
   assert.equal(bad.status, 400);
   assert.match(bad.data.error, /names the stamp "stp_[^"]+", which this account does not have/);
+  // Duplicate and Copy to every page in the editor send the copy with the picture of the field it came from: it is
+  // kept, so every page has the same impression. A picture that is neither that nor the stamp's own is refused.
+  const twinStamp = ok(await c.post('/stamps', { name: 'Twin test', image: stampPng(44) })).stamp;
+  const d3 = await stampedDraft(c, { senderStamp: twinStamp.id, mine: false });
+  const got = (await c.get(`/envelopes/${d3.id}`)).data.envelope;
+  const orig = got.fields.find((f: any) => f.type === 'stamp');
+  ok(await c.put(`/envelopes/${d3.id}`, { fields: [...got.fields, { ...orig, id: undefined, page: 0, y: 0.5 }] }), 'duplicate');
+  assert.deepEqual(db.all("SELECT value FROM fields WHERE envelope_id=? AND type='stamp'", d3.id).map((x: any) => x.value), [twinStamp.image_sha256, twinStamp.image_sha256]);
+  const forged = await c.put(`/envelopes/${d3.id}`, { fields: [...got.fields, { ...orig, id: undefined, y: 0.6, value: 'f'.repeat(64) }] });
+  assert.equal(forged.status, 400);
+  assert.match(forged.data.error, /was sent with a picture \("value"\) that is not the picture of the stamp "Twin test" it names/);
   // A value sent for a stamp is refused in words.
   const val = await c.post('/envelopes', { documents: [{ id: 'd', file_id: f.id }], recipients: [{ id: 'r', name: 'R', email: 'r@x.example' }], fields: [{ document_id: 'd', recipient_id: 'r', type: 'stamp', value: 'x', page: 0, x: 0.1, y: 0.1, w: 0.2, h: 0.15 }] });
   assert.match(val.data.error, /A stamp field holds a stamp picture: a recipient puts their own on when they sign/);
@@ -664,4 +675,42 @@ test('the API description has the stamp field and the stamp routes; the words ne
   assert.match(STAMP_IS, /^A stamp here is a picture of a stamp that this person put on the document\. Sign&Grow does not check that they may use it, and it is not a certified electronic seal\.$/);
   for (const f of ['src/lib/stamps.ts', 'src/lib/stampink.ts', 'src/server/stamps.ts', 'src/server/routes-stamps.ts', 'src/server/png.ts', 'tests/stamps.test.ts'])
     assert.ok(!read(f).includes(String.fromCharCode(0x2014)), `no em dash in ${f}`);
+});
+
+test('the screens: Settings, the editor, the signing page and its text view, the help and developers pages, with the honest words', () => {
+  const settings = read('src/app/app/settings/page.tsx');
+  assert.match(settings, /\['stamps', 'Stamps'\]/, 'a Stamps tab under Settings');
+  assert.match(settings, /\{tab === 'stamps' && <StampSettings \/>\}/);
+  const team = read('src/components/stamps/StampSettings.tsx');
+  assert.match(team, /\{STAMP_IS_TEAM\}/);
+  assert.match(team, /Changing or deleting a stamp here never changes a document it is already on/);
+  const maker = read('src/components/stamps/StampMaker.tsx');
+  assert.match(maker, /Before: your picture/);
+  assert.match(maker, /After: printed like ink/);
+  assert.match(maker, /impression\(prepared, look\)/, 'the impression is made in the browser from the shared steps');
+  assert.match(maker, /toDataURL\('image\/png'\)/, 'and saved as a PNG through the canvas, which leaves out what the file carried besides its pixels');
+  const dialog = read('src/components/stamps/StampDialog.tsx');
+  assert.match(dialog, /capture="environment"/, 'a photo straight from the phone camera');
+  assert.match(dialog, /accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(dialog, /\{STAMP_IS_YOU\}/);
+  const sign = read('src/app/sign/[token]/page.tsx');
+  assert.match(sign, /ink=\{inkLayer\(d\.id\)\}/, 'stamps are printed in the ink layer of each page');
+  assert.match(sign, /aria-label=\{ok \? `\$\{name\}: your stamp is on the page\. Change it or take it off` : `\$\{name\}\$\{need\}\. Put your stamp here`\}/);
+  assert.match(read('src/components/PdfDoc.tsx'), /\{ink && <div className="ink" aria-hidden="true">\{ink\}<\/div>\}/);
+  const css = read('src/app/styles/stamps.css');
+  assert.match(css, /\.pdfpage \.ink \.st-print img \{[^}]*mix-blend-mode: multiply; opacity: 0\.9;/, 'multiplied in at 90 percent, as in the PDF');
+  assert.match(css, /\.pdfpage \.ink \{ position: absolute; inset: 0; pointer-events: none; \}/, 'the ink layer starts no stacking context, so it blends with the page');
+  assert.match(read('src/components/sign/TextFields.tsx'), /'Put your stamp on'/);
+  assert.match(read('src/components/editor/shared.ts'), /\['stamp', 'Stamp', 0\.18, 0\]/);
+  assert.match(read('src/components/editor/StepFields.tsx'), /stampBox\(STAMP_DEFAULT_MM, size\.w, size\.h\)/, 'a new stamp field starts at 40 mm across');
+  assert.match(read('src/components/editor/StampChoice.tsx'), /Me: one of my team&apos;s stamps/);
+  const help = read('src/app/help/stamps.tsx');
+  assert.match(help, /\{STAMP_IS\} It is not stamp duty either/);
+  assert.match(read('src/app/help/page.tsx'), /<StampHelp \/>/);
+  assert.match(read('src/app/developers/page.tsx'), /\['GET', '\/api\/stamps'/);
+  for (const f of ['src/components/stamps/StampMaker.tsx', 'src/components/stamps/StampDialog.tsx', 'src/components/stamps/StampSettings.tsx', 'src/components/editor/StampChoice.tsx', 'src/app/help/stamps.tsx', 'src/app/styles/stamps.css', 'src/server/openapi-stamps.ts'])
+    assert.ok(!read(f).includes(String.fromCharCode(0x2014)), `no em dash in ${f}`);
+  // Nothing anywhere a stamp is offered claims more than a picture.
+  for (const f of ['src/lib/stamps.ts', 'src/components/stamps/StampMaker.tsx', 'src/components/stamps/StampDialog.tsx', 'src/components/stamps/StampSettings.tsx', 'src/app/help/stamps.tsx', 'src/server/openapi-stamps.ts'])
+    assert.doesNotMatch(read(f).replace(/not a certified electronic seal|not an electronic seal backed by a certificate/g, ''), /\b(certified|verified|legally binding|authenticated|official seal)\b/i, `no claim beyond a picture in ${f}`);
 });

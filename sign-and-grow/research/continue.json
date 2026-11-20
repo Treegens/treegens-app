@@ -4347,5 +4347,141 @@
   "settings": [
    "No new environment settings. Two new constants in src/lib/policy.ts: POWERFORM_STARTS_PER_HOUR = 20 (the old hard-coded limit) and POWERFORM_SHARED_STARTS_PER_HOUR = 120 (the owner asked for at least 60). The README row for POWERFORM_SHARED_IDLE_MINUTES names both, so .env.example needs no change."
   ]
+ },
+ "repair:mobile": {
+  "found": "Before changing anything I re-ran the skeptic's probes. Every finding was still there:\n- probe-server.ts: one copied cookie, used every 29 days, was still signed in after 1,102 days (alive in 38 of 38 rounds).\n- 40 unlock tries sent at once on a handed-over browser: all 40 passwords were checked (40 x wrong_password). The counter ended at 1 and the session stayed.\n- A public form owner's own 503 was classed as \"no connection\" (pageTreatsAsNoConnection: true).\n- probe-stacked.ts: a tick box inside a text field was refused at send (400). The same layout saved as a template (200) and as a public form (200). Then every visitor got 503 \"This form cannot take new signatures right now\".\n- probe-photo.ts: all 8 orientations were upright, also with the camera note after the JFIF header. A JPEG whose header said 8160x6120 was accepted (200) and kept at full size.\n- The skeptic had already shown, in the browser, the pinch being adopted, the lost answer, and the form being sent again every 15 s. Their screenshots are in tests/out/verify-mobile.\n\nNothing for this repair had been started before me. Part of my work was committed into other engineers' \"work in progress\" commits while I worked (for example d31825a). I committed nothing.",
+  "done": [
+   {
+    "item": "New bug (high) / mobile-send D: parallel password guesses got past the five-tries limit of the hand-over lock",
+    "status": "done",
+    "how": "In src/server/handover.ts, POST /auth/unlock now reads the body first. It then counts the try before looking at the password, in one statement that only changes the row while tries are left: UPDATE sessions SET unlock_tries=unlock_tries+1 WHERE id=? AND locked_at IS NOT NULL AND unlock_tries < 5 RETURNING unlock_tries. That needs a new column, sessions.unlock_tries.\n- A request that finds nothing to change is refused without its password being checked, and the browser is signed out.\n- The fifth wrong try deletes the session, so the lock is shut for everyone: a right password after it is refused too.\n- The right password resets the count. A new hand-over starts again at 5.\n- Opening the signing page again while it is locked does not reset the count.\n- Rate limits: 30 tries per address and 20 per session in 15 minutes.\n\nProbe afterwards: 40 guesses sent at once got exactly 5 password checks. The answers were 4 wrong_password and 1 signed_out, and the rest were refused (25 not_locked, 10 by the rate limit). The session is gone. In the browser (d-unlock.cjs): a wrong password says '4 more tries', and the right one opens /app.",
+    "test": "tests/mobile-repair.test.ts tests 1-4. They count scrypt calls (40 at once give 5 checks). A right password sent first opens the lock; sent after 5 wrong ones it is refused unchecked. Four wrong then right opens it, and the next lock has 5 tries again. Reopening the page does not reset the count. The per-address limit gives 429."
+   },
+   {
+    "item": "New bug (medium) / mobile-send B: a stolen session cookie never runs out while it is used",
+    "status": "done",
+    "how": "Done as the owner decided: SESSION_MAX_DAYS = 30 in src/lib/policy.ts, counted from sign-in.\n- auth.ts sessionEnd() caps every session: createSession, touch() (it never slides past the cap), authenticate, handover's lockedSession, and the /me/sessions list.\n- A row that slid past 30 days before this rule is refused and not listed.\n- A row from before created_at was kept never moves forward again.\n- renewedCookie gives only the time the session has left.\n- New sessionWords() sentence, quoted on /security (new title 'A browser is signed out 30 days after you signed in on it...') and in Settings. Settings also shows 'Signed out by itself on <date>' for each browser.\n- GET /me/sessions adds max_days, and signs_out_at is now the real end.\n\nProbe afterwards: the copied cookie was alive at 29 days, then dead in every later round.",
+    "test": "mobile-repair tests 5-8. I rewrote the gaps-mobile-send test 'a browser that is used stays signed in...' on purpose: weekly use now stays signed in for 4 weeks, and week 5 must sign in again.",
+    "left_open": "With SESSION_DAYS = 30 and SESSION_MAX_DAYS = 30, the slide changes nothing in practice: every browser is signed out 30 days after sign-in. The code still slides if the idle window is made shorter than the cap. See notes."
+   },
+   {
+    "item": "New bug (medium) / mobile-sign C: Finish whose answer was lost said 'nothing was signed', and a later 409 showed a red toast",
+    "status": "done",
+    "how": "New in src/components/sign/offline.ts: isAlreadyFinished, finishLanded (asks GET /sign/:token whether this person's part is done) and finishUnknown (the 'cannot tell yet' words).\n- In page.tsx complete(), a 409 with the new code 'already_finished' is handled as done, with no red toast.\n- With no answer, or a 5xx from our server, the page asks the server first. If done, it shows the done screen. If the server cannot be asked, it says: 'We did not hear back from Sign&Grow, so we cannot tell yet whether it went through. Nothing you typed is lost...'.\n- 'Nothing was signed' is now said only when that is known: the device was offline before sending, or the server says so after a 5xx.\n- The server sends code already_finished on both 409 paths (envelopes.ts).\n- The /help sentence SIGNING_WEAK_SIGNAL was corrected.\n\nBrowser afterwards:\n- c-lost.cjs: the server signed, the answer was lost, and the done screen came straight away (1 request, no toast).\n- c-lost2.cjs: the answer was lost and asking also failed. The page showed the 'cannot tell yet' words; when the signal came back, the 409 led to the done screen with no toast.\n- c-offline.cjs: offline before sending still says nothing was signed, and the page finishes by itself when the device is back online.",
+    "test": "mobile-repair tests 'a Finish whose answer was lost...' and '/help says...'. I updated gaps-mobile-sign test C (the online wording and our own 503) and the lost-answer test (the page reads the code, not the old regex)."
+   },
+   {
+    "item": "New bug (medium) / mobile-sign C: a public form's own 503 was shown as 'could not reach Sign&Grow' and sent again every 15 s",
+    "status": "done",
+    "how": "isConnectionError now counts only no answer, or a 502/503/504 whose body has none of our sentence (no data.error). The form-wait refusal has code 'form_waits'. The page shows the server's own sentence and turns off retrying.\n\nBrowser afterwards (c-form503.cjs): one POST /complete in 47 s. The page says 'This form cannot take your signature at the moment ... We email you at ...'.",
+    "test": "mobile-repair test 'our own 503 is not no connection': a real form with no signature free gives 503 with code form_waits, and the classifier says it is not a connection problem."
+   },
+   {
+    "item": "New bug (medium) / mobile-sign B: a two-finger pinch on the pad was adopted as a signature",
+    "status": "done",
+    "how": "New onePen() tracker and twoFingers() words in src/lib/ink.ts:\n- Only the pointer that started a line draws.\n- A second finger takes the line under way away and shows 'That was two fingers at once, so it was not kept. Draw your signature with one finger, or choose Type.' Nothing draws until every finger is off.\n- A touch while a pen is drawing (a resting palm) is ignored.\n- isPrimary clears pointers of the same kind whose lifting was never reported.\n\nSignaturePad.tsx uses it in its down, move and up handlers.\n\nBrowser afterwards (b-tap.cjs, b-pinch2.cjs, iPhone 13 and Pixel 5): the pinch shows the two-finger message, and Adopt then refuses. A single tap is still refused. One finger drawn with real touch events is adopted (g-adopt.cjs).",
+    "test": "mobile-repair test 'two fingers spread on the pad...' feeds the skeptic's interleaved pinch, a second finger in the middle of a line, pen plus palm, and a lost pointerup. It also checks the pad's wiring."
+   },
+   {
+    "item": "New bug (low) / mobile-sign F: the stacked-field rule refused a reachable tick box and silently shut public forms",
+    "status": "done",
+    "how": "src/lib/stacked.ts now measures, for each field the person taps, how much of it is covered by their own fields drawn over it (the smaller one is on top; of two the same size, the later one). It refuses above 60%.\n- New layers() gives the zIndex the signing page puts on overlapping own fields (smaller on top, at most 4). Tab order does not change.\n- Templates are checked when saved (saveDraft for kind template: 'The template was not saved.').\n- POST /powerforms is checked ('Change the template first. The form was not made.'), in the new file src/server/stackedforms.ts.\n- A form that was already live lets visitors in (assertSendable skips the rule only for a fresh form start). Its owner is emailed once a day (new column powerforms.stacked_told_at).\n- A correction of such an envelope is still refused.\n\nAfterwards:\n- probe-stacked.ts: send 200, template 200, form 200, visitor 200.\n- f-zorder.cjs: the tick box has z-index 2. elementFromPoint finds the tick at its centre and the text field at its left end. A tap ticks it.",
+    "test": "mobile-repair tests 'a tick box inside a text field...' and 'templates and public forms are checked...'. I updated gaps-mobile-sign test F: the tick box inside a text field is no longer named."
+   },
+   {
+    "item": "New bug (low): 'Sign out everywhere else' left remembered two-step devices",
+    "status": "done",
+    "how": "POST /me/sessions/sign-out-others also deletes every two_step_devices row of the person except this browser's (found through rememberedDevice). It returns two_step_devices_forgotten when there were any.\n\nThe Settings copy and the message after the button say so, and so does /security.",
+    "test": "mobile-repair test 'signing out everywhere else also stops other devices...': only this browser stays remembered, and another person's devices are untouched."
+   },
+   {
+    "item": "New bug (low) / mobile-send A: photos sent through the API were never made smaller",
+    "status": "done",
+    "how": "I took the skeptic's second option: JPEG_MAX_PIXELS is lowered from 50 to 13 million. A 4032x3024 phone photo fits.\n\nThe refusal now says why ('every signer's phone unpacks all of it to show the page ... Make it smaller (2,000 pixels on the long side is plenty for a page)'). openapi.ts /files, /developers and the README say the server does not make pictures smaller.\n\nI did not build server-side shrinking. Decoding a 50 MP JPEG with pdf.js's decoder needs about 225 MB or more on the server, and there is no JPEG encoder without a new dependency.\n\nProbe afterwards: 8160x6120 gives 400 with that sentence.",
+    "test": "I updated the gaps-mobile-send pixel-limit test (13 million; the 12 MP photo passes; the new words)."
+   },
+   {
+    "item": "Owner's decision: test all eight EXIF orientations with real files I make",
+    "status": "done",
+    "how": "Files built from a real 48x32 JPEG with coloured quarters and a phone-style camera note:\n- the note has Make, Model, Orientation, resolutions, Software, DateTime, the Exif sub-IFD, and IFD1 with an embedded thumbnail that claims 160x120;\n- three layouts: the note first, the note after JFIF, and the note followed by an ICC profile and XMP that says orientation 1;\n- both byte orders.\n\nAll 48 files are uploaded and drawn with pdf.js, and every corner is checked. The size read is the photo's, not the thumbnail's. Then 8 envelopes, one per orientation, are signed and the signed PDF is checked corner by corner.",
+    "test": "mobile-repair test 'all eight camera orientations come out upright...'."
+   },
+   {
+    "item": "mobile-sign G: adopt dialog in landscape, at large text and at 200 percent (not proven by the skeptic)",
+    "status": "done",
+    "how": "g-adopt.cjs did what the skeptic asked: at 844x390, 844x390 with the root font at 200%, 390x844 at 200% and 320x568 at 200%, Adopt and sign, Cancel and the alert are all on screen. Nothing is wider than the screen, and one finger draws and adopts.\n\nI also tried a phone held sideways at 200% page zoom (422x195). The buttons were 15 px below the screen. A new @media (max-height: 260px) rule in signphone.css fixes that. Now the buttons are on screen, 76 px of the drawing box is visible above them, and a one-finger signature is adopted. Portrait at 200% (195x422) still passes.",
+    "test": "mobile-repair test 'the adopt dialog on a phone held sideways at 200 percent...' checks the CSS rule. Screenshots: tests/out/repair-mobile/g-*.png."
+   },
+   {
+    "item": "mobile-send C, F, G (not attacked by the skeptic)",
+    "status": "partly",
+    "how": "There was no failure to reproduce. Their existing tests pass in the full run (gaps-mobile-send 18 of 18). I did not test them separately in a browser.",
+    "left_open": "The skeptic did not attack them and neither did I."
+   },
+   {
+    "item": "Overclaims (8)",
+    "status": "done",
+    "how": "Each claim is now true, or the words were changed:\n- 5 tries is now 5 checks, also in parallel.\n- 'Nothing was signed' is only said when known.\n- The isConnectionError comment is rewritten, and our own 503s are excluded.\n- The '500 says nothing was signed' case now asks the server first.\n- Photos: the limit, policy comment, openapi, /developers and README now say the server does not shrink.\n- The test title 'anything a finger can still reach is not named' is now true.\n- The SignedIn copy now covers remembered devices.\n- The pinch is no longer adopted.\n\nI did not edit research/continue.json (the builders' report)."
+   },
+   {
+    "item": "README and docs",
+    "status": "done",
+    "how": "README:\n- a row for tests/mobile-repair.test.ts in the test table;\n- 'What the bad reviews taught us': updated rows for the sign-in, the tablet lock, 'Failed to fetch' and stacked fields, plus new rows for the two-finger pinch and 50 MP API photos;\n- the Sending and Team lines.\n\nAlso openapi /files, /developers, /security and /help (SIGNING_WEAK_SIGNAL). No new environment setting, so .env.example and the config table are unchanged."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/handover.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/auth.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts (two COLUMNS lines: sessions.unlock_tries, powerforms.stacked_told_at)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts (sessionsOf, GET /me/sessions, POST /me/sessions/sign-out-others, imports)",
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts (codes already_finished and form_waits, saveDraft template check, assertSendable form-start exception)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts (POST /powerforms check, owner notice at form start, one import)",
+   "/home/user/treegens-app/sign-and-grow/src/server/stackedforms.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/exif.ts (JPEG refusal words)",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts (/files description)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts (SESSION_MAX_DAYS, sessionWords, JPEG_MAX_PIXELS)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/stacked.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/ink.ts (onePen, twoFingers)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/mobile.ts (SIGNING_WEAK_SIGNAL)",
+   "/home/user/treegens-app/sign-and-grow/src/components/SignaturePad.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/offline.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx (imports, complete(), layered z-index on own fields)",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/settings/SignedIn.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/signphone.css",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/tests/mobile-repair.test.ts (new, 17 tests)",
+   "/home/user/treegens-app/sign-and-grow/tests/gaps-mobile-send.test.ts (session test rewritten for the 30-day cap; JPEG limit assertions)",
+   "/home/user/treegens-app/sign-and-grow/tests/gaps-mobile-sign.test.ts (offline classifier and wording, tick box inside a text field now allowed, lost-answer test reads the new code)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/repair-mobile/ (probes: probe-server.ts, probe-photo.ts, b-pinch2.cjs, c-lost2.cjs, g-adopt.cjs, g-adopt-zoom.cjs, g-check.cjs, d-unlock.cjs, peek.cjs, copies of the skeptic's probes; screenshots)"
+  ],
+  "suite": "npm test, last full run: 846 tests, 845 pass, 1 fails. The failure is not mine: gaps-nonus-words.test.ts:833 expects replyTo={answerComesTo(me)} in src/app/sign/[token]/page.tsx. That line was taken out in commit 50cdd82 ('payment repairs from the third review'), and I never touched it.\n\nTwo earlier full runs failed in bulk because of other people's half-finished edits:\n- 326 failures: logic.ts was missing hiddenAfter.\n- 271 failures: routes-billing.ts used AsyncLocalStorage without importing it.\n\nIn each case I waited and re-ran. tests/mobile-repair.test.ts passes 17 of 17. gaps-mobile-send and gaps-mobile-sign pass in full.\n\nnpx tsc --noEmit -p . is clean at the end. Earlier a routes-trust.ts stampExport error appeared from the stamp work, and it went away.",
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour changes:\n\n1. Every browser is now signed out 30 days after sign-in, however often it is used (the owner's decision). With SESSION_DAYS also at 30, the slide no longer lengthens anything, so a person who uses the app weekly signs in once a month. This contradicts the mobile-send brief ('someone who uses the app every week is not asked to sign in again'). I followed the owner. If the owner wants the slide to matter again, the idle window must be shorter than the cap, or the cap longer. sessionWords() then prints the two-part sentence by itself.\n   - A cookie that is sent again carries only the time left.\n   - Sessions that slid past 30 days before this rule are refused at once after deploy.\n\n2. Hand-over unlock:\n   - Each try counts before its password is checked; only HAND_OVER_TRIES tries ever get a number.\n   - New limits: 30 tries per address and 20 per session in 15 minutes. A front desk unlocking more than 30 times in 15 minutes from one network would see 429 'Too many attempts'.\n   - Tries counted in the old locked_note.wrong before deploy are not carried over, so a session locked at deploy time gets 5 fresh tries.\n\n3. Finish on the signing page:\n   - A 409 with code 'already_finished' counts as done.\n   - A 5xx or a lost answer makes the page ask GET /sign/:token before it says anything.\n   - New server codes: already_finished and form_waits. /sign routes are not in openapi.ts, so they are not documented there.\n\n4. Stacked fields:\n   - The signing page sets z-index 1 to 4 on own fields that overlap.\n   - Saving a template with fields that cover each other is now refused through the API too, the same as in the editor. An existing template with such fields cannot be saved until fixed.\n   - POST /powerforms refuses such a template.\n   - Forms that were already live take their visitors, and the owner is emailed once a day ('Two fields on your form \"...\" cover each other').\n\n5. JPEG uploads over 13 million pixels are refused (was 50 million). Integrations that send 24 MP phone photos will now get a 400 with what to do. The editor shrinks photos in the browser first, but when that fails it uploads the original, which would also be refused. Please confirm 13 million, or ask for server-side shrinking as a separate task (it needs a JPEG encoder; no dependency allowed).\n\n6. Copy I added or changed, with 'Sign&Grow' kept for the rename pass:\n   - sessionWords, on /security and in Settings;\n   - Settings: 'Signed out by itself on <date>', the two-step line, and the message after 'Sign out everywhere else';\n   - finishUnknown and finishNotSent;\n   - twoFingers;\n   - the JPEG refusal;\n   - SIGNING_WEAK_SIGNAL on /help;\n   - the stacked-form owner email and the template and form refusals;\n   - the /developers and openapi photo sentence;\n   - README rows.\n\nNot mine, seen in passing:\n- gaps-nonus-words:833 fails, as described under the suite.\n- The dev server and the test suite were broken several times for a few minutes by half-finished edits in routes-signin.ts (linkProvider), openapi.ts, logic.ts and routes-billing.ts.\n- tsconfig.json has .next-repair-logic lines that another engineer's dev server added. My .next-repair-mobile lines were already there before my server started.\n- My dev server is stopped, and .next-repair-mobile and my dev data are deleted.",
+  "settings": [
+   "No new environment settings. .env.example and the README config table are unchanged.",
+   "New constant SESSION_MAX_DAYS = 30 in src/lib/policy.ts (the owner's decision). sessionWords() builds the sentence from SESSION_DAYS and SESSION_MAX_DAYS.",
+   "Changed constant JPEG_MAX_PIXELS: 50,000,000 to 13,000,000.",
+   "New database columns: sessions.unlock_tries (INTEGER NOT NULL DEFAULT 0) and powerforms.stacked_told_at (TEXT)."
+  ],
+  "abuse_and_stuck": [
+   "Abuse, unlock: 40 tries sent at once from the browser console get 5 password checks, and the browser is signed out (test 1).",
+   "Abuse, unlock: the right password sent after 5 wrong ones is refused without being checked, so the lock is shut for everyone (test 2).",
+   "Abuse, unlock: opening the signing page again does not reset the tries, and one address gets at most 30 tries in 15 minutes across all devices (tests 3 and 4).",
+   "Stuck, unlock: a host who gets the password right on the fifth try is let in (test 3). A host who used up the tries signs in again from the sign-in page (existing test). A double tap of the right password gets not_locked, which the lock screen treats as unlocked.",
+   "Abuse, session: a copied cookie used every 29 days dies 30 days after sign-in (test 5). A row that slid past 30 days before the rule is refused, unlisted and shows no lock screen (test 6). A row without a sign-in time never slides (test 7).",
+   "Stuck, session: a weekly user is asked to sign in once a month. Settings shows the day it will happen, and /security says so. Left open: unsaved editor work at the moment the session ends is not specially protected.",
+   "Abuse, Finish: a second Finish never signs twice (409 already_finished). The form-wait refusal is not sent again every 15 s, so it cannot hammer the server (test 'our own 503'; browser: 1 request in 47 s).",
+   "Stuck, Finish: a lost answer leads to the done screen (c-lost). Lost answer with no signal gives the 'cannot tell yet' words, then the done screen (c-lost2). A 5xx after the claim asks the server first. A public form with no signature free says it will email the visitor.",
+   "Abuse, pad: a two-finger pinch, a second finger landing in the middle of a line, and a stuck pointer all leave no signature behind (test 'two fingers').",
+   "Stuck, pad: a pen with a resting palm keeps its line. One finger still draws and is adopted (g-adopt). The two-finger words tell the person what to do.",
+   "Abuse, stacked: a form whose template was made stacked lets visitors in and emails its owner at most once a day, not once per visitor. A correction into stacked fields is still refused (test 'templates and public forms').",
+   "Stuck, stacked: a tick box inside a text field is allowed, and both can be tapped (f-zorder probe). An old stacked template cannot be saved until fixed, and the refusal says which person and page.",
+   "Left open, stacked: three tick boxes covering a text field are refused with the 'Two fields ... sit on top of each other' sentence, which is slightly inexact for three fields. Other people's fields are not counted (they are drawn with pointer-events: none).",
+   "Abuse, two-step: a lost phone that was remembered must give the two-step code again after 'Sign out everywhere else'. Another person's remembered devices are untouched (test).",
+   "Abuse, photos: a JPEG over 13 million pixels sent through the API is refused before anything is unpacked (updated gaps-mobile-send test). Left open: an editor user whose browser cannot shrink a large photo is refused too, and is told to make it smaller.",
+   "Stuck, adopt dialog at 422x195 (a phone held sideways at 200 percent): the buttons are on screen, but only 76 of the 90 px drawing box shows above them, and less while an error is shown. Type is the easier way there. Not tested on a real phone."
+  ]
  }
 }

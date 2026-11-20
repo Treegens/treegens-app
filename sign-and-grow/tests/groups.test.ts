@@ -820,3 +820,172 @@ test('the README and the help page say what groups do, and no page says they do 
   assert.match(help, /<QA id="group-taken"/);
   for (const f of ['src/app/page.tsx', 'src/app/help/page.tsx', 'src/app/security/page.tsx', 'src/app/developers/page.tsx']) assert.doesNotMatch(read(f), /no (signing|recipient) groups|groups are not/i, f);
 });
+
+// ---- Repairs after the skeptic's report (research/verify-new.json, "verify:groups") ----------------------------------
+
+const MAIL_SECRET = 'groups-repair-mail-events-secret';
+// News from the mail provider, in the plain shape (type and address), as the bounce test above sends it.
+async function mailEvent(body: any) {
+  const was = process.env.MAIL_EVENTS_TOKEN;
+  process.env.MAIL_EVENTS_TOKEN = MAIL_SECRET;
+  try {
+    const { handle } = await import('../src/server/router.ts');
+    const res = await handle(new Request(`http://test.local/api/mail/events?token=${MAIL_SECRET}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.21' }, body: JSON.stringify(body) }));
+    assert.equal(res.status, 200, await res.text());
+  } finally {
+    if (was === undefined) delete process.env.MAIL_EVENTS_TOKEN;
+    else process.env.MAIL_EVENTS_TOKEN = was;
+  }
+}
+const reminders = (to: string) => subjects(to).filter((x: string) => /^Reminder/.test(x)).length;
+const senderMail = (envelopeId: string) => db.get('SELECT u.email FROM users u JOIN envelopes e ON e.sender_id=u.id WHERE e.id=?', envelopeId).email;
+const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+const codeFor = (to: string) => /(\d{6}) is your code/.exec(mailTo(to).filter((m: any) => m.subject === 'Your code to get our emails again').pop()?.html || '')?.[1] || '';
+
+test('repair: a member who marks our email as spam is emailed nothing more, the sender is told exactly that, and only the member can undo it', async () => {
+  const { c, e, maya, ben, cy } = await setup('spam');
+  await send(c, e.id);
+  await mailEvent({ type: 'complaint', email: ben });
+  // The sender is told who it was, that it is a member of the group, and that the others are not affected.
+  const told = mailTo(senderMail(e.id)).filter((m: any) => m.subject === 'Marked as spam: Staff handbook');
+  assert.equal(told.length, 1);
+  const said = text(told[0].html);
+  assert.match(said, /Ben Ortiz <ben\.[^>]+>, a member of HR team, marked the email "Staff handbook" as spam/);
+  assert.match(said, /The other members of HR team are not affected/);
+  assert.match(said, /Only Ben Ortiz can undo that/);
+  // And it is true: a reminder to the group skips Ben, and the answer says so.
+  const rid = row(e.id).id;
+  const asked = ok(await c.post(`/envelopes/${e.id}/remind`, { recipient_id: rid }));
+  assert.deepEqual([reminders(maya), reminders(ben), reminders(cy)], [1, 0, 1]);
+  assert.deepEqual(asked.not_reminded.map((x: any) => [x.name, x.why]), [['Ben Ortiz', 'marked_as_spam']]);
+  const all = ok(await c.post(`/envelopes/${e.id}/remind`, {}));
+  assert.deepEqual(all.not_reminded.map((x: any) => [x.name, x.why]), [['Ben Ortiz', 'marked_as_spam']]);
+  assert.equal(reminders(ben), 0);
+  // The envelope page says it next to Ben.
+  assert.equal((await fresh(c, e.id)).recipients[0].members.find((m: any) => m.email === ben).mail_stop, 'complaint');
+  // Ben's own page says so and offers the way back, which works with a code sent to Ben's address.
+  const benLink = linkOf(e.id, ben);
+  const page = await view(benLink);
+  assert.equal(page.recipient.mail_stopped, true);
+  assert.equal(page.recipient.mail_stopped_why, 'complaint');
+  const b = from();
+  assert.equal(ok(await b.post(`/sign/${benLink}/mail-again`)).code_sent, true);
+  // A code sent to Ben's mailbox does not start the emails of another member who marked ours as spam.
+  await mailEvent({ type: 'complaint', email: cy });
+  const cyLink = linkOf(e.id, cy);
+  ok(await from().post(`/sign/${cyLink}/mail-again`));
+  assert.equal((await from().post(`/sign/${cyLink}/mail-again`, { code: codeFor(ben) })).status, 400, 'Ben\'s code does not work on Cy\'s link');
+  assert.equal(ok(await b.post(`/sign/${benLink}/mail-again`, { code: codeFor(ben) })).changed, true);
+  assert.equal((await view(benLink)).recipient.mail_stopped, false);
+  ok(await c.post(`/envelopes/${e.id}/remind`, { recipient_id: rid }));
+  assert.equal(reminders(ben), 1, 'Ben is reminded again once he asked for it');
+  assert.equal(reminders(cy), 2, 'Cy marked ours as spam after the first two reminders and gets no third');
+});
+
+test('repair: the member who had it marks it as spam and hands it back: no reminders, notices or copies to her as a member either', async () => {
+  const { c, e, maya, ben, cy } = await setup('spamHolder');
+  await send(c, e.id);
+  ok(await agree(linkOf(e.id, maya)));
+  await mailEvent({ type: 'complaint', email: maya });
+  assert.ok(row(e.id).complained_at, 'the row Maya has carries the mark');
+  const told = text(mailTo(senderMail(e.id)).filter((m: any) => m.subject === 'Marked as spam: Staff handbook')[0].html);
+  assert.match(told, /Maya Lopez had taken this on for HR team\. If it goes back to the group, Maya Lopez still gets no emails from us about it/);
+  ok(await from().post(`/sign/${linkOf(e.id, maya)}/hand-back`, {}));
+  assert.equal(row(e.id).complained_at, null, 'the group row has no address and no mark of its own again');
+  ok(await c.post(`/envelopes/${e.id}/remind`, { recipient_id: row(e.id).id }));
+  assert.deepEqual([reminders(maya), reminders(ben), reminders(cy)], [0, 1, 1], 'Maya, a member again, is not reminded');
+  // Her member link shows the mark and lets her undo it.
+  const page = await view(linkOf(e.id, maya));
+  assert.equal(page.recipient.group.state, 'open');
+  assert.equal(page.recipient.mail_stopped, true);
+  assert.equal(ok(await from().post(`/sign/${linkOf(e.id, maya)}/mail-again`)).code_sent, true);
+  // The sender gives it back after Ben took it on: the notice that it is with the group again skips Maya, in words.
+  ok(await agree(linkOf(e.id, ben)));
+  const before = subjects(maya).length;
+  ok(await c.post(`/envelopes/${e.id}/recipients/${row(e.id).id}/release`, {}));
+  assert.equal(subjects(maya).length, before, 'no "Back with HR team" to Maya');
+  assert.ok(subjects(cy).includes('Back with HR team: Staff handbook'));
+  assert.ok(trail(e.id).some((a: any) => a.action === 'Not emailed' && /Maya Lopez <[^>]+>, of HR team, marked an earlier email from this account as spam\. So that the document is with the group again was not emailed to them/.test(a.detail)));
+  // A new envelope to the same group: Maya gets nothing, and the record says why.
+  const e2 = await groupDraft(c, (await fresh(c, e.id)).recipients[0].group_id);
+  await send(c, e2.id);
+  assert.equal(mailTo(maya).filter((m: any) => m.subject === 'Staff handbook').length, 1, 'only the first envelope reached Maya');
+  assert.ok(trail(e2.id).some((a: any) => a.action === 'Not emailed' && /^Maya Lopez/.test(a.detail)));
+});
+
+test('repair: a member who reports the document is emailed nothing more about it, is told so, and the others are not affected', async () => {
+  const { c, e, maya, ben, cy } = await setup('report');
+  await send(c, e.id);
+  const benLink = linkOf(e.id, ben);
+  const rep = ok(await from().post(`/sign/${benLink}/report`, { reason: 'spam' }));
+  assert.equal(rep.mail_stopped, true, 'the answer says so, and the dialog tells them');
+  assert.ok(trail(e.id).some((a: any) => a.action === 'Emails stopped' && /Ben Ortiz <[^>]+>, of HR team, reported this document, so nothing more is emailed to them about it/.test(a.detail)));
+  const asked = ok(await c.post(`/envelopes/${e.id}/remind`, { recipient_id: row(e.id).id }));
+  assert.deepEqual([reminders(maya), reminders(ben), reminders(cy)], [1, 0, 1]);
+  assert.deepEqual(asked.not_reminded.map((x: any) => [x.name, x.why]), [['Ben Ortiz', 'reported']]);
+  assert.equal((await fresh(c, e.id)).recipients[0].members.find((m: any) => m.email === ben).mail_stop, 'report');
+  const page = await view(benLink);
+  assert.equal(page.recipient.mail_stopped_why, 'report');
+  // Cy reports it with the security code of his email: the same.
+  const code = db.get('SELECT check_code FROM recipient_members WHERE envelope_id=? AND email=?', e.id, cy).check_code;
+  assert.equal(ok(await from().post('/public/check/report', { code, reason: 'phishing' })).mail_stopped, true);
+  // Maya declines: the others are told, except the two who reported it, and the record says why.
+  ok(await from().post(`/sign/${linkOf(e.id, maya)}/decline`, { reason: 'Wrong year in the handbook' }));
+  assert.equal(subjects(ben).filter((x: string) => x.startsWith('Declined')).length, 0);
+  assert.equal(subjects(cy).filter((x: string) => x.startsWith('Declined')).length, 0);
+  assert.ok(trail(e.id).some((a: any) => a.action === 'Not emailed' && /Ben Ortiz <[^>]+>, of HR team, reported this document; Cy Tan/.test(a.detail)));
+  // The way back, also for a report: a code to their own address.
+  const b = from();
+  ok(await b.post(`/sign/${benLink}/mail-again`));
+  assert.match(text(mailTo(ben).filter((m: any) => m.subject === 'Your code to get our emails again')[0].html), /You had reported this document, so we had stopped/);
+  assert.equal(ok(await b.post(`/sign/${benLink}/mail-again`, { code: codeFor(ben) })).changed, true);
+  assert.equal(db.get('SELECT reported_at FROM recipient_members WHERE envelope_id=? AND email=?', e.id, ben).reported_at, null);
+});
+
+test('repair: the member who has it reports it: no reminder, and the sender is told why in words', async () => {
+  const { c, e, maya } = await setup('reportHolder');
+  await send(c, e.id);
+  const link = linkOf(e.id, maya);
+  ok(await agree(link));
+  assert.equal(ok(await from().post(`/sign/${link}/report`, { reason: 'phishing' })).mail_stopped, true);
+  const before = reminders(maya);
+  const r = await c.post(`/envelopes/${e.id}/remind`, { recipient_id: row(e.id).id });
+  assert.equal(r.status, 409);
+  assert.equal(r.data.code, 'reported');
+  assert.match(r.data.error, /Maya Lopez reported this document, so we do not email them about it\. Only they can change that/);
+  const all = ok(await c.post(`/envelopes/${e.id}/remind`, {}));
+  assert.deepEqual(all.not_reminded.map((x: any) => [x.name, x.why]), [['Maya Lopez', 'reported']]);
+  assert.equal(reminders(maya), before);
+  // Her page says so, and the screen words are in the shared toast text.
+  assert.equal((await view(link)).recipient.mail_stopped_why, 'report');
+  assert.match(read('src/components/sender/MailNews.tsx'), /they reported this document/);
+  assert.match(read('src/components/sign/MailAgain.tsx'), /You reported it, so we stopped/);
+});
+
+test('repair: a member of a copy group who marked our email as spam gets no completed copy, and the record says so; the timer does not remind them either', async () => {
+  const c = await person('Sender ccspam', `sender.ccspam.${++g}@example.com`);
+  const members = three('ccspam');
+  const grp = await makeGroup(c, members, 'Policy readers');
+  const file = await upload(c, 1);
+  const pat = `pat.ccspam.${++g}@example.com`;
+  const e = ok(await c.post('/envelopes', { subject: 'Policy', send: true, documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'p', role: 'signer', name: 'Pat Person', email: pat }, { id: 'g', role: 'cc', group_id: grp.id }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'p', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).envelope;
+  await mailEvent({ type: 'complaint', email: members[1].email });
+  const patLink = db.get('SELECT token FROM recipients WHERE envelope_id=? AND email=?', e.id, pat).token;
+  ok(await agree(patLink));
+  ok(await finish(patLink));
+  assert.ok(subjects(members[0].email).includes('Completed: Policy'));
+  assert.ok(!subjects(members[1].email).includes('Completed: Policy'), 'no copy to the member who marked ours as spam');
+  assert.ok(trail(e.id).some((a: any) => a.action === 'Copy not emailed' && /^Ben Ortiz/.test(a.detail)));
+
+  // The timer's reminder to a group nobody has taken on skips such a member too.
+  const s2 = await setup('spamTimer', { reminder_days: 1 });
+  await send(s2.c, s2.e.id);
+  await mailEvent({ type: 'complaint', email: s2.ben });
+  db.run('UPDATE recipients SET sent_at=? WHERE envelope_id=?', new Date(Date.now() - 2 * 864e5).toISOString(), s2.e.id);
+  db.run('UPDATE envelopes SET sent_at=?, last_reminder_at=NULL WHERE id=?', new Date(Date.now() - 2 * 864e5).toISOString(), s2.e.id);
+  await s.cron.tick();
+  assert.equal(reminders(s2.ben), 0);
+  assert.ok(reminders(s2.maya) >= 1, 'the others are reminded by the timer');
+});

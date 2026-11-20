@@ -340,6 +340,18 @@ test('a sign-in on a remembered device stops a reset under way, and says so (pro
   assert.equal(user(id).two_step_reset_stopped_at, null, 'a sign-in with the second step leaves no wait');
 });
 
+test('a lost phone that is still signed in can be put out with "Forgot password", and the reset goes on', async () => {
+  const { c: phone, email, id } = await person('Lia Lost');
+  await switchOn(phone);
+  await startReset(email);
+  // Whoever has the phone could press Stop. The owner chooses a new password by email first, as the words advise.
+  assert.match(TWO_STEP_LOST.join(' '), /choose a new password first with "Forgot password" on the sign-in page: that signs out every browser/);
+  await browser().post('/auth/forgot', { email });
+  await browser().post('/auth/reset', { token: tokenOf(mailTo(email).filter((m) => /Reset your Sign&Grow password/.test(m.subject)).at(-1)), password: 'owner new password' });
+  assert.equal((await phone.post('/me/two-step/reset/stop')).status, 401, 'the phone is signed out and cannot stop it');
+  assert.ok(user(id).two_step_reset_at, 'the reset is still under way');
+});
+
 test('a password change while signed in stops a reset under way', async () => {
   const { c, email, id } = await person('Pat Password');
   const { secret } = await switchOn(c);
@@ -612,6 +624,24 @@ test('a team that requires two-step login still lets a member see and end their 
   assert.equal((await m.c.get('/me/sessions')).status, 200);
   const del = await m.c.post('/me/delete', {});
   assert.notEqual(del.data.code, 'two_step_setup');
+});
+
+test('a member of a team that requires it, with an unconfirmed address, is told to confirm and can have the link sent again', async () => {
+  const boss = await person('Uli Upper');
+  const bs = await switchOn(boss.c);
+  const acc = db.get("SELECT account_id a FROM memberships WHERE user_id=? AND role='owner'", boss.id).a;
+  const v = await unconfirmed('Ned New', `ned.${n++}@example.com`);
+  db.run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'member',?)", acc, v.id, iso(Date.now()));
+  await v.c.post('/auth/switch', { account_id: acc });
+  await boss.c.post('/account/two-step', { required: true, code: code(bs.secret) });
+  assert.equal((await v.c.get('/me')).data.two_step.setup_required, true);
+  assert.equal((await v.c.post('/me/two-step/setup', { password: PW })).data.code, 'confirm_first');
+  const before = mailTo(v.email).length;
+  assert.equal((await v.c.post('/auth/resend-verification', {})).status, 200, 'open while the team requires two-step login');
+  assert.equal(mailTo(v.email).length, before + 1);
+  // The screen that hides the rest of the app offers it, because the banner that usually does is hidden too.
+  const src = fs.readFileSync(new URL('../src/components/TwoStep.tsx', import.meta.url), 'utf8');
+  assert.match(src.slice(src.indexOf('export function TwoStepRequired')), /!me\.user\.email_verified[\s\S]*Send the link again/);
 });
 
 test('disagree: a mistyped password on a login without two-step login is still said to be wrong at once (probe K)', async () => {

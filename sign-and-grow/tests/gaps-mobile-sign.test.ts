@@ -286,8 +286,10 @@ test('a Finish sent again after its answer was lost signs once, uses one signatu
   assert.match(again.data.error, /already finished/, 'the words the page reads to show the done screen instead of an error');
   assert.equal(used(), 1);
   assert.equal((await phone.get(`/sign/${tok}`)).data.recipient.status, 'completed');
-  // The page reads exactly that answer as "it went through after all".
-  assert.match(signPage(), /\/no longer open\|already finished\|not your turn\/i\.test\(msg\)/);
+  // The page reads that answer as "it went through after all", by its code, and no longer as a red toast
+  // (changed in tests/mobile-repair.test.ts after a skeptic saw the toast over the done screen).
+  assert.equal(again.data.code, 'already_finished');
+  assert.match(signPage(), /if \(isAlreadyFinished\(e\)\) \{/);
 });
 
 test('the landing page, the in-person notice and /help say that signing needs a connection to open and to finish', () => {

@@ -127,7 +127,7 @@ export default function SignPage() {
   const who = useRef<string | null>(null);
   const stageRef = useRef('loading');
   // This person's questions that nobody has answered yet: mentioned when they press Finish, never in the way of it.
-  const questions = useMyQuestions(base, !!data?.fields && open !== 'ask');
+  const questions = useMyQuestions(base, !!data?.fields && open !== 'ask', open === 'review');
 
   const load = useCallback(async () => {
     try {
@@ -608,7 +608,7 @@ export default function SignPage() {
   const report = <button type="button" className="sg-link" onClick={() => setOpen('report')}>Report this request</button>;
   const downloadUrl = `/api${base}/download`;
   // MailAgain: they marked our email as spam, so we email them nothing more about this, and only they can undo it.
-  const notice = <><MailAgain base={base} stopped={!!me.mail_stopped} />{muteNote === 'done' ? (
+  const notice = <><MailAgain base={base} stopped={!!me.mail_stopped} why={me.mail_stopped_why} />{muteNote === 'done' ? (
     <div className="notice sg-top" role="status">
       <b>Reminders are off.</b> We will not send you any more reminder emails about this document.{stillOpen ? ` You can still ${acts ? 'sign' : 'open'} it here whenever you are ready.` : ''}
     </div>

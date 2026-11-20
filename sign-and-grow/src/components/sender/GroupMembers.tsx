@@ -58,11 +58,13 @@ export function GroupMembers({ e, r, deliveries, onChanged }: { e: any; r: any; 
     }
   }
   const emailOf = (m: any) => deliveries.find((d) => d.recipient_id === r.id && d.to_email.toLowerCase() === m.email.toLowerCase()) || null;
+  // A member who marked our email as spam or reported the document is emailed nothing more about it (groups.ts).
+  const stop = (m: any) => (m.mail_stop === 'complaint' ? ' Marked our email as spam, so we email them nothing more about it. Only they can undo that.' : m.mail_stop === 'report' ? ' Reported this document, so we email them nothing more about it. Only they can undo that.' : '');
   const fact = (m: any) => {
-    if (m.id === r.claimed_by) return r.status === 'completed' ? `${r.role === 'cc' ? 'Read' : 'Acted'} for the group.` : `Has taken it on${r.claimed_at ? ` since ${dayTime(r.claimed_at)}` : ''}.`;
+    if (m.id === r.claimed_by) return `${r.status === 'completed' ? `${r.role === 'cc' ? 'Read' : 'Acted'} for the group.` : `Has taken it on${r.claimed_at ? ` since ${dayTime(r.claimed_at)}` : ''}.`}${stop(m)}`;
     const d = emailOf(m);
     const mail = !m.sent_at ? (r.status === 'pending' ? 'Emailed when it is the group\'s turn.' : 'Not emailed.') : d?.bounced_at ? 'The email came back. Fix the address with Edit envelope.' : d?.status === 'outbox' ? 'No email went out: no mail server is set up. Copy their link.' : d?.status === 'failed' ? 'The email has not gone out yet.' : 'Emailed.';
-    return `${mail}${m.viewed_at ? ` Opened on ${dayTime(m.viewed_at)}.` : ''}${m.muted ? ' Turned off reminders.' : ''}`;
+    return `${m.mail_stop && !m.sent_at ? 'Not emailed.' : mail}${m.viewed_at ? ` Opened on ${dayTime(m.viewed_at)}.` : ''}${m.muted ? ' Turned off reminders.' : ''}${stop(m)}`;
   };
 
   return (
@@ -101,12 +103,13 @@ export function GroupMembers({ e, r, deliveries, onChanged }: { e: any; r: any; 
       {releasing && (
         <ConfirmDialog title={`Give back to ${r.group_name}`} confirmLabel="Give it back" keepLabel={`Leave it with ${r.name}`} danger={false} onClose={() => setReleasing(false)}
           onConfirm={async () => {
-            await api(`/envelopes/${e.id}/recipients/${r.id}/release`, { body: {} });
-            toast(`Given back to ${r.group_name}. Every member was emailed their link.`);
+            // The server says what became of the emails: none go out while sending is paused, for example.
+            const x = await api(`/envelopes/${e.id}/recipients/${r.id}/release`, { body: {} });
+            toast(`Given back to ${r.group_name}. ${x?.told || ''}`.trim(), !x?.emailed && !!x?.not_emailed);
             setReleasing(false);
             onChanged();
           }}>
-          <p>{r.name} has taken this on and has not finished. If you give it back, every member of {r.group_name} can take it on again, and they are emailed. What {r.name} filled in so far is cleared.</p>
+          <p>{r.name} has taken this on and has not finished. If you give it back, every member of {r.group_name} can take it on again, and we email them their links, unless our emails are held back for this envelope (we tell you if so). What {r.name} filled in so far is cleared.</p>
         </ConfirmDialog>
       )}
     </div>

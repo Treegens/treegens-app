@@ -19,9 +19,8 @@ route('DELETE', '/groups/:id', (c) => void deleteGroup(c.account.id, c.params.id
 
 // ---- The sender: give a group's document back to the whole group -----------------------------------------------
 
-route('POST', '/envelopes/:id/recipients/:rid/release', async (c) => {
-  await releaseGroup(mine(c, c.params.id, 'envelope'), c.params.rid, c.actor);
-});
+// Answers how many members were emailed, and a sentence that says so, for the screen to show as it is.
+route('POST', '/envelopes/:id/recipients/:rid/release', async (c) => releaseGroup(mine(c, c.params.id, 'envelope'), c.params.rid, c.actor));
 
 // ---- A member, through their own link ------------------------------------------------------------------------
 

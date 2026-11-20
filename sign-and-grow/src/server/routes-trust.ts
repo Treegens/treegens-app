@@ -14,10 +14,12 @@ import { unpaidDailyRecipients, PAID_TRUST_DAYS } from '../lib/policy.ts';
 import { advance, emailRefusal, hasNotPaid, dailyCap, PAUSED_MEANS } from './envelopes.ts';
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
-import { memberForCode } from './groups.ts';
+import { memberForCode, memberReported } from './groups.ts';
 import { forgetChosen } from './tplroles.ts';
+import { dropPayLinksOf } from './paydrop.ts';
 import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
 import { commentsText } from './comments.ts';
+import { forgetCommentHooks } from './commentrules.ts';
 import { attachedFiles, forgetClickwraps } from './clickwrap.ts';
 import { rememberGoneMail } from './bounces.ts';
 import { stampExport, pruneStampImages } from './stamps.ts';
@@ -98,7 +100,8 @@ route('POST', '/public/check/report', async (c) => {
   }
   if (!who) throw bad('We do not recognise that security code, so we cannot tell which email you mean. Use the contact form on the help page and tell us what the email says.', 404);
   await reportAbuse(e, who, b, { name: `${who.name} <${who.email}>`, ip: c.ip, ua: c.ua });
-  return { ok: true };
+  // A member of a signing group who reports it is emailed nothing more about it, and is told so (groups.ts).
+  return memberReported(e, who, { name: `${who.name} <${who.email}>`, ip: c.ip, ua: c.ua }) || { ok: true };
 }, 'public');
 
 // ---- Lost or replaced links ----------------------------------------------------------------
@@ -255,6 +258,8 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
       run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at, account_id, reported, via_form) VALUES (?,?,?,?,?)', sha256(r.c), now(), owner,
         r.to_email && get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', eid, r.to_email) ? 1 : 0, visitor && r.rid === visitor ? 1 : 0);
     run('DELETE FROM audit WHERE envelope_id=?', eid);
+    // What was written in the comments, and by whom, also leaves the webhook log (commentrules.ts).
+    forgetCommentHooks(eid);
     // News from the mail provider about these emails (a spam complaint) still counts against the account (bounces.ts).
     if (owner) rememberGoneMail(eid, owner);
     run(`DELETE FROM emails WHERE envelope_id=?${account ? '' : ` AND ${NOT_WAITING}`}`, eid);
@@ -272,6 +277,8 @@ const NOT_WAITING = "status!='queued' AND NOT (status='failed' AND next_try_at I
 // how many envelopes moved.
 export function handOver(accountId: string, from: { id: string; name: string; email: string }, toId: string, actor: Actor, why: string): number {
   const to = get('SELECT name, email FROM users WHERE id=?', toId);
+  // Their payment links lead to their own payment page, so those go with them and are not handed on (paydrop.ts).
+  dropPayLinksOf(accountId, from, actor, why);
   const moved = all('SELECT id FROM envelopes WHERE account_id=? AND sender_id=?', accountId, from.id);
   for (const e of moved) audit(e.id, actor, 'Handed over', `From ${from.name} <${from.email}> to ${to.name} <${to.email}>: ${why}`);
   run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', toId, accountId, from.id);

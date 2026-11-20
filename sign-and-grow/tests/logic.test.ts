@@ -687,3 +687,273 @@ test('on the signing page a field that appears or goes is said once, its answer 
   assert.deepEqual(unticked.clear, { name: '' });
   assert.equal(unticked.came, null);
 });
+
+// ---- Repairs after the skeptic's report (research/verify-new.json, "verify:logic") ------------------------------
+
+// Page 1 of a PDF: how many pictures are drawn on it (signatures and initials), and its words.
+async function pageOne(pdf: Uint8Array): Promise<{ images: number; text: string }> {
+  const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(pdf), verbosity: 0, isEvalSupported: false, disableFontFace: true, useSystemFonts: false }).promise;
+  try {
+    const page = await doc.getPage(1);
+    const images = (await page.getOperatorList()).fnArray.filter((fn: number) => fn === pdfjs.OPS.paintImageXObject).length;
+    return { images, text: (await page.getTextContent()).items.map((x: any) => x.str).join(' ') };
+  } finally {
+    await doc.destroy().catch(() => {});
+  }
+}
+const at = (y: number, extra: any) => ({ document_id: 'd', page: 0, x: 0.1, y, w: 0.25, h: 0.04, ...extra });
+
+test('a calculated result with three decimals stays that number: on the PDF, in the sender\'s counts and in the next person\'s formula', async () => {
+  // Owner's decision: a stored calculated value reads back as the same number in every notation.
+  const { canonOf } = await import('../src/lib/logic.ts');
+  const r1 = calc('{q} * {p}', { q: '3', p: '0.411' });
+  assert.deepEqual([r1.text, r1.canon, r1.value], ['1.233', '1.233', 1.233]);
+  const r2 = calc('{q} * {p}', { q: '1,5', p: '0,822' });
+  assert.deepEqual([r2.text, r2.canon], ['1,233', '1.233'], 'shown with a comma, kept plainly');
+  assert.equal(calc('round({q}, 3)', { q: '2.4689' }).canon, '2.469');
+  assert.equal(canonOf({ value: '1,233', calc_num: '1.233' }), 1.233);
+  assert.equal(canonOf({ value: null, calc_num: '1.233' }), null, 'a view that blanks the value blanks its number');
+  // Read back as stored, by the next formula and by a rule, in both notations, also the comma kept for the result.
+  for (const [text, num, want] of [['1.233', '1.233', '2.466'], ['1,233', '1.233', '2,466']]) {
+    const o = workOut([
+      F('t', 'number', { recipient_id: 'ann', formula: '{a} * {b}', value: text, calc_num: num }),
+      F('g', 'number', { recipient_id: 'ben', formula: '{t} * 2' }),
+      F('small', 'text', { recipient_id: 'ben', show_when: { field: 'g', is: 'less_than', value: '1000' } }),
+    ], { stored: (f) => f.recipient_id === 'ann' });
+    assert.equal(o.calc.get('g')!.text, want, `${text} is read as ${num}`);
+    assert.ok(!o.hidden.has('small'));
+  }
+  const mixed = evaluate(parseFormula('{t} * {d}'), (id) => (id === 't' ? { num: 1.233, text: '1,233' } : { text: '1.234' }), (id) => id);
+  assert.equal(mixed.value, 1521.522, 'the comma of a calculated input says how a lone 1.234 typed next to it is meant');
+  assert.equal(mixed.text, '1521,522');
+
+  const s = await person('Fern Fuel', 'fern@logic.example');
+  const file = await upload(s, 1);
+  const e = (await s.post('/envelopes', {
+    subject: 'Fuel order', documents: [{ id: 'd', file_id: file.id }], ordered: true,
+    recipients: [{ id: 'bea', name: 'Bea Buyer', email: 'bea@logic.example', routing_order: 1 }, { id: 'ben', name: 'Ben Booker', email: 'ben.b@logic.example', routing_order: 2 }],
+    fields: [
+      at(0.05, { id: 'l', recipient_id: 'bea', type: 'number', label: 'Litres' }),
+      at(0.12, { id: 'p', recipient_id: 'bea', type: 'number', label: 'Price per litre', readonly: true, value: '0.411' }),
+      at(0.19, { id: 't', recipient_id: 'bea', type: 'number', label: 'Total', formula: '{Litres} * {Price per litre}' }),
+      at(0.26, { id: 's', recipient_id: 'bea', type: 'signature', label: 'Sign for a small order', show_when: { field: 't', is: 'less_than', value: '1000' } }),
+      at(0.33, { id: 'f', recipient_id: 'bea', type: 'text', label: 'Freight terms', readonly: true, value: 'FREIGHT SURCHARGE 250 APPLIES', show_when: { field: 't', is: 'more_than', value: '1000' } }),
+      at(0.45, { id: 'n', recipient_id: 'ben', type: 'number', label: 'Deliveries' }),
+      at(0.52, { id: 'g', recipient_id: 'ben', type: 'number', label: 'Grand total', formula: '{Total} * {Deliveries}' }),
+      at(0.62, { id: 'bs', recipient_id: 'ben', type: 'signature', label: 'Ben signs' }),
+    ],
+  })).data.envelope;
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  const bea = await opened(e.id, 'bea@logic.example');
+  assert.equal((await bea.c.post(`/sign/${bea.tok}/complete`, { values: { ...bea.marks, [bea.id('Litres')!]: '3' }, signature_png: PNG })).status, 200);
+  assert.deepEqual([fieldsOf(e.id).Total.value, fieldsOf(e.id).Total.calc_num], ['1.233', '1.233']);
+  const progress = (await s.get(`/envelopes/${e.id}`)).data.envelope.recipients.find((r: any) => r.name === 'Bea Buyer').progress;
+  assert.equal(progress.required_left, 0, 'the signature she gave is counted as shown, not as hidden by a total of 1233');
+  // The sender saves the envelope again unchanged: the kept result keeps its number.
+  const now = (await s.get(`/envelopes/${e.id}`)).data.envelope;
+  assert.equal((await s.put(`/envelopes/${e.id}`, { fields: now.fields })).status, 200);
+  assert.equal(fieldsOf(e.id).Total.calc_num, '1.233');
+  // Ben's screen is given Bea's total with its number, and works his out the way the server stores it.
+  const ben = await opened(e.id, 'ben.b@logic.example');
+  const input = ben.v.formula_inputs.find((x: any) => x.label === 'Total');
+  assert.deepEqual([input.value, input.num, input.pending], ['1.233', 1.233, false]);
+  assert.equal(ben.v.others.find((x: any) => x.label === 'Total').num, 1.233, 'the fields drawn on his page carry the number too');
+  const { liveLogic } = await import('../src/components/sign/logic.ts');
+  const live = liveLogic(ben.v.fields, ben.v.formula_inputs, { [ben.id('Deliveries')!]: '2' });
+  assert.equal(live.fields.find((f: any) => f.label === 'Grand total').value, '2.466');
+  assert.equal((await ben.c.post(`/sign/${ben.tok}/complete`, { values: { ...ben.marks, [ben.id('Deliveries')!]: '2' }, inputs: ben.v.inputs, signature_png: PNG })).status, 200);
+  assert.equal(fieldsOf(e.id)['Grand total'].value, '2.466', 'not 2466');
+  const look = await pageOne((await s.get(`/envelopes/${e.id}/download`)).data);
+  assert.equal(look.images, 2, "Bea's and Ben's signatures are both printed");
+  assert.match(look.text, /1\.233/);
+  assert.match(look.text, /2\.466/);
+  assert.doesNotMatch(look.text, /FREIGHT SURCHARGE/, 'the wording that was hidden when Bea signed is not printed');
+});
+
+test('nobody finishes as signed without a picture: what is shown at Finish is worked out once, from what is stored', async () => {
+  // Owner's decision: the same result decides what is required and what is printed.
+  const s = await person('Ari Attach', 'ari@logic.example');
+  const file = await upload(s, 1);
+  const e = (await s.post('/envelopes', {
+    documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', name: 'Mal Signer', email: 'mal@logic.example' }],
+    fields: [
+      at(0.1, { id: 'proof', recipient_id: 'r', type: 'attachment', label: 'Signed paper copy', required: false }),
+      at(0.7, { id: 'sig', recipient_id: 'r', type: 'signature', label: 'Sign here', show_when: { field: 'proof', is: 'empty' } }),
+    ],
+  })).data.envelope;
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  const m = await opened(e.id, 'mal@logic.example');
+  // A file id that does not exist is not kept, so the signature stays on the page and needs a picture.
+  let r = await m.c.post(`/sign/${m.tok}/complete`, { values: { [m.id('Signed paper copy')!]: 'file_doesnotexist', [m.id('Sign here')!]: '1' } });
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.match(r.data.error, /Adopt a signature before finishing/);
+  assert.equal(db.get("SELECT status FROM recipients WHERE email='mal@logic.example'").status, 'viewed', 'nothing was signed, the claim was undone');
+  assert.equal(db.all("SELECT 1 FROM audit WHERE envelope_id=? AND action='Signed'", e.id).length, 0);
+  r = await m.c.post(`/sign/${m.tok}/complete`, { values: { [m.id('Signed paper copy')!]: 'file_doesnotexist', [m.id('Sign here')!]: '1' }, signature_png: PNG });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal((await pageOne((await s.get(`/envelopes/${e.id}/download`)).data)).images, 1, 'and the picture is printed');
+
+  // Someone else's saved, unfinished answer does not count either way.
+  const s2 = await person('Bo Both', 'bo@logic.example');
+  const file2 = await upload(s2, 1);
+  const e2 = (await s2.post('/envelopes', {
+    documents: [{ id: 'd', file_id: file2.id }],
+    recipients: [{ id: 'a', name: 'Al Buyer', email: 'al.b@logic.example' }, { id: 'b', name: 'Bi Seller', email: 'bi.s@logic.example' }],
+    fields: [
+      at(0.1, { id: 'q', recipient_id: 'a', type: 'number', label: 'Quantity' }),
+      at(0.2, { id: 't', recipient_id: 'a', type: 'number', label: 'Total', formula: '{Quantity} * {Price}' }),
+      at(0.7, { id: 'sa', recipient_id: 'a', type: 'signature', label: 'Buyer signs (under 1000)', show_when: { field: 't', is: 'less_than', value: '1000' } }),
+      at(0.3, { id: 'p', recipient_id: 'b', type: 'number', label: 'Price' }),
+      at(0.85, { id: 'sb', recipient_id: 'b', type: 'signature' }),
+    ],
+  })).data.envelope;
+  assert.equal((await s2.post(`/envelopes/${e2.id}/send`)).status, 200);
+  const bi = await opened(e2.id, 'bi.s@logic.example');
+  assert.equal((await bi.c.post(`/sign/${bi.tok}/save`, { values: { [bi.id('Price')!]: '437' } })).status, 200);
+  const al = await opened(e2.id, 'al.b@logic.example');
+  assert.deepEqual(al.v.formula_inputs.map((x: any) => [x.label, x.value, x.pending, x.by]), [['Price', null, true, 'Bi Seller']], "Bi's saved price is not given to Al's screen");
+  // Every quantity answers the same, so nothing about Bi's price can be learned from the answers.
+  const said = new Set<string>();
+  for (const q of ['1', '2', '3', '50', '1000']) {
+    r = await al.c.post(`/sign/${al.tok}/complete`, { values: { [al.id('Quantity')!]: q, [al.id('Buyer signs (under 1000)')!]: '1' } });
+    said.add(`${r.status} ${r.data.error}`);
+  }
+  assert.deepEqual([...said], ['400 Adopt a signature before finishing.']);
+  r = await al.c.post(`/sign/${al.tok}/complete`, { values: { [al.id('Quantity')!]: '3', [al.id('Buyer signs (under 1000)')!]: '1' }, signature_png: PNG });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(db.get("SELECT signature_png FROM recipients WHERE email='al.b@logic.example'").signature_png, PNG);
+});
+
+test('when someone else finishes while a screen is open, the total that screen shows is not signed: Finish says so and the page shows the new one', async () => {
+  const s = await person('Tia Timesheet', 'tia@logic.example');
+  const file = await upload(s, 1);
+  const e = (await s.post('/envelopes', {
+    documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'u', name: 'Una Worker', email: 'una.w@logic.example' }, { id: 'v', name: 'Vic Client', email: 'vic.c@logic.example' }],
+    fields: [
+      at(0.1, { id: 'h', recipient_id: 'u', type: 'number', label: 'Hours' }),
+      at(0.2, { id: 'rate', recipient_id: 'v', type: 'number', label: 'Rate' }),
+      at(0.3, { id: 'due', recipient_id: 'v', type: 'number', label: 'Amount due', formula: '{Hours} * {Rate}' }),
+      at(0.4, { id: 'ok', recipient_id: 'v', type: 'text', label: 'Approval reference for amounts over 1000', show_when: { field: 'due', is: 'more_than', value: '1000' } }),
+      at(0.7, { id: 'us', recipient_id: 'u', type: 'signature' }),
+      at(0.8, { id: 'vs', recipient_id: 'v', type: 'signature' }),
+    ],
+  })).data.envelope;
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  const { liveLogic } = await import('../src/components/sign/logic.ts');
+  const vic = await opened(e.id, 'vic.c@logic.example');
+  const rate = vic.id('Rate')!;
+  let live = liveLogic(vic.v.fields, vic.v.formula_inputs, { [rate]: '50' });
+  const due = live.fields.find((f: any) => f.label === 'Amount due');
+  assert.equal(due.value, '0');
+  // The note names every field by its label, and says whose answer it waits for. Never an id.
+  assert.equal(due.calc_note, "Worked out for you from 'Hours' × 'Rate'. With Hours 0, Rate 50, that comes to 0. Empty fields count as 0. 'Hours' counts once Una Worker has finished.");
+  assert.ok(!live.fields.some((f: any) => /Approval/.test(f.label)));
+  const una = await opened(e.id, 'una.w@logic.example');
+  assert.equal((await una.c.post(`/sign/${una.tok}/complete`, { values: { ...una.marks, [una.id('Hours')!]: '40' }, inputs: una.v.inputs, signature_png: PNG })).status, 200);
+  // A page that sends no key (loaded before keys were given) is held to the one the server last gave it.
+  let r = await vic.c.post(`/sign/${vic.tok}/complete`, { values: { ...vic.marks, [rate]: '50' }, signature_png: PNG });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  // Vic presses Finish on the screen he opened before: nothing is signed, and he is told why in words.
+  r = await vic.c.post(`/sign/${vic.tok}/complete`, { values: { ...vic.marks, [rate]: '50' }, inputs: vic.v.inputs, version: vic.v.version, signature_png: PNG });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(r.data.code, 'changed', 'the page loads the document again, as for any change');
+  assert.equal(r.data.why, 'inputs');
+  assert.equal(r.data.error, "Una Worker finished while you had this document open, and what they filled in counts in 'Amount due'. Nothing was signed. It is worked out again below with their answers: look at it before you finish.");
+  assert.equal(db.get("SELECT status FROM recipients WHERE email='vic.c@logic.example'").status, 'viewed');
+  // Loaded again, the page works out what the server will store, and the field that comes with it appears.
+  const again = (await vic.c.get(`/sign/${vic.tok}`)).data;
+  assert.notEqual(again.inputs, vic.v.inputs);
+  live = liveLogic(again.fields, again.formula_inputs, { [rate]: '50' });
+  assert.equal(live.fields.find((f: any) => f.label === 'Amount due').value, '2000');
+  const okId = live.fields.find((f: any) => /Approval/.test(f.label))?.id;
+  assert.ok(okId, 'the approval reference is on the screen now');
+  r = await vic.c.post(`/sign/${vic.tok}/complete`, { values: { ...vic.marks, [rate]: '50', [okId]: 'PO-77' }, inputs: again.inputs, version: again.version, signature_png: PNG });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(fieldsOf(e.id)['Amount due'].value, '2000', 'what he was shown is what is stored and printed');
+  // A caller that was never given a key (no screen) is not held to one, and a screen with no formulas has none.
+  assert.equal(una.v.inputs, null);
+});
+
+test('a number answer written two ways is one answer, so two fields that depend on it may not share a place', async () => {
+  const { stackedFields } = await import('../src/lib/stacked.ts');
+  const qty = { id: 'q', type: 'number', recipient_id: 'r', document_id: 'd', page: 0, x: 0.1, y: 0.1, w: 0.2, h: 0.03 };
+  const word = { id: 'w', type: 'text', recipient_id: 'r', document_id: 'd', page: 0, x: 0.1, y: 0.5, w: 0.2, h: 0.03 };
+  const spot = { recipient_id: 'r', document_id: 'd', page: 0, x: 0.3, y: 0.3, w: 0.3, h: 0.03, type: 'text' };
+  const both = (a: any, b: any) => stackedFields([qty, word, { ...spot, id: 'a', show_when: a }, { ...spot, id: 'b', show_when: b }] as any, [{ id: 'r', name: 'Ada' }], [{ id: 'd', name: 'Doc' }]);
+  assert.equal(both({ field: 'q', is: 'equals', value: '1.000' }, { field: 'q', is: 'equals', value: '1000' }).length, 1, 'a quantity of 1000 shows both');
+  assert.equal(both({ field: 'q', is: 'equals', value: '5' }, { field: 'q', is: 'equals', value: '5.0' }).length, 1);
+  assert.deepEqual(both({ field: 'q', is: 'equals', value: '5' }, { field: 'q', is: 'equals', value: '6' }), []);
+  assert.deepEqual(both({ field: 'q', is: 'equals', value: '1.000' }, { field: 'q', is: 'not_equals', value: '1000' }), [], 'equal and not equal to the same number');
+  assert.deepEqual(both({ field: 'w', is: 'equals', value: '5' }, { field: 'w', is: 'equals', value: '5.0' }), [], 'for words, 5 and 5.0 are two answers');
+});
+
+test('two radio buttons of one group cannot both be chosen, and choosing one takes the other off', async () => {
+  const s = await person('Rae Radio', 'rae@logic.example');
+  const file = await upload(s, 1);
+  const e = (await s.post('/envelopes', {
+    documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', name: 'Ro Reader', email: 'ro@logic.example' }],
+    fields: [
+      at(0.1, { id: 'a', recipient_id: 'r', type: 'radio', label: 'Monthly', group_name: 'Billing', required: false, w: 0.03, h: 0.02 }),
+      at(0.15, { id: 'b', recipient_id: 'r', type: 'radio', label: 'Yearly', group_name: 'Billing', required: false, w: 0.03, h: 0.02 }),
+      at(0.3, { id: 'yt', recipient_id: 'r', type: 'text', label: 'Yearly terms', show_when: { field: 'b', is: 'checked' } }),
+      at(0.4, { id: 'mt', recipient_id: 'r', type: 'text', label: 'Monthly terms', show_when: { field: 'a', is: 'checked' } }),
+      at(0.8, { id: 'sig', recipient_id: 'r', type: 'signature' }),
+    ],
+  })).data.envelope;
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  const ro = await opened(e.id, 'ro@logic.example');
+  const both = { [ro.id('Monthly')!]: '1', [ro.id('Yearly')!]: '1', [ro.id('Monthly terms')!]: 'M', [ro.id('Yearly terms')!]: 'Y' };
+  let r = await ro.c.post(`/sign/${ro.tok}/complete`, { values: { ...ro.marks, ...both }, signature_png: PNG });
+  assert.equal(r.status, 400);
+  assert.equal(r.data.error, 'Only one option can be chosen for Billing, and 2 were chosen: Monthly, Yearly. Choose one and try again. Nothing was saved.');
+  assert.equal((await ro.c.post(`/sign/${ro.tok}/save`, { values: both })).status, 400, 'a save is refused the same way');
+  assert.equal((await ro.c.post(`/sign/${ro.tok}/save`, { values: { [ro.id('Monthly')!]: '1', [ro.id('Monthly terms')!]: 'M' } })).status, 200);
+  // A later save names only Yearly: Monthly goes off, and so do its terms.
+  assert.equal((await ro.c.post(`/sign/${ro.tok}/save`, { values: { [ro.id('Yearly')!]: '1', [ro.id('Yearly terms')!]: 'Y' } })).status, 200);
+  const f = fieldsOf(e.id);
+  assert.deepEqual([f.Monthly.value, f.Yearly.value, f['Monthly terms'].value, f['Yearly terms'].value], [null, '1', null, 'Y']);
+});
+
+test('a very long line of fields that depend on each other is refused in words, and never runs the stack out', async () => {
+  const { longestChain, MAX_CHAIN } = await import('../src/lib/logic.ts');
+  const line = (n: number) => Array.from({ length: n }, (_, i) => F(`n${i}`, 'number', { label: `N${i}`, formula: i < n - 1 ? `{n${i + 1}} + 1` : null }));
+  assert.deepEqual(longestChain(line(5000)), { id: 'n0', length: 5000 });
+  assert.deepEqual(loopsIn(line(5000)), [], 'walked without calling itself');
+  const legacy = workOut(line(3000));
+  assert.match(legacy.calc.get('n0')!.error!, /cannot be worked out/, 'saved before the limit: not worked out, and no crash');
+  const s = await person('Cha Chain', 'cha@logic.example');
+  const file = await upload(s, 1);
+  const make = (n: number) => s.post('/envelopes', {
+    documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', name: 'Rae', email: `rae${n}@logic.example` }],
+    fields: [...line(n).map((f: any, i: number) => ({ ...f, recipient_id: 'r', document_id: 'd', page: 0, x: (i % 40) / 41, y: Math.floor(i / 40) / (n / 40 + 2), w: 0.006, h: 0.006, required: false })),
+      { id: 'sig', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.5, y: 0.95, w: 0.2, h: 0.04 }],
+  });
+  let r = await make(1500);
+  assert.equal(r.status, 400, JSON.stringify(r.data).slice(0, 300));
+  assert.equal(r.data.code, 'logic_chain');
+  assert.match(r.data.error, /^'N0' depends on a line of 1499 other fields/);
+  assert.match(r.data.error, /depends on a line of 1499 other fields.*at most 100 fields can depend on each other in one line.*sum\(\{Line 1\}, \{Line 2\}\)\. Nothing was saved\.$/);
+  r = await make(MAX_CHAIN);
+  assert.equal(r.status, 200, JSON.stringify(r.data).slice(0, 300));
+});
+
+test('numbers too long for a formula, a result that rounds up past the limit, digits of every script, and a rule value with a space', async () => {
+  assert.match(refused('12345678901234567 - 12345678901234566'), /The number 12345678901234567 in the formula has more than 15 digits/);
+  assert.match(refused(`${'9'.repeat(450)} + 1`), /The number 9{20}\.\.\. in the formula has more than 15 digits/);
+  assert.equal(calc('{a} * 0.000000001', { a: '1' }).text, '0.000000001', 'a short number with many zeros is fine');
+  assert.match(calc('{a} + 0.5', { a: '999999999999999' }).error!, /too large to work out exactly/, '999999999999999.5 shows as 1000000000000000');
+  assert.deepEqual(['𝟙𝟘𝟘', '𝟏𝟎𝟎', '𝟸𝟹', '１２３', '١٢٣', '१२३', '٣٫٥'].map((t) => readNumber(t)?.value), [100, 100, 23, 123, 123, 123, 3.5]);
+  const { signsAgain } = await import('../src/components/editor/changes.ts');
+  const base: any = {
+    documents: [{ id: 'd', file_id: 'f' }],
+    recipients: [{ id: 'r1', name: 'Ann', email: 'ann@x.example', role: 'signer', status: 'completed' }, { id: 'r2', name: 'Bob', email: 'bob@x.example', role: 'signer', status: 'sent' }],
+    fields: [
+      { id: 'plan', document_id: 'd', recipient_id: 'r2', type: 'dropdown', options: ['Gold'], page: 0, x: 0.1, y: 0.1, w: 0.2, h: 0.03 },
+      { id: 'txt', document_id: 'd', recipient_id: 'r2', type: 'text', page: 0, x: 0.1, y: 0.2, w: 0.3, h: 0.03, show_when: { field: 'plan', is: 'equals', value: 'Gold' } },
+    ],
+  };
+  const edited = { ...base, fields: base.fields.map((f: any) => (f.id === 'txt' ? { ...f, show_when: { ...f.show_when, value: 'Gold ' } } : f)) };
+  assert.deepEqual(signsAgain(base, edited).map((r: any) => r.name), [], 'the server keeps "Gold", so nobody is asked to sign again');
+});

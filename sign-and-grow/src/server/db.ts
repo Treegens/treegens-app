@@ -334,6 +334,12 @@ CREATE TABLE IF NOT EXISTS recipient_members (
 CREATE INDEX IF NOT EXISTS recipient_members_recipient ON recipient_members(recipient_id, position);
 CREATE INDEX IF NOT EXISTS recipient_members_email ON recipient_members(email);
 CREATE INDEX IF NOT EXISTS recipient_members_check ON recipient_members(check_code);
+-- The code that starts our emails again for one member of a signing group (mail-again in routes-bounces.ts), kept
+-- per member: the members share one recipient row, and one member asking must never cancel another member's code.
+CREATE TABLE IF NOT EXISTS member_mail_again (
+  member_id TEXT PRIMARY KEY REFERENCES recipient_members(id) ON DELETE CASCADE, code_hash TEXT NOT NULL,
+  tries INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL
+);
 -- The members a template's owner or an admin chose (src/server/tplroles.ts): a line lets that person use the template
 -- when it is for chosen members, and can_change also lets them change it when it may be changed by chosen members.
 -- The lines go with the template, and with the person when they leave the team or are removed (handOver).
@@ -441,6 +447,13 @@ CREATE TABLE IF NOT EXISTS stamps (
   created_by TEXT, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS stamps_account ON stamps(account_id);
+-- Who was shown which payment link after Finish, and pressed it (src/server/routes-paylink.ts): one row for each person
+-- and each address, so after the link changes the sender sees who saw the earlier address and who the new one.
+CREATE TABLE IF NOT EXISTS pay_seen (
+  recipient_id TEXT NOT NULL REFERENCES recipients(id) ON DELETE CASCADE, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE,
+  url TEXT NOT NULL, shown_at TEXT NOT NULL, opened_at TEXT, PRIMARY KEY (recipient_id, url)
+);
+CREATE INDEX IF NOT EXISTS pay_seen_envelope ON pay_seen(envelope_id);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -769,6 +782,12 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['recipients', 'visit_noted_at', 'TEXT'],
   // When the timer last looked at a payment that is still not applied, so it takes the least recently looked at first.
   ['payments', 'checked_at', 'TEXT'],
+  // payments.tax_cents: the tax the provider added on top of a monthly payment (taxOf in routes-billing.ts), so the
+  // price an account is on can be told from what it paid. refunds.hand_parts: money that went back by hand at the
+  // provider towards a refund we owe, while ours was still waiting, as a JSON list of {cents, at}. The refund is
+  // settled when the parts add up to it, and the customer is told once, with each part.
+  ['payments', 'tax_cents', 'INTEGER'],
+  ['refunds', 'hand_parts', 'TEXT'],
   // Goes up each time the request passes to another person (another address, or another name at the same address
   // that is not a spelling of the old one). It is part of the signature's ledger line once above zero (sigRef in
   // src/server/credits.ts), so a second person never signs on what the first one paid for. 0 keeps every line from
@@ -871,17 +890,49 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // grouping), next to the value that shows it the way its inputs are written (1.234,50). Every later reader takes
   // the number from here, because a shown "1.233" alone could mean 1233 (src/lib/logic.ts canonOf).
   ['fields', 'calc_num', 'TEXT'],
+  // recipients.seen_inputs: the key of the other people's answers this person's formulas counted when the server last
+  // gave them the document ('-' for none), so a Finish that sends no key is held to that one, like seen_version
+  // (formulaInputs and assertInputs in src/server/logic.ts).
+  ['recipients', 'seen_inputs', 'TEXT'],
+  // recipient_members.reported_at: this member of a signing group reported the document, so nothing more is emailed
+  // to them about this envelope until they ask for it themselves (src/server/groups.ts). A spam mark needs no column
+  // here: it is kept for the account in mail_complaints and read from there.
+  ['recipient_members', 'reported_at', 'TEXT'],
+  // recipient_members.code_fails, code_for: wrong access codes typed on the link of a member whose colleague has the
+  // document, or who only reads a copy, counted for that member alone and for the code they were typed against
+  // (a fingerprint of it), so they never freeze the code of the person who is signing (groups.ts memberWrongCode).
+  ['recipient_members', 'code_fails', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipient_members', 'code_for', 'TEXT'],
+  // comment_threads.settle_noted_at: when marking this conversation as settled or open again was last written into
+  // the audit trail. At most once an hour, so the trail and the certificate cannot be filled by toggling (commentrules.ts).
+  ['comment_threads', 'settle_noted_at', 'TEXT'],
+  // The payment link (src/server/routes-paylink.ts). pay_set_by: whose payment page it is, so it goes when they leave
+  // the team (paydrop.ts); a copy from a template keeps it. pay_gone_at and pay_gone_note: when and why it was taken
+  // off without its sender doing it, for the envelope page. pay_told_at, on the envelope and on the account: when the
+  // people who sent it were last emailed that a signer was not shown it, so they hear it once until it shows again.
+  ['envelopes', 'pay_set_by', 'TEXT'],
+  ['envelopes', 'pay_set_at', 'TEXT'],
+  ['envelopes', 'pay_gone_at', 'TEXT'],
+  ['envelopes', 'pay_gone_note', 'TEXT'],
+  ['envelopes', 'pay_told_at', 'TEXT'],
+  ['accounts', 'pay_told_at', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none
-// (accounts from before it was kept, and any made since that has not started a plan): what its last plan payment was
-// before tax, or, with none, the price for new customers at that moment. A new subscription sets its own when it is
-// taken up (adopt in routes-billing.ts), so a returning customer is never held to the price of a plan that ended.
+// (accounts from before it was kept, and any made since that has not started a plan): what its last full-price plan
+// payment was before its own tax, or, with none, the price for new customers at that moment. A full-price payment is
+// one that bought the whole month of signatures: a month with a discount, a credit or part of a month bought fewer
+// and says nothing about the price. Its tax is the tax of that payment (payments.tax_cents), never the tax the
+// provider expects for the next renewal; a payment from before the tax was kept counts at most the price for new
+// customers, so tax on it is never taken for price. A new subscription sets its own when it is taken up (adopt in
+// routes-billing.ts), so a returning customer is never held to the price of a plan that ended.
 export function fillPrices(d: any = db()): number {
+  const plan = Math.round(PRICING.monthlyUsd * 100);
   return Number(d.prepare(`UPDATE accounts SET price_cents = COALESCE(
-      (SELECT p.amount_cents - accounts.renewal_tax_cents FROM payments p WHERE p.account_id = accounts.id AND p.kind = 'plan'
-        AND p.applied_at IS NOT NULL AND p.credits > 0 AND p.currency = 'usd' ORDER BY p.at DESC, p.rowid DESC LIMIT 1),
-      ?) WHERE price_cents IS NULL`).run(Math.round(PRICING.monthlyUsd * 100)).changes);
+      (SELECT CASE WHEN p.tax_cents IS NOT NULL THEN p.amount_cents - p.tax_cents ELSE MIN(p.amount_cents, ?) END FROM payments p
+        WHERE p.account_id = accounts.id AND p.kind = 'plan' AND p.applied_at IS NOT NULL AND p.credits >= ? AND p.currency = 'usd'
+        ORDER BY p.at DESC, p.rowid DESC LIMIT 1),
+      ?) WHERE price_cents IS NULL`).run(plan, PRICING.monthlySignatures, plan).changes);
 }
 
 // Help requests from before support_requests.came_by was kept (src/server/routes-support.ts), filled in once so the

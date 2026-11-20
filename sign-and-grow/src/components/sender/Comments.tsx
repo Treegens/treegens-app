@@ -11,10 +11,26 @@ import { fail } from './feedback';
 const joinNames = (l: string[]) => (l.length < 2 ? l.join('') : `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`);
 
 // What became of the email about one comment of the sender's side, for each person it is for.
-function newsLine(n: any, mins: number): string {
+// A waiting one says why it waits: the pause, or the ten minutes since the last email to that person.
+function newsLine(n: any, mins: number, paused = false): string {
   if (n.mailed_at) return `Emailed to ${n.to} on ${fmtDate(n.mailed_at, true)}.`;
   if (n.not_emailed) return `Not emailed to ${n.to}: ${n.not_emailed}`;
-  return `Waiting to be emailed to ${n.to}. We send at most one email every ${mins} minutes to each person, and nothing while sending is paused.`;
+  return paused ? `Waiting to be emailed to ${n.to}: sending is paused on this account, and it goes out by itself once the pause is lifted.`
+    : `Waiting to be emailed to ${n.to}. We send at most one email every ${mins} minutes to each person, so it goes with the next one.`;
+}
+
+// Long comments are folded to a few lines, so one person's essay does not push every other conversation off the page.
+const FOLD_CHARS = 600, FOLD_LINES = 8;
+function Body({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > FOLD_CHARS || text.split('\n').length > FOLD_LINES;
+  if (!long) return <p className="cm-body" dir="auto">{text}</p>;
+  return (
+    <>
+      <p className={`cm-body${open ? '' : ' cm-folded'}`} dir="auto">{open ? text : `${text.split('\n').slice(0, FOLD_LINES).join('\n').slice(0, FOLD_CHARS)}...`}</p>
+      <button type="button" className="btn sm cm-more" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Show less' : `Show all ${text.length} characters`}</button>
+    </>
+  );
 }
 
 export function EnvelopeComments({ envelope }: { envelope: any }) {
@@ -58,7 +74,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
     try {
       const r = await api(`/envelopes/${e.id}/comments`, { body });
       setData(r);
-      const told = (r.told || []).map((n: any) => newsLine(n, r.mail_minutes)).join(' ');
+      const told = (r.told || []).map((n: any) => newsLine(n, r.mail_minutes, r.paused)).join(' ');
       toast(`${r.message}${told ? ` ${told}` : ''}`);
       return true;
     } catch (err: any) {
@@ -106,8 +122,8 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
             {t.comments.map((c: any) => (
               <li key={c.id} className={c.by_sender ? 'from-sender' : ''}>
                 <div className="cm-meta"><b><bdi>{c.name}</bdi></b>{c.email ? <span className="muted small"> {c.email}</span> : null} <span className="muted small">{fmtDate(c.at, true)}</span></div>
-                <p className="cm-body" dir="auto">{c.body}</p>
-                {c.by_sender && (c.news || []).map((n: any, k: number) => <p key={k} className="muted small cm-news">{newsLine(n, data.mail_minutes)}</p>)}
+                <Body text={c.body} />
+                {c.by_sender && (c.news || []).map((n: any, k: number) => <p key={k} className="muted small cm-news">{newsLine(n, data.mail_minutes, data.paused)}</p>)}
               </li>
             ))}
           </ol>
@@ -118,7 +134,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
               if (await post({ thread_id: t.id, text: reply })) (setReply(''), setReplyTo(''));
             }}>
               <label className="f"><span>Your answer</span><textarea dir="auto" rows={3} maxLength={COMMENT_MAX_CHARS} value={reply} onChange={(ev) => setReply(ev.target.value)} autoFocus /></label>
-              <p className="muted small">{t.private ? `Only ${t.with?.name || 'this person'} can read it, and they are emailed.` : 'Everyone on the envelope can read it. Whoever wrote in this conversation is emailed.'}</p>
+              <p className="muted small">{t.private ? `Only ${t.with?.name || 'this person'} can read it${t.with?.emailed ? ', and they are emailed.' : `. ${t.with?.not_emailed || 'They are not emailed. They see it on their signing page.'}`}` : 'Everyone on the envelope can read it on their signing page. Whoever wrote in this conversation is emailed if we can email them, and under your answer it says who was.'}</p>
               <div className="row wrap">
                 <button className="btn primary" disabled={busy}>{busy ? 'Sending' : 'Send answer'}</button>
                 <button type="button" className="btn" onClick={() => (setReplyTo(''), setReply(''))}>Cancel</button>
@@ -150,7 +166,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
             <select value={forWhom} onChange={(ev) => setForWhom(ev.target.value)} required>
               <option value="">Choose who can read it</option>
               <option value="everyone">Everyone on the envelope (nobody is emailed)</option>
-              {(data.people || []).map((p: any) => <option key={p.id} value={p.id}>Only {p.name} (they are emailed)</option>)}
+              {(data.people || []).map((p: any) => <option key={p.id} value={p.id}>Only {p.name} ({p.emailed ? 'they are emailed' : 'not emailed, they see it on their signing page'})</option>)}
             </select>
           </label>
           <button className="btn primary" disabled={busy}>{busy ? 'Sending' : 'Send'}</button>

@@ -217,17 +217,30 @@ export function metaOf(f: any): StampMeta | null {
  *  - The sender's stamp is one of the account's stamps ("stamp_id"). The same stamp as before keeps the picture it
  *    was put on with; another stamp, or "stamp_refresh": true, takes that stamp's picture as it is now.
  */
-export function stampOnSave(f: any, old: any, rid: string | null, accountId: string, which: string, by?: Actor) {
+export function stampOnSave(f: any, old: any, rid: string | null, accountId: string, which: string, by?: Actor, before: any[] = []) {
+  // What the request carries as "value". Only ever a picture this field or a twin of it already has: never a new one.
+  const sent = f.value == null || f.value === '' ? '' : String(f.value);
+  const refused = () => bad(`${which}, a stamp field, was sent with a value. A stamp field holds a stamp picture: a recipient puts their own on when they sign, and for a stamp of your account you send its "stamp_id" with no recipient_id. Leave "value" out. Nothing was saved.`);
   // `required`: null keeps what was saved from the request. The sender's own stamp is nobody's to fill in.
   if (rid) {
+    if (sent && sent !== String(old?.value ?? '')) throw refused();
     const keep = !!old && old.type === 'stamp' && old.recipient_id === rid && !!old.value;
     return keep ? { value: old.value, stamp_id: old.stamp_id ?? null, meta: old.stamp_meta ?? null, readonly: 0, required: null } : { value: null, stamp_id: null, meta: null, readonly: 0, required: null };
   }
   const sid = f.stamp_id == null || f.stamp_id === '' ? null : str(f.stamp_id, 60);
-  if (!sid) return { value: null, stamp_id: null, meta: null, readonly: 1, required: 0 };
-  if (old && isSenderStamp(old) && old.stamp_id === sid && old.value && f.stamp_refresh !== true) return { value: old.value, stamp_id: sid, meta: old.stamp_meta, readonly: 1, required: 0 };
+  if (!sid) {
+    if (sent) throw refused();
+    return { value: null, stamp_id: null, meta: null, readonly: 1, required: 0 };
+  }
+  const refresh = f.stamp_refresh === true;
+  if (old && isSenderStamp(old) && old.stamp_id === sid && old.value && !refresh && (!sent || sent === old.value)) return { value: old.value, stamp_id: sid, meta: old.stamp_meta, readonly: 1, required: 0 };
+  // A copy of the sender's stamp on this envelope (Duplicate, Copy to every page) keeps the picture it was copied
+  // from, so every page shows the same impression even when the stamp was changed under Settings since.
+  const twin = sent && !refresh ? before.find((x: any) => isSenderStamp(x) && x.stamp_id === sid && x.value === sent) : null;
+  if (twin) return { value: twin.value, stamp_id: sid, meta: twin.stamp_meta ?? null, readonly: 1, required: 0 };
   const s = get('SELECT * FROM stamps WHERE id=? AND account_id=?', sid, accountId);
   if (!s) throw bad(`${which}, a stamp field, names the stamp "${str(sid, 60)}", which this account does not have${old?.stamp_id === sid ? ' any more: it was deleted under Settings' : ''}. Use the id of one of your stamps (GET /stamps), or leave "stamp_id" out to choose one later. Nothing was saved.`);
+  if (sent && sent !== s.image_sha && !(refresh && sent === String(old?.value ?? ''))) throw bad(`${which}, a stamp field, was sent with a picture ("value") that is not the picture of the stamp "${s.name}" it names. Leave "value" out: the picture comes from "stamp_id". Nothing was saved.`);
   const meta: StampMeta = { name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, size_mm: s.size_mm, from: 'sender', at: now(), by: by?.name || null, stamp_id: s.id };
   return { value: s.image_sha, stamp_id: s.id, meta: JSON.stringify(meta), readonly: 1, required: 0 };
 }

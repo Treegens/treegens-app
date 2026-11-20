@@ -233,7 +233,7 @@ test('signing out everywhere else also stops other devices from skipping two-ste
 
 // ---- Finish: say only what is known --------------------------------------------------------------------
 
-const noDash = (t: string, what: string) => assert.ok(!/[–—]/.test(t), `${what} has a dash: ${t}`);
+const noDash = (t: string, what: string) => assert.ok(!/[\u2013\u2014]/.test(t), `${what} has a dash: ${t}`);
 const signPage = () => read('src/app/sign/[token]/page.tsx');
 const completeFn = () => {
   const page = signPage();
@@ -621,4 +621,17 @@ test('/help says what the page does when the signal drops at Finish, and no more
   assert.match(SIGNING_WEAK_SIGNAL, /asks whether it went through and says what it finds\. When it cannot tell yet, it says so/);
   assert.match(SIGNING_WEAK_SIGNAL, /Trying again never signs twice\./);
   noDash(SIGNING_WEAK_SIGNAL, 'SIGNING_WEAK_SIGNAL');
+});
+
+test('the adopt dialog on a phone held sideways at 200 percent (195 px tall) keeps its buttons on the screen', () => {
+  // Measured in the browser (tests/out/repair-mobile/g-adopt-zoom.cjs): at 422 by 195 the buttons were 15 px below
+  // the screen before this rule; with it they are on it, and 76 px of the box to draw in shows above them.
+  const css = read('src/app/styles/signphone.css');
+  const at = css.indexOf('@media (max-height: 260px) {');
+  assert.ok(at > 0, 'the rule is there');
+  const rule = css.slice(at, css.indexOf('\n}\n', at) + 2);
+  assert.match(rule, /\.sg-adopt-foot \{ max-height: none; \}/);
+  assert.match(rule, /\.sg-dialog \.sigpad \{ height: 90px; \}/);
+  assert.match(rule, /\.sg-adopt-foot \.actions \.btn \{ min-height: 44px; \}/, 'tap targets stay 44 px');
+  noDash(rule, 'signphone.css');
 });

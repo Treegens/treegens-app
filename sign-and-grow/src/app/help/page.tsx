@@ -13,6 +13,7 @@ import { replyPromise } from '@/lib/support';
 import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord, FindRequests } from './tools';
 import { ConsentWords, SignatureKind } from './outside';
 import { WitnessHelp } from './witness';
+import { StampHelp } from './stamps';
 import { SigningOnPhone } from './phone';
 import { NotMeAnswer } from './NotMe';
 import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
@@ -264,6 +265,7 @@ export default function Help() {
 
           {/* A witness for one signer, what it records and what it cannot check, with its dated source (help/witness.tsx). */}
           <WitnessHelp />
+          <StampHelp />
 
           <QA id="reminders" q="Are people reminded by themselves?">
             <p>On an account made today, yes. It starts with a reminder every {DEFAULT_REMINDER_DAYS} days: {reminderText(DEFAULT_REMINDER_DAYS).replace(/^Automatic reminders are on: /, '')}</p>

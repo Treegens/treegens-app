@@ -88,6 +88,8 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
   const [reason, setReason] = useState('');
   const [detail, setDetail] = useState('');
   const [sent, setSent] = useState(false);
+  // A member of a signing group who reports it is emailed nothing more about it (mail_stopped in the answer).
+  const [stopped, setStopped] = useState(false);
   const { busy, error, setError, send } = useSend();
   const name = useId();
   if (sent && reason === 'not-me')
@@ -102,7 +104,7 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
     return (
       <Dialog title="Report this request" onClose={onClose}>
         <Confirmed onClose={onClose}>
-          <b>Thank you. A person will look at this.</b> You do not need to do anything else. If it looks like a scam, do not sign it and do not reply to it.
+          <b>Thank you. A person will look at this.</b> You do not need to do anything else. If it looks like a scam, do not sign it and do not reply to it.{stopped && ' We will not email you about this document again. If you change your mind, this page has a button that starts our emails again.'}
         </Confirmed>
       </Dialog>
     );
@@ -111,7 +113,7 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
       <form onSubmit={async (e) => {
         e.preventDefault();
         if (!reason) return setError('Choose what is wrong, then send your report.');
-        if (await send(() => (reason === 'not-me' ? api(`${base}/dispute`, { body: { detail } }) : api(`${base}/report`, { body: { reason, detail } })), reason === 'not-me' ? '' : 'Your report was not sent. Try again in a minute.')) setSent(true);
+        if (await send(() => (reason === 'not-me' ? api(`${base}/dispute`, { body: { detail } }) : api(`${base}/report`, { body: { reason, detail } }).then((x: any) => setStopped(!!x?.mail_stopped))), reason === 'not-me' ? '' : 'Your report was not sent. Try again in a minute.')) setSent(true);
       }}>
         <p className="muted">This goes to the Sign&Grow team, not to {sender?.name || 'the sender'}. A person reads every report.</p>
         <fieldset className="sg-choices">

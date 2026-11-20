@@ -10,13 +10,15 @@ import { api } from '@/components/ui';
 // first, so this is what keeps the notice from coming back after the person pressed the button.
 const switchedOn = new Set<string>();
 
-export function MailAgain({ base, stopped }: { base: string; stopped: boolean }) {
+// `why` 'report': a member of a signing group who reported this document, so only this document is meant.
+export function MailAgain({ base, stopped, why }: { base: string; stopped: boolean; why?: string | null }) {
+  const one = why === 'report';
   const [state, setState] = useState<'' | 'busy' | 'sent' | 'done'>('');
   const [sentTo, setSentTo] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   if ((!stopped || switchedOn.has(base)) && state !== 'done') return null;
-  if (state === 'done') return <div className="notice sg-top" role="status"><b>Emails are on again.</b> We will email you about this sender&apos;s documents again: reminders while one waits for you, and a copy when it is completed.</div>;
+  if (state === 'done') return <div className="notice sg-top" role="status"><b>Emails are on again.</b> {one ? 'We will email you about this document again: reminders while it waits for you, and a copy when it is completed.' : <>We will email you about this sender&apos;s documents again: reminders while one waits for you, and a copy when it is completed.</>}</div>;
   async function call(body: any, after: string) {
     const was = state;
     setState('busy');
@@ -33,7 +35,8 @@ export function MailAgain({ base, stopped }: { base: string; stopped: boolean })
   const asking = state === 'sent' || (state === 'busy' && !!sentTo);
   return (
     <div className="notice sg-top" role="status">
-      <p style={{ margin: 0 }}><b>We do not email you about this sender&apos;s documents.</b> You marked one of our emails for them as spam, so we stopped: no reminders, and no copy by email when one is completed. This link still opens the document whenever you like.</p>
+      {one ? <p style={{ margin: 0 }}><b>We do not email you about this document.</b> You reported it, so we stopped: no reminders, no notices, and no copy by email when it is completed. This link still opens it whenever you like.</p>
+        : <p style={{ margin: 0 }}><b>We do not email you about this sender&apos;s documents.</b> You marked one of our emails for them as spam, so we stopped: no reminders, and no copy by email when one is completed. This link still opens the document whenever you like.</p>}
       {asking && <p style={{ margin: '8px 0 0' }}>We emailed a code to <b style={{ overflowWrap: 'anywhere' }}>{sentTo}</b>, to be sure it is you. It works for 30 minutes. Not there? Look in your spam folder, and mark it as not spam.</p>}
       {error && <p role="alert" style={{ margin: '8px 0 0' }}>{error}</p>}
       {asking ? (
@@ -45,7 +48,7 @@ export function MailAgain({ base, stopped }: { base: string; stopped: boolean })
           <button type="button" className="btn sm ghost" style={{ minHeight: 44 }} disabled={state === 'busy'} onClick={() => call({}, 'sent')}>Send a new code</button>
         </form>
       ) : (
-        <button type="button" className="btn sm" style={{ minHeight: 44, marginTop: 10 }} disabled={state === 'busy'} onClick={() => call({}, '')}>{state === 'busy' ? 'Sending…' : 'Email me about these documents again'}</button>
+        <button type="button" className="btn sm" style={{ minHeight: 44, marginTop: 10 }} disabled={state === 'busy'} onClick={() => call({}, '')}>{state === 'busy' ? 'Sending…' : one ? 'Email me about this document again' : 'Email me about these documents again'}</button>
       )}
     </div>
   );

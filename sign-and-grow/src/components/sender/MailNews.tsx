@@ -75,7 +75,12 @@ export function MailStopLines({ people }: { people: any[] }) {
 
 /** The toast after "Send reminder" for everyone: who got one, and who did not and why, so nobody is dropped unsaid. */
 export function remindedText(reminded: number, notReminded: { name: string; why: string }[] = [], seeWhere = 'See their cards below.'): { text: string; bad: boolean } {
-  const left = notReminded.length ? ` No reminder to ${joinNames(notReminded.map((x) => x.name))}: ${notReminded.length === 1 ? (notReminded[0].why === 'marked_as_spam' ? 'they marked our email as spam' : 'our last email to them could not be delivered') : 'our emails to them could not be delivered or were marked as spam'}.` : '';
+  // 'reported': a member of a signing group who reported the document is emailed nothing more about it.
+  const why = (k: string, n: number) => (k === 'marked_as_spam' ? 'they marked our email as spam' : k === 'reported' ? 'they reported this document' : n === 1 ? 'our last email to them could not be delivered' : 'our emails to them could not be delivered');
+  const kinds = [...new Set(notReminded.map((x) => x.why))];
+  const of = (k: string) => notReminded.filter((x) => x.why === k).map((x) => x.name);
+  const left = !notReminded.length ? '' : kinds.length === 1 ? ` No reminder to ${joinNames(of(kinds[0]))}: ${why(kinds[0], notReminded.length)}.`
+    : ` No reminder to ${kinds.map((k) => `${joinNames(of(k))} (${why(k, of(k).length)})`).join(', ')}.`;
   if (reminded) return { text: `Reminder emailed to ${reminded} ${reminded === 1 ? 'person' : 'people'}.${left}`, bad: false };
   return { text: left ? `No reminder went out.${left} ${seeWhere}` :'No reminder went out. Everyone waiting has turned reminders off, so share their links another way.', bad: true };
 }

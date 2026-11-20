@@ -181,7 +181,10 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
       // In person the device is about to be in someone else's hands. The account is put away before this page is
       // left, so the Back button does not bring it back (AppShell), and the server locks it when the page opens.
       if (r.role === 'inperson') window.dispatchEvent(new CustomEvent('sg-handed-over', { detail: { signer: r.name, envelope_id: e.id } }));
-      window.location.href = link;
+      // In person the page takes this one's place in the history, so the next person on the device does not reach it
+      // with Back (and the server shows no private comments there to anyone but who holds the device: handlive.ts).
+      if (r.role === 'inperson') window.location.replace(link);
+      else window.location.href = link;
     } catch (err) {
       fail(err);
       setBusy('');

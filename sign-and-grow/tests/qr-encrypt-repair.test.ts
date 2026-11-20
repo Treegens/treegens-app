@@ -467,6 +467,10 @@ test('a signer facing a document the server cannot hand over is shown the server
   assert.match(block, /Try again<\/button>/);
   assert.match(block, /Ask \{sender\}/);
   assert.match(read('src/app/sign/[token]/page.tsx'), /failed=\{\(why, retry, said\) => <NoViewer why=\{why\} retry=\{retry\} said=\{said\}/);
+  // The toolbar and the Other actions menu offer the same download: hidden while that notice is up (measured in a
+  // browser at 390x844: no visible link to a download, tests/out/repair-qr-encrypt/locked.cjs).
+  assert.match(block, /data-stored=\{said\.code\}/);
+  assert.match(read('src/app/styles/signphone.css'), /body:has\(\.sg-noview\[data-stored\]\) a\[href\*="\/download"\]:not\(\[href\*="earlier=1"\]\) \{ display: none; \}/);
 });
 
 test('every member of a group can be handed their own link as a QR code, asked for at that moment', () => {

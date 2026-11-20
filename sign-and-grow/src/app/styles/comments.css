@@ -32,3 +32,6 @@
   .cm-thread { padding: 10px 12px; }
   .cm-acts .btn { flex: 1 1 auto; }
 }
+/* A long comment on the sender's card is folded to a few lines, with a button to read it all. */
+.cm-folded { max-height: 12em; overflow: hidden; }
+.cm-card .cm-more { min-height: 44px; margin-top: 6px; }

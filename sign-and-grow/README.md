@@ -65,6 +65,7 @@ What the test files cover:
 | `tests/templates.test.ts` | Who can use and change each template, and the lock on its wording: every route that lists, reads, uses, sends in bulk, copies, publishes as a public form, changes or deletes a template, for the owner of the account, an admin, the template's owner, a chosen member and another member, each by browser and by API key; the lock through the editor's whole save and through the plain API (what can be filled in, everything else refused with who to ask, nothing saved), once out too, unlocking and deleting the template; copies of templates and of locked envelopes; bulk sends and public forms; leaving and being removed; a database from before this. |
 | `tests/witness.test.ts` | A witness for one signer: tied to one person who signs and every way that cannot work, asked straight after that signer whatever the order and holding nobody up, no signature held or used, the block and what prints when, the signer naming the witness before Finish (themselves, a party, a pause, the cap, the daily count), the statement as the witness's own words and a stale one refused, no decline and no hand-over for a witness, "I was not there" and naming the person who was, the certificate (the witness under the signer, the statement, its time, the note), the marks for the same address, the same browser and the same internet address and browser, reminders, the not-opened alert, Find my documents, the completed copy, declining, passing on, corrections, signing again, templates, bulk sends, public forms and the API description. The repairs: a finished witness set aside and asked again with the signature they saw, moving one needs the sign-again choice, no device fingerprint to any sender and none that links envelopes, no self-witness or party through Correct, an API key or a hand-over, the sender's choice kept after "I was not there" and in a copy, who was told said as it is, the witness's note to the sender only, the witness name read by the fake-notice filter, the deadline warning, the "same name" mark, and no fields of a party for a witness. |
 | `tests/logic.test.ts` | Conditional fields and formulas: the formula reader (order of operations, brackets, sum and round, what it refuses in words, nothing run as code), numbers as people write them and the result written the same way, empty inputs, dividing by 0, numbers too big or too small, rules that chain and loops (refused when saved, naming the fields), what the review step warns about, a browser that lies about a hidden required field or a calculated value, a signature field that an answer hides, the signed PDF, someone else's answer counting once they have finished and a signed result never changing, sign-again after a rule or a formula changes (predicted the same way in the editor), templates, copies, public forms, bulk send rows that fill a field, and the lock on a template's wording. |
+| `tests/stamps.test.ts` | Company stamps: the processing steps as pure functions on pixels made in the test (paper removed under light that falls off by half and on grey and yellow paper, one ink in every pixel, a thin faint line kept thin and faint, the ink found and other colours left out, a logo said to have several colours, the same impression for the same seed and another for another, trimmed with a small margin, a tilt from -4 to 4, a texture that keeps the ink readable, a see-through design, a seal that fills the picture, a dark table at the edge of a photo), which files can be a stamp, the account's stamps (up to ten, admins only, names checked for an unpaid account, anything but a see-through PNG refused in words, text and camera notes taken out of the file), a signer's stamp (Finish later keeps it, the answers never set it, required before Finish, the audit line with its fingerprint), the signed PDF (multiplied in at 90 percent, the words under it still in the file, the certificate lines and the honest sentence), changing and deleting a stamp, saved stamps from the signer's own account and who may not use them, the limits and who may see a picture, money, signing again after a change, templates, bulk sends, public forms, signing groups, the evidence pack, the export, deleting, and the API description. |
 | `tests/clickwrap.test.ts` | Click-to-agree terms: drafts and versions, our page, the frame (only `?embed=1`) and the API, the signed link a website makes, the record that never changes and its seal, what the certificate says the browser reported, the receipt and one copy by email only for the browser that accepted and an address the website gave, the scam filter on every word the page shows, the two monthly counts and the limits per address (offices, IPv6 blocks), paused accounts, reports, members and keys, and deleting with the files. |
 
 ## What the bad reviews taught us
@@ -283,6 +284,32 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   in full. Once the envelope is no longer out they are read-only, and they go with the envelope. Limits: 2,000
   characters, 50 comments for each person on one envelope, 10 in 10 minutes for each signing link (`src/lib/policy.ts`).
   The old "Ask the sender a question" is this now, so there is one way to ask.
+- Company stamps and seals next to a signature (`src/server/stamps.ts`, `src/server/routes-stamps.ts`,
+  `src/lib/stampink.ts`, `src/components/stamps`). A stamp looks like ink from a rubber stamp, not a picture pasted
+  on top. When a picture is chosen (PNG, JPEG, or WebP where the browser reads it, up to 8 MB, from a file or straight
+  from a phone camera; SVG, PDF and the rest are refused in words), the browser turns it into an impression on a
+  canvas: the paper goes, judged for every part of the picture against the paper around it, so uneven light, a
+  shadow and grey or coloured paper go too; solid dark areas at the edge of a photo (the table, a shadow) go; the
+  marks become one ink (blue, red, purple, black or green), the likely one found in the picture and chosen first,
+  with the strength of every mark kept, and marks in another colour (printed black text beside a blue stamp) left out
+  unless asked for; then a rubber texture, a small tilt between -4 and 4 degrees, and a trim to the ink. All of it
+  comes from a seed that is stored with the stamp, so the same settings give the same impression. A before and after
+  on a page of text shows it while each step can be changed. It is stored as a transparent PNG (drawing it on a canvas
+  leaves out the camera's notes), and on the signing page and in the signed PDF it is multiplied into the page at 90
+  percent, so the words under it show through and there is never a box around it. Admins keep up to 10 stamps under
+  Settings, Stamps (a name, the picture, the ink, the seed and the real size, 40 mm across to start with); a
+  stamp name typed by an account the checks apply to is checked like any other name. In the editor a Stamp field
+  is either the sender's own stamp, part of the document from the start (a change after someone has signed needs
+  the sign-again choice), or a signer's, who puts their own on when they sign from a picture, a photo or a saved
+  stamp of their own account (only when signed in at the address the document went to, never on a device handed over
+  in person). Changing or deleting a stamp never changes a document it is on. A stamp field is required or optional,
+  Finish later keeps it, it is put on again when someone is asked to sign again, and it works in templates, bulk
+  sends, public forms, signing groups and the text view. The audit trail says who put which stamp on which field and
+  when, with the SHA-256 of the picture, the certificate lists it under that person, and the evidence pack and the
+  export carry the pictures. A picture from a signing link is shown to nobody outside that envelope, one field holds
+  one, and a link can put on 20 an hour. A stamp uses no signature. What it is, said wherever one is offered: a
+  picture of a stamp that a person put on the document; Sign&Grow does not check that they may use it, it is not a
+  certified electronic seal, and it pays no stamp duty.
 
 **After signing**
 - Final PDF with every value stamped in, signer attachments appended, and a certificate of completion:
@@ -534,6 +561,10 @@ e-signature product, not all of it. Not built:
   These are standard electronic signatures with an audit trail, not "advanced" or "qualified" signatures under
   eIDAS. Have a lawyer confirm they fit your use and jurisdiction before relying on them for high-stakes
   documents.
+- **Electronic seals.** A company stamp here is a picture of a stamp that a person puts on the page (see
+  "Signing"). Nothing checks that they may use it, and it is not an electronic seal backed by a certificate (an
+  "advanced" or "qualified" seal under eIDAS). It pays no stamp duty and is not an e-stamp certificate or an
+  e-meterai.
 - Languages other than English. The signing screen and our emails are in English for now. Your document can be in
   any language. (The sentence the pages print is `LANGUAGE_NOTE` in `src/lib/policy.ts`.)
 - ID verification (government ID, knowledge-based checks) and checks by phone call. A one-time code by email or by
@@ -963,10 +994,12 @@ the app itself (`src/server/filecrypt.ts` for the format, `src/server/filestore.
 - **Switching it off.** Move the key to `FILE_ENCRYPTION_KEYS_OLD` and leave `FILE_ENCRYPTION_KEY` empty: new files are
   stored as they are and the encrypted ones stay readable, and so does the text kept for search. There is no script
   that decrypts files. `/security` then says that new files are stored as they are, and that those stored while it
-  was on stay encrypted.
+  was on stay encrypted. Keep that key listed: the text kept for search stays under it, and `--check` does not look
+  at the database.
 - **Lose the key and the encrypted files are gone.** Nobody can read them, and that includes us. To store files again
   after that, move the files the server cannot read out of `DATA_DIR/blobs` (keep them, in case the key turns up) and
-  restart; asking for one of them then answers that it cannot be found.
+  restart; asking for one of them then answers that it cannot be found. The text kept from those documents is gone
+  too: a search no longer finds them by the words inside, and the check before sending reads only their names.
 
 ## Things to decide before launch
 

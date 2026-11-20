@@ -55,6 +55,14 @@ const GROUPS: [string, Endpoint[]][] = [
     ['DELETE', '/api/groups/:id', 'Delete a group. For admins. Envelopes already sent are not affected.', true],
     ['POST', '/api/envelopes/:id/recipients/:rid/release', 'Give a group\'s document back to the whole group, from the member who took it on and has not finished.', true],
   ]],
+  ['Stamps', [
+    ['GET', '/api/stamps', 'The account\'s stamps (a company stamp or seal): name, ink, real size and the address of the picture. Everyone on the team can use them. A stamp here is a picture of a stamp that a person put on the document; Sign&Grow does not check that they may use it, and it is not a certified electronic seal.'],
+    ['POST', '/api/stamps', 'Add a stamp, up to 10. For admins. "image" is the finished impression: a PNG data URL whose paper is see-through, at most 1000 pixels across. Anything else is refused in words.', true],
+    ['PUT', '/api/stamps/:id', 'Rename it, set its real size, or give it a new picture. For admins. Documents that already carry it keep the picture they have.', true],
+    ['DELETE', '/api/stamps/:id', 'Delete a stamp. For admins. Documents that carry it keep it.', true],
+    ['GET', '/api/stamps/:id/image', 'The picture of a stamp, a PNG.'],
+    ['GET', '/api/envelopes/:id/stamp-image/:sha', 'The picture of a stamp on an envelope, by the SHA-256 its field holds. For whoever can open the envelope.'],
+  ]],
   ['Your data', [
     ['GET', '/api/export', 'One ZIP file with signed PDFs, audit trails and a CSV index. Add ?ids= for some envelopes only.', true],
     ['GET', '/api/reports/summary', 'Counts, completion time and paper saved.'],
@@ -132,6 +140,7 @@ curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
 curl -H "Authorization: Bearer $KEY" -o signed.pdf https://YOUR_HOST/api/envelopes/env_.../download`}</Code>
           <p><b>Fields may be sent without ids.</b> Each one gets its own id on the server. Documents and recipients take any short id you like, such as <C>d1</C> and <C>r1</C>, so that fields can point at them. The response carries the permanent ids.</p>
           <p className="muted small">Recipient roles: {ROLES.join(', ')}. Field types: {FIELD_TYPES.join(', ')}.</p>
+          <p className="muted small"><b>A stamp</b> is a field of type <C>stamp</C>. With a <C>recipient_id</C>, that signer puts their own stamp on when they sign (a picture, a photo or a saved stamp of their own account), and its <C>value</C> becomes the SHA-256 of the picture; it is never taken from a request. Without one, it is your own stamp: send <C>stamp_id</C>, one of <C>GET /api/stamps</C>. Its picture is kept from the moment it is saved, so changing the stamp later changes no document (<C>stamp_refresh</C>: true takes its picture as it is now). It prints like ink: multiplied into the page, slightly see-through, without a box, with the words under it still in the file. The audit trail and the certificate name each stamp with its fingerprint. A stamp uses no signature.</p>
           <p className="muted small"><b>A witness</b> is a recipient with the role <C>witness</C> and <C>witness_for</C>, the id of the person who signs whose signature they watch. Give them a signature field and, if you like, the rest of the witness block (a name, two text fields for address and occupation, a date), and nothing more: a witness never uses a signature, so sending refuses the fields of a party for one. They are asked straight after that person has signed, and never use a signature. With <C>&quot;named_by_signer&quot;: true</C> and no name or email, that person names the witness on the signing page before Finish. The witness ticks a statement of their own first (<C>witness_statement</C> in the answer), or says they were not there (<C>witness_absent_at</C>). Sign&amp;Grow records what a witness states and cannot check it. See <C>/api/openapi.json</C>.</p>
         </div>
 

@@ -18,7 +18,7 @@ import { strikePlace } from '../lib/strike.ts';
 import { stackedFields } from '../lib/stacked.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine } from './bounces.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
-import { attachGroups, groupNames, saveGroups, copyGroup, assertGroups, groupReach, groupReachNew, snapshotGroups, settleGroups, groupPeople, notifyMembers, groupLine, groupWords, groupChange, groupsCorrected, memberLinks, assertGroupCorrection } from './groups.ts';
+import { attachGroups, groupNames, saveGroups, copyGroup, assertGroups, groupReach, groupReachNew, snapshotGroups, settleGroups, groupPeople, notifyMembers, groupLine, groupWords, groupChange, groupsCorrected, memberLinks, assertGroupCorrection, memberMailStop } from './groups.ts';
 import { isOpenGroup, whoIs } from '../lib/groups.ts';
 // A person whose link the sender passes on themselves, with no email address (src/server/bysender.ts).
 import { saveBySender, bySenderProblem, reachKey, reporterKey, copyBySender, bySenderNotice, assertNudgeable, remindThroughSender, untoldLines, unopenedLines, noteNoCopy, senderCopyLines } from './bysender.ts';
@@ -298,9 +298,9 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     const prefilled = ['text', 'number', 'date', 'company', 'title', 'note', 'checkbox', 'radio', 'dropdown'].includes(f.type);
     // Signatures, initials and attachments are never set by the sender, and a name, an address or a signing date
     // fills itself in. A value sent for one of those is refused, unless it is only what the field holds already
-    // (the editor sends every field back as it got it).
-    if (!prefilled && f.value != null && f.value !== '' && String(f.value) !== String(old?.value ?? ''))
-      throw bad(`${which}, a ${f.type.replace('_', ' ')} field, was sent with a value. ${f.type === 'strike' ? 'A strike-out is a line through what is printed and holds no words of its own' : f.type === 'stamp' ? 'A stamp field holds a stamp picture: a recipient puts their own on when they sign, and for a stamp of your account you send its "stamp_id" with no recipient_id' : f.type === 'signature' || f.type === 'initials' || f.type === 'attachment' ? 'Only the signer can fill that in' : 'That field fills itself in when its signer finishes'}. Leave "value" out. Nothing was saved.`);
+    // (the editor sends every field back as it got it). What a stamp field may be sent with is decided by stampOnSave.
+    if (!prefilled && f.type !== 'stamp' && f.value != null && f.value !== '' && String(f.value) !== String(old?.value ?? ''))
+      throw bad(`${which}, a ${f.type.replace('_', ' ')} field, was sent with a value. ${f.type === 'strike' ? 'A strike-out is a line through what is printed and holds no words of its own' : f.type === 'signature' || f.type === 'initials' || f.type === 'attachment' ? 'Only the signer can fill that in' : 'That field fills itself in when its signer finishes'}. Leave "value" out. Nothing was saved.`);
     // During a correction, whatever a signer already entered is kept: an editor that was opened earlier must never
     // wipe it. The sender can still set a value on a field that is empty, on their own read-only fields, and on a
     // field that still holds exactly what the sender put there (prefill).
@@ -328,7 +328,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
       Array.isArray(f.options) ? JSON.stringify(f.options.map((o: any, n: number) => fit(o, 200, `${which}: choice ${n + 1}`))) : null,
       fit(f.group_name, 80, `${which}: the group name`) || null, fit(f.validation, 200, `${which}: the validation rule`) || null, readonly, prefill);
     // What a stamp field holds is decided here from what was there before, never taken from the request (stamps.ts).
-    const stamp = f.type === 'stamp' ? stampOnSave(f, old, rid, accountId, which, by) : null;
+    const stamp = f.type === 'stamp' ? stampOnSave(f, old, rid, accountId, which, by, e.fields) : null;
     if (stamp) run('UPDATE fields SET value=?, stamp_id=?, stamp_meta=?, readonly=?, required=COALESCE(?, required) WHERE id=?', stamp.value, stamp.stamp_id, stamp.meta, stamp.readonly, stamp.required, fid);
     logic.push({ fid, f, rid, which });
   });
@@ -882,10 +882,11 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
   const eid = id(o.kind === 'template' ? 'tpl' : 'env');
   const t = now();
   tx(() => {
-    // pay_url, pay_kind: the link to the sender's own payment page goes with the copy (src/server/routes-paylink.ts).
-    run('INSERT INTO envelopes (id, account_id, sender_id, kind, subject, message, ordered, reminder_days, expire_days, date_format, template_id, powerform_id, bulk_id, created_at, updated_at, pay_url, pay_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    // pay_url, pay_kind: the link to the sender's own payment page goes with the copy (src/server/routes-paylink.ts),
+    // still as the page of whoever set it (pay_set_by), so it goes when they leave the team (paydrop.ts).
+    run('INSERT INTO envelopes (id, account_id, sender_id, kind, subject, message, ordered, reminder_days, expire_days, date_format, template_id, powerform_id, bulk_id, created_at, updated_at, pay_url, pay_kind, pay_set_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       eid, o.accountId, o.senderId, o.kind, str(o.subject ?? src.subject, 200), str(o.message ?? src.message, 5000), src.ordered, src.reminder_days, src.expire_days, src.date_format,
-      src.kind === 'template' ? src.id : src.template_id, o.extra?.powerform_id ?? null, o.extra?.bulk_id ?? null, t, t, src.pay_url ?? null, src.pay_kind ?? null);
+      src.kind === 'template' ? src.id : src.template_id, o.extra?.powerform_id ?? null, o.extra?.bulk_id ?? null, t, t, src.pay_url ?? null, src.pay_kind ?? null, src.pay_url ? src.pay_set_by || src.sender_id : null);
     const dmap = new Map<string, string>();
     const rmap = new Map<string, string>();
     for (const d of src.documents) {
@@ -1278,6 +1279,8 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
   // too, and would only come back. The caller is answered false, as for a reminder that was turned off, and the
   // envelope's record already says why.
   if (r.role !== 'inperson' && (r.complained_at || ((kind === 'reminder' || kind === 'expiring') && r.bounced_at))) return false;
+  // Nor a member of a signing group who reported it, also once they have taken it on (memberMailStop in groups.ts).
+  if (r.group_name && memberMailStop(r)) return false;
   const sender = senderOf(e);
   // Whoever asked for this email (the sender, the timer, a name a signer changed), the guard has the last word
   // before it is written: nothing goes to a recipient in a paused sender's name, and nothing that reads like a fake

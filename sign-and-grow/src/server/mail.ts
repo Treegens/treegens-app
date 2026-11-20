@@ -220,6 +220,15 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
 // Every message is recorded. With SMTP_URL set it is also delivered; without it, it shows up in the dev outbox.
 // The answer says which, so nothing has to claim an email was sent when it was not.
 export async function sendMail(m: Mail): Promise<MailStatus> {
+  return deliver(recordMail(m));
+}
+
+// The two halves of sendMail, for code that must not wait for the mail server where it writes an email (the payment
+// code writes its emails inside an account's queue and hands them over after it, see serial() in routes-billing.ts).
+// recordMail writes the row as 'queued'; deliverQueued hands it over once. A queued row nobody handed over (the
+// process stopped) is picked up by the timer after MAIL_STUCK_MS, and each hand-over first claims the row, so the
+// timer and the code that wrote it never both send it.
+export function recordMail(m: Mail): number | bigint {
   const html = renderMail(m);
   // What a later try needs besides the html. Attachments go to the file store (a signed PDF is there already) and
   // the row only names them.
@@ -237,7 +246,12 @@ export async function sendMail(m: Mail): Promise<MailStatus> {
     'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user, message_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
     m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null, newMessageId(),
   );
-  return deliver(r.lastInsertRowid);
+  return r.lastInsertRowid;
+}
+export async function deliverQueued(id: number | bigint): Promise<MailStatus | null> {
+  const t = now(), stuck = new Date(Date.now() - MAIL_STUCK_MS).toISOString();
+  if (!run("UPDATE emails SET tried_at=? WHERE id=? AND status='queued' AND COALESCE(tried_at, '') < ?", t, id, stuck).changes) return null;
+  return deliver(id);
 }
 
 // Why an email that is waiting for another try must not go out any more, or null when it may. `quiet` is for an email

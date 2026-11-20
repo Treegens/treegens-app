@@ -20,7 +20,7 @@ import { gateOf, lockedView } from './signercode.ts';
 import { CONSENT_VERSION, isConsentVersion, consentAuditNote } from '../lib/policy.ts';
 import { labelOf } from '../lib/bysender.ts';
 // A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
-import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup } from './groups.ts';
+import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup, memberReported, memberWrongCode } from './groups.ts';
 // What happens around the certificate: later visits and the first look at the completed copy (evidence.ts).
 import { noteVisit, noteCopyOpened } from './evidence.ts';
 // A witness for one signer: what the page shows each of them, and what has to happen before Finish (witness.ts).
@@ -110,7 +110,7 @@ route('GET', '/sign/:token', (c) => {
     // mail_stopped: this person marked an email about the envelope as spam, so nothing more is emailed to them about
     // it. The page says so and offers the one way back, which only they have (POST /sign/:token/mail-again).
     // link_by_sender: we have no address for this person, so the page never promises an email (src/lib/bysender.ts).
-    recipient: { id: r.id, name: r.name, email: r.email, link_by_sender: !!r.link_by_sender && !r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, mail_stopped: !!r.complained_at, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
+    recipient: { id: r.id, name: r.name, email: r.email, link_by_sender: !!r.link_by_sender && !r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, mail_stopped: !!(r.complained_at || r.reported_at), mail_stopped_why: r.complained_at ? 'complaint' : r.reported_at ? 'report' : null, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
       earlier_copy: r.status !== 'completed' && !!r.signed_before && !!get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? AND copy_sha256 IS NOT NULL', e.id, r.id) },
   };
   // Someone ran into the deadline. The sender is told before anything else is decided here, so an access code that
@@ -146,6 +146,7 @@ route('GET', '/sign/:token', (c) => {
   // Other people's fields that this person's formulas use, as they count right now (named, with a value only once
   // their owner has finished), and a key for them that Finish sends back (formulaInputs in logic.ts).
   const inputs = formulaInputs(e, r.id);
+  if (e.status === 'sent' && (r.seen_inputs ?? null) !== (inputs.key ?? '-')) run('UPDATE recipients SET seen_inputs=? WHERE id=?', inputs.key ?? '-', r.id);
   return {
     ...base,
     locked: false,
@@ -176,6 +177,8 @@ route('GET', '/sign/:token', (c) => {
         // signer's own calendar.
         value: done ? fieldDisplayValue(f, o, e.date_format, senderZone(e)) : f.type === 'date' ? formatDateValue(words(f), e.date_format) : words(f),
         image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
+        // A finished person's calculated result also as its plain number, so "1.233" is never read as 1233 (logic.ts).
+        ...(done && f.formula && f.value && f.calc_num != null ? { num: Number(f.calc_num) } : {}),
         // A stamp: its picture by this signing link, and its name. The sender's from the first look, another
         // person's once they have finished (stamps.ts).
         ...(f.type === 'stamp' && done && f.value ? stampSeen(c.params.token, f) : {}),
@@ -201,12 +204,15 @@ route('POST', '/sign/:token/unlock', async (c) => {
   const { e, r, actor } = look(c, false);
   if (!r.access_code) return; // nothing to unlock
   if (r.code_frozen_at) throw bad(frozenText(e), 423);
-  const tries = `code:${r.id}:${c.ip}`;
+  // A member of a signing group whose colleague has it, or who only reads a copy, is counted alone (groups.ts), so
+  // a colleague behind the same office connection is not made to wait for their wrong tries.
+  const tries = `code:${r.member && (r.group_state === 'taken' || r.group_state === 'copy') ? r.member.id : r.id}:${c.ip}`;
   const wait = rateWait(tries, CODE_TRIES_PER_ADDRESS);
   if (wait) throw bad(`That makes ${CODE_TRIES_PER_ADDRESS} wrong codes from your internet connection in a quarter of an hour. Wait ${Math.ceil(wait / 60_000)} minutes and try again, or ask ${sender(e).name} for the code: ${sender(e).email}. Nothing you filled in is lost.`, 429);
   if (!safeEqual(code, r.access_code)) {
     rateLimit(tries, Infinity, CODE_WAIT_MS); // counts this wrong try for this device address
-    const left = await wrongAccessCode(e, r, actor);
+    // Never the group's code for a member who cannot act: their tries freeze their own link only (memberWrongCode).
+    const left = (await memberWrongCode(e, r, actor)) ?? (await wrongAccessCode(e, r, actor));
     if (!left) throw bad(frozenText(e), 423);
     throw bad(`That access code is not right. ${sender(e).name} chose the code and can tell you what it is: ${sender(e).email}. It is not in the email we sent you.${left <= 3 ? ` After ${left} more wrong ${left === 1 ? 'try' : 'tries'} the code is frozen until ${sender(e).name} sets a new one.` : ''}`, 401);
   }
@@ -217,7 +223,8 @@ route('POST', '/sign/:token/unlock', async (c) => {
 // "Ask the sender" on the locked screen: for someone who was never given the code, or whose code is frozen.
 route('POST', '/sign/:token/ask-code', async (c) => {
   const { e, r, actor } = find(c, false);
-  rateLimit(`askcode:${r.id}`, 2, 86400_000);
+  // Per member of a signing group: one member asking twice never uses up the asks of the colleague who is signing.
+  rateLimit(`askcode:${r.member?.id || r.id}`, 2, 86400_000);
   await requestAccessCode(e, r, actor);
 }, 'public');
 
@@ -370,6 +377,8 @@ route('POST', '/sign/:token/report', async (c) => {
   const { e, r, actor } = find(c, false);
   rateLimit(`report:${c.ip}`, 10, 3600_000);
   await reportAbuse(e, r, await c.body(), actor);
+  // A member of a signing group who reports it is emailed nothing more about it, and is told so (groups.ts).
+  return memberReported(e, r, actor) || undefined;
 }, 'public');
 
 route('GET', '/sign/:token/download', async (c) => {

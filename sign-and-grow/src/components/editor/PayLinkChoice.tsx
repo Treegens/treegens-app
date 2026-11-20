@@ -4,7 +4,7 @@ import { api, toast } from '../ui';
 import { PAY_FOR_SENDER } from '@/lib/paylink';
 
 type Link = { url: string; host: string; kind: string; label: string } | null;
-type State = { pay_link: Link; may: boolean; why: string | null; kinds: Record<string, string> };
+type State = { pay_link: Link; may: boolean; why: string | null; host_why?: string | null; gone?: { at: string; note: string } | null; kinds: Record<string, string> };
 
 // A link to the sender's own payment page, shown to each signer after they press Finish (src/lib/paylink.ts). It
 // stands on the step with the Send button and is saved by itself, straight away, with its own button: it changes
@@ -36,7 +36,7 @@ export function PayLinkChoice({ envelopeId, isTpl }: { envelopeId?: string; isTp
     setError('');
     try {
       const r = await api<{ pay_link: Link }>(`/envelopes/${envelopeId}/pay-link`, { method: 'PUT', body: { url: to, kind } });
-      setSt({ ...st, pay_link: r.pay_link });
+      setSt({ ...st, pay_link: r.pay_link, host_why: null, gone: r.pay_link ? null : st.gone });
       setUrl(r.pay_link?.url || '');
       toast(r.pay_link ? 'Payment link saved. Nobody was emailed.' : 'Payment link removed.');
     } catch (e: any) {
@@ -50,6 +50,8 @@ export function PayLinkChoice({ envelopeId, isTpl }: { envelopeId?: string; isTp
       <h3 style={{ margin: '0 0 4px' }}>Payment at signing <span className="muted small">(optional)</span></h3>
       <p className="muted small" id="ed-pay-says" style={{ marginTop: 0 }}>{PAY_FOR_SENDER}{isTpl ? ' Every envelope made from this template starts with this link.' : ''}</p>
       {!st.may && <div className="notice warn" role="status"><b>Not shown to anyone right now.</b> {st.why}</div>}
+      {st.may && link && st.host_why && <div className="notice warn" role="status"><b>Not shown to anyone right now.</b> {st.host_why}</div>}
+      {!link && st.gone && <div className="notice" role="status">{st.gone.note}</div>}
       {st.may && (
         <>
           <label className="f" style={{ marginBottom: 8 }}>

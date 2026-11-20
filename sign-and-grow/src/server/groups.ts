@@ -1,9 +1,9 @@
 import { all, get, run, tx } from './db.ts';
-import { bad, id, token, now, isEmail, str, baseUrl, checkCode } from './util.ts';
+import { bad, id, token, now, isEmail, str, baseUrl, checkCode, sha256 } from './util.ts';
 import { sendMail, type MailStatus } from './mail.ts';
 import { audit, loadEnvelope, notifySender, senderOf, emailRefusal, notOpen, declineRecipient, type Actor } from './envelopes.ts';
 import type { Ctx } from './router.ts';
-import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUPS_PER_ACCOUNT, ACCESS_CODE_MIN } from '../lib/policy.ts';
+import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUPS_PER_ACCOUNT, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { actingName, whoIs, groupInvite, groupDoes, groupDid } from '../lib/groups.ts';
 
 // Signing groups: a recipient that is a group of people, any one of whom can act ("HR team", "Accounts payable").
@@ -40,8 +40,42 @@ const ts = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UT
 // The members of a group recipient who are on it now, in their order, with their links.
 const active = (recipientId: string): any[] => all('SELECT * FROM recipient_members WHERE recipient_id=? AND removed_at IS NULL ORDER BY position, id', recipientId);
 const linkOf = (m: any) => `${baseUrl()}/sign/${m.token}`;
-// One member, seen as a recipient: the group's row with this person's name, address, link and security code.
-const memberAs = (r: any, m: any) => ({ ...r, name: m.name, email: m.email, token: m.token, check_code: m.check_code, muted: m.muted, member: m });
+
+// A member who marked our email as spam, or who reported the document, is emailed nothing more about it. The spam
+// mark is kept for the account (mail_complaints, see routes-bounces.ts), like anyone's, so it holds for this
+// account's other documents too and is read from there, whatever the member's place in the group is now. A report
+// holds for this envelope (recipient_members.reported_at). Only the member can undo either, on their own signing
+// page with a code sent to their own address (mail-again in routes-bounces.ts).
+const stopOf = (mid: string): { complained: string | null; reported: string | null } =>
+  get(`SELECT c.at complained, m.reported_at reported FROM recipient_members m JOIN envelopes e ON e.id=m.envelope_id
+    LEFT JOIN mail_complaints c ON c.account_id=e.account_id AND c.email=m.email WHERE m.id=?`, mid) || { complained: null, reported: null };
+/** Why nothing is emailed about this envelope to this member, or to the member who has the group's document, or null. */
+export function memberMailStop(r: any): 'complaint' | 'report' | null {
+  const mid = r?.member?.id || (r?.group_name ? r.claimed_by : null);
+  if (!mid) return null;
+  const s = stopOf(mid);
+  return s.complained ? 'complaint' : s.reported ? 'report' : null;
+}
+const STOP_WHY = { complaint: 'marked an earlier email from this account as spam', report: 'reported this document' };
+// One line in the record for the members a notice did not go to because of such a mark, so nobody is left out
+// without the sender being able to see why.
+function noteStopped(e: any, group: string, list: any[], what: string) {
+  if (list.length) audit(e.id, SYSTEM, 'Not emailed', `${list.map((m) => `${m.name} <${m.email}>, of ${group}, ${STOP_WHY[m.stop as 'complaint' | 'report']}`).join('; ')}. So ${what} was not emailed to them. Their link works, and only they can start our emails again, on their signing page.`);
+}
+// One member, seen as a recipient: the group's row with this person's name, address, link and security code, and
+// their own marks (a group's row has no address of its own, so its marks say nothing about a member).
+const memberAs = (r: any, m: any) => {
+  const s = stopOf(m.id);
+  return { ...r, name: m.name, email: m.email, token: m.token, check_code: m.check_code, muted: m.muted, member: m, complained_at: s.complained, reported_at: s.reported };
+};
+// The members a notice can go to, and the ones it cannot because of their own mark (`stop`).
+const reachable = (r: any, list: any[]) => {
+  const all = list.map((m) => {
+    const x = memberAs(r, m);
+    return { ...m, stop: x.complained_at ? 'complaint' : x.reported_at ? 'report' : null };
+  });
+  return { to: all.filter((m) => !m.stop), stopped: all.filter((m) => m.stop) };
+};
 
 // ---- The groups an account keeps ---------------------------------------------------------------------------
 
@@ -122,7 +156,11 @@ export function attachGroups(e: any) {
       r.group_missing = !g;
       if (g) (r.name = g.name), (r.group_name = g.name);
       r.members = g ? all('SELECT id, name, email FROM signing_group_members WHERE group_id=? ORDER BY position, id', g.id) : [];
-    } else r.members = all('SELECT id, name, email, sent_at, viewed_at, muted FROM recipient_members WHERE recipient_id=? AND removed_at IS NULL ORDER BY position, id', r.id);
+    } else
+      // mail_stop: 'complaint' when this member marked our email as spam, 'report' when they reported this document.
+      // Either way nothing more is emailed to them about it (memberMailStop below), and the envelope page says so.
+      r.members = all(`SELECT m.id, m.name, m.email, m.sent_at, m.viewed_at, m.muted, CASE WHEN c.at IS NOT NULL THEN 'complaint' WHEN m.reported_at IS NOT NULL THEN 'report' END mail_stop
+        FROM recipient_members m LEFT JOIN mail_complaints c ON c.account_id=? AND c.email=m.email WHERE m.recipient_id=? AND m.removed_at IS NULL ORDER BY m.position, m.id`, e.account_id, r.id);
   }
 }
 
@@ -293,10 +331,13 @@ export function settleGroups(envelopeId: string) {
  * longer needed, not your turn yet.
  */
 export function groupPeople(r: any): any[] {
-  if (!r?.group_name || r.claimed_by || r.member) return [r];
+  if (!r?.group_name || r.member) return [r];
+  // A member who reported the document is written to about it no more, also once they have it. (A spam mark is on
+  // the row, and on each member below, as complained_at: every caller already leaves those out, and says so.)
+  if (r.claimed_by) return memberMailStop(r) === 'report' ? [] : [r];
   const rows = active(r.id);
   // A group that was just taken off the envelope has no lines left. The members it was loaded with are used.
-  return (rows.length ? rows : r.members || []).filter((m: any) => m.sent_at).map((m: any) => memberAs(r, m));
+  return (rows.length ? rows : r.members || []).filter((m: any) => m.sent_at).map((m: any) => memberAs(r, m)).filter((x: any) => !x.reported_at);
 }
 
 /**
@@ -307,7 +348,11 @@ export function groupPeople(r: any): any[] {
  */
 export async function notifyMembers(e: any, r: any, kind: string, send: (e: any, r: any, kind: any) => Promise<false | MailStatus>): Promise<false | MailStatus> {
   let out: false | MailStatus = false;
-  for (const m of active(r.id)) {
+  const { to, stopped } = reachable(r, active(r.id));
+  // A member who marked our email as spam or reported the document gets nothing, of any kind. When the document goes
+  // out to them the record says why; for a reminder, the answer to the sender names them (remind in routes-envelopes.ts).
+  if (kind === 'new' || kind === 'again') noteStopped(e, r.group_name, stopped, 'the document');
+  for (const m of to) {
     // Like a person whose email came back: no reminder and no "expires soon" to a member's address that bounced.
     // It would only come back again. The sender was told which member it was and how to fix it (bouncedMember).
     if ((kind === 'reminder' || kind === 'expiring') && get("SELECT 1 x FROM emails WHERE envelope_id=? AND recipient_id=? AND to_email=? COLLATE NOCASE AND bounce_kind='hard'", e.id, r.id, m.email)) continue;
@@ -315,6 +360,29 @@ export async function notifyMembers(e: any, r: any, kind: string, send: (e: any,
     if (!how) continue;
     if (!m.sent_at) run('UPDATE recipient_members SET sent_at=? WHERE id=?', now(), m.id);
     if (how === 'sent' || (how === 'outbox' && out !== 'sent') || !out) out = how;
+  }
+  return out;
+}
+
+/**
+ * For POST /envelopes/:id/remind: the members of these group recipients that a reminder does not go to because of
+ * their own mark, so the answer names them like anyone else who is left out ("why" as there, plus 'reported'). A
+ * member who turned reminders off is not named, like any person who did.
+ */
+export function membersNotReminded(e: any, rows: any[]): { recipient_id: string; member_id: string; name: string; why: string }[] {
+  const out: { recipient_id: string; member_id: string; name: string; why: string }[] = [];
+  for (const r of rows) {
+    if (!r.group_name) continue;
+    if (r.claimed_by) {
+      if (memberMailStop(r) === 'report') out.push({ recipient_id: r.id, member_id: r.claimed_by, name: r.name, why: 'reported' });
+      continue;
+    }
+    for (const m of active(r.id)) {
+      const x = memberAs(r, m);
+      const why = x.complained_at ? 'marked_as_spam' : x.reported_at ? 'reported'
+        : get("SELECT 1 x FROM emails WHERE envelope_id=? AND recipient_id=? AND to_email=? COLLATE NOCASE AND bounce_kind='hard'", e.id, r.id, m.email) ? 'email_bounced' : null;
+      if (why) out.push({ recipient_id: r.id, member_id: m.id, name: m.name, why });
+    }
   }
   return out;
 }
@@ -369,14 +437,19 @@ export async function groupsCorrected(before: any, write: (e: any, r: any, kind:
     const was = before.recipients.find((x: any) => x.id === r.id);
     if (!was?.group_name) continue;
     const still = new Set<string>(active(r.id).map((m: any) => m.id));
-    const gone = (was.members || []).filter((m: any) => !still.has(m.id) && m.sent_at);
+    const told = reachable(was, (was.members || []).filter((m: any) => !still.has(m.id) && m.sent_at));
+    const gone = told.to;
     if (gone.length && quiet) audit(e.id, SYSTEM, 'Change not emailed', `Sending is paused on the account, so nobody was emailed about being taken out of ${was.group_name}: ${listNames(gone)}. Their links say so.`);
+    noteStopped(e, was.group_name, told.stopped, 'that they were taken out of the group');
     for (const m of quiet ? [] : gone)
       await sendMail({ to: m.email, subject: `No longer needed: ${e.subject}`, heading: 'You no longer need to look at this',
         lines: [`${sender?.name || 'The sender'} changed who can act for ${was.group_name} on this document, and you are no longer one of them. There is nothing more for you to do. The link you were sent now says the same.`],
         envelopeId: e.id, recipientId: r.id, brand: brandOf(e.account_id), replyTo: sender?.email, fromName: sender?.name });
     if (!r.group_name || r.claimed_by || !(r.status === 'sent' || r.status === 'viewed' || (r.role === 'cc' && r.status === 'completed'))) continue;
-    for (const m of active(r.id).filter((x: any) => !x.sent_at)) {
+    const asked = reachable(r, active(r.id).filter((x: any) => !x.sent_at));
+    // Said once, for someone this correction added: a member left out before was written down then.
+    noteStopped(e, r.group_name, asked.stopped.filter((m: any) => !(was.members || []).some((x: any) => x.id === m.id)), 'the document');
+    for (const m of asked.to) {
       const how = await write(e, memberAs(r, m), 'new');
       if (!how) continue;
       run('UPDATE recipient_members SET sent_at=? WHERE id=?', now(), m.id);
@@ -396,10 +469,11 @@ export const memberOf = (tok: string): any => get('SELECT * FROM recipient_membe
 //   copy:    the group only gets a copy. Every member reads it with their own link.
 //   taken:   a colleague has it. This link shows who, and can ask the sender to give it back to the group.
 //   removed: the sender took this member out of the group, or put a person where the group was.
+// 'mail-again' is how a member who marked our email as spam, or reported the document, asks for our emails again.
 const MAY: Record<string, string[]> = {
-  open: ['', 'doc', 'download', 'consent', 'decline', 'ask', 'comments', 'request-extension', 'unlock', 'ask-code', 'mute', 'report'],
-  copy: ['', 'doc', 'download', 'ask', 'comments', 'unlock', 'ask-code', 'mute', 'report'],
-  taken: ['', 'take-over', 'unlock', 'ask-code', 'mute', 'report'],
+  open: ['', 'doc', 'download', 'consent', 'decline', 'ask', 'comments', 'request-extension', 'unlock', 'ask-code', 'mute', 'report', 'mail-again'],
+  copy: ['', 'doc', 'download', 'ask', 'comments', 'unlock', 'ask-code', 'mute', 'report', 'mail-again'],
+  taken: ['', 'take-over', 'unlock', 'ask-code', 'mute', 'report', 'mail-again'],
   removed: ['', 'report'],
 };
 
@@ -421,7 +495,10 @@ export function takenText(e: any, row: any): string {
  */
 export function asMember(c: Ctx, out: { e: any; r: any; locked: boolean; gate: any; actor: Actor }, m: any) {
   const row = out.r;
-  if (row.group_name && row.claimed_by === m.id && !m.removed_at) return { ...out, actor: { ...out.actor, name: `${actingName(row)} <${row.email}>` } };
+  // This person's own marks: a spam mark (kept for the account) or a report of this document. Nothing more is
+  // emailed to them about it, their page says so, and they alone can undo it there (mail-again).
+  const s = stopOf(m.id);
+  if (row.group_name && row.claimed_by === m.id && !m.removed_at) return { ...out, r: { ...row, complained_at: row.complained_at || s.complained, reported_at: s.reported }, actor: { ...out.actor, name: `${actingName(row)} <${row.email}>` } };
   const state = m.removed_at || !row.group_name ? 'removed' : row.role === 'cc' ? 'copy' : row.claimed_by ? 'taken' : 'open';
   const what = c.url.pathname.replace(/^\/api/, '').split('/')[3] || '';
   if (!MAY[state].includes(what)) {
@@ -430,7 +507,9 @@ export function asMember(c: Ctx, out: { e: any; r: any; locked: boolean; gate: a
     if (state === 'copy') throw bad(`This link is for reading the copy that was sent to ${row.group_name}. There is nothing to sign or fill in with it.`, 409, { code: 'copy' });
     throw bad(`Agree to ${groupDoes(row.role)} first. This document was sent to ${row.group_name}, and the first member who agrees takes it on. Until then nothing can be filled in or saved through this link.`, 409, { code: 'not_taken' });
   }
-  const r = { ...row, name: m.name, email: m.email, token: m.token, check_code: m.check_code, muted: m.muted, member: m, group_state: state };
+  // code_frozen_at: the group's code is frozen, or (for a member who cannot act) this member's own link is (memberWrongCode).
+  const r = { ...row, name: m.name, email: m.email, token: m.token, check_code: m.check_code, muted: m.muted, member: m, group_state: state, complained_at: s.complained, reported_at: s.reported,
+    code_frozen_at: row.code_frozen_at || ((state === 'taken' || state === 'copy') && frozenAlone(row, m) ? now() : null) };
   const actor = { ...out.actor, name: `${m.name}${row.group_name ? `, for ${row.group_name}` : ''} <${m.email}>` };
   // Someone who is no longer on the document is told so at once: there is nothing behind the access code for them.
   return state === 'removed' ? { ...out, r, actor, locked: false, gate: null } : { ...out, r, actor };
@@ -461,6 +540,76 @@ export function memberOpened(e: any, r: any, actor: Actor) {
   if (!m || m.viewed_at || e.status !== 'sent' || !run('UPDATE recipient_members SET viewed_at=? WHERE id=? AND viewed_at IS NULL', now(), m.id).changes) return;
   // markViewed has just written the line for the first member who opened it. Every later one gets a line here.
   if (r.status !== 'sent') audit(e.id, actor, 'Viewed', `${m.name} opened the envelope`);
+}
+
+/**
+ * Called after a member of a group (or the member who has its document) reports it, on their signing page or with the
+ * security code of an email. Nothing more is emailed to that person about this envelope, the record says so, and
+ * the answer tells them. The other members are not affected. Answers null for a recipient that is no group member.
+ */
+export function memberReported(e: any, r: any, actor: Actor): { ok: true; mail_stopped: true } | null {
+  const mid = r?.member?.id || (r?.group_name ? r.claimed_by : null);
+  if (!mid) return null;
+  const m = get('SELECT * FROM recipient_members WHERE id=?', mid);
+  if (!m) return null;
+  if (run('UPDATE recipient_members SET reported_at=? WHERE id=? AND reported_at IS NULL', now(), m.id).changes)
+    audit(e.id, actor, 'Emails stopped', `${m.name} <${m.email}>, of ${r.group_name}, reported this document, so nothing more is emailed to them about it: no reminders, no notices and no copy. The other members of ${r.group_name} are not affected. Their link still works, and only they can start our emails again, on their signing page.`);
+  return { ok: true, mail_stopped: true };
+}
+
+/** A member asked for our emails again with the code sent to their address: their report of this envelope no longer stops them. */
+export function memberWantsMail(r: any) {
+  const mid = r?.member?.id || (r?.group_name ? r.claimed_by : null);
+  if (mid) run('UPDATE recipient_members SET reported_at=NULL WHERE id=?', mid);
+}
+
+/**
+ * For a spam mark the mail provider reports about an address that is on this envelope only as a member of a group
+ * (routes-bounces.ts): who it is, and what the sender is told. The mark itself is kept for the account like anyone's,
+ * which is what stops our emails to them (memberMailStop). Null when the address is no member's.
+ */
+export function complainedMember(e: any, email: string): { name: string; audit: string; lines: string[] } | null {
+  const m = get(`SELECT m.name, m.email, r.group_name FROM recipient_members m JOIN recipients r ON r.id=m.recipient_id
+    WHERE m.envelope_id=? AND m.email=? COLLATE NOCASE AND r.group_name IS NOT NULL ORDER BY m.removed_at IS NOT NULL, m.position LIMIT 1`, e.id, email);
+  if (!m) return null;
+  const who = `${m.name} <${m.email}>, a member of ${m.group_name},`;
+  return {
+    name: m.name,
+    audit: `${who} marked the email "${str(e.subject, 200)}" as spam in their mail program. Nothing more is emailed to them about this account's documents unless they ask for it themselves on a signing page. The other members of ${m.group_name} are not affected.`,
+    lines: [
+      `${who} marked the email "${e.subject}" as spam in their mail program. So we no longer email ${m.name} about documents from your account: no reminders, no notice when you change one, no notice when the document comes back to the group, and no copy when one is completed. That holds for this envelope, for any other that is out to them, and for new ones.`,
+      `The other members of ${m.group_name} are not affected: they still get their emails, and any of them can still act. ${m.name}'s own link still works too.`,
+      `Only ${m.name} can undo that: their signing page has a button that starts our emails to them again. While nobody has taken the document on, you can still give them their link yourself: open the envelope and choose Copy link next to ${m.name} under ${m.group_name}.`,
+    ],
+  };
+}
+
+// ---- The access code, for a member who cannot act -------------------------------------------------------------
+// A group has one access code, and while nobody has taken the document on every member's wrong tries count towards
+// freezing it, as one person's would. Once a colleague has it ('taken'), or when the group only gets a copy ('copy'),
+// a member's wrong tries are counted for that member alone: their own link freezes, and the code of the person who
+// is signing (and of every other member) keeps working. A new code from the sender starts every count again.
+const codeFor = (r: any) => sha256(`member-code:${r.id}:${r.access_code || ''}`).slice(0, 24);
+const countsAlone = (r: any) => !!r?.member && (r.group_state === 'taken' || r.group_state === 'copy');
+const frozenAlone = (r: any, m: any) => !!r.access_code && (m.code_fails || 0) >= ACCESS_CODE_TRIES && m.code_for === codeFor(r);
+
+/**
+ * Called by POST /sign/:token/unlock for a wrong code. Answers how many tries are left for this link, or null when
+ * the member's tries count for the group (then wrongAccessCode in envelopes.ts counts them, as before).
+ */
+export async function memberWrongCode(e: any, r: any, actor: Actor): Promise<number | null> {
+  if (!countsAlone(r)) return null;
+  const m = r.member, mark = codeFor(r);
+  audit(e.id, actor, 'Access code failed', `${m.name}, of ${r.group_name}. Counted for ${m.name}'s own link only, because ${r.group_state === 'copy' ? 'the group only gets a copy' : 'a colleague has taken the document on'}.`);
+  run('UPDATE recipient_members SET code_fails=CASE WHEN code_for=? THEN code_fails+1 ELSE 1 END, code_for=? WHERE id=?', mark, mark, m.id);
+  const fails = get('SELECT code_fails n FROM recipient_members WHERE id=?', m.id).n;
+  if (fails === ACCESS_CODE_TRIES) {
+    audit(e.id, SYSTEM, 'Access code frozen', `For ${m.name}'s link only (${r.group_name}): ${ACCESS_CODE_TRIES} wrong tries. The code still opens the document for everyone else.`);
+    await notifySender(e, 'always', `Access code frozen for one link: ${e.subject}`, `The access code no longer opens ${m.name}'s link`,
+      [`It was entered wrongly ${ACCESS_CODE_TRIES} times on the link of ${m.name}, a member of ${r.group_name}, so it no longer opens that one link. That keeps it from being guessed.`,
+        `It still works for everyone else in ${r.group_name}${r.group_state === 'taken' ? `, ${get('SELECT name FROM recipients WHERE id=?', r.id)?.name} who has the document included` : ''}. If ${m.name} should get in, set a new code with "Access code" next to ${r.group_name} on the envelope page and give it to them yourself. Everyone then needs the new code.`]);
+  }
+  return Math.max(0, ACCESS_CODE_TRIES - fails);
 }
 
 /** One member turns reminders off for themselves. The others keep getting theirs. */
@@ -513,15 +662,20 @@ function unclaim(r: any, alsoWaiting: boolean): boolean {
 // Tells the members that the document is with the whole group again, each with their own link. It is news, not a
 // reminder, so it also goes to someone who turned reminders off. While the sender is paused, or the envelope reads
 // like a fake notice, nobody is emailed in the sender's name: the links work all the same, and the record says so.
-async function tellGroup(e: any, r: any, said: string, skip?: string): Promise<void> {
-  const members = active(r.id).filter((m: any) => m.id !== skip);
-  if (r.status === 'pending' || !members.length) return;
-  if (emailRefusal(e)) return void audit(e.id, SYSTEM, 'Change not emailed', `Emails in the sender's name are held back on this account or for this envelope, so the members of ${r.group_name} were not emailed that the document is with the group again: ${listNames(members)}. Their links work.`);
+// Answers how many were emailed and how many were not (for a mark of their own, or because sending is held back),
+// so whoever is told about it afterwards is told the truth.
+async function tellGroup(e: any, r: any, said: string, skip?: string): Promise<{ emailed: number; not: number }> {
+  const size = active(r.id).length;
+  const { to: members, stopped } = reachable(r, active(r.id).filter((m: any) => m.id !== skip));
+  if (r.status === 'pending') return { emailed: 0, not: 0 };
+  noteStopped(e, r.group_name, stopped, 'that the document is with the group again');
+  if (!members.length) return { emailed: 0, not: stopped.length };
+  if (emailRefusal(e)) return (audit(e.id, SYSTEM, 'Change not emailed', `Emails in the sender's name are held back on this account or for this envelope, so the members of ${r.group_name} were not emailed that the document is with the group again: ${listNames(members)}. Their links work.`), { emailed: 0, not: members.length + stopped.length });
   const sender = senderOf(e);
   for (const m of members) {
     await sendMail({
       to: m.email, subject: `Back with ${r.group_name}: ${e.subject}`, heading: `This document is with ${r.group_name} again`,
-      lines: [said, groupInvite(r.group_name, members.length + (skip ? 1 : 0), r.role),
+      lines: [said, groupInvite(r.group_name, size, r.role),
         ...(r.access_code ? [`You will need an access code to open it. ${sender?.name || 'The sender'} will give it to you separately. It is not in this email.`] : []),
         `Sent by ${sender?.name} (${sender?.email}). Reply to this email to reach them directly.`],
       cta: { label: r.role === 'approver' ? 'Review and approve' : r.role === 'viewer' ? 'View document' : 'Review and sign', url: linkOf(m) },
@@ -529,7 +683,12 @@ async function tellGroup(e: any, r: any, said: string, skip?: string): Promise<v
     });
     if (!m.sent_at) run('UPDATE recipient_members SET sent_at=? WHERE id=?', now(), m.id);
   }
+  return { emailed: members.length, not: stopped.length };
 }
+// What the sender is told about that, in one sentence.
+const toldText = (t: { emailed: number; not: number }) =>
+  !t.emailed ? 'Nobody was emailed about it (the envelope\'s record says why), so if it is urgent, copy their links from the envelope page and send them yourself.'
+    : `${many(t.emailed, 'member')} ${t.emailed === 1 ? 'was' : 'were'} emailed their link${t.not ? `, and ${many(t.not, 'other')} ${t.not === 1 ? 'was' : 'were'} not (the envelope's record says why)` : ''}.`;
 
 /**
  * The member who took a group's document on hands it back to the group, before finishing. Nothing they filled in
@@ -545,17 +704,19 @@ export async function handBack(e: any, r: any, reason: any, actor: Actor): Promi
   audit(e.id, actor, 'Handed back to the group', `${r.name} <${r.email}> handed this back to ${r.group_name}${why ? `: ${why}${/[.!?]$/.test(why) ? '' : '.'}` : '.'} Nothing that ${r.name} had filled in or signed was passed on. Any member can take it on again.`);
   const fresh = loadEnvelope(e.id);
   const row = fresh.recipients.find((x: any) => x.id === r.id);
-  await tellGroup(fresh, row, `${r.name} had taken this on and has handed it back to ${r.group_name}${why ? `, with this note: ${why}` : ''}. Nothing ${r.name} filled in was kept.`, r.claimed_by);
+  // The note is a stranger's words as far as the other members' inboxes go (anyone holding a member's link can type
+  // it), so it goes to the sender and into the record only, never into the email the group gets in the sender's name.
+  const told = await tellGroup(fresh, row, `${r.name} had taken this on and has handed it back to ${r.group_name}. Nothing ${r.name} filled in was kept.`, r.claimed_by);
   await notifySender(e, 'always', `Handed back: ${e.subject}`, `${r.name} handed this back to ${r.group_name}`,
-    [`${r.name} <${r.email}> had taken "${e.subject}" on for ${r.group_name} and has handed it back${why ? `, with this note: ${why}` : ''}.`,
-      `Every member of ${r.group_name} can take it on again, and they have been emailed. Nothing ${r.name} had filled in was kept. You do not have to do anything.`]);
+    [`${r.name} <${r.email}> had taken "${e.subject}" on for ${r.group_name} and has handed it back${why ? `, with this note for you: ${why}` : ''}.`,
+      `Every member of ${r.group_name} can take it on again. ${toldText(told)}${told.emailed && why ? ' The note was not passed on to them.' : ''} Nothing ${r.name} had filled in was kept. You do not have to do anything.`]);
 }
 
 /**
  * The sender gives a group's document back to the whole group: the answer to a member who asked to take over, or to
  * a colleague who took it on and is away. Works while the person who has it has not finished.
  */
-export async function releaseGroup(e: any, recipientId: string, actor: Actor): Promise<void> {
+export async function releaseGroup(e: any, recipientId: string, actor: Actor): Promise<{ ok: true; emailed: number; not_emailed: number; told: string }> {
   const r = e.recipients.find((x: any) => x.id === recipientId);
   if (!r) throw bad('Recipient not found.', 404);
   if (!r.group_name) throw bad(`${r.name} is one person, not a group, so there is no group to give this back to. To send it to someone else, choose Correct next to their name.`);
@@ -566,7 +727,11 @@ export async function releaseGroup(e: any, recipientId: string, actor: Actor): P
   audit(e.id, actor, 'Given back to the group', `The sender took this back from ${r.name} <${r.email}> and gave it to all of ${r.group_name}. Nothing that ${r.name} had filled in or signed was kept. Any member can take it on.`);
   const fresh = loadEnvelope(e.id);
   const sender = senderOf(e);
-  await tellGroup(fresh, fresh.recipients.find((x: any) => x.id === r.id), `${sender?.name || 'The sender'} gave this back to all of ${r.group_name}. ${r.name} had taken it on before, and what ${r.name} had filled in was not kept.`);
+  const row = fresh.recipients.find((x: any) => x.id === r.id);
+  const t = await tellGroup(fresh, row, `${sender?.name || 'The sender'} gave this back to all of ${r.group_name}. ${r.name} had taken it on before, and what ${r.name} had filled in was not kept.`);
+  // The screen says what became of the emails (GroupMembers.tsx), never more than happened: while sending is paused,
+  // or for members who stopped our emails, nobody is emailed.
+  return { ok: true, emailed: t.emailed, not_emailed: t.not, told: row.status === 'pending' ? `It is not the turn of ${r.group_name} yet: every member is emailed their link when it is.` : toldText(t) };
 }
 
 /** A member whose colleague has the document asks the sender to give it back to the group. Only the sender can. */
@@ -595,7 +760,8 @@ export async function declineForGroup(e: any, r: any, reason: string, actor: Act
   }
   await declineRecipient(x.e, x.r, reason, x.actor);
   const row = x.r;
-  const others = active(row.id).filter((m: any) => m.id !== row.claimed_by && m.sent_at);
+  const { to: others, stopped } = reachable(row, active(row.id).filter((m: any) => m.id !== row.claimed_by && m.sent_at));
+  noteStopped(x.e, row.group_name, stopped, 'that it was declined');
   if (!others.length || emailRefusal(x.e)) return;
   const sender = senderOf(x.e);
   for (const m of others)
@@ -628,6 +794,16 @@ export function bouncedMember(envelopeId: string, email: string): { name: string
   const m = get(`SELECT m.name, r.group_name FROM recipient_members m JOIN recipients r ON r.id=m.recipient_id
     WHERE m.envelope_id=? AND m.email=? COLLATE NOCASE AND m.removed_at IS NULL AND r.group_name IS NOT NULL ORDER BY m.position LIMIT 1`, envelopeId, email);
   return m ? { name: m.name, line: `This address belongs to ${m.name}, a member of ${m.group_name}. The other members of ${m.group_name} were emailed separately and are not affected, and any of them can still act. No reminders go to this address. To fix it, open the envelope, choose Edit envelope, take ${m.name} out of the group and add them again with the right address: they are emailed a new link when you save. Or copy their link from the envelope page and send it to them yourself.` } : null;
+}
+
+/**
+ * For an email that came back from the member who has taken a group's document on (routes-bounces.ts): what the
+ * sender can do about it. "Correct" changes one person's address and is refused for a group, so it is not offered.
+ * Null for a recipient that is no such member.
+ */
+export function holderBounceLine(r: any): string | null {
+  if (!r?.group_name || !r.claimed_by) return null;
+  return `${r.name} took this on for ${r.group_name}, and no reminders go to this address now. If the address is wrong, open the envelope and choose "Give back to the group", so that another member of ${r.group_name} can act; or choose Edit envelope, take ${r.name} out of ${r.group_name} and add them again with the right address, and they are emailed a new link when you save. If the address is right and the mailbox works again, choose "Try again" next to ${r.name}.`;
 }
 
 /** The same for the list of documents sent to someone who is signed in (GET /inbox). */

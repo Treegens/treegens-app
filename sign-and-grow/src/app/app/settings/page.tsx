@@ -528,9 +528,10 @@ function Billing() {
       )}
       {b.refunds_pending?.map((r: any) => (
         <div className="notice" role="status" key={r.payment_id + r.since}>
-          {r.by_hand ? <><b>We owe you a refund of {r.amount}{r.why ? `: ${r.why}` : ''}.</b> The payment provider would not send it automatically, so a person here will send it to your card by hand and write to you when it is on its way. You do not need to do anything.</>
-            : r.auto ? <><b>We owe you a refund of {r.amount}{r.why ? `: ${r.why}` : ''}.</b> It is on its way back to the card it was paid with, and the payment provider has not confirmed it yet. We keep checking and email you as soon as it is through. You do not need to do anything.</>
-            : <><b>A refund of {r.amount} is on its way.</b> You asked for it on {fmtDate(r.since, true)} and the payment provider has not confirmed it yet. We keep checking and email you as soon as it is through. You do not need to do anything.</>}
+          {/* `back`: part of it that a person already sent back by hand; only `left` is still to come. */}
+          {r.by_hand ? <><b>We owe you a refund of {r.amount}{r.why ? `: ${r.why}` : ''}.</b> {r.back ? <>{r.back} of it has gone back to your card already. </> : ''}The payment provider would not send {r.back ? `the other ${r.left}` : 'it'} automatically, so a person here will send it to your card by hand, and we email you once it has all gone back. You do not need to do anything.</>
+            : r.auto ? <><b>We owe you a refund of {r.amount}{r.why ? `: ${r.why}` : ''}.</b> {r.back ? <>{r.back} of it has gone back to your card already, and the other {r.left} is on its way. </> : 'It is on its way back to the card it was paid with, and the payment provider has not confirmed it yet. '}We keep checking and email you as soon as it is through. You do not need to do anything.</>
+            : <><b>A refund of {r.amount} is on its way.</b> You asked for it on {fmtDate(r.since, true)}{r.back ? <>, and {r.back} of it has gone back to your card already. The payment provider has not confirmed the other {r.left} yet.</> : ' and the payment provider has not confirmed it yet.'} We keep checking and email you as soon as it is through. You do not need to do anything.</>}
         </div>
       ))}
 
@@ -582,6 +583,13 @@ function Billing() {
                     window.location.href = r.url;
                   } catch (e: any) {
                     if (e?.status !== 409) throw e;
+                    // Cancel was pressed and never confirmed: paying keeps the plan only if the person says so.
+                    if (e.code === 'cancel_pressed') {
+                      if (!window.confirm(`${e.message}\n\nKeep the plan and pay it now?`)) return;
+                      const r = await api('/billing/pay-open', { method: 'POST', body: { keep: true } });
+                      window.location.href = r.url;
+                      return;
+                    }
                     toast(e.message);
                   }
                 })}>Pay the open payment</button>}

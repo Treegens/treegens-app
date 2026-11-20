@@ -24,12 +24,16 @@ function dependents(fields: any[], fid: string): Set<string> {
   return out;
 }
 const ROUND = /^\s*round\(([\s\S]*),\s*(\d+)\s*\)\s*$/i;
-// Each part sits in the settings panel under the others, with room between them and full-width controls.
-const BOX = { margin: '16px 0 12px', display: 'grid', gap: 8 } as const;
+// Each part sits in the settings panel under the others, with room between them and full-width controls. The one
+// column may never be wider than the panel (minmax(0, 1fr)): a long label in a chip or in the sentence wraps instead
+// of pushing everything past the edge of a phone, where it could not be scrolled to.
+const BOX = { margin: '16px 0 12px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, gap: 8 } as const;
 const HEAD = { margin: 0, fontSize: 15 } as const;
-const CHIPS = { display: 'flex', flexWrap: 'wrap', gap: 6 } as const;
+const CHIPS = { display: 'flex', flexWrap: 'wrap', gap: 6, minWidth: 0 } as const;
 // Every control here answers a thumb over at least 44 px, like the editor's buttons on a phone.
-const TALL = { minHeight: 44 } as const;
+const TALL = { minHeight: 44, maxWidth: '100%' } as const;
+const WRAP = { overflowWrap: 'anywhere', minWidth: 0 } as const;
+const CHIP = { ...TALL, height: 'auto', whiteSpace: 'normal', overflowWrap: 'anywhere', textAlign: 'left', maxWidth: '100%' } as const;
 
 export function FieldLogic({ field, fields, patch }: { field: any; fields: any[]; patch: (p: any) => void }) {
   if (ALWAYS_SHOWN(field.type) || !field.recipient_id) return null;
@@ -75,7 +79,7 @@ function ShowWhen({ field, fields, patch }: { field: any; fields: any[]; patch: 
       {broken ? (
         <p className="notice warn small" role="status">The field this depended on was removed or now belongs to someone else, so this field would never be shown. Choose another field, or choose Always show.</p>
       ) : (
-        <p className="ed-logic-says" aria-live="polite"><b>{ruleWords(rule, parent, logicName(parent))}.</b> Until then it is hidden: not required, any answer in it is cleared, and nothing is printed.</p>
+        <p className="ed-logic-says" style={WRAP} aria-live="polite"><b>{ruleWords(rule, parent, logicName(parent))}.</b> Until then it is hidden: not required, any answer in it is cleared, and nothing is printed.</p>
       )}
       <label className="f"><span>Field</span>
         <select style={TALL} value={parent && !broken ? parent.id : ''} onChange={(e) => { const p = fields.find((x) => x.id === e.target.value); if (p) set(p, rule.is, rule.value ?? undefined); }}>
@@ -167,13 +171,13 @@ function Formula({ field, fields, patch }: { field: any; fields: any[]; patch: (
           onFocus={() => setEditing(true)} onBlur={() => setEditing(false)} onChange={(e) => change(e.target.value)} />
       </label>
       <p className="muted small" id={`${id}-help`}>Field names go in curly brackets. Use + - * / and round brackets; sum(&#123;A&#125;, &#123;B&#125;) adds up a list. An empty field counts as 0, and dividing by 0 leaves it empty. Numbers in the formula take a dot before decimals, like 0.2.</p>
-      <p id={`${id}-says`} className={now.problem ? 'sg-fielderr small' : 'ed-logic-says'} aria-live="polite">
+      <p id={`${id}-says`} className={now.problem ? 'sg-fielderr small' : 'ed-logic-says'} style={WRAP} aria-live="polite">
         {now.problem ? now.problem : <b>Worked out as {formulaWords(now.ids, (k) => logicName(byId.get(k)))}.</b>}
       </p>
       {numbers.length > 0 && (
         <div className="ed-logic-chips" style={CHIPS} role="group" aria-label="Put a field in the formula">
           {numbers.map((f) => (f.label ? (
-            <button key={f.id} type="button" className="btn sm ed-tap" onClick={() => change(`${text.trim()}${text.trim() && !/[+\-*/(,]\s*$/.test(text) ? ' + ' : ' '}{${f.label}}`.trim())}>{f.label}</button>
+            <button key={f.id} type="button" className="btn sm ed-tap" style={CHIP} onClick={() => change(`${text.trim()}${text.trim() && !/[+\-*/(,]\s*$/.test(text) ? ' + ' : ' '}{${f.label}}`.trim())}>{f.label}</button>
           ) : <span key={f.id} className="muted small">{logicName(f)} has no label. Give it one to use it here.</span>))}
         </div>
       )}

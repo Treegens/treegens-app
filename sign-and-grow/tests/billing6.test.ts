@@ -219,10 +219,12 @@ test('a Cancel the provider did not confirm, then paying the open payment on pur
   const open = await setUp(p);
   await event('invoice.paid', renewal(p, open, unix(-2)));
   assert.equal(stripe.refunded(`ch_${open}`), 900);
-  // Pressing "Pay the open payment" afterwards is a choice to pay: that payment is kept and buys the month.
+  // Pressing "Pay the open payment" afterwards asks first (billing8 has the case of nobody saying yes); saying "keep
+  // the plan and pay" is a choice to pay: that payment is kept and buys the month.
   const q = await person('Changed');
   const qo = await setUp(q);
-  assert.equal((await q.c.post('/billing/pay-open')).status, 200);
+  assert.equal((await q.c.post('/billing/pay-open')).status, 409);
+  assert.equal((await q.c.post('/billing/pay-open', { keep: true })).status, 200);
   const had = await bal(q);
   await event('invoice.paid', renewal(q, qo, unix(-2)));
   assert.equal(stripe.refunded(`ch_${qo}`), 0);

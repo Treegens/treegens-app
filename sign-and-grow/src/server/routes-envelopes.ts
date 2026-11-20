@@ -14,7 +14,7 @@ import { hmac, safeEqual } from './util.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine, mailStop, mailStopText } from './bounces.ts';
 import { correctWithCheck, assertBulkChecks, bulkChecksRefusal, assertFormChecks, textsOf } from './signercode.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
-import { memberLink, memberInbox, groupReach, assertNoGroupCheck } from './groups.ts';
+import { memberLink, memberInbox, groupReach, assertNoGroupCheck, membersNotReminded } from './groups.ts';
 import { assertBySenderCorrection } from './bysender.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { cookie, readCookie } from './auth.ts';
@@ -414,7 +414,11 @@ route('POST', '/envelopes/:id/remind', async (c) => {
   const one = b?.recipient_id ? waiting.find((r: any) => r.id === str(b.recipient_id)) : null;
   if (one && mailStop(one)) throw bad(mailStopText(one), 409, { code: mailStop(one) === 'complaint' ? 'marked_as_spam' : 'email_bounced' });
   // Someone whose link the sender passes on has no address at all: named too, so the sender knows to send it again.
-  const not_reminded = b?.recipient_id ? [] : waiting.filter((r: any) => mailStop(r) || (r.link_by_sender && !r.email)).map((r: any) => ({ recipient_id: r.id, name: r.name, why: r.link_by_sender && !r.email ? 'link_by_sender' : mailStop(r) === 'complaint' ? 'marked_as_spam' : 'email_bounced' }));
+  // The member of a signing group who has it and reported it is refused like a person who marked our email as spam.
+  // The members of a group nobody has taken on who get no reminder are named, also when only that group is asked.
+  const members = membersNotReminded(e, one ? [one] : waiting);
+  if (one?.claimed_by && members.length) throw bad(`${one.name} reported this document, so we do not email them about it. Only they can change that, on their signing page. If someone else in ${one.group_name} should act, choose "Give back to the group".`, 409, { code: 'reported' });
+  const not_reminded = [...(b?.recipient_id ? [] : waiting.filter((r: any) => mailStop(r) || (r.link_by_sender && !r.email)).map((r: any) => ({ recipient_id: r.id, name: r.name, why: r.link_by_sender && !r.email ? 'link_by_sender' : mailStop(r) === 'complaint' ? 'marked_as_spam' : 'email_bounced' }))), ...members];
   return { reminded: await remindEnvelope(e, c.actor, b?.recipient_id ? str(b.recipient_id) : undefined), not_reminded };
 });
 

@@ -8,7 +8,7 @@ import { needCode } from './twostep.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { audit, assertMayEmail, loadEnvelope, notifyRecipient, notifySender, reportAbuse, senderOf } from './envelopes.ts';
 import { find, look } from './routes-sign.ts';
-import { bouncedMember } from './groups.ts';
+import { bouncedMember, complainedMember, memberWantsMail, holderBounceLine } from './groups.ts';
 import { welcomeMark } from './routes-trust.ts';
 import {
   mailEventsAuth, readEvents, bounceWhy, softBounceDays, forgetSoftDays, noteBounced, forgetBounced, mailStop, mailStopText, sameAddress as same, type MailEvent,
@@ -139,7 +139,9 @@ async function recipientBounce(e: any, m: any, at: string, why: { plain: string 
   if (!e.hidden_at)
     await notifySender(e, 'problems', `Could not be delivered: ${e.subject}`, `Our email to ${member?.name || firstNames(rows, m)} did not arrive`, [
       `The email "${m.subject}" to ${m.to_email} could not be delivered: ${why.plain}.`,
-      member ? member.line : out && fresh.length ? `No reminders go to this address until you do one of two things. Open the envelope and choose Correct next to ${firstNames(rows, m)} to fix the address: a new email goes out at once. Or, if the address is right and the mailbox works again, choose "Try again" there. You can also copy their signing link from the same page and send it to them yourself.`
+      // The member who took a group's document on: Correct is refused for a group, so it is never the advice (groups.ts).
+      member ? member.line : out && fresh.length && rows.length === 1 && holderBounceLine(rows[0]) ? holderBounceLine(rows[0])!
+        : out && fresh.length ? `No reminders go to this address until you do one of two things. Open the envelope and choose Correct next to ${firstNames(rows, m)} to fix the address: a new email goes out at once. Or, if the address is right and the mailbox works again, choose "Try again" there. You can also copy their signing link from the same page and send it to them yourself.`
         : e.status === 'completed' ? 'The envelope is completed, so there is nothing to send again from here. Download the signed document from the envelope page and send it to them yourself.'
         : out ? 'Open the envelope to see who is on it now. If this person should still get it, add them with the right address.'
         : 'The envelope is closed, so nothing more is sent to them about it.',
@@ -208,7 +210,11 @@ async function complaint(m: any, at: string): Promise<'applied' | 'repeat'> {
   // The person's word is kept for the account, not on these rows alone: whatever the sender does next (a correction
   // away and back, "try again", a new envelope), nothing more is emailed to them until they ask for it themselves.
   const marked = noteComplaint(e.account_id, m.to_email, at);
-  audit(e.id, SYSTEM, 'Marked as spam', `${names(rows, m)} marked the email "${str(m.subject, 200)}" as spam in their mail program. Nothing more is emailed to them about this account's documents unless they ask for it themselves on a signing page.`);
+  // A member of a signing group has no recipient row of their own: said as such (groups.ts). The mark just kept for
+  // the account is what stops our emails to them, in the group and everywhere else.
+  const member = rows.length ? null : complainedMember(e, m.to_email);
+  const holder = rows.find((r: any) => r.group_name && r.claimed_by);
+  audit(e.id, SYSTEM, 'Marked as spam', member ? member.audit : `${names(rows, m)} marked the email "${str(m.subject, 200)}" as spam in their mail program. Nothing more is emailed to them about this account's documents unless they ask for it themselves on a signing page.`);
   // Other envelopes of the account that are out to the same person stop emailing them too, and each record says why.
   for (const r of marked.filter((x: any) => x.envelope_id !== e.id && x.status === 'sent')) {
     audit(r.envelope_id, SYSTEM, 'Marked as spam', `${r.name} <${r.email}> marked another email from this account as spam in their mail program. Nothing more is emailed to them about this envelope unless they ask for it themselves on a signing page.`);
@@ -216,11 +222,13 @@ async function complaint(m: any, at: string): Promise<'applied' | 'repeat'> {
   }
   // It counts against the sending account exactly as the "Report this email" link does: the same list, the same
   // count towards a pause, once for each person and envelope. Someone who is no longer on the envelope counts too.
-  for (const r of fresh.length ? fresh : [{ id: '', name: m.to_email, email: m.to_email }])
+  for (const r of fresh.length ? fresh : [{ id: '', name: member?.name || m.to_email, email: m.to_email }])
     await reportAbuse(e, r, { reason: 'spam', detail: 'Marked as spam in their mail program. Reported by the mail provider, not typed by the person.' }, { name: 'Mail provider' });
   if (!e.hidden_at)
-    await notifySender(e, 'always', `Marked as spam: ${e.subject}`, `${firstNames(rows, m)} marked our email as spam`, [
-      `${names(rows, m)} marked the email "${m.subject}" as spam in their mail program. So we no longer email them about documents from your account: no reminders, no notice when you change one, and no copy when one is completed. That holds for this envelope, for any other that is out to them, and for new ones.`,
+    await notifySender(e, 'always', `Marked as spam: ${e.subject}`, `${member?.name || firstNames(rows, m)} marked our email as spam`, [
+      ...(member ? member.lines : [`${names(rows, m)} marked the email "${m.subject}" as spam in their mail program. So we no longer email them about documents from your account: no reminders, no notice when you change one, and no copy when one is completed. That holds for this envelope, for any other that is out to them, and for new ones.`]),
+      // The member who had taken a group's document on: also when it goes back to the group, they get nothing from us.
+      ...(holder ? [`${holder.name} had taken this on for ${holder.group_name}. If it goes back to the group, ${holder.name} still gets no emails from us about it, and the other members are not affected.`] : []),
       ...(fresh.length ? [`Only ${firstNames(rows, m)} can undo that: their signing page has a button that starts our emails to them again. You can still give them their link yourself. Open the envelope and choose Copy link next to their name.`] : []),
       `It also counts as one report against your account, like the "Report this email" link in our emails does. When ${abuseSuspendAfter()} different recipients have reported an account within 30 days, its sending is paused until a person has looked.`,
     ]);
@@ -443,7 +451,13 @@ route('POST', '/sign/:token/mail-again', async (c) => {
   find(c, false);
   const code = str((await c.body())?.code, 40).replace(/\D/g, '');
   const { e, r, actor } = look(c, false);
-  if (!r.complained_at) return { ok: true, changed: false };
+  // A member of a signing group who reported the document is stopped the same way (groups.ts memberReported).
+  if (!r.complained_at && !r.reported_at) return { ok: true, changed: false };
+  // One code at a time per person. A group's members share one recipient row, so a member's code is kept for that
+  // member (member_mail_again) and made for them alone: a code sent to one member's mailbox never starts another
+  // member's emails, and one member asking never cancels another's code.
+  const slot = `mail-again:${r.id}${r.member ? `:${r.member.id}` : ''}`;
+  const [codes, key, kid] = r.member ? ['member_mail_again', 'member_id', r.member.id] : ['mail_again_codes', 'recipient_id', r.id];
   // Signed in to the account that sent it, unless the address is that person's own: the sender, so not even a code is sent.
   if (c.auth && get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', e.account_id, c.user.id) && !same(c.user.email, r.email))
     throw bad(`Only ${r.name} can ask for our emails about this document again, on their own device. You are signed in to the account that sent it, so nothing was changed. You can still send them their link yourself.`, 403);
@@ -457,33 +471,34 @@ route('POST', '/sign/:token/mail-again', async (c) => {
     }
     const k = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const until = new Date(Date.now() + MAIL_AGAIN_MINUTES * 60_000).toISOString();
-    run('INSERT OR REPLACE INTO mail_again_codes (recipient_id, code_hash, tries, expires_at) VALUES (?,?,0,?)', r.id, hmac(`mail-again:${r.id}:${k}`), until);
+    run(`INSERT OR REPLACE INTO ${codes} (${key}, code_hash, tries, expires_at) VALUES (?,?,0,?)`, kid, hmac(`${slot}:${k}`), until);
     // Not as one of the envelope's emails to them (no recipient id): those stay stopped until the code is typed. The
     // code is never in the subject, which the sender sees in the envelope's list of emails, and our stored copy loses
     // it once the mail server has taken it (here, and on a later try by the listener in signercode.ts, which knows
     // "... is your code").
     const delivery = await sendMail({ to: r.email, envelopeId: e.id, expiresAt: until, subject: 'Your code to get our emails again', heading: 'Your code to get our emails again',
-      lines: [`Someone asked, on the signing page of "${str(e.subject, 200)}", for our emails about it to start again. You had marked one of them as spam, so we had stopped. If that was you, type this code on that page.`,
+      lines: [`Someone asked, on the signing page of "${str(e.subject, 200)}", for our emails about it to start again. You had ${r.complained_at ? 'marked one of them as spam' : 'reported this document'}, so we had stopped. If that was you, type this code on that page.`,
         `${k} is your code. It works for ${MAIL_AGAIN_MINUTES} minutes. If you did not ask for it, ignore this email. Nothing changes, and we send you nothing more unless you ask on that page.`] });
     if (delivery === 'sent') run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND expires_at=?)", k, k, e.id, until);
     audit(e.id, actor, 'Code sent to start emails again', `${r.name} <${r.email}> asked on the signing page for our emails again. A code went to that address. Nothing changes until it is typed there.`);
     return { ok: true, code_sent: true, sent_to: r.email, minutes: MAIL_AGAIN_MINUTES, delivery };
   }
-  const row = get('SELECT * FROM mail_again_codes WHERE recipient_id=?', r.id);
+  const row = get(`SELECT * FROM ${codes} WHERE ${key}=?`, kid);
   if (!row || row.expires_at <= now()) throw bad('That code has run out, or none was asked for. Ask for a new one with the button.', 410);
   if (row.tries >= MAIL_AGAIN_TRIES) throw bad(`That code was typed wrongly ${MAIL_AGAIN_TRIES} times, so it no longer works. Ask for a new one with the button.`, 429);
-  if (!safeEqual(hmac(`mail-again:${r.id}:${code}`), row.code_hash)) {
-    run('UPDATE mail_again_codes SET tries=tries+1 WHERE recipient_id=?', r.id);
+  if (!safeEqual(hmac(`${slot}:${code}`), row.code_hash)) {
+    run(`UPDATE ${codes} SET tries=tries+1 WHERE ${key}=?`, kid);
     throw bad('That code is not right. Type the 6 digits from our newest email to you. Nothing was changed.', 400, { code: 'wrong_code' });
   }
-  run('DELETE FROM mail_again_codes WHERE recipient_id=?', r.id);
+  run(`DELETE FROM ${codes} WHERE ${key}=?`, kid);
   // The complaint was kept for the account, so it goes for the account: every envelope of it that holds this address.
   const back = forgetComplaint(e.account_id, r.email);
+  memberWantsMail(r);
   // The report the mail provider made for them is their own click, which they have now taken back: it no longer
   // counts towards pausing the sender. A report an operator has looked at already stays as they left it.
   run("UPDATE abuse_reports SET status='withdrawn' WHERE account_id=? AND lower(reporter)=lower(?) AND status='open' AND detail LIKE 'Marked as spam in their mail program%'", e.account_id, r.email);
   for (const x of back.length ? back : [{ id: r.id, envelope_id: e.id }]) {
-    audit(x.envelope_id, actor, 'Emails started again', `${r.name} <${r.email}> had marked an email from this account as spam, and now asked to be emailed again, with a code sent to that address.`);
+    audit(x.envelope_id, actor, 'Emails started again', `${r.name} <${r.email}> had ${r.complained_at ? 'marked an email from this account as spam' : 'reported this document'}, and now asked to be emailed again, with a code sent to that address.`);
     fireWebhooks(e.account_id, 'envelope.updated', x.envelope_id, { recipient_id: x.id, change: 'email_wanted_again' });
   }
   return { ok: true, changed: true };
