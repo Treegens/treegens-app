@@ -1,22 +1,40 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { api, useLoad, Status, fmtDate, Modal, oops, toast, ROLE_LABEL, Leaf } from '@/components/ui';
+import { api, useLoad, Status, fmtDate, toast, Leaf } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { fmtNum, fmtTrees, impactOf } from '@/lib/impact';
+import { Recipients, lastEmailTo, type Delivery } from '@/components/sender/Recipients';
+import { ConfirmDialog, CorrectDialog, ExtendDialog, VoidDialog } from '@/components/sender/dialogs';
+import { fail } from '@/components/sender/feedback';
+import { readAllowance, voidCostLine } from '@/components/sender/allowance';
+import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
-const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copied' };
+const MAIL_STATUS: Record<string, string> = { sent: 'Handed to the mail server', outbox: 'Not delivered, no mail server set up', failed: 'Could not be sent', queued: 'Waiting to go out' };
 
 export default function EnvelopeDetail() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const me = useMe();
   const [data, reload, error] = useLoad(() => api(`/envelopes/${id}`), [id]);
-  const [modal, setModal] = useState<'' | 'void' | 'correct'>('');
-  const [reason, setReason] = useState('');
+  const [dialog, setDialog] = useState<'' | 'void' | 'extend' | 'delete'>('');
   const [fix, setFix] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const askedForTime = useRef(false);
+
+  // Emails about deadlines link here with ?extend=1, so the dialog is already open when the page loads.
+  useEffect(() => {
+    if (!data || askedForTime.current) return;
+    askedForTime.current = true;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('extend') !== '1') return;
+    const s = data.envelope.status;
+    if (s === 'sent' || s === 'expired') setDialog('extend');
+    else toast(s === 'completed' ? 'Everyone has already finished, so this one does not need more time.' : 'This envelope is closed, so it cannot be given more time. Clone it to send it again.');
+    q.delete('extend');
+    window.history.replaceState(null, '', `${window.location.pathname}${q.toString() ? `?${q}` : ''}`);
+  }, [data]);
 
   const act = async (fn: () => Promise<any>, ok?: string) => {
     setBusy(true);
@@ -25,127 +43,230 @@ export default function EnvelopeDetail() {
       if (ok) toast(ok);
       reload();
     } catch (e) {
-      oops(e);
+      fail(e);
     } finally {
       setBusy(false);
     }
   };
-  const signNow = (r: any) => act(async () => {
-    const { url } = await api(`/envelopes/${id}/recipient-view`, { body: { recipient_id: r.id } });
-    window.location.href = url;
-  });
 
-  if (error) return <div className="card center"><h2>Envelope not found</h2><p className="muted">It may have been deleted, or it belongs to someone else on your team.</p><Link href="/app/envelopes" className="btn">Back to envelopes</Link></div>;
-  if (!data) return <div className="muted">Loading…</div>;
+  if (error) return <div className="sn card center"><h1 className="serif" style={{ fontSize: 22 }}>We could not open this envelope</h1><p className="muted" style={{ marginTop: 8 }}>It may have been deleted, or it belongs to someone else on your team. Ask them to share it, or go back to your list.</p><Link href="/app/envelopes" className="btn">Back to envelopes</Link></div>;
+  if (!data) return <div className="muted" role="status">Loading…</div>;
+
   const e = data.envelope;
+  const deliveries: Delivery[] = data.deliveries || [];
   const isTpl = e.kind === 'template';
   const impact = impactOf(e.sheets);
   const pages = e.documents.reduce((n: number, d: any) => n + d.pages, 0);
+  const out = e.status === 'sent';
+  const acting = e.recipients.filter((r: any) => r.role !== 'cc');
+  const finished = acting.filter((r: any) => r.status === 'completed');
+  const unfinished = acting.filter((r: any) => r.status !== 'completed');
+  const waiting = out ? waitingOn(e.recipients, me.user.email) : null;
+  const unopened = out ? e.recipients.filter((r: any) => neverOpened(r)) : [];
+  const bounced = out ? e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && lastEmailTo(deliveries, r.email)?.status === 'failed') : [];
+  // Reminders never go to people who turned them off, so do not offer a button that would do nothing.
+  const canRemind = out && e.recipients.some((r: any) => hasTurn(r) && !r.muted);
+  const allMuted = out && !canRemind && e.recipients.some((r: any) => hasTurn(r) && r.muted);
+  const decliner = e.recipients.find((r: any) => r.status === 'declined');
+  // Only worth a banner while people can still act on it. Each recipient's own line says it in every state.
+  const noMailServer = out && deliveries.some((d) => d.status === 'outbox');
+  const editHref = `/app/${isTpl ? 'templates' : 'envelopes'}/${e.id}/edit`;
+  const costLine = voidCostLine(readAllowance(null, me));
+
+  async function remindAll() {
+    await act(async () => {
+      const { reminded } = await api(`/envelopes/${e.id}/remind`, { method: 'POST' });
+      if (reminded) toast(`Reminder emailed to ${reminded} ${reminded === 1 ? 'person' : 'people'}.`);
+      else toast('No reminder went out. Everyone waiting has turned reminders off, so share their links another way.', true);
+    });
+  }
+  const clone = (kind: 'envelope' | 'template') => act(async () => {
+    const r = await api(`/envelopes/${e.id}/clone`, { body: { kind } });
+    router.push(`/app/${kind === 'template' ? 'templates' : 'envelopes'}/${r.id}/edit`);
+  });
 
   return (
-    <div className="stack">
+    <div className="sn stack">
       <div className="pagehead" style={{ marginBottom: 0 }}>
-        <div>
-          <Link href={isTpl ? '/app/templates' : '/app/envelopes'} className="small">← {isTpl ? 'Templates' : 'Envelopes'}</Link>
-          <h1 className="serif" style={{ marginTop: 4 }}>{e.subject || 'Untitled'}</h1>
-          <div className="row wrap" style={{ marginTop: 6 }}>
-            <Status s={e.status} />
-            <span className="muted small">Envelope {e.id}{e.sent_at ? ` · sent ${fmtDate(e.sent_at, true)}` : ''}{e.status === 'sent' && e.expires_at ? ` · expires ${fmtDate(e.expires_at)}` : ''}</span>
+        <div className="grow">
+          <Link href={isTpl ? '/app/templates' : '/app/envelopes'} className="small sn-back">← {isTpl ? 'Templates' : 'Envelopes'}</Link>
+          <h1 className="serif sn-title">{e.subject || (isTpl ? 'Untitled template' : 'Untitled')}</h1>
+          <div className="row wrap" style={{ marginTop: 6, rowGap: 4 }}>
+            <Status s={e.status} label={isTpl ? 'Template' : undefined} />
+            <span className="muted small">{e.sent_at ? `Sent ${fmtDate(e.sent_at, true)} · ` : ''}<span className="sn-id">ID {e.id}</span></span>
           </div>
         </div>
-        <div className="row wrap">
-          {e.status === 'draft' && <Link href={`/app/${isTpl ? 'templates' : 'envelopes'}/${e.id}/edit`} className="btn primary">Continue editing</Link>}
+        <div className="row wrap sn-headactions">
           {e.documents.length > 0 && <a className="btn" href={`/api/envelopes/${e.id}/download?inline=1`} target="_blank" rel="noreferrer">{e.status === 'completed' ? 'View signed PDF' : 'Preview PDF'}</a>}
           {e.status === 'completed' && <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>Download with certificate</a>}
-          {e.status === 'sent' && <button className="btn" disabled={busy} onClick={() => act(() => api(`/envelopes/${e.id}/remind`, { method: 'POST' }), 'Reminder sent')}>Send reminder</button>}
-          {e.status === 'sent' && <button className="btn danger" onClick={() => setModal('void')}>Void</button>}
-          <button className="btn" disabled={busy} onClick={() => act(async () => { const r = await api(`/envelopes/${e.id}/clone`, { body: { kind: 'envelope' } }); router.push(`/app/envelopes/${r.id}/edit`); })}>{isTpl ? 'Use' : 'Clone'}</button>
-          {!isTpl && <button className="btn" disabled={busy} onClick={() => act(async () => { const r = await api(`/envelopes/${e.id}/clone`, { body: { kind: 'template' } }); router.push(`/app/templates/${r.id}/edit`); })}>Save as template</button>}
-          {e.status !== 'sent' && <button className="btn ghost danger" disabled={busy} onClick={() => window.confirm('Delete this for good? This cannot be undone.') && act(async () => { await api(`/envelopes/${e.id}`, { method: 'DELETE' }); router.push(isTpl ? '/app/templates' : '/app/envelopes'); })}>Delete</button>}
+          <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>
+          {!isTpl && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
+          {out && <button className="btn danger" onClick={() => setDialog('void')}>Void</button>}
+          {!out && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
         </div>
       </div>
 
-      {e.status === 'voided' && <div className="notice err">Voided. Reason: {e.void_reason}</div>}
+      {e.status === 'draft' && (
+        <section className="card sn-now" aria-label="Where this stands">
+          <div className="sn-now-main">
+            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{isTpl ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : 'Nobody has received anything. Pick up where you left off.'}</p></div>
+            <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>
+          </div>
+        </section>
+      )}
+
+      {out && (
+        <section className="card sn-now" aria-label="Where this stands">
+          <div className="sn-now-main">
+            <div>
+              <p className="sn-now-line">{waiting ? <>Waiting on <b>{waiting.label}</b>{waiting.since ? ` for ${howLong(waiting.since)}` : ''}.</> : 'Sent. Nobody is holding it up right now.'}</p>
+              {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} did not go out. See below to fix the address or share the link yourself.</p>}
+              {unopened.length > 0 && <p className="sn-now-sub warn">{joinNames(unopened.map((r: any) => r.name))} {unopened.length === 1 ? 'has' : 'have'} not opened it yet. See below for ways to reach them.</p>}
+              {allMuted && <p className="sn-now-sub">They turned reminder emails off, so reach them with their link instead. It is below.</p>}
+              <p className={`sn-now-sub${closingSoon(e.expires_at) ? ' warn' : ''}`}>{e.expires_at ? `${deadlineLine(e.expires_at)}.` : 'No closing date.'}{closingSoon(e.expires_at) ? ' Give more time if they need it.' : ''}</p>
+            </div>
+            <div className="sn-now-actions">
+              {canRemind && <button className="btn" disabled={busy} onClick={remindAll}>Send reminder</button>}
+              <button className={`btn${closingSoon(e.expires_at) ? ' sn-amber' : ''}`} onClick={() => setDialog('extend')}>Give more time</button>
+            </div>
+          </div>
+          <div className="sn-edit">
+            <div>
+              <b>Need to change something?</b> Fix a typo, swap a document or change who signs, without voiding.
+              {finished.length > 0 && <div className="small sn-edit-lock">{joinNames(finished.map((r: any) => r.name))} already finished, so what they signed is locked. The rest can still change.</div>}
+            </div>
+            <Link href={editHref} className="btn primary">Edit envelope</Link>
+          </div>
+        </section>
+      )}
+
+      {e.status === 'expired' && (
+        <section className="card sn-now expired" aria-label="Where this stands">
+          <div className="sn-now-main">
+            <div>
+              <p className="sn-now-line">{e.expires_at ? `${deadlineLine(e.expires_at)}` : 'This closed'} before everyone had finished.</p>
+              {unfinished.length > 0 && <p className="sn-now-sub">Still needed: <b>{joinNames(unfinished.map((r: any) => r.name))}</b>.</p>}
+              <p className="sn-now-sub">Reopen it with a new closing date. Nobody who already signed has to sign again.</p>
+            </div>
+            <div className="sn-now-actions"><button className="btn primary" onClick={() => setDialog('extend')}>Reopen</button></div>
+          </div>
+        </section>
+      )}
+
+      {e.status === 'declined' && (
+        <section className="card sn-now closed" aria-label="Where this stands">
+          <div className="sn-now-main">
+            <div>
+              <p className="sn-now-line">{decliner ? <><b>{decliner.name}</b> declined{decliner.completed_at ? ` on ${longDate(decliner.completed_at)}` : ''}.</> : 'This was declined.'}</p>
+              {decliner?.decline_reason && <p className="sn-now-sub">They wrote: &ldquo;{decliner.decline_reason}&rdquo;</p>}
+              <p className="sn-now-sub">This envelope is closed. Clone it, change what needs changing and send it again.</p>
+            </div>
+            <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Clone and fix</button></div>
+          </div>
+        </section>
+      )}
+
+      {e.status === 'voided' && (
+        <section className="card sn-now closed" aria-label="Where this stands">
+          <div className="sn-now-main">
+            <div>
+              <p className="sn-now-line">Voided. Nobody can sign it any more.</p>
+              <p className="sn-now-sub">Reason given: &ldquo;{e.void_reason}&rdquo;</p>
+              <p className="sn-now-sub">{costLine ? `${costLine} ` : ''}Clone it to send a corrected one.</p>
+            </div>
+            <div className="sn-now-actions"><button className="btn" disabled={busy} onClick={() => clone('envelope')}>Clone</button></div>
+          </div>
+        </section>
+      )}
+
       {e.status === 'completed' && (
         <div className="card row" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
           <Leaf size={26} color="#1f6f43" />
-          <div><b>Completed without paper.</b> About {fmtNum(impact.sheets)} sheets, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e not used ({fmtTrees(impact.trees)} of a tree).</div>
+          <div><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}. Completed without paper.</b> About {fmtNum(impact.sheets)} sheets, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e not used ({fmtTrees(impact.trees)} of a tree).</div>
         </div>
       )}
 
-      <div className="card pad0">
-        <div style={{ padding: '14px 16px' }}><h2>Recipients</h2></div>
-        <div className="tablewrap"><table className="t">
-          <thead><tr>{!!e.ordered && <th>Order</th>}<th>Name</th><th>Action</th><th>Status</th><th /></tr></thead>
-          <tbody>
-            {e.recipients.map((r: any) => {
-              const open = e.status === 'sent' && (r.status === 'sent' || r.status === 'viewed');
-              const isMe = r.email.toLowerCase() === me.user.email.toLowerCase();
-              return (
-                <tr key={r.id}>
-                  {!!e.ordered && <td className="num">{r.routing_order}</td>}
-                  <td><b>{r.name || r.role_name}</b><div className="muted small">{r.email}{r.reassigned_from ? ` · reassigned from ${r.reassigned_from}` : ''}</div></td>
-                  <td>{ROLE_LABEL[r.role]}{r.access_code ? <div className="muted small">Access code: {r.access_code}</div> : null}</td>
-                  <td>
-                    <Status s={r.status} label={r.status === 'completed' ? DONE[r.role] : r.status === 'sent' ? 'Sent' : r.status === 'pending' ? (e.status === 'draft' ? 'Not sent' : 'Waiting for turn') : undefined} />
-                    <div className="muted small">{fmtDate(r.completed_at || r.viewed_at || r.sent_at, true)}{r.decline_reason ? ` · ${r.decline_reason}` : ''}</div>
-                  </td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {open && (isMe || r.role === 'inperson') && <button className="btn sm primary" onClick={() => signNow(r)}>{r.role === 'inperson' ? 'Host signing' : 'Sign now'}</button>}{' '}
-                    {open && !isMe && r.role !== 'inperson' && <button className="btn sm ghost" onClick={() => act(async () => { const { url } = await api(`/envelopes/${id}/recipient-view`, { body: { recipient_id: r.id } }); await navigator.clipboard.writeText(url); }, 'Signing link copied')}>Copy link</button>}
-                    {e.status === 'sent' && r.status !== 'completed' && <button className="btn sm ghost" onClick={() => (setFix({ recipient_id: r.id, name: r.name, email: r.email, access_code: r.access_code || '' }), setModal('correct'))}>Correct</button>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table></div>
-      </div>
+      <section className="card pad0" aria-labelledby="sn-rcpt-h">
+        <div className="sn-cardhead">
+          <h2 id="sn-rcpt-h">{isTpl ? 'Roles' : 'Recipients'}</h2>
+          {!isTpl && e.status !== 'draft' && <p className="muted small">What happened to each email, when they opened the document, and when they finished.{e.ordered ? ' They sign in the order shown.' : ''}</p>}
+        </div>
+        {noMailServer && (
+          <div className="notice warn sn-inset" role="note">
+            This server has no mail server set up, so emails are saved but not delivered. Share each link yourself with the buttons below.
+            {me.outbox && <> You can read the saved emails in the <a href="/dev/outbox" target="_blank" rel="noreferrer">dev outbox</a>.</>}
+          </div>
+        )}
+        {e.recipients.length === 0 ? <div className="empty">Nobody has been added yet.</div> : (
+          <Recipients envelope={e} deliveries={deliveries} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} />
+        )}
+      </section>
 
       <div className="grid g2">
-        <div className="card">
-          <h2 style={{ marginBottom: 10 }}>Documents</h2>
-          {e.documents.map((d: any) => <div key={d.id} className="row between" style={{ padding: '5px 0' }}><span className="truncate">{d.name}</span><span className="muted small">{d.pages} page{d.pages === 1 ? '' : 's'}</span></div>)}
-          <div className="muted small" style={{ marginTop: 8 }}>{pages} pages · {e.fields.length} fields · {e.ordered ? 'signed in order' : 'everyone at once'}</div>
+        <section className="card" aria-labelledby="sn-docs-h">
+          <h2 id="sn-docs-h" style={{ marginBottom: 10 }}>Documents</h2>
+          {e.documents.length === 0 && <div className="muted small">No document has been added yet.</div>}
+          {e.documents.map((d: any) => <div key={d.id} className="row between" style={{ padding: '5px 0' }}><span className="truncate">{d.name}</span><span className="muted small" style={{ whiteSpace: 'nowrap' }}>{d.pages} page{d.pages === 1 ? '' : 's'}</span></div>)}
+          <div className="muted small" style={{ marginTop: 8 }}>
+            {pages} page{pages === 1 ? '' : 's'} · {e.fields.length} field{e.fields.length === 1 ? '' : 's'} · {e.ordered ? 'signed in order' : 'everyone at once'}
+            {!isTpl && <> · {e.reminder_days > 0 ? `automatic reminder every ${e.reminder_days} day${e.reminder_days === 1 ? '' : 's'}` : 'no automatic reminders'}</>}
+          </div>
           {e.message && <p className="muted" style={{ marginTop: 12, whiteSpace: 'pre-wrap' }}>&ldquo;{e.message}&rdquo;</p>}
-        </div>
-        <div className="card">
-          <div className="row between"><h2>Audit trail</h2><span className={`badge ${data.chain.ok ? 'completed' : 'declined'}`}>{data.chain.ok ? 'Chain intact' : 'Chain broken'}</span></div>
-          <div style={{ marginTop: 10, maxHeight: 320, overflow: 'auto' }}>
+          {!isTpl && deliveries.length > 0 && (
+            <details className="sn-mails">
+              <summary>Every email about this envelope ({deliveries.length})</summary>
+              <ul>
+                {deliveries.map((d, i) => (
+                  <li key={i}>
+                    <div><b className="small">{d.subject}</b></div>
+                    <div className="muted small">To {d.to_email} · {dayTime(d.at)}</div>
+                    <div className={`small${d.status === 'failed' || d.status === 'outbox' ? ' sn-bad' : ''}`}>{MAIL_STATUS[d.status] || d.status}{d.status === 'failed' && d.error ? `: ${d.error}` : ''}</div>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </section>
+        <section className="card" aria-labelledby="sn-audit-h">
+          <div className="row between wrap"><h2 id="sn-audit-h">Audit trail</h2><span className={`badge ${data.chain.ok ? 'completed' : 'declined'}`}>{data.chain.ok ? 'Record intact' : 'Record was altered'}</span></div>
+          <div className="sn-audit" tabIndex={0} role="group" aria-label="Audit trail entries">
             {data.audit.length === 0 && <div className="muted small">Nothing has happened yet.</div>}
             {data.audit.map((a: any) => (
-              <div key={a.seq} style={{ padding: '7px 0', borderBottom: '1px solid var(--line)' }}>
-                <div className="row between"><b className="small">{a.action}</b><span className="muted small">{fmtDate(a.at, true)}</span></div>
+              <div key={a.seq} className="sn-audit-item">
+                <div className="row between wrap" style={{ rowGap: 0 }}><b className="small">{a.action}</b><span className="muted small">{fmtDate(a.at, true)}</span></div>
                 <div className="muted small">{a.detail}</div>
                 <div className="muted mono" style={{ fontSize: 11 }}>{a.actor}{a.ip ? ` · ${a.ip}` : ''} · {a.hash.slice(0, 12)}</div>
               </div>
             ))}
           </div>
-        </div>
+        </section>
       </div>
 
-      {modal === 'void' && (
-        <Modal title="Void this envelope" onClose={() => setModal('')}>
-          <p className="muted">Nobody will be able to sign it any more. Recipients who already have it will be told why.</p>
-          <label className="f"><span>Reason</span><textarea value={reason} onChange={(ev) => setReason(ev.target.value)} autoFocus /></label>
-          <div className="actions">
-            <button className="btn" onClick={() => setModal('')}>Cancel</button>
-            <button className="btn primary" style={{ background: 'var(--red)', borderColor: 'var(--red)' }} disabled={busy || !reason.trim()} onClick={() => act(() => api(`/envelopes/${e.id}/void`, { body: { reason } }), 'Envelope voided').then(() => setModal(''))}>Void envelope</button>
-          </div>
-        </Modal>
+      {dialog === 'extend' && <ExtendDialog envelope={e} onClose={() => setDialog('')} onDone={() => (setDialog(''), reload())} />}
+      {dialog === 'void' && (
+        <VoidDialog title="Void this envelope" confirmLabel="Void envelope" onClose={() => setDialog('')}
+          onVoid={async (reason) => {
+            await api(`/envelopes/${e.id}/void`, { body: { reason } });
+            toast('Envelope voided. Everyone who had it has been told.');
+            setDialog('');
+            reload();
+          }}>
+          <p>Nobody will be able to sign it any more, and everyone who already has it is told why.{finished.length > 0 ? ` The ${finished.length === 1 ? 'signature' : 'signatures'} already collected will be lost.` : ''}</p>
+          <p className="muted">Only need to fix something? <Link href={editHref}>Edit the envelope</Link> instead. That keeps it open and keeps what has been signed.{costLine ? ` ${costLine}` : ''}</p>
+        </VoidDialog>
       )}
-      {modal === 'correct' && fix && (
-        <Modal title="Correct recipient" onClose={() => setModal('')}>
-          <p className="muted">Fix a typo or send it to a different address. The old link stops working and a new email goes out.</p>
-          <label className="f"><span>Name</span><input value={fix.name} onChange={(ev) => setFix({ ...fix, name: ev.target.value })} /></label>
-          <label className="f"><span>Email</span><input type="email" value={fix.email} onChange={(ev) => setFix({ ...fix, email: ev.target.value })} /></label>
-          <label className="f"><span>Access code <span className="hint">(optional)</span></span><input value={fix.access_code} onChange={(ev) => setFix({ ...fix, access_code: ev.target.value })} /></label>
-          <div className="actions">
-            <button className="btn" onClick={() => setModal('')}>Cancel</button>
-            <button className="btn primary" disabled={busy} onClick={() => act(() => api(`/envelopes/${e.id}/correct`, { body: fix }), 'Recipient updated').then(() => setModal(''))}>Save and resend</button>
-          </div>
-        </Modal>
+      {dialog === 'delete' && (
+        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this envelope'} confirmLabel="Delete for good" onClose={() => setDialog('')}
+          onConfirm={async () => {
+            await api(`/envelopes/${e.id}`, { method: 'DELETE' });
+            toast('Deleted.');
+            router.push(isTpl ? '/app/templates' : '/app/envelopes');
+          }}>
+          <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>
+          {e.status === 'completed' && <p className="muted">Download the signed PDF first if you want to keep a copy. The links in the emails people received will stop working too.</p>}
+        </ConfirmDialog>
       )}
+      {fix && <CorrectDialog envelopeId={e.id} recipient={fix} onClose={() => setFix(null)} onDone={() => (setFix(null), reload())} />}
     </div>
   );
 }

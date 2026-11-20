@@ -1,8 +1,11 @@
-'use client';
 import Link from 'next/link';
-import { api, useLoad, Leaf } from '@/components/ui';
-import { PublicNav, PublicFooter } from '@/components/Public';
-import { fmtNum, fmtTrees, IMPACT, PLANS } from '@/lib/impact';
+import { Leaf } from '@/components/ui';
+import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/Public';
+import { PLANS, PRICING } from '@/lib/impact';
+import { publicFacts } from '@/app/help/facts';
+
+// The refund window is a setting. Read it when the page is asked for, not when the site is built.
+export const dynamic = 'force-dynamic';
 
 const FEATURES: [string, string][] = [
   ['Send for signature', 'Upload PDFs or images, add signers, approvers, viewers and people who get a copy. Sign in order or all at once.'],
@@ -11,7 +14,7 @@ const FEATURES: [string, string][] = [
   ['Templates and bulk send', 'Set a document up once and reuse it. Send one template to hundreds of people from a spreadsheet.'],
   ['PowerForms', 'A public link or QR code that lets anyone fill in and sign a form on their own. Good for waivers, sign-ups and consent forms.'],
   ['In-person signing', 'Host a signing on your own tablet or laptop when the signer is standing next to you.'],
-  ['Reminders and expiry', 'Automatic nudges, deadlines, voiding with a reason, and fixing a typo in an email address after sending.'],
+  ['Reminders and deadlines', 'Automatic nudges, a warning before a deadline, and more time in one click. An expired envelope can be reopened, and nobody signs twice.'],
   ['Proof you can check', 'Every envelope gets a certificate of completion and a hash-chained audit trail. Anyone can verify a signed PDF on our public page.'],
   ['Teams and branding', 'Invite colleagues, share templates, set roles, and put your own logo and colour on emails and the signing screen.'],
   ['API and webhooks', 'Create envelopes, embed signing in your own product and get notified of every event. Included on every plan.'],
@@ -19,33 +22,61 @@ const FEATURES: [string, string][] = [
   ['Reports', 'See what is waiting, how long signing takes and how much paper your team has kept out of the printer.'],
 ];
 
+// What people say goes wrong with e-signature tools, and what we do instead. Each card links to where the promise is kept.
+type Pledge = { said: string; title: string; text: string; href: string; link: string };
+
 const COMPARE: [string, string, string][] = [
-  ['Where your money goes', '100% of subscription revenue to tree planting', 'Company profit'],
-  ['Signers pay', 'Never', 'Never'],
-  ['API and webhooks', 'Every plan, including free', 'Often a separate, pricier plan'],
-  ['Bulk send and public forms', 'Every plan', 'Usually higher tiers only'],
+  ['Where your money goes', '100% of what you pay goes to tree planting', 'Company profit'],
+  ['A mistake after sending', 'Corrected in place, signatures kept', 'Often void and start again'],
+  ['Signing links', 'Work while the document is open, with no click limit', 'Often expire after a few days or a few opens'],
+  ['Signers', 'Never need an account, never pay', 'Often nudged to register'],
+  ['Billing', 'Month to month', 'Often a yearly commitment'],
+  ['Cancelling', 'One click, also without logging in', 'Often hard to find, or through support'],
+  ['What you pay for', 'Signatures that were actually made', 'Often every document sent, signed or not'],
+  ['What you do not use', 'Rolls over. Signatures never expire', 'Usually lost at renewal'],
+  ['Running out', 'Sending pauses. Never a charge you did not choose', 'Often billed per extra document'],
+  ['Refunds', 'Automatic for what you have not used', 'Usually decided case by case'],
+  ['If you stop paying', 'Nothing is deleted or locked', 'Access can be cut off'],
+  ['Taking your documents with you', 'One free export, any time', 'Often one at a time, or a paid add-on'],
+  ['API, webhooks, bulk send, public forms', 'Every plan, including free', 'Often a separate, pricier plan'],
   ['Check a signed PDF', 'Public page, no account needed', 'Usually needs an account or the sender'],
   ['Audit trail', 'Hash chained, tampering is detectable', 'Event log'],
   ['Environmental impact', 'Shown on every envelope, with the maths published', 'Rarely shown'],
-  ['Run it yourself', 'Yes, one server and one database file', 'No'],
 ];
 
+const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
+
 export default function Landing() {
-  const [imp] = useLoad(() => api('/public/impact'));
+  const { refundDays, dormantStopDays } = publicFacts();
+  const P = PRICING;
+
+  const PROMISES: Pledge[] = [
+    { said: 'A typo means voiding the document and starting over.', title: 'Fix a sent document without voiding it', text: 'Wrong email, misspelled name, a field in the wrong place? Correct the envelope while it is out. Signatures already collected stay, and it does not count as a new envelope.', href: '/help#fix-after-sending', link: 'How correcting works' },
+    { said: 'The link has expired by the time the signer comes back.', title: 'Links that do not die', text: 'A signing link works for as long as the document is open, however often it is opened. If the deadline passes, the sender reopens it and the same link works again.', href: '/help#find-documents', link: 'If a link is lost' },
+    { said: 'People who only want to sign are told to register.', title: 'Signers never need an account', text: 'No sign-up, no password, no trial offer and no marketing. Open the link, sign, get your copy.', href: '/security#signers', link: 'What signers can expect' },
+    { said: 'Nobody can say whether a signing request is real.', title: 'Check any email is real', text: 'Every signing email carries a security code. Type it in on our site and we tell you who sent it, before you click anything.', href: '/check', link: 'Check an email' },
+    { said: 'There is no cancel button to be found.', title: 'Month to month, cancel in one click', text: 'No yearly term and no notice period. One button on the Plan page, a stop link in every renewal reminder, and a way to stop without logging in. Signatures you paid for stay yours.', href: '/help#cancel', link: 'Three ways to cancel' },
+    { said: 'A refund is refused a day after a renewal.', title: 'Refunds without asking', text: `Signatures you have not used from your latest payment are refunded within ${refundDays} days, from the Plan page, with no form and no approval. A charge that arrives after you cancelled refunds itself.`, href: '/help#refunds', link: 'The refund rule' },
+    { said: 'A bill for extra documents arrives out of nowhere.', title: 'No overage charges, ever', text: 'When your signatures run out, sending pauses. It never turns into a bill. A signature is only used when someone actually signs, so voided, declined and expired envelopes cost nothing.', href: '#pricing', link: 'See pricing' },
+    { said: 'The account is locked with the signed contracts inside.', title: 'Your documents stay yours', text: 'Export everything as one ZIP file, free, on any plan, also after you cancel. Cancelling or a failed payment never deletes or locks a document.', href: '/security#your-documents', link: 'What we promise about your data' },
+    { said: 'Support is a chatbot going in circles.', title: 'A person answers', text: 'No chatbot. The contact form works without logging in, gives you a reference, and goes to a person.', href: '/help#contact', link: 'Write to us' },
+  ];
+
   return (
-    <div>
+    <div className="pub">
       <PublicNav />
-      <main>
+      <main id="main">
+        <ClosedNotice />
         <section className="wrap hero">
           <div>
-            <div className="badge completed" style={{ marginBottom: 16 }}>100% of subscription revenue plants trees</div>
+            <div className="badge completed" style={{ marginBottom: 16 }}>100% of what you pay plants trees</div>
             <h1>You sign.<br /><em>Trees grow.</em></h1>
-            <p className="lead">Sign&Grow does what you expect from an e-signature tool: send, sign, track and store agreements. The difference is where the money goes. Every cent of subscription revenue funds Treegens tree planting.</p>
+            <p className="lead">Sign&Grow does what you expect from an e-signature tool: send, sign, track and store agreements. The difference is where the money goes. Every cent you pay funds Treegens tree planting, and every dollar plants {P.treesPerUsd} mangrove trees.</p>
             <div className="row wrap">
               <Link href="/signup" className="btn primary lg">Start free</Link>
               <Link href="/impact" className="btn lg">See the impact</Link>
             </div>
-            <p className="muted small" style={{ marginTop: 14 }}>Free for {PLANS.seedling.envelopesPerMonth} envelopes a month. Signers never need an account.</p>
+            <p className="muted small" style={{ marginTop: 14 }}>{sigs(P.welcomeSignatures)} free to start. No card needed. Signers never need an account.</p>
           </div>
           <div aria-hidden="true">
             <div className="doc-art">
@@ -55,7 +86,7 @@ export default function Landing() {
               <div className="row between" style={{ marginTop: 30, alignItems: 'flex-end' }}>
                 <div>
                   <div style={{ fontFamily: "'Sig Dancing', cursive", fontSize: 34, color: '#10243a', lineHeight: 1 }}>Wangari M.</div>
-                  <div style={{ borderTop: '1.5px solid #17241c', width: 190, marginTop: 4 }} />
+                  <div style={{ borderTop: '1.5px solid #17241c', width: 'min(190px, 40vw)', marginTop: 4 }} />
                   <div className="muted small">Signed via Sign&Grow</div>
                 </div>
                 <div style={{ background: 'var(--green-soft)', borderRadius: 12, padding: '10px 14px', textAlign: 'center' }}>
@@ -67,54 +98,87 @@ export default function Landing() {
           </div>
         </section>
 
-        <section className="band">
-          <div className="wrap">
-            <h2>Paper has a cost. So we count it.</h2>
-            <p style={{ maxWidth: 640, margin: '8px 0 24px', color: '#c5dbc9' }}>
-              One tree makes roughly {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper, and each sheet takes about {IMPACT.litresWaterPerSheet} litres of water to produce. Everyone using Sign&Grow has so far kept this much out of the printer:
-            </p>
-            <div className="grid g4 keep2">
-              <div className="stat"><div className="k">Sheets of paper saved</div><div className="v num">{imp ? fmtNum(imp.sheets) : '…'}</div></div>
-              <div className="stat"><div className="k">Trees left standing</div><div className="v num">{imp ? fmtTrees(imp.trees) : '…'}</div></div>
-              <div className="stat"><div className="k">Litres of water not used</div><div className="v num">{imp ? fmtNum(imp.litresWater) : '…'}</div></div>
-              <div className="stat"><div className="k">Sent to tree planting</div><div className="v num">{imp ? `$${fmtNum(imp.donatedUsd)}` : '…'}</div><div className="s">{imp?.treesFunded != null ? `about ${fmtNum(imp.treesFunded)} trees funded` : 'all subscription revenue'}</div></div>
-            </div>
-            <p className="small" style={{ marginTop: 14, color: '#a8c9b0' }}>Live numbers from this service. <Link href="/impact" style={{ color: '#fff' }}>See exactly how we count</Link>.</p>
+        <ImpactBand />
+
+        <section className="wrap section" aria-labelledby="promises-h">
+          <p className="pub-kicker">Built from the one-star reviews</p>
+          <h2 id="promises-h">Nine things that go wrong elsewhere, and what we do instead</h2>
+          <p className="pub-sub">We read what people say when e-signature tools let them down. Then we built the opposite into the product. Each promise links to the place where it is kept.</p>
+          <div className="grid g3">
+            {PROMISES.map((p) => (
+              <article key={p.title} className="pub-promise">
+                <div className="said"><span>Elsewhere</span>{p.said}</div>
+                <h3>{p.title}</h3>
+                <p>{p.text}</p>
+                <Link href={p.href}>{p.link}</Link>
+              </article>
+            ))}
           </div>
         </section>
 
-        <section className="wrap section">
-          <h2>Everything you need to get documents signed</h2>
-          <p className="muted" style={{ maxWidth: 620, marginBottom: 22 }}>No feature is locked behind a sales call.</p>
+        <section className="wrap section" aria-labelledby="features-h">
+          <h2 id="features-h">Everything you need to get documents signed</h2>
+          <p className="pub-sub">Every feature is on every plan. Nothing is locked behind a higher tier or a sales call.</p>
           <div className="grid g3">{FEATURES.map(([t, d]) => <div key={t} className="feat"><h3>{t}</h3><p>{d}</p></div>)}</div>
         </section>
 
-        <section className="wrap section">
-          <h2>How it compares</h2>
+        <section className="wrap section" aria-labelledby="compare-h">
+          <h2 id="compare-h">How it compares</h2>
           <div className="card pad0" style={{ marginTop: 16 }}>
-            <div className="tablewrap"><table className="t cmp">
-              <thead><tr><th /><th>Sign&Grow</th><th>Typical e-signature tools</th></tr></thead>
-              <tbody>{COMPARE.map(([k, a, b]) => <tr key={k}><td>{k}</td><td style={{ color: 'var(--green-deep)', fontWeight: 600 }}>{a}</td><td className="muted">{b}</td></tr>)}</tbody>
-            </table></div>
+            <table className="t pub-cmp">
+              <thead><tr><th scope="col"><span className="pub-vh">What</span></th><th scope="col">Sign&Grow</th><th scope="col">Typical e-signature tools</th></tr></thead>
+              <tbody>{COMPARE.map(([k, a, b]) => <tr key={k}><th scope="row">{k}</th><td data-label="Sign&Grow">{a}</td><td data-label="Elsewhere">{b}</td></tr>)}</tbody>
+            </table>
           </div>
         </section>
 
-        <section className="wrap section">
-          <h2>Simple pricing that plants trees</h2>
-          <div className="grid g2" style={{ marginTop: 16, maxWidth: 820 }}>
-            {(['seedling', 'grove'] as const).map((id) => (
-              <div key={id} className="card" style={id === 'grove' ? { borderColor: 'var(--green)', boxShadow: '0 0 0 1px var(--green)' } : undefined}>
-                <h3 style={{ fontSize: 18 }}>{PLANS[id].name}</h3>
-                <div className="serif" style={{ fontSize: 38, fontWeight: 700 }}>${PLANS[id].price}<span className="muted" style={{ fontSize: 15, fontWeight: 400 }}> / month</span></div>
-                <p className="muted">{PLANS[id].blurb}</p>
-                <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
-                  <li>{id === 'grove' ? 'Unlimited envelopes' : `${PLANS.seedling.envelopesPerMonth} envelopes a month`}</li>
-                  <li>Every feature included</li>
-                  <li>{id === 'grove' ? '100% goes to Treegens tree planting' : 'Free forever'}</li>
-                </ul>
-                <Link href="/signup" className={`btn ${id === 'grove' ? 'primary' : ''}`}>{id === 'grove' ? 'Start free, upgrade any time' : 'Start free'}</Link>
-              </div>
-            ))}
+        <section className="wrap section" id="pricing" aria-labelledby="pricing-h">
+          <h2 id="pricing-h">Simple pricing that plants trees</h2>
+          <p className="pub-sub" style={{ marginBottom: 0 }}>You pay for signatures that actually happen. Every dollar plants {P.treesPerUsd} mangrove trees with Treegens, and both plans have the same features.</p>
+          <div className="pub-plans">
+            <div className="card pub-plan">
+              <h3>{PLANS.seedling.name}</h3>
+              <div className="price">${PLANS.seedling.price}</div>
+              <p className="muted">Try it, and sign your own documents for free.</p>
+              <ul>
+                <li><b>{sigs(P.welcomeSignatures)} free</b> to try the product</li>
+                <li>Signing your own documents is always free</li>
+                <li>Every feature, including the API</li>
+                <li>No card needed</li>
+                <li>Signing is free for everyone you send to</li>
+              </ul>
+              <Link href="/signup" className="btn">Start free</Link>
+            </div>
+            <div className="card pub-plan best">
+              <h3>{P.planName}</h3>
+              <div className="price">${P.monthlyUsd}<small> / month</small></div>
+              <p className="muted">For people who send regularly.</p>
+              <ul>
+                <li><b>{sigs(P.monthlySignatures)} added every month</b></li>
+                <li>More when you need them, ${P.topUpUsd} a signature</li>
+                <li>What you do not use rolls over and never expires</li>
+                <li>One price for the whole team, not per person</li>
+                <li>Month to month. Cancel in one click</li>
+              </ul>
+              <Link href="/signup" className="btn primary">Start free, upgrade any time</Link>
+            </div>
+          </div>
+
+          <div className="card pub-rules">
+            <h3>The rules, all of them</h3>
+            <ul>
+              <li><b>What a signature is.</b> One person signing one envelope. An envelope can hold several documents, and that is still one signature for each signer.</li>
+              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, it comes back by itself.</li>
+              <li><b>What is always free.</b> Signing your own documents. Approvers, viewers and people who get a copy. Correcting a sent envelope, reminders and deadlines. And signing, for everyone you send to.</li>
+              <li><b>Signatures never expire.</b> What you do not use this month is there next month, also after you cancel.</li>
+              <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. A top-up is a one-off payment at ${P.topUpUsd} a signature, with the total shown before you pay. There are no overage charges.</li>
+              <li><b>Month to month.</b> {P.planName} is ${P.monthlyUsd} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
+              <li><b>Refunds are automatic.</b> Within {refundDays} days of a payment, every signature from it that you have not used is refunded at the price you paid. A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
+              {dormantStopDays > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you.</li>}
+              <li><b>Same features on both plans.</b> Templates, bulk send, public forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
+              <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>
+              <li><b>Where the money goes.</b> 100% of what you pay goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees.</li>
+            </ul>
           </div>
         </section>
       </main>

@@ -1,111 +1,255 @@
 'use client';
-import { useMemo, useState } from 'react';
-import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
+import { Suspense, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { api, useLoad, toast } from '@/components/ui';
+import { useMe } from '@/components/AppShell';
+import { useAllowance, voidCostLine } from '@/components/sender/allowance';
+import { BatchView } from '@/components/sender/BatchView';
+import { ConfirmDialog } from '@/components/sender/dialogs';
+import { headerFor, readRecipients, MAX_ROWS, type BulkRow, type Role } from '@/components/sender/csv';
+import { dayTime, explain, longDateUtc, plural } from '@/components/sender/lib';
 
-// Minimal CSV parser: handles quoted cells, commas and new lines inside quotes.
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = '';
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quoted) {
-      if (c === '"' && text[i + 1] === '"') (cell += '"'), i++;
-      else if (c === '"') quoted = false;
-      else cell += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ',' || c === ';' || c === '\t') (row.push(cell.trim()), (cell = ''));
-    else if (c === '\n' || c === '\r') {
-      if (c === '\r' && text[i + 1] === '\n') i++;
-      row.push(cell.trim());
-      if (row.some(Boolean)) rows.push(row);
-      row = [];
-      cell = '';
-    } else cell += c;
-  }
-  row.push(cell.trim());
-  if (row.some(Boolean)) rows.push(row);
-  return rows;
+export default function BulkPage() {
+  return <Suspense fallback={<div className="muted" role="status">Loading…</div>}><Bulk /></Suspense>;
 }
 
-export default function Bulk() {
-  const [tpls] = useLoad(() => api('/envelopes?kind=template'));
-  const [batches, reload] = useLoad(() => api('/bulk'));
-  const [tid, setTid] = useState('');
+// /app/bulk is the send form and the list of past batches. /app/bulk?batch=<id> is one batch.
+function Bulk() {
+  const params = useSearchParams();
+  const batch = params.get('batch');
+  return batch ? <BatchView id={batch} /> : <BulkSend preset={params.get('template') || ''} />;
+}
+
+type Sent = { id: string; sent: number; failed: { row: BulkRow; error: string }[] };
+
+function BulkSend({ preset }: { preset: string }) {
+  const router = useRouter();
+  const [tpls] = useLoad<any>(() => api('/envelopes?kind=template'));
+  const [batches, reloadBatches] = useLoad<any>(() => api('/bulk'));
+  const me = useMe();
+  const [allowance, reloadAllowance] = useAllowance();
+  // The templates page links here with ?template=<id> so the template is already chosen.
+  const [tid, setTid] = useState(preset);
+  // The full template is needed for its open roles; the list only has a summary.
+  const [tpl, , tplError] = useLoad<any>(() => (tid ? api(`/envelopes/${tid}`) : Promise.resolve(null)), [tid]);
   const [csv, setCsv] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [name, setName] = useState('');
+  const [fileNote, setFileNote] = useState('');
+  const [confirming, setConfirming] = useState<BulkRow[] | null>(null);
+  const [result, setResult] = useState<Sent | null>(null);
 
-  const tpl = tpls?.envelopes.find((t: any) => t.id === tid);
-  // The API matches rows to open roles by role name.
-  const roles: string[] = useMemo(() => (tpl?.recipients || []).filter((r: any) => !r.email && r.role_name).map((r: any) => r.role_name), [tpl]);
-  const header = roles.flatMap((r) => [`${r} name`, `${r} email`]).join(',');
-  const rows = useMemo(() => {
-    const p = parseCsv(csv);
-    const body = p.length && /name|email/i.test(p[0].join(' ')) ? p.slice(1) : p;
-    return body.map((cells) => Object.fromEntries(roles.map((r, i) => [r, { name: cells[i * 2] || '', email: cells[i * 2 + 1] || '' }])));
-  }, [csv, roles]);
+  const loaded = tid && tpl?.envelope?.id === tid ? tpl.envelope : null;
+  const open: any[] = useMemo(() => (loaded?.recipients || []).filter((r: any) => !r.email), [loaded]);
+  const roles: Role[] = useMemo(() => {
+    const seen = new Set<string>();
+    return open.map((r, i) => ({ key: r.role_name || r.id, label: r.role_name || `Recipient ${i + 1}` })).filter((r) => !seen.has(r.key) && !!seen.add(r.key));
+  }, [open]);
+  const sameName = open.length > roles.length;
+  const header = headerFor(roles);
+  const reading = useMemo(() => readRecipients(csv, roles), [csv, roles]);
+  const ready = reading.missing.length ? [] : reading.rows.filter((r) => !r.problems.length);
+  const stuck = reading.rows.filter((r) => r.problems.length);
+  const tooMany = reading.rows.length > MAX_ROWS;
+  // What this list would use, against what is left. Checked here so the answer comes before the send, not after.
+  const signersPerRow = (loaded?.recipients || []).filter((r: any) => (r.role === 'signer' || r.role === 'inperson') && (r.email || '').toLowerCase() !== me.user.email.toLowerCase()).length;
+  const need = allowance?.kind === 'signatures' ? signersPerRow * ready.length : ready.length;
+  const left = allowance?.kind === 'signatures' ? Math.max(0, allowance.available) : allowance?.kind === 'envelopes' ? Math.max(0, allowance.limit - allowance.used) : null;
+  const overPlan = left != null && ready.length > 0 && need > left;
+  const canSend = ready.length > 0 && !tooMany && !reading.missing.length;
 
-  async function send() {
-    setBusy(true);
-    try {
-      const r = await api('/bulk', { body: { template_id: tid, rows } });
-      setResult(r);
-      toast(`${r.sent} envelope${r.sent === 1 ? '' : 's'} sent`);
-      setCsv('');
-      reload();
-    } catch (e) {
-      oops(e);
-    } finally {
-      setBusy(false);
-    }
+  function starter() {
+    const example = roles.flatMap((r, i) => [`Example ${r.label}`, `person${i + 1}@example.org`]).join(',');
+    const url = URL.createObjectURL(new Blob([`${header}\n${example}\n`], { type: 'text/csv' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: 'bulk-send-list.csv' });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  async function pickFile(file?: File) {
+    if (!file) return;
+    if (file.size > 2_000_000) return setFileNote(`${file.name} is larger than 2 MB. Save just the recipient columns as a CSV file and try again.`);
+    const text = await file.text();
+    if (text.includes('\u0000')) return setFileNote(`${file.name} is not a text file. In your spreadsheet, choose Save as CSV, then upload that file.`);
+    setCsv(text);
+    setResult(null);
+    setFileNote(`Loaded ${file.name}.`);
+  }
+
+  async function send(rows: BulkRow[]) {
+    const r = await api('/bulk', { body: { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => x.cells) } });
+    const failed = (r.results as any[]).map((x, i) => ({ row: rows[i], error: x.error as string, ok: x.ok })).filter((x) => !x.ok);
+    setResult({ id: r.id, sent: r.sent, failed });
+    setConfirming(null);
+    toast(r.sent ? `${plural(r.sent, 'envelope')} sent.` : 'Nothing was sent. See why below.', !r.sent);
+    if (!failed.length) (setCsv(''), setName(''), setFileNote(''));
+    reloadBatches();
+    reloadAllowance();
+  }
+
+  const first = roles[0];
   return (
-    <div className="stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Bulk send</h1><div className="muted">Send one template to a whole list. Everyone gets their own private copy to sign.</div></div></div>
-      <div className="card">
-        <label className="f"><span>Template</span>
+    <div className="sn stack">
+      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Bulk send</h1><div className="muted">Send one template to a whole list. Everyone gets their own private copy to sign, and you follow them all as one batch.</div></div></div>
+
+      <section className="card" aria-labelledby="sn-bulk-new-h">
+        <h2 id="sn-bulk-new-h" className="sn-vh">New bulk send</h2>
+        <label className="f"><span>1. Choose a template</span>
           <select value={tid} onChange={(e) => (setTid(e.target.value), setResult(null))}>
             <option value="">Choose a template…</option>
             {(tpls?.envelopes || []).map((t: any) => <option key={t.id} value={t.id}>{t.subject || 'Untitled template'}</option>)}
           </select>
         </label>
-        {tpl && roles.length === 0 && <div className="notice warn">This template has no open roles. Edit it and leave the name and email empty for the role you want to fill from your list.</div>}
-        {tpl && roles.length > 0 && (
+        {tpls && tpls.envelopes.length === 0 && <div className="notice">You have no templates yet. <Link href="/app/envelopes/new?kind=template">Create a template</Link> with an empty role, such as &ldquo;Volunteer&rdquo;, and come back here.</div>}
+        {tid && !loaded && !tplError && <div className="muted" role="status">Loading the template…</div>}
+        {tid && !loaded && tplError && <div className="notice err" role="alert">We could not open that template. It may have been deleted. Choose another one, or reload the page.</div>}
+        {loaded && roles.length === 0 && <div className="notice warn">Every recipient in this template already has a name and email, so there is nothing to fill in from a list. <Link href={`/app/templates/${tid}/edit`}>Edit the template</Link> and leave the name and email empty for the role you want to fill.</div>}
+        {loaded && sameName && <div className="notice warn" style={{ marginBottom: 12 }}>Two roles in this template share the same name, so they would both get the same person. <Link href={`/app/templates/${tid}/edit`}>Edit the template</Link> and give each role its own name.</div>}
+
+        {loaded && roles.length > 0 && (
           <>
-            <label className="f"><span>Recipients <span className="hint">(paste from a spreadsheet or upload a CSV, one row per envelope)</span></span>
-              <textarea style={{ minHeight: 150, fontFamily: 'ui-monospace, monospace', fontSize: 13 }} placeholder={`${header}\nAda Lovelace,ada@example.com`} value={csv} onChange={(e) => setCsv(e.target.value)} />
+            <label className="f" style={{ marginBottom: 6 }}><span>2. Add your list <span className="hint">(paste from a spreadsheet or upload a CSV file, one row per envelope)</span></span>
+              <textarea className="sn-csv" spellCheck={false} placeholder={`${header}\nAda Lovelace,ada@example.org`} value={csv} onChange={(e) => (setCsv(e.target.value), setResult(null), setFileNote(''))} aria-describedby="sn-csv-help" />
             </label>
-            <div className="row between wrap">
-              <label className="btn sm">Upload CSV<input type="file" accept=".csv,text/csv,text/plain" hidden onChange={(e) => e.target.files?.[0]?.text().then(setCsv)} /></label>
-              <span className="muted small">Columns: <span className="mono">{header}</span></span>
+            <div className="sn-csvtools">
+              <label className="btn sm sn-file">Upload CSV<input type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" className="sn-vh" onChange={(e) => (pickFile(e.target.files?.[0]), (e.target.value = ''))} /></label>
+              <button type="button" className="btn sm ghost" onClick={starter}>Download a starter file</button>
+              {fileNote && <span className="small muted" role="status">{fileNote}</span>}
             </div>
-            {rows.length > 0 && (
-              <div className="tablewrap" style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 10, maxHeight: 260, overflow: 'auto' }}>
-                <table className="t"><thead><tr><th>#</th>{roles.map((r) => <th key={r}>{r}</th>)}</tr></thead>
-                  <tbody>{rows.slice(0, 100).map((row: any, i: number) => <tr key={i}><td className="num muted">{i + 1}</td>{roles.map((r) => <td key={r}>{row[r].name} <span className="muted small">{row[r].email}</span></td>)}</tr>)}</tbody>
-                </table>
+            <p className="muted small" id="sn-csv-help">
+              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b></span>)}. They can be in any order, in capitals or not, and extra columns are fine.
+              {' '}No header row? Then use exactly that order.
+            </p>
+
+            {reading.rows.length > 0 && (
+              <div className="sn-verify" role="region" aria-label="Check your list">
+                <h3>3. Check before sending</h3>
+                {reading.missing.length > 0 ? (
+                  <p className="small" aria-live="polite">We found {plural(reading.rows.length, 'row')} under a header row, but could not tell which columns hold the names and emails.</p>
+                ) : (
+                  <p className="small" aria-live="polite">
+                    <b>{plural(ready.length, 'row')} ready.</b>{stuck.length > 0 ? <> <b className="sn-bad">{plural(stuck.length, 'row')} {stuck.length === 1 ? 'needs' : 'need'} a fix.</b></> : null}
+                    {' '}<span className="muted">
+                      {reading.header ? 'We matched your columns by their names.' : `No header row found, so we read the columns in this order: ${header.replace(/,/g, ', ')}.`}
+                      {reading.swapped ? ' The names and emails looked swapped, so we put them the right way round.' : ''}
+                      {reading.ignored.length ? ` Not used: ${reading.ignored.join(', ')}.` : ''}
+                    </span>
+                  </p>
+                )}
+                {reading.missing.length > 0 && (
+                  <div className="notice err" role="alert">
+                    We could not find {reading.missing.length === 1 ? 'a column' : 'columns'} called <b>{reading.missing.join(' and ')}</b>. Your first row has: {reading.ignored.join(', ') || 'no column names we recognise'}. Rename {reading.missing.length === 1 ? 'that column' : 'those columns'} in the first row, or remove the first row and put the columns in this order: {header.replace(/,/g, ', ')}.
+                  </div>
+                )}
+                {tooMany && <div className="notice err" role="alert">That is {reading.rows.length} rows. One batch can hold up to {MAX_ROWS}. Split the list and send it in two goes.</div>}
+                {!reading.missing.length && stuck.length > 0 && (
+                  <div className="notice warn">
+                    <b>Fix these in the box above, or send without them.</b> Nothing has been sent yet.
+                    <ul className="sn-problems">
+                      {stuck.slice(0, 50).map((r) => <li key={r.row}><b>Row {r.row}</b>{first && r.cells[first.key].name ? ` (${r.cells[first.key].name})` : ''}: {r.problems.join('; ')}.</li>)}
+                      {stuck.length > 50 && <li>And {stuck.length - 50} more.</li>}
+                    </ul>
+                  </div>
+                )}
+                {!reading.missing.length && (
+                  <div className="sn-preview-table" tabIndex={0} role="group" aria-label="Your list as we read it">
+                    <table className="t">
+                      <thead><tr><th>Row</th>{roles.map((r) => <th key={r.key}>{r.label}</th>)}<th>Check</th></tr></thead>
+                      <tbody>
+                        {reading.rows.slice(0, 100).map((row) => (
+                          <tr key={row.row} className={row.problems.length ? 'bad' : ''}>
+                            <td className="num muted">{row.row}</td>
+                            {roles.map((r) => <td key={r.key}>{row.cells[r.key].name || <span className="sn-bad">no name</span>}<div className="muted small sn-break">{row.cells[r.key].email || <span className="sn-bad">no email</span>}</div></td>)}
+                            <td className="small">{row.problems.length ? <span className="sn-bad">{row.problems.join('; ')}</span> : row.notes.length ? <span className="sn-cold">Ready. Note: {row.notes.join('; ')}</span> : <span className="sn-good">Ready</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {reading.rows.length > 100 && <p className="muted small">Showing the first 100 of {reading.rows.length} rows. Rows that need a fix are all listed above.</p>}
+
+                {overPlan && allowance?.kind === 'envelopes' && (
+                  <div className="notice warn" role="note">
+                    {left === 0
+                      ? <>You have used this month&rsquo;s {allowance.limit} envelopes, so these would be saved as drafts and not sent.</>
+                      : <>Your plan has <b>{plural(left!, 'envelope')}</b> left this month and this list has {ready.length}. The first {left} would be sent and the rest saved as drafts.</>}
+                    {' '}Nothing extra is ever charged. The count starts again on {longDateUtc(allowance.resets_at)}, or you can <Link href="/app/settings?tab=billing">see the plans</Link>.
+                  </div>
+                )}
+                {overPlan && allowance?.kind === 'signatures' && (
+                  <div className="notice warn" role="note">
+                    This list needs <b>{plural(need, 'signature')}</b>{signersPerRow > 1 ? ` (${signersPerRow} signers on each of ${plural(ready.length, 'row')})` : ''} and you have <b>{left}</b> left to send with.
+                    {' '}A batch only goes out when all of it can, so nothing would be sent yet. <Link href="/app/settings?tab=billing">Get more signatures</Link>, or send a shorter list. Nothing is charged unless you choose it.
+                  </div>
+                )}
+
+                <div className="sn-sendrow">
+                  <label className="f"><span>Name this batch <span className="hint">(optional, only you see it)</span></span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder={loaded.subject || 'Bulk send'} /></label>
+                  <button className="btn primary" disabled={!canSend} onClick={() => setConfirming(ready)}>
+                    {stuck.length > 0 && ready.length > 0 ? `Send the ${plural(ready.length, 'ready row')}` : `Send ${plural(ready.length, 'envelope')}`}
+                  </button>
+                </div>
+                {stuck.length > 0 && ready.length > 0 && !reading.missing.length && <p className="muted small" style={{ textAlign: 'right' }}>The {plural(stuck.length, 'row')} that {stuck.length === 1 ? 'needs' : 'need'} a fix will be left out.</p>}
               </div>
             )}
-            <div className="row" style={{ marginTop: 14, justifyContent: 'flex-end' }}>
-              <button className="btn primary" disabled={busy || rows.length === 0} onClick={send}>{busy ? 'Sending…' : `Send ${rows.length || ''} envelope${rows.length === 1 ? '' : 's'}`}</button>
-            </div>
           </>
         )}
-        {result?.failed?.length > 0 && <div className="notice err" style={{ marginTop: 12 }}>{result.failed.length} could not be sent: {result.failed[0].error}</div>}
-      </div>
 
-      <div className="card pad0">
-        <div style={{ padding: '14px 16px' }}><h2>Past batches</h2></div>
-        {batches && batches.batches.length === 0 ? <div className="empty">No batches yet.</div> : (
-          <div className="tablewrap"><table className="t">
-            <thead><tr><th>Batch</th><th>Sent</th><th>Completed</th><th>Date</th></tr></thead>
-            <tbody>{(batches?.batches || []).map((b: any) => <tr key={b.id}><td><b>{b.name}</b></td><td className="num">{b.created} of {b.total}</td><td className="num">{b.completed}</td><td className="muted small">{fmtDate(b.created_at, true)}</td></tr>)}</tbody>
+        {result && (
+          <div className={`notice${result.failed.length ? ' warn' : ''}`} role="status" style={{ marginTop: 14 }}>
+            <b>{result.sent ? `${plural(result.sent, 'envelope')} sent.` : 'Nothing was sent.'}</b>
+            {result.failed.length > 0 && (
+              <>
+                {' '}{plural(result.failed.length, 'row')} could not be sent and {result.failed.length === 1 ? 'was' : 'were'} saved as {result.failed.length === 1 ? 'a draft' : 'drafts'} in the batch, so nothing is lost:
+                <ul className="sn-problems">
+                  {result.failed.slice(0, 20).map((f, i) => <li key={i}><b>Row {f.row.row}</b>{first ? ` (${f.row.cells[first.key].name})` : ''}: {f.error}</li>)}
+                  {result.failed.length > 20 && <li>And {result.failed.length - 20} more, for the same kind of reason.</li>}
+                </ul>
+              </>
+            )}
+            <div style={{ marginTop: 8 }}><button className="btn sm" onClick={() => router.push(`/app/bulk?batch=${result.id}`)}>Open this batch</button></div>
+          </div>
+        )}
+      </section>
+
+      <section className="card pad0" aria-labelledby="sn-batches-h">
+        <div className="sn-cardhead"><h2 id="sn-batches-h">Past batches</h2><p className="muted small">Open a batch to see everyone in it, remind them, void what is still open or download what is done.</p></div>
+        {!batches ? <div className="empty" role="status">Loading…</div> : batches.batches.length === 0 ? <div className="empty"><h3>No batches yet</h3>Your first bulk send will show up here.</div> : (
+          <div className="tablewrap"><table className="t sn-list">
+            <thead><tr><th>Batch</th><th className="hide-sm">Completed</th><th className="hide-sm">Sent on</th><th><span className="sn-vh">Open</span></th></tr></thead>
+            <tbody>
+              {batches.batches.map((b: any) => (
+                <tr key={b.id} className="click" onClick={() => router.push(`/app/bulk?batch=${b.id}`)}>
+                  <td className="sn-main">
+                    <Link href={`/app/bulk?batch=${b.id}`} className="sn-subject" onClick={(e) => e.stopPropagation()}>{b.name}</Link>
+                    <div className="muted small sn-only-sm">{b.completed} of {b.created} completed · {dayTime(b.created_at)}</div>
+                  </td>
+                  <td className="hide-sm num">{b.completed} of {b.created}</td>
+                  <td className="hide-sm muted small">{dayTime(b.created_at)}</td>
+                  <td className="sn-fit" onClick={(e) => e.stopPropagation()}><Link className="btn sm" href={`/app/bulk?batch=${b.id}`} aria-label={`Open batch ${b.name}`}>Open</Link></td>
+                </tr>
+              ))}
+            </tbody>
           </table></div>
         )}
-      </div>
+      </section>
+
+      {confirming && (
+        <ConfirmDialog title={`Send ${plural(confirming.length, 'envelope')}`} confirmLabel={`Send ${plural(confirming.length, 'envelope')}`} keepLabel="Not yet" danger={false} unchanged="" onClose={() => setConfirming(null)}
+          onConfirm={async () => {
+            try {
+              await send(confirming);
+            } catch (e: any) {
+              // A dropped connection does not tell us whether the batch went out, so never invite a blind second try.
+              if (!e?.status) throw new Error('We lost the connection while sending. Look under Past batches to see whether it went out before you try again, so nobody gets it twice.');
+              throw new Error(explain(e, 'Nothing was sent.'));
+            }
+          }}>
+          <p>{confirming.length === 1 ? 'One person gets' : `${confirming.length} people each get`} their own copy of &ldquo;{loaded?.subject || 'this template'}&rdquo; by email, straight away.</p>
+          <p className="muted">Sent to the wrong list? You can void the whole batch in one go afterwards. {voidCostLine(allowance)}</p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

@@ -22,7 +22,7 @@ export function openapi() {
     info: {
       title: 'Sign&Grow API',
       version: '1.0.0',
-      description: 'Everything the Sign&Grow app does goes through this API. It is the same on every plan, keys work immediately, and there is no separate test environment or go-live review. All times are ISO 8601 in UTC. Errors are JSON: {"error": "what went wrong and what to do"}.',
+      description: 'Everything the Sign&Grow app does goes through this API. It is the same on every plan, keys work immediately, and there is no separate test environment or go-live review. All times are ISO 8601 in UTC. Errors are JSON: {"error": "what went wrong and what to do"}. Sending answers 402 when the account has too few signatures left: one is held for each person who signs, it is only used when they sign, and nothing is ever charged automatically.',
     },
     servers: [{ url: `${baseUrl()}/api` }],
     security: [{ apiKey: [] }],
