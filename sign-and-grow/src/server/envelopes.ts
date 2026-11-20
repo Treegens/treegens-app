@@ -6,7 +6,7 @@ import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail } from './credits.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
-import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
+import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 
 export const ROLES = ['signer', 'approver', 'cc', 'viewer', 'inperson'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note'];
@@ -1524,15 +1524,20 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       expired++;
       continue;
     }
-    // A start from a public form costs nothing to make and holds one of the owner's signatures. One that its visitor
-    // has left alone for a day is closed, so the signature comes back and a stranger cannot tie up a whole balance by
-    // starting and walking away. The visitor loses nothing but the start: the form simply gives them a new one.
+    // A start from a public form costs nothing to make, and while it is unfinished it counts against what the form
+    // can still take. One that its visitor has left alone for a day is closed, so a stranger cannot shut a form by
+    // starting and walking away. On a form marked as filled in on a shared device that is an hour, because the next
+    // person is already waiting. Typing counts as being there (answers are saved as people type). The visitor loses
+    // nothing but the start: the form simply gives them a new one.
     const visitor = e.form_recipient_id && e.recipients.find((r: any) => r.id === e.form_recipient_id);
     if (visitor && (visitor.status === 'sent' || visitor.status === 'viewed')) {
-      const touched = get("SELECT MAX(at) at FROM audit WHERE envelope_id=? AND actor != 'System'", e.id)?.at || e.sent_at;
-      if (Date.now() - Date.parse(touched) > powerformIdleHours() * 3600_000) {
+      const acted = get("SELECT MAX(at) at FROM audit WHERE envelope_id=? AND actor != 'System'", e.id)?.at || e.sent_at;
+      const touched = visitor.touched_at && visitor.touched_at > acted ? visitor.touched_at : acted;
+      const shared = !!get('SELECT shared_device s FROM powerforms WHERE id=?', e.powerform_id)?.s;
+      const idleMs = shared ? powerformSharedIdleMinutes() * 60_000 : powerformIdleHours() * 3600_000;
+      if (Date.now() - Date.parse(touched) > idleMs) {
         run("UPDATE envelopes SET status='expired', expires_at=?, updated_at=? WHERE id=?", t, t, e.id);
-        audit(e.id, { name: 'System' }, 'Envelope expired', `Started from a public form and left unfinished for ${powerformIdleHours()} hours`);
+        audit(e.id, { name: 'System' }, 'Envelope expired', `Started from a public form and left unfinished for ${shared ? `${powerformSharedIdleMinutes()} minutes` : `${powerformIdleHours()} hours`}`);
         fireWebhooks(e.account_id, 'envelope.expired', e.id);
         expired++;
         continue;

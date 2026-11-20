@@ -129,6 +129,9 @@ CREATE TABLE IF NOT EXISTS credits (
 );
 CREATE INDEX IF NOT EXISTS credits_account ON credits(account_id);
 CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, retired_at TEXT NOT NULL);
+-- The security codes of emails about documents that were deleted since, as fingerprints only: no name, no address,
+-- no subject. They let the check page say "that email was real, the document has been deleted" instead of "fake".
+CREATE TABLE IF NOT EXISTS forgotten_codes (code_hash TEXT PRIMARY KEY, at TEXT NOT NULL);
 -- A signature that was set aside because the sender changed the document afterwards and asked for a new one. The
 -- audit trail says so in words. This keeps the signature itself and the answers exactly as they were.
 CREATE TABLE IF NOT EXISTS earlier_signatures (
@@ -207,6 +210,11 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['payments', 'credits', 'INTEGER NOT NULL DEFAULT 0'],
   ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
   ['powerforms', 'alerted_at', 'TEXT'],
+  // 1 on a public form that people fill in on a shared device or from one office network (a tablet at the front
+  // desk). More unfinished starts are allowed from one address, and an abandoned one is cleared sooner.
+  ['powerforms', 'shared_device', 'INTEGER NOT NULL DEFAULT 0'],
+  // The last time this person's answers were saved while filling in. Typing counts as being there.
+  ['recipients', 'touched_at', 'TEXT'],
   ['accounts', 'promo_code', 'TEXT'],
   ['accounts', 'promo_at', 'TEXT'],
   ['emails', 'recipient_id', 'TEXT'],

@@ -15,6 +15,9 @@ export const dormantStopDays = (): number => (process.env.DORMANT_AUTO_STOP_DAYS
 
 /** A closed account can be brought back by signing in for this many days. */
 export const CLOSE_GRACE_DAYS = 30;
+// How long we keep our own copy of an email that is not part of a document's record (invitations, notices, receipts,
+// reminders). A copy of an email about a document stays with that document and goes when the document goes.
+export const MAIL_COPY_DAYS = 90;
 
 /** How many different recipients must report an account before its sending is paused for review. */
 export const abuseSuspendAfter = (): number => Number(process.env.ABUSE_SUSPEND_AFTER) || 3;
@@ -36,6 +39,11 @@ export const powerformIdleHours = (): number => Number(process.env.POWERFORM_IDL
 
 /** How many unfinished starts one device address may have on one public form at a time. */
 export const POWERFORM_OPEN_STARTS = 3;
+// A form its owner marked as filled in on a shared device (a tablet at the front desk, one office network): many
+// people come from the same address there, so more unfinished starts are allowed, and one that was walked away
+// from is cleared after an hour instead of a day so it does not stand in the next person's way.
+export const POWERFORM_SHARED_OPEN_STARTS = 30;
+export const powerformSharedIdleMinutes = (): number => Number(process.env.POWERFORM_SHARED_IDLE_MINUTES) || 60;
 
 /** This many days before a closed account is deleted, its owner is reminded by email, with how to keep it and how to export first. */
 export const CLOSING_REMINDER_DAYS = 7;
@@ -58,7 +66,8 @@ export const KEPT_AFTER_DELETION: string[] = [
   'Documents other people sent you, with what you did on them, such as your signature or a report you made. They belong to whoever sent them.',
   'What you sent as a member of a team you do not own. It belongs to that team and passes to its owner, and its audit trail says so. An API key you made there stays on the team\'s list as stopped, under your name.',
   'Signed PDFs your recipients downloaded or were emailed. Those are theirs. The links in our emails to them stop working.',
-  'Our stored copies of emails to other people that mention your name and belong to no envelope, such as an invitation you sent or a notice to the admins of a team you were on.',
+  'A fingerprint of the security code in each email about a document you sent, for one year. It holds no name, address or title. It only lets someone who still has that email learn that it was real and that the document has been deleted.',
+  `If you go by a single name: our stored copies of emails to other people that mention it and belong to no document, such as an invitation you sent. Those go with all such copies, ${MAIL_COPY_DAYS} days after they were sent. Copies that carry your email address or a full name are deleted with the account.`,
 ];
 
 /**

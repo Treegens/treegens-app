@@ -204,7 +204,8 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `NEW_ACCOUNT_DAILY_RECIPIENTS` | How many people an account that has not paid can send to per day during its first week. "Has not paid" is the free plan or a plan free through a code, with no payment that was kept, and not marked as trusted in the operator queue. Everyone newly emailed counts: a first send, a person added or an address changed on an envelope that is out, a bulk row, a visitor to a public form. | `50` |
 | `UNPAID_DAILY_RECIPIENTS` | The same limit after the first week. Paying for anything lifts both, and so does "Trust this account" in the operator queue. | `200` |
 | `ABUSE_SUSPEND_AFTER` | How many different recipients must report an account within 30 days before its sending is paused for review. Open reports and reports an operator confirmed as abuse both count. | `3` |
-| `POWERFORM_IDLE_HOURS` | An unfinished start from a public form that nobody has touched for this long is closed, so the signature held for it comes back. The visitor can start again. | `24` |
+| `POWERFORM_IDLE_HOURS` | An unfinished start from a public form that nobody has touched for this long is closed, so it no longer counts against what the form can still take. Typing counts as touching. The visitor can start again. | `24` |
+| `POWERFORM_SHARED_IDLE_MINUTES` | The same, for a form its owner marked as filled in on a shared device (a tablet at the front desk, one office network). Such a form also allows 30 unfinished starts from one address instead of 3, and offers "start a new form for the next person" when someone has finished. | `60` |
 | `DORMANT_AUTO_STOP_DAYS` | A paid plan that has sent nothing for this long is not renewed. `0` only warns. | `90` |
 | `UNOPENED_ALERT_HOURS` | How long a request sits unopened before the sender is told. | `48` |
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |

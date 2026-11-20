@@ -6,7 +6,9 @@ import { api, fmtDate, ROLE_LABEL } from '@/components/ui';
 type Genuine = { genuine: true; replaced?: false; sender: { name: string; email: string } | null; account?: string; paused: boolean; subject: string; status: string; sent_at: string | null; for_name: string; role: string; url: string };
 // An email we really sent whose link was replaced afterwards. It is genuine and is said to be, without a link to open.
 type Replaced = { genuine: true; replaced: true; why: string; replaced_at: string | null; for_name: string | null; sender: { name: string; email: string } | null; account?: string; paused: boolean; subject: string | null; status: string | null };
-type Answer = Genuine | Replaced | { genuine: false };
+// An email we really sent about a document that has been deleted since. Only that much is still known.
+type Deleted = { genuine: true; deleted: true; replaced?: false; deleted_at: string };
+type Answer = Genuine | Replaced | Deleted | { genuine: false };
 
 // Why the link in a genuine email stopped working, said for the person who is holding that email.
 const REPLACED_WHY: Record<string, (who: string) => string> = {
@@ -184,7 +186,21 @@ export function CheckForm() {
         </div>
       )}
 
-      {answer?.genuine && !answer.replaced && (
+      {answer?.genuine && 'deleted' in answer && (
+        <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
+          <span className="badge completed">Genuine</span>
+          <h2>This email was real, but the document has been deleted</h2>
+          <p>Code {answer.code} belongs to an email that Sign&Grow really sent. It is not a fake.</p>
+          <p>The document it was about was deleted on {fmtDate(answer.deleted_at, true)}, by its sender or together with the sender&apos;s account. When a document is deleted we delete what we knew about it too, so we can no longer tell you who sent it or what it was called. That is why the link in the email no longer opens anything.</p>
+          <p><b>What to do.</b> There is nothing left to sign. If you were expecting this document, ask the person who sent it whether they will send it again. If you had already signed it, the copy that was emailed to you when it was completed is yours to keep.</p>
+          <div className="pub-actions-row">
+            <button type="button" className="btn primary" onClick={again}>Check another code</button>
+            <Link href="/help?topic=signing#contact" className="btn">Ask us about this email</Link>
+          </div>
+        </div>
+      )}
+
+      {answer?.genuine && !answer.replaced && !('deleted' in answer) && (
         <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
           <span className="badge completed">Genuine</span>
           <h2>This email is real</h2>
@@ -220,7 +236,7 @@ export function CheckForm() {
             <Link href="/help?topic=suspicious#contact" className="btn primary">Tell us about this email</Link>
             <button type="button" className="btn" onClick={again}>Try the code again</button>
           </div>
-          <p className="muted small" style={{ marginTop: 16 }}>A code stays on record when the sender corrects an address, changes who signs or takes someone off a document, so those emails are still recognised here. A code is only forgotten when the document itself is deleted. If you think that is what happened, ask the sender another way before you do anything else.</p>
+          <p className="muted small" style={{ marginTop: 16 }}>A code stays on record when the sender corrects an address, changes who signs or takes someone off a document, and for a year after a document is deleted, so those emails are still recognised here.</p>
         </div>
       )}
     </>

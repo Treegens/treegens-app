@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx, readBlob, dataDir } from './db.ts';
-import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, shortCode, HttpError } from './util.ts';
+import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, shortCode, sha256, HttpError } from './util.ts';
 import { checkPassword } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { auditTrail, emailMyLinks, resendFromRetired } from './envelopes.ts';
@@ -11,7 +11,7 @@ import { audit, helpAsked, type Actor } from './envelopes.ts';
 import { stopBillingFor } from './routes-billing.ts';
 import { sameEmail } from './credits.ts';
 import { unpaidDailyRecipients } from '../lib/policy.ts';
-import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS } from '../lib/policy.ts';
+import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
@@ -74,6 +74,10 @@ route('POST', '/public/check', async (c) => {
     // the role, the signer passed the document on, or the person was taken off. That email was genuine and is said
     // to be, with why its link no longer works and what to do. Its link is never handed out again.
     const old = get('SELECT * FROM retired_tokens WHERE check_code=? ORDER BY retired_at DESC LIMIT 1', code);
+    // A code from an email about a document that was deleted since (by its sender, or with the sender's account).
+    // The email was real, and that is all we still know: the document and everything about it are gone.
+    const gone = old ? null : get('SELECT at FROM forgotten_codes WHERE code_hash=?', sha256(code));
+    if (gone) return { genuine: true, deleted: true, deleted_at: gone.at };
     if (!old) return { genuine: false };
     const oe = old.envelope_id ? get('SELECT subject, status, sender_id, account_id FROM envelopes WHERE id=?', old.envelope_id) : null;
     const account = oe ? get('SELECT name, suspended_at FROM accounts WHERE id=?', oe.account_id) : null;
@@ -103,6 +107,8 @@ route('POST', '/public/check/report', async (c) => {
     e = to ? loadEnvelope(old.envelope_id) : null;
     who = e ? { name: old.sent_to || to, email: to } : null;
   }
+  if (!who && code.length === 12 && get('SELECT 1 x FROM forgotten_codes WHERE code_hash=?', sha256(code)))
+    throw bad('That code is from an email we really sent, but the document it was about has been deleted since, and with it everything that said who sent it. So we cannot file a report against it here. If the email worries you, use the contact form on the help page and tell us what it says: a person will look into it.', 404);
   if (!who) throw bad('We do not recognise that security code, so we cannot tell which email you mean. Use the contact form on the help page and tell us what the email says.', 404);
   await reportAbuse(e, who, b, { name: `${who.name} <${who.email}>`, ip: c.ip, ua: c.ua });
   return { ok: true };
@@ -209,6 +215,12 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
       if (f) (shas.push(f.sha256), run('DELETE FROM files WHERE id=?', fid));
     }
     shas.push(get('SELECT final_sha256 s FROM envelopes WHERE id=?', eid)?.s);
+    // The emails about this document are still in people's inboxes, each with its security code. Only a fingerprint
+    // of each code is kept, so the check page can still tell their holders the email was real. It says nothing
+    // about who or what, and goes after a year (see purge).
+    for (const r of all(`SELECT check_code c FROM recipients WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL
+        UNION SELECT check_code FROM retired_tokens WHERE check_code IS NOT NULL AND (envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?))`, eid, eid, eid))
+      run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at) VALUES (?,?)', sha256(r.c), now());
     run('DELETE FROM audit WHERE envelope_id=?', eid);
     run(`DELETE FROM emails WHERE envelope_id=?${account ? '' : ` AND ${NOT_WAITING}`}`, eid);
     run('DELETE FROM retired_tokens WHERE envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?)', eid, eid);
@@ -332,6 +344,14 @@ export function purgeUser(userId: string): any[] {
     // notices) or name them as "Name <address>" (a help request passed on to the people who answer). Emails about
     // a document somebody else sent them are part of that sender's record and stay with it.
     run("DELETE FROM emails WHERE envelope_id IS NULL AND (lower(to_email)=lower(?) OR instr(lower(html), '&lt;' || lower(?) || '&gt;') > 0)", user.email, user.email);
+    // Copies of emails to OTHER people that mention the person: an invitation they sent, a notice to a team's admins
+    // about their API keys or that they left. Matched on the address anywhere in the email, and on the name when it
+    // is a full name (two words or more), which is how those emails name people. A copy that still has to be
+    // delivered is left alone and goes with the rest after MAIL_COPY_DAYS.
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND instr(lower(html), lower(?)) > 0`, esc(user.email));
+    if (user.name.trim().split(/\s+/).length > 1)
+      run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND (instr(html, ?) > 0 OR instr(subject, ?) > 0)`, esc(user.name), user.name);
     run('DELETE FROM password_resets WHERE user_id=?', userId);
     // A key they made in a team is on that team's list, not theirs to take along. It stops for good and stays
     // listed as stopped, with the maker's name, so an admin can see what happened to whatever used it. The keys of
@@ -371,6 +391,11 @@ export async function purgeClosedAccounts(): Promise<number> {
   run("DELETE FROM emails WHERE subject=? AND status='sent' AND envelope_id IS NULL", CLOSED_SUBJECT);
   // So does the copy of an email about an envelope that was deleted while that email was still waiting to be sent.
   run(`DELETE FROM emails WHERE envelope_id IS NOT NULL AND ${NOT_WAITING} AND envelope_id NOT IN (SELECT id FROM envelopes)`);
+  // Our copy of an email that is not part of a document's record has done its job once it was delivered. It is
+  // kept for a while so "did you send me that?" can be answered, then deleted, whoever it was to.
+  run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND at < ?`, new Date(Date.now() - MAIL_COPY_DAYS * 864e5).toISOString());
+  // The fingerprint of a security code from a deleted document is kept for a year, then that goes too.
+  run('DELETE FROM forgotten_codes WHERE at < ?', new Date(Date.now() - 365 * 864e5).toISOString());
   // A file a signer uploaded and never attached to a field belongs to no envelope and no account, so nothing else
   // would ever remove it.
   const loose = all(`SELECT id, sha256 FROM files WHERE account_id IS NULL AND created_at < ? AND id NOT IN (SELECT value FROM fields WHERE type='attachment' AND value IS NOT NULL)`, new Date(Date.now() - LOOSE_UPLOAD_DAYS * 864e5).toISOString())

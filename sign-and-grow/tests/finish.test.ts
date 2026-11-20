@@ -114,3 +114,173 @@ test('a member leaves a team by themselves: what they sent stays with the team, 
   const r = await back.post('/auth/login', { email: 'lea@leave.example', password: PW, invite: inviteFor('lea@leave.example') });
   assert.equal(r.data.joined, team.name);
 });
+
+// ---- Public forms: shared devices, closing accounts ----------------------------------------------------------
+
+const visitor = () => from();
+const ago = (days: number) => new Date(Date.now() - days * 864e5).toISOString();
+const envelopeOf = (url: string) => db.get('SELECT envelope_id e FROM recipients WHERE token=?', url.split('/sign/')[1]).e as string;
+async function formOf(owner: Client, name: string, shared = false) {
+  const tpl = await simple(owner, '', { kind: 'template', subject: name, recipients: [{ id: 'r', role: 'signer', role_name: 'Visitor' }] });
+  const made = await owner.post('/powerforms', { template_id: tpl.id, name, shared_device: shared });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  return (await owner.get('/powerforms')).data.powerforms.find((p: any) => p.id === made.data.id);
+}
+
+test('a public form on a shared device takes many people from one address, clears an abandoned start after an hour, and offers the next person a fresh form', async () => {
+  const desk = await person('Dana Desk', 'dana@desk.example');
+  const plain = await formOf(desk, 'Visitor sign-in');
+  const kiosk = await formOf(desk, 'Front desk waiver', true);
+  assert.equal(plain.shared_device, false);
+  assert.equal(kiosk.shared_device, true);
+  assert.equal((await visitor().get(`/public/powerforms/${kiosk.slug}`)).data.shared_device, true);
+
+  // Everyone at the front desk comes from the same address. An ordinary form stops at three unfinished starts and
+  // says what the owner can do about it. The shared-device form carries on.
+  const here = ip();
+  const at = () => Object.assign(new Client(), { ip: here });
+  const start = (c: Client, slug: string, who: string) => c.post(`/public/powerforms/${slug}/start`, { name: `Guest ${who}`, email: `${who}@guests.example` });
+  for (const who of ['p1', 'p2', 'p3']) assert.equal((await start(at(), plain.slug, who)).status, 200);
+  const stopped = await start(at(), plain.slug, 'p4');
+  assert.equal(stopped.status, 429);
+  assert.match(stopped.data.error, /ask whoever gave you the link to mark it as used on a shared device/);
+  const urls: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const s = await start(at(), kiosk.slug, `k${i}`);
+    assert.equal(s.status, 200, JSON.stringify(s.data));
+    urls.push(s.data.url);
+  }
+
+  // The person who finishes on the shared device is offered a fresh form for whoever is next. Someone on an
+  // ordinary form is not.
+  const tok = (url: string) => url.split('/sign/')[1];
+  assert.equal((await at().get(`/sign/${tok(urls[0])}`)).data.envelope.next_person, kiosk.slug);
+  const ordinary = (await start(visitor(), plain.slug, 'elsewhere')).data.url;
+  assert.equal((await visitor().get(`/sign/${tok(ordinary)}`)).data.envelope.next_person, null);
+
+  // Two people walked away from the tablet more than an hour ago. A third stopped clicking an hour ago but has been
+  // typing since, which counts as being there. The timer clears the first two only.
+  for (const u of urls.slice(1, 4)) {
+    db.run('UPDATE envelopes SET sent_at=? WHERE id=?', ago(0.05), envelopeOf(u));
+    db.run('UPDATE audit SET at=? WHERE envelope_id=?', ago(0.05), envelopeOf(u));
+  }
+  const typing = at();
+  await typing.post(`/sign/${tok(urls[3])}/consent`);
+  db.run('UPDATE audit SET at=? WHERE envelope_id=?', ago(0.05), envelopeOf(urls[3]));
+  assert.equal((await typing.post(`/sign/${tok(urls[3])}/save`, { values: {} })).status, 200);
+  await cron.tick();
+  assert.deepEqual(urls.slice(0, 5).map((u) => db.get('SELECT status FROM envelopes WHERE id=?', envelopeOf(u)).status), ['sent', 'expired', 'expired', 'sent', 'sent']);
+  assert.match(db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Envelope expired'", envelopeOf(urls[1])).detail, /left unfinished for 60 minutes/);
+  // On the ordinary form the same hour changes nothing: its starts are kept for a day.
+  for (const who of ['p1', 'p2', 'p3']) {
+    const e = db.get('SELECT e.id FROM envelopes e JOIN recipients r ON r.envelope_id=e.id WHERE r.email=?', `${who}@guests.example`).id;
+    db.run('UPDATE envelopes SET sent_at=? WHERE id=?', ago(0.05), e);
+    db.run('UPDATE audit SET at=? WHERE envelope_id=?', ago(0.05), e);
+  }
+  await cron.tick();
+  assert.equal(db.get("SELECT COUNT(*) n FROM envelopes WHERE powerform_id=? AND status='sent'", plain.id).n, 4);
+
+  // The owner's list says who signed and who is filling one in now, not how often the form was opened.
+  const list = (await desk.get('/powerforms')).data.powerforms;
+  assert.deepEqual([list.find((p: any) => p.id === kiosk.id).signed, list.find((p: any) => p.id === kiosk.id).open], [0, 6]);
+  // Switching the mark off and pausing are separate: one call changes only what it names.
+  assert.equal((await desk.call('PATCH', `/powerforms/${kiosk.id}`, { shared_device: false })).status, 200);
+  let now_ = (await desk.get('/powerforms')).data.powerforms.find((p: any) => p.id === kiosk.id);
+  assert.deepEqual([now_.shared_device, now_.active], [false, 1]);
+  assert.equal((await desk.call('PATCH', `/powerforms/${kiosk.id}`, { active: false })).status, 200);
+  now_ = (await desk.get('/powerforms')).data.powerforms.find((p: any) => p.id === kiosk.id);
+  assert.deepEqual([now_.shared_device, now_.active], [false, 0]);
+});
+
+test('a public form of an account that is being closed says it is closed before anyone types into it', async () => {
+  const owner = await person('Cleo Closing', 'cleo@closing.example');
+  const form = await formOf(owner, 'Membership form');
+  assert.equal((await visitor().get(`/public/powerforms/${form.slug}`)).data.closed, false);
+  assert.equal((await owner.post('/me/delete', { password: PW })).data.closed, 'scheduled');
+  assert.equal((await visitor().get(`/public/powerforms/${form.slug}`)).data.closed, true);
+  const mails = mailTo('cleo@closing.example').length;
+  const tried = await visitor().post(`/public/powerforms/${form.slug}/start`, { name: 'Walk In', email: 'walkin@closing.example' });
+  assert.equal(tried.status, 503);
+  assert.equal(db.get("SELECT COUNT(*) n FROM recipients WHERE email='walkin@closing.example'").n, 0, 'nothing of the visitor is kept');
+  assert.equal(mailTo('cleo@closing.example').length, mails, 'and the owner is not emailed about a form they are closing anyway');
+  // Signing in again keeps the account, and the form is open again.
+  const back = from();
+  assert.equal((await back.post('/auth/login', { email: 'cleo@closing.example', password: PW })).data.restored, true);
+  assert.equal((await visitor().get(`/public/powerforms/${form.slug}`)).data.closed, false);
+});
+
+// ---- The email check and deleted documents -------------------------------------------------------------------
+
+test('the code of a genuine email is still recognised after its document was deleted, and nothing else about it is kept', async () => {
+  const sender = await person('Gina Gone', 'gina@gone.example');
+  const e = await simple(sender, 'reader@gone.example', { subject: 'Lease for flat 4' });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const first = db.get('SELECT check_code c FROM recipients WHERE envelope_id=?', e.id).c as string;
+  // The address is corrected, so the first email's link is replaced and a second email goes out with a new code.
+  const rid = db.get('SELECT id FROM recipients WHERE envelope_id=?', e.id).id;
+  assert.equal((await sender.post(`/envelopes/${e.id}/correct`, { recipient_id: rid, email: 'reader2@gone.example' })).status, 200);
+  const second = db.get('SELECT check_code c FROM recipients WHERE envelope_id=?', e.id).c as string;
+  assert.notEqual(first, second);
+  const anon = visitor();
+  const check = async (code: string) => (await anon.post('/public/check', { code })).data;
+  assert.equal((await check(first)).replaced, true);
+  assert.equal((await check(second)).genuine, true);
+
+  // A draft that was never sent leaves no codes behind when it is deleted.
+  const draft = await simple(sender, 'never@gone.example', { subject: 'Never sent' });
+  assert.equal((await sender.call('DELETE', `/envelopes/${draft.id}`)).status, 200);
+  assert.equal(db.get('SELECT COUNT(*) n FROM forgotten_codes').n, 0);
+
+  // The sender voids and deletes the document. Both emails are still in two inboxes.
+  assert.equal((await sender.post(`/envelopes/${e.id}/void`, { reason: 'Sent by mistake' })).status, 200);
+  assert.equal((await sender.call('DELETE', `/envelopes/${e.id}`)).status, 200);
+  assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', e.id).n, 0);
+  for (const code of [first, second]) {
+    const a = await check(code);
+    assert.deepEqual(Object.keys(a).sort(), ['deleted', 'deleted_at', 'genuine'], 'real, deleted, when: nothing about who or what');
+    assert.equal(a.genuine, true);
+    assert.equal(a.deleted, true);
+  }
+  // What is kept is a fingerprint. The code itself, the names and the subject are nowhere.
+  const kept = JSON.stringify(db.all('SELECT * FROM forgotten_codes'));
+  for (const gone of [first, second, 'gone.example', 'Lease', 'Gina']) assert.ok(!kept.includes(gone), `${gone} is not kept`);
+  // A report against it cannot be filed, and the person is told why and where to go instead.
+  const report = await anon.post('/public/check/report', { code: first, reason: 'phishing' });
+  assert.equal(report.status, 404);
+  assert.match(report.data.error, /really sent, but the document it was about has been deleted since/);
+  // A code we never issued is still not recognised.
+  assert.equal((await check('AAAA-BBBB-CCCC')).genuine, false);
+  // After a year the fingerprints go too.
+  db.run('UPDATE forgotten_codes SET at=?', ago(366));
+  await cron.tick();
+  assert.equal(db.get('SELECT COUNT(*) n FROM forgotten_codes').n, 0);
+  assert.equal((await check(first)).genuine, false);
+});
+
+// ---- Stored copies of emails ---------------------------------------------------------------------------------
+
+test('copies of emails that name a deleted person go with them, and copies outside a document\'s record go after 90 days', async () => {
+  const owner = await person('Tara Team', 'tara@copies.example');
+  const mia = await join(owner, 'Mia Member', 'mia@copies.example', 'admin');
+  // Mia invites someone: that email goes to another person and names Mia.
+  assert.equal((await mia.post('/account/invites', { email: 'newbie@copies.example' })).status, 200);
+  // Mia makes a key and closes her login at once: the owner is told about the key, in an email that names Mia.
+  assert.equal((await mia.post('/api-keys', { name: 'Mia tool' })).status, 200);
+  const named = () => db.get("SELECT COUNT(*) n FROM emails WHERE envelope_id IS NULL AND (html LIKE '%Mia Member%' OR subject LIKE '%Mia Member%' OR html LIKE '%mia@copies.example%')").n;
+  assert.ok(named() >= 1);
+  assert.equal((await mia.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  assert.ok(mailTo('tara@copies.example').some((m: any) => /Mia Member/.test(m.subject + m.html)), 'the owner was told (the copy written after the deletion is the notice itself)');
+  // Everything written before the deletion that names her is gone: the invitation she sent, and notices about her.
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='newbie@copies.example' AND html LIKE '%Mia Member%'").n, 0);
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE html LIKE '%mia@copies.example%'").n, 0);
+
+  // A copy that belongs to no document is deleted 90 days after it was sent. One about a document stays with it.
+  const e = await simple(owner, 'kept@copies.example', { subject: 'Kept with its document' });
+  assert.equal((await owner.post(`/envelopes/${e.id}/send`)).status, 200);
+  db.run('UPDATE emails SET at=?', ago(91));
+  const outside = db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id IS NULL').n;
+  assert.ok(outside > 0);
+  await cron.tick();
+  assert.equal(db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id IS NULL AND at < ?', ago(90)).n, 0);
+  assert.ok(db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id=?', e.id).n > 0);
+});

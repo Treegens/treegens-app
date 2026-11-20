@@ -606,6 +606,12 @@ export default function SignPage() {
               <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download PDF</a>
             </div>
           </StateCard>
+          {env.next_person && (
+            <StateCard tone="wait" title="Is this a shared device?">
+              <p>Your copy is on its way to {myEmail}, so you do not need this screen any more. Press the button before you hand the device on: it clears this page and opens an empty form for the next person.</p>
+              <div className="row wrap sg-actions"><a className="btn primary lg" href={`/f/${env.next_person}`}>Done. Start a new form for the next person</a></div>
+            </StateCard>
+          )}
           <Impact impact={finished?.impact || env.impact} />
         </div>
         {dialogs}

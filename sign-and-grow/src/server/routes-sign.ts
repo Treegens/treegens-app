@@ -68,7 +68,9 @@ route('GET', '/sign/:token', (c) => {
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', e.account_id);
   const base = {
     brand: a,
-    envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets) },
+    envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets),
+      // For someone who came through a public form on a shared device: where the next person starts.
+      next_person: (e.powerform_id && e.form_recipient_id === r.id && get('SELECT slug FROM powerforms WHERE id=? AND active=1 AND shared_device=1', e.powerform_id)?.slug) || null },
     recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted },
   };
   // Someone ran into the deadline. The sender is told before anything else is decided here, so an access code that
@@ -177,6 +179,8 @@ route('POST', '/sign/:token/save', async (c) => {
   const shown = shownVersion(r, b);
   if (shown != null && shown !== e.content_version) throw changedSince(e);
   applyValues(e, r, b.values || {}, false);
+  // Someone typing is someone who is there: an unfinished start from a public form is not cleared under them.
+  run('UPDATE recipients SET touched_at=? WHERE id=?', now(), r.id);
   // The chosen signature travels with "finish later", so picking up on another device does not mean signing again.
   if (b.signature_png !== undefined || b.initials_png !== undefined)
     run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(b.signature_png) ? b.signature_png : r.signature_png, okImage(b.initials_png) ? b.initials_png : r.initials_png, r.id);

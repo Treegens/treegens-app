@@ -13,7 +13,7 @@ import {
 import { hmac, safeEqual } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
 import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
-import { powerformIdleHours, POWERFORM_OPEN_STARTS } from '../lib/policy.ts';
+import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes } from '../lib/policy.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -479,18 +479,25 @@ function powerformTemplate(templateId: string) {
 }
 
 route('GET', '/powerforms', (c) => ({
-  powerforms: all('SELECT p.id, p.slug, p.name, p.active, p.uses, p.created_at, t.subject template FROM powerforms p LEFT JOIN envelopes t ON t.id=p.template_id WHERE p.account_id=? ORDER BY p.created_at DESC', c.account.id),
+  // "uses" counts every start. "signed" is what people finished, and "open" is who is filling one in right now.
+  powerforms: all(`SELECT p.id, p.slug, p.name, p.active, p.uses, p.shared_device, p.created_at, t.subject template,
+      (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND r.status='completed') signed,
+      (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND e.status='sent' AND r.status IN ('pending','sent','viewed')) open
+    FROM powerforms p LEFT JOIN envelopes t ON t.id=p.template_id WHERE p.account_id=? ORDER BY p.created_at DESC`, c.account.id).map((p) => ({ ...p, shared_device: !!p.shared_device })),
 }));
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();
   const tpl = mine(c, str(b.template_id), 'template');
   powerformTemplate(tpl.id);
   const pid = id('pwf');
-  run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at) VALUES (?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), str(b.name, 120) || tpl.subject || 'PowerForm', now());
+  run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at, shared_device) VALUES (?,?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), str(b.name, 120) || tpl.subject || 'PowerForm', now(), b.shared_device ? 1 : 0);
   return { id: pid };
 });
 route('PATCH', '/powerforms/:id', async (c) => {
-  run('UPDATE powerforms SET active=? WHERE id=? AND account_id=?', (await c.body()).active ? 1 : 0, c.params.id, c.account.id);
+  // Only what the call names is changed, so pausing a form does not also change how it treats a shared device.
+  const b = await c.body();
+  if (b.active !== undefined) run('UPDATE powerforms SET active=? WHERE id=? AND account_id=?', b.active ? 1 : 0, c.params.id, c.account.id);
+  if (b.shared_device !== undefined) run('UPDATE powerforms SET shared_device=? WHERE id=? AND account_id=?', b.shared_device ? 1 : 0, c.params.id, c.account.id);
 });
 route('DELETE', '/powerforms/:id', (c) => {
   run('DELETE FROM powerforms WHERE id=? AND account_id=?', c.params.id, c.account.id);
@@ -502,13 +509,17 @@ route('GET', '/public/powerforms/:slug', (c) => {
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', p.account_id);
   const { tpl, open } = powerformTemplate(p.template_id);
   // Said before anyone types their name and address into a form that cannot take them.
-  return { name: p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: a, closed: formClosed(p, tpl) };
+  return { name: p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: a, closed: formClosed(p, tpl), shared_device: !!p.shared_device };
 }, 'public');
 
-// Why an owner cannot send right now (a pause, an address that was never confirmed) is the owner's business. A
-// visitor is told only that the form is closed for now, and nothing of theirs is kept.
+// Why an owner cannot send right now (a pause, an address that was never confirmed, an account that is being
+// closed) is the owner's business. A visitor is told only that the form is closed for now, before they type
+// anything, and nothing of theirs is kept.
 const FORM_CLOSED = 'This form cannot take new signatures right now. Please contact whoever gave you the link.';
-const formClosed = (p: any, tpl: any): boolean => !get('SELECT email_verified v FROM users WHERE id=?', tpl.sender_id)?.v || !!get('SELECT suspended_at s FROM accounts WHERE id=?', p.account_id)?.s;
+const formClosed = (p: any, tpl: any): boolean => {
+  const a = get('SELECT suspended_at s, closing_at c FROM accounts WHERE id=?', p.account_id);
+  return !get('SELECT email_verified v FROM users WHERE id=?', tpl.sender_id)?.v || !!a?.s || !!a?.c;
+};
 
 route('POST', '/public/powerforms/:slug/start', async (c) => {
   rateLimit(`pf:${c.ip}`, 20, 3600_000);
@@ -531,12 +542,16 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     const again = get("SELECT r.token FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.id=? AND e.powerform_id=? AND e.status='sent' AND r.status IN ('sent','viewed') AND r.email=? AND lower(r.name)=lower(?)", started, p.id, email, name);
     if (again) return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
   }
-  // Each start holds one of the owner's signatures until it is finished or cleared by the timer, so one device
-  // address may only have a few unfinished ones on a form at a time. An address we cannot tell apart is not counted.
+  // A form stops taking new people once those who have started would use up what its owner has left, so every
+  // unfinished start stands in someone's way until it is finished or cleared by the timer. One device address may
+  // therefore only have a few unfinished ones on a form at a time: more on a form its owner marked as filled in on
+  // a shared device, where they are also cleared much sooner. An address we cannot tell apart is not counted.
   if (c.ip !== 'unknown') {
     const unfinished = get("SELECT COUNT(*) n FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=? AND e.form_ip=? AND e.status='sent' AND r.status IN ('pending','sent','viewed')", p.id, c.ip).n;
-    if (unfinished >= POWERFORM_OPEN_STARTS)
-      throw bad(`This form has been started ${POWERFORM_OPEN_STARTS} times from your internet connection and not finished yet. Finish one of those first: the link is in the email we sent each time. Ones that stay unfinished are cleared after ${powerformIdleHours()} hours, and then you can start again here.`, 429);
+    const most = p.shared_device ? POWERFORM_SHARED_OPEN_STARTS : POWERFORM_OPEN_STARTS;
+    const cleared = p.shared_device ? `${powerformSharedIdleMinutes()} minutes` : `${powerformIdleHours()} hours`;
+    if (unfinished >= most)
+      throw bad(`This form has been started ${most} times from your internet connection and not finished yet. Finish one of those first: the link is in the email we sent each time. Ones that stay unfinished are cleared after ${cleared}, and then you can start again here.${p.shared_device ? '' : ' If many people fill this form in at the same place, ask whoever gave you the link to mark it as used on a shared device.'}`, 429);
   }
   // A public form uses one of its owner's signatures for each person who signs. When there are none left the form
   // says so politely, and the owner is told (once a day at most) instead of finding out from a customer.
@@ -572,7 +587,7 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   }
   run('UPDATE powerforms SET uses=uses+1 WHERE id=?', p.id);
   // The cookie that lets this browser, and nobody else, pick this start up again. It lasts as long as the start can.
-  c.cookies.push(cookie(jar, `${eid}.${hmac(`pf:${p.id}:${eid}`)}`, Math.ceil(powerformIdleHours() * 3600), c.secure));
+  c.cookies.push(cookie(jar, `${eid}.${hmac(`pf:${p.id}:${eid}`)}`, Math.ceil(p.shared_device ? powerformSharedIdleMinutes() * 60 : powerformIdleHours() * 3600), c.secure));
   const me = visitor && get("SELECT token FROM recipients WHERE id=? AND status != 'pending'", visitor.id);
   // If someone else signs first in the routing order, the signer simply gets an email when it is their turn.
   return me ? { url: `${baseUrl()}/sign/${me.token}` } : { queued: true };
