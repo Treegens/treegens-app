@@ -11,7 +11,7 @@
 
 .wt-card { display: grid; gap: 12px; }
 .wt-card h2, .wt-card h3 { margin: 0; }
-.wt-statement { border-left: 4px solid var(--green, #1f7042); background: #f2f8f3; padding: 12px 14px; border-radius: 6px; font-size: 1.05rem; overflow-wrap: anywhere; }
+.wt-statement { margin: 0; text-align: left; border-left: 4px solid var(--green, #1f7042); background: #f2f8f3; padding: 12px 14px; border-radius: 6px; font-size: 1.05rem; overflow-wrap: anywhere; }
 .wt-tick { display: flex; gap: 10px; align-items: flex-start; min-height: 44px; cursor: pointer; }
 .wt-tick input { width: 24px; height: 24px; margin-top: 2px; flex: none; }
 .wt-actions { display: flex; flex-wrap: wrap; gap: 10px; }

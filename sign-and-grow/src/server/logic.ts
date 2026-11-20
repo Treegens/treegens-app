@@ -155,6 +155,7 @@ export function settleLogic(envelopeId: string, acting?: string | null, fields?:
 /** A browser's answer as applyValues stores it, for working out what is shown before anything is stored. */
 const asStored = (f: any, v: any) => {
   const s = str(v, 4000);
+  if (f.type === 'dropdown' && s && !(f.options || []).includes(s)) return ''; // not one of its choices: stored as empty
   return f.type === 'checkbox' || f.type === 'radio' || f.type === 'signature' || f.type === 'initials' ? (s ? '1' : '') : s;
 };
 

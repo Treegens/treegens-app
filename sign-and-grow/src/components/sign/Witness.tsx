@@ -83,7 +83,7 @@ export function WitnessFirst({ data, base, onDone }: { data: any; base: string; 
       <h1 className="serif" id="sg-h1" tabIndex={-1}>{env.subject}</h1>
       <Sender env={env} brand={data.brand} />
       <h2>What you are confirming</h2>
-      <p className="wt-note">{w.sender_named ? `${sender.name} named you` : `${w.name} named you`} as the witness of the signature of {w.name}. Only go on if you were with them and saw them sign. This is your own statement:</p>
+      <p className="wt-note">{w.sender_named ? `${sender.name} named you as the witness of ${w.name}.` : `${w.name} named you as their witness.`} Only go on if you were with them and saw them sign. This is your own statement:</p>
       <blockquote className="wt-statement" id={`${ids}-st`}>{w.statement}</blockquote>
       <label className="wt-tick">
         <input type="checkbox" checked={tick} onChange={(e) => (setTick(e.target.checked), setError(''))} aria-describedby={`${ids}-st ${ids}-rec`} />

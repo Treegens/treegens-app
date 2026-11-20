@@ -699,3 +699,23 @@ test('acceptances belong to the account and go when it is deleted, with the vers
   assert.ok(DELETED_WITH_ACCOUNT.some((x) => /click-to-agree terms with every version, every acceptance/.test(x)), 'the pages say so');
   assert.match(read('src/server/routes-trust.ts'), /forgetClickwraps\(a\.id\)/);
 });
+
+// ---- 8. Documented, and taken out of "What is not in it" --------------------------------------------------------------
+
+test('every click-to-agree route is in the API description, the setting is documented, and nothing says clickwrap is missing', async () => {
+  const { openapi } = await import('../src/server/openapi.ts');
+  const { listRoutes } = await import('../src/server/router.ts');
+  const spec: any = openapi();
+  const documented = new Set(Object.entries<any>(spec.paths).flatMap(([p, item]) => ['get', 'post', 'patch', 'delete'].filter((m) => item[m]).map((m) => `${m.toUpperCase()} ${p}`)));
+  const ours = listRoutes().filter((r) => /clickwrap|\/agree/.test(r.path));
+  assert.ok(ours.length >= 18);
+  for (const r of ours) assert.ok(documented.has(`${r.method} ${r.path.replace(/:(\w+)/g, '{$1}')}`), `not documented: ${r.method} ${r.path}`);
+  assert.match(read('.env.example'), /CLICKWRAP_MONTHLY_LIMIT/);
+  const readme = read('README.md');
+  assert.match(readme, /\| `CLICKWRAP_MONTHLY_LIMIT` \|/);
+  assert.match(readme.slice(readme.indexOf('## Things to decide before launch')), /Click-to-agree acceptances/);
+  const notIn = readme.slice(readme.indexOf('## What is not in it'), readme.indexOf('## ', readme.indexOf('## What is not in it') + 5));
+  assert.equal(/clickwrap/i.test(notIn), false, 'clickwrap is no longer listed as missing');
+  for (const f of ['src/app/page.tsx', 'src/app/help/page.tsx', 'src/app/security/page.tsx', 'src/app/developers/page.tsx'])
+    assert.equal(/no clickwrap|clickwrap is not|not.{0,40}click-to-agree/i.test(read(f)), false, `${f} does not say it is missing`);
+});

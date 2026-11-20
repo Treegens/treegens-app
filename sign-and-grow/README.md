@@ -439,6 +439,23 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   the screen after two minutes (`QR_SHOW_SECONDS` in `src/lib/qrlink.ts`). A public form that is open on a big screen offers its own code, for a visitor who
   would rather use their own phone. No code is made for a link longer than 300 characters or for anything that is
   not a plain web link.
+- Click-to-agree terms ("clickwrap") under Click-to-agree, for the owner and admins (`src/server/clickwrap.ts`,
+  `src/server/routes-clickwrap.ts`, words in `src/lib/clickwrap.ts`). Terms written as plain text with simple
+  formatting (headings, lists, bold, nothing that could carry a link or a script) or a PDF shown as pages, a tick box
+  and a button, and optionally a rule that the terms are scrolled to the end first. Publishing makes version 1; any
+  change to what the page shows is a new version with a note of what changed, and says how many people have to
+  accept again (or, for a correction that changes no meaning, that earlier acceptances still count). Three ways in:
+  the page `/agree/<slug>`; a frame on the customer's own site, pasted as an iframe or as `public/clickwrap.js`, which
+  sizes the frame and fires `signgrow:accepted`; and the API (`POST /api/clickwraps/:id/acceptances`, and
+  `GET /api/clickwraps/:id/status` for "has this person accepted the version that counts?"). The website names its
+  visitor in a link it signs with the key of the agreement (base64url JSON with an end time, HMAC-SHA256), so nobody
+  can accept as somebody else; without one the visitor types a name and an email address, and "Only people the
+  website names" turns that off. Each acceptance holds the version, the SHA-256 of the exact terms, who as given,
+  where that came from, when, the internet address, the browser, the page, how long the terms were open and whether
+  the browser said the button was covered. It is written once (a trigger refuses any change) and sealed with the
+  server's secret. The person can download a certificate and get a copy by email; the team can search, filter,
+  export CSV and download a certificate (PDF, with the terms) for each one. An acceptance is not a signature and
+  costs none; `CLICKWRAP_MONTHLY_LIMIT` is the limit instead.
 
 **Team and admin**
 - A browser stays signed in for 30 days after it was last used (`SESSION_DAYS` in `src/lib/policy.ts`), and signing
@@ -504,7 +521,7 @@ e-signature product, not all of it. Not built:
 - A HIPAA business associate agreement, at any price. US healthcare providers must not put patient information
   through it (`NO_BAA_TEXT` in `src/lib/policy.ts`).
 - Word or Google Docs upload (export to PDF first).
-- Contract lifecycle management, AI contract analysis, clickwrap, document generation.
+- Contract lifecycle management, AI contract analysis, document generation.
 - Single sign-on for a whole organization (SAML, or making a team sign in one way), native mobile apps. Signing in
   with Google or Microsoft is in, and so is two-step login with an authenticator app (see "Two-step login"). Codes by
   text message, passkeys and security keys for signing in are not.
@@ -596,6 +613,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `ABUSE_SUSPEND_AFTER` | How many different recipients must report an account within 30 days before its sending is paused for review. Open reports and reports an operator confirmed as abuse both count, also reports made with the security code of an email whose document was deleted since. Reports from visitors of a public form are shown to operators and never count, because such a visitor typed their own name and address. | `3` |
 | `POWERFORM_IDLE_HOURS` | An unfinished start from a public form that nobody has touched for this long is closed, so it no longer counts against what the form can still take. Typing counts as touching. The visitor can start again. Never a start whose visitor pressed Finish while no signature was free: they were told that what they filled in is kept, so it stays open until the form's deadline, and they are emailed once (at the address they gave) when the form can take their signature. | `24` |
 | `POWERFORM_SHARED_IDLE_MINUTES` | The same, for a form its owner marked as filled in on a shared device (a tablet at the front desk, one office network). Such a form also allows 30 unfinished starts from one address instead of 3, and offers "start a new form for the next person" when someone has finished. | `60` |
+| `CLICKWRAP_MONTHLY_LIMIT` | How many click-to-agree acceptances one account can record in a calendar month (UTC), over all its terms. An acceptance costs nothing, so this keeps a page anyone can open from filling the records. The owner and admins are emailed at 80 percent and when it is reached; after that a visitor is told that the terms cannot be accepted right now (nothing about the account), the API answers 429 with the day it starts again, and nothing is recorded until the 1st. `0` records none. | `1000` |
 | `DORMANT_AUTO_STOP_DAYS` | A paid plan that has sent nothing for this long is not renewed. `0` only warns. | `90` |
 | `UNOPENED_ALERT_HOURS` | How long a request sits unopened before the sender is told. | `48` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Switches on "Continue with Google" on the sign-in and sign-up pages and under Settings. Both must be set. With either missing, nothing about Google is shown anywhere and its routes answer 404. Register the redirect address `APP_URL` + `/api/auth/google/callback` with Google (see below). | none |
