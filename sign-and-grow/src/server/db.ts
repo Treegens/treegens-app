@@ -266,6 +266,27 @@ CREATE TABLE IF NOT EXISTS bounced_addresses (
 -- BOUNCE_WARN_DAYS count as an address that does not work. The address itself is not kept here, only a keyed
 -- fingerprint of it, and a line is deleted once it is older than that.
 CREATE TABLE IF NOT EXISTS soft_bounce_days (address_hash TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (address_hash, day));
+-- An address whose owner marked an email from this account as spam (src/server/routes-bounces.ts). Nothing more is
+-- emailed to it about the account's documents, also after a correction away and back or on a new envelope, until
+-- that person asks for it themselves on a signing page. The lines go with the account.
+CREATE TABLE IF NOT EXISTS mail_complaints (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, email TEXT NOT NULL COLLATE NOCASE, at TEXT NOT NULL,
+  PRIMARY KEY (account_id, email)
+);
+-- An email about an envelope that was deleted since: our number for it and its Message-ID, the account that sent it,
+-- a keyed fingerprint of the address (never the address) and what was heard about it. So news that names it still
+-- counts against that account, and is never pinned on another email to the same address. Kept BOUNCE_WARN_DAYS.
+CREATE TABLE IF NOT EXISTS mail_gone (
+  mail_id INTEGER PRIMARY KEY, message_id TEXT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  address_hash TEXT NOT NULL, bounce_kind TEXT, complained_at TEXT, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mail_gone_message ON mail_gone(message_id);
+-- A code emailed to someone who marked our email as spam and asks, on their signing page, for our emails again.
+-- Holding the link is not enough (the sender can copy it): reading their own mailbox is. One per recipient.
+CREATE TABLE IF NOT EXISTS mail_again_codes (
+  recipient_id TEXT PRIMARY KEY REFERENCES recipients(id) ON DELETE CASCADE, code_hash TEXT NOT NULL,
+  tries INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL
+);
 -- A login's address that is being changed (POST /me/email): the new address, and the fingerprint of the secret in
 -- the link that was emailed to it. The address changes only when that link is opened by the login itself.
 CREATE TABLE IF NOT EXISTS email_changes (
@@ -632,6 +653,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['emails', 'bounce_kind', 'TEXT'],
   ['emails', 'bounce_reason', 'TEXT'],
   ['emails', 'complained_at', 'TEXT'],
+  // What the mail server or the provider wrote about a bounce, cleaned. For the people who run the server only (the
+  // dev outbox): it is written by whoever runs the recipient's mail server, so it never reaches a customer, who is
+  // told bounce_reason, in our own words.
+  ['emails', 'bounce_said', 'TEXT'],
   // An email to this recipient came back for good: when, and why in plain words. Reminders stop until the address
   // is changed or the sender says "try again". complained_at: this person marked an email about the envelope as
   // spam, so nothing more is emailed to them about it unless they ask. A trigger (see migrate) clears all three
@@ -799,9 +824,15 @@ function migrate(d: any) {
   d.exec('CREATE INDEX IF NOT EXISTS emails_to ON emails(to_email COLLATE NOCASE, id)');
   // "Could not be delivered" and "marked as spam" are facts about an address. Whichever way a recipient's address
   // changes (a correction, the editor, a hand-over), the marks go with the old address, so the new person is
-  // reminded like anyone else and no path can forget to clear them.
-  d.exec(`CREATE TRIGGER IF NOT EXISTS recipients_address_changed AFTER UPDATE OF email ON recipients WHEN lower(old.email) != lower(new.email) BEGIN
-    UPDATE recipients SET bounced_at=NULL, bounce_reason=NULL, complained_at=NULL WHERE id=new.id;
+  // reminded like anyone else and no path can forget to clear them. A complaint is the person's own word and is kept
+  // for the account (mail_complaints): an address that complained has it again, whether it comes back by a correction
+  // away and back, by the editor or on a new envelope. Only that person can take it away (routes-bounces.ts).
+  const complaint = `(SELECT c.at FROM mail_complaints c JOIN envelopes e ON e.account_id=c.account_id WHERE e.id=new.envelope_id AND e.kind='envelope' AND c.email=new.email)`;
+  d.exec(`DROP TRIGGER IF EXISTS recipients_address_changed; CREATE TRIGGER recipients_address_changed AFTER UPDATE OF email ON recipients WHEN lower(old.email) != lower(new.email) BEGIN
+    UPDATE recipients SET bounced_at=NULL, bounce_reason=NULL, complained_at=${complaint} WHERE id=new.id;
+  END`);
+  d.exec(`CREATE TRIGGER IF NOT EXISTS recipients_complaint_kept AFTER INSERT ON recipients WHEN new.email IS NOT NULL AND new.complained_at IS NULL BEGIN
+    UPDATE recipients SET complained_at=${complaint} WHERE id=new.id;
   END`);
   // Drafts and templates from before fields kept the sender's own wording apart: everything in them was typed by
   // the sender, so it is copied across once. Envelopes that are already out are left alone, because there a value

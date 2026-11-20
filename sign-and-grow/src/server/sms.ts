@@ -177,6 +177,28 @@ export function textsRoomInHours(accountId: string): number {
 
 // ---- The timer ---------------------------------------------------------------------------------------------
 
+// A text that waited for another try is decided again at the moment it is tried, by everything that applies then,
+// exactly as a first try is: the number on file now, a "not my number", a report, a decline, the pause, the daily
+// limits. What applies is known to the code that owns what the text is about (an envelope: see signercode.ts), so
+// that code says it here. It also tells the sender where they need to hear it, so a refusal here is quiet.
+type RetryGuard = (text: any) => Promise<string | null> | string | null;
+const guards: Record<string, RetryGuard> = (g.__tssmsGuards ??= {});
+/** Lets the code that owns a text's subject matter decide, at the moment of every later try, whether it may still go. */
+export const onTextRetry = (name: string, fn: RetryGuard) => void (guards[name] = fn);
+async function askAgain(row: any): Promise<{ why: string; quiet: boolean } | null> {
+  for (const fn of Object.values(guards)) {
+    try {
+      const why = await fn(row);
+      if (why) return { why: `Not sent again: ${why}.`, quiet: true };
+    } catch (e: any) {
+      // A text that should not have gone cannot be called back, so one we could not decide about is not sent.
+      console.error('[sms] could not decide whether a text may still go', e?.message);
+      return { why: 'Not sent again: we could not check whether it may still go.', quiet: false };
+    }
+  }
+  return null;
+}
+
 // Why a text that is waiting for another try must not go out any more, or null when it may.
 function tooLate(row: any): { why: string; quiet: boolean } | null {
   // A code that has run out, or that a newer code has replaced, would only confuse whoever gets it.
@@ -202,7 +224,7 @@ export async function retryTexts(): Promise<{ sent: number; failed: number; drop
     const lease = new Date(Date.now() + TEXT_STUCK_MS).toISOString();
     if (!run(`UPDATE texts SET tried_at=?, next_try_at=CASE WHEN status='failed' THEN ? ELSE next_try_at END WHERE id=? AND ${isDue}`, t, lease, id, t, stuck).changes) continue;
     const row = get('SELECT * FROM texts WHERE id=?', id);
-    const no = tooLate(row);
+    const no = tooLate(row) || (await askAgain(row));
     if (no) {
       run(`UPDATE texts SET status='failed', next_try_at=NULL, to_phone=NULL, error=COALESCE(error || ' ', '') || ?${row.kind === 'code' ? ', body=?' : ''} WHERE id=?`, no.why, ...(row.kind === 'code' ? [CODE_GONE] : []), id);
       if (!no.quiet) await tell(id, 'gave_up');
@@ -219,4 +241,13 @@ export async function retryTexts(): Promise<{ sent: number; failed: number; drop
 /** A newer code makes every earlier text with a code for the same person pointless: none of them is tried again. */
 export function dropCodeTexts(recipientId: string) {
   run("UPDATE texts SET expires_at=? WHERE recipient_id=? AND kind='code' AND (status='queued' OR (status='failed' AND next_try_at IS NOT NULL))", now(), recipientId);
+}
+
+/**
+ * Every text to this person that still waits for a try, of any kind, is not sent at all: the number, the check or
+ * the person changed, or someone said the number is not theirs. `why` finishes "Not sent again: ...".
+ */
+export function dropTexts(recipientId: string, why: string) {
+  run(`UPDATE texts SET status='failed', next_try_at=NULL, to_phone=NULL, error=COALESCE(error || ' ', '') || ?, body=CASE WHEN kind='code' THEN ? ELSE body END
+    WHERE recipient_id=? AND (status='queued' OR (status='failed' AND next_try_at IS NOT NULL))`, `Not sent again: ${why}.`, CODE_GONE, recipientId);
 }

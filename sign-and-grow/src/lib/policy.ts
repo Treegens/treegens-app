@@ -233,6 +233,8 @@ export const SIGNER_CODE_DIGITS = 6;
 export const SIGNER_CODE_MINUTES = 10;
 /** After this many wrong tries a one-time code no longer works and a new one has to be asked for. */
 export const SIGNER_CODE_TRIES = 5;
+/** A device that typed the right code opens the document without another one for this many hours, counted by the server. */
+export const SIGNER_PASS_HOURS = 24;
 /** A new one-time code can be asked for this many seconds after the last one. */
 export const SIGNER_CODE_WAIT_SECONDS = 60;
 /** How many one-time codes one recipient can be sent in an hour. */

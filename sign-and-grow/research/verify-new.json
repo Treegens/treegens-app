@@ -1805,5 +1805,1214 @@
    "Mail link scanners: 'Completed copy opened' and 'Opened again' can be written by a scanner that runs JavaScript on the /sign page; I could not test a real scanner. The completion email's button points at the page, not the download, which lowers the risk.",
    "The dev server reloaded many times while other engineers edited files (signing page and /check took several tries to render); that looked like work in progress elsewhere, not a fault of this piece. Final passes rendered every screen."
   ]
+ },
+ "verify:misc-today": {
+  "checks": [
+   {
+    "item": "1. Leave a team: what was sent passes to the chosen member or the owner, with an audit line on each envelope",
+    "holds": false,
+    "evidence": "Ordinary case works (author test; probe p1-leave.ts 1.5). Broken by two requests at the same moment: probe /home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/p1b-race.ts case B. Bea leaves (heir: owner) while Ann leaves naming Bea. Both answer 200, Ann's envelope 'Ann in flight' ends up with sender bea@pair.example, who is no longer on the team (that_person_on_team: false); Bea gets 404 on it, only admins still see it. Cause: routes-account.ts:501 reads `others` (and so the heir) before `await c.body()` on line 502, and the tx never checks the heir is still a member.",
+    "still_broken": "The heir is chosen from a list read before the request waits for its body.",
+    "suggested_fix": "Read the body first, then inside tx() re-select the heir from memberships (and closing_at) and refuse with 409 if they are gone."
+   },
+   {
+    "item": "1. The owner cannot leave",
+    "holds": false,
+    "evidence": "Direct call refused (author test). Race in p1b-race.ts case A: owner calls POST /account/transfer-owner {user_id: Lea} at the same moment Lea calls POST /account/leave. Both 200. Memberships left: olga admin only, owners: 0. Afterwards Olga gets 403 'Only the current owner can hand the account over.' The account has no owner and nobody can hand it on or close it. Cause: the role check at routes-account.ts:500 uses c.role from authentication, before the await at line 502.",
+    "still_broken": "An account can be left with no owner.",
+    "suggested_fix": "Inside the leave tx, re-read the caller's role from memberships and refuse if it is 'owner'; in transfer-owner, check inside the tx that the target is still a member."
+   },
+   {
+    "item": "1. An API key cannot leave for a person",
+    "holds": true,
+    "evidence": "Send key 403 (author test). Admin-scope key: p1-leave.ts 1.2 gives 403 'An API key cannot leave the team. That needs a person signed in to the app.' (PERSON_ONLY in router.ts)."
+   },
+   {
+    "item": "1. They stay signed in, in another workspace or a new one; welcome signatures only once",
+    "holds": true,
+    "evidence": "p1-leave.ts: 1.3 an address that was welcomed, deleted, invited back and then left gets 0 welcome signatures; 1.4 leave, rejoin, leave again lands in the same workspace, welcome total 3; 1.5 member of two teams lands in the other team, no new workspace; 1.1 two concurrent leaves still make one workspace with 3. Note: the dialog says 'in your other workspace' even with 3+ workspaces; it is the oldest membership."
+   },
+   {
+    "item": "1. Owner and admins are told by email that someone left",
+    "holds": true,
+    "evidence": "Author test, plus p1-leave.ts 1.9 (2 emails, no em dash). But see new bug: a double-submitted Leave sends a second, contradictory email."
+   },
+   {
+    "item": "1. Someone an admin removes is always told by email (DELETE /account/members/:id)",
+    "holds": true,
+    "evidence": "p1-leave.ts 1.7 and 1.8: told in both cases, also with nothing handed over. Wording overclaims, see overclaims (1.7: email says 'a workspace of your own', the person lands in 'Otto Rem's workspace', another team)."
+   },
+   {
+    "item": "1. Team tab and Leave dialog at 390x844 and desktop",
+    "holds": false,
+    "evidence": "Dialog itself is fine at 390 and 1280, no sideways scroll (/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/team-leave-390.png). The 'Leave this team' card behind it is not: at 390 its text column is 59.9 px wide and 321 px tall, one word per line, because the button carries the whole workspace name (/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/team-leave-card-390.png, ui2-results.json leave_text_box).",
+    "still_broken": "Leave card text squeezed to 60 px on phones.",
+    "suggested_fix": "In settings/page.tsx give the text div flex: 1 1 220px (or put the button on its own line below 600 px) and shorten the button to 'Leave this team'."
+   },
+   {
+    "item": "2. Shared-device form: 30 unfinished starts from one address instead of 3",
+    "holds": false,
+    "evidence": "p2-forms.ts 2.1: 25 visitors from one front-desk address, each finishing at once. Visitor 21 gets 429 'Too many attempts. Please wait a bit and try again.'; 5 refused; signed 20, open 0. routes-envelopes.ts:803 rateLimit(`pf:${c.ip}`, 20, 3600_000) applies to every form, so 30 is never reachable and a busy desk is locked out after 20 people an hour even when nobody abandons anything.",
+    "still_broken": "The older 20-per-hour limit per address overrides the new allowance.",
+    "suggested_fix": "Skip or raise the pf:ip limiter for shared_device forms (for example key it by form and allow a few hundred an hour), and give a form-specific message naming what the owner can do."
+   },
+   {
+    "item": "2. Abandoned start cleared after POWERFORM_SHARED_IDLE_MINUTES; typing counts as being there",
+    "holds": true,
+    "evidence": "Author test covers the timer and touched_at; p2-forms.ts 2.2 confirms a reader who did not type for 65 minutes is cleared (status expired). Side effects are wrong, see new bugs (owner emailed 'Could not open' and 'More time needed' with deadline wording)."
+   },
+   {
+    "item": "2. The person who finishes is offered a fresh form for the next person",
+    "holds": false,
+    "evidence": "The button exists (/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/shared-done.png) and says 'it clears this page'. In Chromium: finish, press 'Done. Start a new form for the next person', then Back. The previous visitor's done page comes back with their email address, 'View completed document' and 'Download PDF' (/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/shared-back.png; ui-results.json after_back shows_previous 1). Cause: f/[slug]/page.tsx uses window.location.assign(r.url) and the button is a plain <a href>, so /sign/<token> stays in history.",
+    "still_broken": "The next person on the tablet can open and download the previous person's signed document.",
+    "suggested_fix": "Use window.location.replace for the start and for the next-person button, and on a shared-device done screen hide the download links after the button was pressed (or require the visitor's email to download)."
+   },
+   {
+    "item": "2. The owner's list shows signed and open counts",
+    "holds": true,
+    "evidence": "p2-forms.ts 2.1: signed 20, open 0; screenshot powerforms-1280.png shows '0 / 2 filling it in now'. Note 'open' also counts a visitor who is still 'pending' behind a countersigner, who is not filling anything in."
+   },
+   {
+    "item": "2. A form of a closing account says it is closed before anyone types",
+    "holds": true,
+    "evidence": "Author test, plus p2-forms.ts 2.4: closed false before /me/delete, true after."
+   },
+   {
+    "item": "2. PowerForms page at 390x844",
+    "holds": false,
+    "evidence": "The new 'shared device' checkbox is rendered 5.8 px wide by 13 px (ui2-results.json checkbox; /home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/powerforms-check-390.png shows a sliver). The Shared device / Pause / Delete column is off the right edge of the table on a phone (powerforms-390.png). Desktop is fine.",
+    "suggested_fix": "label.check input { flex: none; width: 18px; height: 18px }; on phones put the row actions under the name like the 'Only X or an admin' note."
+   },
+   {
+    "item": "3. The code of an email about a deleted document is recognised for a year from a fingerprint with no name, address or title",
+    "holds": true,
+    "evidence": "Author test; forgotten_codes holds code_hash, at, account_id, reported only. p3-check.ts 3.2: after the whole account is deleted the check still says genuine/deleted. 3.3: a hidden (removed by sender) envelope's code still answers as live."
+   },
+   {
+    "item": "3. A report on a deleted document still counts against the account, like any other",
+    "holds": false,
+    "evidence": "p3-check.ts 3.1: a stranger starts a public form 3 times with 3 addresses of their own. Reported while the starts exist: via_form 1,1,1, account not paused. Same steps, but the owner deletes the 3 abandoned starts first (nobody signed, so deleted for good): reports via_form 0,0,0 and the account is paused ('3 different recipients reported documents from this account'). forgotten_codes does not keep whether the code was a form visitor's. Also 3.2: with the account deleted the report is refused 404 while the page says 'we do know which account sent it'.",
+    "still_broken": "Anyone can pause an account that uses public forms once its owner tidies up abandoned starts.",
+    "suggested_fix": "Add forgotten_codes.via_form, set it in forgetEnvelopes when the recipient is e.form_recipient_id, and pass it to reportAbuse so the report stays non-counting. Make the check page sentence conditional (return has_account from /public/check)."
+   },
+   {
+    "item": "4. Deleting a login never removes a copy that only shares a name or part of an address with it, and nothing still to be delivered",
+    "holds": false,
+    "evidence": "p4-mail.ts (SUPPORT_EMAIL set). Carol, signed in, writes a help request mentioning 'Vic Victim <vic@samename2.example>'. Mallory signs up with the name 'Mal <vic@samename2.example>' (accepted) and invites Nina. The operators' copy and Nina's invitation are set to failed with next_try_at (mail server down). Vic deletes his login at once. Before: carol_ack 1, operators 1, nina_invite 1. After: 0, 0, 0. Carol's own acknowledgement, the operators' undelivered copy of Carol's request and Nina's undelivered invitation are all gone and will never be retried. Cause: routes-trust.ts:384 deletes any envelope-less email whose html contains '&lt;' + address + '&gt;', with no NOT_WAITING guard and regardless of who it was to.",
+    "still_broken": "Text a stranger writes (a help message, a user name, an account name) decides which other customers' emails are deleted.",
+    "suggested_fix": "Delete only to_email = the login's address plus about_user = the login (with NOT_WAITING). Mark the operator notice of a help request with about: t.user_id when the writer is that login, instead of matching html. Update KEPT_AFTER_DELETION."
+   },
+   {
+    "item": "4. Copies outside a document's record are deleted 90 days after sending; nothing depends on an older copy",
+    "holds": true,
+    "evidence": "Author test covers the sweep. Read every reader of the emails table: billing reminders look back 9 days, price notices at the same moment, bounce matching within BOUNCE_MATCH_DAYS. Only the operator thread's 'mail' field (routes-support.ts:160) becomes null for a request older than 90 days, which is cosmetic."
+   },
+   {
+    "item": "5. A deleted envelope that somebody signed is only hidden: lists, search, folders, export, reports, verify, inbox, admins' removed box, restore",
+    "holds": true,
+    "evidence": "p5-hidden.ts 5.4: member and admin search 0, folders [], removed box 1, member box=removed 403, report completed 0, export 400 'nothing to export', /public/verify match true, admin download 200, member download 404, evidence 200, recipient inbox true. Restore: member 403, two admin calls at once both 200 with 1 audit line, member sees it again. Bulk only checked by reading routes-envelopes.ts:462/649/655."
+   },
+   {
+    "item": "5. A voided, declined or expired envelope on which someone had finished is hidden, not deleted",
+    "holds": false,
+    "evidence": "p5-hidden.ts 5.2: a viewer confirmed viewing, then the envelope was voided. The viewer could download before (200, keepsCopy allows it). DELETE answers {ok:true}, the envelope is gone for good, the viewer's download is now 404. DELETE (routes-envelopes.ts:333) counts only signer/inperson/approver while keepsCopy counts every role but cc.",
+    "suggested_fix": "Use the keepsCopy rule (role != 'cc' and completed or signed_before) in DELETE, or state that viewers do not keep a copy."
+   },
+   {
+    "item": "5. The delete dialog matches what the server does",
+    "holds": false,
+    "evidence": "p5-hidden.ts 5.3: a signer signed, the sender changed the document with resign:true (signer back to 'sent' with signed_before), then voided. The dialog's rule ([id]/page.tsx:84) gives kept=false, so it says 'will be removed for good. This cannot be undone.' and toasts 'Deleted.'; the server answers {ok:true, kept_for_recipients:true} and keeps it.",
+    "suggested_fix": "Have GET /envelopes/:id return a deletes_for_good flag computed by the same server rule, and use it in the dialog."
+   },
+   {
+    "item": "6. 'Not opened yet' leaves out the sender's own part",
+    "holds": true,
+    "evidence": "p6-small.ts: envelope with the sender (as UMA@ upper case) and Xavi, both unopened 60 h: one alert naming only Xavi; envelope with only the sender's own part: no alert; second tick: no repeat."
+   },
+   {
+    "item": "6. Phone top bar shows the workspace name with more than one workspace",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/topbar-390.png: 'Otto Other Company With ...' truncated with ellipsis, no overflow. Hidden with one workspace (first run, topbar null)."
+   },
+   {
+    "item": "Repair: welcome signatures once per email address across deleting and signing up again",
+    "holds": true,
+    "evidence": "p1-leave.ts 1.3: first login welcomed 3, deleted at once, new login under the same address via invitation then leaving gets 0."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Deleting one login deletes other customers' stored emails, including ones not delivered yet",
+    "severity": "high",
+    "where": "src/server/routes-trust.ts:384 (purgeUser)",
+    "detail": "Steps (probe /home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/p4-mail.ts): Carol (signed in) writes a help request that mentions '<vic@samename2.example>'; Mallory signs up with name 'Mal <vic@samename2.example>' and invites Nina; the operators' copy and Nina's invitation are waiting for a retry (status failed, next_try_at set). Vic calls POST /me/delete {now:true}. Result: Carol's acknowledgement, the operators' copy and Nina's invitation are all deleted (1,1,1 -> 0,0,0), so the two waiting emails are never sent. The clause instr(lower(html), '&lt;'||email||'&gt;') matches any text a stranger typed, and it has no NOT_WAITING guard. Fix: delete only to_email = the address and about_user = the id (both with NOT_WAITING for the second); mark the help-request notices with about."
+   },
+   {
+    "title": "A stranger can pause an account through its public form once the owner deletes abandoned starts",
+    "severity": "high",
+    "where": "src/server/routes-trust.ts:229-235 (forgetEnvelopes) and :78-90 (POST /public/check/report)",
+    "detail": "Steps (p3-check.ts 3.1): start a public form 3 times with 3 addresses you own, keep the 3 security codes. While the starts exist, reports are via_form=1 and do not pause. After the timer closes them and the owner deletes them (nobody signed, so deleted for good), POST /public/check/report with each code files via_form=0 reports and the account is paused: '3 different recipients reported documents from this account'. Fix: keep via_form in forgotten_codes and pass it through to reportAbuse."
+   },
+   {
+    "title": "Owner hands the account to a member while that member leaves: the account has no owner",
+    "severity": "medium",
+    "where": "src/server/routes-account.ts:499-518 (POST /account/leave), :532 (transfer-owner)",
+    "detail": "Steps (p1b-race.ts A): Promise.all([owner POST /account/transfer-owner {user_id: Lea}, Lea POST /account/leave {}]). Both 200. Team memberships: olga=admin only, 0 owners; Olga then gets 403 'Only the current owner can hand the account over.' The owner check uses the role read before await c.body(). Fix: re-check role inside the tx after the body is read."
+   },
+   {
+    "title": "Leaving and naming someone who is leaving at the same moment hands envelopes to a non-member",
+    "severity": "medium",
+    "where": "src/server/routes-account.ts:501-510",
+    "detail": "Steps (p1b-race.ts B): Promise.all([Bea POST /account/leave {}, Ann POST /account/leave {to: Bea}]). Both 200; Ann's in-flight envelope now has sender Bea, who is not on the team (Bea 404, only admins see it; a bulk batch would stop). `others` is read before the await. Fix: read body first and re-select the heir inside the tx."
+   },
+   {
+    "title": "Shared-device form refuses the 21st person in an hour with 'Too many attempts'",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts:803",
+    "detail": "Steps (p2-forms.ts 2.1): 25 visitors from one address, each finishing straight away. Visitor 21-25 get 429 'Too many attempts. Please wait a bit and try again.' although nothing is unfinished. The promised 30 unfinished starts can never be reached. Fix: exempt shared-device forms from pf:ip or key it per form with a much higher limit, and give a message the visitor can act on."
+   },
+   {
+    "title": "'Start a new form for the next person' does not clear the page: Back shows the previous visitor's document",
+    "severity": "medium",
+    "where": "src/app/f/[slug]/page.tsx (window.location.assign) and src/app/sign/[token]/page.tsx:750-755 (plain <a href>)",
+    "detail": "Steps (ui.cjs step 5, Chromium 820x1180): visitor fills the form, finishes, presses the button, the next person presses Back. The first visitor's done page returns with their email, 'View completed document' and 'Download PDF' (shared-back.png). The card promises 'it clears this page'. Confident for Safari/Chrome on tablets too: it is ordinary history navigation. Fix: location.replace for both navigations, and hide downloads once the button was pressed."
+   },
+   {
+    "title": "Hidden expired envelope: signer visits and 'ask for more time' email the sender links that 404",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts:2277 (noteDeadLink), :2031 (requestExtension); src/server/routes-sign.ts:108",
+    "detail": "Steps (p5-hidden.ts 5.1): Ann signs, deadline passes, member Mona deletes it (hidden). Bob opens his link and asks for more time (200). Mona gets 'Could not open: ...' and 'More time needed: ...' with links /app/envelopes/<id> and ?extend=1; Mona's GET is 404, and even the owner's POST /extend is 404 until someone restores it. canBeStuck already excludes hidden envelopes; these two paths do not. Fix: skip both for e.hidden_at (or tell the signer the sender removed it), and let restore be offered to admins in that email."
+   },
+   {
+    "title": "Cleared form starts email the owner 'The deadline passed... reopen with a new deadline'",
+    "severity": "medium",
+    "where": "src/server/routes-sign.ts:108 with the idle clearing in envelopes.ts:2449-2463",
+    "detail": "Steps (p2-forms.ts 2.3): 10 abandoned starts on a shared-device form are cleared after 60 minutes; each link is opened again (Back on the tablet, or the visitor's email). The owner gets 10 emails 'Could not open: Sign-in sheet' saying 'The deadline passed on ... You can reopen the envelope with a new deadline'. There was no deadline; the start was cleared for idleness, and the visitor (2.2) is offered 'ask for more time', which emails the owner again. Fix: for e.powerform_id starts closed by idleness, send no owner email and show the visitor a link to /f/<slug> to start again."
+   },
+   {
+    "title": "Double-submitted Leave sends a second, contradictory email",
+    "severity": "low",
+    "where": "src/server/routes-account.ts:509-527",
+    "detail": "Steps (p1-leave.ts 1.1): two POST /account/leave at once. Both 200 (handed_over 1 and 0); the owner gets two 'Lea Race left' emails, the second says 'Lea Race had sent nothing, so there was nothing to hand over.' Fix: if DELETE FROM memberships changes 0 rows inside the tx, answer 409 and send nothing."
+   },
+   {
+    "title": "Envelope where only a viewer had finished is deleted for good",
+    "severity": "low",
+    "where": "src/server/routes-envelopes.ts:333",
+    "detail": "p5-hidden.ts 5.2: viewer confirmed, voided, deleted: gone, viewer download 200 before and 404 after, though keepsCopy gave them a copy. Fix: use the keepsCopy rule."
+   },
+   {
+    "title": "Delete dialog says 'removed for good' for an envelope the server keeps",
+    "severity": "low",
+    "where": "src/app/app/envelopes/[id]/page.tsx:84",
+    "detail": "p5-hidden.ts 5.3: signer with signed_before, voided: dialog rule gives kept=false, server returns kept_for_recipients:true. Fix: server-computed flag."
+   },
+   {
+    "title": "Leave card on the Team tab squeezed to a 60 px column at 390x844",
+    "severity": "low",
+    "where": "src/app/app/settings/page.tsx:282-285",
+    "detail": "team-leave-card-390.png: text 59.9 px wide, 321 px tall, one word per line. Fix: flex-basis on the text, short button label."
+   },
+   {
+    "title": "Shared-device checkbox is 5.8 px wide on phones",
+    "severity": "low",
+    "where": "src/app/app/powerforms/page.tsx:32 (label.check)",
+    "detail": "powerforms-check-390.png, ui2-results.json: input 5.8 x 13 px. Fix: flex: none and a fixed size for the input."
+   },
+   {
+    "title": "Idempotency-Key replay after the sender deleted a completed envelope sends it again",
+    "severity": "low",
+    "where": "src/server/routes-envelopes.ts:196-208",
+    "detail": "p5-hidden.ts 5.5: create+send with Idempotency-Key 'order-1001' via a member's key, signer signs, member deletes it, the same call is retried: 200 with a new envelope and one new email to the signer. mine() treats the hidden envelope as gone. Fix: look up the key's envelope including hidden ones and replay it (or answer 409)."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/app/app/powerforms/page.tsx:34, README.md:108 and :615, research brief",
+    "claim": "A shared-device form allows 30 unfinished starts from one address.",
+    "reality": "rateLimit pf:<ip> 20 per hour refuses the 21st start in an hour from that address, finished or not (p2-forms.ts 2.1)."
+   },
+   {
+    "where": "src/app/sign/[token]/page.tsx:752",
+    "claim": "Press the button before you hand the device on: it clears this page.",
+    "reality": "Back brings the previous visitor's done page, email address and PDF download back (shared-back.png)."
+   },
+   {
+    "where": "src/app/check/CheckForm.tsx:201",
+    "claim": "We do know which account sent it, and your report counts against that account like any other.",
+    "reality": "When the account was deleted the report is refused with 404 (p3-check.ts 3.2); and a form visitor's report, which normally never counts, starts counting after deletion (3.1)."
+   },
+   {
+    "where": "src/lib/policy.ts:123 (KEPT_AFTER_DELETION)",
+    "claim": "Any other copy that happens to mention your name goes with all such copies, 90 days after it was sent.",
+    "reality": "Any envelope-less copy whose text holds '<your address>' is deleted at once, whoever it was to and even if not yet delivered (p4-mail.ts)."
+   },
+   {
+    "where": "src/server/routes-account.ts:491 (removal email) and settings/page.tsx Remove dialog",
+    "claim": "The next time you sign in you are in a workspace of your own.",
+    "reality": "A removed person who is in another team lands in that team ('Otto Rem's workspace', p1-leave.ts 1.7)."
+   },
+   {
+    "where": "src/server/envelopes.ts:2447-2448 (cron comment)",
+    "claim": "The visitor loses nothing but the start: the form simply gives them a new one.",
+    "reality": "The visitor's link shows 'expired', Finish answers 400 'This envelope is no longer open for signing.', and 'ask for more time' emails the owner (p2-forms.ts 2.2)."
+   },
+   {
+    "where": "src/app/app/settings/page.tsx:290 (Leave dialog)",
+    "claim": "You stay signed in, in your other workspace.",
+    "reality": "With three or more workspaces it is the oldest membership, not a particular 'other' one."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "No outside service is involved in any finding. The mail server being down was simulated by setting emails rows to status 'failed' with next_try_at, which is exactly what mail.ts deliver() writes on a refused send; confident.",
+   "Front-desk tablets sharing one address: depends on TRUSTED_PROXY_HOPS and the office NAT. With the default 1 hop behind a proxy every visitor at one office shares an address, so the 20-per-hour limit applies; with TRUSTED_PROXY_HOPS=0 every visitor everywhere is 'unknown' and shares one global 20-per-hour bucket (pre-existing, made worse by this feature). High confidence from reading clientIp in router.ts.",
+   "Back button on iPad Safari: not tried, only Chromium. Both keep /sign/<token> in history after location.assign and a plain link, so I expect the same result (high confidence)."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/team-leave-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/team-leave-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/team-leave-card-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/topbar-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/powerforms-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/powerforms-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/powerforms-check-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/check-deleted-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/check-deleted-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/delete-dialog-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/delete-dialog-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/shared-done.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-misc-today/shared-back.png"
+  ]
+ },
+ "verify:nonus": {
+  "checks": [
+   {
+    "item": "Consent wording (consentWording, CONSENT_VERSION) shown on the signing page and its version written into the consent audit line",
+    "holds": true,
+    "evidence": "Browser at 390x844 (tests/out/verify-nonus/phone-sign-first.png): the paragraph says simple electronic signature, rules differ by country, ask the sender or a lawyer, nothing about equal to handwritten. Author tests 1 to 3 pass. New consents write 'Wording 2026-11, as printed on the help page...'."
+   },
+   {
+    "item": "Consent wording for envelopes whose consent line was written before this work (existing database rows)",
+    "holds": false,
+    "evidence": "probe-oldconsent.ts: an audit line in the old format (detail = the name only, as routes-sign.ts wrote before commit 9b0ee8f) gives an evidence pack whose consent.txt says 'Wording 2026-11:' and prints today's wording, under the header 'The audit line names the version of the wording their screen showed, and this is that wording'. That signer actually saw 'An electronic signature has the same legal effect as a handwritten one.'",
+    "still_broken": "evidence.ts line ~268 falls back to CONSENT_VERSION when a line names no version, and the pre-2026-11 wording was never kept as a version in policy.ts.",
+    "suggested_fix": "Add the old wording to CONSENT_WORDINGS as a version (for example 'before-2026-11') and make evidence.ts use it for consent lines whose detail has neither 'Wording ' nor 'wording in use was', with a note that the version was inferred from the date."
+   },
+   {
+    "item": "Prices as US$ on public pages with one line about conversion",
+    "holds": true,
+    "evidence": "prices.cjs read the visible text of /, /help, /impact, /security, /developers, /signup, /security/processing, /billing/stop on a running server: 8, 2 and 1 US$ prices, zero bare $ amounts, zero em dashes."
+   },
+   {
+    "item": "Warning before sending: names the word it saw, warns, never blocks, same list in the editor and the API",
+    "holds": false,
+    "evidence": "Never blocks and appears in the review step (phone-review.png) and as warnings in the API: true. But probe-words.ts and the live API show common spellings are missed: document names straight from file names keep underscores, and 'power_of_attorney.pdf', 'Lasting_Power_of_Attorney_Smith.pdf', 'Deed_of_Sale.pdf', 'Title_Deed_Plot14.pdf', 'Last_Will_Jo.pdf', 'Separation_Agreement.pdf' give no warning; German without umlauts ('Kuendigung_Mueller.pdf', 'Grundstueckskaufvertrag', 'Letztwillige Verfuegung') gives none; 'Will - Jo Bloggs.pdf', 'PowerOfAttorney.pdf', 'POA', 'LPA' give none. GET /envelopes/:id/warnings on a draft with files Lasting_Power_of_Attorney_Smith.pdf and Kuendigung_Mueller.pdf answered only the subject's will warning.",
+    "still_broken": "finder() in src/lib/paperwork.ts joins words with [\\s\\-\u2010-\u2015]+ only, and flat() does not fold ue/oe/ae.",
+    "suggested_fix": "In flatWithPlaces treat '_' and '.' as a space and split CamelCase in the flattened text, and add a second flattening that maps \u00fc/\u00f6/\u00e4/\u00df to ue/oe/ae/ss so either spelling matches (keep the place map). Consider 'will' as a whole word in document names only."
+   },
+   {
+    "item": "Country notes on /help: dated, sourced, not advice, not wrong",
+    "holds": false,
+    "evidence": "Read src/lib/paperwork.ts COUNTRY_NOTES against the research in research/gaps-partial.json. Every note is dated and hedged, but: (1) the 'United Kingdom' note describes England and Wales law (physically present witness for a deed, HM Land Registry, which covers England and Wales only); Scotland and Northern Ireland differ. (2) The EU note links the legislation.gov.uk copy of eIDAS, labelled 'official' and 'the 2014 text', but that site shows the UK's retained and UK-amended version, not the EU's own text. (3) Singapore has no source link at all. (4) The Nigeria half says 'their electronic transactions law', while the research names the Cybercrimes Act section 17(2), which also lists birth and death certificates. (5) India says only wills and trusts are excluded; the First Schedule as I know it also lists powers of attorney and contracts for sale of immovable property (lower confidence, see doubts). (6) All ten notes use one constant CHECKED = 'November 2026', including ones resting on a 2012 article. (7) Several lines are instructions ('Where a law requires a signature, use one of those two', 'buy the e-stamp certificate first and add it as the first document'), which reads as advice.",
+    "suggested_fix": "Rename the UK note to 'England and Wales' or add one sentence that Scotland and Northern Ireland have their own rules; link EUR-Lex for eIDAS; give Singapore a source or drop the claim; name the Cybercrimes Act for Nigeria; have a person check the India list; give each note its own checked date; reword instructions as statements of what the law asks."
+   },
+   {
+    "item": "Where your data is on /security and the printable processing summary, filled from settings",
+    "holds": true,
+    "evidence": "Seen at 390x844 (phone-security-data-top.png): every unstated setting says 'The operator of this server has not said ... Ask them.', off providers listed, no sideways scroll. /security/processing renders with Print button and no overflow. Only a small omission (see new bugs: stored time zones are not listed)."
+   },
+   {
+    "item": "Footer line for people who cannot open the page, and the help for senders",
+    "holds": true,
+    "evidence": "Author test 15 passes (invitation and reminder carry it, replyTo is the sender). Small overclaim: /help says 'Every email that asks someone to sign therefore ends with this line', but the Find my documents email (envelopes.ts emailMyLinks, links 'waiting for you') has no such line."
+   },
+   {
+    "item": "'I will send the link myself': no email, record says 'Link shared by the sender', limits and money still count",
+    "holds": true,
+    "evidence": "probe-f.ts: void, comments, sign-again, reassign, more time: zero emails to an empty address. probe-money.ts: held 1 at send, correction to the sender's own name and address frees it (free=1), reassign to the sender frees it, void returns it. Witness with the tick refused at send. Envelope page own card at 390x844: no overflow, all share buttons 44px tall."
+   },
+   {
+    "item": "'I will send the link myself': the signer's own page never promises an email (as /help#no-email says)",
+    "holds": false,
+    "evidence": "screens2.cjs at 390x844 on a link_by_sender signer: menu item 'Ask Vera Sender for more time', then toast 'We asked Vera Sender for more time. They will be in touch by email.' and the menu then reads 'Asked. They will be in touch by email.' The sender's 'More time needed' email has no reply address and does not say the person has no address. The menu also offers 'Stop reminder emails' to someone who gets none.",
+    "still_broken": "src/app/sign/[token]/page.tsx line ~804 ignores me.link_by_sender; requestExtension in envelopes.ts does not mention it.",
+    "suggested_fix": "When me.link_by_sender, say 'We asked X for more time. They have no email address for you here, so they will reach you the way they sent you this link.', hide 'Stop reminder emails', and add answerLine(r) from bysender.ts to the More time needed email."
+   },
+   {
+    "item": "Signed PDF prints Chinese, Japanese, Korean, Thai, Hindi, Arabic, Hebrew and mixed scripts, read back out",
+    "holds": true,
+    "evidence": "probe-pdf.ts: ten signers with mixed names and values ('\u738b\u5c0f\u660e (Wang Xiaoming)', '\u6771\u4eac\u90fd\u6e2f\u533a 1-2-3 Tokyo', '\u0410\u043d\u0430 \u738b \u0645\u062d\u0645\u062f', '\u05e9\u05d0\u05e8\u05e2 ABC-12 \u0631\u0642\u0645 \u0661\u0662\u0663', Thai with digits, Hindi with digits). Rendered with pdftoppm (mixed-1.png, mixed-2.png, p7crop.png): all glyphs drawn, right-to-left right-aligned, emoji printed as the mark and listed as U+1F44D, warned before signing. pdftotext (Poppler, uses ActualText) returns every value in typing order including Hindi."
+   },
+   {
+    "item": "Right-to-left with digits and Latin words left to right, dates and times inside Hebrew",
+    "holds": true,
+    "evidence": "Rendered page: '\u05ea\u05d0\u05e8\u05d9\u05da 20/11/2026 \u05d1\u05e9\u05e2\u05d4 16:40' keeps 20/11/2026 and 16:40 whole, '\u05d2\u05e8\u05e1\u05d4 Windows 11 \u05e2\u05db\u05e9\u05d9\u05d5' keeps 'Windows 11', '+972-3-1234567' shows as the browser's bidi does (plus sign after the number). The pass skips UAX#9 rule W2, so European digits in Arabic text keep typing order on the PDF where a browser may reorder groups (for example 012-345-6789); the PDF is the more literal one."
+   },
+   {
+    "item": "Dates: typed date printed in the envelope's format everywhere",
+    "holds": false,
+    "evidence": "Through the screens it is a date picker and holds (author tests). Through the API nothing is checked: probe-pdf.ts finished with date values '2026-02-31', '03/04/2026' and 'next Tuesday' (200 each), and the signed PDF prints '31/02/2026', '03/04/2026' and 'next Tuesday' under a DD/MM/YYYY envelope (mixed-1.png).",
+    "still_broken": "applyValues in envelopes.ts has no rule for type 'date'; formatDateValue only checks day 1 to 31.",
+    "suggested_fix": "In applyValues, for type 'date' accept only YYYY-MM-DD that is a real calendar day (round-trip through Date.UTC), and answer 400 otherwise."
+   },
+   {
+    "item": "Time zones on recipients: date of signing and certificate times in the signer's reported zone",
+    "holds": false,
+    "evidence": "probe-tz.ts: after the first person reports Pacific/Kiritimati and hands the document to Bob, the row keeps tz Pacific/Kiritimati; Bob signs with no zone and the PDF prints '21 Nov 2026' (UTC day 20 Nov); the certificate says 'Time zone Pacific/Kiritimati, as reported by their device' for Bob and every Bob audit line carries 'their time ... UTC+14:00'. Same after the sender's Correct to another person (tz Asia/Tokyo kept, the new person's invitation names Asia/Tokyo). Separately, 400 consent calls alternating two zones wrote 400 'Time zone reported' lines (500 with a second IP) and a 34-page PDF.",
+    "suggested_fix": "See new bugs 1 and 2."
+   },
+   {
+    "item": "Reminders held to the signer's daytime",
+    "holds": false,
+    "evidence": "Author test passes for the plain case. probe-tz.ts: a reminder held at night still went out in the morning after the sender set reminder_days to 0 (off_got 1); with one sleeper and three link_by_sender people the sender got three 'Reminder to pass on' emails in one tick instead of one. Signer muting before morning is respected."
+   },
+   {
+    "item": "Numbers written outside the US: one rule for page and server",
+    "holds": true,
+    "evidence": "23 inputs (1.234,56, 1 234,56, 1'234.56, Indian grouping, \u20b9/\u20ac/kr, Arabic-Indic and Devanagari digits, U+2212 minus) accepted by isNumber, and the formula reader in src/lib/logic.ts gives the same value for each, marking 1.234 and 1,234 as ambiguous."
+   },
+   {
+    "item": "Screens at 390x844 and no em dashes",
+    "holds": true,
+    "evidence": "Envelope page, review step, /help, /security, /security/processing and the signing page: scrollWidth minus clientWidth = 0 on phone and desktop. No em dash in any file under src, the README, or the visible text of the public pages."
+   },
+   {
+    "item": "Author tests",
+    "holds": false,
+    "evidence": "tests/gaps-nonus-words.test.ts plus tests/gaps-nonus-text.test.ts: 48 of 49 pass on the second run. Test 46 fails on /replyTo=\\{answerComesTo\\(me\\)\\}/: the question dialog was replaced by Comments.tsx in another engineer's comments work, so answerComesTo is now unused; this looks like work in progress elsewhere, not a defect here. On the first run the Witness.tsx dir=\"auto\" check also failed; it was fixed by its owner within minutes (work in progress)."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "A new person inherits the previous person's time zone after a hand-over or a correction",
+    "severity": "high",
+    "where": "src/server/envelopes.ts reassignRecipient (UPDATE recipients ... around line 1980) and correctRecipient (the 'other' branch around line 1750); read by pdf.ts fieldDisplayValue, drawCertificate, notifyRecipient and cronTick",
+    "detail": "Steps (tests/out/verify-nonus/probe-tz.ts): send one signer aiko@example.com with a date_signed field, date_format 'D MMM YYYY'. As her: POST /sign/{tok}/consent {tz:'Pacific/Kiritimati'}, then POST /sign/{tok}/reassign {name:'Bob Elsewhere', email:'bob.else@example.com'}. The row now has name Bob, consent_at NULL, tz still Pacific/Kiritimati. Bob signs from a client that sends no tz. Result: the signed page prints 21 Nov 2026 while the UTC day was 20 Nov; the certificate prints under Bob 'Time zone Pacific/Kiritimati, as reported by their device' and every Bob audit line carries 'their time 2026-11-21 09:57 UTC+14:00'. Same with POST /envelopes/:id/correct to a different name and address after the first person reported Asia/Tokyo: tz stays Asia/Tokyo and the invitation emailed to the new person states the deadline in Asia/Tokyo time. Automatic reminders to the new person are held to the old person's night. Fix: wherever a recipient row becomes another person (reassign, correction to another person, PUT correction that changes the address, group hand-back), also set tz=NULL and reminder_held_at=NULL."
+   },
+   {
+    "title": "Any holder of a signing link can fill the audit trail and certificate with 'Time zone reported' lines",
+    "severity": "medium",
+    "where": "src/server/routes-sign.ts noteZone (called from /sign/:token/consent and /complete)",
+    "detail": "Steps (probe-tz.ts): 400 calls of POST /sign/{tok}/consent alternating tz 'Asia/Tokyo' and 'Europe/Berlin' from one IP: all 200, none limited, 400 audit lines; 100 more from a second IP make 500; after Finish the signed PDF has 34 pages. Only find()'s 600 per token per IP per 10 minutes applies. recipient-view in routes-envelopes.ts already limits its own line to one a day for exactly this reason. Fix: keep r.tz updated silently, write the audit line only the first time and once more at Finish if the zone used for the date differs, or cap zone changes per recipient (for example 3) and ignore the rest."
+   },
+   {
+    "title": "Evidence pack states the new consent wording for signers who agreed before the change",
+    "severity": "medium",
+    "where": "src/server/evidence.ts consent.txt (version fallback to CONSENT_VERSION), src/lib/policy.ts CONSENT_WORDINGS",
+    "detail": "Steps (probe-oldconsent.ts): write the consent audit line the way routes-sign.ts did before commit 9b0ee8f (detail = 'Sam Signer'), finish, GET /envelopes/:id/evidence, open consent.txt. It says 'The audit line names the version of the wording their screen showed, and this is that wording' and then 'Wording 2026-11:' with the new paragraph. The person actually saw 'An electronic signature has the same legal effect as a handwritten one.' This is the file a sender hands over in a dispute. Only matters where a database has consent lines from before 20 November 2026. Fix: keep the old wording as its own version in CONSENT_WORDINGS, and in evidence.ts use it (marked as inferred from the date) for lines that name no version."
+   },
+   {
+    "title": "Signer with no address is told the sender 'will be in touch by email'",
+    "severity": "medium",
+    "where": "src/app/sign/[token]/page.tsx line ~804 (menu item and toast); requestExtension in src/server/envelopes.ts; 'Stop reminder emails' in the same menu",
+    "detail": "Steps (screens2.cjs, 390x844): send to 'Wanjiru Kamau' with link_by_sender and expire_days 14, open her link, agree, Other actions, 'Ask Vera Sender for more time'. Toast: 'We asked Vera Sender for more time. They will be in touch by email.'; the menu then shows 'Asked. They will be in touch by email.' The sender cannot email her: the 'More time needed' email has replyTo null and does not say she has no address (probe-f.ts). This breaks the /help#no-email promise 'Their own page never promises them an email.' The same menu offers 'Stop reminder emails' to someone who gets none. Fix: branch on me.link_by_sender for the hint and toast, hide the mute item for them, and add answerLine(r) from src/server/bysender.ts to the sender's email."
+   },
+   {
+    "title": "Paperwork check misses names with underscores and German without umlauts",
+    "severity": "medium",
+    "where": "src/lib/paperwork.ts finder() and flat()",
+    "detail": "Document names are file names with underscores kept (routes-envelopes.ts line 63). On a running server, a draft with files 'Lasting_Power_of_Attorney_Smith.pdf' and 'Kuendigung_Mueller.pdf' and subject 'Last Will of Jo Bloggs' got only the will warning from GET /envelopes/:id/warnings and in the review step (phone-review.png). probe-words.ts: no warning for power_of_attorney.pdf, Deed_of_Sale.pdf, Title_Deed_Plot14.pdf, Last_Will_Jo.pdf, Separation_Agreement.pdf, Kuendigung, Grundstueckskaufvertrag, Letztwillige Verfuegung, PowerOfAttorney.pdf, 'Will - Jo Bloggs.pdf'. A text layer in the PDF may still catch some, a scan never. Fix: treat '_' and '.' as spaces and split CamelCase before matching; also match with \u00fc/\u00f6/\u00e4/\u00df folded to ue/oe/ae/ss; add the help page sentence that file names are read too."
+   },
+   {
+    "title": "A reminder held for the morning goes out after the sender turned reminders off",
+    "severity": "low",
+    "where": "src/server/envelopes.ts cronTick, the loop over reminder_held_at",
+    "detail": "Steps (probe-tz.ts section 5): signer reports a zone where it is 02:00, envelope reminder_days 1 and two days old, cron holds the reminder. The sender then PUTs reminder_days 0 (200, stored 0). Morning comes: the held reminder is still emailed ('Reminder: ...', count 1). Fix: in the release loop also skip when e.reminder_days <= 0, and note a fake-notice hold with noteHeld instead of dropping silently."
+   },
+   {
+    "title": "Sender gets one 'Reminder to pass on' email per person when someone else is asleep",
+    "severity": "low",
+    "where": "src/server/envelopes.ts cronTick asleep branch calling remindEnvelope per recipient; remindThroughSender",
+    "detail": "Steps (probe-tz.ts section 6): one emailed signer in a night zone plus three link_by_sender signers, reminder due. One tick sends the sender three identical 'Reminder to pass on: Zone probe' emails; the same envelope with nobody asleep sends one. Fix: in the asleep branch call remindEnvelope once for all awake people (or call remindThroughSender once before the per-recipient loop and skip it inside)."
+   },
+   {
+    "title": "Date fields accept any text through the API, and an impossible date is reformatted",
+    "severity": "low",
+    "where": "src/server/envelopes.ts applyValues; src/lib/dates.ts formatDateValue",
+    "detail": "probe-pdf.ts: POST /sign/{tok}/complete with a date field value '2026-02-31' prints '31/02/2026' on a DD/MM/YYYY envelope; '03/04/2026' and 'next Tuesday' print as typed. Fix: validate type 'date' as YYYY-MM-DD and a real calendar day on the server, 400 otherwise."
+   },
+   {
+    "title": "Stored time zones are not listed as processed data",
+    "severity": "low",
+    "where": "src/app/security/processing/page.tsx 'What is processed'; /security",
+    "detail": "This work stores the time zone a signer's device reports (recipients.tz, printed on the certificate) and the account holder's zone (users.tz, from the x-tz header). The summary lists name, email, access code, phone, answers, signatures and times, not the zone. Fix: add 'the time zone their device reports, which decides the date printed and is on the certificate' to both lists."
+   },
+   {
+    "title": "Zone names printed exactly as the device sent them",
+    "severity": "low",
+    "where": "src/lib/dates.ts validZone, zoneWords, localStamp",
+    "detail": "validZone('ASIA/KOLKATA') returns it unchanged, so the certificate and emails print 'ASIA/KOLKATA time'; 'Etc/GMT-14' prints as 'Etc/GMT-14 time (UTC+14:00)', which reads as minus 14. Fix: store new Intl.DateTimeFormat('en',{timeZone}).resolvedOptions().timeZone, and for Etc/GMT zones print only the UTC offset."
+   },
+   {
+    "title": "Sender's 'More time needed' email gives the deadline in UTC only",
+    "severity": "low",
+    "where": "src/server/envelopes.ts requestExtension",
+    "detail": "It uses momentText(e.expires_at) while the 'Expires soon' email uses momentForEmail(e.expires_at, senderZone(e)). A sender in Auckland reads a UTC time there and a local one elsewhere. Fix: use momentForEmail with senderZone(e)."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/app/help/outside.tsx, QA no-email",
+    "claim": "Their own page never promises them an email.",
+    "reality": "The signing page's 'Ask for more time' says 'They will be in touch by email.' to a person with no address (seen in a browser at 390x844)."
+   },
+   {
+    "where": "research/continue.json gaps:nonus-text, item D",
+    "claim": "The certificate gives local time with its zone and UTC for each of that signer's steps; the zone is what their device reported.",
+    "reality": "After a hand-over or a correction to another person, the zone and the 'as reported by their device' line belong to the previous person (probe-tz.ts)."
+   },
+   {
+    "where": "src/server/evidence.ts consent.txt header",
+    "claim": "The audit line names the version of the wording their screen showed, and this is that wording.",
+    "reality": "For consent lines written before this work it prints today's 2026-11 wording, which that signer never saw."
+   },
+   {
+    "where": "src/lib/policy.ts comment above CONSENT_VERSION",
+    "claim": "To change a word, add a new version here, keep the old one.",
+    "reality": "The wording in use before 2026-11 ('same legal effect as a handwritten one') was not kept as a version, so nothing can print it."
+   },
+   {
+    "where": "src/app/help/outside.tsx, QA cannot-open",
+    "claim": "Every email that asks someone to sign therefore ends with this line, and a reply to it comes to you.",
+    "reality": "The Find my documents email (emailMyLinks) lists links 'waiting for you' with no such line."
+   },
+   {
+    "where": "src/lib/paperwork.ts COUNTRY_NOTES eu source label",
+    "claim": "Regulation (EU) No 910/2014 ... the 2014 text as kept on legislation.gov.uk (official).",
+    "reality": "legislation.gov.uk shows the UK's retained, UK-amended version, not the EU's own text (fairly but not fully sure, see doubts)."
+   },
+   {
+    "where": "src/lib/paperwork.ts COUNTRY_NOTES uk",
+    "claim": "United Kingdom: a deed needs a witness who is physically present; HM Land Registry rules.",
+    "reality": "That is England and Wales law; HM Land Registry covers England and Wales only."
+   },
+   {
+    "where": "research/continue.json gaps:nonus-words suite",
+    "claim": "tests/gaps-nonus-words.test.ts, 27 of 27 pass.",
+    "reality": "Now 26 of 27: test 46 looks for replyTo={answerComesTo(me)}, which another engineer's comments work removed (work in progress elsewhere, not a defect of this piece)."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Law in the country notes: I could not open any source. From memory, India's IT Act First Schedule also lists powers of attorney and contracts for sale of immovable property (moderate confidence, about 60 percent, the research quote only confirms items 3 and 4); HM Land Registry covering England and Wales only (high confidence); legislation.gov.uk showing the UK-amended retained version of eIDAS (about 80 percent); Nigeria's exclusions coming from the Cybercrimes Act 2015 section 17(2) (the research itself says so).",
+   "WhatsApp and text message share buttons: I only saw that the buttons render at 44px; I did not see a real phone hand the link to WhatsApp, nor whether WhatsApp previews the link and thereby counts as a view.",
+   "Mail clients: whether a reply to the invitation really reaches the sender depends on the mail provider honouring Reply-To; the server sets it (author test), I could not test a real provider.",
+   "Device time zones: browsers usually report canonical IANA names, so the case and Etc/GMT oddities mostly come from API callers; I could not test real devices in other countries."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/phone-envelope-crop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/phone-review.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/phone-sign-first.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/phone-sign-menu.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/phone-sign-asked.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/phone-security-data-top.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/phone-help-uk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/desk-envelope.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/desk-review.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/mixed-1.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/mixed-2.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-nonus/p7crop.png"
+  ]
+ },
+ "verify:groups": {
+  "checks": [
+   {
+    "item": "Named groups kept by the account (2 to 20 members); admins manage them, every team member uses them; API routes documented",
+    "holds": true,
+    "evidence": "probe3.ts block 7: a non-admin team member (role member) gets GET /groups 200 with may_change false, sends an envelope to the group (200), gets a member's link via recipient-view member_id (200), gives it back (200), and PUT /groups/:id is 403. probe2.ts block L: a 'send' API key gets 403 on POST /groups, an 'admin' key gets 200. openapi has /groups, /groups/{id}, release, member_id. Screens at 390x844 (01/02-contacts-390.png) have no horizontal scroll and all group buttons are 44 px.",
+    "still_broken": "Small: GET /groups answers may_change: true to a 'send'-scope API key whose owner is an admin, although that key gets 403 on every change.",
+    "suggested_fix": "In routes-groups.ts compute may_change as c.admin && !(c.auth.via === 'api_key' && c.auth.scope !== 'admin')."
+   },
+   {
+    "item": "Editor: a recipient can be a group (signer, approver, viewer, copy), fields belong to it, works at 390x844",
+    "holds": true,
+    "evidence": "04-editor-390.png and 14-editor-correcting-390.png (dev server on 3581): no horizontal scroll, no em dash; measure.cjs: group select 291x44, role select 170x44, More 56x44, remove 44x44, Take out 291x44, Add a member 133x44, Add a group 116x44."
+   },
+   {
+    "item": "Every member gets their own email and link; the first who agrees takes it on; two members at the same moment",
+    "holds": true,
+    "evidence": "probe2.ts H (3 runs): consent by Maya and decline by Ben sent together with Promise.all: always one 200 and one 409 'Maya Lopez from HR team has taken this on', envelope still 'sent', exactly one 'Taken on for a group' line. I (3 runs): Maya's Finish and the sender's release together: one wins, the row is never half claimed. I2: Maya's Finish and her own Hand back together: Finish 200, Hand back 409, row completed. Confidence limited to one Node process: the claim is a single conditional UPDATE, so two processes on one SQLite file should behave the same."
+   },
+   {
+    "item": "A member removed from the group after sending can no longer act and is not offered the document",
+    "holds": true,
+    "evidence": "probe2.ts G: after a correction removes Maya, GET /sign/<maya link> returns only brand/envelope/recipient/help_code with group.state 'removed'; Find my documents sends her nothing; the saved-group change (author test) keeps the snapshot. probe4.ts 2: 'Email me the current link' from her retired link emails nobody.",
+    "still_broken": "Low: POST /public/check with the removed member's security code answers genuine: true, status 'sent', for_name 'Maya Lopez' and her signing url, with nothing saying she was taken off (memberForCode in src/server/groups.ts ignores removed_at).",
+    "suggested_fix": "In memberForCode, when m.removed_at is set, answer like a retired code (replaced: true, why: 'removed', no url)."
+   },
+   {
+    "item": "Taking it on, handing it back, the sender giving it back",
+    "holds": false,
+    "evidence": "Works in the basic flow (author tests, probe2 I/I2). probe4.ts block 4: Maya takes it on and hands it back 3 times; Ben then takes it on (200) and his Hand back with reason 'wrong person' answers 429 'This document has been handed back 3 times today ... It stays with you for now'. The limit key is handback:<recipient row id> (src/server/routes-groups.ts line 37), so one member's hand-backs lock every other member out of their own.",
+    "still_broken": "A member who legitimately took it on by mistake cannot hand it back because a colleague used the group's daily allowance.",
+    "suggested_fix": "Key the limit per member (handback:<member id>) and keep a higher per-row ceiling for flooding, e.g. 3 per member and 6 per row per day."
+   },
+   {
+    "item": "One member declining declines for everyone, and the screen says so before",
+    "holds": true,
+    "evidence": "probe3.ts 6: an approver group member declines before anyone took it on: 200, envelope declined, Maya emailed 'Declined: Staff handbook'. 11-sign-decline-dialog-390.png shows the group note at the top of the dialog ('You are declining for ... That closes the document for everyone'). A refused decline (empty reason, viewer group) takes nothing on (author tests)."
+   },
+   {
+    "item": "A member cannot read what another member typed or signed",
+    "holds": true,
+    "evidence": "Hand back and give back clear field values, signature and initials (unclaim in groups.ts); removing the holder clears answers (author test). Comments are scoped per member (partyOf in comments.ts uses m:<member id>). earlierCopy needs signed_before, which unclaim and clearAnswers set to NULL, so a member who takes over after a give-back cannot download the previous holder's earlier signed copy. 'taken' links return no documents/fields/others (author test). I did not find a route that serves another member's uploaded attachment."
+   },
+   {
+    "item": "Access code: one per group, and nobody else can lock out the person who has it",
+    "holds": false,
+    "evidence": "probe2.ts block O: draft with access_code 'harbour-77', sent; Maya unlocks and takes it on. Ben, whose link is now 'taken' (he can do nothing with the document), posts 12 wrong codes to /sign/<ben>/unlock from fresh IPs: last answer 423 'entered wrongly 10 times, so it is frozen'; row.code_frozen_at set; Maya in a new browser with the right code gets 423. Then Ben calls /sign/<ben>/ask-code twice (200, 200) and Maya's /sign/<maya>/ask-code gets 429 'Too many attempts. Please wait a bit and try again.' (rateLimit askcode:<row id> in routes-sign.ts). MAY.taken in groups.ts line 402 allows 'unlock' and 'ask-code'.",
+    "still_broken": "The builder listed 'a member freezes the code' as left open, but the worse case was not noted: a member who can no longer act at all can freeze the code for the colleague who is signing, and use up that colleague's way to ask for it.",
+    "suggested_fix": "For a member in state 'taken' or 'copy', do not count wrong tries towards the row's freeze (count per member, and cap that member only), and key ask-code per member (askcode:<member id>) instead of per row."
+   },
+   {
+    "item": "One-time codes and texted links are refused for a group",
+    "holds": true,
+    "evidence": "Author test: POST /envelopes/:id/correct with verify 'sms_code' and a phone answers 400 'A one-time code and a text message go to one person'. saveGroups refuses verify/text_link on any save, assertGroups at send, assertNoGroupCheck on quick correction. No account-wide default that would add a check exists (grep for default_verify found nothing)."
+   },
+   {
+    "item": "Money: one signature per group, held once while out",
+    "holds": true,
+    "evidence": "probe5.ts: bulk of 3 rows from a template with a supplier and a 3-member group: /bulk/check signers_per_row 2, need 6; after sending, 6 held (2 per envelope). Author test covers hand back and take on again (still 1 held) and resign (no second signature)."
+   },
+   {
+    "item": "Money: a group that includes the sender",
+    "holds": false,
+    "evidence": "probe1.ts block D (STRIPE_SECRET_KEY set): group 'Directors' = Sam Sender (the sender, same name and address) + Ola. Sent: 1 held. Sam opens his member link, agrees and signs: balance drops by 1. The same sender signing his own document directly as a person: drops by 0. The pricing rule says a signature is used only when the person signing is not the sender signing their own document under their own name and address, and GROUP_RULE (src/lib/policy.ts) says 'A group that signs uses one signature, like one person'.",
+    "still_broken": "The sender pays for signing their own document when the recipient is a group they belong to. The builder noticed and chose to keep it; the README, help and the Contacts text say otherwise.",
+    "suggested_fix": "Owner decision. Either make it free: at takeOn set free=isSelf(claimed row, sender) and reset free to 0 in unclaim (keep free=1 from settleGroups when already paid), so reserved() and completeRecipient agree; or keep it and say so in README, help, GROUP_RULE and the pricing page ('a group you are in counts like any other signer, also when you sign for it')."
+   },
+   {
+    "item": "Money: a group replaced by a different group after it signed",
+    "holds": false,
+    "evidence": "probe1.ts block E: envelope with group 'Group one' and Pat. A Group one member signs (1 used). PUT /envelopes/:id with that recipient's group_id changed to 'Group two' (other people) and resign: true: 200, row free=1. A Group two member signs: total used stays 1. Same steps with a person replaced by another person: total used 2. Cause: settleGroups (src/server/groups.ts lines 286-287) sets free=1 for any group row with any 'signature' credit whose ref starts with the row id, whatever group it belonged to.",
+    "suggested_fix": "Only treat the group as already paid when the group is the same: reset free and bump person_gen in saveGroups when group_id changes on an envelope that is out (the !same branch), and make settleGroups check that the credit was made while the row had this group_id (e.g. include group_id in the ref, or record the paid group on the row)."
+   },
+   {
+    "item": "Reminders only to people who can still act",
+    "holds": false,
+    "evidence": "Holds for mute, claim, removal, bounce and the timer (probe3.ts 3: auto reminder to Maya and Ben, not to Cy who muted). Fails for spam marks. probe1.ts block A: after send, mail event {type:'complaint', email: ben}: the sender gets 'Marked as spam' saying 'So we no longer email them about this document: no reminders, no notice when you change it, and no copy when it is completed.' Then POST /envelopes/:id/remind: Ben gets 'Reminder: Staff handbook' (count 1); his page says mail_stopped false. Block C: Maya takes it on, marks spam (row.complained_at set), hands back: the address trigger clears the mark and Maya is a plain member again, reminded like the others. notifyMembers (groups.ts line 313) checks only emails.bounce_kind='hard', never complaints, and /sign/:token/mail-again is in no MAY state, so a member could not undo a mark anyway.",
+    "still_broken": "A group member who marked our email as spam keeps getting reminders, 'expires soon', 'updated' and the completed copy (cc groups), while the sender is told the opposite.",
+    "suggested_fix": "Keep the mark per member (recipient_members.complained_at, set in complaint() when no row matches but a member does, like bouncedMember), skip such members in notifyMembers and tellGroup and in the completed-copy loop, copy it onto the row in takeOn and back in unclaim, add 'mail-again' to MAY.open/taken/copy acting on the member, word the sender's email for a member, and show it in GroupMembers.fact()."
+   },
+   {
+    "item": "Not-opened alert names the group and goes quiet once one member opens",
+    "holds": true,
+    "evidence": "Author test, plus probe1.ts block B: after a hand-back the alert can fire once more (unopened_alerted_at is reset, sent_at moves to the hand-back), which is reasonable."
+   },
+   {
+    "item": "A bounce: the sender is told whose address it was and how to fix it",
+    "holds": false,
+    "evidence": "Holds while nobody has it (author test). probe1.ts block B: Maya takes it on; a reminder to her hard-bounces. The sender's email says 'Open the envelope and choose Correct next to Maya Lopez to fix the address: a new email goes out at once.' Doing exactly that (POST /envelopes/:id/correct with a new email) answers 400 'Maya Lopez acts for HR team, which is a group, so there is no single name or address to correct here.' routes-bounces.ts line 97 only uses the member wording when no recipient row matches.",
+    "suggested_fix": "In recipientBounce, when the matched row has group_name, use group wording: 'Maya took this on for HR team. Give it back to the group from the envelope page so another member can act, or take Maya out and add her again with the right address with Edit envelope.'"
+   },
+   {
+    "item": "Abuse limits: each member emailed counts as a person reached; strangers' text does not reach inboxes under our name",
+    "holds": false,
+    "evidence": "Counting holds: send, correction (author test), bulk (probe5: 3 reached rows per member across 3 envelopes, deduped by address in the daily count), and the sender in the group counts like sending to self (probe2 Q). But probe1.ts block F: Maya takes it on and hands back with reason 'PayPal billing: your payment of $499.99 was charged today. To cancel call +1 888 555 0199 or visit http://paypal-refund.example'. Ben's 'Back with HR team' email (from the sender's name, reply-to the sender) contains the phone number and amount. The same words as an envelope message are refused at send with 422 'This reads like a payment notice from a well-known brand'. tellGroup (groups.ts 516-531) checks emailRefusal(e) without the note; reassign, for comparison, sends its reason to the sender only.",
+    "still_broken": "Any holder of a member link can put up to 300 characters of their own text into the inboxes of up to 19 people, 3 times a day per envelope, past the fake-notice filter.",
+    "suggested_fix": "Do not put the note in the members' email (keep it in the audit trail and the sender's email), or pass it as extra to emailRefusal/lureIn and leave it out when it trips the filter."
+   },
+   {
+    "item": "Corrections: someone added to a group on an envelope that is out is emailed their own link",
+    "holds": false,
+    "evidence": "probe4.ts 1: Maya has it; the sender adds Dee with PUT: 200, Dee gets no email (groupsCorrected skips claimed groups, groups.ts line 378), yet the editor says 'When you save, someone you add is emailed their own link' (GroupRecipient.tsx MembersEditor) and openapi 'members' says 'someone added is emailed their own link at once'. probe3.ts 1: a correction that moves a field and adds Dee in one save: Dee's only email is 'Updated: Staff handbook ... changed this document after sending it. Please look at it again before you sign.', and there is no 'Sent to recipient ... added to HR team' audit line, because notifyMembers('updated') runs first and sets her sent_at, so groupsCorrected skips her.",
+    "suggested_fix": "In notifyMembers, for kinds other than 'new' (and 'resent'), skip members whose sent_at is NULL so groupsCorrected sends them the real invitation and writes the audit line; reword the editor and openapi: 'emailed now, or, if a colleague has taken it on, when it comes back to the group'."
+   },
+   {
+    "item": "Templates and bulk with groups; public forms refused",
+    "holds": true,
+    "evidence": "probe5.ts (cost and holds per row correct). probe2.ts J: after the group is deleted, POST /bulk answers 200 with sent 0 and each row failed 'The group \"Accounts payable\" no longer exists'; template use with send answers 400 the same. Author test covers powerforms refusal.",
+    "still_broken": "Low: J leaves the failed drafts behind and tells the sender to 'Open the envelope', where the real fix is the template. K: a template use or bulk row that names a person for the group's role is silently ignored (200, the group stays, the person is not emailed), probably the same as for other fixed roles.",
+    "suggested_fix": "For a template that names a deleted group, say 'Change the template: choose another group or a person for that role' and do not leave drafts per failed bulk row."
+   },
+   {
+    "item": "The certificate and audit trail name who signed for the group",
+    "holds": true,
+    "evidence": "probe2.ts N: 'Signed | Maya Lopez, for HR team <maya...>', certificate has 'Maya Lopez, for HR team <...>' and 'Acted for HR team, a group of 3: ...'. probe4.ts 5: after Fix my name the record says 'Maya L\u00f3pez, for HR team'.",
+    "still_broken": "Low: members who only looked are recorded on the certificate as 'Viewed | Ben Ortiz, for HR team <ben...>' and 'Cy Tan, for HR team', which reads as if they acted for the group (asMember builds the actor that way, groups.ts line 434).",
+    "suggested_fix": "Use 'Ben Ortiz, member of HR team <...>' for members who have not taken it on, and keep ', for HR team' for the person who did."
+   },
+   {
+    "item": "A database from before this work keeps working",
+    "holds": true,
+    "evidence": "olddb1.ts/olddb2.ts: made a database with today's code, dropped recipient_members, signing_group_members, signing_groups and the four recipient columns, booted again on it: login 200, the old envelope loads with group_name null, its signer finishes (200), a group can be made, and a cc group added to the old envelope that is out writes 2 members."
+   },
+   {
+    "item": "Screens at 390x844 and no em dashes",
+    "holds": true,
+    "evidence": "screens.cjs on next dev port 3581: contacts, change form, envelope page (open and taken), editor, member's consent screen, taken screen, ask-sent, holder's page and menu, hand-back dialog, decline dialog: scrollWidth equals 390 on every one, no element past the right edge, no button under 44 px inside the group parts, no em dash in the rendered text. grep finds no em dash in the changed files. Screenshots in tests/out/verify-groups/*.png. Dev server stopped and .next-verify-groups deleted."
+   },
+   {
+    "item": "Give back while sending is paused",
+    "holds": false,
+    "evidence": "probe4.ts 3: account suspended, POST /envelopes/:id/recipients/:rid/release answers 200 {ok:true}; Ben gets 0 emails; audit has 'Change not emailed'. GroupMembers.tsx line 82 then shows the toast 'Given back to HR team. Every member was emailed their link.'",
+    "suggested_fix": "Return { emailed: false } from the route when tellGroup held the emails back, and word the toast from it ('Given back. Sending is paused, so nobody was emailed: copy their links below')."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "A group member's spam mark is ignored: reminders keep going while the sender is told they stop",
+    "severity": "high",
+    "where": "src/server/groups.ts notifyMembers (line 313), src/server/routes-bounces.ts complaint(), MAY table (no 'mail-again')",
+    "detail": "Steps: send to HR team (Maya, Ben, Cy); POST /api/mail/events {type:'complaint', email: ben}; POST /envelopes/:id/remind {recipient_id: group row}. Result: the sender's 'Marked as spam' email says 'we no longer email them about this document: no reminders...', and Ben receives 'Reminder: Staff handbook'. Also: the holder marks spam then hands back, and the row's mark is cleared by the address trigger, so she is reminded again as a member. Probe: tests/out/verify-groups/probe1.ts blocks A and C. Fix: per-member complaint mark, skipped in notifyMembers/tellGroup/completed copies, carried over in takeOn/unclaim, mail-again allowed on member links, member wording in the sender's email."
+   },
+   {
+    "title": "Hand-back note puts a stranger's text, unfiltered, in every other member's inbox under the sender's name",
+    "severity": "medium",
+    "where": "src/server/groups.ts tellGroup/handBack (lines 516-552)",
+    "detail": "Steps: member takes it on, POST /sign/<link>/hand-back {reason: 'PayPal billing: your payment of $499.99 was charged today. To cancel call +1 888 555 0199 ...'}. Result: 200 and every other member's 'Back with HR team' email (fromName and replyTo of the sender) contains the lure; the same text as an envelope message is refused with 422 by the fake-notice filter. Probe1 block F. Fix: keep the note out of members' emails (audit and sender only), or run it through the filter and drop it."
+   },
+   {
+    "title": "Bounce of the person who took it on tells the sender to use Correct, which is refused for groups",
+    "severity": "medium",
+    "where": "src/server/routes-bounces.ts recipientBounce (lines 96-101)",
+    "detail": "Steps: Maya takes it on; a reminder to her hard-bounces. Sender's email: 'choose Correct next to Maya Lopez to fix the address'. POST /envelopes/:id/correct {recipient_id, email: new} answers 400 'Maya Lopez acts for HR team, which is a group...'. Probe1 block B. Fix: group-specific wording when the matched row has group_name (Give back to the group, or Edit envelope to replace her)."
+   },
+   {
+    "title": "A colleague who can no longer act can freeze the access code for the person signing and use up their code requests",
+    "severity": "medium",
+    "where": "src/server/groups.ts MAY.taken (line 402); src/server/routes-sign.ts unlock and ask-code",
+    "detail": "Steps: group with access code; Maya unlocks and takes it on; Ben (state 'taken') posts 10 wrong codes from several IPs: code frozen (423) for Maya too; Ben calls ask-code twice and Maya's ask-code gets 429. Probe2 block O. Fix: wrong tries and ask-code counted per member for non-holders, never freezing the row."
+   },
+   {
+    "title": "Sender who is in the group pays for signing their own document",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts send (free fixed at send with email ''), src/server/groups.ts takeOn; src/lib/policy.ts GROUP_RULE",
+    "detail": "Steps (credits on): group = sender + Ola; send; sender takes it on with his member link and signs: 1 signature used. Same sender signing directly: 0. Contradicts 'Signing your own document is free' and GROUP_RULE 'like one person'. Probe1 block D. Fix: owner decision; either recompute free at takeOn/unclaim or document the exception everywhere prices are described."
+   },
+   {
+    "title": "Replacing a signed group with a different group makes the new group's signature free",
+    "severity": "low",
+    "where": "src/server/groups.ts settleGroups (lines 286-287), saveGroups !same branch",
+    "detail": "Steps: envelope with Group one + Pat; Group one signs (1 used); PUT with group_id of Group two and resign: true; Group two signs: still 1 used. A person replaced by another person after signing costs 2. Probe1 block E. Fix: reset free/person_gen when group_id changes on an envelope that is out, and only count a credit made under the same group."
+   },
+   {
+    "title": "Hand-back daily limit is shared by all members",
+    "severity": "low",
+    "where": "src/server/routes-groups.ts line 37 (key handback:<row id>)",
+    "detail": "Steps: Maya takes on and hands back 3 times; Ben takes it on; Ben's hand-back answers 429 'It stays with you for now'. Probe4 block 4. Fix: key per member with a higher per-row ceiling."
+   },
+   {
+    "title": "Member added by correction is not emailed when a colleague has it, or gets only an 'Updated' email when the same save changes the document",
+    "severity": "low",
+    "where": "src/server/groups.ts notifyMembers (sets sent_at for any kind, line 316) and groupsCorrected (line 378); src/components/editor/GroupRecipient.tsx MembersEditor text; src/server/openapi.ts 'members'",
+    "detail": "Probe4 block 1: Dee added while Maya has it gets no email although the editor says 'When you save, someone you add is emailed their own link'. Probe3 block 1: Dee added in a save that also moves a field gets only 'Updated: ... changed this document after sending it. Please look at it again', and no 'Sent to recipient' audit line. Fix: skip never-sent members in notifyMembers for non-'new' kinds; reword editor and openapi."
+   },
+   {
+    "title": "Give back while paused: toast says every member was emailed",
+    "severity": "low",
+    "where": "src/components/sender/GroupMembers.tsx line 82; src/server/routes-groups.ts release",
+    "detail": "Probe4 block 3: account suspended, release 200 {ok:true}, nobody emailed, audit 'Change not emailed', toast 'Every member was emailed their link.' Fix: return whether emails went and word the toast from it."
+   },
+   {
+    "title": "Viewers recorded as acting 'for HR team' on the certificate",
+    "severity": "low",
+    "where": "src/server/groups.ts asMember (line 434)",
+    "detail": "Probe2 block N: audit and certificate show 'Viewed | Ben Ortiz, for HR team <ben...>' for members who only looked, while Maya signed. Fix: 'member of HR team' for non-holders."
+   },
+   {
+    "title": "Check page treats a removed member's code as a live request",
+    "severity": "low",
+    "where": "src/server/groups.ts memberForCode (lines 646-650), src/server/routes-trust.ts /public/check",
+    "detail": "Probe2 block G: removed Maya's security code answers genuine, status 'sent', for_name Maya and her url, with nothing saying she was taken off. Fix: answer replaced/removed when removed_at is set."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md 'Signing groups' bullet and the builder's report (REMINDERS decision)",
+    "claim": "Reminders go to each member who can still act (not to one who turned them off or whose email came back).",
+    "reality": "Also go to a member who marked our email as spam, while the sender is emailed 'we no longer email them about this document: no reminders'. Probe1 block A."
+   },
+   {
+    "where": "src/lib/policy.ts GROUP_RULE (Contacts page and help) and README 'one signature ... like one person'",
+    "claim": "A group that signs uses one signature, like one person.",
+    "reality": "Unlike one person, the sender signing for a group they are in under their own name and address uses a signature; signing directly is free. Probe1 block D."
+   },
+   {
+    "where": "Builder's report, BOUNCES decision",
+    "claim": "A member's bounce: the sender is told whose address it was and to fix it with Edit envelope.",
+    "reality": "Only while nobody has taken it on. For the member who took it on, the sender is told to use Correct, which answers 400 for a group. Probe1 block B."
+   },
+   {
+    "where": "src/components/editor/GroupRecipient.tsx MembersEditor note, and src/server/openapi.ts Recipient.members",
+    "claim": "When you save, someone you add is emailed their own link (openapi: 'at once').",
+    "reality": "Not emailed at all while a colleague has it; when the same save changes the document, their first email is 'Updated: ... Please look at it again'. Probe4 block 1, probe3 block 1."
+   },
+   {
+    "where": "src/components/sender/GroupMembers.tsx toast after Give back",
+    "claim": "Given back to HR team. Every member was emailed their link.",
+    "reality": "While the account is paused (or the envelope reads like a fake notice) nobody is emailed; only the audit says so. Probe4 block 3."
+   },
+   {
+    "where": "Builder's report, abuse list",
+    "claim": "Hand back repeated to flood colleagues' inboxes: 3 a day per recipient (tested).",
+    "reality": "The count is limited, but the note typed with each hand-back goes unfiltered into every colleague's inbox under the sender's name (a lure refused elsewhere goes through), and the shared count locks out a different member who took it on. Probe1 block F, probe4 block 4."
+   },
+   {
+    "where": "Builder's report, left open",
+    "claim": "A member typing the access code wrong on purpose freezes it for the whole group until the sender sets a new one.",
+    "reality": "Understated: a member whose link is 'taken' and who can do nothing with the document can freeze it for the colleague who is signing, and also use up the group's two code requests so that colleague gets 429. Probe2 block O."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Mail provider complaint and bounce events: I sent the normalized shape {type, email} to /api/mail/events. A real provider (SES, Postmark and the like) also names the address the complaint is about, so recipientsOf() finds no row for a group member either way and the same gap appears. I am fairly sure (high), because the lookup falls back to the address and a group row's address is empty until someone takes it on.",
+   "Whether a URL in the hand-back note becomes clickable depends on the reader's mail program. Gmail, Outlook and Apple Mail turn bare URLs in HTML text into links, so I am fairly sure (medium-high) the lure in probe1 F would be clickable in most inboxes. The phone number and amount reach the inbox whatever the mail program does.",
+   "The races were run in one Node process. The take-on and the finish are single conditional UPDATEs, so two processes on the same SQLite file should behave the same, but I could not run several server processes here (medium confidence).",
+   "Payment: I only checked the signature ledger with STRIPE_SECRET_KEY set to a fake value. No payment provider call is involved in the group money rules, so the stripe fake was not needed."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/01-contacts-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/02-contacts-change-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/03-envelope-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/04-editor-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/05-sign-open-ben-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/06-sign-taken-ben-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/07-sign-taken-asked-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/08-sign-mine-maya-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/09-sign-menu-maya-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/10-sign-handback-dialog-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/11-sign-decline-dialog-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/12-envelope-taken-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/13-envelope-taken-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-groups/14-editor-correcting-390.png"
+  ]
+ },
+ "verify:logic": {
+  "checks": [
+   {
+    "item": "Formula parser never runs code and cannot hang the server with one formula (deep nesting, huge numbers, long input, odd characters)",
+    "holds": true,
+    "evidence": "tests/out/verify-logic/probe1-pure.ts: 500 characters of '1+1+...' parse in 3 ms; 21 nested sum() refused; 101 refs refused; a 499-digit literal gives 'too large'; emoji, fullwidth and Arabic digits, '**', quotes, constructor are refused in words. No eval or Function anywhere in src/lib/logic.ts. Separate low issue: a chain of 1500 formula fields gives a 500 (see new_bugs)."
+   },
+   {
+    "item": "Server ignores a lying browser: hidden required field and calculated value on save and on Finish",
+    "holds": true,
+    "evidence": "probe4-nosig.ts angle 3: save with Total '1' stores '18' (2 seats x 9); unticking without resending the name clears the stored 'Acme' to null. Author test 'the server decides' covers Finish. This holds for ordinary fields; the signature requirement does NOT hold (next item)."
+   },
+   {
+    "item": "A signer cannot finish without a signature that is on the page (hiddenAfter and settleLogic agree)",
+    "holds": false,
+    "evidence": "probe4-nosig.ts angle 1: signature 'Sign here' shown when attachment 'Signed paper copy' is empty. POST /sign/:t/complete {values:{<attachment>:'file_doesnotexist', <sig>:'1'}} with no signature_png -> 200, envelope 'completed', audit 'Signed', field 'Sign here'='1', recipients.signature_png=null. Angle 2 (another person's saved, unfinished Price makes hiddenAfter think the total is 1500 while settleLogic uses 0) -> same 200 with no image.",
+    "still_broken": "hiddenAfter (src/server/logic.ts:166) works visibility out from the raw body (asStored keeps a made-up attachment id that applyValues drops) and from other people's unfinished values (settleLogic nulls them). The Adopt-a-signature check uses the first, the stored result uses the second.",
+    "suggested_fix": "In completeRecipient, decide needsSig/needsIni after applyValues inside the tx from the set settleLogic returns (hidden), and check okImage there; or make hiddenAfter build its view exactly as settleLogic does (null unfinished others, same attachment check as applyValues). Add a test with a made-up attachment id and with a saved, unfinished cross-person input."
+   },
+   {
+    "item": "A formula never reveals another person's answer before they finish",
+    "holds": false,
+    "evidence": "probe5-oracle.ts: Bi saves Price 437 (not finished). Al's own signature is shown when his Total ({Quantity} * {Price}) is under 1000. Al sends Finish with no signature and varying Quantity: 'Adopt a signature before finishing.' when q*437 < 1000, 'A required field is still empty: Buyer signs (under 1000).' otherwise. 60 refused Finish requests gave '437.00'. Al stays 'viewed'; no audit line, no rate limit.",
+    "still_broken": "hiddenAfter uses other people's stored values without nulling unfinished ones, so its answer depends on their private input.",
+    "suggested_fix": "Same view as settleLogic in hiddenAfter (value null for f.recipient_id !== r.id && !f.readonly && not completed). Consider rate limiting refused Finish calls per recipient."
+   },
+   {
+    "item": "The signed PDF prints only what was shown, with the calculated values",
+    "holds": false,
+    "evidence": "probe2-reread.ts: Litres 3 x Price per litre 0.411 = Total stored as text '1.233'. At Finish the server worked out 1.233 (signature 'Sign for a small order' shown, 'Freight terms' hidden). The completed PDF is built through hiddenOf, which re-reads the stored text '1.233' with readNumber as 1233: page 1 of the signed PDF has 0 images (Bea's signature is missing) and prints 'FREIGHT SURCHARGE 250 APPLIES', the hidden field's sender wording. Sender progress after completion: {fields:3, filled:2, required_left:1}.",
+    "still_broken": "formatNumber writes a 3-decimal result as '1.233' or '1,233' (dec ','), which readNumber reads as thousands when no hint is given (src/lib/logic.ts:114-116). Every later reader of the stored calculated text (hiddenOf for pdf.ts, fieldProgress, hiddenFor; another person's formula; the signing page's others) gets 1000x.",
+    "suggested_fix": "Store the calculated number unambiguously alongside the text (a calc_num column, or JSON {n, text}), and make workOut's stored path use that number instead of readNumber(f.value). At the least, pass the envelope's decimal mark as hint when re-reading a calculated field. Add a test: 3 x 0.411 with a rule on the total, check the PDF images and text."
+   },
+   {
+    "item": "Number notations in and out (1.234,56, Indian grouping)",
+    "holds": false,
+    "evidence": "probe1-pure.ts: reading 1.234,56 / 1 234,56 / 1'234.56 / 1,23,456 / 12,34,567.50 / Arabic and Devanagari digits works, and 1,23,456 x 1000 writes '12,34,56,000'. But: {q}*{p} with 1,5 x 0,822 writes '1,233' and reads back 1233; round(..., 3) of 2.4689 writes '2.469', reads back 2469. probe2: Ben's Grand total = {Ann's Total '1.233'} * 2 is stored and signed as 2466, not 2.466; his screen note says \"'Total' (1.233) is read as 1233\". Also '\ud835\udfd9\ud835\udfd8\ud835\udfd8' (mathematical double-struck digits, accepted by NUMBER_RULE) reads as 0 because asciiDigit stops counting back at 10.",
+    "still_broken": "See the PDF item; plus asciiDigit for scripts whose digit blocks touch another digit block.",
+    "suggested_fix": "As above for calculated values. For asciiDigit use the Unicode digit value (for example a lookup by codepoint ranges from \\p{Nd} starts, or NFKC normalize first: '\ud835\udfd9'.normalize('NFKC') is '1')."
+   },
+   {
+    "item": "What a signer sees for a calculated field is what is signed (parallel signing)",
+    "holds": false,
+    "evidence": "probe3-parallel.ts and browser look.cjs at 390x844: Vic opens the page while Una has not finished; his screen shows Amount due 0. Una finishes with 40 hours; content_version does not move and Vic's page still shows 0 after 3 s (02-vic-phone-after-una.png). Vic presses Finish with rate 20: 200 and 'Amount due' stored and printed as 800. With rate 50 the server refuses: 'A required field is still empty: Approval reference for amounts over 1000.' for a field that is not on his screen; the page answers '... Go back, put it right, then finish again.' and does not reload.",
+    "still_broken": "A later Finish of an input's owner changes another open screen's total without telling it.",
+    "suggested_fix": "When settleLogic changes a calculated value or a visibility of a recipient who is open on the page (not completed), bump a per-recipient version (or content_version) so Finish returns 409 'changed' and the page reloads; or at Finish compare the server's calculated values with the browser's shown values and refuse with code 'changed' when they differ."
+   },
+   {
+    "item": "Loops through three fields and through another person are refused when saved",
+    "holds": true,
+    "evidence": "probe1: loopsIn finds a,b,c. probe7-misc.ts: Ann extra shown when Ann total > 5; Ann total = {Ben number}; Ben number = {Ann extra} + 1 -> 400 logic_loop naming all three."
+   },
+   {
+    "item": "Sign-again after a rule or formula change",
+    "holds": true,
+    "evidence": "Author tests pass (23/23). printedView/seenView/askView are computed live, not stored, so rows from before this work do not look changed. Nit in new_bugs: the editor predicts sign-again for a rule value with a trailing space that the server trims."
+   },
+   {
+    "item": "Templates, copies, bulk send and public forms carry rules and formulas; a bulk row cannot slip a lure into a field",
+    "holds": true,
+    "evidence": "Author test covers template, clone, public form and bulk. probe6-channels.ts: a bulk row with fields {Notes: 'Call PayPal billing on 1 888 555 0142'} on a 'Your PayPal invoice' template gets row error and 0 emails; a phone number as a number field value too; a correction whose show_when.value carries the lure gets 422 and no emails. The 3-decimal issue applies to all of these."
+   },
+   {
+    "item": "API key path accepts show_when and formula and ignores value/required/readonly for a calculated field",
+    "holds": true,
+    "evidence": "probe6 A: POST /envelopes with Bearer tsk_ key, Total formula with value 999, required and readonly -> stored value null, required 0, readonly 0, formula by id."
+   },
+   {
+    "item": "Screens at 390x844",
+    "holds": false,
+    "evidence": "Signing page: no horizontal scroll (scrollWidth 390). Editor: look-editor.cjs with a 60-character number label (limit is 120): the 'Calculate from...' panel is 426 px wide inside a 390 px screen; text and the field chip are cut off (04-editor-formula-phone.png). Builder's own screenshot used short labels.",
+    "suggested_fix": "min-width:0 on the .ed-logic grid (gridTemplateColumns 'minmax(0,1fr)'), white-space:normal and overflow-wrap:anywhere on the chip buttons and on .ed-logic-says."
+   },
+   {
+    "item": "Signer-facing text names fields as people know them",
+    "holds": false,
+    "evidence": "Browser 01-vic-phone-total.png: \"Worked out for you from 'a field' x 'Rate'. With fld_GS9AoeCOLMzazeck 0, Rate 50, that comes to 0. Empty fields count as 0.\" The input Hours belongs to Una, who has not finished, so it is not in 'others' and liveLogic falls back to the raw id.",
+    "suggested_fix": "Send id, label and type of every field a formula of this recipient uses in GET /sign (value null until finished), or have the server send the calc_note; never print the id."
+   },
+   {
+    "item": "No em dashes in the new text",
+    "holds": true,
+    "evidence": "grep for U+2014 in src/lib/logic.ts, src/server/logic.ts, src/components/editor/FieldLogic.tsx, src/components/sign/logic.ts, src/components/sender/fieldColumns.ts, tests/logic.test.ts, openapi show_when/formula lines: none."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Calculated results with three decimals are stored as '1.233' and read back as 1233: signature missing from the signed PDF, hidden wording printed, other people's totals 1000x off",
+    "severity": "high",
+    "where": "src/lib/logic.ts readNumber (lines 109-117) used on stored text in workOut when stored() is true; src/server/logic.ts hiddenOf; src/server/pdf.ts:595; settleLogic for other people's calculated inputs",
+    "detail": "Steps (tests/out/verify-logic/probe2-reread.ts): one signer; Litres (number); Price per litre readonly '0.411'; Total formula {Litres} * {Price per litre}; signature shown when Total less_than 1000; text 'Freight terms' (sender wording 'FREIGHT SURCHARGE 250 APPLIES') shown when Total more_than 1000. Signer finishes with 3 litres and a signature: 200. Stored Total '1.233'. hiddenOf on the stored fields returns ['Sign for a small order']. Signed PDF page 1: 0 images, text includes 'FREIGHT SURCHARGE 250 APPLIES'. Sender progress after completion: required_left 1. Second angle: Ann's Total '1.233' is used by Ben's {Total} * {Deliveries} with 2: stored and signed '2466'. Same with comma notation (1,5 x 0,822 -> '1,233' -> 1233) and round(x, 3). Fix: keep the exact number of a calculated field (separate column or JSON) and use it whenever the field is read as stored; never re-parse the display text without the envelope's hint. Test the PDF images, not only its text."
+   },
+   {
+    "title": "Signer finishes 'Signed' with no signature image when the Finish check and the stored result disagree on visibility",
+    "severity": "high",
+    "where": "src/server/logic.ts hiddenAfter (asStored, no nulling of unfinished others) vs settleLogic; src/server/envelopes.ts completeRecipient needsSig",
+    "detail": "Steps (probe4-nosig.ts angle 1): signature 'Sign here' shown when attachment 'Signed paper copy' is empty. POST /api/sign/<token>/complete {\"values\":{\"<attachment id>\":\"file_doesnotexist\",\"<sig id>\":\"1\"}} without signature_png. Result: 200, envelope completed, audit 'Signed', field value '1', recipients.signature_png null; drawField prints nothing there. hiddenAfter kept the made-up file id (signature hidden, so no image demanded); applyValues dropped it, settleLogic then showed the signature and accepted the '1'. Angle 2: another person's saved but unfinished input does the same through a calculated field. Fix: decide the signature requirement from the hidden set settleLogic returns inside the tx, or build hiddenAfter's view exactly like applyValues + settleLogic."
+   },
+   {
+    "title": "Another person's unfinished answer can be read out through Finish error messages",
+    "severity": "medium",
+    "where": "src/server/logic.ts hiddenAfter; src/server/envelopes.ts completeRecipient",
+    "detail": "Steps (probe5-oracle.ts): Al's Total = {Quantity} * {Price}, Price is Bi's; Al's signature shown when Total less_than 1000. Bi saves Price 437 and does not finish. Al calls complete with only Quantity and no signature: 'Adopt a signature before finishing.' if q*437 < 1000, else 'A required field is still empty: Buyer signs (under 1000).' A bisection of 60 calls gives 437.00. Nothing is written to the audit trail and nothing limits the calls. Contradicts openapi 'A field of someone else only counts once that person has finished'. Fix: null unfinished other people's values in hiddenAfter as settleLogic does; rate limit refused Finish calls."
+   },
+   {
+    "title": "Open signing page shows a total that is not the one signed when another person finishes meanwhile; Finish refused for a field not on the screen",
+    "severity": "medium",
+    "where": "src/server/logic.ts settleLogic (acting Finish recomputes with newly finished inputs); src/app/sign/[token]/page.tsx (no reload on that 400)",
+    "detail": "Steps (probe3-parallel.ts, look.cjs): unordered envelope; Una has Hours; Vic has Rate and Amount due = {Hours} * {Rate}, plus 'Approval reference' shown when Amount due more_than 1000. Vic opens the page (Amount due 0). Una finishes with 40. Vic's page still shows 0 (browser, after 3 s). Vic finishes with rate 20: 200, Amount due stored and printed under Vic as 800. With rate 50: 400 'A required field is still empty: Approval reference for amounts over 1000.', and the page says 'Go back, put it right, then finish again.' though the field is not on it. Fix: when settleLogic changes a calculated value or visibility for an open recipient, make their next Finish answer 409 code 'changed' (or compare the shown calculated values sent with Finish), so the page reloads and shows the new total."
+   },
+   {
+    "title": "Signer sees a raw field id and 'a field' in the calculated field's note",
+    "severity": "low",
+    "where": "src/components/sign/logic.ts liveLogic/calcNote with others filtered by value in src/server/routes-sign.ts",
+    "detail": "Browser at 390x844 (01-vic-phone-total.png): \"Worked out for you from 'a field' x 'Rate'. With fld_GS9AoeCOLMzazeck 0, Rate 50, that comes to 0.\" The input belongs to someone who has not finished, so GET /sign does not include it in others. Fix: send label and type (no value) of every field this recipient's formulas use, or build the note on the server."
+   },
+   {
+    "title": "Editor 'Calculate from...' panel is clipped at 390 px with a long field label",
+    "severity": "low",
+    "where": "src/components/editor/FieldLogic.tsx (BOX grid, CHIPS, chip buttons)",
+    "detail": "look-editor.cjs: a 60-character number label (limit 120). At 390x844 the panel's paragraphs, input and the 'Worked out as' sentence end at x=426; text such as 'Required' and 'round brackets' is cut (04-editor-formula-phone.png). Page itself does not scroll sideways, so the cut text cannot be reached. Fix: gridTemplateColumns 'minmax(0,1fr)' / minWidth 0, and allow chip text to wrap."
+   },
+   {
+    "title": "Two fields in one place whose rules compare the same number written two ways are both shown",
+    "severity": "low",
+    "where": "src/lib/logic.ts neverTogether (fold compares text, holds compares numbers)",
+    "detail": "probe7-misc.ts: Pallet terms shown when Qty equals '1.000', Crate terms shown when Qty equals '1000', same x/y. Save and send accepted (neverTogether says never together). Signer types 1000: both shown, both required, Finish answers 'A required field is still empty: Pallet terms.' while on the document view one box covers the other. Same for '5' and '5.0'. Fix: for a number parent compare readNumber values in neverTogether."
+   },
+   {
+    "title": "Both radio buttons of one group can be chosen, so both conditional branches show and print",
+    "severity": "low",
+    "where": "src/server/envelopes.ts applyValues (pre-existing, made worse by rules on radio buttons)",
+    "detail": "probe4 angle 3: complete with values Monthly '1' and Yearly '1' plus both terms fields: 200, stored Monthly '1', Yearly '1', 'Monthly terms' 'M', 'Yearly terms' 'Y'. Fix: in applyValues, when a radio is '1', set the others of its group to ''."
+   },
+   {
+    "title": "A long chain of formula fields answers 500; a stack overflow is swallowed as 'cannot be read'",
+    "severity": "low",
+    "where": "src/lib/logic.ts workOut astOf (catch around parseFormula), loopsIn recursion",
+    "detail": "probe8-chain.ts: 1300 chained number fields save (200), 1500 answer 500 'Something went wrong on our side' (RangeError). In probe1, a 2000 chain outside a request gives f0 \"'number' cannot be worked out\" because astOf catches the RangeError as an unreadable formula. Only the sender's own envelope is affected. Fix: refuse a dependency depth over, say, 200 in saveLogic with a plain message; catch only FormulaError in astOf."
+   },
+   {
+    "title": "Number literals over 15 digits in a formula are not refused, and 999999999999999.9 prints with 16 digits",
+    "severity": "low",
+    "where": "src/lib/logic.ts tokens/evaluate/formatNumber",
+    "detail": "probe1: '12345678901234567 - 12345678901234566' gives 2 (true answer 1); inputs of more than 15 digits are refused but literals are not. '999999999999999.9 * 1' gives text '1000000000000000' while 10^15 is said to be refused. Fix: apply MAX_DIGITS to literals; check the rounded value against 10^15."
+   },
+   {
+    "title": "Editor predicts a sign-again that the server will not ask for (rule value with a trailing space)",
+    "severity": "low",
+    "where": "src/lib/logic.ts ruleOf/logicKey (no trim) vs src/server/logic.ts saveLogic (trims value)",
+    "detail": "probe7: signsAgain(base, edited) with value 'Gold ' vs stored 'Gold' returns ['Ann']; the server stores 'Gold' and the logicKey is unchanged. Fix: trim value in ruleOf."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md lines 211-213 and the 'What the bad reviews taught us' row (line 159)",
+    "claim": "the signed PDF prints only what was shown, with the calculated values; a hidden field ... prints nothing",
+    "reality": "With a calculated total of three decimals the signed PDF drops a signature the signer gave and prints a field that was hidden at signing (probe2-reread.ts: 0 images, 'FREIGHT SURCHARGE 250 APPLIES' printed)."
+   },
+   {
+    "where": "research/continue.json build:logic item 3",
+    "claim": "completeRecipient asks hiddenAfter, so a signature field hidden by the signer's own answer is not demanded",
+    "reality": "hiddenAfter and settleLogic can disagree, and then a signature that is on the page is not demanded either: completed with no signature image (probe4-nosig.ts)."
+   },
+   {
+    "where": "research/continue.json build:logic item 3 and src/server/openapi.ts formula description",
+    "claim": "Someone else's answer counts in a formula only after that person has finished / A field of someone else only counts once that person has finished",
+    "reality": "The Finish check counts another person's saved, unfinished answer, and its two error messages reveal it (probe5-oracle.ts: 437.00 from 60 calls)."
+   },
+   {
+    "where": "research/continue.json build:logic item 2 and README",
+    "claim": "The result keeps the decimal mark and grouping of its inputs (1.234,50 stays in that style)",
+    "reality": "It is written that way, but a 3-decimal result such as '1.233' or '1,233' is read back as 1233 by every later reader, so it does not stay the same number."
+   },
+   {
+    "where": "research/continue.json build:logic item 4",
+    "claim": "Checked in a browser: ... editor on desktop and phone",
+    "reality": "Only with short labels. A 60-character label clips the 'Calculate from...' panel at 390 px (04-editor-formula-phone.png)."
+   },
+   {
+    "where": "tests/integrity promise 'What people sign is what they saw' as applied to formulas (README line 212: 'a result never changes after its signer has finished')",
+    "claim": "The signer signs the result they saw",
+    "reality": "In unordered signing Vic's screen showed 0 and 800 was signed under his name because Una finished while his page was open (probe3-parallel.ts)."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "No outside service is involved in this feature. The 'no signature image' result rests on pdf.js's operator list (paintImageXObject count on page 1 of the signed PDF) plus drawField returning early when recipients.signature_png is null; I am confident in both because the code path is direct and the PDF text shows the hidden wording printed at the same time.",
+   "The 1500-field 500 depends on Node's default stack size; another host or flag would move the threshold but not remove it."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-logic/01-vic-phone-total.png (raw field id in the calculated note, 390x844)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-logic/02-vic-phone-after-una.png (still 0 after the other person finished)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-logic/03-bea-phone-total.png and 03a-bea-after-continue.png (Total 1.233 on screen, freight terms hidden)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-logic/04-editor-formula-phone.png (editor panel clipped at 390 px with a long label)",
+   "Probes: /home/user/treegens-app/sign-and-grow/tests/out/verify-logic/probe1-pure.ts, probe2-reread.ts, probe3-parallel.ts, probe4-nosig.ts, probe5-oracle.ts, probe6-channels.ts, probe7-misc.ts, probe8-chain.ts, look.cjs, look-editor.cjs"
+  ]
+ },
+ "verify:witness": {
+  "checks": [
+   {
+    "item": "1. Role tied to one signer, asked straight after that signer whatever the order, holds nobody up",
+    "holds": true,
+    "evidence": "tests/witness.test.ts passes 18/18 (re-run today). My probes (tests/out/verify-witness/probe1.ts, probe3.ts A) agree: an ordered deed Ann(1), witness, Ben(2): witness stays pending and unmailed until Ann finishes, Ben is asked at once. A pending witness calling witness-statement, not-present, complete, save, decline, reassign or name gets 400 'It is not your turn yet' (consent alone answers 200, same as any pending person)."
+   },
+   {
+    "item": "2. Money: a witness never holds or uses a signature",
+    "holds": true,
+    "evidence": "probe4.ts with credits on (stripe-fake): deed Ann+witness+Ben reserves 2, ledger welcome3 signature-1 signature-1 after all three finish; send with 1 available answers 402 'This needs 2 signatures' (witness not counted); own deed with a witness sends at 0 available; Correct on a witness at 0 available answers 200; turning a pending witness into a signer at 0 available answers 402; public form whose visitor names a witness uses exactly one signature (visitor's Finish), none at the witness's Finish."
+   },
+   {
+    "item": "Money, other direction: a 'witness' cannot be used as a free party",
+    "holds": false,
+    "evidence": "probe4.ts D: sender signs her own document (free) and adds 'Carl Customer' as witness with a required text field 'Amount you agree to repay' and an initials field; sends with 0 signatures available: 200. Carl completes free (after ticking the statement). The builder disclosed this as open decision (c).",
+    "still_broken": "Known and disclosed, not decided.",
+    "suggested_fix": "Limit a witness's fields to the five WITNESS_BLOCK types (signature, full_name, text labelled address/occupation, date_signed) in witnessProblem, or count a witness whose signer is the sender's own free signature."
+   },
+   {
+    "item": "3. The signer names the witness on the review screen, with the paragraph on who may witness; the sender's own choice is respected",
+    "holds": false,
+    "evidence": "Naming works (probe4 H, look.cjs screens). But probe3.ts D: deed with sender-chosen Will; Ann signs; Will says 'not there' (notPresent sets named_by_signer=1 for good); sender uses Correct to put Vera Valid; sender then changes the document with resign:true; Ann's page shows may_name=true and POST /sign/{ann}/witness {Mallory Mate} answers 200, Vera is replaced, sender gets no email. probe7.ts: cloning that envelope (what the sender is told to do: 'void and send again') gives a copy whose witness is 'Witness for Ann Signer', email '', named_by_signer=1, so the sender's choice of Will is gone.",
+    "still_broken": "named_by_signer stays 1 after 'not there' even after the sender chose again.",
+    "suggested_fix": "Do not overwrite named_by_signer in notPresent; keep a separate flag (e.g. signer_may_rename) that witnessCorrected and saveWitnesses clear when the sender names a witness, and have copyWitnesses use the sender's original choice. Email the sender whenever the signer replaces a witness the sender named."
+   },
+   {
+    "item": "4. Witness first screen: own statement to tick, then sign; stale statement refused",
+    "holds": true,
+    "evidence": "Screenshots tests/out/verify-witness/phone-04-witness-first.png and desk-04: kicker, statement in a blockquote, tick 'This is true. I make this statement as my own.', Continue and 'I was not there' (54px). Finish without statement 400 statement_needed (test). Two statement POSTs at once: 200,200 with one audit line (probe6 D)."
+   },
+   {
+    "item": "5. 'I was not there' tells the signer and the sender",
+    "holds": false,
+    "evidence": "probe3.ts B: signer Ann with link_by_sender (no email). Ann signs, witness POSTs not-present. No email goes to Ann (notPresent skips a signer without email or with complained_at), but the sender's email says 'We told Ann Signer, who can name another witness from their signing link.' and the witness's screen (Witness.tsx WitnessFirst) says 'We told Ann Signer and Sam Sender'. openapi witness_absent_at says 'the signer and the sender are emailed'.",
+    "still_broken": "False promise for signers with no address, a spam complaint, or a bounce.",
+    "suggested_fix": "Return from notPresent whether the signer was emailed and word the sender's email and the witness screen from it ('Ann has no email address with us; pass on her link or name another witness with Correct')."
+   },
+   {
+    "item": "6. No sentence suggests the product checked the witness was in the room or that a witnessed deed is valid",
+    "holds": true,
+    "evidence": "Read src/lib/witness.ts, src/server/witness.ts, Witness.tsx, WitnessChoice.tsx, WitnessFacts.tsx, help/witness.tsx, openapi witness entries, emails captured in probe8.ts. Nothing claims validity; help says check first, sign on paper if in doubt, not legal advice. No em dash or en dash in any witness text (grep)."
+   },
+   {
+    "item": "7. The honesty sentence is shown everywhere a witness is offered, as the report claims (including the witness emails)",
+    "holds": false,
+    "evidence": "probe8.ts: the witness request email text has no 'cannot check' sentence (witnessMailLines has three lines, none is WITNESS_RECORDS); the signer's 'Your witness was not there' email has WHO_MAY_WITNESS but not WITNESS_RECORDS. Signer's done screen box 'Your witness' (phone-03-signer-done.png) and WitnessNotice for the signer also lack it. Builder report: 'shown ... in the witness emails'.",
+    "suggested_fix": "Append WITNESS_RECORDS to witnessMailLines and to the not-there email to the signer."
+   },
+   {
+    "item": "8. Certificate and audit trail list the witness under the signer they witnessed, with statement and time",
+    "holds": false,
+    "evidence": "Normal path holds (test). probe1.ts A: Ann signs, Will witnesses (completed), Ben pending. Sender PUTs Ann -> 'Alice Other' <alice.other@...> with resign:true: 200. Will stays status completed with statement 'I was physically present and saw Ann Signer sign this document on 2026-11-20.' and is never emailed again. Alice signs, Ben signs, envelope completes. Certificate: 'Will Witness ... Witness for Alice Other Their statement \"I was physically present and saw Ann Signer sign...\"'. probe1.ts B: same with another name at Ann's address. probe1.ts C: after Will completed, PUT changing only witness_for to Ben, no resign: 200, no audit line; certificate prints 'Witnessed by Will Witness' under Ben and 'Witness for Ben Second' with the statement about Ann.",
+    "still_broken": "A completed witness survives the set-aside of the signature they saw, and their witness_for can be moved after they finished.",
+    "suggested_fix": "In correctEnvelope, add every completed witness whose signer is in `again` or whose signer changed person to `again` (setAside, status pending, clear witness_statement/said_at/saw/marks). In writeContent's doneIds `same` check, include witness_for so moving a finished witness needs resign; or refuse it in saveWitnesses for a completed witness."
+   },
+   {
+    "item": "9. Same address / same device marked and the sender told",
+    "holds": false,
+    "evidence": "Address and same-browser marks work (probe2 A and C: marks=address,device). But 'same device' is only the same browser cookie; help, README and MARK_WORDS say 'same device'. probe2.ts E: sender-named witness 'Ann Signer' at another address, finished from another browser: sent, marks=null, no 'Check the witness' email. The signer's exact own name is refused only when the signer types it (probe2 F), and an accented spelling '\u00c1nn Signer' passes.",
+    "suggested_fix": "Add a 'name' mark when samePerson(witness.name, signer.name); say 'same browser' in help/README or change MARK_WORDS.device to 'same browser as the signer'."
+   },
+   {
+    "item": "10. A witness who is the signer is refused",
+    "holds": false,
+    "evidence": "probe2.ts A: POST /envelopes/{id}/correct {recipient_id: witness, name:'Ann Signer', email: Ann's} answers 200 (the editor refuses the same state with 400, and from then on every editor save is refused). probe5.ts B: same with an API key: 200. probe2.ts B: Correct on Ann to the witness's name and address: 200. probe2.ts C: Ann reassigns to her own witness Will: 200; Will signs as signer, then witnesses himself; statement 'saw Will Witness sign'. openapi says sending refuses 'a witness who is the signer'.",
+    "suggested_fix": "Run witnessProblem for the changed row (and its witness/target) in correctRecipient/correctWithCheck and in reassignRecipient (refuse passing on to one's own witness)."
+   },
+   {
+    "item": "A party to the document as witness",
+    "holds": false,
+    "evidence": "probe2.ts D: sender names Ben Second (who signs) as Ann's witness at Ben's address: send 200, Ben witnesses, marks=null. The signer naming Ben is refused (probe2 F). WHO_MAY_WITNESS says not a party.",
+    "suggested_fix": "Refuse or mark in witnessProblem when the witness's address and name match another signer/approver on the envelope."
+   },
+   {
+    "item": "11. Declining and reassigning for the role",
+    "holds": true,
+    "evidence": "Test: witness decline/reassign 400 pointing to 'I was not there'; signer decline never emails the witness; a signer-named witness is forgotten on pass-on. My race probe6 D: Finish and not-present at once: 200,400, witness completed, not absent."
+   },
+   {
+    "item": "12. Reminders, not-opened alert, expiry warning",
+    "holds": false,
+    "evidence": "Reminders and the not-opened alert hold (test). probe5.ts C: Ann and Ben signed, witness said 'not there', expiry 2 days away, cronTick: the sender's 'Expires soon' email says 'Still waiting on nobody.' though the envelope cannot complete without a witness.",
+    "suggested_fix": "In the expiry warning, list a pending witness with witness_absent_at (or an unnamed one) as 'a witness for Ann Signer (not named yet / said not there)'."
+   },
+   {
+    "item": "13. Corrections: changing a pending witness after the signer signed does not ask her to sign again",
+    "holds": true,
+    "evidence": "Test plus probe3 D (Correct to Vera 200, Ann stays signed). Printed change with resign takes a completed witness back (probe1.ts D)."
+   },
+   {
+    "item": "14. Templates, bulk and public forms",
+    "holds": true,
+    "evidence": "probe4.ts H: form from a template with a signer-named witness: start 200, visitor names Wanda 200, visitor Finish 200, Wanda emailed, witness Finish 200, envelope completed, one signature used. probe6.ts B: bulk row naming the giver as her own witness is refused for that row only, the other row sent."
+   },
+   {
+    "item": "15. Groups and witnesses together",
+    "holds": true,
+    "evidence": "probe6.ts A: a deed with a group signer and a witness for an individual sends; turning Ann into a group after sending, or making the witness a group, answers 400. Wording glitch: 'A witness is one named person, and A witness is a group.'"
+   },
+   {
+    "item": "16. Privacy: the device fingerprint is used for nothing else",
+    "holds": false,
+    "evidence": "probe5.ts A: GET /envelopes/{id} (sender API) returns device_hash for the signer. Pat signs a deed of account Alma and a deed of account Bert in one browser: both senders see the same device_hash 0972533a...; Quinn, a different person on a third envelope in the same browser, has the same value. The ts_dev cookie lasts 400 days and no public page mentions it. Comment in witness.ts: 'Nothing else reads it.'",
+    "suggested_fix": "Strip device_hash (and witness_saw) in publicEnvelope; key the HMAC per envelope (hmac(`device:${e.id}:${dev}`)) so it cannot link people across envelopes or accounts; describe the cookie on /security."
+   },
+   {
+    "item": "17. Stranger's text into someone's inbox under our name",
+    "holds": false,
+    "evidence": "probe3.ts C: witness POSTs not-present with note 'Your signature was rejected by the bank. Verify your account now at http://secure-login.example/verify or call +1 800 555 0199 to avoid a $450 fee.'; Ann's email 'Your witness was not there' (sender's name, reply-to sender) carries it verbatim. probe9.ts: on a free account, a signer names a witness 'PayPal Billing call +1 800 555 0199 re $499 charge': 200 (same words as a subject answer 422); the lure then sits in the heading of the sender's 'Witness was not there' email.",
+    "suggested_fix": "Do not forward the note to the signer (keep it for the sender and the audit trail), or run lureIn on it and drop links; pass the typed witness name as `extra` to emailRefusal in nameWitness."
+   },
+   {
+    "item": "18. Screens at 390x844 and desktop",
+    "holds": true,
+    "evidence": "Dev server :3592, Playwright (look.cjs, editor.cjs): signer first screen, signer done, witness first screen with the not-there panel, envelope page, /help#witness, editor witness choice: 0px horizontal overflow at 390 and 1280; witness buttons 54px, tick label 50px, editor select 44px; no console errors. Server stopped, .next-verify-witness and data dir removed."
+   },
+   {
+    "item": "19. Completed copy and Find my documents",
+    "holds": true,
+    "evidence": "Test covers. probe5.ts E: a witness the signer named (never chosen by the sender) gets 'Completed: Deed of gift' and can download the whole completed deed (200, 30636 bytes). Works as built; whether a signer-chosen stranger should get every party's completed copy is a decision for the owner."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "A finished witness survives when the signature they saw is set aside; certificate states a false witnessing",
+    "severity": "high",
+    "where": "src/server/envelopes.ts correctEnvelope (again = done.filter(printed || touched)) and src/server/witness.ts settleWitnesses (only sent/viewed witnesses)",
+    "detail": "Steps (tests/out/verify-witness/probe1.ts A): deed Ann, witness Will, Ben; Ann finishes; Will ticks and finishes; sender PUT /envelopes/{id} with Ann renamed 'Alice Other' at a new address and resign:true -> 200. Will stays 'completed', is not emailed. Alice and Ben finish; envelope completes. Certificate: 'Will Witness ... Witness for Alice Other ... Their statement \"I was physically present and saw Ann Signer sign this document on 2026-11-20.\"'. Same with another name at Ann's address (probe1 B). Fix: when a signer is in `again` or passes to another person, put their completed witness in `again` too (setAside, pending, clear statement/saw/marks) so the witness is asked after the new signature."
+   },
+   {
+    "title": "A finished witness can be moved to another signer without resign or audit",
+    "severity": "high",
+    "where": "src/server/envelopes.ts writeContent doneIds `same` check (role/name/email/routing_order only) plus saveWitnesses running for done rows",
+    "detail": "probe1.ts C: after Will witnessed Ann, PUT /envelopes/{id} changing only the witness's witness_for to Ben -> 200, no 'sign_again', no audit line. Ben finishes; certificate shows 'Witnessed by Will Witness, listed next' under Ben and 'Witness for Ben Second' with a statement about Ann. Fix: compare witness_for in the `same` check (409 sign_again) or refuse in saveWitnesses when the saved row is completed."
+   },
+   {
+    "title": "Device fingerprint returned to senders and identical across envelopes, accounts and people",
+    "severity": "high",
+    "where": "src/server/envelopes.ts publicEnvelope (spreads every recipient column); src/server/witness.ts beforeFinish (hmac(`device:${dev}`))",
+    "detail": "probe5.ts A: one browser signs a deed for account Alma and one for account Bert; both GET /envelopes/{id} answers carry the same device_hash; a different person (Quinn) in the same browser gets the same value. 400-day cookie, not on /security, undocumented in openapi. Fix: omit device_hash from publicEnvelope and scope the HMAC to the envelope id."
+   },
+   {
+    "title": "'Witness of their own signature' rule bypassed by Correct, an API key and reassign",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts correctRecipient, reassignRecipient; src/server/witness.ts witnessCorrected",
+    "detail": "probe2.ts A: POST /envelopes/{id}/correct {recipient_id: witness, name:'Ann Signer', email: Ann's} -> 200 (editor save of the same state -> 400, and every later editor save is blocked until fixed). probe5.ts B: same with an API key -> 200. probe2 B: Correct on Ann to the witness's identity -> 200. probe2 C: Ann reassigns to her own witness -> 200; Will signs and then witnesses himself (statement 'saw Will Witness sign'). Fix: run witnessProblem on the corrected row and on the witness tied to it, and in reassignRecipient refuse the signer's own witness's address+name."
+   },
+   {
+    "title": "After 'I was not there', the sender's later choice of witness can be replaced by the signer silently, and a clone hands naming to the signer",
+    "severity": "medium",
+    "where": "src/server/witness.ts notPresent (named_by_signer=1), witnessCorrected, copyWitnesses",
+    "detail": "probe3.ts D: Will (sender's choice) says not there; sender Corrects to Vera; a printed change with resign; Ann's page may_name=true; POST /sign/{ann}/witness Mallory -> 200; sender not emailed. probe7.ts: clone after 'not there' gives a witness 'Witness for Ann Signer' with no address and named_by_signer=1. Fix: separate the signer's right to rename after 'not there' from named_by_signer, clear it when the sender names a witness, and email the sender on every signer rename of a sender-chosen witness."
+   },
+   {
+    "title": "False 'We told Ann' when the signer has no address or stopped emails",
+    "severity": "medium",
+    "where": "src/server/witness.ts notPresent (sender lines) and src/components/sign/Witness.tsx WitnessFirst ('We told {w.name} and {sender.name}'); openapi witness_absent_at",
+    "detail": "probe3.ts B: signer with link_by_sender; witness not-present -> no email to Ann, sender reads 'We told Ann Signer, who can name another witness from their signing link.' Fix: word from whether sendMail ran; tell the sender to pass on Ann's link or use Correct."
+   },
+   {
+    "title": "Witness's free-text note (links, phone, money) forwarded to the signer's inbox under the sender's name",
+    "severity": "medium",
+    "where": "src/server/witness.ts notPresent sendMail to the signer ('They wrote: ...')",
+    "detail": "probe3.ts C: note 'Your signature was rejected by the bank. Verify your account now at http://secure-login.example/verify or call +1 800 555 0199 to avoid a $450 fee.' appears verbatim in Ann's 'Your witness was not there' email. A decline reason, by contrast, goes only to the sender. Fix: keep the note for the sender and audit trail only, or lureIn-check it and strip links."
+   },
+   {
+    "title": "Typed witness name is not read by the fake-notice filter",
+    "severity": "low",
+    "where": "src/server/witness.ts nameWitness: emailRefusal(e, [email]) without `extra`",
+    "detail": "probe9.ts (free account): signer names witness 'PayPal Billing call +1 800 555 0199 re $499 charge' -> 200 while the same words as a subject -> 422; the lure then appears in the sender's 'Witness was not there' email heading. Fix: emailRefusal(e, [email], { extra: [name] })."
+   },
+   {
+    "title": "Expiry warning says 'Still waiting on nobody' when only a witness is missing",
+    "severity": "low",
+    "where": "src/server/envelopes.ts cronTick expiry warning (waiting = sent/viewed only)",
+    "detail": "probe5.ts C: Ann and Ben signed, witness said not there, two days to the deadline: sender email 'Still waiting on nobody.' Fix: name pending witnesses who are absent or unnamed."
+   },
+   {
+    "title": "Sender may name a party, or the signer's exact name at another address, as witness with no refusal and no mark",
+    "severity": "low",
+    "where": "src/lib/witness.ts witnessProblem; src/server/witness.ts witnessDone",
+    "detail": "probe2.ts D: Ben (a signer) as Ann's witness: send 200, marks=null. probe2 E: witness 'Ann Signer' at ann.second.address: send 200, marks=null, no 'Check the witness' email. Signer-typed equivalents are refused. Fix: refuse a party (address+name of another signer/approver), add a 'same name' mark."
+   },
+   {
+    "title": "Copy glitches",
+    "severity": "low",
+    "where": "src/lib/witness.ts witnessProblem; WitnessChoice.tsx; witnessMailLines",
+    "detail": "PUT making the witness a group answers 'A witness is one named person, and A witness is a group.' (probe6 A). Editor and witness email say the witness confirms 'in their own words' but the statement is fixed text they tick."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "research/continue.json build:witness item 4",
+    "claim": "WITNESS_RECORDS 'is shown ... in the witness emails'",
+    "reality": "The witness request email and the signer's not-there email carry no 'cannot check' sentence (probe8.ts); only the sender's 'Check the witness' email does."
+   },
+   {
+    "where": "src/app/help/witness.tsx, README line 113, MARK_WORDS.device",
+    "claim": "A witness 'on the same device as the signer' is marked on the certificate",
+    "reality": "Only the same browser (ts_dev cookie) or the same IP plus user agent is caught; another browser on the same phone is not. The builder's own abuse notes admit it."
+   },
+   {
+    "where": "research/continue.json build:witness item 2 and abuse_and_stuck",
+    "claim": "Each witness name goes through the fake-notice filter",
+    "reality": "emailRefusal is called without the typed name; a payment lure as the witness name is accepted (probe9.ts)."
+   },
+   {
+    "where": "src/server/witness.ts comment on the device cookie",
+    "claim": "'Nothing else reads it'",
+    "reality": "publicEnvelope returns device_hash to the sender API, and the value links one browser across accounts (probe5.ts A)."
+   },
+   {
+    "where": "src/server/openapi.ts Recipient.witness_for and witness_absent_at",
+    "claim": "Sending refuses 'a witness who is the signer'; after 'not there' 'the signer and the sender are emailed'",
+    "reality": "POST /envelopes/{id}/correct (also with an API key) and reassign create a self-witness (probe2, probe5 B); a signer without an address is not emailed (probe3 B)."
+   },
+   {
+    "where": "research/continue.json build:witness item 6",
+    "claim": "Corrections: changing the witness is handled, and 'after resign: true the witness waits for the new signature'",
+    "reality": "Only for a witness not yet finished, or a printed change. A finished witness stays finished when the signer's place passes to another person (probe1 A, B) and can be moved to another signer without resign (probe1 C)."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "HM Land Registry acceptance of electronically signed, witnessed deeds: I could not call gov.uk. From memory of practice guide 8 and its 2020 addendum (moderate confidence), HMLR accepts e-signed deeds only through a conveyancer-controlled platform with one-time codes for signers and a witness physically present. Sign&Grow does not offer that, and the help entry says to read the guide and sign on paper if in doubt, which fits.",
+   "Email delivery: with no mail server, everything went to the dev outbox, so I could not see how a real provider shows the forwarded not-there note or the lure. That it reaches the inbox under the sender's display name comes from the sendMail arguments (fromName, replyTo). High confidence about what we send, none about spam filtering.",
+   "Device mark: depends on the browser keeping an HttpOnly first-party cookie between the signer's Finish and the witness's Finish (minutes). Private windows, cleared cookies and a second browser defeat it. That is a fact about browsers, not something I could test across vendors."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-01-signer-first.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-02-signer-named.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-03-signer-done.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-04-witness-first.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-05-witness-notthere-open.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/desk-04-witness-first.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-06-envelope-page.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-07-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-09-editor-witness.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-10-editor-signer-names.png"
+  ]
  }
 }

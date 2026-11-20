@@ -3,10 +3,11 @@ import { all, get, run, tx } from './db.ts';
 import { bad, hmac, now, str, safeEqual, sha256, baseUrl } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
 import { sendMail } from './mail.ts';
-import { sendText, smsMode, phoneKey, textsLeft, numbersToday, linkTextsToday, textsRoomInHours, onTextOutcome, dropCodeTexts } from './sms.ts';
-import { audit, emailRefusal, hasNotPaid, dailyCap, signUrl, notifySender, senderOf, correctRecipient, loadEnvelope, type Actor } from './envelopes.ts';
+import { sendText, smsMode, phoneKey, textsLeft, numbersToday, linkTextsToday, textsRoomInHours, onTextOutcome, dropCodeTexts, onTextRetry, dropTexts } from './sms.ts';
+import { audit, emailRefusal, hasNotPaid, dailyCap, signUrl, notifySender, senderOf, correctRecipient, loadEnvelope, samePerson, type Actor } from './envelopes.ts';
+import { reporterKey } from './bysender.ts';
 import { CHECKS, isCodeCheck, CHANNEL_WORDS, normalPhone, PHONE_HOW, maskPhone, maskEmail, checkLine, plainTime, SMS_OFF } from '../lib/checks.ts';
-import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODE_WAIT_SECONDS, SIGNER_CODES_PER_HOUR, SIGNER_CODES_PER_CALLER_HOUR, SIGNER_CODES_PER_DESTINATION_DAY, LINK_TEXTS_PER_NUMBER_DAY, smsDailyPerAccount } from '../lib/policy.ts';
+import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODE_WAIT_SECONDS, SIGNER_CODES_PER_HOUR, SIGNER_CODES_PER_CALLER_HOUR, SIGNER_CODES_PER_DESTINATION_DAY, LINK_TEXTS_PER_NUMBER_DAY, SIGNER_PASS_HOURS, smsDailyPerAccount } from '../lib/policy.ts';
 
 // Checking who signs. A sender can ask that a recipient types a one-time code before the document opens for them: a
 // code sent to their email address, or by text message to a mobile number the sender typed. This file holds all of
@@ -29,28 +30,38 @@ const texted = (r: any) => (!!r.text_link && r.role !== 'inperson') || r.verify 
 
 // ---- The record, and what a device that passed carries -------------------------------------------------
 
-// A check is passed by a person, and a person here is whoever holds the link. The record of a passed check is tied
-// to the link it was passed under, so it stops counting by itself the moment the link is replaced: the address was
-// corrected to another person's, the role changed, or the signer passed the document on. No code that swaps a
-// person has to remember to clear it.
-const linkStamp = (r: any) => sha256(`check:${r.id}:${r.token}`);
+// A check is passed by one person, and never counts for another. The record of a passed check is tied to the link it
+// was passed under and to the person on the request (person_gen, which goes up whenever the request passes to
+// someone else, also to another person at the same address, who keeps the link). So it stops counting by itself the
+// moment the link is replaced (the address was corrected, the role changed, the signer passed the document on) or
+// another person takes the place at the same inbox. No code that swaps a person has to remember to clear it.
+// (person_gen 0 adds nothing, so records made before it was part of the stamp still count.)
+const gen = (r: any) => (Number(r.person_gen) > 0 ? `:p${Number(r.person_gen)}` : '');
+const linkStamp = (r: any) => sha256(`check:${r.id}:${r.token}${gen(r)}`);
 
 /** The record of a code typed correctly by whoever holds this link now, or null: how it was sent, to where (masked), and when. */
 export const passedCheck = (r: any): { how: string; at: string } | null =>
   r?.checked_at && r.checked_how && r.token && r.checked_for === linkStamp(r) ? { how: r.checked_how, at: r.checked_at } : null;
 
-// What the browser of someone who typed the right code is given, remembered the same way a correct access code is
-// (see POST /sign/:token/unlock): a cookie for this recipient that only the server can make. It names the link, the
-// kind of check and check_gen, which goes up whenever the sender changes the check or the number, so every one of
-// those makes every device pass the check again.
-const deviceStamp = (r: any) => hmac(`vc:${r.id}:${r.token}:${r.check_gen || 0}:${r.verify}`);
+// What the browser of someone who typed the right code is given, remembered the way a correct access code is (see
+// POST /sign/:token/unlock): a cookie for this recipient that only the server can make. It names the link, the
+// person, the kind of check and check_gen, which goes up whenever the sender changes the check or the number, so
+// every one of those makes every device pass the check again. It also carries the moment the code was typed, signed
+// with the rest: the server refuses it SIGNER_PASS_HOURS later, whatever the browser does, so a copied cookie stops
+// working at the same moment, and two devices that passed never hold the same value.
+const deviceStamp = (r: any) => hmac(`vc:${r.id}:${r.token}:${r.check_gen || 0}:${r.verify}${gen(r)}`);
 const jar = (r: any) => `ts_vc_${r.id}`;
-export const passCookie = (r: any, secure: boolean) => cookie(jar(r), deviceStamp(r), 86400, secure);
+const passValue = (r: any, at: number) => `${at}.${hmac(`pass:${deviceStamp(r)}:${at}`)}`;
+export const passCookie = (r: any, secure: boolean) => cookie(jar(r), passValue(r, Date.now()), SIGNER_PASS_HOURS * 3600, secure);
 
 /** The one-time code this request still has to pass before the document opens, or null. */
 export function gateOf(req: Request, r: any): 'email_code' | 'sms_code' | null {
   if (!isCodeCheck(r.verify)) return null;
-  return safeEqual(readCookie(req, jar(r)) || '', deviceStamp(r)) ? null : r.verify;
+  const held = readCookie(req, jar(r)) || '';
+  const at = Number(held.split('.')[0]);
+  // A minute of leeway for a clock that is a little ahead; never a moment further in the future than that.
+  const fresh = Number.isInteger(at) && at <= Date.now() + 60_000 && Date.now() - at < SIGNER_PASS_HOURS * 3600_000;
+  return fresh && safeEqual(held, passValue(r, at)) ? null : r.verify;
 }
 
 // Where a recipient's code goes: the address itself (never given out), how it is shown, and a keyed fingerprint to
@@ -213,7 +224,9 @@ export function assertChecks(e: any) {
 function resetCheck(recipientId: string, finished: boolean) {
   run(`UPDATE recipients SET check_gen=check_gen+1, check_stop=NULL, texted_at=NULL${finished ? '' : ', checked_at=NULL, checked_how=NULL, checked_for=NULL'} WHERE id=?`, recipientId);
   run("UPDATE signer_codes SET ended_at=?, ended_how='changed' WHERE recipient_id=? AND ended_at IS NULL", now(), recipientId);
-  dropCodeTexts(recipientId);
+  // A text still waiting for another try was meant for the number, the check or the person as they were: a signing
+  // link to a number the sender just said is wrong must never go out late.
+  dropTexts(recipientId, 'the number, the check or the person changed after it was written');
 }
 const differs = (old: any, c: CheckValues) => (old?.verify || null) !== c.verify || (old?.phone || null) !== c.phone;
 function applyCheck(recipientId: string, old: any, c: CheckValues) {
@@ -236,8 +249,10 @@ export function saveChecks(e: any, asked: { rid: string; r: any; i: number }[], 
     if (correcting) {
       // A different address is a different person, and the number on file was typed for the first one. A text to
       // it would hand the new person's code or link to the old one, so the number has to be said again.
-      if (old && !sameAddress(old.email, row.email) && r.phone === undefined && old.phone) {
-        if (c.verify === 'sms_code' || c.text_link) throw bad(`${whom[0].toUpperCase()}${whom.slice(1)} now has another email address, so this is another person, and the mobile number on file was typed for ${old.name}. Send "phone" with the number of ${row.name}, or change "verify" and "text_link" so that no text is needed. Nothing was saved.`);
+      // The same goes for another person at the same address (see samePerson in envelopes.ts).
+      const otherHere = !!old && sameAddress(old.email, row.email) && old.name !== row.name && !samePerson(old.name, row.name);
+      if (old && (!sameAddress(old.email, row.email) || otherHere) && r.phone === undefined && old.phone) {
+        if (c.verify === 'sms_code' || c.text_link) throw bad(`${whom[0].toUpperCase()}${whom.slice(1)} ${otherHere ? `is another person than ${old.name}, at the same email address` : 'now has another email address, so this is another person'}, and the mobile number on file was typed for ${old.name}. Send "phone" with the number of ${row.name}, or change "verify" and "text_link" so that no text is needed. Nothing was saved.`);
         c.phone = null;
       }
       const problem = checkProblem({ ...row, ...c }, e);
@@ -316,7 +331,8 @@ export function checkBits(o: any, r: any): string[] {
   if ((o.phone || '') !== (r.phone || '')) bits.push(!r.phone ? `mobile number ${maskPhone(o.phone)} removed` : o.phone ? `mobile number changed from ${maskPhone(o.phone)} to ${maskPhone(r.phone)}` : `mobile number ${maskPhone(r.phone)} added`);
   if (!!o.text_link !== !!r.text_link) bits.push(r.text_link ? 'the signing link is now also sent by text message' : 'the signing link is no longer sent by text message');
   const had = passedCheck(o);
-  const reset = (o.verify || '') !== (r.verify || '') || (o.phone || '') !== (r.phone || '') || !sameAddress(o.email, r.email);
+  // Another person at the same address (person_gen went up) never keeps the pass of the one before.
+  const reset = (o.verify || '') !== (r.verify || '') || (o.phone || '') !== (r.phone || '') || !sameAddress(o.email, r.email) || (Number(o.person_gen) || 0) !== (Number(r.person_gen) || 0);
   if (had && reset && o.status !== 'completed') bits.push(`the one-time code that was passed on ${plainTime(had.at)} no longer counts${isCodeCheck(r.verify) ? ', and a new one is asked for' : ''}`);
   return bits;
 }
@@ -331,7 +347,12 @@ export async function correctWithCheck(e: any, recipientId: string, patch: any, 
   const r = e?.recipients?.find((x: any) => x.id === recipientId);
   const asks = !!patch && (patch.verify !== undefined || patch.phone !== undefined || patch.text_link !== undefined || patch.number_confirmed !== undefined);
   const email = patch?.email !== undefined ? str(patch.email, 254).trim() : r?.email;
-  const swapped = !!r && !sameAddress(r.email, email);
+  const name = patch?.name !== undefined ? str(patch.name, 120).trim() || r?.name : r?.name;
+  // Another person: another address, or at the same address a name that is not the old one in another spelling
+  // (a couple or an office can share an inbox: see samePerson in envelopes.ts). The number on file was typed for
+  // the first one, and what they passed is theirs.
+  const sameInbox = !!r && sameAddress(r.email, email);
+  const swapped = !!r && (!sameInbox || (name !== r.name && !samePerson(r.name, name)));
   const other = !!patch && (patch.name !== undefined || patch.email !== undefined || patch.access_code !== undefined);
   // Nothing about a check in the call and the same person: exactly what it always did. So are the refusals for an
   // envelope that is not out and a person who is not on it or has finished.
@@ -339,10 +360,12 @@ export async function correctWithCheck(e: any, recipientId: string, patch: any, 
   const whom = r.name || 'this recipient';
   const c = readCheck(patch, r, whom, true);
   if (swapped && patch.phone === undefined && r.phone) {
-    if (c.verify === 'sms_code' || c.text_link) throw bad(`You are sending this to another email address, so to another person, and the mobile number on file was typed for ${r.name}. Send "phone" with the new person's number, or change "verify" and "text_link" so that no text is needed. Nothing was changed.`);
+    const who = sameInbox ? `${name} is another person than ${r.name}, at the same email address` : 'You are sending this to another email address, so to another person';
+    if (c.verify === 'sms_code' || c.text_link) throw bad(`${who}, and the mobile number on file was typed for ${r.name}. Send "phone" with the number of ${name}, or change "verify" and "text_link" so that no text is needed. Nothing was changed.`);
     c.phone = null;
   }
-  const after = { ...r, ...c, name: patch.name !== undefined ? str(patch.name, 120).trim() || r.name : r.name, email };
+  // person_gen goes up with the correction below (correctRecipient), and the record says what that does to a pass.
+  const after = { ...r, ...c, name, email, person_gen: swapped ? (Number(r.person_gen) || 0) + 1 : r.person_gen };
   const changed = differs(r, c) || !!r.text_link !== !!c.text_link;
   if (changed || swapped) {
     const problem = checkProblem(after, e);
@@ -406,17 +429,28 @@ export async function passCheckOn(e: any, old: any, actor: Actor) {
 // Why a text must not go to this number right now, or null. Asked at the moment of every text, so no path to a
 // text can walk round a limit: the hard stop per account and day, the daily number of phone numbers for an account
 // the email limit applies to, and for a link or a reminder how many of those one number gets in a day.
-function mayText(e: any, phone: string, kind: 'code' | 'link' | 'reminder'): string | null {
+// `own` is for a text the timer tries again: it was counted when it was first written, and while that count is
+// still inside the last 24 hours it is not counted against itself a second time.
+function mayText(e: any, phone: string, kind: 'code' | 'link' | 'reminder', own = false): string | null {
   if (!smsMode()) return 'text messages are switched off on this server';
-  if (textsLeft(e.account_id) < 1) return `the account this document was sent from has sent as many text messages as this server allows in a day (${smsDailyPerAccount()})`;
+  const mine = own ? 1 : 0;
+  if (textsLeft(e.account_id) + mine < 1) return `the account this document was sent from has sent as many text messages as this server allows in a day (${smsDailyPerAccount()})`;
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
   if (hasNotPaid(account)) {
     const have = numbersToday(account.id);
     if (!have.has(phoneKey(phone)) && have.size >= dailyCap(account).cap) return `the account this document was sent from has texted as many phone numbers as it may in a day (${dailyCap(account).cap})`;
   }
-  if (kind !== 'code' && linkTextsToday(e.account_id, phone) >= LINK_TEXTS_PER_NUMBER_DAY) return `${LINK_TEXTS_PER_NUMBER_DAY} texts about documents have gone to this number from this account in the last 24 hours, which is the most we send to one number`;
+  if (kind !== 'code' && linkTextsToday(e.account_id, phone) - mine >= LINK_TEXTS_PER_NUMBER_DAY) return `${LINK_TEXTS_PER_NUMBER_DAY} texts about documents have gone to this number from this account in the last 24 hours, which is the most we send to one number`;
   return null;
 }
+
+// The pause and the filter for fake payment notices, in the words a record of a text uses, or null. They read the
+// same words a text is made of (the sender's name and the subject) and hold whoever the text goes to.
+function textGuard(e: any): string | null {
+  const guard = emailRefusal(e);
+  return !guard ? null : guard.status === 403 ? 'sending is paused on this account' : 'the envelope reads like a fake payment notice, or goes out under a name that reads like a well-known brand';
+}
+const reported = (e: any, r: any) => !!get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', e.id, reporterKey(r));
 
 // Something stood in the way of a text, and the record says what. The sender hears it once a day for each person.
 async function textHeld(e: any, r: any, what: string, why: string) {
@@ -455,14 +489,13 @@ export async function alsoText(e: any, r: any, kind: string): Promise<void> {
     // Someone using the link said this number is not theirs. Its owner is left alone: no code and no link by text
     // either, until the sender corrects the number or confirms it. The sender was told when it was said.
     if (cur.check_stop) return;
-    // Someone who told us this document looks wrong hears nothing more from us about it by text.
-    if (get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', e.id, cur.email)) return;
     if (kind === 'reminder' && cur.texted_at && Date.now() - Date.parse(cur.texted_at) < 864e5) return;
     const what = kind === 'reminder' ? 'a reminder by text message' : 'the signing link by text message';
-    // The pause and the filter for fake payment notices read the same words the text is made of: the sender's name
-    // and the subject. They hold for a text whoever it goes to, also when the email went to the sender's own address.
-    const guard = emailRefusal(e);
-    const no = guard ? (guard.status === 403 ? 'sending is paused on this account' : 'the envelope reads like a fake payment notice, or goes out under a name that reads like a well-known brand') : mayText(e, phone, kind === 'reminder' ? 'reminder' : 'link');
+    // Someone who told us this document looks wrong hears nothing more from us about it by text. Whoever holds the
+    // link can report without a code, so the sender is told the texts stopped and can reach the person another way.
+    // The pause and the filter for fake payment notices hold for a text whoever it goes to, also when the email went
+    // to the sender's own address.
+    const no = reported(e, cur) ? 'someone using their signing link reported this document as suspicious, and we send nothing more to them about it by text' : textGuard(e) || mayText(e, phone, kind === 'reminder' ? 'reminder' : 'link');
     if (no) return void (await textHeld(e, cur, what, no));
     run('UPDATE recipients SET texted_at=? WHERE id=?', now(), cur.id);
     const { status } = await sendText({ to: phone, text: linkText(e, cur, senderOf(e), kind), accountId: e.account_id, envelopeId: e.id, recipientId: cur.id, kind: kind === 'reminder' ? 'reminder' : 'link' });
@@ -482,6 +515,39 @@ export async function textWaiting(envelopeId: string): Promise<void> {
   if (!e || e.status !== 'sent') return;
   for (const r of e.recipients) if (r.text_link && !r.texted_at && (r.status === 'sent' || r.status === 'viewed')) await alsoText(e, r, 'new');
 }
+
+// A text the provider did not take the first time is tried again by the timer (retryTexts in sms.ts). That try is
+// decided again by everything that applies at that moment, exactly as a first try is: the number on file now, the
+// check and the link as they are now, a "not my number", a finished, declined or muted person, a report, the pause,
+// the fake-notice filter and the daily limits. A text to a number the sender has since corrected, to someone who
+// has signed, or to someone who said it is not their number, is never sent late. Returns why not, or null.
+onTextRetry('envelope', async (t) => {
+  if (!t.envelope_id || !t.recipient_id) return null;
+  const e = loadEnvelope(t.envelope_id);
+  const r = e?.recipients?.find((x: any) => x.id === t.recipient_id);
+  if (!e || !r) return 'the person or the document it was about is no longer there';
+  const phone = normalPhone(r.phone);
+  if (!phone || phone !== t.to_phone) return 'the mobile number on file was changed after it was written';
+  if (r.check_stop) return 'someone using the signing link said the number is not theirs';
+  if (t.kind === 'code') {
+    // A code text only ever carries the newest code for the check as it is now.
+    const live = r.verify === 'sms_code' ? liveCode(r) : null;
+    if (!live || live.expires_at !== t.expires_at) return 'the code in it no longer works';
+  } else {
+    if (!r.text_link || r.role === 'inperson') return 'the signing link is no longer sent to them by text message';
+    if (!r.token || !String(t.body || '').includes(`/sign/${r.token}`)) return 'the link in it was replaced';
+    if (e.status !== 'sent' || !['sent', 'viewed'].includes(r.status)) return r.status === 'completed' ? 'they have finished' : r.status === 'declined' ? 'they declined' : 'it is not their turn now';
+    if (t.kind === 'reminder' && r.muted) return 'they asked not to be reminded';
+  }
+  const what = t.kind === 'code' ? 'a one-time code by text message' : t.kind === 'reminder' ? 'a reminder by text message' : 'the signing link by text message';
+  const own = Date.parse(t.at) > Date.now() - 864e5;
+  const no = (t.kind !== 'code' && reported(e, r) ? 'someone using their signing link reported this document as suspicious, and we send nothing more to them about it by text' : null)
+    || textGuard(e) || mayText(e, phone, t.kind, own);
+  // The sender hears it the way they hear a first try that is held back. A code is asked for by whoever holds the
+  // link, who is told why at once when they ask for the next one.
+  if (no && t.kind !== 'code') await textHeld(e, r, what, no);
+  return no;
+});
 
 // What became of a text belongs in its envelope's record, like an email (see onMailOutcome in envelopes.ts): the
 // first failed try as exactly that, a later try that goes through as sent, and the end of trying as final. Then the
@@ -679,7 +745,7 @@ export async function codeProblem(e: any, r: any, what: any, actor: Actor): Prom
   if (notMine) {
     run('UPDATE recipients SET check_stop=? WHERE id=?', now(), r.id);
     run("UPDATE signer_codes SET ended_at=?, ended_how='stopped' WHERE recipient_id=? AND ended_at IS NULL", now(), r.id);
-    dropCodeTexts(r.id);
+    dropTexts(r.id, 'someone using the signing link said the number is not theirs');
     audit(e.id, actor, 'One-time code: not my number', `Someone using the signing link of ${r.name} said the mobile number ${d.masked} is not theirs. No more codes or links are texted to it until the sender corrects it or confirms it with them.`);
     await notifySender(e, 'always', `Wrong number: ${e.subject}`, `${r.name} says the mobile number is not theirs`,
       [`Someone using the signing link of ${r.name} told us that ${d.masked}, the number you typed for the one-time code, is not their number. We have stopped sending codes to it, so whoever owns that number is left alone.`,

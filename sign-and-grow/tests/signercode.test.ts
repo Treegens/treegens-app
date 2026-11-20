@@ -7,7 +7,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, Client, PNG, simple, upload, tokenFor, signUp, mailTo } from './helpers.ts';
-import { smsProvider, smsWarning, normalPhone, maskPhone, maskEmail, checkLine, SMS_OFF, CHECK_PROVES } from '../src/lib/checks.ts';
+import { smsProvider, smsWarning, normalPhone, maskPhone, maskEmail, checkLine, plainTime, SMS_OFF, CHECK_PROVES } from '../src/lib/checks.ts';
 import { SIGNER_CODE_TRIES, SIGNER_CODES_PER_HOUR, SIGNER_CODES_PER_CALLER_HOUR, SIGNER_CODES_PER_DESTINATION_DAY, SIGNER_CODE_MINUTES, LINK_TEXTS_PER_NUMBER_DAY, smsDailyPerAccount } from '../src/lib/policy.ts';
 import { extractText } from '../src/server/text.ts';
 
@@ -882,7 +882,7 @@ test('another person at another address: the number has to be said again, and th
   // The address alone: refused, or the new person's code and link would go to the first person's phone.
   const silent = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Nia New', email: swapTo });
   assert.equal(silent.status, 400);
-  assert.match(silent.data.error, /another email address, so to another person, and the mobile number on file was typed for Sam Signer\. Send "phone" with the new person's number/);
+  assert.match(silent.data.error, /another email address, so to another person, and the mobile number on file was typed for Sam Signer\. Send "phone" with the number of Nia New/);
   assert.equal(db.get('SELECT email FROM recipients WHERE id=?', s.rid).email, s.email, 'nothing was changed');
   const before = texts(s.rid).length;
   const swapped = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Nia New', email: swapTo, phone: '+44 7700 900200' });
@@ -1142,4 +1142,206 @@ test('a bulk list brings a mobile number only where the template texts that role
   const plain = readRecipients('Volunteer name,Volunteer email,Volunteer phone\nAda,ada@example.org,+44 7700 900123', [{ key: 'Volunteer', label: 'Volunteer' }]);
   assert.deepEqual(plain.rows[0].cells.Volunteer, { name: 'Ada', email: 'ada@example.org' });
   assert.deepEqual(plain.ignored, ['Volunteer phone']);
+});
+
+// ---- Repairs after the skeptic's report (research/verify-new.json, "verify:signercode") ------------------------------
+
+const twilio = () => provider({ TWILIO_ACCOUNT_SID: 'AC123', TWILIO_AUTH_TOKEN: 'twilio-secret', TWILIO_FROM: '+15550100' });
+const toNumber = (call: { body: string }) => new URLSearchParams(call.body).get('To');
+const due = (rid: string) => db.run("UPDATE texts SET next_try_at=? WHERE recipient_id=? AND status='failed' AND next_try_at IS NOT NULL", new Date(Date.now() - 1000).toISOString(), rid);
+const accountOf = (email: string) => db.get('SELECT m.account_id a FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email=?', email).a;
+// One signer whose signing link by text the provider would not take the first time: it waits for the timer.
+async function failedLink(c: Client, r: any = {}, over: any = {}) {
+  sms.answers.push({ status: 503, body: { message: 'Service unavailable' } });
+  const s = await one(c, { phone: '+44 7700 900111', text_link: true, ...r }, over);
+  const [t] = texts(s.rid);
+  assert.deepEqual([t.kind, t.status, !!t.next_try_at], ['link', 'failed', true]);
+  return s;
+}
+// What the timer does with this person's waiting texts: which numbers it texted, and what our record says now.
+async function retried(rid: string) {
+  const before = sms.calls.length;
+  due(rid);
+  await cron.tick();
+  return { to: sms.calls.slice(before).map(toNumber), rows: texts(rid) };
+}
+
+test('a text tried again by the timer is decided again: a corrected number, "not my number", a report, a decline, a finished signer and muted reminders', async () => {
+  twilio();
+  try {
+    // The sender corrects the number: the text that waited for the old one is not sent to it, and the new one gets the link.
+    const a = await failedLink(ada, { phone: '+44 7700 900111' }, { subject: 'Wrong number corrected' });
+    assert.equal((await ada.post(`/envelopes/${a.id}/correct`, { recipient_id: a.rid, phone: '+44 7700 900112' })).status, 200);
+    let out = await retried(a.rid);
+    assert.equal(out.to.includes('+447700900111'), false, 'the late try texted the number the sender had just said was wrong');
+    assert.deepEqual([out.rows[0].status, out.rows[0].next_try_at, out.rows[0].to_phone], ['failed', null, null]);
+    assert.match(out.rows[0].error, /Not sent again: the number, the check or the person changed after it was written\./);
+    assert.deepEqual(out.rows.map((t: any) => [t.to_masked, t.status]), [['+44 *** *** 0111', 'failed'], ['+44 *** *** 0112', 'sent']]);
+    // The same is decided at the moment of the try, also when nothing dropped the text before: the number on file
+    // is the one that counts.
+    const b = await failedLink(ada, { phone: '+44 7700 900113' });
+    db.run("UPDATE recipients SET phone='+447700900114' WHERE id=?", b.rid);
+    out = await retried(b.rid);
+    assert.deepEqual(out.to, []);
+    assert.match(out.rows[0].error, /Not sent again: the mobile number on file was changed after it was written\./);
+
+    // "This is not my number" while the link text waited.
+    const c = await failedLink(ada, { verify: 'sms_code', phone: '+44 7700 900121' });
+    assert.equal((await visitor().post(`/sign/${c.tok}/code/problem`, { what: 'not_mine' })).status, 200);
+    assert.deepEqual((await retried(c.rid)).to, []);
+
+    // A report: nothing more by text, and the sender is told the text stopped, because whoever holds the link can report.
+    const d = await failedLink(ada, { phone: '+44 7700 900131' }, { subject: 'Reported later' });
+    assert.equal((await visitor().post(`/sign/${d.tok}/report`, { reason: 'spam' })).status, 200);
+    out = await retried(d.rid);
+    assert.deepEqual(out.to, []);
+    assert.match((await line(ada, d.id, 'Text not sent')).detail, /^Sam Signer: the signing link by text message to \+44 \*\*\* \*\*\* 0131 was not sent, because someone using their signing link reported this document as suspicious/);
+    assert.equal(toAda('Text not sent: Reported later').length, 1);
+
+    // Two signers at once: one finishes, the other declines. Neither is asked to sign by a late text.
+    const file = await upload(ada, 1);
+    const emails = [fresh('dee'), fresh('eli'), fresh('fay')];
+    sms.answers.push({ status: 503, body: {} }, { status: 503, body: {} });
+    const e = (await ada.post('/envelopes', {
+      subject: 'Three at once', send: true, documents: [{ id: 'd', file_id: file.id }],
+      recipients: [{ id: 'a', role: 'signer', name: 'Dee', email: emails[0], phone: '+44 7700 900151', text_link: true }, { id: 'b', role: 'signer', name: 'Eli', email: emails[1], phone: '+44 7700 900152', text_link: true }, { id: 'c', role: 'signer', name: 'Fay', email: emails[2] }],
+      fields: ['a', 'b', 'c'].map((id, i) => ({ document_id: 'd', recipient_id: id, type: 'signature', page: 0, x: 0.1, y: 0.2 + i * 0.2, w: 0.3, h: 0.06 })),
+    })).data.envelope;
+    const [dee, eli] = emails.slice(0, 2).map((m) => db.get('SELECT id, token FROM recipients WHERE envelope_id=? AND email=?', e.id, m));
+    assert.equal((await finish(visitor(), dee.token)).status, 200);
+    assert.equal((await visitor().post(`/sign/${eli.token}/decline`, { reason: 'Not for me' })).status, 200);
+    for (const who of [dee, eli]) {
+      out = await retried(who.id);
+      assert.deepEqual(out.to, [], 'someone who signed or declined was texted to sign');
+    }
+    assert.match(texts(dee.id)[0].error, /Not sent again: (they have finished|its link no longer opens a document that is waiting)\./);
+
+    // Reminders switched off while a reminder by text waited.
+    const f = await one(ada, { phone: '+44 7700 900161', text_link: true });
+    db.run('UPDATE recipients SET texted_at=NULL WHERE id=?', f.rid);
+    sms.answers.push({ status: 503, body: {} });
+    assert.equal((await ada.post(`/envelopes/${f.id}/remind`)).status, 200);
+    assert.deepEqual(texts(f.rid).map((t: any) => [t.kind, t.status]), [['link', 'sent'], ['reminder', 'failed']]);
+    assert.equal((await visitor().post(`/sign/${f.tok}/mute`)).status, 200);
+    out = await retried(f.rid);
+    assert.deepEqual(out.to, []);
+    assert.match(out.rows[1].error, /Not sent again: they asked not to be reminded\./);
+  } finally {
+    provider({ SMS_DEV_OUTBOX: '1' });
+    sms.answers.length = 0;
+  }
+});
+
+test('a text tried again by the timer is held by the pause, the fake-notice filter and the daily limit as they are at that moment', async () => {
+  twilio();
+  try {
+    // Paused after the first try: the late try does not go, and the record says why.
+    const mo = await signUp('Mo Retry', 'mo.retry@example.com', ip());
+    const p = await failedLink(mo, { phone: '+44 7700 900141' }, { subject: 'Paused later' });
+    db.run("UPDATE accounts SET suspended_at=?, suspended_reason='reports' WHERE id=?", new Date().toISOString(), accountOf('mo.retry@example.com'));
+    let out = await retried(p.rid);
+    assert.deepEqual(out.to, []);
+    assert.match(out.rows[0].error, /Not sent again: sending is paused on this account\./);
+    assert.match((await line(mo, p.id, 'Text not sent')).detail, /was not sent, because sending is paused on this account\.$/);
+    db.run('UPDATE accounts SET suspended_at=NULL WHERE id=?', accountOf('mo.retry@example.com'));
+
+    // The words now read like a fake payment notice.
+    const lu = await signUp('Lu Retry', 'lu.retry@example.com', ip());
+    const q = await failedLink(lu, { phone: '+44 7700 900142' }, { subject: 'Garden rota' });
+    db.run('UPDATE envelopes SET subject=? WHERE id=?', 'PayPal invoice: $499.00 charged. To cancel call +1 (888) 555-0142', q.id);
+    out = await retried(q.rid);
+    assert.deepEqual(out.to, []);
+    assert.match(out.rows[0].error, /Not sent again: the envelope reads like a fake payment notice/);
+
+    // The daily limit: the try that waited was counted when it was written and is not counted against itself again,
+    // but a limit the operator lowered since holds it.
+    const cy = await signUp('Cy Retry', 'cy.retry@example.com', ip());
+    db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), accountOf('cy.retry@example.com'));
+    const r1 = await failedLink(cy, { phone: '+44 7700 900143' });
+    process.env.SMS_DAILY_PER_ACCOUNT = '1';
+    out = await retried(r1.rid);
+    assert.deepEqual(out.to, ['+447700900143'], 'the text was counted twice against the daily limit');
+    process.env.SMS_DAILY_PER_ACCOUNT = '2';
+    const r2 = await failedLink(cy, { phone: '+44 7700 900144' });
+    process.env.SMS_DAILY_PER_ACCOUNT = '1';
+    out = await retried(r2.rid);
+    assert.deepEqual(out.to, []);
+    assert.match(out.rows[0].error, /Not sent again: the account this document was sent from has sent as many text messages as this server allows in a day \(1\)\./);
+  } finally {
+    provider({ SMS_DEV_OUTBOX: '1' });
+    sms.answers.length = 0;
+  }
+});
+
+test('another person at the same address never keeps the code the first one passed, and the certificate says only what each did', async () => {
+  const s = await one(ada, { verify: 'email_code', name: 'Sam Smith' }, { subject: 'Shared inbox' });
+  const sams = visitor();
+  await pass(sams, s);
+  assert.equal((await sams.get(`/sign/${s.tok}`)).data.locked, false);
+  // A spelling fix is still Sam: the pass stays.
+  assert.equal((await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Sam Smyth' })).status, 200);
+  assert.equal((await sams.get(`/sign/${s.tok}`)).data.locked, false, 'a spelling fix of the same name cost the signer their pass');
+  // Alex at the same inbox keeps the link, and is asked for a code of their own, also on the device Sam used.
+  const fix = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Alex Jones' });
+  assert.equal(fix.status, 200, JSON.stringify(fix.data));
+  assert.equal(db.get('SELECT token FROM recipients WHERE id=?', s.rid).token, s.tok, 'the link stays with the inbox');
+  const locked = (await sams.get(`/sign/${s.tok}`)).data;
+  assert.deepEqual([locked.locked, locked.needs], [true, 'code']);
+  assert.equal((await full(ada, s.id)).envelope.recipients[0].check.line, 'Link sent by email. A one-time code by email was asked for and was not passed');
+  assert.match((await line(ada, s.id, 'Check corrected')).detail, /^Alex Jones <.+>: the one-time code that was passed on .+ UTC no longer counts, and a new one is asked for\.$/);
+  // A code Sam was sent and never typed does not open it for Alex either.
+  assert.equal((await sams.post(`/sign/${s.tok}/code/check`, { code: emailCode(s.email) })).status, 410);
+  // Alex passes their own code and signs: the certificate carries Alex's pass, at Alex's time.
+  db.run("UPDATE signer_codes SET at=? WHERE recipient_id=?", new Date(Date.now() - 120_000).toISOString(), s.rid);
+  await pass(sams, s);
+  const alexAt = db.get('SELECT checked_at FROM recipients WHERE id=?', s.rid).checked_at;
+  assert.equal((await finish(sams, s.tok)).status, 200);
+  assert.match(await certificate(ada, s.id), new RegExp(`Identity check One-time code sent by email to s\\*\\*\\*@example\\.com, passed ${plainTime(alexAt)}`));
+});
+
+test('another person at the same address needs their own mobile number for a code by text, through Correct and through the editor', async () => {
+  const s = await one(ada, { verify: 'sms_code', phone: '+44 7700 900211', name: 'Sam Smith' });
+  const no = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Alex Jones' });
+  assert.equal(no.status, 400);
+  assert.equal(no.data.error, 'Alex Jones is another person than Sam Smith, at the same email address, and the mobile number on file was typed for Sam Smith. Send "phone" with the number of Alex Jones, or change "verify" and "text_link" so that no text is needed. Nothing was changed.');
+  assert.equal(db.get('SELECT name FROM recipients WHERE id=?', s.rid).name, 'Sam Smith');
+  const ok = await ada.post(`/envelopes/${s.id}/correct`, { recipient_id: s.rid, name: 'Alex Jones', phone: '+44 7700 900212' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal((await visitor().post(`/sign/${s.tok}/code`)).data.to, '+44 *** *** 0212');
+  // The editor: the same person under another name at the same address.
+  const d = (await full(ada, s.id)).envelope;
+  const recipients = d.recipients.map((r: any) => ({ id: r.id, role: r.role, name: 'Blair Rivera', email: r.email }));
+  const put = await ada.call('PUT', `/envelopes/${s.id}`, { recipients });
+  assert.equal(put.status, 400, JSON.stringify(put.data));
+  assert.match(put.data.error, /is another person than Alex Jones, at the same email address, and the mobile number on file was typed for Alex Jones\. Send "phone" with the number of Blair Rivera/);
+});
+
+test('a device that passed is let in for a day counted by the server, and two devices never hold the same pass', async () => {
+  const s = await one(ada, { verify: 'email_code' });
+  const d1 = visitor(), d2 = visitor();
+  await pass(d1, s);
+  older(s.rid, 61);
+  await pass(d2, s);
+  const k = `ts_vc_${s.rid}`;
+  assert.notEqual(d1.cookies[k], d2.cookies[k]);
+  // A pass whose time was changed by hand is not ours.
+  const forged = Object.assign(new Client(), { ip: ip() });
+  forged.cookies[k] = d1.cookies[k].replace(/^\d+/, String(Date.now() + 3600_000));
+  assert.equal((await forged.get(`/sign/${s.tok}`)).data.locked, true);
+  // 25 hours later the browser may still send it, and the server no longer takes it.
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 25 * 3600_000;
+    assert.equal((await d1.get(`/sign/${s.tok}`)).data.locked, true, 'a pass worked for longer than a day');
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal((await d1.get(`/sign/${s.tok}`)).data.locked, false);
+});
+
+test('the certificate keeps how the link travelled for someone who signed in person or whose link the sender shared', () => {
+  const passed = { how: 'One-time code sent by email to s***@example.com', at: '2026-03-12T14:02:00Z' };
+  assert.equal(checkLine({ role: 'inperson' }, passed), 'Signed in person on a device of the sender, who was emailed the link. One-time code sent by email to s***@example.com, passed 12 March 2026 14:02 UTC');
+  assert.equal(checkLine({ role: 'signer', link_by_sender: 1 }, passed), 'Link shared by the sender. One-time code sent by email to s***@example.com, passed 12 March 2026 14:02 UTC');
+  assert.equal(checkLine({ role: 'signer' }, passed), 'One-time code sent by email to s***@example.com, passed 12 March 2026 14:02 UTC');
 });

@@ -80,7 +80,9 @@ export function checkLine(r: { role?: string; access_code?: any; verify?: any; l
   // "I will send the link myself": we know the sender had the link, not how it travelled (src/lib/bysender.ts).
   const link = inPerson ? 'Signed in person on a device of the sender, who was emailed the link' : r.link_by_sender ? 'Link shared by the sender' : 'Link sent by email';
   const code = r.access_code ? ' and an access code chosen by the sender' : '';
-  if (passed) return `${passed.how}, passed ${plainTime(passed.at)}${r.access_code ? '. Also an access code chosen by the sender' : ''}`;
+  // A link that did not simply arrive by email is said with the code, so the line keeps how the person got in.
+  const via = inPerson || r.link_by_sender ? `${link}. ` : '';
+  if (passed) return `${via}${passed.how}, passed ${plainTime(passed.at)}${r.access_code ? '. Also an access code chosen by the sender' : ''}`;
   if (isCodeCheck(r.verify)) return `${link}${code}. A one-time code by ${CHANNEL_WORDS[r.verify]} was asked for and was not passed`;
   return r.access_code ? `${link}${code}` : inPerson ? link : `${link} only`;
 }
