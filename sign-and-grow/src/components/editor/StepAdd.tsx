@@ -86,11 +86,12 @@ export function StepAdd({ ed }: { ed: Ed }) {
             if (lockedIds.has(r.id))
               return (
                 <div key={r.id} className="rcpt ed-locked" style={{ ['--fc' as any]: ed.color(r.id) }}>
-                  <div className="row wrap" style={{ rowGap: 4 }}>
+                  <div className="row wrap" style={{ gap: 8, rowGap: 4 }}>
                     {!!env.ordered && <span className="badge num" aria-label={`Signing order ${r.routing_order}`}>{r.routing_order}</span>}
-                    <div className="grow"><b>{who(r)}</b><div className="muted small ed-break">{r.email} · {ROLE_LABEL[r.role]}</div></div>
+                    <b className="ed-break">{who(r)}</b>
                     <Status s="completed" label={DONE[r.role] || 'Finished'} />
                   </div>
+                  <div className="muted small ed-break" style={{ marginTop: 4 }}>{r.email} · {ROLE_LABEL[r.role]}</div>
                   <div className="muted small ed-lockline" style={{ marginTop: 6 }}><Lock /><span>Finished{old?.completed_at ? ` on ${fmtDate(old.completed_at)}` : ''}. Their details and fields can no longer change.</span></div>
                 </div>
               );
@@ -99,8 +100,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
                 <div className="row wrap">
                   {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
                   {isTpl && <input placeholder="Role, e.g. Client" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
-                  <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 150px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
-                  <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" style={{ flex: '1 1 190px' }}
+                  <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
+                  <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" style={{ flex: '1 1 170px' }}
                     onChange={(e) => {
                       const c = contacts.find((x) => x.email.toLowerCase() === e.target.value.toLowerCase());
                       ed.patchRcp(r.id, { email: e.target.value, ...(c && !r.name ? { name: c.name } : {}) });
@@ -154,7 +155,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
               </select>
             </label>
             <div id="ed-date-example" className="muted small" aria-live="polite">
-              {anyLocked ? `Dates are written like ${formatDate(today, format)}. That is fixed, because ${lockedNames} already finished.` : <>A date signed today is written as <b style={{ color: 'var(--ink)' }}>{formatDate(today, format)}</b>, exactly as you see it here.</>}
+              {anyLocked ? `Dates are written like ${formatDate(today, format)}. That is fixed, because ${lockedNames} already finished.` : <>A date signed today is written as <b style={{ color: 'var(--ink)' }}>{formatDate(today, format)}</b>. It is never changed to another format.</>}
             </div>
           </div>
         </div>

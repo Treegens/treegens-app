@@ -67,7 +67,6 @@ export type Ed = {
   setFields: History<any[]>['set'];
   undo: () => void;
   redo: () => void;
-  confirm: (c: Confirm) => void;
   modalOpen: boolean;
   go: (step: number) => void;
 };

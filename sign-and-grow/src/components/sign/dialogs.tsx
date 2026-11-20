@@ -155,11 +155,11 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
 
 // ---- Decline and pass on ---------------------------------------------------------------------
 
-export function DeclineDialog({ base, sender, onClose, onDone }: { base: string; sender: any; onClose: () => void; onDone: () => void }) {
+export function DeclineDialog({ base, sender, title = 'Decline to sign', onClose, onDone }: { base: string; sender: any; title?: string; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
   const { busy, error, setError, send } = useSend();
   return (
-    <Dialog title="Decline to sign" onClose={onClose}>
+    <Dialog title={title} onClose={onClose}>
       <form onSubmit={async (e) => {
         e.preventDefault();
         if (!reason.trim()) return setError(`Add a short reason so ${sender.name} knows what to change, then choose Decline.`);
@@ -288,6 +288,8 @@ export function FieldSheet({ field, value, onChange, onDone, onNext }: { field: 
     <Dialog title={name} onClose={onDone} variant="field" light>
       <form onSubmit={(e) => {
         e.preventDefault();
+        // Stay on a field that still needs putting right. Done remains available to look at the document first.
+        if (problem) return input.current?.focus();
         (onNext || onDone)();
       }}>
         {field.type === 'dropdown' ? (
@@ -301,7 +303,9 @@ export function FieldSheet({ field, value, onChange, onDone, onNext }: { field: 
           <input {...shared} type={field.type === 'date' ? 'date' : 'text'} inputMode={field.type === 'number' ? 'decimal' : undefined} autoComplete={field.type === 'company' ? 'organization' : field.type === 'title' ? 'organization-title' : 'off'}
             enterKeyHint={onNext ? 'next' : 'done'} onChange={(e) => onChange(e.target.value)} />
         )}
-        <p id={hint} className={`sg-sheet-hint${problem ? ' bad' : ''}`}>{problem || (field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.')}</p>
+        {problem
+          ? <p id={hint} className="sg-sheet-hint bad" role="alert">{problem}</p>
+          : <p id={hint} className="sg-sheet-hint">{field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}</p>}
         <div className="actions">
           <button type="button" className={`btn${onNext ? '' : ' primary'}`} onClick={onDone}>Done</button>
           {onNext && <button className="btn primary">Next</button>}

@@ -56,13 +56,15 @@ function Page({ pdf, index, width, children, onClick }: { pdf: any; index: numbe
   );
 }
 
-export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, onPages }: {
+export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, onPages, onDocument }: {
   url: string;
   maxWidth?: number;
   zoom?: number;
   overlay?: (page: number) => ReactNode;
   onPageClick?: (page: number, x: number, y: number) => void;
   onPages?: (n: number) => void;
+  /** Hands the loaded pdf.js document to the parent (to read its text, for example), and null when it is unloaded. */
+  onDocument?: (pdf: any | null) => void;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [pdf, setPdf] = useState<any>(null);
@@ -83,10 +85,12 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, onPageClick, on
         if (!live) return;
         setPdf(d);
         onPages?.(d.numPages);
+        onDocument?.(d);
       })
       .catch((e: any) => live && setError(e?.message || 'Could not load the document.'));
     return () => {
       live = false;
+      onDocument?.(null);
       task?.destroy?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

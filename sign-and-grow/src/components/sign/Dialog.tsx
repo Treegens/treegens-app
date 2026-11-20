@@ -40,7 +40,12 @@ export function Dialog({ title, children, onClose, wide, variant, light }: {
       el.setAttribute('inert', '');
       hidden.push(el);
     }
-    if (locks++ === 0) document.documentElement.classList.add('sg-locked');
+    if (locks++ === 0) {
+      // Stop the page behind from scrolling, and keep its width so nothing jumps when the scrollbar goes.
+      const gap = window.innerWidth - document.documentElement.clientWidth;
+      if (gap > 0) document.documentElement.style.paddingRight = `${gap}px`;
+      document.documentElement.classList.add('sg-locked');
+    }
 
     if (!panel.contains(document.activeElement)) (panel.querySelector<HTMLElement>('[data-autofocus]') || panel).focus({ preventScroll: true });
 
@@ -87,7 +92,10 @@ export function Dialog({ title, children, onClose, wide, variant, light }: {
       vv?.removeEventListener('scroll', lift);
       stack.splice(stack.indexOf(id), 1);
       for (const el of hidden) el.removeAttribute('inert');
-      if (--locks === 0) document.documentElement.classList.remove('sg-locked');
+      if (--locks === 0) {
+        document.documentElement.classList.remove('sg-locked');
+        document.documentElement.style.paddingRight = '';
+      }
       if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, [id]);
@@ -95,7 +103,7 @@ export function Dialog({ title, children, onClose, wide, variant, light }: {
   if (typeof document === 'undefined') return null;
   return createPortal(
     <div ref={bg} className={`modal-bg sg-dialog-bg${light ? ' light' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={box} className={`modal sg-dialog${wide ? ' wide' : ''}${variant ? ` ${variant}` : ''}`} role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1}>
+      <div ref={box} className={`modal sg-dialog${wide ? ' wide' : ''}${variant === 'field' ? ' sg-two' : ''}`} role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1}>
         <div className="sg-dialog-head">
           <h2 id={id}>{title}</h2>
           <button type="button" className="sg-x" aria-label="Close" onClick={onClose}>

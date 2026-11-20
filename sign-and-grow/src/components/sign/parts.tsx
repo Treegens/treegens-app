@@ -130,7 +130,15 @@ export const prefersLessMotion = () => typeof window !== 'undefined' && window.m
 
 /** Scrolls so the element sits a given fraction of the way down the screen. */
 export function bringIntoView(el: Element, fraction = 0.45) {
-  const r = el.getBoundingClientRect();
-  const top = r.top + window.scrollY + r.height / 2 - window.innerHeight * fraction;
-  window.scrollTo({ top: Math.max(0, top), behavior: prefersLessMotion() ? 'auto' : 'smooth' });
+  const go = (behavior: ScrollBehavior) => {
+    const r = el.getBoundingClientRect();
+    window.scrollTo({ top: Math.max(0, r.top + window.scrollY + r.height / 2 - window.innerHeight * fraction), behavior });
+  };
+  go(prefersLessMotion() ? 'auto' : 'smooth');
+  // Pages that were still loading can push the target further down while we scroll. Check once it has settled.
+  window.setTimeout(() => {
+    if (!el.isConnected) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < 64 || r.bottom > window.innerHeight - 96) go('auto');
+  }, 750);
 }

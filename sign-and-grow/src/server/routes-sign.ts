@@ -2,7 +2,7 @@ import { route, pdfResponse, type Ctx } from './router.ts';
 import { get, run, readBlob } from './db.ts';
 import { bad, hmac, now, str, rateLimit, safeEqual, HttpError } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
-import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, askSender, renameSelf, noteDeadLink } from './envelopes.ts';
+import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, askSender, renameSelf, noteDeadLink, okImage } from './envelopes.ts';
 import { fieldDisplayValue } from './pdf.ts';
 import { storeUpload } from './routes-envelopes.ts';
 import { impactOf } from '../lib/impact.ts';
@@ -60,6 +60,7 @@ route('GET', '/sign/:token', (c) => {
       const done = !f.recipient_id || o?.status === 'completed';
       return {
         id: f.id, document_id: f.document_id, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h,
+        label: f.label, by: o?.name || null,
         value: done ? fieldDisplayValue(f, o, e.date_format) : '',
         image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
       };
@@ -101,7 +102,11 @@ route('GET', '/sign/:token/doc/:doc', (c) => {
 route('POST', '/sign/:token/save', async (c) => {
   const { e, r } = find(c);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw bad('This envelope is no longer open for signing.');
-  applyValues(e, r, (await c.body()).values || {}, false);
+  const b = await c.body();
+  applyValues(e, r, b.values || {}, false);
+  // The chosen signature travels with "finish later", so picking up on another device does not mean signing again.
+  if (b.signature_png !== undefined || b.initials_png !== undefined)
+    run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(b.signature_png) ? b.signature_png : r.signature_png, okImage(b.initials_png) ? b.initials_png : r.initials_png, r.id);
 }, 'public');
 
 route('POST', '/sign/:token/upload', async (c) => {

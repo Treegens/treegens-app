@@ -1,1 +1,132 @@
 /* Styles for the editor screens. Shared tokens and components live in ../globals.css. */
+
+/* Read by screen readers, not drawn. Still focusable, so a hidden file input keeps working from the keyboard. */
+.ed-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.ed-only-sm { display: none; }
+.ed-break { overflow-wrap: anywhere; }
+.ed-narrow { margin: 0 auto; max-width: 860px; }
+.ed-review { max-width: 760px; }
+.ed .palette button:focus-visible, .ed .steps button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.ed .palette button:disabled { opacity: 0.5; cursor: not-allowed; }
+.ed .btn.ed-danger { background: var(--red); border-color: var(--red); color: #fff; }
+.ed .btn.ed-danger:hover { background: #932d25; border-color: #932d25; }
+.ed-top .btn.ghost { gap: 4px; }
+
+/* A strip under the top bar: "this envelope is already out", or "your changes are not saved yet". */
+.ed-banner { background: var(--blue-soft); color: #1d3f6e; border-bottom: 1px solid #cfdcf0; padding: 10px 18px; font-size: 14px; }
+.ed-banner.err { background: var(--red-soft); color: #7d241d; border-bottom-color: #f1cfca; }
+
+/* Step 1 */
+.ed-drop { display: block; position: relative; }
+.ed-drop:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+.ed-uploads { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.ed-uploads li { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
+.ed-uploads li.err { background: var(--red-soft); border-color: #f1cfca; color: #7d241d; }
+.ed-upload-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; min-width: 0; }
+.ed-upload-head > span:first-child { min-width: 0; flex: 1; }
+.ed-progress { height: 6px; border-radius: 3px; background: #e7e2d6; overflow: hidden; }
+.ed-progress > i { display: block; height: 100%; background: var(--green); border-radius: 3px; transition: width 0.15s; }
+.ed-progress > i.busy { background-image: linear-gradient(90deg, var(--green) 0%, var(--leaf) 50%, var(--green) 100%); background-size: 200% 100%; animation: ed-slide 1.1s linear infinite; }
+@keyframes ed-slide { from { background-position: 200% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .ed-progress > i.busy { animation: none; } .ed-progress > i { transition: none; } }
+.ed-doc { margin-top: 10px; }
+.ed-lockline { display: flex; gap: 8px; align-items: flex-start; }
+.ed-lockline svg { margin-top: 3px; }
+.rcpt.ed-locked { background: #faf8f2; }
+.ed-static { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.ed-static > span { display: block; margin-bottom: 5px; }
+.ed-static > div { font-weight: 400; font-size: 14px; padding: 9px 0; }
+
+/* Step 2. On a wide screen the three columns fill the window under the top bar and any banner. */
+@media (min-width: 901px) {
+  .ed-step2 { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+  .ed-step2 .editor { flex: 1; min-height: 0; height: auto; }
+}
+.ed-mid { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ed-mid .canvas { flex: 1; min-height: 0; }
+.ed-bar { display: flex; align-items: center; gap: 14px; padding: 8px 16px; background: #f4f1e8; border-bottom: 1px solid var(--line); }
+.ed-undo { display: inline-flex; gap: 6px; }
+.ed-tools .ed-group { margin-bottom: 16px; }
+.ed-tools h3 { margin-bottom: 8px; }
+.ed-signers { display: grid; gap: 6px; }
+.ed-signers .btn { justify-content: flex-start; min-width: 0; }
+.ed-signers .btn.on { border-color: var(--fc); box-shadow: 0 0 0 1px var(--fc); }
+.ed-find { width: 100%; }
+.ed-findbox p { margin: 6px 0 0; }
+.ed-status { margin: 0 0 10px; color: var(--green-deep); background: var(--green-soft); border-radius: 8px; padding: 8px 10px; }
+.ed-status:empty { display: none; }
+.ed-hint { margin: 10px 0 0; }
+.ed-size { grid-template-columns: 1fr 1fr; gap: 8px; }
+.ed-sheetbar { display: none; }
+
+.field.edit.locked { cursor: default; border-style: dashed; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--fc, var(--green)) 16%, transparent) 0 6px, color-mix(in srgb, var(--fc, var(--green)) 6%, transparent) 6px 12px); }
+.field.edit.locked .tag { display: inline-flex; align-items: center; gap: 3px; opacity: 0.8; }
+.field.edit.locked svg { flex: none; }
+/* A checkbox is smaller than its own resize handle. Hang the handle outside the box so the box can still be grabbed. */
+.field.edit.box .grip { right: -13px; bottom: -13px; }
+@media (pointer: coarse) {
+  .field.edit .grip { width: 16px; height: 16px; right: -8px; bottom: -8px; }
+  .field.edit.box .grip { right: -17px; bottom: -17px; }
+  .field.edit .grip::after { content: ''; position: absolute; inset: 0 -14px -14px 0; } /* a bigger target for a finger */
+}
+/* The line a field snapped to while it is being dragged. */
+.ed-guide { position: absolute; z-index: 6; pointer-events: none; background: #d6249f; }
+.ed-guide.x { width: 1px; margin-left: -0.5px; }
+.ed-guide.y { height: 1px; margin-top: -0.5px; }
+
+/* Step 3 */
+.ed-people { list-style: none; margin: 0; padding: 0; }
+.ed-people li { display: flex; gap: 10px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+.ed-people li:first-child { border-top: 0; }
+.ed-people li > .dot { margin-top: 6px; }
+.ed-people li.gone b { text-decoration: line-through; text-decoration-color: var(--muted); }
+.ed-actions { justify-content: flex-end; }
+
+@media (max-width: 900px) {
+  .ed-only-sm { display: block; }
+  .ed-hide-sm, .ed-wide { display: none !important; }
+
+  /* Everything that can be tapped is at least 40px tall. */
+  .ed .btn, .ed .palette button, .ed .steps button { min-height: 40px; }
+  .ed .steps button { min-width: 40px; justify-content: center; }
+  .ed .btn.sm { min-width: 40px; }
+  .ed input:not([type='checkbox']):not([type='radio']), .ed select { min-height: 40px; }
+  .ed label.check { min-height: 40px; }
+  .ed input[type='checkbox'] { width: 18px; height: 18px; }
+
+  .ed-top { gap: 6px; padding: 0 8px; }
+  .ed-top .steps { gap: 2px; justify-content: center; }
+  .ed-top .steps button { padding: 6px 8px; }
+  .ed-banner { padding: 8px 12px; font-size: 13px; }
+  .ed-doc { flex-wrap: wrap; gap: 6px 8px; }
+  .ed-doc input { flex: 1 1 100%; }
+  .ed-doc > .muted { margin-right: auto; }
+  .ed-actions .grow { display: none; }
+  .ed-actions .btn.primary { flex: 1; }
+
+  /* Step 2: tools become two strips that stay under the top bar, the page sits below, settings slide up. */
+  .ed .editor { display: block; }
+  .ed .editor .pane.ed-tools { position: sticky; top: 61px; z-index: 15; padding: 8px 10px; box-shadow: 0 4px 10px rgba(23, 36, 28, 0.06); }
+  .ed-tools h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .ed-tools .ed-group { margin: 0; }
+  .ed-row-a, .ed-row-b { display: flex; gap: 6px; align-items: center; }
+  .ed-row-b { margin-top: 6px; }
+  .ed-row-a .ed-group, .ed-palbox { flex: 1; min-width: 0; }
+  .ed-findbox { flex: none; }
+  .ed-signers, .ed .palette { display: flex; gap: 6px; overflow-x: auto; padding: 2px; scrollbar-width: none; }
+  .ed-signers::-webkit-scrollbar, .ed .palette::-webkit-scrollbar { display: none; }
+  .ed-signers .btn { flex: none; max-width: 62vw; }
+  .ed .palette button { flex: none; white-space: nowrap; padding: 8px 12px; }
+  .ed-find { width: auto; }
+  .ed-status { margin: 6px 0 0; }
+  .ed-hint { margin: 6px 0 0; }
+  .ed-bar { padding: 6px 10px; }
+  .ed .editor .canvas { padding: 12px 8px 66vh; } /* room to scroll the last fields clear of the settings sheet */
+
+  .ed .editor .pane.ed-settings { display: none; }
+  .ed .editor .pane.ed-settings.has { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; max-height: 62vh; overflow-y: auto; border-top: 1px solid var(--line); box-shadow: 0 -8px 24px rgba(23, 36, 28, 0.14); padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  .ed-sheetbar { display: flex; gap: 6px; align-items: center; }
+  .ed-sheetbar > span:first-child { flex: 1; min-width: 0; }
+  .ed-sheetbody { display: none; margin-top: 12px; }
+  .ed-settings.open .ed-sheetbody, .ed-sheetbody.always { display: block; }
+}

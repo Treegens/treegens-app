@@ -46,9 +46,16 @@ test('a sent envelope can be corrected without voiding it', async () => {
   // Ada signs. Now what she signed is locked, but the others can still be changed.
   assert.equal((await signAll(e.id, 'ada@example.com')).status, 200);
   e = (await full(jo, e.id)).envelope;
-  const locked = asBody(e);
-  locked.fields.find((f: any) => f.recipient_id === e.recipients.find((x: any) => x.email === 'ada@example.com').id && f.type === 'text').value = 'tampered';
-  assert.equal((await jo.put(`/envelopes/${e.id}`, locked)).status, 409, 'cannot change what a finished signer signed');
+  const adaId = e.recipients.find((x: any) => x.email === 'ada@example.com').id;
+  const rewrite = asBody(e);
+  rewrite.fields.find((f: any) => f.recipient_id === adaId && f.type === 'text').value = 'tampered';
+  assert.equal((await jo.put(`/envelopes/${e.id}`, rewrite)).status, 200);
+  assert.equal(((await full(jo, e.id)).envelope.fields.find((f: any) => f.type === 'text').value), 'filled in', 'what a finished signer wrote cannot be rewritten');
+  e = (await full(jo, e.id)).envelope;
+  const moved = asBody(e);
+  moved.fields.find((f: any) => f.recipient_id === adaId && f.type === 'signature').y = 0.1;
+  assert.equal((await jo.put(`/envelopes/${e.id}`, moved)).status, 409, 'and their signature cannot be moved somewhere else on the page');
+  e = (await full(jo, e.id)).envelope;
   const swapDoc = asBody(e);
   swapDoc.documents = [];
   assert.notEqual((await jo.put(`/envelopes/${e.id}`, swapDoc)).status, 200, 'cannot pull the document out from under a signature');
@@ -395,4 +402,53 @@ test('small things that stop people getting stuck', async () => {
   const f = new FormData();
   f.append('file', new Blob([await blank.save()], { type: 'application/pdf' }), 'scan.pdf');
   assert.equal((await jo.call('POST', '/files', f)).data.is_scan, true);
+});
+
+test('an editor opened earlier can never undo what a signer did', async () => {
+  const e0 = await draft(jo, { ordered: false, subject: 'Stale editor' });
+  await jo.post(`/envelopes/${e0.id}/send`);
+  // The sender opens the editor now...
+  const stale = asBody((await full(jo, e0.id)).envelope);
+  // ...and meanwhile Ada types an answer and saves, and then finishes.
+  const tok = tokenFor(e0.id, 'ada@example.com');
+  const ada = new Client();
+  await ada.post(`/sign/${tok}/consent`);
+  const v = (await ada.get(`/sign/${tok}`)).data;
+  const textId = v.fields.find((f: any) => f.type === 'text').id;
+  await ada.post(`/sign/${tok}/save`, { values: { [textId]: '400 seedlings' }, signature_png: PNG });
+  assert.ok((await new Client().get(`/sign/${tok}`)).data.recipient.signature_png, 'the chosen signature is kept for another device');
+
+  // The sender saves the old editor state (which has that field empty) after moving one of Ben's fields.
+  stale.fields.find((f: any) => f.type === 'checkbox').x = 0.6;
+  assert.equal((await jo.put(`/envelopes/${e0.id}`, stale)).status, 200);
+  assert.equal((await full(jo, e0.id)).envelope.fields.find((f: any) => f.id === textId).value, '400 seedlings', 'what Ada typed is still there');
+
+  // Ada finishes. The same old editor state is saved again: it must not be refused just for being out of date,
+  // and it must not change Ada.
+  await ada.post(`/sign/${tok}/complete`, { values: { [textId]: '400 seedlings', [v.fields.find((f: any) => f.type === 'signature').id]: '1' }, signature_png: PNG });
+  stale.recipients.find((r: any) => r.email === 'ada@example.com').name = 'Someone Else';
+  stale.date_format = 'DD/MM/YYYY';
+  assert.equal((await jo.put(`/envelopes/${e0.id}`, stale)).status, 200);
+  const now = (await full(jo, e0.id)).envelope;
+  assert.equal(now.recipients.find((r: any) => r.email === 'ada@example.com').name, 'Ada Signer');
+  assert.equal(now.fields.find((f: any) => f.id === textId).value, '400 seedlings');
+  assert.notEqual(now.date_format, 'DD/MM/YYYY', 'the date format is fixed once somebody has signed');
+
+  // A copy recipient whose address is corrected gets their copy at the new address.
+  const cur = asBody(now);
+  cur.recipients.find((r: any) => r.role === 'cc').email = 'cee.new@example.com';
+  db.run("UPDATE recipients SET status='completed' WHERE envelope_id=? AND role='cc'", e0.id);
+  assert.equal((await jo.put(`/envelopes/${e0.id}`, asBody((await full(jo, e0.id)).envelope).recipients.length ? cur : cur)).status, 200);
+  assert.ok(mailTo('cee.new@example.com').length >= 1);
+
+  // Limits are stated, never applied silently, and a draft can be saved with a half-typed address.
+  const d = await simple(jo, 'x@example.com');
+  const body = asBody((await full(jo, d.id)).envelope);
+  body.recipients[0].email = 'half-typed@';
+  assert.equal((await jo.put(`/envelopes/${d.id}`, body)).status, 200);
+  assert.equal((await jo.post(`/envelopes/${d.id}/send`)).status, 400, 'and it is checked before sending');
+  body.recipients = Array.from({ length: 51 }, (_, i) => ({ id: `x${i}`, role: 'cc', name: `P${i}`, email: `p${i}@example.com` }));
+  const tooMany = await jo.put(`/envelopes/${d.id}`, body);
+  assert.equal(tooMany.status, 400);
+  assert.match(tooMany.data.error, /up to 50 recipients/);
 });

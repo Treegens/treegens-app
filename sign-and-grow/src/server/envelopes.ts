@@ -92,9 +92,16 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean)
   const recId = keep(e.recipients, 'rcp', 'recipients');
   const fldId = keep(e.fields, 'fld', 'fields');
 
-  const docs = Array.isArray(body.documents) ? body.documents.slice(0, 30) : [];
-  const recs = Array.isArray(body.recipients) ? body.recipients.slice(0, 50) : [];
-  const flds = Array.isArray(body.fields) ? body.fields.slice(0, 2000) : [];
+  const docs = Array.isArray(body.documents) ? body.documents : [];
+  const recs = Array.isArray(body.recipients) ? body.recipients : [];
+  const flds = Array.isArray(body.fields) ? body.fields : [];
+  // Limits are said out loud. Nothing is ever dropped quietly.
+  if (docs.length > 30) throw bad('An envelope can hold up to 30 documents. Remove some, or send the rest in a second envelope.');
+  if (recs.length > 50) throw bad('An envelope can have up to 50 recipients. For more people, use bulk send so each gets their own copy.');
+  if (flds.length > 2000) throw bad('An envelope can have up to 2,000 fields. Remove some fields and save again.');
+  // Once somebody has finished, the date format stays as it was when they signed.
+  const someoneDone = correcting && e.recipients.some((r: any) => r.status === 'completed' && r.role !== 'cc');
+  const doneIds = new Set<string>(correcting ? e.recipients.filter((r: any) => r.status === 'completed' && r.role !== 'cc').map((r: any) => r.id) : []);
   const docPages = new Map<string, number>();
   const oldRecs = new Set<string>(e.recipients.map((r: any) => r.id));
   const oldFields = new Map<string, any>(e.fields.map((f: any) => [f.id, f]));
@@ -102,7 +109,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean)
   run('UPDATE envelopes SET subject=?, message=?, ordered=?, reminder_days=?, expire_days=?, date_format=?, updated_at=? WHERE id=?',
     str(body.subject ?? e.subject, 200), str(body.message ?? e.message, 5000), body.ordered ? 1 : 0,
     int(body.reminder_days, 0, 60, e.reminder_days), int(body.expire_days, 1, 365, e.expire_days),
-    (DATE_FORMATS as readonly string[]).includes(body.date_format) ? body.date_format : e.date_format, now(), e.id);
+    !someoneDone && (DATE_FORMATS as readonly string[]).includes(body.date_format) ? body.date_format : e.date_format, now(), e.id);
   run('DELETE FROM fields WHERE envelope_id=?', e.id);
   run('DELETE FROM documents WHERE envelope_id=?', e.id);
   docs.forEach((d: any, i: number) => {
@@ -119,7 +126,13 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean)
     seen.add(rid);
     const role = ROLES.includes(r.role) ? r.role : 'signer';
     const email = str(r.email, 254).trim();
-    if (email && !isEmail(email)) throw bad(`"${email}" is not a valid email address.`);
+    // A draft may hold a half-typed address so the rest of the work is never lost; it is checked before sending.
+    if (correcting && email && !isEmail(email)) throw bad(`"${email}" is not a valid email address.`);
+    // Someone who has finished stays exactly as they were, whatever an out-of-date editor sends.
+    if (doneIds.has(rid)) {
+      run('UPDATE recipients SET position=? WHERE id=?', i, rid);
+      return;
+    }
     const vals = [role, str(r.role_name, 80) || null, str(r.name, 120).trim(), email, int(r.routing_order, 1, 99, 1), i, str(r.access_code, 50).trim() || null, str(r.note, 1000) || null];
     if (oldRecs.has(rid)) run('UPDATE recipients SET role=?, role_name=?, name=?, email=?, routing_order=?, position=?, access_code=?, note=? WHERE id=?', ...vals, rid);
     else run('INSERT INTO recipients (role, role_name, name, email, routing_order, position, access_code, note, id, envelope_id) VALUES (?,?,?,?,?,?,?,?,?,?)', ...vals, rid, e.id);
@@ -137,7 +150,11 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean)
     const h = Math.min(1, Math.max(0.005, Number(f.h) || 0.03));
     const prefilled = ['text', 'number', 'date', 'company', 'title', 'note', 'checkbox', 'radio', 'dropdown'].includes(f.type);
     // Signatures, initials and attachments are never set by the sender. During a correction, keep what signers put there.
-    const value = prefilled ? str(f.value, 4000) || null : correcting && old ? old.value : null;
+    // During a correction, whatever a signer already entered is kept: an editor that was opened earlier must never
+    // wipe it. The sender can still set a value on a field that is empty, or on their own read-only fields.
+    const senderOwned = f.type === 'note' || (old ? !!old.readonly : !!f.readonly);
+    const value = correcting && old && !senderOwned && old.value != null ? old.value
+      : prefilled ? str(f.value, 4000) || null : correcting && old ? old.value : null;
     run('INSERT INTO fields (id, envelope_id, document_id, recipient_id, type, page, x, y, w, h, required, label, value, options, group_name, validation, readonly) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       fid, e.id, did, rid, f.type, int(f.page, 0, docPages.get(did)! - 1, 0),
       Math.min(clamp01(f.x), 1 - w), Math.min(clamp01(f.y), 1 - h), w, h, f.required === false || f.required === 0 ? 0 : 1,
@@ -222,6 +239,11 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       const old = oldById.get(r.id);
       if (!old) {
         run('UPDATE recipients SET token=?, check_code=? WHERE id=?', token(), checkCode(), r.id);
+        continue;
+      }
+      if (old.status === 'completed' && old.role === 'cc' && r.role === 'cc' && old.email.toLowerCase() !== r.email.toLowerCase()) {
+        retireToken(old);
+        run("UPDATE recipients SET status='pending', token=?, check_code=?, sent_at=NULL, completed_at=NULL WHERE id=?", token(), checkCode(), r.id);
         continue;
       }
       if (old.status === 'completed' || old.status === 'pending') continue;
@@ -463,7 +485,7 @@ async function completeEnvelope(e: any) {
   const sender = senderOf(e);
   const sent = new Set<string>();
   for (const r of fresh.recipients) {
-    const to = r.role === 'inperson' ? '' : r.email.toLowerCase();
+    const to = r.email.toLowerCase();
     if (!to || sent.has(to)) continue;
     sent.add(to);
     await sendMail({ to: r.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their Sign&Grow account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code });
@@ -579,7 +601,7 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
   for (const [name, gr] of groups) if (gr.required && !gr.ok) throw bad(`Choose an option for ${name}.`);
 }
 
-const okImage = (s: any) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < 700_000;
+export const okImage = (s: any) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < 700_000;
 
 export async function completeRecipient(e: any, r: any, body: any, actor: Actor) {
   if (e.status !== 'sent') throw bad('This envelope is no longer open for signing.');

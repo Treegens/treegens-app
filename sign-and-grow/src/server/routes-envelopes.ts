@@ -16,7 +16,7 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   const form = await c.req.formData().catch(() => null);
   const file = form?.get('file');
   if (!file || typeof file === 'string') throw bad('Choose a file to upload.');
-  if (file.size > 25_000_000) throw bad('Files can be up to 25 MB.');
+  if (file.size > 25_000_000) throw bad('That file is larger than 25 MB. Save it with smaller images or split it into parts, then upload again.');
   let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
   const isPdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
   const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
@@ -24,7 +24,7 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   if (!isPdf && !isPng && !isJpg) throw bad('Upload a PDF, PNG or JPEG. Export Word or Google Docs files as PDF first.');
   if (!isPdf) bytes = await imageToPdf(bytes, isPng ? 'image/png' : 'image/jpeg');
   const info = await inspectPdf(bytes);
-  if (info.pages > 500) throw bad('Documents can have up to 500 pages.');
+  if (info.pages > 500) throw bad('That document has more than 500 pages. Split it into smaller documents and add them one by one.');
   const fid = id('fil');
   const name = str(file.name, 200).replace(/\.(pdf|png|jpe?g)$/i, '') || 'Document';
   // Text is kept for the sender's own search. Files uploaded by signers are not indexed.

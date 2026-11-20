@@ -1,1 +1,237 @@
 /* Styles for the sign screens. Shared tokens and components live in ../globals.css. */
+
+/* ---- Frame ------------------------------------------------------------------------------------ */
+html.sg-locked, html.sg-locked body { overflow: hidden; }
+.sg-shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; font-size: 16px; line-height: 1.55; }
+.sg-shell .signwrap { flex: 1; width: 100%; padding: 20px 12px 40px; }
+.sg-vh { position: absolute !important; width: 1px !important; height: 1px !important; min-height: 0 !important; margin: -1px; padding: 0 !important; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.sg-skip { position: absolute; left: 8px; top: -80px; z-index: 70; background: #fff; color: var(--ink); padding: 12px 16px; border-radius: 10px; font-weight: 600; box-shadow: var(--shadow); }
+.sg-skip:focus { top: 8px; }
+
+.sg-shell :focus-visible, .sg-dialog :focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
+/* These only receive focus so a screen reader starts reading in the right place. */
+.sg-dialog:focus-visible, #sg-main:focus-visible, #sg-h1:focus-visible, .sg-confirmed:focus-visible { outline: none; }
+
+.sg-shell .btn, .sg-dialog .btn { min-height: 44px; font-size: 15px; }
+.sg-shell .btn.lg, .sg-dialog .btn.lg { min-height: 52px; font-size: 17px; }
+.sg-shell .btn.sm, .sg-dialog .btn.sm { min-height: 40px; font-size: 14px; padding: 6px 14px; }
+.btn.sg-danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.sg-danger:hover { background: #962d25; border-color: #962d25; }
+.sg-shell :where(input:not([type='checkbox'], [type='radio'], [type='file']), select, textarea),
+.sg-dialog :where(input:not([type='checkbox'], [type='radio'], [type='file']), select, textarea) { font-size: 16px; min-height: 46px; padding: 10px 12px; }
+.sg-shell input[type='file'] { font-size: 15px; padding: 9px 8px; min-height: 46px; }
+.sg-shell label.f, .sg-dialog label.f { font-size: 15px; }
+.sg-email { display: inline-block; max-width: 100%; overflow-wrap: anywhere; vertical-align: bottom; }
+.sg-link { border: 0; background: none; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; }
+
+/* ---- Top bar ---------------------------------------------------------------------------------- */
+.sg-bar { min-height: 60px; color: var(--sg-bar-ink, #fff); gap: 10px; padding: 8px 14px; }
+.sg-bar :focus-visible { outline-color: var(--sg-bar-ink, #fff); }
+.sg-logo { max-height: 32px; max-width: 140px; background: #fff; border-radius: 6px; padding: 3px; }
+.sg-title { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: 0; line-height: 1.3; }
+.sg-count { font-size: 13.5px; line-height: 1.3; white-space: nowrap; }
+.sg-count .progress { width: 100%; min-width: 130px; margin-bottom: 4px; background: color-mix(in srgb, currentColor 28%, transparent); }
+.sg-count .progress > i { background: var(--sg-bar-ink, #ffd24a); }
+.sg-bar .btn.go { padding: 9px 28px; font-size: 16px; border-color: rgba(0, 0, 0, 0.18); }
+
+/* ---- Footer and the bar at the bottom of a phone ---------------------------------------------- */
+.sg-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 20px; max-width: 920px; width: 100%; margin: 0 auto; padding: 10px 12px 20px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); }
+.sg-foot-links { display: flex; flex-wrap: wrap; gap: 0 20px; align-items: center; }
+.sg-foot-links > * { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; }
+.sg-foot-by { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.sg-bottom { display: none; }
+
+/* ---- One clear message: locked, closed, waiting, finished, lost links ------------------------- */
+.sg-state, .sg-narrow { max-width: 560px; margin: 24px auto; padding: 32px 28px; text-align: center; }
+.sg-state > h1, .sg-narrow > h1 { font-size: 28px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.sg-state > p, .sg-narrow > p, .sg-find > p { margin: 0 auto 14px; max-width: 48ch; }
+.sg-state label.f, .sg-narrow label.f { text-align: left; }
+.sg-state .btn.lg, .sg-narrow .btn.lg { width: 100%; }
+.sg-state-icon { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 14px; background: var(--green-soft); color: var(--green); }
+.sg-state-icon.warn, .sg-state-icon.wait { background: var(--amber-soft); color: #8a5a0b; }
+.sg-state-icon.stop { background: var(--red-soft); color: var(--red); }
+.sg-state-icon.lock, .sg-state-icon.link, .sg-state-icon.mail { background: var(--blue-soft); color: var(--blue); }
+.sg-who { margin: 18px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf6; text-align: left; display: grid; gap: 4px; font-size: 15px; }
+.sg-who > div { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: 8px; }
+.sg-who dt { color: var(--muted); }
+.sg-who dd { margin: 0; overflow-wrap: anywhere; }
+.sg-quote { margin: 16px 0 0; padding: 12px 14px; border-left: 4px solid var(--leaf); background: #fbfaf6; border-radius: 0 10px 10px 0; white-space: pre-wrap; text-align: left; overflow-wrap: anywhere; }
+.sg-state > p.sg-quote { margin: 0 0 14px; max-width: none; }
+.sg-quote > .muted { display: block; margin-bottom: 2px; }
+.sg-actions { margin-top: 16px; }
+.sg-state .sg-actions { justify-content: center; }
+.sg-state .sg-actions .btn.lg { width: auto; flex: 1 1 220px; }
+.sg-top { margin-bottom: 12px; }
+.sg-gap { margin-top: 14px; }
+.sg-problem { margin: 12px 0; text-align: left; }
+.sg-confirmed { margin: 4px 0 0; padding: 14px 16px; text-align: left; font-size: 16px; }
+.sg-state > p.sg-after, .sg-narrow > p.sg-after { margin: 18px auto 0; }
+.sg-loading { padding: 80px 20px; }
+.sg-impact { display: flex; gap: 14px; align-items: flex-start; background: var(--green-soft); border-color: #cfe3d2; max-width: 560px; margin-left: auto; margin-right: auto; }
+.sg-impact p { margin: 4px 0 0; }
+
+/* ---- Consent ---------------------------------------------------------------------------------- */
+.sg-consent { max-width: 640px; margin: 16px auto; padding: 28px; }
+.sg-kicker { font-size: 14px; font-weight: 600; color: var(--green); margin: 0 0 4px; }
+.sg-consent h1 { font-size: 28px; overflow-wrap: anywhere; }
+.sg-consent h2 { font-size: 17px; }
+.sg-consent .sg-who { margin-bottom: 10px; }
+.sg-rule { border: 0; border-top: 1px solid var(--line); margin: 22px 0 18px; }
+.sg-legal { margin: 6px 0 0; font-size: 15px; }
+.sg-agree { margin: 14px 0 16px; padding: 12px 14px; border: 1.5px solid #cfc8b8; border-radius: 10px; font-size: 16px; min-height: 52px; gap: 12px; }
+.sg-agree input { width: 22px; height: 22px; flex: none; }
+.sg-agree:has(input:checked) { border-color: var(--green); background: var(--green-soft); }
+.sg-continue { width: 100%; }
+
+/* ---- The document ----------------------------------------------------------------------------- */
+.sg-guide { margin: 0 0 12px; font-size: 16px; }
+.sg-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.sg-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 2px; gap: 2px; }
+.sg-seg button { border: 0; background: transparent; font: inherit; font-weight: 600; font-size: 15px; min-height: 44px; padding: 6px 14px; border-radius: 10px; color: var(--muted); cursor: pointer; }
+.sg-seg button[aria-pressed='true'] { background: var(--green); color: #fff; }
+.sg-docname { font-size: 15px; color: var(--muted); margin: 4px 0 8px; }
+.sg-envelope { margin: 28px 0 0; }
+
+/* The overlay gets its own stacking order so the enlarged tap areas below sit behind every real field. */
+.sg-doc .pdfpage .overlay { z-index: 0; }
+/* Text on the page follows the size of the page, but never drops below what can be read at all. */
+.sg-doc .field { font-size: max(calc(var(--pw, 800px) * 0.0145), 7px); }
+.sg-doc .field.box > svg { width: 86%; height: 86%; stroke-width: 3; }
+.sg-dot { width: 52%; height: 52%; border-radius: 50%; background: var(--ink); }
+.sg-doc .field.fill { font-family: inherit; text-align: left; color: var(--ink); line-height: 1.1; }
+.sg-doc button.field.fill { appearance: none; margin: 0; }
+.sg-doc .field.fill:focus-within { outline: 3px solid var(--green-deep); outline-offset: 2px; }
+.sg-doc .field.fill.bad { border-color: var(--red); background: var(--red-soft); }
+.sg-doc .field.fill .cta { display: inline-flex; align-items: center; justify-content: center; gap: 0.3em; max-width: 100%; overflow: hidden; white-space: nowrap; }
+.sg-doc .field.fill .cta svg { width: 1.15em; height: 1.15em; }
+.sg-doc .sg-val { display: block; width: 100%; padding: 0 0.3em; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sg-doc .sg-val.ph { color: #7a5b00; }
+.sg-doc .sg-auto { cursor: default; }
+.sg-flag { position: absolute; z-index: 6; transform: translateY(calc(-100% - 8px)); background: #ffd24a; color: #2b2100; font-weight: 700; font-size: 13px; line-height: 1; padding: 6px 9px; border-radius: 6px; white-space: nowrap; pointer-events: none; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2); }
+.sg-flag::after { content: ''; position: absolute; left: 12px; top: 100%; border: 6px solid transparent; border-top-color: #ffd24a; }
+.sg-flag.below { transform: translateY(8px); }
+.sg-flag.below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: #ffd24a; }
+
+/* ---- Text view -------------------------------------------------------------------------------- */
+.sg-text { font-size: 18px; line-height: 1.7; padding: 24px 28px; max-width: 760px; margin: 0 auto; overflow-wrap: anywhere; }
+.sg-text-doc { font-size: 22px; margin-bottom: 8px; }
+.sg-text-page { padding: 4px 0 20px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.sg-text-page:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+.sg-text-page > h3 { font-size: 13.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 10px; }
+.sg-text-page > h4 { font-family: var(--serif); font-size: 24px; margin: 14px 0 10px; }
+.sg-text-page > p { margin: 0 0 14px; white-space: pre-line; }
+.sg-form { margin-top: 18px; padding: 16px; border: 2px solid #d9a400; background: #fffbe8; border-radius: 12px; font-size: 16px; line-height: 1.5; }
+.sg-form-title { font-weight: 700; margin-bottom: 10px; }
+.sg-row { margin: 0 0 14px; }
+.sg-row:last-child { margin-bottom: 0; }
+.sg-row label.f { margin-bottom: 0; }
+.sg-row-label { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+.sg-row-label .hint, .sg-choices legend .hint, .sg-choice-label .hint, .sg-shell label.f .hint { font-weight: 400; color: var(--muted); }
+.sg-row-sig { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sg-row-sig img { max-height: 64px; max-width: 240px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.sg-row-state { margin: 6px 0 0; }
+.sg-row-remove { margin-top: 8px; }
+.sg-near { display: block; font-size: 14px; color: var(--muted); font-weight: 400; margin-top: 4px; }
+.sg-fielderr { margin: 6px 0 0; color: #7d241d; font-size: 14px; font-weight: 600; }
+.sg-others { margin-top: 14px; font-size: 16px; line-height: 1.5; }
+.sg-others ul { margin: 0; padding-left: 20px; }
+.sg-others img { max-height: 40px; vertical-align: middle; }
+
+/* ---- Dialogs ---------------------------------------------------------------------------------- */
+.sg-dialog-bg.light { background: rgba(15, 28, 20, 0.22); }
+.sg-dialog { position: relative; font-size: 16px; line-height: 1.5; padding: 20px 24px 24px; }
+.sg-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.sg-dialog-head h2 { margin: 8px 0 0; font-size: 21px; overflow-wrap: anywhere; }
+.sg-x { flex: none; width: 44px; height: 44px; margin: -4px -10px 0 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.sg-x:hover { background: rgba(23, 36, 28, 0.07); color: var(--ink); }
+.sg-dialog .actions { flex-wrap: wrap; }
+.sg-menu { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sg-menu-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+.sg-menu-item:hover { background: #fbfaf6; border-color: #cfc8b8; }
+.sg-menu-item svg { color: var(--green); }
+.sg-menu-label { display: block; font-weight: 600; line-height: 1.3; }
+.sg-menu-hint { display: block; font-size: 13.5px; color: var(--muted); line-height: 1.35; }
+.sg-menu-item.danger .sg-menu-label, .sg-menu-item.danger svg { color: var(--red); }
+.sg-choices { border: 0; padding: 0; margin: 0 0 14px; min-width: 0; }
+.sg-choices legend { font-weight: 600; font-size: 15px; padding: 0; margin-bottom: 6px; }
+.sg-choice { display: flex; align-items: flex-start; gap: 12px; padding: 11px 12px; min-height: 48px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 6px; cursor: pointer; background: #fff; }
+.sg-choice input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; }
+.sg-choice:has(input:checked) { border-color: var(--green); background: var(--green-soft); }
+.sg-choice:has(input:focus-visible) { outline: 3px solid var(--green); outline-offset: 2px; }
+.sg-choice-label { display: block; font-weight: 600; }
+.sg-choice-hint { display: block; font-size: 13.5px; color: var(--muted); }
+.sg-sigpreview { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 14px; display: grid; place-items: center; min-height: 110px; margin-bottom: 12px; }
+.sg-sigpreview img { max-width: 100%; max-height: 120px; object-fit: contain; }
+.sg-review { margin: 0 0 14px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.sg-review > div { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.sg-review > div:last-child { border-bottom: 0; }
+.sg-review dt { font-size: 13.5px; color: var(--muted); font-weight: 600; margin-bottom: 2px; }
+.sg-review dd { margin: 0; overflow-wrap: anywhere; }
+.sg-review-sig { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sg-review-sig img { max-height: 64px; max-width: min(260px, 60%); object-fit: contain; }
+.sg-dialog .sg-big-input { font-size: 20px; min-height: 58px; padding: 12px 14px; border: 2px solid var(--green); }
+.sg-dialog .sg-big-input[aria-invalid='true'] { border-color: var(--red); }
+.sg-sheet-hint { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.sg-sheet-hint.bad { color: #7d241d; font-weight: 600; }
+
+/* Adopting a signature */
+.sg-sigtabs button { min-height: 44px; padding: 10px 16px; font-size: 15px; }
+.sg-sigstyles .sigstyle { min-height: 60px; }
+.sg-padwrap { position: relative; }
+.sg-padwrap::after { content: ''; position: absolute; left: 7%; right: 7%; bottom: 27%; border-bottom: 1.5px solid #d8d2c4; pointer-events: none; }
+.sg-padhint { position: absolute; inset: 0; display: grid; place-items: center; color: #8d8676; font-size: 18px; pointer-events: none; }
+.sg-dialog .sigpad { height: clamp(170px, 34vh, 280px); border: 2px dashed #cfc8b8; }
+.sg-padrow { margin-top: 8px; flex-wrap: wrap; }
+.sg-drop { display: block; position: relative; }
+.sg-drop:focus-within { outline: 3px solid var(--green); outline-offset: 2px; }
+.sg-drop .muted { display: block; }
+.sg-siglegal { margin: 14px 0 0; }
+
+/* ---- Phones ----------------------------------------------------------------------------------- */
+@media (max-width: 600px) {
+  .sg-wide { display: none !important; }
+  .sg-shell .btn.sm, .sg-dialog .btn.sm { min-height: 44px; }
+  .sg-bar { padding: 8px 10px; }
+  .sg-title { font-size: 15px; }
+  .sg-shell .signwrap { padding: 14px 12px 28px; }
+  .sg-state, .sg-narrow, .sg-consent { padding: 24px 18px; margin: 4px auto; }
+  .sg-state > h1, .sg-narrow > h1, .sg-consent h1 { font-size: 24px; }
+  .sg-who > div { grid-template-columns: 1fr; gap: 0; }
+  .sg-who > div + div { margin-top: 6px; }
+  .sg-actions .btn, .sg-state .sg-actions .btn.lg { flex: 1 1 100%; }
+  .sg-consent .sg-actions .btn { flex: 1 1 0; padding-left: 8px; padding-right: 8px; }
+  .sg-text { padding: 18px 16px; }
+  .sg-text-page > h4 { font-size: 22px; }
+  .sg-foot { padding-bottom: 12px; }
+
+  /* What is left, and the one thing to do next, always within reach of a thumb. */
+  .sg-bottom { display: flex; align-items: center; gap: 14px; position: sticky; bottom: 0; z-index: 30; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -8px 24px rgba(23, 36, 28, 0.1); padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  .sg-bottom-info { display: flex; flex-direction: column; line-height: 1.25; flex: none; }
+  .sg-bottom-info b { font-size: 16px; white-space: nowrap; }
+  .sg-bottom-info span { font-size: 13px; color: var(--muted); }
+  .sg-bottom .btn.sg-big { flex: 1; min-height: 54px; font-size: 19px; background: #ffd24a; color: #2b2100; border-color: #e0b22c; }
+  .sg-bottom .btn.sg-big.finish { background: var(--green); color: #fff; border-color: var(--green); }
+  body:has(.sg-bottom) .toasts { bottom: calc(88px + env(safe-area-inset-bottom)); }
+  /* While a sheet is up, messages move to the top so they never cover what is being typed. */
+  html.sg-locked .toasts, html.sg-locked body:has(.sg-bottom) .toasts { bottom: auto; top: calc(10px + env(safe-area-inset-top)); }
+
+  /* Fields on a phone are a few millimetres tall. Give each a finger-sized area around it. */
+  .sg-doc .field.fill:not(.sg-auto) { overflow: visible; }
+  .sg-doc .field.fill:not(.sg-auto)::before { content: ''; position: absolute; z-index: -1; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+
+  /* Dialogs come up from the bottom and stay above the keyboard. */
+  .sg-dialog-bg { align-items: flex-end; padding: 0 0 var(--sg-kb, 0px); }
+  .sg-dialog, .sg-dialog.wide { max-width: none; border-radius: 18px 18px 0 0; padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); max-height: calc(100vh - 20px - var(--sg-kb, 0px)); max-height: calc(100dvh - 20px - var(--sg-kb, 0px)); animation: sg-up 0.18s ease-out; }
+  .sg-dialog .actions { flex-direction: column-reverse; gap: 8px; margin-top: 16px; }
+  .sg-dialog .actions .btn { width: 100%; min-height: 50px; font-size: 16px; }
+  .sg-dialog.sg-two .actions { flex-direction: row; flex-wrap: nowrap; }
+  .sg-dialog.sg-two .actions .btn { flex: 1; width: auto; min-width: 0; }
+  .sg-menu-item { min-height: 50px; padding: 6px 12px; }
+  .sg-dialog .sigpad { height: clamp(160px, 38vh, 320px); height: clamp(160px, 38dvh, 320px); }
+  .sg-padrow { flex-wrap: nowrap; }
+  .sg-sigstyles { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .sg-sigstyles .sigstyle { font-size: 24px; padding: 8px 10px; }
+}
+@keyframes sg-up { from { transform: translateY(28px); opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .sg-dialog { animation: none !important; } }
+@media print { .sg-bottom, .sg-tools, .sg-foot, .sg-guide, .sg-flag, .sg-skip { display: none !important; } }

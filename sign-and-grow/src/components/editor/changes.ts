@@ -185,3 +185,14 @@ export function restoreLocked(fresh: Content, mine: Content): Content {
   ];
   return { ordered: mine.ordered, documents, recipients, fields };
 }
+
+/** A canonical string of everything the editor can change. Two envelopes with the same fingerprint save the same. */
+export function fingerprint(e: { subject?: any; message?: any; ordered?: any; reminder_days?: any; date_format?: any }, c: Content): string {
+  return JSON.stringify([
+    s(e.subject), s(e.message), e.ordered ? 1 : 0, Number(e.reminder_days) || 0, s(e.date_format),
+    c.documents.map((d) => [d.id, d.file_id, s(d.name)]),
+    c.recipients.map((r) => [r.id, r.role, s(r.role_name), s(r.name).trim(), s(r.email).trim(), order(r), s(r.access_code).trim(), s(r.note)]),
+    c.fields.map((f) => [f.id, f.document_id, f.recipient_id || '', f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), s(f.value),
+      (f.options || []).join('\n'), s(f.group_name), s(f.validation), f.readonly || f.type === 'note' ? 1 : 0]).sort(byFirst),
+  ]);
+}

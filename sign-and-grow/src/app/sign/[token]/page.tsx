@@ -1,310 +1,720 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { api, Modal, Leaf, oops, toast, fmtDate } from '@/components/ui';
+import { api, toast, fmtDate } from '@/components/ui';
 import { PdfDoc } from '@/components/PdfDoc';
 import { AdoptSignature } from '@/components/SignaturePad';
-import { fmtNum, fmtTrees } from '@/lib/impact';
+import { formatDate } from '@/lib/dates';
+import { fmtNum } from '@/lib/impact';
+import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
+import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
+import { MenuDialog, AskDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
+import { TextView } from '@/components/sign/TextView';
+import { PageFields, PageOthers, type FieldCtx } from '@/components/sign/TextFields';
+import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 
-const AUTO = ['date_signed', 'full_name', 'email'];
-const LABEL: Record<string, string> = { signature: 'Sign', initials: 'Initial', text: 'Text', number: 'Number', date: 'Date', company: 'Company', title: 'Title', dropdown: 'Choose', attachment: 'Attach file' };
-
-function Shell({ data, children, bar }: { data?: any; children: React.ReactNode; bar?: React.ReactNode }) {
-  const brand = data?.brand;
-  return (
-    <div style={{ minHeight: '100vh' }}>
-      <div className="signbar" style={brand?.brand_color ? ({ ['--brand' as any]: brand.brand_color }) : undefined}>
-        {brand?.brand_logo ? <img src={brand.brand_logo} alt={brand.name} style={{ maxHeight: 30, maxWidth: 140, background: '#fff', borderRadius: 6, padding: 3 }} /> : <Leaf size={22} color="#9ed88f" />}
-        <div className="grow truncate" style={{ fontWeight: 600 }}>{data?.envelope?.subject || 'Sign&Grow'}</div>
-        {bar}
-      </div>
-      <div className="signwrap">{children}</div>
-    </div>
-  );
-}
-
-function Impact({ impact, title }: { impact: any; title: string }) {
-  if (!impact?.sheets) return null;
-  return (
-    <div className="card" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2' }}>
-      <div className="row" style={{ alignItems: 'flex-start' }}>
-        <Leaf size={28} color="#1f6f43" />
-        <div>
-          <b>{title}</b>
-          <p style={{ margin: '4px 0 0' }}>
-            About <b>{fmtNum(impact.sheets)} sheets of paper</b>, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e were not used
-            (that is {fmtTrees(impact.trees)} of a tree). And 100% of Sign&Grow subscription revenue goes to planting more. <a href="/impact">How we count</a>
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
+type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
+type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review';
+const SAVE_TEXT: Record<Save, string> = { idle: 'Saves as you go', pending: 'Saving', saving: 'Saving', saved: 'Saved', error: 'Not saved yet' };
+const FLAG: Record<string, string> = { signature: 'Sign here', initials: 'Initial here', checkbox: 'Tick here', radio: 'Choose one', dropdown: 'Choose here', attachment: 'Attach here' };
+// Phones, and anything else used mainly by touch, get a sheet with a large input instead of typing into the page.
+// Typing straight into a small box makes touch browsers zoom in and out.
+const TOUCH = '(max-width: 600px), (pointer: coarse)';
 
 export default function SignPage() {
   const { token } = useParams<{ token: string }>();
+  const base = `/sign/${token}`;
   const [data, setData] = useState<any>(null);
-  const [error, setError] = useState('');
+  const [problem, setProblem] = useState<{ status: number; message: string } | null>(null);
+  const [handedTo, setHandedTo] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
   const [sig, setSig] = useState<string | null>(null);
   const [ini, setIni] = useState<string | null>(null);
-  const [adopt, setAdopt] = useState<{ kind: 'signature' | 'initials'; field: string } | null>(null);
-  const [modal, setModal] = useState<'' | 'decline' | 'reassign' | 'menu'>('');
+  const [adopt, setAdopt] = useState<{ kind: 'signature' | 'initials'; field?: string } | null>(null);
+  const [open, setOpen] = useState<Open>('');
+  const [signedField, setSignedField] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<string | null>(null);
+  const [view, setView] = useState<'doc' | 'text'>('doc');
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState('');
   const [agree, setAgree] = useState(false);
   const [code, setCode] = useState('');
+  const [formError, setFormError] = useState('');
+  const [finishError, setFinishError] = useState('');
   const [finished, setFinished] = useState<any>(null);
-  const [form, setForm] = useState({ reason: '', name: '', email: '' });
-  const base = `/sign/${token}`;
+  const [save, setSave] = useState<Save>('idle');
+  const [muted, setMuted] = useState(false);
+  const [muteNote, setMuteNote] = useState<'' | 'done' | 'failed'>('');
+  const [moreTime, setMoreTime] = useState<'' | 'busy' | 'asked'>('');
+  const touch = useMedia(TOUCH);
+
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
+  const kept = useRef<{ sig: string | null; ini: string | null }>({ sig: null, ini: null });
+  kept.current = { sig, ini };
+  const lastSaved = useRef('');
+  const canSave = useRef(false);
+  const rejected = useRef(0);
+  const afterClose = useRef<any>(null);
+  const stageRef = useRef('loading');
 
   const load = useCallback(async () => {
     try {
       const d = await api(base);
+      setProblem(null);
       setData(d);
+      setMuted((m) => m || !!d.recipient?.muted);
       if (d.fields) {
-        setValues(Object.fromEntries(d.fields.map((f: any) => [f.id, f.value || ''])));
-        setSig((s) => s || d.recipient.signature_png || null);
-        setIni((s) => s || d.recipient.initials_png || null);
+        const server: Record<string, string> = Object.fromEntries(d.fields.map((f: any) => [f.id, f.value || '']));
+        const before = JSON.stringify(server);
+        const stored = readKept(token);
+        const s = kept.current.sig || d.recipient.signature_png || stored.sig;
+        const i = kept.current.ini || d.recipient.initials_png || stored.ini;
+        // A field saved as signed is no use without the signature itself. Ask again instead of guessing.
+        for (const f of d.fields) if ((f.type === 'signature' && !s) || (f.type === 'initials' && !i)) server[f.id] = '';
+        setSig(s);
+        setIni(i);
+        const unsaved = !!lastSaved.current && JSON.stringify(valuesRef.current) !== lastSaved.current;
+        setValues((prev) => (unsaved ? { ...server, ...prev } : server));
+        lastSaved.current = before;
       }
     } catch (e: any) {
-      setError(e.message);
+      const status = e?.status || 0;
+      if (status === 404 || status === 410) setData(null);
+      setProblem({ status, message: e?.message || 'Something went wrong on our side.' });
     }
-  }, [base]);
+  }, [base, token]);
   useEffect(() => {
     load();
   }, [load]);
 
-  // Signed-in users get their saved signature offered automatically.
+  // Someone who is signed in gets the signature saved on their own account offered. Never in person: that device belongs to the host.
   useEffect(() => {
-    if (!data?.recipient) return;
+    if (!data?.recipient || data.recipient.role === 'inperson' || !data.fields) return;
     api('/me').then((m) => {
       if (m.user?.email?.toLowerCase() === data.recipient.email.toLowerCase()) {
         setSig((s) => s || m.user.signature_png || null);
         setIni((s) => s || m.user.initials_png || null);
       }
     }).catch(() => {});
-  }, [data?.recipient?.email]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data?.recipient?.email, data?.recipient?.role, !!data?.fields]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fields: any[] = data?.fields || [];
-  const isDone = useCallback((f: any) => {
-    if (f.readonly || AUTO.includes(f.type)) return true;
-    if (f.type === 'radio') {
-      const group = fields.filter((x) => x.type === 'radio' && (x.group_name || x.id) === (f.group_name || f.id));
-      return group.some((x) => values[x.id]) || !group.some((x) => x.required);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('sg:view') === 'text') setView('text');
+    } catch {
+      /* no storage: start in the document view */
     }
-    return !f.required || !!values[f.id];
-  }, [fields, values]);
+  }, []);
+  function chooseView(v: 'doc' | 'text') {
+    setView(v);
+    try {
+      localStorage.setItem('sg:view', v);
+    } catch {
+      /* the choice just is not remembered */
+    }
+  }
+
+  const mute = useCallback(async (fromEmail = false) => {
+    try {
+      await api(`${base}/mute`, { method: 'POST' });
+      setMuted(true);
+      if (fromEmail) setMuteNote('done');
+      else toast('Reminder emails are off for this document.');
+    } catch (e: any) {
+      if (e?.status === 404 || e?.status === 410) return;
+      if (fromEmail) setMuteNote('failed');
+      else toast(`${e?.message || 'We could not turn off reminders.'} Try again in a minute.`, true);
+    }
+  }, [base]);
+  // The "stop reminders" link in a reminder email lands here.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('mute') !== '1') return;
+    q.delete('mute');
+    window.history.replaceState(null, '', window.location.pathname + (q.size ? `?${q}` : ''));
+    mute(true);
+  }, [mute]);
+
+  const me = data?.recipient;
+  const env = data?.envelope;
+  const fields: any[] = useMemo(() => data?.fields || [], [data?.fields]);
+  const acts = me?.role === 'signer' || me?.role === 'inperson';
+  const closed = !!env && (env.status === 'voided' || env.status === 'declined' || env.status === 'expired' || me.status === 'declined');
+  const iAmDone = !!finished || me?.status === 'completed';
+  // A closed or not-yet-ready document says so straight away, before anyone is asked for an access code.
+  const stage = handedTo ? 'handed' : !data ? (problem ? 'problem' : 'loading') : closed ? 'closed' : me.status === 'pending' ? 'pending' : data.locked ? 'locked' : iAmDone ? 'done' : !me.consented ? 'consent' : 'sign';
+  canSave.current = stage === 'sign' && acts && fields.length > 0;
+
+  // When the screen changes, start reading from its heading rather than from wherever focus was left.
+  useEffect(() => {
+    const before = stageRef.current;
+    stageRef.current = stage;
+    if (before === stage || before === 'loading') return;
+    window.scrollTo({ top: 0 });
+    (document.getElementById('sg-h1') || document.getElementById('sg-main'))?.focus({ preventScroll: true });
+  }, [stage]);
+
+  const filled = useCallback((f: any) => (f.type === 'signature' ? !!values[f.id] && !!sig : f.type === 'initials' ? !!values[f.id] && !!ini : !!values[f.id]), [values, sig, ini]);
   const ordered = useMemo(() => {
-    const docIndex = new Map((data?.documents || []).map((d: any, i: number) => [d.id, i]));
-    return [...fields].sort((a, b) => (docIndex.get(a.document_id) as number) - (docIndex.get(b.document_id) as number) || a.page - b.page || a.y - b.y || a.x - b.x);
+    const docIndex = new Map<string, number>((data?.documents || []).map((d: any, i: number) => [d.id, i]));
+    const row = (f: any) => Math.round((f.y + f.h / 2) / 0.012);
+    return [...fields].sort((a, b) => docIndex.get(a.document_id)! - docIndex.get(b.document_id)! || a.page - b.page || row(a) - row(b) || a.x - b.x);
   }, [fields, data?.documents]);
-  const todo = ordered.filter((f) => !isDone(f));
-  const actionable = ordered.filter((f) => !f.readonly && !AUTO.includes(f.type));
-  const nextId = todo[0]?.id;
+  const items = useMemo(() => buildItems(ordered, filled), [ordered, filled]);
+  const required = items.filter((i) => i.required);
+  const left = required.filter((i) => !i.done);
+  const nextField = left[0]?.first;
+  const dateText = formatDate(new Date(), env?.date_format);
+  const byId = (id: string | null | undefined) => fields.find((f) => f.id === id);
 
-  const set = (id: string, v: string) => setValues((s) => ({ ...s, [id]: v }));
+  const set = useCallback((id: string, v: string) => setValues((s) => ({ ...s, [id]: v })), []);
+  const pickRadio = useCallback((f: any) => setValues((s) => {
+    const n = { ...s };
+    fields.filter((x) => x.type === 'radio' && groupKey(x) === groupKey(f)).forEach((x) => (n[x.id] = ''));
+    n[f.id] = '1';
+    return n;
+  }), [fields]);
 
-  function goNext() {
-    const el = nextId && document.getElementById(`f-${nextId}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    (el.querySelector('input,select,textarea,button') as HTMLElement | null)?.focus({ preventScroll: true });
+  // ---- Autosave: nothing typed is lost to a timeout, a closed tab or a flat battery ---------------
+  const flush = useCallback(async (leaving = false): Promise<boolean> => {
+    if (!canSave.current) return true;
+    const json = JSON.stringify(valuesRef.current);
+    if (json === lastSaved.current) return true;
+    const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ values: valuesRef.current }), credentials: 'same-origin' as const };
+    if (leaving) {
+      // The page is going away: hand the request to the browser and do not wait for an answer.
+      try {
+        void fetch(`/api${base}/save`, { ...request, keepalive: true }).catch(() => {});
+      } catch {
+        try {
+          navigator.sendBeacon(`/api${base}/save`, new Blob([request.body], { type: 'application/json' }));
+        } catch {
+          /* nothing more can be done from a closing page */
+        }
+      }
+      return true;
+    }
+    setSave('saving');
+    try {
+      const res = await fetch(`/api${base}/save`, request);
+      if (!res.ok) throw Object.assign(new Error(), { status: res.status });
+      lastSaved.current = json;
+      rejected.current = 0;
+      setSave(JSON.stringify(valuesRef.current) === json ? 'saved' : 'pending');
+      return true;
+    } catch (e: any) {
+      if (!canSave.current) return true;
+      // The document changed underneath us (voided, corrected, finished elsewhere): show what is true now.
+      if (e?.status >= 400 && e.status < 500 && e.status !== 429 && rejected.current++ < 2) {
+        setSave('idle');
+        load();
+      } else setSave((s) => {
+        if (s !== 'error') toast('We could not save just now. Check your connection. We will keep trying, and nothing is lost while this page stays open.', true);
+        return 'error';
+      });
+      return false;
+    }
+  }, [base, load]);
+
+  const valuesJson = JSON.stringify(values);
+  useEffect(() => {
+    if (stage !== 'sign' || !canSave.current || valuesJson === lastSaved.current) return;
+    setSave((s) => (s === 'error' ? s : 'pending'));
+    const t = setTimeout(() => flush(), 1500);
+    return () => clearTimeout(t);
+  }, [valuesJson, stage, flush]);
+  useEffect(() => {
+    if (save !== 'error') return;
+    const t = setInterval(() => flush(), 8000);
+    return () => clearInterval(t);
+  }, [save, flush]);
+  useEffect(() => {
+    const hidden = () => document.visibilityState === 'hidden' && flush(true);
+    const leaving = () => flush(true);
+    document.addEventListener('visibilitychange', hidden);
+    window.addEventListener('pagehide', leaving);
+    return () => {
+      document.removeEventListener('visibilitychange', hidden);
+      window.removeEventListener('pagehide', leaving);
+    };
+  }, [flush]);
+
+  // The adopted signature lives in this tab until the document is finished, so a reload does not lose it.
+  useEffect(() => {
+    if (stage === 'sign' && acts) writeKept(token, sig, ini);
+  }, [sig, ini, stage, acts, token]);
+
+  // ---- Moving around ------------------------------------------------------------------------------
+  const usesSheet = (f: any) => touch && view === 'doc' && (TYPED.includes(f.type) || f.type === 'dropdown');
+
+  function goTo(f: any) {
+    const el = document.getElementById(`${view === 'text' ? 't' : 'f'}-${f.id}`);
+    if (!el) return toast('The document is still loading. Try again in a moment.');
+    if (usesSheet(f)) {
+      bringIntoView(el, 0.25);
+      setSheet(f.id);
+      return;
+    }
+    bringIntoView(el, view === 'text' ? 0.35 : 0.42);
+    (el.matches('button, input, select, textarea, [tabindex]') ? el : el.querySelector<HTMLElement>('input, select, textarea, button'))?.focus({ preventScroll: true });
+  }
+  // Focus cannot move to the page while a dialog is still closing, so the move waits for it.
+  useEffect(() => {
+    if (sheet || adopt || open || signedField || !afterClose.current) return;
+    const f = afterClose.current;
+    afterClose.current = null;
+    goTo(f);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** The next required thing after this field, wrapping round to the top. */
+  function nextAfter(id: string) {
+    const rest = left.filter((i) => !i.fields.some((f) => f.id === id));
+    const here = ordered.findIndex((f) => f.id === id);
+    return (rest.find((i) => ordered.indexOf(i.first) > here) || rest[0])?.first;
+  }
+  function sheetNext(id: string) {
+    const f = nextAfter(id);
+    if (!f) return setSheet(null);
+    if (usesSheet(f)) return goTo(f);
+    afterClose.current = f;
+    setSheet(null);
   }
 
   function clickSig(f: any) {
     const kind = f.type as 'signature' | 'initials';
-    const have = kind === 'signature' ? sig : ini;
-    if (values[f.id]) return;
-    if (have) set(f.id, '1');
+    if (filled(f)) return setSignedField(f.id);
+    if (kind === 'signature' ? sig : ini) set(f.id, '1');
     else setAdopt({ kind, field: f.id });
   }
 
-  async function run(fn: () => Promise<any>) {
-    setBusy(true);
+  async function attach(f: any, file?: File) {
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    setUploading(f.id);
     try {
-      await fn();
-    } catch (e) {
-      oops(e);
+      const r = await api(`${base}/upload`, { form });
+      set(f.id, r.id);
+      toast('File attached');
+    } catch (e: any) {
+      toast(`${e?.message || 'That file could not be attached.'} Choose the file again, or try a PDF, PNG or JPEG.`, true);
+    } finally {
+      setUploading('');
+    }
+  }
+
+  function pressFinish() {
+    if (me.role === 'viewer') return complete();
+    const wrong = acts && ordered.find((f) => problemWith(f, values[f.id] || ''));
+    if (wrong) {
+      // On a phone the field opens in its sheet, which says what is wrong right under the input.
+      if (!usesSheet(wrong)) toast(`${fieldName(wrong)} needs another look. ${problemWith(wrong, values[wrong.id])}`, true);
+      return goTo(wrong);
+    }
+    setFinishError('');
+    setOpen('review');
+  }
+
+  async function complete() {
+    setBusy(true);
+    setFinishError('');
+    try {
+      const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini } });
+      canSave.current = false;
+      writeKept(token, null, null);
+      setOpen('');
+      setFinished(r);
+    } catch (e: any) {
+      const msg = e?.message || 'Something went wrong on our side.';
+      if (/no longer open|already finished|not your turn/i.test(msg)) {
+        setOpen('');
+        toast(msg, true);
+        await load();
+      } else if (open === 'review') setFinishError(`${msg} Go back, put it right, then finish again.`);
+      else toast(`${msg} Try again in a moment.`, true);
     } finally {
       setBusy(false);
     }
   }
 
-  const finish = () => run(async () => {
-    const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini } });
-    setFinished(r);
-    window.scrollTo({ top: 0 });
-  });
-
-  async function attach(f: any, file?: File) {
-    if (!file) return;
-    const fd = new FormData();
-    fd.append('file', file);
-    await run(async () => {
-      const r = await api(`${base}/upload`, { form: fd });
-      set(f.id, r.id);
-      toast('File attached');
-    });
+  async function askForTime() {
+    setMoreTime('busy');
+    try {
+      await api(`${base}/request-extension`, { method: 'POST' });
+      setMoreTime('asked');
+      return true;
+    } catch (e: any) {
+      setMoreTime('');
+      toast(`${e?.message || 'We could not send that.'} You can also email ${env.sender.email} directly.`, true);
+      return false;
+    }
   }
 
-  if (error) return <Shell><div className="card center"><h2>This link cannot be opened</h2><p className="muted" style={{ marginTop: 8 }}>{error}</p></div></Shell>;
-  if (!data) return <Shell><div className="muted center" style={{ padding: 60 }}>Loading…</div></Shell>;
+  // ---- Screens that are not the document ------------------------------------------------------------
 
-  const { envelope: env, recipient: me } = data;
-
-  if (data.locked)
+  if (handedTo)
     return (
-      <Shell data={data}>
-        <form className="card" style={{ maxWidth: 420, margin: '40px auto' }} onSubmit={(e) => { e.preventDefault(); run(async () => { await api(`${base}/unlock`, { body: { code } }); await load(); }); }}>
-          <h2>Enter your access code</h2>
-          <p className="muted" style={{ margin: '8px 0 16px' }}>{env.sender.name} protected this document with a code. They will have shared it with you separately.</p>
-          <label className="f"><span>Access code</span><input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" /></label>
-          <button className="btn primary" disabled={busy || !code}>Open document</button>
-        </form>
+      <Shell>
+        <StateCard tone="ok" title={`You passed this to ${handedTo}`}>
+          <p>They have been emailed their own link, and the sender has been told. Your link no longer opens the document, and there is nothing more for you to do.</p>
+        </StateCard>
       </Shell>
     );
+  if (!data && problem) {
+    if (problem.status === 410) return <ReplacedLink token={token} />;
+    if (problem.status === 404) return <UnknownLink />;
+    return <LoadProblem message={problem.message} onRetry={load} />;
+  }
+  if (!data) return <Shell><div className="muted center sg-loading" role="status">Opening your document</div></Shell>;
 
-  const closed = env.status === 'voided' || env.status === 'declined' || env.status === 'expired';
-  const allDone = finished?.envelope_status === 'completed' || env.status === 'completed';
-  const iAmDone = finished || me.status === 'completed';
-
-  if (closed || me.status === 'declined')
-    return (
-      <Shell data={data}>
-        <div className="card center">
-          <h2>{env.status === 'voided' ? 'The sender voided this document' : env.status === 'expired' ? 'This signing request has expired' : 'This document was declined'}</h2>
-          <p className="muted" style={{ marginTop: 8 }}>{env.status === 'voided' && env.void_reason ? `Reason: ${env.void_reason}` : `There is nothing more to do here. Contact ${env.sender.name} (${env.sender.email}) if you have questions.`}</p>
-        </div>
-      </Shell>
-    );
-
-  if (iAmDone)
-    return (
-      <Shell data={data}>
-        <div className="stack">
-          <div className="card center" style={{ padding: 36 }}>
-            <div style={{ fontSize: 40 }}>🌱</div>
-            <h1 className="serif" style={{ marginTop: 6 }}>{allDone ? 'All done. Everyone has signed.' : me.role === 'cc' ? 'Here is your copy' : 'You are done. Thank you!'}</h1>
-            <p className="muted" style={{ margin: '10px auto 20px', maxWidth: 480 }}>
-              {allDone ? 'The completed document includes a certificate with the full audit trail. A copy is on its way to your inbox too.' : 'We will email you the completed document once everyone has finished.'}
-            </p>
-            <div className="row wrap" style={{ justifyContent: 'center' }}>
-              <a className="btn primary" href={`/api${base}/download?inline=1`} target="_blank" rel="noreferrer">{allDone ? 'View completed document' : 'View document so far'}</a>
-              <a className="btn" href={`/api${base}/download`}>Download PDF</a>
-            </div>
-          </div>
-          <Impact impact={finished?.impact || env.impact} title="Signed without paper" />
-          <div className="card center">
-            <b>Need signatures yourself?</b>
-            <p className="muted" style={{ margin: '4px 0 12px' }}>Sign&Grow is free to start, and every subscription plants trees.</p>
-            <a className="btn" href="/signup">Create a free account</a>
-          </div>
-        </div>
-      </Shell>
-    );
-
-  if (me.status === 'pending')
-    return <Shell data={data}><div className="card center"><h2>It is not your turn yet</h2><p className="muted" style={{ marginTop: 8 }}>Others need to finish first. We will email you when the document is ready for you.</p></div></Shell>;
-
-  if (!me.consented)
-    return (
-      <Shell data={data}>
-        <div className="card" style={{ maxWidth: 620, margin: '24px auto' }}>
-          <p className="muted small" style={{ marginBottom: 4 }}>{env.sender.name} ({env.sender.email}) sent you</p>
-          <h1 className="serif">{env.subject}</h1>
-          {data.message && <p style={{ whiteSpace: 'pre-wrap', margin: '14px 0 0' }}>{data.message}</p>}
-          {data.note && <div className="notice" style={{ marginTop: 14 }}><b>Private note for you:</b> {data.note}</div>}
-          {me.role === 'inperson' && <div className="notice warn" style={{ marginTop: 14 }}>In-person signing. Hand this device to <b>{me.name}</b> now.</div>}
-          <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '20px 0' }} />
-          <h3>Electronic records and signatures</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>
-            You are about to review{me.role === 'signer' || me.role === 'inperson' ? ' and sign' : ''} this document electronically. An electronic signature has the same legal effect as a handwritten one.
-            You can download or print a copy at any time, decline to sign, or ask {env.sender.name} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.
-          </p>
-          <label className="check" style={{ margin: '14px 0 18px' }}>
-            <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} /> I agree to use electronic records and signatures.
-          </label>
-          <button className="btn primary lg" disabled={!agree || busy} onClick={() => run(async () => { await api(`${base}/consent`, { method: 'POST' }); await load(); })}>Continue</button>
-        </div>
-      </Shell>
-    );
-
-  const acts = me.role === 'signer' || me.role === 'inperson';
-  const bar = (
+  const sender = env.sender;
+  const myEmail = <span className="sg-email">{me.email}</span>;
+  const stillOpen = env.status === 'sent' && !iAmDone && !closed;
+  const report = <button type="button" className="sg-link" onClick={() => setOpen('report')}>Report this request</button>;
+  const downloadUrl = `/api${base}/download`;
+  const notice = muteNote === 'done' ? (
+    <div className="notice sg-top" role="status">
+      <b>Reminders are off.</b> We will not send you any more reminder emails about this document.{stillOpen ? ` You can still ${acts ? 'sign' : 'open'} it here whenever you are ready.` : ''}
+    </div>
+  ) : muteNote === 'failed' ? (
+    <div className="notice warn sg-top" role="alert">We could not turn off reminders just now. <button type="button" className="sg-link" onClick={() => mute(true)}>Try again</button></div>
+  ) : null;
+  const dialogs = (
     <>
-      {acts && actionable.length > 0 && (
-        <div className="hide-sm" style={{ fontSize: 13 }}>
-          <div className="progress"><i style={{ width: `${((actionable.length - todo.length) / actionable.length) * 100}%` }} /></div>
-          <div style={{ marginTop: 3 }}>{todo.length ? `${todo.length} required left` : 'Ready to finish'}</div>
-        </div>
-      )}
-      <button className="btn sm" onClick={() => setModal('menu')}>Other actions</button>
-      {acts && todo.length > 0 ? <button className="btn go" onClick={goNext}>Next</button>
-        : <button className="btn go" disabled={busy} onClick={finish}>{me.role === 'approver' ? 'Approve' : me.role === 'viewer' ? 'Mark as viewed' : 'Finish'}</button>}
+      {open === 'report' && <ReportDialog base={base} sender={sender} onClose={() => setOpen('')} />}
+      {open === 'ask' && <AskDialog base={base} sender={sender} replyTo={me.email} onClose={() => setOpen('')} />}
+      {open === 'decline' && <DeclineDialog base={base} sender={sender} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
+      {open === 'reassign' && <ReassignDialog base={base} sender={sender} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
     </>
   );
+
+  if (stage === 'locked')
+    return (
+      <Shell data={data} footer={report}>
+        {notice}
+        <form className="card sg-narrow" noValidate onSubmit={async (e) => {
+          e.preventDefault();
+          if (!code.trim()) return setFormError('Type the access code first.');
+          setBusy(true);
+          setFormError('');
+          try {
+            await api(`${base}/unlock`, { body: { code } });
+            await load();
+          } catch (err: any) {
+            setFormError(err?.status === 401 ? `That access code is not right. Check it and try again, or ask ${sender.name} for the code.` : `${err?.message || 'Something went wrong on our side.'}`);
+          } finally {
+            setBusy(false);
+          }
+        }}>
+          <div className="sg-state-icon lock"><Icon name="lock" size={26} /></div>
+          <h1 className="serif" id="sg-h1" tabIndex={-1}>Enter your access code</h1>
+          <p>{sender.name} protected this document with a code and will have given it to you separately. It is not in the email from us.</p>
+          <label className="f"><span>Access code</span><input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" autoCapitalize="off" spellCheck={false} aria-invalid={!!formError} /></label>
+          {formError && <div className="notice err sg-problem" role="alert">{formError}</div>}
+          <button className="btn primary lg" disabled={busy}>{busy ? 'Opening' : 'Open document'}</button>
+          <p className="muted small sg-after">Do not have a code? Ask the sender for it.</p>
+          <Sender env={env} brand={data.brand} />
+        </form>
+        {dialogs}
+      </Shell>
+    );
+
+  if (stage === 'closed') {
+    const expired = env.status === 'expired';
+    const voided = env.status === 'voided';
+    const mine = me.status === 'declined';
+    return (
+      <Shell data={data} footer={report}>
+        {notice}
+        <StateCard tone={expired ? 'warn' : 'stop'} title={voided ? `${sender.name} cancelled this document` : expired ? 'This signing request has expired' : mine ? 'You declined this document' : 'This document was declined'}>
+          {voided && <p>It was voided, so there is nothing for you to sign and nothing more to do.{env.void_reason ? '' : ` Contact ${sender.name} if you have questions.`}</p>}
+          {voided && env.void_reason && <p className="sg-quote"><span className="muted small">Their reason</span>{env.void_reason}</p>}
+          {!voided && !expired && <p>{mine ? `We told ${sender.name}. The document is closed and there is nothing more for you to do. Changed your mind? Ask them to send it again.` : 'One of the people asked to sign said no, so the document is closed. There is nothing more for you to do.'}</p>}
+          {expired && (
+            <>
+              <p>The deadline{env.expires_at ? ` was ${fmtDate(env.expires_at)}` : ' has passed'}. Nothing is lost: {sender.name} can open it again and you carry on from where you were.</p>
+              {me.status !== 'completed' && me.status !== 'declined' && me.role !== 'cc' && (moreTime === 'asked' ? (
+                <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name} for more time.</b> You will get an email as soon as the document is open again.</div>
+              ) : (
+                <button type="button" className="btn primary lg" disabled={moreTime === 'busy'} onClick={askForTime}>{moreTime === 'busy' ? 'Asking' : `Ask ${sender.name} for more time`}</button>
+              ))}
+            </>
+          )}
+          <Sender env={env} brand={data.brand} lead={expired ? 'Or contact' : 'Questions? Contact'} />
+        </StateCard>
+        {dialogs}
+      </Shell>
+    );
+  }
+
+  if (stage === 'done') {
+    const allDone = finished?.envelope_status === 'completed' || env.status === 'completed';
+    const inPerson = me.role === 'inperson';
+    const title = allDone ? 'All done. Everyone has signed.' : me.role === 'cc' ? 'Here is your copy' : me.role === 'approver' ? 'You approved this. Thank you.' : me.role === 'viewer' ? 'Marked as viewed. Thank you.' : 'You are done. Thank you.';
+    return (
+      <Shell data={data} footer={report}>
+        {notice}
+        <div className="stack">
+          <StateCard tone="ok" title={title}>
+            <p>
+              {allDone
+                ? inPerson ? `The completed document, with its certificate, has been emailed to ${sender.name}. Download your own copy here.` : <>A copy has been emailed to {myEmail}. It includes a certificate with the full record of who signed and when.</>
+                : inPerson ? `${sender.name} will get the completed document by email once everyone has finished. You can download it as it stands now.` : <>Others still need to finish. We will email the completed document to {myEmail} as soon as they have.</>}
+            </p>
+            <div className="row wrap sg-actions">
+              <a className="btn primary lg" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> {allDone ? 'View completed document' : 'View document so far'}<span className="sg-vh"> (opens in a new tab)</span></a>
+              <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download PDF</a>
+            </div>
+          </StateCard>
+          <Impact impact={finished?.impact || env.impact} />
+        </div>
+        {dialogs}
+      </Shell>
+    );
+  }
+
+  if (stage === 'pending')
+    return (
+      <Shell data={data} footer={report}>
+        {notice}
+        <StateCard tone="wait" title="It is not your turn yet">
+          <p>Others need to finish first. We will email {myEmail} as soon as the document is ready for you. There is nothing to do until then.</p>
+          <Sender env={env} brand={data.brand} lead="Questions? Contact" />
+        </StateCard>
+        {dialogs}
+      </Shell>
+    );
+
+  // ---- Other actions, shared by the consent screen and the document ---------------------------------
+
+  const go = (o: Open) => () => setOpen(o);
+  const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
+  const menu: MenuItem[] = [
+    ...(stage === 'sign' && acts ? [{ key: 'later', label: 'Finish later', hint: 'Your answers are saved. Come back with the same link.', icon: 'clock', onClick: async () => { const ok = await flush(); setOpen(''); if (ok) toast('Saved. Use the link in your email to come back and finish.'); } }] : []),
+    { key: 'ask', label: `Ask ${sender.name} a question`, hint: 'They reply by email. Asking signs nothing.', icon: 'mail', onClick: go('ask') },
+    { key: 'download', label: 'Download the document', icon: 'download', href: downloadUrl, download: true },
+    { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },
+    ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); setAdopt({ kind: sig ? 'signature' : 'initials' }); } }] : []),
+    ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? 'Asked. They will be in touch by email.' : `The deadline is ${fmtDate(env.expires_at)}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(`We asked ${sender.name} for more time. They will be in touch by email.`); } }] : []),
+    ...(me.role === 'signer' || me.role === 'approver' ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
+    ...(!muted && me.role !== 'inperson' ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
+    ...(me.role !== 'viewer' && me.role !== 'cc' ? [{ key: 'decline', label: declineLabel, hint: 'Closes the document for everyone.', icon: 'stop', danger: true, onClick: go('decline') }] : []),
+  ];
+  const other = <button type="button" className="btn sm sg-other" aria-haspopup="dialog" onClick={go('menu')}>Other actions</button>;
+  const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} />;
+
+  if (stage === 'consent') {
+    const ask = me.role === 'approver' ? 'You have been asked to approve' : me.role === 'viewer' ? 'You have been asked to read' : 'You have been asked to sign';
+    return (
+      <Shell data={data} bar={other} footer={report} helpInNewTab>
+        {notice}
+        <div className="card sg-consent">
+          <p className="sg-kicker">{ask}</p>
+          <h1 className="serif" id="sg-h1" tabIndex={-1}>{env.subject}</h1>
+          <Sender env={env} brand={data.brand} />
+          <p className="muted small">This was sent to {me.name} ({myEmail}). Not expecting it? Do not sign. You can <button type="button" className="sg-link" onClick={go('report')}>report this request</button>.</p>
+          {data.message && <div className="sg-quote"><span className="muted small">Message from {sender.name}</span>{data.message}</div>}
+          {data.note && <div className="notice sg-gap"><b>Private note for you:</b> {data.note}</div>}
+          {me.role === 'inperson' && <div className="notice warn sg-gap">In-person signing. Hand this device to <b>{me.name}</b> now.</div>}
+          <div className="row wrap sg-actions">
+            <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
+            <a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> View or print<span className="sg-vh"> (opens in a new tab)</span></a>
+          </div>
+          <hr className="sg-rule" />
+          <h2>Electronic records and signatures</h2>
+          <p className="muted sg-legal">
+            You are about to review{acts ? ' and sign' : ''} this document on screen. An electronic signature has the same legal effect as a handwritten one.
+            You can download or print a copy at any time, decline, or ask {sender.name} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.
+          </p>
+          <label className="check sg-agree">
+            <input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setFormError(''))} aria-describedby={formError ? 'sg-agree-err' : undefined} /> <span>I agree to use electronic records and signatures.</span>
+          </label>
+          {formError && <div id="sg-agree-err" className="notice err sg-problem" role="alert">{formError}</div>}
+          <button type="button" className="btn primary lg sg-continue" disabled={busy} onClick={async () => {
+            if (!agree) return setFormError('Tick the box above to agree, then choose Continue.');
+            setBusy(true);
+            try {
+              await api(`${base}/consent`, { method: 'POST' });
+              await load();
+            } catch (e: any) {
+              setFormError(`${e?.message || 'Something went wrong on our side.'} Try again in a moment.`);
+            } finally {
+              setBusy(false);
+            }
+          }}>Continue</button>
+        </div>
+        {menuDialog}
+        {dialogs}
+      </Shell>
+    );
+  }
+
+  // ---- The document -----------------------------------------------------------------------------------
+
+  const finishLabel = me.role === 'approver' ? 'Approve' : me.role === 'viewer' ? 'Mark as viewed' : 'Finish';
+  const hasNext = acts && left.length > 0;
+  const count = !acts ? '' : !required.length ? 'Nothing is required' : left.length ? `${left.length} of ${required.length} left` : 'Ready to finish';
+  const mainButton = (big: boolean) => hasNext
+    ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => goTo(nextField)}>Next</button>
+    : <button type="button" className={`btn go finish${big ? ' sg-big' : ''}`} disabled={busy} onClick={pressFinish}>{finishLabel}</button>;
+  const done = required.length - left.length;
+  const bar = (
+    <>
+      {acts && (
+        <div className="sg-count sg-wide">
+          {required.length > 0 && <div className="progress" aria-hidden="true"><i style={{ width: `${(done / required.length) * 100}%` }} /></div>}
+          <div><b>{count}</b><span aria-hidden="true"> · {SAVE_TEXT[save]}</span></div>
+        </div>
+      )}
+      {other}
+      <span className="sg-wide">{mainButton(false)}</span>
+    </>
+  );
+  const bottom = (
+    <>
+      {acts && <div className="sg-bottom-info"><b>{count}</b><span aria-hidden="true">{SAVE_TEXT[save]}</span></div>}
+      {mainButton(true)}
+    </>
+  );
+  const live = save === 'saved' ? 'Saved' : save === 'error' ? 'Not saved yet. We will keep trying.' : '';
+
+  const docField = (f: any) => {
+    const ok = filled(f);
+    const auto = AUTO.includes(f.type) || f.readonly;
+    const value = values[f.id] || '';
+    const wrong = !auto && !!problemWith(f, value);
+    const cls = `field fill sg-f${auto || ok ? ' done' : ''}${f.id === nextField?.id ? ' next' : ''}${isBox(f) ? ' box' : ''}${wrong ? ' bad' : ''}${auto ? ' sg-auto' : ''}`;
+    const common = { id: `f-${f.id}`, className: cls, style: pos(f) };
+    const name = fieldName(f);
+    const need = f.required ? ', required' : ', optional';
+
+    if (f.type === 'signature' || f.type === 'initials') {
+      const word = f.type === 'signature' ? 'signature' : 'initials';
+      return (
+        <button key={f.id} type="button" {...common} onClick={() => clickSig(f)} aria-label={ok ? `Your ${word}. Change or clear it` : `${name}${need}. ${FLAG[f.type]}`}>
+          {ok ? <img src={(f.type === 'signature' ? sig : ini) || ''} alt="" /> : <span className="cta"><Icon name="pen" size={14} /> {f.type === 'signature' ? 'Sign' : 'Initial'}</span>}
+        </button>
+      );
+    }
+    if (AUTO.includes(f.type)) return <div key={f.id} {...common} title="Added for you"><span className="sg-val">{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : dateText}</span></div>;
+    if (f.readonly) return <div key={f.id} {...common}><span className="sg-val">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}</span></div>;
+    if (f.type === 'checkbox') {
+      const flip = () => set(f.id, value ? '' : '1');
+      return <div key={f.id} {...common} role="checkbox" aria-checked={!!value} aria-label={`${name}${need}`} tabIndex={0} onClick={flip} onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && (e.preventDefault(), flip())}>{value && <Icon name="check" />}</div>;
+    }
+    if (f.type === 'radio')
+      return (
+        <div key={f.id} {...common} style={{ ...pos(f), borderRadius: '50%' }} role="radio" aria-checked={!!value} aria-label={`${f.label || 'Option'}${f.group_name ? `, ${f.group_name}` : ''}`} tabIndex={0}
+          onClick={() => pickRadio(f)} onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && (e.preventDefault(), pickRadio(f))}>{value && <span className="sg-dot" />}</div>
+      );
+    if (f.type === 'attachment')
+      return (
+        <label key={f.id} {...common}>
+          <input type="file" className="sg-vh" aria-label={`${name}${need}. ${value ? 'A file is attached. Choose another to replace it' : 'Choose a PDF, PNG or JPEG'}`} accept="application/pdf,image/png,image/jpeg" onChange={(e) => (attach(f, e.target.files?.[0]), (e.target.value = ''))} />
+          <span className="cta"><Icon name={value ? 'check' : 'clip'} size={14} /> {uploading === f.id ? 'Uploading' : value ? 'Attached' : name}</span>
+        </label>
+      );
+    if (usesSheet(f))
+      return (
+        <button key={f.id} type="button" {...common} onClick={() => goTo(f)} aria-label={`${name}${need}. ${value ? `Your answer: ${value}` : 'Empty'}. Opens a box to type in`}>
+          <span className={`sg-val${value ? '' : ' ph'}`}>{value || name + (f.required ? ' *' : '')}</span>
+        </button>
+      );
+    if (f.type === 'dropdown')
+      return (
+        <div key={f.id} {...common}>
+          <select aria-label={name} aria-required={!!f.required} value={value} onChange={(e) => set(f.id, e.target.value)}>
+            <option value="">{name}</option>
+            {(f.options || []).map((o: string) => <option key={o}>{o}</option>)}
+          </select>
+        </div>
+      );
+    const shared = { 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, placeholder: name + (f.required ? ' *' : ''), value, title: wrong ? problemWith(f, value) : undefined };
+    return (
+      <div key={f.id} {...common}>
+        {isMulti(f)
+          ? <textarea {...shared} onChange={(e) => set(f.id, e.target.value)} />
+          : <input {...shared} type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined} onChange={(e) => set(f.id, e.target.value)} />}
+      </div>
+    );
+  };
+
+  // The pointer sits above the field unless that would cover the top of the page or something another person filled in.
+  const flagBelow = !!nextField && (nextField.y < 0.07 || [...data.others, ...fields].some((g: any) =>
+    g.id !== nextField.id && g.document_id === nextField.document_id && g.page === nextField.page
+    && g.y + g.h > nextField.y - 0.07 && g.y < nextField.y && g.x < nextField.x + 0.3 && g.x + g.w > nextField.x));
 
   const overlay = (docId: string) => (page: number) => (
     <>
       {data.others.filter((f: any) => f.document_id === docId && f.page === page).map((f: any) => (
-        <div key={f.id} className={`field other${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}`} style={pos(f)}>
-          {f.image ? <img src={f.image} alt="Signature" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? '✓' : '') : f.value}
+        <div key={f.id} className={`field other${isBox(f) ? ' box' : ''}`} style={pos(f)}>
+          {f.image ? <img src={f.image} alt="Signature of another signer" /> : isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}
         </div>
       ))}
-      {fields.filter((f) => f.document_id === docId && f.page === page).map((f) => {
-        const done = isDone(f) && (AUTO.includes(f.type) || f.readonly || !!values[f.id]);
-        const cls = `field fill${done ? ' done' : ''}${f.id === nextId ? ' next' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}`;
-        const common = { id: `f-${f.id}`, className: cls, style: pos(f), title: f.label || undefined };
-        const name = f.label || LABEL[f.type] || f.type;
-        if (f.type === 'signature' || f.type === 'initials')
-          return (
-            <div {...common} onClick={() => clickSig(f)}>
-              {values[f.id] ? <img src={(f.type === 'signature' ? sig : ini || sig) || ''} alt={`Your ${f.type}`} />
-                : <button className="cta" style={{ all: 'unset', cursor: 'pointer', width: '100%', textAlign: 'center', fontWeight: 700, color: '#7a5b00' }}>{LABEL[f.type]} ✍</button>}
-            </div>
-          );
-        if (AUTO.includes(f.type)) return <div {...common}><span style={{ padding: '0 .3em' }}>{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : new Date().toISOString().slice(0, 10)}</span></div>;
-        if (f.readonly) return <div {...common}><span style={{ padding: '0 .3em' }}>{f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? '✓' : '') : f.value}</span></div>;
-        if (f.type === 'checkbox')
-          return <div {...common} role="checkbox" aria-checked={!!values[f.id]} aria-label={name} tabIndex={0} onClick={() => set(f.id, values[f.id] ? '' : '1')} onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && (e.preventDefault(), set(f.id, values[f.id] ? '' : '1'))}>{values[f.id] ? '✓' : ''}</div>;
-        if (f.type === 'radio')
-          return (
-            <div {...common} role="radio" aria-checked={!!values[f.id]} aria-label={name} tabIndex={0} style={{ ...pos(f), borderRadius: '50%' }}
-              onClick={() => setValues((s) => {
-                const n = { ...s };
-                fields.filter((x) => x.type === 'radio' && (x.group_name || x.id) === (f.group_name || f.id)).forEach((x) => (n[x.id] = ''));
-                n[f.id] = '1';
-                return n;
-              })}>{values[f.id] ? '●' : ''}</div>
-          );
-        if (f.type === 'dropdown')
-          return <div {...common}><select aria-label={name} value={values[f.id] || ''} onChange={(e) => set(f.id, e.target.value)}><option value="">{name}…</option>{(f.options || []).map((o: string) => <option key={o}>{o}</option>)}</select></div>;
-        if (f.type === 'attachment')
-          return <label {...common}><input type="file" hidden accept="application/pdf,image/png,image/jpeg" onChange={(e) => attach(f, e.target.files?.[0])} /><span className="cta">{values[f.id] ? 'Attached ✓' : `${name} 📎`}</span></label>;
-        return (
-          <div {...common}>
-            <input aria-label={name} placeholder={name + (f.required ? ' *' : '')} type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined}
-              value={values[f.id] || ''} onChange={(e) => set(f.id, e.target.value)} />
-          </div>
-        );
-      })}
+      {fields.filter((f) => f.document_id === docId && f.page === page).map(docField)}
+      {nextField && nextField.document_id === docId && nextField.page === page && !sheet && (
+        <span className={`sg-flag${flagBelow ? ' below' : ''}`} aria-hidden="true"
+          style={{ left: `min(${nextField.x * 100}%, calc(100% - 8.5em))`, top: `${(nextField.y + (flagBelow ? nextField.h : 0)) * 100}%` }}>
+          {FLAG[nextField.type] || 'Fill in here'}
+        </span>
+      )}
     </>
   );
 
-  return (
-    <Shell data={data} bar={bar}>
-      {me.role === 'inperson' && <div className="notice warn" style={{ marginBottom: 12 }}>In-person signing for <b>{me.name}</b>.</div>}
-      {!acts && <div className="notice" style={{ marginBottom: 12 }}>{me.role === 'approver' ? 'Review the document, then choose Approve or decline from Other actions.' : 'Review the document, then choose Mark as viewed.'}</div>}
-      <div className="stack">
-        {data.documents.map((d: any) => (
-          <div key={d.id}>
-            {data.documents.length > 1 && <div className="muted small" style={{ margin: '4px 0 8px', fontWeight: 600 }}>{d.name}</div>}
-            <PdfDoc url={`/api${base}/doc/${d.id}`} overlay={overlay(d.id)} />
-          </div>
-        ))}
-      </div>
-      <p className="muted small center" style={{ marginTop: 28 }}>Envelope {env.id}{env.expires_at ? ` · expires ${fmtDate(env.expires_at)}` : ''} · Signing digitally saves about {fmtNum(env.impact.sheets)} sheets of paper.</p>
+  const ctx: FieldCtx = { me, values, sig, ini, dateText, ordered, uploading, filled, set, pickRadio, clickSig, attach };
+  const signed = byId(signedField);
+  const sheetField = byId(sheet);
+  const sheetTarget = sheetField && nextAfter(sheetField.id);
 
+  return (
+    <Shell data={data} bar={bar} bottom={bottom} footer={report} titleIsHeading live={live} helpInNewTab>
+      {notice}
+      {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now.</div>}
+      <p className="sg-guide" id="sg-guide">
+        {!acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
+          : hasNext ? <>Choose <b>Next</b> and we take you to each place that needs you, one at a time.</>
+          : <>Everything needed is filled in. Choose <b>Finish</b> to check it and send.</>}
+      </p>
+      <div className="sg-tools">
+        <div className="sg-seg" role="group" aria-label="How to read the document">
+          <button type="button" aria-pressed={view === 'doc'} onClick={() => chooseView('doc')}>Document</button>
+          <button type="button" aria-pressed={view === 'text'} onClick={() => chooseView('text')}>Text view</button>
+        </div>
+        <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
+      </div>
+
+      {view === 'doc' ? (
+        <div className="stack sg-doc">
+          {data.documents.map((d: any) => (
+            <div key={d.id}>
+              {data.documents.length > 1 && <h2 className="sg-docname">{d.name}</h2>}
+              <PdfDoc url={`/api${base}/doc/${d.id}`} overlay={overlay(d.id)} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <TextView documents={data.documents} urlFor={(id) => `/api${base}/doc/${id}`} senderName={sender.name} onAsk={go('ask')}
+          fields={(docId, page, near) => <PageFields docId={docId} page={page} c={ctx} near={near} />}
+          others={(docId, page) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} />} />
+      )}
+      <p className="muted small center sg-envelope">Envelope {env.id}{env.expires_at ? ` · open until ${fmtDate(env.expires_at)}` : ''} · Signing on screen saves about {fmtNum(env.impact.sheets)} sheets of paper.</p>
+
+      {sheetField && (
+        <FieldSheet field={sheetField} value={values[sheetField.id] || ''} onChange={(v) => set(sheetField.id, v)} onDone={() => setSheet(null)} onNext={sheetTarget ? () => sheetNext(sheetField.id) : undefined} />
+      )}
+      {signed && (
+        <SignedFieldDialog kind={signed.type} image={(signed.type === 'signature' ? sig : ini) || ''} onClose={() => setSignedField(null)}
+          onClear={() => { set(signed.id, ''); setSignedField(null); }}
+          onChange={() => { setSignedField(null); setAdopt({ kind: signed.type }); }} />
+      )}
+      {menuDialog}
+      {dialogs}
+      {open === 'review' && (
+        <ReviewDialog me={me} sender={sender} items={items} sig={sig} ini={ini} approving={me.role === 'approver'} busy={busy} error={finishError}
+          usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
+          onChangeSig={(kind) => setAdopt({ kind })} onBack={() => setOpen('')} onFinish={complete} />
+      )}
       {adopt && (
         <AdoptSignature kind={adopt.kind} name={me.name} onClose={() => setAdopt(null)}
           onDone={(png) => {
@@ -314,42 +724,6 @@ export default function SignPage() {
             setAdopt(null);
           }} />
       )}
-      {modal === 'menu' && (
-        <Modal title="Other actions" onClose={() => setModal('')}>
-          <div className="stack" style={{ display: 'grid', gap: 8 }}>
-            {acts && <button className="btn" onClick={() => run(async () => { await api(`${base}/save`, { body: { values } }); setModal(''); toast('Saved. Use the link in your email to come back and finish.'); })}>Finish later</button>}
-            {acts && (sig || ini) && <button className="btn" onClick={() => { setSig(null); setIni(null); setValues((s) => { const n = { ...s }; fields.filter((f) => f.type === 'signature' || f.type === 'initials').forEach((f) => (n[f.id] = '')); return n; }); setModal(''); }}>Change my signature</button>}
-            <a className="btn" href={`/api${base}/download?inline=1`} target="_blank" rel="noreferrer">View or print the document</a>
-            {(me.role === 'signer' || me.role === 'approver') && <button className="btn" onClick={() => setModal('reassign')}>Assign to someone else</button>}
-            {me.role !== 'viewer' && me.role !== 'cc' && <button className="btn danger" onClick={() => setModal('decline')}>Decline to sign</button>}
-          </div>
-          <div className="actions"><button className="btn ghost" onClick={() => setModal('')}>Close</button></div>
-        </Modal>
-      )}
-      {modal === 'decline' && (
-        <Modal title="Decline to sign" onClose={() => setModal('')}>
-          <p className="muted">This closes the document for everyone. {env.sender.name} will be told why.</p>
-          <label className="f"><span>Reason</span><textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} autoFocus /></label>
-          <div className="actions">
-            <button className="btn" onClick={() => setModal('')}>Keep signing</button>
-            <button className="btn primary" style={{ background: 'var(--red)', borderColor: 'var(--red)' }} disabled={busy || !form.reason.trim()} onClick={() => run(async () => { await api(`${base}/decline`, { body: { reason: form.reason } }); setModal(''); await load(); })}>Decline</button>
-          </div>
-        </Modal>
-      )}
-      {modal === 'reassign' && (
-        <Modal title="Assign to someone else" onClose={() => setModal('')}>
-          <p className="muted">If you are not the right person to sign, pass it on. Your link will stop working and {env.sender.name} will be notified.</p>
-          <label className="f"><span>Their name</span><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></label>
-          <label className="f"><span>Their email</span><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-          <label className="f"><span>Reason <span className="hint">(optional)</span></span><input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>
-          <div className="actions">
-            <button className="btn" onClick={() => setModal('')}>Cancel</button>
-            <button className="btn primary" disabled={busy} onClick={() => run(async () => { await api(`${base}/reassign`, { body: form }); setModal(''); setError(`You assigned this document to ${form.name}. Nothing more for you to do.`); })}>Assign</button>
-          </div>
-        </Modal>
-      )}
     </Shell>
   );
 }
-
-const pos = (f: any) => ({ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` });

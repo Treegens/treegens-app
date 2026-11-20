@@ -26,7 +26,8 @@ const Near = ({ id, text }: { id: string; text?: string }) => (text ? <span id={
 function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
   const id = `t-${f.id}`;
   const name = fieldName(f);
-  const hint = !f.label && near ? near : '';
+  // Company and job title already say what they are. Everything else unlabelled borrows the words printed beside it.
+  const hint = !f.label && near && f.type !== 'company' && f.type !== 'title' ? near : '';
   const described = hint ? `${id}-near` : undefined;
 
   if (isSig(f)) {
@@ -61,8 +62,9 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
       <div className="sg-row">
         <label className="sg-choice">
           <input type="checkbox" id={id} checked={!!c.values[f.id]} onChange={(e) => c.set(f.id, e.target.checked ? '1' : '')} aria-describedby={described} />
-          <span><span className="sg-choice-label">{f.label || 'Tick this box'}<Need f={f} /></span><Near id={`${id}-near`} text={hint} /></span>
+          <span className="sg-choice-label">{f.label || 'Tick this box'}<Need f={f} /></span>
         </label>
+        <Near id={`${id}-near`} text={hint} />
       </div>
     );
   if (f.type === 'dropdown')
@@ -84,10 +86,8 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
         <label className="f"><span>{name}<Need f={f} /></span>
           <input type="file" id={id} accept="application/pdf,image/png,image/jpeg" onChange={(e) => (c.attach(f, e.target.files?.[0]), (e.target.value = ''))} aria-describedby={`${id}-state`} />
         </label>
-        <p id={`${id}-state`} className="muted small sg-row-state">
-          {busy ? 'Uploading.' : c.values[f.id] ? 'A file is attached. Choose another to replace it.' : 'PDF, PNG or JPEG.'}
-          {c.values[f.id] && !busy && <> <button type="button" className="sg-link" onClick={() => c.set(f.id, '')}>Remove the file</button></>}
-        </p>
+        <p id={`${id}-state`} className="muted small sg-row-state">{busy ? 'Uploading.' : c.values[f.id] ? 'A file is attached. Choose another to replace it.' : 'PDF, PNG or JPEG.'}</p>
+        {c.values[f.id] && !busy && <button type="button" className="btn sm sg-row-remove" onClick={() => c.set(f.id, '')}>Remove the file</button>}
       </div>
     );
   }

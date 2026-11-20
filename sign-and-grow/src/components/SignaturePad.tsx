@@ -248,7 +248,7 @@ export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signatu
       <div role="tabpanel" id={`${ids}-panel`} aria-labelledby={`${ids}-${tab}`}>
         {tab === 'type' && (
           <div className="stack">
-            <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input value={text} onChange={(e) => setText(e.target.value)} autoFocus maxLength={60} autoComplete="off" /></label>
+            <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input value={text} onChange={(e) => setText(e.target.value)} maxLength={60} autoComplete="off" /></label>
             <div className="grid g2 sg-sigstyles" role="group" aria-label="Choose a style">
               {STYLES.map((f, i) => (
                 <button key={f} type="button" className={`sigstyle${font === f ? ' on' : ''}`} style={{ fontFamily: `'${f}', cursive` }} onClick={() => setFont(f)} aria-pressed={font === f} aria-label={`Style ${i + 1}: ${text || 'Your name'}`}>
@@ -265,7 +265,7 @@ export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signatu
               {!inked && <span className="sg-padhint" aria-hidden="true">Draw here</span>}
             </div>
             <div className="row between sg-padrow">
-              <span className="muted small">Use a finger, a stylus or the mouse. Cannot draw? Use Type instead.</span>
+              <span className="muted small">Use a finger, stylus or mouse.</span>
               <span className="row">
                 <button type="button" className="btn sm" onClick={undo} disabled={!inked}>Undo</button>
                 <button type="button" className="btn sm" onClick={clear} disabled={!inked}>Clear</button>

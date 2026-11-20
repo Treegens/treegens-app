@@ -5,7 +5,7 @@ export type Uploaded = { id: string; name: string; pages: number; page_sizes: { 
 export const MAX_BYTES = 25_000_000;
 export const LIMITS = 'PDF, PNG or JPEG. Up to 25 MB and 500 pages each.';
 
-const mb = (n: number) => `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)} MB`;
+const mb = (n: number) => `${(n / 1_000_000).toFixed(n < 100_000_000 ? 1 : 0)} MB`;
 export const fmtSize = (n: number) => (n < 1_000_000 ? `${Math.max(1, Math.round(n / 1000))} KB` : mb(n));
 
 /** Problems we can see before sending a single byte. Returns '' when the file looks fine. */

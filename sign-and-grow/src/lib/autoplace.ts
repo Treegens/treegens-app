@@ -127,7 +127,7 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
       if (other.cx[other.cx.length - 1] < x0 || other.cx[0] > x1) continue;
       top = Math.max(top, other.y + 0.25 * other.h);
     }
-    top = Math.min(top, bottom - 1.25 * line.h);
+    top = Math.min(top, bottom - (type === 'checkbox' ? 1.15 : 1.25) * line.h);
     const x = clamp(x0, 0, PW);
     const w = clamp(x1 - x0, 0.012 * PW, PW - x);
     const y = clamp(top, 0, PH);
