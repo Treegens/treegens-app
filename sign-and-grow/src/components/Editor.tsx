@@ -15,6 +15,7 @@ import { StepFields } from './editor/StepFields';
 import { StepReview } from './editor/StepReview';
 import { MAX_DOCS, SIGNS, clamp, plural, who, type Confirm, type Ed, type Upload } from './editor/shared';
 import { sendAnywayAsk } from '@/lib/mailnews';
+import { stackedFields } from '@/lib/stacked';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -318,6 +319,8 @@ export function Editor({ id }: { id: string }) {
       if (check) p.push(check);
     }
     if (!isTpl && rcps.length > 0 && !rcps.some((r) => r.role !== 'cc')) p.push('Add at least one recipient who signs, approves or views.');
+    // Two fields of one person on top of each other: on a phone only the top one can be tapped. The server refuses it too.
+    p.push(...stackedFields(fields.value, rcps, docs));
     return [...new Set(p)];
   }, [docs, rcps, fields.value, isTpl, correcting, base, me.text_messages]);
 

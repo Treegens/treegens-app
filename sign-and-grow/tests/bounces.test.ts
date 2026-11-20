@@ -427,6 +427,11 @@ test('a complaint stops every email about that envelope, tells the sender only t
   assert.equal(db.get('SELECT COUNT(*) n FROM abuse_reports WHERE envelope_id=?', eid).n, 1);
   // The person themselves sees it on their signing page and can start the emails again.
   const t = tokenFor(eid, to);
+  // The sender holds the link too (Copy link), but cannot undo the complaint for them.
+  const asSender = await c.post(`/sign/${t}/mail-again`);
+  assert.equal(asSender.status, 403);
+  assert.match(asSender.data.error, /Only Sam Signer can ask/);
+  assert.ok(rec(eid, to).complained_at);
   const signer = new Client();
   assert.equal((await signer.get(`/sign/${t}`)).data.recipient.mail_stopped, true);
   assert.equal((await signer.post(`/sign/${t}/mail-again`)).data.changed, true);
@@ -573,6 +578,12 @@ test('a login whose emails come back sees it on every page until the address cha
   const solo = await person('Solo Sam', 'solo.sam@bounce.example');
   await ok({ type: 'bounce', email: 'solo.sam@bounce.example', mail_id: String(lastMail('solo.sam@bounce.example').id) });
   assert.ok((await me(solo)).email_problem);
+  // Pressing "It works now, try again" again and again sends one email, and is then slowed down.
+  const had = mailTo('solo.sam@bounce.example').length;
+  const presses: number[] = [];
+  for (let i = 0; i < 7; i++) presses.push((await solo.post('/me/email-works')).status);
+  assert.deepEqual(presses, [200, 200, 200, 200, 200, 200, 429]);
+  assert.equal(mailTo('solo.sam@bounce.example').length, had + 1);
   // A key cannot say it works or move the address.
   const key = (await solo.post('/api-keys', { name: 'k', scope: 'admin' })).data.key;
   const viaKey = await new Client().call('POST', '/me/email-works', {}, { authorization: `Bearer ${key}` });

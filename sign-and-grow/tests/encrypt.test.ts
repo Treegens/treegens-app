@@ -630,7 +630,7 @@ test('the pages say what is encrypted and what is not, from the setting the serv
   const dbOnly = notEncryptedPoint();
   assert.equal(dbOnly.title, 'The database is not encrypted by the software.');
   for (const t of [off.text, dbOnly.text]) {
-    assert.match(t, /names and email addresses of everyone on a document, what they typed into its fields, their signatures as pictures and every audit trail are kept there, and the software does not encrypt it/);
+    assert.match(t, /The names and email addresses of everyone on a document, what they typed into its fields, their signatures as pictures and every audit trail are kept in the database, and the software does not encrypt it/);
     assert.match(t, /Whoever has a copy of the disk can read all of that unless the disk itself is encrypted/);
   }
   assert.match(PROCESSING_ENCRYPTED, /The database is not/);

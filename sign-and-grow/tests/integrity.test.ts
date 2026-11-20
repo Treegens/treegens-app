@@ -955,6 +955,33 @@ test('what a finished signer left empty or unticked is their answer, and a save 
   assert.equal((await pagesOf(e.id)).includes('Non-compete for 10 years applies'), false);
 });
 
+test('a line that a signer emptied before finishing stays empty when an older copy is saved, and new wording is said', async () => {
+  const e = await draft(jo, { ordered: false, subject: 'Emptied before finishing' });
+  const b = await current(e.id);
+  b.fields.push({ document_id: b.documents[0].id, recipient_id: person(b, 'ada@example.com').id, type: 'text', required: false, label: 'Clause', value: 'Non-compete for 10 years', page: 0, x: 0.1, y: 0.3, w: 0.6, h: 0.03 });
+  assert.equal((await jo.put(`/envelopes/${e.id}`, b)).status, 200);
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const stale = await current(e.id); // an editor that was opened before Ada touched it holds this copy
+  // Ada empties the line and saves her progress. She has not finished.
+  const ada = await open(e.id, 'ada@example.com');
+  const clause = ada.view.fields.find((f: any) => f.label === 'Clause').id;
+  assert.equal((await ada.c.post(`/sign/${ada.tok}/save`, { version: ada.view.version, values: { [clause]: '' } })).status, 200);
+  const stored = () => ({ ...db.get('SELECT value, prefill FROM fields WHERE id=?', clause) });
+  assert.deepEqual(stored(), { value: null, prefill: 'Non-compete for 10 years' });
+  // The older copy is saved. When she comes back, the line is as she left it: empty, not filled in again unseen.
+  assert.equal((await jo.put(`/envelopes/${e.id}`, stale)).status, 200);
+  assert.deepEqual(stored(), { value: null, prefill: 'Non-compete for 10 years' });
+  const back = (await ada.c.get(`/sign/${ada.tok}`)).data;
+  assert.equal(back.fields.find((f: any) => f.id === clause).value, null);
+  assert.equal(back.version, ada.view.version, 'nothing changed, so nothing is said');
+  // New wording from the sender is a change: it goes in, and her open page has to look again before it can finish.
+  const reworded = await current(e.id);
+  reworded.fields.find((f: any) => f.label === 'Clause').value = 'Non-compete for 2 years';
+  assert.equal((await jo.put(`/envelopes/${e.id}`, reworded)).status, 200);
+  assert.deepEqual(stored(), { value: 'Non-compete for 2 years', prefill: 'Non-compete for 2 years' });
+  assert.equal((await ada.finish({ version: back.version })).data.code, 'changed');
+});
+
 // ---- 3 again. The page shows the file that is signed ------------------------------------------------------------
 
 test('the signing page is given the fingerprint of each file, loads a replaced file again, and Finish waits for its pages', async () => {

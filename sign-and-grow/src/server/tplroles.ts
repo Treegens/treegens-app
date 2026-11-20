@@ -229,7 +229,7 @@ export function assertWordingKept(c: Ctx, e: any, b: any) {
     const fixed = new Set(lock.fixed);
     list.forEach((f, i) => {
       const was = by.get(text(f?.id));
-      const which = `Field ${i + 1}${was?.label ? ` ("${str(was.label, 60)}")` : ''}`;
+      const which = was?.type === 'note' ? `The note "${str(was.value, 60)}" on page ${was.page + 1}` : `Field ${i + 1}${was?.label ? ` ("${str(was.label, 60)}")` : ''}`;
       if (!was) return no(`${which} is not one of its fields. Send the fields with the ids they have.`);
       const mark = was.type === 'note' || was.type === 'strike';
       const same = f.type === was.type && text(f.document_id) === was.document_id && text(f.recipient_id) === text(was.recipient_id) && (Number(f.page) || 0) === was.page
@@ -237,8 +237,11 @@ export function assertWordingKept(c: Ctx, e: any, b: any) {
         && JSON.stringify(f.options || []) === JSON.stringify(was.options || []) && text(f.group_name) === text(was.group_name) && text(f.validation) === text(was.validation)
         && (yes(f.readonly, false) === true || mark) === !!was.readonly;
       if (!same) no(`${which} cannot be moved, resized or changed.`);
-      // The template's own wording stays. The value a signer already gave stays too (the save keeps it anyway).
-      if (fixed.has(was.id) && text(f.value) !== text(was.value) && text(f.value) !== text(was.prefill)) no(`${which} holds wording from the template, and it cannot be changed.`);
+      // The template's own wording stays: a value left out would empty it, so it counts as a change. Once the envelope
+      // is out, a field its signer may change holds their answer in value and the template's wording in prefill;
+      // the editor sends back either, and the save keeps the signer's answer whatever it is sent.
+      const kept = text(f.value) === text(was.value) || (text(was.prefill) !== '' && text(f.value) === text(was.prefill));
+      if (fixed.has(was.id) && !kept) no(`${which} holds wording from the template, and it cannot be changed.`);
     });
   }
 }

@@ -126,13 +126,15 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | On my phone I never hear that someone signed. | The page after sending has one switch, "Email me each time someone signs". It sets the same preference as Settings, Notifications. |
 | Fields in the editor are too small to grab with a finger. | On a touch screen every field answers a tap over at least 44 by 44 pixels (a tick box is drawn about 9 pixels wide at phone width), so does the resize corner, and every button of the editor on a phone is at least 44 pixels tall. |
 | A blind signer hears "Text, required" and cannot know what to type. | The last step before sending lists every field a signer fills in that has no label, says why that matters to someone who uses a screen reader, and opens each one with the cursor in its Label box. It warns and never blocks. |
+| The upload said 25 MB was fine, and my signers' phones sat on a blank page. | A signer's phone downloads the whole file, and we measured how long that takes on a slow mobile connection: about 5.7 seconds a megabyte (`PHONE_SECONDS_PER_MB` in `src/lib/policy.ts`, Chromium at phone size with Chrome's "Slow 4G", not a real phone). The upload box says so next to the limits, and a document of 5 MB or more gets a warning under it and again before sending, with the wait for its size and what to do. On a phone the box says "Tap to choose files or take a photo", not "drop" or "click". |
 
 ## What is in it
 
 **Sending**
 - Upload PDFs, PNGs or JPEGs. Several documents per envelope, reorder and rename them. A phone photo is turned
   upright from the camera's note, several pictures chosen at once can become one document, and pictures are made
-  smaller before they leave the phone.
+  smaller before they leave the phone. A PNG can have up to 25 million pixels and a JPEG up to 50 million, read
+  from the header before anything is unpacked. A document of 5 MB or more is pointed out as slow on a phone.
 - Recipients who sign, approve, only view, get a copy, or sign in person on your device. Signing in person needs an
   internet connection from opening the document to pressing Finish: there is no offline mode.
 - Signing order (sequential, parallel or mixed) or everyone at once.

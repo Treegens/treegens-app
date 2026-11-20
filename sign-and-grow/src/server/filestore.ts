@@ -99,7 +99,9 @@ const SAY: Record<StoredFileProblem['why'], [number, string]> = {
   'no-key': [503, `We could not open this file at the moment: it is locked with an encryption key this server has not been given. The file is still there and nothing was changed. ${RECORDED} Please try again later.`],
   newer: [503, `We could not open this file at the moment: it was stored by a newer version of our software than the one running now. The file is still there and nothing was changed. ${RECORDED} Please try again later.`],
 };
-const STOPPED = 'We cannot store files at the moment, so nothing was saved. The server was started with an encryption setting that cannot open the files it already has, and it stores nothing new until that is put right, so that no file is ever locked with a key nobody can find later. Everything already stored is safe. The people who run this server have been told. Please try again later.';
+// Why storing stopped (a key that does not fit the files there) is for the operator, in the log and the queue. The
+// person in front of the screen needs to know that nothing was saved, that nothing is lost, and what to do.
+const STOPPED = 'We cannot store files at the moment, so nothing was saved. Everything already stored is safe. A setting on our server has to be put right first, and the people who run it have been told. Please try again later.';
 
 const DETAIL: Record<StoredFileProblem['why'], string> = {
   missing: 'The file is not in the folder of stored files.',

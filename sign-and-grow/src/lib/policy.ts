@@ -329,8 +329,14 @@ export const SESSION_TOUCH_MINUTES = 60;
 export const HAND_OVER_TRIES = 5;
 /** A stored document of at least this many bytes is pointed out to the sender as slow to open on a phone (phoneWeight() in src/lib/phone.ts). */
 export const PHONE_SLOW_BYTES = 5_000_000;
-/** Seconds a phone needed for each megabyte of a document on the signing page over a slow mobile connection: Chrome's "Slow 4G" (1.6 megabits a second), measured with tests/out/gaps-mobile-send/g-measure.cjs. */
-export const PHONE_SECONDS_PER_MB = 5.6;
+/**
+ * Seconds a phone needed for each megabyte of a document on the signing page over a slow mobile connection, measured
+ * on 2026-11-20 in Chromium at 390 by 844 with Chrome's "Slow 4G" setting (1.6 megabits a second): 5 MB took 28.6
+ * seconds, 10 MB 56.4, 20 MB 113.3. With "Fast 4G" (9 megabits) it was about 1.1 seconds a megabyte. The first page
+ * was drawn within 0.3 seconds of the last byte: that day a signer waited for all of it before seeing page 1 (the
+ * file is served without range requests). Not measured on a real phone.
+ */
+export const PHONE_SECONDS_PER_MB = 5.7;
 
 // Signing groups: a recipient that is a group of people, any one of whom can act (src/server/groups.ts). The
 // Contacts page, the editor, the help page and the server all quote these.

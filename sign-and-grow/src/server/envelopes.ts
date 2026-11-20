@@ -15,6 +15,7 @@ import { saveChecks, copyCheck, assertChecks, checkBits, alsoText, textWaiting, 
 import { sendWarnings, PAPER_AUDIT_ACTION } from './warnings.ts';
 import { paperAuditNote } from '../lib/paperwork.ts';
 import { strikePlace } from '../lib/strike.ts';
+import { stackedFields } from '../lib/stacked.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine } from './bounces.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
 import { attachGroups, groupNames, saveGroups, copyGroup, assertGroups, groupReach, groupReachNew, snapshotGroups, settleGroups, groupPeople, notifyMembers, groupLine, groupWords, groupChange, groupsCorrected, memberLinks, assertGroupCorrection } from './groups.ts';
@@ -288,7 +289,10 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     // puts the sender's value back, whatever the body carries. Where they left the sender's own wording as it was,
     // a change to it is a change to what they signed, and correctEnvelope asks for the sign-again choice.
     const finished = !!old?.recipient_id && doneIds.has(old.recipient_id);
-    const answered = correcting && !!old && !senderOwned && old.value !== old.prefill && (finished || old.value != null);
+    // Someone who has not finished yet and emptied such a line answered too. A body that carries the sender's wording
+    // as it was (an editor opened before, the same request sent again) leaves it empty, or the line would come back
+    // unseen. New wording is a change: it replaces the empty line, and the signer is told (content_version).
+    const answered = correcting && !!old && !senderOwned && old.value !== old.prefill && (finished || old.value != null || String(f.value ?? '') === String(old.prefill));
     const value = answered ? old.value : prefilled ? fit(f.value, 4000, `${which}: the value`) || null : correcting && old ? old.value : null;
     const readonly = ro || SENDER_MARK(f.type) ? 1 : 0;
     // The sender's own wording in a field its signer may still change. Kept beside the value: see db.ts. A signer
@@ -353,6 +357,9 @@ function assertSendable(e: any) {
       throw bad(`${r.name} has nothing to sign yet. Place at least one field for them.`);
   }
   if (!e.recipients.some((r: any) => r.role !== 'cc')) throw bad('Add at least one recipient who signs, approves or views.');
+  // Two fields of one person on top of each other: a finger reaches only the top one, and the signer can never finish.
+  const stacked = stackedFields(e.fields, e.recipients, e.documents);
+  if (stacked.length) throw bad(stacked.join(' '));
 }
 
 const r6 = (n: number) => Math.round(n * 1e6);

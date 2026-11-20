@@ -27,7 +27,7 @@ export function decodeFileKey(text: string | undefined): Buffer | null {
 export const fileEncryptionOn = (env: Record<string, string | undefined> = process.env): boolean => !!decodeFileKey(env.FILE_ENCRYPTION_KEY);
 
 const FILES = 'uploaded documents, signed PDFs and the files signers attach';
-const DATABASE = 'The database is a different matter: the names and email addresses of everyone on a document, what they typed into its fields, their signatures as pictures and every audit trail are kept there, and the software does not encrypt it. Whoever has a copy of the disk can read all of that unless the disk itself is encrypted, which depends on where the service is hosted.';
+const DATABASE = 'The names and email addresses of everyone on a document, what they typed into its fields, their signatures as pictures and every audit trail are kept in the database, and the software does not encrypt it. Whoever has a copy of the disk can read all of that unless the disk itself is encrypted, which depends on where the service is hosted.';
 
 /** The point on /security that says what is protected when the files are encrypted. Empty when they are not. */
 export function encryptedFilesPoint(on = fileEncryptionOn()): { title: string; text: string } | null {

@@ -19,3 +19,13 @@
 .sg-pan.zoomed { overflow-x: auto; overscroll-behavior-x: contain; margin: 0 -12px; padding: 0 12px 26px; }
 .sg-pan.zoomed .pdfdoc { align-items: flex-start; }
 .sg-zoom button { min-width: 44px; padding: 6px 10px; font-variant-numeric: tabular-nums; }
+/* Narrow screens and large text: the size buttons wrap inside their group instead of running off the screen. */
+.sg-tools .sg-seg { max-width: 100%; flex-wrap: wrap; }
+.sg-tools .sg-seg button { flex: 1 1 auto; }
+
+/* ---- Finish and Decline within reach ---------------------------------------------------------------------------
+   Decline lives under Other actions in the top bar. On a phone held sideways the bar is the wide one, where small
+   buttons are 40 px: on a touch screen they are 44 px like everything else a thumb has to hit. */
+@media (pointer: coarse) {
+  .sg-bar .btn.sm, .sg-bar .btn.go { min-height: 44px; }
+}

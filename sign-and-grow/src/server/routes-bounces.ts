@@ -316,6 +316,10 @@ route('POST', '/envelopes/:id/try-again', async (c) => {
 route('POST', '/sign/:token/mail-again', (c) => {
   const { e, r, actor } = find(c, false);
   if (!r.complained_at) return { ok: true, changed: false };
+  // The sender can copy this link, so holding it is not enough when the browser (or key) is signed in to the account
+  // that sent the envelope: undoing a complaint is the recipient's word alone, unless the address is that person's own.
+  if (c.auth && get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', e.account_id, c.user.id) && !same(c.user.email, r.email))
+    throw bad(`Only ${r.name} can ask for our emails about this document again, on their own device. You are signed in to the account that sent it, so nothing was changed. You can still send them their link yourself.`, 403);
   run('UPDATE recipients SET complained_at=NULL WHERE id=?', r.id);
   audit(e.id, actor, 'Emails started again', `${r.name} had marked an email about this envelope as spam, and now asked to be emailed about it again.`);
   fireWebhooks(e.account_id, 'envelope.updated', e.id, { recipient_id: r.id, change: 'email_wanted_again' });

@@ -8,10 +8,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { boot, signUp, simple, samplePdf, mailTo, tokenFor, Client, PNG, type Server } from './helpers.ts';
+import { boot, signUp, simple, samplePdf, upload, mailTo, tokenFor, Client, PNG, type Server } from './helpers.ts';
 import { whyNotShown, VIEW_FAILED } from '../src/components/viewFailure.ts';
+import { stackedFields, STACK_SHARE } from '../src/lib/stacked.ts';
+import { CANNOT_REACH, sameFieldAgain } from '../src/components/sign/stuck.ts';
 import { DRAW_SCREENS, RELEASE_SCREENS, MAX_PAGE_PIXELS, nearScreen, pixelRatio, jumpRatherThanGlide } from '../src/components/pdfMemory.ts';
-import { SIGNING_BROWSERS, SIGNING_ONLINE, SIGNING_WEAK_SIGNAL, CANNOT_SHOW_WAYS } from '../src/lib/mobile.ts';
+import { SIGNING_BROWSERS, SIGNING_ONLINE, SIGNING_WEAK_SIGNAL, SIGNING_ZOOM, ZOOMS, CANNOT_SHOW_WAYS } from '../src/lib/mobile.ts';
 import { isConnectionError, finishNotSent, saveNotSent, keepAnswers, readAnswers, dropAnswers, FINISH_RETRY_MS } from '../src/components/sign/offline.ts';
 import { drawnProblem, inkLength, inkShare, pictureProblem, PEN_WIDTH, type Point } from '../src/lib/ink.ts';
 
@@ -332,4 +334,98 @@ test('Next jumps to a far field instead of gliding past it, and checks where it 
   assert.ok(!/750\);/.test(fn), 'no longer a fixed check in the middle of a glide');
   // Measured: one tap on Next from page 1 put the field on page 51 at 340 px from the top of an 844 px screen,
   // where before it stopped with the field above the screen.
+});
+
+// ---- E. Small print -----------------------------------------------------------------------------------------
+
+test('the signing page offers 100, 150 and 200 percent, sharp at each, in a strip that leaves the bars alone; pinch zoom stays on', () => {
+  assert.deepEqual(ZOOMS, [1, 1.5, 2]);
+  const page = signPage();
+  assert.match(page, /\{view === 'doc' && <ZoomControl zoom=\{zoom\} onZoom=\{setZoom\} \/>\}/, 'only in the document view, where it means something');
+  assert.match(page, /<PdfDoc key=\{d\.sha256 \|\| d\.id\} url=\{docUrl\(base, d\)\} zoom=\{zoom\}/);
+  assert.match(page, /className=\{`stack sg-doc sg-pan\$\{zoom > 1 \? ' zoomed' : ''\}`\}/);
+  const zoom = read('src/components/sign/Zoom.tsx');
+  assert.match(zoom, /role="group" aria-label="Size of the pages"/);
+  assert.match(zoom, /aria-pressed=\{zoom === z\} aria-label=\{`\$\{Math\.round\(z \* 100\)\} percent`\}/);
+  // Sharp: the pages are drawn again at the new width (pixelRatio, tested above), not stretched.
+  assert.match(read('src/components/PdfDoc.tsx'), /const width = Math\.round\(Math\.min\(maxWidth, avail \|\| maxWidth\) \* zoom\);/);
+  // The strip scrolls sideways by itself, so the page never gets wider than the phone and the bars stay put.
+  const css = read('src/app/styles/signphone.css');
+  assert.match(css, /\.sg-pan\.zoomed \{ overflow-x: auto;/);
+  // Next slides the strip to a field at the edge of a zoomed page.
+  assert.match(read('src/components/sign/parts.tsx'), /el\.closest\('\.sg-pan'\)/);
+  // Pinch zoom: the viewport sets no ceiling, and nothing on the document view switches touch gestures off. The pad
+  // you draw on does, and has to; so do the sender's fields while they are dragged in the editor.
+  const layout = read('src/app/layout.tsx');
+  assert.ok(!/maximumScale|userScalable|maximum-scale|user-scalable/.test(layout));
+  for (const file of ['src/app/styles/sign.css', 'src/app/styles/signphone.css'])
+    assert.ok(!/touch-action:\s*none/.test(read(file)), `${file} does not stop pinching`);
+  assert.deepEqual(read('src/app/globals.css').match(/^[^\n{]*\{[^}]*touch-action:\s*none/gm)?.map((r) => r.split('{')[0].trim()), ['.field.edit', '.field .grip', '.sigpad']);
+  assert.match(SIGNING_ZOOM, /Pinching to zoom works too\./);
+  assert.match(read('src/app/help/phone.tsx'), /\{SIGNING_ZOOM\}/);
+});
+
+// ---- F. Two fields of one person on top of each other -------------------------------------------------------
+
+const box = (o: any) => ({ document_id: 'd1', page: 0, type: 'signature', x: 0.1, y: 0.5, w: 0.3, h: 0.06, ...o });
+const people = [{ id: 'r1', name: 'Pat Phone' }, { id: 'r2', name: 'Sam Other' }];
+const oneDoc = [{ id: 'd1', name: 'Agreement' }];
+
+test('two fields of the same person that cover each other are named; anything a finger can still reach is not', () => {
+  // The case from the research: two required signatures in the same spot, sent, and the signer stuck at 1 of 2 left.
+  assert.deepEqual(stackedFields([box({ recipient_id: 'r1' }), box({ recipient_id: 'r1', x: 0.12 })], people, oneDoc),
+    ['Two fields for Pat Phone sit on top of each other on page 1, so one of them cannot be tapped. Move or remove one.']);
+  // A tick box hidden under a text field, and a field under one the sender filled in for them.
+  assert.equal(stackedFields([box({ recipient_id: 'r1', type: 'text', w: 0.4, h: 0.04 }), box({ recipient_id: 'r1', type: 'checkbox', x: 0.2, y: 0.505, w: 0.02, h: 0.02 })], people, oneDoc).length, 1);
+  assert.equal(stackedFields([box({ recipient_id: 'r1', type: 'text' }), box({ recipient_id: 'r1', type: 'text', readonly: 1 })], people, oneDoc).length, 1);
+  // Not stacked: two people in the same spot (each sees only their own), another page, a slight touch, two fields
+  // filled in for the signer, and the sender's own notes.
+  assert.deepEqual(stackedFields([box({ recipient_id: 'r1' }), box({ recipient_id: 'r2' })], people, oneDoc), []);
+  assert.deepEqual(stackedFields([box({ recipient_id: 'r1' }), box({ recipient_id: 'r1', page: 1 })], people, oneDoc), []);
+  assert.deepEqual(stackedFields([box({ recipient_id: 'r1' }), box({ recipient_id: 'r1', x: 0.25 })], people, oneDoc), [], 'half covered: both can be tapped');
+  assert.deepEqual(stackedFields([box({ recipient_id: 'r1', type: 'date_signed' }), box({ recipient_id: 'r1', type: 'full_name' })], people, oneDoc), []);
+  assert.deepEqual(stackedFields([box({ recipient_id: 'r1' }), box({ recipient_id: null, type: 'note' }), box({ recipient_id: 'r1', type: 'note' })], people, oneDoc), []);
+  // Said once per person and page however many overlap, with the document named when there are several, and a role
+  // name for a template's open recipient.
+  const three = [box({ recipient_id: 'r1' }), box({ recipient_id: 'r1' }), box({ recipient_id: 'r1', document_id: 'd2', page: 3 }), box({ recipient_id: 'r1', document_id: 'd2', page: 3 })];
+  assert.deepEqual(stackedFields(three, [{ id: 'r1', name: '', role_name: 'Client' }], [...oneDoc, { id: 'd2', name: 'Schedule B' }]), [
+    'Two fields for Client sit on top of each other on page 1 of Agreement, so one of them cannot be tapped. Move or remove one.',
+    'Two fields for Client sit on top of each other on page 4 of Schedule B, so one of them cannot be tapped. Move or remove one.',
+  ]);
+  assert.equal(STACK_SHARE, 0.6);
+  // The editor lists it with the other problems of the review step, which keeps Send switched off.
+  const editor = read('src/components/Editor.tsx');
+  assert.match(editor, /p\.push\(\.\.\.stackedFields\(fields\.value, rcps, docs\)\);\s+return \[\.\.\.new Set\(p\)\];/);
+  // Next coming back to the same empty field points to Text view, from the second time.
+  const again = sameFieldAgain();
+  assert.deepEqual([again('a'), again('a'), again('a'), again('b'), again('a')], [false, true, true, false, false]);
+  assert.match(CANNOT_REACH, /Text view/);
+  assert.match(signPage(), /nextAgain\(nextField\.id\) && view === 'doc' && toast\(CANNOT_REACH\)/);
+});
+
+test('the server refuses to send or correct into stacked fields, and nothing goes out', async () => {
+  const c = await signUp('Stack Sender', 'stack@example.com', ip());
+  const file = await upload(c, 2);
+  const body = {
+    subject: 'Stacked', documents: [{ id: 'd1', file_id: file.id, name: 'Agreement' }],
+    recipients: [{ id: 'r1', role: 'signer', name: 'Pat Phone', email: 'stacked@example.com' }],
+    fields: [box({ id: 'a', recipient_id: 'r1' }), box({ id: 'b', recipient_id: 'r1', x: 0.11, y: 0.505 })],
+  };
+  const made = await c.post('/envelopes', body);
+  assert.equal(made.status, 200, 'a draft may hold it while the sender works');
+  const sent = await c.post(`/envelopes/${made.data.envelope.id}/send`);
+  assert.equal(sent.status, 400);
+  assert.equal(sent.data.error, 'Two fields for Pat Phone sit on top of each other on page 1, so one of them cannot be tapped. Move or remove one.');
+  assert.equal((await c.get(`/envelopes/${made.data.envelope.id}`)).data.envelope.status, 'draft');
+  assert.equal(mailTo('stacked@example.com').length, 0, 'nobody was emailed');
+  // Moved apart, it sends. Then a correction that stacks them again is refused, and the envelope stays as it was.
+  const e = (await c.get(`/envelopes/${made.data.envelope.id}`)).data.envelope;
+  const fixed = { ...body, documents: e.documents, recipients: e.recipients, fields: e.fields.map((f: any, i: number) => ({ ...f, y: 0.3 + i * 0.2 })) };
+  assert.equal((await c.put(`/envelopes/${e.id}`, fixed)).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  const out = (await c.get(`/envelopes/${e.id}`)).data.envelope;
+  const again = await c.put(`/envelopes/${e.id}`, { subject: out.subject, documents: out.documents, recipients: out.recipients, fields: out.fields.map((f: any) => ({ ...f, y: 0.5 })) });
+  assert.equal(again.status, 400);
+  assert.match(again.data.error, /^Two fields for Pat Phone sit on top of each other on page 1/);
+  assert.deepEqual((await c.get(`/envelopes/${e.id}`)).data.envelope.fields.map((f: any) => f.y).sort(), [0.3, 0.5]);
 });

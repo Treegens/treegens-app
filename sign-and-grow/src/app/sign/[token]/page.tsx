@@ -24,6 +24,7 @@ import { pageBoxes } from '@/components/sign/pdfText';
 import { NoViewer } from '@/components/sign/NoViewer';
 import { ZoomControl } from '@/components/sign/Zoom';
 import { isConnectionError, finishNotSent, saveNotSent, keepAnswers, readAnswers, dropAnswers, FINISH_RETRY_MS } from '@/components/sign/offline';
+import { CANNOT_REACH, sameFieldAgain } from '@/components/sign/stuck';
 import { SIGNING_ONLINE } from '@/lib/mobile';
 import { PayLink } from '@/components/sign/PayLink';
 import { NoEmailDone, NoEmailWait, answerComesTo } from '@/components/sign/NoEmail';
@@ -102,6 +103,8 @@ export default function SignPage() {
   const canSave = useRef(false);
   const rejected = useRef(0);
   const warnedSave = useRef(false);
+  // Next that keeps coming back to the same empty field: something on the page may cover it (stuck.ts).
+  const nextAgain = useRef(sameFieldAgain()).current;
   // Finish was pressed and did not get through for want of a connection: it is sent again by itself (see complete).
   const [finishPending, setFinishPending] = useState(false);
   const completeRef = useRef<() => void>(() => {});
@@ -821,7 +824,7 @@ export default function SignPage() {
   const hasNext = acts && left.length > 0;
   const count = !acts ? '' : !required.length ? 'Nothing is required' : left.length ? `${left.length} of ${required.length} left` : 'Ready to finish';
   const mainButton = (big: boolean) => hasNext
-    ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => goTo(nextField)}>Next</button>
+    ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => (nextAgain(nextField.id) && view === 'doc' && toast(CANNOT_REACH), goTo(nextField))}>Next</button>
     : <button type="button" className={`btn go finish${big ? ' sg-big' : ''}`} disabled={busy || !allShown} aria-describedby={allShown ? undefined : 'sg-guide'} onClick={pressFinish}>{finishLabel}</button>;
   const done = required.length - left.length;
   const bar = (
