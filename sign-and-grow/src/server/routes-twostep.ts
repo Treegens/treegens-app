@@ -58,14 +58,14 @@ route('POST', '/auth/two-step', async (c) => {
 route('POST', '/auth/two-step/lost', async (c) => {
   const p = pendingOf(c);
   if (!p) throw expired();
-  rateLimit(`two-step-lost:${p.user_id}`, 3, 3600_000);
+  rateLimit(`two-step-lost:${p.user_id}`, 5, 3600_000);
   if (p.password_ok) await sendWayBack(user(p.user_id));
   return { ok: true };
 }, 'public');
 
 // The same from Settings, for someone still signed in somewhere who no longer has the phone.
 route('POST', '/me/two-step/lost', async (c) => {
-  rateLimit(`two-step-lost:${c.user.id}`, 3, 3600_000);
+  rateLimit(`two-step-lost:${c.user.id}`, 5, 3600_000);
   if (!twoStepOn(c.user)) throw bad('Two-step login is not on for your login, so there is nothing to reset.', 409);
   await sendWayBack(c.user);
   return { ok: true, sent_to: c.user.email, owner: ownsAnAccount(c.user.id) };

@@ -94,7 +94,8 @@ test('HOTP and TOTP give the published test values of RFC 4226 and RFC 6238', ()
   assert.deepEqual(fromBase32(toBase32(random).toLowerCase().replace(/(.{4})/g, '$1 ')), random, 'typed in groups and in small letters, it is the same secret');
   const uri = new URL(otpauthUri('JBSWY3DPEHPK3PXP', 'ada@example.com'));
   assert.equal(uri.protocol, 'otpauth:');
-  assert.equal(decodeURIComponent(uri.pathname.replace(/^\/\/totp\//, '').replace(/^totp\//, '')), 'Sign&Grow:ada@example.com');
+  assert.equal(uri.host, 'totp');
+  assert.equal(decodeURIComponent(uri.pathname.slice(1)), 'Sign&Grow:ada@example.com', 'the label the app shows: who issued it, and the login');
   assert.equal(uri.searchParams.get('secret'), 'JBSWY3DPEHPK3PXP');
   assert.equal(uri.searchParams.get('issuer'), 'Sign&Grow');
   assert.equal(uri.searchParams.get('digits'), '6');

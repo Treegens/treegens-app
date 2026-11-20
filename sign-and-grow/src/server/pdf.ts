@@ -308,7 +308,7 @@ class Sheet {
   }
 }
 
-const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approver', cc: 'Receives a copy', viewer: 'Needs to view', inperson: 'In-person signer' };
+const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approver', cc: 'Receives a copy', viewer: 'Needs to view', inperson: 'In-person signer', witness: 'Witness' };
 const ts = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '-');
 
 async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
@@ -342,13 +342,16 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   }
 
   s.h2('Recipients');
-  for (const r of e.recipients) {
+  // A witness comes straight after the person they witnessed (witnessOrder in witness.ts).
+  for (const r of witnessOrder(e.recipients)) {
     s.need(96);
     const top = s.y;
     // For a group: the member who acted and the group ("Maya Lopez, for HR team"), see certName in src/lib/groups.ts.
     s.text(certName(r, iso), { size: 10, bold: true, maxW: 330 });
     s.kv('Role', ROLE_LABEL[r.role] || r.role);
-    s.kv('Status', r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : 'Signed') : r.status);
+    s.kv('Status', r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : r.role === 'witness' ? 'Witnessed' : 'Signed') : r.status);
+    // Whose signature a witness witnessed, their statement as ticked, when, and what a challenge would look at.
+    for (const [k, v] of witnessCertLines(e, r, ts)) s.kv(k, known(v));
     s.kv('Sent', ts(r.sent_at));
     if (r.role !== 'cc') {
       s.kv('Viewed', ts(r.viewed_at));
