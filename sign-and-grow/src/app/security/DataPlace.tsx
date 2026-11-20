@@ -12,7 +12,7 @@ const Unstated = ({ children }: { children: string }) => <span className="pub-un
 export const Stated = ({ value, what }: { value: string | null; what: string }) => (value ? <>{value}{/[.!?]$/.test(value) ? '' : '.'}</> : <Unstated>{notSaid(what)}</Unstated>);
 
 const unnamed: Record<Processor['id'], string> = {
-  host: 'The hosting company', mail: 'The mail provider', payments: 'The payment provider', google: 'Google', microsoft: 'Microsoft', sms: 'The text message provider',
+  host: 'The hosting company', mail: 'The mail provider', payments: 'The payment provider', google: 'Google', microsoft: 'Microsoft', sms: 'The text message provider', chat: 'The help chat provider',
 };
 
 /** Everyone else who handles data. On a phone each row becomes a card with its labels written out. */
@@ -47,7 +47,7 @@ export function WhereYourDataIs() {
         <li><b>Who runs this server.</b><span><Stated value={d.operator} what="who they are" /> They are the ones who hold your data, and the ones to ask about it.</span></li>
         <li><b>Where the server and its files are.</b><span><Stated value={d.region} what="where it is hosted" /> {d.host ? <>It runs on machines of {d.host}.</> : <Unstated>{notSaid('which company hosts it')}</Unstated>} The database and every uploaded and signed file are on one disk in that one place. There is one region. You cannot choose another.</span></li>
         <li><b>Backups.</b><span><Stated value={d.backups} what="whether and where backups are kept" /></span></li>
-        <li><b>What leaves the server.</b><span>Only what the table below lists, for the reason it gives{d.processors.length > 1 ? '' : ': on this server that is the hosting alone'}. A webhook you set up yourself sends the events you chose to the address you gave. There is no analytics service, no advertising and no AI service behind these pages.</span></li>
+        <li><b>What leaves the server.</b><span>Only what the table below lists, for the reason it gives{d.processors.length > 1 ? '' : ': on this server that is the hosting alone'}. A webhook you set up yourself sends the events you chose to the address you gave. There is no analytics service and no advertising behind these pages{d.processors.some((p) => p.id === 'chat') ? <>. The one AI service is the help chat&apos;s, in the table, and it gets only what people type into the chat</> : ', and no AI service'}.</span></li>
       </ul>
       <ProcessorTable d={d} />
       {d.off.length > 0 && <p className="muted small" style={{ margin: '12px 0 0' }}><b>Not in use on this server:</b> {d.off.join(' ')}</p>}

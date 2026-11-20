@@ -11,6 +11,7 @@
 // It reads the environment: server code and server components only.
 import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
+import { chatProvider, chatDailyLimit, CHAT_SENT, CHAT_WHO } from './chatprovider.ts';
 
 type Env = Record<string, string | undefined>;
 const val = (v: string | undefined): string | null => (v || '').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
@@ -19,7 +20,7 @@ const val = (v: string | undefined): string | null => (v || '').replace(/\s+/g, 
 export const notSaid = (what: string): string => `The operator of this server has not said ${what}. Ask them.`;
 
 export type Processor = {
-  id: 'host' | 'mail' | 'payments' | 'google' | 'microsoft' | 'sms';
+  id: 'host' | 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'chat';
   /** The company, or null when the operator has not named it. */
   name: string | null;
   /** The country it handles the data in, or null when the operator has not stated it. */
@@ -60,6 +61,7 @@ export type DataPlace = {
  *   MAIL_PROVIDER_NAME, MAIL_PROVIDER_COUNTRY        the company behind SMTP_URL and where it handles email
  *   PAYMENT_PROVIDER_COUNTRY                         which Stripe company the account is with, and its country
  *   SMS_PROVIDER_NAME, SMS_PROVIDER_COUNTRY          the text message provider (the name is known when it is Twilio)
+ *   SUPPORT_CHAT_PROVIDER_NAME, SUPPORT_CHAT_PROVIDER_COUNTRY   who writes the help chat's answers (src/lib/chatprovider.ts)
  */
 export function dataPlace(env: Env = process.env): DataPlace {
   const operator = val(env.OPERATOR_NAME);
@@ -123,6 +125,18 @@ export function dataPlace(env: Env = process.env): DataPlace {
       missing: [...need(name, 'which company delivers its text messages'), ...need(country, 'in which country its text message provider handles text messages')],
     });
   } else off.push('Text messages are switched off on this server, so no phone number goes to a text message provider.');
+
+  // The help chat: listed when a model answers it, from the same function the server asks (src/lib/chatprovider.ts).
+  const chat = chatProvider(env);
+  if (chat && (env[chat.keyVar] || '').trim() && chatDailyLimit(env) > 0) {
+    processors.push({
+      id: 'chat', name: chat.name, country: chat.country,
+      purpose: `Writes the answers of the help chat (the AI model ${chat.model}, reached at ${chat.host}). What it keeps of a question, and for how long, is set by its own terms.`,
+      data: CHAT_SENT,
+      who: CHAT_WHO,
+      missing: need(chat.country, 'in which country its help chat provider handles what people type'),
+    });
+  } else off.push('No AI model answers the help chat on this server: its answers come from the built-in help, and nothing typed into it leaves the server.');
 
   const unstated = [...need(operator, 'who they are'), ...processors.flatMap((p) => p.missing), ...need(backups, 'whether and where backups are kept')];
   return { operator, region, host, backups, processors, off, unstated };

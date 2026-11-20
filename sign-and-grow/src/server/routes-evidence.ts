@@ -49,7 +49,8 @@ route('POST', '/public/check/dispute', async (c) => {
 route('GET', '/envelopes/:id/evidence', async (c) => {
   const e = mine(c, c.params.id, 'envelope', { removed: true });
   if (e.status === 'draft') throw bad('This envelope has not been sent, so there is no record to put in an evidence pack yet.');
-  const { entries, name } = await evidencePack(e, c.user ? `${c.user.name} <${c.user.email}>` : 'an API key');
+  // A key's request carries the login of whoever made the key, but no person asked for this pack: the README says so.
+  const { entries, name } = await evidencePack(e, c.auth?.via === 'api_key' ? `an API key that ${c.user.name} <${c.user.email}> created` : `${c.user.name} <${c.user.email}>`);
   return new Response(zipStream(entries), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="${name.replace(/[^\w .()-]+/g, '_')}"` } });
 });
 
@@ -106,6 +107,6 @@ route('GET', '/public/verify/:id', async (c) => {
   const wanted = str(c.params.id, 80).trim();
   if (!/^env_[A-Za-z0-9_-]{8,40}$/.test(wanted)) throw bad('That is not an envelope ID. It starts with env_ and stands at the foot of every page of the signed PDF, after "Envelope ID". Type it exactly as printed.', 400);
   const found = await lookupEnvelope(wanted);
-  if (!found.found) throw bad('We hold no completed or sent envelope with that ID. Check that you typed it exactly as printed, letter for letter: capitals count. A document deleted more than a year ago is not known here any more.', 404);
+  if (!found.found) throw bad('We hold no envelope with that ID. Check that you typed it exactly as printed, letter for letter: capitals count. If it is right, its sender may have deleted it: we keep the fingerprint of a completed document for a year after that, and of one that was never completed nothing at all, unless someone named on it disputes it.', 404);
   return found;
 }, 'public');

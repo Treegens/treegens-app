@@ -66,10 +66,14 @@ export type Look = {
   texture: number;
   /** How much counts as paper: 0 keeps faint marks, 1 takes more away. */
   paper: number;
-  /** Keep only marks in the colour of the ink that was found (only when that ink is not black). */
+  /** Keep only marks in the colour of the chosen ink, or of the ink that was found (only when that is not black). */
   onlyInk: boolean;
   /** Edges taken off before anything else, as shares of the width and height. */
   crop?: { left: number; top: number; right: number; bottom: number };
+  /** A thin gap of paper where two colours of a design meet, so a logo's shapes stay apart in one ink. */
+  gaps?: boolean;
+  /** A round seal that came out as an oval (a photo taken at a slant) is made round again. */
+  round?: boolean;
 };
 export const TILT_MAX = 4;
 export const DEFAULT_TEXTURE = 0.5;
@@ -96,7 +100,15 @@ export function tiltFor(seed: number): number {
   const t = Math.round((r() * 2 - 1) * TILT_MAX * 10) / 10;
   return Math.abs(t) < 0.6 ? (t < 0 ? -0.6 : 0.6) * (1 + Math.round(r() * 4)) : t;
 }
-export const lookFor = (seed: number, ink: Ink = 'blue'): Look => ({ ink, seed, tilt: tiltFor(seed), texture: DEFAULT_TEXTURE, paper: DEFAULT_PAPER, onlyInk: true });
+/**
+ * The settings a new impression starts with. Given what was found in the picture: a photo leaves out marks in other
+ * colours (printed text around the stamp) and makes an oval seal round again; a design keeps every mark, and a
+ * design in several colours (a logo) gets a thin gap where two colours meet. Nothing of a design is left out unasked.
+ */
+export function lookFor(seed: number, ink: Ink = 'blue', p?: { photo: boolean; found: InkFound }): Look {
+  const photo = p ? p.photo : true;
+  return { ink, seed, tilt: tiltFor(seed), texture: DEFAULT_TEXTURE, paper: DEFAULT_PAPER, onlyInk: photo, gaps: !!p && !photo && p.found.several, round: photo };
+}
 
 // ---- 1. Paper ------------------------------------------------------------------------------------------------
 
