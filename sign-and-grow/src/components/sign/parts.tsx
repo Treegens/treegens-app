@@ -46,6 +46,16 @@ function inkOn(hex?: string | null): string | undefined {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.2 ? '#17241c' : '#ffffff';
 }
 
+/**
+ * Where "Help" leads from a signing screen: the help page with the topic chosen and, when the screen knows it, which
+ * document this is about. A message written from there then names the document, so the people who answer see it
+ * and its sender can be told. Once the document is open to this person the link carries the security code of their
+ * emails (help_code); before that, the envelope's id, which proves nothing by itself. It never carries the signing
+ * link's own secret, because the address of a page ends up in logs and in the browser's history.
+ */
+export const helpHref = (data?: any, anchor = 'signing') =>
+  `/help?topic=signing${data?.help_code ? `&code=${encodeURIComponent(data.help_code)}` : data?.envelope?.id ? `&envelope=${encodeURIComponent(data.envelope.id)}` : ''}#${anchor}`;
+
 export function Shell({ data, children, bar, bottom, footer, titleIsHeading, live, helpInNewTab }: {
   data?: any;
   children: ReactNode;
@@ -75,7 +85,7 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
       <footer className="sg-foot">
         <div className="sg-foot-links">
           {footer}
-          <a href="/help" {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Help{helpInNewTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
+          <a href={helpHref(data)} {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Help{helpInNewTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
         </div>
         <div className="sg-foot-by"><Leaf size={14} color="#1f6f43" /> Powered by Sign&Grow</div>
       </footer>

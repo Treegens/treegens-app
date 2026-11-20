@@ -1,5 +1,5 @@
 'use client';
-import { cannotPrintText, cannotPrintAdvice } from '@/lib/scripts';
+import { CANNOT_PRINT_HEAD, CANNOT_PRINT_THEN, cannotPrintAdvice, shownChars } from '@/lib/scripts';
 
 export type PrintProblem = { where: string; chars: string };
 
@@ -8,15 +8,14 @@ export type PrintProblem = { where: string; chars: string };
 // src/lib/scripts.ts, the same ones the signer reads before finishing.
 export function PrintNotice({ problems }: { problems: PrintProblem[] }) {
   if (!problems.length) return null;
-  const all = [...new Set(problems.flatMap((p) => [...p.chars]))].join('');
   return (
     <div className="notice warn sn-print" role="status">
-      <b>Some of this is in a script the signed PDF cannot print.</b> {cannotPrintText(all)}
+      <b>{CANNOT_PRINT_HEAD}</b>
       <ul style={{ margin: '6px 0', paddingLeft: 18 }}>
-        {problems.slice(0, 8).map((p, i) => <li key={i} style={{ overflowWrap: 'anywhere' }}>{p.where}: <bdi>{[...p.chars].slice(0, 12).join(' ')}</bdi></li>)}
+        {problems.slice(0, 8).map((p, i) => <li key={i} style={{ overflowWrap: 'anywhere' }}>{p.where}: <bdi>{shownChars(p.chars)}</bdi></li>)}
         {problems.length > 8 && <li>And {problems.length - 8} more places.</li>}
       </ul>
-      {cannotPrintAdvice}
+      {CANNOT_PRINT_THEN} {cannotPrintAdvice}
     </div>
   );
 }

@@ -1,0 +1,54 @@
+/* QR codes: the picture, the dialog on an envelope, the printable sheet of a public form, and the button on the
+   form itself. Every class here starts with "qr-". Shared tokens and components live in ../globals.css. */
+
+/* The picture is always black on white with its own light margin, whatever is around it, or cameras cannot read it. */
+.qr-code { background: #fff; line-height: 0; width: 100%; max-width: 300px; margin: 0 auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
+.qr-code svg { display: block; width: 100%; height: auto; }
+
+/* A button that is tapped with a finger is at least 44 px high. */
+@media (max-width: 900px), (pointer: coarse) { .btn.qr-tap { min-height: 44px; } }
+
+/* ---- The dialog on an envelope ---- */
+.qr-dialog p { margin: 0 0 12px; }
+.qr-dialog .qr-code { margin-bottom: 14px; }
+.qr-dialog .notice { margin-bottom: 12px; }
+.qr-gone { border: 1px dashed #cfc8b8; border-radius: 10px; padding: 18px 16px; margin: 0 0 14px; text-align: center; background: #fbfaf6; }
+.qr-gone p { margin: 0 0 12px; }
+.qr-dialog .actions { flex-wrap: wrap; }
+
+/* ---- The printable sheet of a public form ---- */
+.qr-page { max-width: 720px; }
+.qr-back { display: inline-flex; align-items: center; min-height: 44px; }
+.qr-page h1 { overflow-wrap: anywhere; }
+.qr-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.qr-page .notice { margin-bottom: 12px; }
+.qr-sheet { background: #fff; color: #000; border: 1px solid var(--line); border-radius: var(--radius); padding: 28px 24px 30px; text-align: center; }
+.qr-sheet-from { margin: 0 0 4px; font-size: 14px; color: #333; overflow-wrap: anywhere; }
+.qr-sheet-name { font-size: 28px; margin: 0 0 18px; overflow-wrap: anywhere; }
+.qr-sheet .qr-code { max-width: 320px; border: 0; padding: 0; border-radius: 0; }
+.qr-sheet-scan { font-size: 17px; margin: 18px auto 14px; max-width: 520px; }
+.qr-sheet-small { font-size: 13.5px; color: #333; margin: 0 auto 6px; max-width: 520px; }
+.qr-sheet-link { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+
+/* ---- On the public form: the same form on the visitor's own phone ---- */
+.qr-own { margin-top: 12px; text-align: center; }
+.qr-own .btn { width: 100%; }
+.qr-own-box { margin-top: 12px; }
+.qr-own-box p { margin: 12px 0 0; font-size: 14px; color: var(--muted); text-align: left; }
+.qr-own-box .qr-code { max-width: 240px; }
+/* Someone who has the form open on a phone is already where the code would take them. */
+@media (max-width: 600px) { .qr-own { display: none; } }
+
+/* Paper gets the sheet and nothing else: no menu, no banners, no buttons, no notes that are for the owner only. */
+@media print {
+  body.qr-printing { background: #fff; }
+  body.qr-printing .main { padding: 0; }
+  body.qr-printing .main > *:not(.qr-page), body.qr-printing .qr-noprint, body.qr-printing .toasts { display: none !important; }
+  body.qr-printing .qr-page { max-width: none; }
+  body.qr-printing .qr-sheet { border: 0; border-radius: 0; padding: 12mm 0 0; }
+  body.qr-printing .qr-sheet-name { font-size: 30pt; margin-bottom: 10mm; }
+  body.qr-printing .qr-sheet .qr-code { width: 95mm; max-width: 95mm; }
+  body.qr-printing .qr-sheet-scan { font-size: 15pt; margin: 10mm auto 8mm; max-width: 150mm; }
+  body.qr-printing .qr-sheet-small { font-size: 10.5pt; max-width: 150mm; }
+  body.qr-printing .qr-sheet-link { font-size: 13pt; }
+}

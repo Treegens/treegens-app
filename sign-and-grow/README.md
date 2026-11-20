@@ -38,6 +38,7 @@ What the test files cover:
 | `tests/integrity.test.ts` | What people sign is what they saw: every signer is shown everything the sender wrote, nothing printed changes after a signature unless the signer is asked to sign again, a signing page left open cannot finish on a document that was changed, the audit trail says what a correction changed, a replaced signer starts with empty fields, a save from an older copy of the editor is refused, a replaced email is still recognised as genuine, a changed signing order is enforced. A second round covers what a second look found: names and addresses that a field prints are wording too, what a finished signer left empty stays empty, the page loads a replaced file again before Finish works, a hand-over inside one inbox passes on nothing, changes made outside the editor count as a newer version, nothing in a request is dropped or cut short without a word, and whoever signed keeps the document as they signed it. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
 | `tests/autoplace.test.ts` | Placing fields automatically from the text of a document. |
+| `tests/qr.test.ts` | QR codes made by the app itself: every version from 1 to 40 read back by a reader written apart from the encoder (format and version bits, the mask taken off, the blocks put back together, Reed-Solomon checked, the text out), fixed matrices that outside decoders read from pixels, the fixed parts of the picture, the four penalty rules and the choice among all eight masks, the SVG with its light margin and nothing of the text in it, what is refused (too long, not a web link, a user name in front of the address), the words on the dialog and the sheet, the public address a form's code is drawn from, and a personal code that stops opening the document when its link is replaced. |
 | `tests/platform.test.ts` | Platform and security: links in emails never come from a request header, the caller's address behind a proxy, what an API key may do and what it says when it cannot be used, keys when a member is removed, closes their own login or an account is closing, and webhooks (logged before the first try, sent to the address that was checked, sent again, paged). |
 | `tests/abuse.test.ts` | Keeping scammers and strangers out: the filter for fake payment notices where an email is started and where it is written (first send, correction, reminder, bulk, public form, void, the next person in a signing order, a decline notice, a team invitation), with the spellings it is known to catch (spaced, glued, look-alike letters and digits, phone numbers however they are punctuated) and the honest senders it must let through; a payment that lifts the checks only after 14 days; the daily limit on people newly emailed, with its own count for each public form and for team invitations; what a paused account can and cannot do, and what is held back and released; reports that count, reports through a public form that do not, and reports about documents that were deleted; who may read a support message and who may confirm an address; access codes that freeze; public forms that never hand out someone else's document; and reporting an email with its security code. |
 | `tests/api.test.ts` | Calls that are repeated or cross each other: an `Idempotency-Key` that belongs to one person and goes with its envelope, a bulk send that is repeated while it runs or finished after the server stopped half way, one audit line a day for an embedded signing link, two Finish, Decline, Void or reassign requests at the same moment, a whole batch reminded or voided while someone in it signs, and signed PDFs made from fillable forms, whether the form was sent or attached by a signer. |
@@ -45,7 +46,9 @@ What the test files cover:
 | `tests/support.test.ts` | Help requests as tickets: the whole life of a request from both sides, the published response times and the timer's escalation when one is late, reopening and the follow-up after 30 days, the link that works without a login (right secret, wrong secret, another request's secret), what a customer can never see (internal notes, another customer's request, an answer written to somebody else's mailbox), the operator queue and who may work it (nobody else, and no API key), the payment alerts in the same queue, the real median, the limits on the link and the form, and deleting an account with its threads. |
 | `tests/signerux.test.ts` | The person who signs, and the email that reaches them: a saved signature is confirmed before it goes on a page and never offered across two people at one address, "Finish later" carries the signature to another device, "Fix my name" cannot turn one signer into another, dead and replaced links tell the sender, "Email me the current link" and "Find my documents" say what they did, scans and pictures are flagged page by page and stay flagged, the sender's field count matches the signer's, emails the mail server refuses are tried again and the audit trail says so, and someone who signed keeps a copy when the envelope is closed. |
 | `tests/signin.test.ts` | Signing in and signing up with Google or Microsoft, against a stand-in for both (an RSA key made in the test, their key lists and token endpoints answered by a fetch stub, ID tokens signed and forged there): a new person, a returning one, a state that is missing, made up, from another browser, used twice or too old, every check on the ID token (signature, "none", HS256 keyed with the public key, issuer, Microsoft's organization rule, audience, expiry, nonce), keys cached and fetched again for an unknown key id, an address in a token never opening an existing login unless the provider vouches for it, a login someone else started in a person's name being cut off from them, invitations, free codes, a closing login coming back, a removed member's workspace, connecting and disconnecting under Settings, the last way in, a first password by emailed link, API keys kept out, no redirect off this site, and nothing answering when a provider is not configured. |
-| `tests/gaps-nonus-words.test.ts` | What the product says to people outside the United States, and whether it is true: the consent text (what kind of signature this is, never that it equals a handwritten one) and its version in the audit trail, no promised QR code, the sentence about English, what "fix my name" really does, every public price written as US$ with the line about currency, the check before sending (which words set it off, which do not, that it warns and never blocks, the `warnings` in the answer to sending and the line in the audit trail), every country note dated and resting on a source the research names, "Where your data is" filled from settings with what was not stated said out loud, the data processing summary, and the line in signing emails for someone who cannot open the page. |
+| `tests/signercode.test.ts` | Checking who signs, with the text message provider stood in for (a fetch stub for Twilio and for the generic hook, and the outbox): what each setting switches on and what is refused without one, what a link gives away before the code is typed, the code (ten minutes, five tries, only the newest, never in an answer or in the database), every limit on codes and on texts, "not my number", Twilio and the hook called with the right body and credentials, a provider that fails or refuses, the signing link by text and who is never texted, the daily stop, corrections and passing a document on, templates, bulk rows and public forms, the audit lines and the certificate text. |
+| `tests/gaps-nonus-words.test.ts` | What the product says to people outside the United States, and whether it is true: the consent text (what kind of signature this is, never that it equals a handwritten one) and its version in the audit trail, a QR code promised only because the app now draws one, the sentence about English, what "fix my name" really does, every public price written as US$ with the line about currency, the check before sending (which words set it off, which do not, that it warns and never blocks, the `warnings` in the answer to sending and the line in the audit trail), every country note dated and resting on a source the research names, "Where your data is" filled from settings with what was not stated said out loud, the data processing summary, and the line in signing emails for someone who cannot open the page. |
+| `tests/gaps-nonus-text.test.ts` | Text, dates, numbers and names outside the US and outside the Latin alphabet: a signed PDF with Chinese, Japanese, Korean, Thai, Hindi, Arabic, Khmer and Cyrillic names read back out of it, a script with no font (flagged to sender and signer, marked on the page, listed in the certificate) and a font file that is missing, right-to-left text with digits and Latin words in it (order, alignment, the typed text kept in the PDF), one date format for typed dates and the date of signing, the account's default format, the date of signing by the signer's own calendar with local time and zone on the certificate, deadlines with time and zone in emails, reminders that wait for a signer's morning, numbers as they are written outside the US, and a signer fixing the spacing of their name or offering it in another script. |
 
 ## What the bad reviews taught us
 
@@ -94,6 +97,14 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | I cannot find out where my documents are stored or who else handles them. | `/security` has a block "Where your data is", filled from settings (`OPERATOR_NAME`, `DATA_REGION`, `DATA_HOST`, `DATA_BACKUPS` and the provider settings): where the server is, who else handles data, in which country and what for. A provider is listed only when its switch is on, and whatever the operator has not stated is printed as "has not said ... Ask them." instead of being left out. `/security/processing` is a plain data processing summary to save as a PDF, and says that a signed agreement is between the customer and whoever runs the server. |
 | My signer cannot open the page where they are, and nobody says what to do. | Every email that asks someone to sign ends with one line: reply and ask the sender for the document as a PDF. `/help` tells the sender what to do then, and that a signature collected that way is outside the certificate. No claim is made about any country, because none was tested. |
 | My signers do not read English and nobody told me. | The landing page, `/help`, `/security` and this file say it in one sentence (`LANGUAGE_NOTE`): the signing screen and the emails are in English for now, and the document can be in any language. `/help` prints the consent text so a sender can translate it. Languages themselves are not built yet. |
+| A name in Chinese, Thai or Hindi comes out as empty boxes on the signed document. | The signed PDF and its certificate print Latin (with accents), Greek, Cyrillic, Arabic, Hebrew, Armenian, Georgian, Chinese, Japanese, Korean, Thai, Devanagari (Hindi, Marathi, Nepali) and Khmer, with the letters joined and stacked as the script needs, and only the font files a document uses are embedded in it. For any other script (Tamil or Bengali, say) nothing is printed as an empty box: the sender is told on the envelope page and before sending, the signer in the check before finishing, each such character is printed as the mark �, and the certificate lists them by Unicode number. A font file that is missing after a broken install counts the same way instead of failing the PDF. A typed signature shows four handwriting styles only when the handwriting fonts can write the name, and one plain style otherwise. |
+| Hebrew or Arabic typed into a field is reversed, and house number 42 becomes 24. | Right-to-left text is put in reading order on the signed PDF and the certificate, with digits and Latin words inside it left to right, and it starts at the right edge of its box. The fields on the signing page take their direction from what is typed. The words as typed are also written into the PDF next to the glyphs, for programs that copy or search. |
+| The dates on my document are in American order, and one page shows two formats. | One format for every date on an envelope: the date each person signs on, and any date they pick in a date field, on the signing page, in what other signers are shown and on the PDF. An account sets the format its new envelopes start with (Settings, Account), and the formats with the month as a word are listed first. Nothing is ever converted to month-first unless the sender chose that. |
+| The signing date is a day off from my own calendar, and no time zone is given. | The date of signing is the calendar day where the signer is, by the time zone their device reports with consent and with Finish (falling back to the sender's zone, then UTC). The zone is written to the audit trail, and the certificate prints the signer's local time with its zone next to UTC for each of their steps. A signed PDF is built once and never changes afterwards. |
+| The email said the 20th, the page said the 21st, and it closed at 9:40 in the morning. | A deadline is a moment, and it is always given with its time and its zone: in emails in UTC ("closes on 20 March 2027 at 16:40 UTC") and in the signer's own zone as well once their device has told us which it is, on the signing page and the sender's pages in the reader's local time with the zone named. |
+| Reminders arrive at one in the morning. | Once a signer's time zone is known, automatic reminders keep to their daytime, 8:00 to 20:00 there. One that falls in their night waits for the morning, and the audit trail says so. Without a known zone it goes out at about the hour the envelope was sent, as before. A reminder the sender sends by hand always goes at once. |
+| An amount written 1.234,56 is refused. | A number field takes numbers the way people write them: 1.234,56, 1 234,56, 1'234.56, Indian grouping (1,23,456), a currency sign before or after. The signing page and the server check with one rule (`src/lib/numbers.ts`), and what was typed is printed exactly as typed. |
+| My name was cut at the first space, and I could not fix how it is written. | One name as written, everywhere: no screen or share text greets anyone by a guessed first name, and a new workspace is named after the whole name. A signer can fix a letter, the spacing, a hyphen or a dot of their own name ("山田 太郎" to "山田太郎"). A name offered in another script (Cyrillic to Latin, kanji to Latin) goes to the sender to confirm, and the signer is told that it may well be the same name, not that it is a different one. |
 
 ## What is in it
 
@@ -107,6 +118,9 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   arrow keys, duplicate, copy to every page. Required or optional, prefilled, read only, validated.
 - Access codes (at least 4 characters, frozen after 10 wrong tries until the sender sets a new one), private notes
   per recipient, email subject and message.
+- A one-time code before the document opens, per recipient: by email, or by text message to a mobile number the
+  sender types, and the signing link by text as well (both only where the operator has switched text messages on).
+  See "Checking who signs" under Configuration.
 - Automatic reminders: a new account starts with one every 3 days to whoever has not finished
   (`DEFAULT_REMINDER_DAYS` in `src/lib/policy.ts`), the last step before sending shows the setting with a way to
   change it or switch it off, and Settings, Account sets what new envelopes start with. An account made before that
@@ -128,7 +142,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   never says the signature equals a handwritten one. The wording has a version (`CONSENT_VERSION` in
   `src/lib/policy.ts`), the audit trail records which version each person agreed to, and `/help` prints the words.
 - Guided "Next" through required fields, progress bar.
-- Adopt a signature by typing (four handwriting styles), drawing or uploading. Saved signatures for account holders.
+- Adopt a signature by typing (four handwriting styles for names in Latin letters, one plain style for other
+  scripts), drawing or uploading. Saved signatures for account holders.
 - Finish later, decline with a reason, assign to someone else, ask the sender a question, fix a slip in the
   spelling of your own name (a bigger change is passed to the sender), ask for more time, stop reminders, report a
   request. View or print at any time.
@@ -136,7 +151,10 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 
 **After signing**
 - Final PDF with every value stamped in, signer attachments appended, and a certificate of completion:
-  recipients, timestamps, IP addresses, consent, signature images, document hashes and the full audit trail.
+  recipients, timestamps (UTC, and the signer's local time with its zone when their device reported one), IP
+  addresses, consent, signature images, document hashes and the full audit trail. "Every value" holds for the
+  scripts listed under "Scripts and fonts in the signed PDF" below. A character in any other script is printed as
+  a visible mark and listed in the certificate, and both sender and signer are told before signing.
 - Audit trail is hash chained. Editing any past event breaks the chain, and the app shows it.
 - Public `/verify` page: drop in a PDF and see whether it is an untouched completed document. No account needed.
 - Everyone gets the completed copy by email.
@@ -217,6 +235,14 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   that costs before the Send button, from the server's own count (`POST /api/bulk/check`).
 - PowerForms: a public link anyone can use to fill in and sign a template. An unfinished start is only given back
   to the browser that made it, never to whoever types the same email address, and is cleared after a quiet day.
+- QR codes, made by the app itself (`src/lib/qr.ts`, no library and no outside service: the code is drawn in the
+  browser from the link, so the link is sent nowhere to make it). "QR code" next to each PowerForm opens a sheet to
+  print (the name of the form, the code, one line on what scanning does, the link written out) and saves the code
+  as a picture. "Show QR code" next to "Copy link" on an envelope lets someone standing next to the sender open
+  their own link on their own phone; it says that the code is the link and who may see it, and takes the code off
+  the screen after two minutes (`QR_SHOW_SECONDS` in `src/lib/qrlink.ts`). A public form that is open on a big screen offers its own code, for a visitor who
+  would rather use their own phone. No code is made for a link longer than 300 characters or for anything that is
+  not a plain web link.
 
 **Team and admin**
 - Accounts with owner, admin and member roles, email invitations (from a confirmed address, 20 people a day, none
@@ -268,8 +294,9 @@ e-signature product, not all of it. Not built:
   documents.
 - Languages other than English. The signing screen and our emails are in English for now. Your document can be in
   any language. (The sentence the pages print is `LANGUAGE_NOTE` in `src/lib/policy.ts`.)
-- A QR code for a public form or a signing link. The link can be put into one with any tool; the app makes none.
-- ID verification (government ID, knowledge-based checks), SMS or phone authentication, SMS delivery.
+- ID verification (government ID, knowledge-based checks) and checks by phone call. A one-time code by email or by
+  text message is in (see "Checking who signs"); it shows that someone can read a mailbox or holds a phone, not who
+  they are. Text messages only exist on a server whose operator has set a provider up.
 - Remote online notarisation, payments collected during signing, conditional fields and formulas.
 - Word or Google Docs upload (export to PDF first), comments on documents, shared recipient groups.
 - Contract lifecycle management, AI contract analysis, clickwrap, document generation.
@@ -281,6 +308,50 @@ e-signature product, not all of it. Not built:
   response time and says so when it is missed. Someone still has to read the queue and answer in time.
 - Replying to a support email. Answers are written and read on the request's own page (the link in every email),
   not by replying to the email, and the emails say so.
+
+## Scripts and fonts in the signed PDF
+
+On screen and in emails every script works, because the browser and the mail program bring their own fonts. A PDF
+has to carry its fonts with it, so what the signed PDF can print is decided here, by `src/server/pdftext.ts`.
+
+- **What prints:** Latin with accents, Greek, Cyrillic, Arabic, Hebrew, Armenian and Georgian from DejaVu Sans
+  (package `dejavu-fonts-ttf`, the DejaVu Fonts licence, which is the Bitstream Vera licence with additions).
+  Chinese, Japanese, Korean, Thai, Devanagari and Khmer from Noto Sans (packages `@fontsource-variable/noto-sans-sc`,
+  `-jp`, `-kr` and `@fontsource/noto-sans-thai`, `-devanagari`, `-khmer`, all under the SIL Open Font License 1.1).
+- **How the fonts get there:** `npm install` runs `scripts/copy-assets.mjs`, which calls `scripts/build-fonts.mjs`.
+  The Noto packages ship web fonts, which the PDF library cannot embed, so each is written out once as a plain
+  TrueType file into `assets/fonts/noto` (340 small files, about 16 MB, about ten seconds the first time). The
+  Chinese, Japanese and Korean packages are "variable" fonts whose built-in weight is Thin: they are written out at
+  the Regular weight. The packages add about 17 MB to `node_modules`. A signed PDF embeds only the pieces its text
+  uses: a test document with all of the scripts above in it is about 60 KB.
+- **When a font is not there:** if the font step fails, or a file is missing or unreadable, that script counts as one
+  the PDF cannot print. Nothing crashes: the sender and the signer are warned, the characters are printed as the
+  mark �, and the certificate lists them by Unicode number. The same happens for every script not listed above
+  (Tamil, Bengali, Gujarati, Telugu, Ethiopic and others) and for most emoji. To add a script, add its Noto package
+  and one line in `scripts/build-fonts.mjs`, sign a test document and look at it: the letters of many scripts join
+  and stack, and only a reader of the script can say whether the result is right.
+- **Right to left:** Arabic, Hebrew and Persian are ordered by a small version of the Unicode bidirectional rules
+  (`src/server/bidi.ts`): the first letter decides the direction of a field, numbers and Latin words inside stay
+  left to right, brackets are mirrored. The certificate is an English page, so there a name, a subject or a file
+  name is ordered by itself inside our line. The app's own screens are English and are not mirrored.
+
+Known limits, said plainly:
+
+- Chinese characters are drawn in the Japanese form when the same text has kana in it, in the Korean form when it
+  has Hangul, and otherwise in the mainland Chinese form. A Japanese name written only in kanji, and text from
+  Taiwan or Hong Kong, therefore get mainland forms. Readable, not always what a native reader expects.
+- Scripts from the Noto fonts are printed in regular weight, also where the certificate sets a line in bold.
+- Text copied out of the PDF: every line that is not plain left-to-right text carries the words as typed
+  (ActualText), which Poppler-based tools use. A program that ignores it (pdf.js is one) gives Hindi and Khmer in
+  the order the glyphs are drawn, which for some syllables is not the typing order.
+- In the audit trail on the certificate, a right-to-left phrase that is not one of the envelope's names (a reason
+  for declining typed in Arabic with a number in it, say) is ordered as part of the English sentence around it.
+- The joining of letters is done by `@pdf-lib/fontkit` 1.1.1, with two repairs that live in `pdftext.ts` (a helper
+  the library expects and does not ship, and a crash on fonts that leave an attachment point out). If shaping a
+  piece of text fails anyway, it is printed letter by letter rather than failing the signed PDF, and the server log
+  says so. Drawing also leans on how pdf-lib 1.17 keeps fonts inside a document. `tests/gaps-nonus-text.test.ts`
+  builds and reads back a PDF in every supported script, so an upgrade of either library that breaks this fails
+  there.
 
 ## Configuration
 
@@ -323,11 +394,86 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `MAIL_PROVIDER_NAME`, `MAIL_PROVIDER_COUNTRY` | The company behind `SMTP_URL` and the country it handles email in. Listed among "who else handles data" only when `SMTP_URL` is set. | not stated |
 | `PAYMENT_PROVIDER_COUNTRY` | The country of the Stripe company the payment account is with. Stripe is listed only when `STRIPE_SECRET_KEY` is set. | not stated |
 | `SMS_PROVIDER_NAME`, `SMS_PROVIDER_COUNTRY` | The text message provider and where it handles messages. Listed only when text messages are switched on. The name is known without this setting when the provider is Twilio. | not stated |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM` or `TWILIO_MESSAGING_SERVICE_SID` | Switches text messages on, sent through Twilio with `fetch` (no SDK). The account id and the token are both needed, and one of a sending number in international form or a messaging service (which wins when both are set). With one of them missing text messages stay off and the server log says which. See "Checking who signs". | none |
+| `SMS_WEBHOOK_URL`, `SMS_WEBHOOK_TOKEN` | Switches text messages on through any other provider: every text is one `POST` to the address with the JSON body `{"to", "text"}` and `Authorization: Bearer <token>`. Answer 2xx when the text was taken. 400 or 422 means the number can never be texted, which is final. Anything else is tried again by the timer like an email. Twilio wins when both are set up. | none |
+| `SMS_DAILY_PER_ACCOUNT` | The most text messages one account can cause in 24 hours: one-time codes, signing links and reminders, every new one counted, also a code that is asked for again. A hard stop, because a text costs the operator money and customers are not charged for it. The refusal says when there is room again. `0` lets none through. | `200` |
+| `SMS_DEV_OUTBOX=1` | Development only: text messages are switched on without a provider and are only written to `/dev/outbox`. Ignored on a production server unless `DEV_OUTBOX=1` is set too, because nobody receives anything. | off |
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |
 | `DEV_OUTBOX=1` | Shows the outbox in a production build. Never set this on a public server: it exposes every signing link. | off |
 
 `/help`, `/` and `/security` quote the refund window and the unused-plan rule. They read them from
 `src/lib/policy.ts`, the same file the server enforces them from, so the pages and the code cannot disagree.
+
+### Checking who signs
+
+For each recipient the sender chooses what has to happen before the document opens (the editor, step 1, "More"
+next to a recipient; in the API `recipients[].verify`, `recipients[].phone` and `recipients[].text_link`):
+
+| Check | What happens | What it proves |
+| --- | --- | --- |
+| none | The link from the email opens the document. | That the email reached a mailbox. Nothing about who opened it. |
+| access code (`access_code`) | A secret the sender chooses and passes on themselves. Works as before and can be combined with a one-time code: it is asked for first. | That whoever opened the document was told the code. |
+| one-time code by email (`"verify": "email_code"`) | A 6-digit code goes to the recipient's address when they press the button on the signing page. | That they could read the mailbox at that moment. It is the same mailbox the link went to, so it mainly stops a forwarded or left-open link. |
+| one-time code by text message (`"verify": "sms_code"`, `phone`) | The code goes to a mobile number the sender typed, in international form. | That they held that phone at that moment: a second thing besides the mailbox. Only as right as the number the sender typed. |
+
+The four sentences the pages print are `CHECK_PROVES` in `src/lib/checks.ts`. None of this looks at an identity
+document.
+
+**The code.** Six digits from `crypto.randomInt`, never stored (only an HMAC of it under `APP_SECRET`), valid for
+10 minutes, dead after 5 wrong tries, compared in constant time. A new code at most once a minute and 5 an hour
+for one recipient, 15 an hour for one caller address over every link it opens, 15 a day for one mailbox or phone
+number whoever asks, all counted in the database (`signer_codes`). The numbers are in `src/lib/policy.ts`. Our
+stored copy of a code email or text loses the code once the mail server or the provider has taken it. A device
+that passed stays passed for that link for a day, with a cookie made the same way as the one for a correct access
+code. Changing the check or the number, or the link passing to another person, makes every device pass again.
+
+**Before the code is typed** `GET /api/sign/:token` answers with less than it does behind an access code alone: no
+subject, no message, no documents, no other recipients, no reason for a void, and the email address and the
+number only masked (`j***@example.com`, `+44 *** *** 4321`). No answer of any route ever holds the code.
+
+**When the code does not come** the screen has "I do not get the code" and, for a text, "This is not my number".
+Both are written to the audit trail and emailed to the sender whatever their notification settings, because only
+the sender can fix it. After "not my number" no further code goes to that number until the sender corrects it.
+
+**The record.** The audit trail gets a line when a code is sent (the channel and the masked destination), when a
+wrong code is typed, when the check is passed, and for every correction of a check. The certificate of completion
+says for each signer how they were checked, for example "One-time code sent by text message to +44 \*\*\* \*\*\*
+4321, passed 12 March 2026 14:02 UTC", and "Link sent by email only" when there was no check.
+
+**Text messages** are off until the operator sets a provider up: Twilio, or any other through `SMS_WEBHOOK_URL`
+(see the table above). While they are off the editor does not offer them, `GET /api/me` says `text_messages:
+false`, and the API refuses `"sms_code"` and `"text_link": true` with a sentence that says the operator has not
+switched them on. A text the provider would not take is tried again by the timer like an email (`POST /api/cron`),
+a refusal for good (a number that does not exist) ends at once, and either way the envelope page, the audit trail
+and an email to the sender say what happened. In development, `SMS_DEV_OUTBOX=1` writes texts to `/dev/outbox`.
+
+**"Also text the signing link"** (`text_link`, off unless chosen) sends a short text when the request goes out:
+"Sign&Grow, sent for Ada Sender: "Lease" is waiting for you to sign." and the link. Reminders by text follow at
+most once a day, and one number gets at most 4 such texts a day from one account. Someone who declined or reported
+the document is not texted again, and someone who switched reminders off gets no reminder by text. A text counts like an email to that person: none while the
+sender is paused or the envelope reads like a fake payment notice, and an account under the daily limit on emails
+can text as many phone numbers a day as people it may email.
+
+**What a text costs.** Texts are not charged to customers. `SMS_DAILY_PER_ACCOUNT` (200) is a hard stop per account
+and 24 hours, every new text counted (`sms_usage`), and deleting an envelope hands nothing back.
+
+**Corrections.** `POST /api/envelopes/:id/correct` and the editor take the check and the number. A change resets
+any passed check for that person, clears "not my number", and is written to the audit trail with the numbers
+masked. Changing the email address to another person's needs their number in the same call when a text is still
+asked for. When a signer passes a document on themselves, the number is dropped, a check by text becomes a code
+by email to the new person, and the sender is told.
+
+**Templates, bulk send and public forms.** A template keeps the check of each role. A bulk send takes a `phone`
+column (and `"phone"` per role in the API), and a row without one the template needs stops the whole batch before
+anything is sent. A public form accepts a one-time code by email for its visitor and refuses a code by text and
+"also text the signing link": the number would be typed by a stranger, and every start would send a text at the
+operator's cost to any number they like.
+
+**Where the phone number is kept.** On the recipient and nowhere else: not in contacts, not in the audit trail
+(masked there), and in the record of a text only until the provider has taken it.
+
+Not tried against a live provider: Twilio and the hook were only tested against a stand-in
+(`tests/signercode.test.ts`). Send one real text in the provider's test mode before relying on it.
 
 ### Signing in with Google or Microsoft
 

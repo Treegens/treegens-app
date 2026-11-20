@@ -8,8 +8,10 @@ import { PRICING, mangrovesFor } from '@/lib/impact';
 // Plain constants only: the rest of policy.ts reads the environment and is for the server.
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 import { DEFAULT_REMINDER_DAYS, reminderText } from '@/lib/policy';
+import { DATE_FORMAT_CHOICES, formatDate, deviceZone } from '@/lib/dates';
 // The same holds for signin.ts: the names and the words only.
 import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
+import { SignedIn } from './SignedIn';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -58,7 +60,8 @@ function Profile() {
         </div>
       </div>
       <SignInWays />
-      {adopt && <AdoptSignature kind={adopt} name={me.user.name} onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
+      <SignedIn />
+      {adopt &&<AdoptSignature kind={adopt} name={me.user.name} onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
     </div>
   );
 }
@@ -178,7 +181,7 @@ function Account() {
   const me = useMe();
   const a = me.account;
   const admin = me.role !== 'member';
-  const [f, setF] = useState({ name: a.name, brand_color: a.brand_color || '#1f6f43', brand_logo: a.brand_logo || '', default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days });
+  const [f, setF] = useState({ name: a.name, brand_color: a.brand_color || '#1f6f43', brand_logo: a.brand_logo || '', default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || 'YYYY-MM-DD' });
   if (!admin) return <div className="notice">Only account admins can change these settings.</div>;
   return (
     <div className="card">
@@ -195,7 +198,13 @@ function Account() {
         </div>
         <label className="f"><span>Remind people every <span className="hint">(days, 0 for never)</span></span><input type="number" min={0} max={60} value={f.default_reminder_days} aria-describedby="set-reminders" onChange={(e) => setF({ ...f, default_reminder_days: Number(e.target.value) })} /></label>
         <label className="f"><span>Default deadline <span className="hint">(days)</span></span><input type="number" min={1} max={365} value={f.default_expire_days} onChange={(e) => setF({ ...f, default_expire_days: Number(e.target.value) })} /></label>
+        <label className="f"><span>Dates are written as <span className="hint">(on the documents)</span></span>
+          <select value={f.default_date_format} aria-describedby="set-dates" onChange={(e) => setF({ ...f, default_date_format: e.target.value })}>
+            {DATE_FORMAT_CHOICES.map((x) => <option key={x} value={x}>{formatDate(new Date(), x, deviceZone())} ({x})</option>)}
+          </select>
+        </label>
       </div>
+      <p className="muted small" id="set-dates"><b>How dates are written.</b> New envelopes start with this format, and whoever sends can change it for one envelope on the first step. It is used for the date each person signs on and for dates they pick in a date field. A format with the month as a word cannot be misread: 03/04/2026 is 3 April in most of the world and 4 March in the United States.</p>
       {/* Said in full, because a new account has reminders on without anyone having chosen that. */}
       <p className="muted small" id="set-reminders"><b>New envelopes start like this.</b> {reminderText(f.default_reminder_days)} A new account starts at {DEFAULT_REMINDER_DAYS} days. Whoever sends sees the setting on the last step before sending and can change it for that envelope. Envelopes that are already out keep what they were sent with.</p>
       <p className="muted small">Emails to your recipients come from "{me.user.name} via Sign&Grow" and replies go straight to you.</p>
@@ -772,7 +781,15 @@ function YourData() {
         <h2>Close your account</h2>
         <p className="muted" style={{ margin: '6px 0 12px' }}>Closing is separate from cancelling a plan. If you only want to stop paying, <button className="linklike" onClick={() => window.location.assign('/app/settings?tab=billing')}>cancel the plan</button> instead and keep all your documents.</p>
         {blocked.length > 0 ? (
-          <div className="notice warn">You own {blocked.map((n) => `"${n}"`).join(' and ')} and other people still use it. Make one of them the owner on the Team tab first, then you can close your own account.</div>
+          <>
+            <div className="notice warn">You own {blocked.map((n) => `"${n}"`).join(' and ')} and other people still use it. Make one of them the owner on the Team tab first, then you can close your own account.</div>
+            {/* What closing would remove and keep is said here too, so nobody has to hand an account over to find out. */}
+            <p className="muted small" style={{ margin: '14px 0 0' }}>Once you can close it, this is what goes and what stays. An account you have handed to someone else is theirs then and is not deleted.</p>
+            <div className="grid g2" style={{ margin: '10px 0 0' }}>
+              <div><b>Deleted for good</b><ul className="rules small" style={{ marginTop: 6 }}>{DELETED_WITH_ACCOUNT.map((x) => <li key={x}>{x}</li>)}</ul></div>
+              <div><b>Kept</b><ul className="rules small" style={{ marginTop: 6 }}>{KEPT_AFTER_DELETION.map((x) => <li key={x}>{x}</li>)}</ul></div>
+            </div>
+          </>
         ) : (
           <>
             <ul className="rules">
@@ -800,7 +817,7 @@ function YourData() {
             <div className="notice warn" style={{ marginBottom: 12 }}>Closing an account is confirmed with your password, and this login has none yet because you sign in another way. Set one first: open <button className="linklike" onClick={() => window.location.assign('/app/settings?tab=profile')}>Settings, Profile</button> and choose &quot;Email me a link to set a password&quot;. Then come back here. Nothing has been changed.</div>
           ) : (
             <>
-              <p>Enter your password to confirm it is you, {me.user.name.split(' ')[0]}.</p>
+              <p>Enter your password to confirm it is you, <bdi>{me.user.name}</bdi>.</p>
               <label className="f"><span>Password</span><input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus /></label>
             </>
           )}

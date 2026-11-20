@@ -140,7 +140,15 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
 export function Tickets({ accountActions }: { accountActions?: (a: Account) => ReactNode }) {
   const [filter, setFilter] = useState('open');
   const [openId, setOpenId] = useState<string | null>(null);
-  const [q, reload, error] = useLoad<any>(() => api(`/operator/support?filter=${filter}`), [filter]);
+  // A reference a customer reads out, an address, a name or a few words. The search looks through every request,
+  // whatever its state, so it does not matter which tab is open.
+  const [typed, setTyped] = useState('');
+  const [term, setTerm] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setTerm(typed.trim()), 300);
+    return () => clearTimeout(t);
+  }, [typed]);
+  const [q, reload, error] = useLoad<any>(() => api(`/operator/support?filter=${filter}${term ? `&q=${encodeURIComponent(term)}` : ''}`), [filter, term]);
   // The emails to operators link straight to one request: /app/operator?ticket=...
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get('ticket');
@@ -160,12 +168,20 @@ export function Tickets({ accountActions }: { accountActions?: (a: Account) => R
           Sorted by the time a person should have answered by. Answer here, not by email: only an answer written here reaches the customer&apos;s request and stops the clock.
         </div>
       </div>
+      <div style={{ padding: '0 16px 10px' }}>
+        <label className="f" style={{ margin: 0 }}><span>Find a request <span className="hint">(the reference a customer gives you, an email address, a name, or words from the message)</span></span>
+          <input type="search" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="For example ABCD2345 or name@example.com" autoComplete="off" spellCheck={false} />
+        </label>
+        {term && <div className="muted small" style={{ marginTop: 6 }} role="status">{q ? `${list.length === 0 ? 'No request matches' : list.length === 1 ? 'One request matches' : `${list.length} requests match`} "${term}". The search looks through every request, open or closed. ` : 'Searching. '}<button type="button" className="linklike" onClick={() => setTyped('')}>Clear the search</button></div>}
+      </div>
+      {!term && (
       <div className="tk-filters" role="group" aria-label="Which requests to show">
         {FILTERS.map(([key, label]) => <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}{q ? ` (${q.counts[key]})` : ''}</button>)}
       </div>
+      )}
       {openId && !list.some((r) => r.id === openId) && q && <div className="queue-item" style={{ padding: 0 }}><div className="muted small" style={{ padding: '10px 16px 0' }}>The request you opened is not in this list. <button type="button" className="linklike" onClick={() => setOpenId(null)}>Put it away</button></div>{detail(openId)}</div>}
       {!q && <div className="empty" style={{ padding: 24 }}>Loading</div>}
-      {q && list.length === 0 && <div className="empty" style={{ padding: 24 }}>{EMPTY[filter]}</div>}
+      {q && list.length === 0 && <div className="empty" style={{ padding: 24 }}>{term ? 'Nothing matches. Check the spelling of the reference: it is eight letters and numbers, and never holds 0, 1, I, L or O.' : EMPTY[filter]}</div>}
       {list.map((r) => (
         <div key={r.id} className="queue-item" style={{ padding: 0 }}>
           <button type="button" className="tk-row" aria-expanded={openId === r.id} aria-controls={`tk-${r.id}`} onClick={() => setOpenId(openId === r.id ? null : r.id)}>

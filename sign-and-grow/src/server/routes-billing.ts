@@ -367,7 +367,9 @@ export const stopBillingFor = (acct: any): Promise<boolean> => serial(acct?.id, 
   // on our side. It is tried again now, and "stopped" is not said until every one of them has been confirmed:
   // asking twice must never turn "we could not reach the provider" into "done".
   for (const t of all("SELECT * FROM billing_todo WHERE kind='cancel' AND account_id=? AND done_at IS NULL", a.id)) {
-    if (t.ref !== tried && (await endSubscription(t.ref, true))) run('UPDATE billing_todo SET done_at=? WHERE id=?', now(), t.id);
+    // The one just ended above needs no second call: its answer is `ok`.
+    const ended = t.ref === tried ? ok : await endSubscription(t.ref, true);
+    if (ended) run('UPDATE billing_todo SET done_at=? WHERE id=?', now(), t.id);
     else ok = false;
   }
   return ok;

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="growsigning">
+  <title>growsigning</title>
+  <!-- App icon and browser tab icon. -->
+  <rect width="64" height="64" rx="14" fill="#134a2c"/>
+  <path fill="#f6f3ec" d="M9.98 54.02L12.63 51.8L12.41 51.59L16.2 46.66L32.63 29.23A4.14 4.14 0 0 1 39.66 24.99L52.27 12.38L52.15 11.85C41.33 9.34 29.98 12.58 22.13 20.43C11.88 30.68 14.13 42.3 9.98 54.02Z"/>
+  <path fill="#9ed88f" d="M9.98 54.02C21.7 49.87 33.32 52.12 43.57 41.87C51.42 34.02 54.66 22.67 52.15 11.85L39.35 24.65A4.14 4.14 0 0 1 34.77 31.37L17.34 47.8L12.41 51.59Z"/>
+</svg>

@@ -75,7 +75,7 @@ export function BatchView({ id }: { id: string }) {
         <div className="grow">
           <Link href="/app/bulk" className="small sn-back">← Bulk send</Link>
           <h1 className="serif sn-title">{b.name}</h1>
-          <div className="muted small" style={{ marginTop: 6 }}>Sent {dayTime(b.created_at)} · {plural(envelopes.length, 'envelope')}{b.total > envelopes.length ? ` of ${b.total} rows` : ''}</div>
+          <div className="muted small" style={{ marginTop: 6 }}>Sent {dayTime(b.created_at)} · {plural(envelopes.length, 'envelope')}{b.total > envelopes.length ? ` of ${b.total} rows` : ''}{data.removed > 0 ? `. ${data.removed} more ${data.removed === 1 ? 'was' : 'were'} removed from the lists by ${data.removed === 1 ? 'its' : 'their'} sender after somebody had signed, and ${data.removed === 1 ? 'is' : 'are'} not counted here${me.role !== 'member' ? ': as an admin you find them under Envelopes, in the tab Removed by its sender' : ''}` : ''}</div>
         </div>
       </div>
 

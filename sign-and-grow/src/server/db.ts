@@ -240,6 +240,59 @@ CREATE TABLE IF NOT EXISTS sms_usage (
   kind TEXT NOT NULL, dest_hash TEXT NOT NULL, at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sms_usage_account ON sms_usage(account_id, at);
+-- An account's do-not-mail list (src/server/bounces.ts): an address at which an email about one of the account's
+-- envelopes could not be delivered for good, with what the mail server said and when. A new envelope to that
+-- address within BOUNCE_WARN_DAYS is answered with a warning first, and goes out when the sender says so. One line
+-- for each account and address: a newer bounce replaces it, and an email that arrives there takes it away. The
+-- lines go with the account.
+CREATE TABLE IF NOT EXISTS bounced_addresses (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, email TEXT NOT NULL COLLATE NOCASE,
+  reason TEXT NOT NULL DEFAULT '', at TEXT NOT NULL, PRIMARY KEY (account_id, email)
+);
+-- The days on which an address answered "try later" (a full mailbox, say). Three separate days within
+-- BOUNCE_WARN_DAYS count as an address that does not work. The address itself is not kept here, only a keyed
+-- fingerprint of it, and a line is deleted once it is older than that.
+CREATE TABLE IF NOT EXISTS soft_bounce_days (address_hash TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (address_hash, day));
+-- A login's address that is being changed (POST /me/email): the new address, and the fingerprint of the secret in
+-- the link that was emailed to it. The address changes only when that link is opened by the login itself.
+CREATE TABLE IF NOT EXISTS email_changes (
+  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  new_email TEXT NOT NULL COLLATE NOCASE, expires_at TEXT NOT NULL
+);
+-- The welcome signatures are given once per email address, also when a login is deleted and a new one is made
+-- under the same address. One line for each deleted login that had been given them and whose address was
+-- confirmed: a keyed fingerprint of the address (it cannot be turned back into the address, and without the
+-- server's secret an address cannot even be tested against it) and the day they were given. No name, no account.
+CREATE TABLE IF NOT EXISTS welcomed (email_hash TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- Whose list a contact is in. The address book is one list for the account (contacts) and admins see all of it. A
+-- member is shown the people they added by hand (a line here) or sent to themselves, never who a colleague sends
+-- to. The lines go with the contact.
+CREATE TABLE IF NOT EXISTS contact_users (
+  contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE, user_id TEXT NOT NULL, PRIMARY KEY (contact_id, user_id)
+);
+-- Signing groups (src/server/groups.ts): a named list of people an account keeps, any one of whom can act when the
+-- group is put on an envelope as one recipient ("HR team"). The lists go with the account.
+CREATE TABLE IF NOT EXISTS signing_groups (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (account_id, name)
+);
+CREATE TABLE IF NOT EXISTS signing_group_members (
+  id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES signing_groups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, email TEXT NOT NULL COLLATE NOCASE, position INTEGER NOT NULL DEFAULT 0, UNIQUE (group_id, email)
+);
+-- The members of a group recipient on one envelope, as they were when it was sent: changing or deleting the
+-- account's group later changes nothing here. The recipient stays one row in recipients (one signature, one place
+-- in the order, one access code), and every member has a line here with a link of their own (token) and the
+-- security code of their own emails (check_code), so it is known who opened and who acted. removed_at is set when
+-- a correction took the member off: their link then says so and opens nothing. The lines go with the recipient.
+CREATE TABLE IF NOT EXISTS recipient_members (
+  id TEXT PRIMARY KEY, recipient_id TEXT NOT NULL REFERENCES recipients(id) ON DELETE CASCADE, envelope_id TEXT NOT NULL,
+  name TEXT NOT NULL, email TEXT NOT NULL COLLATE NOCASE, position INTEGER NOT NULL DEFAULT 0, token TEXT UNIQUE, check_code TEXT,
+  sent_at TEXT, viewed_at TEXT, muted INTEGER NOT NULL DEFAULT 0, removed_at TEXT, link_issued_at TEXT
+);
+CREATE INDEX IF NOT EXISTS recipient_members_recipient ON recipient_members(recipient_id, position);
+CREATE INDEX IF NOT EXISTS recipient_members_email ON recipient_members(email);
+CREATE INDEX IF NOT EXISTS recipient_members_check ON recipient_members(check_code);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -295,6 +348,14 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // when the request goes out, so a later change of sender or of the sender's own address cannot flip it.
   ['recipients', 'free', 'INTEGER'],
   ['users', 'tz', 'TEXT'],
+  // The time zone a signer's device reported when they agreed and when they finished (an IANA name like
+  // "Asia/Kolkata"). The date they sign on is the calendar day there, the certificate prints their local time, and
+  // automatic reminders wait for their morning.
+  ['recipients', 'tz', 'TEXT'],
+  // Set when an automatic reminder fell in this person's night and waits for 8:00 their time. Cleared when it goes out.
+  ['recipients', 'reminder_held_at', 'TEXT'],
+  // The date format new envelopes of this account start with (one of DATE_FORMATS in src/lib/dates.ts). Empty means year-month-day.
+  ['accounts', 'default_date_format', 'TEXT'],
   ['accounts', 'renewal_reminded', 'TEXT'],
   ['accounts', 'renewal_quoted_cents', 'INTEGER'],
   ['accounts', 'sub_event_at', 'INTEGER'],
@@ -459,6 +520,50 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // The document exactly as this person signed it, as a stored PDF (its fingerprint), made at the moment their
   // signature was set aside. It is what they download when they ask for what they signed the first time.
   ['earlier_signatures', 'copy_sha256', 'TEXT'],
+  // What the mail provider told us about an email after it took it (POST /mail/events, src/server/bounces.ts).
+  // message_id is the Message-ID we gave the email, without the angle brackets, which providers hand back with their
+  // news. delivered_at: the recipient's mail server took it. bounced_at, bounce_kind ('hard': the address does not
+  // work, 'soft': try later) and bounce_reason: it came back. complained_at: the reader marked it as spam.
+  ['emails', 'message_id', 'TEXT'],
+  ['emails', 'delivered_at', 'TEXT'],
+  ['emails', 'bounced_at', 'TEXT'],
+  ['emails', 'bounce_kind', 'TEXT'],
+  ['emails', 'bounce_reason', 'TEXT'],
+  ['emails', 'complained_at', 'TEXT'],
+  // An email to this recipient came back for good: when, and why in plain words. Reminders stop until the address
+  // is changed or the sender says "try again". complained_at: this person marked an email about the envelope as
+  // spam, so nothing more is emailed to them about it unless they ask. A trigger (see migrate) clears all three
+  // when the address changes, because they are facts about an address.
+  ['recipients', 'bounced_at', 'TEXT'],
+  ['recipients', 'bounce_reason', 'TEXT'],
+  ['recipients', 'complained_at', 'TEXT'],
+  // An email to this login came back for good. The app says so on every page until the address is changed or the
+  // person says it works again.
+  ['users', 'email_bounced_at', 'TEXT'],
+  ['users', 'email_bounce_reason', 'TEXT'],
+  // Where a person is signed in (Settings, "Where you are signed in"). created_at: when this browser signed in.
+  // last_used_at: the last time it was used, written at most once an hour. ua: what the browser called itself then,
+  // from which the page makes "iPhone, Safari". No address is kept. A session from before these columns has none
+  // of the three until it is next used.
+  ['sessions', 'created_at', 'TEXT'],
+  ['sessions', 'last_used_at', 'TEXT'],
+  ['sessions', 'ua', 'TEXT'],
+  // Set when this browser opened the signing page of someone who signs in person: the device is in a signer's
+  // hands, so the session opens nothing until its owner types their password (src/server/handover.ts). locked_note
+  // is where to go back to afterwards: the envelope and the signer's name, as JSON.
+  ['sessions', 'locked_at', 'TEXT'],
+  ['sessions', 'locked_note', 'TEXT'],
+  // The envelope through whose signing link a signer uploaded this file. Such a file belongs to no account, so
+  // this is what lets it go with the envelope (or its account) also when it was never attached to a field.
+  ['files', 'via_envelope', 'TEXT'],
+  // A recipient that is a group (src/server/groups.ts). group_id is the account's group it was made from, and
+  // group_name its name: on a draft or template both follow the saved group, and from the moment the envelope is
+  // sent group_name is the name it went out under. claimed_by is the member (recipient_members.id) who took the
+  // document on, with when: from then the row carries that person's name, address and link like any recipient's.
+  ['recipients', 'group_id', 'TEXT'],
+  ['recipients', 'group_name', 'TEXT'],
+  ['recipients', 'claimed_by', 'TEXT'],
+  ['recipients', 'claimed_at', 'TEXT'],
 ];
 
 function migrate(d: any) {
@@ -470,6 +575,15 @@ function migrate(d: any) {
   }
   d.exec('CREATE INDEX IF NOT EXISTS recipients_check ON recipients(check_code)');
   d.exec('CREATE INDEX IF NOT EXISTS retired_tokens_check ON retired_tokens(check_code)');
+  // News from the mail provider names an email by the Message-ID we gave it, or only by the address it went to.
+  d.exec('CREATE INDEX IF NOT EXISTS emails_message ON emails(message_id)');
+  d.exec('CREATE INDEX IF NOT EXISTS emails_to ON emails(to_email COLLATE NOCASE, id)');
+  // "Could not be delivered" and "marked as spam" are facts about an address. Whichever way a recipient's address
+  // changes (a correction, the editor, a hand-over), the marks go with the old address, so the new person is
+  // reminded like anyone else and no path can forget to clear them.
+  d.exec(`CREATE TRIGGER IF NOT EXISTS recipients_address_changed AFTER UPDATE OF email ON recipients WHEN lower(old.email) != lower(new.email) BEGIN
+    UPDATE recipients SET bounced_at=NULL, bounce_reason=NULL, complained_at=NULL WHERE id=new.id;
+  END`);
   // Drafts and templates from before fields kept the sender's own wording apart: everything in them was typed by
   // the sender, so it is copied across once. Envelopes that are already out are left alone, because there a value
   // may be a signer's answer and nothing says which.

@@ -195,6 +195,24 @@ export function ReplyRecord() {
 export function ContactForm() {
   const [f, setF] = useState({ name: '', email: '', topic: 'signing', message: '' });
   const [envelope, setEnvelope] = useState('');
+  // Which document the message is about. The Help link on a signing page and in a signing email brings the security
+  // code of that email along (?code=), and someone who came another way can type it. The server says which document
+  // the code stands for (`about`), and the form shows that before anything is sent.
+  const [code, setCode] = useState('');
+  const [about, setAbout] = useState<{ subject: string; sender: string | null; for_name: string; tells_sender: boolean } | null>(null);
+  const [codeNote, setCodeNote] = useState('');
+  // The signed-in person's confirmed address, if any: what they write is passed on to the sender only from there.
+  const [mine, setMine] = useState('');
+  const lookUp = (typed: string) => {
+    const clean = typed.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    setCodeNote('');
+    if (clean.length !== 12) return setAbout(null);
+    api('/public/support/about', { body: { code: clean } })
+      .then((d) => (d?.known ? setAbout(d) : (setAbout(null), setCodeNote(d?.replaced
+        ? 'That code is from an email whose link has been replaced by a newer one since. Your message will still say which document you mean.'
+        : 'We do not know a document for that code. Check it against the email, or leave the box empty: your message reaches us either way.'))))
+      .catch(() => setAbout(null));
+  };
   const [info, setInfo] = useState<SupportInfo>({ email: null, topics: Object.keys(TOPIC_LABEL), urgent: [], reply: null, median: null });
   const a = useAction<{ reference: string; email: string; due_at: string | null; reply_hours: number | null }>();
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((s) => ({ ...s, [k]: e.target.value }));
@@ -212,8 +230,9 @@ export function ContactForm() {
     const topic = q.get('topic');
     if (topic) setF((s) => ({ ...s, topic }));
     if (q.get('envelope')) setEnvelope(q.get('envelope')!.slice(0, 60));
+    if (q.get('code')) (setCode(q.get('code')!.slice(0, 20)), lookUp(q.get('code')!));
     // Someone who is signed in does not have to type who they are.
-    api('/me').then((d) => d?.user && setF((s) => ({ ...s, name: s.name || d.user.name || '', email: s.email || d.user.email || '' }))).catch(() => {});
+    api('/me').then((d) => d?.user && (setMine(d.user.email_verified ? d.user.email || '' : ''), setF((s) => ({ ...s, name: s.name || d.user.name || '', email: s.email || d.user.email || '' })))).catch(() => {});
     // Links on this page such as "Report with the contact form" choose the topic on the way down.
     const onClick = (e: MouseEvent) => {
       const el = (e.target as HTMLElement | null)?.closest?.('[data-topic]') as HTMLElement | null;
@@ -249,7 +268,7 @@ export function ContactForm() {
       onSubmit={(e) =>
         a.run(e, async () => {
           // The time zone of this browser goes along, so the time in the email is the reader's own time.
-          const r = await api('/public/support', { body: { name: f.name.trim(), email: f.email.trim(), topic, message: f.message.trim(), envelope_id: envelope || undefined, tz: browserZone() || undefined } });
+          const r = await api('/public/support', { body: { name: f.name.trim(), email: f.email.trim(), topic, message: f.message.trim(), envelope_id: envelope || undefined, code: code.replace(/[^A-Za-z0-9]/g, '').length === 12 ? code : undefined, tz: browserZone() || undefined } });
           // "Your requests" below shows the new one straight away for someone who is signed in.
           window.dispatchEvent(new Event('sg-support-sent'));
           return { reference: r.reference, email: f.email.trim(), due_at: r.due_at || null, reply_hours: r.reply_hours || null };
@@ -270,7 +289,21 @@ export function ContactForm() {
       <label className="f"><span>What happened, and what do you need? <span className="hint">(a couple of sentences is enough)</span></span>
         <textarea value={f.message} onChange={set('message')} required minLength={10} maxLength={5000} rows={6} />
       </label>
-      {envelope && <p className="muted small pub-form-hint">This message will mention envelope <span className="mono">{envelope}</span>. <button type="button" className="pub-link" onClick={() => setEnvelope('')}>Leave it out</button></p>}
+      {/* Which document this is about, said before sending, with who else is told and what they are told. */}
+      {about ? (
+        <div className="notice pub-form-hint" role="status" id="contact-about">
+          <p style={{ margin: 0 }}>This message will be about <b>&ldquo;{about.subject || 'a document without a title'}&rdquo;</b>{about.sender ? <>, which {about.sender} sent to {about.for_name}</> : null}. The person who answers you sees which document you mean.</p>
+          {about.tells_sender && topic === 'signing' && <p style={{ margin: '6px 0 0' }}>We also tell {about.sender || 'the sender'} that you need help with it, because whoever sent a document can often fix it fastest. {mine && mine.toLowerCase() === f.email.trim().toLowerCase() ? 'What you write here is passed on to them, because you are signed in under this address.' : 'They are told that you asked for help, not what you write here.'}</p>}
+          <p style={{ margin: '6px 0 0' }}><button type="button" className="pub-link" onClick={() => (setAbout(null), setCode(''), setEnvelope(''))}>Do not mention the document</button></p>
+        </div>
+      ) : envelope ? (
+        <p className="muted small pub-form-hint" id="contact-about">This message will be about the document you came from, so the person who answers sees which one you mean. If the address above is the one it was sent to and the topic is signing, we also tell its sender that you need help (not what you write here). <button type="button" className="pub-link" onClick={() => setEnvelope('')}>Do not mention the document</button></p>
+      ) : topic === 'signing' || topic === 'stuck' ? (
+        <label className="f"><span>Security code from the email about the document <span className="hint">(optional: 12 letters and numbers near the bottom of that email)</span></span>
+          <input value={code} onChange={(e) => (setCode(e.target.value.slice(0, 20)), lookUp(e.target.value))} autoComplete="off" autoCapitalize="characters" spellCheck={false} placeholder="ABCD-EFGH-JKLM" aria-describedby={codeNote ? 'contact-code-note' : undefined} style={{ maxWidth: 260 }} />
+          {codeNote && <span id="contact-code-note" className="hint" role="status">{codeNote}</span>}
+        </label>
+      ) : null}
       {a.error && <div className="notice err" role="alert">{a.error}</div>}
       <div className="pub-contact-foot">
         <button className="btn primary" disabled={a.busy}>{a.busy ? 'Sending' : 'Send to a person'}</button>

@@ -47,7 +47,7 @@ export default function Home() {
     <div className="sn stack">
       <div className="pagehead" style={{ marginBottom: 0 }}>
         <div>
-          <h1 className="serif">Hello, {me.user.name.split(' ')[0]}</h1>
+          <h1 className="serif">Hello, <bdi>{me.user.name}</bdi></h1>
           <div className="muted">Every document you send here is one that never gets printed.</div>
         </div>
         <div className="row wrap">

@@ -10,6 +10,10 @@ import { extractPages } from '../src/server/text.ts';
 import { visualRuns, isolate } from '../src/server/bidi.ts';
 import { unprintable, fontsFrom } from '../src/server/pdftext.ts';
 import { PRINT_MARK, codePoints, handwritingWrites, cannotPrintText } from '../src/lib/scripts.ts';
+import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, formatDateValue, clockIn, momentText, momentForEmail, localStamp, isDaytime, validZone } from '../src/lib/dates.ts';
+import { isNumber, NUMBER_HINT, NUMBER_PROBLEM } from '../src/lib/numbers.ts';
+import { problemWith } from '../src/components/sign/fields.ts';
+import { deadlineLine } from '../src/components/sender/lib.ts';
 
 let s: Server;
 before(async () => {
@@ -128,7 +132,7 @@ test('a script with no font: the sender is told on the envelope page and before 
   await ana.post(`/sign/${anaTok}/consent`);
   assert.deepEqual((await ana.post(`/sign/${anaTok}/print-check`, { values: {} })).data.problems, []);
   // The words they read say what happens and name the characters.
-  assert.match(cannotPrintText('சு'), /cannot print these characters: ச ு\. On the document each is replaced by the mark �, and the certificate lists them by Unicode number/);
+  assert.match(cannotPrintText('சு'), /^The signed PDF cannot print these characters: சு\. On the PDF each of them is replaced by the mark \uFFFD, and the certificate lists them by Unicode number/);
   // The signed PDF: a mark for each letter, never an empty box, and the certificate lists the characters by number.
   const { pages } = await signedPages(c, e, { 'sundar@example.com': 'மதுரை 625001', 'ana-print@example.com': 'fine' });
   assert.ok(pages[0].includes(PRINT_MARK.repeat(4)), pages[0]);
@@ -202,10 +206,12 @@ test('a Hebrew address with house number 42 and Arabic text with "ABC 123" are p
   // Read back, the text is in typing order again and the numbers are whole.
   assert.ok(has(pages[0], 'תל אביב 42'), pages[0]);
   assert.ok(has(pages[0], 'شركة ABC رقم 123'), pages[0]);
-  assert.ok(!squash(pages[0]).includes('24') && !squash(pages[0]).includes('321') && !pages[0].includes('CBA'));
+  // Not mirrored anywhere. (The captions under the signatures and the envelope number are random letters and
+  // digits, so they are left out of this look.)
+  const typed = pages[0].replace(/Signed via Sign&Grow · \S+/g, '').replace(/Envelope ID: \S+/g, '');
+  assert.ok(!/24|321|CBA/.test(squash(typed)), typed);
   const cert = pages.slice(1).join(' ');
   assert.ok(has(cert, 'דנה כהן') && has(cert, 'شركة ABC') && has(cert, 'عقد رقم 2026'), cert.slice(0, 600));
-  assert.ok(!cert.includes('CBA') && !squash(cert).includes('6202'));
   // The words as typed are also written into the PDF beside the glyphs (ActualText), for programs that copy or
   // search text: on the page a right-to-left line does not stand in typing order.
   const utf16 = (t: string) => `FEFF${[...t].map((ch) => ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')).join('')}`;
@@ -265,4 +271,305 @@ test('the first letter of a line decides which way it reads, and a line can be t
   assert.equal(ts.layout('תל אביב 42', { dir: 'ltr' }).rtl, false);
   const text = (await extractPages(await doc.save()))[0];
   assert.ok(has(text, 'תל אביב 42') && has(text, 'Tel Aviv 42'), text);
+});
+
+// ---- C. Dates ------------------------------------------------------------------------------------
+
+test('a date a signer picks is written in the format the sender chose: on the PDF and in what the next signer is shown', async () => {
+  const c = await signUp('Uma Sender', 'uma-dates@example.com', ip());
+  const e = await sendTo(c, [{ name: 'Ada Dates', email: 'ada-dates@example.com', type: 'date' }, { name: 'Ben Dates', email: 'ben-dates@example.com' }], { date_format: 'D MMM YYYY' });
+  const d = fieldOf(e, 'ada-dates@example.com', 'date');
+  assert.equal((await signAll(e.id, 'ada-dates@example.com', { [d.id]: '2026-03-04' })).status, 200);
+  // Ben has not signed yet. On his screen Ada's date reads as it will on paper, not as 2026-03-04.
+  const ben = new Client();
+  const seen = (await ben.get(`/sign/${tokenFor(e.id, 'ben-dates@example.com')}`)).data;
+  assert.equal(seen.envelope.date_format, 'D MMM YYYY');
+  assert.equal(seen.others.find((o: any) => o.id === d.id).value, '4 Mar 2026');
+  // What Ada's own page sends back to her is still the plain date, which the date picker needs.
+  assert.equal((await new Client().get(`/sign/${tokenFor(e.id, 'ada-dates@example.com')}`)).data.fields.find((f: any) => f.id === d.id).value, '2026-03-04');
+  assert.equal((await signAll(e.id, 'ben-dates@example.com')).status, 200);
+  const page = (await extractPages((await c.get(`/envelopes/${e.id}/download`)).data))[0];
+  assert.ok(page.includes('4 Mar 2026'), page);
+  assert.ok(!page.includes('2026-03-04'), 'one page never carries two formats');
+});
+
+test('every format writes a typed date the same way it writes the date of signing, and anything that is not a date is left as typed', () => {
+  assert.deepEqual(DATE_FORMATS.map((f) => formatDateValue('2026-11-20', f)), ['2026-11-20', '20/11/2026', '11/20/2026', '20 Nov 2026', 'Nov 20, 2026']);
+  assert.deepEqual(DATE_FORMATS.map((f) => formatDate('2026-11-20T10:00:00.000Z', f)), DATE_FORMATS.map((f) => formatDateValue('2026-11-20', f)));
+  for (const typed of ['20th of November', '20.11.2026', '2026-13-40', '2026-11-2', '']) assert.equal(formatDateValue(typed, 'D MMM YYYY'), typed);
+  assert.equal(formatDateValue('2026-11-20'), '2026-11-20');
+  // The picker lists the same formats, with the ones nobody can misread first.
+  assert.deepEqual([...DATE_FORMAT_CHOICES].sort(), [...DATE_FORMATS].sort());
+  assert.equal(DATE_FORMAT_CHOICES[0], 'D MMM YYYY');
+});
+
+test('an account sets the date format its new envelopes start with', async () => {
+  const c = await signUp('Ines Admin', 'ines-dates@example.com', ip());
+  assert.equal((await c.get('/me')).data.account.default_date_format, null);
+  assert.equal((await simple(c, 'd0@example.com')).date_format, null, 'nothing chosen: year-month-day, as before');
+  // One that does not exist is refused and nothing changes.
+  const bad = await c.call('PATCH', '/account', { default_date_format: 'DD.MM.YYYY' });
+  assert.equal(bad.status, 400);
+  assert.match(bad.data.error, /does not exist\. Use one of: YYYY-MM-DD, DD\/MM\/YYYY/);
+  assert.equal((await c.call('PATCH', '/account', { default_date_format: 'DD/MM/YYYY' })).status, 200);
+  assert.equal((await c.get('/me')).data.account.default_date_format, 'DD/MM/YYYY');
+  // Other settings saved without it leave it alone.
+  assert.equal((await c.call('PATCH', '/account', { default_expire_days: 30 })).status, 200);
+  assert.equal((await c.get('/me')).data.account.default_date_format, 'DD/MM/YYYY');
+  const e = await simple(c, 'd1@example.com');
+  assert.equal(e.date_format, 'DD/MM/YYYY');
+  // Whoever sends can still choose another format for one envelope.
+  assert.equal((await simple(c, 'd2@example.com', { date_format: 'MMM D, YYYY' })).date_format, 'MMM D, YYYY');
+  // A template made now starts with it too, and envelopes made from the template keep the template's.
+  const tpl = (await c.post('/envelopes', { kind: 'template', subject: 'T' })).data.envelope;
+  assert.equal(tpl.date_format, 'DD/MM/YYYY');
+  // Back to none.
+  assert.equal((await c.call('PATCH', '/account', { default_date_format: '' })).status, 200);
+  assert.equal((await simple(c, 'd3@example.com')).date_format, null);
+});
+
+// ---- E. Numbers as people write them ----------------------------------------------------------------
+
+const NUMBERS = ['2500', '12.5', '12,5', '-40', '1,234.56', '1.234,56', '1 234,56', "1'234.56", '1,23,456', '12,34,567.50', '₹1,23,456', '€1.234,56', '1 234,56 €', '1.234.567', '١٢٣'];
+const NOT_NUMBERS = ['abc', '12abc', '1,,2', '1.234.56', '1 234 56', '1,2,3', '12.', '.5', '1e5', '5 apples', '1,234,56', '--5'];
+
+test('the signing page and the server use one rule for numbers, and it takes the ways numbers are written outside the US', () => {
+  const field = { type: 'number', label: 'Amount' };
+  for (const v of NUMBERS) {
+    assert.equal(isNumber(v), true, v);
+    assert.equal(problemWith(field, v), '', `the page accepts ${v}`);
+  }
+  for (const v of NOT_NUMBERS) {
+    assert.equal(isNumber(v), false, v);
+    assert.equal(problemWith(field, v), NUMBER_PROBLEM, `the page refuses ${v}`);
+  }
+  // The hint says how to write it and that nothing is converted.
+  assert.match(NUMBER_HINT, /as you write it, like 2500, 1\.234,56 or 1,234\.56\. It is printed exactly as you type it\./);
+});
+
+test('a number field takes 1.234,56, 1 234,56, 1\'234.56 and Indian grouping, and the PDF prints exactly what was typed', async () => {
+  const c = await signUp('Nora Sender', 'nora-numbers@example.com', ip());
+  const typed = ['1.234,56', '1 234,56', "1'234.56", '1,23,456', '₹12,34,567.50', '1,234.56'];
+  const people = typed.map((_, i) => ({ name: `Signer ${i + 1}`, email: `num${i}@example.com`, type: 'number' }));
+  const e = await sendTo(c, people);
+  // What is not a number is refused when finishing, with words that say how to write one. Nothing was signed.
+  const f0 = fieldOf(e, 'num0@example.com', 'number');
+  const no = await signAll(e.id, 'num0@example.com', { [f0.id]: '1.234.56' });
+  assert.equal(no.status, 400);
+  assert.match(no.data.error, /"1\.234\.56" does not read as a number for Answer 1\. Type it as you write it, like 2500, 12\.5, 1\.234,56 or 1,234\.56/);
+  const { pages } = await signedPages(c, e, Object.fromEntries(people.map((p, i) => [p.email, typed[i]])));
+  for (const v of typed) assert.ok(pages[0].includes(v), `${v} is printed as typed: ${pages[0]}`);
+});
+
+// ---- D. Time zones -----------------------------------------------------------------------------------
+
+// A zone where the clock shows this hour right now. (In these names the sign is the other way round: Etc/GMT-5 is
+// five hours ahead of UTC.)
+function zoneWhereItIs(hour: number): string {
+  let off = hour - new Date().getUTCHours();
+  while (off > 12) off -= 24;
+  while (off < -11) off += 24;
+  return off === 0 ? 'Etc/GMT' : `Etc/GMT${off > 0 ? '-' : '+'}${Math.abs(off)}`;
+}
+// A zone whose calendar day is not the UTC day right now: fourteen hours ahead, or eleven behind.
+const otherDayZone = () => (new Date().getUTCHours() >= 10 ? 'Pacific/Kiritimati' : 'Pacific/Pago_Pago');
+
+// What the signing page does: the device's time zone goes along with consent and with Finish.
+async function signInZone(envelopeId: string, email: string, tz: any, extra: Record<string, string> = {}) {
+  const c = new Client();
+  const tok = tokenFor(envelopeId, email);
+  assert.equal((await c.post(`/sign/${tok}/consent`, { tz })).status, 200);
+  const v = (await c.get(`/sign/${tok}`)).data;
+  const values: Record<string, string> = { ...extra };
+  for (const f of v.fields || []) if (!(f.id in values)) values[f.id] = f.type === 'text' ? 'filled in' : '1';
+  return c.post(`/sign/${tok}/complete`, { values, signature_png: PNG, initials_png: PNG, tz });
+}
+
+test('the date of signing is the calendar day where the signer is, and the certificate gives their local time with its zone next to UTC', async () => {
+  const c = await signUp('Kiri Sender', 'kiri-zones@example.com', ip());
+  const zone = otherDayZone();
+  const e = await sendTo(c, [{ name: 'Mele Far', email: 'mele@example.com', type: 'date_signed' }, { name: 'Una Utc', email: 'una@example.com', type: 'date_signed' }], { date_format: 'D MMM YYYY' });
+  assert.equal((await signInZone(e.id, 'mele@example.com', zone)).status, 200);
+  // Someone whose device says nothing, and a sender whose zone we never learned: UTC, as before.
+  assert.equal((await signAll(e.id, 'una@example.com')).status, 200);
+  const rows = Object.fromEntries(s.db.all('SELECT email, tz, completed_at FROM recipients WHERE envelope_id=?', e.id).map((r: any) => [r.email, r]));
+  assert.equal(rows['mele@example.com'].tz, zone);
+  assert.equal(rows['una@example.com'].tz, null);
+  const local = formatDate(rows['mele@example.com'].completed_at, 'D MMM YYYY', zone), utc = formatDate(rows['mele@example.com'].completed_at, 'D MMM YYYY');
+  assert.notEqual(local, utc, 'the test only means something when the two days differ');
+  const pages = await extractPages((await c.get(`/envelopes/${e.id}/download`)).data);
+  // Mele's date is her own day. Una's is the UTC day.
+  assert.ok(pages[0].includes(local), pages[0]);
+  assert.ok(pages[0].includes(formatDate(rows['una@example.com'].completed_at, 'D MMM YYYY')));
+  // The certificate: the zone, the local time of each of her steps, and UTC as before.
+  const cert = pages.slice(1).join(' ');
+  assert.ok(cert.includes(`Time zone ${zone}, as reported by their device`), cert.slice(0, 1800));
+  assert.ok(cert.includes(`Completed, their time ${localStamp(rows['mele@example.com'].completed_at, zone)}`));
+  assert.match(cert, /Consent, their time \d{4}-\d\d-\d\d \d\d:\d\d UTC[+-]\d\d:\d\d, Pacific\//);
+  assert.ok(cert.includes(`Completed ${rows['mele@example.com'].completed_at.replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}`));
+  // Her audit lines carry her local time too, and the zone itself is part of the hash-chained record.
+  assert.match(cert, /Mele Far <mele@example\.com> · [^·]+ · [0-9a-f]{16} · their time \d{4}-\d\d-\d\d \d\d:\d\d UTC[+-]\d\d:\d\d, Pacific\//);
+  const audit = (await c.get(`/envelopes/${e.id}`)).data.audit;
+  const told = audit.filter((a: any) => a.action === 'Time zone reported');
+  assert.equal(told.length, 1, 'said once, not again when Finish repeats the same zone');
+  assert.match(told[0].detail, new RegExp(`^Mele Far: ${zone} \\(UTC[+-]\\d\\d:\\d\\d at this moment\\), as their device says\\.`));
+  assert.equal((await c.get(`/envelopes/${e.id}`)).data.chain.ok, true);
+  // Nothing of the sort is said about Una.
+  assert.ok(!/Una Utc <una@example\.com> · [^·]+ · [0-9a-f]{16} · their time/.test(cert));
+});
+
+test('with no zone from the signer the sender\'s zone decides the day, and something that is not a time zone is ignored', async () => {
+  const c = await signUp('Sami Sender', 'sami-zones@example.com', ip());
+  const zone = otherDayZone();
+  // The app tells us the sender's zone when it loads.
+  assert.equal((await c.call('GET', '/me', undefined, { 'x-tz': zone })).status, 200);
+  const e = await sendTo(c, [{ name: 'Quiet Device', email: 'quiet@example.com', type: 'date_signed' }, { name: 'Odd Device', email: 'odd@example.com', type: 'date_signed' }], { date_format: 'DD/MM/YYYY' });
+  assert.equal((await signAll(e.id, 'quiet@example.com')).status, 200);
+  assert.equal((await signInZone(e.id, 'odd@example.com', 'Mars/Olympus; DROP TABLE recipients')).status, 200);
+  const rows = s.db.all('SELECT email, tz, completed_at FROM recipients WHERE envelope_id=? ORDER BY email', e.id);
+  assert.deepEqual(rows.map((r: any) => r.tz), [null, null]);
+  const page = (await extractPages((await c.get(`/envelopes/${e.id}/download`)).data))[0];
+  for (const r of rows) {
+    assert.notEqual(formatDate(r.completed_at, 'DD/MM/YYYY', zone), formatDate(r.completed_at, 'DD/MM/YYYY'));
+    assert.ok(page.includes(formatDate(r.completed_at, 'DD/MM/YYYY', zone)), page);
+  }
+  assert.equal((await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => a.action === 'Time zone reported').length, 0);
+});
+
+test('a moment reads the same everywhere: with its time and its zone', () => {
+  // The envelope from the complaint: one deadline, told as two different days.
+  const closes = '2027-03-20T16:40:00.000Z';
+  assert.equal(momentText(closes), '20 March 2027 at 16:40 UTC');
+  assert.equal(momentText(closes, 'Pacific/Auckland'), '21 March 2027 at 05:40 Pacific/Auckland time (UTC+13:00)');
+  assert.equal(momentText(closes, 'America/Los_Angeles'), '20 March 2027 at 09:40 America/Los Angeles time (UTC-07:00)');
+  assert.equal(momentForEmail(closes), '20 March 2027 at 16:40 UTC');
+  assert.equal(momentForEmail(closes, 'Asia/Kolkata'), '20 March 2027 at 16:40 UTC, which is 20 March 2027 at 22:10 Asia/Kolkata time (UTC+05:30)');
+  assert.equal(momentForEmail(closes, 'not a zone'), '20 March 2027 at 16:40 UTC');
+  // Summer time is followed: London is an hour ahead of UTC in July and not in January.
+  assert.equal(clockIn('2026-07-01T23:30:00Z', 'Europe/London')!.offset, 'UTC+01:00');
+  assert.equal(formatDate('2026-07-01T23:30:00Z', 'D MMM YYYY', 'Europe/London'), '2 Jul 2026');
+  assert.equal(clockIn('2026-01-01T23:30:00Z', 'Europe/London')!.offset, 'UTC');
+  // The examples from the research: the same moment is the 21st in Auckland and still the 20th in Los Angeles.
+  assert.equal(formatDate('2026-11-20T16:40:43.000Z', 'DD/MM/YYYY', 'Pacific/Auckland'), '21/11/2026');
+  assert.equal(formatDate('2026-11-21T03:40:00.000Z', 'DD/MM/YYYY', 'America/Los_Angeles'), '20/11/2026');
+  assert.equal(formatDate('2026-11-20T16:40:43.000Z', 'DD/MM/YYYY'), '20/11/2026');
+  assert.equal(validZone('Asia/Kolkata'), 'Asia/Kolkata');
+  for (const no of ['', 'Nope/Nowhere', 'x'.repeat(80), null, 5, 'Europe/Berlin\nX']) assert.equal(validZone(no), null);
+  // Daytime for reminders is 8:00 up to 20:00.
+  assert.equal(isDaytime('2026-11-20T02:30:00Z', 'Asia/Kolkata'), true);  // 08:00 in India
+  assert.equal(isDaytime('2026-11-20T02:29:00Z', 'Asia/Kolkata'), false); // 07:59
+  assert.equal(isDaytime('2026-11-20T14:29:00Z', 'Asia/Kolkata'), true);  // 19:59
+  assert.equal(isDaytime('2026-11-20T14:30:00Z', 'Asia/Kolkata'), false); // 20:00
+  // The sender's page keeps its shape and now names the time and the zone.
+  assert.match(deadlineLine(new Date(Date.now() + 12 * 864e5).toISOString()), /^Closes on \d{1,2} \w+ \d{4} at \d\d:\d\d .*(UTC|time \(UTC.*\)), in 12 days$/);
+});
+
+test('emails give a deadline with its time in UTC, and in the signer\'s own zone as well once it is known', async () => {
+  const c = await signUp('Dee Sender', 'dee-deadline@example.com', ip());
+  const e = await sendTo(c, [{ name: 'Ravi Later', email: 'ravi-deadline@example.com' }], { expire_days: 30 });
+  const closes = (await c.get(`/envelopes/${e.id}`)).data.envelope.expires_at;
+  const first = mailTo('ravi-deadline@example.com').pop()!;
+  assert.ok(first.html.includes(`This request closes on ${momentText(closes)}.`), 'the invitation names the time and says UTC');
+  assert.ok(!first.html.includes(`closes on ${closes.slice(0, 10)}`), 'and no longer a bare day');
+  // Ravi opens it in India. From then on his emails name the same moment by his clock too.
+  const rc = new Client(), tok = tokenFor(e.id, 'ravi-deadline@example.com');
+  assert.equal((await rc.post(`/sign/${tok}/consent`, { tz: 'Asia/Kolkata' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/remind`)).data.reminded, 1);
+  const reminder = mailTo('ravi-deadline@example.com').pop()!;
+  assert.match(reminder.subject, /^Reminder: /);
+  assert.ok(reminder.html.includes(`This request closes on ${momentText(closes)}, which is ${momentText(closes, 'Asia/Kolkata')}.`), reminder.html.slice(-900));
+  // The signing page is given the moment itself and words it in the device's zone (momentText, tested above).
+  assert.equal((await rc.get(`/sign/${tok}`)).data.envelope.expires_at, closes);
+  // More time: the audit line names the new moment, not only its day.
+  const later = (await c.post(`/envelopes/${e.id}/extend`, { days: 10 })).data.expires_at;
+  const line = (await c.get(`/envelopes/${e.id}`)).data.audit.find((a: any) => a.action === 'Deadline extended');
+  assert.equal(line.detail, `New deadline ${momentText(later)}`);
+});
+
+test('an automatic reminder waits for the morning of a signer whose time zone we know, and goes out at once to everyone else', async () => {
+  const c = await signUp('Remi Sender', 'remi-night@example.com', ip());
+  const night = zoneWhereItIs(2), day = zoneWhereItIs(13);
+  const e = await sendTo(c, [{ name: 'Nia Night', email: 'nia-night@example.com' }, { name: 'Dev Day', email: 'dev-day@example.com' }, { name: 'Una Unknown', email: 'una-unknown@example.com' }], { reminder_days: 1 });
+  for (const [email, tz] of [['nia-night@example.com', night], ['dev-day@example.com', day]])
+    assert.equal((await new Client().post(`/sign/${tokenFor(e.id, email)}/consent`, { tz })).status, 200);
+  const reminders = (email: string) => mailTo(email).filter((m: any) => m.subject.startsWith('Reminder: ')).length;
+  // Two days pass.
+  s.db.run('UPDATE envelopes SET sent_at=?, last_reminder_at=NULL WHERE id=?', new Date(Date.now() - 2 * 864e5).toISOString(), e.id);
+  s.db.run('UPDATE recipients SET sent_at=? WHERE envelope_id=?', new Date(Date.now() - 2 * 864e5).toISOString(), e.id);
+  await s.env.cronTick();
+  assert.equal(reminders('dev-day@example.com'), 1, 'it is day for Dev');
+  assert.equal(reminders('una-unknown@example.com'), 1, 'nothing is known about Una, so as before');
+  assert.equal(reminders('nia-night@example.com'), 0, 'it is two in the morning for Nia');
+  const held = s.db.get("SELECT reminder_held_at h FROM recipients WHERE envelope_id=? AND email='nia-night@example.com'", e.id).h;
+  assert.ok(held);
+  let audit = (await c.get(`/envelopes/${e.id}`)).data.audit;
+  assert.equal(audit.find((a: any) => a.action === 'Reminder waits for the morning').detail, `Nia Night (${night}): it is night where they are, so the reminder goes out at 8:00 their time.`);
+  // The next runs of the timer during her night change nothing, and nobody is reminded twice.
+  await s.env.cronTick();
+  assert.deepEqual([reminders('nia-night@example.com'), reminders('dev-day@example.com'), reminders('una-unknown@example.com')], [0, 1, 1]);
+  // Morning comes for Nia (her clock is moved, since the test cannot wait): the reminder goes out, once.
+  s.db.run("UPDATE recipients SET tz=? WHERE envelope_id=? AND email='nia-night@example.com'", zoneWhereItIs(9), e.id);
+  await s.env.cronTick();
+  await s.env.cronTick();
+  assert.equal(reminders('nia-night@example.com'), 1);
+  assert.equal(s.db.get("SELECT reminder_held_at h FROM recipients WHERE envelope_id=? AND email='nia-night@example.com'", e.id).h, null);
+  audit = (await c.get(`/envelopes/${e.id}`)).data.audit;
+  assert.ok(audit.some((a: any) => a.action === 'Reminder sent' && /^Nia Night, once it was morning where they are/.test(a.detail)));
+  // A reminder the sender asks for by hand is not held: it goes out now, night or not.
+  s.db.run("UPDATE recipients SET tz=? WHERE envelope_id=? AND email='nia-night@example.com'", night, e.id);
+  assert.equal((await c.post(`/envelopes/${e.id}/remind`, { recipient_id: e.recipients.find((r: any) => r.email === 'nia-night@example.com').id })).data.reminded, 1);
+  assert.equal(reminders('nia-night@example.com'), 2);
+});
+
+// ---- F. Names ----------------------------------------------------------------------------------------
+
+test('a signer can fix the spacing, a hyphen or a dot of their own name, and a name in another script goes to the sender as "may be the same name"', async () => {
+  const c = await signUp('Hana Sender', 'hana-names@example.com', ip());
+  const e = await sendTo(c, [
+    { name: '山田 太郎', email: 'yamada-name@example.com' }, { name: 'Mary-Ann Okafor', email: 'maryann@example.com' }, { name: 'J.R. Tolkien', email: 'jrr@example.com' },
+    { name: 'Иван Петров', email: 'ivan-name@example.com' }, { name: '田中 花子', email: 'tanaka@example.com' }, { name: 'Ana Lima', email: 'ana-name@example.com' },
+  ]);
+  const rename = (email: string, name: string) => new Client().post(`/sign/${tokenFor(e.id, email)}/name`, { name });
+  const nameOf = (email: string) => s.db.get('SELECT name FROM recipients WHERE envelope_id=? AND email=?', e.id, email).name;
+  // The same letters with only what stands between them changed: done at once.
+  for (const [email, to] of [['yamada-name@example.com', '山田太郎'], ['maryann@example.com', 'Mary Ann Okafor'], ['jrr@example.com', 'JR Tolkien']]) {
+    const r = await rename(email, to);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.applied, true, `${to}: ${r.data.message}`);
+    assert.equal(nameOf(email), to);
+  }
+  // Cyrillic to Latin, and kanji to Latin: not changed by us, the sender is asked, and nobody is told it is a
+  // different name, because it may not be.
+  for (const [email, was, to] of [['ivan-name@example.com', 'Иван Петров', 'Ivan Petrov'], ['tanaka@example.com', '田中 花子', 'Hanako Tanaka']]) {
+    const r = await rename(email, to);
+    assert.equal(r.data.applied, false);
+    assert.match(r.data.message, /This may be the same name in another script, but software cannot tell, so we asked Hana Sender to confirm it\./);
+    assert.ok(!/different name|more than|not yours/.test(r.data.message), r.data.message);
+    assert.equal(nameOf(email), was, 'the name stays as the sender wrote it until they decide');
+    const mail = mailTo('hana-names@example.com').filter((m: any) => m.subject.startsWith('Name change asked for')).pop()!;
+    assert.ok(mail.html.includes(`asked for the name on the document to be &quot;${to}&quot;`) || mail.html.includes(`asked for the name on the document to be "${to}"`), mail.html.slice(0, 900));
+    assert.match(mail.html, /It may be the same name in another script, which software cannot tell/);
+  }
+  const trail = (await c.get(`/envelopes/${e.id}`)).data.audit;
+  assert.equal(trail.filter((a: any) => a.action === 'Signer corrected their name').length, 3);
+  assert.equal(trail.filter((a: any) => a.action === 'Name change asked for' && /in a different script from/.test(a.detail)).length, 2);
+  // A different name in the same script is still passed to the sender in the words for that, as before.
+  const other = await rename('ana-name@example.com', 'Bo Stone');
+  assert.equal(other.data.applied, false);
+  assert.ok(!/another script/.test(other.data.message));
+  assert.equal(nameOf('ana-name@example.com'), 'Ana Lima');
+});
+
+test('nobody is greeted by a guessed first name, and a new workspace is named after the whole name', async () => {
+  // In "山田 太郎" the first word is the family name, and "Sukarno" has only one.
+  const c = await signUp('山田 太郎', 'taro-ws@example.com', ip());
+  assert.equal((await c.get('/me')).data.account.name, "山田 太郎's workspace");
+  const d = await signUp('Sukarno', 'sukarno-ws@example.com', ip());
+  assert.equal((await d.get('/me')).data.account.name, "Sukarno's workspace");
+  // The screens and share texts that used to cut a name at its first space no longer do. The one place left that
+  // shows a first word on purpose is the help desk, which gives customers an operator's first name and no more.
+  const cut = /\.split\((?:' '|" "|\/\\s\+\/)\)\[0\]/;
+  const files = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((x) => (x.isDirectory() ? files(path.join(dir, x.name)) : /\.tsx?$/.test(x.name) ? [path.join(dir, x.name)] : []));
+  const found = files('src').filter((f) => !/routes-billing|credits\.ts$|lib\/support\.ts$/.test(f)).filter((f) => fs.readFileSync(f, 'utf8').split('\n').some((line) => cut.test(line) && /name/i.test(line)));
+  assert.deepEqual(found, []);
 });

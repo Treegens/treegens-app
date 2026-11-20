@@ -39,6 +39,7 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
   const [left, setLeft] = useState(check.resend_in);
   const input = useRef<HTMLInputElement>(null);
   const problem = useRef<HTMLDivElement>(null);
+  const toldRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const tick = () => setLeft(Math.max(0, Math.ceil((until - Date.now()) / 1000)));
@@ -50,6 +51,11 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
   useEffect(() => {
     if (error) problem.current?.scrollIntoView({ block: 'nearest' });
   }, [error]);
+
+  // "We told the sender" replaces the button that was pressed. Reading goes on from that sentence, not from nowhere.
+  useEffect(() => {
+    if (told) toldRef.current?.focus();
+  }, [told]);
 
   const waitFrom = (e: any) => {
     const s = Number(e?.data?.resend_in);
@@ -119,7 +125,7 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
     ? <p className="muted small sg-code-when">You can ask for a new code in {howLong(left)}.</p>
     : null;
   const toldNote = told && (
-    <div className="notice sg-confirmed" role="status" tabIndex={-1}>
+    <div ref={toldRef} className="notice sg-confirmed" role="status" tabIndex={-1}>
       <b>Done. We told {sender.name}.</b>{' '}
       {told === 'not_mine'
         ? `No more codes go to ${check.to}. Only ${sender.name} can fix this: they have to put in your number, or choose another way to check that it is you. Until they have, this document stays closed.`

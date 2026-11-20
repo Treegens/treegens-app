@@ -875,7 +875,7 @@ test('voiding and deleting what was sent does not put a sender out of reach of r
   await asOperator(async () => {
     const mine = (await op.get('/operator/queue')).data.reports.filter((r: any) => r.about_account === acc);
     assert.equal(mine.length, 2, 'deleting the envelopes does not hide the reports');
-    assert.ok(mine.every((r: any) => r.envelope_deleted === true && r.subject === null && r.account_name === "Eva's workspace"));
+    assert.ok(mine.every((r: any) => r.envelope_deleted === true && r.subject === null && r.account_name === "Eva Eraser's workspace"));
   });
   // The third envelope is sent, voided and deleted before anyone can report it. Whoever holds its email still can.
   const third = await sent(eva, 'er3@example.com');

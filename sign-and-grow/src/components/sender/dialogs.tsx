@@ -3,6 +3,8 @@ import { useId, useState, type ReactNode } from 'react';
 import { api, toast } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { deadlineLine, explain, longDate, newDeadline, looksLikeEmail } from './lib';
+import { useMe } from '@/components/AppShell';
+import { CheckFields, checkTrouble, type CheckValue } from './CheckFields';
 
 const CHOICES = [7, 14, 30];
 
@@ -108,8 +110,16 @@ export function VoidDialog({ title, children, confirmLabel, onClose, onVoid }: {
 }
 
 // The quick fix for one person: a typo in the name, a different address, or an access code.
-export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { envelopeId: string; recipient: { id: string; name: string; email: string; status?: string; access_code?: string | null; code_frozen_at?: string | null }; onClose: () => void; onDone: () => void }) {
+export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { envelopeId: string; recipient: { id: string; name: string; email: string; role?: string; status?: string; access_code?: string | null; code_frozen_at?: string | null; verify?: string | null; phone?: string | null; text_link?: boolean | null; check?: { stopped?: boolean } | null; code_only?: boolean }; onClose: () => void; onDone: () => void }) {
+  const me = useMe();
+  // For someone who has finished, and once the envelope is finished or closed, the access code is the one thing that
+  // can still change: it is not part of what was signed, and it stands between them and their copy.
+  const codeOnly = !!recipient.code_only;
   const [f, setF] = useState({ name: recipient.name || '', email: recipient.email || '', access_code: recipient.access_code || '' });
+  // The check before the document opens, and the signing link by text message. Changing either makes them type a new code.
+  const was: CheckValue = { verify: recipient.verify || 'none', phone: recipient.phone || '', text_link: !!recipient.text_link };
+  const [check, setCheck] = useState<CheckValue>(was);
+  const checkChanged = check.verify !== was.verify || String(check.phone || '').trim() !== was.phone || !!check.text_link !== was.text_link;
   // After too many wrong tries a code opens nothing until a different one is set here.
   const frozen = !!recipient.access_code && !!recipient.code_frozen_at;
   const [busy, setBusy] = useState(false);
@@ -118,14 +128,35 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
   // Someone whose turn has not come yet has no email and no link so far.
   const waiting = recipient.status === 'pending';
 
-  async function save() {
-    if (!f.name.trim()) return setError('Add their name.');
-    if (!looksLikeEmail(f.email.trim())) return setError('That email address is not complete. It should look like name@example.org.');
+  async function saveCode() {
     setBusy(true);
     setError('');
     try {
-      await api(`/envelopes/${envelopeId}/correct`, { body: { recipient_id: recipient.id, name: f.name.trim(), email: f.email.trim(), access_code: f.access_code } });
-      toast(!newAddress ? 'Updated. Their link still works.' : waiting ? 'Updated. They get the email when it is their turn.' : `Updated. A new email is on its way to ${f.email.trim()}.`);
+      await api(`/envelopes/${envelopeId}/correct`, { body: { recipient_id: recipient.id, access_code: f.access_code } });
+      toast(f.access_code.trim() ? 'Updated. Their link is the same. Give them the new code yourself.' : 'Updated. Their link now opens without a code.');
+      onDone();
+    } catch (e: any) {
+      setError(explain(e, 'Nothing was changed.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function save() {
+    if (codeOnly) return saveCode();
+    if (!f.name.trim()) return setError('Add their name.');
+    if (!looksLikeEmail(f.email.trim())) return setError('That email address is not complete. It should look like name@example.org.');
+    const trouble = checkTrouble({ ...check, role: recipient.role }, !!me.text_messages, f.name.trim());
+    if (trouble && (checkChanged || newAddress)) return setError(trouble);
+    setBusy(true);
+    setError('');
+    try {
+      // The check goes along when it was changed here, and when the address was: a number typed for one person is
+      // never used for another without the sender saying so.
+      const checks = checkChanged || newAddress ? { verify: check.verify, phone: String(check.phone || '').trim(), text_link: !!check.text_link } : {};
+      await api(`/envelopes/${envelopeId}/correct`, { body: { recipient_id: recipient.id, name: f.name.trim(), email: f.email.trim(), access_code: f.access_code, ...checks } });
+      const again = checkChanged && check.verify !== 'none' ? ' They are asked for a new one-time code.' : '';
+      toast(!newAddress ? `Updated. Their link still works.${again}` : waiting ? 'Updated. They get the email when it is their turn.' : `Updated. A new email is on its way to ${f.email.trim()}.`);
       onDone();
     } catch (e: any) {
       setError(explain(e, 'Nothing was changed.'));
@@ -136,15 +167,25 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
 
   return (
     <Dialog title={`Correct ${recipient.name || 'this recipient'}`} onClose={onClose}>
-      <p className="muted">Fix a typo or send it to a different address. Nothing is voided and nobody else is disturbed.</p>
+      <p className="muted">{codeOnly ? `The name and the address of ${recipient.name} can no longer be changed here. Their access code still can: it is not part of what was signed, and their link needs it to open the document or their copy of it.`
+        : 'Fix a typo, send it to a different address, or change how they are checked. Nothing is voided and nobody else is disturbed.'}</p>
       <form onSubmit={(e) => (e.preventDefault(), save())}>
-        <label className="f"><span>Name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoComplete="off" data-autofocus="" /></label>
-        <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoComplete="off" /></label>
-        <label className="f"><span>Access code <span className="hint">(optional, at least 4 characters, you give it to them yourself)</span></span><input value={f.access_code} onChange={(e) => setF({ ...f, access_code: e.target.value })} autoComplete="off" /></label>
+        {!codeOnly && <label className="f"><span>Name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoComplete="off" data-autofocus="" /></label>}
+        {!codeOnly && <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoComplete="off" /></label>}
+        <label className="f"><span>Access code <span className="hint">(optional, at least 4 characters, you give it to them yourself)</span></span><input value={f.access_code} onChange={(e) => setF({ ...f, access_code: e.target.value })} autoComplete="off" {...(codeOnly ? { 'data-autofocus': '' } : {})} /></label>
         {frozen && <div className="notice warn" style={{ marginBottom: 12 }}><b>This code is frozen.</b> It was entered wrongly too many times, so it opens nothing now. {f.access_code.trim() === recipient.access_code ? 'Type a different code here, save, and give the new one to them yourself.' : 'Saving the new code lets them in again. Give it to them yourself.'}</div>}
+        {!codeOnly && <fieldset className="sn-check-fix">
+          <legend>Checking who signs</legend>
+          {/* Someone using the link said the number is not theirs. Codes go out again once the number or the check changes. */}
+          {recipient.check?.stopped && !checkChanged && <p className="notice warn small" role="status" style={{ margin: 0 }}><b>They said this number is not theirs</b>, so we stopped sending codes to it. Put in the right number or choose another check, and save. Make sure first that you are dealing with the right person.</p>}
+          <CheckFields value={check} role={recipient.role} textsOn={!!me.text_messages} onChange={(p) => setCheck({ ...check, ...p })} />
+          {newAddress && !!was.phone && String(check.phone || '').trim() === was.phone && <p className="notice warn small" role="status" style={{ margin: 0 }}>This mobile number was typed for {recipient.name}. If the person at the new address has another number, change it here, or texts for them go to the wrong phone.</p>}
+        </fieldset>}
         <p className="small muted" aria-live="polite">
-          {waiting ? 'It is not their turn yet, so no email has gone out. They get it at the corrected address when their turn comes.'
+          {codeOnly ? 'Their link stays the same and no email is sent. Give the new code to them yourself.'
+            : waiting ? 'It is not their turn yet, so no email has gone out. They get it at the corrected address when their turn comes.'
             : newAddress ? 'Because the address changed, the old link stops working and a new email goes out to the new address.'
+            : f.name.trim() !== (recipient.name || '') ? 'The address is the same, so the link they already have keeps working. A spelling fix keeps what they filled in. If the new name is another person, whatever was filled in or signed under the old name is cleared, and they start with an empty document.'
             : 'The address is the same, so the link they already have keeps working and no new email is sent.'}
         </p>
         {error && <div className="notice err" role="alert">{error}</div>}

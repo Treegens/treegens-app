@@ -39,14 +39,14 @@ test('the consent text says what kind of signature this is and never that it equ
   assert.match(w.legal, /simple electronic signature/);
   assert.match(w.legal, /rules differ by country and by kind of document/);
   assert.match(w.legal, /handwritten, witnessed, notarised or qualified signature/);
-  assert.match(w.legal, /Sign&Grow does not check which kind this document is/);
+  assert.match(w.legal, /Sign&Grow does not know which kind this document is/);
   assert.match(w.legal, /ask Ada Sender or a lawyer before you sign/);
   // Need 16: the parties accept the method between themselves, in so many words.
   assert.match(w.legal, /you accept this electronic method as a valid way for you and the other parties to sign this document/);
   assert.match(w.practical, /ask Ada Sender for a paper copy instead/);
   assert.doesNotMatch(`${w.legal} ${w.practical} ${w.agree}`, PROMISES);
   // One paragraph each, and no em dash anywhere.
-  assert.doesNotMatch(`${w.legal}${w.practical}`, /\n|—/);
+  assert.doesNotMatch(`${w.legal}${w.practical}`, /\n|\u2014/);
 
   // Someone who approves or only reads is not told that they sign, or that they accept a way of signing.
   const reads = consentWording('Ada Sender', false);
@@ -74,7 +74,7 @@ test('the signing screen and the signature dialog show those words and nothing s
   assert.match(page, /<p className="muted sg-legal">\{wording\.legal\}<\/p>/);
   assert.match(page, /aria-describedby=\{formError \? 'sg-legal sg-agree-err' : 'sg-legal'\}/);
   assert.match(page, /<span>\{wording\.agree\}<\/span>/);
-  assert.match(page, /body: \{ version: version\.current, wording: wording\.version \}/);
+  assert.match(page, /body: \{ version: version\.current, wording: wording\.version[ ,}]/);
   assert.match(pad, /\{adoptLine\(word\)\}/);
   // Nothing else in the product makes the promise either: pages, components, emails, the README.
   for (const f of ['app/page.tsx', 'app/help/page.tsx', 'app/help/outside.tsx', 'app/security/page.tsx', 'server/mail.ts', 'server/pdf.ts', 'server/openapi.ts', 'components/sign/dialogs.tsx'])
@@ -94,7 +94,7 @@ test('the audit line for consent names the wording the signer was shown', async 
   assert.equal(r1.data.wording, CONSENT_VERSION);
   let lines = await consentLines(e1.id);
   assert.equal(lines.length, 1);
-  assert.equal(lines[0].detail, `Sam Signer. Wording ${CONSENT_VERSION}, as printed on the help page under "What you agree to before you sign".`);
+  assert.equal(lines[0].detail, `Sam Signer. Wording ${CONSENT_VERSION}, as printed on the help page under "What do I agree to before I sign?".`);
   // Agreeing twice writes one line, and the chain still holds.
   await s1.post(`/sign/${tokenFor(e1.id, 'wording1@example.com')}/consent`, { wording: CONSENT_VERSION });
   lines = await consentLines(e1.id);
@@ -110,7 +110,7 @@ test('the audit line for consent names the wording the signer was shown', async 
     const r = await new Client().call('POST', `/sign/${tokenFor(e.id, email)}/consent`, body);
     assert.equal(r.status, 200, JSON.stringify(body));
     const [line] = await consentLines(e.id);
-    assert.equal(line.detail, `Sam Signer. The screen did not say which wording it showed. The wording in use was ${CONSENT_VERSION}, as printed on the help page under "What you agree to before you sign".`);
+    assert.equal(line.detail, `Sam Signer. The screen did not say which wording it showed. The wording in use was ${CONSENT_VERSION}, as printed on the help page under "What do I agree to before I sign?".`);
   }
 
   // The help page prints the words under that heading, with the version, so the line can be read back by anyone.
@@ -121,13 +121,15 @@ test('the audit line for consent names the wording the signer was shown', async 
   assert.match(src('app/help/page.tsx'), /<ConsentWords \/>/);
 });
 
-test('no page promises a QR code, and every public page says which language signers are asked in', () => {
+test('a page promises a QR code only because the app draws one, and every public page says which language signers are asked in', () => {
   const landing = src('app/page.tsx');
-  assert.doesNotMatch(landing, /link or QR code/);
-  assert.match(landing, /turn the link into a QR code with a tool of your own: we do not make one yet/);
-  // Nothing in the app draws a QR code, so nothing may say it does.
-  for (const f of ['app/page.tsx', 'app/help/page.tsx', 'app/help/outside.tsx', 'app/security/page.tsx'])
-    assert.doesNotMatch(src(f), /(we|Sign&Grow) (make|makes|show|shows|give|gives) (you )?a QR/i, f);
+  // The landing page once promised "a public link or QR code" while nothing drew one, and then said to use a tool
+  // of your own. The app now makes the code itself (src/lib/qr.ts, held to the standard in tests/qr.test.ts), so the
+  // page says that, and the promise stands on code that exists.
+  assert.doesNotMatch(landing, /link or QR code|tool of your own|we do not make one yet/);
+  assert.match(landing, /print the QR code the app makes for it on a sheet/);
+  assert.match(src('lib/qr.ts'), /export function qrEncode\(/);
+  assert.match(src('app/app/powerforms/page.tsx'), /\/app\/powerforms\/\$\{p\.id\}\/qr/);
 
   assert.equal(LANGUAGE_NOTE, 'The signing screen and our emails are in English for now. Your document can be in any language.');
   assert.match(landing, /\$\{LANGUAGE_NOTE\}/);
@@ -139,7 +141,8 @@ test('no page promises a QR code, and every public page says which language sign
 test('the help page says what "fix my name" really does, and the server does exactly that', async () => {
   const help = src('app/help/page.tsx');
   assert.doesNotMatch(help, /<li>Fix the spelling of your own name\.<\/li>/);
-  assert.match(help, /A small one, such as a letter missing or two swapped, is corrected at once\./);
+  // Another engineer widens what counts as a small slip (a space, a hyphen), so only the frame of the sentence is pinned here.
+  assert.match(help, /A small one, such as a letter missing or two swapped[^.]* is corrected at once\./);
   assert.match(help, /it changes nothing and asks the sender, who can correct it for you/);
   assert.doesNotMatch(read('README.md'), /fix the spelling of\s+your own name, ask for more time/);
 
@@ -251,7 +254,7 @@ test('the check before sending finds the words that matter and leaves ordinary c
 
   // Every sentence the list can produce: plain, hedged, no promise and no em dash.
   for (const k of PAPER_KINDS) {
-    assert.doesNotMatch(`${k.a} ${k.why}`, /—/);
+    assert.doesNotMatch(`${k.a} ${k.why}`, /\u2014/);
     assert.doesNotMatch(k.why, PROMISES);
   }
   assert.match(PAPER_TAIL, /rules differ by country and by kind of document/);
@@ -260,6 +263,9 @@ test('the check before sending finds the words that matter and leaves ordinary c
   assert.equal(listed.length, PAPER_KINDS.length);
   assert.ok(listed.find((k) => k.a === 'a will')!.titleOnly.includes('will of'));
   assert.ok(listed.find((k) => k.a === 'a power of attorney')!.words.includes('power of attorney'));
+  // A stem is shown as one, so "befrist" is not taken for a word nobody writes.
+  assert.ok(listed.find((k) => /employment/.test(k.a))!.words.includes('befrist...'));
+  assert.ok(listed.find((k) => /employment/.test(k.a))!.titleOnly.includes('kündigung...'));
 });
 
 // A one-page PDF with the given lines as real text, uploaded as a sender would.
@@ -402,7 +408,7 @@ test('every country note is dated, hedged and rests on a source the research nam
       assert.equal(typeof s.official, 'boolean');
     }
     assert.doesNotMatch(n.text, PROMISES, n.id);
-    assert.doesNotMatch(n.text, /—|legally valid|is valid|are valid/, n.id);
+    assert.doesNotMatch(n.text, /\u2014|legally valid|is valid|are valid/, n.id);
   }
   // What the product does not provide is said in so many words where the research found people assume it does.
   const text = (id: string) => COUNTRY_NOTES.find((n) => n.id === id)!.text;

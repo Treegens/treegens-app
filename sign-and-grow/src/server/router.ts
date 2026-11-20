@@ -1,4 +1,4 @@
-import { authenticate, type Auth } from './auth.ts';
+import { authenticate, renewedCookie, type Auth } from './auth.ts';
 import { HttpError, bad, setOrigin, id } from './util.ts';
 import type { Actor } from './envelopes.ts';
 
@@ -72,10 +72,18 @@ const PERSON_ONLY: [RegExp, string][] = [
   [/^POST \/account\/transfer-owner$/, 'hand the account to another owner'],
   [/^DELETE \/account\/members\//, 'remove someone from the team'],
   [/^POST \/account\/leave$/, 'leave the team'],
+  // Which workspace a person works in, and lands in at their next sign-in, is chosen in a browser. A key belongs to
+  // one account and never moves.
+  [/^POST \/auth\/switch$/, 'switch to another workspace'],
   [/^POST \/me\/delete$/, 'close the account'],
   // Who can get into a login is its owner's business alone: connecting Google or Microsoft, disconnecting them,
   // asking for the link that sets a password, or reading which of them are connected.
   [/^[A-Z]+ \/me\/signin/, 'see or change the ways to sign in'],
+  // The address of a login is where its links and notices go: moving it, or saying that it works again, is for
+  // the person themselves (routes-bounces.ts).
+  [/^POST \/me\/email/, 'change the email address of a login, or say that it works again'],
+  // Which browsers a person is signed in on, and signing them out, is for that person in a browser of theirs.
+  [/^[A-Z]+ \/me\/sessions/, 'see or end where a person is signed in'],
   [/^(POST|PUT|PATCH|DELETE) \/billing\//, 'change the plan, pay or refund'],
   [/^[A-Z]+ \/operator\//, 'work the operator queue'],
 ];
@@ -101,6 +109,9 @@ export async function handle(req: Request): Promise<Response> {
       const m = r.re.exec(path);
       if (!m) continue;
       const auth = authenticate(req, r.level !== 'public');
+      // A browser that is used stays signed in: when this request moved the end of its session forward, the cookie
+      // goes out again with the new end. A handler that signs out or in pushes its own cookie after this one.
+      if (auth?.slid) cookies.push(renewedCookie(req, proto === 'https'));
       if (r.level !== 'public') {
         if (!auth) throw new HttpError(401, 'Please sign in.');
         if (r.level === 'admin' && auth.role !== 'owner' && auth.role !== 'admin') throw new HttpError(403, 'Only account admins can do that.');

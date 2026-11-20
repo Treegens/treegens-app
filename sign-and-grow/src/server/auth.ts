@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import { all, get, run } from './db.ts';
 import { sha256, token, now, HttpError } from './util.ts';
+import { SESSION_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
 
 export const SESSION_COOKIE = 'ts_session';
-const DAYS = 30;
+const DAYS = SESSION_DAYS;
 
 export function hashPassword(pw: string): string {
   const salt = crypto.randomBytes(16);
@@ -48,13 +49,33 @@ export function readCookie(req: Request, name: string): string | null {
 
 export function createSession(userId: string, accountId: string, secure: boolean): string {
   const t = token();
-  run('INSERT INTO sessions (id, user_id, account_id, expires_at) VALUES (?,?,?,?)', sha256(t), userId, accountId, new Date(Date.now() + DAYS * 864e5).toISOString());
+  // Signing in here adds a browser. It never signs another one out: each has a row of its own. Rows that ran out
+  // are cleared on the way, so the list under Settings is only what is still signed in.
+  run('DELETE FROM sessions WHERE user_id=? AND expires_at <= ?', userId, now());
+  run('INSERT INTO sessions (id, user_id, account_id, expires_at, created_at) VALUES (?,?,?,?,?)', sha256(t), userId, accountId, new Date(Date.now() + DAYS * 864e5).toISOString(), now());
   return cookie(SESSION_COOKIE, t, DAYS * 86400, secure);
 }
 
+// A browser that is used stays signed in. Each use moves the end of its session to SESSION_DAYS from now, so
+// someone who opens the app on their phone every week is never asked to sign in again, and a browser nobody uses
+// is signed out SESSION_DAYS after its last visit. To keep reading a page from writing to the database every time,
+// the use is written down at most once every SESSION_TOUCH_MINUTES, together with what the browser calls itself:
+// Settings shows both under "Where you are signed in". The end moves at most once a day. When it does, true comes
+// back and the router sends the cookie again (renewedCookie), because the browser forgets a cookie on the date it
+// was given with, whatever the database says.
+function touch(s: any, req: Request): boolean {
+  const t = Date.now();
+  if (t - (Date.parse(s.last_used_at || '') || 0) < SESSION_TOUCH_MINUTES * 60_000) return false;
+  const slide = Date.parse(s.expires_at) - t < (DAYS - 1) * 864e5;
+  run('UPDATE sessions SET last_used_at=?, ua=?, expires_at=? WHERE id=?', new Date(t).toISOString(), (req.headers.get('user-agent') || '').slice(0, 300) || null, slide ? new Date(t + DAYS * 864e5).toISOString() : s.expires_at, s.id);
+  return slide;
+}
+export const renewedCookie = (req: Request, secure: boolean): string => cookie(SESSION_COOKIE, readCookie(req, SESSION_COOKIE) || '', DAYS * 86400, secure);
+
 // A key's scope: 'send' does the everyday work, 'admin' may also change account settings. What each can reach is
 // decided in one place, router.ts.
-export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key'; sessionId?: string; scope?: 'send' | 'admin' };
+// slid: this request moved the end of the browser's session forward, so its cookie is to be sent again (see touch).
+export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key'; sessionId?: string; scope?: 'send' | 'admin'; slid?: boolean };
 
 const KEYS_PAGE = 'Settings, API and webhooks';
 
@@ -62,8 +83,8 @@ const KEYS_PAGE = 'Settings, API and webhooks';
 // that say which thing went wrong, because a program cannot act on "Please sign in." Without it, on public routes,
 // such a caller is simply nobody.
 export function authenticate(req: Request, required = false): Auth | null {
-  const refuse = (status: number, message: string): null => {
-    if (required) throw new HttpError(status, message);
+  const refuse = (status: number, message: string, data?: Record<string, any>): null => {
+    if (required) throw new HttpError(status, message, data);
     return null;
   };
   const header = (req.headers.get('authorization') || '').trim();
@@ -85,8 +106,11 @@ export function authenticate(req: Request, required = false): Auth | null {
   }
   const t = readCookie(req, SESSION_COOKIE);
   const s = t ? get('SELECT * FROM sessions WHERE id=? AND expires_at > ?', sha256(t), now()) : null;
+  // A browser that was handed to someone to sign in person opens nothing until its owner has typed their password
+  // (src/server/handover.ts). Until then it counts as nobody, and is not noted as used.
+  if (s?.locked_at) return refuse(401, 'This device was handed to someone to sign in person, so your account is locked in this browser. Open Sign&Grow here and type your password to come back.', { code: 'handed_over' });
   const m = s ? get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', s.account_id, s.user_id) : null;
-  if (m) return { user: get('SELECT * FROM users WHERE id=?', s.user_id), account: get('SELECT * FROM accounts WHERE id=?', s.account_id), role: m.role, via: 'session', sessionId: s.id };
+  if (m) return { user: get('SELECT * FROM users WHERE id=?', s.user_id), account: get('SELECT * FROM accounts WHERE id=?', s.account_id), role: m.role, via: 'session', sessionId: s.id, slid: touch(s, req) };
   // Something was sent in place of a key, but not in the form a key has.
   if (header) return refuse(401, `We could not read an API key from the Authorization header. Send it as "Authorization: Bearer tsk_..." with a key from ${KEYS_PAGE}.`);
   return null;

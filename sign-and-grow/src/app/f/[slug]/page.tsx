@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api, useLoad, Leaf } from '@/components/ui';
+import { QrOwnPhone } from '@/components/QrOwnPhone';
 
 export default function PowerForm() {
   const { slug } = useParams<{ slug: string }>();
@@ -43,6 +44,8 @@ export default function PowerForm() {
             <label className="f"><span>Your email <span className="hint">(we send your signed copy here)</span></span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoComplete="email" /></label>
             {msg && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{msg}</div>}
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{busy ? 'Preparing your document…' : 'Continue to sign'}</button>
+            {/* On a big screen (a tablet at a front desk): a code that opens this same form on the visitor's own phone. */}
+            <QrOwnPhone slug={slug} name={form.name} />
           </form>
         )}
       <p className="muted small center" style={{ marginTop: 14 }}>Powered by Sign&Grow, where every dollar plants mangrove trees. <a href="/help?topic=signing#contact">Something not working? Get help</a></p>

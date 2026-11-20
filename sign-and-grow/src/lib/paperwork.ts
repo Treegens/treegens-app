@@ -121,12 +121,17 @@ const finder = (word: string): RegExp => {
 };
 const COMPILED = PAPER_KINDS.map((k) => ({
   kind: k,
-  words: k.words.map((w) => (typeof w === 'string' ? { word: w } : w)).map((w) => ({ word: w.word.replace(/\*$/, ''), re: finder(w.word), title: !!(w as any).title, need: ((w as any).with as string[] | undefined)?.map(flat) })),
+  words: k.words.map((w) => (typeof w === 'string' ? { word: w } : w)).map((w) => ({ word: w.word.replace(/\*$/, ''), stem: w.word.endsWith('*'), re: finder(w.word), title: !!(w as any).title, need: ((w as any).with as string[] | undefined)?.map(flat) })),
 }));
 
-/** Every word the check looks for, by kind, for the help page: nobody should have to guess what sets it off. */
-export const paperWordList = (): { a: string; words: string[]; titleOnly: string[] }[] =>
-  COMPILED.map(({ kind, words }) => ({ a: kind.a, words: words.filter((w) => !w.title).map((w) => w.word), titleOnly: words.filter((w) => w.title).map((w) => w.word) }));
+/**
+ * Every word the check looks for, by kind, for the help page: nobody should have to guess what sets it off. A word
+ * that stands for every word beginning that way is printed with three dots after it ("befrist...").
+ */
+export const paperWordList = (): { a: string; words: string[]; titleOnly: string[] }[] => {
+  const shown = (w: { word: string; stem: boolean }) => (w.stem ? `${w.word}...` : w.word);
+  return COMPILED.map(({ kind, words }) => ({ a: kind.a, words: words.filter((w) => !w.title).map(shown), titleOnly: words.filter((w) => w.title).map(shown) }));
+};
 
 const whereText = (w: Pick<PaperWarning, 'where' | 'document'>): string =>
   w.where === 'subject' ? 'The subject' : w.where === 'document name' ? `The name of the document "${w.document}"` : `The text of "${w.document}"`;

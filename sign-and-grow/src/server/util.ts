@@ -25,6 +25,9 @@ const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const checkCode = () => Array.from(crypto.randomBytes(12), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
 // A shorter code from the same alphabet, for a reference a person reads out or types back, such as a help request.
 export const shortCode = (length = 8) => Array.from(crypto.randomBytes(length), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+// The same kind of code worked out from something that is already stored, for a record that was written without
+// one. It is the same every time for the same seed.
+export const codeFrom = (seed: string, length = 8) => Array.from(crypto.createHash('sha256').update(seed).digest().subarray(0, length), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
 export const fmtCode = (c: string) => c.replace(/(.{4})(?=.)/g, '$1-');
 export const parseCode = (s: any) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 export const isEmail = (s: any): s is string => typeof s === 'string' && s.length < 255 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);

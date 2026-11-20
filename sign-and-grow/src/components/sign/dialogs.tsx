@@ -4,7 +4,9 @@ import { api } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { Icon } from './parts';
 import { fieldName, isMulti, problemWith, type Item } from './fields';
-import { cannotPrintText } from '@/lib/scripts';
+import { CANNOT_PRINT_HEAD, CANNOT_PRINT_THEN, shownChars } from '@/lib/scripts';
+import { formatDateValue } from '@/lib/dates';
+import { NUMBER_HINT } from '@/lib/numbers';
 
 // Runs one request and keeps its error next to the form, where the person is looking.
 function useSend() {
@@ -255,7 +257,7 @@ function FixName({ name, onRename }: { name: string; onRename: (name: string) =>
         <button type="button" className="btn sm ghost" onClick={() => setOpen(false)}>Cancel</button>
       </div>
       {problem && <p className="sg-problem" role="alert">{problem}</p>}
-      <p className="muted small" style={{ margin: '6px 0 0' }}>This is for fixing how your name is spelled. The sender is told about the change and it is recorded in the audit trail. A different name is not changed here: the sender is asked instead.</p>
+      <p className="muted small" style={{ margin: '6px 0 0' }}>This is for fixing how your name is written: a letter, the spacing, a hyphen or a dot. The sender is told about the change and it is recorded in the audit trail. A name in another alphabet or script, or a different name, is not changed here: the sender is asked instead.</p>
     </div>
   );
 }
@@ -318,8 +320,9 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
       </p>
       {cannotPrint.length > 0 && (
         <div className="notice warn sg-problem sg-cannot-print" role="status">
-          <b>The signed PDF cannot print part of this.</b> {cannotPrintText([...new Set(cannotPrint.flatMap((p) => [...p.chars]))].join(''))}
-          <ul>{cannotPrint.map((p) => <li key={p.field_id || 'name'}>{p.label}: <bdi>{[...p.chars].slice(0, 12).join(' ')}</bdi></li>)}</ul>
+          <b>{CANNOT_PRINT_HEAD}</b>
+          <ul>{cannotPrint.map((p) => <li key={p.field_id || 'name'}>{p.label}: <bdi>{shownChars(p.chars)}</bdi></li>)}</ul>
+          {CANNOT_PRINT_THEN}{' '}
           {cannotPrint.some((p) => p.field_id) && 'To have an answer readable on the PDF, go back and add the same in Latin letters as well, for example in brackets after it. '}
           {cannotPrint.some((p) => !p.field_id) && `For your name, ask ${sender.name} to add it in Latin letters as well. They can change it without sending the document again. `}
           You can also finish as it is.
@@ -337,7 +340,7 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
 // ---- Typing on a phone -----------------------------------------------------------------------
 
 // Instead of typing into a box a few millimetres tall, the field opens here with room to see what you type.
-export function FieldSheet({ field, value, onChange, onDone, onNext }: { field: any; value: string; onChange: (v: string) => void; onDone: () => void; onNext?: () => void }) {
+export function FieldSheet({ field, value, dateFormat, onChange, onDone, onNext }: { field: any; value: string; dateFormat?: string | null; onChange: (v: string) => void; onDone: () => void; onNext?: () => void }) {
   const input = useRef<any>(null);
   const hint = useId();
   const name = fieldName(field);
@@ -366,7 +369,7 @@ export function FieldSheet({ field, value, onChange, onDone, onNext }: { field: 
         )}
         {problem
           ? <p id={hint} className="sg-sheet-hint bad" role="alert">{problem}</p>
-          : <p id={hint} className="sg-sheet-hint">{field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}</p>}
+          : <p id={hint} className="sg-sheet-hint">{field.type === 'date' && value ? `On the document this date is written as ${formatDateValue(value, dateFormat)}.` : field.type === 'number' ? `${NUMBER_HINT}${field.required ? '' : ' Optional.'}` : field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}</p>}
         <div className="actions">
           <button type="button" className={`btn${onNext ? '' : ' primary'}`} onClick={onDone}>Done</button>
           {onNext && <button className="btn primary">Next</button>}

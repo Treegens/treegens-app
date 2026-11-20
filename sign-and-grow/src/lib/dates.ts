@@ -5,6 +5,8 @@
 // It is used for the date of signing and for every date a signer types into a date field.
 export const DATE_FORMATS = ['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'D MMM YYYY', 'MMM D, YYYY'] as const;
 export type DateFormat = (typeof DATE_FORMATS)[number];
+/** The same formats in the order a picker lists them: the ones with the month as a word first, because nobody can misread them. */
+export const DATE_FORMAT_CHOICES: DateFormat[] = ['D MMM YYYY', 'MMM D, YYYY', 'YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY'];
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const pad = (n: number) => String(n).padStart(2, '0');

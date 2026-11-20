@@ -1,8 +1,8 @@
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
-import { bad, id, now, isEmail, str, rateLimit, baseUrl, shortCode, sha256, hmac, safeEqual, HttpError } from './util.ts';
+import { bad, id, now, isEmail, str, rateLimit, baseUrl, shortCode, codeFrom, sha256, hmac, safeEqual, parseCode, HttpError } from './util.ts';
 import { sendMail } from './mail.ts';
-import { loadEnvelope, helpAsked } from './envelopes.ts';
+import { loadEnvelope, helpAsked, canBeStuck } from './envelopes.ts';
 import { sameEmail } from './credits.ts';
 import { isOperator } from './routes-trust.ts';
 import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS } from '../lib/policy.ts';
@@ -45,8 +45,11 @@ const ALERT_NAME = 'Sign&Grow (automatic alert)';
 // and closes it. The form gives every request a reference and an alert has none, so typing this name into the form
 // does not turn a request into one.
 const isAlert = (t: any) => !t.ref && !t.user_id && t.name === ALERT_NAME;
-// A request from before references were kept has the one it was answered with then.
-const refOf = (t: any): string => t.ref || t.id.slice(-8).toUpperCase();
+// A request from before references were kept has the one it was answered with then. An alert is filed without a
+// reference (that is also how it is told from a request), so its reference is worked out from its id in the same
+// alphabet nobody can misread: the queue and "handed to you" emails never show a 0 next to an O, and it is the
+// same every time for the same alert.
+const refOf = (t: any): string => t.ref || (isAlert(t) ? codeFrom(`alert:${t.id}`) : t.id.slice(-8).toUpperCase());
 const priorityOf = (t: any): 'urgent' | 'normal' => (t.priority === 'urgent' || t.priority === 'normal' ? t.priority : !isAlert(t) && SUPPORT_URGENT_TOPICS.includes(t.topic) ? 'urgent' : 'normal');
 const hoursFor = (priority: string) => (priority === 'urgent' ? supportUrgentReplyHours() : supportFirstReplyHours());
 // The moment by which a person will have answered a message written now. Real hours. With nobody to reach, no time
@@ -214,6 +217,35 @@ async function acknowledge(t: any, extra: string[] = []) {
     cta: { label: 'Open my request', url: linkFor(t) }, ...PLAIN });
 }
 
+// ---- Which document a message is about -------------------------------------------------------------
+
+// The help link on the signing page and in every email about a document carries the security code of that
+// recipient's emails, the one people type into /check. It never carries the signing link's own secret, which would
+// end up in logs and browser histories as part of the help page's address. The code names one person on one
+// envelope, and whoever has it was sent that email, which is more than typing an address shows. A code whose link
+// has been replaced since (the sender corrected the address, or the document was passed on) still says which
+// envelope is meant and no more: `r` is empty then, and the address typed has to be on the envelope as before.
+function aboutCode(typed: any): { e: any; r: any | null } | null {
+  const code = parseCode(typed);
+  if (code.length !== 12) return null;
+  const live = get('SELECT id, envelope_id FROM recipients WHERE check_code=? AND token IS NOT NULL', code);
+  const old = live ? null : get('SELECT envelope_id FROM retired_tokens WHERE check_code=? AND envelope_id IS NOT NULL ORDER BY retired_at DESC LIMIT 1', code);
+  const e = live || old ? loadEnvelope((live || old).envelope_id) : null;
+  if (!e || e.kind !== 'envelope') return null;
+  return { e, r: live ? e.recipients.find((x: any) => x.id === live.id) || null : null };
+}
+
+// What the form shows the writer before they send: which document their message will be about, who sent it, and
+// whether its sender is told that they need help (tells_sender). It says no more than /check says to the same
+// code, and nothing at all for a code we do not know or one whose link has been replaced.
+route('POST', '/public/support/about', async (c) => {
+  rateLimit(`about:${c.ip}`, 40, 3600_000);
+  const hit = aboutCode((await c.body()).code);
+  // replaced: the code of an email we sent whose link was replaced since. /check says that much to the same code.
+  if (!hit?.r) return { known: false, ...(hit ? { replaced: true } : {}) };
+  return { known: true, subject: hit.e.subject, sender: get('SELECT name FROM users WHERE id=?', hit.e.sender_id)?.name || null, for_name: hit.r.name, tells_sender: canBeStuck(hit.e, hit.r) };
+}, 'public');
+
 // Open to everyone: signers, free users, former customers, and people who cannot log in.
 route('POST', '/public/support', async (c) => {
   rateLimit(`support:${c.ip}`, 8, 3600_000);
@@ -227,15 +259,20 @@ route('POST', '/public/support', async (c) => {
   if (fromAddress(email) >= SUPPORT_REPLIES_PER_ADDRESS) throw bad(TOO_MANY, 429);
   const topic = SUPPORT_TOPICS.includes(b.topic) ? b.topic : 'other';
   const known = !!c.user?.email_verified && sameEmail(email, c.user.email);
-  const t = openRequest({ email, name: str(b.name || c.user?.name, 120) || null, topic, message, envelope_id: str(b.envelope_id, 60) || null, user_id: c.user?.id ?? null, account_id: c.account?.id ?? null, verified: known, tz: knownZone(b.tz) || (known ? c.user.tz : null) });
+  // Which document it is about: the security code the help link of a signing page or a signing email carries, or
+  // else an envelope id. The request keeps the envelope's id either way, so the people who answer see it.
+  const coded = aboutCode(b.code);
+  const t = openRequest({ email, name: str(b.name || c.user?.name, 120) || null, topic, message, envelope_id: coded?.e.id || str(b.envelope_id, 60) || null, user_id: c.user?.id ?? null, account_id: c.account?.id ?? null, verified: known, tz: knownZone(b.tz) || (known ? c.user.tz : null) });
   await announce(t);
   await acknowledge(t);
-  // A problem with signing that names an envelope the writer is a recipient of also goes to its sender, who can
-  // usually fix it at once. The answer is the same whether or not the envelope and the address matched, so the form
-  // cannot be used to find out who is on a document.
-  const about = topic === 'signing' && b.envelope_id ? loadEnvelope(str(b.envelope_id, 60)) : null;
-  const signer = about?.recipients.find((r: any) => r.email && sameEmail(r.email, email));
-  if (signer) await helpAsked(about, signer, known ? message : null, { name: 'Sign&Grow help form', ip: c.ip, ua: c.ua });
+  // A problem with signing that names a document the writer is a recipient of also goes to its sender, who can
+  // usually fix it at once. The writer is on it when they hold the security code of the email we sent that
+  // recipient, or when the address they typed is on the envelope they named. The answer is the same whether or not
+  // anything matched, so the form cannot be used to find out who is on a document. The writer's words are passed on
+  // only from someone signed in under their own confirmed address, as before: the form says so before sending.
+  const about = topic !== 'signing' ? null : coded ? coded.e : b.envelope_id ? loadEnvelope(str(b.envelope_id, 60)) : null;
+  const signer = coded?.r || about?.recipients.find((r: any) => r.email && sameEmail(r.email, email));
+  if (about && signer) await helpAsked(about, signer, known ? message : null, { name: 'Sign&Grow help form', ip: c.ip, ua: c.ua }, !!coded?.r && !sameEmail(signer.email, email));
   // The private link is not in this answer. It goes to the mailbox only, because having it is what proves the
   // mailbox is yours.
   return { reference: refOf(t), priority: t.priority, due_at: t.due_at, reply_hours: t.due_at ? hoursFor(t.priority) : null };
@@ -400,9 +437,20 @@ route('GET', '/operator/support', (c) => {
   };
   const filter = FILTERS[c.q.get('filter') || ''] ? c.q.get('filter')! : 'open';
   const count = (f: string) => get(`SELECT COUNT(*) n FROM support_requests WHERE ${FILTERS[f][0]}`, ...FILTERS[f][1]).n;
+  // ?q= looks through every request, whatever the tab and whatever its state: the reference a customer reads out
+  // (with or without the dash people add), an address, a name, or words from the first message. An alert has no
+  // stored reference, so alerts are matched on the one worked out for them.
+  const q = str(c.q.get('q'), 100).trim();
+  const found = (): any[] => {
+    const like = `%${q.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
+    const code = parseCode(q);
+    const hits = all(`SELECT * FROM support_requests WHERE ref=? OR upper(substr(id, -8))=? OR lower(email) LIKE ? ESCAPE '\\' OR lower(COALESCE(name, '')) LIKE ? ESCAPE '\\' OR lower(message) LIKE ? ESCAPE '\\' ORDER BY ${ORDER} LIMIT 200`, code, q.toUpperCase(), like, like, like);
+    const alerts = code.length === 8 ? all('SELECT * FROM support_requests WHERE ref IS NULL AND user_id IS NULL AND name=?', ALERT_NAME).filter((t) => refOf(t) === code && !hits.some((h) => h.id === t.id)) : [];
+    return [...alerts, ...hits];
+  };
   return {
-    filter,
-    requests: all(`SELECT * FROM support_requests WHERE ${FILTERS[filter][0]} ORDER BY ${ORDER} LIMIT 200`, ...FILTERS[filter][1]).map((t) => forOperator(t)),
+    filter, q,
+    requests: (q ? found() : all(`SELECT * FROM support_requests WHERE ${FILTERS[filter][0]} ORDER BY ${ORDER} LIMIT 200`, ...FILTERS[filter][1])).map((t) => forOperator(t)),
     counts: { open: count('open'), mine: count('mine'), unowned: count('unowned'), waiting: count('waiting'), all: count('all'),
       late: get("SELECT COUNT(*) n FROM support_requests WHERE status='open' AND due_at IS NOT NULL AND due_at < ?", now()).n },
     operators: ops.map((o) => ({ id: o.id, name: o.name, me: o.id === c.user.id })),

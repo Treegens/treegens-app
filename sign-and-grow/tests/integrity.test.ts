@@ -679,14 +679,15 @@ test('a request that cannot be carried out in full is refused with the reason, n
   const ada = (await full(jo, e0.id)).envelope.recipients.find((r: any) => r.id === adaId);
   assert.deepEqual([ada.name, ada.email, ada.role, ada.routing_order, ada.status], ['Ada Signer', 'ada@example.com', 'signer', 1, 'completed']);
 
-  // With the sender's choice to have them sign again, a misspelled name can be put right after all.
+  // With the sender's choice to have them sign again, a misspelled name can be put right after all. (A spelling,
+  // not another person's name: that would start the request afresh for that person, see tests/signerux.test.ts.)
   const fix = await current(e0.id);
-  person(fix, 'ada@example.com').name = 'Ada Lovelace';
+  person(fix, 'ada@example.com').name = 'Ada Signor';
   assert.equal((await jo.put(`/envelopes/${e0.id}`, { ...fix, resign: true })).status, 200);
   const renamed = (await full(jo, e0.id)).envelope.recipients.find((r: any) => r.id === adaId);
-  assert.deepEqual([renamed.name, renamed.status], ['Ada Lovelace', 'sent']);
+  assert.deepEqual([renamed.name, renamed.status], ['Ada Signor', 'sent']);
   assert.match(mailTo('ada@example.com').at(-1)!.subject, /^Changed after you finished:/);
-  assert.match((await audits(e0.id, 'Envelope corrected')).at(-1)!, /Ada Lovelace <ada@example\.com>: name changed from "Ada Signer" to "Ada Lovelace"\. Ada Signer had already signed and is asked to sign again\./);
+  assert.match((await audits(e0.id, 'Envelope corrected')).at(-1)!, /Ada Signor <ada@example\.com>: name changed from "Ada Signer" to "Ada Signor"\. Ada Signer had already signed and is asked to sign again\./);
 });
 
 test('a finished signer is replaced or taken off only by that choice, and the signature they gave is set aside on record', async () => {
@@ -881,6 +882,9 @@ test('a new spelling of a name is a newer version: an open page cannot finish un
     assert.ok(plain(mail.html).includes(said), plain(mail.html));
     const fresh = (await s.c.get(`/sign/${s.tok}`)).data;
     assert.deepEqual([fresh.recipient.name, fresh.changed], [guarantor, said]);
+    // A name that reads like another person's starts the request afresh for that person (tests/signerux.test.ts),
+    // so they agree for themselves on the page that now shows it. Then they can finish.
+    assert.equal((await s.c.post(`/sign/${s.tok}/consent`)).status, 200);
     assert.equal((await s.finish({ version: fresh.version })).status, 200);
   };
 
@@ -1041,15 +1045,15 @@ test('every way an envelope changes counts as a newer version: a save from a cop
 
   copy = await editor();
   const mary = await open(e.id, 'mary.deputy@example.com');
-  assert.equal((await mary.c.post(`/sign/${mary.tok}/name`, { name: 'Marie Deputy' })).data.applied, true);
-  await refusedWith(copy, /^Mary Deputy corrected their name to "Marie Deputy" on /);
+  assert.equal((await mary.c.post(`/sign/${mary.tok}/name`, { name: 'Marry Deputy' })).data.applied, true);
+  await refusedWith(copy, /^Mary Deputy corrected their name to "Marry Deputy" on /);
 
   copy = await editor();
   assert.equal((await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, name: 'Benjamin Signer' })).status, 200);
   await refusedWith(copy, /^Jo Sender changed the name of Ben Signer to Benjamin Signer on /);
 
   // Nothing of it was undone, and a copy that is loaded now saves as always.
-  assert.deepEqual((await full(jo, e.id)).envelope.recipients.map((r: any) => `${r.name} <${r.email}>`), ['Marie Deputy <mary.deputy@example.com>', 'Benjamin Signer <ben.right@example.com>', 'Cee Copy <cee@example.com>']);
+  assert.deepEqual((await full(jo, e.id)).envelope.recipients.map((r: any) => `${r.name} <${r.email}>`), ['Marry Deputy <mary.deputy@example.com>', 'Benjamin Signer <ben.right@example.com>', 'Cee Copy <cee@example.com>']);
   const saved = await jo.put(`/envelopes/${e.id}`, await editor());
   assert.equal(saved.status, 200, JSON.stringify(saved.data));
   assert.deepEqual([saved.data.envelope.message, saved.data.envelope.edited_how], ['A small change', null]);

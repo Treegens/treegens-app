@@ -193,3 +193,606 @@ test('"automatic nudges" is true: a new account reminds every 3 days, says so, a
   assert.match(landing, /standing next to you\. \$\{IN_PERSON_ONLINE\}/);
   assert.match(policy.IN_PERSON_ONLINE, /needs an internet connection from opening the document to pressing Finish/);
 });
+
+// ---- D. What a bulk send holds, before the Send button ---------------------------------------------------
+
+// Signatures are only counted while a payment provider is connected. Nothing here pays or reaches the network.
+async function counting<T>(fn: () => Promise<T>): Promise<T> {
+  const was = process.env.STRIPE_SECRET_KEY;
+  process.env.STRIPE_SECRET_KEY = 'sk_test_gaps_industry';
+  try {
+    return await fn();
+  } finally {
+    if (was === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = was;
+  }
+}
+async function waiver(c: Client, recipients: any[]) {
+  const file = await upload(c, 1);
+  const r = await c.post('/envelopes', {
+    kind: 'template', subject: 'Offer letter', documents: [{ id: 'd', file_id: file.id }], recipients,
+    fields: recipients.filter((x) => x.role === 'signer').map((x) => ({ document_id: 'd', recipient_id: x.id, type: 'signature', page: 0, x: 0.1, y: 0.2 + 0.1 * recipients.indexOf(x), w: 0.3, h: 0.06 })),
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  return r.data.envelope;
+}
+const hires = (tag: string, count: number, role = 'Hire') => Array.from({ length: count }, (_, i) => ({ [role]: { name: `${tag} ${i + 1}`, email: `${tag}${i + 1}@example.com` } }));
+
+test('the bulk page is told what a batch holds, what is there, what is missing and what that costs, in the numbers the send is held to', async () => {
+  await counting(async () => {
+    const c = await signUp('Hana Hiring', 'hana-hiring@example.com', ip());
+    const me = (await c.get('/me')).data;
+    const tpl = await waiver(c, [{ id: 'r', role: 'signer', role_name: 'Hire' }, { id: 'me', role: 'signer', name: 'Hana Hiring', email: 'hana-hiring@example.com' }, { id: 'cc', role: 'cc', name: 'Files', email: 'files@example.com' }]);
+    const check = async (rows: any[]) => (await c.post('/bulk/check', { template_id: tpl.id, rows })).data;
+
+    // A list that fits: 2 of the 3 welcome signatures. The sender's own signature and the copy cost nothing.
+    const fits = await check(hires('fit', 2));
+    assert.deepEqual({ counted: fits.counted, rows: fits.rows, per: fits.signers_per_row, need: fits.need, have: fits.have, short: fits.short, cost: fits.cost, refusal: fits.refusal },
+      { counted: true, rows: 2, per: 1, need: 2, have: 3, short: 0, cost: null, refusal: null });
+
+    // The research's case: an offer letter to 40 people. On the free plan a top-up needs the monthly plan first.
+    const forty = await check(hires('forty', 40));
+    assert.equal(forty.need, 40);
+    assert.equal(forty.have, 3);
+    assert.equal(forty.short, 37);
+    assert.equal(forty.plan, 'seedling');
+    assert.deepEqual(forty.cost, { usd: 9 + 28, plan_usd: 9, plan_signatures: 9, top_up: 28, top_up_usd: 28 });
+    // The send itself answers with the same two numbers, and sends nothing.
+    const refused = await c.post('/bulk', { template_id: tpl.id, rows: hires('forty', 40) });
+    assert.equal(refused.status, 402);
+    assert.match(refused.data.error, /^This needs 40 signatures and you have 3 left\./);
+    assert.equal(mailTo('forty1@example.com').length, 0);
+    assert.equal(s.db.get('SELECT COUNT(*) n FROM bulk_batches WHERE account_id=?', me.account.id).n, 0);
+
+    // On the monthly plan the missing ones are a top-up at the price of one signature each.
+    s.db.run("UPDATE accounts SET plan='grove' WHERE id=?", me.account.id);
+    const onPlan = await check(hires('forty', 40));
+    assert.deepEqual(onPlan.cost, { usd: 37, plan_usd: 0, plan_signatures: 0, top_up: 37, top_up_usd: 37 });
+    s.db.run("UPDATE accounts SET plan='seedling' WHERE id=?", me.account.id);
+
+    // What is out counts: after a batch of 2 is sent, 2 are held and 1 is free to send with.
+    const sent = await c.post('/bulk', { template_id: tpl.id, rows: hires('fit', 2) });
+    assert.equal(sent.status, 200, JSON.stringify(sent.data));
+    assert.equal(sent.data.sent, 2);
+    const after = await check(hires('next', 2));
+    assert.equal(after.have, 1);
+    assert.equal(after.short, 1);
+    assert.deepEqual(after.cost, { usd: 9, plan_usd: 9, plan_signatures: 9, top_up: 0, top_up_usd: 0 }, 'one monthly payment covers a small gap');
+
+    // The daily limit on people newly emailed is said before the button as well, in the words of the refusal.
+    const many = hires('many', 60);
+    const over = await check(many);
+    assert.equal(over.refusal?.status, 429);
+    const sendOver = await c.post('/bulk', { template_id: tpl.id, rows: many });
+    assert.equal(sendOver.status, 429);
+    assert.equal(over.refusal.message, sendOver.data.error, 'the same sentence the send answers with');
+
+    // Asking sends nothing and writes nothing.
+    assert.equal(mailTo('many1@example.com').length + mailTo('next1@example.com').length, 0);
+    assert.equal(s.db.get('SELECT COUNT(*) n FROM bulk_batches WHERE account_id=?', me.account.id).n, 1);
+    // Somebody else's template is not theirs to ask about.
+    const other = await signUp('Otto Other', 'otto-other@example.com', ip());
+    assert.equal((await other.post('/bulk/check', { template_id: tpl.id, rows: hires('x', 1) })).status, 404);
+  });
+});
+
+test('the count is the server\'s: two signers on a row, and a client entered under the sender\'s own address, each hold a signature', async () => {
+  await counting(async () => {
+    const c = await signUp('Cleo Couples', 'cleo-couples@example.com', ip());
+    // Two open roles, and a client who has no address of their own and is entered under the sender's.
+    const tpl = await waiver(c, [{ id: 'a', role: 'signer', role_name: 'Buyer' }, { id: 'b', role: 'signer', role_name: 'Co-buyer' }, { id: 'k', role: 'signer', name: 'Grandpa Client', email: 'cleo-couples@example.com' }]);
+    const rows = [{ Buyer: { name: 'Bo Buyer', email: 'bo-buyer@example.com' }, 'Co-buyer': { name: 'Di Buyer', email: 'bo-buyer@example.com' } }];
+    const one = (await c.post('/bulk/check', { template_id: tpl.id, rows })).data;
+    assert.equal(one.signers_per_row, 3, 'both buyers and the client under the sender\'s address');
+    assert.equal(one.need, 3);
+    assert.equal(one.short, 0);
+    const two = (await c.post('/bulk/check', { template_id: tpl.id, rows: [...rows, ...rows] })).data;
+    assert.equal(two.need, 6);
+    assert.equal(two.short, 3);
+    assert.equal((await c.post('/bulk', { template_id: tpl.id, rows: [...rows, { Buyer: { name: 'Al Buyer', email: 'al-buyer@example.com' }, 'Co-buyer': { name: 'Em Buyer', email: 'em-buyer@example.com' } }] })).status, 402, 'and the send agrees');
+  });
+});
+
+test('with no payment provider nothing is counted, and the page that shows the count asks the server for it', async () => {
+  const c = await signUp('Nora Nocount', 'nora-nocount@example.com', ip());
+  const tpl = await waiver(c, [{ id: 'r', role: 'signer', role_name: 'Hire' }]);
+  const r = (await c.post('/bulk/check', { template_id: tpl.id, rows: hires('free', 20) })).data;
+  assert.equal(r.counted, false);
+  assert.equal(r.short, 0);
+  assert.equal(r.cost, null);
+
+  const page = read('src/app/app/bulk/page.tsx');
+  const cost = read('src/app/app/bulk/BatchCost.tsx');
+  assert.match(cost, /api<BatchCheck>\('\/bulk\/check'/, 'the numbers come from the server');
+  assert.ok(page.indexOf('<BatchCost check={check}') > 0 && page.indexOf('<BatchCost check={check}') < page.indexOf('onClick={() => setConfirming(ready)}'), 'and they stand before the Send button');
+  assert.match(page, /\{listOk && <BatchCost/, 'for every list, not only one that is too long');
+  assert.match(cost, /This batch holds \{plural\(c\.need, 'signature'\)\} and you have \{c\.have\} ready, so \{c\.short\}/);
+  assert.match(cost, /Top up \{plural\(c\.short, 'signature'\)\} for \{usd\(cost\.top_up_usd\)\}/);
+  assert.match(page, /batchLine\(check\)/, 'and the confirm dialog says it once more');
+});
+
+// ---- E. Two signers finishing at the same moment ----------------------------------------------------------
+
+// A couple signing side by side, each on their own device: both save and both press Finish in the same instant.
+// Nothing either of them did may be lost, and the envelope is completed exactly once.
+async function finishTogether(tag: string, emails: [string, string]) {
+  const c = await signUp(`Rhea ${tag}`, `rhea-${tag}@example.com`, ip());
+  const file = await upload(c, 1);
+  const people = [{ id: 'a', name: `Ana ${tag}`, email: emails[0] }, { id: 'b', name: `Bob ${tag}`, email: emails[1] }];
+  const made = await c.post('/envelopes', {
+    subject: `Purchase agreement ${tag}`, ordered: false, documents: [{ id: 'd', file_id: file.id, name: 'Agreement' }],
+    recipients: people.map((p) => ({ ...p, role: 'signer' })),
+    fields: people.flatMap((p, i) => [
+      { id: `sig-${p.id}`, document_id: 'd', recipient_id: p.id, type: 'signature', page: 0, x: 0.1, y: 0.2 + i * 0.3, w: 0.3, h: 0.06 },
+      { id: `ini-${p.id}`, document_id: 'd', recipient_id: p.id, type: 'initials', page: 0, x: 0.5, y: 0.2 + i * 0.3, w: 0.1, h: 0.05 },
+      { id: `txt-${p.id}`, document_id: 'd', recipient_id: p.id, type: 'text', label: `Address of ${p.name}`, page: 0, x: 0.1, y: 0.3 + i * 0.3, w: 0.5, h: 0.03 },
+      { id: `chk-${p.id}`, document_id: 'd', recipient_id: p.id, type: 'checkbox', label: 'I have read it', page: 0, x: 0.1, y: 0.36 + i * 0.3, w: 0.03, h: 0.02 },
+    ]),
+    send: true,
+  });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const e = made.data.envelope;
+  const rcp = (name: string) => e.recipients.find((r: any) => r.name === name);
+  const fieldsOf = (r: any) => Object.fromEntries(e.fields.filter((f: any) => f.recipient_id === r.id).map((f: any) => [f.type, f.id]));
+  // Each on a device of their own: separate cookies, separate addresses on the network.
+  const signers = people.map((p, i) => {
+    const r = rcp(p.name);
+    const client = new Client();
+    client.ip = `192.0.2.${100 + i}`;
+    const f = fieldsOf(r);
+    return { p, r, client, token: s.db.get('SELECT token FROM recipients WHERE id=?', r.id).token as string, values: { [f.signature]: '1', [f.initials]: '1', [f.text]: `${p.name} lives at ${i + 1} Mangrove Lane`, [f.checkbox]: '1' }, f };
+  });
+  assert.notEqual(signers[0].token, signers[1].token, 'each has a link of their own, also at one address');
+  for (const x of signers) {
+    assert.equal((await x.client.get(`/sign/${x.token}`)).status, 200);
+    assert.equal((await x.client.post(`/sign/${x.token}/consent`)).status, 200);
+  }
+  // Both save what they typed in the same instant, then both press Finish in the same instant.
+  const saves = await Promise.all(signers.map((x) => x.client.post(`/sign/${x.token}/save`, { values: x.values, signature_png: PNG, initials_png: PNG })));
+  assert.deepEqual(saves.map((r) => r.status), [200, 200], JSON.stringify(saves.map((r) => r.data)));
+  const done = await Promise.all(signers.map((x) => x.client.post(`/sign/${x.token}/complete`, { values: x.values, signature_png: PNG, initials_png: PNG })));
+  assert.deepEqual(done.map((r) => r.status), [200, 200], JSON.stringify(done.map((r) => r.data)));
+
+  const after = (await c.get(`/envelopes/${e.id}`)).data;
+  assert.equal(after.envelope.status, 'completed');
+  for (const x of signers) {
+    const row = s.db.get('SELECT status, signature_png, initials_png, completed_at FROM recipients WHERE id=?', x.r.id);
+    assert.equal(row.status, 'completed', `${x.p.name} is recorded as finished`);
+    assert.equal(row.signature_png, PNG, `the signature of ${x.p.name} is kept`);
+    assert.equal(row.initials_png, PNG, `the initials of ${x.p.name} are kept`);
+    const kept = Object.fromEntries(s.db.all('SELECT id, value FROM fields WHERE recipient_id=?', x.r.id).map((f: any) => [f.id, f.value]));
+    assert.equal(kept[x.f.text], x.values[x.f.text], `what ${x.p.name} typed is kept`);
+    assert.equal(kept[x.f.checkbox], '1');
+    assert.equal(kept[x.f.signature], '1');
+    assert.equal(kept[x.f.initials], '1');
+  }
+  // The record: each person signed once, the envelope was completed once, and nothing in the chain is out of place.
+  const trail = after.audit as any[];
+  assert.equal(trail.filter((a) => a.action === 'Signed').length, 2);
+  assert.deepEqual(trail.filter((a) => a.action === 'Signed').map((a) => a.detail).sort(), signers.map((x) => `${x.p.name} <${x.p.email}>`).sort());
+  assert.equal(trail.filter((a) => a.action === 'Envelope completed').length, 1, 'completed once');
+  assert.equal(after.chain.ok, true, 'the audit chain is intact');
+  assert.equal(new Set(trail.map((a) => a.seq)).size, trail.length, 'no line of it carries a number twice');
+  assert.deepEqual(trail.map((a) => a.seq), [...trail.map((a) => a.seq)].sort((x, y) => x - y), 'and the lines stand in the order they were written');
+  for (let i = 1; i < trail.length; i++) assert.equal(trail[i].prev_hash, trail[i - 1].hash, 'each line is chained to the one before it');
+  // The signed copy was built once, and holds what both of them typed.
+  const sha = s.db.get('SELECT final_sha256 h FROM envelopes WHERE id=?', e.id).h;
+  assert.match(sha, /^[0-9a-f]{64}$/);
+  const pdf = await c.get(`/envelopes/${e.id}/download`);
+  assert.equal(pdf.status, 200);
+  const { extractPages } = await import('../src/server/text.ts');
+  const text = (await extractPages(pdf.data)).join(' ').replace(/\s+/g, ' ');
+  for (const x of signers) assert.ok(text.includes(x.values[x.f.text]), `the signed PDF prints what ${x.p.name} typed`);
+  return { e, signers, sender: c };
+}
+
+test('two signers of one envelope finish at the same moment on two addresses, and nothing of either is lost', async () => {
+  const { e, signers, sender } = await finishTogether('twoaddr', ['ana-twoaddr@example.com', 'bob-twoaddr@example.com']);
+  // Each gets one completion email, with their own link.
+  for (const x of signers) {
+    const mails = mailTo(x.p.email).filter((m) => m.subject.startsWith('Completed: '));
+    assert.equal(mails.length, 1, `${x.p.name} gets one completion email`);
+    assert.ok(mails[0].link.endsWith(`/sign/${x.token}`), 'with their own link');
+  }
+  assert.equal(mailTo('rhea-twoaddr@example.com').filter((m) => m.subject.startsWith('Completed: ')).length, 1, 'and the sender is told once');
+  assert.equal(e.recipients.length, 2);
+  assert.equal((await sender.get(`/envelopes/${e.id}`)).data.envelope.recipients.every((r: any) => r.status === 'completed'), true);
+});
+
+test('two people who share one email address finish at the same moment, each with their own link, signature and copy', async () => {
+  const { signers } = await finishTogether('shared', ['family-shared@example.com', 'family-shared@example.com']);
+  const mails = mailTo('family-shared@example.com').filter((m) => m.subject.startsWith('Completed: '));
+  assert.equal(mails.length, 2, 'one completion email for each of them, at the one address');
+  assert.deepEqual(mails.map((m) => m.link.split('/sign/')[1]).sort(), signers.map((x) => x.token).sort(), 'each with that person\'s own link');
+  for (const x of signers) assert.ok(mails.some((m) => m.html.includes(`For ${x.p.name}`)), `one of them says it is for ${x.p.name}`);
+});
+
+test('when signatures are counted, two people finishing together use one each: never two for one, never one for two', async () => {
+  await counting(async () => {
+    const { e, signers } = await finishTogether('ledger', ['ana-ledger@example.com', 'ana-ledger@example.com']);
+    const used = s.db.all("SELECT ref, delta FROM credits WHERE account_id=? AND reason='signature' ORDER BY ref", e.account_id ?? s.db.get('SELECT account_id a FROM envelopes WHERE id=?', e.id).a);
+    assert.equal(used.length, 2);
+    assert.deepEqual(used.map((u: any) => u.delta), [-1, -1]);
+    assert.deepEqual(used.map((u: any) => u.ref).sort(), signers.map((x) => `${x.r.id}|${x.p.email}`).sort());
+    const acct = s.db.get('SELECT account_id a FROM envelopes WHERE id=?', e.id).a;
+    assert.equal(s.db.get('SELECT COALESCE(SUM(delta),0) n FROM credits WHERE account_id=?', acct).n, 1, '3 to start with, 2 used');
+  });
+});
+
+test('a late autosave from one of them that crosses both Finish requests changes nothing that was signed', async () => {
+  const c = await signUp('Rhea Crossing', 'rhea-crossing@example.com', ip());
+  const file = await upload(c, 1);
+  const made = await c.post('/envelopes', {
+    subject: 'Listing agreement', ordered: false, documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'a', role: 'signer', name: 'Ana Crossing', email: 'ana-crossing@example.com' }, { id: 'b', role: 'signer', name: 'Bob Crossing', email: 'bob-crossing@example.com' }],
+    fields: ['a', 'b'].flatMap((p, i) => [
+      { id: `sig-${p}`, document_id: 'd', recipient_id: p, type: 'signature', page: 0, x: 0.1, y: 0.2 + i * 0.3, w: 0.3, h: 0.06 },
+      { id: `txt-${p}`, document_id: 'd', recipient_id: p, type: 'text', label: 'Price', page: 0, x: 0.1, y: 0.3 + i * 0.3, w: 0.5, h: 0.03 },
+    ]),
+    send: true,
+  });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const e = made.data.envelope;
+  const who = (email: string) => {
+    const r = e.recipients.find((x: any) => x.email === email);
+    const f = Object.fromEntries(e.fields.filter((x: any) => x.recipient_id === r.id).map((x: any) => [x.type, x.id]));
+    return { r, f, token: tokenFor(e.id, email), client: new Client() };
+  };
+  const ana = who('ana-crossing@example.com'), bob = who('bob-crossing@example.com');
+  for (const x of [ana, bob]) await x.client.post(`/sign/${x.token}/consent`);
+  const finish = (x: any, price: string) => x.client.post(`/sign/${x.token}/complete`, { values: { [x.f.signature]: '1', [x.f.text]: price }, signature_png: PNG });
+  const autosave = (x: any, price: string) => x.client.post(`/sign/${x.token}/save`, { values: { [x.f.signature]: '', [x.f.text]: price } });
+  // Ana's page saves an older answer (and an empty signature) just as she presses Finish. Bob's does the same.
+  const [aDone, aLate, bDone, bLate] = await Promise.all([finish(ana, '410,000'), autosave(ana, '400,000'), finish(bob, '410,000'), autosave(bob, '')]);
+  assert.equal(aDone.status, 200, JSON.stringify(aDone.data));
+  assert.equal(bDone.status, 200, JSON.stringify(bDone.data));
+  for (const late of [aLate, bLate]) assert.notEqual(late.status, 200, 'the save that came second is refused');
+  for (const x of [ana, bob]) {
+    const kept = Object.fromEntries(s.db.all('SELECT id, value FROM fields WHERE recipient_id=?', x.r.id).map((f: any) => [f.id, f.value]));
+    assert.equal(kept[x.f.text], '410,000', 'what was signed stands');
+    assert.equal(kept[x.f.signature], '1');
+    assert.equal(s.db.get('SELECT signature_png p FROM recipients WHERE id=?', x.r.id).p, PNG);
+  }
+  assert.equal((await c.get(`/envelopes/${e.id}`)).data.envelope.status, 'completed');
+});
+
+// ---- F. Filled everything in, never pressed Finish ------------------------------------------------------
+
+test('the sender is shown who filled in everything but has not pressed Finish, and the reminder to that person says one button is left', async () => {
+  const c = await signUp('Faye Finish', 'faye-finish@example.com', ip());
+  const file = await upload(c, 1);
+  const made = await c.post('/envelopes', {
+    subject: 'Seller disclosure', ordered: false, documents: [{ id: 'd', file_id: file.id }],
+    recipients: [
+      { id: 'a', role: 'signer', name: 'Abe Almost', email: 'abe-almost@example.com' },
+      { id: 'h', role: 'signer', name: 'Hal Halfway', email: 'hal-halfway@example.com' },
+      { id: 'o', role: 'signer', name: 'Opal Optional', email: 'opal-optional@example.com' },
+      { id: 'v', role: 'approver', name: 'Vera Approver', email: 'vera-approver@example.com' },
+    ],
+    fields: [
+      ...['a', 'h'].flatMap((p, i) => [
+        { id: `sig-${p}`, document_id: 'd', recipient_id: p, type: 'signature', page: 0, x: 0.1, y: 0.1 + i * 0.25, w: 0.3, h: 0.06 },
+        { id: `txt-${p}`, document_id: 'd', recipient_id: p, type: 'text', label: 'Year built', page: 0, x: 0.1, y: 0.18 + i * 0.25, w: 0.3, h: 0.03 },
+        { id: `yes-${p}`, document_id: 'd', recipient_id: p, type: 'radio', group_name: 'Flooded', label: 'Yes', page: 0, x: 0.5, y: 0.1 + i * 0.25, w: 0.03, h: 0.02 },
+        { id: `no-${p}`, document_id: 'd', recipient_id: p, type: 'radio', group_name: 'Flooded', label: 'No', page: 0, x: 0.6, y: 0.1 + i * 0.25, w: 0.03, h: 0.02 },
+        { id: `opt-${p}`, document_id: 'd', recipient_id: p, type: 'text', label: 'Anything else', required: false, page: 0, x: 0.5, y: 0.18 + i * 0.25, w: 0.3, h: 0.03 },
+      ]),
+      { id: 'opt-o', document_id: 'd', recipient_id: 'o', type: 'checkbox', label: 'Send me news', required: false, page: 0, x: 0.1, y: 0.7, w: 0.03, h: 0.02 },
+    ],
+    send: true,
+  });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const e = made.data.envelope;
+  const person = (email: string) => {
+    const r = e.recipients.find((x: any) => x.email === email);
+    const f = Object.fromEntries(e.fields.filter((x: any) => x.recipient_id === r.id).map((x: any) => [`${x.type}:${x.label || ''}`, x.id]));
+    return { r, f, token: tokenFor(e.id, email), client: new Client() };
+  };
+  const abe = person('abe-almost@example.com'), hal = person('hal-halfway@example.com'), opal = person('opal-optional@example.com'), vera = person('vera-approver@example.com');
+  const progress = async (x: any) => (await c.get(`/envelopes/${e.id}`)).data.envelope.recipients.find((r: any) => r.id === x.r.id).progress;
+  const open = async (x: any) => {
+    assert.equal((await x.client.get(`/sign/${x.token}`)).status, 200);
+    assert.equal((await x.client.post(`/sign/${x.token}/consent`)).status, 200);
+  };
+
+  // Nobody has opened anything: nobody is "ready".
+  assert.equal((await progress(abe)).ready, false);
+  for (const x of [abe, hal, opal, vera]) await open(x);
+  assert.deepEqual(await progress(abe), { fields: 4, filled: 0, required_left: 3, ready: false }, 'opened, nothing filled in');
+
+  // Abe fills in everything that is required, his signature included, and closes the tab. The page saved as he went.
+  const all = { [abe.f['signature:']]: '1', [abe.f['text:Year built']]: '1987', [abe.f['radio:No']]: '1' };
+  assert.equal((await abe.client.post(`/sign/${abe.token}/save`, { values: all, signature_png: PNG })).status, 200);
+  assert.deepEqual(await progress(abe), { fields: 4, filled: 3, required_left: 0, ready: true }, 'everything required is in, and the optional field does not matter');
+  // Hal stops half way. Opal has nothing required. Vera approves and has no fields. None of them is "ready".
+  assert.equal((await hal.client.post(`/sign/${hal.token}/save`, { values: { [hal.f['text:Year built']]: '2001' } })).status, 200);
+  assert.equal((await progress(hal)).ready, false);
+  assert.equal((await progress(hal)).required_left, 2);
+  assert.equal((await opal.client.post(`/sign/${opal.token}/save`, { values: { [opal.f['checkbox:Send me news']]: '1' } })).status, 200);
+  assert.equal((await progress(opal)).ready, false, 'with nothing required there is no "everything" to have filled in');
+  assert.equal((await progress(vera)).ready, false);
+  assert.equal(s.db.get('SELECT status FROM recipients WHERE id=?', abe.r.id).status, 'viewed', 'and Abe has not signed: saving is not finishing');
+
+  // The reminder to Abe says that one button is left. The one to Hal does not.
+  const nudge = (x: any) => c.post(`/envelopes/${e.id}/remind`, { recipient_id: x.r.id });
+  assert.equal((await nudge(abe)).data.reminded, 1);
+  assert.equal((await nudge(hal)).data.reminded, 1);
+  const reminderTo = (email: string) => mailTo(email).filter((m) => m.subject === 'Reminder: Seller disclosure').at(-1)!;
+  assert.match(reminderTo('abe-almost@example.com').html, /You filled in everything, and what you filled in is saved\. One step is left: open the document and press Finish\. Until you do, it is not signed and Faye Finish has not received it\./);
+  assert.doesNotMatch(reminderTo('hal-halfway@example.com').html, /You filled in everything/);
+  // The automatic reminder, three days on, says the same without anybody pressing anything.
+  s.db.run('UPDATE envelopes SET sent_at=?, last_reminder_at=? WHERE id=?', days(3.1), days(3.1), e.id);
+  const before = mailTo('abe-almost@example.com').length;
+  await s.env.cronTick();
+  const auto = mailTo('abe-almost@example.com');
+  assert.equal(auto.length, before + 1);
+  assert.match(auto.at(-1)!.html, /One step is left: open the document and press Finish/);
+
+  // Once he changes an answer so that something required is empty again, it is no longer said.
+  assert.equal((await abe.client.post(`/sign/${abe.token}/save`, { values: { ...all, [abe.f['text:Year built']]: '' } })).status, 200);
+  assert.equal((await progress(abe)).ready, false);
+  assert.equal((await abe.client.post(`/sign/${abe.token}/save`, { values: all })).status, 200);
+  // And once he presses Finish it is over.
+  assert.equal((await abe.client.post(`/sign/${abe.token}/complete`, { values: all, signature_png: PNG })).status, 200);
+  assert.equal((await progress(abe)).ready, false);
+  assert.equal(s.db.get('SELECT status FROM recipients WHERE id=?', abe.r.id).status, 'completed');
+});
+
+test('the screens say it: the step before Finish opens by itself, and the envelope page names who has not pressed it', () => {
+  const page = read('src/app/sign/[token]/page.tsx');
+  assert.match(page, /useAutoReview\(stage === 'sign' && acts && required\.length > 0 && left\.length === 0 && allShown/, 'the first time nothing required is left');
+  assert.match(page, /, pressFinish\);/, 'it opens the same step the Finish button opens');
+  const hook = read('src/components/sign/autoReview.ts');
+  assert.match(hook, /if \(!ready \|\| shown\.current\) return;/, 'once for each visit');
+  assert.match(hook, /at\.addEventListener\('blur', done, \{ once: true \}\)/, 'never while someone is still typing in a field');
+  assert.match(hook, /panel\.focus\(\{ preventScroll: true \}\)/, 'and the focus does not land on the button that signs');
+  const people = read('src/components/sender/Recipients.tsx');
+  assert.match(people, /r\.progress\?\.ready\) return \{ s: 'expired', label: 'Filled in, not finished' \}/);
+  assert.match(people, /<b>Filled in everything but has not pressed Finish\.<\/b>/);
+  assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /id="sn-almost">.*filled in everything but .* not pressed Finish/);
+});
+
+// ---- G. Finding one template among many ---------------------------------------------------------------
+
+test('templates can be searched by any words of their name, role, folder or document, filtered by folder and moved', async () => {
+  const owner = await signUp('Tess Templates', 'tess-templates@example.com', ip());
+  assert.equal((await owner.post('/account/invites', { email: 'mo-member@example.com', role: 'member' })).status, 200);
+  const invite = s.db.get('SELECT token FROM invites WHERE email=?', 'mo-member@example.com').token;
+  const member = new Client();
+  member.ip = ip();
+  assert.equal((await member.post('/auth/signup', { name: 'Mo Member', email: 'mo-member@example.com', password: 'correct horse battery', invite })).status, 200);
+
+  const make = async (c: Client, subject: string, role: string) => {
+    const file = await upload(c, 1);
+    const r = await c.post('/envelopes', { kind: 'template', subject, documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: role }], fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    return r.data.envelope;
+  };
+  const texas = await make(owner, 'Texas, conditional waiver, progress payment', 'Subcontractor');
+  const texasFinal = await make(owner, 'Texas, unconditional waiver, final payment', 'Subcontractor');
+  const ohio = await make(owner, 'Ohio, conditional waiver, progress payment', 'Supplier');
+  const members = await make(member, 'Change order', 'Homeowner');
+  const find = async (c: Client, q = '', folder = '') => (await c.get(`/envelopes?kind=template&q=${encodeURIComponent(q)}&folder=${encodeURIComponent(folder)}&limit=200`)).data;
+  const names = (d: any) => d.envelopes.map((e: any) => e.subject).sort();
+
+  // One search away: the words in any order, with whatever stands between them.
+  assert.deepEqual(names(await find(owner, 'texas progress')), ['Texas, conditional waiver, progress payment']);
+  assert.deepEqual(names(await find(owner, 'progress conditional')), ['Ohio, conditional waiver, progress payment', 'Texas, conditional waiver, progress payment']);
+  assert.deepEqual(names(await find(owner, 'TEXAS')), ['Texas, conditional waiver, progress payment', 'Texas, unconditional waiver, final payment']);
+  assert.deepEqual(names(await find(owner, 'supplier')), ['Ohio, conditional waiver, progress payment'], 'by the name of a role');
+  assert.deepEqual(names(await find(owner, 'agreement page')), names(await find(owner)), 'by the words inside the document');
+  assert.deepEqual(names(await find(owner, 'texas nowhere')), [], 'every word has to be found');
+  assert.equal((await find(owner, texas.id)).envelopes[0].id, texas.id, 'and by its id');
+  assert.equal((await find(owner)).envelopes.length, 4, 'templates are the team\'s: the member\'s is listed too');
+
+  // Folders: one for each state. Moving is a change, so it is for the person a template belongs to and for admins.
+  assert.equal((await owner.call('PATCH', `/envelopes/${texas.id}`, { folder: 'Texas' })).status, 200);
+  assert.equal((await owner.call('PATCH', `/envelopes/${texasFinal.id}`, { folder: ' Texas ' })).status, 200);
+  assert.equal((await owner.call('PATCH', `/envelopes/${ohio.id}`, { folder: 'Ohio' })).status, 200);
+  assert.equal((await member.call('PATCH', `/envelopes/${ohio.id}`, { folder: 'Mine' })).status, 403, 'a member does not move a colleague\'s template');
+  assert.equal((await member.call('PATCH', `/envelopes/${members.id}`, { folder: 'Change orders' })).status, 200, 'and moves their own');
+  assert.equal((await owner.call('PATCH', `/envelopes/${members.id}`, { folder: 'Change orders' })).status, 200, 'an admin moves anybody\'s');
+  const all = await find(member);
+  assert.deepEqual([...all.folders].sort(), ['Change orders', 'Ohio', 'Texas'], 'the folders of templates are shared with the team');
+  assert.deepEqual(names(await find(member, '', 'Texas')), ['Texas, conditional waiver, progress payment', 'Texas, unconditional waiver, final payment']);
+  assert.deepEqual(names(await find(member, 'final', 'Texas')), ['Texas, unconditional waiver, final payment'], 'search inside a folder');
+  assert.deepEqual(names(await find(member, 'ohio')), ['Ohio, conditional waiver, progress payment'], 'the name of a folder is searched too');
+  assert.equal(all.envelopes.find((e: any) => e.id === ohio.id).may_change, false);
+  assert.equal(all.envelopes.find((e: any) => e.id === members.id).may_change, true);
+  // Out of its folder again, and a folder with nothing left in it is gone.
+  assert.equal((await owner.call('PATCH', `/envelopes/${ohio.id}`, { folder: '' })).status, 200);
+  assert.deepEqual([...(await find(owner)).folders].sort(), ['Change orders', 'Texas']);
+  // Folders of templates and folders of envelopes are two lists: an envelope's folder does not show up here.
+  const e = await simple(owner, 'client-of-tess@example.com');
+  assert.equal((await owner.call('PATCH', `/envelopes/${e.id}`, { folder: 'Clients 2026' })).status, 200);
+  assert.deepEqual([...(await find(owner)).folders].sort(), ['Change orders', 'Texas']);
+  // The envelope list is searched the same way: every word, in any order.
+  const env = (await owner.get(`/envelopes?q=${encodeURIComponent('agreement simple')}`)).data.envelopes;
+  assert.deepEqual(env.map((x: any) => x.id), [e.id]);
+
+  const page = read('src/app/app/templates/page.tsx');
+  assert.match(page, /aria-label="Search templates"/);
+  assert.match(page, /\/envelopes\?kind=template&q=\$\{encodeURIComponent\(view\.q\)\}&folder=\$\{encodeURIComponent\(view\.folder\)\}/, 'the page asks the server, so a search reaches every template and not only the ones on screen');
+  assert.match(page, /aria-label="Folder"/);
+  assert.match(page, /aria-label=\{`Move \$\{name\} to a folder`\}/);
+  assert.match(page, /t\.may_change !== false && <button className="btn sm ghost" onClick=\{\(\) => setMoving\(t\)\}/, 'Move is offered to those who may');
+});
+
+// ---- H. Striking out wording --------------------------------------------------------------------------
+
+// Every straight line stroked on a page of a PDF, as [x1, y1, x2, y2] in points from the bottom left corner.
+async function strokedLines(bytes: Uint8Array, pageIndex: number): Promise<number[][]> {
+  const { PDFDocument, PDFName, PDFArray, PDFRawStream, PDFContentStream, decodePDFRawStream } = await import('pdf-lib');
+  const doc = await PDFDocument.load(bytes);
+  const node = doc.getPage(pageIndex).node;
+  const contents = node.lookup(PDFName.of('Contents'));
+  const streams = contents instanceof PDFArray ? contents.asArray().map((r: any) => doc.context.lookup(r)) : [contents];
+  let text = '';
+  for (const st of streams) {
+    if (st instanceof PDFRawStream) text += `${Buffer.from(decodePDFRawStream(st).decode()).toString('latin1')}\n`;
+    else if (st instanceof PDFContentStream) text += `${Buffer.from((st as any).getUnencodedContents()).toString('latin1')}\n`;
+  }
+  return [...text.matchAll(/(-?[\d.]+) (-?[\d.]+) m\s+(-?[\d.]+) (-?[\d.]+) l\s+S/g)].map((m) => m.slice(1, 5).map(Number));
+}
+const hasLine = (lines: number[][], want: number[]) => lines.some((l) => l.every((v, i) => Math.abs(v - want[i]) < 0.05));
+
+async function withStrike(c: Client, over: any = {}) {
+  const file = await upload(c, 1);
+  const body = {
+    subject: 'Purchase agreement', ordered: false, documents: [{ id: 'd1', file_id: file.id, name: 'Agreement' }],
+    recipients: [{ id: 'r1', role: 'signer', name: 'Ada Signer', email: 'ada-strike@example.com' }, { id: 'r2', role: 'signer', name: 'Ben Signer', email: 'ben-strike@example.com' }],
+    fields: [
+      { id: 'f1', document_id: 'd1', recipient_id: 'r1', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
+      { id: 'f2', document_id: 'd1', recipient_id: 'r2', type: 'signature', page: 0, x: 0.5, y: 0.8, w: 0.25, h: 0.06 },
+      // Given a recipient and marked required on purpose: a strike-out belongs to nobody, whatever a caller sends.
+      { id: 's1', document_id: 'd1', recipient_id: 'r1', type: 'strike', required: true, page: 0, x: 0.1, y: 0.2, w: 0.3, h: 0.02 },
+    ],
+    ...over,
+  };
+  const r = await c.post('/envelopes', body);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  return r.data.envelope;
+}
+
+test('the sender can strike out wording: it is shown to every signer, drawn into the signed PDF and written to the audit trail', async () => {
+  const c = await signUp('Sol Strike', 'sol-strike@example.com', ip());
+  const e = await withStrike(c);
+  const strike = e.fields.find((f: any) => f.type === 'strike');
+  assert.equal(strike.recipient_id, null, 'it belongs to no recipient');
+  assert.equal(strike.readonly, 1, 'and nobody can fill it in');
+  assert.ok(!strike.value);
+  // It holds no words of its own, and a caller that sends some is told why in a true sentence.
+  const worded = await c.put(`/envelopes/${e.id}`, { ...e, fields: e.fields.map((f: any) => (f.id === strike.id ? { ...f, value: 'and the curtains' } : f)) });
+  assert.equal(worded.status, 400);
+  assert.match(worded.data.error, /a strike field, was sent with a value\. A strike-out is a line through what is printed and holds no words of its own\. Leave "value" out\./);
+
+  // The preview shows the line before anything is sent: one line through the middle of the box.
+  const preview = await c.get(`/envelopes/${e.id}/download`);
+  assert.equal(preview.status, 200);
+  assert.ok(hasLine(await strokedLines(preview.data, 0), [61.2, 625.68, 244.8, 625.68]), 'the preview PDF carries the line');
+
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  const trail = (await c.get(`/envelopes/${e.id}`)).data.audit;
+  const line = trail.find((a: any) => a.action === 'Wording struck out');
+  assert.equal(line?.detail, 'The sender struck out wording on page 1 of "Agreement".');
+
+  // Every signer is shown it from the first look, as the sender's mark, whoever they are.
+  for (const email of ['ada-strike@example.com', 'ben-strike@example.com']) {
+    const seen = (await new Client().get(`/sign/${tokenFor(e.id, email)}`)).data;
+    const mark = seen.others.find((f: any) => f.type === 'strike');
+    assert.ok(mark, `${email} is shown the strike-out`);
+    assert.deepEqual([mark.page, mark.x, mark.y, mark.w, mark.h, mark.from], [0, 0.1, 0.2, 0.3, 0.02, 'sender']);
+    assert.equal(seen.fields.some((f: any) => f.type === 'strike'), false, 'and it is not theirs to fill in');
+  }
+  // It does not count as something a signer has to do.
+  const progress = (await c.get(`/envelopes/${e.id}`)).data.envelope.recipients[0].progress;
+  assert.deepEqual([progress.fields, progress.required_left], [1, 1]);
+
+  assert.equal((await signAll(e.id, 'ada-strike@example.com')).status, 200);
+  assert.equal((await signAll(e.id, 'ben-strike@example.com')).status, 200);
+  const pdf = await c.get(`/envelopes/${e.id}/download`);
+  assert.equal(pdf.status, 200);
+  assert.ok(hasLine(await strokedLines(pdf.data, 0), [61.2, 625.68, 244.8, 625.68]), 'the signed PDF carries the line');
+  // It is a line through the words, not a deletion: the words under it are still in the file.
+  const { extractPages } = await import('../src/server/text.ts');
+  assert.match((await extractPages(pdf.data))[0], /Agreement page 1/);
+});
+
+test('a box over more than one line is crossed out corner to corner, the same on the screen and in the PDF', async () => {
+  const { strikeLines, strikeIsCross, strikeClass, strikeSays } = await import('../src/lib/strike.ts');
+  assert.deepEqual(strikeLines({ h: 0.02 }), [[0, 0.5, 1, 0.5]]);
+  assert.deepEqual(strikeLines({ h: 0.06 }), [[0, 0, 1, 1], [0, 1, 1, 0]]);
+  assert.equal(strikeIsCross({ h: 0.035 }), false);
+  assert.equal(strikeClass({ type: 'strike', h: 0.02 }), ' strike');
+  assert.equal(strikeClass({ type: 'strike', h: 0.06 }), ' strike cross');
+  assert.equal(strikeClass({ type: 'note', h: 0.06 }), '');
+  const c = await signUp('Xena Cross', 'xena-cross@example.com', ip());
+  const e = await withStrike(c, { fields: [
+    { id: 'f1', document_id: 'd1', recipient_id: 'r1', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
+    { id: 'f2', document_id: 'd1', recipient_id: 'r2', type: 'signature', page: 0, x: 0.5, y: 0.8, w: 0.25, h: 0.06 },
+    { id: 's1', document_id: 'd1', type: 'strike', page: 0, x: 0.1, y: 0.2, w: 0.3, h: 0.06 },
+  ] });
+  const lines = await strokedLines((await c.get(`/envelopes/${e.id}/download`)).data, 0);
+  assert.ok(hasLine(lines, [61.2, 633.6, 244.8, 586.08]), 'from the top left to the bottom right');
+  assert.ok(hasLine(lines, [61.2, 586.08, 244.8, 633.6]), 'and from the bottom left to the top right');
+  // What someone who cannot see the line is told: who drew it and at which printed line, never a guess at the words.
+  assert.equal(strikeSays('Sol Strike', 'The seller will leave the garden shed and the curtains.'),
+    'Sol Strike struck out wording on this page, at the line that reads: "The seller will leave the garden shed and the curtains.". Which words are struck shows only on the page itself, in the Document view and in the PDF. If you cannot see that, ask Sol Strike which words are meant before you sign.');
+  assert.match(strikeSays('Sol Strike'), /^Sol Strike struck out wording on this page\. Which words are struck shows only on the page itself/);
+  // The screens draw it from the same rule.
+  assert.match(read('src/app/sign/[token]/page.tsx'), /className=\{`field other\$\{isBox\(f\) \? ' box' : ''\}\$\{strikeClass\(f\)\}`\}/);
+  assert.match(read('src/components/sign/TextFields.tsx'), /<b>Struck out:<\/b> \{strikeSays\(senderName, near\?\.\(f\)\)\}/);
+  assert.match(read('src/components/editor/StepFields.tsx'), /\$\{strikeClass\(f\)\}/);
+  assert.match(read('src/components/editor/shared.ts'), /\['strike', 'Strike out', 0\.3, 0\.02\]/);
+  assert.match(read('src/app/globals.css'), /\.field\.strike \{/);
+  assert.match(read('src/server/pdf.ts'), /for \(const \[x1, y1, x2, y2\] of strikeLines\(f\)\)/);
+});
+
+test('a strike-out is printed wording: once someone has signed it is only added, moved or removed if they are asked to sign again', async () => {
+  const c = await signUp('Rule Strike', 'rule-strike@example.com', ip());
+  // Before anyone has finished, striking out more is a correction like any other: saved, and everyone is told.
+  const e = await withStrike(c);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  const cur = async () => (await c.get(`/envelopes/${e.id}`)).data.envelope;
+  const body = async (fields: (f: any[]) => any[], over: any = {}) => {
+    const x = await cur();
+    return { subject: x.subject, message: x.message, ordered: x.ordered, documents: x.documents, recipients: x.recipients, fields: fields(x.fields), ...over };
+  };
+  const more = { id: 's2', document_id: 'd1', type: 'strike', page: 0, x: 0.1, y: 0.3, w: 0.4, h: 0.02 };
+  const first = await c.put(`/envelopes/${e.id}`, await body((f) => [...f, { ...more, document_id: f[0].document_id }]));
+  assert.equal(first.status, 200, JSON.stringify(first.data));
+  const told = mailTo('ada-strike@example.com').filter((m) => m.subject.startsWith('Updated: ')).at(-1);
+  assert.ok(told, 'a signer who had the document is told');
+  assert.match(told!.html, /The sender struck out wording on page 1\./);
+  assert.ok((await c.get(`/envelopes/${e.id}`)).data.audit.some((a: any) => /The sender struck out wording on page 1\./.test(a.detail)), 'and the audit trail says what the correction did');
+
+  // Ada finishes. From here every change to a strike-out is a change to what she signed.
+  assert.equal((await signAll(e.id, 'ada-strike@example.com')).status, 200);
+  const strikes = (await cur()).fields.filter((f: any) => f.type === 'strike');
+  assert.equal(strikes.length, 2);
+  const tries: [string, (f: any[]) => any[], RegExp][] = [
+    ['a new strike-out', (f) => [...f, { id: 's3', document_id: f[0].document_id, type: 'strike', page: 0, x: 0.1, y: 0.4, w: 0.2, h: 0.02 }], /The sender struck out wording on page 1\./],
+    ['moving one', (f) => f.map((x) => (x.id === strikes[0].id ? { ...x, y: 0.25 } : x)), /A strike-out was moved or resized on page 1, so other wording is struck out now\./],
+    ['making one longer', (f) => f.map((x) => (x.id === strikes[0].id ? { ...x, w: 0.6 } : x)), /A strike-out was moved or resized on page 1/],
+    ['removing one', (f) => f.filter((x) => x.id !== strikes[1].id), /A strike-out was removed from page 1, so the wording under it stands again\./],
+  ];
+  for (const [what, change, says] of tries) {
+    const refused = await c.put(`/envelopes/${e.id}`, await body(change));
+    assert.equal([refused.status, refused.data.code].join(), '409,sign_again', `${what} is refused without the choice`);
+    assert.deepEqual(refused.data.sign_again, ['Ada Signer']);
+    assert.match(refused.data.error, says, `${what}: the refusal says what would change`);
+  }
+  const same = await cur();
+  assert.deepEqual(same.fields.filter((f: any) => f.type === 'strike').map((f: any) => [f.id, f.x, f.y, f.w, f.h]), strikes.map((f: any) => [f.id, f.x, f.y, f.w, f.h]), 'nothing was saved');
+  assert.equal(same.recipients.find((r: any) => r.email === 'ada-strike@example.com').status, 'completed');
+
+  // With the choice made, it is saved, Ada is asked to sign again and told what changed.
+  const again = await c.put(`/envelopes/${e.id}`, await body(tries[3][1], { resign: true }));
+  assert.equal(again.status, 200, JSON.stringify(again.data));
+  const after = await cur();
+  assert.equal(after.fields.filter((f: any) => f.type === 'strike').length, 1);
+  assert.notEqual(after.recipients.find((r: any) => r.email === 'ada-strike@example.com').status, 'completed');
+  const asked = mailTo('ada-strike@example.com').at(-1)!;
+  assert.match(asked.subject, /^Changed after you finished: /);
+  assert.match(asked.html, /A strike-out was removed from page 1, so the wording under it stands again\./);
+});
+
+test('a strike-out travels with a template, and needs no signer to be placed', async () => {
+  const c = await signUp('Tia Template', 'tia-template@example.com', ip());
+  const file = await upload(c, 1);
+  const tpl = await c.post('/envelopes', {
+    kind: 'template', subject: 'Standard lease', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Tenant' }],
+    fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.3, h: 0.06 }, { document_id: 'd', type: 'strike', page: 0, x: 0.2, y: 0.4, w: 0.5, h: 0.02 }],
+  });
+  assert.equal(tpl.status, 200, JSON.stringify(tpl.data));
+  const made = await c.post('/envelopes', { template_id: tpl.data.envelope.id, recipients: { [tpl.data.envelope.recipients[0].id]: { name: 'Tom Tenant', email: 'tom-tenant@example.com' } } });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const strike = made.data.envelope.fields.find((f: any) => f.type === 'strike');
+  assert.deepEqual([strike.recipient_id, strike.x, strike.y, strike.w, strike.h], [null, 0.2, 0.4, 0.5, 0.02]);
+  // The developer documentation lists the type, and a type that does not exist still names the ones that do.
+  const { FIELD_TYPES } = await import('../src/server/envelopes.ts');
+  assert.ok(FIELD_TYPES.includes('strike'));
+  const bad = await c.post('/envelopes', { subject: 'x', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'A', email: 'a-strike@example.com' }], fields: [{ document_id: 'd', recipient_id: 'r', type: 'strikethrough', page: 0, x: 0.1, y: 0.1, w: 0.1, h: 0.02 }] });
+  assert.equal(bad.status, 400);
+  assert.match(bad.data.error, /strike/);
+});

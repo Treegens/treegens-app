@@ -6,6 +6,8 @@ import { findFields, overlap, scanPdf, type Found } from '@/lib/autoplace';
 import { snapBox, type Guide } from './snap';
 import { Lock, UndoRedo, Wand } from './parts';
 import { MAX_FIELDS, MIN_H, MIN_W, PREFILL, SIGNS, TLABEL, TYPES, clamp, makeField, plural, who, type Ed } from './shared';
+import { SENDER_MARK } from './shared';
+import { strikeClass, STRIKE_HELP } from '@/lib/strike';
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
 const DRAG_START_PX = 3; // a press only becomes a drag after this much movement, so a click never moves anything
@@ -54,6 +56,25 @@ export function StepFields({ ed }: { ed: Ed }) {
     if (r.focus) el.focus({ preventScroll: true });
   });
 
+  // Arriving from the review step's list of fields without a label: that field is selected, its settings are
+  // open, and once its page is drawn it is brought into view with the cursor in the Label box.
+  useEffect(() => {
+    const id = ed.jump;
+    if (!id) return;
+    ed.clearJump();
+    setSel(id);
+    setSheet(true);
+    let tries = 0;
+    const t = setInterval(() => {
+      const el = canvas.current?.querySelector<HTMLElement>(`[data-fid="${id}"]`);
+      if (!el && ++tries < 60) return;
+      clearInterval(t);
+      el?.scrollIntoView({ block: 'center', inline: 'nearest' });
+      document.getElementById('ed-label')?.focus({ preventScroll: true });
+    }, 100);
+    return () => clearInterval(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // On a phone the settings slide up from the bottom. Keep the selected field in view above them.
   useEffect(() => {
     if (!sel || !window.matchMedia('(max-width: 900px)').matches) return;
@@ -69,7 +90,7 @@ export function StepFields({ ed }: { ed: Ed }) {
     const size = doc.page_sizes?.[page] || { w: 612, h: 792 };
     const w = t[2];
     const h = t[3] || (w * size.w) / size.h;
-    if (type !== 'note' && !active) return toast('Add a signer in step 1 first, then place fields for them.', true);
+    if (!SENDER_MARK(type) && !active) return toast('Add a signer in step 1 first, then place fields for them.', true);
     if (full()) return;
     const box = { x: clamp(x - w / 2, 0, 1 - w), y: clamp(y - h / 2, 0, 1 - h), w, h };
     // Dropped from the keyboard, a field lands in the middle of the page. Step down until it has a spot of its own.
@@ -373,11 +394,11 @@ export function StepFields({ ed }: { ed: Ed }) {
                         const locked = isLockedField(f);
                         const owner = f.recipient_id ? rcps.find((r) => r.id === f.recipient_id) : null;
                         return (
-                          <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${locked ? ' locked' : ''}`}
+                          <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${strikeClass(f)}${locked ? ' locked' : ''}`}
                             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
                             tabIndex={0} role="button" aria-label={`${TLABEL[f.type]} field${owner ? ` for ${who(owner)}` : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
                             onClick={(e) => e.stopPropagation()} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
-                            {f.type !== 'checkbox' && f.type !== 'radio' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : f.label || TLABEL[f.type]}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
+                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : f.label || TLABEL[f.type]}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
                             {sel === f.id && !locked && <span className="grip" onPointerDown={(e) => drag(e, f, 'resize')} />}
                           </div>
                         );
@@ -425,17 +446,19 @@ export function StepFields({ ed }: { ed: Ed }) {
             ) : (
               <div className="ed-sheetbody">
                 <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
-                {selected.type !== 'note' && (
+                {/* A strike-out has nothing to set: it is a line, it belongs to nobody, and its place is the whole of it. */}
+                {selected.type === 'strike' && <p className="muted small" id="ed-strike-help">{STRIKE_HELP}</p>}
+                {!SENDER_MARK(selected.type) && (
                   <label className="f"><span>Assigned to</span>
                     <select value={selected.recipient_id || ''} onChange={(e) => patchField(selected.id, { recipient_id: e.target.value })}>
                       {open.map((r) => <option key={r.id} value={r.id}>{who(r)}</option>)}
                     </select>
                   </label>
                 )}
-                {selected.type !== 'note' && !['date_signed', 'full_name', 'email'].includes(selected.type) && (
+                {!SENDER_MARK(selected.type) && !['date_signed', 'full_name', 'email'].includes(selected.type) && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
-                {selected.type !== 'note' && <label className="f"><span>Label <span className="hint">(shown to the signer)</span></span><input value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
+                {!SENDER_MARK(selected.type) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
                 {PREFILL.includes(selected.type) && (
                   <>
                     <label className="f"><span>{selected.type === 'note' ? 'Text' : 'Prefilled value'}</span><textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>

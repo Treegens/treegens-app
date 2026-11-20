@@ -1,20 +1,24 @@
 import { route, pdfResponse, type Ctx } from './router.ts';
 import { get, run, readBlob } from './db.ts';
-import { bad, hmac, now, str, rateLimit, safeEqual, HttpError } from './util.ts';
+import { bad, hmac, now, str, rateLimit, safeEqual, fmtCode, HttpError } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
+import { handDevice } from './handover.ts';
 import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, askSender, renameSelf, noteDeadLink, okImage } from './envelopes.ts';
-import { fieldDisplayValue } from './pdf.ts';
+import { fieldDisplayValue, senderZone } from './pdf.ts';
+import { validZone, clockIn, formatDateValue, momentText } from '../lib/dates.ts';
 import { storeUpload } from './routes-envelopes.ts';
 import { impactOf } from '../lib/impact.ts';
 import { rateWait } from './util.ts';
 import { wrongAccessCode, requestAccessCode } from './envelopes.ts';
-import { senderText, shownVersion, changedSince } from './envelopes.ts';
+import { shownVersion, changedSince } from './envelopes.ts';
 import { noteReplacedLink, notCompletedNotice } from './envelopes.ts';
 import { printedWords, printsName, notOpen, keepsCopy, earlierCopy } from './envelopes.ts';
 import { ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { unprintable } from './pdftext.ts';
 import { gateOf, lockedView } from './signercode.ts';
 import { CONSENT_VERSION, isConsentVersion, consentAuditNote } from '../lib/policy.ts';
+// A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
+import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup } from './groups.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -41,7 +45,9 @@ function checkedBody(c: Ctx): Promise<any> {
 }
 
 export function look(c: Ctx, needUnlocked = true) {
-  const r = get('SELECT * FROM recipients WHERE token=?', c.params.token);
+  // The link of one member of a group is kept with the group's members and leads to the group's row (groups.ts).
+  const member = memberOf(c.params.token);
+  const r = member ? get('SELECT * FROM recipients WHERE id=?', member.recipient_id) : get('SELECT * FROM recipients WHERE token=?', c.params.token);
   if (!r) {
     // 410 tells the page this link was replaced, so it can offer to send the current one instead of a dead end.
     if (get('SELECT 1 x FROM retired_tokens WHERE token=?', c.params.token)) {
@@ -59,7 +65,9 @@ export function look(c: Ctx, needUnlocked = true) {
   const gate = gateOf(c.req, r);
   if (gate && needUnlocked) throw bad('Type the one-time code first.', 401);
   const actor = { name: `${r.name} <${r.email}>`, ip: c.ip, ua: c.ua };
-  return { e, r: e.recipients.find((x: any) => x.id === r.id), locked, gate, actor };
+  const out = { e, r: e.recipients.find((x: any) => x.id === r.id), locked, gate, actor };
+  // A member acts under their own name, and only as far as the state of their link allows: see asMember.
+  return member ? asMember(c, out, member) : out;
 }
 
 const CLOSED = ['voided', 'expired', 'declined'];
@@ -72,6 +80,8 @@ function assertViewable(e: any, r: any) {
 
 route('GET', '/sign/:token', (c) => {
   const { e, r, locked, gate, actor } = find(c, false);
+  // In person: the host's device is about to be in the signer's hands, so the host's account locks in this browser.
+  handDevice(c, e, r);
   const sender = get('SELECT name, email FROM users WHERE id=?', e.sender_id);
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', e.account_id);
   const base = {
@@ -82,17 +92,30 @@ route('GET', '/sign/:token', (c) => {
     // signed_before: when this person finished, if the sender changed the document after that and asked them to
     // sign again. A closed envelope says so too, because that person still has the right to a copy. earlier_copy:
     // whether the document as they signed it then was kept, so the page only offers that download when it exists.
-    recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
+    // mail_stopped: this person marked an email about the envelope as spam, so nothing more is emailed to them about
+    // it. The page says so and offers the one way back, which only they have (POST /sign/:token/mail-again).
+    recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, mail_stopped: !!r.complained_at, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
       earlier_copy: r.status !== 'completed' && !!r.signed_before && !!get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? AND copy_sha256 IS NOT NULL', e.id, r.id) },
   };
   // Someone ran into the deadline. The sender is told before anything else is decided here, so an access code that
   // was not typed yet does not keep the news from them: the screen says "expired" before it asks for a code.
-  if (e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${String(e.expires_at).slice(0, 10)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
+  if (e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${momentText(e.expires_at)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
   // A frozen code is said straight away, so nobody types the right code into a form that can no longer accept it.
   // Someone who has to type a one-time code is told less than this until they have: see lockedView.
   if (locked || gate) return lockedView({ ...base, locked: true, code_frozen: !!r.code_frozen_at }, r, locked, gate);
+  // From here the document is open to this browser, so the Help link on the page may carry the security code of
+  // this person's emails: a message to the help form then says which document it is about, and its sender can be
+  // told (aboutCode in routes-support.ts). A page that is still locked is not given the code, because the code
+  // names the document, and its Help link carries the envelope's id alone, which proves nothing by itself.
+  Object.assign(base, { help_code: r.check_code ? fmtCode(r.check_code) : null });
+  // A group's document: which group, what this member's link is to it, and who has taken it on (groupFacts in
+  // groups.ts). Said only now, behind the access code, like everything else about the document.
+  Object.assign(base.recipient, { group: groupFacts(e, r) });
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
+  // A member whose colleague has the document, or who was taken out of the group, is told so and shown no more.
+  if (r.member && (r.group_state === 'taken' || r.group_state === 'removed')) return { ...base, locked: false };
   if (e.status === 'sent' && r.status === 'sent') markViewed(e, r, actor);
+  if (r.member) memberOpened(e, r, actor);
   // The server keeps which content version this screen was given. The screen sends the number back with every save
   // and with Finish, and one that comes from an older version is refused: see completeRecipient.
   if (e.status === 'sent' && r.seen_version !== e.content_version) run('UPDATE recipients SET seen_version=? WHERE id=?', e.content_version, r.id);
@@ -123,10 +146,13 @@ route('GET', '/sign/:token', (c) => {
       return {
         id: f.id, document_id: f.document_id, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h,
         label: f.label, by: o?.name || null, from: !f.recipient_id || f.readonly || printsName(f) ? 'sender' : done ? 'signer' : 'start',
-        value: done ? fieldDisplayValue(f, o, e.date_format) : words(f),
+        // Dates read here as they will on the signed PDF: in the envelope's format, the date of signing by the
+        // signer's own calendar.
+        value: done ? fieldDisplayValue(f, o, e.date_format, senderZone(e)) : f.type === 'date' ? formatDateValue(words(f), e.date_format) : words(f),
         image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
       };
-    }).filter((f: any) => f.value || f.image),
+      // A strike-out has no words and no picture: it is the sender's line through what is printed, and everyone is shown it.
+    }).filter((f: any) => f.value || f.image || f.type === 'strike'),
   };
 }, 'public');
 
@@ -173,10 +199,25 @@ route('POST', '/sign/:token/ask-code', async (c) => {
 // into the audit line, so the record names the words this person agreed to and not the words in use today. A screen
 // left open across a change of wording sends the older version, and that is what is written. A call that names no
 // wording we have shown is recorded as exactly that. Looked up again after the body is in: see checkedBody.
+// The time zone the signer's device reports ("tz", sent with consent and with Finish). It decides which calendar day
+// the date of signing is, and the certificate prints this person's local time from it. It is kept on the recipient
+// and written to the audit trail the first time and whenever it changes, so the zone a date rests on is part of
+// the record. A value that is not a time zone is ignored, and the sender's zone or UTC is used as before.
+function noteZone(e: any, r: any, tz: any, actor: any) {
+  const zone = validZone(tz);
+  if (!zone || zone === r.tz || e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) return;
+  run('UPDATE recipients SET tz=? WHERE id=?', zone, r.id);
+  r.tz = zone;
+  audit(e.id, actor, 'Time zone reported', `${r.name}: ${zone} (${clockIn(now(), zone)!.offset} at this moment), as their device says. The date this person signs on is the calendar day there.`);
+}
+
 route('POST', '/sign/:token/consent', async (c) => {
   find(c);
   const b = await c.req.json().catch(() => ({}));
-  const { e, r, actor } = look(c);
+  // The first member of a group who agrees takes the document on for the group, and is the recipient from here on.
+  // Whoever comes second is told who has it (takeOn in groups.ts).
+  const { e, r, actor } = takeOn(look(c));
+  noteZone(e, r, b?.tz, actor);
   if (!r.consent_at) {
     run('UPDATE recipients SET consent_at=? WHERE id=?', now(), r.id);
     audit(e.id, actor, 'Agreed to electronic records and signatures', `${r.name}. ${isConsentVersion(b?.wording) ? consentAuditNote(b.wording) : consentAuditNote(CONSENT_VERSION, false)}`);
@@ -230,7 +271,11 @@ route('POST', '/sign/:token/upload', async (c) => {
   const { e, r } = find(c);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw notOpen(e, r);
   rateLimit(`upload:${r.id}`, 30, 3600_000);
-  return storeUpload(c, null);
+  const file = await storeUpload(c, null);
+  // The file belongs to no account. It remembers the envelope it came in through, so deleting that envelope or its
+  // account removes it also when the signer never attached it to a field.
+  run('UPDATE files SET via_envelope=? WHERE id=?', e.id, file.id);
+  return file;
 }, 'public');
 
 // Finish (which is also how an approver approves and a viewer confirms), decline, pass on and rename all act on the
@@ -239,6 +284,7 @@ route('POST', '/sign/:token/upload', async (c) => {
 route('POST', '/sign/:token/complete', async (c) => {
   const body = await checkedBody(c);
   const { e, r, actor } = look(c);
+  noteZone(e, r, body?.tz, actor);
   await completeRecipient(e, r, body, actor);
   const after = get('SELECT status, sheets FROM envelopes WHERE id=?', e.id);
   return { ok: true, envelope_status: after.status, impact: impactOf(after.sheets) };
@@ -247,6 +293,8 @@ route('POST', '/sign/:token/complete', async (c) => {
 route('POST', '/sign/:token/decline', async (c) => {
   const body = await checkedBody(c);
   const { e, r, actor } = look(c);
+  // One member of a group declines for the whole group, on record as the person who did (declineForGroup in groups.ts).
+  if (r.group_name) return void (await declineForGroup(e, r, str(body.reason, 500), actor));
   await declineRecipient(e, r, str(body.reason, 500), actor);
 }, 'public');
 
@@ -280,6 +328,8 @@ route('POST', '/sign/:token/ask', async (c) => {
 
 route('POST', '/sign/:token/mute', (c) => {
   const { e, r, actor } = find(c, false);
+  // One member of a group stops their own reminders. The others keep getting theirs (groups.ts).
+  if (r.member) return void muteMember(e, r, actor);
   muteReminders(e, r, actor);
 }, 'public');
 

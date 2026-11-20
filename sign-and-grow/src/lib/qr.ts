@@ -289,7 +289,7 @@ export function qrEncode(text: string, opts: { mask?: number } = {}): Qr {
   let i = 0;
   for (let right = size - 1; right >= 1; right -= 2) {
     if (right === 6) right = 5;
-    const up = ((size - 1 - right) & 2) === 0 === right > 6;
+    const up = ((right + 1) & 2) === 0; // the first pair of columns goes up, the next down, and so on
     for (let step = 0; step < size; step++) for (let j = 0; j < 2; j++) {
       const x = right - j;
       const y = up ? size - 1 - step : step;

@@ -10,6 +10,8 @@ import { formatDate, formatDateValue, localStamp, validZone } from '../lib/dates
 import { typesetterFor } from './pdftext.ts';
 import { isolate, hasRtl } from './bidi.ts';
 import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
+import { strikeLines } from '../lib/strike.ts';
+import { certName, certGroup } from '../lib/groups.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -37,11 +39,18 @@ export async function inspectPdf(buf: Uint8Array): Promise<{ pages: number; size
     if (/encrypted/i.test(String(e?.message))) throw bad('This PDF is password protected. Remove the password and upload it again.');
     throw bad('That file could not be read as a PDF.');
   }
-  const sizes = doc.getPages().map((p) => {
-    const b = p.getCropBox();
-    const rot = ((p.getRotation().angle % 360) + 360) % 360;
-    return rot % 180 ? { w: b.height, h: b.width } : { w: b.width, h: b.height };
-  });
+  // A file that starts like a PDF and is cut short or damaged can load and still have no readable pages. Reading
+  // them is part of reading the file, so that is refused in the same words and never as an error on our side.
+  let sizes: PageSize[];
+  try {
+    sizes = doc.getPages().map((p) => {
+      const b = p.getCropBox();
+      const rot = ((p.getRotation().angle % 360) + 360) % 360;
+      return rot % 180 ? { w: b.height, h: b.width } : { w: b.width, h: b.height };
+    });
+  } catch {
+    throw bad('That file could not be read as a PDF. It looks damaged or cut short. Export or download it again and use the new file.');
+  }
   if (!sizes.length) throw bad('That PDF has no pages.');
   return { pages: sizes.length, sizes };
 }
@@ -147,8 +156,10 @@ async function image(ctx: Ctx, dataUrl: string | null | undefined) {
 // (`senderTz`) is used, and failing that UTC. The certificate gives the exact moment in UTC beside it.
 export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null, senderTz?: string | null): string {
   switch (f.type) {
-    case 'full_name': return r?.name || '';
-    case 'email': return r?.email || '';
+    // For a group the sender named nobody. Its name and email fields are filled in like a date of signing: with the
+    // member who acted, once that person has finished (see printedWords in envelopes.ts).
+    case 'full_name': return (r?.group_name && r.status !== 'completed' ? '' : r?.name) || '';
+    case 'email': return (r?.group_name && r.status !== 'completed' ? '' : r?.email) || '';
     case 'date_signed': return r?.completed_at ? formatDate(r.completed_at, dateFormat, validZone(r.tz) || senderTz) : '';
     case 'date': return formatDateValue(f.value, dateFormat);
     default: return f.value || '';
@@ -191,6 +202,14 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
     return;
   }
   if (f.type === 'attachment') return;
+  // A strike-out: the sender's line through wording printed on the page. The same shape the signing screen shows
+  // (strikeLines in src/lib/strike.ts): one line through the middle, or corner to corner over more than one line.
+  // The words under it stay in the file.
+  if (f.type === 'strike') {
+    const thickness = Math.max(0.8, Math.min(1.6, vh * 0.09));
+    for (const [x1, y1, x2, y2] of strikeLines(f)) page.drawLine({ start: m.pt(vx + vw * x1, vy + vh * y1), end: m.pt(vx + vw * x2, vy + vh * y2), thickness, color: INK });
+    return;
+  }
 
   const text = clean(fieldDisplayValue(f, r, ctx.dateFormat, ctx.tz));
   if (!text) return;
@@ -315,7 +334,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   for (const r of e.recipients) {
     s.need(96);
     const top = s.y;
-    s.text(`${iso(r.name)}  <${r.email}>`, { size: 10, bold: true, maxW: 330 });
+    // For a group: the member who acted and the group ("Maya Lopez, for HR team"), see certName in src/lib/groups.ts.
+    s.text(certName(r, iso), { size: 10, bold: true, maxW: 330 });
     s.kv('Role', ROLE_LABEL[r.role] || r.role);
     s.kv('Status', r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : 'Signed') : r.status);
     s.kv('Sent', ts(r.sent_at));
@@ -335,6 +355,15 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
       s.kv('Identity check', r.check_line || (r.access_code ? 'Link sent by email and an access code chosen by the sender' : 'Link sent by email only'));
       s.kv('E-record consent', ts(r.consent_at));
       s.kv('IP address', r.ip || '-');
+      // The same moments by this person's own clock, in the time zone their device reported. The date of signing on
+      // the pages is the calendar day there, so the certificate shows what that day rests on, next to UTC above.
+      const zone = validZone(r.tz);
+      if (zone) {
+        s.kv('Time zone', `${zone}, as reported by their device`);
+        if (r.viewed_at) s.kv('Viewed, their time', localStamp(r.viewed_at, zone));
+        if (r.consent_at) s.kv('Consent, their time', localStamp(r.consent_at, zone));
+        if (r.completed_at) s.kv('Completed, their time', localStamp(r.completed_at, zone));
+      }
       if (r.reassigned_from) s.kv('Reassigned from', known(r.reassigned_from));
     }
     const img = await image(ctx, r.signature_png);
@@ -344,9 +373,19 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
       s.page.drawRectangle({ x, y: top - 72, width: 160, height: 66, borderColor: RULE, borderWidth: 0.6 });
       s.page.drawImage(img, { x: x + (160 - img.width * sc) / 2, y: top - 72 + (66 - img.height * sc) / 2, width: img.width * sc, height: img.height * sc });
     }
+    // A group: everyone who could have acted for it on this envelope, as it was sent.
+    if (r.group_name) s.kv(r.claimed_by ? 'Acted for' : 'Sent to', certGroup(r, iso));
     s.rule(6);
   }
 
+  // Whose time zone we know, by the name and address each of their audit lines is signed with. Their lines carry
+  // their local time as well as UTC.
+  const zones = new Map<string, string>();
+  for (const r of e.recipients) {
+    const zone = validZone(r.tz);
+    if (!zone) continue;
+    for (const name of new Set([r.name, r.sender_name, r.self_name].filter(Boolean))) zones.set(`${name} <${r.email}>`, zone);
+  }
   s.h2('Audit trail');
   s.text('Each event is hashed together with the one before it, so the history cannot be edited without breaking the chain.', { size: 7.5, color: MUTED, gap: 4 });
   for (const a of audit) {
@@ -354,7 +393,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     const y0 = s.y;
     s.page.drawText(ts(a.at), { x: s.L, y: y0 - 8, size: 7.5, font: ctx.font, color: MUTED });
     s.text(known(`${a.action}${a.detail ? ` · ${a.detail}` : ''}`), { size: 8, x: s.L + 118, maxW: 330 });
-    s.text(known(`${a.actor}${a.ip ? ` · ${a.ip}` : ''} · ${a.hash.slice(0, 16)}`), { size: 6.5, x: s.L + 118, color: MUTED, gap: 3 });
+    s.text(known(`${a.actor}${a.ip ? ` · ${a.ip}` : ''} · ${a.hash.slice(0, 16)}${zones.has(a.actor) ? ` · their time ${localStamp(a.at, zones.get(a.actor))}` : ''}`), { size: 6.5, x: s.L + 118, color: MUTED, gap: 3 });
   }
   if (audit.length) s.kv('Chain head', audit[audit.length - 1].hash, s.L, 70);
 

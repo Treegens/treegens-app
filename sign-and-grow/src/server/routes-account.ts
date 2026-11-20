@@ -1,8 +1,12 @@
 import { route, json, type Ctx } from './router.ts';
+import { DATE_FORMATS } from '../lib/dates.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, SESSION_COOKIE } from './auth.ts';
 import { PROVIDER_NAMES, isProviderId } from '../lib/signin.ts';
+import { deviceName } from '../lib/phone.ts';
+import { handedOver } from './handover.ts';
+import { SESSION_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
 import { smsProvider } from '../lib/checks.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
@@ -11,7 +15,8 @@ import { nameRefusal, hasNotPaid, inviteRefusal, noteInvited } from './envelopes
 import { grant, creditSummary, findFreeCode, sameEmail } from './credits.ts';
 import { tick } from './cron.ts';
 import { redeemCode } from './routes-billing.ts';
-import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver } from './routes-trust.ts';
+import { emailProblem } from './bounces.ts';
+import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 
@@ -38,11 +43,17 @@ export async function sendVerification(u: any, via?: string) {
 // however many workspaces are made for them.
 function ownWorkspace(userId: string, name: string, t = now()): string {
   const accountId = id('acc');
+  // The workspace is named after the whole name as the person wrote it. Which word of a name is the given name
+  // differs from country to country, so none is picked out. The name can be changed under Settings, Account.
   // A new account starts with automatic reminders on (DEFAULT_REMINDER_DAYS in src/lib/policy.ts), because the
   // public pages promise reminders. The review step shows the choice before every send, and Settings changes it.
-  run('INSERT INTO accounts (id, name, created_at, default_reminder_days) VALUES (?,?,?,?)', accountId, `${name.split(' ')[0]}'s workspace`, t, DEFAULT_REMINDER_DAYS);
+  run('INSERT INTO accounts (id, name, created_at, default_reminder_days) VALUES (?,?,?,?)', accountId, `${name}'s workspace`, t, DEFAULT_REMINDER_DAYS);
   run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'owner',?)", accountId, userId, t);
-  if (run('UPDATE users SET welcomed_at=? WHERE id=? AND welcomed_at IS NULL', t, userId).changes) grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
+  // Once per person, and once per email address: a login that was deleted and made again under the same address
+  // was welcomed before (wasWelcomed in routes-trust.ts). Every way a login or a workspace is made comes through
+  // here, with a password or with Google or Microsoft, so this is the one place that decides.
+  const first = run('UPDATE users SET welcomed_at=? WHERE id=? AND welcomed_at IS NULL', t, userId).changes;
+  if (first && !wasWelcomed(get('SELECT email FROM users WHERE id=?', userId)?.email)) grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
   return accountId;
 }
 
@@ -251,7 +262,9 @@ route('POST', '/auth/switch', async (c) => {
 });
 
 route('GET', '/me', (c) => {
-  if (!c.auth) return { user: null };
+  // handed_over: this browser is signed in, but was handed to someone to sign in person and is locked until its
+  // owner types their password. The app shows the screen that asks for it, not the sign-in page.
+  if (!c.auth) return { user: null, ...(handedOver(c.req) ? { handed_over: handedOver(c.req) } : {}) };
   const a = c.account;
   // The browser says which time zone it is in. Emails with dates in them (renewals, cancellations) use it, so the
   // day in the email is the day on the screen.
@@ -265,7 +278,7 @@ route('GET', '/me', (c) => {
   return {
     user: publicUser(c.user),
     role: c.role,
-    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
+    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || null, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
     members: get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n,
     ...trustInfo(c),
@@ -274,6 +287,9 @@ route('GET', '/me', (c) => {
     outbox: devOutbox(),
     // Whether the operator of this server has switched text messages on. When not, nothing offers them.
     text_messages: !!smsProvider(),
+    // Set when an email to this login came back for good ({ address, since, reason }), so every page can say so
+    // until the address is changed or the person says it works again. null otherwise. See routes-bounces.ts.
+    email_problem: emailProblem(c.user),
   };
 }, 'public');
 
@@ -304,6 +320,36 @@ route('POST', '/me/password', async (c) => {
   return { ok: true };
 });
 
+// ---- Where a person is signed in -------------------------------------------------------------
+// Every browser that signed in has a session of its own, and signing in on one never signs another out. Here a
+// person sees them (the device and browser as the browser described itself, when it signed in, when it was last
+// used) and ends the ones that should not be signed in any more: a phone that was lost, a computer at work. What
+// names a session to the page is a short fingerprint of its row, never the cookie or the hash we look it up by.
+// No API key reaches these routes (PERSON_ONLY in router.ts).
+const sessionHandle = (s: any): string => sha256(`session:${s.id}`).slice(0, 16);
+const sessionsOf = (userId: string): any[] => all('SELECT * FROM sessions WHERE user_id=? AND expires_at > ?', userId, now());
+route('GET', '/me/sessions', (c) => {
+  const mine = sessionsOf(c.user.id).map((s) => ({
+    id: sessionHandle(s), ...deviceName(s.ua), signed_in_at: s.created_at || null, last_used_at: s.last_used_at || null, signs_out_at: s.expires_at,
+    current: s.id === c.auth?.sessionId, handed_over: !!s.locked_at,
+  }));
+  // This browser first, then the most recently used.
+  mine.sort((a, b) => Number(b.current) - Number(a.current) || String(b.last_used_at || b.signed_in_at || '').localeCompare(String(a.last_used_at || a.signed_in_at || '')));
+  return { sessions: mine, days: SESSION_DAYS, noted_every_minutes: SESSION_TOUCH_MINUTES };
+});
+route('POST', '/me/sessions/sign-out-others', (c) => {
+  const n = Number(run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '').changes);
+  return { ok: true, signed_out: n };
+});
+route('DELETE', '/me/sessions/:id', (c) => {
+  const s = sessionsOf(c.user.id).find((x) => sessionHandle(x) === c.params.id);
+  if (!s) throw bad('That browser is not signed in any more, so there was nothing to sign out.', 404);
+  run('DELETE FROM sessions WHERE id=?', s.id);
+  const current = s.id === c.auth?.sessionId;
+  if (current) c.cookies.push(cookie(SESSION_COOKIE, '', 0, c.secure));
+  return { ok: true, current };
+});
+
 // ---- Account, team -------------------------------------------------------------------------
 
 route('PATCH', '/account', async (c) => {
@@ -315,6 +361,10 @@ route('PATCH', '/account', async (c) => {
   // The account's name is the brand line of every email, also for envelopes that are already out: see PATCH /me.
   const renamed = b.name != null && str(b.name, 120).trim() !== a.name && hasNotPaid(a) ? nameRefusal([str(b.name, 120)]) : null;
   if (renamed) throw bad(`${renamed} Nothing was changed.`, 422);
+  // The date format new envelopes start with. One that does not exist is refused, never swapped for another.
+  if (b.default_date_format != null && b.default_date_format !== '' && !(DATE_FORMATS as readonly string[]).includes(b.default_date_format))
+    throw bad(`The date format "${str(b.default_date_format, 40)}" does not exist. Use one of: ${DATE_FORMATS.join(', ')}. Nothing was changed.`);
+  if (b.default_date_format !== undefined) run('UPDATE accounts SET default_date_format=? WHERE id=?', b.default_date_format || null, a.id);
   run('UPDATE accounts SET name=?, brand_color=?, brand_logo=?, default_reminder_days=?, default_expire_days=? WHERE id=?',
     str(b.name ?? a.name, 120).trim() || a.name, b.brand_color === undefined ? a.brand_color : b.brand_color || null,
     b.brand_logo === undefined ? a.brand_logo : b.brand_logo || null, days(b.default_reminder_days, 0, 60, a.default_reminder_days), days(b.default_expire_days, 1, 365, a.default_expire_days), a.id);
@@ -386,6 +436,10 @@ route('DELETE', '/account/members/:id', async (c) => {
   const to = c.q.get('to');
   if (to && (to === c.params.id || !get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)))
     throw bad(`Choose another member of ${c.account.name} to take over what ${m.name} sent. The person named in "to" is not on the team. Nothing was changed.`);
+  // Someone who is closing their own login is not someone who stays: what they were handed would move a second
+  // time when their login is deleted. The same rule as on POST /account/leave.
+  const closing = to ? get('SELECT name FROM users WHERE id=? AND closing_at IS NOT NULL', to) : null;
+  if (closing) throw bad(`${closing.name} is closing their login, so they cannot take over what ${m.name} sent. Choose someone else. Nothing was changed.`);
   const successor = to || c.user.id;
   const keys = all('SELECT id, name, prefix, scope, last_used_at FROM api_keys WHERE account_id=? AND user_id=? AND stopped_at IS NULL', c.account.id, c.params.id);
   const admins = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin') AND m.user_id!=?", c.account.id, c.params.id);
@@ -468,21 +522,37 @@ route('POST', '/account/transfer-owner', async (c) => {
 
 // ---- Contacts ------------------------------------------------------------------------------
 
-route('GET', '/contacts', (c) => ({ contacts: all('SELECT id, name, email, company FROM contacts WHERE account_id=? ORDER BY name COLLATE NOCASE', c.account.id) }));
+// The address book is one list for the account, and admins see all of it. A member is shown, and can change or
+// delete, only the people they added themselves (contact_users) or sent to themselves: who a colleague sends to is
+// that colleague's business, like their envelopes and their folders.
+const ownContacts = (c: Ctx): [string, any[]] => (c.admin ? ['', []]
+  : [` AND (id IN (SELECT contact_id FROM contact_users WHERE user_id=?) OR EXISTS (SELECT 1 FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.account_id=contacts.account_id AND e.sender_id=? AND r.email=contacts.email))`, [c.user.id, c.user.id]]);
+const keepContact = (c: Ctx, contactId: string) => run('INSERT OR IGNORE INTO contact_users (contact_id, user_id) VALUES (?,?)', contactId, c.user.id);
+
+route('GET', '/contacts', (c) => {
+  const [mine, who] = ownContacts(c);
+  return { contacts: all(`SELECT id, name, email, company FROM contacts WHERE account_id=?${mine} ORDER BY name COLLATE NOCASE`, c.account.id, ...who) };
+});
 route('POST', '/contacts', async (c) => {
   const b = await c.body();
   if (!str(b.name).trim() || !isEmail(str(b.email).trim())) throw bad('Enter a name and a valid email address.');
   run('INSERT INTO contacts (id, account_id, name, email, company, created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(account_id, email) DO UPDATE SET name=excluded.name, company=excluded.company',
     id('con'), c.account.id, str(b.name, 120).trim(), str(b.email, 254).trim(), str(b.company, 120) || null, now());
+  keepContact(c, get('SELECT id FROM contacts WHERE account_id=? AND email=?', c.account.id, str(b.email, 254).trim()).id);
 });
 route('PATCH', '/contacts/:id', async (c) => {
   const b = await c.body();
   if (!str(b.name).trim() || !isEmail(str(b.email).trim())) throw bad('Enter a name and a valid email address.');
+  const [mine, who] = ownContacts(c);
+  if (!get(`SELECT 1 x FROM contacts WHERE id=? AND account_id=?${mine}`, c.params.id, c.account.id, ...who)) throw bad('That contact is not in your list any more. Nothing was changed.', 404);
   if (get('SELECT 1 x FROM contacts WHERE account_id=? AND email=? AND id!=?', c.account.id, str(b.email).trim(), c.params.id)) throw bad('Another contact already uses that email address.');
   run('UPDATE contacts SET name=?, email=?, company=? WHERE id=? AND account_id=?', str(b.name, 120).trim(), str(b.email, 254).trim(), str(b.company, 120) || null, c.params.id, c.account.id);
+  // Stays in this person's list also when the address was changed to one they have not sent to yet.
+  keepContact(c, c.params.id);
 });
 route('DELETE', '/contacts/:id', (c) => {
-  run('DELETE FROM contacts WHERE id=? AND account_id=?', c.params.id, c.account.id);
+  const [mine, who] = ownContacts(c);
+  run(`DELETE FROM contacts WHERE id=? AND account_id=?${mine}`, c.params.id, c.account.id, ...who);
 });
 
 // ---- API keys and webhooks -----------------------------------------------------------------
@@ -551,7 +621,11 @@ route('POST', '/webhooks/deliveries/:id/redeliver', async (c) => {
   redeliver(d.webhook_id, d.event, d.envelope_id, d.body);
 }, 'admin');
 route('DELETE', '/webhooks/:id', (c) => {
-  run('DELETE FROM webhooks WHERE id=? AND account_id=?', c.params.id, c.account.id);
+  // Its delivery log goes with it. The log holds envelope ids and, for the latest deliveries, what was sent, and
+  // nothing else would ever remove it: closing the account only finds the logs of webhooks that still exist.
+  tx(() => {
+    if (run('DELETE FROM webhooks WHERE id=? AND account_id=?', c.params.id, c.account.id).changes) run('DELETE FROM webhook_deliveries WHERE webhook_id=?', c.params.id);
+  });
 }, 'admin');
 
 // ---- Reports and impact --------------------------------------------------------------------
@@ -619,5 +693,6 @@ route('GET', '/dev/outbox', (c) => {
     return new Response(m?.html || 'Not found', { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'" } });
   }
   // Text messages land here too on a machine without a provider (SMS_DEV_OUTBOX=1), with the number masked.
-  return json({ emails: all('SELECT id, to_email, subject, link, status, at FROM emails ORDER BY id DESC LIMIT 100'), texts: all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100') });
+  // delivered_at, bounced_at (with its kind and reason) and complained_at: what the mail provider said afterwards.
+  return json({ emails: all('SELECT id, to_email, subject, link, status, at, delivered_at, bounced_at, bounce_kind, bounce_reason, complained_at FROM emails ORDER BY id DESC LIMIT 100'), texts: all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100') });
 }, 'public');

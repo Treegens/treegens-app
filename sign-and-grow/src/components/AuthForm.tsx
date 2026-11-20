@@ -60,7 +60,9 @@ export function AuthForm({ mode }: { mode: Mode }) {
         window.location.assign(safeNext(q?.get('next')));
       } else if (mode === 'forgot') {
         await api('/auth/forgot', { body: { email: f.email } });
-        setDone('If that address has an account, a link to choose a new password is on its way. It works for one hour.');
+        // The invitation is not lost by resetting a password, but the reset email does not carry it: the person is
+        // told to come back through the invitation email, which is what puts them on the team.
+        setDone(`If that address has an account, a link to choose a new password is on its way. It works for one hour.${q?.get('invite') ? ' Once you have chosen the new password, open the invitation email again and sign in from its button. That is what puts you on the team.' : ''}`);
       } else {
         const r = await api('/auth/reset', { body: { token: q?.get('token'), password: f.password } });
         // Choosing a password for a login whose address had never been confirmed cuts off a provider that did not
@@ -83,6 +85,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{TITLE[mode]}</h1>
         {mode === 'signup' && <p className="muted small">{q?.get('invite') ? 'You were invited to join a team.' : 'Free to start. No card needed. Every subscription plants trees.'}</p>}
         {mode === 'login' && q?.get('invite') && <p className="muted small">You were invited to join a team. Sign in and you are on it. Anything you already have on Sign&Grow stays as it is.</p>}
+        {mode === 'forgot' && q?.get('invite') && <p className="muted small">Your invitation stays valid while you do this. After you have chosen a new password, open the invitation email again and sign in from its button.</p>}
         {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>Your account is closed and will be deleted in 30 days. Any subscription has been stopped. Changed your mind? Sign in and it comes straight back.</div>}
         {cameBack && <div className="notice err" style={{ marginTop: 10 }} role="alert">{cameBack}</div>}
         {done ? <div className="notice" style={{ margin: '12px 0' }}>{done} <Link href="/login">Sign in</Link></div> : (
@@ -109,7 +112,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         )}
       </form>
       <p className="muted small center" style={{ marginTop: 14 }}>
-        {mode === 'login' ? <>New here? <Link href={`/signup${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Create an account</Link> · <Link href="/forgot">Forgot password?</Link></> : <>Already have an account? <Link href={`/login${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Sign in</Link></>}
+        {mode === 'login' ? <>New here? <Link href={`/signup${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Create an account</Link> · <Link href={`/forgot${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Forgot password?</Link></> : <>Already have an account? <Link href={`/login${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Sign in</Link></>}
         {/* Whichever form this is, a person is one click away, also for someone who cannot get in at all. */}
         {' · '}<Link href={mode === 'signup' ? '/help' : '/help?topic=cannot-log-in#contact'}>{mode === 'signup' ? 'Help' : 'Cannot get in? Get help'}</Link>
       </p>

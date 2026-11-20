@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { api, toast, Status, ROLE_LABEL } from '@/components/ui';
 import { fail } from './feedback';
 import { dayTime, howLong, neverOpened } from './lib';
+import { QrDialog } from './QrDialog';
+import { IN_PERSON_LOCK } from '@/lib/phone';
 
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent' };
 const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view' };
@@ -24,6 +26,8 @@ function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: stri
   if (r.status === 'declined') return { s: 'declined', label: 'Declined' };
   if (r.status === 'pending') return { s: 'pending', label: envelopeStatus === 'draft' ? 'Not sent' : open ? 'Waiting for their turn' : 'Never reached' };
   if (!open) return { s: 'pending', label: r.status === 'viewed' ? 'Opened, did not finish' : 'Did not open' };
+  // Everything required has a saved value and Finish was not pressed: nothing is signed, and only a nudge helps.
+  if (r.status === 'viewed' && r.progress?.ready) return { s: 'expired', label: 'Filled in, not finished' };
   if (r.status === 'viewed') return { s: 'viewed', label: 'Opened' };
   if (r.role === 'inperson') return { s: 'sent', label: 'Ready to sign in person' };
   if (mail?.status === 'failed') return mail.next_try_at ? { s: 'expired', label: 'Email delayed' } : { s: 'declined', label: 'Email failed' };
@@ -33,7 +37,7 @@ function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: stri
 }
 
 function EmailFact({ d, role }: { d: Delivery | null; role: string }) {
-  if (role === 'inperson') return <>No email goes to them. They sign on your device when you are together.</>;
+  if (role === 'inperson') return <>No email goes to them. They sign on your device when you are together. {IN_PERSON_LOCK}</>;
   if (!d) return <>No email has gone to this address yet.</>;
   const subject = <span className="muted"> &ldquo;{d.subject}&rdquo;</span>;
   const tries = d.tries && d.tries > 1 ? `, on try ${d.tries}` : '';
@@ -48,10 +52,25 @@ function EmailFact({ d, role }: { d: Delivery | null; role: string }) {
 // One card per person: what really happened to their email, when they opened it, when they finished,
 // and ways to reach them that do not depend on email.
 // `paused` is true while sending is paused on the account: a reminder would be refused, so the button says so.
-export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorrect, paused }: { envelope: any; deliveries: Delivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void; paused?: boolean }) {
+// What became of a text message about this envelope: a one-time code, the signing link or a reminder. The number is
+// only ever masked here, and the text itself is not shown.
+export type TextDelivery = { recipient_id?: string | null; kind: 'code' | 'link' | 'reminder' | string; to: string; status: string; error?: string | null; at: string; tries?: number; tried_at?: string | null; next_try_at?: string | null };
+const TEXT_KIND: Record<string, string> = { code: 'A one-time code', link: 'The signing link', reminder: 'A reminder' };
+
+function TextFact({ t }: { t: TextDelivery }) {
+  const what = `${TEXT_KIND[t.kind] || 'A text'} to ${t.to}`;
+  if (t.status === 'sent') return <>{what}: handed to the text message provider on {dayTime(t.tried_at || t.at)}.</>;
+  if (t.status === 'outbox') return <>{what}: <b className="sn-bad">not delivered.</b> This machine has no text message provider, so it was only written to the outbox.</>;
+  if (t.status === 'failed' && t.next_try_at) return <>{what}: <b className="sn-bad">not sent yet.</b> The provider would not take it on {dayTime(t.tried_at || t.at)}{t.error ? <>: {t.error}</> : null}. We try again around {dayTime(t.next_try_at)}.</>;
+  if (t.status === 'failed') return <>{what}: <b className="sn-bad">could not be sent</b>{t.error ? <>: {t.error}</> : null}. We have stopped trying. Check the number with <b>Correct</b>.</>;
+  return <>{what}: waiting to go out since {dayTime(t.at)}.</>;
+}
+
+export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onChanged, onCorrect, paused }: { envelope: any; deliveries: Delivery[]; texts?: TextDelivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void; paused?: boolean }) {
   const [links, setLinks] = useState<Record<string, string>>({});
   const [shown, setShown] = useState('');
   const [busy, setBusy] = useState('');
+  const [qr, setQr] = useState(''); // whose QR code is on the screen, if anyone's
   const out = e.status === 'sent';
 
   const linkFor = async (r: any) => {
@@ -60,7 +79,9 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
     setLinks((l) => ({ ...l, [r.id]: url }));
     return url as string;
   };
-  const shareText = (r: any, url: string) => `Hi ${(r.name || '').split(' ')[0] || 'there'}, here is your personal link to ${ASK[r.role] || 'sign'} "${e.subject}": ${url}`;
+  // The whole name as the sender wrote it. Which word of a name is the one to call someone by differs from country
+  // to country (the family name comes first in much of Asia, many people have one name only), so it is not guessed.
+  const shareText = (r: any, url: string) => `Hi ${(r.name || '').trim() || 'there'}, here is your personal link to ${ASK[r.role] || 'sign'} "${e.subject}": ${url}`;
 
   async function copy(r: any) {
     setBusy(`copy:${r.id}`);
@@ -73,6 +94,19 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
       } catch {
         toast('Your browser did not let us copy. The link is shown under their name, so you can select and copy it.', true);
       }
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  // For someone standing next to the sender: their link as a code to scan. Asking for the link is recorded like a copy.
+  async function showQr(r: any) {
+    setBusy(`qr:${r.id}`);
+    try {
+      await linkFor(r);
+      setQr(r.id);
     } catch (err) {
       fail(err);
     } finally {
@@ -117,7 +151,11 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
   async function signNow(r: any) {
     setBusy(`sign:${r.id}`);
     try {
-      window.location.href = await linkFor(r);
+      const link = await linkFor(r);
+      // In person the device is about to be in someone else's hands. The account is put away before this page is
+      // left, so the Back button does not bring it back (AppShell), and the server locks it when the page opens.
+      if (r.role === 'inperson') window.dispatchEvent(new CustomEvent('sg-handed-over', { detail: { signer: r.name, envelope_id: e.id } }));
+      window.location.href = link;
     } catch (err) {
       fail(err);
       setBusy('');
@@ -152,6 +190,10 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
                   {r.reassigned_from ? ` · handed over by ${r.reassigned_from}` : ''}
                   {r.access_code ? <> · Access code <b className="sn-code">{r.access_code}</b> (give it to them yourself, it is not in the email)</> : null}
                   {r.access_code && r.code_frozen_at ? <> · <b>This code is frozen</b> after too many wrong tries and opens nothing now. Choose Correct and set a new one to let them in.</> : null}
+                  {/* The check the sender asked for before the document opens, and whether it has been passed. */}
+                  {r.verify === 'sms_code' || r.verify === 'email_code' ? <> · Checked with a one-time code by {r.verify === 'sms_code' ? <>text message to <b className="sn-code">{r.phone}</b></> : 'email'}{r.check?.passed_at ? <>, passed on {dayTime(r.check.passed_at)}</> : ', not typed in yet'}</> : null}
+                  {r.check?.stopped ? <> · <b>They said this is not their number</b>, so no more codes are sent to it. Choose Correct and put in the right number to let them in.</> : null}
+                  {r.text_link && r.role !== 'inperson' ? <> · Link also sent by text message{r.verify === 'sms_code' ? '' : <> to <b className="sn-code">{r.phone}</b></>}</> : null}
                 </div>
               </div>
               <div className="sn-person-badges">
@@ -165,6 +207,8 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
                 <div><dt>Email</dt><dd>{out ? <>Not sent yet. {before.length ? `It goes out once ${before.map((x: any) => x.name).join(' and ')} ${before.length === 1 ? 'has' : 'have'} finished.` : 'It goes out when their turn comes.'}</> : 'Never sent. The envelope closed before their turn.'}</dd></div>
               )}
               {r.status !== 'pending' && <div><dt>Email</dt><dd><EmailFact d={mail} role={r.role} /></dd></div>}
+              {/* The latest text message to this person, when there was one: what really became of it. */}
+              {texts.find((t) => t.recipient_id === r.id) && <div><dt>Text message</dt><dd><TextFact t={texts.find((t) => t.recipient_id === r.id)!} /></dd></div>}
               {r.status !== 'pending' && r.role !== 'cc' && (
                 <div>
                   <dt>Opened</dt>
@@ -183,6 +227,13 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
                 <b>Not opened in {howLong(r.sent_at)}.</b> It may be in their spam folder. {r.muted ? 'Send them the link yourself:' : 'Nudge them, or send the link yourself:'}
               </p>
             )}
+            {/* The case nobody sees from outside: all filled in, Finish not pressed. Said in the server's own count. */}
+            {turn && p?.ready && (
+              <p className="sn-hint warn">
+                <b>Filled in everything but has not pressed Finish.</b> Their answers are saved, and nothing is signed until they press Finish.
+                {' '}{r.role === 'inperson' ? 'Open it with Host signing now and let them finish.' : r.muted ? 'They turned reminder emails off, so send them the link yourself and say that one button is left.' : 'A nudge tells them that one button is left:'}
+              </p>
+            )}
             {!stale && undelivered && (
               <p className="sn-hint warn">
                 {mail!.status === 'failed' && mail!.next_try_at ? <>The email has not gone out yet. We keep trying. If the address is wrong, fix it with <b>Correct</b>, or send them the link yourself in the meantime.</>
@@ -196,9 +247,17 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
                 {turn && (isMe || r.role === 'inperson') && <button className="btn sm primary" disabled={!!busy} onClick={() => signNow(r)}>{r.role === 'inperson' ? 'Host signing now' : `${r.role === 'approver' ? 'Review' : r.role === 'viewer' ? 'View' : 'Sign'} now`}</button>}
                 {reachable && !r.muted && <button className="btn sm" disabled={!!busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out. You can still copy the link and send it yourself.' : undefined} onClick={() => nudge(r)} aria-label={`Nudge ${r.name} with a reminder email`}>{busy === `nudge:${r.id}` ? 'Sending…' : 'Nudge'}</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => copy(r)} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>}
+                {reachable && <button className="btn sm qr-tap" disabled={!!busy} onClick={() => showQr(r)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link for ${r.name}`}>Show QR code</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>Share on WhatsApp</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'sms')} aria-label={`Share link with ${r.name} by text message`}>Share by text message</button>}
                 <button className="btn sm" disabled={!!busy} onClick={() => onCorrect(r)} aria-label={`Correct name or email of ${r.name}`}>Correct</button>
+              </div>
+            )}
+            {/* An access code can still be changed when nothing else can: for someone who has finished, and once the
+                envelope is finished or closed. It stands between them and their copy, and a frozen one locks them out. */}
+            {!(turn || (out && r.status === 'pending')) && e.status !== 'draft' && !!r.access_code && (
+              <div className="sn-person-actions">
+                <button className="btn sm" disabled={!!busy} onClick={() => onCorrect({ ...r, code_only: true })} aria-label={`Change the access code of ${r.name}`}>Correct</button>
               </div>
             )}
             {shown === r.id && links[r.id] && turn && (
@@ -207,6 +266,7 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
                 <input readOnly value={links[r.id]} onFocus={(ev) => ev.currentTarget.select()} />
               </label>
             )}
+            {qr === r.id && links[r.id] && turn && <QrDialog recipient={r} link={links[r.id]} onClose={() => setQr('')} />}
           </li>
         );
       })}

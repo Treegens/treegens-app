@@ -95,6 +95,11 @@
 .ed-guide.y { height: 1px; margin-top: -0.5px; }
 
 /* Step 3 */
+/* Fields without a label: one row for each, with the button that opens it. */
+.ed-nolabel { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.ed-nolabel li { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid rgba(0, 0, 0, 0.08); }
+.ed-nolabel li > span { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.ed-nolabel .btn { min-height: 44px; }
 .ed-people { list-style: none; margin: 0; padding: 0; }
 .ed-people li { display: flex; gap: 10px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
 .ed-people li:first-child { border-top: 0; }

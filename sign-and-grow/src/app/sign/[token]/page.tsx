@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api, toast, fmtDate } from '@/components/ui';
 import { PdfDoc } from '@/components/PdfDoc';
+import { HandBack } from '@/components/HandBack';
 import { AdoptSignature, type SavedMark } from '@/components/SignaturePad';
-import { formatDate } from '@/lib/dates';
+import { formatDate, formatDateValue, deviceZone, momentText } from '@/lib/dates';
 import { consentWording } from '@/lib/policy';
 import { fmtNum } from '@/lib/impact';
+import { NUMBER_HINT } from '@/lib/numbers';
 import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
 import { CodeCheck } from '@/components/sign/CodeCheck';
@@ -14,8 +16,10 @@ import { MenuDialog, AskDialog, ReportDialog, DeclineDialog, ReassignDialog, Sig
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
-import { pageTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
+import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
 import { docUrl, allOnScreen } from '@/components/sign/fields';
+import { useAutoReview } from '@/components/sign/autoReview';
+import { strikeClass } from '@/lib/strike';
 import { pageBoxes } from '@/components/sign/pdfText';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
@@ -48,6 +52,8 @@ export default function SignPage() {
   const [open, setOpen] = useState<Open>('');
   const [signedField, setSignedField] = useState<string | null>(null);
   const [sheet, setSheet] = useState<string | null>(null);
+  // The date field whose picker is open. A date that was picked is otherwise shown the way it will be printed.
+  const [dateOpen, setDateOpen] = useState<string | null>(null);
   const [view, setView] = useState<'doc' | 'text'>('doc');
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState('');
@@ -87,6 +93,8 @@ export default function SignPage() {
   const canSave = useRef(false);
   const rejected = useRef(0);
   const afterClose = useRef<any>(null);
+  // The name on the request as this tab last showed it: see load, where marks made under another name are dropped.
+  const who = useRef<string | null>(null);
   const stageRef = useRef('loading');
 
   const load = useCallback(async () => {
@@ -100,14 +108,19 @@ export default function SignPage() {
         // Marks made or confirmed in this tab come first: the ones on screen, or after a reload the tab's own
         // store. Otherwise the ones saved with the document on another device are used, so what was signed there
         // stays signed here. Opening the document never saves anything back: see restoreMarks.
-        const stored = readKept(token);
-        const start = restoreMarks(d.fields, d.recipient, { sig: (seenRef.current.signature && kept.current.sig) || stored.sig, ini: (seenRef.current.initials && kept.current.ini) || stored.ini });
+        // A mark belongs to the person who made it. When the name on the request is no longer the one this tab
+        // showed last (the sender put somebody else on it), nothing made in this tab is carried over: no signature,
+        // no initials, no answer that was not saved yet. Only what the server still holds for the request is used.
+        const mine = who.current == null || who.current === d.recipient?.name;
+        who.current = d.recipient?.name ?? null;
+        const stored = readKept(token, d.recipient?.name);
+        const start = restoreMarks(d.fields, d.recipient, { sig: (mine && seenRef.current.signature && kept.current.sig) || stored.sig, ini: (mine && seenRef.current.initials && kept.current.ini) || stored.ini });
         const server = start.values;
         setSig(start.sig);
         setIni(start.ini);
         setSeen(start.seen);
         savedMarks.current = start.saved;
-        const unsaved = !!lastSaved.current && JSON.stringify(valuesRef.current) !== lastSaved.current;
+        const unsaved = mine && !!lastSaved.current && JSON.stringify(valuesRef.current) !== lastSaved.current;
         // Answers not saved yet are kept, but only for fields that still exist: the sender may have taken one away.
         setValues((prev) => (unsaved ? { ...server, ...Object.fromEntries(Object.entries(prev).filter(([id]) => id in server)) } : server));
         lastSaved.current = start.baseline;
@@ -135,10 +148,9 @@ export default function SignPage() {
     };
   }, [data?.recipient?.email, data?.recipient?.name, data?.recipient?.role, !!data?.fields]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The browser tab names the document, so it can be found again among other tabs.
-  useEffect(() => {
-    if (data?.envelope?.subject) document.title = pageTitle(data.envelope.subject);
-  }, [data?.envelope?.subject]);
+  // The browser tab names the document, so it can be found again among other tabs, and keeps that name when the
+  // framework writes the site's own title into the head again: see keepTitle.
+  useEffect(() => keepTitle(data?.envelope?.subject), [data?.envelope?.subject]);
 
   useEffect(() => {
     try {
@@ -209,7 +221,8 @@ export default function SignPage() {
   const required = items.filter((i) => i.required);
   const left = required.filter((i) => !i.done);
   const nextField = left[0]?.first;
-  const dateText = formatDate(new Date(), env?.date_format);
+  // Today's date where this person is: the date of signing is the calendar day in their own time zone.
+  const dateText = formatDate(new Date(), env?.date_format, deviceZone());
   const byId = (id: string | null | undefined) => fields.find((f) => f.id === id);
 
   const set = useCallback((id: string, v: string) => setValues((s) => ({ ...s, [id]: v })), []);
@@ -309,8 +322,8 @@ export default function SignPage() {
   // The adopted signature lives in this tab until the document is finished, so a reload does not lose it. Only a
   // mark made or confirmed here is kept that way: one that came from storage still has to be confirmed after a reload.
   useEffect(() => {
-    if (stage === 'sign' && acts) writeKept(token, seen.signature ? sig : null, seen.initials ? ini : null);
-  }, [sig, ini, seen, stage, acts, token]);
+    if (stage === 'sign' && acts) writeKept(token, seen.signature ? sig : null, seen.initials ? ini : null, data?.recipient?.name);
+  }, [sig, ini, seen, stage, acts, token, data?.recipient?.name]);
 
   // The "Sign here" pointer must not sit on the words of the page. They are read from the document that is already
   // drawn (nothing is downloaded again), for the page that holds the next field, together with the size of that
@@ -402,6 +415,10 @@ export default function SignPage() {
   // Said instead of finishing while the pages of the document, as it is now, are not on the screen yet.
   const NOT_SHOWN = 'The document is still loading. You can finish as soon as its pages are on your screen.';
 
+  // The first time nothing required is left, "Check before you finish" opens by itself (see autoReview.ts).
+  useAutoReview(stage === 'sign' && acts && required.length > 0 && left.length === 0 && allShown && !sheet && !adopt && !open && !signedField && !changedOpen && !busy
+    && !ordered.some((f) => problemWith(f, values[f.id] || '')), pressFinish);
+
   function pressFinish() {
     if (!allShown) return toast(NOT_SHOWN, true);
     if (me.role === 'viewer') return complete();
@@ -422,7 +439,7 @@ export default function SignPage() {
     setBusy(true);
     setFinishError('');
     try {
-      const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current } });
+      const r = await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, tz: deviceZone() } });
       canSave.current = false;
       writeKept(token, null, null);
       setOpen('');
@@ -591,7 +608,7 @@ export default function SignPage() {
           {!voided && !expired && <p>{mine ? `We told ${sender.name}. The document is closed and there is nothing more for you to do. Changed your mind? Ask them to send it again.` : 'One of the people asked to sign said no, so the document is closed. There is nothing more for you to do.'}</p>}
           {expired && (
             <>
-              <p>The deadline{env.expires_at ? ` was ${fmtDate(env.expires_at)}` : ' has passed'}. Nothing is lost: {sender.name} can open it again and you carry on from where you were.</p>
+              <p>The deadline{env.expires_at ? ` was ${momentText(env.expires_at, deviceZone())}` : ' has passed'}. Nothing is lost: {sender.name} can open it again and you carry on from where you were.</p>
               {me.status !== 'completed' && me.status !== 'declined' && me.role !== 'cc' && (moreTime === 'asked' ? (
                 <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name} for more time.</b> You will get an email as soon as the document is open again.</div>
               ) : (
@@ -630,6 +647,8 @@ export default function SignPage() {
       <Shell data={data} footer={report}>
         {notice}
         <div className="stack">
+          {/* In person, the device is not the signer's: the first thing the done screen says is to hand it back. */}
+          {inPerson && <HandBack signer={me.name} sender={sender.name} envelopeId={env.id} />}
           <StateCard tone="ok" title={title}>
             <p>
               {allDone
@@ -665,7 +684,7 @@ export default function SignPage() {
           {me.signed_before && me.earlier_copy && !data.locked && (
             <>
               <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {sender.name} changed the document, so you will be asked to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again when it is your turn. What you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} then is kept on record, and you can download it.</p>
-              <div className="row wrap sg-actions"><a className="btn lg" href={`${downloadUrl}?earlier=1`}><Icon name="download" /> Download the document as you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it</a></div>
+              <div className="row wrap sg-actions"><a className="btn lg" href={`${downloadUrl}?earlier=1`}><Icon name="download" /> Download what you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'}</a></div>
             </>
           )}
           <Sender env={env} brand={data.brand} lead="Questions? Contact" />
@@ -684,7 +703,7 @@ export default function SignPage() {
     { key: 'download', label: 'Download the document', icon: 'download', href: downloadUrl, download: true },
     { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },
     ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); changeMark(sig ? 'signature' : 'initials'); } }] : []),
-    ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? 'Asked. They will be in touch by email.' : `The deadline is ${fmtDate(env.expires_at)}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(`We asked ${sender.name} for more time. They will be in touch by email.`); } }] : []),
+    ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? 'Asked. They will be in touch by email.' : `The deadline is ${momentText(env.expires_at, deviceZone())}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(`We asked ${sender.name} for more time. They will be in touch by email.`); } }] : []),
     ...(me.role === 'signer' || me.role === 'approver' ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
     ...(!muted && me.role !== 'inperson' ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
     ...(me.role !== 'viewer' && me.role !== 'cc' ? [{ key: 'decline', label: declineLabel, hint: 'Closes the document for everyone.', icon: 'stop', danger: true, onClick: go('decline') }] : []),
@@ -726,7 +745,7 @@ export default function SignPage() {
             if (!agree) return setFormError('Tick the box above to agree, then choose Continue.');
             setBusy(true);
             try {
-              await api(`${base}/consent`, { body: { version: version.current, wording: wording.version } });
+              await api(`${base}/consent`, { body: { version: version.current, wording: wording.version, tz: deviceZone() } });
               await load();
             } catch (e: any) {
               setFormError(`${e?.message || 'Something went wrong on our side.'} Try again in a moment.`);
@@ -774,6 +793,8 @@ export default function SignPage() {
     const ok = filled(f);
     const auto = AUTO.includes(f.type) || f.readonly;
     const value = values[f.id] || '';
+    // How the answer reads on the page: a picked date in the format the sender chose for this envelope.
+    const shown = f.type === 'date' ? formatDateValue(value, env.date_format) : value;
     const wrong = !auto && !!problemWith(f, value);
     const cls = `field fill sg-f${auto || ok ? ' done' : ''}${f.id === nextField?.id ? ' next' : ''}${isBox(f) ? ' box' : ''}${wrong ? ' bad' : ''}${auto ? ' sg-auto' : ''}`;
     const common = { id: `f-${f.id}`, className: cls, style: pos(f) };
@@ -789,7 +810,7 @@ export default function SignPage() {
       );
     }
     if (AUTO.includes(f.type)) return <div key={f.id} {...common} title="Added for you"><span className="sg-val" dir="auto">{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : dateText}</span></div>;
-    if (f.readonly) return <div key={f.id} {...common}><span className="sg-val" dir="auto">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}</span></div>;
+    if (f.readonly) return <div key={f.id} {...common}><span className="sg-val" dir="auto">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.type === 'date' ? formatDateValue(f.value, env.date_format) : f.value}</span></div>;
     // Tick boxes and radio buttons are the browser's own controls, drawn in the place the page gives them. So the
     // keyboard works as everywhere else (Space ticks, the arrow keys move through a group of radio buttons) and a
     // screen reader says what they are, whether they are on, and which group a radio button belongs to.
@@ -818,8 +839,8 @@ export default function SignPage() {
       );
     if (usesSheet(f))
       return (
-        <button key={f.id} type="button" {...common} onClick={() => goTo(f)} aria-label={`${name}${need}. ${value ? `Your answer: ${value}` : 'Empty'}. Opens a box to type in`}>
-          <span className={`sg-val${value ? '' : ' ph'}`} dir="auto">{value || name + (f.required ? ' *' : '')}</span>
+        <button key={f.id} type="button" {...common} onClick={() => goTo(f)} aria-label={`${name}${need}. ${value ? `Your answer: ${shown}` : 'Empty'}. Opens a box to type in`}>
+          <span className={`sg-val${value ? '' : ' ph'}`} dir="auto">{shown || name + (f.required ? ' *' : '')}</span>
         </button>
       );
     if (f.type === 'dropdown')
@@ -831,13 +852,22 @@ export default function SignPage() {
           </select>
         </div>
       );
+    // A date that has been picked is shown the way it will be printed, in the format the sender chose, not in the
+    // browser's own. Going to the field (a click, Tab or Next) brings the date picker back.
+    if (f.type === 'date' && value && dateOpen !== f.id)
+      return (
+        <button key={f.id} type="button" {...common} onFocus={() => setDateOpen(f.id)} onClick={() => setDateOpen(f.id)} aria-label={`${name}${need}. Your answer: ${shown}. Change it`}>
+          <span className="sg-val">{shown}</span>
+        </button>
+      );
     // dir="auto": the direction comes from what is typed, so right-to-left text starts at the right edge of its box.
-    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, placeholder: name + (f.required ? ' *' : ''), value, title: wrong ? problemWith(f, value) : undefined };
+    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, placeholder: name + (f.required ? ' *' : ''), value, title: wrong ? problemWith(f, value) : f.type === 'number' ? NUMBER_HINT : undefined };
     return (
       <div key={f.id} {...common}>
         {isMulti(f)
           ? <textarea {...shared} onChange={(e) => set(f.id, e.target.value)} />
-          : <input {...shared} type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined} onChange={(e) => set(f.id, e.target.value)} />}
+          : <input {...shared} type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined} onChange={(e) => set(f.id, e.target.value)}
+              {...(f.type === 'date' ? { autoFocus: dateOpen === f.id, onFocus: () => setDateOpen(f.id), onBlur: () => setDateOpen(null) } : {})} />}
       </div>
     );
   };
@@ -875,7 +905,7 @@ export default function SignPage() {
       {/* Everything already on the page that is not this person's to fill in: the sender's own wording, whoever it
           is assigned to, and what people who have finished put there. */}
       {data.others.filter((f: any) => f.document_id === docId && f.page === page).map((f: any) => (
-        <div key={f.id} dir="auto" className={`field other${isBox(f) ? ' box' : ''}`} style={pos(f)} title={otherSource(f, sender.name)}>
+        <div key={f.id} dir="auto" className={`field other${isBox(f) ? ' box' : ''}${strikeClass(f)}`} style={pos(f)} title={otherSource(f, sender.name)}>
           {f.image ? <img src={f.image} alt="Signature of another signer" /> : isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}
         </div>
       ))}
@@ -888,7 +918,7 @@ export default function SignPage() {
     </>
   );
 
-  const ctx: FieldCtx = { me, values, sig, ini, dateText, ordered, uploading, filled, set, pickRadio, clickSig, attach };
+  const ctx: FieldCtx = { me, values, sig, ini, dateText, dateFormat: env.date_format, ordered, uploading, filled, set, pickRadio, clickSig, attach };
   const signed = byId(signedField);
   const sheetField = byId(sheet);
   const sheetTarget = sheetField && nextAfter(sheetField.id);
@@ -946,12 +976,12 @@ export default function SignPage() {
       ) : (
         <TextView documents={data.documents} urlFor={(id) => docUrl(base, data.documents.find((d: any) => d.id === id) || { id })} onShown={markShown} senderName={sender.name} onAsk={go('ask')}
           fields={(docId, page, near) => <PageFields docId={docId} page={page} c={ctx} near={near} />}
-          others={(docId, page) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} />} />
+          others={(docId, page, near) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} near={near} />} />
       )}
-      <p className="muted small center sg-envelope">Envelope {env.id}{env.expires_at ? ` · open until ${fmtDate(env.expires_at)}` : ''} · Signing on screen saves about {fmtNum(env.impact.sheets)} sheets of paper.</p>
+      <p className="muted small center sg-envelope">Envelope {env.id}{env.expires_at ? ` · open until ${momentText(env.expires_at, deviceZone())}` : ''} · Signing on screen saves about {fmtNum(env.impact.sheets)} sheets of paper.</p>
 
       {sheetField && (
-        <FieldSheet field={sheetField} value={values[sheetField.id] || ''} onChange={(v) => set(sheetField.id, v)} onDone={() => setSheet(null)} onNext={sheetTarget ? () => sheetNext(sheetField.id) : undefined} />
+        <FieldSheet field={sheetField} dateFormat={env.date_format} value={values[sheetField.id] || ''} onChange={(v) => set(sheetField.id, v)} onDone={() => setSheet(null)} onNext={sheetTarget ? () => sheetNext(sheetField.id) : undefined} />
       )}
       {signed && (
         <SignedFieldDialog kind={signed.type} image={(signed.type === 'signature' ? sig : ini) || ''} onClose={() => setSignedField(null)}
@@ -973,6 +1003,7 @@ export default function SignPage() {
             // A new spelling is a newer version of the envelope. This page made the change and shows it, so it
             // carries on with that version. Anyone else who has the page open is asked to look again.
             if (r?.version != null) version.current = r.version;
+            who.current = r?.name || name; // the same person under a corrected spelling: their marks in this tab stay
             setData((d: any) => (d ? { ...d, version: r?.version ?? d.version, recipient: { ...d.recipient, name: r?.name || name } } : d));
             return '';
           }} />

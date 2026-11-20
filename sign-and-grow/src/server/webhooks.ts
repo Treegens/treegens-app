@@ -6,7 +6,10 @@ import { all, get, run } from './db.ts';
 import { hmac, now, id, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
 
-export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'envelope.corrected', 'recipient.viewed', 'recipient.completed'];
+// envelope.updated: something about an envelope changed that is none of the others. Today that is news about an
+// email to one of its recipients (it came back, it was marked as spam, the sender had it tried again): the delivery
+// carries "recipient_id" and "change". Read the envelope again to see how it stands.
+export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'envelope.corrected', 'envelope.updated', 'recipient.viewed', 'recipient.completed'];
 
 function isPrivate(ip: string): boolean {
   if (net.isIPv4(ip)) {

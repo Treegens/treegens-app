@@ -2,9 +2,10 @@
 import { useState } from 'react';
 import { ROLE_LABEL, Status, fmtDate } from '../ui';
 import { useMe } from '../AppShell';
-import { DATE_FORMATS, formatDate } from '@/lib/dates';
+import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, deviceZone, momentText } from '@/lib/dates';
 import { scanWarning } from '@/lib/scans';
 import { Lock } from './parts';
+import { CheckFields } from '../sender/CheckFields';
 import { LIMITS, PAPER_HINT, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
 
@@ -19,6 +20,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
   const uploading = uploads.some((u) => u.state !== 'error');
   const format = env.date_format || DATE_FORMATS[0];
   const today = new Date();
+  // The example shows today's date where the sender is, which is how a signer's own day is found as well.
+  const zone = deviceZone();
   const was = (id: string) => (correcting ? base.recipients.find((r: any) => r.id === id) : null);
 
   return (
@@ -129,7 +132,10 @@ export function StepAdd({ ed }: { ed: Ed }) {
                     <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">(only they see it)</span></span><input value={r.note || ''} maxLength={1000} onChange={(e) => ed.patchRcp(r.id, { note: e.target.value })} /></label>
                   </div>
                 )}
-                {r.role === 'inperson' && <div className="muted small" style={{ marginTop: 6 }}>You host the signing on your own device. The link is emailed to you.</div>}
+                {/* A one-time code before the document opens, and the signing link by text message: only what this
+                    server can do is offered (me.text_messages says whether its operator switched texts on). */}
+                {more === r.id && <CheckFields value={r} role={r.role} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={(p) => ed.patchRcp(r.id, p)} />}
+                {r.role === 'inperson' && <div className="muted small" style={{ marginTop: 6 }}>You host the signing on your own device. The link is emailed to you. While they hold the device your account is locked in that browser, and you type your password to come back.</div>}
                 {correcting && (
                   <div className="muted small" style={{ marginTop: 6 }}>
                     {!old ? 'New. They are invited when you save, or when it is their turn.'
@@ -157,16 +163,17 @@ export function StepAdd({ ed }: { ed: Ed }) {
         <div className="grid g2">
           <label className="f"><span>Remind every <span className="hint">(days, 0 for never)</span></span><input type="number" inputMode="numeric" min={0} max={60} value={env.reminder_days} onChange={(e) => ed.patchEnv({ reminder_days: Number(e.target.value) })} /></label>
           {correcting
-            ? <div className="f ed-static"><span>Deadline</span><div className="muted">{env.expires_at ? `Closes on ${fmtDate(env.expires_at)}. ` : ''}To give people more time, use the envelope page after you save.</div></div>
+            ? <div className="f ed-static"><span>Deadline</span><div className="muted">{env.expires_at ? `Closes on ${momentText(env.expires_at, zone)}. ` : ''}To give people more time, use the envelope page after you save.</div></div>
             : <label className="f"><span>Expires after <span className="hint">(days)</span></span><input type="number" inputMode="numeric" min={1} max={365} value={env.expire_days} onChange={(e) => ed.patchEnv({ expire_days: Number(e.target.value) })} /></label>}
           <div>
             <label className="f" style={{ marginBottom: 6 }}><span>Date format <span className="hint">(for dates stamped on the document)</span></span>
               <select value={format} disabled={anyLocked} aria-describedby="ed-date-example" onChange={(e) => ed.patchEnv({ date_format: e.target.value })}>
-                {DATE_FORMATS.map((f) => <option key={f} value={f}>{formatDate(today, f)} ({f})</option>)}
+                {DATE_FORMAT_CHOICES.map((f) => <option key={f} value={f}>{formatDate(today, f, zone)} ({f})</option>)}
               </select>
             </label>
             <div id="ed-date-example" className="muted small" aria-live="polite">
-              {anyLocked ? `Dates are written like ${formatDate(today, format)}. That is fixed, because ${lockedNames} already finished.` : <>A date signed today is written as <b style={{ color: 'var(--ink)' }}>{formatDate(today, format)}</b>. It is never changed to another format.</>}
+              {anyLocked ? `Dates are written like ${formatDate(today, format, zone)}. That is fixed, because ${lockedNames} already finished.`
+                : <>Every date on the document is written like <b style={{ color: 'var(--ink)' }}>{formatDate(today, format, zone)}</b>: the date each person signs on, and any date they pick in a date field. The date of signing is the calendar day where that person is, by the time zone of their device. The certificate gives the exact time in UTC as well. The format is never changed to another one.</>}
             </div>
           </div>
         </div>

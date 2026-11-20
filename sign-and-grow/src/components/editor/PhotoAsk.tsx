@@ -15,8 +15,14 @@ const THUMBS_UP_TO = 12;
 export function PhotoAsk({ files, onPick, onClose }: { files: File[]; onPick: (files: File[], oneDocument: boolean) => void; onClose: () => void }) {
   const [pics, setPics] = useState<File[]>(() => files.filter(isPicture));
   const others = useMemo(() => files.filter((f) => !isPicture(f)), [files]);
-  const urls = useMemo(() => (pics.length <= THUMBS_UP_TO ? new Map(files.filter(isPicture).map((f) => [f, URL.createObjectURL(f)])) : new Map<File, string>()), [files]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => urls.forEach((u) => URL.revokeObjectURL(u)), [urls]);
+  const [urls, setUrls] = useState<Map<File, string>>(new Map());
+  useEffect(() => {
+    const shown = files.filter(isPicture);
+    if (shown.length > THUMBS_UP_TO) return;
+    const made = new Map(shown.map((f) => [f, URL.createObjectURL(f)]));
+    setUrls(made);
+    return () => made.forEach((u) => URL.revokeObjectURL(u));
+  }, [files]);
   const [said, setSaid] = useState('');
   const n = pics.length;
   const tooMany = n > MAX_PHOTOS_PER_DOCUMENT;

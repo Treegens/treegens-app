@@ -23,6 +23,8 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-envelopes.ts');
   await import('../src/server/routes-sign.ts');
   await import('../src/server/routes-signercode.ts');
+  await import('../src/server/routes-groups.ts');
+  await import('../src/server/routes-bounces.ts');
   await import('../src/server/routes-trust.ts');
   await import('../src/server/routes-support.ts');
   await import('../src/server/openapi.ts');

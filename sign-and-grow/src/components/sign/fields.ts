@@ -1,4 +1,5 @@
 // What a signer's fields mean, shared by the document view, the text view and the phone sheet.
+import { NUMBER_RULE, NUMBER_PROBLEM } from '../../lib/numbers.ts';
 
 export const AUTO = ['date_signed', 'full_name', 'email'];
 /** Fields that are typed into. On a phone these open a sheet with a large input. */
@@ -40,7 +41,8 @@ export function buildItems(ordered: any[], filled: (f: any) => boolean): Item[] 
 }
 
 // The same checks the server makes when finishing, so a mistake is caught while the person is still at the field.
-const RULES: Record<string, RegExp> = { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, number: /^-?\d+([.,]\d+)?$/, phone: /^[+()\d][\d\s().-]{5,}$/ };
+// The number rule is the server's own (src/lib/numbers.ts): numbers as people write them anywhere, not only in the US.
+const RULES: Record<string, RegExp> = { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, number: NUMBER_RULE, phone: /^[+()\d][\d\s().-]{5,}$/ };
 export function problemWith(f: any, value: string): string {
   if (!value || isSig(f) || isBox(f) || f.type === 'dropdown' || f.type === 'attachment') return '';
   const rule = f.type === 'number' ? 'number' : f.validation;
@@ -54,7 +56,7 @@ export function problemWith(f: any, value: string): string {
     }
   }
   if (re.test(value)) return '';
-  if (rule === 'number') return 'Use digits only, like 2500 or 12.5.';
+  if (rule === 'number') return NUMBER_PROBLEM;
   if (rule === 'email') return 'Enter an email address, like name@example.org.';
   if (rule === 'phone') return 'Enter a phone number with its area code.';
   return 'This is not in the format the sender asked for. Check it and try again.';
@@ -64,20 +66,26 @@ export const pos = (f: any) => ({ left: `${f.x * 100}%`, top: `${f.y * 100}%`, w
 
 // The signature a person adopts is only sent when they finish. Keeping it for the life of the tab means a
 // reload or a dropped connection does not make them draw it again.
+// It is kept under the name it was made for (`who`). A signature belongs to the person who made it: when the sender
+// has put another name on the request since, the tab's copy is not given back, and only what the server still holds
+// for the request counts (it clears that too when the new name is another person). `store` is the tab's own
+// storage, and a parameter only so this can be tested without a browser.
+type KeptStore = { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void };
 const keptKey = (token: string) => `sg:sign:${token}`;
-export function readKept(token: string): { sig: string | null; ini: string | null } {
+export function readKept(token: string, who?: string | null, store?: KeptStore): { sig: string | null; ini: string | null } {
   try {
-    const k = JSON.parse(sessionStorage.getItem(keptKey(token)) || '{}');
+    const k = JSON.parse((store || sessionStorage).getItem(keptKey(token)) || '{}');
     const ok = (s: any) => (typeof s === 'string' && s.startsWith('data:image/') ? s : null);
+    if (who != null && k.who !== who) return { sig: null, ini: null };
     return { sig: ok(k.sig), ini: ok(k.ini) };
   } catch {
     return { sig: null, ini: null };
   }
 }
-export function writeKept(token: string, sig: string | null, ini: string | null) {
+export function writeKept(token: string, sig: string | null, ini: string | null, who?: string | null, store?: KeptStore) {
   try {
-    if (sig || ini) sessionStorage.setItem(keptKey(token), JSON.stringify({ sig, ini }));
-    else sessionStorage.removeItem(keptKey(token));
+    if (sig || ini) (store || sessionStorage).setItem(keptKey(token), JSON.stringify({ sig, ini, who: who ?? null }));
+    else (store || sessionStorage).removeItem(keptKey(token));
   } catch {
     /* Private mode or a full store: the signature simply is not kept across a reload. */
   }
@@ -87,6 +95,26 @@ export function writeKept(token: string, sig: string | null, ini: string | null)
 
 /** The browser tab says which document this is, so it can be found again among other tabs. */
 export const pageTitle = (subject?: string | null): string => (subject && subject.trim() ? `${subject.trim()} · Sign&Grow` : 'Sign&Grow');
+
+/**
+ * Keeps the tab named after the document for as long as the screen shows it. Setting the title once is not enough:
+ * whenever the framework renders the head of the page again it writes the site's own title back, and the tab would
+ * lose the document's name. So the head is watched, and the name is put back when something else changed it.
+ * Returns how to stop. `doc` and `Watch` are the page's own document and MutationObserver, and parameters only so
+ * this can be tested without a browser.
+ */
+export function keepTitle(subject: string | null | undefined, doc?: { title: string; head: any }, Watch?: new (fn: () => void) => { observe(target: any, o: any): void; disconnect(): void }): () => void {
+  if (!subject || !subject.trim()) return () => {};
+  const d = doc || document;
+  const want = pageTitle(subject);
+  const set = () => {
+    if (d.title !== want) d.title = want;
+  };
+  set();
+  const watch = new (Watch || MutationObserver)(set);
+  watch.observe(d.head, { childList: true, subtree: true, characterData: true });
+  return () => watch.disconnect();
+}
 
 /** Names are compared the way a person reads them: case, accents and extra spaces make no difference. */
 export function sameName(a: any, b: any): boolean {

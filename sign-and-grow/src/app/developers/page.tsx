@@ -11,7 +11,7 @@ type Endpoint = [method: string, path: string, what: string, isNew?: boolean];
 
 const GROUPS: [string, Endpoint[]][] = [
   ['Files and envelopes', [
-    ['POST', '/api/files', 'Upload a PDF, PNG or JPEG as the multipart field "file", up to 25 MB and 500 pages. Returns the file id and page sizes.'],
+    ['POST', '/api/files', 'Upload a PDF, PNG or JPEG as the multipart field "file", up to 25 MB and 500 pages. Returns the file id, page sizes and stored size. A phone photo is turned upright from its camera note. Repeat "file" to make one document from several pictures, a page for each, in the order sent.'],
     ['POST', '/api/envelopes', 'Create a draft, or create from a template with template_id. Add "send": true to send straight away.'],
     ['GET', '/api/envelopes', 'List envelopes. Filters: box (drafts, sent, waiting, completed, closed), q, folder, kind=template, limit, offset.'],
     ['GET', '/api/envelopes/:id', 'One envelope with its documents, recipients and fields, the audit trail, the email delivery log and how far each signer has got.'],
@@ -26,7 +26,7 @@ const GROUPS: [string, Endpoint[]][] = [
   ['While an envelope is out', [
     ['POST', '/api/envelopes/:id/remind', 'Remind everyone whose turn it is. Send a recipient_id to remind one person only.', true],
     ['POST', '/api/envelopes/:id/extend', 'Push the deadline out by a number of days, or reopen an envelope that expired.', true],
-    ['POST', '/api/envelopes/:id/correct', 'Fix one recipient\'s name, email or access code. A name fix keeps their link. A new email address gets a new one, and counts as a new person towards the daily limit of an account that has not paid. An access code needs at least 4 characters, and a new one unfreezes a code that was frozen after 10 wrong tries.'],
+    ['POST', '/api/envelopes/:id/correct', 'Fix one recipient\'s name, email or access code. A name fix keeps their link. A new email address gets a new one, and counts as a new person towards the daily limit of an account that has not paid. An access code needs at least 4 characters, and a new one unfreezes a code that was frozen after 10 wrong tries. Also takes "verify", "phone" and "text_link": see Checking who signs.'],
     ['POST', '/api/envelopes/:id/void', 'Void with a reason. Recipients see the reason.'],
     ['POST', '/api/envelopes/:id/recipient-view', 'Get one recipient\'s signing URL, for embedded signing.'],
   ]],
@@ -186,6 +186,26 @@ const expected = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET)
   .update(req.headers["x-signandgrow-timestamp"] + "." + rawBody).digest("hex");
 const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-signandgrow-signature"]));`}</Code>
           <p className="muted small">Webhook addresses must use https and point to a public address. The name is looked up once when each delivery starts, and the delivery only connects to an address that passed the check.</p>
+        </div>
+
+        <div className="card" id="checks">
+          <h2>Checking who signs</h2>
+          <p>Each recipient can carry a check that has to be passed before the document opens for them. Set it where you set the name and the email address, on <C>POST /api/envelopes</C>, on <C>PUT /api/envelopes/:id</C> and on <C>POST /api/envelopes/:id/correct</C>:</p>
+          <Code label="Example: a recipient who is checked by text message">{`"recipients": [{
+  "name": "Sam Signer", "email": "sam@example.org",
+  "verify": "sms_code",        // "none" (the default), "email_code" or "sms_code"
+  "phone": "+447700900123",    // E.164: plus sign, country code, number. Needed for "sms_code" and for "text_link"
+  "text_link": true            // also text the signing link. Off unless you send true
+}]`}</Code>
+          <ul className="pub-list">
+            <li><C>email_code</C> sends a 6-digit code to the recipient&apos;s email address, <C>sms_code</C> by text message to <C>phone</C>. The code is sent when the person asks for it on the signing page, works for 10 minutes and for 5 tries, and is never in any answer of this API. <C>access_code</C> works as before and can be combined with either: it is asked for first.</li>
+            <li>Text messages exist only when the operator of this server has switched them on. <C>GET /api/me</C> says so in <C>text_messages</C>. When they are off, <C>&quot;verify&quot;: &quot;sms_code&quot;</C> and <C>&quot;text_link&quot;: true</C> are refused with 400, a sentence that says so, and <C>&quot;code&quot;: &quot;texts_off&quot;</C>. <C>email_code</C> always works.</li>
+            <li>A phone number that is not in international form, or a missing one where a text is asked for, is refused with 400 when the envelope is sent or corrected. A draft may hold a half-typed number.</li>
+            <li>What comes back: <C>verify</C>, <C>phone</C>, <C>text_link</C>, and <C>check</C> with <C>line</C> (the sentence the certificate will carry, such as &ldquo;Link sent by email only&rdquo;), <C>passed_at</C> and <C>stopped</C> (someone using the link said the number is not theirs, and no code goes to it until you correct it). <C>GET /api/envelopes/:id</C> also returns <C>texts</C>: what became of every text message, with the number masked.</li>
+            <li>Changing <C>verify</C> or <C>phone</C> on an envelope that is out makes that person pass the check again and writes a line to the audit trail. Changing their email address to another person&apos;s needs their <C>phone</C> in the same call when a text is still asked for: a number typed for one person is never used for another.</li>
+            <li>A text counts like an email to that person: 403 while the account is paused, 429 when an account under the daily limit would text more phone numbers than it may email people, and 429 when the account has used the text messages this server allows it in 24 hours. Texts are not charged for.</li>
+            <li>Templates keep the check. <C>POST /api/bulk</C> and <C>POST /api/envelopes</C> with a <C>template_id</C> take <C>phone</C> next to <C>name</C> and <C>email</C> for each role. A public form refuses <C>sms_code</C> and <C>text_link</C> on the role its visitors fill in, and accepts <C>email_code</C>.</li>
+          </ul>
         </div>
 
         <div className="card" id="embedded">

@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, useLoad, fmtDate, toast } from '@/components/ui';
@@ -7,10 +7,55 @@ import { Dialog } from '@/components/sender/Dialog';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
+import { reminderText } from '@/lib/policy';
+
+// With a waiver form for each state or client, one flat list stops working at about twenty. So the page has what
+// the envelope list has: a search (every word has to be found in the name, the folder, a role or the document), a
+// folder filter, and Move. Folders of templates belong to the team, like the templates themselves.
+type View = { q: string; folder: string };
+const STORE = 'sg.templates.view';
+const PAGE = 200;
 
 export default function Templates() {
   const router = useRouter();
-  const [data, reload, error] = useLoad<any>(() => api('/envelopes?kind=template'));
+  const [view, setView] = useState<View | null>(null);
+  const [typed, setTyped] = useState('');
+  const [moving, setMoving] = useState<any>(null);
+  // The last search and folder are remembered, so using a template and coming back does not lose the place.
+  useEffect(() => {
+    let v: View = { q: '', folder: '' };
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE) || '{}') || {};
+      v = { q: typeof saved.q === 'string' ? saved.q : '', folder: typeof saved.folder === 'string' ? saved.folder : '' };
+    } catch {
+      /* storage can be unavailable */
+    }
+    setView(v);
+    setTyped(v.q);
+  }, []);
+  useEffect(() => {
+    if (!view) return;
+    try {
+      localStorage.setItem(STORE, JSON.stringify(view));
+    } catch {
+      /* storage can be unavailable */
+    }
+  }, [view]);
+  useEffect(() => {
+    const t = setTimeout(() => setView((v) => (v && v.q !== typed.trim() ? { ...v, q: typed.trim() } : v)), 250);
+    return () => clearTimeout(t);
+  }, [typed]);
+  const [data, reload, error] = useLoad<any>(
+    () => (view ? api(`/envelopes?kind=template&q=${encodeURIComponent(view.q)}&folder=${encodeURIComponent(view.folder)}&limit=${PAGE}`) : Promise.resolve(null)),
+    [view?.q, view?.folder],
+  );
+  // A remembered folder that no longer exists would hide every template with no way to see why.
+  useEffect(() => {
+    if (data && view?.folder && !data.folders.includes(view.folder)) setView({ ...view, folder: '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+  const filtered = !!view && (view.q !== '' || view.folder !== '');
+  const showAll = () => (setTyped(''), setView({ q: '', folder: '' }));
   const [use, setUse] = useState<any>(null);
   const [fill, setFill] = useState<Record<string, { name: string; email: string }>>({});
   const [busy, setBusy] = useState(false);
@@ -67,16 +112,38 @@ export default function Templates() {
         <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds. Everyone on your team can use every template. Only the person it belongs to or an admin can change or delete it.</div></div>
         <Link href="/app/envelopes/new?kind=template" className="btn primary">New template</Link>
       </div>
+      {/* Shown once there is something to look through, and kept while a search or a folder hides everything. */}
+      {(rows.length > 0 || filtered || (data?.folders || []).length > 0) && (
+        <div className="sn-filters" role="search">
+          <div className="sn-search">
+            <input type="search" placeholder="Search name, folder, role or document text" value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Search templates" />
+            {typed && <button className="btn sm ghost" onClick={() => (setTyped(''), setView((v) => ({ ...(v || { folder: '' }), q: '' })))}>Clear</button>}
+          </div>
+          {data && data.folders.length > 0 && (
+            <select value={view?.folder || ''} onChange={(e) => setView((v) => ({ ...(v || { q: '' }), folder: e.target.value }))} aria-label="Folder">
+              <option value="">All folders</option>{[...data.folders].sort((a: string, b: string) => a.localeCompare(b)).map((f: string) => <option key={f}>{f}</option>)}
+            </select>
+          )}
+        </div>
+      )}
+      <div className="sn-selbar" aria-live="polite">
+        <span className="muted small">
+          {!data || rows.length === 0 ? '' : `${rows.length}${rows.length === PAGE ? ' most recently updated' : ''} template${rows.length === 1 ? '' : 's'}${filtered ? ` ${rows.length === 1 ? 'matches' : 'match'}` : ''}${rows.length === PAGE ? '. Search to find older ones' : ''}.`}
+          {data && rows.length > 0 && data.folders.length === 0 ? ' Use Move to sort them into folders, for example one for each state or client.' : ''}
+        </span>
+      </div>
       <div className="card pad0">
         {error ? (
           <div className="empty" role="alert"><h3>We could not load your templates</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
         ) : !data ? (
           <div className="empty" role="status">Loading…</div>
+        ) : rows.length === 0 && filtered ? (
+          <div className="empty"><h3>Nothing matches</h3>No template fits {view?.q ? <>&ldquo;{view.q}&rdquo;</> : 'this'}{view?.folder ? <> in the folder &ldquo;{view.folder}&rdquo;</> : null}. Every word you type has to be in the name, the folder, a role or the document.<div style={{ marginTop: 14 }}><button className="btn" onClick={showAll}>Show all templates</button></div></div>
         ) : rows.length === 0 ? (
           <div className="empty"><h3>No templates yet</h3>Good for contracts, NDAs, waivers and anything else you send more than once.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new?kind=template" className="btn primary">Create your first template</Link></div></div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">
-            <thead><tr><th>Template</th><th className="hide-sm">Roles</th><th className="hide-sm">Pages</th><th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th></tr></thead>
+            <thead><tr><th>Template</th><th className="hide-sm">Roles</th><th className="hide-sm">Folder</th><th className="hide-sm">Pages</th><th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th></tr></thead>
             <tbody>
               {rows.map((t) => {
                 const name = t.subject || 'Untitled template';
@@ -87,21 +154,24 @@ export default function Templates() {
                     <td className="sn-main">
                       <b>{name}</b>
                       <div className="muted small">by {t.sender}</div>
-                      <div className="muted small sn-only-sm">Roles: {roles} · {t.pages} page{t.pages === 1 ? '' : 's'}</div>
+                      <div className="muted small sn-only-sm">Roles: {roles} · {t.pages} page{t.pages === 1 ? '' : 's'}{t.folder ? ` · Folder: ${t.folder}` : ''}</div>
                       <div className="sn-only-sm sn-inlineactions">
                         <button className="btn sm primary" onClick={() => start(t)} aria-label={`Use ${name}`}>Use</button>
                         {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
                         {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
+                        {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
                         {t.may_change !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
                       </div>
                     </td>
                     <td className="small hide-sm">{roles}</td>
+                    <td className="hide-sm muted small">{t.folder || ''}</td>
                     <td className="hide-sm num">{t.pages}</td>
                     <td className="hide-sm muted small">{fmtDate(t.updated_at)}</td>
                     <td className="sn-rowactions hide-sm">
                       <button className="btn sm primary" onClick={() => start(t)} aria-label={`Use ${name}`}>Use</button>
                       {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
                       {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
+                      {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
                       {t.may_change !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
                     </td>
                   </tr>
@@ -123,6 +193,8 @@ export default function Templates() {
                 <label className="f"><span>Email</span><input type="email" value={fill[r.id]?.email || ''} readOnly={!!draftId} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], email: e.target.value } }))} autoComplete="off" /></label>
               </fieldset>
             ))}
+            {/* "Send now" skips the review step, so what it would show about reminders is said here. */}
+            <p className="muted small" id="sn-use-reminders">{reminderText(use.reminder_days)} That comes from the template. To change it for this envelope, choose Review first.</p>
             {problem && <div className="notice err" role="alert">{problem}</div>}
             <div className="actions">
               <button type="button" className="btn" disabled={busy} onClick={() => create(false)}>{draftId ? 'Open the draft' : 'Review first'}</button>
@@ -143,6 +215,43 @@ export default function Templates() {
           <p>&ldquo;{deleting.subject || 'Untitled template'}&rdquo; will be removed for your whole team. Envelopes already sent from it are not affected.</p>
         </ConfirmDialog>
       )}
+
+      {moving && <MoveTemplate template={moving} folders={data?.folders || []} onClose={() => setMoving(null)} onDone={() => (setMoving(null), reload())} />}
     </div>
+  );
+}
+
+// The same dialog the envelope list has, for a template. The server lets the person a template belongs to and the
+// admins move it (PATCH /api/envelopes/:id), and the folder is the team's: everyone who can use the template sees it.
+function MoveTemplate({ template, folders, onClose, onDone }: { template: any; folders: string[]; onClose: () => void; onDone: () => void }) {
+  const [name, setName] = useState(template.folder || '');
+  const [busy, setBusy] = useState(false);
+  async function save() {
+    setBusy(true);
+    try {
+      await api(`/envelopes/${template.id}`, { method: 'PATCH', body: { folder: name.trim() } });
+      toast(name.trim() ? `Moved to ${name.trim()}.` : 'Taken out of its folder.');
+      onDone();
+    } catch (e) {
+      fail(e, 'Nothing was moved.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog title="Move to a folder" onClose={onClose}>
+      <form onSubmit={(e) => (e.preventDefault(), save())}>
+        <label className="f">
+          <span>Folder for &ldquo;{template.subject || 'Untitled template'}&rdquo; <span className="hint">(leave empty for no folder)</span></span>
+          <input value={name} onChange={(e) => setName(e.target.value)} list="sn-template-folders" maxLength={80} placeholder="For example: Texas, or Client Acme" data-autofocus="" autoComplete="off" aria-describedby="sn-template-folder-note" />
+          <datalist id="sn-template-folders">{folders.map((f) => <option key={f} value={f} />)}</datalist>
+        </label>
+        <p className="muted small" id="sn-template-folder-note">Type a new name to make a folder, or pick one you have. Everyone on your team who uses this template sees the folder it is in.</p>
+        <div className="actions">
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Moving…' : 'Move'}</button>
+        </div>
+      </form>
+    </Dialog>
   );
 }

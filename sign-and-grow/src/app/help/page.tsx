@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
+import { CHECK_PROVES, CHECK_LIMITS, smsProvider } from '@/lib/checks';
+import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODES_PER_HOUR, smsDailyPerAccount } from '@/lib/policy';
 import { publicFacts, abuseFacts, supportFacts } from './facts';
 import { replyPromise } from '@/lib/support';
 import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord, FindRequests } from './tools';
@@ -28,6 +30,9 @@ export default function Help() {
   // does not speak of them.
   const signInWith = signInProviders().map((p) => PROVIDER_NAMES[p]).join(' or ');
   const support = supportFacts();
+  // Whether the operator of this server has switched text messages on. When not, the page offers none and says why.
+  const textsOn = !!smsProvider();
+  const smsDaily = smsDailyPerAccount();
   const P = PRICING;
   const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 
@@ -96,13 +101,25 @@ export default function Help() {
           <QA id="while-signing" q="What else can I do on the signing page?">
             <ul className="pub-list">
               <li>Ask the sender a question before you sign.</li>
-              <li>Fix a slip in the spelling of your own name. A small one, such as a letter missing or two swapped, is corrected at once. When the software cannot tell that the new name is still you, for example a name written in another alphabet, it changes nothing and asks the sender, who can correct it for you.</li>
+              <li>Fix a slip in the spelling of your own name. A small one, such as a letter missing or two swapped, a space, a hyphen or a dot, is corrected at once. When the software cannot tell that the new name is still you, for example a name written in another alphabet, it changes nothing and asks the sender, who can correct it for you.</li>
               <li>Pass the document to someone else who should sign instead.</li>
               <li>Decline, with a reason.</li>
               <li>Stop for now and finish later. Your link brings you back to where you were.</li>
               <li>Stop reminder emails for that document.</li>
             </ul>
             <p className="muted small">Asked for an access code? The sender chose it and can tell you what it is. It is never in our email. The page that asks for it has an <b>Ask the sender</b> button. After {abuse.codeTries} wrong tries a code is frozen so it cannot be guessed, and the sender sets a new one.</p>
+          </QA>
+
+          <QA id="one-time-code" q="I was asked for a one-time code">
+            <p>The sender asked us to check who opens the document. When you press <b>Send me the code</b> we send a {SIGNER_CODE_DIGITS}-digit code {textsOn ? 'to your email address, or by text message to a mobile number the sender typed for you' : 'to your email address'}. The screen shows where it goes with most of it hidden. Type the code in and the document opens. On that device it stays open for a day.</p>
+            <ul className="pub-list">
+              <li>A code works for {SIGNER_CODE_MINUTES} minutes and for {SIGNER_CODE_TRIES} tries. Only the newest one works.</li>
+              <li>You can ask for a new code after a minute, up to {SIGNER_CODES_PER_HOUR} times an hour. The button says when.</li>
+              <li><b>The code does not arrive?</b> A code by email goes to the same mailbox as the link, so look in the spam folder.{textsOn ? ' A text can take a minute.' : ''} If it still does not come, <b>I do not get the code</b> on the same screen tells the sender.</li>
+              {textsOn && <li><b>The number is not yours?</b> Press <b>This is not my number</b>. We stop sending codes to it at once and tell the sender.</li>}
+              <li>Only the sender can change where the code goes, or take the check off. We cannot do that for you, because we cannot know who is asking.</li>
+            </ul>
+            <p className="muted small">Nobody at Sign&Grow will ever ask you for this code, and neither should the sender. If a code arrives that you did not ask for, someone else has opened your link: do not pass the code on.</p>
           </QA>
           <ConsentWords />
         </section>
@@ -192,11 +209,24 @@ export default function Help() {
           <QA id="not-received" q="The recipient says they never got the email">
             <p>Open the envelope. It shows whether each email left our server, and whether the person has opened the document.</p>
             <ul className="pub-list">
-              <li>Copy their signing link and send it yourself by text or chat.</li>
+              <li>Copy their signing link and send it yourself by text or chat. If they are standing next to you, show it as a QR code instead (&quot;Show QR code&quot; on the envelope) and they open it with their phone camera. The code is the link, so show it only to them.</li>
               <li>Send a reminder to just that person.</li>
               <li>Correct their email address. Nothing is voided and nobody else is disturbed.</li>
             </ul>
             <p className="muted small">If a request sits unopened for a couple of days, we email you so you can help before anyone has to ask.</p>
+            {textsOn && <p className="muted small">You can also have us text the signing link: under <b>More</b> next to a recipient, type their mobile number and tick <b>Also text the signing link</b>. It is off unless you choose it, the text names you and the document, and reminders by text follow at most once a day.</p>}
+          </QA>
+
+          <QA id="checking-signers" q="How can I check who is signing?">
+            <p>Under <b>More</b> next to each recipient you choose what they have to do before the document opens: nothing, an access code you give them yourself, {textsOn ? 'a one-time code we send to their email address, or a one-time code we send by text message to a mobile number you type' : 'or a one-time code we send to their email address'}. An access code can be combined with a one-time code. What each of them proves:</p>
+            <ul className="pub-list">
+              {CHECK_PROVES.filter((p) => textsOn || p.key !== 'sms_code').map((p) => <li key={p.key}><b>{p.title}.</b> {p.text}</li>)}
+            </ul>
+            <p>{CHECK_LIMITS}</p>
+            <p>You can change a person&apos;s check or number while the envelope is out: <b>Correct</b> next to their name. They then have to pass the check again, and the audit trail says what you changed. If you send the document to another person, a number you typed for the first one is never used for the second: you are asked for it again. A template keeps its check, a bulk send takes a <b>phone</b> column, and a public form can ask its visitors for a code by email only, because they type their own details.</p>
+            {textsOn
+              ? <p className="muted small">Text messages are not charged to you. To keep them from being misused, one account can send {smsDaily} in 24 hours, every code and every reminder counted, and an account under the daily limit on emails can text as many phone numbers a day as people it can email. A text that could not be delivered shows on the envelope, and you are told when we stop trying.</p>
+              : <p className="muted small">The software can also send a one-time code by text message and text the signing link. The operator of this server has not switched text messages on, so they are not offered here.</p>}
           </QA>
 
           <QA id="reminders" q="Are people reminded by themselves?">
@@ -223,6 +253,7 @@ export default function Help() {
               <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account cannot send those, or invite under such a name, until it has a payment that is {abuse.paidTrustDays} days old and was not refunded or disputed. We read what the emails print: the subject, the message, notes to recipients, document names, what you wrote on the pages, the reason for voiding, your name and the account name. The message says which words set it off, so you can see whether it is a misreading. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a> and a person will clear your account.</li>
               <li><b>Sending is paused.</b> This happens when {abuse.reportsToPause} different recipients report documents from one account, or when our team pauses it. The message and the banner in the app give the reason. A person reviews every pause. Until then nothing you start is emailed to anyone: no new documents, no new or changed recipients, no reminders, no reopening, no team invitations and no email about a change you make, and people who are waiting further down a signing order are asked only once the pause is lifted. You can still open, download and export everything, give a document that is out more time, and void one (the people on it are told, without your reason). People who already have a document can still sign it. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>
               <li><b>An access code is too short.</b> A code you set needs at least {abuse.codeMin} characters.</li>
+              {textsOn && <li><b>A mobile number is missing or not complete.</b> Someone you check by text message, or text the link to, needs a number with its country code, like +44 7700 900123. Or the account has sent its {smsDaily} text messages for the day: the message says when there is room again, and a code by email always works. See <a href="#checking-signers">checking who signs</a>.</li>}
               <li><b>You are out of signatures.</b> See <a href="#signatures">how signatures work</a>.</li>
             </ul>
           </QA>

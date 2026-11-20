@@ -218,7 +218,8 @@ try {
     await sp.reload();
     await sp.locator('.pdfpage canvas').first().waitFor();
     assert.match(await sp.locator('body').innerText(), /2,500/, 'typed answer came back after reload');
-    await sp.getByRole('button', { name: 'Finish', exact: true }).click();
+    // Nothing required is left, so "Check before you finish" opens by itself once the pages are drawn. Nobody has
+    // to find the Finish button, and nobody leaves with everything filled in and nothing signed.
     await sp.getByRole('dialog').getByText(/You are signing as/).waitFor();
     await sp.waitForTimeout(400);
     await shot(sp, '10-sign-review');

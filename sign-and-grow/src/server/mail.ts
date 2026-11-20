@@ -1,5 +1,5 @@
 import { run, get, all, saveBlob, readBlob } from './db.ts';
-import { esc, now, baseUrl, fmtCode } from './util.ts';
+import { esc, now, baseUrl, fmtCode, sha256, token } from './util.ts';
 import { PRICING } from '../lib/impact.ts';
 import { cannotOpenLine } from '../lib/policy.ts';
 
@@ -23,6 +23,9 @@ export type Mail = {
   // The footer then says what to do when the page will not open where the reader is: ask the sender for a PDF.
   askForPdf?: string;
   expiresAt?: string; // when a one-time link or code in it stops working. It is never sent again after that.
+  // True on an email that asks its recipient (recipientId) to do something: sign, approve, look again. A later try
+  // does not deliver it once that person has finished or declined.
+  untilDone?: boolean;
 };
 
 // What became of an email at hand-over: the mail server took it, there is no mail server (it sits in the outbox
@@ -50,6 +53,9 @@ function fromHeader(name?: string): string {
 
 // "Report this email": the check page with the security code filled in. Reporting from there needs no signing link.
 const reportUrl = (code: string) => `${baseUrl()}/check?code=${fmtCode(code)}&report=1`;
+// "Get help with this document": the help form with the topic chosen and the same security code, so the message
+// says which document it is about and its sender can be told. The signing link's own secret is never put in it.
+export const helpUrl = (code: string) => `${baseUrl()}/help?topic=signing&code=${fmtCode(code)}#contact`;
 
 // A line of an email may hold a word with nowhere to break, such as a SHA-256 fingerprint or a long address. Lines
 // wrap anywhere (overflow-wrap), so the email never becomes wider than the phone it is read on.
@@ -83,7 +89,7 @@ export function renderMail(m: Mail): string {
     ${m.cta ? `<br>If the button does not work, copy this link: ${esc(m.cta.url)}` : ''}
     ${m.askForPdf ? `<br>${esc(cannotOpenLine(m.askForPdf))}` : ''}
     ${m.code ? '<br>Do not forward this email. The link is personal to you.' : ''}
-    <br>Need a hand? ${esc(baseUrl())}/help
+    <br>Need a hand? ${m.code ? `<a href="${esc(helpUrl(m.code))}" style="color:#6b776f;font-weight:600">Get help with this document</a>. The link opens our help page and tells us which document you mean. Or go to ${esc(baseUrl())}/help yourself.` : `${esc(baseUrl())}/help`}
   </p>
 </div></body></html>`;
 }
@@ -119,6 +125,40 @@ async function tell(id: number | bigint, what: MailOutcome) {
   }
 }
 
+// ---- Ids the mail provider hands back ----------------------------------------------------------
+//
+// Hand-over is all the mail server tells us. Whether an email arrived, came back or was marked as spam is told later
+// by the mail provider (POST /mail/events, src/server/bounces.ts), and that news has to name the email. So every
+// email carries two ids of ours. Its Message-ID is made here and kept on the row, the same for every try, instead
+// of being left to the mail library: providers quote it back (some as "smtp-id" or "message-id"). And X-SG-Mail is
+// the number of the row in the emails table, for providers that return the headers of the original email. Neither
+// says anything about the reader.
+const mailDomain = (): string => {
+  let host = /@([^>\s"]+)/.exec(process.env.MAIL_FROM || '')?.[1] || '';
+  try {
+    host ||= new URL(baseUrl()).hostname;
+  } catch {}
+  return host.toLowerCase().replace(/[^a-z0-9.-]/g, '') || 'localhost';
+};
+/** A new Message-ID without its angle brackets, lower case, which is how it is stored and compared. */
+const newMessageId = (): string => `sg-${sha256(token()).slice(0, 32)}@${mailDomain()}`;
+/**
+ * The headers every email goes out with. Three providers do not return our own headers with their news and have a
+ * header of their own for a value to carry along. It is added only when SMTP_URL names that provider, so nothing
+ * made for one provider is ever sent through another. Written from their documentation, not tried against them.
+ */
+export function mailHeaders(id: number | bigint, smtpUrl = process.env.SMTP_URL || ''): Record<string, string> {
+  const h: Record<string, string> = { 'X-SG-Mail': String(id) };
+  let host = '';
+  try {
+    host = new URL(smtpUrl).hostname.toLowerCase();
+  } catch {}
+  if (host.endsWith('postmarkapp.com')) h['X-PM-Metadata-sg-mail'] = String(id);
+  if (host.endsWith('sendgrid.net')) h['X-SMTPAPI'] = JSON.stringify({ unique_args: { sg_mail: String(id) } });
+  if (host.endsWith('mailgun.org')) h['X-Mailgun-Variables'] = JSON.stringify({ sg_mail: String(id) });
+  return h;
+}
+
 // One try at handing a recorded email to the mail server. Everything it needs is on the row. `again` is a try made
 // by the timer: when that one goes through, whoever listens hears that the email left after all.
 async function deliver(id: number | bigint, again = false): Promise<MailStatus> {
@@ -132,6 +172,8 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
     const p = JSON.parse(row.payload || '{}');
     await t.sendMail({
       from: p.from || fromHeader(), replyTo: p.replyTo || undefined, to: row.to_email, subject: row.subject, html: row.html, text: p.text || undefined,
+      // The ids the mail provider hands back when it tells us what became of this email: see mailHeaders.
+      ...(row.message_id ? { messageId: `<${row.message_id}>` } : {}), headers: mailHeaders(row.id),
       attachments: (p.attachments || []).map((a: any) => ({ filename: a.filename, content: readBlob(a.sha256) })),
     });
     run("UPDATE emails SET status='sent', error=NULL, tries=tries+1, tried_at=?, next_try_at=NULL WHERE id=?", now(), id);
@@ -159,12 +201,14 @@ export async function sendMail(m: Mail): Promise<MailStatus> {
     text: [m.heading, ...m.lines, ...(m.links || []).map((l) => `${l.label}${l.note ? ` (${l.note})` : ''}: ${l.url}`), m.cta ? `${m.cta.label}: ${m.cta.url}` : '', m.footnote || '',
       m.askForPdf ? cannotOpenLine(m.askForPdf) : '',
       m.code ? `Not sure this email is real? Go to ${baseUrl()}/check and enter the security code ${fmtCode(m.code)}.` : '',
-      m.code ? `Did not expect this, or does it look wrong? Report this email: ${reportUrl(m.code)}` : ''].filter(Boolean).join('\n\n'),
+      m.code ? `Did not expect this, or does it look wrong? Report this email: ${reportUrl(m.code)}` : '',
+      m.code ? `Need a hand with this document? ${helpUrl(m.code)}` : ''].filter(Boolean).join('\n\n'),
     attachments: process.env.SMTP_URL ? (m.attachments || []).map((a) => ({ filename: a.filename, sha256: saveBlob(a.content) })) : [],
+    ...(m.untilDone && m.recipientId ? { untilDone: true } : {}),
   };
   const r = run(
-    'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null,
+    'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user, message_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null, newMessageId(),
   );
   return deliver(r.lastInsertRowid);
 }
@@ -180,8 +224,24 @@ function tooLate(row: any): { why: string; quiet: boolean } | null {
   // changed since, a newer email has gone to the right place. If the envelope was voided or ran out of time,
   // everyone was told that instead.
   const signing = /\/sign\/([\w-]+)/.exec(row.link || '')?.[1];
-  if (signing && !['sent', 'completed'].includes(get('SELECT e.status FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.token=?', signing)?.status))
+  // The second half finds the link of a member of a group (src/server/groups.ts), which opens the document for as
+  // long as nobody else in the group has taken it on and the member is still in the group.
+  if (signing && !['sent', 'completed'].includes(get(`SELECT e.status FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.token=?
+      UNION ALL SELECT e.status FROM recipient_members m JOIN recipients r ON r.id=m.recipient_id JOIN envelopes e ON e.id=r.envelope_id WHERE m.token=? AND m.removed_at IS NULL AND r.claimed_by IS NULL`, signing, signing)?.status))
     return { why: 'Not sent again: its link no longer opens the document.', quiet: true };
+  // A request or a reminder is not delivered to someone who has finished in the meantime (the sender passed the link
+  // on by hand, say): it would ask them to sign what they already signed.
+  let asks = false;
+  try {
+    asks = !!JSON.parse(row.payload).untilDone;
+  } catch {}
+  if (asks && row.recipient_id && ['completed', 'declined'].includes(get('SELECT status FROM recipients WHERE id=?', row.recipient_id)?.status))
+    return { why: 'Not sent again: the person it asks had already finished by then.', quiet: true };
+  // A team invitation is only worth sending while it can still be accepted. One that was withdrawn, replaced by a
+  // newer one or used already would lead to a refusal.
+  const invite = /[?&]invite=([\w-]+)/.exec(row.link || '')?.[1];
+  if (invite && !get('SELECT 1 x FROM invites WHERE token=? AND accepted_at IS NULL', invite))
+    return { why: 'Not sent again: the invitation in it had been withdrawn, replaced or used by then.', quiet: true };
   if (Date.now() - Date.parse(row.at) > MAIL_MAX_AGE_MS) return { why: 'Not sent again: it would have arrived more than two days late.', quiet: false };
   return null;
 }

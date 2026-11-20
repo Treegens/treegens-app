@@ -412,7 +412,7 @@ test('a member who closes their own login takes their API keys along, and the te
 
   // Before she closes, she is shown which keys go off with her login, and which of them a team depends on.
   const preview = (await lea.get('/me/delete')).data;
-  assert.deepEqual(preview.keys.map((k: any) => [k.name, k.account, k.team]), [['Own script', "Lea's workspace", false], ['Nightly sync', "Tia's workspace", true]]);
+  assert.deepEqual(preview.keys.map((k: any) => [k.name, k.account, k.team]), [['Own script', "Lea Ver's workspace", false], ['Nightly sync', "Tia Lead's workspace", true]]);
   assert.ok(!JSON.stringify(preview).includes(key), 'never the key itself');
 
   // She closes her login, with the usual days to change her mind. The team's integration stops at that moment.
@@ -424,7 +424,7 @@ test('a member who closes their own login takes their API keys along, and the te
   for (const to of admins) {
     const m = keyMail(to).at(-1);
     assert.ok(m, `nobody told ${to} that a key of the team went off`);
-    assert.equal(m.subject, "An API key of Tia's workspace is switched off: Lea Ver is closing their login");
+    assert.equal(m.subject, "An API key of Tia Lead's workspace is switched off: Lea Ver is closing their login");
     assert.ok(m.html.includes('Nightly sync') && m.html.includes(`${key.slice(0, 10)}...`), 'the key is named, with the part of it an admin can see in the list');
     assert.ok(m.html.includes(until), 'and the day it stops for good');
     assert.ok(!m.html.includes('Own script'), 'a key of her own workspace is not the team\'s business');
@@ -441,13 +441,13 @@ test('a member who closes their own login takes their API keys along, and the te
   // She signs in again in time: the key works again, and the admins hear that too.
   assert.equal((await lea.post('/auth/login', { email: 'lea.ver@example.com', password })).data.restored, true);
   assert.equal((await withKey(key).get('/envelopes')).status, 200);
-  for (const to of admins) assert.equal(keyMail(to).at(-1)!.subject, "An API key of Tia's workspace works again: Lea Ver kept their login");
+  for (const to of admins) assert.equal(keyMail(to).at(-1)!.subject, "An API key of Tia Lead's workspace works again: Lea Ver kept their login");
   assert.equal((await listed('Nightly sync')).closing, null);
 
   // She closes again and the days run out. The key is not wiped from the team's list: it is stopped, it still says
   // whose it was, and what it answers is what happened, not "this key is not known here".
   await lea.post('/me/delete', { password });
-  const short = (m: any) => m.subject.replace("An API key of Tia's workspace ", '');
+  const short = (m: any) => m.subject.replace("An API key of Tia Lead's workspace ", '');
   assert.deepEqual(keyMail('tia.lead@example.com').map(short), ['is switched off: Lea Ver is closing their login', 'works again: Lea Ver kept their login', 'is switched off: Lea Ver is closing their login']);
   db.run("UPDATE users SET closing_at=? WHERE email='lea.ver@example.com'", new Date(Date.now() - 1000).toISOString());
   assert.ok((await cron.tick()).purged >= 1);
@@ -474,7 +474,7 @@ test('a member who closes their own login takes their API keys along, and the te
   assert.match(dead.data.error, /no longer in the account/);
   for (const to of admins) {
     const m = keyMail(to).at(-1)!;
-    assert.equal(m.subject, "2 API keys of Tia's workspace stopped working: Ned Now closed their login");
+    assert.equal(m.subject, "2 API keys of Tia Lead's workspace stopped working: Ned Now closed their login");
     assert.ok(m.html.includes('Provisioning') && m.html.includes('Reports feed') && !m.html.includes(nedKey));
   }
   assert.ok(mailTo('ned.now@example.com').at(-1)!.html.includes('Provisioning'), 'the person is told which keys went with the login');

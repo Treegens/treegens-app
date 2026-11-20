@@ -2,9 +2,12 @@
 // any delimiter, columns in any order when there is a header row, any letter case, and a leading byte order mark.
 // No React in here, so it can be tested on its own.
 import { looksLikeEmail } from './lib.ts';
+import { normalPhone } from '../../lib/checks.ts';
 
-export type Role = { key: string; label: string };
-export type Cell = { name: string; email: string };
+// `phone` is true for a role the template checks with a code by text message, or texts the signing link to: every
+// row then needs that person's mobile number, in a column of its own.
+export type Role = { key: string; label: string; phone?: boolean };
+export type Cell = { name: string; email: string; phone?: string };
 export type BulkRow = { row: number; cells: Record<string, Cell>; problems: string[]; notes: string[] };
 export type Reading = {
   rows: BulkRow[];
@@ -69,6 +72,7 @@ const norm = (s: string) => s.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]
 
 const NAME_WORDS = ['name', 'fullname'];
 const EMAIL_WORDS = ['email', 'emailaddress', 'mail', 'mailaddress'];
+const PHONE_WORDS = ['phone', 'phonenumber', 'mobile', 'mobilenumber', 'mobilephone', 'cell', 'cellphone', 'telephone', 'tel'];
 
 function findColumn(header: string[], role: string, words: string[], alone: boolean): number {
   const wanted = new Set<string>();
@@ -96,7 +100,7 @@ export function readRecipients(text: string, roles: Role[]): Reading {
   const body = header ? table.slice(1) : table;
   const alone = roles.length === 1;
 
-  type Cols = { name: number; first: number; last: number; email: number };
+  type Cols = { name: number; first: number; last: number; email: number; phone: number };
   const cols: Record<string, Cols> = {};
   if (header) {
     const used = new Set<number>();
@@ -107,23 +111,31 @@ export function readRecipients(text: string, roles: Role[]): Reading {
         first: findColumn(firstNorm, rn, ['firstname', 'givenname'], alone),
         last: findColumn(firstNorm, rn, ['lastname', 'surname', 'familyname'], alone),
         email: findColumn(firstNorm, rn, EMAIL_WORDS, alone),
+        // Only read where the template texts this role. Otherwise a phone column is one more we do not need, and
+        // nobody's number is taken along for nothing.
+        phone: r.phone ? findColumn(firstNorm, rn, PHONE_WORDS, alone) : -1,
       };
       // A column named just after the role ("Volunteer") holds the name.
       if (c.name < 0 && c.first < 0) c.name = firstNorm.indexOf(rn);
       if (c.name < 0 && c.first < 0) out.missing.push(`${r.label} name`);
       if (c.email < 0) out.missing.push(`${r.label} email`);
-      for (const i of [c.name, c.first, c.last, c.email]) if (i >= 0) used.add(i);
+      if (r.phone && c.phone < 0) out.missing.push(`${r.label} phone`);
+      for (const i of [c.name, c.first, c.last, c.email, c.phone]) if (i >= 0) used.add(i);
       cols[r.key] = c;
     }
     out.ignored = first.filter((h, i) => h && !used.has(i));
   } else {
-    roles.forEach((r, i) => {
-      let name = i * 2;
-      let email = i * 2 + 1;
+    // Without a header the columns come in the order we suggest: name, email, and a phone where the role needs one.
+    let next = 0;
+    roles.forEach((r) => {
+      let name = next;
+      let email = next + 1;
+      const phone = r.phone ? next + 2 : -1;
+      next += r.phone ? 3 : 2;
       // No header to go by: if the "name" column is full of email addresses and the other is not, they are swapped.
       const at = (col: number) => body.filter((cells) => (cells[col] || '').includes('@')).length;
       if (at(name) > at(email)) ([name, email] = [email, name]), (out.swapped = true);
-      cols[r.key] = { name, first: -1, last: -1, email };
+      cols[r.key] = { name, first: -1, last: -1, email, phone };
     });
   }
 
@@ -135,8 +147,12 @@ export function readRecipients(text: string, roles: Role[]): Reading {
       const get = (col: number) => (col >= 0 ? cells[col] || '' : '');
       const name = (get(c.name) || [get(c.first), get(c.last)].filter(Boolean).join(' ')).trim();
       const email = get(c.email).trim();
-      row.cells[r.key] = { name, email };
+      const phone = get(c.phone).trim();
+      // The number is sent on as typed when it is a full international one, and said to be wrong here when it is not.
+      row.cells[r.key] = { name, email, ...(phone ? { phone: normalPhone(phone) || phone } : {}) };
       const who = alone ? '' : `${r.label}: `;
+      if (r.phone && !phone) row.problems.push(`${who}mobile number is missing`);
+      else if (phone && !normalPhone(phone)) row.problems.push(`${who}"${phone}" is not a full mobile number. Write it with the country code, like +44 7700 900123`);
       if (!name && !email) row.problems.push(`${who}name and email are missing`);
       else if (!name) row.problems.push(`${who}name is missing`);
       else if (!email) row.problems.push(`${who}email is missing`);
@@ -153,4 +169,4 @@ export function readRecipients(text: string, roles: Role[]): Reading {
 }
 
 /** The header line we suggest, and the example under it. */
-export const headerFor = (roles: Role[]) => roles.flatMap((r) => [`${r.label} name`, `${r.label} email`]).join(',');
+export const headerFor = (roles: Role[]) => roles.flatMap((r) => [`${r.label} name`, `${r.label} email`, ...(r.phone ? [`${r.label} phone`] : [])]).join(',');

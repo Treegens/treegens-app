@@ -312,8 +312,11 @@ test('deleting a voided envelope that someone had already signed takes it out of
   assert.equal((await sender.post(`/envelopes/${e.id}/void`, { reason: 'Deal is off' })).status, 200);
   const gone = await sender.call('DELETE', `/envelopes/${e.id}`);
   assert.deepEqual(gone.data, { ok: true, kept_for_recipients: true });
-  assert.equal((await sender.get(`/envelopes/${e.id}`)).status, 404, 'gone from the sender\'s account');
+  // Out of the lists. The account's admins (here the sender owns the account) can still find it under "removed by
+  // its sender" and open it, which says so.
   assert.ok(!(await sender.get('/envelopes')).data.envelopes.some((x: any) => x.id === e.id));
+  assert.ok((await sender.get('/envelopes?box=removed')).data.envelopes.some((x: any) => x.id === e.id));
+  assert.ok((await sender.get(`/envelopes/${e.id}`)).data.removed_at, 'opened as removed');
   // Ann signed it. Her link still opens, and what she signed can still be downloaded.
   const ann = visitor();
   const page = await ann.get(`/sign/${annToken}`);

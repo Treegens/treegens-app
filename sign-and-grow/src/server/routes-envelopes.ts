@@ -11,11 +11,14 @@ import {
   advance, assertMayEmail, formNeedsSignatures, type Actor,
 } from './envelopes.ts';
 import { hmac, safeEqual } from './util.ts';
-import { correctWithCheck, assertBulkChecks, assertFormChecks, textsOf } from './signercode.ts';
+import { bouncedBefore, bouncedRefusal, bouncedLine, mailStop, mailStopText } from './bounces.ts';
+import { correctWithCheck, assertBulkChecks, bulkChecksRefusal, assertFormChecks, textsOf } from './signercode.ts';
+// A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
+import { memberLink, memberInbox, groupReach, assertNoGroupCheck } from './groups.ts';
 import { cookie, readCookie } from './auth.ts';
 import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
 import { sendWarnings } from './warnings.ts';
-import { emailRefusal } from './envelopes.ts';
+import { emailRefusal, fieldProgress } from './envelopes.ts';
 import { PRICING } from '../lib/impact.ts';
 import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
@@ -72,13 +75,15 @@ route('GET', '/files/:id/content', (c) => {
 
 // ---- Envelopes and templates ---------------------------------------------------------------
 
-function mine(c: Ctx, envelopeId: string, kind?: string) {
+export function mine(c: Ctx, envelopeId: string, kind?: string, o: { removed?: boolean } = {}) {
   const e = loadEnvelope(envelopeId);
   if (!e || e.account_id !== c.account.id || (kind && e.kind !== kind)) throw bad('Envelope not found.', 404);
   // Members see what they sent. Admins see the whole account. Templates are shared with the team.
   if (e.kind === 'envelope' && !c.admin && e.sender_id !== c.user.id) throw bad('Envelope not found.', 404);
-  // A completed envelope its sender deleted is gone for the sender. Only its recipients still have it.
-  if (e.hidden_at) throw bad('Envelope not found.', 404);
+  // An envelope its sender deleted after somebody had signed is gone for the sender: no list, no search, no
+  // change. Its recipients still have it, and so does the account: an admin can open it, download it and put it
+  // back (the three routes that pass `removed`), and do nothing else to it until it is back.
+  if (e.hidden_at && !(o.removed && c.admin)) throw bad('Envelope not found.', 404);
   return e;
 }
 
@@ -100,10 +105,15 @@ function idemKey(c: Ctx): string {
 const bodyHash = (b: any) => sha256(JSON.stringify(b));
 
 route('GET', '/envelopes', (c) => {
-  const kind = c.q.get('kind') === 'template' ? 'template' : 'envelope';
   const box = c.q.get('box') || 'all';
-  // hidden_at: a completed envelope its sender deleted. It is in nobody's list on the sending side.
-  const where = ['e.account_id=?', 'e.kind=?', 'e.hidden_at IS NULL'];
+  // box=removed: the envelopes a sender deleted from their own lists after somebody had signed (hidden_at). They
+  // are in nobody's ordinary list, search, export or report. The account is a party to those documents too, so
+  // its admins can still find them here, and put one back with POST /envelopes/:id/restore. Members cannot.
+  const removed = box === 'removed';
+  if (removed && !c.admin) throw bad('Envelopes that were removed by their sender are shown to the admins of the account only. Ask an admin of your team to look for it and put it back.', 403);
+  const kind = c.q.get('kind') === 'template' && !removed ? 'template' : 'envelope';
+  const hidden = removed ? 'hidden_at IS NOT NULL' : 'hidden_at IS NULL';
+  const where = ['e.account_id=?', 'e.kind=?', `e.${hidden}`];
   const p: any[] = [c.account.id, kind];
   // Members see what they sent, and the folders of what they sent. Templates and their folders are the team's.
   const own = kind === 'envelope' && !c.admin;
@@ -113,37 +123,46 @@ route('GET', '/envelopes', (c) => {
   if (c.q.get('folder')) (where.push('e.folder=?'), p.push(c.q.get('folder')));
   if (c.admin && c.q.get('sender')) (where.push('e.sender_id=?'), p.push(c.q.get('sender')));
   const q = (c.q.get('q') || '').trim();
-  if (q) {
-    // Matches the subject, the envelope id, anyone on it, a document's name, or the words inside the documents.
-    where.push(`(e.subject LIKE ? OR e.id = ? OR EXISTS (SELECT 1 FROM recipients r WHERE r.envelope_id=e.id AND (r.name LIKE ? OR r.email LIKE ?))
-      OR EXISTS (SELECT 1 FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=e.id AND (d.name LIKE ? OR f.text LIKE ?)))`);
-    p.push(`%${q}%`, q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  // Every word that was typed has to be found somewhere: in the subject, the folder, on a person or in the name of
+  // a role, in a document's name or in the words inside the documents. So "texas progress" finds the template
+  // "Texas, conditional waiver, progress payment", whatever stands between the two words. What was typed as a whole
+  // still finds an envelope by its id.
+  const words = q.split(/\s+/).filter(Boolean).slice(0, 8);
+  if (words.length) {
+    const word = `(e.subject LIKE ? OR e.folder LIKE ? OR EXISTS (SELECT 1 FROM recipients r WHERE r.envelope_id=e.id AND (r.name LIKE ? OR r.email LIKE ? OR r.role_name LIKE ?))
+      OR EXISTS (SELECT 1 FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=e.id AND (d.name LIKE ? OR f.text LIKE ?)))`;
+    where.push(`(e.id = ? OR (${words.map(() => word).join(' AND ')}))`);
+    p.push(q, ...words.flatMap((w) => Array(7).fill(`%${w}%`)));
   }
   const limit = Math.min(200, Number(c.q.get('limit')) || 100);
-  const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, e.sender_id, u.name sender
+  const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, e.sender_id, u.name sender, e.hidden_at removed_at
     FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE ${where.join(' AND ')} ORDER BY e.updated_at DESC LIMIT ? OFFSET ?`, ...p, limit, Number(c.q.get('offset')) || 0);
   for (const e of rows) {
-    e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
+    // bounced_at, complained_at: an email to them came back for good, or they marked one as spam. The list flags both.
+    e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted, bounced_at, complained_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
     // True when the latest email to someone who has not opened it yet did not leave. Lets the list flag it.
     e.email_failed = all("SELECT m.status FROM emails m WHERE m.envelope_id=? AND m.id IN (SELECT MAX(id) FROM emails WHERE envelope_id=? GROUP BY COALESCE(recipient_id, to_email))", e.id, e.id).some((m) => m.status === 'failed');
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
   }
   // Only the folders of what this person can see: a folder name such as "Layoffs 2026" says something by itself.
-  const folders = all(`SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND hidden_at IS NULL AND folder IS NOT NULL AND folder != ''${own ? ' AND sender_id=?' : ''}`, ...(own ? [c.account.id, kind, c.user.id] : [c.account.id, kind])).map((r) => r.folder);
+  const folders = all(`SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND ${hidden} AND folder IS NOT NULL AND folder != ''${own ? ' AND sender_id=?' : ''}`, ...(own ? [c.account.id, kind, c.user.id] : [c.account.id, kind])).map((r) => r.folder);
   // Admins can narrow the list to one person's envelopes.
-  const senders = c.admin ? all('SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? AND e.hidden_at IS NULL ORDER BY u.name', c.account.id, kind) : [];
+  const senders = c.admin ? all(`SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? AND e.${hidden} ORDER BY u.name`, c.account.id, kind) : [];
   // On a template, may_change says whether this person may change or delete it (their own, or they are an admin).
   if (kind === 'template') for (const e of rows) e.may_change = c.admin || e.sender_id === c.user.id;
-  return { envelopes: rows, folders, senders };
+  // For admins: how many envelopes in the account were removed by their sender, so the list can offer to show them.
+  const removedCount = c.admin && kind === 'envelope' ? get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND hidden_at IS NOT NULL", c.account.id).n : undefined;
+  return { envelopes: rows, folders, senders, ...(removedCount === undefined ? {} : { removed: removedCount }) };
 });
 
 // Documents addressed to the signed-in user, from any sender.
 route('GET', '/inbox', (c) => {
   if (!c.user.email_verified) return { needs_verification: true, items: [] };
   return {
-    items: all(`SELECT e.id, e.subject, e.status, e.sent_at, e.completed_at, u.name sender, r.role, r.status my_status, r.token
+    // First what is waiting for a group this person is a member of, each with their own link (memberInbox in groups.ts).
+    items: [...memberInbox(c.user.email), ...all(`SELECT e.id, e.subject, e.status, e.sent_at, e.completed_at, u.name sender, r.role, r.status my_status, r.token
       FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id
-      WHERE r.email=? AND e.kind='envelope' AND e.status!='draft' AND r.status!='pending' AND r.role!='inperson' ORDER BY e.updated_at DESC LIMIT 100`, c.user.email),
+      WHERE r.email=? AND e.kind='envelope' AND e.status!='draft' AND r.status!='pending' AND r.role!='inperson' ORDER BY e.updated_at DESC LIMIT 100`, c.user.email)],
   };
 });
 
@@ -191,7 +210,8 @@ route('POST', '/envelopes', async (c) => {
   if (idem) run('INSERT OR REPLACE INTO idempotency_keys (account_id, user_id, key, envelope_id, request_hash, at) VALUES (?,?,?,?,?,?)', c.account.id, c.user.id, idem, eid, bodyHash(b), now());
   if (b.send && kind === 'envelope') {
     try {
-      await sendEnvelope(eid, c.actor);
+      // "send_anyway": the caller has seen that an address on it bounced before, and wants it sent all the same.
+      await sendEnvelope(eid, c.actor, { anyway: b.send_anyway === true });
     } catch (e) {
       // "Create and send" either sends or leaves nothing behind. No stray drafts after a refusal, and the key is
       // free again, so the same call can be repeated once the reason for the refusal is fixed.
@@ -205,30 +225,27 @@ route('POST', '/envelopes', async (c) => {
 });
 
 route('GET', '/envelopes/:id', (c) => {
-  const e = mine(c, c.params.id);
+  // An admin can still open an envelope its sender removed from their lists. The answer says so in removed_at.
+  const e = mine(c, c.params.id, undefined, { removed: true });
   // Whether each email actually left, so "I never got it" can be answered without guessing.
   // An email the mail server would not take is tried again by the timer: tries, when the latest one was, and when the
   // next one is due (empty once it left, or when nobody tries any more).
-  const deliveries = all('SELECT to_email, recipient_id, subject, status, error, at, tries, tried_at, next_try_at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
+  // What the mail provider said afterwards, on a server that is told (MAIL_EVENTS_TOKEN): delivered_at when the
+  // recipient's mail server took it, bounced_at with bounce_kind ('hard' or 'soft') and bounce_reason when it came
+  // back, complained_at when the reader marked it as spam. All empty on a server that only knows the hand-over.
+  const deliveries = all('SELECT to_email, recipient_id, subject, status, error, at, tries, tried_at, next_try_at, delivered_at, bounced_at, bounce_kind, bounce_reason, complained_at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
   // How far each signer has got, so the sender can help someone who is stuck without being able to sign for them.
   // Counted the way the signer's own screen counts: a group of radio buttons is one thing to do, not one for each
   // button, so sender and signer see the same "N of M".
   const env = publicEnvelope(e);
-  for (const r of env.recipients) {
-    const things = new Map<string, { filled: boolean; required: boolean }>();
-    for (const f of e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !['date_signed', 'full_name', 'email'].includes(f.type))) {
-      const key = f.type === 'radio' ? `group:${f.group_name || f.id}` : f.id;
-      const it = things.get(key) || { filled: false, required: false };
-      things.set(key, { filled: it.filled || !!f.value, required: it.required || !!f.required });
-    }
-    const list = [...things.values()];
-    r.progress = { fields: list.length, filled: list.filter((x) => x.filled).length, required_left: list.filter((x) => x.required && !x.filled).length };
-  }
+  // `ready` marks someone who filled in everything required and has not pressed Finish (fieldProgress in envelopes.ts,
+  // the same count the reminder to that person goes by).
+  for (const r of env.recipients) r.progress = fieldProgress(e, r);
   // Names and wording in a script the signed PDF has no font for, said here so the sender hears it from the
   // envelope page and not from the finished document. Each entry says where the text stands and which characters.
   const print_problems = e.status === 'completed' && e.final_sha256 ? [] : printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id));
   // texts: what became of every text message about this envelope, like deliveries for email. Numbers are masked.
-  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems };
+  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null };
 });
 
 // The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.
@@ -279,7 +296,8 @@ route('PATCH', '/envelopes/:id', async (c) => {
 // That is every completed envelope, and also one that was voided, declined or ran out of time after someone had
 // already finished their part. Deleting one of those takes it out of the sender's lists, search, export and
 // reports, and every recipient's link, download and "sent to me" list keep working. It is removed for good when
-// the account is.
+// the account is. Until then the admins of the account can still find it (GET /envelopes?box=removed), open and
+// download it, and put it back (POST /envelopes/:id/restore): the account is a party to the document as well.
 route('DELETE', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
   assertMayChange(c, e);
@@ -301,9 +319,24 @@ route('DELETE', '/envelopes/:id', (c) => {
   removeUnusedBlobs(shas);
 });
 
+// Puts an envelope its sender removed from their lists back where it was: in the sender's lists, the search, the
+// export and the reports. For admins, because the member who removed it cannot see it any more and the account
+// must not be the one party to a signed document that cannot get at it. One statement decides, so two calls at the
+// same moment leave one line in the record.
+route('POST', '/envelopes/:id/restore', (c) => {
+  const e = mine(c, c.params.id, 'envelope', { removed: true });
+  if (run('UPDATE envelopes SET hidden_at=NULL WHERE id=? AND hidden_at IS NOT NULL', e.id).changes)
+    audit(e.id, c.actor, 'Put back in the sender\'s lists', 'An admin of the account put this envelope back after it had been removed from the sender\'s lists.');
+  return { envelope: publicEnvelope(loadEnvelope(e.id)) };
+}, 'admin');
+
+// A send to an address at which an email of this account came back for good in the last weeks is answered 409 with
+// "code": "bounced_address" and which address, when and why. Nothing was sent. The same call with a body of
+// { "send_anyway": true } sends it. The body is optional: without one the call is what it always was.
 route('POST', '/envelopes/:id/send', async (c) => {
+  const b = await c.req.json().catch(() => ({}));
   const e = mine(c, c.params.id, 'envelope');
-  await sendEnvelope(e.id, c.actor);
+  await sendEnvelope(e.id, c.actor, { anyway: b?.send_anyway === true });
   const sent = loadEnvelope(e.id);
   return { envelope: publicEnvelope(sent), warnings: sendWarnings(sent) };
 });
@@ -323,13 +356,24 @@ route('POST', '/envelopes/:id/void', async (c) => {
 
 route('POST', '/envelopes/:id/remind', async (c) => {
   const b = await c.req.json().catch(() => ({}));
-  return { reminded: await remindEnvelope(mine(c, c.params.id, 'envelope'), c.actor, b?.recipient_id ? str(b.recipient_id) : undefined) };
+  const e = mine(c, c.params.id, 'envelope');
+  // No reminder goes to someone whose last email came back, or who marked one as spam (see bounces.ts). Asked for
+  // one such person, the call is refused in words that say why and what to do. Asked for everyone, the others are
+  // reminded and the answer names who was left out and why, so nobody is dropped without the sender knowing.
+  const waiting = e.status === 'sent' ? e.recipients.filter((r: any) => r.status === 'sent' || r.status === 'viewed') : [];
+  const one = b?.recipient_id ? waiting.find((r: any) => r.id === str(b.recipient_id)) : null;
+  if (one && mailStop(one)) throw bad(mailStopText(one), 409, { code: mailStop(one) === 'complaint' ? 'marked_as_spam' : 'email_bounced' });
+  const not_reminded = b?.recipient_id ? [] : waiting.filter((r: any) => mailStop(r)).map((r: any) => ({ recipient_id: r.id, name: r.name, why: mailStop(r) === 'complaint' ? 'marked_as_spam' : 'email_bounced' }));
+  return { reminded: await remindEnvelope(e, c.actor, b?.recipient_id ? str(b.recipient_id) : undefined), not_reminded };
 });
 
 route('POST', '/envelopes/:id/correct', async (c) => {
   const b = await c.body();
+  const e = mine(c, c.params.id, 'envelope');
+  // A one-time code or a text message goes to one person, so neither can be asked of a group (groups.ts).
+  assertNoGroupCheck(e, str(b.recipient_id), b);
   // With their check too ("verify", "phone", "text_link"): correctWithCheck does all of the call or none of it.
-  await correctWithCheck(mine(c, c.params.id, 'envelope'), str(b.recipient_id), b, c.actor);
+  await correctWithCheck(e, str(b.recipient_id), b, c.actor);
 });
 
 route('POST', '/envelopes/:id/clone', async (c) => {
@@ -344,8 +388,12 @@ route('POST', '/envelopes/:id/clone', async (c) => {
 
 // Embedded signing: get a signing link for one recipient to open inside your own flow.
 route('POST', '/envelopes/:id/recipient-view', async (c) => {
-  const rid = str((await c.body()).recipient_id);
+  const body = await c.body();
+  const rid = str(body.recipient_id);
   const e = mine(c, c.params.id, 'envelope');
+  // In a group every member has a link of their own, and "member_id" says whose is wanted (memberLink in groups.ts).
+  const theirs = memberLink(e, rid, body.member_id, c.actor);
+  if (theirs) return theirs;
   const r = e.recipients.find((x: any) => x.id === rid);
   if (!r || !r.token) throw bad('Recipient not found, or the envelope has not been sent.', 404);
   // Handing out the link belongs in the record, but one line a day says it. An integration that asks for the link
@@ -360,7 +408,7 @@ route('POST', '/envelopes/:id/recipient-view', async (c) => {
 });
 
 route('GET', '/envelopes/:id/download', async (c) => {
-  const e = mine(c, c.params.id);
+  const e = mine(c, c.params.id, undefined, { removed: true });
   if (!e.documents.length) throw bad('This envelope has no documents yet.');
   const done = finalPdf(e);
   return pdfResponse(done || (await buildPdf(e, false)), e.subject || 'document', c.q.get('inline') === '1');
@@ -381,10 +429,20 @@ route('GET', '/bulk', (c) => ({
 // one moment a batch can be left half sent with nobody working on it. A repeat with the same key then finishes it.
 const sendingNow: Set<string> = ((globalThis as any).__tsbulk ??= new Set());
 
+// Why the rows of a batch that are left are not sent: the person the batch was started by no longer holds it (it
+// was handed over), or is no longer a member of the account. '' while they still are both.
+function notTheirsAnyMore(b: { id: string; sender_id: string }): string {
+  if (get('SELECT 1 x FROM bulk_batches b JOIN memberships m ON m.account_id=b.account_id AND m.user_id=b.sender_id WHERE b.id=? AND b.sender_id=?', b.id, b.sender_id)) return '';
+  const heir = get('SELECT u.name FROM bulk_batches b JOIN users u ON u.id=b.sender_id WHERE b.id=? AND b.sender_id!=?', b.id, b.sender_id)?.name;
+  return `Not sent. The person who started this bulk send was no longer on the team when this row's turn came, and nothing goes out in the name of someone who has left.${heir ? ` The batch now belongs to ${heir}, who can send this row in a new bulk send from the same template.` : ''}`;
+}
+
 // Sends every row of a batch that has not been tried yet, one after another, and writes each outcome to the batch
 // record as it happens. It can be run again on a batch that stopped half way: a row that went out is never sent
 // again, a copy that was made but not sent is sent, and the rest are made and sent.
-async function sendBatch(b: { id: string; account_id: string; sender_id: string; template_id: string }, actor: Actor) {
+// `anyway`: the call said "send_anyway", so a row to an address that bounced before goes out too. Without it such
+// a row is not sent and says why (it can only happen when the address came back while this batch was going out).
+async function sendBatch(b: { id: string; account_id: string; sender_id: string; template_id: string }, actor: Actor, anyway = false) {
   sendingNow.add(b.id);
   try {
     // A draft in the batch that no row points at was made in the instant before the process stopped. Its row is
@@ -394,6 +452,13 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
     for (const row of all('SELECT position, fill, envelope_id FROM bulk_rows WHERE bulk_id=? AND sent_at IS NULL AND error IS NULL ORDER BY position', b.id)) {
       const set = (what: string, ...p: any[]) => run(`UPDATE bulk_rows SET ${what} WHERE bulk_id=? AND position=?`, ...p, b.id, row.position);
       try {
+        // Asked again before every row, with nothing waited for between this look and the copy below: a bulk send
+        // takes as long as the mail server needs, and in that time the person who started it can be removed from
+        // the team, leave it, or have their login deleted. From that moment nothing more goes out on their say-so
+        // and no envelope is made in their name. The batch has passed to another member by then (handOver), and
+        // every row that is left says why it was not sent.
+        const stopped = notTheirsAnyMore(b);
+        if (stopped) throw bad(stopped);
         let eid: string = row.envelope_id;
         if (!eid) {
           if (!tpl || tpl.kind !== 'template') throw bad('The template was deleted before this row could be sent.');
@@ -404,7 +469,7 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
         if (!status) throw bad('The envelope for this row was deleted before it was sent.');
         // No longer a draft means the process stopped just after sending it. advance() only makes sure whoever is
         // next has been asked. Nobody who was already asked is asked again.
-        if (status === 'draft') await sendEnvelope(eid, actor);
+        if (status === 'draft') await sendEnvelope(eid, actor, { anyway });
         else await advance(eid);
         set('sent_at=?, fill=NULL', now());
       } catch (e: any) {
@@ -450,19 +515,23 @@ route('POST', '/bulk/check', async (c) => {
   const b = await c.body();
   const tpl = mine(c, str(b.template_id), 'template');
   const rows: any[] = Array.isArray(b.rows) ? b.rows.slice(0, 500) : [];
-  const open = tpl.recipients.filter((r: any) => !r.email);
+  const open = tpl.recipients.filter((r: any) => !r.email && !r.group_name); // a group is filled in by its members, not by a row or a visitor
   const counted = creditsEnabled();
   const { perRow, need, have } = counted ? batchNeeds(c, tpl, rows.length) : { perRow: 0, need: 0, have: 0 };
   const short = Math.max(0, need - Math.max(0, have));
   const onPlan = c.account.plan === 'grove';
   const planSignatures = onPlan ? 0 : Math.min(short, PRICING.monthlySignatures);
   const topUp = short - planSignatures;
-  const reach = [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row?.[r.role_name || r.id]?.email).trim()))].filter(Boolean);
-  const refusal = rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) : null;
+  const reach = [...tpl.recipients.map((r: any) => r.email), ...groupReach(tpl), ...rows.flatMap((row) => open.map((r: any) => str(row?.[r.role_name || r.id]?.email).trim()))].filter(Boolean);
+  // bulkChecksRefusal: a row without the mobile number its role needs, or more text messages than the account may send today.
+  const refusal = rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) || bulkChecksRefusal(tpl, rows, open) : null;
   return {
     counted, rows: rows.length, signers_per_row: perRow, need, have: Math.max(0, have), short, plan: c.account.plan,
     cost: counted && short > 0 ? { usd: (onPlan ? 0 : PRICING.monthlyUsd) + topUp * PRICING.topUpUsd, plan_usd: onPlan ? 0 : PRICING.monthlyUsd, plan_signatures: onPlan ? 0 : PRICING.monthlySignatures, top_up: topUp, top_up_usd: topUp * PRICING.topUpUsd } : null,
     refusal: refusal ? { status: refusal.status, message: refusal.message } : null,
+    // Addresses in this list at which an email of the account came back for good in the last weeks, each with the
+    // day and why. Not a refusal: POST /bulk sends to them when it carries "send_anyway": true, and says so otherwise.
+    bounced: rows.length ? bouncedBefore(c.account.id, reach).map((x) => ({ email: x.email, bounced_at: x.at, reason: x.reason, line: bouncedLine(x) })) : [],
   };
 });
 
@@ -479,14 +548,14 @@ route('POST', '/bulk', async (c) => {
     if (prior.request_hash !== bodyHash(b))
       throw bad(`This Idempotency-Key was already used for a different bulk send, which made batch ${prior.id}. Nothing new was sent. Repeat a call with its own key, and use a new key for each new list.`, 409);
     const busy = sendingNow.has(prior.id);
-    if (!busy) await sendBatch(prior, c.actor);
+    if (!busy) await sendBatch(prior, c.actor, b.send_anyway === true);
     return json(batchResult(prior.id), busy ? 202 : 200, { 'idempotent-replay': 'true' });
   }
   const tpl = mine(c, str(b.template_id), 'template');
   const rows: any[] = Array.isArray(b.rows) ? b.rows : [];
   if (!rows.length) throw bad('Add at least one row of recipients.');
   if (rows.length > 500) throw bad('Send up to 500 envelopes per batch.');
-  const open = tpl.recipients.filter((r: any) => !r.email);
+  const open = tpl.recipients.filter((r: any) => !r.email && !r.group_name); // a group is filled in by its members, not by a row or a visitor
   rows.forEach((row, i) => {
     for (const r of open) {
       const v = row?.[r.role_name || r.id];
@@ -498,7 +567,14 @@ route('POST', '/bulk', async (c) => {
   assertBulkChecks(tpl, rows, open);
   // A pause, the fake-notice filter and the daily limit refuse the whole batch before anything is written, instead of
   // failing it row by row. Every address in every row counts as a person emailed.
-  assertMayEmail({ ...tpl, sender_id: c.user.id }, [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))].filter(Boolean));
+  assertMayEmail({ ...tpl, sender_id: c.user.id }, [...tpl.recipients.map((r: any) => r.email), ...groupReach(tpl), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))].filter(Boolean));
+  // An address in the list at which an email of this account came back for good in the last weeks: the whole batch
+  // waits until the sender has seen which and why, and goes out when the same call carries "send_anyway": true.
+  const dead = b.send_anyway === true ? [] : bouncedBefore(c.account.id, [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))]);
+  if (dead.length) {
+    const no = bouncedRefusal(dead, 'Nothing was sent, to anyone in the list');
+    throw bad(no.message, 409, no.data);
+  }
   // Check the whole batch against the balance first, so it never stops half way through.
   if (creditsEnabled()) {
     const { perRow, need, have } = batchNeeds(c, tpl, rows.length);
@@ -513,7 +589,7 @@ route('POST', '/bulk', async (c) => {
       made.id, made.account_id, made.sender_id, tpl.id, str(b.name, 120) || tpl.subject || 'Bulk send', rows.length, now(), idem || null, bodyHash(b));
     rows.forEach((row, i) => run('INSERT INTO bulk_rows (bulk_id, account_id, position, fill) VALUES (?,?,?,?)', made.id, made.account_id, i, JSON.stringify(row)));
   });
-  await sendBatch(made, c.actor);
+  await sendBatch(made, c.actor, b.send_anyway === true);
   return batchResult(made.id);
 });
 
@@ -529,9 +605,12 @@ route('GET', '/bulk/:id', (c) => {
   for (const e of envelopes) e.recipients = all('SELECT name, email, role, status, viewed_at, completed_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
   // The record row by row: which rows went out, which could not and why, and which have not been tried yet. The row
   // itself (names and emails as submitted) is shown until it is sent. After that its envelope has them.
+  // An envelope of the batch that its sender removed from their lists is not among `envelopes`. Its row says so
+  // (removed), and `removed` counts them, so the numbers on the page add up to the rows that were sent.
+  const gone = new Set(all('SELECT id FROM envelopes WHERE bulk_id=? AND hidden_at IS NOT NULL', b.id).map((e) => e.id as string));
   const rows = all('SELECT position, fill, envelope_id, sent_at, error FROM bulk_rows WHERE bulk_id=? ORDER BY position', b.id)
-    .map((r) => ({ position: r.position, status: r.sent_at ? 'sent' : r.error ? 'failed' : 'pending', envelope_id: r.envelope_id, sent_at: r.sent_at, error: r.error, row: r.fill ? JSON.parse(r.fill) : null }));
-  return { batch: b, envelopes, rows, sending: sendingNow.has(b.id) };
+    .map((r) => ({ position: r.position, status: r.sent_at ? 'sent' : r.error ? 'failed' : 'pending', envelope_id: r.envelope_id, sent_at: r.sent_at, error: r.error, row: r.fill ? JSON.parse(r.fill) : null, ...(gone.has(r.envelope_id) ? { removed: true } : {}) }));
+  return { batch: b, envelopes, rows, removed: gone.size, sending: sendingNow.has(b.id) };
 });
 // The remind and the void below work through the envelopes that are out for signature one at a time, and each one's
 // emails take a while. In that while a signer can finish or decline one further down the list, or a second call can
@@ -573,21 +652,45 @@ route('POST', '/bulk/:id/void', async (c) => {
 function powerformTemplate(templateId: string) {
   const tpl = loadEnvelope(templateId);
   if (!tpl || tpl.kind !== 'template') throw bad('Template not found.', 404);
-  const open = tpl.recipients.filter((r: any) => !r.email);
+  const open = tpl.recipients.filter((r: any) => !r.email && !r.group_name); // a group is filled in by its members, not by a row or a visitor
   if (open.length !== 1 || !['signer', 'approver'].includes(open[0].role)) throw bad('A PowerForm needs a template with exactly one open signer role. Give every other recipient a name and email in the template.');
   return { tpl, open: open[0] };
 }
 
+// A public form sends in the name of the person its template belongs to, uses that account's signatures, and its
+// template cannot be deleted while the form exists. So publishing a template as a form, and pausing, changing or
+// deleting the form, is for the people who may change the template: the person it belongs to, and admins. Everyone
+// on the team still sees the forms and can hand out their links.
+const mayRunForm = (c: Ctx, templateOwner: string | null | undefined) => c.admin || (!!templateOwner && templateOwner === c.user.id);
+function assertMayRunForm(c: Ctx, tpl: any, doing: string) {
+  if (mayRunForm(c, tpl?.sender_id)) return;
+  const owner = (tpl && get('SELECT name FROM users WHERE id=?', tpl.sender_id)?.name) || 'a colleague';
+  throw bad(`This template belongs to ${owner}, so only ${owner} or an admin of your team can ${doing}. Nothing was changed. To have a PowerForm of your own, copy the template and make the PowerForm from your copy.`, 403);
+}
+// The form a call names, for someone who may change it. The same answer for a form that does not exist and for one
+// in another account.
+function formToChange(c: Ctx, doing: string) {
+  const p = get('SELECT * FROM powerforms WHERE id=? AND account_id=?', c.params.id, c.account.id);
+  if (!p) throw bad('That PowerForm does not exist any more. It may have been deleted already.', 404);
+  assertMayRunForm(c, get('SELECT sender_id FROM envelopes WHERE id=?', p.template_id), doing);
+  return p;
+}
+
 route('GET', '/powerforms', (c) => ({
   // "uses" counts every start. "signed" is what people finished, and "open" is who is filling one in right now.
-  powerforms: all(`SELECT p.id, p.slug, p.name, p.active, p.uses, p.shared_device, p.created_at, t.subject template,
+  // may_change says whether this person may pause, change or delete the form, and owner whose template it is on.
+  powerforms: all(`SELECT p.id, p.slug, p.name, p.active, p.uses, p.shared_device, p.created_at, t.subject template, t.sender_id template_owner, u.name owner,
       (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND r.status='completed') signed,
       (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND e.status='sent' AND r.status IN ('pending','sent','viewed')) open
-    FROM powerforms p LEFT JOIN envelopes t ON t.id=p.template_id WHERE p.account_id=? ORDER BY p.created_at DESC`, c.account.id).map((p) => ({ ...p, shared_device: !!p.shared_device })),
+    FROM powerforms p LEFT JOIN envelopes t ON t.id=p.template_id LEFT JOIN users u ON u.id=t.sender_id WHERE p.account_id=? ORDER BY p.created_at DESC`, c.account.id)
+    // url is the public address of the form, built from APP_URL like every link in an email and never from a
+    // request header. The app copies it and draws the form's QR code from it.
+    .map(({ template_owner, ...p }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, template_owner), url: `${baseUrl()}/f/${p.slug}` })),
 }));
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();
   const tpl = mine(c, str(b.template_id), 'template');
+  assertMayRunForm(c, tpl, 'publish it as a PowerForm');
   // A visitor types their own details, so the open role can be checked with a code by email and never by text.
   assertFormChecks(powerformTemplate(tpl.id).open);
   const pid = id('pwf');
@@ -597,10 +700,12 @@ route('POST', '/powerforms', async (c) => {
 route('PATCH', '/powerforms/:id', async (c) => {
   // Only what the call names is changed, so pausing a form does not also change how it treats a shared device.
   const b = await c.body();
+  formToChange(c, 'pause or change this PowerForm');
   if (b.active !== undefined) run('UPDATE powerforms SET active=? WHERE id=? AND account_id=?', b.active ? 1 : 0, c.params.id, c.account.id);
   if (b.shared_device !== undefined) run('UPDATE powerforms SET shared_device=? WHERE id=? AND account_id=?', b.shared_device ? 1 : 0, c.params.id, c.account.id);
 });
 route('DELETE', '/powerforms/:id', (c) => {
+  formToChange(c, 'delete this PowerForm');
   run('DELETE FROM powerforms WHERE id=? AND account_id=?', c.params.id, c.account.id);
 });
 

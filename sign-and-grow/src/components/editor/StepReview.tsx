@@ -3,13 +3,14 @@ import Link from 'next/link';
 import { ROLE_LABEL, Leaf, fmtDate, api, useLoad, oops } from '../ui';
 import { useMe } from '../AppShell';
 import { fmtNum, sheetsSaved, impactOf, fmtTrees, PRICING, mangrovesFor } from '@/lib/impact';
-import { formatDate } from '@/lib/dates';
+import { formatDate, momentText, deviceZone } from '@/lib/dates';
 import { scanWarning } from '@/lib/scans';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
 import { PaperCheck, EnoughLink } from './PaperCheck';
 import { ReminderChoice } from './ReminderChoice';
 import { PrintCheck } from './PrintCheck';
+import { LabelCheck } from './LabelCheck';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -134,6 +135,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {docs.filter((d) => scanWarning(d)).map((d) => (
         <div key={d.id} className="notice warn"><b>{d.name || 'A document'}:</b> {scanWarning(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the documents</button></div>
       ))}
+      {/* Fields a screen reader can only name by their type, each with a way to the box where the label is typed. */}
+      {!closed && <LabelCheck ed={ed} />}
       {/* The check before sending: a word that often means paper, a witness or a notary. It warns and never blocks. */}
       {!closed && <PrintCheck subject={env.subject || ''} docs={docs} rcps={rcps} fields={fields} />}
       {!closed && <PaperCheck envelopeId={env.id} subject={env.subject || ''} docs={docs} sending={!isTpl && !correcting} />}
@@ -143,7 +146,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
         {env.message && <p className="muted" style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{env.message}</p>}
         <div className="muted small" style={{ marginTop: 8 }}>
           {plural(docs.length, 'document')}, {plural(pages, 'page')} · {env.ordered ? 'signed in order' : 'everyone at once'} · {env.reminder_days ? `reminder every ${plural(env.reminder_days, 'day')}` : 'no automatic reminders'}
-          {correcting ? (env.expires_at ? ` · closes on ${fmtDate(env.expires_at)}` : '') : ` · expires after ${plural(env.expire_days, 'day')}`} · dates written like {formatDate(new Date(), env.date_format)}
+          {correcting ? (env.expires_at ? ` · closes on ${momentText(env.expires_at, deviceZone())}` : '') : ` · expires after ${plural(env.expire_days, 'day')}`} · dates written like {formatDate(new Date(), env.date_format, deviceZone())}
         </div>
       </div>
 
@@ -185,7 +188,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
                   <div className="grow">
                     <b className="ed-break">{r.name || r.role_name || 'Unnamed'}</b>
                     <div className="muted small ed-break">{r.email || 'Filled in when the template is used'}</div>
-                    <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
+                    <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
                   </div>
                 </li>
               );

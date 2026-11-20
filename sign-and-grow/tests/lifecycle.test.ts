@@ -11,7 +11,7 @@ import path from 'node:path';
 import { PDFDocument } from 'pdf-lib';
 import { boot, Client, PNG, simple, upload, tokenFor, signUp, signAll, mailTo, type Server } from './helpers.ts';
 import { PRICING } from '../src/lib/impact.ts';
-import { supportWarning, CLOSING_REMINDER_DAYS, CLOSE_GRACE_DAYS } from '../src/lib/policy.ts';
+import { supportWarning, CLOSING_REMINDER_DAYS, CLOSE_GRACE_DAYS, KEPT_AFTER_DELETION } from '../src/lib/policy.ts';
 
 let db: Server['db'];
 let cron: Server['cron'];
@@ -73,7 +73,7 @@ test('someone removed from their only team can sign in, gets a workspace with th
   assert.equal(back.r.status, 200, JSON.stringify(back.r.data));
   assert.equal(back.r.data.fresh, true);
   const mine = await me(back.c);
-  assert.equal(mine.account.name, "Pat's workspace");
+  assert.equal(mine.account.name, "Pat Member's workspace");
   assert.equal(mine.role, 'owner');
   assert.notEqual(mine.account.id, team.id);
   assert.equal((await back.c.get('/envelopes')).data.envelopes.length, 0);
@@ -441,7 +441,7 @@ test('nobody is invited into, joins or sends from an account that is being close
   const closed = (await owner.post('/me/delete', { password: PW })).data;
   assert.equal(closed.closed, 'scheduled');
   const day = closed.deletes_at.slice(0, 10);
-  const refusal = new RegExp(`Clo's workspace is being closed and will be deleted on ${day}\\..*If its owner signs in before that day, the account is restored`);
+  const refusal = new RegExp(`Clo Sing's workspace is being closed and will be deleted on ${day}\\..*If its owner signs in before that day, the account is restored`);
 
   // Joining: by signing up from the invitation, by accepting it signed in, or by signing in from it.
   const late = await from().post('/auth/signup', { name: 'Late Joiner', email: 'late.joiner@example.com', password: PW, invite: lateInvite });
@@ -607,8 +607,11 @@ test('a completed envelope its sender deletes leaves the sender\'s lists, and ev
   // Gone for the sender: the list, search, the envelope itself, the export and the reports.
   assert.deepEqual((await jo.get('/envelopes')).data.envelopes.map((x: any) => x.subject), ['This one stays']);
   assert.equal((await jo.get('/envelopes?q=keeper')).data.envelopes.length, 0);
-  assert.equal((await jo.get(`/envelopes/${e.id}`)).status, 404);
-  assert.equal((await jo.get(`/envelopes/${e.id}/download`)).status, 404);
+  // Jo owns this account, and an owner or admin can still open and download what a sender removed, and put it
+  // back (see the test for that below). A plain member gets 404 on all of it. Nothing else can be done to it.
+  assert.ok((await jo.get(`/envelopes/${e.id}`)).data.removed_at, 'the answer to an admin says it was removed');
+  assert.equal((await jo.get(`/envelopes/${e.id}/download`)).status, 200);
+  assert.equal((await jo.post(`/envelopes/${e.id}/clone`)).status, 404);
   assert.equal((await jo.call('DELETE', `/envelopes/${e.id}`)).status, 404);
   assert.equal((await jo.get(`/export?ids=${e.id}`)).status, 400, 'not in the export either');
   assert.equal(zipNames((await jo.get('/export')).data).filter((x) => x.startsWith('signed/')).length, 1);
@@ -786,4 +789,410 @@ test('the app knows when a workspace hangs on one admin, and a production server
   assert.equal((await me(solo)).support_email, 'help@example.com');
   assert.equal((await from().get('/public/support')).data.email, 'help@example.com');
   delete process.env.SUPPORT_EMAIL;
+});
+
+// ---- What the second look at this list found ------------------------------------------------------------------
+
+const withKey = (key: string) => (method: string, url: string, body?: any) => new Client().call(method, url, body, { authorization: `Bearer ${key}` });
+// A security code the way emails and links print it: ABCD-EFGH-JKLM.
+const pretty = (code: string) => code.replace(/(.{4})(?=.)/g, '$1-');
+const codeOf = (envelopeId: string) => pretty(db.get('SELECT check_code c FROM recipients WHERE envelope_id=?', envelopeId).c);
+
+test('an API key cannot change which workspace its owner lands in at the next sign-in', async () => {
+  const boss = await person('Key Boss', 'key.boss@example.com');
+  const team = (await me(boss)).account.id;
+  const kay = await person('Kay Two', 'kay.two@example.com');
+  const home = (await me(kay)).account.id;
+  assert.equal((await boss.post('/account/invites', { email: 'kay.two@example.com' })).status, 200);
+  assert.equal((await kay.post('/invites/accept', { token: inviteFor('kay.two@example.com') })).status, 200);
+  const last = () => db.get("SELECT last_account_id a FROM users WHERE email='kay.two@example.com'").a;
+  assert.equal(last(), team);
+  const key = (await kay.post('/api-keys', { name: 'team key' })).data.key;
+  const r = await withKey(key)('POST', '/auth/switch', { account_id: home });
+  assert.equal(r.status, 403);
+  assert.match(r.data.error, /An API key cannot switch to another workspace\. That needs a person signed in to the app\./);
+  assert.equal(last(), team, 'nothing was remembered for the next sign-in');
+  // A person in a browser still chooses.
+  assert.equal((await kay.post('/auth/switch', { account_id: home })).status, 200);
+  assert.equal(last(), home);
+});
+
+test('the welcome signatures are given once per email address, also after the login was deleted and made again', async () => {
+  const first = await person('Loop Er', 'looper@example.com');
+  assert.equal(welcome('looper@example.com'), PRICING.welcomeSignatures);
+  assert.equal((await first.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  const again = await person('Loop Er', 'looper@example.com');
+  assert.equal((await me(again)).account.name, "Loop's workspace", 'the new login gets a workspace like any other');
+  assert.equal(welcome('looper@example.com'), 0, 'and no second set of welcome signatures');
+  // And not a third, after the days in between and the timer either.
+  assert.equal((await again.post('/me/delete', { password: PW })).data.closed, 'scheduled');
+  db.run("UPDATE users SET closing_at=? WHERE email='looper@example.com'", new Date(Date.now() - 1000).toISOString());
+  await cron.tick();
+  assert.equal(db.get("SELECT COUNT(*) n FROM users WHERE email='looper@example.com'").n, 0);
+  await person('Loop Er', 'looper@example.com');
+  assert.equal(welcome('looper@example.com'), 0);
+
+  // What is kept to know it: a fingerprint and a day. Never the address, and nothing that could be turned back into it.
+  const kept = db.all('SELECT * FROM welcomed');
+  assert.ok(kept.length >= 1);
+  for (const k of kept) assert.deepEqual([/^[0-9a-f]{64}$/.test(k.email_hash), /^\d{4}-\d\d-\d\d$/.test(k.at), Object.keys(k).length], [true, true, 2]);
+  assert.doesNotMatch(JSON.stringify(kept), /looper|example\.com/i);
+  assert.ok(KEPT_AFTER_DELETION.some((line) => /fingerprint of your email address and the day you were given the welcome signatures.*once per address.*cannot be turned back into your address/.test(line)), 'and the pages say so');
+
+  // A stranger who signs up with somebody else's address and deletes that login never confirmed the address, so
+  // the person it belongs to is still welcomed.
+  const squatter = from();
+  assert.equal((await squatter.post('/auth/signup', { name: 'Not Really', email: 'real.owner@example.com', password: PW })).status, 200);
+  assert.equal((await squatter.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  await person('Real Owner', 'real.owner@example.com');
+  assert.equal(welcome('real.owner@example.com'), PRICING.welcomeSignatures);
+});
+
+test('someone who is closing their own login cannot be named to take over what a removed member sent', async () => {
+  const owner = await person('Hea Dd', 'hea.dd@example.com');
+  const goer = await join(owner, 'Go Er', 'go.er@example.com');
+  const closer = await join(owner, 'Clo Ser', 'clo.ser@example.com');
+  const [goerId, closerId] = [await idOf(goer), await idOf(closer)];
+  const e = await simple(goer, 'client.goer@example.com');
+  assert.equal((await goer.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await closer.post('/me/delete', { password: PW })).data.closed, 'scheduled');
+  const r = await owner.call('DELETE', `/account/members/${goerId}?to=${closerId}`);
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /Clo Ser is closing their login, so they cannot take over what Go Er sent\. Choose someone else\. Nothing was changed\./);
+  assert.equal(db.get('SELECT sender_id s FROM envelopes WHERE id=?', e.id).s, goerId);
+  assert.equal(db.get('SELECT COUNT(*) n FROM memberships WHERE user_id=?', goerId).n, 1, 'still on the team');
+  // With nobody named it goes to whoever removes them, who stays.
+  const ok = await owner.call('DELETE', `/account/members/${goerId}`);
+  assert.equal(ok.status, 200);
+  assert.equal(db.get('SELECT sender_id s FROM envelopes WHERE id=?', e.id).s, await idOf(owner));
+});
+
+test('a bulk send that is still going out stops when its sender is removed, and everything it made belongs to the successor', async () => {
+  const g = globalThis as any;
+  const owner = await person('Rae Lead', 'rae.lead@example.com');
+  const heir = await join(owner, 'Hei Ress', 'hei.ress@example.com');
+  const bea = await join(owner, 'Bea Bulk', 'bea.bulk@example.com');
+  const [heirId, beaId] = [await idOf(heir), await idOf(bea)];
+  const tpl = await template(bea, 'Bea template');
+  const rows = Array.from({ length: 12 }, (_, i) => ({ Member: { name: `Row ${i}`, email: `row${i}@race.example` } }));
+  // A mail server that takes a few milliseconds for each email, as a real one does. Nothing leaves this machine.
+  process.env.SMTP_URL = 'smtp://slow.invalid';
+  g.__tsmail = { sendMail: async () => void (await new Promise((r) => setTimeout(r, 5))) };
+  try {
+    const sending = bea.call('POST', '/bulk', { template_id: tpl.id, rows });
+    const sentSoFar = () => db.get('SELECT COUNT(*) n FROM bulk_rows r JOIN bulk_batches b ON b.id=r.bulk_id WHERE b.template_id=? AND r.sent_at IS NOT NULL', tpl.id).n;
+    for (let i = 0; i < 200000 && sentSoFar() < 2; i++) await new Promise((r) => setImmediate(r));
+    assert.ok(sentSoFar() >= 2 && sentSoFar() < 12, 'the batch is under way');
+    const removed = await owner.call('DELETE', `/account/members/${beaId}?to=${heirId}`);
+    assert.equal(removed.status, 200);
+    const res = await sending;
+    assert.equal(res.status, 200);
+    const bid = res.data.id;
+
+    // Nothing more went out in the name of someone who had left, and every row that was left says why.
+    assert.ok(res.data.sent >= 2 && res.data.sent < 12, JSON.stringify(res.data.sent));
+    assert.equal(res.data.failed.length, 12 - res.data.sent);
+    for (const f of res.data.failed) assert.match(f.error, /^Not sent\. The person who started this bulk send was no longer on the team when this row's turn came, and nothing goes out in the name of someone who has left\. The batch now belongs to Hei Ress, who can send this row in a new bulk send from the same template\.$/);
+    assert.equal(mailTo('row11@race.example').length, 0);
+    // Every envelope the batch made belongs to the successor, none to the person who left, and each one's record says so.
+    const made = db.all('SELECT id, sender_id FROM envelopes WHERE bulk_id=? ORDER BY created_at', bid);
+    assert.equal(made.length, res.data.sent, 'no half-made copy is left behind');
+    assert.deepEqual([...new Set(made.map((e: any) => e.sender_id))], [heirId]);
+    for (const e of made) assert.equal(auditOf(e.id).filter((a: any) => a.action === 'Handed over' && /From Bea Bulk <bea\.bulk@example\.com> to Hei Ress/.test(a.detail)).length, 1, e.id);
+    assert.equal((await heir.get(`/envelopes/${made.at(-1).id}`)).status, 200, 'the successor can open the last one that went out');
+    // The successor sees which rows are left, with the names and addresses, so they can be sent again.
+    const page = (await heir.get(`/bulk/${bid}`)).data;
+    assert.equal(page.rows.filter((r: any) => r.status === 'failed' && r.row?.Member?.email).length, 12 - res.data.sent);
+    assert.equal(page.rows.filter((r: any) => r.status === 'pending').length, 0);
+    // The signed copy goes to the successor, not to the person who left.
+    const before = mailTo('bea.bulk@example.com').length;
+    assert.equal((await signAll(made[0].id, 'row0@race.example')).status, 200);
+    assert.ok(mailTo('hei.ress@example.com').some((m) => m.subject === 'Completed: Bea template'));
+    assert.deepEqual(mailTo('bea.bulk@example.com').slice(before).map((m) => m.subject), []);
+  } finally {
+    delete process.env.SMTP_URL;
+    delete g.__tsmail;
+  }
+});
+
+test('the delivery log of a webhook goes with the webhook, and a log left behind earlier goes with the account or with the timer', async () => {
+  const w = await person('Web Hooker', 'web.hooker@example.com');
+  const other = await person('Oth Hooker', 'oth.hooker@example.com');
+  const [wid, oid] = [(await me(w)).account.id, (await me(other)).account.id];
+  const t = new Date().toISOString();
+  const e = await simple(w, 'hooked@example.com', { subject: 'Hooked subject' });
+  const log = (hook: string, envelopeId: string | null) => db.run('INSERT INTO webhook_deliveries (webhook_id, event, envelope_id, at, body) VALUES (?,?,?,?,?)', hook, 'envelope.sent', envelopeId, t, '{"envelope":{"subject":"Hooked subject"}}');
+  const logged = (hook: string) => db.get('SELECT COUNT(*) n FROM webhook_deliveries WHERE webhook_id=?', hook).n;
+  // Made directly, as the deletion test above does: adding one through the API looks its address up first.
+  db.run("INSERT INTO webhooks (id, account_id, url, secret, created_at) VALUES ('whk_mine', ?, 'https://example.com/hook', 's', ?)", wid, t);
+  db.run("INSERT INTO webhooks (id, account_id, url, secret, created_at) VALUES ('whk_theirs', ?, 'https://example.com/hook', 's', ?)", oid, t);
+  log('whk_mine', e.id);
+  log('whk_mine', null);
+  log('whk_theirs', null);
+
+  // Somebody else's webhook is not theirs to delete, and its log stays.
+  assert.equal((await w.call('DELETE', '/webhooks/whk_theirs')).status, 200);
+  assert.deepEqual([db.get("SELECT COUNT(*) n FROM webhooks WHERE id='whk_theirs'").n, logged('whk_theirs')], [1, 1]);
+  // Deleting a webhook takes its delivery log along.
+  assert.equal((await w.call('DELETE', '/webhooks/whk_mine')).status, 200);
+  assert.equal(logged('whk_mine'), 0);
+
+  // What an earlier version left behind when a webhook was deleted: it names the account's envelopes, so it goes
+  // with the account, and what names no envelope is cleared by the timer.
+  log('whk_long_gone', e.id);
+  assert.equal((await w.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  assert.equal(logged('whk_long_gone'), 0, 'the pages say delivery logs are deleted with the account');
+  log('whk_long_gone', null);
+  await cron.tick();
+  assert.deepEqual([logged('whk_long_gone'), logged('whk_theirs')], [0, 1]);
+});
+
+test('a file a signer uploaded and did not attach goes with the envelope it came in through, and with the account', async () => {
+  const jo = await person('Jo Loose', 'jo.loose@example.com');
+  const uploadVia = async (envelopeId: string, email: string) => {
+    const tok = tokenFor(envelopeId, email);
+    const s = from();
+    await s.post(`/sign/${tok}/consent`);
+    const up = (await s.call('POST', `/sign/${tok}/upload`, await pdfFile('Wrong file, never attached', 'wrong.pdf'))).data;
+    return { id: up.id as string, sha: db.get('SELECT sha256 s FROM files WHERE id=?', up.id).s as string };
+  };
+  const one = await simple(jo, 'loose.one@example.com');
+  await jo.post(`/envelopes/${one.id}/send`);
+  const a = await uploadVia(one.id, 'loose.one@example.com');
+  assert.equal(db.get('SELECT via_envelope v, account_id a FROM files WHERE id=?', a.id).v, one.id, 'the file remembers the envelope it came in through');
+  assert.ok(blob(a.sha));
+  // The envelope is voided and deleted: the file nobody attached goes with it, at once.
+  assert.equal((await jo.post(`/envelopes/${one.id}/void`, { reason: 'Sent by mistake' })).status, 200);
+  assert.equal((await jo.call('DELETE', `/envelopes/${one.id}`)).status, 200);
+  assert.deepEqual([db.get('SELECT COUNT(*) n FROM files WHERE id=?', a.id).n, blob(a.sha)], [0, false]);
+  // And with the account, without waiting for the timer.
+  const two = await simple(jo, 'loose.two@example.com');
+  await jo.post(`/envelopes/${two.id}/send`);
+  const b = await uploadVia(two.id, 'loose.two@example.com');
+  assert.equal((await jo.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  assert.deepEqual([db.get('SELECT COUNT(*) n FROM files WHERE id=?', b.id).n, blob(b.sha)], [0, false]);
+});
+
+test('a public form is published, paused, changed and deleted by the person its template belongs to and by admins, and a member sees only their own contacts', async () => {
+  const owner = await person('Fay Owner', 'fay.owner@example.com');
+  const ann = await join(owner, 'Ann Member', 'ann.member@example.com');
+  const bob = await join(owner, 'Bob Member', 'bob.member@example.com');
+  const tpl = await template(ann, 'Ann sign-off');
+  const pf = await ann.post('/powerforms', { template_id: tpl.id, name: 'Ann form' });
+  assert.equal(pf.status, 200, JSON.stringify(pf.data));
+  const form = () => db.get('SELECT active, shared_device FROM powerforms WHERE id=?', pf.data.id);
+
+  // A colleague sees the form and can hand out its link, and is told whose it is.
+  assert.deepEqual((await bob.get('/powerforms')).data.powerforms.map((p: any) => [p.name, p.may_change, p.owner]), [['Ann form', false, 'Ann Member']]);
+  assert.equal((await ann.get('/powerforms')).data.powerforms[0].may_change, true);
+  // Pausing, changing and deleting it are not for a colleague.
+  for (const [method, body, doing] of [['PATCH', { active: false }, 'pause or change'], ['PATCH', { shared_device: true }, 'pause or change'], ['DELETE', undefined, 'delete']] as const) {
+    const r = await bob.call(method, `/powerforms/${pf.data.id}`, body);
+    assert.equal(r.status, 403, `${method} ${JSON.stringify(body)}`);
+    assert.match(r.data.error, new RegExp(`^This template belongs to Ann Member, so only Ann Member or an admin of your team can ${doing} this PowerForm\\. Nothing was changed\\. To have a PowerForm of your own, copy the template`));
+  }
+  assert.deepEqual(form(), { active: 1, shared_device: 0 });
+  // Nor is putting a form on a colleague's template, which would send in her name and keep her from deleting it.
+  const lock = await bob.post('/powerforms', { template_id: tpl.id, name: 'Bob form on Ann template' });
+  assert.equal(lock.status, 403);
+  assert.match(lock.data.error, /only Ann Member or an admin of your team can publish it as a PowerForm/);
+  assert.equal(db.get('SELECT COUNT(*) n FROM powerforms WHERE template_id=?', tpl.id).n, 1);
+  // A copy of the template is his, and so is a form made from it.
+  const copy = (await bob.post(`/envelopes/${tpl.id}/clone`)).data.id;
+  assert.equal((await bob.post('/powerforms', { template_id: copy, name: 'Bob form' })).status, 200);
+  // The person the template belongs to, and an admin, can do all of it.
+  assert.equal((await ann.call('PATCH', `/powerforms/${pf.data.id}`, { active: false })).status, 200);
+  assert.deepEqual(form(), { active: 0, shared_device: 0 });
+  assert.equal((await owner.call('PATCH', `/powerforms/${pf.data.id}`, { active: true, shared_device: true })).status, 200);
+  assert.deepEqual(form(), { active: 1, shared_device: 1 });
+  assert.equal((await ann.call('DELETE', `/powerforms/${pf.data.id}`)).status, 200);
+  assert.equal((await ann.call('DELETE', `/envelopes/${tpl.id}`)).status, 200, 'nobody else could put a form on her template, so she can delete it');
+  const gone = await ann.call('PATCH', `/powerforms/${pf.data.id}`, { active: true });
+  assert.equal(gone.status, 404);
+  assert.match(gone.data.error, /That PowerForm does not exist any more/);
+
+  // Who a colleague sends to is that colleague's business. Admins see the whole address book.
+  const e = await simple(ann, 'client.ann@example.com');
+  assert.equal((await ann.post(`/envelopes/${e.id}/send`)).status, 200);
+  const list = async (c: Client) => (await c.get('/contacts')).data.contacts.map((x: any) => x.email).sort();
+  assert.deepEqual(await list(ann), ['client.ann@example.com']);
+  assert.deepEqual(await list(bob), []);
+  const cid = db.get("SELECT id FROM contacts WHERE email='client.ann@example.com'").id;
+  await bob.call('DELETE', `/contacts/${cid}`);
+  assert.equal((await bob.call('PATCH', `/contacts/${cid}`, { name: 'Renamed by Bob', email: 'client.ann@example.com' })).status, 404);
+  assert.equal(db.get('SELECT name FROM contacts WHERE id=?', cid).name, 'Sam Signer', 'a colleague can neither delete nor rename it');
+  assert.equal((await bob.post('/contacts', { name: 'Bobs Client', email: 'client.bob@example.com' })).status, 200);
+  assert.deepEqual(await list(bob), ['client.bob@example.com']);
+  assert.deepEqual(await list(ann), ['client.ann@example.com']);
+  assert.deepEqual(await list(owner), ['client.ann@example.com', 'client.bob@example.com']);
+  // His own he can change and delete, also after changing its address to one he has not sent to.
+  const mine = db.get("SELECT id FROM contacts WHERE email='client.bob@example.com'").id;
+  assert.equal((await bob.call('PATCH', `/contacts/${mine}`, { name: 'Bobs Client', email: 'client.bob.new@example.com' })).status, 200);
+  assert.deepEqual(await list(bob), ['client.bob.new@example.com']);
+  await bob.call('DELETE', `/contacts/${mine}`);
+  assert.deepEqual(await list(bob), []);
+});
+
+test('an envelope a member removed from their lists can still be found, opened and put back by the admins of the account', async () => {
+  const owner = await person('Ada Admin', 'ada.admin@example.com');
+  const mem = await join(owner, 'Mem Deleter', 'mem.deleter@example.com');
+  const e = await simple(mem, 'kept.signer@example.com', { subject: 'Team contract' });
+  assert.equal((await mem.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'kept.signer@example.com')).status, 200);
+  assert.equal((await owner.get(`/envelopes/${e.id}`)).data.removed_at, null);
+  assert.equal((await mem.call('DELETE', `/envelopes/${e.id}`)).data.kept_for_recipients, true);
+
+  // Gone for the member, who cannot look among the removed ones or put anything back either.
+  assert.equal((await mem.get(`/envelopes/${e.id}`)).status, 404);
+  assert.equal((await mem.get(`/envelopes/${e.id}/download`)).status, 404);
+  const no = await mem.get('/envelopes?box=removed');
+  assert.equal(no.status, 403);
+  assert.match(no.data.error, /shown to the admins of the account only\. Ask an admin of your team/);
+  assert.equal((await mem.post(`/envelopes/${e.id}/restore`)).status, 403);
+  assert.equal('removed' in (await mem.get('/envelopes')).data, false);
+
+  // The account is a party to the document too. An admin does not see it in the ordinary list or the export, is
+  // told that one was removed, finds it under "removed", and can open and download it.
+  const list = (await owner.get('/envelopes')).data;
+  assert.deepEqual([list.envelopes.some((x: any) => x.id === e.id), list.removed], [false, 1]);
+  assert.deepEqual((await owner.get('/envelopes?box=removed')).data.envelopes.map((x: any) => [x.id, x.sender, !!x.removed_at]), [[e.id, 'Mem Deleter', true]]);
+  assert.deepEqual((await owner.get('/envelopes?box=removed&q=kept.signer')).data.envelopes.map((x: any) => x.id), [e.id], 'and search works in there');
+  assert.ok((await owner.get(`/envelopes/${e.id}`)).data.removed_at);
+  assert.equal(Buffer.from((await owner.get(`/envelopes/${e.id}/download`)).data).subarray(0, 4).toString(), '%PDF');
+  assert.equal((await owner.get(`/export?ids=${e.id}`)).status, 400);
+  // Nothing else can be done to it until it is back.
+  for (const r of [await owner.post(`/envelopes/${e.id}/clone`), await owner.call('PATCH', `/envelopes/${e.id}`, { folder: 'X' }), await owner.call('DELETE', `/envelopes/${e.id}`)]) assert.equal(r.status, 404);
+  // Somebody from another account finds nothing.
+  assert.equal((await (await person('Far Away', 'far.away@example.com')).post(`/envelopes/${e.id}/restore`)).status, 404);
+
+  // Put back: it is an ordinary envelope again for its sender and for the admins, and the record says who did it, once.
+  const back = await owner.post(`/envelopes/${e.id}/restore`);
+  assert.equal(back.status, 200);
+  assert.equal(back.data.envelope.hidden_at, null);
+  assert.equal((await owner.post(`/envelopes/${e.id}/restore`)).status, 200);
+  assert.deepEqual(auditOf(e.id).filter((a: any) => a.action === 'Put back in the sender\'s lists').map((a: any) => a.actor), ['Ada Admin <ada.admin@example.com>']);
+  const again = (await mem.get(`/envelopes/${e.id}`)).data;
+  assert.deepEqual([again.removed_at, again.chain.ok], [null, true]);
+  assert.ok((await mem.get('/envelopes')).data.envelopes.some((x: any) => x.id === e.id));
+  assert.equal((await mem.get(`/export?ids=${e.id}`)).status, 200);
+  assert.equal((await owner.get('/envelopes')).data.removed, 0);
+});
+
+test('the help link on the signing page and in signing emails says which document it is about, never with the link\'s secret, and the sender is told', async () => {
+  const jo = await person('Jo Sender', 'jo.sender@example.com');
+  const e = await simple(jo, 'work.address@example.com', { subject: 'Lease for unit 4' });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const tok = tokenFor(e.id, 'work.address@example.com');
+  const code = codeOf(e.id);
+
+  // The email that asks for the signature: its help link carries the security code, not the signing link.
+  const mail = mailTo('work.address@example.com').at(-1)!;
+  const helpLink = /href="([^"]*\/help\?[^"]*)"/.exec(mail.html)?.[1] || '';
+  assert.equal(helpLink, `http://test.local/help?topic=signing&amp;code=${code}#contact`);
+  assert.ok(!helpLink.includes(tok));
+  // An email to the sender is about no one recipient, so it has the plain address of the help page.
+  assert.ok(!/href="[^"]*\/help\?/.test(mailTo('jo.sender@example.com').at(-1)!.html));
+  // The signing page is given the same code for its Help link once the document is open to this browser.
+  assert.equal((await from().get(`/sign/${tok}`)).data.help_code, code);
+  // A page that still waits for an access code is not: the code would name the document.
+  const locked = await simple(jo, 'locked.signer@example.com', { subject: 'Locked doc', recipients: [{ id: 'r', role: 'signer', name: 'Loc Ked', email: 'locked.signer@example.com', access_code: '424242' }] });
+  assert.equal((await jo.post(`/envelopes/${locked.id}/send`)).status, 200);
+  const lockedView = (await from().get(`/sign/${tokenFor(locked.id, 'locked.signer@example.com')}`)).data;
+  assert.deepEqual([lockedView.locked, 'help_code' in lockedView, lockedView.envelope.id], [true, false, locked.id]);
+
+  // What the form shows before anything is sent: which document, who sent it, and that the sender is told.
+  assert.deepEqual((await from().post('/public/support/about', { code: code.toLowerCase() })).data, { known: true, subject: 'Lease for unit 4', sender: 'Jo Sender', for_name: 'Sam Signer', tells_sender: true });
+  assert.deepEqual((await from().post('/public/support/about', { code: 'ABCD-EFGH-JKLM' })).data, { known: false });
+
+  // A signer who writes from another address than the one the document was sent to. Without the document nobody
+  // can be told. With the code from the help link, the sender is told and the record says how we know.
+  const told = (subject: string) => mailTo('jo.sender@example.com').filter((m) => m.subject === `Problem signing: ${subject}`);
+  const asked = (id: string) => auditOf(id).filter((a: any) => a.action === 'Help requested').map((a: any) => a.detail);
+  const write = (body: any) => from().post('/public/support', { topic: 'signing', message: 'The page will not take my signature. PRIVATE-WORDS', ...body });
+  const plain = await write({ email: 'private.address@example.net' });
+  assert.equal(told('Lease for unit 4').length, 0);
+  const coded = await write({ email: 'private.address@example.net', code });
+  assert.deepEqual(Object.keys(coded.data), Object.keys(plain.data), 'the answer is the same either way');
+  assert.equal(told('Lease for unit 4').length, 1);
+  const said = text(told('Lease for unit 4')[0].html);
+  assert.match(said, /Someone who holds the email we sent to Sam Signer \(work\.address@example\.com\) about this envelope used its help link and told our help form that there is a problem with signing "Lease for unit 4"/);
+  assert.doesNotMatch(said, /PRIVATE-WORDS|private\.address/, 'neither the words nor the address of someone we do not know are passed on');
+  assert.deepEqual(asked(e.id), ['Someone who holds the email we sent to work.address@example.com told the Sign&Grow help form that there is a problem with signing']);
+  assert.equal(db.get('SELECT envelope_id e FROM support_requests WHERE ref=?', coded.data.reference).e, e.id, 'the people who answer see which document it is');
+  assert.equal((await jo.get(`/envelopes/${e.id}`)).data.chain.ok, true);
+  // Once a day for each recipient, whichever way they were recognised.
+  await write({ email: 'work.address@example.com', envelope_id: e.id });
+  assert.deepEqual([told('Lease for unit 4').length, asked(e.id).length], [1, 1]);
+
+  // Another topic is not passed on: the writer may be writing about the sender.
+  const sus = await simple(jo, 'wary.signer@example.com', { subject: 'Wary doc' });
+  await jo.post(`/envelopes/${sus.id}/send`);
+  await write({ email: 'wary.signer@example.com', topic: 'suspicious', code: codeOf(sus.id) });
+  assert.deepEqual([told('Wary doc').length, asked(sus.id).length], [0, 0]);
+
+  // Nobody is stuck on a document that is completed, or on one its sender removed from their lists.
+  const done = await simple(jo, 'done.signer@example.com', { subject: 'Done doc' });
+  await jo.post(`/envelopes/${done.id}/send`);
+  await signAll(done.id, 'done.signer@example.com');
+  assert.equal((await from().post('/public/support/about', { code: codeOf(done.id) })).data.tells_sender, false);
+  await write({ email: 'done.signer@example.com', code: codeOf(done.id) });
+  await write({ email: 'done.signer@example.com', envelope_id: done.id });
+  assert.deepEqual([told('Done doc').length, asked(done.id).length], [0, 0]);
+
+  // A code from an email whose link was replaced still says which envelope is meant, and no more: the address typed
+  // has to be on the envelope, as before.
+  const moved = await simple(jo, 'old.address@example.com', { subject: 'Moved doc' });
+  await jo.post(`/envelopes/${moved.id}/send`);
+  const oldCode = codeOf(moved.id);
+  const rid = db.get('SELECT id FROM recipients WHERE envelope_id=?', moved.id).id;
+  assert.equal((await jo.post(`/envelopes/${moved.id}/correct`, { recipient_id: rid, email: 'new.address@example.com' })).status, 200);
+  assert.deepEqual((await from().post('/public/support/about', { code: oldCode })).data, { known: false, replaced: true });
+  await write({ email: 'old.address@example.com', code: oldCode });
+  assert.equal(told('Moved doc').length, 0);
+  await write({ email: 'new.address@example.com', code: oldCode });
+  assert.equal(told('Moved doc').length, 1);
+  assert.deepEqual(asked(moved.id), ['A message from new.address@example.com to the Sign&Grow help form said there is a problem with signing']);
+});
+
+test('an alert the software files has a reference nobody can misread, and the queue finds a request by the reference a customer gives', async () => {
+  const before = process.env.OPERATOR_EMAILS;
+  process.env.OPERATOR_EMAILS = 'opal.ops@example.com,otto.ops@example.com';
+  try {
+    const ops = await person('Opal Ops', 'opal.ops@example.com');
+    await person('Otto Ops', 'otto.ops@example.com');
+    // Filed the way the payment code files one: no reference, nobody's login, under the alert's name. The ids end
+    // in characters that are easy to misread.
+    for (let i = 0; i < 30; i++)
+      db.run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'billing',?,'open',?)", `sup_alertrow${String(i).padStart(2, '0')}-_0OIl`, 'opal.ops@example.com', 'Sign&Grow (automatic alert)', `Alert number ${i}\n\nSomething for a person to look at.`, new Date().toISOString());
+    const queue = async () => (await ops.get('/operator/support?filter=all')).data.requests.filter((r: any) => r.alert && /^Alert number/.test(r.message));
+    const alerts = await queue();
+    assert.equal(alerts.length, 30);
+    for (const a of alerts) assert.match(a.reference, /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/);
+    assert.equal(new Set(alerts.map((a: any) => a.reference)).size, 30);
+    assert.deepEqual((await queue()).map((a: any) => a.reference), alerts.map((a: any) => a.reference), 'the same reference every time');
+    // Handing one to a colleague names it by that reference.
+    const otto = (await ops.get('/operator/support')).data.operators.find((o: any) => !o.me);
+    assert.equal((await ops.post(`/operator/support/${alerts[0].id}`, { action: 'assign', to: otto.id })).status, 200);
+    assert.equal(mailTo('otto.ops@example.com').at(-1)!.subject, `Request ${alerts[0].reference} was handed to you`);
+
+    // A customer reads their reference out. It is found whatever tab is open and however it is typed.
+    const ref = (await from().post('/public/support', { email: 'caller@example.org', name: 'Cal Ler', message: 'I was charged twice this month, please look.' })).data.reference;
+    const find = async (q: string) => (await ops.get(`/operator/support?filter=mine&q=${encodeURIComponent(q)}`)).data.requests.map((r: any) => r.reference);
+    assert.deepEqual(await find(ref), [ref]);
+    assert.deepEqual(await find(` ${ref.slice(0, 4)}-${ref.slice(4)} `.toLowerCase()), [ref], 'with the dash and the small letters people add');
+    assert.deepEqual(await find('caller@example.org'), [ref]);
+    assert.deepEqual(await find('Cal Ler'), [ref]);
+    assert.deepEqual(await find('charged twice'), [ref]);
+    assert.deepEqual(await find(alerts[3].reference), [alerts[3].reference], 'an alert is found by the reference shown for it');
+    assert.deepEqual(await find('ZZZZ9999'), []);
+    assert.deepEqual(await find('100%_nothing'), []);
+    // A closed request is found too: the search is not limited to what waits for us.
+    const id = db.get('SELECT id FROM support_requests WHERE ref=?', ref).id;
+    assert.equal((await ops.post(`/operator/support/${id}`, { action: 'close', text: 'We refunded the second charge.' })).status, 200);
+    assert.deepEqual(await find(ref), [ref]);
+    assert.equal((await ops.get('/operator/support?filter=open')).data.requests.some((r: any) => r.reference === ref), false);
+  } finally {
+    if (before === undefined) delete process.env.OPERATOR_EMAILS;
+    else process.env.OPERATOR_EMAILS = before;
+  }
 });

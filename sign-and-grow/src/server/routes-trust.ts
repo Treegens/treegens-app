@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx, readBlob, dataDir } from './db.ts';
-import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, shortCode, sha256, HttpError } from './util.ts';
+import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, shortCode, sha256, hmac, HttpError } from './util.ts';
 import { checkPassword, hasPassword } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { auditTrail, emailMyLinks, resendFromRetired } from './envelopes.ts';
@@ -14,6 +14,7 @@ import { unpaidDailyRecipients, PAID_TRUST_DAYS } from '../lib/policy.ts';
 import { advance, emailRefusal, hasNotPaid, dailyCap, PAUSED_MEANS } from './envelopes.ts';
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
+import { memberForCode } from './groups.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -28,7 +29,8 @@ route('POST', '/public/check', async (c) => {
   rateLimit(`check:${c.ip}`, 30, 3600_000);
   const code = parseCode((await c.body()).code);
   if (code.length !== 12) throw bad('Security codes are 12 letters and numbers, like ABCD-EFGH-JKLM. Check the email and try again.');
-  const r = get('SELECT * FROM recipients WHERE check_code=?', code);
+  // Each member of a group has a security code of their own in their own emails (memberForCode in groups.ts).
+  const r = get('SELECT * FROM recipients WHERE check_code=?', code) || memberForCode(code);
   if (!r?.token) {
     // A code from an email we really sent, whose link has since been replaced: the sender corrected the address or
     // the role, the signer passed the document on, or the person was taken off. That email was genuine and is said
@@ -56,9 +58,10 @@ route('POST', '/public/check/report', async (c) => {
   rateLimit(`report:${c.ip}`, 10, 3600_000);
   const b = await c.body();
   const code = parseCode(b.code);
-  const r = code.length === 12 ? get('SELECT id, envelope_id, token FROM recipients WHERE check_code=?', code) : null;
+  const r = code.length === 12 ? get('SELECT id, envelope_id, token FROM recipients WHERE check_code=?', code) || memberForCode(code) : null;
   let e = r?.token ? loadEnvelope(r.envelope_id) : null;
-  let who = e?.recipients.find((x: any) => x.id === r.id);
+  // A member of a group reports under their own name and address, not under the group's.
+  let who = r?.member ? r : e?.recipients.find((x: any) => x.id === r.id);
   if (!who && code.length === 12) {
     // The code of a genuine email whose link was replaced since (the sender changed the address, say). Whoever
     // holds that email can report it all the same, under the address it was sent to.
@@ -181,8 +184,11 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
   const shas: string[] = [];
   for (const eid of ids) {
     // A file a signer attached belongs to no account. It is found through the field it was attached to, now or in
-    // a signature that was set aside.
-    const attached: string[] = [...all("SELECT value v FROM fields WHERE envelope_id=? AND type='attachment' AND value IS NOT NULL", eid).map((f) => f.v),
+    // a signature that was set aside, and through the envelope whose link it was uploaded with: that also finds a
+    // file a signer uploaded and then did not attach (files.via_envelope; uploads from before that was kept are
+    // removed by the timer after LOOSE_UPLOAD_DAYS).
+    const attached: string[] = [...all("SELECT id FROM files WHERE account_id IS NULL AND via_envelope=? AND id NOT IN (SELECT value FROM fields WHERE type='attachment' AND value IS NOT NULL AND envelope_id!=?)", eid, eid).map((f) => f.id),
+      ...all("SELECT value v FROM fields WHERE envelope_id=? AND type='attachment' AND value IS NOT NULL", eid).map((f) => f.v),
       ...all('SELECT answers FROM earlier_signatures WHERE envelope_id=?', eid).flatMap((s) => (JSON.parse(s.answers || '[]') as any[]).filter((a) => a.type === 'attachment').map((a) => a.value))];
     for (const fid of attached) {
       const f = get('SELECT sha256 FROM files WHERE id=? AND account_id IS NULL', fid);
@@ -200,7 +206,8 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
     const owner = account ? null : get('SELECT account_id a FROM envelopes WHERE id=?', eid)?.a;
     for (const r of all(`SELECT check_code c, email to_email FROM recipients WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL
         UNION SELECT t.check_code, (SELECT m.to_email FROM emails m WHERE m.envelope_id=? AND m.recipient_id=t.recipient_id AND m.at <= t.retired_at ORDER BY m.id DESC LIMIT 1)
-          FROM retired_tokens t WHERE t.check_code IS NOT NULL AND (t.envelope_id=? OR t.recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?))`, eid, eid, eid, eid))
+          FROM retired_tokens t WHERE t.check_code IS NOT NULL AND (t.envelope_id=? OR t.recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?))
+        UNION SELECT check_code, email FROM recipient_members WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL`, eid, eid, eid, eid, eid)) // the last line: the emails to the members of a group (groups.ts)
       run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at, account_id, reported) VALUES (?,?,?,?)', sha256(r.c), now(), owner,
         r.to_email && get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', eid, r.to_email) ? 1 : 0);
     run('DELETE FROM audit WHERE envelope_id=?', eid);
@@ -225,6 +232,12 @@ export function handOver(accountId: string, from: { id: string; name: string; em
   run('UPDATE bulk_batches SET sender_id=?, idem_key=NULL WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
   return moved.length;
 }
+
+// How a deleted login's address is remembered for the welcome signatures (table `welcomed`): a fingerprint made with
+// the server's own secret. It cannot be turned back into the address, and nobody without the secret can test an
+// address against it. wasWelcomed answers whether a login under this address was given them before it was deleted.
+export const welcomeMark = (email: string) => hmac(`welcome:${String(email).trim().toLowerCase()}`);
+export const wasWelcomed = (email: string): boolean => !!get('SELECT 1 x FROM welcomed WHERE email_hash=?', welcomeMark(email));
 
 // The API keys a person made that still work, each with the account it works for. "team" marks an account the
 // person does not own: it goes on without them, and its admins are the ones whose integration breaks.
@@ -304,7 +317,9 @@ export function purgeUser(userId: string): any[] {
       shas.push(...all('SELECT sha256 s FROM files WHERE account_id=?', a.id).map((r) => r.s), ...forgetEnvelopes(all('SELECT id FROM envelopes WHERE account_id=?', a.id).map((r) => r.id), true));
       run('DELETE FROM abuse_reports WHERE account_id=?', a.id);
       run('DELETE FROM files WHERE account_id=?', a.id);
-      run('DELETE FROM webhook_deliveries WHERE webhook_id IN (SELECT id FROM webhooks WHERE account_id=?)', a.id);
+      // The delivery logs of its webhooks, and also what is left of the log of a webhook that was deleted before
+      // delivery logs went with their webhook: those lines are found through the account's envelopes.
+      run('DELETE FROM webhook_deliveries WHERE webhook_id IN (SELECT id FROM webhooks WHERE account_id=?) OR envelope_id IN (SELECT id FROM envelopes WHERE account_id=?)', a.id, a.id);
       run('DELETE FROM bulk_batches WHERE account_id=?', a.id);
       run("UPDATE billing_log SET detail='' WHERE account_id=?", a.id);
       // The ledger of signatures stays (accounts have to be kept), but each "signature used" line is named after
@@ -338,10 +353,18 @@ export function purgeUser(userId: string): any[] {
     // copy outside a document's record after MAIL_COPY_DAYS.
     run(`DELETE FROM emails WHERE about_user=? AND envelope_id IS NULL AND ${NOT_WAITING}`, userId);
     run('DELETE FROM password_resets WHERE user_id=?', userId);
+    // Which contacts of a team they had in their own list. The contacts themselves are the team's and stay.
+    run('DELETE FROM contact_users WHERE user_id=?', userId);
     // A key they made in a team is on that team's list, not theirs to take along. It stops for good and stays
     // listed as stopped, with the maker's name, so an admin can see what happened to whatever used it. The keys of
     // the accounts deleted above went with those accounts.
     run('UPDATE api_keys SET stopped_at=COALESCE(stopped_at, ?), owner_was=(SELECT name FROM users WHERE id=?) WHERE user_id=?', now(), userId, userId);
+    // The welcome signatures are given once per email address. While a login exists its own row says so. When it
+    // goes, a keyed fingerprint of the address is what is left to say it (see welcomeMark), with the day. Only for
+    // an address that was confirmed: a stranger who signed up with somebody else's address and deleted the login
+    // has not used up that person's welcome.
+    const welcomed = get('SELECT welcomed_at w FROM users WHERE id=? AND email_verified=1', userId)?.w;
+    if (welcomed) run('INSERT OR IGNORE INTO welcomed (email_hash, at) VALUES (?,?)', welcomeMark(user.email), String(welcomed).slice(0, 10));
     run('DELETE FROM users WHERE id=?', userId);
   });
   removeUnusedBlobs(shas);
@@ -381,6 +404,9 @@ export async function purgeClosedAccounts(): Promise<number> {
   run(`DELETE FROM emails WHERE envelope_id IS NULL AND ${NOT_WAITING} AND at < ?`, new Date(Date.now() - MAIL_COPY_DAYS * 864e5).toISOString());
   // The fingerprint of a security code from a deleted document is kept for a year, then that goes too.
   run('DELETE FROM forgotten_codes WHERE at < ?', new Date(Date.now() - 365 * 864e5).toISOString());
+  // A delivery log whose webhook is gone belongs to nothing any more. Deleting a webhook takes its log along; this
+  // clears what was left behind before that was so.
+  run('DELETE FROM webhook_deliveries WHERE webhook_id NOT IN (SELECT id FROM webhooks)');
   // A file a signer uploaded and never attached to a field belongs to no envelope and no account, so nothing else
   // would ever remove it.
   const loose = all(`SELECT id, sha256 FROM files WHERE account_id IS NULL AND created_at < ? AND id NOT IN (SELECT value FROM fields WHERE type='attachment' AND value IS NOT NULL)`, new Date(Date.now() - LOOSE_UPLOAD_DAYS * 864e5).toISOString())

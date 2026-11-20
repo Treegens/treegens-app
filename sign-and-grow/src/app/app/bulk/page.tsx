@@ -1,9 +1,9 @@
 'use client';
-import { Suspense, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { BatchCost, batchLine, useBatchCheck } from './BatchCost';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api, useLoad, toast } from '@/components/ui';
-import { useMe } from '@/components/AppShell';
 import { useAllowance, voidCostLine } from '@/components/sender/allowance';
 import { BatchView } from '@/components/sender/BatchView';
 import { ConfirmDialog } from '@/components/sender/dialogs';
@@ -27,7 +27,6 @@ function BulkSend({ preset }: { preset: string }) {
   const router = useRouter();
   const [tpls] = useLoad<any>(() => api('/envelopes?kind=template'));
   const [batches, reloadBatches] = useLoad<any>(() => api('/bulk'));
-  const me = useMe();
   const [allowance, reloadAllowance] = useAllowance();
   // The templates page links here with ?template=<id> so the template is already chosen.
   const [tid, setTid] = useState(preset);
@@ -43,7 +42,8 @@ function BulkSend({ preset }: { preset: string }) {
   const open: any[] = useMemo(() => (loaded?.recipients || []).filter((r: any) => !r.email), [loaded]);
   const roles: Role[] = useMemo(() => {
     const seen = new Set<string>();
-    return open.map((r, i) => ({ key: r.role_name || r.id, label: r.role_name || `Recipient ${i + 1}` })).filter((r) => !seen.has(r.key) && !!seen.add(r.key));
+    // phone: the template checks this role with a code by text message, or texts them the link, so every row needs a number.
+    return open.map((r, i) => ({ key: r.role_name || r.id, label: r.role_name || `Recipient ${i + 1}`, phone: r.verify === 'sms_code' || !!r.text_link })).filter((r) => !seen.has(r.key) && !!seen.add(r.key));
   }, [open]);
   const sameName = open.length > roles.length;
   const header = headerFor(roles);
@@ -51,15 +51,48 @@ function BulkSend({ preset }: { preset: string }) {
   const ready = reading.missing.length ? [] : reading.rows.filter((r) => !r.problems.length);
   const stuck = reading.rows.filter((r) => r.problems.length);
   const tooMany = reading.rows.length > MAX_ROWS;
-  // What this list would use, against what is left. Checked here so the answer comes before the send, not after.
-  const signersPerRow = (loaded?.recipients || []).filter((r: any) => (r.role === 'signer' || r.role === 'inperson') && (r.email || '').toLowerCase() !== me.user.email.toLowerCase()).length;
-  const need = signersPerRow * ready.length;
-  const left = allowance ? Math.max(0, allowance.available) : null;
-  const overPlan = left != null && ready.length > 0 && need > left;
-  const canSend = ready.length > 0 && !tooMany && !reading.missing.length;
+  const listOk = ready.length > 0 && !tooMany && !reading.missing.length;
+  // What this list would hold, against what is free to send with, and what the missing ones cost. The server counts
+  // (POST /bulk/check), with the function the send is held to, so the answer comes before the Send button and the
+  // two cannot disagree. `asked` moves when the balance may have changed.
+  const [asked, setAsked] = useState(0);
+  const { check, failed: checkFailed } = useBatchCheck(tid, listOk ? ready : [], asked);
+  // The server would refuse the whole batch, and the notice above the button says why and what to do about it.
+  const wouldRefuse = !!check && ((check.counted && check.short > 0) || !!check.refusal);
+  const canSend = listOk && !wouldRefuse;
+
+  // The list is kept in this browser tab while it is being worked on, so paying for missing signatures (which
+  // leaves this page for the payment provider) does not lose it. It goes once the batch has been sent.
+  const KEPT = 'sg:bulk-list';
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    try {
+      const kept = JSON.parse(sessionStorage.getItem(KEPT) || 'null');
+      if (!kept?.csv || csv) return;
+      if (!preset || preset === kept.tid) {
+        setTid(kept.tid || preset);
+        setCsv(String(kept.csv));
+        setName(String(kept.name || ''));
+        setFileNote('This is the list you were working on in this tab.');
+      }
+    } catch {
+      /* no storage: the list simply is not kept */
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!restored.current) return;
+    try {
+      if (csv.trim() && csv.length < 2_000_000) sessionStorage.setItem(KEPT, JSON.stringify({ tid, csv, name }));
+      else sessionStorage.removeItem(KEPT);
+    } catch {
+      /* no storage, or no room in it */
+    }
+  }, [tid, csv, name]);
 
   function starter() {
-    const example = roles.flatMap((r, i) => [`Example ${r.label}`, `person${i + 1}@example.org`]).join(',');
+    const example = roles.flatMap((r, i) => [`Example ${r.label}`, `person${i + 1}@example.org`, ...(r.phone ? ['+44 7700 900123'] : [])]).join(',');
     const url = URL.createObjectURL(new Blob([`${header}\n${example}\n`], { type: 'text/csv' }));
     const a = Object.assign(document.createElement('a'), { href: url, download: 'bulk-send-list.csv' });
     a.click();
@@ -94,6 +127,7 @@ function BulkSend({ preset }: { preset: string }) {
     if (!failed.length) (setCsv(''), setName(''), setFileNote(''));
     reloadBatches();
     reloadAllowance();
+    setAsked((n) => n + 1);
   }
 
   const first = roles[0];
@@ -126,7 +160,7 @@ function BulkSend({ preset }: { preset: string }) {
               {fileNote && <span className="small muted" role="status">{fileNote}</span>}
             </div>
             <p className="muted small" id="sn-csv-help">
-              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b></span>)}. They can be in any order, in capitals or not, and extra columns are fine.
+              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.
               {' '}No header row? Then use exactly that order.
             </p>
 
@@ -178,16 +212,12 @@ function BulkSend({ preset }: { preset: string }) {
                 )}
                 {reading.rows.length > 100 && <p className="muted small">Showing the first 100 of {reading.rows.length} rows. Rows that need a fix are all listed above.</p>}
 
-                {overPlan && allowance?.kind === 'signatures' && (
-                  <div className="notice warn" role="note">
-                    This list needs <b>{plural(need, 'signature')}</b>{signersPerRow > 1 ? ` (${signersPerRow} signers on each of ${plural(ready.length, 'row')})` : ''} and you have <b>{left}</b> left to send with.
-                    {' '}A batch only goes out when all of it can, so nothing would be sent yet. <Link href="/app/settings?tab=billing">Get more signatures</Link>, or send a shorter list. Nothing is charged unless you choose it.
-                  </div>
-                )}
+                {/* What the batch holds, what is there, what is missing and what that costs: before the button, for every list. */}
+                {listOk && <BatchCost check={check} failed={checkFailed} />}
 
                 <div className="sn-sendrow">
                   <label className="f"><span>Name this batch <span className="hint">(optional, only you see it)</span></span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder={loaded.subject || 'Bulk send'} /></label>
-                  <button className="btn primary" disabled={!canSend} onClick={() => setConfirming(ready)}>
+                  <button className="btn primary" disabled={!canSend} aria-describedby={listOk ? 'sn-batch-cost' : undefined} onClick={() => setConfirming(ready)}>
                     {stuck.length > 0 && ready.length > 0 ? `Send the ${plural(ready.length, 'ready row')}` : `Send ${plural(ready.length, 'envelope')}`}
                   </button>
                 </div>
@@ -248,6 +278,7 @@ function BulkSend({ preset }: { preset: string }) {
             }
           }}>
           <p>{confirming.length === 1 ? 'One person gets' : `${confirming.length} people each get`} their own copy of &ldquo;{loaded?.subject || 'this template'}&rdquo; by email, straight away.</p>
+          {batchLine(check) && <p>{batchLine(check)}</p>}
           <p className="muted">Sent to the wrong list? You can void the whole batch in one go afterwards. {voidCostLine(allowance)}</p>
         </ConfirmDialog>
       )}

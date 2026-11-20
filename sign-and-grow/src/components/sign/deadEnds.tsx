@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/components/ui';
-import { Shell, StateCard } from './parts';
+import { Shell, StateCard, helpHref } from './parts';
 
 // Links that cannot be opened. None of these is a dead end: each one offers the way forward itself.
 
@@ -56,7 +56,7 @@ export function ReplacedLink({ token }: { token: string }) {
             <button type="button" className="btn primary lg" onClick={resend} disabled={state === 'busy'}>{state === 'busy' ? 'Sending' : 'Email me the current link'}</button>
           </>
         )}
-        <p className="muted small sg-after">Still stuck? <a href="/help">Get help from a person</a>.</p>
+        <p className="muted small sg-after">Still stuck? <a href={helpHref(undefined, 'contact')}>Get help from a person</a>. If you have the email this link came in, the form there asks for its security code, so we know which document you mean.</p>
       </StateCard>
     </Shell>
   );
@@ -96,7 +96,7 @@ export function UnknownLink() {
             <button className="btn primary lg" disabled={state === 'busy'}>{state === 'busy' ? 'Sending' : 'Email me my documents'}</button>
           </form>
         )}
-        <p className="muted small sg-after">Still stuck? <a href="/help">Get help from a person</a>.</p>
+        <p className="muted small sg-after">Still stuck? <a href={helpHref(undefined, 'contact')}>Get help from a person</a>. If you have the email this link came in, the form there asks for its security code, so we know which document you mean.</p>
       </StateCard>
     </Shell>
   );
@@ -110,7 +110,7 @@ export function LoadProblem({ message, onRetry }: { message: string; onRetry: ()
         <p>{message}</p>
         <p className="muted">Nothing is lost. Check your connection and try again.</p>
         <button type="button" className="btn primary lg" onClick={onRetry}>Try again</button>
-        <p className="muted small sg-after">Still stuck? <a href="/help">Get help from a person</a>.</p>
+        <p className="muted small sg-after">Still stuck? <a href={helpHref(undefined, 'contact')}>Get help from a person</a>. If you have the email this link came in, the form there asks for its security code, so we know which document you mean.</p>
       </StateCard>
     </Shell>
   );

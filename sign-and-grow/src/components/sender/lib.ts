@@ -1,4 +1,5 @@
 // Wording and small calculations shared by the sender screens. No React in here, so it can be tested on its own.
+import { momentText, deviceZone } from '../../lib/dates.ts';
 
 export const HOUR_MS = 3600_000;
 export const DAY_MS = 24 * HOUR_MS;
@@ -55,12 +56,17 @@ export function timeLeft(iso?: string | null, now = Date.now()): string {
   return `in ${plural(Math.round(ms / DAY_MS), 'day')}`;
 }
 
-/** "Closes on 4 December, in 12 days", or "Closed on 4 December" once the date has passed. */
+/**
+ * "Closes on 4 December 2026 at 16:40 Europe/Berlin time (UTC+01:00), in 12 days", or "Closed on ..." once it has
+ * passed. A deadline is a moment, not a day: it is given with its time and the zone the time is in, so the sender
+ * and a signer on the other side of the world are told the same moment.
+ */
 export function deadlineLine(expiresAt?: string | null, now = Date.now()): string {
   const d = valid(expiresAt);
   if (!d) return '';
   const left = timeLeft(expiresAt, now);
-  return left ? `Closes on ${longDate(expiresAt)}, ${left}` : `Closed on ${longDate(expiresAt)}`;
+  const when = momentText(expiresAt, deviceZone());
+  return left ? `Closes on ${when}, ${left}` : `Closed on ${when}`;
 }
 
 /** True when the deadline is less than three days away. */

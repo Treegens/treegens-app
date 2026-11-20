@@ -280,7 +280,7 @@ test('the price never goes up without thirty days of notice: a renewal above the
     const notice = mailTo(p.email).slice(mailsBefore).find((m: any) => /^The price of your Sign&Grow plan changes on /.test(m.subject));
     assert.ok(notice, 'the owner is told by email');
     const t = text(notice.html);
-    assert.match(t, /Today Priced's workspace pays \$9\.00 a month\. From .* the monthly plan costs \$12\.00 a month/);
+    assert.match(t, /Today Priced Tester's workspace pays \$9\.00 a month\. From .* the monthly plan costs \$12\.00 a month/);
     assert.match(t, /stop the plan with the button below/);
     assert.match(notice.link || '', /\/billing\/stop\?token=/);
     assert.doesNotMatch(t, /—/);

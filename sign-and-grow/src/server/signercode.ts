@@ -290,6 +290,17 @@ export function assertBulkChecks(tpl: any, rows: any[], open: any[]) {
   if (no) throw bad(no, 429);
 }
 
+/** The same answer without stopping anything, for the bulk page's look ahead (POST /bulk/check). */
+export function bulkChecksRefusal(tpl: any, rows: any[], open: any[]): { status: number; message: string } | null {
+  try {
+    assertBulkChecks(tpl, rows, open);
+    return null;
+  } catch (e: any) {
+    if (typeof e?.status !== 'number') throw e;
+    return { status: e.status, message: e.message };
+  }
+}
+
 /** A public form is made from a template: its open role, the visitor, can never be texted. Said when the form is made. */
 export function assertFormChecks(open: any) {
   if (open?.verify === 'sms_code' || open?.text_link) throw bad(FORM_NO_TEXT);
@@ -553,7 +564,9 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
       r.id, e.id, e.account_id, kind, d.masked, d.key, codeHash(r, stamp, code), stamp, actor.ip || null, at, expires).lastInsertRowid);
   });
   // An older code that is still waiting to be sent would arrive after this one and work for nothing.
-  run('UPDATE emails SET expires_at=? WHERE recipient_id=? AND expires_at IS NOT NULL AND expires_at > ?', at, r.id, at);
+  // (An email about an envelope that carries an end time is a code email. They are filed under the envelope and the
+  // address, not under the recipient, so the sender's page keeps showing the signing email as the last one to them.)
+  if (!byText) run("UPDATE emails SET expires_at=? WHERE envelope_id=? AND lower(to_email)=lower(?) AND expires_at IS NOT NULL AND expires_at > ? AND status IN ('queued','failed')", at, e.id, d.to, at);
   dropCodeTexts(r.id);
 
   let delivery: string;
@@ -567,10 +580,10 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
       to: d.to!, subject: `Your code to open a document from ${sender.name}`, heading: `${code} is your code`,
       lines: [`Type this code on the page that asked for it. It works for ${SIGNER_CODE_MINUTES} minutes, and only for the document ${sender.name} sent you.`,
         `Nobody at Sign&Grow and nobody working for ${sender.name} will ever ask you for this code. If you did not just open a document from ${sender.name}, someone else has the link that was emailed to you: do not pass the code on${sender.email ? `, and tell ${sender.name} (${sender.email})` : ''}.`],
-      envelopeId: e.id, recipientId: r.id, brand: brandOf(e.account_id), replyTo: sender.email || undefined, fromName: sender.name, expiresAt: expires,
+      envelopeId: e.id, brand: brandOf(e.account_id), replyTo: sender.email || undefined, fromName: sender.name, expiresAt: expires,
     });
     // Once the mail server has it, our own copy of the email no longer needs to hold the code.
-    if (delivery === 'sent') run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE recipient_id=? AND expires_at=?)", code, code, r.id, expires);
+    if (delivery === 'sent') run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND lower(to_email)=lower(?) AND expires_at=?)", code, code, e.id, d.to, expires);
   }
   run('UPDATE signer_codes SET delivery=? WHERE id=?', delivery, id);
   const to = `${r.name}: by ${how} to ${d.masked}`;

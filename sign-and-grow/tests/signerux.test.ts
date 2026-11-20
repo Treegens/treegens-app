@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { PDFDocument } from 'pdf-lib';
 import { boot, Client, PNG, draft, simple, upload, tokenFor, signUp, signAll, mailTo, type Server } from './helpers.ts';
-import { accountMarks, tapOnMark, restoreMarks, saveBody, sameName, pageTitle, placeFlag, buildItems } from '../src/components/sign/fields.ts';
+import { accountMarks, tapOnMark, restoreMarks, saveBody, sameName, pageTitle, placeFlag, buildItems, keepTitle, readKept, writeKept } from '../src/components/sign/fields.ts';
 import { scanWarning, pageList } from '../src/lib/scans.ts';
 import { extractPages } from '../src/server/text.ts';
 import { MAIL_RETRY_MINUTES } from '../src/server/mail.ts';
@@ -159,7 +159,7 @@ test('"Fix my name" fixes a spelling, cannot turn one signer into another, and t
     // A name with nothing in common with what the sender wrote is a different person, not a spelling.
     const other = await visitor().post(`/sign/${c.alex.token}/name`, { name: 'Morgan Lee' });
     assert.equal(other.data.applied, false);
-    assert.match(other.data.message, /different name/);
+    assert.match(other.data.message, /Only a small slip can be corrected here.*"Morgan Lee" differs from "Alex Rivera" by more than that/);
     assert.deepEqual(names(), ['Alex Rivera', 'Blair Rivera']);
     const asked = toJo('Name change asked for: Whose name');
     assert.equal(asked.length, 3, 'each one went to the sender as a question, whatever their email settings');
@@ -666,7 +666,7 @@ test('the signing screens keep what they promise in markup: new tab, labels, rea
   assert.match(page, /role="radiogroup" aria-label=\{members\[0\]\.group_name/);
   assert.doesNotMatch(page, /role="checkbox"|role="radio" /);
   // The tab title, and the signature that is confirmed before use.
-  assert.match(page, /document\.title = pageTitle\(/);
+  assert.match(page, /useEffect\(\(\) => keepTitle\(data\?\.envelope\?\.subject\), \[data\?\.envelope\?\.subject\]\)/);
   assert.match(page, /tapOnMark\(\{ current: kind === 'signature' \? sig : ini, seen: seen\[kind\], account: account\[kind\] \}\)/);
   assert.doesNotMatch(page, /setSig\(\(s\) => s \|\| m\.user\.signature_png/, 'the account signature is no longer applied by itself');
   // Autosave is built by saveBody, which carries the signature.

@@ -1,5 +1,8 @@
 'use client';
 import { AUTO, LABEL, fieldName, groupKey, isMulti, isSig, problemWith } from './fields';
+import { formatDateValue } from '@/lib/dates';
+import { NUMBER_HINT } from '@/lib/numbers';
+import { isStrike, strikeSays } from '@/lib/strike';
 
 // A signer's fields as an ordinary form, used by the text view. It reads and writes the same answers as the
 // fields on the document, so switching between the two views loses nothing.
@@ -10,6 +13,8 @@ export type FieldCtx = {
   sig: string | null;
   ini: string | null;
   dateText: string;
+  /** The format the sender chose for dates on this envelope. A picked date is said back in it. */
+  dateFormat?: string | null;
   ordered: any[];
   uploading: string;
   filled: (f: any) => boolean;
@@ -49,7 +54,7 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
     );
   }
   if (AUTO.includes(f.type) || f.readonly) {
-    const shown = f.type === 'full_name' ? c.me.name : f.type === 'email' ? c.me.email : f.type === 'date_signed' ? c.dateText : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'Ticked' : 'Not ticked') : f.value || 'Empty';
+    const shown = f.type === 'full_name' ? c.me.name : f.type === 'email' ? c.me.email : f.type === 'date_signed' ? c.dateText : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'Ticked' : 'Not ticked') : f.type === 'date' ? formatDateValue(f.value, c.dateFormat) || 'Empty' : f.value || 'Empty';
     return (
       <div className="sg-row">
         <div className="sg-row-label">{name}</div>
@@ -103,6 +108,8 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
       </label>
       <Near id={`${id}-near`} text={hint} />
       {problem && <p id={`${id}-err`} className="sg-fielderr">{problem}</p>}
+      {f.type === 'number' && !problem && <p className="muted small sg-row-state">{NUMBER_HINT}</p>}
+      {f.type === 'date' && c.values[f.id] && <p className="muted small sg-row-state">On the document this date is written as {formatDateValue(c.values[f.id], c.dateFormat)}.</p>}
     </div>
   );
 }
@@ -141,24 +148,28 @@ export function PageFields({ docId, page, c, near }: { docId: string; page: numb
 
 /** Who put something on the page that is not this signer's to fill in. Said next to it in both views. */
 export function otherSource(f: any, senderName: string): string {
+  if (isStrike(f)) return `Struck out by ${senderName}.`;
   if (f.from === 'start') return `Filled in by ${senderName} for ${f.by || 'another signer'}, who can still change it.`;
   if (f.from === 'sender') return f.by ? `Written by ${senderName}, in the part for ${f.by}.` : `Written by ${senderName}.`;
   return `Filled in by ${f.by || 'another signer'}.`;
 }
 
 /** What is already on this page besides the signer's own fields, as text: the sender's wording and what others filled in. */
-export function PageOthers({ others, senderName }: { others: any[]; senderName: string }) {
+export function PageOthers({ others, senderName, near }: { others: any[]; senderName: string; near?: (f: any) => string }) {
   if (!others.length) return null;
   return (
     <div className="sg-others">
       <div className="sg-form-title">Already on this page, from {senderName} and other signers</div>
       <ul>
-        {others.map((f) => (
+        {others.map((f) => (isStrike(f) ? (
+          // A line through printed wording cannot be read out, so it is said: who drew it, and at which printed line.
+          <li key={f.id}><b>Struck out:</b> {strikeSays(senderName, near?.(f))}</li>
+        ) : (
           <li key={f.id}>
             {f.label || LABEL[f.type] || 'Field'}: {f.image ? <img src={f.image} alt="Signed" /> : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'ticked' : 'not ticked') : <bdi>{f.value}</bdi>}
             {' '}<span className="muted small">{otherSource(f, senderName)}</span>
           </li>
-        ))}
+        )))}
       </ul>
     </div>
   );

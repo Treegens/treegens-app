@@ -194,7 +194,7 @@ test('a new person signs up with Google: the request is a proper code flow, and 
   const ws = db.all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', u.id);
   assert.equal(ws.length, 1);
   assert.equal(ws[0].role, 'owner');
-  assert.equal(ws[0].name, "Nora's workspace");
+  assert.equal(ws[0].name, "Nora New's workspace");
   assert.equal(db.get("SELECT COALESCE(SUM(delta),0) n FROM credits WHERE account_id=? AND reason='welcome'", ws[0].id).n, 3);
   // The person is the provider's id for them.
   const [idn] = identities('nora@gmail.com');
@@ -722,7 +722,7 @@ test('someone removed from their only team gets a workspace when they sign in wi
   assert.match(signInNotice(r.note), /no longer on a team, so we made you a workspace of your own/);
   const me = (await again.get('/me')).data;
   assert.equal(me.role, 'owner');
-  assert.equal(me.account.name, "Rem's workspace");
+  assert.equal(me.account.name, "Rem Oved's workspace");
   assert.equal(db.get("SELECT COALESCE(SUM(delta),0) n FROM credits WHERE account_id=? AND reason='welcome'", me.account.id).n, 3, 'with the welcome signatures, once');
   // Invited again and switched to their own workspace: the next sign-in opens the one used last.
   assert.equal((await boss.post('/account/invites', { email: 'rem@gmail.com' })).status, 200);

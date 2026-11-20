@@ -193,7 +193,7 @@ export function outcomes(before: Content, after: Content): { people: Outcome[]; 
 
 // ---- Keeping up with signers who act while the sender is editing ------------------------------------------------
 
-const PERSON_KEYS = ['name', 'email', 'role', 'role_name', 'routing_order', 'access_code', 'note'];
+const PERSON_KEYS = ['name', 'email', 'role', 'role_name', 'routing_order', 'access_code', 'note', 'verify', 'phone', 'text_link'];
 const SERVER_KEYS = ['status', 'sent_at', 'viewed_at', 'completed_at', 'consent_at', 'decline_reason', 'reassigned_from', 'muted', 'has_signature'];
 const same = (a: any, b: any) => s(a) === s(b);
 
@@ -260,7 +260,8 @@ export function fingerprint(e: { subject?: any; message?: any; ordered?: any; re
   return JSON.stringify([
     s(e.subject), s(e.message), e.ordered ? 1 : 0, Number(e.reminder_days) || 0, s(e.date_format),
     c.documents.map((d) => [d.id, d.file_id, s(d.name)]),
-    c.recipients.map((r) => [r.id, r.role, s(r.role_name), s(r.name).trim(), s(r.email).trim(), order(r), s(r.access_code).trim(), s(r.note)]),
+    // The check before the document opens is part of what a correction saves: "none" and nothing are the same.
+    c.recipients.map((r) => [r.id, r.role, s(r.role_name), s(r.name).trim(), s(r.email).trim(), order(r), s(r.access_code).trim(), s(r.note), s(r.verify) || 'none', s(r.phone).trim(), r.text_link ? 1 : 0]),
     c.fields.map((f) => [f.id, f.document_id, f.recipient_id || '', f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), s(f.value),
       (f.options || []).join('\n'), s(f.group_name), s(f.validation), f.readonly || f.type === 'note' ? 1 : 0]).sort(byFirst),
   ]);

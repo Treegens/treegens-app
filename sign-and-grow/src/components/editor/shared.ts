@@ -8,7 +8,11 @@ export const TYPES: [string, string, number, number][] = [
   ['email', 'Email', 0.24, 0.026], ['company', 'Company', 0.2, 0.026], ['title', 'Title', 0.2, 0.026], ['text', 'Text', 0.22, 0.026],
   ['number', 'Number', 0.12, 0.026], ['date', 'Date', 0.14, 0.026], ['checkbox', 'Checkbox', 0.024, 0], ['radio', 'Radio', 0.024, 0],
   ['dropdown', 'Dropdown', 0.2, 0.026], ['attachment', 'Attachment', 0.2, 0.03], ['note', 'Note', 0.25, 0.026],
+  // The sender's line through wording printed on the page (src/lib/strike.ts). Like a note, it belongs to nobody.
+  ['strike', 'Strike out', 0.3, 0.02],
 ];
+/** Marks the sender puts on a page that belong to no recipient: words added (a note) and words struck out. */
+export const SENDER_MARK = (type: string) => type === 'note' || type === 'strike';
 export const TLABEL: Record<string, string> = Object.fromEntries(TYPES.map((t) => [t[0], t[1]]));
 export const PREFILL = ['text', 'number', 'date', 'company', 'title', 'note'];
 export const MIN_W = 0.012;
@@ -27,9 +31,9 @@ type Box = { x: number; y: number; w: number; h: number };
 
 export function makeField(type: string, documentId: string, page: number, recipientId: string | null, box: Box, over: any = {}) {
   return {
-    id: newId('fld'), document_id: documentId, recipient_id: type === 'note' ? null : recipientId, type, page, ...box,
-    required: !['checkbox', 'company', 'title', 'attachment'].includes(type), label: '', value: type === 'note' ? 'Note' : '',
-    options: type === 'dropdown' ? ['Option 1', 'Option 2'] : [], group_name: type === 'radio' ? 'Group 1' : '', validation: '', readonly: type === 'note',
+    id: newId('fld'), document_id: documentId, recipient_id: SENDER_MARK(type) ? null : recipientId, type, page, ...box,
+    required: !['checkbox', 'company', 'title', 'attachment', 'strike'].includes(type), label: '', value: type === 'note' ? 'Note' : '',
+    options: type === 'dropdown' ? ['Option 1', 'Option 2'] : [], group_name: type === 'radio' ? 'Group 1' : '', validation: '', readonly: SENDER_MARK(type),
     ...over,
   };
 }
@@ -71,4 +75,9 @@ export type Ed = {
   redo: () => void;
   modalOpen: boolean;
   go: (step: number) => void;
+  /** Opens step 2 with this field selected and the cursor in its Label box (from the review step's list). */
+  showField: (fieldId: string) => void;
+  /** The field step 2 is asked to open on, until it has done so. */
+  jump: string | null;
+  clearJump: () => void;
 };

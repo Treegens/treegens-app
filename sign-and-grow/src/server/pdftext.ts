@@ -339,7 +339,7 @@ export class Typesetter {
     const ops: PDFOperator[] = [];
     // The words as they were typed, for programs that copy or search text in the PDF: on the page the glyphs of a
     // right-to-left or a joined script do not stand in typing order.
-    if (!line.plain) ops.push(PDFOperator.of(Op.BeginMarkedContentSequence, [PDFName.of('Span'), this.doc.context.obj({ ActualText: PDFHexString.fromText(line.text) })]));
+    if (!line.plain) ops.push(PDFOperator.of(Op.BeginMarkedContentSequence, [PDFName.of('Span'), this.doc.context.obj({ ActualText: PDFHexString.fromText(line.text) }) as any]));
     ops.push(pushGraphicsState(), beginText(), setFillingColor(o.color), setTextMatrix(Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), o.x, o.y));
     const num = (n: number) => PDFNumber.of(Math.round(n * 100) / 100);
     for (const seg of line.segs) {

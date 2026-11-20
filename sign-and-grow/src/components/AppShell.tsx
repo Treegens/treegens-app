@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { api, Leaf, toast, oops } from './ui';
 import { fmtNum, fmtTrees } from '@/lib/impact';
+import { HandedOver, type Locked } from './HandedOver';
 
-type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
+type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
 
@@ -30,13 +31,35 @@ export function AppShell({ children }: { children: ReactNode }) {
   const path = usePathname();
   const router = useRouter();
 
+  // Set while this browser is locked because the device was handed to someone to sign in person. Then no page of
+  // the account is drawn, only the screen that asks for the owner's password (HandedOver).
+  const [locked, setLocked] = useState<Locked | null>(null);
+
   const reload = useCallback(() => {
     api('/me').then((m) => {
+      if (m.handed_over) return setLocked(m.handed_over);
+      setLocked(null);
       if (!m.user) router.replace(`/login?next=${encodeURIComponent(window.location.pathname)}`);
       else setMe(m);
     }).catch(oops);
   }, [router]);
   useEffect(reload, [reload]);
+  useEffect(() => {
+    // "Host signing now" says so before it leaves this page, and the account is put away at once: the Back button
+    // then brings back the lock, not the envelope. The server locks the session when the signing page opens.
+    const handed = (e: Event) => setLocked((l) => l || { name: me?.user?.name || 'the owner of this account', has_password: me?.user?.has_password !== false, signer: (e as CustomEvent).detail?.signer || null, envelope_id: (e as CustomEvent).detail?.envelope_id || null });
+    // A page of the account that was open in another tab, or comes back from the browser's history, asks whether
+    // it may still show what it shows as soon as it is looked at again.
+    const look = () => document.visibilityState === 'visible' && api('/me').then((m) => (m.handed_over ? setLocked(m.handed_over) : m.user && setLocked(null))).catch(() => {});
+    window.addEventListener('sg-handed-over', handed);
+    window.addEventListener('pageshow', look);
+    document.addEventListener('visibilitychange', look);
+    return () => {
+      window.removeEventListener('sg-handed-over', handed);
+      window.removeEventListener('pageshow', look);
+      document.removeEventListener('visibilitychange', look);
+    };
+  }, [me]);
   useEffect(() => {
     if (me) api('/impact').then(setImpact).catch(() => {});
   }, [me, path]);
@@ -60,6 +83,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  if (locked) return <HandedOver info={locked} onUnlocked={reload} />;
   if (!me) return <div className="muted center" style={{ padding: 80 }}>Loading…</div>;
   const full = /^\/app\/(envelopes|templates)\/[^/]+\/edit/.test(path);
   if (full) return <MeCtx.Provider value={{ ...me, reload }}>{children}</MeCtx.Provider>;

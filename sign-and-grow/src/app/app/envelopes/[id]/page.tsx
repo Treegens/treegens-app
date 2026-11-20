@@ -9,6 +9,7 @@ import { reminderText } from '@/lib/policy';
 import { Recipients, lastEmailTo, type Delivery } from '@/components/sender/Recipients';
 import { ConfirmDialog, CorrectDialog, ExtendDialog, VoidDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
+import { AfterSend } from '@/components/sender/AfterSend';
 import { PrintNotice } from '@/components/sender/PrintNotice';
 import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
@@ -60,6 +61,10 @@ export default function EnvelopeDetail() {
   // Everyone on the team can use a template. Changing or deleting it is for the person it belongs to and for admins.
   const mayChange = !isTpl || me.role !== 'member' || e.sender_id === me.user.id;
   const done = e.status === 'completed';
+  // Set when its sender removed this envelope from their lists. Only an admin gets to see it then: they can read
+  // it, download it and put it back, and nothing else until it is back.
+  const removed: string | null = data.removed_at || null;
+  const isAdmin = me.role !== 'member';
   const impact = impactOf(e.sheets);
   const pages = e.documents.reduce((n: number, d: any) => n + d.pages, 0);
   const out = e.status === 'sent';
@@ -72,6 +77,8 @@ export default function EnvelopeDetail() {
   const kept = !isTpl && e.status !== 'draft' && (done || e.recipients.some((r: any) => r.status === 'completed' && ['signer', 'inperson', 'approver'].includes(r.role)));
   const waiting = out ? waitingOn(e.recipients, me.user.email) : null;
   const unopened = out ? e.recipients.filter((r: any) => neverOpened(r)) : [];
+  // People who filled in everything required and have not pressed Finish, by the server's count (progress.ready).
+  const almost = out ? e.recipients.filter((r: any) => r.progress?.ready) : [];
   const bounced = out ? e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && lastEmailTo(deliveries, r.email, r.id)?.status === 'failed') : [];
   // Reminders never go to people who turned them off, so do not offer a button that would do nothing.
   const canRemind = out && e.recipients.some((r: any) => hasTurn(r) && !r.muted);
@@ -110,12 +117,25 @@ export default function EnvelopeDetail() {
         <div className="row wrap sn-headactions">
           {e.documents.length > 0 && <a className="btn" href={`/api/envelopes/${e.id}/download?inline=1`} target="_blank" rel="noreferrer">{e.status === 'completed' ? 'View signed PDF' : 'Preview PDF'}</a>}
           {e.status === 'completed' && <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>Download with certificate</a>}
-          <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>
-          {!isTpl && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
+          {!removed && <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>}
+          {!removed && !isTpl && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
           {out && <button className="btn danger" onClick={() => setDialog('void')}>Void</button>}
-          {!out && mayChange && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
+          {!removed && !out && mayChange && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
         </div>
       </div>
+
+      {removed && (
+        <section className="card sn-now closed" aria-label="Removed by its sender">
+          <div className="sn-now-main">
+            <div>
+              <p className="sn-now-line">Removed from its sender&apos;s lists on {longDate(removed)}.</p>
+              <p className="sn-now-sub">It is in no list, search, export or report of your team. Everyone who was on it still has their link and their copy. You can open it because you are an admin of this account.</p>
+              <p className="sn-now-sub">Put it back and it is an ordinary envelope again, for its sender and for the admins. The audit trail records who removed it and who put it back.</p>
+            </div>
+            <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => act(() => api(`/envelopes/${e.id}/restore`, { method: 'POST' }), 'Put back. It is in the lists, the search, the export and the reports again.')}>Put it back</button></div>
+          </div>
+        </section>
+      )}
 
       {/* A name or wording in a script the signed PDF has no font for: said here, before anyone signs. */}
       {(data.print_problems || []).length > 0 && <PrintNotice problems={data.print_problems} />}
@@ -123,11 +143,15 @@ export default function EnvelopeDetail() {
       {e.status === 'draft' && (
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
-            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To make your own version, use it and save that as a template.'}</p></div>
-            {mayChange && <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>}
+            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To change something, make your own copy: the copy is yours and the original stays as it is.'}</p></div>
+            {mayChange ? <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>
+              : <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('template')}>Make my own copy</button></div>}
           </div>
         </section>
       )}
+
+      {/* Right after sending: what we email the sender, and the one switch for an email at each signature. */}
+      {out && <AfterSend envelope={e} />}
 
       {out && (
         <section className="card sn-now" aria-label="Where this stands">
@@ -135,6 +159,7 @@ export default function EnvelopeDetail() {
             <div>
               <p className="sn-now-line">{waiting ? <>Waiting on <b>{waiting.label}</b>{waiting.since ? ` for ${howLong(waiting.since)}` : ''}.</> : 'Sent. Nobody is holding it up right now.'}</p>
               {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} {bounced.some((r: any) => lastEmailTo(deliveries, r.email, r.id)?.next_try_at) ? 'has not gone out yet, and we keep trying' : 'did not go out'}. See below to fix the address or share the link yourself.</p>}
+              {almost.length > 0 && <p className="sn-now-sub warn" id="sn-almost"><b>{joinNames(almost.map((r: any) => r.name))}</b> {almost.length === 1 ? 'has' : 'have'} filled in everything but {almost.length === 1 ? 'has' : 'have'} not pressed Finish, so {almost.length === 1 ? 'their part is' : 'their parts are'} not signed yet. A reminder tells them that one button is left.</p>}
               {unopened.length > 0 && <p className="sn-now-sub warn">{joinNames(unopened.map((r: any) => r.name))} {unopened.length === 1 ? 'has' : 'have'} not opened it yet. See below for ways to reach them.</p>}
               {allMuted && <p className="sn-now-sub">They turned reminder emails off, so reach them with their link instead. It is below.</p>}
               <p className={`sn-now-sub${closingSoon(e.expires_at) ? ' warn' : ''}`}>{e.expires_at ? `${deadlineLine(e.expires_at)}.` : 'No closing date.'}{closingSoon(e.expires_at) ? ' Give more time if they need it.' : ''}</p>
@@ -166,7 +191,7 @@ export default function EnvelopeDetail() {
               {unfinished.length > 0 && <p className="sn-now-sub">Still needed: <b>{joinNames(unfinished.map((r: any) => r.name))}</b>.</p>}
               <p className="sn-now-sub">{paused ? 'Sending is paused on this account. Reopening emails everyone who still has to sign, so it has to wait until the pause is lifted.' : 'Reopen it with a new closing date. Nobody who already signed has to sign again.'}</p>
             </div>
-            <div className="sn-now-actions"><button className="btn primary" disabled={paused} title={paused ? 'Sending is paused on this account, so this has to wait.' : undefined} onClick={() => setDialog('extend')}>Reopen</button></div>
+            {!removed && <div className="sn-now-actions"><button className="btn primary" disabled={paused} title={paused ? 'Sending is paused on this account, so this has to wait.' : undefined} onClick={() => setDialog('extend')}>Reopen</button></div>}
           </div>
         </section>
       )}
@@ -179,7 +204,7 @@ export default function EnvelopeDetail() {
               {decliner?.decline_reason && <p className="sn-now-sub">They wrote: &ldquo;{decliner.decline_reason}&rdquo;</p>}
               <p className="sn-now-sub">This envelope is closed. Clone it, change what needs changing and send it again.</p>
             </div>
-            <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Clone and fix</button></div>
+            {!removed && <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Clone and fix</button></div>}
           </div>
         </section>
       )}
@@ -192,7 +217,7 @@ export default function EnvelopeDetail() {
               <p className="sn-now-sub">Reason given: &ldquo;{e.void_reason}&rdquo;</p>
               <p className="sn-now-sub">{costLine ? `${costLine} ` : ''}Clone it to send a corrected one.</p>
             </div>
-            <div className="sn-now-actions"><button className="btn" disabled={busy} onClick={() => clone('envelope')}>Clone</button></div>
+            {!removed && <div className="sn-now-actions"><button className="btn" disabled={busy} onClick={() => clone('envelope')}>Clone</button></div>}
           </div>
         </section>
       )}
@@ -216,7 +241,7 @@ export default function EnvelopeDetail() {
           </div>
         )}
         {e.recipients.length === 0 ? <div className="empty">Nobody has been added yet.</div> : (
-          <Recipients envelope={e} deliveries={deliveries} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} paused={paused} />
+          <Recipients envelope={e} deliveries={deliveries} texts={data.texts || []} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} paused={paused} />
         )}
       </section>
 
@@ -283,7 +308,11 @@ export default function EnvelopeDetail() {
           }}>
           {kept ? (
             <>
-              <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back, so download the PDF first if you want to keep a copy.</p>
+              {/* It is hidden, not destroyed: the account is a party to the document too, so its admins can still find it
+                  and put it back. A member cannot do that themselves, and is told who can. */}
+              {isAdmin
+                ? <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves the lists, the search, the export and the reports. It is not destroyed: you and the other admins of this account still find it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back from there.</p>
+                : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back yourself. An admin of your team still finds it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back, so ask one of them if you need it again. Download the PDF first if you want to keep a copy of your own.</p>}
               <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone has already signed it, so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>
             </>
           ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>}

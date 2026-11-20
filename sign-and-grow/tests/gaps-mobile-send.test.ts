@@ -5,11 +5,12 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, signUp, upload, signAll, simple, samplePdf, Client, PNG, type Server } from './helpers.ts';
+import { boot, signUp, upload, signAll, simple, samplePdf, mailTo, Client, PNG, type Server } from './helpers.ts';
 import { jpegOrientation, markUpright } from '../src/server/exif.ts';
+import { sha256 } from '../src/server/util.ts';
 import { imagesToPdf } from '../src/server/pdf.ts';
-import { fitWithin } from '../src/lib/phone.ts';
-import { MAX_PHOTOS_PER_DOCUMENT, PHOTO_MAX_SIDE } from '../src/lib/policy.ts';
+import { fitWithin, deviceName, IN_PERSON_LIMITS, IN_PERSON_LOCK } from '../src/lib/phone.ts';
+import { MAX_PHOTOS_PER_DOCUMENT, PHOTO_MAX_SIDE, SESSION_DAYS, SESSION_TOUCH_MINUTES, HAND_OVER_TRIES } from '../src/lib/policy.ts';
 
 let s: Server;
 before(async () => {
@@ -182,6 +183,13 @@ test('what people sign is what they saw: the photo is upright in the signed PDF 
   assert.equal(d.page[2] < d.page[3], true, 'the page of the signed PDF is upright');
   for (const colour of ['red', 'green', 'blue'] as const) assert.equal(whereIs(d.corners, colour), SEEN[6][colour], `signed PDF: ${colour}`);
   assert.equal(jpegOrientation(jpegInside(signed)!)?.value, 1);
+  // The page the sender placed the field on (its size came back from the upload) is the page of the signed PDF, and
+  // the signature sits inside the box that was drawn on it: 10% from the left, 85% down, 30% wide, 6% tall.
+  assert.deepEqual(up.data.page_sizes[0], { w: d.page[2], h: d.page[3] });
+  const sig = await drawn(signed, 1, (img) => img.width === 1 && img.height === 1);
+  const [W, H] = [d.page[2], d.page[3]];
+  assert.ok(sig.box.x0 >= 0.1 * W - 0.5 && sig.box.x1 <= 0.4 * W + 0.5, `signature across: ${sig.box.x0} to ${sig.box.x1}`);
+  assert.ok(sig.box.y1 <= H * (1 - 0.85) + 0.5 && sig.box.y0 >= H * (1 - 0.91) - 0.5, `signature down: ${sig.box.y0} to ${sig.box.y1}`);
 });
 
 test('several pictures sent together become one document, a page for each, in the order chosen', async () => {
@@ -258,4 +266,411 @@ test('a photo is made smaller to a size a page needs, never larger, and keeps it
   assert.match(editor, /shrinkPhoto\(/);
   assert.match(editor, /<PhotoAsk /);
   assert.match(read('src/components/editor/photos.ts'), /fitWithin\(img\.naturalWidth, img\.naturalHeight\)/);
+});
+
+// ---- Staying signed in -------------------------------------------------------------------------------
+
+const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+const WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const DAY = 864e5;
+const iso = (ms: number) => new Date(ms).toISOString();
+// One call through the router with everything a browser sends, and the cookies it was sent back, attributes and all.
+async function raw(c: Client, method: string, url: string, ua = IPHONE, body?: any) {
+  const { handle } = await import('../src/server/router.ts');
+  const res = await handle(new Request(`http://test.local/api${url}`, {
+    method, headers: { cookie: Object.entries(c.cookies).map(([k, v]) => `${k}=${v}`).join('; '), 'x-forwarded-for': c.ip, 'user-agent': ua, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  }));
+  return { status: res.status, data: await res.json(), set: res.headers.getSetCookie() };
+}
+// The test client sends no browser name, and a use is noted at most once an hour. This forgets the note that
+// signing up left, so the next call is the one that is written down, as a real browser's first page load is.
+const unnoted = (c: Client) => s.db.run('UPDATE sessions SET last_used_at=NULL, ua=NULL WHERE id=?', sha256(c.cookies.ts_session));
+const sessionRow = (email: string) => s.db.get('SELECT s.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE u.email=? ORDER BY s.created_at DESC', email);
+// Moves a session back in time, as if `days` had passed since it was last touched.
+const age = (id: string, days: number) => {
+  const r = s.db.get('SELECT * FROM sessions WHERE id=?', id);
+  s.db.run('UPDATE sessions SET expires_at=?, last_used_at=?, created_at=? WHERE id=?', iso(Date.parse(r.expires_at) - days * DAY), r.last_used_at ? iso(Date.parse(r.last_used_at) - days * DAY) : null, iso(Date.parse(r.created_at) - days * DAY), id);
+};
+
+test('a browser that is used stays signed in, and one that is not used is signed out after 30 days', async () => {
+  assert.equal(SESSION_DAYS, 30);
+  const c = await signUp('Lea Weekly', 'lea@example.com', ip());
+  unnoted(c);
+  const first = await raw(c, 'GET', '/me');
+  assert.equal(first.data.user.email, 'lea@example.com');
+  const made = sessionRow('lea@example.com');
+  assert.ok(made.created_at, 'when the browser signed in is kept');
+  assert.equal(made.ua, IPHONE, 'what the browser called itself is kept');
+  assert.ok(Date.parse(made.expires_at) - Date.now() > 29.9 * DAY);
+  // Nothing is written and no cookie is sent again while the last note is under an hour old.
+  assert.deepEqual(first.set.filter((x) => x.startsWith('ts_session=')), []);
+  const again = await raw(c, 'GET', '/me');
+  assert.deepEqual(again.set, []);
+  assert.equal(sessionRow('lea@example.com').last_used_at, made.last_used_at);
+
+  // She opens the app once a week for half a year. Before the session slid, week five was a sign-in page.
+  for (let week = 1; week <= 26; week++) {
+    age(made.id, 7);
+    const r = await raw(c, 'GET', '/envelopes');
+    assert.equal(r.status, 200, `week ${week}: ${JSON.stringify(r.data)}`);
+    // The cookie goes out again with a new end, because the browser forgets it on the date it was given with.
+    const sent = r.set.find((x) => x.startsWith('ts_session='));
+    assert.ok(sent, `week ${week}: the cookie is sent again`);
+    assert.equal(sent!.split(';')[0], `ts_session=${c.cookies.ts_session}`, 'the same session, not a new one');
+    assert.match(sent!, /Max-Age=2592000/);
+    assert.match(sent!, /HttpOnly/);
+    assert.match(sent!, /SameSite=Lax/);
+    const row = s.db.get('SELECT * FROM sessions WHERE id=?', made.id);
+    assert.ok(Date.parse(row.expires_at) - Date.now() > 29.9 * DAY, `week ${week}: 30 days from this visit`);
+    assert.ok(Date.now() - Date.parse(row.last_used_at) < 60_000);
+  }
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM sessions WHERE user_id=?', made.user_id).n, 1, 'still one session: nobody was signed in again');
+
+  // The end moves at most once a day: a visit two hours later notes the use and sends no cookie.
+  s.db.run('UPDATE sessions SET last_used_at=? WHERE id=?', iso(Date.now() - 2 * 3600_000), made.id);
+  const soon = await raw(c, 'GET', '/me');
+  assert.deepEqual(soon.set, []);
+  assert.ok(Date.now() - Date.parse(s.db.get('SELECT last_used_at t FROM sessions WHERE id=?', made.id).t) < 60_000);
+
+  // Over https the cookie that is sent again is marked Secure, like the first one.
+  age(made.id, 3);
+  const { handle } = await import('../src/server/router.ts');
+  const https = await handle(new Request('http://test.local/api/me', { headers: { cookie: `ts_session=${c.cookies.ts_session}`, 'x-forwarded-proto': 'https', 'x-forwarded-for': c.ip } }));
+  assert.match(https.headers.getSetCookie().find((x) => x.startsWith('ts_session='))!, /Max-Age=2592000; Secure$/);
+
+  // Thirty-one days without a visit: signed out, and a late visit does not bring the session back.
+  age(made.id, 31);
+  const late = await raw(c, 'GET', '/envelopes');
+  assert.equal(late.status, 401);
+  assert.equal((await raw(c, 'GET', '/me')).data.user, null);
+  assert.ok(Date.parse(s.db.get('SELECT expires_at t FROM sessions WHERE id=?', made.id).t) < Date.now());
+  // Signing in again clears the row that ran out.
+  const back = new Client();
+  back.ip = c.ip;
+  assert.equal((await back.post('/auth/login', { email: 'lea@example.com', password: 'correct horse battery' })).status, 200);
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM sessions WHERE id=?', made.id).n, 0);
+
+  // Signing out sends the cookie away for good, also on a request that would have moved the end forward.
+  const row = sessionRow('lea@example.com');
+  await raw(back, 'GET', '/me');
+  age(row.id, 5);
+  const out = await raw(back, 'POST', '/auth/logout');
+  assert.match(out.set.at(-1)!, /^ts_session=; .*Max-Age=0/);
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM sessions WHERE id=?', row.id).n, 0);
+});
+
+test('signing in on a new device does not sign the others out, and Settings shows each one', async () => {
+  const phone = await signUp('Moe Mobile', 'moe@example.com', ip());
+  unnoted(phone);
+  await raw(phone, 'GET', '/me', IPHONE);
+  const desk = new Client();
+  desk.ip = ip();
+  assert.equal((await raw(desk, 'POST', '/auth/login', WINDOWS, { email: 'moe@example.com', password: 'correct horse battery' })).status, 200);
+  // raw() does not keep cookies, so sign in once more the ordinary way and use that browser from here on.
+  assert.equal((await desk.post('/auth/login', { email: 'moe@example.com', password: 'correct horse battery' })).status, 200);
+  await raw(desk, 'GET', '/me', WINDOWS);
+  assert.equal((await raw(phone, 'GET', '/envelopes', IPHONE)).status, 200, 'the phone is still signed in');
+  assert.equal((await raw(desk, 'GET', '/envelopes', WINDOWS)).status, 200);
+
+  const list = (await raw(desk, 'GET', '/me/sessions', WINDOWS)).data;
+  assert.equal(list.days, 30);
+  assert.equal(list.noted_every_minutes, SESSION_TOUCH_MINUTES);
+  // Three sessions: the phone, this browser, and the sign-in whose cookie was thrown away above (never used).
+  assert.equal(list.sessions.length, 3);
+  assert.deepEqual(list.sessions.map((x: any) => x.current), [true, false, false], 'this browser comes first');
+  assert.deepEqual([list.sessions[0].device, list.sessions[0].browser], ['Windows computer', 'Chrome']);
+  const onPhone = list.sessions.find((x: any) => x.device === 'iPhone');
+  assert.equal(onPhone.browser, 'Safari');
+  assert.ok(onPhone.signed_in_at && onPhone.last_used_at);
+  const unused = list.sessions.find((x: any) => x.device === 'Unknown device');
+  assert.equal(unused.last_used_at, null);
+  // What names a session to the page is not the cookie and not the hash it is looked up by.
+  const hashes: string[] = s.db.all('SELECT id FROM sessions').map((r: any) => r.id);
+  for (const x of list.sessions) {
+    assert.match(x.id, /^[0-9a-f]{16}$/);
+    assert.ok(!hashes.some((h) => h.startsWith(x.id)) && !JSON.stringify(x).includes(desk.cookies.ts_session));
+  }
+
+  // One browser can be signed out by itself.
+  const one = await desk.call('DELETE', `/me/sessions/${unused.id}`);
+  assert.deepEqual(one.data, { ok: true, current: false });
+  const gone = await desk.call('DELETE', `/me/sessions/${unused.id}`);
+  assert.equal(gone.status, 404);
+  assert.match(gone.data.error, /is not signed in any more, so there was nothing to sign out/);
+  // Not somebody else's: a handle from another login finds nothing.
+  const other = await signUp('Nan Other', 'nan@example.com', ip());
+  const theirs = (await other.get('/me/sessions')).data.sessions[0].id;
+  assert.equal((await desk.call('DELETE', `/me/sessions/${theirs}`)).status, 404);
+  assert.equal((await other.get('/me')).data.user.email, 'nan@example.com');
+
+  // "Sign out everywhere else" ends every other browser and keeps this one.
+  const all = await desk.post('/me/sessions/sign-out-others');
+  assert.deepEqual(all.data, { ok: true, signed_out: 1 });
+  assert.equal((await raw(phone, 'GET', '/envelopes', IPHONE)).status, 401, 'the phone has to sign in again');
+  assert.equal((await desk.get('/envelopes')).status, 200);
+  assert.equal((await desk.get('/me/sessions')).data.sessions.length, 1);
+  assert.deepEqual((await desk.post('/me/sessions/sign-out-others')).data, { ok: true, signed_out: 0 });
+  // Signing this browser out through the list also takes its cookie away.
+  const me = (await desk.get('/me/sessions')).data.sessions[0];
+  const self = await raw(desk, 'DELETE', `/me/sessions/${me.id}`, WINDOWS);
+  assert.equal(self.data.current, true);
+  assert.match(self.set.at(-1)!, /^ts_session=; .*Max-Age=0/);
+  assert.equal((await raw(desk, 'GET', '/me', WINDOWS)).data.user, null);
+
+  // No API key sees or ends where a person is signed in.
+  const owner = await signUp('Ona Owner', 'ona@example.com', ip());
+  const key = (await owner.post('/api-keys', { name: 'Integration', scope: 'admin' })).data.key as string;
+  const k = new Client();
+  for (const [method, url] of [['GET', '/me/sessions'], ['POST', '/me/sessions/sign-out-others'], ['DELETE', '/me/sessions/abc']] as const) {
+    const r = await k.call(method, url, method === 'GET' ? undefined : {}, { authorization: `Bearer ${key}` });
+    assert.equal(r.status, 403, `${method} ${url}`);
+    assert.match(r.data.error, /An API key cannot see or end where a person is signed in\. That needs a person signed in to the app\./);
+  }
+  assert.equal((await owner.get('/me/sessions')).data.sessions.length, 1);
+});
+
+test('the device and browser shown are what the browser said, and nothing is guessed', () => {
+  const cases: [string, string, string][] = [
+    [IPHONE, 'iPhone', 'Safari'],
+    [WINDOWS, 'Windows computer', 'Chrome'],
+    ['Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36', 'Android phone', 'Chrome'],
+    ['Mozilla/5.0 (Linux; Android 13; SM-X700) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', 'Android tablet', 'Chrome'],
+    ['Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36', 'Android phone', 'Samsung Internet'],
+    ['Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.6723.90 Mobile/15E148 Safari/604.1', 'iPhone', 'Chrome'],
+    ['Mozilla/5.0 (iPad; CPU OS 16_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/130.0 Mobile/15E148 Safari/605.1.15', 'iPad', 'Firefox'],
+    // Safari on an iPad says it is a Mac. We cannot tell them apart, so we say so.
+    ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15', 'Mac or iPad', 'Safari'],
+    ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', 'Mac', 'Chrome'],
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0', 'Windows computer', 'Edge'],
+    ['Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0', 'Linux computer', 'Firefox'],
+    ['Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', 'Chromebook', 'Chrome'],
+    ['curl/8.5.0', 'Unknown device', 'unknown browser'],
+    ['', 'Unknown device', 'unknown browser'],
+  ];
+  for (const [ua, device, browser] of cases) assert.deepEqual(deviceName(ua), { device, browser }, ua);
+  assert.deepEqual(deviceName(null), { device: 'Unknown device', browser: 'unknown browser' });
+  // Settings shows the list with the button, under Profile.
+  const page = read('src/app/app/settings/SignedIn.tsx');
+  assert.match(page, /Where you are signed in/);
+  assert.match(page, /Sign out everywhere else/);
+  assert.match(read('src/app/app/settings/page.tsx'), /<SignedIn \/>/);
+});
+
+// ---- The switch after sending ------------------------------------------------------------------------
+
+const twoSigners = (c: Client, tag: string) => simple(c, `${tag}1@example.com`, {
+  recipients: [{ id: 'r', role: 'signer', name: 'First Signer', email: `${tag}1@example.com` }, { id: 'r2', role: 'signer', name: 'Second Signer', email: `${tag}2@example.com` }],
+  fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'f2', document_id: 'd', recipient_id: 'r2', type: 'signature', page: 0, x: 0.1, y: 0.7, w: 0.3, h: 0.06 }],
+  send: true,
+});
+
+test('the switch on the page after sending turns on one email per signature, and only that', async () => {
+  const c = await signUp('Pia Waiting', 'pia@example.com', ip());
+  const subjects = () => mailTo('pia@example.com').map((m: any) => m.subject as string);
+  // As it comes: nothing until the end.
+  const quiet = await twoSigners(c, 'quiet');
+  assert.equal((await signAll(quiet.id, 'quiet1@example.com')).status, 200);
+  assert.deepEqual(subjects().filter((x) => /^Signed:/.test(x)), []);
+  assert.equal((await signAll(quiet.id, 'quiet2@example.com')).status, 200);
+  assert.equal(subjects().filter((x) => /^Completed:/.test(x)).length, 1);
+
+  // The switch sends exactly this, and the other choices stay as they were.
+  const before = (await c.get('/me')).data.user.notify;
+  assert.deepEqual(before, { viewed: false, signed: false, completed: true, problems: true });
+  const flipped = await c.call('PATCH', '/me', { notify: { signed: true } });
+  assert.deepEqual(flipped.data.user.notify, { ...before, signed: true });
+  const loud = await twoSigners(c, 'loud');
+  assert.equal((await signAll(loud.id, 'loud1@example.com')).status, 200);
+  assert.equal(subjects().filter((x) => /^Signed:/.test(x)).length, 1, 'one email when the first of two has signed');
+  assert.equal(subjects().filter((x) => /^Opened:/.test(x)).length, 0, 'the email for each opening stays off');
+  assert.equal((await signAll(loud.id, 'loud2@example.com')).status, 200);
+  // The last signature is the completion email, not one more "Signed".
+  assert.equal(subjects().filter((x) => /^Signed:/.test(x)).length, 1);
+  assert.equal(subjects().filter((x) => /^Completed:/.test(x)).length, 2);
+  // And off again.
+  assert.equal((await c.call('PATCH', '/me', { notify: { signed: false } })).data.user.notify.signed, false);
+
+  // The page: the editor sends the sender to ?sent=1, the envelope page draws the card there, and the switch on
+  // it sets this preference and no other.
+  assert.match(read('src/components/Editor.tsx'), /leave\(`\/app\/envelopes\/\$\{id\}\?sent=1`\)/);
+  assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /\{out && <AfterSend envelope=\{e\} \/>\}/);
+  const card = read('src/components/sender/AfterSend.tsx');
+  assert.match(card, /q\.get\('sent'\) !== '1'/);
+  assert.match(card, /api\('\/me', \{ method: 'PATCH', body: \{ notify: \{ signed: next \} \} \}\)/);
+  assert.match(card, /role="switch"/);
+  assert.match(card, /Email me each time someone signs/);
+});
+
+// ---- Signing in person: the host's account is not left open ------------------------------------------
+
+async function inPerson(c: Client, hostEmail: string, tag: string) {
+  const e = await simple(c, hostEmail, {
+    recipients: [{ id: 'r', role: 'inperson', name: 'Pat Present', email: `${tag}-pat@example.com` }, { id: 'r2', role: 'inperson', name: 'Quin Present', email: `${tag}-quin@example.com` }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'f2', document_id: 'd', recipient_id: 'r2', type: 'signature', page: 0, x: 0.1, y: 0.7, w: 0.3, h: 0.06 }],
+    send: true,
+  });
+  const tokens: string[] = s.db.all('SELECT token FROM recipients WHERE envelope_id=? ORDER BY position', e.id).map((r: any) => r.token);
+  return { e, pat: tokens[0], quin: tokens[1] };
+}
+const PASSWORD = 'correct horse battery';
+
+test('hosting an in-person signing locks the host\'s account in that browser until the host types their password', async () => {
+  const host = await signUp('Rae Host', 'rae@example.com', ip());
+  const other = new Client(); // the host's laptop at home, signed in to the same login
+  other.ip = ip();
+  assert.equal((await other.post('/auth/login', { email: 'rae@example.com', password: PASSWORD })).status, 200);
+  const { e, pat } = await inPerson(host, 'rae@example.com', 'rae');
+  assert.equal((await host.get(`/envelopes/${e.id}`)).status, 200);
+
+  // The host taps "Host signing now": the signing page opens in the host's browser.
+  const opened = await host.get(`/sign/${pat}`);
+  assert.equal(opened.status, 200);
+  assert.equal(opened.data.recipient.role, 'inperson');
+  assert.equal(opened.data.envelope.sender.name, 'Rae Host');
+  assert.equal(opened.data.envelope.id, e.id, 'the done screen can lead back to this envelope');
+
+  // From here the browser opens nothing of the account. Every call that needs signing in says why.
+  for (const [method, url] of [['GET', '/envelopes'], ['GET', `/envelopes/${e.id}`], ['GET', '/contacts'], ['GET', `/files/${e.documents[0].file_id}/content`], ['PATCH', '/me'], ['GET', '/me/sessions'], ['POST', '/me/sessions/sign-out-others'], ['GET', '/export']] as const) {
+    const r = await host.call(method, url, method === 'GET' ? undefined : {});
+    assert.equal(r.status, 401, `${method} ${url}`);
+    assert.equal(r.data.code, 'handed_over');
+    assert.match(r.data.error, /handed to someone to sign in person, so your account is locked in this browser\. Open Sign&Grow here and type your password to come back\./);
+  }
+  // The app is told what to show: not the sign-in page, the screen that asks for the owner's password.
+  const me = (await host.get('/me')).data;
+  assert.equal(me.user, null);
+  assert.deepEqual(me.handed_over, { name: 'Rae Host', has_password: true, signer: 'Pat Present', envelope_id: e.id, tries_left: HAND_OVER_TRIES });
+  assert.equal(JSON.stringify(me).includes('rae@example.com'), false, 'nothing more than the name');
+
+  // The signer signs: the link needs no account, locked or not.
+  assert.equal((await host.post(`/sign/${pat}/consent`)).status, 200);
+  const view = (await host.get(`/sign/${pat}`)).data;
+  assert.equal((await host.post(`/sign/${pat}/complete`, { values: { [view.fields[0].id]: '1' }, signature_png: PNG, initials_png: PNG })).status, 200);
+  assert.equal((await host.get(`/sign/${pat}`)).data.recipient.status, 'completed');
+  assert.equal((await host.get('/envelopes')).status, 401, 'still locked after the signer has finished');
+
+  // Nothing was signed out anywhere else, and the other browser sees which one is locked.
+  assert.equal((await other.get('/envelopes')).status, 200);
+  const listed = (await other.get('/me/sessions')).data.sessions;
+  assert.deepEqual(listed.map((x: any) => [x.current, x.handed_over]).sort(), [[false, true], [true, false]]);
+
+  // "I am Rae Host": a wrong password leaves it locked and says how many tries are left.
+  const wrong = await host.post('/auth/unlock', { password: 'not the password' });
+  assert.equal(wrong.status, 401);
+  assert.equal(wrong.data.code, 'wrong_password');
+  assert.match(wrong.data.error, /That password is not right, so the account stays locked on this device\. 4 more tries, then this browser is signed out\./);
+  assert.equal((await host.get('/envelopes')).status, 401);
+  assert.equal((await host.post('/auth/unlock', {})).status, 400);
+  assert.equal((await host.get('/me')).data.handed_over.tries_left, HAND_OVER_TRIES - 1, 'an empty box is not a guess');
+  // The right one takes the lock off, in the same session, and says where to go back to.
+  const cookieBefore = host.cookies.ts_session;
+  const back = await host.post('/auth/unlock', { password: PASSWORD });
+  assert.deepEqual(back.data, { ok: true, envelope_id: e.id });
+  assert.equal(host.cookies.ts_session, cookieBefore);
+  assert.equal((await host.get('/me')).data.user.email, 'rae@example.com');
+  assert.equal((await host.get(`/envelopes/${e.id}`)).status, 200);
+  assert.equal((await host.post('/auth/unlock', { password: PASSWORD })).data.code, 'not_locked');
+  // Looking at the page of the signer who has finished does not lock the browser again.
+  await host.get(`/sign/${pat}`);
+  assert.equal((await host.get('/envelopes')).status, 200);
+});
+
+test('five wrong passwords on a handed-over device sign that browser out, and a login without a password is told what to do', async () => {
+  const host = await signUp('Sol Host', 'sol@example.com', ip());
+  const { quin } = await inPerson(host, 'sol@example.com', 'sol');
+  await host.get(`/sign/${quin}`);
+  const sid = sha256(host.cookies.ts_session);
+  for (let i = 1; i < HAND_OVER_TRIES; i++) assert.equal((await host.post('/auth/unlock', { password: `guess ${i}` })).data.code, 'wrong_password');
+  const last = await raw(host, 'POST', '/auth/unlock', IPHONE, { password: 'guess 5' });
+  assert.equal(last.status, 401);
+  assert.equal(last.data.code, 'signed_out');
+  assert.match(last.data.error, /That was 5 wrong passwords, so this browser has been signed out\. Sign in again from the sign-in page\. Nothing in the account was changed\./);
+  assert.match(last.set.at(-1)!, /^ts_session=; .*Max-Age=0/);
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM sessions WHERE id=?', sid).n, 0);
+  // Even the right password does nothing now: the session is gone, and the sign-in page is the way back.
+  assert.equal((await host.post('/auth/unlock', { password: PASSWORD })).data.code, 'not_locked');
+  assert.equal((await host.get('/me')).data.handed_over, undefined);
+  const again = new Client();
+  again.ip = host.ip;
+  assert.equal((await again.post('/auth/login', { email: 'sol@example.com', password: PASSWORD })).status, 200);
+
+  // Someone who signs in with Google or Microsoft has no password to type. The lock screen is told, and so are they.
+  await again.get(`/sign/${quin}`);
+  s.db.run("UPDATE users SET password_hash='!' WHERE email='sol@example.com'");
+  assert.equal((await again.get('/me')).data.handed_over.has_password, false);
+  const none = await again.post('/auth/unlock', { password: PASSWORD });
+  assert.equal(none.status, 400);
+  assert.equal(none.data.code, 'no_password');
+  assert.match(none.data.error, /This login has no password, because you sign in with Google or Microsoft\. Sign in again that way/);
+});
+
+test('only the host\'s own browser is locked, and only by a signing page that someone still has to sign in person', async () => {
+  // An ordinary signer who has an account of their own, opening their link while signed in: left alone.
+  const sender = await signUp('Tia Sender', 'tia@example.com', ip());
+  const signer = await signUp('Uma Signer', 'uma@example.com', ip());
+  const plain = await simple(sender, 'uma@example.com', { send: true });
+  const link = s.db.get('SELECT token FROM recipients WHERE envelope_id=?', plain.id).token;
+  assert.equal((await signer.get(`/sign/${link}`)).status, 200);
+  assert.equal((await signer.get('/envelopes')).status, 200);
+  // The sender signing their own document ("Sign now") is not in person either.
+  const own = await simple(sender, 'tia@example.com', { send: true });
+  await sender.get(`/sign/${s.db.get('SELECT token FROM recipients WHERE envelope_id=?', own.id).token}`);
+  assert.equal((await sender.get('/envelopes')).status, 200);
+
+  // An in-person link opened in a browser that is signed in to somebody else's account: that account is not the host's.
+  const { e, pat, quin } = await inPerson(sender, 'tia@example.com', 'tia');
+  await signer.get(`/sign/${pat}`);
+  assert.equal((await signer.get('/envelopes')).status, 200);
+  // A colleague on the host's team who hosts the signing is locked like the host.
+  const invite = await sender.post('/account/invites', { email: 'vic@example.com', role: 'admin' });
+  assert.equal(invite.status, 200, JSON.stringify(invite.data));
+  const mate = new Client();
+  mate.ip = ip();
+  const joined = await mate.post('/auth/signup', { name: 'Vic Mate', email: 'vic@example.com', password: PASSWORD, invite: s.db.get("SELECT token FROM invites WHERE email='vic@example.com'").token });
+  assert.equal(joined.status, 200, JSON.stringify(joined.data));
+  await mate.get(`/sign/${pat}`);
+  assert.equal((await mate.get('/envelopes')).data.code, 'handed_over');
+  assert.equal((await mate.get('/me')).data.handed_over.name, 'Vic Mate');
+  assert.equal((await sender.get('/envelopes')).status, 200, 'the sender, on another device, is not');
+
+  // A voided envelope has nobody left to sign in person: opening the old link locks nothing.
+  assert.equal((await sender.post(`/envelopes/${e.id}/void`, { reason: 'Signed on paper instead' })).status, 200);
+  await sender.get(`/sign/${quin}`);
+  assert.equal((await sender.get('/envelopes')).status, 200);
+  // A locked browser is not noted as used, so one that is never unlocked runs out like any other.
+  const row = s.db.get('SELECT * FROM sessions WHERE id=?', sha256(mate.cookies.ts_session));
+  s.db.run('UPDATE sessions SET last_used_at=?, expires_at=? WHERE id=?', iso(Date.now() - 5 * DAY), iso(Date.now() + 2 * DAY), row.id);
+  const r = await raw(mate, 'GET', '/me');
+  assert.deepEqual(r.set, []);
+  assert.ok(Date.parse(s.db.get('SELECT expires_at t FROM sessions WHERE id=?', row.id).t) < Date.now() + 3 * DAY);
+});
+
+test('the screens of in-person signing say to hand the device back and what the lock does not cover', () => {
+  // The done screen of the signing page, for the in-person role only, starts with the hand-back card.
+  const signPage = read('src/app/sign/[token]/page.tsx');
+  assert.match(signPage, /\{inPerson && <HandBack signer=\{me\.name\} sender=\{sender\.name\} envelopeId=\{env\.id\} \/>\}/);
+  const card = read('src/components/HandBack.tsx');
+  assert.match(card, /Thank you, \{signer\}\. Please hand this device back to \{sender\}\./);
+  assert.match(card, /I am \{sender\}/);
+  assert.match(card, /href=\{`\/app\/envelopes\/\$\{encodeURIComponent\(envelopeId\)\}`\}/);
+  // The signing page has no way into the account of its own: no link to the app besides that button.
+  assert.equal(/href=["'{`]+\/app/.test(signPage), false);
+  // The app draws the lock screen in place of every page, puts the account away before leaving for the signing
+  // page, and looks again when a tab comes back to the front.
+  const shell = read('src/components/AppShell.tsx');
+  assert.match(shell, /if \(m\.handed_over\) return setLocked\(m\.handed_over\);/);
+  assert.match(shell, /if \(locked\) return <HandedOver info=\{locked\} onUnlocked=\{reload\} \/>;\s+if \(!me\)/);
+  assert.match(shell, /addEventListener\('sg-handed-over', handed\)/);
+  assert.match(shell, /addEventListener\('visibilitychange', look\)/);
+  assert.match(read('src/components/sender/Recipients.tsx'), /if \(r\.role === 'inperson'\) window\.dispatchEvent\(new CustomEvent\('sg-handed-over'/);
+  const lock = read('src/components/HandedOver.tsx');
+  assert.match(lock, /This device was handed to \{info\.signer \|\| 'someone'\} to sign/);
+  assert.match(lock, /autoComplete="one-time-code"/);
+  // What the lock does not cover is said in the same words wherever in-person signing is offered.
+  assert.equal(IN_PERSON_LIMITS.length, 4);
+  assert.match(IN_PERSON_LIMITS.join(' '), /your email .*password reset.*saved and offers to fill in.*Google or Microsoft.*another tab/s);
+  assert.match(IN_PERSON_LOCK, /locks your account in that browser\. To come back you type your password, or sign in again if your login has none\./);
+  for (const file of ['src/components/HandedOver.tsx', 'src/app/security/page.tsx']) assert.match(read(file), /IN_PERSON_LIMITS\.map/, file);
+  for (const file of ['src/components/sender/Recipients.tsx', 'src/app/security/page.tsx']) assert.match(read(file), /\{IN_PERSON_LOCK\}/, file);
 });

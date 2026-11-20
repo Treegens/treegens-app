@@ -9,6 +9,9 @@ import { fail } from '@/components/sender/feedback';
 import { cap, exportUrl, howLong, joinNames, neverOpened, waitingOn } from '@/components/sender/lib';
 
 const BOXES: [string, string][] = [['all', 'All'], ['drafts', 'Drafts'], ['waiting', 'Waiting for others'], ['completed', 'Completed'], ['closed', 'Declined, voided, expired']];
+// For admins only: what a sender deleted from their own lists after somebody had signed. It is in no other tab, and
+// it is not remembered as the last tab, so nobody lands in it by accident.
+const REMOVED = 'removed';
 const STORE = 'sg.envelopes.view';
 const PAGE = 200;
 
@@ -84,7 +87,8 @@ export default function Envelopes() {
   }, [data]);
 
   const rows: any[] = data?.envelopes || [];
-  const pickable = useMemo(() => rows.filter((e) => e.status !== 'draft').map((e) => e.id as string), [rows]);
+  // What was removed by its sender is not in the export, so there is nothing to tick there.
+  const pickable = useMemo(() => (view?.box === REMOVED ? [] : rows.filter((e) => e.status !== 'draft').map((e) => e.id as string)), [rows, view?.box]);
   const chosen = pickable.filter((id) => picked.has(id));
   const allPicked = pickable.length > 0 && chosen.length === pickable.length;
   const filtered = !!view && (view.q !== '' || view.folder !== '' || view.sender !== '' || view.box !== 'all');
@@ -124,6 +128,21 @@ export default function Envelopes() {
   }
 
   const open = (e: any) => (e.status === 'draft' ? `/app/envelopes/${e.id}/edit` : `/app/envelopes/${e.id}`);
+  const isAdmin = me.role !== 'member';
+  const inRemoved = view?.box === REMOVED;
+
+  async function putBack(e: any) {
+    setBusy(e.id);
+    try {
+      await api(`/envelopes/${e.id}/restore`, { method: 'POST' });
+      toast(`Put back. "${e.subject || 'Untitled'}" is in the lists, the search, the export and the reports again.`);
+      reload();
+    } catch (err) {
+      fail(err, 'Nothing was changed.');
+    } finally {
+      setBusy('');
+    }
+  }
 
   return (
     <div className="sn">
@@ -140,7 +159,9 @@ export default function Envelopes() {
 
       <div className="tabs" role="group" aria-label="Show">
         {BOXES.map(([k, l]) => <button key={k} className={view?.box === k ? 'on' : ''} aria-pressed={view?.box === k} onClick={() => change({ box: k })}>{l}</button>)}
+        {isAdmin && (inRemoved || data?.removed > 0) && <button className={inRemoved ? 'on' : ''} aria-pressed={inRemoved} onClick={() => change({ box: REMOVED })}>Removed by its sender{data?.removed > 0 ? ` (${data.removed})` : ''}</button>}
       </div>
+      {inRemoved && <p className="notice sn-inset" role="note">These envelopes were deleted by their sender after somebody had signed. They are in no other tab, search, export or report, and everyone who was on them still has their link and their copy. As an admin you can open each one and put it back.</p>}
 
       <div className="sn-filters">
         <div className="sn-search">
@@ -168,7 +189,7 @@ export default function Envelopes() {
           </>
         ) : (
           <span className="muted small">
-            {!data ? '' : rows.length === 0 ? '' : `${rows.length}${rows.length === PAGE ? ' most recently updated' : ''} envelope${rows.length === 1 ? '' : 's'}${rows.length === PAGE ? '. Search to find older ones' : ''}. Tick the boxes to download several as one ZIP.`}
+            {!data ? '' : rows.length === 0 ? '' : `${rows.length}${rows.length === PAGE ? ' most recently updated' : ''} envelope${rows.length === 1 ? '' : 's'}${rows.length === PAGE ? '. Search to find older ones' : ''}.${inRemoved ? '' : ' Tick the boxes to download several as one ZIP.'}`}
           </span>
         )}
       </div>
@@ -210,11 +231,12 @@ export default function Envelopes() {
                 return (
                   <tr key={e.id} className="click" onClick={() => router.push(open(e))}>
                     <td className="sn-tick" onClick={(ev) => ev.stopPropagation()}>
-                      {e.status !== 'draft' && <label className="sn-check"><input type="checkbox" checked={picked.has(e.id)} onChange={() => toggle(e.id)} aria-label={`Select ${title}`} /></label>}
+                      {!inRemoved && e.status !== 'draft' && <label className="sn-check"><input type="checkbox" checked={picked.has(e.id)} onChange={() => toggle(e.id)} aria-label={`Select ${title}`} /></label>}
                     </td>
                     <td className="sn-main">
                       <Link href={open(e)} className="sn-subject" onClick={(ev) => ev.stopPropagation()}>{title}</Link>
                       <div className="muted small sn-to">To {e.recipients.map((r: any) => r.name).filter(Boolean).join(', ') || 'nobody yet'}</div>
+                      {inRemoved && <div className="muted small">Sent by {e.sender}. Removed from their lists on {fmtDate(e.removed_at)}.</div>}
                       <div className="sn-only-sm sn-rowmeta">
                         <Status s={e.status} />
                         {e.status === 'sent' && <span className="small">Waiting on {waitingText}</span>}
@@ -224,7 +246,8 @@ export default function Envelopes() {
                       <div className="sn-only-sm sn-inlineactions" onClick={(ev) => ev.stopPropagation()}>
                         {e.status === 'sent' && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
                         {e.status === 'completed' && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
-                        <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move</button>
+                        {inRemoved ? <button className="btn sm" disabled={busy === e.id} onClick={() => putBack(e)} aria-label={`Put ${title} back in the lists`}>{busy === e.id ? 'Putting back…' : 'Put back'}</button>
+                          : <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move</button>}
                       </div>
                     </td>
                     <td className="hide-sm"><Status s={e.status} /></td>
@@ -234,7 +257,8 @@ export default function Envelopes() {
                     <td className="hide-sm sn-rowactions" onClick={(ev) => ev.stopPropagation()}>
                       {e.status === 'sent' && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
                       {e.status === 'completed' && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
-                      <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move</button>
+                      {inRemoved ? <button className="btn sm" disabled={busy === e.id} onClick={() => putBack(e)} aria-label={`Put ${title} back in the lists`}>{busy === e.id ? 'Putting back…' : 'Put back'}</button>
+                        : <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move</button>}
                     </td>
                   </tr>
                 );

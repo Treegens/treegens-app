@@ -49,7 +49,7 @@ export function SignatureKind() {
       </QA>
 
       <QA id="outside-us" q="Signing outside the United States, and documents that should not be signed here">
-        <p>Sign&Grow was built from reviews that were mostly written in the United States, and it knows nothing about your country. It does not check what kind of document you send, and it has not checked the law of any country for you, the United States included. What follows is what our research found, with the month it was looked at and where it came from. It is not legal advice, laws change, and the rule for your document may differ: check with a lawyer or the office that will receive the document.</p>
+        <p>Sign&Grow was built from reviews that were mostly written in the United States, and it knows nothing about your country. It cannot tell what kind of document you send, beyond looking for the few words listed below, and it has not checked the law of any country for you, the United States included. What follows is what our research found, with the month it was looked at and where it came from. It is not legal advice, laws change, and the rule for your document may differ: check with a lawyer or the office that will receive the document.</p>
         <p><b>Do not sign these here without checking first:</b></p>
         <ul className="pub-list">
           <li>A will or a codicil, a trust deed, a power of attorney.</li>
@@ -61,6 +61,7 @@ export function SignatureKind() {
         <p><b>The check before sending.</b> When the subject, the name of a document or the text of a document contains a word that usually means one of these, the review step of the editor shows a warning that names the word and where it stands, and the audit trail of the envelope gets a line that says so. Through the API the same list comes back as <code>warnings</code> in the answer to sending, and from <code>GET /api/envelopes/&#123;id&#125;/warnings</code> before it. It is a reminder and nothing more: it never blocks a send, it only knows the words below, and a document it says nothing about can still need paper.</p>
         <details>
           <summary>The words it looks for</summary>
+          <p className="muted small" style={{ margin: '8px 0 0' }}>Capitals and accents make no difference. A word followed by three dots stands for every word that begins that way.</p>
           <dl className="pub-words">
             {paperWordList().map((k) => (
               <div key={k.a}>

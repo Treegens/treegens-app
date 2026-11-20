@@ -26,6 +26,26 @@
 .sn-cardhead p { margin: 4px 0 0; }
 .sn-inset { margin: 0 16px 14px; }
 
+/* ---- Right after sending: what the sender hears from us, and the one switch ---- */
+.sn-sent { border-color: #cfe3d2; background: var(--green-soft); }
+.sn-sent h2 { margin-bottom: 4px; }
+.sn-sent p { margin: 0; }
+.sn-switch { min-height: 44px; margin-top: 10px; border-top: 1px solid #cfe3d2 !important; }
+.sn-switch input { width: 22px; height: 22px; }
+
+/* ---- Signing in person: "hand the device back" on the signer's last screen, and the lock screen of the app ---- */
+.hb { border: 2px solid var(--green); background: var(--green-soft); }
+.hb h2 { font-size: 24px; line-height: 1.25; margin-bottom: 8px; overflow-wrap: anywhere; }
+.hb p { margin: 0 0 14px; font-size: 16px; }
+.hb-row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.hb-row .btn { min-height: 52px; white-space: normal; overflow-wrap: anywhere; }
+.hb-row > span { flex: 1 1 220px; }
+.ho .card h1 { overflow-wrap: anywhere; }
+.ho-more { margin-top: 14px; font-size: 14px; color: var(--muted); }
+.ho-more summary { cursor: pointer; padding: 12px 0; }
+.ho-more ul { margin: 6px 0 0; padding-left: 20px; }
+.ho-more li { margin-bottom: 4px; }
+
 /* ---- Where an envelope stands ---- */
 .sn-now { padding: 0; overflow: hidden; }
 .sn-now-main { display: flex; gap: 14px 24px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; padding: 18px 20px; }

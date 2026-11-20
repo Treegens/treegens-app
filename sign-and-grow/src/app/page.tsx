@@ -5,6 +5,7 @@ import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/
 import { PLANS, PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { BULK_COST_NOTE, DEFAULT_REMINDER_DAYS, IN_PERSON_ONLINE, NO_BAA_TITLE, NO_BAA_TEXT } from '@/lib/policy';
+import { IN_PERSON_SHORT } from '@/lib/phone';
 
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
 export const dynamic = 'force-dynamic';
@@ -14,13 +15,13 @@ const FEATURES: [string, string][] = [
   ['Drag and drop fields', 'Signatures, initials, dates, text, checkboxes, radio buttons, dropdowns, attachments and notes. Required or optional, prefilled or validated.'],
   ['Sign anywhere', `Recipients sign from any phone or computer with no account. Type, draw or upload a signature. Finish later, decline or pass it to someone else. ${LANGUAGE_NOTE}`],
   ['Templates and bulk send', `Set a document up once and reuse it. Send one template to hundreds of people from a spreadsheet. ${BULK_COST_NOTE} The page shows the count and the price before you send.`],
-  ['PowerForms', 'A public link that lets anyone fill in and sign a form on their own. Put it on your website or in an email. For a poster, turn the link into a QR code with a tool of your own: we do not make one yet. Good for waivers, sign-ups and permission slips. Not for patient forms: there is no HIPAA agreement to sign with us, as the rules under the prices say.'],
-  ['In-person signing', `Host a signing on your own tablet or laptop when the signer is standing next to you. ${IN_PERSON_ONLINE}`],
+  ['PowerForms', 'A public link that lets anyone fill in and sign a form on their own. Put it on your website or in an email, or print the QR code the app makes for it on a sheet for a poster or a front desk. Good for waivers, sign-ups and permission slips. Not for patient forms: there is no HIPAA agreement to sign with us, as the rules under the prices say.'],
+  ['In-person signing', `Host a signing on your own phone, tablet or laptop when the signer is standing next to you. ${IN_PERSON_SHORT} ${IN_PERSON_ONLINE}`],
   ['Reminders and deadlines', `A new account reminds whoever has not finished by email every ${DEFAULT_REMINDER_DAYS} days. You see that setting before every send and can change it or switch it off. A warning before a deadline, and more time in one click. An expired envelope can be reopened, and nobody signs twice.`],
   ['Proof you can check', 'Every envelope gets a certificate of completion and a hash-chained audit trail. Anyone can verify a signed PDF on our public page.'],
   ['Teams and branding', 'Invite colleagues, share templates, set roles, and put your own logo and colour on emails and the signing screen.'],
   ['API and webhooks', 'Create envelopes, embed signing in your own product and get notified of every event. Included on every plan.'],
-  ['Access codes', 'Protect sensitive documents with a code you share with the signer separately.'],
+  ['Checking who signs', 'Protect a document with an access code you share with the signer yourself, or have us send them a one-time code by email at the moment they open it. Where the operator of the server has switched text messages on, the code can go to a mobile number you type instead, and the signing link can be texted as well. The certificate says for every signer which check was passed.'],
   ['Reports', 'See what is waiting, how long signing takes and how much paper your team has kept out of the printer.'],
 ];
 

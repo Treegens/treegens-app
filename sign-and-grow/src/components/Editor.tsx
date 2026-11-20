@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, COLORS, Modal, fmtDate, newId, toast } from './ui';
 import { useHistory } from './editor/history';
+import { useMe } from './AppShell';
+import { checkTrouble } from './sender/CheckFields';
 import { finished, fingerprint, freshValues, outcomes, rebase, restoreLocked, signsAgain } from './editor/changes';
 import { precheck, uploadFile, fmtSize, MAX_BYTES } from './editor/upload';
 import { isPicture, shrinkPhoto } from './editor/photos';
@@ -20,6 +22,7 @@ const friendly = (e: any) => (e?.status ? e.message : 'We could not reach the se
 
 export function Editor({ id }: { id: string }) {
   const router = useRouter();
+  const me = useMe();
   const [env, setEnv] = useState<any>(null);
   const [base, setBase] = useState<any>(null); // the envelope as the server last gave it to us
   const [docs, setDocs] = useState<any[]>([]);
@@ -37,6 +40,8 @@ export function Editor({ id }: { id: string }) {
   const [ask, setAsk] = useState<Confirm | null>(null);
   // The files a sender chose, while they are asked whether the pictures among them are one document.
   const [photoAsk, setPhotoAsk] = useState<File[] | null>(null);
+  // A field the review step wants shown in step 2 (a field without a label, see LabelCheck).
+  const [jump, setJump] = useState<string | null>(null);
   // Set when someone else saved this envelope after it was opened here, so saving now would wipe their work.
   // `how` says what the newer version was when it was not a save from an editor: a quick correction of one person, a
   // signer passing the document on or fixing their name, or sending ("passed this document on to Mary Deputy").
@@ -62,6 +67,13 @@ export function Editor({ id }: { id: string }) {
       if (!on) return;
       if (e.status !== 'draft' && !(e.kind === 'envelope' && e.status === 'sent')) {
         toast(`This envelope is ${e.status}, so it can no longer be edited. Clone it to send a new version.`);
+        return router.replace(`/app/envelopes/${id}`);
+      }
+      // A template can be changed by the person it belongs to and by admins (the server refuses everyone else).
+      // A member who opens a colleague's template for editing is not shown an editor whose every save fails: they
+      // are taken to the template's page, which offers to use it or to make a copy of their own.
+      if (e.kind === 'template' && me.role === 'member' && e.sender_id !== me.user.id) {
+        toast('This template belongs to a colleague, so only they or an admin of your team can change it. You can use it as it is, or make your own copy and change that.');
         return router.replace(`/app/envelopes/${id}`);
       }
       loaded.current = e.edit_version ?? null;
@@ -91,7 +103,9 @@ export function Editor({ id }: { id: string }) {
     documents: docs.map((d) => ({ id: d.id, file_id: d.file_id, name: d.name })),
     // A draft is saved while people are still typing. A half-typed email would make the server turn the whole
     // save down, so it is left out until it is complete and everything else is kept safe meanwhile.
-    recipients: list.map((r) => ({ id: r.id, role: r.role, role_name: r.role_name, name: r.name, email: correcting || !r.email || validEmail(r.email) ? r.email : '', routing_order: r.routing_order, access_code: r.access_code, note: r.note })),
+    recipients: list.map((r) => ({ id: r.id, role: r.role, role_name: r.role_name, name: r.name, email: correcting || !r.email || validEmail(r.email) ? r.email : '', routing_order: r.routing_order, access_code: r.access_code, note: r.note,
+      // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
+      verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link })),
     fields: flds,
   });
   latest.current = env && body();
@@ -291,10 +305,13 @@ export function Editor({ id }: { id: string }) {
       const ac = (r.access_code || '').trim();
       const was = correcting && base ? base.recipients.find((x: any) => x.id === r.id)?.access_code : null;
       if (ac && ac.length < 4 && ac !== was) p.push(`The access code for ${name} needs at least 4 characters. Make it longer, or leave it empty for no code.`);
+      // A check by text message needs a number we can text, on a server that sends texts. The server refuses the same.
+      const check = checkTrouble(r, !!me.text_messages, name, isTpl && !r.email);
+      if (check) p.push(check);
     }
     if (!isTpl && rcps.length > 0 && !rcps.some((r) => r.role !== 'cc')) p.push('Add at least one recipient who signs, approves or views.');
     return [...new Set(p)];
-  }, [docs, rcps, fields.value, isTpl, correcting, base]);
+  }, [docs, rcps, fields.value, isTpl, correcting, base, me.text_messages]);
 
   const mine = { ordered: env?.ordered, date_format: env?.date_format, documents: docs, recipients: rcps, fields: fields.value };
   const changed = useMemo(() => !!base && correcting && fingerprint(env, mine) !== fingerprint(base, base), [base, correcting, env, docs, rcps, fields.value]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -463,6 +480,7 @@ export function Editor({ id }: { id: string }) {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, docs, rcps, fields, contacts, uploads, color,
     patchEnv, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
+    showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
   };
   // Closing the question about pictures hands focus back to the upload box it came from.
   const closePhotoAsk = () => {

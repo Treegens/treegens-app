@@ -6,7 +6,7 @@ import { pageTexts, textNear, type PageText } from './pdfText';
 // It is the same document and the same answers as the visual view, just readable by a screen reader or at any size.
 
 function DocText({ doc, url, showName, fields, others, senderName, onAsk, onShown }: {
-  doc: any; url: string; showName: boolean; fields: (page: number, near: (f: any) => string) => ReactNode; others: (page: number) => ReactNode; senderName: string; onAsk?: () => void; onShown?: (doc: any) => void;
+  doc: any; url: string; showName: boolean; fields: (page: number, near: (f: any) => string) => ReactNode; others: (page: number, near: (f: any) => string) => ReactNode; senderName: string; onAsk?: () => void; onShown?: (doc: any) => void;
 }) {
   const [pages, setPages] = useState<PageText[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -37,7 +37,8 @@ function DocText({ doc, url, showName, fields, others, senderName, onAsk, onShow
       {Array.from({ length: count }, (_, i) => {
         const blocks = pages?.[i]?.blocks;
         const form = fields(i, (f) => textNear(pages?.[i], f));
-        const filledByOthers = others(i);
+        // `near` names the printed line a mark sits on, so a line the sender struck out can be said in words.
+        const filledByOthers = others(i, (f) => textNear(pages?.[i], f));
         return (
           <section key={i} className="sg-text-page" aria-labelledby={`sg-p-${doc.id}-${i}`}>
             <h3 id={`sg-p-${doc.id}-${i}`}>Page {i + 1} of {count}</h3>
@@ -63,14 +64,14 @@ export function TextView({ documents, urlFor, fields, others, senderName, onAsk,
   documents: any[];
   urlFor: (docId: string) => string;
   fields: (docId: string, page: number, near: (f: any) => string) => ReactNode;
-  others: (docId: string, page: number) => ReactNode;
+  others: (docId: string, page: number, near: (f: any) => string) => ReactNode;
   senderName: string;
   onAsk?: () => void;
 }) {
   return (
     <div className="stack">
       {documents.map((d) => (
-        <DocText key={d.id} doc={d} url={urlFor(d.id)} showName={documents.length > 1} fields={(p, near) => fields(d.id, p, near)} others={(p) => others(d.id, p)} senderName={senderName} onAsk={onAsk} onShown={onShown} />
+        <DocText key={d.id} doc={d} url={urlFor(d.id)} showName={documents.length > 1} fields={(p, near) => fields(d.id, p, near)} others={(p, near) => others(d.id, p, near)} senderName={senderName} onAsk={onAsk} onShown={onShown} />
       ))}
     </div>
   );

@@ -26,8 +26,9 @@
 .ed-check { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); display: grid; gap: 10px; }
 .ed-check-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .ed-check label.f { margin: 0; }
-.ed-check select, .ed-check input[type='tel'] { min-height: 44px; width: 100%; }
-.ed-check .check { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+/* Written to win over the editor's own 40px rule for phones: everything here that is tapped is 44px tall. */
+.ed-check label.f select, .ed-check label.f input[type='tel'] { min-height: 44px; width: 100%; }
+.ed-check label.check { min-height: 44px; display: flex; align-items: center; gap: 8px; }
 .ed-check .ed-check-says { margin: 0; }
 @media (max-width: 700px) {
   .ed-check-row { grid-template-columns: 1fr; }
@@ -37,8 +38,12 @@
 .sn-check-fix { display: grid; gap: 12px; margin: 4px 0 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf6; }
 .sn-check-fix legend { font-weight: 600; font-size: 14px; padding: 0 4px; }
 .sn-check-fix label.f { margin: 0; }
-.sn-check-fix select, .sn-check-fix input[type='tel'] { min-height: 44px; width: 100%; }
-.sn-check-fix .check { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+.sn-check-fix .ed-check { margin-top: 0; padding-top: 0; border-top: 0; }
+/* The dialog is narrow: one control to a line, so the name of the check is never cut short. */
+.sn-check-fix .ed-check-row { grid-template-columns: 1fr; }
+
+/* The security and help pages: what each check proves, one to a line. */
+.pub-proof { display: block; margin: 6px 0 0; }
 
 /* The dev outbox: text messages next to emails. */
 .ob-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; margin: 4px 0 0; }

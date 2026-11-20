@@ -24,6 +24,25 @@ export const priceRuleText = (days = PRICE_NOTICE_DAYS): string =>
 // reminders). A copy of an email about a document stays with that document and goes when the document goes.
 export const MAIL_COPY_DAYS = 90;
 
+// ---- Emails that did not arrive (src/server/bounces.ts) -----------------------------------------------------
+/**
+ * Whether this server hears from its mail provider what became of an email after hand-over: it does once the
+ * operator has set MAIL_EVENTS_TOKEN (at least MAIL_EVENTS_TOKEN_MIN characters) and pointed the provider at
+ * POST /api/mail/events. Without it nothing in the product says that bounces are noticed, because they are not.
+ */
+export const MAIL_EVENTS_TOKEN_MIN = 16;
+export const mailEventsOn = (env: Record<string, string | undefined> = process.env): boolean => (env.MAIL_EVENTS_TOKEN || '').trim().length >= MAIL_EVENTS_TOKEN_MIN;
+/** An address that bounced for good is on its account's do-not-mail list for this many days: a new envelope to it warns first. */
+export const BOUNCE_WARN_DAYS = 30;
+/** "Try later" answers from one address on this many separate days (within BOUNCE_WARN_DAYS) count as an address that does not work. */
+export const SOFT_BOUNCE_DAYS = 3;
+/** News from the mail provider that names no email of ours is matched to the emails sent to that address in this many days. */
+export const BOUNCE_MATCH_DAYS = 3;
+/** What "Could not be delivered" means and does, in one sentence each, for the help page and the emails that say it. */
+export const BOUNCE_MEANS = 'The mail server of the address answered that it cannot take the email for good: the mailbox or the domain does not exist, or it refuses.';
+export const BOUNCE_STOPS = `Reminders to that address stop until you correct it or choose "Try again", and for ${BOUNCE_WARN_DAYS} days a new envelope to the same address warns you before it goes out.`;
+export const COMPLAINT_MEANS = 'The person marked one of our emails about the document as spam in their mail program. Nothing more is emailed to them about that document unless they ask for it themselves on their signing page, and it counts as one report against the sending account.';
+
 /** How many different recipients must report an account before its sending is paused for review. */
 export const abuseSuspendAfter = (): number => Number(process.env.ABUSE_SUSPEND_AFTER) || 3;
 
@@ -93,6 +112,7 @@ export const KEPT_AFTER_DELETION: string[] = [
   'What you sent as a member of a team you do not own. It belongs to that team and passes to its owner, and its audit trail says so. An API key you made there stays on the team\'s list as stopped, under your name.',
   'Signed PDFs your recipients downloaded or were emailed. Those are theirs. The links in our emails to them stop working.',
   'A fingerprint of the security code in each email about a document you sent, for one year. It holds no name, address or title. It only lets someone who still has that email learn that it was real and that the document has been deleted.',
+  'A fingerprint of your email address and the day you were given the welcome signatures, if your address was confirmed. The welcome signatures are given once per address, and this is how we know after your login is gone. It is made with a key only this server has, cannot be turned back into your address, and holds no name.',
   `Our stored copies of emails to other people are deleted with the account when we know they are about you: an invitation you sent, or a notice to a team about your API keys or that you left. Any other copy that happens to mention your name goes with all such copies, ${MAIL_COPY_DAYS} days after it was sent.`,
 ];
 
@@ -153,8 +173,8 @@ export const CONSENT_VERSION = '2026-11';
 const CONSENT_WORDINGS: Record<string, (sender: string, signs: boolean) => Omit<ConsentWording, 'version'>> = {
   '2026-11': (sender, signs) => ({
     legal: signs
-      ? `You are about to review and sign this document on screen, with a simple electronic signature: your name or mark on the page and a record of when and from where you signed. In many countries a signature like this can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not check which kind this document is. If you are not sure, ask ${sender} or a lawyer before you sign. By continuing, you accept this electronic method as a valid way for you and the other parties to sign this document.`
-      : `You are about to review this document on screen. What you do here is recorded electronically, not on paper. In many countries that can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not check which kind this document is. If you are not sure, ask ${sender} or a lawyer before you continue.`,
+      ? `You are about to review and sign this document on screen, with a simple electronic signature: your name or mark on the page and a record of when and from where you signed. In many countries a signature like this can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not know which kind this document is. If you are not sure, ask ${sender} or a lawyer before you sign. By continuing, you accept this electronic method as a valid way for you and the other parties to sign this document.`
+      : `You are about to review this document on screen. What you do here is recorded electronically, not on paper. In many countries that can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not know which kind this document is. If you are not sure, ask ${sender} or a lawyer before you continue.`,
     practical: `You can download or print a copy before you ${signs ? 'sign' : 'finish'}, and afterwards you can download what you ${signs ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask ${sender} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.`,
     agree: 'I agree to use electronic records and signatures.',
   }),
@@ -170,7 +190,7 @@ export const consentWording = (sender: string, signs: boolean, version: string =
  * names the wording in use at that moment and says that it is not the screen's own word.
  */
 export const consentAuditNote = (version: string, stated = true): string =>
-  `${stated ? `Wording ${version}` : `The screen did not say which wording it showed. The wording in use was ${version}`}, as printed on the help page under "What you agree to before you sign".`;
+  `${stated ? `Wording ${version}` : `The screen did not say which wording it showed. The wording in use was ${version}`}, as printed on the help page under "What do I agree to before I sign?".`;
 /** The line under "Adopt and sign". It says what the mark is, not what a court will make of it. */
 export const adoptLine = (word: 'signature' | 'initials'): string => `I agree that this mark stands for my ${word}.`;
 
@@ -300,3 +320,16 @@ export const MAX_PHOTOS_PER_DOCUMENT = 50;
 export const SESSION_DAYS = 30;
 /** How often, at most, a browser's "last used" time is written down. Shown times are this exact, no more. */
 export const SESSION_TOUCH_MINUTES = 60;
+/** After this many wrong passwords on a device that was handed to a signer, that browser is signed out. */
+export const HAND_OVER_TRIES = 5;
+
+// Signing groups: a recipient that is a group of people, any one of whom can act (src/server/groups.ts). The
+// Contacts page, the editor, the help page and the server all quote these.
+
+/** The fewest and the most people a group can have. One person is a recipient, not a group. */
+export const GROUP_MIN_MEMBERS = 2;
+export const GROUP_MAX_MEMBERS = 20;
+/** How many groups one account can keep. */
+export const GROUPS_PER_ACCOUNT = 200;
+/** How a group recipient works, in the words the Contacts page, the editor and the help page share. */
+export const GROUP_RULE = 'Every member gets their own email with their own link. The first one who agrees to sign takes the document on, and the others are then told who has it. The record names the person who signed and the group. A group that signs uses one signature, like one person.';

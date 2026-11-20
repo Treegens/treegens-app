@@ -156,6 +156,11 @@ table.t tr.click:hover td { background: #fbfaf6; }
 .field.other { border: 0; background: transparent; pointer-events: none; padding: 0 0.3em; }
 .field.other img { width: 100%; height: 100%; object-fit: contain; }
 .field.box { justify-content: center; padding: 0; }
+/* A strike-out: the sender's line through wording printed on the page. One line through the middle, or corner to
+   corner when the box covers more than one line. The PDF draws the same shape (strikeLines in src/lib/strike.ts). */
+.field.strike { padding: 0; background-image: linear-gradient(#1c2921, #1c2921); background-size: 100% max(1.5px, 0.11em); background-position: center; background-repeat: no-repeat; }
+.field.strike.cross { background-size: 100% 100%; background-image: linear-gradient(to top right, transparent calc(50% - 1px), #1c2921 calc(50% - 1px), #1c2921 calc(50% + 1px), transparent calc(50% + 1px)), linear-gradient(to bottom right, transparent calc(50% - 1px), #1c2921 calc(50% - 1px), #1c2921 calc(50% + 1px), transparent calc(50% + 1px)); }
+.field.edit.strike { background-color: color-mix(in srgb, var(--fc, var(--green)) 10%, transparent); }
 
 /* Editor */
 .editor { display: grid; grid-template-columns: 240px minmax(0, 1fr) 260px; height: calc(100vh - 61px); }
@@ -240,3 +245,8 @@ table.t tr.click:hover td { background: #fbfaf6; }
 
 /* A button that reads as a link, for small secondary actions inside a sentence. */
 .linklike { border: 0; background: none; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; }
+
+/* An iPhone zooms the whole page in when a box with text smaller than 16px is tapped, and does not zoom back out.
+   So on touch screens every box that is typed in is 16px: the sign-in form, Settings, the editor. The rule is weak
+   on purpose, so the boxes that sit on a document page keep the size of the page they are on. */
+@media (pointer: coarse) { input, select, textarea, label.f input, label.f select, label.f textarea { font-size: 16px; } }

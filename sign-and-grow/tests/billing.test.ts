@@ -339,7 +339,8 @@ test('the code GROWalition makes the monthly plan free', async () => {
   // Entered at sign-up, in any letter case.
   const gro = new Client();
   assert.equal((await gro.post('/auth/signup', { name: 'Gro Member', email: 'gro@example.com', password: 'correct horse battery', code: 'growALITION' })).status, 200);
-  await new Client().post('/auth/verify', { token: db.get("SELECT verify_token t FROM users WHERE email='gro@example.com'").t });
+  // Confirmed in the browser that signed up: the link proves nothing to a browser that is not signed in to the login.
+  assert.equal((await gro.post('/auth/verify', { token: db.get("SELECT verify_token t FROM users WHERE email='gro@example.com'").t })).status, 200);
   let state = (await gro.get('/billing')).data;
   assert.equal(state.plan, 'grove');
   assert.equal(state.free_with, 'GROWalition');
