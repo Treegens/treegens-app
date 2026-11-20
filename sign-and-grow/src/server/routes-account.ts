@@ -1,7 +1,8 @@
 import { route, json, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
-import { hashPassword, checkPassword, createSession, cookie, SESSION_COOKIE } from './auth.ts';
+import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, SESSION_COOKIE } from './auth.ts';
+import { PROVIDER_NAMES, isProviderId } from '../lib/signin.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
 import { billingEnabled, verifyChain, notifyPrefs, closingText } from './envelopes.ts';
@@ -11,13 +12,17 @@ import { redeemCode } from './routes-billing.ts';
 import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 
-const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
+const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
 
-async function sendVerification(u: any) {
+// `via` names the provider when the login was made by signing in with Google or Microsoft and the provider did not
+// stand behind the address. Whoever reads the email is then told how the login came about, so someone who did not
+// make it knows not to confirm it.
+export async function sendVerification(u: any, via?: string) {
   await sendMail({
     to: u.email, subject: 'Confirm your email for Sign&Grow', heading: 'Confirm your email',
-    lines: [`Hi ${u.name}, confirm this address so documents sent to you show up in your inbox.`],
+    lines: [`Hi ${u.name}, confirm this address so documents sent to you show up in your inbox.`,
+      ...(via ? [`This Sign&Grow login was made by someone who signed in with ${via} and gave this address. If that was you, confirm it. If it was not you, do not confirm: without that, the login cannot send anything and sees nothing that was sent to you.`] : [])],
     cta: { label: 'Confirm email', url: `${baseUrl()}/verify-email?token=${u.verify_token}` },
   });
 }
@@ -61,30 +66,42 @@ route('POST', '/auth/signup', async (c) => {
   if (!isEmail(email)) throw bad('Enter a valid email address.');
   if (password.length < 8) throw bad('Use a password of at least 8 characters.');
   if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a Sign&Grow login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
-  const invite = b.invite ? openInvite(str(b.invite), email) : null;
+  const made = await createLogin(c, { name, email, passwordHash: hashPassword(password), invite: b.invite, code: b.code });
+  return { user: publicUser(made.user) };
+}, 'public');
+
+// Makes a new login and signs it in. One way, whether the person chose a password or came from Google or Microsoft:
+// a workspace of their own with the welcome signatures, or the team whose invitation they carry, and a code that
+// makes the plan free applied at once. `verified` says someone else has already stood behind the address (the
+// provider); an invitation does the same, because it was sent there. Everyone else is emailed our confirmation link.
+// An invitation or a code that cannot be used is refused before anything is created. `also` runs inside the same
+// transaction as the new login, for what must exist with it or not at all.
+export async function createLogin(c: Ctx, p: { name: string; email: string; passwordHash: string; verified?: boolean; invite?: any; code?: any; via?: string; also?: (userId: string) => void }) {
+  const invite = p.invite ? openInvite(str(p.invite), p.email) : null;
   // A code that makes the plan free is checked before anything is created, so a typo is said out loud instead of
   // quietly giving an ordinary account. It only applies to a new workspace, not to joining someone else's team.
-  const typedCode = str(b.code, 80).trim();
+  const typedCode = str(p.code, 80).trim();
   if (typedCode && !invite && !findFreeCode(typedCode)) throw bad('We do not recognise that code. Check the spelling, or leave the code box empty and add it later on the Plan page.');
   const uid = id('usr');
   let accountId = invite?.account_id;
   const t = now();
   tx(() => {
-    run('INSERT INTO users (id, email, name, password_hash, email_verified, verify_token, created_at) VALUES (?,?,?,?,?,?,?)', uid, email, name, hashPassword(password), invite ? 1 : 0, token(), t);
+    run('INSERT INTO users (id, email, name, password_hash, email_verified, verify_token, created_at) VALUES (?,?,?,?,?,?,?)', uid, p.email, p.name, p.passwordHash, invite || p.verified ? 1 : 0, token(), t);
     if (invite) join(invite, uid, t);
     else {
       // With a few free signatures to try the product with. Once per person.
-      accountId = ownWorkspace(uid, name, t);
+      accountId = ownWorkspace(uid, p.name, t);
       run('UPDATE users SET last_account_id=? WHERE id=?', accountId, uid);
     }
+    p.also?.(uid);
   });
   // A free-plan code entered at sign-up takes effect straight away, and is confirmed by email like one entered later.
   if (typedCode && !invite) await redeemCode(accountId, typedCode);
-  const u = get('SELECT * FROM users WHERE id=?', uid);
-  if (!invite) await sendVerification(u);
+  const user = get('SELECT * FROM users WHERE id=?', uid);
+  if (!user.email_verified) await sendVerification(user, p.via);
   c.cookies.push(createSession(uid, accountId, c.secure));
-  return { user: publicUser(u) };
-}, 'public');
+  return { user, joined: (invite?.account_name as string) || null };
+}
 
 route('POST', '/auth/login', async (c) => {
   const b = await c.body();
@@ -93,6 +110,14 @@ route('POST', '/auth/login', async (c) => {
   rateLimit(`login:${email}`, 10, 900_000);
   const u = get('SELECT * FROM users WHERE email=?', email);
   if (!u || !checkPassword(str(b.password, 200), u.password_hash)) throw bad('That email and password do not match.', 401);
+  return { user: publicUser(u), ...(await signInAs(c, u, b.invite)) };
+}, 'public');
+
+// Everything that happens once we know who is signing in, whichever way they showed it (their password, Google or
+// Microsoft): a login that is being closed comes back, an invitation carried along is accepted, the workspace used
+// last opens, and someone who belongs to no account any more gets one of their own. Sets the session cookie and
+// returns what happened, so the first screen can say it.
+export async function signInAs(c: Ctx, u: any, inviteToken?: any) {
   // Signing in during the grace period after closing an account brings it straight back.
   const restored = !!u.closing_at;
   if (restored) {
@@ -105,9 +130,9 @@ route('POST', '/auth/login', async (c) => {
   // used never stops the sign-in: the person is in, and is told why they did not join.
   let joined: any = null;
   let inviteError = '';
-  if (b.invite) {
+  if (inviteToken) {
     try {
-      joined = openInvite(str(b.invite), u.email);
+      joined = openInvite(str(inviteToken), u.email);
       tx(() => join(joined, u.id));
     } catch (e) {
       if (!(e instanceof HttpError)) throw e;
@@ -123,8 +148,8 @@ route('POST', '/auth/login', async (c) => {
   const accountId = joined?.account_id || (mine.includes(u.last_account_id) ? u.last_account_id : mine[0]) || tx(() => ownWorkspace(u.id, u.name));
   if (accountId !== u.last_account_id) run('UPDATE users SET last_account_id=? WHERE id=?', accountId, u.id);
   c.cookies.push(createSession(u.id, accountId, c.secure));
-  return { user: publicUser(u), restored, fresh, joined: joined?.account_name || null, invite_error: inviteError || null };
-}, 'public');
+  return { restored, fresh, joined: (joined?.account_name as string) || null, invite_error: inviteError || null };
+}
 
 route('POST', '/auth/logout', (c) => {
   if (c.auth?.sessionId) run('DELETE FROM sessions WHERE id=?', c.auth.sessionId);
@@ -150,24 +175,48 @@ route('POST', '/auth/forgot', async (c) => {
   rateLimit(`forgot:${c.ip}`, 10, 3600_000);
   const email = str((await c.body()).email, 254).trim().toLowerCase();
   const u = get('SELECT * FROM users WHERE email=?', email);
-  if (u) {
-    const t = token();
-    run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)', sha256(t), u.id, new Date(Date.now() + 3600_000).toISOString());
-    // expiresAt: if the mail server will not take this now, it is tried again, but never once the link in it has run out.
-    await sendMail({ to: u.email, subject: 'Reset your Sign&Grow password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url: `${baseUrl()}/reset?token=${t}` }, expiresAt: new Date(Date.now() + 3600_000).toISOString() });
-  }
+  if (u) await sendPasswordLink(u);
   return { ok: true }; // same answer either way, so emails cannot be probed
 }, 'public');
+
+// The emailed link that lets someone choose a password. It is asked for on the "Forgot password" page, or under
+// Settings by someone whose login has no password yet because they sign in with Google or Microsoft. That person
+// may have come to "Forgot password" only because they did not remember how they sign in, so their email says it,
+// and says what choosing a password does to that way of signing in (see POST /auth/reset).
+export async function sendPasswordLink(u: any) {
+  const t = token();
+  const until = new Date(Date.now() + 3600_000).toISOString();
+  run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)', sha256(t), u.id, until);
+  const url = `${baseUrl()}/reset?token=${t}`;
+  // expiresAt: if the mail server will not take this now, it is tried again, but never once the link in it has run out.
+  if (hasPassword(u)) return void (await sendMail({ to: u.email, subject: 'Reset your Sign&Grow password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url }, expiresAt: until }));
+  const ways: any[] = all('SELECT provider, vouched FROM identities WHERE user_id=?', u.id).filter((i) => isProviderId(i.provider));
+  const names = (list: any[]) => [...new Set(list.map((i) => PROVIDER_NAMES[i.provider as 'google' | 'microsoft']))].join(' and ');
+  const cut = u.email_verified ? [] : ways.filter((i) => !i.vouched);
+  await sendMail({ to: u.email, subject: 'Choose a password for Sign&Grow', heading: 'Choose a password',
+    lines: [`This Sign&Grow login has no password yet${ways.length ? `. It is opened by signing in with ${names(ways)}` : ''}. With this link you choose a password, so that you can also sign in with this email address.`,
+      ...(cut.length ? [`This address has not been confirmed yet, so choosing a password here also disconnects ${names(cut)} from the login. Once you are signed in you can connect it again under Settings.`] : ways.length ? [`Signing in with ${names(ways)} keeps working as before.`] : []),
+      'The link works for one hour. If you did not ask for it, ignore this email and nothing changes.'],
+    cta: { label: 'Choose a password', url }, expiresAt: until });
+}
 
 route('POST', '/auth/reset', async (c) => {
   const b = await c.body();
   const r = get('SELECT * FROM password_resets WHERE token_hash=? AND expires_at > ?', sha256(str(b.token)), now());
   if (!r) throw bad('This reset link has expired. Ask for a new one.');
   if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
-  run('UPDATE users SET password_hash=?, email_verified=1 WHERE id=?', hashPassword(str(b.password, 200)), r.user_id);
-  run('DELETE FROM password_resets WHERE user_id=?', r.user_id);
-  run('DELETE FROM sessions WHERE user_id=?', r.user_id);
-  return { ok: true };
+  const hash = hashPassword(str(b.password, 200));
+  // Opening this link shows that the address belongs to whoever is choosing the password now. If nobody had shown
+  // that before, whatever else leads into the login was put there by someone who never did: it is cut off here, so
+  // a stranger who made a login in this person's name does not stay in it. `disconnected` names what was removed.
+  const disconnected = tx(() => {
+    const cut = get('SELECT email_verified v FROM users WHERE id=?', r.user_id)?.v ? [] : cutEarlierAccess(r.user_id);
+    run('UPDATE users SET password_hash=?, email_verified=1 WHERE id=?', hash, r.user_id);
+    run('DELETE FROM password_resets WHERE user_id=?', r.user_id);
+    run('DELETE FROM sessions WHERE user_id=?', r.user_id);
+    return cut;
+  });
+  return { ok: true, disconnected: [...new Set(disconnected)].map((p) => (isProviderId(p) ? PROVIDER_NAMES[p] : p)) };
 }, 'public');
 
 route('POST', '/auth/switch', async (c) => {
@@ -216,6 +265,9 @@ route('PATCH', '/me', async (c) => {
 
 route('POST', '/me/password', async (c) => {
   const b = await c.body();
+  // Someone who signs in with Google or Microsoft has no current password to type. The first one is chosen through
+  // a link sent to their address (POST /me/signin/password-link), which shows the mailbox is theirs.
+  if (!hasPassword(c.user)) throw bad(`This login has no password yet. Under Settings, Profile, Ways to sign in, choose "Email me a link to set a password". The link goes to ${c.user.email}.`);
   if (!checkPassword(str(b.current, 200), c.user.password_hash)) throw bad('Your current password is not right.');
   if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
   run('UPDATE users SET password_hash=? WHERE id=?', hashPassword(str(b.password, 200)), c.user.id);
@@ -315,9 +367,15 @@ route('DELETE', '/account/members/:id', async (c) => {
       await sendMail({ to: a.email, subject: `${n} stopped working: ${m.name} was removed from ${c.account.name}`, heading: `${n} stopped working`,
         lines: [`${c.user.name} removed ${m.name} from ${c.account.name}. The API keys ${m.name} created stopped working at that moment:`, list, 'Anything that used one of them now gets an error that says the key has stopped. To carry on, create a new key and put it into the integration.'],
         cta: { label: 'Open API keys', url: `${baseUrl()}/app/settings?tab=developers` } });
-    await sendMail({ to: m.email, subject: `Your API keys for ${c.account.name} stopped working`, heading: `${n} of yours stopped working`,
-      lines: [`${c.user.name} removed you from ${c.account.name} on Sign&Grow. The API keys you created there stopped working at that moment:`, list, `If something still uses one of them, it now gets an error. Ask an admin of ${c.account.name} for a new key.`] });
   }
+  // The person removed hears it from us, in words, and not from a sign-in that suddenly opens an empty workspace.
+  const heir = get('SELECT name FROM users WHERE id=?', successor);
+  await sendMail({ to: m.email, subject: `You were removed from ${c.account.name} on Sign&Grow`, heading: `You are no longer on the team ${c.account.name}`,
+    lines: [`${c.user.name} removed you from ${c.account.name}. You can no longer open that team's documents.`,
+      handed ? `Nothing you sent there is lost: your envelopes, drafts, templates and bulk sends now belong to ${heir?.name || 'another member of the team'}, and anything out for signature carries on.` : 'You had sent nothing there, so there was nothing to hand over.',
+      ...(keys.length ? [`The API keys you created there stopped working at that moment:`, keyList(keys), `If something still uses one of them, it now gets an error. Ask an admin of ${c.account.name} for a new key.`] : []),
+      'Your own login stays. The next time you sign in you are in a workspace of your own, and documents other people sent you to sign are still in your inbox there. If you think this was a mistake, ask the person who removed you: they can invite you back at any time.'],
+    cta: { label: 'Sign in', url: `${baseUrl()}/login` } });
   return { ok: true, keys_stopped: keys, handed_over: handed, handed_to: successor };
 }, 'admin');
 

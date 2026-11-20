@@ -339,7 +339,8 @@ test('removing a team member says which API keys stop, in the answer and by emai
 
   // Both admins and the person removed get the names.
   for (const to of ['team@example.com', 'ada.admin@example.com', 'pat.keys@example.com']) {
-    const m = mailTo(to).find((x) => /stopped working/.test(x.subject));
+    // The person removed gets one email about all of it: that they were removed, what became of their work, the keys.
+    const m = mailTo(to).find((x) => (to === 'pat.keys@example.com' ? /You were removed from/ : /stopped working/).test(x.subject));
     assert.ok(m, `no email to ${to}`);
     assert.ok(m.html.includes('CRM sync') && m.html.includes('Nightly export'), to);
   }
@@ -358,6 +359,12 @@ test('removing a team member says which API keys stop, in the answer and by emai
   const r = await owner.call('DELETE', `/account/members/${(await quiet.get('/me')).data.user.id}`);
   assert.deepEqual(r.data.keys_stopped, []);
   assert.ok(!mailTo('nokeys@example.com').some((x) => /stopped working/.test(x.subject)));
+  // They are still told that they were removed, and that their login stays.
+  const told = mailTo('nokeys@example.com').find((x) => /^You were removed from /.test(x.subject));
+  assert.ok(told, 'the person removed hears it from us');
+  assert.match(told.html, /You had sent nothing there/);
+  assert.match(told.html, /Your own login stays/);
+  assert.ok(!/API key/.test(told.html));
 });
 
 test('API keys are switched off while an account is being closed, and work again when it is restored', async () => {
@@ -440,6 +447,8 @@ test('a member who closes their own login takes their API keys along, and the te
   // She closes again and the days run out. The key is not wiped from the team's list: it is stopped, it still says
   // whose it was, and what it answers is what happened, not "this key is not known here".
   await lea.post('/me/delete', { password });
+  const short = (m: any) => m.subject.replace("An API key of Tia's workspace ", '');
+  assert.deepEqual(keyMail('tia.lead@example.com').map(short), ['is switched off: Lea Ver is closing their login', 'works again: Lea Ver kept their login', 'is switched off: Lea Ver is closing their login']);
   db.run("UPDATE users SET closing_at=? WHERE email='lea.ver@example.com'", new Date(Date.now() - 1000).toISOString());
   assert.ok((await cron.tick()).purged >= 1);
   assert.equal(db.get("SELECT COUNT(*) n FROM users WHERE email='lea.ver@example.com'").n, 0);
@@ -449,8 +458,9 @@ test('a member who closes their own login takes their API keys along, and the te
   const stopped = await listed('Nightly sync');
   assert.ok(stopped?.stopped_at, 'the key is still on the admins\' list, as stopped');
   assert.deepEqual([stopped.owner_name, stopped.closing], ['Lea Ver', null]);
-  assert.deepEqual(keyMail('tia.lead@example.com').map((m) => m.subject.replace("An API key of Tia's workspace ", '')),
-    ['is switched off: Lea Ver is closing their login', 'works again: Lea Ver kept their login', 'is switched off: Lea Ver is closing their login', 'stopped working: Lea Ver closed their login']);
+  // Our copies of the earlier notices named her, so they went with her login. The one that says the keys have
+  // stopped for good is written after that, and is what the admins are left with.
+  assert.deepEqual(keyMail('tia.lead@example.com').map(short), ['stopped working: Lea Ver closed their login']);
   assert.ok(keyMail('sec.admin@example.com').at(-1)!.html.includes('Nightly sync'));
   assert.equal((await owner.call('DELETE', `/api-keys/${stopped.id}`)).status, 200, 'an admin can clear it from the list');
 
@@ -476,16 +486,18 @@ test('a member who closes their own login takes their API keys along, and the te
   const remId = (await rem.get('/me')).data.user.id;
   await rem.post('/me/delete', { password });
   assert.deepEqual((await owner.call('DELETE', `/account/members/${remId}`)).data.keys_stopped.map((k: any) => k.name), ['Zap']);
-  const told = keyMail('tia.lead@example.com').length;
+  // (Our copies of emails that name Rem go when the login is purged, so this counts what is written after that.)
+  const before = db.get('SELECT MAX(id) m FROM emails').m;
   db.run("UPDATE users SET closing_at=? WHERE email='rem.oved@example.com'", new Date(Date.now() - 1000).toISOString());
   assert.ok((await cron.tick()).purged >= 1);
-  assert.equal(keyMail('tia.lead@example.com').length, told);
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='tia.lead@example.com' AND id > ?", before).n, 0);
   assert.equal((await listed('Zap')).owner_name, 'Rem Oved', 'the name stays on the stopped key after the login is gone');
 
   // And someone without keys closes their login without a word about keys to anybody.
   const quiet = await join(owner, 'No Keys', 'nokeys.closing@example.com');
+  const sofar = db.get('SELECT MAX(id) m FROM emails').m;
   await quiet.post('/me/delete', { password });
-  assert.equal(keyMail('tia.lead@example.com').length, told);
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='tia.lead@example.com' AND id > ?", sofar).n, 0);
   assert.ok(!/API key/.test(mailTo('nokeys.closing@example.com').at(-1)!.html));
 });
 

@@ -152,6 +152,9 @@ CREATE TABLE IF NOT EXISTS billing_todo (
   tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, done_at TEXT, UNIQUE (kind, ref)
 );
 CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- Messages from the payment provider that have arrived and are not applied yet. The provider is answered as soon as
+-- a message is safely in here; a row goes when its message has been applied, and the timer tries the rest again.
+CREATE TABLE IF NOT EXISTS stripe_inbox (id TEXT PRIMARY KEY, body TEXT NOT NULL, at TEXT NOT NULL, tries INTEGER NOT NULL DEFAULT 0, last_at TEXT, error TEXT);
 -- Every account that was ever deleted. A payment that names one of these is known to be for an account that is
 -- gone (and goes straight back); a payment that names an id nobody has heard of is not.
 CREATE TABLE IF NOT EXISTS deleted_accounts (id TEXT PRIMARY KEY, at TEXT NOT NULL);
@@ -168,6 +171,15 @@ CREATE TABLE IF NOT EXISTS support_requests (
   id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, topic TEXT NOT NULL, message TEXT NOT NULL, envelope_id TEXT,
   user_id TEXT, account_id TEXT, status TEXT NOT NULL DEFAULT 'open', at TEXT NOT NULL
 );
+-- What happened on a help request after its first message: what the customer added ('customer'), what an operator
+-- answered ('answer') or asked ('question'), notes only operators see ('note'), and a line for everything that was
+-- done to it, with who and when ('event'). It hangs on the request, so whatever deletes a request (an answered one
+-- goes with a deleted account) deletes its thread in the same statement.
+CREATE TABLE IF NOT EXISTS support_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL REFERENCES support_requests(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, by_id TEXT, by_name TEXT, body TEXT NOT NULL DEFAULT '', at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS support_messages_request ON support_messages(request_id, id);
 -- One line for every person an account newly emailed: a first send, a person added or an address changed by a
 -- correction, a bulk row, a public form. The daily limits count these lines and not the envelopes, so voiding or
 -- deleting an envelope never hands the day's allowance back.
@@ -176,6 +188,23 @@ CREATE TABLE IF NOT EXISTS reached (
   email TEXT NOT NULL COLLATE NOCASE, envelope_id TEXT, at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS reached_account ON reached(account_id, at);
+-- A way into a login besides its password: one line for each Google or Microsoft account connected to it. The
+-- person is known by the provider's own id for them (provider, subject) and never by the address in email, which is
+-- kept only to show in Settings which account it is. vouched is 1 when the provider itself stood behind that address
+-- at the moment the line was written (see identityOf in oidc.ts). The lines go with the login when it is deleted.
+CREATE TABLE IF NOT EXISTS identities (
+  id TEXT PRIMARY KEY, provider TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL DEFAULT '' COLLATE NOCASE, vouched INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE (provider, subject)
+);
+CREATE INDEX IF NOT EXISTS identities_user ON identities(user_id);
+-- A sign-in at Google or Microsoft that was started and has not come back yet. id is the fingerprint of the "state"
+-- value that travels through the provider, and the same value sits in a cookie of the browser that started, so only
+-- that browser can finish it. The line is deleted the moment it is used, which is what makes it work once. user_id
+-- is set when someone who is signed in is connecting a provider to their own login.
+CREATE TABLE IF NOT EXISTS signin_states (
+  id TEXT PRIMARY KEY, provider TEXT NOT NULL, nonce TEXT NOT NULL, verifier TEXT NOT NULL, mode TEXT NOT NULL,
+  invite TEXT, code TEXT, next TEXT, user_id TEXT, expires_at TEXT NOT NULL
+);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -210,6 +239,12 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['payments', 'credits', 'INTEGER NOT NULL DEFAULT 0'],
   ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
   ['powerforms', 'alerted_at', 'TEXT'],
+  // The monthly price this account is on, before tax: what its last plan payment was held to. And the notice of a
+  // higher price, if one was sent: the new price, the day it starts, and when the email about it left.
+  ['accounts', 'price_cents', 'INTEGER'],
+  ['accounts', 'price_notice_cents', 'INTEGER'],
+  ['accounts', 'price_notice_from', 'TEXT'],
+  ['accounts', 'price_notice_at', 'TEXT'],
   // 1 on a public form that people fill in on a shared device or from one office network (a tablet at the front
   // desk). More unfinished starts are allowed from one address, and an abandoned one is cleared sooner.
   ['powerforms', 'shared_device', 'INTEGER NOT NULL DEFAULT 0'],
@@ -325,6 +360,28 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['emails', 'tried_at', 'TEXT'],
   ['emails', 'next_try_at', 'TEXT'],
   ['emails', 'expires_at', 'TEXT'],
+  // A help request as a ticket (src/server/routes-support.ts). priority is 'urgent' or 'normal', decided by the
+  // topic. owner_id is the operator who took it. due_at is the moment by which a person will have answered, and is
+  // empty while the clock is stopped (we asked the customer something, we answered, it is closed) or when no promise
+  // was made. escalated_for is the due time the operators were emailed about, so they are told once for each time a
+  // request is late. first_reply_at is when a person first wrote back. closed_how says who closed it and why.
+  ['support_requests', 'priority', 'TEXT'],
+  ['support_requests', 'owner_id', 'TEXT'],
+  ['support_requests', 'due_at', 'TEXT'],
+  ['support_requests', 'escalated_for', 'TEXT'],
+  ['support_requests', 'first_reply_at', 'TEXT'],
+  ['support_requests', 'closed_at', 'TEXT'],
+  ['support_requests', 'closed_how', 'TEXT'],
+  ['support_requests', 'updated_at', 'TEXT'],
+  // The fingerprint of the secret in the private link to this request. The secret itself is only ever in the email.
+  ['support_requests', 'secret_hash', 'TEXT'],
+  // 1 when the first message was written by someone signed in under their own confirmed address. Anyone can type
+  // any address into the form, so the words of any other first message are not shown back until a person has read it.
+  ['support_requests', 'verified', 'INTEGER NOT NULL DEFAULT 0'],
+  // The writer's time zone where known, so "answered by Tuesday 14:00" in an email is their Tuesday 14:00.
+  ['support_requests', 'tz', 'TEXT'],
+  // The older request this one continues: a reply that came after the time for reopening had passed.
+  ['support_requests', 'follows', 'TEXT'],
 ];
 
 function migrate(d: any) {

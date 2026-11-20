@@ -1,11 +1,46 @@
 'use client';
 import { useState, type FormEvent } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
+import { Tickets } from './tickets';
+import { PRICE_NOTICE_DAYS } from '@/lib/policy';
 
 // The queue for the people who run the service: help requests, reports from recipients, and paused accounts.
 // Only visible to the addresses listed in OPERATOR_EMAILS.
 // Money questions only a person can settle: who is behind a charge on a card statement, and accounts whose payments
 // were switched off by a card dispute.
+// Announcing a higher monthly price. Customers are promised notice, and the server holds every renewal to it, so
+// this is the first step of any price change: it emails everyone who would pay more and records that they were told.
+function PriceNotice() {
+  const [usd, setUsd] = useState('');
+  const [from, setFrom] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<any>(null);
+  const earliest = new Date(Date.now() + (PRICE_NOTICE_DAYS + 1) * 864e5).toISOString().slice(0, 10);
+  const send = (e: FormEvent) => {
+    e.preventDefault();
+    if (!window.confirm(`Email every owner and admin of every account on the monthly plan that the price becomes $${usd} a month from ${from}? This cannot be taken back once the emails are out.`)) return;
+    setBusy(true);
+    api('/operator/billing/price-notice', { body: { new_usd: Number(usd), from } }).then(setOut).catch(oops).finally(() => setBusy(false));
+  };
+  return (
+    <>
+      <h3 style={{ marginTop: 18 }}>Announce a price change</h3>
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>Nobody on the plan pays a higher price without {PRICE_NOTICE_DAYS} days&apos; notice. Announce it here first: every owner and admin is emailed the old price, the new one, the date and a link that stops their plan. Then change the price with the payment provider for that same date. A renewal that charges more without this notice has the difference refunded automatically, and you are told. Running it again is safe: accounts already told are skipped.</p>
+      <form className="row wrap" onSubmit={send}>
+        <input value={usd} onChange={(e) => setUsd(e.target.value)} placeholder="New price in dollars, for example 12" aria-label="New monthly price in dollars" inputMode="decimal" required style={{ maxWidth: 280 }} />
+        <input type="date" value={from} min={earliest} onChange={(e) => setFrom(e.target.value)} aria-label="First day of the new price" required style={{ maxWidth: 170 }} />
+        <button className="btn" disabled={busy || !usd || !from}>{busy ? 'Sending' : 'Tell everyone on the plan'}</button>
+      </form>
+      {out && (
+        <div className="notice" role="status" style={{ marginTop: 12 }}>
+          <b>{out.told} {out.told === 1 ? 'account was' : 'accounts were'} told</b> that the plan costs {out.new_price} a month from {fmtDate(out.from)}. {out.already_told > 0 && `${out.already_told} had been told already. `}{out.not_affected > 0 && `${out.not_affected} already pay that much or more, so nothing changes for them. `}
+          {out.not_told.length > 0 && <><b>{out.not_told.length} could not be told</b> because no email left the mail server ({out.not_told.join(', ')}). They keep their price until they have been. Fix the email problem and run this again.</>}
+        </div>
+      )}
+    </>
+  );
+}
+
 function BillingTools() {
   const [disputed, reload] = useLoad<any>(() => api('/operator/billing/disputed').catch(() => ({ accounts: [] })));
   const [last4, setLast4] = useState('');
@@ -48,6 +83,7 @@ function BillingTools() {
           ))}</ul>
         </>
       )}
+      <PriceNotice />
     </div>
   );
 }
@@ -78,28 +114,12 @@ export default function Operator() {
     : <div className="small muted" style={{ margin: '4px 0 8px' }}>No account goes with this address: they were not signed in, and no confirmed account owner uses it.</div>);
   return (
     <div className="stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Review queue</h1><div className="muted">Every item here is a person waiting. Reply by email, then close it.</div></div><button className="btn" onClick={reload}>Refresh</button></div>
+      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Review queue</h1><div className="muted">Every item here is a person waiting. Answer a help request right here: the answer is emailed to them and kept with the request.</div></div><button className="btn" onClick={reload}>Refresh</button></div>
 
       <BillingTools />
 
-      <div className="card pad0">
-        <div style={{ padding: '14px 16px' }}><h2>Help requests <span className="muted" style={{ fontWeight: 400 }}>({q.support.length})</span></h2></div>
-        {q.support.length === 0 && <div className="empty" style={{ padding: 24 }}>Nobody is waiting.</div>}
-        {q.support.map((s: any) => (
-          <div key={s.id} className="queue-item">
-            <div className="row between wrap"><b>{s.name || 'Someone'} · {s.email}</b><span className="muted small">{s.topic} · {fmtDate(s.at, true)} · ref {s.ref || s.id.slice(-8).toUpperCase()}</span></div>
-            {!!s.forget && <div className="muted small">This person has deleted their account since. The request was kept so it can be answered, and it is deleted when you mark it as answered.</div>}
-            {about(s)}
-            <pre>{s.message}</pre>
-            <div className="row wrap">
-              <a className="btn sm primary" href={`mailto:${s.email}?subject=${encodeURIComponent(`Re: your Sign&Grow request ${s.ref || s.id.slice(-8).toUpperCase()}`)}`}>Reply by email</a>
-              <button className="btn sm" onClick={() => act(api(`/operator/support/${s.id}`, { body: { status: 'closed' } }), 'Closed')}>Mark as answered</button>
-              {s.about_account && trustButton(s.about_account, s.account_name, s.account_trusted_at)}
-              {s.envelope_id && <span className="muted small mono">{s.envelope_id}</span>}
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Help requests as tickets: the queue by due time, the thread, and every action an operator can take. */}
+      <Tickets accountActions={(a) => trustButton(a.id, a.name, a.trusted_at)} />
 
       <div className="card pad0">
         <div style={{ padding: '14px 16px' }}><h2>Reports from recipients <span className="muted" style={{ fontWeight: 400 }}>({q.reports.length})</span></h2><div className="muted small">Three different recipients reporting one account pauses it automatically. Reports you mark as abuse keep counting towards that. Reports you dismiss do not.</div></div>

@@ -73,6 +73,9 @@ const PERSON_ONLY: [RegExp, string][] = [
   [/^DELETE \/account\/members\//, 'remove someone from the team'],
   [/^POST \/account\/leave$/, 'leave the team'],
   [/^POST \/me\/delete$/, 'close the account'],
+  // Who can get into a login is its owner's business alone: connecting Google or Microsoft, disconnecting them,
+  // asking for the link that sets a password, or reading which of them are connected.
+  [/^[A-Z]+ \/me\/signin/, 'see or change the ways to sign in'],
   [/^(POST|PUT|PATCH|DELETE) \/billing\//, 'change the plan, pay or refund'],
   [/^[A-Z]+ \/operator\//, 'work the operator queue'],
 ];

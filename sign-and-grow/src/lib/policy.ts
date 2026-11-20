@@ -15,6 +15,11 @@ export const dormantStopDays = (): number => (process.env.DORMANT_AUTO_STOP_DAYS
 
 /** A closed account can be brought back by signing in for this many days. */
 export const CLOSE_GRACE_DAYS = 30;
+// How long before a higher monthly price everyone who would pay it is told. The server holds renewals to this:
+// a renewal above the price an account was on, without a notice that old, has the difference refunded.
+export const PRICE_NOTICE_DAYS = 30;
+export const priceRuleText = (days = PRICE_NOTICE_DAYS): string =>
+  `The price of your plan never goes up without notice. If the monthly price ever changes, every owner and admin is told by email at least ${days} days before the first renewal at the new price, with the old price, the new price, the date and a link that stops the plan in one click. A renewal that charges more than the price you were on without that notice has the difference refunded automatically. Signatures you already have are never touched by a price change.`;
 // How long we keep our own copy of an email that is not part of a document's record (invitations, notices, receipts,
 // reminders). A copy of an email about a document stays with that document and goes when the document goes.
 export const MAIL_COPY_DAYS = 90;
@@ -71,10 +76,49 @@ export const KEPT_AFTER_DELETION: string[] = [
 ];
 
 /**
- * The public pages say a person answers. With no SUPPORT_EMAIL, nobody is emailed when a help request arrives and no
- * address is shown anywhere. Returns the warning to log once when a production server starts, or null.
+ * The public pages say a person answers. With no SUPPORT_EMAIL no address is shown anywhere, and a new help request
+ * is emailed to the people in OPERATOR_EMAILS instead. With neither, nobody is emailed and nobody can open the
+ * queue. Returns the warning to log once when a production server starts, or null.
  */
 export function supportWarning(env: Record<string, string | undefined> = process.env): string | null {
   if (env.NODE_ENV !== 'production' || (env.SUPPORT_EMAIL || '').trim()) return null;
-  return `\n[config] SUPPORT_EMAIL IS NOT SET. The help page, the footer and every email promise that a person answers, but nobody is emailed when a help request arrives and no address is shown to anyone. Requests are only stored${(env.OPERATOR_EMAILS || '').trim() ? ' and shown in the operator queue at /app/operator' : ', and OPERATOR_EMAILS is empty as well, so no person can see them at all'}. Set SUPPORT_EMAIL to an address that somebody reads, for example SUPPORT_EMAIL=help@example.com\n`;
+  return `\n[config] SUPPORT_EMAIL IS NOT SET. The help page, the footer and every email promise that a person answers, ${(env.OPERATOR_EMAILS || '').trim()
+    ? 'but no address is shown to anyone. Help requests are emailed to the people in OPERATOR_EMAILS and shown in the operator queue at /app/operator'
+    : 'but nobody is emailed when a help request arrives and no address is shown to anyone. Requests are only stored, and OPERATOR_EMAILS is empty as well, so no person can see them at all. No response time is promised on the help page while that is so'}. Set SUPPORT_EMAIL to an address that somebody reads, for example SUPPORT_EMAIL=help@example.com\n`;
 }
+
+// ---- Help requests ---------------------------------------------------------------------------------
+// The response times are published on the help page, said in the acknowledgement email and shown on every request.
+// The server counts them (src/server/routes-support.ts), so the page and the code cannot disagree.
+
+const hours = (v: string | undefined, fallback: number) => (Number(v) > 0 ? Number(v) : fallback);
+
+/** A person answers a help request within this many hours of the message. Real hours: nights and weekends count. */
+export const supportFirstReplyHours = (env: Record<string, string | undefined> = process.env): number => hours(env.SUPPORT_FIRST_REPLY_HOURS, 24);
+
+/** The same for an urgent request. It is never longer than the time for any other request. */
+export const supportUrgentReplyHours = (env: Record<string, string | undefined> = process.env): number => Math.min(hours(env.SUPPORT_URGENT_REPLY_HOURS, 8), supportFirstReplyHours(env));
+
+/**
+ * Whether a help request reaches anybody at all: SUPPORT_EMAIL, or at least one address in OPERATOR_EMAILS. With
+ * neither, no response time is promised anywhere, because nobody could keep it (see supportWarning above).
+ */
+export const supportReachable = (env: Record<string, string | undefined> = process.env): boolean =>
+  [env.SUPPORT_EMAIL || '', ...(env.OPERATOR_EMAILS || '').split(',')].some((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim()));
+
+/** What a help request can be about, in the order the form lists them. Plain constants, so a 'use client' file may import them. */
+export const SUPPORT_TOPICS: string[] = ['signing', 'stuck', 'sending', 'billing', 'charged-wrongly', 'cannot-log-in', 'suspicious', 'other'];
+
+/** The topics that make a request urgent: someone is locked out, money was taken wrongly, or a document or a deadline cannot wait. */
+export const SUPPORT_URGENT_TOPICS: string[] = ['cannot-log-in', 'charged-wrongly', 'stuck'];
+
+/** A closed request opens again when its writer replies within this many days. Later, a reply starts a new request that names the old one. */
+export const SUPPORT_REOPEN_DAYS = 30;
+
+/** The help page shows the real median time to a first answer over this many days, and only when it covers at least this many requests. */
+export const SUPPORT_MEDIAN_DAYS = 30;
+export const SUPPORT_MEDIAN_MIN = 10;
+
+/** How many messages a customer may add in 24 hours, to one request and from one address, so a link cannot be used to flood the people who answer. */
+export const SUPPORT_REPLIES_PER_REQUEST = 10;
+export const SUPPORT_REPLIES_PER_ADDRESS = 30;

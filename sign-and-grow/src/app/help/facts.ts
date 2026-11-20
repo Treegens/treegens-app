@@ -6,6 +6,7 @@
 // breaks their error handling. policy.ts registers nothing, which is why it is safe here.)
 import { refundDays, dormantStopDays, CLOSE_GRACE_DAYS } from '@/lib/policy';
 import { newAccountDailyRecipients, unpaidDailyRecipients, abuseSuspendAfter, ACCESS_CODE_MIN, ACCESS_CODE_TRIES, powerformIdleHours } from '@/lib/policy';
+import { supportReachable, supportFirstReplyHours, supportUrgentReplyHours, SUPPORT_REOPEN_DAYS } from '@/lib/policy';
 
 export type Facts = {
   refundDays: number; // unused signatures from the latest payment are refunded on request within this many days
@@ -27,4 +28,10 @@ export function abuseFacts() {
     codeTries: ACCESS_CODE_TRIES, // wrong tries before an access code is frozen
     formIdleHours: powerformIdleHours(), // an unfinished start from a public form is cleared after this long
   };
+}
+
+// The published response times for help requests. `promised` is false when this server has nobody set up to answer
+// (no SUPPORT_EMAIL and no OPERATOR_EMAILS): then no time is promised, and the pages must not print one.
+export function supportFacts() {
+  return { promised: supportReachable(), hours: supportFirstReplyHours(), urgentHours: supportUrgentReplyHours(), reopenDays: SUPPORT_REOPEN_DAYS };
 }

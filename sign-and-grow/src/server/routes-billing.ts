@@ -5,7 +5,7 @@ import { sendMail } from './mail.ts';
 import { billingEnabled } from './envelopes.ts';
 import { grant, creditSummary, available, balance, findFreeCode } from './credits.ts';
 import { PRICING, mangrovesFor } from '../lib/impact.ts';
-import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients } from '../lib/policy.ts';
+import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients, PRICE_NOTICE_DAYS, priceRuleText } from '../lib/policy.ts';
 
 export { refundDays, dormantStopDays };
 
@@ -30,6 +30,14 @@ const sid = (x: any): string | null => (typeof x === 'string' ? x : x?.id || nul
 const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 const PLAN_CENTS = () => PRICING.monthlyUsd * 100;
 const PLAN_PRICE = () => money(PLAN_CENTS());
+// The monthly price an account is on, before tax, for a renewal at `at`. An account keeps the price it has been
+// paying, whatever the price for new customers is today, until it has been told of a higher one at least
+// PRICE_NOTICE_DAYS before the day that price starts (see /operator/billing/price-notice). A lower price needs no
+// notice: it simply applies when it is charged.
+const noticed = (a: any, at?: string | null): boolean =>
+  !!a?.price_notice_cents && !!a.price_notice_from && !!a.price_notice_at && !!at && at >= a.price_notice_from
+  && Date.parse(a.price_notice_from) - Date.parse(a.price_notice_at) >= PRICE_NOTICE_DAYS * 864e5 - 3600_000;
+const priceFor = (a: any, at?: string | null): number => (noticed(a, at) ? Math.max(a.price_notice_cents, a.price_cents || 0) : a?.price_cents || PLAN_CENTS());
 const trees = (cents: number) => `${mangrovesFor(cents / 100).toLocaleString('en')} mangrove trees`;
 const planUrl = () => `${baseUrl()}/app/settings?tab=billing`;
 const account = (accountId: any) => (accountId ? get('SELECT * FROM accounts WHERE id=?', accountId) : null);
@@ -127,7 +135,7 @@ const unixNow = () => Math.floor(Date.now() / 1000);
 const log = (accountId: string, what: string, detail = '', ref = '') => run('INSERT INTO billing_log (account_id, at, what, ref, detail) VALUES (?,?,?,?,?)', accountId, now(), what, ref, detail);
 const HISTORY_LABEL: Record<string, string> = {
   started: 'Monthly plan started', cancelled: 'Cancelled', resumed: 'Cancellation undone', ended: 'Monthly plan ended', refund: 'Refund sent', code: 'Free code applied',
-  'code-ended': 'Free code ended', reminder: 'Renewal reminder sent', 'auto-stop': 'Renewal stopped for you', dispute: 'Card dispute', 'card-removed': 'Card removed', paused: 'Payment failed',
+  'code-ended': 'Free code ended', reminder: 'Renewal reminder sent', 'auto-stop': 'Renewal stopped for you', dispute: 'Card dispute', 'card-removed': 'Card removed', paused: 'Payment failed', price: 'Price change announced',
 };
 
 type Cta = { label: string; url: string };
@@ -380,13 +388,20 @@ export function billingState(acct: any, user?: any) {
     free_next_at: acct.promo_code ? nextMonth : null,
     renews_at: acct.plan === 'grove' && renewing(acct) ? acct.renews_at : null,
     // What the next charge will really be: the amount we told them for it if a reminder went out, else the plan price.
-    next_amount: money(told || PLAN_CENTS() + (acct.renewal_tax_cents || 0)),
+    next_amount: money(told || priceFor(acct, acct.renews_at) + (acct.renewal_tax_cents || 0)),
+    // The monthly price this account is on, and a higher one it has been told about, if any.
+    plan_price: money(priceFor(acct, null)),
+    price_change: acct.price_notice_cents && acct.price_notice_from && hasSub(acct) && acct.price_notice_cents > (acct.price_cents || PLAN_CENTS())
+      ? { now: money(acct.price_cents || PLAN_CENTS()), next: money(acct.price_notice_cents), from: acct.price_notice_from, told_at: acct.price_notice_at } : null,
+    price_rule: priceRuleText(),
     ends_at: acct.plan === 'grove' && !acct.promo_code ? acct.cancel_at : null,
     cancel_ref: acct.cancel_ref || null,
     // A plan that was on and is not any more (as opposed to one that never started).
     ended: acct.plan !== 'grove' && !!get("SELECT 1 x FROM billing_log WHERE account_id=? AND what='started' LIMIT 1", acct.id),
     // A payment that did not go through. Nothing is locked; the page says what to do.
     problem: hasSub(acct) && ['past_due', 'unpaid', 'incomplete', 'paused'].includes(acct.subscription_status) ? acct.subscription_status : null,
+    // A failed payment can be paid by hand on the provider's page. On hold ('unpaid') that is the only way back.
+    can_pay_open: hasSub(acct) && ['past_due', 'unpaid', 'incomplete'].includes(acct.subscription_status),
     // A card dispute stops payments until a person has looked.
     disputed: !!acct.dispute_at,
     can_cancel: renewing(acct) || (hasSub(acct) && (acct.plan !== 'grove' || !PAID_UP.includes(acct.subscription_status))),
@@ -762,6 +777,25 @@ route('POST', '/billing/portal', async (c) => {
   return { url: s.url };
 }, 'admin');
 
+// A payment that did not go through is paid on the provider's own page for that invoice, where another card can be
+// used. For a plan on hold this is the one thing that brings it back: the provider has stopped trying the card by
+// itself, so putting a new card on file changes nothing until the open invoice is paid.
+route('POST', '/billing/pay-open', async (c) => {
+  const a = account(c.account.id);
+  if (!billingEnabled() || !hasSub(a)) throw bad('There is no payment waiting on this account.');
+  const sub = await stripe('GET', `subscriptions/${a.stripe_subscription_id}`, { 'expand[]': 'latest_invoice' });
+  let inv = sub.latest_invoice;
+  if (typeof inv === 'string') inv = await stripe('GET', `invoices/${inv}`);
+  if (inv?.status === 'open' && inv.hosted_invoice_url) return { url: inv.hosted_invoice_url, amount: money(Number(inv.amount_remaining ?? inv.amount_due ?? 0), inv.currency) };
+  // Nothing is open any more: it was paid in the meantime, or withdrawn. The plan is read back so the page shows
+  // what is true now instead of offering the same button again.
+  await serial(a.id, async () => {
+    await applySubscription(account(a.id), sub, unixNow(), sub.status === 'canceled' || sub.status === 'incomplete_expired');
+    await catchUpInvoice(sub).catch(() => {});
+  });
+  throw bad(inv?.status === 'paid' ? 'That payment has gone through in the meantime, so nothing is waiting to be paid. The page now shows where your plan stands.' : 'There is no open payment on this plan any more. The page now shows where your plan stands.', 409);
+}, 'admin');
+
 route('POST', '/billing/cancel', (c) => serial(c.account.id, () => cancelPlan(c.account, `in the app by ${c.user.name}`)), 'admin');
 
 route('POST', '/billing/resume', (c) => serial(c.account.id, async () => {
@@ -786,7 +820,7 @@ route('POST', '/billing/resume', (c) => serial(c.account.id, async () => {
   log(a.id, 'resumed', `By ${c.user.name}.`, a.cancel_ref || '');
   const next = periodEnd(sub) || a.renews_at;
   await mailAdmins(a.id, `Your ${PRICING.planName} plan continues`, 'The cancellation was undone', [
-    `${c.user.name} chose to keep the monthly plan for ${a.name}. ${next ? `The next charge is ${PLAN_PRICE()} on ${day(next)}.` : `It is billed ${PLAN_PRICE()} each month.`} We remind you before it happens.`,
+    `${c.user.name} chose to keep the monthly plan for ${a.name}. ${next ? `The next charge is ${money(priceFor(a, next))} on ${day(next)}.` : `It is billed ${money(priceFor(a, null))} each month.`} We remind you before it happens.`,
     'To stop it again, use the Cancel button on the Plan page or the link below.',
   ], 'stop');
   return billingState(account(a.id), c.user);
@@ -882,9 +916,9 @@ route('POST', '/public/billing/find', async (c) => {
       to: email, subject: 'Your Sign&Grow subscriptions', heading: 'Your monthly plans',
       lines: [
         ...(rows.length ? ['You asked which paid plans are tied to this email address. Each link below stops that plan from renewing. No login needed.'] : []),
-        ...others.map((a) => `${a.name} has a paid plan (${PLAN_PRICE()} a month) that you are a member of but do not manage. Its owner can stop it: ${admins(a.id).map((x) => x.name).join(', ') || 'see the Team page'}.`),
+        ...others.map((a) => `${a.name} has a paid plan (${money(priceFor(a, null))} a month) that you are a member of but do not manage. Its owner can stop it: ${admins(a.id).map((x) => x.name).join(', ') || 'see the Team page'}.`),
       ],
-      links: rows.map((a) => ({ label: `Stop renewal for ${a.name}`, url: stopUrl(a.id, u.id), note: dated(!PAID_UP.includes(a.subscription_status) ? `${PLAN_PRICE()} a month, and the last payment did not go through` : a.cancel_at ? `already cancelled, ends ${day(a.cancel_at)}` : `${PLAN_PRICE()} a month${a.renews_at ? `, next charge ${day(a.renews_at)}` : ''}`, u.tz) })),
+      links: rows.map((a) => ({ label: `Stop renewal for ${a.name}`, url: stopUrl(a.id, u.id), note: dated(!PAID_UP.includes(a.subscription_status) ? `${money(priceFor(a, null))} a month, and the last payment did not go through` : a.cancel_at ? `already cancelled, ends ${day(a.cancel_at)}` : `${PLAN_PRICE()} a month${a.renews_at ? `, next charge ${day(a.renews_at)}` : ''}`, u.tz) })),
     });
   else
     await sendMail({ to: email, subject: 'Your Sign&Grow subscriptions', heading: 'No paid plans found', lines: ['There is no paid Sign&Grow plan tied to this email address, so we are not charging you.', 'If you see a charge from us anyway, it may be under a different address. On the help page you can stop it with the card instead: the last four digits plus the date and amount of the charge are enough.'], cta: { label: 'Stop it with the card', url: `${baseUrl()}/help#stop-by-card` } });
@@ -1023,14 +1057,24 @@ async function applyInvoice(o: any): Promise<void> {
   const named = namedAccount(o);
   let a = account(named) || (customer ? get('SELECT * FROM accounts WHERE stripe_customer_id=?', customer) : null);
   let sub: any = null;
-  if (!a && !named && S) sub = await stripe('GET', `subscriptions/${S}`).catch(() => null);
+  if (!S && customer && !get('SELECT 1 x FROM payments WHERE id=? AND applied_at IS NOT NULL', o.id)) {
+    // Not named on the invoice in any shape we know, and not on the invoice read back either. Before deciding
+    // that this money pays for no plan (and sending it back), look at what the customer is subscribed to right
+    // now: exactly one live subscription of ours is the one this invoice is for.
+    const list = await stripe('GET', 'subscriptions', { customer, status: 'all', limit: '20' }).catch(() => null);
+    const live = ((list?.data || []) as any[]).filter((s) => [...LIVE, 'incomplete'].includes(s.status) && ours(s, s));
+    if (live.length === 1) (S = live[0].id), (sub = live[0]);
+  }
+  if (!a && !named && S && !sub) sub = await stripe('GET', `subscriptions/${S}`).catch(() => null);
   if (!a && sub?.metadata?.sg_account) a = account(sub.metadata.sg_account);
   const mine = ours(o, sub);
   // An account this was for and that was closed and deleted since. An id nobody here has ever heard of is not that.
   const gonefor = [named, sub?.metadata?.sg_account].find(wasDeleted) || null;
   const isPlan = !o.billing_reason || String(o.billing_reason).startsWith('subscription');
   // Signatures follow the money: the plan price buys the plan's signatures, a smaller invoice buys fewer, never more.
-  const credits = isPlan && currency === 'usd' ? Math.min(PRICING.monthlySignatures, Math.floor((cents * PRICING.monthlySignatures) / PLAN_CENTS())) : 0;
+  // An account that is still on an earlier, lower price gets the full month for that price.
+  const fullPrice = Math.min(PLAN_CENTS(), a?.price_cents || PLAN_CENTS());
+  const credits = isPlan && currency === 'usd' ? Math.min(PRICING.monthlySignatures, Math.floor((cents * PRICING.monthlySignatures) / fullPrice)) : 0;
   const fresh = run('INSERT OR IGNORE INTO payments (id, account_id, amount_cents, currency, at, receipt_url, kind, credits, charge_id, customer_id, subscription_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
     o.id, a?.id ?? null, cents, currency, now(), o.hosted_invoice_url || o.invoice_pdf || null, !mine ? 'unknown' : isPlan ? 'plan' : 'other', credits, chargeOf(o), customer, S).changes;
   let p = get('SELECT * FROM payments WHERE id=?', o.id);
@@ -1122,12 +1166,25 @@ async function applyInvoice(o: any): Promise<void> {
   const cycle = o.billing_reason === 'subscription_cycle';
   const paidFrom = iso(o.lines?.data?.[0]?.period?.start) || '';
   const reminded = !!paidFrom && String(a.renewal_reminded || '').startsWith(paidFrom.slice(0, 10));
-  const said = cycle && reminded && a.renewal_quoted_cents ? a.renewal_quoted_cents : PLAN_CENTS() + taxOf(o);
+  // And the price itself never goes up without notice: a renewal is held to the price the account was on, unless a
+  // higher one was announced at least PRICE_NOTICE_DAYS before it started (priceFor). A first payment is held to
+  // the price shown at checkout.
+  const allowed = (cycle ? priceFor(a, paidFrom) : PLAN_CENTS()) + taxOf(o);
+  const quoted = cycle && reminded && a.renewal_quoted_cents ? a.renewal_quoted_cents : allowed;
+  const said = Math.min(quoted, allowed);
+  const unannounced = cycle && cents > said && said === allowed;
   if (cents > said) {
-    await owe(a, get('SELECT * FROM payments WHERE id=?', o.id), cents - said, `we said ${money(said, currency)} and ${money(cents, currency)} was charged`);
-    await tellOperators(`${a.name} was charged more than we told them`, [`Invoice ${o.id}: we said ${money(said, currency)}, the charge was ${money(cents, currency)}. The difference is being refunded automatically. Check the price configured with the payment provider.`], a.id);
-  } else if (cents - taxOf(o) !== PLAN_CENTS())
-    await tellOperators(`A monthly payment from ${a.name} was not the plan price`, [`Invoice ${o.id} was ${money(cents, currency)}; the plan is ${PLAN_PRICE()}. ${sigs(credits)} were added. Check the price configured with the payment provider.`], a.id);
+    await owe(a, get('SELECT * FROM payments WHERE id=?', o.id), cents - said, unannounced
+      ? `the price went up without the ${PRICE_NOTICE_DAYS} days' notice we promise, so you pay the price you were on: ${money(said, currency)}, not ${money(cents, currency)}`
+      : `we said ${money(said, currency)} and ${money(cents, currency)} was charged`);
+    await tellOperators(`${a.name} was charged more than we told them`, [`Invoice ${o.id}: we said ${money(said, currency)}, the charge was ${money(cents, currency)}. The difference is being refunded automatically. ${unannounced ? `This account is on ${money(priceFor(a, null))} a month and has not had ${PRICE_NOTICE_DAYS} days' notice of a higher price. Announce a price change on the operator page before changing the price with the payment provider.` : 'Check the price configured with the payment provider.'}`], a.id);
+  } else if (cents - taxOf(o) !== (cycle ? priceFor(a, paidFrom) : PLAN_CENTS()))
+    await tellOperators(`A monthly payment from ${a.name} was not the plan price`, [`Invoice ${o.id} was ${money(cents, currency)}; this account's plan is ${money(cycle ? priceFor(a, paidFrom) : PLAN_CENTS())}. ${sigs(credits)} were added. Check the price configured with the payment provider.`], a.id);
+  // The price this account is on from here: what it was just held to, before tax. A notice that has now taken
+  // effect has done its job.
+  const nowOn = Math.max(1, Math.min(cents, said) - taxOf(o));
+  run('UPDATE accounts SET price_cents=? WHERE id=?', nowOn, a.id);
+  if (a.price_notice_cents && nowOn >= a.price_notice_cents) run('UPDATE accounts SET price_notice_cents=NULL, price_notice_from=NULL, price_notice_at=NULL WHERE id=?', a.id);
   // A reminder only counts if an email for it actually left: one that the mail server never took is no reminder.
   const left = reminded && all("SELECT e.status FROM emails e WHERE e.to_email IN (SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')) AND e.at > ? AND (e.subject LIKE 'Heads up: your plan renews%' OR e.subject LIKE 'Last reminder: your plan renews%' OR e.subject LIKE 'Correction: your plan renews%')", a.id, new Date(Date.parse(paidFrom) - 9 * 864e5).toISOString()).some((m) => m.status === 'sent' || m.status === 'outbox');
   if (cycle && paidFrom && !left)
@@ -1136,7 +1193,7 @@ async function applyInvoice(o: any): Promise<void> {
   await mailAdmins(a.id, `Receipt: ${money(cents, currency)} for ${sigs(credits)}`, 'Payment received. Thank you.', [
     `${money(cents, currency)} for ${a.name}, charged today. ${sigs(credits)} added: you now have ${sigs(Math.max(0, available(a.id)))} to send.`,
     `That plants ${trees(Math.min(cents, said))} with Treegens.`,
-    ...(next && !a.cancel_at ? [`Next charge: ${PLAN_PRICE()} on ${day(next)}. We remind you a week before and again about a day before.`] : []),
+    ...(next && !a.cancel_at ? [`Next charge: ${money(priceFor(account(a.id), next))} on ${day(next)}. We remind you a week before and again about a day before.`] : []),
     refundRuleText(refundDays()),
     `Account: ${a.name}, reference ${a.id}. Receipts go to every owner and admin of the account.`,
   ], o.hosted_invoice_url ? { label: 'View invoice', url: o.hosted_invoice_url } : { label: 'Open the Plan page', url: planUrl() });
@@ -1146,7 +1203,7 @@ async function applyInvoice(o: any): Promise<void> {
 // be charged and when, each with a one-click way to stop it. Sent on our own timer; the provider's "upcoming invoice"
 // message triggers the same thing and adds the exact amount. Every reminder is written to the plan history, and the
 // amount in the latest one is what the charge is held to.
-async function remindRenewal(acct: any, cents?: number | null, currency = 'usd'): Promise<boolean> {
+async function remindRenewal(acct: any, cents?: number | null, currency = 'usd', tax?: number | null): Promise<boolean> {
   const a = account(acct.id);
   const when = a?.renews_at;
   if (!when || a.plan !== 'grove' || !renewing(a) || !PAID_UP.includes(a.subscription_status || '')) return false;
@@ -1156,7 +1213,19 @@ async function remindRenewal(acct: any, cents?: number | null, currency = 'usd')
   const [k, sent = ''] = String(a.renewal_reminded || '').split('|');
   const already = k === key ? sent.split(',').filter(Boolean) : [];
   const told = k === key ? a.renewal_quoted_cents || 0 : 0;
-  const amountCents = cents ?? (told || PLAN_CENTS() + (a.renewal_tax_cents || 0));
+  // What this renewal may cost: the price the account is on (or one it was told of in time) plus tax. The tax is
+  // what the provider says it will be this time when it says, and otherwise what it was last time. Tax can change
+  // without notice from us; the price cannot.
+  const cap = priceFor(a, when) + (tax ?? (a.renewal_tax_cents || 0));
+  let amountCents = cents ?? (told || cap);
+  if (cents != null && cents - cap >= 50) {
+    // The provider is about to charge more than that: the price was raised there without the notice we promise.
+    // The customer is told what they will end up paying (the difference comes back when the charge is made), and a
+    // person is told now, while there is still time to put the price right.
+    amountCents = cap;
+    if (run('INSERT OR IGNORE INTO stripe_events (id, at) VALUES (?,?)', `overprice:${a.id}:${key}`, now()).changes)
+      await tellOperators(`The next renewal for ${a.name} is set above the price they are on`, [`The payment provider will charge ${money(cents, currency)} on ${key}. This account is on ${money(priceFor(a, when))} a month and has not had ${PRICE_NOTICE_DAYS} days' notice of a higher price. If nothing changes, the difference is refunded automatically when the charge is made. Put the price back with the payment provider, or announce the new price on the operator page and start it after the notice period.`], a.id);
+  }
   const amount = money(amountCents, currency);
   const stage = hours <= 26 ? '1' : '7';
   const due = !already.includes(stage) && !(stage === '7' && already.includes('1'));
@@ -1291,6 +1360,24 @@ export async function billingRetries(): Promise<number> {
       await catchUpInvoice(sub).catch((e) => console.error('[billing] could not catch up on the latest invoice', a.id, e?.message));
     });
   }
+  // Messages from the provider that were received and not applied: the server stopped in between, or applying
+  // failed. Each is tried again with growing gaps. After three days a person is told and the message is dropped;
+  // by then the reconciliation above has read the truth back from the provider for anything that matters.
+  const minuteAgo = new Date(Date.now() - 60_000).toISOString();
+  for (const row of all('SELECT * FROM stripe_inbox WHERE at < ? ORDER BY at LIMIT 100', minuteAgo)) {
+    if (Date.parse(row.at) < Date.now() - 3 * 864e5) {
+      run('DELETE FROM stripe_inbox WHERE id=?', row.id);
+      let type = '';
+      try { type = JSON.parse(row.body)?.type || ''; } catch {}
+      await tellOperators('A message from the payment provider could not be applied for three days', [`Event ${row.id}${type ? ` (${type})` : ''}, received ${row.at}. Last error: ${row.error || 'none recorded'}. It was dropped. Look the event up with the payment provider and check the account it was about.`]);
+      continue;
+    }
+    if (row.last_at && Date.parse(row.last_at) > Date.now() - Math.min(360, 2 ** Math.min(row.tries, 8)) * 60_000) continue;
+    let ev: any = null;
+    try { ev = JSON.parse(row.body); } catch {}
+    if (!ev) { run('DELETE FROM stripe_inbox WHERE id=?', row.id); continue; }
+    await settleInbox(ev).then(() => n++, (e) => console.error('[billing] a provider message still cannot be applied', row.id, e?.message));
+  }
   run('DELETE FROM stripe_events WHERE at < ?', new Date(Date.now() - 60 * 864e5).toISOString());
   run("DELETE FROM payments WHERE kind='unknown' AND account_id IS NULL AND at < ?", new Date(Date.now() - 90 * 864e5).toISOString());
   return n;
@@ -1311,7 +1398,8 @@ async function applySubscription(a: any, o: any, at: number, ended: boolean) {
   } else if (!live && !ended && a.plan === 'grove')
     await mailAdmins(a.id, 'Your monthly plan is on hold', 'Your plan is on hold because a payment did not go through', [
       'Nothing is locked and nothing is deleted. The signatures you already have stay yours and still work.',
-      'To bring the plan back, update the card on the Plan page. To end it for good, press Cancel there: the failed payment is then not tried again.',
+      'To bring the plan back, open the Plan page and press "Pay the open payment". You can use another card there. A new card on file is not enough by itself: the payment that failed is no longer tried automatically.',
+      'To end the plan for good, press Cancel there: the failed payment is then withdrawn and never tried again.',
     ], { label: 'Open the Plan page', url: planUrl() });
   else if (live && endsAt && !a.cancel_at && !PAID_UP.includes(o.status)) {
     // Cancelled on the provider's own page while the payment for the running month is failing. There is no paid
@@ -1354,7 +1442,7 @@ async function handleEvent(ev: any) {
     // The renewal is the end of the period we already know. If we do not know it yet, take it from the message.
     const theirs = iso(o.period_end || o.next_payment_attempt);
     if (theirs && (!a.renews_at || Math.abs(Date.parse(a.renews_at) - Date.parse(theirs)) > 3 * 864e5)) run('UPDATE accounts SET renews_at=? WHERE id=?', theirs, a.id);
-    await remindRenewal(a, o.amount_due ?? null, o.currency || 'usd');
+    await remindRenewal(a, o.amount_due ?? null, o.currency || 'usd', o.amount_due != null ? taxOf(o) : null);
     return;
   }
 
@@ -1541,13 +1629,42 @@ export const applyStripeEvent = (ev: any): Promise<void> => {
   return inQueue(eventKey(ev));
 };
 
+// Applies a message that is in the inbox and takes it out. A failure is written on its row and the row stays, so
+// the timer tries it again (see billingRetries) whether or not the provider does.
+async function settleInbox(ev: any): Promise<void> {
+  try {
+    await applyStripeEvent(ev);
+    if (ev?.id) run('DELETE FROM stripe_inbox WHERE id=?', ev.id);
+  } catch (e: any) {
+    if (ev?.id) run('UPDATE stripe_inbox SET tries=tries+1, last_at=?, error=? WHERE id=?', now(), String(e?.message || e).slice(0, 300), ev.id);
+    throw e;
+  }
+}
+// How long the provider's message is worked on before it is answered. The provider waits only so long for an
+// answer and counts a late one as a failure, so a message that takes longer (the account's queue is busy, the
+// payment provider or the mail server is slow) is answered "received" and finished in the background.
+const webhookWaitMs = () => Number(process.env.STRIPE_WEBHOOK_WAIT_MS) || 5000;
+
 route('POST', '/stripe/webhook', async (c) => {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret) throw new HttpError(501, 'Billing is not set up.');
   const raw = await c.req.text();
   if (!verifyStripeSignature(raw, c.req.headers.get('stripe-signature') || '', secret)) throw new HttpError(400, 'Bad signature.');
-  await applyStripeEvent(JSON.parse(raw));
-  return { received: true };
+  const ev = JSON.parse(raw);
+  // Kept before anything else happens, so a message is never lost between "received" and "applied": not by a
+  // restart, and not by an error half way.
+  if (ev?.id) run('INSERT OR IGNORE INTO stripe_inbox (id, body, at) VALUES (?,?,?)', ev.id, raw, now());
+  const work = settleInbox(ev);
+  work.catch(() => {}); // a failure after we answered is on the inbox row, not an unhandled error
+  let timer: any;
+  const late = new Promise<'later'>((r) => (timer = setTimeout(() => r('later'), webhookWaitMs())));
+  try {
+    // A failure inside the wait is still answered with an error, so the provider sends the message again as well.
+    const how = await Promise.race([work.then(() => 'applied' as const), late]);
+    return { received: true, applied: how === 'applied' };
+  } finally {
+    clearTimeout(timer);
+  }
 }, 'public');
 
 // Once every two months at most: tell people who pay but do not send, so nobody funds a forgotten plan by accident.
@@ -1558,7 +1675,7 @@ export async function dormancyNudges(): Promise<number> {
   for (const a of rows) {
     run('UPDATE accounts SET dormant_nudged_at=? WHERE id=?', now(), a.id);
     await mailAdmins(a.id, 'Still using Sign&Grow?', 'You are on the monthly plan but have not sent anything in 60 days', [
-      `${a.name} pays ${PLAN_PRICE()} a month and has ${sigs(Math.max(0, available(a.id)))} saved up. Every dollar plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
+      `${a.name} pays ${money(priceFor(a, null))} a month and has ${sigs(Math.max(0, available(a.id)))} saved up. Every dollar plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
       'If you are not using it, stop the renewal with the link below. You keep every document and every signature you have already paid for.',
     ], 'stop');
   }
@@ -1587,6 +1704,52 @@ route('GET', '/operator/billing/lookup', async (c) => {
 route('GET', '/operator/billing/disputed', (c) => {
   operator(c);
   return { accounts: all('SELECT * FROM accounts WHERE dispute_at IS NOT NULL ORDER BY dispute_at DESC LIMIT 100').map((a) => ({ id: a.id, name: a.name, plan: a.plan, free_with: a.promo_code || null, dispute_at: a.dispute_at, signatures: available(a.id), admins: admins(a.id).map((u) => ({ name: u.name, email: u.email })) })) };
+});
+
+// The price rule (priceRuleText in src/lib/policy.ts): nobody on the plan pays a higher monthly price without having
+// been told at least PRICE_NOTICE_DAYS before. This is how they are told. It emails every owner and admin of every
+// paying account and records the notice on the account; renewals are then held to it (see applyInvoice). It does
+// not change anything with the payment provider: the operator changes the price there for the day given here.
+// Safe to run again: an account that already has this notice is skipped, and one whose email did not leave the
+// first time is tried again.
+route('POST', '/operator/billing/price-notice', async (c) => {
+  operator(c);
+  const b = await c.body();
+  const cents = Math.round(Number(b.new_usd) * 100);
+  if (!Number.isFinite(cents) || cents < 100 || cents > 100_000) throw bad('Enter the new monthly price in dollars, for example 12.');
+  const fromAt = Date.parse(str(b.from, 40));
+  if (!Number.isFinite(fromAt)) throw bad('Enter the day the new price starts, for example 2027-03-01.');
+  const earliest = Date.now() + PRICE_NOTICE_DAYS * 864e5;
+  if (fromAt < earliest) throw bad(`The new price can start on ${new Date(earliest + 864e5).toISOString().slice(0, 10)} at the earliest. Everyone on the plan is promised ${PRICE_NOTICE_DAYS} days' notice, counted from the moment the email goes out.`);
+  const from = new Date(fromAt).toISOString();
+  const out = { told: 0, already_told: 0, not_affected: 0, not_told: [] as string[], new_price: money(cents), from };
+  for (const row of all("SELECT id FROM accounts WHERE plan='grove' AND promo_code IS NULL AND stripe_subscription_id IS NOT NULL")) {
+    await serial(row.id, async () => {
+      const a = account(row.id);
+      if (!a || !hasSub(a)) return;
+      const nowCents = a.price_cents || PLAN_CENTS();
+      // The same or a lower price needs no notice, and withdraws an earlier notice of a higher one.
+      if (cents <= nowCents) {
+        if (a.price_notice_cents) run('UPDATE accounts SET price_notice_cents=NULL, price_notice_from=NULL, price_notice_at=NULL WHERE id=?', a.id);
+        return void out.not_affected++;
+      }
+      if (a.price_notice_cents === cents && a.price_notice_from === from && a.price_notice_at) return void out.already_told++;
+      const started = now();
+      await mailAdmins(a.id, `The price of your Sign&Grow plan changes on ${day(from)}`, 'The price of your monthly plan is changing', [
+        `Today ${a.name} pays ${money(nowCents)} a month. From ${day(from)} the monthly plan costs ${money(cents)} a month. The first renewal on or after that day is the first at the new price. Until then nothing changes.`,
+        `Each payment still adds ${sigs(PRICING.monthlySignatures)}, and the signatures you already have are not touched.`,
+        'You do not have to do anything to stay. If the new price is not for you, stop the plan with the button below or on the Plan page at any time before that renewal. You keep every signature and every document.',
+        priceRuleText(),
+      ], 'stop');
+      // A notice only counts if an email for it actually left. One the mail server did not take is no notice.
+      const left = all(`SELECT status FROM emails WHERE at >= ? AND subject LIKE 'The price of your Sign&Grow plan changes on%' AND to_email IN (${admins(a.id).map(() => '?').join(',') || "''"})`, started, ...admins(a.id).map((u) => u.email)).some((m) => m.status === 'sent' || m.status === 'outbox');
+      if (!left) return void out.not_told.push(a.name);
+      run('UPDATE accounts SET price_notice_cents=?, price_notice_from=?, price_notice_at=? WHERE id=?', cents, from, started, a.id);
+      log(a.id, 'price', `Told by email that the plan costs ${money(cents)} a month from ${from.slice(0, 10)} (${money(nowCents)} until then).`);
+      out.told++;
+    });
+  }
+  return out;
 });
 
 // After a card dispute payments stay off until a person has looked. This switches them back on.

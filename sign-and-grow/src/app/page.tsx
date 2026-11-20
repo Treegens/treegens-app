@@ -1,4 +1,4 @@
-import { refundRuleText } from '@/lib/policy';
+import { refundRuleText, PRICE_NOTICE_DAYS } from '@/lib/policy';
 import Link from 'next/link';
 import { Leaf } from '@/components/ui';
 import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/Public';
@@ -177,6 +177,7 @@ export default function Landing() {
               <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at ${P.topUpUsd} a signature, with the total shown before you pay. There are no overage charges.</li>
               <li><b>Month to month.</b> {P.planName} is ${P.monthlyUsd} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
               <li><b>Refunds are automatic.</b> {refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
+              <li><b>No surprise price rises.</b> If the monthly price ever goes up, you are told by email at least {PRICE_NOTICE_DAYS} days before your first renewal at the new price, and a renewal that charges more without that notice refunds the difference by itself.</li>
               {dormantStopDays > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you.</li>}
               <li><b>Same features on both plans.</b> Templates, bulk send, public forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
               <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>

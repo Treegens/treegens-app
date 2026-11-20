@@ -1,0 +1,778 @@
+// Help requests as real tickets: every request has an owner, a thread, a state the customer can see and a time by
+// which a person will have answered, and the product holds itself to that time. Each test here fails without the
+// work it describes: the whole life of a request from both sides, the published response times and what happens
+// when we are late, reopening, the link that works without a login, who may see what, the operator queue and who
+// may work it, the alerts the payment code files, the real median, the limits on the link, and deleting an account.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import { boot, Client, signUp, mailTo, type Server } from './helpers.ts';
+// Only here so the payment code can raise one of its own alerts without reaching the network. It stands in for
+// api.stripe.com and passes every other call on.
+import './stripe-fake.ts';
+import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, supportWarning, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS } from '../src/lib/policy.ts';
+import { whenText, standing, replyPromise, spanText, firstName } from '../src/lib/support.ts';
+
+let db: Server['db'];
+let cron: Server['cron'];
+let billing: Server['billing'];
+let maya: Client; // the two people who answer
+let ravi: Client;
+const realFetch = globalThis.fetch;
+
+const PW = 'correct horse battery';
+// Sign-ups, the help form and the link are limited per device address, so everybody here arrives from their own.
+let n = 0;
+const ip = () => `10.9.${Math.floor(++n / 250)}.${n % 250}`;
+const from = () => Object.assign(new Client(), { ip: ip() });
+const person = (name: string, email: string) => signUp(name, email, ip());
+const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ');
+const row = (ref: string) => db.get('SELECT * FROM support_requests WHERE ref=?', ref);
+const hoursFromNow = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
+const near = (iso: string, hours: number) => Math.abs(Date.parse(iso) - (Date.now() + hours * 3600_000)) < 120_000;
+const mails = (email: string, ref: string) => mailTo(email).filter((m) => m.subject.includes(ref));
+const ask = async (body: any, c: Client = from()) => {
+  const r = await c.post('/public/support', { message: 'Something is wrong and I need a person to look at it.', ...body });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  return r.data as { reference: string; priority: string; due_at: string | null; reply_hours: number | null };
+};
+// The private link, read from the latest email about the request, as its owner would.
+const link = (email: string, ref: string) => {
+  const m = mails(email, ref).filter((x) => (x.link || '').includes('/help/request/')).at(-1);
+  assert.ok(m, `an email to ${email} about ${ref} carries the link`);
+  const [, id, key] = /\/help\/request\/([^/]+)\/([^/?#]+)/.exec(m!.link)!;
+  return { id, key, api: `/public/support/ticket/${id}/${key}` };
+};
+const seen = async (api: string) => (await from().get(api)).data.request;
+const act = (op: Client, id: string, body: any) => op.post(`/operator/support/${id}`, body);
+const opView = async (op: Client, id: string) => (await op.get(`/operator/support/${id}`)).data.request;
+const queue = async (op: Client, filter = '') => (await op.get(`/operator/support${filter ? `?filter=${filter}` : ''}`)).data;
+
+before(async () => {
+  ({ db, cron, billing } = await boot());
+  delete process.env.SUPPORT_EMAIL;
+  process.env.OPERATOR_EMAILS = 'maya@ops.test, Ravi@ops.test';
+  maya = await person('Maya Okafor', 'maya@ops.test');
+  ravi = await person('Ravi Desk', 'ravi@ops.test');
+});
+after(() => {
+  globalThis.fetch = realFetch;
+});
+
+// ---- 5. Honest numbers (first, while the database holds no other requests) ------------------------------------
+
+test('the help page gets the real median time to a first answer, and only when it covers enough requests', async () => {
+  const info = async () => (await from().get('/public/support')).data;
+  assert.equal((await info()).median, null, 'nothing answered yet: the target only');
+  const minutes = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+  const ids: string[] = [];
+  for (let i = 0; i < minutes.length; i++) {
+    const t = await ask({ email: `stat${i}@cust.test` });
+    const id = row(t.reference).id;
+    ids.push(id);
+    assert.equal((await act(maya, id, { action: 'answer', text: 'Here is how to do that.' })).status, 200);
+    // Move the clock: this one was written so many minutes before it was answered.
+    db.run('UPDATE support_requests SET at=? WHERE id=?', new Date(Date.parse(db.get('SELECT first_reply_at f FROM support_requests WHERE id=?', id).f) - minutes[i] * 60_000).toISOString(), id);
+    if (i === SUPPORT_MEDIAN_MIN - 2) assert.equal((await info()).median, null, `${SUPPORT_MEDIAN_MIN - 1} requests are too few to publish a number`);
+  }
+  assert.deepEqual((await info()).median, { minutes: 55, count: 10, days: 30, late_now: 0 });
+  // A first answer from more than 30 days ago does not count any more, and neither does a request nobody answered.
+  db.run('UPDATE support_requests SET first_reply_at=? WHERE id=?', new Date(Date.now() - 31 * 864e5).toISOString(), ids[0]);
+  assert.equal((await info()).median, null);
+  db.run('UPDATE support_requests SET first_reply_at=? WHERE id=?', new Date().toISOString(), ids[0]);
+  await ask({ email: 'stat-open@cust.test' });
+  assert.equal((await info()).median.count, 10);
+  // An internal note and taking a request are not an answer to the customer.
+  const quiet = row((await ask({ email: 'stat-note@cust.test' })).reference).id;
+  await act(maya, quiet, { action: 'take' });
+  await act(maya, quiet, { action: 'note', text: 'Looked at it, nothing sent yet.' });
+  assert.equal(db.get('SELECT first_reply_at f FROM support_requests WHERE id=?', quiet).f, null);
+  assert.equal(spanText(55), '55 minutes');
+  assert.equal(spanText(200), '3 hours');
+});
+
+// ---- 1 to 4. The life of a request ----------------------------------------------------------------------------
+
+test('the whole life of a request, from both sides: asked, taken, a question back, answered, solved', async () => {
+  // Lena cannot sign in, so she has no login to read anything with. She writes without one.
+  const asked = await ask({ email: 'lena@cust.test', name: 'Lena Locked', topic: 'cannot-log-in', message: 'I cannot get in and my renewal is tomorrow. PRIVATE-WORDS', tz: 'Europe/Berlin' });
+  assert.deepEqual(Object.keys(asked).sort(), ['due_at', 'priority', 'reference', 'reply_hours'], 'the answer to the form carries no link: that goes to the mailbox only');
+  assert.equal(asked.priority, 'urgent', 'being locked out is urgent');
+  assert.ok(near(asked.due_at!, 8) && asked.reply_hours === 8);
+  const t = row(asked.reference);
+  assert.equal(t.status, 'open');
+
+  // The acknowledgement: the reference, the actual time a person will have answered by in her own time zone, the
+  // private link, and plainly that replying by email is not how to add something.
+  const ack = mails('lena@cust.test', asked.reference).at(-1)!;
+  assert.equal(ack.subject, `We got your message (${asked.reference})`);
+  const said = text(ack.html);
+  assert.ok(said.includes(`A person will have answered by ${whenText(asked.due_at!, 'Europe/Berlin')}`), said);
+  assert.match(said, /by \w+day \d{1,2} \w+, \d\d:\d\d \(Europe\/Berlin time\)/);
+  assert.match(said, /within 8 hours of your message, counted in real hours: nights and weekends count too/);
+  assert.match(said, /do not reply to this email: a reply does not reach your request/);
+  assert.ok(!said.includes('PRIVATE-WORDS'), 'anyone can type any address, so her words are not mailed back');
+  const l = link('lena@cust.test', asked.reference);
+  // The people who answer were told, with the time that was promised. No support address is set, so that is them.
+  for (const op of ['maya@ops.test', 'ravi@ops.test']) assert.match(text(mails(op, asked.reference).at(-1)!.html), /Help request .* From Lena Locked <lena@cust\.test>, not logged in\. Urgent\. The customer was told a person will have answered by/);
+
+  // Her view through the link, with no login: where it stands and by when.
+  let v = await seen(l.api);
+  assert.deepEqual([v.reference, v.status, v.priority, v.owner, v.due_at, v.late], [asked.reference, 'open', 'urgent', null, asked.due_at, false]);
+  assert.equal(standing(v, (iso) => whenText(iso)).title, 'Waiting for a person to pick this up');
+  assert.deepEqual([v.held, v.thread[0].body], [true, ''], 'the words of a first message from nobody we know are not shown back until a person has read them');
+
+  // Maya takes it. Lena sees a first name and nothing more of her.
+  const mine = await act(maya, t.id, { action: 'take' });
+  assert.equal(mine.data.request.owner.name, 'Maya Okafor');
+  v = await seen(l.api);
+  assert.equal(v.owner, 'Maya');
+  assert.equal(standing(v, (iso) => whenText(iso)).title, 'Maya is looking at this');
+  assert.ok(!JSON.stringify(v).includes('Okafor') && !JSON.stringify(v).includes('ops.test'));
+
+  // An internal note is for operators only.
+  assert.equal((await act(maya, t.id, { action: 'note', text: 'INTERNAL-NOTE: card on file ends 4242, do not mention.' })).status, 200);
+  assert.ok(!JSON.stringify(await seen(l.api)).includes('INTERNAL-NOTE'));
+
+  // Maya asks something. That is emailed in full, the request waits for Lena, and the clock stops.
+  const before = mailTo('lena@cust.test').length;
+  assert.equal((await act(maya, t.id, { action: 'ask', text: 'Which address did you sign up with? QUESTION-IN-FULL' })).data.request.status, 'waiting');
+  const q = mailTo('lena@cust.test').at(-1)!;
+  assert.equal(mailTo('lena@cust.test').length, before + 1);
+  assert.equal(q.subject, `We have a question about your request (${asked.reference})`);
+  assert.match(text(q.html), /Maya needs one thing from you .*QUESTION-IN-FULL.*the time we promised is paused until we have it.*do not reply to this email/);
+  assert.ok(q.link.endsWith(`/help/request/${l.id}/${l.key}`), 'every email about a request carries the same link');
+  v = await seen(l.api);
+  assert.deepEqual([v.status, v.due_at, v.late, v.held], ['waiting', null, false, false]);
+  assert.equal(v.thread[0].body, 'I cannot get in and my renewal is tomorrow. PRIVATE-WORDS', 'a person has read it and written back, so her own words are shown to her now');
+  assert.deepEqual(v.thread.at(-1), { from: 'us', kind: 'question', name: 'Maya', at: v.thread.at(-1).at, body: 'Which address did you sign up with? QUESTION-IN-FULL' });
+  assert.equal(standing(v, (iso) => whenText(iso)).title, 'Maya asked you a question');
+
+  // Lena answers through the link. The request is ours again with a new time, and its owner is told once.
+  const opMails = () => [mailTo('maya@ops.test').length, mailTo('ravi@ops.test').length];
+  const [m0, r0] = opMails();
+  const replied = await from().post(`${l.api}/reply`, { message: 'It was lena@old-job.test. REPLY-ONE' });
+  assert.equal(replied.status, 200);
+  assert.equal(replied.data.request.status, 'open');
+  assert.ok(near(replied.data.request.due_at, 8), 'her reply starts a new 8 hours');
+  assert.deepEqual(opMails(), [m0 + 1, r0], 'the reply goes to whoever has the request');
+  assert.match(text(mailTo('maya@ops.test').at(-1)!.html), /Lena Locked replied on request .* From Lena Locked <lena@cust\.test>\. It was lena@old-job\.test\. REPLY-ONE/);
+  // More from her while it is waiting for us is added, sends nothing more, and does not move the promised time.
+  const again = await from().post(`${l.api}/reply`, { message: 'I also tried the reset link.' });
+  assert.equal(again.data.request.due_at, replied.data.request.due_at);
+  assert.deepEqual(opMails(), [m0 + 1, r0]);
+
+  // Maya answers. The answer is emailed in full, so nobody has to sign in to read it.
+  assert.equal((await act(maya, t.id, { action: 'answer', text: 'I have sent a reset link to lena@old-job.test and to this address. ANSWER-IN-FULL' })).data.request.status, 'answered');
+  const a = mailTo('lena@cust.test').at(-1)!;
+  assert.equal(a.subject, `An answer to your request (${asked.reference})`);
+  assert.match(text(a.html), /Maya answered your request .*ANSWER-IN-FULL.*do not reply to this email.*use the button below\. It works without signing in/);
+  v = await seen(l.api);
+  assert.deepEqual([v.status, v.due_at], ['answered', null]);
+  assert.deepEqual(v.thread.map((m: any) => [m.from, m.kind]), [['you', 'message'], ['us', 'question'], ['you', 'message'], ['you', 'message'], ['us', 'message']]);
+
+  // Lena says it is solved, from the link.
+  const done = await from().post(`${l.api}/solved`);
+  assert.deepEqual([done.data.request.status, done.data.request.closed_how], ['closed', 'solved']);
+  assert.equal(standing(done.data.request, (iso) => whenText(iso)).title, 'Solved');
+
+  // The operators' record: every message, the note, and everything that was done, each with who and when.
+  const full = await opView(maya, t.id);
+  assert.deepEqual(full.thread.map((m: any) => [m.kind, m.by]), [
+    ['customer', 'Lena Locked'], ['event', 'Maya Okafor'], ['note', 'Maya Okafor'], ['question', 'Maya Okafor'], ['customer', 'Lena Locked'], ['event', 'Lena Locked'],
+    ['customer', 'Lena Locked'], ['answer', 'Maya Okafor'], ['event', 'Lena Locked']]);
+  assert.deepEqual(full.thread.filter((m: any) => m.kind === 'event').map((m: any) => m.body), ['Took it', 'The customer answered our question. The clock runs again', 'The customer marked it as solved']);
+  assert.ok(full.thread.every((m: any) => m.by && !Number.isNaN(Date.parse(m.at))));
+  assert.deepEqual([full.thread[0].via, full.thread[4].via], ['form', 'link'], 'and how each of her messages came: typed into the form, then through the link from her mailbox');
+  assert.equal(full.written, 'not_signed_in');
+  assert.ok(full.first_reply_at, 'the first time a person wrote back is kept');
+});
+
+test('response times are published, settable and counted in real hours, and a time is in UTC and says so when the zone is unknown', async () => {
+  assert.deepEqual([supportFirstReplyHours({}), supportUrgentReplyHours({})], [24, 8]);
+  assert.deepEqual([supportFirstReplyHours({ SUPPORT_FIRST_REPLY_HOURS: '12' }), supportUrgentReplyHours({ SUPPORT_URGENT_REPLY_HOURS: '2' })], [12, 2]);
+  assert.deepEqual([supportFirstReplyHours({ SUPPORT_FIRST_REPLY_HOURS: 'soon' }), supportFirstReplyHours({ SUPPORT_FIRST_REPLY_HOURS: '-3' })], [24, 24], 'nonsense falls back to the default');
+  assert.equal(supportUrgentReplyHours({ SUPPORT_FIRST_REPLY_HOURS: '4' }), 4, 'urgent is never slower than everything else');
+  assert.equal(replyPromise(24, 8), 'A person answers within 24 hours, and within 8 hours when you cannot log in, were charged wrongly, or a document is stuck or a deadline is near. These are real hours, counted from the moment you write: nights and weekends count too.');
+
+  const info = (await from().get('/public/support')).data;
+  assert.deepEqual(info.reply, { hours: 24, urgent_hours: 8 });
+  assert.deepEqual(info.topics, SUPPORT_TOPICS);
+  assert.deepEqual(info.urgent_topics, ['cannot-log-in', 'charged-wrongly', 'stuck']);
+  // The topic decides: locked out, charged wrongly, a stuck document or a near deadline are urgent. The rest is not.
+  for (const topic of SUPPORT_TOPICS) {
+    const t = await ask({ email: `topic-${topic}@cust.test`, topic });
+    const urgent = SUPPORT_URGENT_TOPICS.includes(topic);
+    assert.deepEqual([t.priority, t.reply_hours, near(t.due_at!, urgent ? 8 : 24)], [urgent ? 'urgent' : 'normal', urgent ? 8 : 24, true], topic);
+  }
+  assert.equal((await ask({ email: 'topic-made-up@cust.test', topic: 'urgent-please' })).priority, 'normal', 'an unknown topic is not a way to jump the queue');
+
+  // No time zone known: the email gives the time in UTC and says that it does.
+  const utc = await ask({ email: 'nozone@cust.test' });
+  const said = text(mails('nozone@cust.test', utc.reference).at(-1)!.html);
+  assert.ok(said.includes(`by ${whenText(utc.due_at!, null)}`));
+  assert.match(said, /, \d\d:\d\d UTC \(we do not know your time zone, so this is UTC\)\. That is within 24 hours/);
+  assert.equal((await ask({ email: 'badzone@cust.test', tz: 'Mars/Olympus"><script>' })).due_at !== null, true);
+  assert.match(text(mailTo('badzone@cust.test').at(-1)!.html), /UTC \(we do not know your time zone/, 'a made-up zone is not printed, it is not known');
+
+  // Someone signed in under their own confirmed address: their zone is the one their browser reported, and they get
+  // their own words back, because we know who wrote them.
+  const kim = await person('Kim Known', 'kim@cust.test');
+  await kim.call('GET', '/me', undefined, { 'x-tz': 'America/New_York' });
+  const k = await ask({ topic: 'billing', message: 'Please check my last payment. MY-OWN-WORDS' }, kim);
+  const kimSaid = text(mails('kim@cust.test', k.reference).at(-1)!.html);
+  assert.match(kimSaid, /\(America\/New York time\)/);
+  assert.match(kimSaid, /What you sent us: Please check my last payment\. MY-OWN-WORDS/);
+
+  // The setting changes what is promised from then on, on the page, in the email and on the request.
+  process.env.SUPPORT_FIRST_REPLY_HOURS = '48';
+  process.env.SUPPORT_URGENT_REPLY_HOURS = '1';
+  try {
+    assert.deepEqual((await from().get('/public/support')).data.reply, { hours: 48, urgent_hours: 1 });
+    const slow = await ask({ email: 'slow@cust.test' });
+    assert.ok(near(slow.due_at!, 48));
+    assert.match(text(mailTo('slow@cust.test').at(-1)!.html), /within 48 hours of your message/);
+    const fast = await ask({ email: 'fast@cust.test', topic: 'stuck' });
+    assert.ok(near(fast.due_at!, 1));
+    assert.match(text(mailTo('fast@cust.test').at(-1)!.html), /within 1 hour of your message/);
+  } finally {
+    delete process.env.SUPPORT_FIRST_REPLY_HOURS;
+    delete process.env.SUPPORT_URGENT_REPLY_HOURS;
+  }
+});
+
+test('with nobody to reach, no response time is promised anywhere', async () => {
+  const ops = process.env.OPERATOR_EMAILS;
+  delete process.env.OPERATOR_EMAILS;
+  try {
+    assert.equal(supportReachable(), false);
+    assert.deepEqual([supportReachable({ SUPPORT_EMAIL: 'help@example.com' }), supportReachable({ OPERATOR_EMAILS: ' , ops@example.com' }), supportReachable({ SUPPORT_EMAIL: 'not an address', OPERATOR_EMAILS: ',' })], [true, true, false]);
+    const info = (await from().get('/public/support')).data;
+    assert.deepEqual([info.reply, info.median], [null, null]);
+    const t = await ask({ email: 'nobody-home@cust.test', topic: 'cannot-log-in' });
+    assert.deepEqual([t.due_at, t.reply_hours], [null, null]);
+    const said = text(mails('nobody-home@cust.test', t.reference).at(-1)!.html);
+    assert.doesNotMatch(said, /will have answered by|within \d+ hours?/);
+    assert.match(said, /A person will reply to you Your reference is/);
+    const v = await seen(link('nobody-home@cust.test', t.reference).api);
+    assert.deepEqual([v.due_at, v.late], [null, false]);
+    assert.equal(standing(v, (iso) => whenText(iso)).text, 'A person will read it and answer by email. The answer is shown here too.');
+    // Nothing was promised, so nothing is late.
+    db.run('UPDATE support_requests SET at=? WHERE ref=?', new Date(Date.now() - 5 * 864e5).toISOString(), t.reference);
+    assert.equal((await cron.tick()).support.late, 0);
+  } finally {
+    process.env.OPERATOR_EMAILS = ops;
+  }
+  assert.match(supportWarning({ NODE_ENV: 'production' })!, /nobody is emailed when a help request arrives.*No response time is promised/s);
+  assert.match(supportWarning({ NODE_ENV: 'production', OPERATOR_EMAILS: 'ops@example.com' })!, /Help requests are emailed to the people in OPERATOR_EMAILS and shown in the operator queue/);
+});
+
+test('a late request says so to the customer, the operators are emailed once for it, and the queue shows it first', async () => {
+  process.env.SUPPORT_EMAIL = 'help@ops.test';
+  try {
+    const late = await ask({ email: 'late@cust.test', name: 'Lars Late', topic: 'billing', tz: 'Asia/Tokyo' });
+    const urgent = await ask({ email: 'urgent@cust.test', topic: 'charged-wrongly' });
+    const normal = await ask({ email: 'normal@cust.test', topic: 'other' });
+    const id = row(late.reference).id;
+    assert.equal(mails('help@ops.test', late.reference).length, 1, 'with a support address set, a new request is announced there');
+    assert.equal(mails('maya@ops.test', late.reference).length, 0);
+
+    // Move the clock: the time a person should have answered by passed an hour ago.
+    const due = new Date(Date.now() - 3600_000).toISOString();
+    db.run('UPDATE support_requests SET due_at=? WHERE id=?', due, id);
+    const l = link('late@cust.test', late.reference);
+    let v = await seen(l.api);
+    assert.deepEqual([v.late, v.passed_on], [true, false]);
+    let says = standing(v, (iso) => whenText(iso));
+    assert.equal(says.title, 'We are late with this. Sorry.');
+    assert.match(says.text, /We said a person would have answered by .*, and that has not happened\. It is being passed to everyone on the support team\. You do not need to write again\./);
+
+    // The queue: the late one leads, then by the time each is due (urgent ones are due sooner), and both are marked.
+    const q = await queue(maya);
+    const mineOf = [late.reference, urgent.reference, normal.reference];
+    const order = q.requests.filter((r: any) => mineOf.includes(r.reference)).map((r: any) => [r.reference, r.late, r.priority]);
+    assert.deepEqual(order, [[late.reference, true, 'normal'], [urgent.reference, false, 'urgent'], [normal.reference, false, 'normal']]);
+    assert.equal(q.requests[0].reference, late.reference, 'before everything else in the queue');
+    assert.equal(q.counts.late, 1);
+    const dues = q.requests.filter((r: any) => r.due_at).map((r: any) => r.due_at);
+    assert.deepEqual(dues, [...dues].sort(), 'sorted by the time a person should have answered by');
+
+    // The timer escalates: everyone who answers is emailed, once, and the customer is told plainly.
+    assert.equal((await cron.tick()).support.late, 1);
+    for (const to of ['help@ops.test', 'maya@ops.test', 'ravi@ops.test']) {
+      const m = mails(to, late.reference).filter((x) => x.subject === `Late: help request ${late.reference} has no answer`);
+      assert.equal(m.length, 1, to);
+      assert.match(text(m[0].html), /From Lars Late <late@cust\.test>, about "Billing or a refund"\. A person should have answered by .* Nobody has taken it\. The customer has been told that we are late/);
+    }
+    const sorry = mails('late@cust.test', late.reference).at(-1)!;
+    assert.equal(sorry.subject, `We are late with your request (${late.reference})`);
+    assert.ok(text(sorry.html).includes(`We said a person would have answered by ${whenText(due, 'Asia/Tokyo')}, and that has not happened. Your request has been passed to everyone on the support team and is at the top of their list.`));
+    assert.match(text(sorry.html), /You do not need to write again, and you keep your place\. Please do not reply to this email/);
+    v = await seen(l.api);
+    assert.equal(v.passed_on, true);
+    assert.match(standing(v, (iso) => whenText(iso)).text, /It has been passed to everyone on the support team and is at the top of their list\./);
+    assert.equal((await from().get('/public/support')).data.median?.late_now ?? 1, 1);
+
+    // Once for each time it is late: the next runs of the timer send nothing.
+    const count = () => db.get('SELECT COUNT(*) n FROM emails').n;
+    const sent = count();
+    assert.equal((await cron.tick()).support.late, 0);
+    assert.equal((await cron.tick()).support.late, 0);
+    assert.equal(count(), sent);
+    assert.ok((await opView(maya, id)).thread.some((m: any) => m.kind === 'event' && m.by === 'Sign&Grow' && /^Late: no answer by the time we promised\. Everyone who answers was emailed \(3\), and the customer was told/.test(m.body)));
+
+    // Somebody has it: the customer is told who, in both places.
+    await act(ravi, id, { action: 'take' });
+    assert.match(standing(await seen(l.api), (iso) => whenText(iso)).text, /top of their list, and Ravi still has it\./);
+
+    // Answered, then the customer writes back and we are late again: that is a new lateness and is told again.
+    await act(ravi, id, { action: 'answer', text: 'Sorry for the wait. Here is the answer.' });
+    assert.deepEqual([(await seen(l.api)).late, (await queue(maya)).counts.late], [false, 0]);
+    await from().post(`${l.api}/reply`, { message: 'That did not help.' });
+    db.run('UPDATE support_requests SET due_at=? WHERE id=?', new Date(Date.now() - 60_000).toISOString(), id);
+    assert.equal((await cron.tick()).support.late, 1);
+    assert.equal(mails('maya@ops.test', late.reference).filter((x) => x.subject.startsWith('Late:')).length, 2);
+    assert.match(text(mails('maya@ops.test', late.reference).at(-1)!.html), /Ravi Desk has it\./);
+    assert.match(text(mails('late@cust.test', late.reference).at(-1)!.html), /top of their list\. Ravi still has it\./);
+    await act(ravi, id, { action: 'close', text: 'Second answer, and closing.' });
+  } finally {
+    delete process.env.SUPPORT_EMAIL;
+  }
+});
+
+test('a reply reopens an answered or closed request, and after 30 days it starts a new one that names the old', async () => {
+  const t = await ask({ email: 'reo@cust.test', name: 'Reo Pen', topic: 'sending' });
+  const id = row(t.reference).id;
+  const l = link('reo@cust.test', t.reference);
+
+  // Nobody closes a request without a written answer, and closing sends that answer.
+  const bare = await act(maya, id, { action: 'close' });
+  assert.equal(bare.status, 400);
+  assert.match(bare.data.error, /Write the answer this request is closed with\. It is emailed to the customer, and nobody closes a request without one\./);
+  assert.equal((await act(maya, id, { status: 'closed' })).status, 400, 'the old way of closing is held to the same rule');
+  assert.equal(row(t.reference).status, 'open');
+  assert.equal((await act(maya, id, { action: 'close', text: 'You can resend from the envelope page. CLOSING-ANSWER' })).data.request.status, 'closed');
+  const closed = mails('reo@cust.test', t.reference).at(-1)!;
+  assert.equal(closed.subject, `Your request ${t.reference} is closed`);
+  assert.match(text(closed.html), /Maya closed your request .*CLOSING-ANSWER.*write back within 30 days: this same request opens again\. After that, what you write there starts a new request that is linked to this one\. Please do not reply to this email/);
+  let v = await seen(l.api);
+  assert.deepEqual([v.status, v.closed_how, v.thread.at(-1).body], ['closed', 'answered', 'You can resend from the envelope page. CLOSING-ANSWER']);
+  assert.ok(near(v.reopen_until, SUPPORT_REOPEN_DAYS * 24));
+  assert.match(standing(v, (iso) => whenText(iso)).text, /^Not solved after all\? Reply before .* and this same request opens again\.$/);
+  // Once closed, an operator reopens before writing more.
+  assert.match((await act(maya, id, { action: 'answer', text: 'One more thing.' })).data.error, /This request is closed\. Reopen it first\./);
+
+  // Within the 30 days a reply opens the same request again, with a new time to answer by.
+  db.run('UPDATE support_requests SET closed_at=? WHERE id=?', new Date(Date.now() - 29 * 864e5).toISOString(), id);
+  const back = await from().post(`${l.api}/reply`, { message: 'It still does not work.' });
+  assert.deepEqual([back.data.request.status, back.data.request.reference, back.data.request.closed_at], ['open', t.reference, null]);
+  assert.ok(near(back.data.request.due_at, 24));
+  assert.ok((await opView(maya, id)).thread.some((m: any) => m.kind === 'event' && m.body === 'The customer wrote back, so the request is open again (it was closed)'));
+
+  // An answer, then closing it with no new text: the answer already given goes out again with the closing.
+  await act(maya, id, { action: 'answer', text: 'Try the copy link button. GIVEN-ANSWER' });
+  assert.equal((await act(maya, id, { action: 'close' })).status, 200);
+  assert.match(text(mails('reo@cust.test', t.reference).at(-1)!.html), /Maya closed your request Our answer was: Try the copy link button\. GIVEN-ANSWER/);
+
+  // More than 30 days after closing, a reply starts a new request. The old one stays closed and the new one names it.
+  db.run('UPDATE support_requests SET closed_at=? WHERE id=?', new Date(Date.now() - 31 * 864e5).toISOString(), id);
+  v = await seen(l.api);
+  assert.match(standing(v, (iso) => whenText(iso)).text, /closed more than 30 days ago, so a reply now starts a new request that is linked to this one\./);
+  const moved = await from().post(`${l.api}/reply`, { message: 'The same problem is back. FOLLOW-UP-WORDS' });
+  assert.equal(moved.status, 200);
+  assert.equal(moved.data.moved, true);
+  assert.notEqual(moved.data.reference, t.reference);
+  assert.equal(row(t.reference).status, 'closed');
+  const fresh = row(moved.data.reference);
+  assert.deepEqual([fresh.status, fresh.follows, fresh.email, fresh.topic], ['open', id, 'reo@cust.test', 'sending']);
+  // The page is handed the new request's own link, and the mailbox gets it too.
+  const nv = (await from().get(moved.data.url.replace('/help/request/', '/public/support/ticket/'))).data.request;
+  assert.deepEqual([nv.reference, nv.follows, nv.held, nv.thread[0].body], [moved.data.reference, t.reference, false, 'The same problem is back. FOLLOW-UP-WORDS']);
+  assert.match(text(mails('reo@cust.test', moved.data.reference).at(-1)!.html), new RegExp(`Your earlier request ${t.reference} was closed more than 30 days ago, so this is a new one\\. It is linked to the old one`));
+  assert.equal(link('reo@cust.test', moved.data.reference).id, fresh.id);
+  const op = await opView(maya, fresh.id);
+  assert.deepEqual(op.follows, { id, reference: t.reference });
+  assert.match(text(mails('maya@ops.test', moved.data.reference).at(-1)!.html), new RegExp(`This continues request ${t.reference}, which was closed on`));
+
+  // Someone signed in under their confirmed address reads the thread and replies under Help, without any link.
+  const sia = await person('Sia Signed', 'sia@cust.test');
+  const s = await ask({ topic: 'other', message: 'How do I rename a template?' }, sia);
+  const sid = row(s.reference).id;
+  await act(ravi, sid, { action: 'answer', text: 'Open it and choose Rename. IN-APP-ANSWER' });
+  let listed = (await sia.get('/support/mine')).data.requests;
+  assert.deepEqual([listed[0].reference, listed[0].status, listed[0].owner, listed[0].can_reply, listed[0].thread.at(-1).body], [s.reference, 'answered', 'Ravi', true, 'Open it and choose Rename. IN-APP-ANSWER']);
+  assert.equal((await sia.post(`/support/mine/${sid}/reply`, { message: 'There is no Rename for me.' })).status, 200);
+  listed = (await sia.get('/support/mine')).data.requests;
+  assert.deepEqual([listed[0].status, near(listed[0].due_at, 24), listed[0].thread.length], ['open', true, 3]);
+  assert.equal((await sia.post(`/support/mine/${sid}/solved`)).status, 200);
+  assert.deepEqual([row(s.reference).status, row(s.reference).closed_how], ['closed', 'solved']);
+});
+
+// ---- 3 and 6. The link, and who sees what ---------------------------------------------------------------------
+
+test('the private link opens one request with the right secret, and nothing with a wrong one or with another request\'s', async () => {
+  const a = await ask({ email: 'ann@cust.test', name: 'Ann One', message: 'ANN-WORDS: my template lost its fields.' });
+  const b = await ask({ email: 'bob@cust.test', name: 'Bob Two', message: 'BOB-WORDS: I was charged twice.' });
+  const la = link('ann@cust.test', a.reference);
+  const lb = link('bob@cust.test', b.reference);
+  assert.notEqual(la.key, lb.key);
+
+  // Only a fingerprint of the secret is stored. The secret itself is nowhere on the request.
+  const stored = db.get('SELECT * FROM support_requests WHERE id=?', la.id);
+  assert.equal(stored.secret_hash, crypto.createHash('sha256').update(la.key).digest('hex'));
+  assert.ok(!Object.values(stored).includes(la.key));
+
+  assert.equal((await from().get(la.api)).status, 200);
+  // A wrong secret, another request's secret, and a request that does not exist all get the same answer.
+  const wrong = await from().get(`/public/support/ticket/${la.id}/${la.key.slice(0, -1)}x`);
+  const other = await from().get(`/public/support/ticket/${la.id}/${lb.key}`);
+  const none = await from().get(`/public/support/ticket/sup_doesnotexist0000/${la.key}`);
+  const byRef = await from().get(`/public/support/ticket/${a.reference}/${la.key}`);
+  for (const r of [wrong, other, none, byRef]) {
+    assert.equal(r.status, 404);
+    assert.equal(r.data.error, wrong.data.error);
+    assert.equal(r.data.request, undefined);
+  }
+  assert.match(wrong.data.error, /This link does not open a request\..*open it again from our latest email about your request\. If that does not help, write to us on the help page and give your reference\./);
+  // Nor can a wrong secret write to a request or close it.
+  assert.equal((await from().post(`/public/support/ticket/${la.id}/${lb.key}/reply`, { message: 'Bob writing into Ann\'s request.' })).status, 404);
+  assert.equal((await from().post(`/public/support/ticket/${la.id}/${lb.key}/solved`)).status, 404);
+  assert.deepEqual([stored.status, db.get('SELECT COUNT(*) n FROM support_messages WHERE request_id=?', la.id).n], ['open', 0]);
+
+  // The link shows the request and nothing else: no address, no name, no account, no id of anything.
+  await act(maya, la.id, { action: 'note', text: 'NOTE-FOR-OPERATORS' });
+  await act(maya, la.id, { action: 'answer', text: 'They are back now.' });
+  const v = (await from().get(la.api)).data.request;
+  assert.deepEqual(Object.keys(v).sort(), ['at', 'closed_at', 'closed_how', 'due_at', 'follows', 'held', 'late', 'owner', 'passed_on', 'priority', 'reference', 'reopen_until', 'status', 'thread', 'topic', 'updated_at']);
+  const shown = JSON.stringify(v);
+  for (const secret of ['ann@cust.test', 'Ann One', 'NOTE-FOR-OPERATORS', 'Okafor', 'maya@ops.test', la.id, 'BOB-WORDS', 'Took it']) assert.ok(!shown.includes(secret), secret);
+  assert.ok(shown.includes('ANN-WORDS'));
+
+  // Someone at the address who never wrote can say so with one click. Nothing more is sent to them.
+  const typed = await ask({ email: 'victim@cust.test', message: 'Your refund is waiting. Call +1 888 555 0142 today.' });
+  const lv = link('victim@cust.test', typed.reference);
+  assert.ok(!JSON.stringify((await from().get(lv.api)).data.request).includes('555'), 'the stranger\'s words are not put on our page for them');
+  const no = await from().post(`${lv.api}/solved`, { not_mine: true });
+  assert.deepEqual([no.data.request.status, no.data.request.closed_how], ['closed', 'disowned']);
+  assert.equal(standing(no.data.request, (iso) => whenText(iso)).title, 'Closed: you told us you did not write this');
+  assert.ok((await opView(maya, lv.id)).thread.some((m: any) => m.body === 'The person at this address said they did not write this. Closed, and nothing more is sent to them'));
+});
+
+test('a customer never sees internal notes or another customer\'s request, and answers go only to the mailbox they were written to', async () => {
+  const amy = await person('Amy First', 'amy@cust.test');
+  const ben = await person('Ben Second', 'ben@cust.test');
+  const a = await ask({ topic: 'billing', message: 'AMY-WORDS: please look at my invoice.' }, amy);
+  const b = await ask({ topic: 'other', message: 'BEN-WORDS: how do folders work?' }, ben);
+  const aid = row(a.reference).id;
+  await act(maya, aid, { action: 'note', text: 'AMY-NOTE: she is on a free code.' });
+  await act(maya, aid, { action: 'answer', text: 'AMY-ANSWER: the invoice is correct.' });
+
+  const amys = JSON.stringify((await amy.get('/support/mine')).data);
+  const bens = JSON.stringify((await ben.get('/support/mine')).data);
+  assert.ok(amys.includes('AMY-WORDS') && amys.includes('AMY-ANSWER') && !amys.includes('AMY-NOTE') && !amys.includes('BEN-WORDS'));
+  assert.ok(bens.includes('BEN-WORDS') && !bens.includes('AMY-'));
+  assert.deepEqual((await ben.get('/support/mine')).data.requests.map((r: any) => r.reference), [b.reference]);
+  // Ben cannot write into Amy's request or close it, and is told the same as for a request that does not exist.
+  const poke = await ben.post(`/support/mine/${aid}/reply`, { message: 'Ben in Amy\'s thread.' });
+  assert.equal(poke.status, 404);
+  assert.equal(poke.data.error, (await ben.post('/support/mine/sup_nothing/reply', { message: 'Ben in nobody\'s thread.' })).data.error);
+  assert.equal((await ben.post(`/support/mine/${aid}/solved`)).status, 404);
+  assert.equal(row(a.reference).status, 'answered');
+  assert.equal((await from().get('/support/mine')).status, 401);
+
+  // Signed in, but writing under somebody else's address. The answer is written to that mailbox, so the writer is
+  // shown what they wrote and where it stands, and nothing of the answer. They cannot carry the thread on either.
+  const eve = await person('Eve Typist', 'eve@cust.test');
+  const forged = await ask({ email: 'amy@cust.test', topic: 'cannot-log-in', message: 'EVE-WORDS: I am Amy, what card is on my account?' }, eve);
+  const fid = row(forged.reference).id;
+  assert.equal((await opView(maya, fid)).written, 'signed_in_other', 'the operator is told the writer was not signed in under this address');
+  await act(maya, fid, { action: 'answer', text: 'FOR-AMY-ONLY: we never give that out. Use the reset link.' });
+  const eves = (await eve.get('/support/mine')).data.requests.find((r: any) => r.reference === forged.reference);
+  assert.deepEqual([eves.message, eves.thread, eves.can_reply, eves.status], ['EVE-WORDS: I am Amy, what card is on my account?', null, false, 'answered']);
+  assert.ok(!JSON.stringify((await eve.get('/support/mine')).data).includes('FOR-AMY-ONLY'));
+  assert.equal((await eve.post(`/support/mine/${fid}/reply`, { message: 'Then send it to eve@cust.test.' })).status, 404);
+  // Amy, whose mailbox it is, got the answer by email and sees the request under her own address.
+  assert.match(text(mailTo('amy@cust.test').at(-1)!.html), /FOR-AMY-ONLY/);
+  assert.ok(JSON.stringify((await amy.get('/support/mine')).data).includes('FOR-AMY-ONLY'));
+
+  // Signing up with somebody's address without confirming it shows nothing that was written to that mailbox.
+  const typed = await ask({ email: 'squat@cust.test', message: 'SQUAT-TARGET-WORDS: a question from the real owner.' });
+  await act(maya, row(typed.reference).id, { action: 'answer', text: 'SQUAT-ANSWER' });
+  const squatter = from();
+  assert.equal((await squatter.post('/auth/signup', { name: 'Not Them', email: 'squat@cust.test', password: PW })).status, 200);
+  assert.deepEqual((await squatter.get('/support/mine')).data.requests, []);
+  assert.equal((await squatter.post(`/support/mine/${row(typed.reference).id}/reply`, { message: 'Let me in.' })).status, 404);
+});
+
+// ---- 4. The people who answer ---------------------------------------------------------------------------------
+
+test('the operator routes refuse everyone who is not an operator, and every API key', async () => {
+  const t = await ask({ email: 'guarded@cust.test', message: 'GUARDED-WORDS: nobody else should read this.' });
+  const id = row(t.reference).id;
+  const calls: [string, string, any?][] = [['GET', '/operator/support'], ['GET', `/operator/support/${id}`], ['POST', `/operator/support/${id}`, { action: 'take' }], ['POST', `/operator/support/${id}`, { action: 'close', text: 'Closed by someone who should not.' }], ['POST', `/operator/support/${id}`, { status: 'closed' }]];
+
+  const stranger = await person('Sam Stranger', 'sam@cust.test');
+  // Listed as an operator but the address was never confirmed: signing up with a staff address proves nothing.
+  const unconfirmed = from();
+  process.env.OPERATOR_EMAILS += ',fake-staff@ops.test';
+  assert.equal((await unconfirmed.post('/auth/signup', { name: 'Fake Staff', email: 'fake-staff@ops.test', password: PW })).status, 200);
+  for (const [method, path, body] of calls) {
+    assert.equal((await from().call(method, path, body)).status, 401, `${method} ${path} without a login`);
+    for (const who of [stranger, unconfirmed]) {
+      const r = await who.call(method, path, body);
+      assert.equal(r.status, 404, `${method} ${path}`);
+      assert.ok(!JSON.stringify(r.data).includes('GUARDED-WORDS'));
+    }
+  }
+  // An operator's own API keys, of either scope, cannot work the queue. That takes a person who is signed in.
+  for (const scope of ['send', 'admin']) {
+    const key = (await maya.post('/api-keys', { name: `ops ${scope}`, scope })).data.key;
+    assert.equal((await new Client().call('GET', '/envelopes', undefined, { authorization: `Bearer ${key}` })).status, 200, 'the key itself works');
+    for (const [method, path, body] of calls) {
+      const r = await Object.assign(new Client(), { ip: ip() }).call(method, path, body, { authorization: `Bearer ${key}` });
+      assert.equal(r.status, 403, `${scope} key: ${method} ${path}`);
+      assert.match(r.data.error, /An API key cannot work the operator queue\. That needs a person signed in to the app\./);
+    }
+  }
+  // Nor can a customer's key read or answer their own requests: the support routes are for people.
+  const key = (await stranger.post('/api-keys', { name: 'integration' })).data.key;
+  const mineId = row((await ask({ topic: 'other', message: 'A request of my own, long enough.' }, stranger)).reference).id;
+  for (const [method, path, body] of [['GET', '/support/mine'], ['POST', `/support/mine/${mineId}/reply`, { message: 'From a key.' }], ['POST', `/support/mine/${mineId}/solved`, {}]] as [string, string, any?][]) {
+    const r = await new Client().call(method, path, body, { authorization: `Bearer ${key}` });
+    assert.equal(r.status, 403, `${method} ${path}`);
+    assert.match(r.data.error, /An API key cannot read or answer help requests/);
+  }
+  const untouched = row(t.reference);
+  assert.deepEqual([untouched.status, untouched.owner_id, db.get('SELECT COUNT(*) n FROM support_messages WHERE request_id=?', id).n], ['open', null, 0]);
+  process.env.OPERATOR_EMAILS = 'maya@ops.test, Ravi@ops.test';
+});
+
+test('the queue: mine, nobody\'s, waiting and all, taking and handing over, and the account next to the request', async () => {
+  const pat = await person('Pat Payer', 'pat@cust.test');
+  const acc = (await pat.get('/me')).data.account.id;
+  const t = await ask({ topic: 'charged-wrongly', message: 'I was charged after I cancelled.' }, pat);
+  const id = row(t.reference).id;
+  const inFilter = async (op: Client, filter: string) => (await queue(op, filter)).requests.some((r: any) => r.id === id);
+
+  assert.deepEqual([await inFilter(maya, 'open'), await inFilter(maya, 'unowned'), await inFilter(maya, 'mine'), await inFilter(maya, 'waiting'), await inFilter(maya, 'all')], [true, true, false, false, true]);
+  const counts = (await queue(maya)).counts;
+  await act(maya, id, { action: 'take' });
+  assert.deepEqual([await inFilter(maya, 'mine'), await inFilter(maya, 'unowned'), await inFilter(ravi, 'mine')], [true, false, false]);
+  assert.deepEqual([(await queue(maya)).counts.mine, (await queue(maya)).counts.unowned], [counts.mine + 1, counts.unowned - 1]);
+  assert.deepEqual((await queue(ravi)).operators, [{ id: (await maya.get('/me')).data.user.id, name: 'Maya Okafor', me: false }, { id: (await ravi.get('/me')).data.user.id, name: 'Ravi Desk', me: true }]);
+
+  // Handing over: only to someone who works the queue, and that person is told.
+  const raviId = (await ravi.get('/me')).data.user.id;
+  const notOp = await act(maya, id, { action: 'assign', to: (await pat.get('/me')).data.user.id });
+  assert.equal(notOp.status, 400);
+  assert.match(notOp.data.error, /Choose one of the people who work this queue/);
+  const handed = await act(maya, id, { action: 'assign', to: raviId, text: 'You know billing better.' });
+  assert.equal(handed.data.request.owner.name, 'Ravi Desk');
+  const told = mails('ravi@ops.test', t.reference).at(-1)!;
+  assert.equal(told.subject, `Request ${t.reference} was handed to you`);
+  assert.match(text(told.html), /Maya Okafor handed you request .* It is from Pat Payer <pat@cust\.test>\. A person should have answered by .* Maya Okafor wrote: You know billing better\./);
+  assert.deepEqual([await inFilter(ravi, 'mine'), await inFilter(maya, 'mine')], [true, false]);
+  assert.equal((await pat.get('/support/mine')).data.requests[0].owner, 'Ravi');
+
+  // Waiting for the customer: out of "waiting for us", into "waiting", still Ravi's.
+  await act(ravi, id, { action: 'ask', text: 'On which date was the charge?' });
+  assert.deepEqual([await inFilter(ravi, 'open'), await inFilter(ravi, 'waiting'), await inFilter(ravi, 'mine')], [false, true, true]);
+
+  // The account facts, read-only: plan, paused or not, and the last payment.
+  let facts = await opView(ravi, id);
+  assert.deepEqual([facts.account.id, facts.account.name, facts.account.plan, facts.account.suspended_at, facts.account.last_payment, facts.account.via], [acc, (await pat.get('/me')).data.account.name, 'seedling', null, null, 'written_from']);
+  assert.deepEqual([facts.login.name, facts.login.confirmed, facts.written], ['Pat Payer', true, 'own']);
+  db.run("INSERT INTO payments (id, account_id, amount_cents, currency, at, kind, credits) VALUES ('in_old_pat', ?, 900, 'usd', ?, 'plan', 9)", acc, new Date(Date.now() - 40 * 864e5).toISOString());
+  db.run("INSERT INTO payments (id, account_id, amount_cents, currency, at, kind, credits, refunded_cents) VALUES ('in_new_pat', ?, 300, 'usd', ?, 'topup', 3, 100)", acc, new Date().toISOString());
+  db.run("UPDATE accounts SET plan='grove', suspended_at=?, suspended_reason='Reports from recipients' WHERE id=?", new Date().toISOString(), acc);
+  facts = await opView(ravi, id);
+  assert.deepEqual([facts.account.plan, !!facts.account.suspended_at, facts.account.suspended_reason], ['grove', true, 'Reports from recipients']);
+  assert.deepEqual([facts.account.last_payment.amount_cents, facts.account.last_payment.kind, facts.account.last_payment.refunded_cents], [300, 'topup', 100]);
+  // Put the account back as it was, so the timer in later tests has no made-up payments to act on.
+  db.run("UPDATE accounts SET plan='seedling', suspended_at=NULL, suspended_reason=NULL WHERE id=?", acc);
+  db.run("DELETE FROM payments WHERE id IN ('in_old_pat', 'in_new_pat')");
+  // A request from an address with no login has no account next to it.
+  const lone = await opView(ravi, row((await ask({ email: 'no-login@cust.test' })).reference).id);
+  assert.deepEqual([lone.login, lone.account], [null, null]);
+
+  // Marking a request urgent can bring the promised time forward. It never moves one later.
+  const calm = await ask({ email: 'calm@cust.test', topic: 'other' });
+  const cid = row(calm.reference).id;
+  const up = await act(maya, cid, { action: 'priority', priority: 'urgent' });
+  assert.ok(up.data.request.priority === 'urgent' && near(up.data.request.due_at, 8));
+  const down = await act(maya, cid, { action: 'priority', priority: 'normal' });
+  assert.deepEqual([down.data.request.priority, down.data.request.due_at], ['normal', up.data.request.due_at]);
+
+  // Someone who stops being an operator has no requests any more: theirs show as nobody's, to both sides.
+  process.env.OPERATOR_EMAILS = 'maya@ops.test';
+  assert.equal((await opView(maya, id)).owner, null);
+  assert.equal((await pat.get('/support/mine')).data.requests[0].owner, null);
+  assert.equal((await ravi.get('/operator/support')).status, 404);
+  process.env.OPERATOR_EMAILS = 'maya@ops.test, Ravi@ops.test';
+  assert.equal((await opView(maya, id)).owner.name, 'Ravi Desk');
+
+  // Every action is in the history with who and when.
+  const history = (await opView(maya, id)).thread.filter((m: any) => m.kind === 'event').map((m: any) => [m.by, m.body]);
+  assert.deepEqual(history, [['Maya Okafor', 'Took it'], ['Maya Okafor', 'Handed it to Ravi Desk']]);
+  const unknown = await act(maya, id, { action: 'delete' });
+  assert.equal(unknown.status, 400);
+});
+
+test('closing without an answer is only for a request nobody at the address wrote, and nothing is emailed for it', async () => {
+  const spam = await ask({ email: 'target@cust.test', message: 'You have won. Call +1 888 555 0199 to claim your prize.' });
+  const id = row(spam.reference).id;
+  const l = link('target@cust.test', spam.reference);
+  const before = mailTo('target@cust.test').length;
+  const r = await act(maya, id, { action: 'spam' });
+  assert.deepEqual([r.data.request.status, r.data.request.closed_how], ['closed', 'spam']);
+  assert.equal(mailTo('target@cust.test').length, before, 'the person whose address was typed is not written to again');
+  assert.ok(r.data.request.thread.some((m: any) => m.by === 'Maya Okafor' && m.body === 'Closed as not written by the owner of the address. Nothing was emailed to them'));
+  // If the address owner did write it after all, they are told what happened and how to open it again.
+  const v = await seen(l.api);
+  assert.equal(standing(v, (iso) => whenText(iso)).title, 'Closed: this did not look like it came from you');
+  assert.ok(!JSON.stringify(v).includes('555'));
+  assert.equal((await from().post(`${l.api}/reply`, { message: 'That was really me, sorry for the odd wording.' })).data.request.status, 'open');
+  // Now it is known to come from the mailbox, so it cannot be closed without a word again.
+  const again = await act(maya, id, { action: 'spam' });
+  assert.equal(again.status, 400);
+  assert.match(again.data.error, /known to come from the owner of the address.*Close it with an answer instead\./);
+  // The same for someone who was signed in under their own address.
+  const real = await person('Rea Real', 'rea@cust.test');
+  const mineId = row((await ask({ topic: 'other', message: 'A real question from a real person.' }, real)).reference).id;
+  assert.equal((await act(maya, mineId, { action: 'spam' })).status, 400);
+  // Empty answers, questions and notes are refused with what to do.
+  for (const action of ['answer', 'ask', 'note']) assert.match((await act(maya, mineId, { action, text: ' ' })).data.error, /^Write the (answer|question|note) first\./);
+});
+
+test('the payment problems the software files itself still appear in the queue, and are closed with a note, not an email', async () => {
+  // A payment that names an account this server never had: the payment code tells the operators (tellOperators).
+  await billing.applyStripeEvent({ type: 'invoice.paid', data: { object: { id: 'in_support_test', customer: 'cus_support', subscription: 'sub_support', amount_paid: 900, currency: 'usd', status: 'paid', billing_reason: 'subscription_create', lines: { data: [{ price: { id: 'price_grove' }, metadata: { sg_account: 'acc_from_another_server' } }] } } } });
+  const filed = db.get("SELECT * FROM support_requests WHERE topic='billing' AND message LIKE '%in_support_test%'");
+  assert.ok(filed, 'the alert was filed as a request');
+  const q = await queue(maya);
+  const listed = q.requests.find((r: any) => r.id === filed.id);
+  assert.ok(listed, 'and is in the queue');
+  assert.deepEqual([listed.alert, listed.status, listed.due_at, listed.late, listed.name], [true, 'open', null, false, 'Sign&Grow (automatic alert)']);
+  assert.match(listed.message, /could not be matched/);
+  assert.ok((await queue(maya, 'unowned')).requests.some((r: any) => r.id === filed.id) && (await queue(maya, 'all')).requests.some((r: any) => r.id === filed.id));
+  // It comes after the requests a time was promised for, and is never late: no customer is waiting on it.
+  const firstNoDue = q.requests.findIndex((r: any) => !r.due_at);
+  assert.ok(q.requests.slice(firstNoDue).every((r: any) => !r.due_at));
+  db.run('UPDATE support_requests SET at=? WHERE id=?', new Date(Date.now() - 9 * 864e5).toISOString(), filed.id);
+  assert.equal((await cron.tick()).support.late, 0);
+
+  // Nobody is emailed "an answer" to an alert, and it is not somebody's request under Help.
+  const emails = db.get('SELECT COUNT(*) n FROM emails').n;
+  for (const action of ['answer', 'ask', 'spam']) assert.match((await act(maya, filed.id, { action, text: 'Dear alert' })).data.error, /an alert the software filed by itself\. Nobody is waiting for an email about it/);
+  assert.deepEqual((await maya.get('/support/mine')).data.requests.filter((r: any) => r.topic === 'billing' && /could not be matched/.test(r.message)), []);
+  assert.equal((await from().get(`/public/support/ticket/${filed.id}/anything`)).status, 404);
+  // Take it, note what was found, close it with a note that says what was done.
+  assert.equal((await act(maya, filed.id, { action: 'take' })).data.request.owner.name, 'Maya Okafor');
+  assert.match((await act(maya, filed.id, { action: 'close' })).data.error, /Write a note that says what was done about this alert/);
+  const closed = await act(maya, filed.id, { action: 'close', text: 'Belongs to the staging server. Refunded by hand there.' });
+  assert.deepEqual([closed.data.request.status, closed.data.request.thread.at(-2).kind, closed.data.request.thread.at(-2).body], ['closed', 'note', 'Belongs to the staging server. Refunded by hand there.']);
+  assert.equal(db.get('SELECT COUNT(*) n FROM emails').n, emails);
+  assert.ok(!(await queue(maya)).requests.some((r: any) => r.id === filed.id) && (await queue(maya, 'all')).requests.some((r: any) => r.id === filed.id));
+  // Typing the alert's name into the form does not make a customer's request an alert.
+  const posing = await ask({ email: 'poser@cust.test', name: 'Sign&Grow (automatic alert)', topic: 'billing' });
+  assert.equal((await opView(maya, row(posing.reference).id)).alert, false);
+  // The old queue call still lists what is waiting, for anything that reads it.
+  assert.ok((await maya.get('/operator/queue')).data.support.some((s: any) => s.ref === posing.reference));
+});
+
+// ---- 6. Limits and privacy ------------------------------------------------------------------------------------
+
+test('the link cannot be used to flood the people who answer: a limit for each request and for each address', async () => {
+  const t = await ask({ email: 'flood@cust.test', message: 'The first message, which is long enough.' });
+  const l = link('flood@cust.test', t.reference);
+  await act(maya, row(t.reference).id, { action: 'answer', text: 'An answer, so the next reply reopens it.' });
+  const opMails = mailTo('maya@ops.test').length;
+  for (let i = 0; i < SUPPORT_REPLIES_PER_REQUEST; i++) assert.equal((await from().post(`${l.api}/reply`, { message: `Reply number ${i + 1}.` })).status, 200, `reply ${i + 1}`);
+  const over = await from().post(`${l.api}/reply`, { message: 'One too many.' });
+  assert.equal(over.status, 429);
+  assert.match(over.data.error, /You have added 10 messages to this request in the last 24 hours, and we have them all\. A person reads everything you sent\. You can add more tomorrow\./);
+  assert.equal(db.get("SELECT COUNT(*) n FROM support_messages WHERE request_id=? AND kind='customer'", l.id).n, SUPPORT_REPLIES_PER_REQUEST);
+  assert.equal(mailTo('maya@ops.test').length, opMails + 1, 'ten replies, one email to the operator who has it: the request was already back on the list');
+  // A day later there is room again.
+  db.run("UPDATE support_messages SET at=? WHERE request_id=? AND kind='customer'", new Date(Date.now() - 25 * 3600_000).toISOString(), l.id);
+  db.run('UPDATE support_requests SET at=? WHERE id=?', new Date(Date.now() - 26 * 3600_000).toISOString(), l.id);
+  assert.equal((await from().post(`${l.api}/reply`, { message: 'The next day.' })).status, 200);
+  assert.equal((await from().post(`${l.api}/reply`, { message: '' })).status, 400);
+
+  // Across requests: one address cannot be used for more than 30 messages a day, new requests and replies
+  // together, whichever device they come from. That also keeps the form from filling a stranger's inbox.
+  let made = 0;
+  for (;;) {
+    const r = await from().post('/public/support', { email: 'Bomb@cust.test', message: 'Another request to the same address.' });
+    if (r.status !== 200) {
+      assert.equal(r.status, 429);
+      assert.match(r.data.error, /We already have a lot of messages from this address in the last 24 hours/);
+      break;
+    }
+    assert.ok(++made <= SUPPORT_REPLIES_PER_ADDRESS, 'the limit holds');
+  }
+  assert.equal(made, SUPPORT_REPLIES_PER_ADDRESS);
+  assert.equal(mailTo('Bomb@cust.test').length, SUPPORT_REPLIES_PER_ADDRESS, 'and no more acknowledgements than that reach the address');
+  const any = db.get("SELECT ref FROM support_requests WHERE email='Bomb@cust.test' LIMIT 1").ref;
+  assert.equal((await from().post(`${link('Bomb@cust.test', any).api}/reply`, { message: 'A reply instead.' })).status, 429);
+  // One device hammering the form is stopped long before that.
+  const one = from();
+  let ok = 0;
+  for (let i = 0; i < 12; i++) if ((await one.post('/public/support', { email: `many${i}@cust.test`, message: 'From one device, many addresses.' })).status === 200) ok++;
+  assert.equal(ok, 8);
+});
+
+test('deleting an account removes its requests with their threads, and one still waiting for an answer goes once it has it', async () => {
+  const gal = await person('Gal Going', 'gal@cust.test');
+  const done = await ask({ topic: 'other', message: 'DONE-WORDS: an old question.' }, gal);
+  const open = await ask({ topic: 'billing', message: 'OPEN-WORDS: please refund my last payment before I go.' }, gal);
+  const waiting = await ask({ topic: 'sending', message: 'WAITING-WORDS: why was my send refused?' }, gal);
+  const [did, oid, wid] = [done, open, waiting].map((t) => row(t.reference).id);
+  await act(maya, did, { action: 'note', text: 'DONE-NOTE' });
+  await act(maya, did, { action: 'answer', text: 'DONE-ANSWER' });
+  assert.equal((await gal.post(`/support/mine/${did}/reply`, { message: 'DONE-REPLY' })).status, 200);
+  await act(maya, did, { action: 'close', text: 'DONE-CLOSING' });
+  await act(maya, oid, { action: 'take' });
+  await act(maya, oid, { action: 'note', text: 'OPEN-NOTE' });
+  assert.equal((await gal.post(`/support/mine/${oid}/reply`, { message: 'OPEN-MORE: it was 9 dollars.' })).status, 200);
+  await act(maya, wid, { action: 'ask', text: 'WAITING-QUESTION: which envelope?' });
+  const thread = (id: string) => db.get('SELECT COUNT(*) n FROM support_messages WHERE request_id=?', id).n;
+  assert.ok(thread(did) >= 5 && thread(oid) >= 3 && thread(wid) >= 1);
+  const openLink = link('gal@cust.test', open.reference);
+
+  assert.equal((await gal.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+
+  // The answered one is gone, and its whole thread with it: messages both ways, the note, the history.
+  assert.equal(db.get('SELECT COUNT(*) n FROM support_requests WHERE id=?', did).n, 0);
+  assert.equal(thread(did), 0);
+  assert.equal(db.get("SELECT COUNT(*) n FROM support_messages WHERE body LIKE 'DONE-%'").n, 0);
+  // The one nobody has answered, and the one where we asked something and wait, are kept so the answer is not lost,
+  // cut loose from the login and the account that no longer exist.
+  for (const id of [oid, wid]) assert.deepEqual({ ...db.get('SELECT forget, user_id, account_id FROM support_requests WHERE id=?', id) }, { forget: 1, user_id: null, account_id: null });
+  assert.deepEqual([row(open.reference).status, row(waiting.reference).status], ['open', 'waiting']);
+  assert.ok(thread(oid) >= 3);
+  assert.equal((await opView(maya, oid)).forget, true);
+  // Our stored copies of the emails about them went with the account.
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE lower(to_email)='gal@cust.test' AND subject LIKE ?", `%${done.reference}%`).n, 0);
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE html LIKE '%gal@cust.test%' AND subject LIKE '[%'").n, 0, 'also the ones that told the operators about her');
+
+  // Answering the open one sends the answer in full, says that the request is now deleted, and deletes it.
+  const answered = await act(maya, oid, { action: 'answer', text: 'OPEN-ANSWER: your 9 dollars are on their way back.' });
+  assert.deepEqual(answered.data, { ok: true, deleted: true });
+  const last = mailTo('gal@cust.test').at(-1)!;
+  assert.match(text(last.html), /OPEN-ANSWER: your 9 dollars are on their way back\. You closed your Sign&Grow account while this request was open\. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it\./);
+  assert.equal(last.link, null, 'the email carries no link, because there is nothing left to open');
+  assert.deepEqual([db.get('SELECT COUNT(*) n FROM support_requests WHERE id=?', oid).n, thread(oid)], [0, 0]);
+  assert.equal((await from().get(openLink.api)).status, 404);
+  assert.equal((await opView(maya, oid)), undefined);
+
+  // The one waiting for her reply is kept for the time a closed request can be reopened, then it goes too.
+  await cron.tick();
+  assert.equal(db.get('SELECT COUNT(*) n FROM support_requests WHERE id=?', wid).n, 1);
+  db.run('UPDATE support_requests SET updated_at=? WHERE id=?', new Date(Date.now() - (SUPPORT_REOPEN_DAYS + 1) * 864e5).toISOString(), wid);
+  await cron.tick();
+  assert.deepEqual([db.get('SELECT COUNT(*) n FROM support_requests WHERE id=?', wid).n, thread(wid)], [0, 0]);
+  assert.equal(db.get("SELECT COUNT(*) n FROM support_messages WHERE body LIKE 'OPEN-%' OR body LIKE 'WAITING-%'").n, 0);
+  assert.equal(firstName('  Maya   Okafor '), 'Maya');
+  assert.ok(hoursFromNow(1) > new Date().toISOString());
+});

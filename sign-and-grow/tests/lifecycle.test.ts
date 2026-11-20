@@ -273,7 +273,9 @@ test('deleting an account at once leaves no name, address, email copy or signer 
   const answered = await from().post('/public/support', { email: 'gone.gal@example.com', name: 'Gone Gal', message: 'An old question that was answered.' });
   const open = await from().post('/public/support', { email: 'gone.gal@example.com', name: 'Gone Gal', topic: 'billing', message: 'Please refund my last payment before I go.' });
   const reqId = (ref: string) => db.get('SELECT id FROM support_requests WHERE ref=?', ref)?.id;
-  assert.equal((await olga.post(`/operator/support/${reqId(answered.data.reference)}`, { status: 'closed' })).status, 200);
+  // A request is never closed without a written answer (see tests/support.test.ts), so closing carries one.
+  assert.equal((await olga.post(`/operator/support/${reqId(answered.data.reference)}`, { status: 'closed' })).status, 400);
+  assert.equal((await olga.post(`/operator/support/${reqId(answered.data.reference)}`, { status: 'closed', text: 'Here is the answer to your old question.' })).status, 200);
   assert.ok(mailTo('gone.gal@example.com').length > 1 && blob(done.src) && blob(done.att) && blob(done.fin));
 
   assert.equal((await g.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
@@ -306,7 +308,7 @@ test('deleting an account at once leaves no name, address, email copy or signer 
   const waiting = db.get('SELECT status, forget, user_id, account_id FROM support_requests WHERE ref=?', open.data.reference);
   assert.deepEqual({ ...waiting }, { status: 'open', forget: 1, user_id: null, account_id: null });
   assert.ok((await olga.get('/operator/queue')).data.support.some((s: any) => s.ref === open.data.reference), 'still in the queue of the people who answer');
-  assert.equal((await olga.post(`/operator/support/${reqId(open.data.reference)}`, { status: 'closed' })).data.deleted, true);
+  assert.equal((await olga.post(`/operator/support/${reqId(open.data.reference)}`, { status: 'closed', text: 'Your last payment has been refunded.' })).data.deleted, true);
   assert.equal(reqId(open.data.reference), undefined);
   delete process.env.OPERATOR_EMAILS;
 
@@ -690,7 +692,7 @@ test('a help reference is eight characters nobody can misread, and the same one 
   process.env.OPERATOR_EMAILS = 'ref.reader@example.com';
   const row = (await user.get('/operator/queue')).data.support.find((s: any) => s.email === 'ref.reader@example.com');
   assert.equal(row.ref, mine.data.reference);
-  assert.equal((await user.post(`/operator/support/${row.id}`, { status: 'closed' })).status, 200);
+  assert.equal((await user.post(`/operator/support/${row.id}`, { status: 'closed', text: 'Your last payment was taken once, as it should be.' })).status, 200);
   delete process.env.OPERATOR_EMAILS;
   assert.equal((await user.get('/support/mine')).data.requests[0].status, 'closed');
   // A request from before references were stored keeps the one it was answered with then.

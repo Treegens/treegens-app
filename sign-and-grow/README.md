@@ -33,6 +33,8 @@ What the test files cover:
 | `tests/billing2.test.ts` | Paying when things go wrong: the provider's messages in any order, the provider failing half way, two refund requests at once, replayed checkouts and messages, cancelling while a payment is failing, slow payment methods, reminders on our own timer, a charge higher than the reminder said, the corners of the free code, and the ways round paying for a signature. |
 | `tests/billing3.test.ts` | What a second round of attacks found: provider messages handled in the same instant, a refund whose answer is lost on the way back, refunding again when signatures come back, card disputes, top-up invoices and invoices that are not ours, cancelling in the awkward moments, the unused-plan rule, who pays for which signature, and a free code that is switched off. |
 | `tests/billing4.test.ts` | What a third round of attacks found: a refund racing against a burst of sends, one customer's slow call not holding up another's, things on a shared provider account that are not ours, disputes the bank decides either way, a refund made by hand settling ours, cancelling when the provider cannot be asked, payments whose message was lost, and the corners of who pays for which signature. |
+| `tests/billing5.test.ts` | The last open ends of the payment code: the provider's messages are answered within a few seconds and kept in an inbox until applied (a slow provider, a failure, a restart in between, three days of failing), a plan on hold can pay its open payment from the Plan page and is read back when that was paid elsewhere, an invoice that names no subscription is matched by asking the provider what the customer is subscribed to, and the price rule: a renewal above the price an account is on is refunded the difference unless a notice went out 30 days before, with the operator's announcement and the reminder that states the true amount. |
+| `tests/finish.test.ts` | What was still open at the end: a member leaves a team by themselves, public forms on a shared device and on a closing account, the email check recognising codes of deleted documents from a fingerprint, and stored copies of emails going with a deleted person and after 90 days. |
 | `tests/integrity.test.ts` | What people sign is what they saw: every signer is shown everything the sender wrote, nothing printed changes after a signature unless the signer is asked to sign again, a signing page left open cannot finish on a document that was changed, the audit trail says what a correction changed, a replaced signer starts with empty fields, a save from an older copy of the editor is refused, a replaced email is still recognised as genuine, a changed signing order is enforced. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
 | `tests/autoplace.test.ts` | Placing fields automatically from the text of a document. |
@@ -41,6 +43,7 @@ What the test files cover:
 | `tests/api.test.ts` | Calls that are repeated or cross each other: an `Idempotency-Key` that belongs to one person and goes with its envelope, a bulk send that is repeated while it runs or finished after the server stopped half way, one audit line a day for an embedded signing link, two Finish, Decline, Void or reassign requests at the same moment, a whole batch reminded or voided while someone in it signs, and signed PDFs made from fillable forms, whether the form was sent or attached by a signer. |
 | `tests/lifecycle.test.ts` | Accounts, teams and deleting: someone removed from a team can still sign in (a workspace of their own, the welcome signatures once) and be invited again, nobody removes themselves, a hand-over names a member who stays, takes bulk sends along and is written to each audit trail, a deleted account leaves no names, addresses, email copies or signer files behind and keeps the money records without names, a closing account takes on nothing new and its owner is emailed a week before the end, members use every template but change only their own and see only their own folders and batches, a completed envelope its sender deletes stays with its recipients, help references nobody can misread, a signer's help request that reaches the sender, and sign-in opening the workspace used last. |
 | `tests/signerux.test.ts` | The person who signs, and the email that reaches them: a saved signature is confirmed before it goes on a page and never offered across two people at one address, "Finish later" carries the signature to another device, "Fix my name" cannot turn one signer into another, dead and replaced links tell the sender, "Email me the current link" and "Find my documents" say what they did, scans and pictures are flagged page by page and stay flagged, the sender's field count matches the signer's, emails the mail server refuses are tried again and the audit trail says so, and someone who signed keeps a copy when the envelope is closed. |
+| `tests/signin.test.ts` | Signing in and signing up with Google or Microsoft, against a stand-in for both (an RSA key made in the test, their key lists and token endpoints answered by a fetch stub, ID tokens signed and forged there): a new person, a returning one, a state that is missing, made up, from another browser, used twice or too old, every check on the ID token (signature, "none", HS256 keyed with the public key, issuer, Microsoft's organization rule, audience, expiry, nonce), keys cached and fetched again for an unknown key id, an address in a token never opening an existing login unless the provider vouches for it, a login someone else started in a person's name being cut off from them, invitations, free codes, a closing login coming back, a removed member's workspace, connecting and disconnecting under Settings, the last way in, a first password by emailed link, API keys kept out, no redirect off this site, and nothing answering when a provider is not configured. |
 
 ## What the bad reviews taught us
 
@@ -62,6 +65,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | "I paid and nothing happened." | The plan and its signatures are there the moment checkout finishes, whichever of the provider's messages arrives first, and the page only says thank you for a payment that really arrived. A payment that cannot be matched to an account is flagged to a person at once. |
 | Bills for going over the limit. Documents that count even when nobody signed. | People pay for signatures, and one is used only when somebody actually signs. Sending holds one per signer. Voiding, declining and expiring give it back. Running out pauses sending and never creates a charge. |
 | Prepaid allowance disappears at renewal. | Signatures never expire. They roll over, also after cancelling. |
+| The price went up and nobody said so. | One rule, written once (`priceRuleText` in `src/lib/policy.ts`) and enforced by the server: an account stays on the monthly price it has been paying until every owner and admin has been emailed the new price at least 30 days before the day it starts, with a link that stops the plan. A renewal that charges more without that notice has the difference refunded automatically, the customer still gets the full month, and the operator is told (a week ahead if the provider already shows the higher amount). The operator announces a price on `/app/operator`. |
+| "I updated my card and the plan is still on hold." | A plan the provider has stopped retrying says so, and offers "Pay the open payment", which opens the provider's page for exactly that invoice. If it was paid in the meantime the plan is read back instead of offering the payment again. |
 | Paying for a plan nobody uses. | A nudge after 60 quiet days. After `DORMANT_AUTO_STOP_DAYS` without a send, the renewal is stopped before the next charge and the owner is told. |
 | Support is a chatbot loop, and closed to anyone who cannot log in. | `/help` works without an account: self-service tools, then a contact form that returns a reference and goes to a queue people work from (`/app/operator`, and `SUPPORT_EMAIL` if set). No chatbot. The reference is eight characters nobody can misread, and someone who is signed in sees their requests and whether each was answered under the form. A message about signing that names an envelope the writer is on also reaches its sender, who can usually fix it at once. Help is one click away from the sign-in forms, the public form page and the editor. |
 | A typo after sending means void and start again. | An envelope that is out can be corrected in place: names, addresses, fields, people. Signatures already collected stay. Once someone has finished, the pages they signed only change if the sender chooses to ask them to sign again: they are told what changed, the first signature stays on record, and it costs no extra signature. A signer whose page is open during a correction cannot finish on the old version. The audit trail says what every correction changed. |
@@ -75,6 +80,9 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | Signers cannot get their copy later. | The completion email links to the signed document and attaches it when small enough, and two people who share an address each get their own. `/help` sends it again for as long as the sender keeps the account, also for a document someone has signed while others have not, and says whose link is whose at a shared address. Someone who signed an envelope that was later voided, declined or expired can still download what they signed: that copy opens with a page saying it was not completed by everyone, and why. A sender who deletes a completed envelope only takes it out of their own lists, search, export and reports: every recipient's link, download and list of documents sent to them keep working. |
 | The API costs extra and needs a go-live review. | The API is the same on every plan, and a key works as soon as it is created. Errors say what to do and carry a request id. Retries are safe with an `Idempotency-Key`. |
 | Integrations break without anyone noticing. | Every webhook delivery is in the log from before the first try, and the latest 200 of each webhook can be sent again. After three failures in a row the admins get an email. Removing a team member lists the API keys that stop with them and emails the admins. A member who closes their own login is shown the same list first, and the admins get the same email. Stopped keys stay on the admins' list. A key that cannot be used says why. |
+| You cannot get off a team without asking someone. | "Leave this team" on the Team tab, for every member and admin: no permission needed. What they sent passes to the member they choose (the owner by default) with a line in each audit trail, their API keys stop and the admins are told which, and they stay signed in, in another workspace of theirs or a new one of their own. The owner hands the account over first. Someone an admin removes is told by email what happened to their work and that their login stays. |
+| A real email is called fake once the sender has deleted the document. | The check page keeps a fingerprint of each security code for a year after a document is deleted: no name, no address, no title. Whoever still holds that email learns that it was real and that the document is gone, instead of "treat it as fake". |
+| A front-desk tablet locks itself out of its own form. | A public form can be marked as used on a shared device: 30 unfinished starts from one address instead of 3, an abandoned start is cleared after an hour instead of a day, typing counts as being there, and whoever finishes is offered a clean form for the next person. A form of an account that is closing says so before anyone types into it. |
 | Closing an account by mistake loses everything. | Closing keeps everything for 30 days, and signing in again undoes it. A week before the end the owner is emailed the date, how to keep the account and how to export first. While it is closing nothing new starts in it: nothing is sent, nobody is invited or joins, its keys are off. |
 | "Deleted" does not mean deleted. | When an account is deleted, at once or after the 30 days, its envelopes go with their audit trails, our stored copies of their emails, the files signers attached, replaced links, reports, webhook logs and batch records, and the files come off the disk. What stays is listed on `/security`, `/help` and in Settings from one list (`KEPT_AFTER_DELETION` in `src/lib/policy.ts`): payments, refunds and the signature ledger without names, a help request that is still open until it is answered, and what belongs to other people. |
 
@@ -129,6 +137,10 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 
 **Team and admin**
 - Accounts with owner, admin and member roles, email invitations, multiple accounts per user.
+- Sign in and sign up with Google or Microsoft next to email and password, once the operator has set them up
+  (see "Signing in with Google or Microsoft" under Configuration). Under Settings, Profile, a person sees every way
+  into their login, connects or disconnects a provider, and gets a link by email to set a first password. The last
+  way in cannot be removed, and the owner of a login is emailed whenever a new way in is connected to it.
 - Hand the account to another owner. What a removed member sent passes to a member the admin chooses. Members see
   their own envelopes, folders and bulk sends, admins see all of them. Signing in opens the workspace used last.
 - Branding: logo and colour on emails and the signing screen.
@@ -174,7 +186,8 @@ e-signature product, not all of it. Not built:
 - Remote online notarisation, payments collected during signing, conditional fields and formulas.
 - Word or Google Docs upload (export to PDF first), comments on documents, shared recipient groups.
 - Contract lifecycle management, AI contract analysis, clickwrap, document generation.
-- Single sign-on (SAML), two-factor login, native mobile apps.
+- Single sign-on for a whole organization (SAML, or making a team sign in one way), two-factor login of our own,
+  native mobile apps. Signing in with Google or Microsoft is in; a second step is then whatever that account has.
 - Ready-made integrations (Salesforce, Google Drive and so on). The API and webhooks are the way in for now.
 - A security certification, or encryption of stored files by the app itself. `/security` says so plainly.
 - Staffed support. The software gives everyone a way to reach a person and gives those people a queue. Someone
@@ -194,6 +207,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SMTP_URL`, `MAIL_FROM` | Mail server, for example `smtps://user:pass@smtp.example.com`. Without it nothing is delivered, and the audit trail of an envelope says "Not emailed" instead of "Sent to recipient". An email the mail server will not take is kept and tried again by the timer (see `CRON_SECRET`): after 5 minutes, 30 minutes, 2 hours, 6 hours and a day, six tries in all. The envelope page and the audit trail say how it goes, and after the last try the sender is told. | none |
 | `CRON_SECRET` | Lets a scheduler call `POST /api/cron`. Call it at least once an hour: it sends signer reminders and renewal reminders, tries emails again that the mail server would not take (so the gaps between tries are never shorter than the gap between calls), expires envelopes, retries refunds and cancellations the payment provider could not take the first time, and closes accounts. A renewal that is charged with no reminder on record raises an alert. | none |
 | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_GROVE`, `STRIPE_WEBHOOK_SECRET` | Turns on paying. Without them nothing is counted and there is nothing to buy. `STRIPE_PRICE_GROVE` is the monthly price. Point a Stripe webhook at `/api/stripe/webhook` and send it these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `invoice.paid`, `invoice.upcoming`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`, `charge.dispute.created`. | none |
+| `STRIPE_WEBHOOK_WAIT_MS` | How long a message from the payment provider is worked on before it is answered. The provider counts a late answer as a failure, so a message that takes longer (the provider or the mail server is slow) is answered "received", kept in an inbox table and finished in the background; the timer applies anything left over after a restart or a failure. | `5000` |
 | `STRIPE_API_VERSION` | Pins the version of the payment provider's API that calls are made with, for example the one shown in your Stripe dashboard when you tested. Set the webhook endpoint to the same version. Unset, the account's default version is used; both the older and the newer shapes of invoices and subscriptions are read. | account default |
 | `ACCEPT_DISPUTES_UP_TO_USD` | A card dispute always stops billing, takes the signatures the disputed payment bought off the balance (also ones held for envelopes that are out), switches new payments off until a person has looked (the operator page has the button to switch them back on), and tells the customer in writing. Disputes up to this amount are also accepted with the payment provider automatically instead of being fought; larger ones are left for a person to decide, and if the bank then lets the payment stand the signatures come back by themselves. `0` (or `ACCEPT_DISPUTES=0`) leaves every dispute to a person. | `25` |
 | `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, receives every help request with the sender as reply-to, and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and are kept in the operator queue. Set at least one of the two: with neither, nobody can open the queue and an alert is only a loud line in the server log. When set, the address is also printed in the footer of every public page and in the app's menu. A production server that starts without it logs a loud warning, because the pages promise that a person answers. | none |
@@ -208,11 +222,58 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `POWERFORM_SHARED_IDLE_MINUTES` | The same, for a form its owner marked as filled in on a shared device (a tablet at the front desk, one office network). Such a form also allows 30 unfinished starts from one address instead of 3, and offers "start a new form for the next person" when someone has finished. | `60` |
 | `DORMANT_AUTO_STOP_DAYS` | A paid plan that has sent nothing for this long is not renewed. `0` only warns. | `90` |
 | `UNOPENED_ALERT_HOURS` | How long a request sits unopened before the sender is told. | `48` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Switches on "Continue with Google" on the sign-in and sign-up pages and under Settings. Both must be set. With either missing, nothing about Google is shown anywhere and its routes answer 404. Register the redirect address `APP_URL` + `/api/auth/google/callback` with Google (see below). | none |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | The same for "Continue with Microsoft". Redirect address: `APP_URL` + `/api/auth/microsoft/callback`. | none |
+| `MICROSOFT_TENANT` | Who may sign in with Microsoft: `common` (work, school and personal accounts), `organizations` (work and school), `consumers` (personal), or the id of one organization (the "Directory (tenant) ID", a value like `11111111-2222-3333-4444-555555555555`). A domain name is not accepted: Microsoft sign-in then stays off and the server log says why. | `common` |
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |
 | `DEV_OUTBOX=1` | Shows the outbox in a production build. Never set this on a public server: it exposes every signing link. | off |
 
 `/help`, `/` and `/security` quote the refund window and the unused-plan rule. They read them from
 `src/lib/policy.ts`, the same file the server enforces them from, so the pages and the code cannot disagree.
+
+### Signing in with Google or Microsoft
+
+Off until it is configured. A provider is on when both of its values are set, and then "Continue with Google" or
+"Continue with Microsoft" appears on `/login` and `/signup` and under Settings, Profile. `GET /api/auth/providers`
+tells the pages which are on. Nothing here uses an SDK: the code flow is written out with `fetch` in
+`src/server/oidc.ts`, and who the person is gets decided in `src/server/routes-signin.ts`.
+
+Register one redirect address with each provider, exactly `APP_URL` followed by the path, with no slash at the end:
+
+| Provider | Where to register it | Redirect address (with `APP_URL=https://sign.example.com`) |
+| --- | --- | --- |
+| Google | Google Cloud console, APIs and Services, Credentials, an OAuth client of the type "Web application", under "Authorized redirect URIs" | `https://sign.example.com/api/auth/google/callback` |
+| Microsoft | Microsoft Entra admin centre, App registrations, your app, Authentication, platform "Web", under "Redirect URIs" | `https://sign.example.com/api/auth/microsoft/callback` |
+
+The app asks for `openid email profile` and nothing more. It never calls another API of the provider and keeps no
+token of theirs: it reads the name, the email address and the provider's id for the person out of the ID token once.
+
+How a person is recognised (the rule is at the top of `src/server/routes-signin.ts`):
+
+- By the provider's own id for them, kept in the `identities` table: Google's `sub`, Microsoft's `tid` with `oid`.
+  Never by the email address in the token alone, because at Microsoft the admin of any organization can put any
+  address there.
+- An id we do not know, whose address belongs to a login that exists, is connected to that login only when the
+  provider itself stands behind the address. For Google that means `email_verified` is true and Google runs the
+  mailbox (gmail.com, or a Google Workspace domain, which the `hd` claim says). For Microsoft it means the optional
+  claim `xms_edov` is true. To let Microsoft vouch, add the optional claims `email` and `xms_edov` to the ID token
+  of the app registration (its manifest, `optionalClaims`, `idToken`). Without `xms_edov` Microsoft never vouches,
+  which is safe and only means more people are asked to confirm their address by our own email.
+- When the provider does not vouch, nobody is signed in to the existing login. The page says to sign in with the
+  password once and connect the provider under Settings.
+- A new person gets a login made exactly as sign-up makes one (a workspace, the welcome signatures, an invitation
+  or a free code carried along). It has no password until they set one through a link sent to their address, and
+  its address counts as confirmed only when the provider vouched or an invitation was sent there.
+- If the provider vouches for an address whose login was never confirmed, that login may have been started by
+  someone else in this person's name. The password set before, the browsers signed in, the API keys that login made
+  and connections that were not vouched for are all cut off, and the person is told on screen and by email. The same
+  cut happens when the address of a never-confirmed login is first proven by a password link.
+
+What is checked on every sign-in: the `state` works once, for ten minutes, and only in the browser that started
+(an HttpOnly cookie); PKCE (S256); and the ID token itself, here and not by a library: RS256 and nothing else,
+the signature against the provider's published keys (kept for an hour, read once more when a token names a key we
+have not seen), issuer (for Microsoft the organization named in the token itself, and `MICROSOFT_TENANT` when it
+names one), audience, expiry and the nonce of this sign-in.
 
 ## Things to decide before launch
 
@@ -234,9 +295,13 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
   again (the sender has to choose that; nothing changes silently). That lock covers the whole envelope, including
   a new empty field for someone who has not signed yet. It is deliberately strict; loosen it in `printedView()`
   in `src/server/envelopes.ts` if you prefer a per-document rule.
-- **Raising the price** is not handled for you. Changing the price at the payment provider changes what existing
-  subscribers pay at their next renewal. The reminder a week before will state the new amount, but nothing here
-  asks for their agreement or gives 60 days of notice. Decide that policy before touching the price.
+- **Raising the price** has a rule, and the server holds you to it: 30 days of notice (`PRICE_NOTICE_DAYS` in
+  `src/lib/policy.ts`). In this order: (1) on `/app/operator`, "Announce a price change" with the new price and a
+  first day at least 30 days away. That emails every owner and admin of every paying account and records the
+  notice. (2) Change `PRICING.monthlyUsd` for new customers whenever you like. (3) With the payment provider, move
+  existing subscriptions to the new price so that it first applies on or after the announced day. Until an account
+  has had its notice, a renewal above the price it was on is refunded the difference automatically and you are
+  told; it still gets the full month of signatures. A lower price needs no notice.
 - **The free code** (`GROWalition` by default) is in this source code. If the repository is public, so is the
   code, and nothing limits how many accounts use it. Change it with `FREE_PLAN_CODES`.
 - **Impact factors** in the same file are commonly cited estimates. Check them against a source you are happy
@@ -255,6 +320,14 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
   Stripe account is shared with something else: everything Sign&Grow starts there carries its own mark
   (`sg_account` in the metadata), and invoices, checkouts, subscriptions and disputes without that mark or for
   another price are left alone. Also send the webhook these events: `charge.dispute.closed`, `refund.failed`.
+- **Signing in with Google or Microsoft** has only been tested against a stand-in (`tests/signin.test.ts`), never
+  against the live providers. Before switching it on for real, go through it once with real client ids: sign up,
+  sign in again, cancel at the provider, connect and disconnect under Settings, and a Microsoft work account as well
+  as a personal one. Three things to know: an unconfirmed login can still be started in someone else's name (with a
+  password as before, or now with a Microsoft account that claims their address), and although every way in is cut
+  off when the real owner arrives, what that login made stays in it (team members, webhooks, drafts), which is why
+  the notice tells them to look; whoever opens our "Confirm your email" link confirms the login it belongs to,
+  whoever made it; and closing an account still asks for a password, so someone without one sets one first.
 - **Storage** is SQLite on one disk, which is fine for one server. Back the `DATA_DIR` folder up. Moving to
   Postgres and object storage is the step to take before running more than one instance.
 - **`/security`** lists only what the code does. If hosting adds something (disk encryption, backups, a

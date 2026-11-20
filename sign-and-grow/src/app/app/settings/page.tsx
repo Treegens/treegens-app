@@ -7,6 +7,8 @@ import { AdoptSignature } from '@/components/SignaturePad';
 import { PRICING, mangrovesFor } from '@/lib/impact';
 // Plain constants only: the rest of policy.ts reads the environment and is for the server.
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
+// The same holds for signin.ts: the names and the words only.
+import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -23,7 +25,6 @@ const longMoment = (s?: string | null) => (s ? `${longDate(s)} at ${new Date(s).
 function Profile() {
   const me = useMe();
   const [f, setF] = useState({ name: me.user.name, title: me.user.title || '', company: me.user.company || '' });
-  const [pw, setPw] = useState({ current: '', password: '' });
   const [adopt, setAdopt] = useState<'' | 'signature' | 'initials'>('');
   const save = (body: any, msg = 'Saved') => api('/me', { method: 'PATCH', body }).then(() => (toast(msg), me.reload())).catch(oops);
   return (
@@ -55,16 +56,90 @@ function Profile() {
           })}
         </div>
       </div>
-      <form className="card" onSubmit={(e) => { e.preventDefault(); api('/me/password', { body: pw }).then(() => (toast('Password changed'), setPw({ current: '', password: '' }))).catch(oops); }}>
-        <h2 style={{ marginBottom: 12 }}>Password</h2>
-        <div className="grid g2">
-          <label className="f"><span>Current password</span><input type="password" autoComplete="current-password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /></label>
-          <label className="f"><span>New password</span><input type="password" autoComplete="new-password" minLength={8} value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} /></label>
-        </div>
-        <button className="btn">Change password</button>
-      </form>
+      <SignInWays />
       {adopt && <AdoptSignature kind={adopt} name={me.user.name} onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
     </div>
+  );
+}
+
+// Ways to sign in: the password, and Google and Microsoft when the operator of this server has switched them on, or
+// while one is still connected from a time it was. With neither, this is the password form there has always been.
+function SignInWays() {
+  const me = useMe();
+  const [d, reload, failed] = useLoad(() => api('/me/signin'));
+  const [pw, setPw] = useState({ current: '', password: '' });
+  // What the last thing done here led to. It stays on screen: some of it is a few sentences and tells what to do next.
+  const [said, setSaid] = useState<{ text: string; err?: boolean; confirm?: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    // Back from Google or Microsoft after "Connect": what happened, in words, and the address tidied up.
+    const q = new URLSearchParams(window.location.search);
+    const p = q.get('provider');
+    if (q.get('signin_error')) setSaid({ text: signInErrorText(q.get('signin_error'), p), err: true });
+    else if (q.get('signin') === 'connected') setSaid({ text: `${isProviderId(p) ? PROVIDER_NAMES[p] : 'It'} is connected. From now on you can sign in with it.` });
+    if (q.get('signin_error') || q.get('signin')) window.history.replaceState(null, '', '/app/settings?tab=profile');
+  }, []);
+  const providers: any[] = d?.providers || [];
+  const hasPw: boolean = d ? d.password : me.user.has_password !== false;
+  const act = (what: () => Promise<any>) => {
+    setBusy(true);
+    setSaid(null);
+    what().catch((e: any) => setSaid({ text: e?.message || 'Something went wrong.', err: true, confirm: e?.code === 'confirm_first' })).finally(() => setBusy(false));
+  };
+  const changePassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    api('/me/password', { body: pw }).then(() => (toast('Password changed'), setPw({ current: '', password: '' }))).catch(oops);
+  };
+  const fields = (
+    <div className="grid g2">
+      <label className="f"><span>Current password</span><input type="password" autoComplete="current-password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /></label>
+      <label className="f"><span>New password</span><input type="password" autoComplete="new-password" minLength={8} value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} /></label>
+    </div>
+  );
+  // Nothing is drawn until we know which of the two this is, so the card does not change shape under the reader.
+  if (!d && !failed) return null;
+  if (!providers.length && hasPw) return (
+    <form className="card" onSubmit={changePassword}>
+      <h2 style={{ marginBottom: 12 }}>Password</h2>
+      {fields}
+      <button className="btn">Change password</button>
+    </form>
+  );
+  const sendLink = () => act(() => api('/me/signin/password-link', { method: 'POST' }).then((r) => setSaid({ text: `We sent a link to ${r.sent_to}. Open it and choose your password. It works for one hour, and until you use it nothing changes.` })));
+  const connectTo = (p: any) => act(() => api(`/me/signin/${p.id}/connect`, { method: 'POST' }).then((r) => window.location.assign(r.url)));
+  const disconnect = (p: any, c: any) => window.confirm(`Disconnect ${p.name}${c.email ? ` (${c.email})` : ''}? Signing in with it will no longer open this login. You can connect it again at any time.`)
+    && act(() => api(`/me/signin/${c.id}`, { method: 'DELETE' }).then(() => (setSaid({ text: `${p.name} is disconnected. It no longer opens this login.` }), reload())));
+  return (
+    <section className="card" aria-labelledby="ways-h">
+      <h2 id="ways-h" style={{ marginBottom: 4 }}>Ways to sign in</h2>
+      <p className="muted small">Each of these opens your login, {me.user.email}. There is always at least one: the last one cannot be removed.</p>
+      {said && (
+        <div className={`notice${said.err ? ' err' : ''}`} role={said.err ? 'alert' : 'status'} style={{ margin: '10px 0' }}>
+          {said.text}
+          {said.confirm && <div style={{ marginTop: 8 }}><button className="btn sm" style={{ minHeight: 44 }} onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => setSaid({ text: `We sent the confirmation link to ${me.user.email} again. Open it, then come back here.` })).catch(oops)}>Send the confirmation email again</button></div>}
+        </div>
+      )}
+      <ul className="ways">
+        <li>
+          <div className="what"><b>Password</b><div className="muted small">{hasPw ? 'Set. You sign in with your email address and this password.' : 'Not set yet. This login was made without one.'}</div></div>
+          {hasPw
+            ? <form onSubmit={changePassword}>{fields}<button className="btn">Change password</button></form>
+            : <button className="btn" disabled={busy} onClick={sendLink}>Email me a link to set a password</button>}
+        </li>
+        {providers.map((p) => (
+          <li key={p.id}>
+            <div className="what">
+              <b>{p.name}</b>
+              {p.connected.length === 0 && <div className="muted small">Not connected.</div>}
+              {p.connected.map((c: any) => <div key={c.id} className="muted small">Connected as {c.email || 'an account that gave no email address'} since {longDate(c.since)}.</div>)}
+              {!p.on && <div className="muted small">Signing in with {p.name} is switched off on this server at the moment, so this does not open your login right now.</div>}
+            </div>
+            {p.connected.map((c: any) => <button key={c.id} className="btn danger" disabled={busy} aria-label={`Disconnect ${p.name}${c.email ? ` (${c.email})` : ''}`} onClick={() => disconnect(p, c)}>Disconnect</button>)}
+            {p.on && p.connected.length === 0 && <button className="btn" disabled={busy} onClick={() => connectTo(p)}>Connect {p.name}</button>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -375,7 +450,10 @@ function Billing() {
   const grove = b.plan === 'grove';
   const free = !!b.free_with;
   const P = PRICING;
+  // The price for someone starting today. An account that is on the plan sees the price it is on, which can be an
+  // earlier one: nobody's price goes up without notice.
   const price = `$${P.monthlyUsd}`;
+  const myPrice = grove && !b.free_with && b.plan_price ? b.plan_price.replace(/\.00$/, '') : price;
   const s = b.signatures;
   const n = (x: number) => `${x} signature${x === 1 ? '' : 's'}`;
   const q = Math.min(P.topUpMax, Math.max(1, Math.round(qty) || 1));
@@ -418,6 +496,9 @@ function Billing() {
         </div>
       )}
 
+      {b.price_change && (
+        <div className="notice warn" role="status"><b>The price of your plan changes on {utcDate(b.price_change.from)}.</b> It stays {b.price_change.now} a month until then. The first renewal on or after that day is {b.price_change.next}. Every owner and admin was told by email on {fmtDate(b.price_change.told_at)}. Nothing else changes, and you can cancel at any time before then and keep your signatures.</div>
+      )}
       {b.refunds_pending?.map((r: any) => (
         <div className="notice" role="status" key={r.payment_id + r.since}><b>A refund of {r.amount} is on its way.</b> You asked for it on {fmtDate(r.since, true)} and the payment provider has not confirmed it yet. We keep checking and email you as soon as it is through. You do not need to do anything.</div>
       ))}
@@ -438,7 +519,7 @@ function Billing() {
         <div className="row between wrap">
           <div>
             <div className="muted small" style={{ fontWeight: 600 }}>Monthly plan</div>
-            <h2 style={{ fontSize: 24 }}>{free ? <>Free <s className="muted" style={{ fontSize: 16, fontWeight: 400 }}>{price} a month</s></> : <>{price} a month</>} <span className="muted" style={{ fontSize: 15, fontWeight: 400 }}>adds {n(P.monthlySignatures)} every month</span></h2>
+            <h2 style={{ fontSize: 24 }}>{free ? <>Free <s className="muted" style={{ fontSize: 16, fontWeight: 400 }}>{price} a month</s></> : <>{myPrice} a month</>} <span className="muted" style={{ fontSize: 15, fontWeight: 400 }}>adds {n(P.monthlySignatures)} every month</span></h2>
           </div>
           {free && <span className="badge completed">Free with {b.free_with}</span>}
           {grove && !free && !b.ends_at && !b.problem && <span className="badge completed">Active</span>}
@@ -454,10 +535,17 @@ function Billing() {
         )}
         {!free && b.problem && (
           <>
-            <div className="notice warn" style={{ marginBottom: 12 }}><b>The last payment did not go through.</b> Nothing is locked and nothing is deleted, and the signatures you have still work. To keep the plan, update the card. To stop it, cancel: the failed payment is then not tried again.</div>
+            {b.problem === 'unpaid' ? (
+              <div className="notice warn" style={{ marginBottom: 12 }}><b>Your plan is on hold: a payment did not go through, and the card is no longer being tried.</b> Nothing is locked and nothing is deleted, and the signatures you have still work. To bring the plan back, pay the open payment (you can use another card there). A new card on file is not enough by itself. To stop the plan instead, cancel: the open payment is then withdrawn and never tried again.</div>
+            ) : b.problem === 'paused' ? (
+              <div className="notice warn" style={{ marginBottom: 12 }}><b>Your plan is paused with the payment provider.</b> Nothing is charged while it is paused, nothing is locked, and the signatures you have still work. To end it for good, cancel.</div>
+            ) : (
+              <div className="notice warn" style={{ marginBottom: 12 }}><b>The last payment did not go through.</b> Nothing is locked and nothing is deleted, and the signatures you have still work. The card will be tried again over the next days. To keep the plan, pay now or update the card. To stop it, cancel: the failed payment is then not tried again.</div>
+            )}
             {admin && (
               <div className="row wrap">
-                <button className="btn primary" disabled={busy} onClick={() => go('/billing/portal')}>Update the card</button>
+                {b.can_pay_open && <button className="btn primary" disabled={busy} onClick={() => go('/billing/pay-open').then(reload)}>Pay the open payment</button>}
+                {b.problem !== 'paused' && <button className={b.can_pay_open ? 'btn' : 'btn primary'} disabled={busy} onClick={() => go('/billing/portal')}>Update the card</button>}
                 <button className="btn" onClick={() => setModal('cancel')}>Cancel plan</button>
               </div>
             )}
@@ -551,6 +639,7 @@ function Billing() {
           <li><b>Nothing is charged unless you choose it.</b> When you run out, sending pauses and tells you. There are no automatic extra charges and no per-person fees.</li>
           <li><b>Month to month.</b> No yearly contract and no notice period. Cancel any time up to the minute before a charge. We remind you a week before and again about a day before, with the exact amount.</li>
           <li><b>Refunds are automatic.</b> {b.refund_rule}</li>
+          <li><b>No surprise price rises.</b> {b.price_rule}</li>
           {b.dormant_stop_days > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {b.dormant_stop_days} days when a renewal comes up, we stop the renewal and tell you, with one click to keep it.</li>}
           <li><b>Charged after cancelling?</b> That should never happen. If it does, the software refunds it by itself, and keeps trying until the refund has gone through. The same goes for being charged twice for the plan, or more than we told you.</li>
           <li><b>A card dispute stops everything.</b> If a payment is disputed with the bank, billing stops at once, the unused signatures that payment bought go back with the money, and new payments stay off until a person has looked.</li>
@@ -702,8 +791,16 @@ function YourData() {
 
       {open && (
         <Modal title="Close your account" onClose={() => setOpen(false)}>
-          <p>Enter your password to confirm it is you, {me.user.name.split(' ')[0]}.</p>
-          <label className="f"><span>Password</span><input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus /></label>
+          {me.user.has_password === false ? (
+            // Someone who signs in with Google or Microsoft has no password to type here. They are told how to get
+            // one, and the button below stays off until they have it.
+            <div className="notice warn" style={{ marginBottom: 12 }}>Closing an account is confirmed with your password, and this login has none yet because you sign in another way. Set one first: open <button className="linklike" onClick={() => window.location.assign('/app/settings?tab=profile')}>Settings, Profile</button> and choose &quot;Email me a link to set a password&quot;. Then come back here. Nothing has been changed.</div>
+          ) : (
+            <>
+              <p>Enter your password to confirm it is you, {me.user.name.split(' ')[0]}.</p>
+              <label className="f"><span>Password</span><input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus /></label>
+            </>
+          )}
           <label className="check" style={{ marginBottom: 8 }}><input type="checkbox" checked={now} onChange={(e) => setNow(e.target.checked)} /> Delete everything right now instead of keeping it for {CLOSE_GRACE_DAYS} days. This cannot be undone, and nobody can bring it back, us included.</label>
           <div className="actions">
             <button className="btn" onClick={() => setOpen(false)}>Keep my account</button>

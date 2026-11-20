@@ -1,6 +1,7 @@
 import { cronTick } from './envelopes.ts';
 import { dormancyNudges, renewalReminders, billingRetries, endRemovedCodes } from './routes-billing.ts';
 import { purgeClosedAccounts } from './routes-trust.ts';
+import { supportTick } from './routes-support.ts';
 import { retryMail } from './mail.ts';
 
 // Everything that runs on a timer: expiry, expiry warnings, reminders to signers, the reminders before a renewal,
@@ -9,5 +10,7 @@ import { retryMail } from './mail.ts';
 // mail server would not take earlier are tried again here too (`mail` in the answer says how that went).
 export async function tick() {
   const r = { ...(await cronTick()), mail: await retryMail() };
-  return { ...r, renewals: await renewalReminders(), retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: await purgeClosedAccounts() };
+  return { ...r, renewals: await renewalReminders(), retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: await purgeClosedAccounts(),
+    // Help requests that have passed the time a person should have answered by: the operators are emailed and the customer is told.
+    support: await supportTick() };
 }

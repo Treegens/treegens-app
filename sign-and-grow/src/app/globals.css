@@ -206,6 +206,16 @@ table.t tr.click:hover td { background: #fbfaf6; }
 .cmp td:first-child { font-weight: 600; }
 .foot { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--muted); font-size: 13.5px; margin-top: 40px; }
 .authbox { max-width: 420px; margin: 6vh auto; padding: 0 16px; }
+/* "Continue with Google / Microsoft" under the sign-in form, and the ways to sign in under Settings. */
+.auth-alt .btn { width: 100%; min-height: 44px; margin-top: 8px; }
+.auth-or { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; color: var(--muted); font-size: 13px; }
+.auth-or::before, .auth-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+.ways { list-style: none; margin: 0; padding: 0; }
+.ways > li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 0; border-top: 1px solid var(--line); }
+.ways > li:first-child { border-top: 0; padding-top: 4px; }
+.ways .what { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.ways .btn { min-height: 44px; }
+.ways form { flex: 1 1 100%; }
 .doc-art { background: #fff; border-radius: 14px; box-shadow: var(--shadow); padding: 28px; border: 1px solid var(--line); transform: rotate(1.2deg); }
 .doc-art .ln { height: 9px; border-radius: 5px; background: #ece8dd; margin-bottom: 11px; }
 

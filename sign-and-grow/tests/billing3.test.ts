@@ -383,13 +383,14 @@ test('the plan nobody uses: stopped once, and "keep it" means keep it', async ()
   await cron.tick();
   assert.equal(acct(q.id).cancel_at, null);
 
-  // The amount goes up after the reminder said $9: a correction goes out, and the charge is then held to that.
-  await event('invoice.upcoming', { customer: q.cus, subscription: q.sub, amount_due: 1200, currency: 'usd', period_end: Math.floor(Date.parse(acct(q.id).renews_at) / 1000) });
+  // The amount goes up after the reminder said $9, because tax now applies: a correction goes out, and the charge
+  // is then held to that. (A higher price is another matter: that needs thirty days' notice, see billing5.)
+  await event('invoice.upcoming', { customer: q.cus, subscription: q.sub, amount_due: 1080, tax: 180, currency: 'usd', period_end: Math.floor(Date.parse(acct(q.id).renews_at) / 1000) });
   const fix = mailTo(q.email).find((m) => m.subject.startsWith('Correction: your plan renews on'))!;
-  assert.match(fix.subject, /for \$12\.00, not \$9\.00/);
-  assert.equal((await state(q)).next_amount, '$12.00');
+  assert.match(fix.subject, /for \$10\.80, not \$9\.00/);
+  assert.equal((await state(q)).next_amount, '$10.80');
   // One reminder per renewal even when the provider names a slightly different moment for it.
-  await event('invoice.upcoming', { customer: q.cus, subscription: q.sub, amount_due: 1200, currency: 'usd', next_payment_attempt: Math.floor(Date.parse(acct(q.id).renews_at) / 1000) + 3600 });
+  await event('invoice.upcoming', { customer: q.cus, subscription: q.sub, amount_due: 1080, tax: 180, currency: 'usd', next_payment_attempt: Math.floor(Date.parse(acct(q.id).renews_at) / 1000) + 3600 });
   assert.equal(subjects(q.email).filter((s) => /^(Heads up|Correction)/.test(s)).length, 2);
 });
 

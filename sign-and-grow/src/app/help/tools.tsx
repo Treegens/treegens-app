@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from '@/components/ui';
+import { TOPIC_LABEL, STATUS_FOR_CUSTOMER, whenText, spanText, type CustomerRequest } from '@/lib/support';
+import { RequestView } from './RequestView';
 
 // The self-service tools on the help page. Every one of them works without logging in.
 
@@ -138,25 +140,44 @@ export function StopByCard() {
   );
 }
 
-const TOPIC_LABEL: Record<string, string> = {
-  signing: 'Signing a document',
-  sending: 'Sending documents',
-  billing: 'Billing or a refund',
-  'cannot-log-in': 'I cannot log in',
-  suspicious: 'Something looks suspicious',
-  other: 'Something else',
+// What the server says about help: the address, the topics, and the published response times. `reply` is null when
+// the people who run this server have set up nobody to answer, and then no time is promised anywhere on the page.
+type SupportInfo = { email: string | null; topics: string[]; urgent: string[]; reply: { hours: number; urgent_hours: number } | null; median: { minutes: number; count: number; days: number; late_now: number } | null };
+const hoursText = (n: number) => `${n} hour${n === 1 ? '' : 's'}`;
+const browserZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
 };
+
+// How we actually did, next to what we promise: the real median time to a first answer. Shown only when it covers
+// enough requests to mean something. The server decides that and sends nothing otherwise.
+export function ReplyRecord() {
+  const [m, setM] = useState<SupportInfo['median']>(null);
+  useEffect(() => {
+    api('/public/support').then((d) => setM(d.median || null)).catch(() => {});
+  }, []);
+  if (!m) return null;
+  return (
+    <p className="muted small">
+      How we did in the last {m.days} days: of the {m.count} requests that got their first answer in that time, half had it within {spanText(m.minutes)}.
+      {m.late_now > 0 ? ` Right now ${m.late_now === 1 ? 'one request is' : `${m.late_now} requests are`} waiting longer than we promised.` : ' Right now no request is waiting longer than we promised.'}
+    </p>
+  );
+}
 
 // Reaches a person. Open to everyone: signers, free users, former customers and people who cannot log in.
 export function ContactForm() {
   const [f, setF] = useState({ name: '', email: '', topic: 'signing', message: '' });
   const [envelope, setEnvelope] = useState('');
-  const [info, setInfo] = useState<{ email: string | null; topics: string[] }>({ email: null, topics: Object.keys(TOPIC_LABEL) });
-  const a = useAction<{ reference: string; email: string }>();
+  const [info, setInfo] = useState<SupportInfo>({ email: null, topics: Object.keys(TOPIC_LABEL), urgent: [], reply: null, median: null });
+  const a = useAction<{ reference: string; email: string; due_at: string | null; reply_hours: number | null }>();
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((s) => ({ ...s, [k]: e.target.value }));
 
   useEffect(() => {
-    api('/public/support').then((d) => setInfo({ email: d.email || null, topics: Array.isArray(d.topics) && d.topics.length ? d.topics : Object.keys(TOPIC_LABEL) })).catch(() => {});
+    api('/public/support').then((d) => setInfo({ email: d.email || null, topics: Array.isArray(d.topics) && d.topics.length ? d.topics : Object.keys(TOPIC_LABEL), urgent: d.urgent_topics || [], reply: d.reply || null, median: d.median || null })).catch(() => {});
     // Other pages can link straight to a filled-in form: /help?topic=suspicious&envelope=env_...#contact
     const q = new URLSearchParams(window.location.search);
     const topic = q.get('topic');
@@ -183,7 +204,8 @@ export function ContactForm() {
         <Result show>
           <p><b>We got your message.</b> A person will read it and reply by email to {a.done.email}.</p>
           <p>Your reference is <span className="pub-ref">{a.done.reference}</span></p>
-          <p>We also emailed you this reference. Reply to that email if you want to add anything.</p>
+          {a.done.due_at && <p><b>A person will have answered by {whenText(a.done.due_at)}</b> (your time). That is within {hoursText(a.done.reply_hours || 0)}, counted in real hours. If we are ever late, your request says so and the whole team is told.</p>}
+          <p>We also emailed you this reference, with a private link to your request. Use that link to read the answer, to add something or to see where things stand. It works without signing in. Replying to the email itself does not reach us.</p>
         </Result>
         {info.email && <p className="muted small pub-form-hint">You can also write to <a href={`mailto:${info.email}?subject=${encodeURIComponent(`Reference ${a.done.reference}`)}`}>{info.email}</a>. Mention your reference.</p>}
         <button type="button" className="btn" onClick={() => (a.reset(), setF((s) => ({ ...s, message: '' })))}>Send another message</button>
@@ -195,11 +217,12 @@ export function ContactForm() {
       className="card pub-form pub-contact"
       onSubmit={(e) =>
         a.run(e, async () => {
-          const r = await api('/public/support', { body: { name: f.name.trim(), email: f.email.trim(), topic, message: f.message.trim(), envelope_id: envelope || undefined } });
+          // The time zone of this browser goes along, so the time in the email is the reader's own time.
+          const r = await api('/public/support', { body: { name: f.name.trim(), email: f.email.trim(), topic, message: f.message.trim(), envelope_id: envelope || undefined, tz: browserZone() || undefined } });
           // "Your requests" below shows the new one straight away for someone who is signed in.
           window.dispatchEvent(new Event('sg-support-sent'));
-          return { reference: r.reference, email: f.email.trim() };
-        }, (err) => explain(err, info.email ? `You have sent several messages in the last hour, and we have them. To add something now, write to ${info.email}.` : 'You have sent several messages in the last hour, and we have them. To add something, reply to the confirmation email we sent you.'))
+          return { reference: r.reference, email: f.email.trim(), due_at: r.due_at || null, reply_hours: r.reply_hours || null };
+        }, (err) => explain(err, info.email ? `You have sent several messages, and we have them all. To add something now, use the link in a confirmation email we sent you, or write to ${info.email}.` : 'You have sent several messages, and we have them all. To add something, use the link in a confirmation email we sent you.'))
       }
     >
       <div className="grid g2">
@@ -211,6 +234,7 @@ export function ContactForm() {
           {topics.map((t) => <option key={t} value={t}>{TOPIC_LABEL[t] || t}</option>)}
         </select>
       </label>
+      {info.reply && <p className="muted small pub-form-hint" style={{ margin: '-6px 0 14px' }} aria-live="polite">{info.urgent.includes(topic) ? 'This is urgent for us. ' : ''}A person answers this within {hoursText(info.urgent.includes(topic) ? info.reply.urgent_hours : info.reply.hours)}, counted in real hours from the moment you send it. You are told the exact time.</p>}
       <label className="f"><span>What happened, and what do you need? <span className="hint">(a couple of sentences is enough)</span></span>
         <textarea value={f.message} onChange={set('message')} required minLength={10} maxLength={5000} rows={6} />
       </label>
@@ -225,30 +249,57 @@ export function ContactForm() {
   );
 }
 
-// For someone who is signed in: what they asked and whether a person has answered, so "did my message arrive?"
-// never needs a second message. Nobody else sees anything here. Requests written from an address that was never
-// confirmed are not listed, because typing an address proves nothing.
+// For someone who is signed in: every request they sent, where it stands, who has it, by when a person will have
+// answered, and everything written on it, with a box to reply. So "did my message arrive?" never needs a second
+// message. Nobody else sees anything here. Requests written from an address that was never confirmed are not
+// listed, because typing an address proves nothing.
 export function YourRequests() {
-  const [list, setList] = useState<{ id: string; reference: string; topic: string; message: string; status: string; at: string }[] | null>(null);
+  const [list, setList] = useState<(CustomerRequest & { id: string })[] | null>(null);
+  // Which requests are unfolded. Once the reader has opened or closed one it stays that way, also when the list is
+  // read again after a reply.
+  const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
+  const load = useRef(() => {});
   useEffect(() => {
-    const load = () => api('/me').then((d) => (d?.user ? api('/support/mine').then((r) => setList(r.requests || [])) : setList(null))).catch(() => {});
-    load();
-    window.addEventListener('sg-support-sent', load);
-    return () => window.removeEventListener('sg-support-sent', load);
+    load.current = () => void api('/me').then((d) => (d?.user ? api('/support/mine').then((r) => setList(r.requests || [])) : setList(null))).catch(() => {});
+    load.current();
+    const again = () => load.current();
+    window.addEventListener('sg-support-sent', again);
+    return () => window.removeEventListener('sg-support-sent', again);
   }, []);
   if (!list?.length) return null;
+  // What one line of the list says before it is opened: the state, and the time that goes with it.
+  const line = (r: CustomerRequest) =>
+    r.late ? 'We are late with this. Sorry.' : r.status === 'open' ? (r.due_at ? `${r.owner ? `${r.owner} is looking at this` : 'Waiting for us'}: answer by ${whenText(r.due_at)}` : 'Waiting for a person to answer')
+      : r.status === 'waiting' ? 'We asked you a question' : r.status === 'answered' ? 'Answered: reply, or mark it as solved' : STATUS_FOR_CUSTOMER[r.status] || r.status;
   return (
     <section className="card" aria-labelledby="your-requests-h" style={{ marginTop: 16 }}>
       <h3 id="your-requests-h">Your requests</h3>
-      <p className="muted small" style={{ margin: '4px 0 10px' }}>What you sent us while signed in, or from your confirmed address. A request stays open until a person has answered it by email.</p>
-      <ul role="list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-        {list.map((r) => (
-          <li key={r.id} style={{ borderTop: '1px solid var(--line)', padding: '10px 0' }}>
-            <div className="row between wrap">
-              <span><span className="pub-ref">{r.reference}</span> <span className="muted small">{TOPIC_LABEL[r.topic] || r.topic} · {billDay(r.at)}</span></span>
-              <b className="small">{r.status === 'open' ? 'Open: waiting for a person to answer' : 'Answered by email'}</b>
-            </div>
-            <div className="muted small" style={{ marginTop: 4, overflowWrap: 'anywhere' }}>{r.message.length > 160 ? `${r.message.slice(0, 160)}…` : r.message}</div>
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>What you sent us while signed in, or from your confirmed address. Open one to read everything written on it, to reply, or to mark it as solved.</p>
+      <ul role="list" className="rq-list">
+        {list.map((r, i) => (
+          <li key={r.id}>
+            <details className="rq-item" open={unfolded[r.id] ?? (list.length === 1 || (i === 0 && r.status !== 'closed') || r.status === 'waiting' || r.late)}
+              onToggle={(e) => {
+                const open = e.currentTarget.open;
+                setUnfolded((s) => (s[r.id] === open ? s : { ...s, [r.id]: open }));
+              }}>
+              <summary>
+                <span><span className="pub-ref">{r.reference}</span> <span className="muted small">{TOPIC_LABEL[r.topic] || r.topic} · {billDay(r.at)}</span></span>
+                <span className={`rq-sum-state${r.late ? ' late' : ''}`}>{line(r)}</span>
+              </summary>
+              <RequestView
+                r={r}
+                reply={r.can_reply ? async (message) => {
+                  const d = await api(`/support/mine/${r.id}/reply`, { body: { message } });
+                  load.current();
+                  if (d.moved) return `This request was closed too long ago to open again, so we started a new one for you. Its reference is ${d.reference}, and it is in this list.`;
+                } : undefined}
+                solved={r.can_reply ? async (notMine) => {
+                  await api(`/support/mine/${r.id}/solved`, { body: { not_mine: notMine } });
+                  load.current();
+                } : undefined}
+              />
+            </details>
           </li>
         ))}
       </ul>

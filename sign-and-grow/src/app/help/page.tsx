@@ -1,10 +1,12 @@
-import { refundRuleText, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
+import { refundRuleText, priceRuleText, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { PRICING } from '@/lib/impact';
-import { publicFacts, abuseFacts } from './facts';
-import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests } from './tools';
+import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
+import { publicFacts, abuseFacts, supportFacts } from './facts';
+import { replyPromise } from '@/lib/support';
+import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord } from './tools';
 
 export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in and without a chatbot. Find your documents, stop a subscription, or write to a person.' };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
@@ -20,6 +22,10 @@ const QA = ({ id, q, children }: { id: string; q: string; children: ReactNode })
 export default function Help() {
   const { refundDays, dormantStopDays, closeGraceDays } = publicFacts();
   const abuse = abuseFacts();
+  // Google and Microsoft, when the operator of this server has switched them on. Empty when not, and then the page
+  // does not speak of them.
+  const signInWith = signInProviders().map((p) => PROVIDER_NAMES[p]).join(' or ');
+  const support = supportFacts();
   const P = PRICING;
   const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 
@@ -35,7 +41,7 @@ export default function Help() {
         <nav className="pub-jump" aria-label="On this page">
           <a href="#signing"><b>I need to sign something</b><span>Lost links, checking an email is real, deadlines, getting your copy.</span></a>
           <a href="#sending"><b>I send documents</b><span>Cancelling, refunds, how signatures work, fixing a sent document.</span></a>
-          <a href="#contact"><b>Write to a person</b><span>Works without logging in. You get a reference.</span></a>
+          <a href="#contact"><b>Write to a person</b><span>Works without logging in. You get a reference{support.promised ? ' and the time by which a person will have answered' : ''}.</span></a>
         </nav>
 
         {/* ---- People who sign ---- */}
@@ -131,6 +137,7 @@ export default function Help() {
               <li><b>Within {refundDays} days of a payment:</b> {refundRuleText(refundDays)} Each signature is refunded at the price you paid for it. Open Settings, then Plan: your latest payment is offered at the top, and earlier ones in the list of payments. There is no form and no approval.</li>
               <li><b>It covers every payment inside that time,</b> the monthly plan and top-ups alike, and you can come back for more: signatures held for envelopes that are still out count as in use, and when they come back (a voided envelope, say) they can be refunded too.</li>
               <li><b>Refunding a monthly payment ends the monthly plan.</b> Refunding a top-up changes nothing else.</li>
+              <li id="price"><b>If the price ever changes:</b> {priceRuleText()}</li>
               <li><b>Charged after you cancelled, charged twice, or charged more than the reminder said:</b> that should never happen. If it does, the software refunds it by itself and tells you. If the payment provider is down at that moment it keeps trying until the refund has gone through.</li>
             </ul>
             <p>The money goes back to the card that paid. Banks usually show it within 5 to 10 working days. Your documents stay where they are.</p>
@@ -201,6 +208,8 @@ export default function Help() {
 
           <QA id="locked-out" q="I cannot log in">
             <p><b>Forgot the password?</b> <Link href="/forgot">Reset it here</Link>. The link we email works for one hour.</p>
+            {signInWith && <p><b>Made your login with {signInWith}?</b> Use that button on the <Link href="/login">sign-in page</Link>. Such a login has no password until you choose one: <Link href="/forgot">the same link by email</Link> lets you do that, and under Settings, Profile you see every way into your login and can connect or disconnect {signInWith}. The last way in cannot be removed.</p>}
+            {signInWith && <p><b>Told that you already have a login with this address?</b> Then {signInWith} did not confirm to us that the address is yours, and we never open an existing login on the strength of an address alone. Sign in with your password once (or choose one with the link by email), then connect it under Settings, Profile.</p>}
             <p><b>No longer have that mailbox?</b> You can still <a href="#stop-by-card">stop the billing with your card</a>. Then <a href="#contact" data-topic="cannot-log-in">write to us</a> and a person will help with the account.</p>
             <p><b>On a team?</b> An owner or admin can remove someone who has left. What that person sent (envelopes, drafts, templates and bulk sends) passes to a member the admin chooses, and each envelope&apos;s audit trail says so. The owner can hand the whole account to someone else under Settings, then Team.</p>
             <p><b>Were you removed from a team?</b> Your login still works. Sign in and you get an empty workspace of your own, with your inbox of documents sent to you. A team can invite you again at any time: sign in from the invitation and you are on it.</p>
@@ -218,7 +227,18 @@ export default function Help() {
             <h2 id="contact-h">Write to a person</h2>
             <p className="muted">This form works whether or not you have an account, and whether or not you can log in. You get a reference straight away, and a person replies by email.</p>
           </div>
-          <ContactForm />
+          <QA id="after-writing" q="What happens after I write?">
+            <ul className="pub-list">
+              {support.promised && <li><b>{replyPromise(support.hours, support.urgentHours)}</b> The confirmation email and the request itself give the exact time, in your own time zone where your browser tells us it.</li>}
+              {support.promised && <li><b>If we are late, we say so.</b> The request says it in plain words, everyone who answers is emailed, and so are you. You do not have to ask twice.</li>}
+              <li><b>One person has it.</b> When someone on our team takes your request, it shows their first name.</li>
+              <li><b>Every answer is emailed to you in full.</b> You never have to sign in to read one.</li>
+              <li><b>Each email has a private link to your request.</b> It works without signing in. There you read everything written so far, reply, and mark it as solved. Whoever has the link can do that, so keep those emails to yourself. Replying to the email itself does not reach your request: use the link.</li>
+              <li><b>A request is never closed on you without a written answer.</b> If it was closed and is not solved, reply within {support.reopenDays} days and the same request opens again. After that, a reply starts a new request that is linked to the old one.</li>
+            </ul>
+            {support.promised && <ReplyRecord />}
+          </QA>
+          <div style={{ marginTop: 12 }}><ContactForm /></div>
           <YourRequests />
         </section>
       </main>

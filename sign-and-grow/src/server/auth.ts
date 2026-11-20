@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { get, run } from './db.ts';
+import { all, get, run } from './db.ts';
 import { sha256, token, now, HttpError } from './util.ts';
 
 export const SESSION_COOKIE = 'ts_session';
@@ -15,6 +15,24 @@ export function checkPassword(pw: string, stored: string): boolean {
   const a = crypto.scryptSync(pw, Buffer.from(salt, 'hex'), 64);
   const b = Buffer.from(hash, 'hex');
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+// A login made by signing in with Google or Microsoft has no password until its owner chooses one. This is stored
+// in the password's place. It is not the hash of anything, so nothing typed into a password box matches it.
+export const NO_PASSWORD = '!';
+export const hasPassword = (u: any): boolean => typeof u?.password_hash === 'string' && u.password_hash.startsWith('scrypt$');
+
+// The first time somebody proves that the address of a login is theirs (Google or Microsoft vouches for it, or they
+// open the reset link we sent there), everything attached to the login before that moment was attached by someone
+// who had proved nothing. That can be a stranger who made the login in this person's name and waited for them to
+// arrive. So that moment cuts every earlier way in: browsers that are signed in, API keys this login made, and
+// sign-in connections whose provider did not vouch for the address. The password is the caller's to deal with.
+// Returns the providers that were disconnected. Call inside tx().
+export function cutEarlierAccess(userId: string): string[] {
+  const gone = all('SELECT provider FROM identities WHERE user_id=? AND vouched=0', userId).map((r) => r.provider as string);
+  run('DELETE FROM identities WHERE user_id=? AND vouched=0', userId);
+  run('DELETE FROM sessions WHERE user_id=?', userId);
+  run('DELETE FROM api_keys WHERE user_id=?', userId);
+  return gone;
 }
 
 export function cookie(name: string, value: string, maxAgeSec: number, secure: boolean): string {

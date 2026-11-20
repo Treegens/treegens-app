@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
+import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
 
 export const metadata = { title: 'Security and trust', description: 'What Sign&Grow does to protect signers, senders and documents, in plain words. And what it does not do.' };
 
@@ -28,6 +29,9 @@ const Block = ({ id, title, lead, not, children }: { id: string; title: string; 
 export default function Security() {
   const { closeGraceDays } = publicFacts();
   const abuse = abuseFacts();
+  // Google and Microsoft, when the operator of this server has switched them on. Empty when not, and then nothing
+  // on this page speaks of them.
+  const signIn = signInProviders().map((p) => PROVIDER_NAMES[p]).join(' or ');
   return (
     <div className="pub">
       <PublicNav />
@@ -91,6 +95,7 @@ export default function Security() {
 
         <Block id="access" title="Accounts and access">
           <Point title="Passwords are never stored as written.">Only a salted scrypt hash is kept. Password reset links work once and for one hour.</Point>
+          {signIn && <Point title={`With ${signIn}, you are known by the id they have for you, never by an email address alone.`}>When you sign in with {signIn} we check their signed answer ourselves and recognise you by the id it carries for you. An email address in that answer opens a login that already exists only when {signIn} itself confirms to us that the address is yours. Otherwise you sign in with your password once and connect it under Settings, and the owner of a login is emailed whenever a new way to sign in is connected to it.</Point>}
           <Point title="API keys and login sessions are stored as fingerprints.">An API key is shown once, when you create it. After that we only hold its hash.</Point>
           <Point title="Guessing is slowed down.">Sign-in attempts, access codes, security codes and the public forms on this site are rate limited. An access code is frozen after {abuse.codeTries} wrong tries.</Point>
           <Point title="Webhooks are signed.">Every delivery carries an HMAC-SHA256 signature you can verify, and webhook addresses that point into a private network are refused.</Point>
@@ -101,7 +106,9 @@ export default function Security() {
           <Point title="Not certificate-based digital signatures.">A signed PDF is not sealed with a cryptographic certificate inside the file. Its integrity rests on the recorded fingerprint, the audit trail and the verify page.</Point>
           <Point title="Not advanced or qualified signatures.">These are standard electronic signatures with an audit trail. If a law or the other party requires an advanced or a qualified signature, use a service that provides those. For high-stakes documents, ask a lawyer whether a standard electronic signature fits your case and country.</Point>
           <Point title="No identity check yet.">We do not check ID documents and we do not send codes by SMS or phone. A signer is identified by access to their email inbox, plus an access code if the sender sets one.</Point>
-          <Point title="No two-step login or single sign-on yet.">Accounts are protected by a password.</Point>
+          {signIn
+            ? <Point title="No two-step login of our own, and no single sign-on for a whole organization.">Accounts are protected by a password, or by signing in with {signIn}. A second step at sign-in is whatever your account there has. We add none of our own, and a team cannot make its members sign in one particular way.</Point>
+            : <Point title="No two-step login or single sign-on yet.">Accounts are protected by a password.</Point>}
           <Point title="No security certification.">We have not been audited against a security standard, and we will not hint that we have.</Point>
           <Point title="No claim about encrypted storage.">The software does not add its own encryption to stored documents. How the disk is protected depends on where the service is hosted.</Point>
         </Block>

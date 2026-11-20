@@ -8,6 +8,11 @@ export async function register() {
   const { supportWarning } = await import('./lib/policy');
   const warning = supportWarning();
   if (warning) console.error(warning);
+  // And when signing in with Microsoft was set up with a MICROSOFT_TENANT we cannot check sign-ins against: it
+  // stays switched off, and the operator should hear why instead of looking for a missing button.
+  const { signInWarning } = await import('./lib/signin');
+  const signIn = signInWarning();
+  if (signIn) console.error(signIn);
   const { tick } = await import('./server/cron');
   g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
   g.__tscron.unref?.();

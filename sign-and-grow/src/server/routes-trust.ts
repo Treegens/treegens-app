@@ -3,7 +3,7 @@ import path from 'node:path';
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx, readBlob, dataDir } from './db.ts';
 import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, shortCode, sha256, HttpError } from './util.ts';
-import { checkPassword } from './auth.ts';
+import { checkPassword, hasPassword } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { auditTrail, emailMyLinks, resendFromRetired } from './envelopes.ts';
 import { loadEnvelope, reportAbuse } from './envelopes.ts';
@@ -19,48 +19,7 @@ import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from
 
 // ---- Help ----------------------------------------------------------------------------------
 
-export const SUPPORT_TOPICS = ['signing', 'sending', 'billing', 'cannot-log-in', 'suspicious', 'other'];
-
-route('GET', '/public/support', () => ({ email: process.env.SUPPORT_EMAIL || null, topics: SUPPORT_TOPICS }), 'public');
-
-// Open to everyone: signers, free users, former customers, and people who cannot log in.
-route('POST', '/public/support', async (c) => {
-  rateLimit(`support:${c.ip}`, 8, 3600_000);
-  const b = await c.body();
-  const email = str(b.email || c.user?.email, 254).trim();
-  const message = str(b.message, 5000).trim();
-  if (!isEmail(email)) throw bad('Enter an email address we can reply to.');
-  if (message.length < 10) throw bad('Tell us a little more so we can help on the first reply.');
-  const topic = SUPPORT_TOPICS.includes(b.topic) ? b.topic : 'other';
-  const sid = id('sup');
-  // The reference is read out on the phone and typed into emails, so it is made of characters nobody can misread,
-  // and it is kept with the request, so the queue and "Your requests" show the very same one.
-  const ref = shortCode();
-  run('INSERT INTO support_requests (id, ref, email, name, topic, message, envelope_id, user_id, account_id, at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    sid, ref, email, str(b.name || c.user?.name, 120) || null, topic, message, str(b.envelope_id, 60) || null, c.user?.id ?? null, c.account?.id ?? null, now());
-  if (process.env.SUPPORT_EMAIL)
-    await sendMail({ to: process.env.SUPPORT_EMAIL, replyTo: email, subject: `[${topic}] ${message.slice(0, 60)}`, heading: `Help request ${ref}`,
-      lines: [`From ${str(b.name || c.user?.name, 120) || 'someone'} <${email}>${c.account ? `, account ${c.account.name} (${c.account.plan})` : ', not logged in'}.`, ...(b.envelope_id ? [`About envelope ${str(b.envelope_id, 60)}.`] : []), message],
-      cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } });
-  // Anyone can type any address into this form. So the acknowledgement only repeats the message to an address we
-  // know belongs to the writer: someone signed in, writing from their own confirmed address. Everyone else gets the
-  // reference and nothing a stranger wrote, or the form would send any text to any inbox under our name.
-  const known = !!c.user?.email_verified && sameEmail(email, c.user.email);
-  await sendMail({ to: email, subject: `We got your message (${ref})`, heading: 'A person will reply to you',
-    lines: [`Your reference is ${ref}. Reply to this email if you want to add anything.`, ...(known ? ['What you sent us:', message] : ['If you did not write to us, someone typed your address into our help form by mistake. You can ignore this email.'])] });
-  // A problem with signing that names an envelope the writer is a recipient of also goes to its sender, who can
-  // usually fix it at once. The answer is the same whether or not the envelope and the address matched, so the form
-  // cannot be used to find out who is on a document.
-  const about = topic === 'signing' && b.envelope_id ? loadEnvelope(str(b.envelope_id, 60)) : null;
-  const who = about?.recipients.find((r: any) => r.email && sameEmail(r.email, email));
-  if (who) await helpAsked(about, who, known ? message : null, { name: 'Sign&Grow help form', ip: c.ip, ua: c.ua });
-  return { reference: ref };
-}, 'public');
-
-// What you asked and whether it has been answered, for people who are logged in. Requests filed while signed in as
-// this user, and requests filed from this user's address once the address is confirmed. Signing up with somebody
-// else's address proves nothing, so an unconfirmed address never matches.
-route('GET', '/support/mine', (c) => ({ requests: all(`SELECT id, ref, topic, message, status, at FROM support_requests WHERE user_id=?${c.user.email_verified ? ' OR email=?' : ''} ORDER BY at DESC LIMIT 30`, ...(c.user.email_verified ? [c.user.id, c.user.email] : [c.user.id])).map(({ ref, ...r }) => ({ ...r, reference: ref || r.id.slice(-8).toUpperCase() })) })); // a request from before references were kept has the one it was answered with then
+// The help form, the requests it makes, their threads and the routes for both sides are in routes-support.ts.
 
 // ---- Is this email real? -------------------------------------------------------------------
 
@@ -333,12 +292,14 @@ export function purgeUser(userId: string): any[] {
       const owner = get("SELECT user_id FROM memberships WHERE account_id=? AND role='owner'", m.account_id);
       if (owner) handOver(m.account_id, user, owner.user_id, { name: 'System' }, `${user.name} closed their login`);
     }
-    // What they wrote to the help form goes too. A request nobody has answered yet stays until it is answered (see
-    // POST /operator/support/:id), or closing an account would be a way to lose a refund question. Requests are
-    // matched by address only when the address was confirmed: signing up with somebody else's proves nothing.
+    // What they wrote to the help form goes too, each request with its whole thread (the database removes a
+    // request's messages with it). A request nobody has answered yet stays until it is answered, and so does one
+    // on which we asked them something and wait for their reply (see forgetNow in routes-support.ts), or closing an
+    // account would be a way to lose a refund question. Requests are matched by address only when the address was
+    // confirmed: signing up with somebody else's proves nothing.
     const theirs = `(user_id=?${user.email_verified ? ' OR lower(email)=lower(?)' : ''})`;
     const who = user.email_verified ? [userId, user.email] : [userId];
-    run(`DELETE FROM support_requests WHERE ${theirs} AND status!='open'`, ...who);
+    run(`DELETE FROM support_requests WHERE ${theirs} AND status NOT IN ('open','waiting')`, ...who);
     run(`UPDATE support_requests SET forget=1, user_id=NULL, account_id=NULL WHERE ${theirs}`, ...who);
     // Our stored copies of emails that belong to no envelope and went to the person (sign-up, receipts, reminders,
     // notices) or name them as "Name <address>" (a help request passed on to the people who answer). Emails about
@@ -409,6 +370,9 @@ export async function purgeClosedAccounts(): Promise<number> {
 // cancels the closure. Billing stops at once either way. "now: true" deletes immediately for people who want that.
 route('POST', '/me/delete', async (c) => {
   const b = await c.body();
+  // Someone who signs in with Google or Microsoft may have no password to type. Closing is confirmed with one, so
+  // they are told how to get one instead of being told that a password they never had is wrong.
+  if (!hasPassword(c.user)) throw bad(`Closing an account is confirmed with your password, and this login has none yet because you sign in another way. Set one first: Settings, Profile, "Email me a link to set a password". Then come back here. Nothing was changed.`, 400, { code: 'no_password' });
   if (!checkPassword(str(b.password, 200), c.user.password_hash)) throw bad('That password is not right.');
   const owned = all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role='owner'", c.user.id);
   for (const a of owned)
@@ -477,13 +441,7 @@ route('GET', '/operator/queue', (c) => {
     paused: all('SELECT id, name, plan, created_at, trusted_at, suspended_at, suspended_reason FROM accounts WHERE suspended_at IS NOT NULL ORDER BY suspended_at DESC'),
   };
 });
-route('POST', '/operator/support/:id', async (c) => {
-  operator(c);
-  const status = (await c.body()).status === 'open' ? 'open' : 'closed';
-  // A request whose writer has deleted their account since was only kept so that it could be answered.
-  if (status === 'closed' && run('DELETE FROM support_requests WHERE id=? AND forget=1', c.params.id).changes) return { ok: true, deleted: true };
-  run('UPDATE support_requests SET status=? WHERE id=?', status, c.params.id);
-});
+// Working a help request (take it, answer, ask, note, close) is POST /operator/support/:id in routes-support.ts.
 route('POST', '/operator/reports/:id', async (c) => {
   operator(c);
   run('UPDATE abuse_reports SET status=? WHERE id=?', (await c.body()).status === 'upheld' ? 'upheld' : 'dismissed', c.params.id);

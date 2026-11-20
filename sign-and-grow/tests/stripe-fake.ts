@@ -64,6 +64,8 @@ function answer(method: string, path: string, params: Record<string, string>, ke
   const part = path.split('/');
   if (path === 'checkout/sessions') return json({ url: `https://pay.example/${params.mode}` });
   if (part[0] === 'checkout') return stripe.sessions[part[2]] ? json(stripe.sessions[part[2]]) : json({ error: { message: 'No such checkout session' } }, 404);
+  // What a customer is subscribed to, asked by customer.
+  if (path === 'subscriptions') return json({ data: Object.values(stripe.subs).filter((s: any) => !params.customer || s.customer === params.customer) });
   if (part[0] === 'subscriptions') {
     const s = stripe.sub(part[1]);
     if (method === 'DELETE') {
