@@ -4,11 +4,14 @@ import Link from 'next/link';
 import { api } from '@/components/ui';
 import { PLANS, type PlanId } from '@/lib/impact';
 import { FindSubscription, StopByCard, billDay } from '@/app/help/tools';
+import { expiryMoment } from '@/lib/policy';
 
 // price: the monthly price this account is charged (in dollars), and next_amount (next_cents) the next charge as the
 // Plan page states it, with any tax added on top. Never the price for new customers: this page is where someone
 // decides whether to stop.
-type Info = { account: string; plan: string; price: number; next_amount?: string; next_cents?: number; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null; failing?: boolean };
+type Info = { account: string; plan: string; price: number; next_amount?: string; next_cents?: number; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null; failing?: boolean;
+  // What is left by where it came from, and the first moment each kind expires (GET /public/billing/stop).
+  plan_left?: number; plan_until?: string | null; topups_left?: number; topups_until?: string | null; trial_left?: number; trial_until?: string | null };
 type Done = { ends_at: string; reference: string; ended_now?: boolean; why?: string };
 type View = { kind: 'loading' } | { kind: 'no-link' } | { kind: 'expired' } | { kind: 'failed'; message: string } | { kind: 'ready'; info: Info };
 
@@ -124,7 +127,15 @@ export function StopView() {
   const { info } = view;
   const ends = done?.ends_at || info.ends_at;
   const n = info.signatures_left;
-  const left = typeof n === 'number' ? `The ${n} signature${n === 1 ? '' : 's'} you have left never expire${n === 1 ? 's' : ''}.` : 'The ones you have left never expire.';
+  // What is left and until when (expiryRuleText): this month's plan signatures expire at the end of the month, top-ups
+  // keep their own dates. Said with the dates the server gives, never as "they stay".
+  const sig = (k: number) => `${k} signature${k === 1 ? '' : 's'}`;
+  const left = typeof n === 'number'
+    ? [`You have ${sig(n)} left.`,
+      info.plan_left ? `The ${sig(info.plan_left)} from this month of the plan can be used until ${expiryMoment(info.plan_until)}, when they expire like every month's.` : '',
+      info.topups_left ? `${info.topups_left === 1 ? 'The one' : `The ${info.topups_left}`} from top-ups ${info.topups_left === 1 ? 'keeps its' : 'keep their'} own date${info.topups_left === 1 ? '' : 's'}${info.topups_until ? `, the first on ${expiryMoment(info.topups_until)}` : ''}.` : '',
+      info.trial_left ? `The ${sig(info.trial_left)} every new account gets expire on ${expiryMoment(info.trial_until)}.` : ''].filter(Boolean).join(' ')
+    : 'The ones you have left can be used until their own dates.';
 
   const reference = done?.reference || info.cancel_ref;
   if (done?.ended_now)
@@ -137,7 +148,7 @@ export function StopView() {
           {reference && <p>Cancellation reference <span className="pub-ref">{reference}</span></p>}
           <ul className="pub-list">
             <li>{done.why === 'not_taken' ? 'The payment for the new month had not been taken yet, so the plan ended today and that payment is withdrawn.' : done.why === 'already_ended' ? 'The plan had already ended with the payment provider, so there was nothing more to stop.' : 'The last payment had not gone through, so the plan ended today and that payment will not be tried again.'}</li>
-            <li><b>Your signatures stay yours.</b> {left}</li>
+            <li><b>Your signatures, until their own dates.</b> {left}</li>
             <li><b>Nothing is deleted.</b> Every document, audit trail and receipt stays in the account, and you can export all of it for free.</li>
             <li>If a charge ever appears after today, the software refunds it by itself.</li>
             <li>We emailed this confirmation to the admins of the account.</li>
@@ -157,7 +168,7 @@ export function StopView() {
           {done && !reference && <p className="muted">There is no reference on file for this cancellation. It is stopped all the same.</p>}
           <ul className="pub-list">
             <li>The plan runs until {billDay(ends)}, because that month is already paid for. No payment is taken after that.</li>
-            <li><b>Your signatures stay yours.</b> {left}</li>
+            <li><b>Your signatures, until their own dates.</b> {left}</li>
             <li><b>Nothing is deleted.</b> Every document, audit trail and receipt stays in the account, and you can export all of it for free.</li>
             <li>If a charge ever appears after {billDay(ends)}, the software refunds it by itself.</li>
             {done && <li>We emailed this confirmation to the admins of the account.</li>}
@@ -188,7 +199,7 @@ export function StopView() {
 
   return (
     <>
-      <Head title="Stop renewing">One button. No login, no questions, and you keep everything.</Head>
+      <Head title="Stop renewing">One button. No login, no questions, and you keep every document.</Head>
       <div className="card">
         <dl className="pub-facts" style={{ marginTop: 0 }}>
           <dt>Account</dt>
@@ -196,7 +207,7 @@ export function StopView() {
           <dt>Plan</dt>
           <dd>{planName('grove')}, US${info.price} a month{info.failing ? ' (the last payment did not go through)' : ''}</dd>
           {info.renews_at && <><dt>Next charge</dt><dd>US${info.price} on {billDay(info.renews_at)}{info.next_cents && info.next_cents !== Math.round(info.price * 100) ? ' (US' + info.next_amount + ' with tax)' : ''}</dd></>}
-          {typeof n === 'number' && <><dt>Signatures left</dt><dd>{n}<small>They stay yours after you stop</small></dd></>}
+          {typeof n === 'number' && <><dt>Signatures left</dt><dd>{n}<small>{info.plan_left ? `This month's ${info.plan_left} until ${expiryMoment(info.plan_until)}` : 'Each until its own date'}</small></dd></>}
         </dl>
         {error && <div className="notice err" role="alert" style={{ marginBottom: 14 }}>{error}</div>}
         <div className="pub-actions-row" style={{ marginTop: 0 }}>
@@ -204,7 +215,7 @@ export function StopView() {
         </div>
         <ul className="pub-list muted small" style={{ margin: '18px 0 0' }}>
           <li>You are not charged again. {info.failing ? 'The last payment did not go through, so the plan ends today and that payment is not tried again.' : 'The plan runs until the end of the month you already paid for.'}</li>
-          <li>The signatures you have left stay yours and never expire. Nothing is deleted.</li>
+          <li>{left} Nothing is deleted.</li>
           <li>You get a cancellation reference here and by email.</li>
         </ul>
       </div>

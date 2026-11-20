@@ -14,7 +14,7 @@ export const refundDays = (): number => Number(process.env.REFUND_DAYS) || 30;
 export const refundRuleText = (days: number): string =>
   `Signatures you have not used are refunded in full within ${days} days of the payment that bought them, from the Plan page, without talking to anyone. Refunding a monthly payment also ends the monthly plan.`;
 
-// ---- Signatures expire (decided 2026-11-20, replacing "signatures never expire") ---------------------------
+// ---- Signatures expire (decided by the owner on 2026-11-20; before that they did not) -----------------------
 // The server enforces these (src/server/credits.ts): each lot of signatures carries its own expiry, the one that
 // expires soonest is used first, and a held one does not expire while it is held. Plain numbers and words with no
 // environment in them, so a 'use client' file may import them.
@@ -29,7 +29,7 @@ export const TOPUP_WARN_DAYS: number[] = [30, 3];
  * of the provider, the welcome and receipt emails and every renewal reminder quote it, so they cannot disagree.
  */
 export const expiryRuleText = (): string =>
-  `Signatures expire, so you always know what you have. The ${PRICING.monthlySignatures} that come with each month of ${PRICING.planName} belong to that month (with a free code, the calendar month in UTC): the ones not used by the end of it (the renewal, or the end of the paid month after you cancel) expire, and the next month brings a fresh ${PRICING.monthlySignatures}. Top-up signatures expire ${TOPUP_EXPIRY_MONTHS} months after the payment that bought them, and we email you ${TOPUP_WARN_DAYS[0]} days and ${TOPUP_WARN_DAYS[1]} days before, if any are unused. The ${PRICING.welcomeSignatures} free signatures of a new account expire ${WELCOME_EXPIRY_DAYS} days after it is made. The signature that expires soonest is always used first, and one held for an envelope that is out does not expire while it is held. Every date is on the Plan page. The trees are planted either way: everything you pay goes to planting mangroves with Treegens, whether the signatures are used or not.`;
+  `Signatures expire. The ${PRICING.monthlySignatures} that come with each month of ${PRICING.planName} belong to that month (with a free code, the calendar month in UTC): the ones not used by its end (the renewal, or the end of the paid month after you cancel) expire, and the next month brings a fresh ${PRICING.monthlySignatures}. Top-up signatures expire ${TOPUP_EXPIRY_MONTHS} months after the payment that bought them, and we email you ${TOPUP_WARN_DAYS[0]} and ${TOPUP_WARN_DAYS[1]} days before if any are unused. The ${PRICING.welcomeSignatures} free signatures of a new account expire ${WELCOME_EXPIRY_DAYS} days after it is made. The one that expires soonest is always used first, and one held for an envelope that is out does not expire while held. Every date is on the Plan page. Every dollar still plants ${PRICING.treesPerUsd} mangroves, used or not.`;
 /** What happens to a held signature whose date passes, for every place that explains holds. */
 export const HELD_EXPIRY_TEXT = 'A signature held for an envelope that is out does not expire while it is held. If that envelope is then voided, declined or runs out of time after the signature\'s own date has passed, that signature is gone instead of coming back.';
 /** A moment a signature expires, the same way everywhere: "3 December 2026 at 14:00 UTC". */
@@ -157,6 +157,8 @@ export const KEPT_AFTER_DELETION: string[] = [
   'For a document someone named on it disputes, while a person at GrowSigning has not closed that dispute: its envelope ID, the fingerprint of its signed file, the day of the dispute and the state the document was in, with no names and no addresses, so Verify a document keeps saying that it is disputed. The alert our team works from keeps the names and what was written until it is closed, then it is deleted like any help request.',
   'A fingerprint of your email address and the day you were given the welcome signatures, if your address was confirmed. The welcome signatures are given once per address, and this is how we know after your login is gone, or after it moved to another address (that fingerprint is kept from the day it moved). It is made with a key only this server has, cannot be turned back into your address, and holds no name.',
   `Our stored copies of emails to other people are deleted with your login when we marked them as being about you when they were sent: an invitation you sent, a notice to a team about your API keys or that you left, or our note to the people who answer help requests about a request of yours. Any other copy, such as one where somebody else typed your name or address, and any email still waiting to be delivered at that moment, is deleted like every copy that is not part of a document's record: ${MAIL_COPY_DAYS} days after it was sent.`,
+  // The disposition record of src/server/records.ts (forgetRetentionLog, and the trigger in db.ts that keeps it a year).
+  'The retention record of your accounts (Settings, Your data): which envelope was purged, kept or put on hold, when, at which level, and the fingerprint of each signed PDF that was purged, without the names of the people who did it and without the reasons they wrote, for one year.',
 ];
 
 /**
@@ -439,13 +441,16 @@ export const SESSION_DAYS = 30;
  * again. Without it a cookie copied off a device, used once a month from anywhere, stayed signed in for ever (a test
  * kept one alive for three years). The owner's decision of 2026-11-20. A session from before its sign-in time was
  * kept is no longer moved forward at all (src/server/auth.ts).
+ * 90, not 30 (also decided 2026-11-20): at 30 a phone used every week was signed out every month, which is the
+ * complaint "my phone keeps asking me to sign in". At 90 that phone signs in about once a quarter (12 weeks of weekly
+ * use), and a copied cookie still dies 90 days after the sign-in at the latest, or after SESSION_DAYS without use.
  */
-export const SESSION_MAX_DAYS = 30;
+export const SESSION_MAX_DAYS = 90;
 /** How long a browser stays signed in, in the words /security and Settings print, from the two numbers above. */
 export const sessionWords = (days = SESSION_DAYS, maxDays = SESSION_MAX_DAYS): string =>
   maxDays <= days
     ? `A browser is signed out ${maxDays} days after you signed in on it, however often you use it in between, and then you sign in again. That way a sign-in copied off a device, or left on a computer you no longer use, does not last.`
-    : `A browser stays signed in while you use it: it is signed out ${days} days after you last used GrowSigning in it, and in any case ${maxDays} days after you signed in on it, however often you use it. Then you sign in again. That way a sign-in copied off a device, or left on a computer you no longer use, does not last.`;
+    : `A browser stays signed in while you use it. Two rules sign it out, whichever comes first: ${days} days without using GrowSigning in it, or ${maxDays} days after you signed in on it, however often you use it in between. Then you sign in again. That way a sign-in copied off a device, or left on a computer you no longer use, does not last.`;
 /** How often, at most, a browser's "last used" time is written down. Shown times are this exact, no more. */
 export const SESSION_TOUCH_MINUTES = 60;
 /** After this many wrong passwords on a device that was handed to a signer, that browser is signed out. */

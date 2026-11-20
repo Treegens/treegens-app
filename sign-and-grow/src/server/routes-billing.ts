@@ -593,6 +593,18 @@ const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', pl
 // What a lot is, for the Plan page and the emails.
 const LOT_LABEL: Record<string, string> = { welcome: 'Free signatures of a new account', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', adjust: 'Added by a person here' };
 
+// The same as numbers, for the page that stops a renewal without logging in.
+function keepParts(accountId: string) {
+  const lots = lotsOf(accountId).filter((l) => l.live && l.left > 0);
+  const pick = (src: string[]) => lots.filter((l) => src.includes(l.source));
+  const count = (ls: LotView[]) => ls.reduce((k, l) => k + l.left, 0);
+  const first = (ls: LotView[]) => ls.map((l) => l.expires_at).filter(Boolean).sort()[0] || null;
+  return {
+    plan_left: count(pick(['plan', 'code'])), plan_until: first(pick(['plan', 'code'])),
+    topups_left: count(pick(['topup'])), topups_until: first(pick(['topup'])),
+    trial_left: count(pick(['welcome'])), trial_until: first(pick(['welcome'])),
+  };
+}
 // The signatures an account has and when each expires, in sentences, for the emails that count them (sent when a
 // plan stops or is stopped, and when a code ends): what is left of the plan month runs to its end and expires then
 // like any month's, top-ups keep their own dates, the trial's its own. Nothing here claims a signature lasts longer
@@ -933,7 +945,7 @@ route('POST', '/billing/checkout', async (c) => {
     // The price this page shows, kept on the subscription: it is the price the account is on from its first payment.
     'subscription_data[metadata][sg_price_cents]': String(PLAN_CENTS()),
     // The commitment, in plain words, on the payment page itself. And always in US dollars, the price we show.
-    'custom_text[submit][message]': `${PLAN_PRICE()} today, then ${PLAN_PRICE()} every month until you cancel. Each payment adds ${sigs(PRICING.monthlySignatures)}. No contract and no notice period: cancel in one click. ${refundRuleText(refundDays())}`,
+    'custom_text[submit][message]': `${PLAN_PRICE()} today, then ${PLAN_PRICE()} every month until you cancel. Each payment adds ${sigs(PRICING.monthlySignatures)}. No contract and no notice period: cancel in one click. ${refundRuleText(refundDays())} ${expiryRuleText()}`,
     'adaptive_pricing[enabled]': 'false',
     success_url: `${baseUrl()}/app/settings?tab=billing&upgraded=1&session_id={CHECKOUT_SESSION_ID}`, cancel_url: planUrl(),
     ...who,
@@ -959,7 +971,7 @@ route('POST', '/billing/topup', async (c) => {
     'payment_intent_data[description]': `GrowSigning top-up: ${sigs(quantity)} for ${a.name} (${a.id})`, 'payment_intent_data[metadata][sg_account]': a.id,
     // The provider makes an invoice for it, marked as a top-up so it is never mistaken for a monthly payment.
     'invoice_creation[enabled]': 'true', 'invoice_creation[invoice_data][metadata][kind]': 'sg_topup', 'invoice_creation[invoice_data][metadata][sg_account]': a.id,
-    'custom_text[submit][message]': `One payment of ${total} for ${sigs(quantity)}. Nothing recurring, and your plan and its price do not change. ${refundRuleText(refundDays())}`,
+    'custom_text[submit][message]': `One payment of ${total} for ${sigs(quantity)}. Nothing recurring, and your plan and its price do not change. ${refundRuleText(refundDays())} ${expiryRuleText()}`,
     'adaptive_pricing[enabled]': 'false',
     client_reference_id: a.id, success_url: `${baseUrl()}/app/settings?tab=billing&topped=1&session_id={CHECKOUT_SESSION_ID}`, cancel_url: planUrl(),
     ...who,
@@ -1031,7 +1043,8 @@ async function adopt(accountId: string, customer: string | null, subscriptionId:
     `You are on the monthly plan: ${price} a month adds ${sigs(PRICING.monthlySignatures)} to your balance with every payment. That is ${trees(priceFor(account(a.id), end))} planted each month.`,
     ...(freeFirst ? [`Your first invoice came to ${money(0)}, so this first month brought no signatures. Signatures are added only for what is paid, and that invoice paid nothing (a discount, a credit or a free trial set up with the payment provider made it free). Each payment from here on adds them as above.`] : []),
     ...(end ? [`Next charge: ${price} on ${day(end)}, and every month after that until you cancel. We remind you a week before and again about a day before.`] : []),
-    `Signatures never expire, so what you do not use rolls over. Need more? Top up any time at ${money(PRICING.topUpUsd * 100)} a signature.`,
+    `Each month's ${sigs(PRICING.monthlySignatures)} belong to that month: what you do not use by the renewal expires, and the renewal brings a fresh ${PRICING.monthlySignatures}. Need more? Top up any time at ${money(PRICING.topUpUsd * 100)} a signature; top-ups last ${TOPUP_EXPIRY_MONTHS} months.`,
+    expiryRuleText(),
     'It is month to month: no contract, no notice period, and nothing is ever charged unless you choose it. You get a receipt for every payment.',
     refundRuleText(refundDays()),
     'To stop renewing, use the Cancel button on the Plan page or the link below. It works without logging in.',
@@ -1076,14 +1089,17 @@ async function applyTopUp(s: any): Promise<boolean> {
     await tellOperators('A top-up could not be turned into signatures', [`Checkout ${s.id}, ${money(cents, currency)}, customer ${sid(s.customer) || 'unknown'}: ${why}. It is being refunded automatically. Check that it went through.`], a?.id);
     return false;
   }
-  grant(a.id, credits, 'topup', s.id);
+  // They expire TOPUP_EXPIRY_MONTHS after this payment (expiryRuleText).
+  const until = addMonths(p.at, TOPUP_EXPIRY_MONTHS);
+  grant(a.id, credits, 'topup', s.id, p.at, until);
   run('UPDATE payments SET applied_at=? WHERE id=?', now(), s.id);
   if (s.customer && !a.stripe_customer_id) run('UPDATE accounts SET stripe_customer_id=? WHERE id=?', sid(s.customer), a.id);
   const receipt = s.invoice ? await topUpReceipt(s.id, sid(s.invoice)!) : null;
   await mailAdmins(a.id, `Receipt: ${money(cents, currency)} for ${sigs(credits)}`, `${sigs(credits)} added. Thank you.`, [
     `${money(cents, currency)} for ${a.name}, paid today. You now have ${sigs(Math.max(0, available(a.id)))} to send.`,
-    `That plants ${trees(cents)} with Treegens.`,
-    'This was a single payment. It does not repeat and does not change your plan. Signatures never expire.',
+    `That plants ${trees(cents)} with Treegens, whether the signatures are used or not.`,
+    `This was a single payment. It does not repeat and does not change your plan. These ${sigs(credits)} can be used until ${expiryMoment(until)}, ${TOPUP_EXPIRY_MONTHS} months from today. We email you ${TOPUP_WARN_DAYS[0]} days and ${TOPUP_WARN_DAYS[1]} days before, if any are still unused then.`,
+    expiryRuleText(),
     refundRuleText(refundDays()),
     `Account: ${a.name}, reference ${a.id}. Receipts go to every owner and admin of the account.`,
   ], receipt ? { label: 'View invoice', url: receipt } : { label: 'Open the Plan page', url: planUrl() });
@@ -1292,6 +1308,9 @@ route('GET', '/public/billing/stop', (c) => {
     account: a.name, plan: a.plan, price: chargePrice(a) / 100, next_amount: money(nextCents(a)), next_cents: nextCents(a), free_with: a.promo_code || null, failing,
     can_cancel: renewing(a) || failing,
     renews_at: a.plan === 'grove' && renewing(a) && !failing ? a.renews_at : null, ends_at: a.promo_code || failing || !hasSub(a) ? null : a.cancel_at, cancel_ref: a.cancel_ref || null, signatures_left: Math.max(0, available(a.id)),
+    // What is left, by where it came from, and until when (expiryRuleText): this month's plan signatures expire at
+    // the end of the month, top-ups keep their own dates.
+    ...keepParts(a.id),
   };
 }, 'public');
 
@@ -1467,16 +1486,20 @@ async function unsure(ch: any, what: string, todo: string) {
 
 // Money went back to the customer by a road that was not our own refund (a person in the provider's dashboard, or
 // the bank after a dispute). The signatures it paid for leave the balance, like any refund. That includes ones held
-// for envelopes that are out: those can still be signed, and the balance then shows what is owed. Ones that were
-// already used stay used; the answer says how many that was.
-function takeBack(acct: any | null, p: any, cents: number, ref: string, reason: 'refund' | 'dispute' = 'refund'): { taken: number; used: number } {
+// for envelopes that are out: those can still be signed, and the balance then shows what is owed. That payment's
+// own unused signatures go first (takeBackLots in credits.ts); ones of it that expired are gone already and nothing
+// is taken for them; for ones that were already used, others leave the balance as far as it goes, and the rest stay
+// used. The answer says how many of each.
+function takeBack(acct: any | null, p: any, cents: number, ref: string, reason: 'refund' | 'dispute' = 'refund'): { taken: number; used: number; expired: number } {
   const left = p.credits - (p.credits_refunded || 0);
-  if (!acct || left <= 0 || !p.applied_at || cents <= 0) return { taken: 0, used: 0 };
+  if (!acct || left <= 0 || !p.applied_at || cents <= 0) return { taken: 0, used: 0, expired: 0 };
   const paidFor = Math.min(left, Math.round((cents / p.amount_cents) * p.credits));
-  const taken = Math.min(paidFor, Math.max(0, balance(acct.id)));
-  if (taken > 0 && grant(acct.id, -taken, reason, ref)) run('UPDATE payments SET credits_refunded=credits_refunded+? WHERE id=?', taken, p.id);
-  return { taken, used: paidFor - taken };
+  const out = takeBackLots(acct.id, paidFor, reason, ref, p.id);
+  if (out.taken > 0) run('UPDATE payments SET credits_refunded=credits_refunded+? WHERE id=?', out.taken, p.id);
+  return out;
 }
+// "3 had already been used and stay used, and 2 had expired unused", for the emails about money that went back.
+const notTaken = (used: number, expired: number) => [used ? `${sigs(used)} had already been used and stay used` : '', expired ? `${sigs(expired)} had expired unused, so there was nothing to take back for ${expired === 1 ? 'it' : 'them'}` : ''].filter(Boolean).join(', and ');
 
 // Is this invoice ours at all? The provider account may be shared with other things. It is ours when it carries our
 // mark (sg_account, on it or on its subscription) or is for our price. Being a customer of ours is not enough: the
@@ -1644,7 +1667,8 @@ async function applyInvoice(o: any): Promise<void> {
       log(a.id, 'ended', 'Ended: it had been stopped while a payment was waiting, and that payment was taken afterwards. It is refunded in full.', a.cancel_ref || '');
       await mailAdmins(a.id, 'Your monthly plan has ended', 'Your plan has ended and that payment is coming back', [
         `The monthly plan for ${a.name} had been stopped while a payment of ${money(cents, currency)} was still waiting. That payment went through afterwards, so we are refunding it in full and the plan has ended. You will not be charged again.`,
-        `You still have ${sigs(Math.max(0, available(a.id)))}. They never expire. Nothing was deleted: every document, audit trail and receipt is still in your account.`,
+        whatYouKeep(a.id, true),
+        'Nothing was deleted: every document, audit trail and receipt is still in your account.',
       ], { label: 'Open the Plan page', url: planUrl() });
     }
     await payOwed(owed);
@@ -1655,8 +1679,12 @@ async function applyInvoice(o: any): Promise<void> {
   // A payment that got through brings a plan that was on hold back.
   if (a.plan !== 'grove' || a.subscription_status !== 'active')
     run("UPDATE accounts SET plan='grove', subscription_status=CASE WHEN subscription_status='trialing' THEN 'trialing' ELSE 'active' END WHERE id=?", a.id);
-  grant(a.id, credits, 'plan', o.id);
   const next = iso(o.lines?.data?.[0]?.period?.end);
+  // The month's signatures belong to the period this payment is for, and expire when it ends: at the renewal, or at
+  // the end of the paid month after cancelling (expiryRuleText). An invoice that names no period is taken to run to
+  // the renewal the provider told us of, or for a month.
+  const monthEnds = next || (a.renews_at && a.renews_at > now() ? a.renews_at : addMonths(now(), 1));
+  grant(a.id, credits, 'plan', o.id, undefined, monthEnds);
   if (next && (!a.renews_at || next > a.renews_at)) run('UPDATE accounts SET renews_at=? WHERE id=?', next, a.id);
   // Remember the tax on this one, so the next reminder can state the full amount without waiting for the provider,
   // and on the payment itself, so the price it was paid at can always be told from it (fillPrices in db.ts).
@@ -1703,8 +1731,10 @@ async function applyInvoice(o: any): Promise<void> {
 
   await mailAdmins(a.id, `Receipt: ${money(cents, currency)} for ${sigs(credits)}`, 'Payment received. Thank you.', [
     `${money(cents, currency)} for ${a.name}, charged today. ${sigs(credits)} added: you now have ${sigs(Math.max(0, available(a.id)))} to send.`,
-    `That plants ${trees(Math.min(cents, said))} with Treegens.`,
+    `That plants ${trees(Math.min(cents, said))} with Treegens, whether the signatures are used or not.`,
+    `These ${sigs(credits)} belong to this month of the plan and can be used until ${expiryMoment(monthEnds)}. Those not used by then expire${a.cancel_at ? '' : `, and the renewal brings a fresh ${PRICING.monthlySignatures}`}.`,
     ...(next && !a.cancel_at ? [`Next charge: ${money(priceFor(account(a.id), next))} on ${day(next)}. We remind you a week before and again about a day before.`] : []),
+    expiryRuleText(),
     refundRuleText(refundDays()),
     `Account: ${a.name}, reference ${a.id}. Receipts go to every owner and admin of the account.`,
   ], o.hosted_invoice_url ? { label: 'View invoice', url: o.hosted_invoice_url } : { label: 'Open the Plan page', url: planUrl() });
@@ -1755,20 +1785,29 @@ async function remindRenewal(acct: any, cents?: number | null, currency = 'usd',
     const r = await cancelPlan(a, `automatically, because nothing was sent in ${stopAfter} days`, true);
     await mailAdmins(a.id, 'We stopped your renewal so you are not charged for nothing', `You will not be charged on ${day(when)}`, [
       `${a.name} has not sent anything in ${stopAfter} days, so we turned the renewal off rather than charge you again. Reference ${r.reference}.`,
-      `You keep the ${sigs(Math.max(0, available(a.id)))} you already have. They never expire.`,
+      whatYouKeep(a.id, true),
       'If you want to keep the monthly plan (thank you: every dollar plants mangroves), press "Keep the plan after all" on the Plan page. We will not stop this renewal a second time.',
     ], { label: 'Keep my plan', url: planUrl() });
     return true;
   }
   run('UPDATE accounts SET renewal_reminded=?, renewal_quoted_cents=? WHERE id=?', `${key}|${[...new Set([...already, ...(due ? [stage] : [])])].join(',')}`, amountCents, a.id);
-  const left = `You have ${sigs(Math.max(0, available(a.id)))} left at the moment. They roll over either way.`;
+  // How many of this month's signatures will expire at the renewal if they stay unused (the plan lots that end at
+  // that moment), said in every reminder, with the rule.
+  const ending = lotsOf(a.id).filter((l) => l.source === 'plan' && l.live && !!l.expires_at && Date.parse(l.expires_at) <= Date.parse(when) + 3600_000);
+  const unused = ending.reduce((n, l) => n + Math.max(0, l.left), 0);
+  const heldNow = ending.reduce((n, l) => n + l.held, 0);
+  const ofMonth = ending.reduce((n, l) => n + l.qty, 0);
+  const total = `You have ${sigs(Math.max(0, available(a.id)))} to send with in all right now.`;
+  const left = !ending.length ? total
+    : unused > 0 ? `${unused} of this month's ${sigs(ofMonth)} ${unused === 1 ? 'is' : 'are'} still unused. If ${unused === 1 ? 'it is' : 'they are'} not used by the renewal, ${unused === 1 ? 'it expires' : 'they expire'} then, on ${expiryMoment(ending[0].expires_at)}, and the renewal brings a fresh ${PRICING.monthlySignatures}.${heldNow ? ` The ${sigs(heldNow)} held for envelopes that are out do not expire while they are held.` : ''} ${total}`
+    : `None of this month's ${sigs(ofMonth)} will expire at the renewal: they are all used${heldNow ? ' or held for envelopes that are out (a held one does not expire while it is held)' : ''}. ${total}`;
   const out = 'To keep planting mangroves, do nothing. To stop, use the link below. It takes one click, needs no login, and works right up to the charge.';
   const went = raised && !due
     ? await mailAdmins(a.id, `Correction: your plan renews on ${day(when)} for ${amount}, not ${money(told, currency)}`, 'The amount of your next charge changed', [
-      `We told you ${money(told, currency)} for ${a.name}. The payment provider now says the charge on ${day(when)} will be ${amount}. That is the full amount, and if more than this is taken we send the difference back.`, left, out,
+      `We told you ${money(told, currency)} for ${a.name}. The payment provider now says the charge on ${day(when)} will be ${amount}. That is the full amount, and if more than this is taken we send the difference back.`, left, out, expiryRuleText(),
     ], 'stop', when)
     : await mailAdmins(a.id, stage === '1' ? `Last reminder: your plan renews on ${day(when)} for ${amount}` : `Heads up: your plan renews on ${day(when)} for ${amount}`, stage === '1' ? 'Your plan renews in about a day' : 'Your plan renews soon', [
-      `On ${day(when)} we will charge ${amount} for ${a.name} and add ${sigs(PRICING.monthlySignatures)}. That is the full amount: there are no extras, and if more than this is ever taken we send the difference back.`, left, out,
+      `On ${day(when)} we will charge ${amount} for ${a.name} and add ${sigs(PRICING.monthlySignatures)}. That is the full amount: there are no extras, and if more than this is ever taken we send the difference back.`, left, out, expiryRuleText(),
     ], 'stop', when);
   // The plan history says "sent" only for a reminder whose email left. One the mail server would not take is tried
   // again a few times (never after the renewal), and the history says it could not be delivered.
@@ -1787,6 +1826,40 @@ export async function renewalReminders(): Promise<number> {
   const rows = all("SELECT id FROM accounts WHERE plan='grove' AND promo_code IS NULL AND cancel_at IS NULL AND stripe_subscription_id IS NOT NULL AND renews_at > ? AND renews_at <= ?", now(), new Date(Date.now() + 7 * 864e5).toISOString());
   let n = 0;
   for (const a of rows) if (await serial(a.id, () => remindRenewal(a), true).catch((e) => (console.error('[billing] reminder failed', a.id, e?.message), false))) n++;
+  return n;
+}
+
+// On the timer: top-up signatures that are about to expire unused. One email TOPUP_WARN_DAYS[0] days before and one
+// TOPUP_WARN_DAYS[1] days before, each only while some of that top-up are unused (held ones do not count: they do not
+// expire while held). Each goes once per top-up; one that was missed (the timer was not called) is not sent late as
+// the earlier one, only the later one is. Not retried after the moment they expire.
+async function warnTopUp(accountId: string, lotRef: string): Promise<boolean> {
+  const a = account(accountId);
+  const l = a ? lotsOf(a.id).find((x) => x.source === 'topup' && x.ref === lotRef) : null;
+  if (!a || !l?.expires_at || !l.live || l.left <= 0) return false;
+  const days = (Date.parse(l.expires_at) - Date.now()) / 864e5;
+  const [far, near] = TOPUP_WARN_DAYS;
+  const stage = days <= near ? String(near) : days <= far ? String(far) : null;
+  const warned = String(get('SELECT warned FROM credit_lots WHERE id=?', l.id)?.warned || '').split(',');
+  if (!stage || warned.includes(stage)) return false;
+  markWarned(l.id, stage);
+  if (stage === String(near)) markWarned(l.id, String(far));
+  const p = get('SELECT amount_cents, currency FROM payments WHERE id=?', l.ref);
+  const ids = await mailAdmins(a.id, `${sigs(l.left)} from your top-up expire on ${expiryMoment(l.expires_at)}`, stage === String(near) ? 'Your top-up signatures expire in a few days' : 'Some of your top-up signatures expire next month', [
+    `${a.name} bought ${sigs(l.qty)} on ${day(l.at)}${p ? ` (${money(p.amount_cents, p.currency)})` : ''}. ${l.left} of them ${l.left === 1 ? 'is' : 'are'} still unused, and ${l.left === 1 ? 'it expires' : 'they expire'} on ${expiryMoment(l.expires_at)}, ${TOPUP_EXPIRY_MONTHS} months after that payment.`,
+    `When you send, the signature that expires soonest is always used first, so ${l.left === 1 ? 'this one goes' : 'these go'} before newer ones${l.held ? `. ${sigs(l.held)} of this top-up ${l.held === 1 ? 'is' : 'are'} held for envelopes that are out: held ones do not expire while they are held` : ''}.`,
+    `The mangroves this top-up paid for are planted whether its signatures are used or not.${stage === String(far) ? ` We email you once more ${near} days before, if any are still unused then.` : ''}`,
+    expiryRuleText(),
+  ], { label: 'Open the Plan page', url: planUrl() }, l.expires_at);
+  await afterMail(ids, (how) => log(a.id, 'topup-expiry', `${sigs(l.left)} of a top-up of ${sigs(l.qty)} expire on ${expiryMoment(l.expires_at)}${how.some(mailLeft) ? '' : '. The mail server did not take the email; it is tried again until then'}.`, l.ref));
+  return true;
+}
+export async function topUpExpiryNotices(): Promise<number> {
+  if (!billingEnabled()) return 0;
+  const soon = new Date(Date.now() + TOPUP_WARN_DAYS[0] * 864e5).toISOString();
+  const rows = all("SELECT l.account_id, l.ref FROM credit_lots l JOIN accounts a ON a.id=l.account_id WHERE l.source='topup' AND l.expires_at > ? AND l.expires_at <= ? ORDER BY l.expires_at", now(), soon);
+  let n = 0;
+  for (const r of rows) if (await serial(r.account_id, () => warnTopUp(r.account_id, r.ref), true).catch((e) => (console.error('[billing] top-up expiry email failed', r.account_id, e?.message), false))) n++;
   return n;
 }
 
@@ -1820,9 +1893,14 @@ export async function billingRetries(): Promise<number> {
       } catch (e: any) {
         // The provider said no to a refund a customer asked for: undo it and get a person involved.
         if (!r.auto) {
+          // Back to the lot they came from: usable again unless its date has passed meanwhile.
+          const usable = r.account_id ? stillLive(r.account_id, 'refund', r.id) : 0;
           dropRefund(r.id);
-          await tellOperators('A refund a customer asked for was refused by the payment provider', [`Refund ${r.id}, payment ${r.payment_id}${r.account_id ? `, account ${r.account_id}` : ''}: ${e?.message}. Their signatures are back on the balance. Refund it by hand and write to them.`], r.account_id);
-          if (account(r.account_id)) await mailAdmins(r.account_id, 'Your refund needs a person', 'We could not send your refund automatically', ['The payment provider would not make the refund you asked for. The signatures are back on your balance, and a person here has been told and will refund it by hand and write to you. You do not need to do anything.']);
+          const back = usable >= r.signatures ? 'The signatures are back on your balance'
+            : usable ? `${sigs(usable)} of the ${sigs(r.signatures)} are back on your balance (the others reached their own date in the meantime and have expired)`
+            : `The ${sigs(r.signatures)} had reached their own date in the meantime, so they have expired instead of coming back`;
+          await tellOperators('A refund a customer asked for was refused by the payment provider', [`Refund ${r.id}, payment ${r.payment_id}${r.account_id ? `, account ${r.account_id}` : ''}: ${e?.message}. ${usable >= r.signatures ? 'Their signatures are back on the balance' : `${sigs(usable)} of their ${sigs(r.signatures)} are back on the balance; the rest had expired`}. Refund it by hand and write to them.`], r.account_id);
+          if (account(r.account_id)) await mailAdmins(r.account_id, 'Your refund needs a person', 'We could not send your refund automatically', [`The payment provider would not make the refund you asked for. ${back}, and a person here has been told and will refund it by hand and write to you. You do not need to do anything.`]);
           return 'failed';
         }
         // A refund we owe that the provider has now clearly refused three times (not "could not be reached"): asking
@@ -1955,10 +2033,10 @@ async function applySubscription(a: any, o: any, at: number, ended: boolean) {
   if (ended && a.subscription_status !== 'canceled') {
     log(a.id, 'ended', 'The monthly plan ended.', a.cancel_ref || '');
     if (a.plan === 'grove')
-      await mailAdmins(a.id, 'Your monthly plan has ended', 'Your plan has ended', ['You will not be charged again. Nothing was deleted: every document, audit trail and receipt is still in your account.', `You still have ${sigs(Math.max(0, available(a.id)))}. They never expire, and signing your own documents is always free. Come back to the monthly plan whenever you like.`]);
+      await mailAdmins(a.id, 'Your monthly plan has ended', 'Your plan has ended', ['You will not be charged again. Nothing was deleted: every document, audit trail and receipt is still in your account.', whatYouKeep(a.id, true), 'Come back to the monthly plan whenever you like.']);
   } else if (!live && !ended && a.plan === 'grove')
     await mailAdmins(a.id, 'Your monthly plan is on hold', 'Your plan is on hold because a payment did not go through', [
-      'Nothing is locked and nothing is deleted. The signatures you already have stay yours and still work.',
+      'Nothing is locked and nothing is deleted. The signatures you already have still work, each until its own date (the Plan page shows them).',
       'To bring the plan back, open the Plan page and press "Pay the open payment". You can use another card there. A new card on file is not enough by itself: the payment that failed is no longer tried automatically.',
       'To end the plan for good, press Cancel there: the failed payment is then withdrawn and never tried again.',
     ], { label: 'Open the Plan page', url: planUrl() });
@@ -2016,7 +2094,7 @@ async function handleEvent(ev: any) {
     if (a && hasSub(a) && subOf(o) === a.stripe_subscription_id) {
       log(a.id, 'paused', 'A monthly payment did not go through.');
       await mailAdmins(a.id, 'Your monthly payment did not go through', 'A payment failed', [
-        'Nothing is locked and nothing is deleted. If the payment keeps failing, the monthly plan simply ends. Every document stays available, and the signatures you already have stay yours.',
+        'Nothing is locked and nothing is deleted. If the payment keeps failing, the monthly plan simply ends. Every document stays available, and the signatures you already have still work, each until its own date (the Plan page shows them).',
         'To keep the plan, update the card on the Plan page. To stop it instead, press Cancel there: the failed payment will then not be tried again.',
       ], { label: 'Open the Plan page', url: planUrl() });
     }
@@ -2101,17 +2179,17 @@ async function handleEvent(ev: any) {
     if (extra <= 0 || p.disputed) return;
     run('UPDATE payments SET refunded_at=COALESCE(refunded_at, ?), refunded_cents=? WHERE id=?', now(), total - parted, p.id);
     const acct = account(p.account_id);
-    const { taken, used } = takeBack(acct, p, extra, `out:${o.id}:${total}`);
+    const { taken, used, expired } = takeBack(acct, p, extra, `out:${o.id}:${total}`);
     if (acct) log(acct.id, 'refund', `${money(extra, p.currency)} refunded by the payment provider.${taken ? ` ${sigs(taken)} left the balance with it.` : ''}`);
-    await tellOperators(`A refund made outside the app was recorded${acct ? `: ${acct.name}` : ''}`, [`Payment ${p.id}: ${money(extra, p.currency)} went back to the card${owedToo ? `, on top of the refund of ${money(owedToo.cents, p.currency)} we owed (${owedToo.id}), which it settled` : ''}. ${sigs(taken)} it had paid for were taken off the balance${used ? `; ${sigs(used)} had already been used and stay used` : ''}. The customer has been told by email.`], acct?.id);
+    await tellOperators(`A refund made outside the app was recorded${acct ? `: ${acct.name}` : ''}`, [`Payment ${p.id}: ${money(extra, p.currency)} went back to the card${owedToo ? `, on top of the refund of ${money(owedToo.cents, p.currency)} we owed (${owedToo.id}), which it settled` : ''}. ${sigs(taken)} it had paid for were taken off the balance${used || expired ? `; ${notTaken(used, expired)}` : ''}. The customer has been told by email.`], acct?.id);
     // The customer hears it from us too: what went back, what it did to the balance and why, and whether the plan goes on.
     if (acct) {
       const now_ = account(acct.id);
       const all_ = extra + (owedToo?.cents || 0);
       await mailAdmins(acct.id, `Refund sent: ${money(all_, p.currency)}`, 'Money went back to your card', [
         `${money(all_, p.currency)} of your ${PAYMENT_LABEL[p.kind]?.toLowerCase() || ''} payment of ${money(p.amount_cents, p.currency)} from ${day(p.at)} was refunded to the card it was paid with${owedToo ? `, ${partsText(handParts(owedToo).length ? [...handParts(owedToo).slice(0, -1), { ...handParts(owedToo).at(-1)!, cents: handParts(owedToo).at(-1)!.cents + extra }] : [{ cents: all_, at: heard }], p.currency)}` : ''}. ${owedToo ? `That includes the refund of ${money(owedToo.cents, p.currency)} we owed you (${owedToo.auto ? owedWhy(owedToo.why) : owedToo.why}). ` : ''}It was sent by a person here, through the payment provider. Banks usually show it within 5 to 10 working days.`,
-        taken || used
-          ? `Signatures follow the money, so the ${sigs(taken + used)} it paid for went with it: ${taken ? `${sigs(taken)} left your balance` : 'none could leave your balance'}${used ? `, and ${sigs(used)} had already been used and stay used` : ''}. You have ${sigs(Math.max(0, available(acct.id)))} to send now.`
+        taken || used || expired
+          ? `Signatures follow the money, so the ${sigs(taken + used + expired)} it paid for went with it: ${taken ? `${sigs(taken)} left your balance` : 'none could leave your balance'}${used || expired ? `, and ${notTaken(used, expired)}` : ''}. You have ${sigs(Math.max(0, available(acct.id)))} to send now.`
           : 'Your signature balance is unchanged.',
         renewing(now_) && now_.plan === 'grove' && now_.renews_at
           ? `Your monthly plan is not affected and continues: it renews on ${day(now_.renews_at)}, and we remind you before that. To stop it, use the link below.`
@@ -2128,9 +2206,14 @@ async function handleEvent(ev: any) {
     if (!r) return;
     run("UPDATE refunds SET status='failed' WHERE id=?", r.id);
     run('UPDATE payments SET refunded_cents=MAX(0, refunded_cents-?), credits_refunded=MAX(0, credits_refunded-?) WHERE id=?', r.cents, r.signatures, r.payment_id);
+    // The signatures go back to their lot: usable again, unless its date has passed meanwhile (then they expire).
+    const usable = r.account_id ? stillLive(r.account_id, 'refund', r.id) : 0;
     if (r.account_id) run("DELETE FROM credits WHERE account_id=? AND reason='refund' AND ref=?", r.account_id, r.id);
-    await tellOperators('A refund could not be delivered by the bank', [`Refund ${o.id} for payment ${r.payment_id}${r.account_id ? ` (account ${r.account_id})` : ''}, ${money(r.cents)}. It has been undone here${r.signatures ? ` and its ${sigs(r.signatures)} are back on the balance` : ''}. Find another way to return the money and write to the customer.`], r.account_id);
-    if (account(r.account_id)) await mailAdmins(r.account_id, 'Your refund could not be delivered', 'The bank could not deliver your refund', [`The refund of ${money(r.cents)} we sent could not be delivered to the card (banks do this when a card has been closed, for example).${r.signatures ? ` The ${sigs(r.signatures)} are back on your balance for now.` : ''} A person here has been told and will write to you about another way to return the money.`]);
+    const backWords = (whose: string) => (r.signatures ? (usable >= r.signatures ? ` ${whose === 'ops' ? `its ${sigs(r.signatures)} are back on the balance` : `The ${sigs(r.signatures)} are back on your balance for now.`}`
+      : usable ? ` ${whose === 'ops' ? `${sigs(usable)} of its ${sigs(r.signatures)} are back on the balance (the others had passed their date and expired)` : `${sigs(usable)} of the ${sigs(r.signatures)} are back on your balance for now; the others had reached their own date in the meantime and have expired.`}`
+      : ` ${whose === 'ops' ? `its ${sigs(r.signatures)} had passed their date meanwhile and expired` : `The ${sigs(r.signatures)} it was for had reached their own date in the meantime, so they have expired instead of coming back.`}`) : '');
+    await tellOperators('A refund could not be delivered by the bank', [`Refund ${o.id} for payment ${r.payment_id}${r.account_id ? ` (account ${r.account_id})` : ''}, ${money(r.cents)}. It has been undone here${r.signatures ? ` and${backWords('ops')}` : ''}. Find another way to return the money and write to the customer.`], r.account_id);
+    if (account(r.account_id)) await mailAdmins(r.account_id, 'Your refund could not be delivered', 'The bank could not deliver your refund', [`The refund of ${money(r.cents)} we sent could not be delivered to the card (banks do this when a card has been closed, for example).${backWords('customer')} A person here has been told and will write to you about another way to return the money.`]);
     return;
   }
 
@@ -2161,7 +2244,7 @@ async function handleEvent(ev: any) {
     }
     const limit = process.env.ACCEPT_DISPUTES === '0' ? 0 : (process.env.ACCEPT_DISPUTES_UP_TO_USD === undefined ? 25 : Number(process.env.ACCEPT_DISPUTES_UP_TO_USD) || 0) * 100;
     const accepted = !!o.id && amount <= limit && (await stripe('POST', `disputes/${o.id}/close`).then(() => true).catch(() => false));
-    const { taken, used } = takeBack(a, get('SELECT * FROM payments WHERE id=?', p.id), p.amount_cents - p.refunded_cents, `dispute:${p.id}`, 'dispute');
+    const { taken, used, expired } = takeBack(a, get('SELECT * FROM payments WHERE id=?', p.id), p.amount_cents - p.refunded_cents, `dispute:${p.id}`, 'dispute');
     // Conceded: the money is going back, so the payment counts as returned. Not conceded: nothing has gone back yet.
     if (accepted) run("UPDATE payments SET disputed='lost', dispute_taken=?, refunded_at=COALESCE(refunded_at, ?), refunded_cents=amount_cents WHERE id=?", taken, now(), p.id);
     else run("UPDATE payments SET disputed='open', dispute_taken=? WHERE id=?", taken, p.id);
@@ -2174,10 +2257,11 @@ async function handleEvent(ev: any) {
     await mailAdmins(a.id, 'A payment was disputed, so we stopped billing you', 'A payment was disputed with your bank', [
       `A payment of ${money(amount, p.currency)} to GrowSigning was disputed with the card's bank. ${accepted ? 'We are not contesting it: the bank returns the money to the card.' : 'A person here will look at it and write to you.'}`,
       ...(hadPlan ? ['Your monthly plan has ended and nothing more will be charged.'] : a.promo_code ? [`Your plan stays free with the code ${a.promo_code}.`] : []),
-      taken ? (accepted ? `The ${sigs(taken)} that payment bought have left your balance, as with any refund.` : `The ${sigs(taken)} that payment bought are set aside until the bank decides. If the payment stands, they come back.`) + ` You have ${sigs(Math.max(0, available(a.id)))} to send now. Envelopes that are already out can still be signed.` : 'Your balance is unchanged.',
+      (taken ? (accepted ? `The ${sigs(taken)} that payment bought have left your balance, as with any refund.` : `The ${sigs(taken)} that payment bought are set aside until the bank decides. If the payment stands, they come back, unless their own date has passed by then.`) + ` You have ${sigs(Math.max(0, available(a.id)))} to send now. Envelopes that are already out can still be signed.` : 'Your balance is unchanged.')
+        + (used || expired ? ` Of the signatures that payment bought, ${notTaken(used, expired)}.` : ''),
       'Nothing was deleted. New payments are switched off on this account for now. If the dispute was a mistake, reply to this email or use the contact form and a person will switch them back on.',
     ], { label: 'Contact us', url: `${baseUrl()}/help?topic=billing#contact` });
-    await tellOperators(`Card dispute: ${a.name}`, [`Account ${a.name} (${a.id}), dispute ${o.id}, ${money(amount, p.currency)}. Billing was stopped${stopped ? '' : ', but the provider did not confirm the subscription ended (we keep trying)'}. ${forOps} ${sigs(taken)} were taken off the balance (including any held for envelopes that are out); ${sigs(used)} bought with that payment had already been used by people signing. New payments stay off until you switch them back on in the operator queue. The customer has been told in writing.`], a.id);
+    await tellOperators(`Card dispute: ${a.name}`, [`Account ${a.name} (${a.id}), dispute ${o.id}, ${money(amount, p.currency)}. Billing was stopped${stopped ? '' : ', but the provider did not confirm the subscription ended (we keep trying)'}. ${forOps} ${sigs(taken)} were taken off the balance (including any held for envelopes that are out); ${sigs(used)} bought with that payment had already been used by people signing${expired ? `, and ${sigs(expired)} had expired unused` : ''}. New payments stay off until you switch them back on in the operator queue. The customer has been told in writing.`], a.id);
     return;
   }
 
@@ -2209,15 +2293,17 @@ async function handleEvent(ev: any) {
     }
     // Won, or closed without the money moving: the payment stands, so its signatures come back.
     run("UPDATE payments SET disputed='won', dispute_taken=0, credits_refunded=MAX(0, credits_refunded-?) WHERE id=?", p.dispute_taken, p.id);
-    if (a && p.dispute_taken > 0) grant(a.id, p.dispute_taken, 'dispute', `dispute-won:${p.id}`);
+    // They go back to the lots they were taken from. One whose date passed while the bank decided is gone with it.
+    const back = a && p.dispute_taken > 0 ? restoreTaken(a.id, p.dispute_taken, `dispute-won:${p.id}`) : { back: 0, gone: 0 };
+    const backWords = `${back.back ? `${sigs(back.back)} ${back.back === 1 ? 'is' : 'are'} back on the balance.` : ''}${back.gone ? ` ${sigs(back.gone)} had passed ${back.gone === 1 ? 'its' : 'their'} own date while the bank decided, so ${back.gone === 1 ? 'it has' : 'they have'} expired.` : ''}`.trim();
     if (a) {
-      log(a.id, 'dispute', `The bank decided the disputed payment stands.${p.dispute_taken ? ` ${sigs(p.dispute_taken)} are back on the balance.` : ''}`, o.id || '');
+      log(a.id, 'dispute', `The bank decided the disputed payment stands.${backWords ? ` ${backWords}` : ''}`, o.id || '');
       await mailAdmins(a.id, 'The disputed payment stands', 'The bank has decided the dispute', [
-        `The bank decided that the payment of ${money(p.amount_cents, p.currency)} to GrowSigning stands.${p.dispute_taken ? ` The ${sigs(p.dispute_taken)} it bought are back on your balance.` : ''}`,
+        `The bank decided that the payment of ${money(p.amount_cents, p.currency)} to GrowSigning stands.${back.back ? ` The ${sigs(back.back)} set aside for it ${back.back === 1 ? 'is' : 'are'} back on your balance.` : ''}${back.gone ? ` ${sigs(back.gone)} of those set aside had reached ${back.gone === 1 ? 'its' : 'their'} own date while the bank decided, so ${back.gone === 1 ? 'it' : 'they'} expired instead of coming back.` : ''}`,
         'New payments are still switched off on this account. Reply to this email or use the contact form and a person will switch them back on.',
       ], { label: 'Contact us', url: `${baseUrl()}/help?topic=billing#contact` });
     }
-    await tellOperators(`Dispute closed in our favour${a ? `: ${a.name}` : ''}`, [`Dispute ${o.id}, payment ${p.id}: the payment stands${p.dispute_taken ? ` and ${sigs(p.dispute_taken)} went back on the balance` : ''}. Payments are still off for this account; switch them back on in the operator queue if that is right.`], a?.id);
+    await tellOperators(`Dispute closed in our favour${a ? `: ${a.name}` : ''}`, [`Dispute ${o.id}, payment ${p.id}: the payment stands${backWords ? `. ${backWords}` : ''}. Payments are still off for this account; switch them back on in the operator queue if that is right.`], a?.id);
   }
 }
 
@@ -2311,8 +2397,8 @@ export async function dormancyNudges(): Promise<number> {
   for (const a of rows) {
     run('UPDATE accounts SET dormant_nudged_at=? WHERE id=?', now(), a.id);
     await mailAdmins(a.id, 'Still using GrowSigning?', 'You are on the monthly plan but have not sent anything in 60 days', [
-      `${a.name} pays ${money(chargePrice(a))} a month and has ${sigs(Math.max(0, available(a.id)))} saved up. Every dollar plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
-      'If you are not using it, stop the renewal with the link below. You keep every document and every signature you have already paid for.',
+      `${a.name} pays ${money(chargePrice(a))} a month and has ${sigs(Math.max(0, available(a.id)))} it has not used. Every dollar plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
+      'If you are not using it, stop the renewal with the link below. You keep every document, and the signatures you have already paid for can be used until their own dates.',
     ], 'stop');
   }
   return rows.length;
@@ -2407,7 +2493,7 @@ route('POST', '/operator/billing/price-notice', async (c) => {
           `Today ${a.name} pays ${money(nowCents)} a month. From ${day_} the monthly plan costs ${money(cents)} a month. The first renewal on or after that day is the first at the new price. Until then nothing changes.`,
           ...(had ? [`This replaces what we told you on ${priceChangeDay(had.at)} (${money(had.cents)} a month from ${priceChangeDay(had.from)}).`] : []),
           `Each payment still adds ${sigs(PRICING.monthlySignatures)}, and the signatures you already have are not touched.`,
-          'You do not have to do anything to stay. If the new price is not for you, stop the plan with the button below or on the Plan page at any time before that renewal. You keep every signature and every document.',
+          'You do not have to do anything to stay. If the new price is not for you, stop the plan with the button below or on the Plan page at any time before that renewal. You keep every document, and the signatures you have can be used until their own dates.',
           priceRuleText(),
         ], 'stop', undefined, missing.map((u) => u.email));
         for (const mid of ids) run('INSERT OR IGNORE INTO stripe_events (id, at) VALUES (?,?)', `${noticeKey(a.id, cents, from)}${mid}`, now());

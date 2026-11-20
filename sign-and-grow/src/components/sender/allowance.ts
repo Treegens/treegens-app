@@ -23,6 +23,6 @@ export function useAllowance(): [Allowance, () => void, boolean] {
 
 /** A sentence for the moment something is voided, true for the way this account is counted. */
 export function voidCostLine(a: Allowance): string {
-  if (a?.kind === 'signatures') return 'Signatures held for people who have not signed yet go back to your balance.';
+  if (a?.kind === 'signatures') return 'Signatures held for people who have not signed yet go back to your balance, except any whose own date has passed while they were held: those expire instead.';
   return '';
 }

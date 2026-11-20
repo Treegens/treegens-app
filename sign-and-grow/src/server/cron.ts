@@ -1,5 +1,5 @@
 import { cronTick, formVisitorsReady } from './envelopes.ts';
-import { dormancyNudges, renewalReminders, billingRetries, endRemovedCodes } from './routes-billing.ts';
+import { dormancyNudges, renewalReminders, billingRetries, endRemovedCodes, expireSignatures, topUpExpiryNotices } from './routes-billing.ts';
 import { purgeClosedAccounts } from './routes-trust.ts';
 import { supportTick } from './routes-support.ts';
 import { retryMail } from './mail.ts';
@@ -21,7 +21,11 @@ import './signercode.ts';
 export async function tick() {
   // Text messages the provider would not take are tried again the same way (`texts`).
   const r = { ...(await cronTick()), mail: await retryMail(), texts: await retryTexts() };
-  return { ...r, renewals: await renewalReminders(), retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: await purgeClosedAccounts(),
+  return { ...r, renewals: await renewalReminders(),
+    // Signatures whose date has passed and that nobody holds expire, with a line in the plan history (credits.ts),
+    // and top-ups about to expire unused are announced 30 and 3 days before (routes-billing.ts).
+    signatures_expired: expireSignatures(), topups_warned: await topUpExpiryNotices(),
+    retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: await purgeClosedAccounts(),
     // Help requests that have passed the time a person should have answered by: the operators are emailed and the customer is told.
     support: await supportTick(),
     // Addresses that bounced, and "try later" days, older than BOUNCE_WARN_DAYS (bounces.ts).

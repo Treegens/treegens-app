@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
+import { Mark } from './Brand';
 
 // The reader's time zone, sent along when the app loads, so dates in emails match the dates on screen.
 function timeZone(): string {
@@ -65,11 +66,10 @@ export function Modal({ title, children, onClose, wide }: { title: string; child
   );
 }
 
+/** Old name for a picture of a leaf. It now draws the brand's mark in one colour, hidden from screen readers. Use
+ * `Mark` or `Logo` from ./Brand instead; tests/brand.test.ts fails when a Leaf stands next to the product's name. */
 export const Leaf = ({ size = 20, color = 'currentColor' }: { size?: number; color?: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ flex: 'none' }}>
-    <path fill={color} d="M2 22C2 9 10 2 22 2c0 12-7 20-20 20Z" />
-    <path d="M4 20 15 9" stroke="rgba(255,255,255,.55)" strokeWidth="1.4" strokeLinecap="round" />
-  </svg>
+  <Mark size={size} tone="mono" label="" style={{ color }} />
 );
 
 const STATUS: Record<string, string> = { draft: 'Draft', sent: 'Waiting for others', completed: 'Completed', declined: 'Declined', voided: 'Voided', expired: 'Expired', pending: 'Not yet sent', viewed: 'Viewed' };

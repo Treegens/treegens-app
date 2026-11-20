@@ -102,14 +102,14 @@ const addDraw = (creditId: number, lotId: number | null, n: number) => void (n &
 const addLot = (accountId: string, creditId: number, source: string, ref: string, qty: number, at: string, expiresAt: string | null) =>
   run('INSERT OR IGNORE INTO credit_lots (id, account_id, source, ref, qty, at, expires_at, paid) VALUES (?,?,?,?,?,?,?,?)', creditId, accountId, source, ref, qty, at, expiresAt, PAID_SOURCES.includes(source) ? 1 : 0);
 
-// Takes `need` signatures that are free (not held) for line `creditId`, soonest-expiring first, from lots that could
-// pay at `since`. What no lot can pay for is drawn from no lot: the account is short by that much, and the next lot
-// to arrive pays for it first (fund).
-function takeFree(accountId: string, creditId: number, need: number, since: string) {
+// Takes `need` signatures that are free (not held) for line `creditId`, soonest-expiring first, from lots that had
+// arrived by `at` (the line's own time) and could pay at `since`. What no lot can pay for is drawn from no lot: the
+// account is short by that much, and the next lot to arrive pays for it first (fund).
+function takeFree(accountId: string, creditId: number, need: number, since: string, at: string) {
   for (const l of loadLots(accountId).sort(soonest)) {
     if (need <= 0) break;
     const k = Math.min(need, freeIn(l));
-    if (k > 0 && liveAt(l, since)) {
+    if (k > 0 && liveAt(l, since) && l.at <= at) {
       addDraw(creditId, l.id, k);
       need -= k;
     }
@@ -136,7 +136,7 @@ function drawLine(accountId: string, creditId: number, need: number, reason: str
       if (sent && sent < at) since = sent;
     }
   }
-  if (need > 0) takeFree(accountId, creditId, need, since);
+  if (need > 0) takeFree(accountId, creditId, need, since, at);
 }
 
 // A line that gives back what an earlier one took (a dispute the bank decided in our favour): the signatures go back
@@ -526,7 +526,7 @@ export const markWarned = (lotId: number, stage: string) => {
 };
 
 // On the timer: every account with a lot whose date has passed and that still has something in it nobody holds.
-// Its holds are brought up to date first (settle), so a signature held for an envelope that is out never expires.
+// Its holds are brought up to date first (settle), so a signature held for an envelope that is out stays held.
 // The answer is how many signatures expired.
 export function expireSignatures(): number {
   if (!creditsEnabled()) return 0;

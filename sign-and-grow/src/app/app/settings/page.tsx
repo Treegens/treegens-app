@@ -8,6 +8,8 @@ import { PRICING, mangrovesFor } from '@/lib/impact';
 // Plain constants only: the rest of policy.ts reads the environment and is for the server.
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 import { DEFAULT_REMINDER_DAYS, reminderText } from '@/lib/policy';
+// When a signature expires, written the same way as in the emails: "3 December 2026 at 14:00 UTC".
+import { expiryMoment, TOPUP_EXPIRY_MONTHS } from '@/lib/policy';
 import { DATE_FORMAT_CHOICES, formatDate, deviceZone } from '@/lib/dates';
 // The same holds for signin.ts: the names and the words only.
 import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
@@ -16,6 +18,7 @@ import { TwoStepCard, TeamTwoStep } from './TwoStep';
 import { EmailAddressCard } from '@/components/EmailProblem';
 // The team's company stamps (src/components/stamps/StampSettings.tsx).
 import { StampSettings } from '@/components/stamps/StampSettings';
+import { RetentionSettings } from '@/components/settings/RetentionSettings';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
 import { LanguageSettings } from '@/components/settings/LanguageSettings';
 import { SecurityLog } from '@/components/settings/SecurityLog';
@@ -511,15 +514,15 @@ function Billing() {
         <div>
           <h2 className="serif" style={{ fontSize: 22 }}>Every dollar plants {P.treesPerUsd} mangrove trees</h2>
           <p style={{ margin: '4px 0 0' }}>
-            Everything you pay GrowSigning goes to Treegens tree planting. {b.mangroves > 0 ? <>So far {me.account.name} has planted <b style={{ color: '#fff' }}>{b.mangroves.toLocaleString()} mangroves</b>. Thank you.</> : 'People who sign your documents never pay anything.'}
+            Everything you pay GrowSigning goes to Treegens tree planting, whether its signatures are used or not. {b.mangroves > 0 ? <>So far {me.account.name} has planted <b style={{ color: '#fff' }}>{b.mangroves.toLocaleString()} mangroves</b>. Thank you.</> : 'People who sign your documents never pay anything.'}
           </p>
         </div>
       </div>
 
       {done && (
         <div className="notice" role="status">
-          {done.kind === 'cancel' && !done.ended_now && <><b>Cancelled. You will not be charged again.</b> The plan runs until {longDate(done.ends_at)} because that month is already paid for, and your signatures stay yours. Reference {done.reference}. We emailed you this too.</>}
-          {done.kind === 'cancel' && done.ended_now && <><b>Cancelled. You will not be charged again.</b> {done.why === 'not_taken' ? 'The payment for the new month had not been taken yet, so the plan ended today and that payment is withdrawn.' : done.why === 'already_ended' ? 'The plan had already ended with the payment provider, so there was nothing more to stop.' : 'The last payment had not gone through, so the plan ended today and that payment will not be tried again.'} Your signatures stay yours. Reference {done.reference}. We emailed you this too.</>}
+          {done.kind === 'cancel' && !done.ended_now && <><b>Cancelled. You will not be charged again.</b> The plan runs until {longDate(done.ends_at)} because that month is already paid for. Your signatures can be used until their own dates: this month&apos;s until the plan ends, top-ups for {TOPUP_EXPIRY_MONTHS} months after each payment. Reference {done.reference}. We emailed you this too.</>}
+          {done.kind === 'cancel' && done.ended_now && <><b>Cancelled. You will not be charged again.</b> {done.why === 'not_taken' ? 'The payment for the new month had not been taken yet, so the plan ended today and that payment is withdrawn.' : done.why === 'already_ended' ? 'The plan had already ended with the payment provider, so there was nothing more to stop.' : 'The last payment had not gone through, so the plan ended today and that payment will not be tried again.'} The signatures you have left can be used until their own dates, shown below. Reference {done.reference}. We emailed you this too.</>}
           {done.kind === 'refund' && !done.pending && <><b>Refund sent: {done.refunded}</b> for {n(done.signatures)} you had not used. It goes back to the card you paid with. Reference {done.reference}. Banks usually show it within 5 to 10 working days.{done.plan_ended ? ' The monthly plan has ended and will not be charged again.' : ''}</>}
           {done.kind === 'refund' && done.pending && <><b>Refund of {done.refunded} requested.</b> The payment provider has not confirmed it yet. We keep checking and email you as soon as it is through; you do not need to do anything, and it cannot be paid twice. The {n(done.signatures)} have left your balance.{done.plan_ended ? ' The monthly plan has ended and will not be charged again.' : ''}</>}
           {done.kind === 'card' && (done.removed > 0 ? <><b>Card removed.</b> Nothing can be charged to it.{done.cancelled ? ' Your plan was cancelled at the same time, so it does not renew.' : ''}</> : <><b>There was no saved card or payment method to remove.</b>{done.cancelled ? ' Your plan was cancelled, so it does not renew.' : ''}</>)}
@@ -527,7 +530,7 @@ function Billing() {
       )}
 
       {b.price_change && (
-        <div className="notice warn" role="status"><b>The price of your plan changes on {b.price_change.from_day || utcDate(b.price_change.from)}.</b> It stays {b.price_change.now} a month until then. The first renewal on or after that day is {b.price_change.next}. Every owner and admin the account had then was told by email on {fmtDate(b.price_change.told_at)}. Nothing else changes, and you can cancel at any time before then and keep your signatures.</div>
+        <div className="notice warn" role="status"><b>The price of your plan changes on {b.price_change.from_day || utcDate(b.price_change.from)}.</b> It stays {b.price_change.now} a month until then. The first renewal on or after that day is {b.price_change.next}. Every owner and admin the account had then was told by email on {fmtDate(b.price_change.told_at)}. Nothing else changes, and you can cancel at any time before then and use the signatures you have until their own dates.</div>
       )}
       {b.refunds_pending?.map((r: any) => (
         <div className="notice" role="status" key={r.payment_id + r.since}>
@@ -544,8 +547,23 @@ function Billing() {
           <div className="balance"><b className="num">{Math.max(0, s.available)}</b> signature{s.available === 1 ? '' : 's'}</div>
           <p className="plan-line" style={{ marginTop: 6 }}>
             One signature is one person signing one envelope. {s.held > 0 ? <>{s.held} more {s.held === 1 ? 'is' : 'are'} held for people who have been asked and have not signed yet. </> : ''}
-            A signature is only used when somebody actually signs. If you void an envelope, or someone declines or runs out of time, the ones held for people who had not signed yet come straight back. One that was already used stays used. Signatures never expire.
+            A signature is only used when somebody actually signs, and the one that expires soonest is always used first. If you void an envelope, or someone declines or runs out of time, the ones held for people who had not signed yet come straight back. {b.held_rule} One that was already used stays used.
           </p>
+          {/* Like a usage limit that resets: this month's signatures and when they reset, then every other lot with its own date. */}
+          {b.period && (
+            <p className="plan-line lot-line"><b>This month of the plan: {b.period.left} of {b.period.of} left</b>, {b.period.fresh === 'none'
+              ? <>they expire on {expiryMoment(b.period.resets_at)}, and no new month follows.</>
+              : <>they reset on {expiryMoment(b.period.resets_at)}.</>}{b.period.held > 0 ? <> {b.period.held} more {b.period.held === 1 ? 'is' : 'are'} held for envelopes that are out.</> : ''}</p>
+          )}
+          {b.lots?.filter((l: any) => !(b.period && (l.source === 'plan' || l.source === 'code') && l.expires_at === b.period.resets_at)).length > 0 && (
+            <ul className="lot-list">{b.lots.filter((l: any) => !(b.period && (l.source === 'plan' || l.source === 'code') && l.expires_at === b.period.resets_at)).map((l: any, i: number) => (
+              <li key={i}>
+                <b>{l.source === 'topup' ? `Top-up of ${longDate(l.at)}` : l.label}: {l.left} of {l.of} left</b>
+                {l.expires_at ? (l.live ? <>, {l.left === 1 ? 'it expires' : 'they expire'} on {expiryMoment(l.expires_at)}.</> : <>, past {l.held === 1 ? 'its' : 'their'} date ({expiryMoment(l.expires_at)}): only the held ones are left, and they do not expire while held.</>) : <>, with no expiry date.</>}
+                {l.held > 0 && l.live ? <> {l.held} more {l.held === 1 ? 'is' : 'are'} held for envelopes that are out.</> : ''}
+              </li>
+            ))}</ul>
+          )}
           {s.available < 0 && <div className="notice warn">You are {n(b.short)} short. {s.held > 0 ? 'More envelopes are out than you have signatures for, and people can still sign them. ' : ''}Whatever you add next covers those {b.short} first, so add more than that before sending to someone new. Signing your own documents stays free.</div>}
         </div>
       )}
@@ -565,7 +583,7 @@ function Billing() {
 
         {free && (
           <p className="plan-line" style={{ marginBottom: 0 }}>
-            <b>Your plan is free with the code {b.free_with}.</b> {n(P.monthlySignatures)} are added to your balance at the start of every month at no charge{b.free_next_at ? <> (the next on {utcDate(b.free_next_at)})</> : ''}, and what you do not use rolls over. Nothing is charged for the plan, so there is nothing to cancel. Need more in a busy month? Top up below.
+            <b>Your plan is free with the code {b.free_with}.</b> {n(P.monthlySignatures)} come with every calendar month at no charge{b.free_next_at ? <> (the next on {utcDate(b.free_next_at)})</> : ''}. They belong to that month: what you do not use by its end expires, and the next month brings a fresh {P.monthlySignatures}. Nothing is charged for the plan, so there is nothing to cancel. Need more in a busy month? Top up below.
           </p>
         )}
         {!free && b.problem && (
@@ -610,14 +628,14 @@ function Billing() {
         )}
         {grove && !free && b.ends_at && !b.problem && (
           <>
-            <p className="plan-line"><b>Cancelled.</b> You will not be charged again. The plan runs until {longMoment(b.ends_at)}. Your signatures stay yours after that, and nothing is deleted.{b.cancel_ref ? <> Cancellation reference <b>{b.cancel_ref}</b>.</> : ''}</p>
+            <p className="plan-line"><b>Cancelled.</b> You will not be charged again. The plan runs until {longMoment(b.ends_at)}. What is left of this month&apos;s signatures expires then, like every month&apos;s, and no new month follows; top-ups keep their own dates. Nothing is deleted.{b.cancel_ref ? <> Cancellation reference <b>{b.cancel_ref}</b>.</> : ''}</p>
             {admin && <button className="btn primary" disabled={busy} onClick={() => act(() => api('/billing/resume', { method: 'POST' }).then(() => (setDone(null), toast('Welcome back. Your plan continues.'))))}>Keep the plan after all</button>}
           </>
         )}
         {b.disputed && <div className="notice warn" style={{ marginBottom: 12 }}><b>A payment on this account was disputed with the bank.</b> New payments are switched off until a person has looked. If that was a mistake, <Link href="/help?topic=billing#contact">write to us</Link> and we switch them back on.</div>}
         {!grove && !b.problem && !b.disputed && (
           <>
-            <p className="plan-line">{n(P.monthlySignatures)} added to your balance with every payment, {mangrovesFor(P.monthlyUsd)} mangroves planted each month. What you do not use rolls over. Need more in a busy month? Top up at ${P.topUpUsd} a signature.</p>
+            <p className="plan-line">{n(P.monthlySignatures)} added to your balance with every payment, {mangrovesFor(P.monthlyUsd)} mangroves planted each month. They belong to that month: what you do not use by the renewal expires, and the renewal brings a fresh {P.monthlySignatures}. Need more in a busy month? Top up at ${P.topUpUsd} a signature.</p>
             {admin && b.enabled && b.other_paid?.length > 0 && (
               <div className="notice warn" style={{ marginBottom: 12 }}>You already pay for a plan on {b.other_paid.map((x: string) => `"${x}"`).join(' and ')}. Starting one here is a second, separate subscription. Each team needs only one.</div>
             )}
@@ -683,8 +701,8 @@ function Billing() {
         <h2 style={{ marginBottom: 10 }}>The rules</h2>
         <ul className="rules">
           <li><b>{price} a month adds {n(P.monthlySignatures)}.</b> Extra signatures are ${P.topUpUsd} each. Every dollar plants {P.treesPerUsd} mangrove trees.</li>
-          <li><b>Signatures never expire.</b> What you do not use this month is still there next month, and after you cancel.</li>
-          <li><b>You only use one when somebody signs.</b> When an envelope is voided, declined or expires, the signatures held for people who had not signed yet come back. One that was already used stays used. Correcting a sent envelope and sending reminders are free.</li>
+          <li><b>When signatures expire.</b> {b.expiry_rule}</li>
+          <li><b>You only use one when somebody signs.</b> When an envelope is voided, declined or expires, the signatures held for people who had not signed yet come back. {b.held_rule} One that was already used stays used. Correcting a sent envelope and sending reminders are free.</li>
           <li><b>Some things are always free.</b> Signing your own documents, under your own name and address. People who approve, view or get a copy. Everyone who signs something you send. Your first {n(P.welcomeSignatures)}. Being asked to sign again after a change.</li>
           <li><b>Some things always use one.</b> Someone signing in person on your device, whatever address you typed for them. Each visitor who signs a public form of yours: a form holds nothing while people fill it in, and takes one signature at the moment a visitor finishes. If the form has other signers too (a colleague who countersigns, say), each of them uses one as well, and a visitor can start only while enough are free for everyone on it. If none is free when a visitor finishes, they are told it is nothing they did, what they filled in is kept until the form&apos;s deadline, and we email them once the form can take their signature. You get an email too. A form never takes a signature that is held for an envelope you have out, and never takes your balance below zero. The emails at two signatures left and at none come for forms as for anything you send.</li>
           <li><b>Nothing is charged unless you choose it.</b> When you run out, sending pauses and tells you. There are no automatic extra charges and no per-person fees.</li>
@@ -693,7 +711,7 @@ function Billing() {
           <li><b>No surprise price rises.</b> {b.price_rule}</li>
           {b.dormant_stop_days > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {b.dormant_stop_days} days when a renewal comes up, we stop the renewal and tell you, with one click to keep it.</li>}
           <li><b>Charged after cancelling?</b> That should never happen. If it does, the software refunds it by itself and tells you. While the payment provider cannot be reached it keeps trying; if the provider refuses the refund three times, a person here sends it by hand and we tell you so. The same goes for being charged twice for the plan, or more than we told you.</li>
-          <li><b>A card dispute stops everything.</b> If a payment is disputed with the bank, billing stops at once and new payments stay off until a person has looked. The unused signatures that payment bought are set aside: they leave with the money if it goes back to the card, and come back if the bank decides the payment stands.</li>
+          <li><b>A card dispute stops everything.</b> If a payment is disputed with the bank, billing stops at once and new payments stay off until a person has looked. The unused signatures that payment bought are set aside: they leave with the money if it goes back to the card, and come back if the bank decides the payment stands (unless their own date passed in the meantime: then they expire). Ones of that payment that already expired are not taken from anything else.</li>
           <li><b>Payments are in US dollars.</b> Anything paid in another currency is sent straight back.</li>
           <li><b>The limits, as numbers.</b> A top-up is at most {b.limits.top_up_max} signatures, a bulk send at most {b.limits.bulk_rows} rows, and top-ups need the monthly plan. To keep scammers out, an account without a payment that has stood for {b.limits.paid_trust_days} days can send to {b.limits.new_account_daily} people a day in its first week{b.limits.first_week_daily ? ' (that is you, for now)' : ''} and to {b.limits.unpaid_daily} a day after that{b.limits.unpaid_daily_now ? ' (that is you, for now)' : ''}. Paying does not lift them at once: they stop, together with the check for fake payment notices, once a payment is at least {b.limits.paid_trust_days} days old and was not refunded or disputed{b.limits.lifts_on ? <> (for you, on {utcDate(b.limits.lifts_on)}, if that payment stands)</> : ''}. A small amount we send back by ourselves because more was charged than we said does not count as a refund here. A person on our team can lift them sooner: use the contact form on the help page.</li>
           <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is always free.</li>
@@ -708,7 +726,7 @@ function Billing() {
             <div className="tablewrap"><table className="t">
               <thead><tr><th>Date</th><th>For</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
               <tbody>{b.payments.map((p: any) => (
-                <tr key={p.id}><td>{fmtDate(p.at)}</td><td>{p.label || (p.kind === 'topup' ? 'Top-up' : 'Monthly plan')}<div className="muted small">{n(p.credits)}</div></td>
+                <tr key={p.id}><td>{fmtDate(p.at)}</td><td>{p.label || (p.kind === 'topup' ? 'Top-up' : 'Monthly plan')}<div className="muted small">{n(p.credits)}</div>{p.expires_at && p.credits > 0 && <div className="muted small">{Date.parse(p.expires_at) > Date.now() ? 'Expire' : 'Expired'} {expiryMoment(p.expires_at)}</div>}</td>
                   <td className="num" style={{ textAlign: 'right' }}>{p.amount}{p.refunded && <div className="muted small">{p.refunded} refunded</div>}
                     {p.disputed === 'open' && <div className="muted small">Disputed with the bank, not decided yet</div>}
                     {p.refund_pending && <div className="muted small">Refund on its way</div>}
@@ -751,7 +769,7 @@ function Billing() {
             <li>You will not be charged again.</li>
             {b.problem ? <li>The last payment did not go through, so the plan ends today and that payment is not tried again.</li>
               : <li>The plan runs until {b.renews_at ? longMoment(b.renews_at) : 'the end of the month you paid for'}, because that month is already paid for. (If a new month has only just started and its payment has not been taken yet, the plan ends today instead and that payment is withdrawn.)</li>}
-            <li>Your signatures stay yours. {s && s.available > 0 ? `The ${n(s.available)} you have never expire.` : 'They never expire.'}</li>
+            <li>{b.period ? `This month's signatures (${b.period.left} of ${b.period.of} left) can be used until ${expiryMoment(b.period.resets_at)} and expire then, like every month's; no new month follows.` : 'No new signatures arrive after the plan ends.'} {b.topups?.length ? `Your top-up signatures keep their own dates (${TOPUP_EXPIRY_MONTHS} months after each payment).` : ''}</li>
             <li>Nothing is deleted. Every document, audit trail and invoice stays in your account.</li>
           </ul>
           <div className="actions">
@@ -771,7 +789,7 @@ function Billing() {
       )}
       {modal === 'card' && (
         <Modal title="Remove your card" onClose={() => setModal('')}>
-          <p>We take the card off file so nothing can be charged to it. {b.can_cancel ? 'Your plan is cancelled at the same time, so it does not renew.' : ''} Your signatures stay, and nothing is deleted.</p>
+          <p>We take the card off file so nothing can be charged to it. {b.can_cancel ? 'Your plan is cancelled at the same time, so it does not renew.' : ''} Your signatures can still be used until their own dates, and nothing is deleted.</p>
           <div className="actions">
             <button className="btn" onClick={() => setModal('')}>Keep the card</button>
             <button className="btn primary" disabled={busy} onClick={() => act(async () => { const r = await api('/billing/remove-card', { method: 'POST' }); setDone({ kind: 'card', ...r }); setModal(''); window.scrollTo({ top: 0 }); })}>Remove card</button>
@@ -919,6 +937,7 @@ export default function Settings() {
       {tab === 'account' && <LanguageSettings />}
       {tab === 'team' && <Team />}
       {tab === 'billing' && <Billing />}
+      {tab === 'data' && <RetentionSettings />}
       {tab === 'data' && <YourData />}
       {tab === 'developers' && <Developers />}
       {tab === 'stamps' && <StampSettings />}

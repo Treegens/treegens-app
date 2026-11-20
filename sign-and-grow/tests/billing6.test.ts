@@ -400,7 +400,10 @@ test('a refund we owe that the provider refuses three times needs a person: the 
   assert.deepEqual((await state(p)).refunds_pending, []);
 });
 
-test('free signatures count as used first, so a code never makes a used-up payment refundable again', async () => {
+// Changed for the expiry rule (2026-11-20): this used to pin "free signatures count as used first". The rule now is
+// that the one that expires soonest is used first, free or paid; a payment's own signatures are counted exactly
+// (lots), so a code that arrives later still never makes a used-up payment refundable again.
+test('the soonest-expiring are used first, and a code never makes a used-up payment refundable again', async () => {
   // Paid $9 (3 welcome + 9), every signature used, then the free code: 9 free ones arrive. Nothing to refund.
   const p = await person('Coded');
   await subscribe(p);
@@ -413,9 +416,12 @@ test('free signatures count as used first, so a code never makes a used-up payme
   assert.equal(s.payments.find((x: any) => x.id === `in6_${p.k}_1`).refundable, null);
   assert.equal((await p.c.post('/billing/refund')).status, 400);
 
-  // The welcome signatures are the first ones used: three used out of twelve leaves the whole payment refundable.
+  // The welcome signatures expire 30 days after the account was made, before this month of the plan (40 days here),
+  // so they are the first ones used: three used out of twelve leaves the whole payment refundable.
   const q = await person('Welcome');
-  await subscribe(q);
+  Object.assign(stripe.sub(q.sub), { customer: q.cus, metadata: { sg_account: q.id } });
+  await event('checkout.session.completed', checkout(q));
+  await event('invoice.paid', invoice(q, `in6_${q.k}_1`, { lines: { data: [{ period: { start: unix(0), end: unix(40) }, metadata: { sg_account: q.id }, price: { id: 'price_grove' } }] } }));
   useUp(q, 3, 'q');
   s = await state(q);
   assert.deepEqual([s.refund.amount, s.refund.signatures], ['$9.00', 9]);
@@ -426,7 +432,7 @@ test('free signatures count as used first, so a code never makes a used-up payme
   assert.equal(s.signatures.available, 14);
   const offer = s.payments.find((x: any) => x.id === `in6_${q.k}_1`).refundable;
   assert.deepEqual([offer.amount, offer.signatures], ['$5.00', 5]);
-  assert.match(offer.reason, /free signatures, the ones every new account gets and any from a code, count as used first/);
+  assert.match(offer.reason, /5 of the 9 signatures it bought are still unused and have not expired/);
 });
 
 test('a first invoice of $0 is said in the welcome: that month brought no signatures, and why', async () => {

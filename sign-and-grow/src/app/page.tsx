@@ -1,6 +1,7 @@
 import { refundRuleText, PRICE_NOTICE_DAYS, LANGUAGE_NOTE } from '@/lib/policy';
+import { expiryRuleText, HELD_EXPIRY_TEXT } from '@/lib/policy';
 import Link from 'next/link';
-import { Leaf } from '@/components/ui';
+import { Mark } from '@/components/Brand';
 import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/Public';
 import { PLANS, PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
@@ -37,7 +38,7 @@ const COMPARE: [string, string, string][] = [
   ['Billing', 'Month to month', 'Often a yearly commitment'],
   ['Cancelling', 'One click, also without logging in', 'Often hard to find, or through support'],
   ['What you pay for', 'Signatures that were actually made', 'Often every document sent, signed or not'],
-  ['What you do not use', 'Rolls over. Signatures never expire', 'Usually lost at renewal'],
+  ['What you do not use', 'A month\'s signatures expire at its end, with the date and time always on screen. The soonest to expire is used first, and you are emailed before top-ups expire', 'Often lost at renewal without a word'],
   ['Running out', 'Sending pauses. Never a charge you did not choose', 'Often billed per extra document'],
   ['Refunds', 'Automatic for what you have not used', 'Usually decided case by case'],
   ['If you stop paying', 'Nothing is deleted or locked', 'Access can be cut off'],
@@ -65,7 +66,7 @@ export default function Landing() {
     { said: 'The link has expired by the time the signer comes back.', title: 'Links that do not die', text: 'A signing link works for as long as the document is open, however often it is opened. If the deadline passes, the sender reopens it and the same link works again.', href: '/help#find-documents', link: 'If a link is lost' },
     { said: 'People who only want to sign are told to register.', title: 'Signers never need an account', text: 'No sign-up, no password, no trial offer and no marketing. Open the link, sign, get your copy.', href: '/security#signers', link: 'What signers can expect' },
     { said: 'Nobody can say whether a signing request is real.', title: 'Check any email is real', text: 'Every signing email carries a security code. Type it in on our site and we tell you who sent it, before you click anything.', href: '/check', link: 'Check an email' },
-    { said: 'There is no cancel button to be found.', title: 'Month to month, cancel in one click', text: 'No yearly term and no notice period. One button on the Plan page, a stop link in every renewal reminder, and a way to stop without logging in. Signatures you paid for stay yours.', href: '/help#cancel', link: 'Three ways to cancel' },
+    { said: 'There is no cancel button to be found.', title: 'Month to month, cancel in one click', text: 'No yearly term and no notice period. One button on the Plan page, a stop link in every renewal reminder, and a way to stop without logging in. Signatures you paid for can be used until their own dates.', href: '/help#cancel', link: 'Three ways to cancel' },
     { said: 'A refund is refused a day after a renewal.', title: 'Refunds without asking', text: `${refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself.`, href: '/help#refunds', link: 'The refund rule' },
     { said: 'A bill for extra documents arrives out of nowhere.', title: 'No overage charges, ever', text: 'When your signatures run out, sending pauses. It never turns into a bill. A signature is only used when someone actually signs, so an envelope nobody signed costs nothing.', href: '#pricing', link: 'See pricing' },
     { said: 'The account is locked with the signed contracts inside.', title: 'Your documents stay yours', text: 'Export everything as one ZIP file, free, on any plan, also after you cancel. Cancelling or a failed payment never deletes or locks a document.', href: '/security#your-documents', link: 'What we promise about your data' },
@@ -100,7 +101,7 @@ export default function Landing() {
                   <div className="muted small">Signed via GrowSigning</div>
                 </div>
                 <div style={{ background: 'var(--green-soft)', borderRadius: 12, padding: '10px 14px', textAlign: 'center' }}>
-                  <Leaf color="#1f6f43" size={22} />
+                  <Mark size={22} label="" />
                   <div className="small" style={{ fontWeight: 700, color: 'var(--green-deep)' }}>6 sheets saved</div>
                 </div>
               </div>
@@ -166,7 +167,7 @@ export default function Landing() {
               <ul>
                 <li><b>{sigs(P.monthlySignatures)} added every month</b></li>
                 <li>More when you need them, {usd(P.topUpUsd)} a signature</li>
-                <li>What you do not use rolls over and never expires</li>
+                <li>A fresh {P.monthlySignatures} each month, with the reset date on screen</li>
                 <li>One price for the whole team, not per person</li>
                 <li>Month to month. Cancel in one click</li>
               </ul>
@@ -184,18 +185,18 @@ export default function Landing() {
             <h3>The rules</h3>
             <ul>
               <li><b>What a signature is.</b> One person signing one envelope. An envelope can hold several documents, and that is still one signature for each signer.</li>
-              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves.</li>
+              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves. {HELD_EXPIRY_TEXT}</li>
               <li><b>What is always free.</b> Signing your own documents. Approvers, viewers and people who get a copy. Corrections, reminders and more time. And signing, for everyone you send to.</li>
-              <li><b>Signatures never expire.</b> What you do not use this month is there next month, also after you cancel.</li>
+              <li id="expiry"><b>When signatures expire.</b> {expiryRuleText()}</li>
               <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at {usd(P.topUpUsd)} a signature, with the total shown before you pay. There are no overage charges.</li>
               <li><b>Month to month.</b> {P.planName} is {usd(P.monthlyUsd)} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
               <li><b>Refunds are automatic.</b> {refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
               <li><b>No surprise price rises.</b> If the monthly price ever goes up, you are told by email at least {PRICE_NOTICE_DAYS} days before your first renewal at the new price, and a renewal that charges more without that notice refunds the difference by itself.</li>
               {dormantStopDays > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you.</li>}
               <li><b>Same features on both plans.</b> Templates, bulk send, public forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
-              <li id="bulk-cost"><b>What a bulk send costs.</b> {BULK_COST_NOTE} A list of {LIST} people needs {sigs(LIST)}: starting from none on {P.planName}, that is the {P.monthlySignatures} of the month and {listTopUp} more at {usd(P.topUpUsd)} each, {usd(listUsd)} in all, paid before the batch goes out. The bulk send page shows your own numbers before you press Send. What nobody signs comes back to your balance when you void the batch or it runs out of time, and the refund rule applies to it. An account that has not paid yet can newly email {firstWeekDaily} people a day in its first week and {unpaidDaily} a day after that.</li>
+              <li id="bulk-cost"><b>What a bulk send costs.</b> {BULK_COST_NOTE} A list of {LIST} people needs {sigs(LIST)}: starting from none on {P.planName}, that is the {P.monthlySignatures} of the month and {listTopUp} more at {usd(P.topUpUsd)} each, {usd(listUsd)} in all, paid before the batch goes out. The bulk send page shows your own numbers before you press Send. What nobody signs comes back to your balance when you void the batch or it runs out of time (unless its own date has passed by then), and the refund rule applies to it. An account that has not paid yet can newly email {firstWeekDaily} people a day in its first week and {unpaidDaily} a day after that.</li>
               <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>
-              <li><b>Where the money goes.</b> 100% of what you pay goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees.</li>
+              <li><b>Where the money goes.</b> 100% of what you pay goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees, whether its signatures are used or not.</li>
               <li id="not-for-patients"><b>{NO_BAA_TITLE}</b> {NO_BAA_TEXT} <Link href="/security#not">What would have to be true first</Link>.</li>
             </ul>
           </div>

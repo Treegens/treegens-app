@@ -19,7 +19,10 @@ import './styles/stamps.css';
 import './styles/chat.css';
 import './styles/seclog.css';
 import './styles/retention.css';
+// After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
+import './styles/brand.css';
 import type { Metadata, Viewport } from 'next';
+import { siteBase } from '@/lib/site';
 import { Toasts } from '@/components/ui';
 import { headers } from 'next/headers';
 import { chooseLocale, dir } from '@/lib/i18n';
@@ -27,7 +30,11 @@ import { chooseLocale, dir } from '@/lib/i18n';
 export const metadata: Metadata = {
   title: { default: 'GrowSigning · e-signatures that plant trees', template: '%s · GrowSigning' },
   description: 'Send, sign and manage documents without paper. Every dollar plants 10 mangrove trees with Treegens.',
-  icons: { icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%231f6f43' d='M2 22C2 9 10 2 22 2c0 12-7 20-20 20Z'/%3E%3C/svg%3E" },
+  // The icons, the link preview picture and its alt text are files in src/app (favicon.ico, icon.svg, apple-icon.png,
+  // opengraph-image.png, opengraph-image.alt.txt), copied from the brand kit by scripts/build-brand.mjs; Next writes
+  // their tags. The preview's address is absolute, from APP_URL (src/lib/site.ts).
+  metadataBase: siteBase(),
+  twitter: { card: 'summary_large_image' },
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#134a2c' };
 

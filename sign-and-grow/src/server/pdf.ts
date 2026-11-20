@@ -21,7 +21,10 @@ import { hiddenOf } from './logic.ts';
 // A company stamp on the page, printed like ink (src/server/stamps.ts). Not the large "VOIDED" mark of stamp.ts.
 import { BlendMode } from 'pdf-lib';
 import { stampPng, stampCertLines, senderStampCertLines, stampCertNote } from './stamps.ts';
+import { sealLineFor } from './seal.ts';
 import { STAMP_OPACITY, stampTurn } from '../lib/stamps.ts';
+// The logo in the certificate's header and the "Signed with growsigning" stamp at the foot of pages (brandpdf.ts).
+import { drawBrandHeader, drawSheetFoot, drawPageStamp } from './brandpdf.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -304,7 +307,7 @@ export class Sheet {
   }
   add() {
     this.page = this.doc.addPage([this.W, this.H]);
-    this.page.drawText(this.footer, { x: this.L, y: 28, size: 7, font: this.font, color: MUTED });
+    drawSheetFoot(this.page, { L: this.L, footer: this.footer, font: this.font, color: MUTED });
     this.y = this.H - 56;
   }
   need(h: number) {
@@ -347,12 +350,9 @@ const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approv
 const ts = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '-');
 
 async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
-  const s = new Sheet(ctx.doc, ctx.font, ctx.bold, `GrowSigning · Certificate of Completion · Envelope ${e.id}`);
-  // Header band
-  s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: GREEN });
-  s.page.drawSvgPath('M0 22 C0 8 10 0 24 0 C24 14 16 24 2 24 Z', { x: s.L, y: s.H - 30, color: rgb(1, 1, 1), scale: 1.2 });
-  s.page.drawText('Certificate of Completion', { x: s.L + 40, y: s.H - 52, size: 20, font: ctx.bold, color: rgb(1, 1, 1) });
-  s.page.drawText('GrowSigning · e-signatures that plant trees', { x: s.L + 40, y: s.H - 68, size: 9, font: ctx.font, color: rgb(0.85, 0.94, 0.88) });
+  // The stamp at the foot of each sheet says "Signed with growsigning", so the footer line does not repeat the name.
+  const s = new Sheet(ctx.doc, ctx.font, ctx.bold, `Certificate of Completion · Envelope ${e.id}`);
+  drawBrandHeader(s.page, { W: s.W, H: s.H, L: s.L, title: 'Certificate of Completion', bold: ctx.bold });
   s.y = s.H - 112;
   // A name, a subject or a file name in a right-to-left script is ordered by itself inside our English line, so
   // "ABC" or a number in it stays where its writer put it. In the audit lines, which were written earlier as plain
@@ -453,6 +453,9 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     s.text(known(`${a.actor}${a.ip ? ` · ${a.ip}` : ''} · ${a.hash.slice(0, 16)}${zones.has(a.actor) ? ` · their time ${localStamp(a.at, zones.get(a.actor))}` : ''}`), { size: 6.5, x: s.L + 118, color: MUTED, gap: 3 });
   }
   if (audit.length) s.kv('Chain head', audit[audit.length - 1].hash, s.L, 70);
+  // The digital seal of this file, when finishPdf is sealing it (src/server/seal.ts). Nothing without seal settings.
+  const sealLine = sealLineFor(e);
+  if (sealLine) (s.h2('Digital seal'), s.text(sealLine, { size: 8, gap: 4 }));
 
   // A character none of our fonts has is never left as an empty box. It is marked wherever it stood, and listed here
   // by its Unicode number, so what was typed can be put back together from this record.
@@ -597,7 +600,7 @@ export async function withNotice(pdf: Uint8Array, envelopeId: string, notice: { 
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
-  noticeSheet(doc, font, bold, `GrowSigning · ${mark} · Envelope ${envelopeId}`, notice);
+  noticeSheet(doc, font, bold, `${mark} · Envelope ${envelopeId}`, notice);
   const src = await PDFDocument.load(pdf, { updateMetadata: false });
   for (const page of await doc.copyPages(src, src.getPageIndices())) {
     doc.addPage(page);
@@ -624,7 +627,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
-  if (opts.notice) noticeSheet(doc, font, bold, `GrowSigning · Not completed · Envelope ${e.id}`, opts.notice);
+  if (opts.notice) noticeSheet(doc, font, bold, `Not completed · Envelope ${e.id}`, opts.notice);
   const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format, tz: senderZone(e) };
   // A copy made for one recipient (`viewer`) while others are still at work shows the pages as that recipient's
   // screen does: everything the sender wrote, what people who have finished filled in, and what the viewer has
@@ -652,6 +655,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
       const m = mapper(page);
       const p = m.pt(12, 13);
       page.drawText(`GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+      drawPageStamp(page, m, MUTED); // "Signed with growsigning" at the foot (brandpdf.ts)
       if (mark) drawStamp(page, bold, mark); // and across the whole page (stamp.ts)
     }
     if (mark) markFields(pages, fields.filter((f: any) => f.document_id === d.id), bold, mark);
@@ -684,9 +688,7 @@ export async function sheetPdf(title: string, footer: string, draw: (s: Sheet) =
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
   const s = new Sheet(doc, font, bold, footer);
-  s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: GREEN });
-  s.page.drawText(clean(title), { x: s.L, y: s.H - 52, size: 20, font: bold, color: rgb(1, 1, 1) });
-  s.page.drawText('GrowSigning · e-signatures that plant trees', { x: s.L, y: s.H - 68, size: 9, font, color: rgb(0.85, 0.94, 0.88) });
+  drawBrandHeader(s.page, { W: s.W, H: s.H, L: s.L, title: clean(title), bold });
   s.y = s.H - 112;
   await draw(s);
   if (after) await after(doc);

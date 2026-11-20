@@ -178,18 +178,18 @@ export function screenView(r: any) {
     if (type === 'system') return 'GrowSigning on its own';
     if (type === 'operator') return 'The GrowSigning team';
     if (!oid) return 'Unknown';
-    if (type === 'user') return userName(oid)?.name || 'A login that no longer exists';
+    if (type === 'user') return userName(oid)?.name || 'a login that no longer exists';
     if (type === 'api_key') {
       const k = get('SELECT name, prefix FROM api_keys WHERE id=?', oid);
-      return k ? `API key "${k.name}" (${k.prefix}...)` : 'An API key that was revoked';
+      return k ? `API key "${k.name}" (${k.prefix}...)` : 'an API key that was revoked';
     }
     if (type === 'invite') {
       const i = get('SELECT email FROM invites WHERE id=?', oid);
-      return i ? `An invitation to ${i.email}` : 'An invitation that no longer exists';
+      return i ? `the invitation to ${i.email}` : 'an invitation that no longer exists';
     }
-    if (type === 'webhook') return `Webhook ${v.details?.host || oid}`;
-    if (type === 'envelope') return `Envelope ${oid}`;
-    if (type === 'template') return `Template ${oid}`;
+    if (type === 'webhook') return `the webhook to ${v.details?.host || oid}`;
+    if (type === 'envelope') return `envelope ${oid}`;
+    if (type === 'template') return `template ${oid}`;
     return oid;
   };
   return { ...v, actor_name: nameOf(r.actor_type, r.actor_id), about_name: v.about ? nameOf(v.about.type, v.about.id) : null };
@@ -207,7 +207,12 @@ export function filterSql(accountId: string, f: Filter): [string, any[]] {
   return [w.join(' AND '), p];
 }
 
-const cell = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+// A browser's name, a key's name and an account's name are words anyone may have typed. A spreadsheet runs a cell
+// that starts with = + - @ as a formula, so such a cell gets a ' in front and opens as the text it is.
+const cell = (v: any) => {
+  const t = String(v ?? '');
+  return `"${(/^[=+\-@\t\r]/.test(t) ? `'${t}` : t).replace(/"/g, '""')}"`;
+};
 export const CSV_HEAD = ['seq', 'at', 'kind', 'what', 'outcome', 'actor_type', 'actor_id', 'actor_name', 'actor_email', 'about_type', 'about_id', 'about_name', 'about_email', 'ip', 'user_agent', 'details', 'hash'];
 export function csvLine(r: any, emails: boolean): string {
   const v = eventView(r, emails) as any;

@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { api, useLoad, Leaf } from './ui';
+import { api, useLoad } from './ui';
+import { Logo } from './Brand';
 import { fmtNum, fmtTrees, IMPACT, usd } from '@/lib/impact';
 import { HelpChatButton } from './HelpChat';
 
@@ -41,7 +42,7 @@ export function PublicNav() {
       <a href="#main" className="pub-skip">Skip to the main content</a>
       <header className="pub-head">
         <div className="nav-top">
-          <Link href="/" className="logo"><Leaf color="#1f6f43" size={24} /> GrowSigning</Link>
+          <Link href="/" className="logo"><Logo height={26} /></Link>
           <nav className="pub-links" aria-label="Main">
             {LINKS.map(([href, label]) => <Link key={href} href={href} className="btn ghost sm" {...current(href)}>{label}</Link>)}
           </nav>
@@ -75,7 +76,7 @@ export function PublicFooter() {
     <footer className="foot pub-foot">
       <div className="wrap pub-foot-grid">
         <div className="pub-foot-brand">
-          <Link href="/" className="logo"><Leaf color="#1f6f43" size={20} /> GrowSigning</Link>
+          <Link href="/" className="logo"><Logo height={22} /></Link>
           <p>100% of what you pay goes to Treegens tree planting.</p>
           <p>Stuck? <Link href="/help#contact">Write to us</Link>{support?.email ? <> or email <a href={`mailto:${support.email}`}>{support.email}</a></> : null}. A person replies, and you do not need to log in.</p>
         </div>

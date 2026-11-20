@@ -386,7 +386,7 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
     } catch (e: any) {
       unread = e?.data?.code === 'file_locked' ? 'they are locked with an encryption key this server was not given' : e?.data?.code === 'file_damaged' ? 'the stored copy failed its check' : 'the stored copy could not be opened';
     }
-  return sheetPdf('Record of acceptance', `GrowSigning · Record of acceptance ${r.id}`, (s) => {
+  return sheetPdf('Record of acceptance', `Record of acceptance ${r.id}`, (s) => {
     s.h2('What was accepted');
     s.kv('Terms', v.title);
     s.kv('Written by', v.account_name || (account ? `${account} (the account's name now: versions published before the name was kept with them do not say what it was then)` : '-'));

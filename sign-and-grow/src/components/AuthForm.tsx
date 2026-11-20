@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, Leaf } from './ui';
+import { api } from './ui';
+import { Logo } from './Brand';
 // Plain functions and constants only: the rest of that file reads the environment and is for the server.
 import { safeNext, signInErrorText, signInNotice, removedText } from '@/lib/signin';
 
@@ -92,7 +93,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
 
   return (
     <div className="authbox">
-      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Leaf color="#1f6f43" size={24} /> GrowSigning</Link>
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <form className="card" onSubmit={submit}>
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{TITLE[mode]}</h1>
         {mode === 'signup' && <p className="muted small">{q?.get('invite') ? 'You were invited to join a team.' : 'Free to start. No card needed. Every subscription plants trees.'}</p>}

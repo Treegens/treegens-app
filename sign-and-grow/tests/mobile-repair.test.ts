@@ -123,7 +123,7 @@ test('one address cannot keep trying the locks of many devices', async () => {
   assert.ok(src.indexOf('await c.body()') < src.indexOf('const s = lockedSession(c.req)'), 'the body is read before the session, so nothing waits between count and check');
 });
 
-// ---- A session ends 30 days after signing in, however often it is used ---------------------------------
+// ---- A session ends 90 days after signing in, however often it is used, or after 30 days without use -----
 
 const DAY = 864e5;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -134,9 +134,10 @@ const age = (sid: string, days: number) => {
 };
 const me = (cookie: string, ip: string) => handle(new Request('http://test.local/api/me', { headers: { cookie: `ts_session=${cookie}`, 'x-forwarded-for': ip, 'user-agent': 'curl/8' } })).then((r) => r.json());
 
-test('a copied cookie used once every 29 days runs out 30 days after the sign-in, and does not come back', async () => {
-  const { SESSION_MAX_DAYS } = await import('../src/lib/policy.ts');
-  assert.equal(SESSION_MAX_DAYS, 30);
+test('a copied cookie used once every 29 days runs out 90 days after the sign-in, and does not come back', async () => {
+  const { SESSION_MAX_DAYS, SESSION_DAYS } = await import('../src/lib/policy.ts');
+  assert.equal(SESSION_MAX_DAYS, 90);
+  assert.equal(SESSION_DAYS, 30);
   const victim = await signUp('Vee Victim', 'vee-r@example.com', ip());
   const sid = sha256(victim.cookies.ts_session);
   const alive: boolean[] = [];
@@ -144,7 +145,7 @@ test('a copied cookie used once every 29 days runs out 30 days after the sign-in
     age(sid, 29);
     alive.push((await me(victim.cookies.ts_session, ip())).user?.email === 'vee-r@example.com');
   }
-  assert.deepEqual(alive, [true, false, false, false, false, false], 'alive at 29 days, gone at 58 and after');
+  assert.deepEqual(alive, [true, true, true, false, false, false], 'alive at 29, 58 and 87 days, gone at 116 and after: 90 days from the sign-in at the latest');
   // Not listed under Settings any more, and the next sign-in clears it.
   const desk = new Client();
   desk.ip = ip();
@@ -153,7 +154,7 @@ test('a copied cookie used once every 29 days runs out 30 days after the sign-in
   assert.equal((await desk.get('/me/sessions')).data.sessions.length, 1);
 });
 
-test('a session that slid past 30 days before the rule existed is refused, unlisted and cannot be unlocked', async () => {
+test('a session that slid past 90 days before the rule existed is refused, unlisted and cannot be unlocked', async () => {
   const c = await signUp('Old Slider', 'old-slider@example.com', ip());
   const sid = sha256(c.cookies.ts_session);
   // What the sliding session left behind: signed in 100 days ago, last moved yesterday, ends in 29 days.
@@ -166,7 +167,7 @@ test('a session that slid past 30 days before the rule existed is refused, unlis
   assert.deepEqual((await other.get('/me/sessions')).data.sessions.map((x: any) => x.current), [true]);
   // A handed-over browser in that state shows no lock screen to work on.
   const { host, sid: hid } = await hosting('old');
-  s.db.run('UPDATE sessions SET created_at=?, expires_at=? WHERE id=?', iso(Date.now() - 40 * DAY), iso(Date.now() + 20 * DAY), hid);
+  s.db.run('UPDATE sessions SET created_at=?, expires_at=? WHERE id=?', iso(Date.now() - 95 * DAY), iso(Date.now() + 20 * DAY), hid);
   assert.equal((await host.get('/me')).data.handed_over, undefined);
   assert.equal((await host.post('/auth/unlock', { password: PASSWORD })).data.code, 'not_locked');
 });
@@ -180,25 +181,31 @@ test('a session from before its sign-in time was kept is never moved forward aga
   assert.equal(s.db.get('SELECT expires_at t FROM sessions WHERE id=?', sid).t, end, 'the end stays where it was');
 });
 
-test('a new session ends 30 days after signing in, Settings shows that day, and a cookie sent again never outlives it', async () => {
+test('a new session ends 30 days after its last use and 90 after signing in at the latest, Settings shows that day, and a cookie sent again never outlives it', async () => {
   const c = await signUp('Day Shower', 'day-shower@example.com', ip());
   const row = s.db.get('SELECT * FROM sessions WHERE id=?', sha256(c.cookies.ts_session));
-  assert.ok(Math.abs(Date.parse(row.expires_at) - Date.parse(row.created_at) - 30 * DAY) < 5000);
+  assert.ok(Math.abs(Date.parse(row.expires_at) - Date.parse(row.created_at) - 30 * DAY) < 5000, 'unused, it ends 30 days after signing in');
   const list = (await c.get('/me/sessions')).data;
-  assert.equal(list.max_days, 30);
+  assert.equal(list.max_days, 90);
+  assert.equal(list.days, 30);
   assert.ok(Math.abs(Date.parse(list.sessions[0].signs_out_at) - Date.parse(row.created_at) - 30 * DAY) < 5000);
-  // The cookie that goes out again (only when the end moves, which a shorter idle time than 30 days would make
-  // happen) carries the time the session has left, never a fresh 30 days.
+  // The cookie that goes out again carries the time the session has left, never a fresh 30 days: 20 days left of
+  // the idle time here, and near the 90 day end only what is left of that.
   const { renewedCookie } = await import('../src/server/auth.ts');
   age(row.id, 10);
-  const again = renewedCookie(new Request('http://test.local/', { headers: { cookie: `ts_session=${c.cookies.ts_session}` } }), true);
+  const cookieNow = () => renewedCookie(new Request('http://test.local/', { headers: { cookie: `ts_session=${c.cookies.ts_session}` } }), true);
+  const again = cookieNow();
   const maxAge = Number(/Max-Age=(\d+)/.exec(again)![1]);
   assert.ok(Math.abs(maxAge - 20 * 86400) < 10, `${maxAge}`);
+  s.db.run('UPDATE sessions SET created_at=?, expires_at=? WHERE id=?', iso(Date.now() - 85 * DAY), iso(Date.now() + 25 * DAY), row.id);
+  const late = Number(/Max-Age=(\d+)/.exec(cookieNow())![1]);
+  assert.ok(Math.abs(late - 5 * 86400) < 10, `5 days left of the 90, whatever the idle end says: ${late}`);
   assert.match(again, /; Secure$/);
   // The words the pages print come from the same two numbers.
   const { sessionWords } = await import('../src/lib/policy.ts');
   assert.match(sessionWords(30, 30), /^A browser is signed out 30 days after you signed in on it, however often you use it in between, and then you sign in again\./);
-  assert.match(sessionWords(7, 30), /signed out 7 days after you last used GrowSigning in it, and in any case 30 days after you signed in on it/);
+  assert.match(sessionWords(7, 30), /Two rules sign it out, whichever comes first: 7 days without using GrowSigning in it, or 30 days after you signed in on it/);
+  assert.match(sessionWords(), /Two rules sign it out, whichever comes first: 30 days without using GrowSigning in it, or 90 days after you signed in on it, however often you use it in between\. Then you sign in again\./);
   assert.match(read('src/app/security/page.tsx'), /\{sessionWords\(\)\}/);
   assert.match(read('src/app/app/settings/SignedIn.tsx'), /\{sessionWords\(d\.days, d\.max_days\)\}/);
   for (const f of ['src/app/security/page.tsx', 'src/app/app/settings/SignedIn.tsx', 'README.md']) assert.doesNotMatch(read(f), /once a month does not ask|not after it signed in/, f);

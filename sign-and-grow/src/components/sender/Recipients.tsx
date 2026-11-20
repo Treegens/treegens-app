@@ -52,8 +52,10 @@ function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: stri
   return { s: 'sent', label: 'Sent' };
 }
 
-function EmailFact({ d, role }: { d: Delivery | null; role: string }) {
+function EmailFact({ d, role, purged }: { d: Delivery | null; role: string; purged?: string | null }) {
   if (role === 'inperson') return <>No email goes to them. They sign on your device when you are together. {IN_PERSON_LOCK}</>;
+  // A purge at the personal level took our copies of the emails away (src/server/records.ts), not the emails themselves.
+  if (!d && purged) return <>Our copies of the emails about it were removed by the purge on {String(purged).slice(0, 10)}.</>;
   if (!d) return <>No email has gone to this address yet.</>;
   const subject = <span className="muted"> &ldquo;{d.subject}&rdquo;</span>;
   const tries = d.tries && d.tries > 1 ? `, on try ${d.tries}` : '';
@@ -242,7 +244,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               {r.status === 'pending' && e.status !== 'draft' && (
                 <div><dt>Email</dt><dd>{own ? ownLinkFact(r, out, before.map((x: any) => x.name)) : r.role === 'witness' ? witnessWait(r, e) : out ? <>Not sent yet. {before.length ? `It goes out once ${before.map((x: any) => x.name).join(' and ')} ${before.length === 1 ? 'has' : 'have'} finished.` : 'It goes out when their turn comes.'}</> : 'Never sent. The envelope closed before their turn.'}</dd></div>
               )}
-              {r.status !== 'pending' && <div><dt>Email</dt><dd>{own ? ownLinkFact(r, out, []) : <EmailFact d={mail} role={r.role} />}</dd></div>}
+              {r.status !== 'pending' && <div><dt>Email</dt><dd>{own ? ownLinkFact(r, out, []) : <EmailFact d={mail} role={r.role} purged={e.purged_level === 'personal' ? e.purged_at : null} />}</dd></div>}
               {/* The latest text message to this person, when there was one: what really became of it. */}
               {texts.find((t) => t.recipient_id === r.id) && <div><dt>Text message</dt><dd><TextFact t={texts.find((t) => t.recipient_id === r.id)!} /></dd></div>}
               {r.status !== 'pending' && r.role !== 'cc' && (

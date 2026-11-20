@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Leaf } from '@/components/ui';
+import { Mark, SentWith } from '@/components/Brand';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 import { jumpRatherThanGlide } from '@/components/pdfMemory';
 
@@ -78,7 +78,7 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
     <div className="sg-shell">
       <a className="sg-skip" href="#sg-main">Skip to the main part</a>
       <header className="signbar sg-bar" style={style}>
-        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : <Leaf size={22} color="#9ed88f" />}
+        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
         {titleIsHeading ? <h1 className="sg-title grow truncate">{title}</h1> : <div className="sg-title grow truncate">{title}</div>}
         {bar}
       </header>
@@ -88,7 +88,7 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
           {footer}
           <a href={helpHref(data)} {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Help{helpInNewTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
         </div>
-        <div className="sg-foot-by"><Leaf size={14} color="#1f6f43" /> Powered by GrowSigning</div>
+        <div className="sg-foot-by"><SentWith height={16} /></div>
       </footer>
       {bottom && <div className="sg-bottom">{bottom}</div>}
       <div className="sg-vh" role="status" aria-live="polite">{live || ''}</div>
@@ -125,7 +125,7 @@ export function Impact({ impact }: { impact: any }) {
   if (!impact?.sheets) return null;
   return (
     <div className="card sg-impact">
-      <Leaf size={28} color="#1f6f43" />
+      <Mark size={28} label="" />
       <div>
         <b>Signed without paper</b>
         <p>

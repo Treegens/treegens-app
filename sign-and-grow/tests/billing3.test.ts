@@ -169,13 +169,15 @@ test('signatures that come back later can still be refunded from the same paymen
     out.push(e.id);
   }
   assert.deepEqual(await bal(p), { balance: 12, held: 5, available: 7 });
-  assert.equal((await p.c.post('/billing/refund')).data.refunded, '$7.00');
-  // The five that were out are voided, so their signatures are free again. Two of them are what is left of the $9.
+  // Changed for the expiry rule: the five are held in the month's nine, which end a moment before the three free
+  // ones (soonest-expiring first), so four of the nine are unused now (it was seven when free ones counted first).
+  assert.equal((await p.c.post('/billing/refund')).data.refunded, '$4.00');
+  // The five that were out are voided, so their signatures are free again: they are what is left of the $9.
   for (const id of out) await p.c.post(`/envelopes/${id}/void`, { reason: 'changed my mind' });
   const s = await state(p);
-  assert.equal(s.refund.amount, '$2.00');
-  assert.match(s.refund.reason, /you have 2 unused signatures to hand back out of the 9 it bought/);
-  assert.equal((await p.c.post('/billing/refund')).data.refunded, '$2.00');
+  assert.equal(s.refund.amount, '$5.00');
+  assert.match(s.refund.reason, /5 of the 9 signatures it bought are still unused and have not expired/);
+  assert.equal((await p.c.post('/billing/refund')).data.refunded, '$5.00');
   assert.equal(pay(`in3_${p.k}_1`).refunded_cents, 900);
   assert.equal(stripe.refunded(`ch_in3_${p.k}_1`), 900);
   assert.equal((await bal(p)).balance, 3);

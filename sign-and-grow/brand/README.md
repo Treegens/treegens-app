@@ -134,7 +134,7 @@ The first is what to run after editing an SVG. It needs Playwright with Chromium
 
 ## Wiring it in
 
-What to change in the rename pass. Nothing here is wired yet. Line numbers are as of 20 November 2026 and will drift; the code quoted is what to look for.
+What was changed in the rename pass, kept as a record of where the brand lives. All of it was wired on 20 November 2026 (`tests/brand.test.ts` checks it). Two places differ from the plan below: the drawing code for the PDF is in `src/server/brandpdf.ts`, called from `pdf.ts`, and the `.plan-hero` leaf in Settings still uses `Leaf`, which now draws the new mark in one colour. No email has a dark header, so `email-logo-dark.png` is not used yet. Line numbers are as of 20 November 2026 and will drift; the code quoted is what to look for.
 
 ### 1. Fonts and styles: `src/app/layout.tsx`
 

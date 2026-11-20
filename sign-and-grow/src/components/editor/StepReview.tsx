@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
-import { ROLE_LABEL, Leaf, fmtDate, api, useLoad, oops } from '../ui';
+import { ROLE_LABEL, fmtDate, api, useLoad, oops } from '../ui';
+import { Mark } from '../Brand';
 import { useMe } from '../AppShell';
 import { fmtNum, sheetsSaved, impactOf, fmtTrees, PRICING, mangrovesFor } from '@/lib/impact';
 import { formatDate, momentText, deviceZone } from '@/lib/dates';
@@ -68,7 +69,7 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
           {b.plan === 'grove'
             ? <li><b>Top up {each(short)} for ${short * PRICING.topUpUsd}.</b> One payment, nothing recurring, and it plants {mangrovesFor(short * PRICING.topUpUsd)} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
             : <li><b>Start the monthly plan:</b> ${PRICING.monthlyUsd} a month for {PRICING.monthlySignatures} signatures, month to month, and every dollar plants {PRICING.treesPerUsd} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
-          {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Voiding an envelope you no longer need gives its signatures back at once.</li>}
+          {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Voiding an envelope you no longer need gives its signatures back at once, unless their own date has passed (then they expire instead).</li>}
           {next && b.plan === 'grove' && <li><b>Wait.</b> The next {each(PRICING.monthlySignatures)} arrive on {fmtDate(next)}.</li>}
           <li><b>Send to fewer people now.</b> Signing your own copy, approvers, viewers and copies are always free.</li>
         </ul>
@@ -212,7 +213,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
 
       {!isTpl && !correcting && pages > 0 && (
         <div className="card row" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
-          <Leaf size={26} color="#1f6f43" />
+          <Mark size={26} label="" />
           <div>
             <b>Sending this digitally saves about {fmtNum(impact.sheets)} sheets of paper</b>
             <div className="small" style={{ marginTop: 2 }}>That is {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e not used, or {fmtTrees(impact.trees)} of a tree. Printing, couriers and filing cabinets not included.</div>

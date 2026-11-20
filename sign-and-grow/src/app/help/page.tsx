@@ -1,4 +1,5 @@
 import { refundRuleText, priceRuleText, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
+import { expiryRuleText, HELD_EXPIRY_TEXT } from '@/lib/policy';
 import { BULK_COST_NOTE, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER, reminderText, DEFAULT_REMINDER_DAYS } from '@/lib/policy';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
@@ -169,44 +170,45 @@ export default function Help() {
               <p className="muted small">For when you no longer have that mailbox, for example after leaving a job, or do not know which address the account is under. The card proves you are the one paying: its last four digits, plus either the account email or the date and amount of a charge.</p>
               <StopByCard />
             </div>
-            <p><b>What happens next.</b> You get a cancellation reference on screen and by email. The plan runs until the end of the month you already paid for, and no payment is taken after that. (If the last payment had failed there is no paid month, so it ends the same day and the failed payment is not tried again.) The signatures you have left stay yours and never expire. Nothing is deleted. If a charge ever arrives after that, the software refunds it by itself and tells you. If the payment provider refuses that refund three times, a person here sends it by hand and we tell you so.</p>
+            <p><b>What happens next.</b> You get a cancellation reference on screen and by email. The plan runs until the end of the month you already paid for, and no payment is taken after that. (If the last payment had failed there is no paid month, so it ends the same day and the failed payment is not tried again.) The signatures you have left can be used until their own dates: what is left of the month you paid for until it ends (then it expires like every month&apos;s), top-ups until 12 months after their payment. Nothing is deleted. If a charge ever arrives after that, the software refunds it by itself and tells you. If the payment provider refuses that refund three times, a person here sends it by hand and we tell you so.</p>
           </QA>
 
           <QA id="refunds" q="Can I get a refund?">
             <p>Yes, and you do not have to ask anyone. This is the whole rule:</p>
             <ul className="pub-list">
               <li><b>Within {refundDays} days of a payment:</b> {refundRuleText(refundDays)} Each signature is refunded at the price you paid for it. Open Settings, then Plan: your latest payment is offered at the top, and earlier ones in the list of payments. There is no form and no approval.</li>
-              <li><b>It covers every payment inside that time,</b> the monthly plan and top-ups alike, and you can come back for more: signatures held for envelopes that are still out count as in use, and when they come back (a voided envelope, say) they can be refunded too.</li>
+              <li><b>It covers every payment inside that time,</b> the monthly plan and top-ups alike, and you can come back for more: signatures held for envelopes that are still out count as in use, and when they come back (a voided envelope, say) they can be refunded too, as long as their own date has not passed. A signature that has expired is not refunded.</li>
               <li><b>Refunding a monthly payment ends the monthly plan.</b> Refunding a top-up changes nothing else.</li>
               <li id="price"><b>If the price ever changes:</b> {priceRuleText()}</li>
               <li><b>Charged after you cancelled, charged twice, or charged more than the reminder said:</b> that should never happen. If it does, the software refunds it by itself and tells you. If the payment provider is down at that moment it keeps trying until the refund has gone through; if the provider refuses it three times, a person here sends it by hand and we tell you so.</li>
             </ul>
             <p>The money goes back to the card that paid. Banks usually show it within 5 to 10 working days. Your documents stay where they are.</p>
             <p>Outside this rule, or about an older payment? <a href="#contact" data-topic="billing">Write to us</a> and a person will look at it.</p>
-            {dormantStopDays > 0 && <p className="muted small">We also do not charge for a plan nobody uses. If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you, with one click to keep it. You keep your signatures either way.</p>}
+            {dormantStopDays > 0 && <p className="muted small">We also do not charge for a plan nobody uses. If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you, with one click to keep it. The signatures you have can be used until their own dates either way.</p>}
           </QA>
 
           <QA id="signatures" q="How do signatures work, and what is free?">
             <p>A signature is one person signing one envelope. A new account gets {sigs(P.welcomeSignatures)} free to try the product. {P.planName} is {usd(P.monthlyUsd)} a month and adds {sigs(P.monthlySignatures)} with every payment. On {P.planName} you can buy more at {usd(P.topUpUsd)} each, whenever you need them. {CURRENCY_NOTE}</p>
             <ul className="pub-list">
               <li><b>Used up:</b> only when someone actually signs.</li>
-              <li><b>Held, then given back:</b> sending holds one signature for each signer, so nobody is stopped halfway. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves. One that was already used stays used.</li>
+              <li><b>Held, then given back:</b> sending holds one signature for each signer, so nobody is stopped halfway. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves. {HELD_EXPIRY_TEXT} One that was already used stays used.</li>
               <li><b>Always free:</b> signing your own documents. Approvers, viewers and people who get a copy. Reminders, more time and corrections. A signer you add in a correction needs a signature like any other.</li>
               <li><b>Public forms:</b> one signature for each person who signs the form.</li>
               <li id="bulk-cost"><b>Bulk send:</b> {BULK_COST_NOTE} A list of 40 people needs 40 signatures before it is sent. The bulk send page shows how many a list holds, how many you have, what is missing and what that costs, before you press Send. An account that has not paid yet can also newly email only {abuse.firstWeekDaily} people a day in its first week and {abuse.unpaidDaily} a day after that.</li>
             </ul>
-            <p>Signatures never expire. What you do not use is still there next month, also after you cancel.</p>
+            <p id="expiry"><b>When signatures expire.</b> {expiryRuleText()}</p>
+            <p>{HELD_EXPIRY_TEXT}</p>
             <p>We email you when you are down to two and when you reach none. With none left, sending pauses until you choose to add more. It never turns into a charge. Signing, downloads and export keep working, and envelopes already out can still be signed.</p>
           </QA>
 
           <QA id="code" q="I was given a code">
             <p>Some communities get {P.planName} free. Enter your code when you <Link href="/signup">sign up</Link>. If you already have an account, enter it under Settings, then Plan, where it says <b>Have a code?</b></p>
-            <p>With a code, the {sigs(P.monthlySignatures)} of the monthly plan arrive every month and nothing is charged for the plan, so there is nothing to cancel. If you were paying before, your paid subscription ends the moment the code is applied, with a cancellation reference by email; the card you paid with stays saved for top-ups until you remove it on the Plan page.</p>
+            <p>With a code, the {sigs(P.monthlySignatures)} of the monthly plan arrive every calendar month and nothing is charged for the plan, so there is nothing to cancel. Like a paid month&apos;s, they belong to that month: the ones not used by its end expire, and the next month brings a fresh {P.monthlySignatures}. If you were paying before, your paid subscription ends the moment the code is applied, with a cancellation reference by email; the card you paid with stays saved for top-ups until you remove it on the Plan page.</p>
           </QA>
 
           <QA id="after-cancel" q="What happens to my documents when I cancel?">
             <p>Nothing. Cancelling or a failed payment deletes nothing and locks nothing.</p>
-            <p>Every document, audit trail and receipt stays in the account. Documents that are already out can still be signed, and the signatures you have left stay yours.</p>
+            <p>Every document, audit trail and receipt stays in the account. Documents that are already out can still be signed, and the signatures you have left can be used until their own dates (the Plan page shows each one).</p>
             <p>You can take everything with you as one ZIP file at any time, on any plan: Settings, then Your data, then <b>Export everything</b>. It is free and it keeps working after you cancel.</p>
           </QA>
 

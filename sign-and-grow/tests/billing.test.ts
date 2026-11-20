@@ -1,6 +1,6 @@
 // Billing, against a simulated payment provider.
 // The model: $9 a month adds 9 signatures, extra signatures are $1 each, every dollar plants 10 mangroves, and
-// signatures never expire. These tests also cover the complaints people most often make about subscriptions:
+// signatures expire (a month's at its end, top-ups after 12 months, the trial's after 30 days; tests/billing9.test.ts). These tests also cover the complaints people most often make about subscriptions:
 // surprise renewals, being charged after cancelling, no way to cancel, refused refunds, surprise charges, lockouts.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -150,15 +150,17 @@ test('top-ups: $1 a signature, only ever on purpose', async () => {
   assert.equal((await free.post('/billing/sync', { session_id: 'cs_top3' })).data.signatures.balance, 3, 'someone else cannot claim it');
 });
 
-test('signatures roll over, and a reminder comes before each renewal with a one-click stop', async () => {
+// Changed for the expiry rule (2026-11-20): this used to pin "signatures roll over". Nothing expires at a renewal
+// before the month's own date, and the reminder now quotes the expiry rule instead of promising roll-over.
+test('a renewal adds the month\'s signatures, and a reminder comes before each renewal with a one-click stop', async () => {
   const before = (await sig()).balance;
   await monthly('in_2');
-  assert.equal((await sig()).balance, before + 9, 'nothing is reset at renewal');
+  assert.equal((await sig()).balance, before + 9, 'nothing expires before its own date');
 
   await event('invoice.upcoming', { customer: 'cus_1', amount_due: 900, currency: 'usd', next_payment_attempt: unix(3) });
   const m = mailTo('olive@example.com').find((x) => x.subject.startsWith('Heads up:'))!;
   assert.match(m.subject, /\$9\.00/);
-  assert.match(m.html, /roll over/);
+  assert.match(m.html, /Signatures expire\./);
 
   // The link works with no session at all.
   const anon = new Client();
@@ -170,7 +172,7 @@ test('signatures roll over, and a reminder comes before each renewal with a one-
   assert.equal(stripe.sub('sub_1').cancel_at_period_end, true, 'the provider was told straight away');
   const conf = mailTo('olive@example.com').find((x) => x.subject === 'Your Grove plan is cancelled')!;
   assert.match(conf.html, new RegExp(stopped.data.reference));
-  assert.match(conf.html, /never expire/);
+  assert.match(conf.html, /when they expire like every month/);
 
   // No reminder for a plan that is already ending, and it can be resumed.
   const count = mailTo('olive@example.com').length;
@@ -180,7 +182,8 @@ test('signatures roll over, and a reminder comes before each renewal with a one-
   assert.equal(account().cancel_at, null);
 });
 
-test('cancelling keeps every signature; a charge after cancellation refunds itself and adds nothing', async () => {
+// Changed for the expiry rule: cancelling keeps every signature until its own date (it used to say "never expire").
+test('cancelling keeps every signature until its own date; a charge after cancellation refunds itself and adds nothing', async () => {
   const r = await owner.post('/billing/cancel');
   assert.ok(r.data.ends_at && r.data.reference);
   assert.equal((await owner.post('/billing/cancel')).data.reference, r.data.reference, 'cancelling twice is harmless');
@@ -190,7 +193,7 @@ test('cancelling keeps every signature; a charge after cancellation refunds itse
   stripe.sub('sub_1').status = 'canceled';
   assert.equal(account().plan, 'seedling');
   assert.equal((await sig()).balance, kept, 'paid-for signatures survive the plan ending');
-  assert.match(mailTo('olive@example.com').find((m) => m.subject === 'Your monthly plan has ended')!.html, /never expire/);
+  assert.match(mailTo('olive@example.com').find((m) => m.subject === 'Your monthly plan has ended')!.html, /when they expire like every month&#39;s, and no new month comes after that/);
 
   // They can still be used without a plan.
   const e = await simple(owner, 'later@example.com');
@@ -218,22 +221,25 @@ test('unused signatures from the latest payment are refunded on request, to the 
   assert.deepEqual((await pat.get('/billing')).data.signatures, { balance: 12, held: 0, available: 12 });
   assert.equal((await pat.get('/billing')).data.refund.amount, '$9.00');
 
-  // Five get used. Three of those came free, so seven of the nine paid for are still unused.
+  // Five get used. Changed for the expiry rule: the one that expires soonest is used first, and the month's nine end
+  // at the renewal (in 20 days here) before the three free ones of a new account (30 days after it was made). So the
+  // five come from the nine paid for: four of them are still unused, and the three free ones are left. (Before, free
+  // ones counted as used first and seven were refunded.)
   for (let i = 0; i < 5; i++) {
     const e = await simple(pat, `p${i}@example.com`);
     await pat.post(`/envelopes/${e.id}/send`);
     await signAll(e.id, `p${i}@example.com`);
   }
   const offer = (await pat.get('/billing')).data.refund;
-  assert.equal(offer.signatures, 7);
-  assert.equal(offer.amount, '$7.00');
+  assert.equal(offer.signatures, 4);
+  assert.equal(offer.amount, '$4.00');
   const done = await pat.post('/billing/refund');
-  assert.equal(done.data.refunded, '$7.00');
+  assert.equal(done.data.refunded, '$4.00');
   assert.equal(done.data.plan_ended, true);
   assert.equal(stripe.refunds.at(-1)!.params.charge, 'ch_p1');
-  assert.equal(stripe.refunds.at(-1)!.params.amount, '700');
+  assert.equal(stripe.refunds.at(-1)!.params.amount, '400');
   assert.equal(stripe.sub('sub_p').status, 'canceled', 'the plan was ended with the provider before any money moved');
-  assert.equal((await pat.get('/billing')).data.signatures.balance, 0);
+  assert.equal((await pat.get('/billing')).data.signatures.balance, 3, 'the free ones are left, until their own date');
   assert.equal((await pat.get('/billing')).data.plan, 'seedling');
   assert.equal((await pat.post('/billing/refund')).status, 400, 'nothing left to refund');
 
@@ -309,7 +315,8 @@ test('paying but not using it: a nudge, then the renewal is stopped for them', a
   await event('invoice.upcoming', { customer: 'cus_1', amount_due: 900, next_payment_attempt: unix(3) });
   assert.ok(account().cancel_at, 'renewal turned off after 90 quiet days');
   assert.equal(account().plan, 'grove', 'the paid month is kept');
-  assert.match(mailTo('olive@example.com').find((m) => m.subject.startsWith('We stopped your renewal'))!.html, /never expire/);
+  // Changed for the expiry rule: it used to say the signatures never expire; it now says until when each can be used.
+  assert.match(mailTo('olive@example.com').find((m) => m.subject.startsWith('We stopped your renewal'))!.html, /no new month comes after that/);
 });
 
 test('back from checkout the plan is active at once; a card dispute stops all further billing', async () => {

@@ -37,6 +37,7 @@ import { ruleOf, logicKey } from '../lib/logic.ts';
 // A public form's visitor whose start was closed is offered a fresh form, and the owner is not emailed (formstart.ts).
 import { closedFormStart, closedStartText } from './formstart.ts';
 import { finalsDue, finalFailed, finalMadeLate } from './finalretry.ts';
+import { finishPdf, sealStored } from './finalpipe.ts';
 // A stamp next to a signature: a recipient's own, or the sender's, printed like ink (stamps.ts).
 import { isSenderStamp, printedStamp, stampOnSave, copyStamps, stampProblem, stampsSent, stampsFinished, senderStampChange } from './stamps.ts';
 import { convertedSent, convertedAdded } from './converted.ts';
@@ -1582,8 +1583,10 @@ export async function buildFinal(envelopeId: string): Promise<boolean> {
   if (!e || e.status !== 'completed') return false;
   if (e.final_sha256) return true;
   try {
-    const pdf = await buildPdf(e, true);
+    // The finishing steps (the digital seal) run over the rendered file, so what is stored is the finished one (finalpipe.ts).
+    const pdf = await finishPdf(e, (x) => buildPdf(x, true));
     run('UPDATE envelopes SET final_sha256=?, final_size=? WHERE id=? AND final_sha256 IS NULL', saveBlob(pdf), pdf.length, e.id);
+    sealStored(e, pdf);
     await finalMadeLate(e).catch((x) => console.error('[pdf] could not tell the sender', x?.message));
     return true;
   } catch (err: any) {

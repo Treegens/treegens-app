@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, Leaf } from '@/components/ui';
+import { api } from '@/components/ui';
+import { Logo } from '@/components/Brand';
 import { CodeField } from '@/components/TwoStep';
 import { safeNext, signInNotice } from '@/lib/signin';
 import { TWO_STEP_LOST, TWO_STEP_REMEMBER_DAYS, TWO_STEP_SIGNIN_MINUTES } from '@/lib/policy';
@@ -59,7 +60,7 @@ export function TwoStepForm() {
   const again = <Link href={`/login${nextPage ? `?next=${encodeURIComponent(nextPage)}` : ''}`}>Start again with your password</Link>;
   return (
     <div className="authbox">
-      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Leaf color="#1f6f43" size={24} /> GrowSigning</Link>
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>Two-step login</h1>
         {!state ? <p className="muted" role="status">One moment…</p> : !state.waiting ? (

@@ -365,7 +365,9 @@ test('the free code: typos are said out loud, nobody on it is ever charged, and 
   await event('customer.subscription.updated', { id: 'sub_ivy_zombie', customer: p.cus, status: 'active', metadata: { sg_account: p.id } });
   assert.equal(stripe.sub('sub_ivy_zombie').status, 'canceled', 'a paid subscription on a free plan is never left alive');
 
-  // Months in which nobody opened the account are made up, not lost.
+  // Changed for the expiry rule (2026-11-20): this used to pin "months in which nobody opened the account are made up,
+  // not lost" (39 = 3 + 9 for each of four months). A month's signatures belong to that month now, free ones too, so
+  // three quiet months that have ended bring nothing: only this month's 9 are there, and they reset next month.
   const g = new Client();
   g.ip = '198.51.100.202';
   await g.post('/auth/signup', { name: 'Gro Quiet', email: 'quiet@example.com', password: 'correct horse battery', code: 'GROWalition' });
@@ -373,18 +375,19 @@ test('the free code: typos are said out loud, nobody on it is ever charged, and 
   const d = new Date();
   db.run("DELETE FROM credits WHERE account_id=? AND reason='code'", gid);
   db.run('UPDATE accounts SET promo_at=? WHERE id=?', new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 3, 15)).toISOString(), gid);
-  assert.equal((await g.get('/billing')).data.signatures.balance, 3 + 9 * 4, 'three quiet months and this one');
-  assert.equal((await g.get('/billing')).data.signatures.balance, 39);
+  assert.equal((await g.get('/billing')).data.signatures.balance, 3 + 9, 'this month only: the quiet months have ended');
+  assert.equal((await g.get('/billing')).data.signatures.balance, 12);
   assert.ok((await g.get('/billing')).data.free_next_at, 'the page says when the next ones arrive');
+  assert.equal((await g.get('/billing')).data.period.resets_at, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString(), 'and when these reset');
 
   // Two codes do not stack.
   process.env.FREE_PLAN_CODES = 'GROWalition,Mangrove2027';
-  assert.equal((await g.post('/billing/redeem', { code: 'Mangrove2027' })).data.signatures.balance, 39);
+  assert.equal((await g.post('/billing/redeem', { code: 'Mangrove2027' })).data.signatures.balance, 12);
 
   // A code that is switched off adds nothing more, and the plan it made free ends with an email.
   process.env.FREE_PLAN_CODES = 'SomethingElse';
   db.run("DELETE FROM credits WHERE account_id=? AND reason='code' AND ref=?", gid, new Date().toISOString().slice(0, 7));
-  assert.equal((await g.get('/billing')).data.signatures.balance, 30);
+  assert.equal((await g.get('/billing')).data.signatures.balance, 3);
   // A code has to be gone for three days before plans end, so a slip in a deployment does not end everyone's plan.
   assert.equal((await cron.tick()).codes_ended, 0);
   assert.equal(acct(gid).plan, 'grove');
@@ -393,7 +396,7 @@ test('the free code: typos are said out loud, nobody on it is ever charged, and 
   assert.equal(acct(gid).plan, 'seedling');
   assert.equal(acct(gid).promo_code, null);
   assert.ok(subjects('quiet@example.com').includes('The code Mangrove2027 has ended'));
-  assert.equal((await g.get('/billing')).data.signatures.balance, 30, 'they keep what they have');
+  assert.equal((await g.get('/billing')).data.signatures.balance, 3, 'they keep what they have, until its own date');
   delete process.env.FREE_PLAN_CODES;
 });
 

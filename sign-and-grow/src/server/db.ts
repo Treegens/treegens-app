@@ -542,6 +542,27 @@ CREATE TRIGGER IF NOT EXISTS retention_log_fixed BEFORE UPDATE ON retention_log
 CREATE TRIGGER IF NOT EXISTS retention_log_kept BEFORE DELETE ON retention_log
   WHEN old.gone_at IS NULL OR old.gone_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-365 days')
   BEGIN SELECT RAISE(ABORT, 'A line of the retention record is kept.'); END;
+-- The certificates this server has sealed completed PDFs with (src/server/seal.ts), so /verify still calls a seal
+-- ours after the operator changes the key. Only public facts: the certificate's fingerprint and names.
+CREATE TABLE IF NOT EXISTS seal_certs (sha256 TEXT PRIMARY KEY, name TEXT, issuer TEXT, first_at TEXT NOT NULL);
+-- Custom fields (src/server/customfields.ts). custom_field_defs: the fields an account defined (a case number, a cost
+-- centre), name_key being the name as compared (src/lib/customfields.ts customKey). custom_values: the value of each
+-- on an envelope or template, with the name and certificate choice it has there; document_id is '' for the
+-- envelope's own fields and the id of a document for that document's name and value pairs (API only). def_id stays
+-- after its field is deleted: an envelope that was sent keeps its values.
+CREATE TABLE IF NOT EXISTS custom_field_defs (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL, name_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text', choices TEXT, required INTEGER NOT NULL DEFAULT 0, on_certificate INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0, created_by TEXT, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS custom_field_defs_name ON custom_field_defs(account_id, name_key);
+CREATE TABLE IF NOT EXISTS custom_values (
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, document_id TEXT NOT NULL DEFAULT '', def_id TEXT,
+  name TEXT NOT NULL, name_key TEXT NOT NULL, value TEXT NOT NULL, value_key TEXT NOT NULL, on_certificate INTEGER NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (envelope_id, document_id, name_key)
+);
+CREATE INDEX IF NOT EXISTS custom_values_find ON custom_values(name_key, value_key);
+CREATE INDEX IF NOT EXISTS custom_values_def ON custom_values(def_id);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1051,6 +1072,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['envelopes', 'purged_level', 'TEXT'],
   ['envelopes', 'purged_sha256', 'TEXT'],
   ['audit', 'redacted_at', 'TEXT'],
+  // The digital seal of the signed PDF (src/server/seal.ts): its level (B-B or B-T) and the SHA-256 of the
+  // certificate it was made with. NULL for a file without a seal, such as every one completed before seals were set up.
+  ['envelopes', 'seal_level', 'TEXT'],
+  ['envelopes', 'seal_cert', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

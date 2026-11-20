@@ -295,7 +295,7 @@ const age = (id: string, days: number) => {
   s.db.run('UPDATE sessions SET expires_at=?, last_used_at=?, created_at=? WHERE id=?', iso(Date.parse(r.expires_at) - days * DAY), r.last_used_at ? iso(Date.parse(r.last_used_at) - days * DAY) : null, iso(Date.parse(r.created_at) - days * DAY), id);
 };
 
-test('a browser that is used stays signed in until 30 days after it signed in, and one that is not used is signed out after 30 days', async () => {
+test('a browser used every week stays signed in for 12 weeks and then signs in again, and one that is not used is signed out after 30 days', async () => {
   assert.equal(SESSION_DAYS, 30);
   const c = await signUp('Lea Weekly', 'lea@example.com', ip());
   unnoted(c);
@@ -311,20 +311,24 @@ test('a browser that is used stays signed in until 30 days after it signed in, a
   assert.deepEqual(again.set, []);
   assert.equal(sessionRow('lea@example.com').last_used_at, made.last_used_at);
 
-  // She opens the app once a week. It stays signed in, but only until 30 days after she signed in, however often
-  // she comes (SESSION_MAX_DAYS, the owner's decision after a copied cookie stayed alive for three years): from
-  // then she signs in again. The end never moves past that, so no cookie is sent again on the way.
-  for (let week = 1; week <= 4; week++) {
+  // She opens the app once a week. Each visit moves the end of the session to 30 days from then, so it stays signed
+  // in, but never past 90 days after she signed in, however often she comes (SESSION_MAX_DAYS: a copied cookie once
+  // stayed alive for three years). From then she signs in again: about once a quarter, not every month.
+  for (let week = 1; week <= 12; week++) {
     age(made.id, 7);
     const r = await raw(c, 'GET', '/envelopes');
     assert.equal(r.status, 200, `week ${week}: ${JSON.stringify(r.data)}`);
-    assert.equal(r.set.find((x) => x.startsWith('ts_session=')), undefined, `week ${week}: the end does not move`);
     const row = s.db.get('SELECT * FROM sessions WHERE id=?', made.id);
-    assert.ok(Math.abs(Date.parse(row.expires_at) - (Date.parse(row.created_at) + 30 * DAY)) < 60_000, `week ${week}: still 30 days from signing in`);
+    const capped = Date.parse(row.created_at) + 90 * DAY;
+    assert.ok(Math.abs(Date.parse(row.expires_at) - Math.min(Date.now() + 30 * DAY, capped)) < 60_000, `week ${week}: 30 days from now, never past 90 days from signing in`);
     assert.ok(Date.now() - Date.parse(row.last_used_at) < 60_000);
+    // When the end moves, the browser is given the cookie again, with what is left and never more.
+    const sent = r.set.find((x) => x.startsWith('ts_session='));
+    assert.equal(!!sent, week <= 9, `week ${week}: the cookie is sent again only while the end still moves`);
+    if (sent) assert.ok(Number(/Max-Age=(\d+)/.exec(sent)![1]) <= (capped - Date.now()) / 1000 + 5, `week ${week}: the cookie never outlives the 90 days`);
   }
   age(made.id, 7);
-  assert.equal((await raw(c, 'GET', '/envelopes')).status, 401, 'week five: 35 days after signing in, she signs in again');
+  assert.equal((await raw(c, 'GET', '/envelopes')).status, 401, 'week 13: 91 days after signing in, she signs in again');
   assert.equal(s.db.get('SELECT COUNT(*) n FROM sessions WHERE user_id=?', made.user_id).n, 1, 'one session, never a second one made behind her back');
 
   // A session that is not used is signed out the same way. (Back to a fresh sign-in for the rest of this test.)

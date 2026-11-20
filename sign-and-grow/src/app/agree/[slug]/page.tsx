@@ -4,7 +4,8 @@
 // when the visitor has accepted. The rules are in src/server/clickwrap.ts, the words in src/lib/clickwrap.ts.
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { api, fmtDate, Leaf } from '@/components/ui';
+import { api, fmtDate } from '@/components/ui';
+import { Mark } from '@/components/Brand';
 import { PdfDoc } from '@/components/PdfDoc';
 import { ClickwrapTerms } from '@/components/ClickwrapTerms';
 
@@ -197,7 +198,7 @@ export default function Agree() {
       ) : (
         <div className="card">
           <div className="cw-head">
-            {data.account.logo ? <img src={data.account.logo} alt="" /> : <Leaf color="#1f6f43" size={22} />}
+            {data.account.logo ? <img src={data.account.logo} alt="" /> : <Mark size={24} label="" />}
             <span className="muted small">{data.account.name}</span>
           </div>
           <h1 className="cw-title serif">{older?.title || v.title}</h1>

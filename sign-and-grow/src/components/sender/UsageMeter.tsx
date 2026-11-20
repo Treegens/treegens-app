@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { PRICING } from '@/lib/impact';
 import type { Allowance } from './allowance';
+import { HELD_EXPIRY_TEXT, TOPUP_EXPIRY_MONTHS, WELCOME_EXPIRY_DAYS } from '@/lib/policy';
 
 const PLAN_PAGE = '/app/settings?tab=billing';
 
@@ -35,10 +36,10 @@ function SignatureBalance({ a, canUpgrade }: { a: NonNullable<Allowance>; canUpg
       {left > 0 && left <= 2 && <p className="sn-usage-note"><b>Running low.</b> Each new signer needs one. Nothing is charged unless you choose it.</p>}
       <ul className="sn-rules">
         <li><b>What uses one:</b> each person who actually signs.</li>
-        <li><b>Set aside, not spent:</b> sending holds one for each signer. It comes back if you void, or if they decline or it expires.</li>
+        <li><b>Set aside, not spent:</b> sending holds one for each signer. It comes back if you void, or if they decline or it expires. {HELD_EXPIRY_TEXT}</li>
         <li><b>Free:</b> signing your own documents, and people who only approve, view or get a copy.</li>
         <li>Fixing an envelope after sending is free, unless you add another signer.</li>
-        <li>Signatures never expire. What you do not use this month is still there next month.</li>
+        <li><b>Signatures expire:</b> a month&apos;s {PRICING.monthlySignatures} at the end of that month, top-ups {TOPUP_EXPIRY_MONTHS} months after their payment, the free ones of a new account {WELCOME_EXPIRY_DAYS} days after it was made. The one that expires soonest is used first. <Link href={PLAN_PAGE}>Every date is on the Plan page</Link>.</li>
         <li><b>Getting more:</b> ${PRICING.monthlyUsd} a month adds {PRICING.monthlySignatures}, and extra ones are ${PRICING.topUpUsd} each. Every dollar plants {PRICING.treesPerUsd} mangrove trees.{a.freeWith ? ` Your monthly plan is free with the code ${a.freeWith}.` : ''}</li>
       </ul>
     </section>

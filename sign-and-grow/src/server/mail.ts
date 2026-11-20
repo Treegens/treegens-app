@@ -73,9 +73,14 @@ export const helpUrl = (code: string) => `${baseUrl()}/help?topic=signing&code=$
 // wrap anywhere (overflow-wrap), so the email never becomes wider than the phone it is read on.
 export function renderMail(m: Mail): string {
   const color = /^#[0-9a-f]{6}$/i.test(m.brand?.color || '') ? m.brand!.color! : '#1f6f43';
+  // The sender's logo, else the sender's name, else ours: the drawn logo as a picture loaded from APP_URL (until the app
+  // is public, mail programs show its alt text, "GrowSigning"). Every email has a light header, so it is always the
+  // logo for light grounds; public/brand/email-logo-dark.png waits for an email with a dark header.
   const logo = m.brand?.logo?.startsWith('data:image/')
     ? `<img src="${esc(m.brand.logo)}" alt="${esc(m.brand?.name || '')}" style="max-height:40px;max-width:200px">`
-    : `<span style="font-size:18px;font-weight:700;color:${color}">${esc(m.brand?.name || 'GrowSigning')}</span>`;
+    : m.brand?.name
+      ? `<span style="font-size:18px;font-weight:700;color:${color}">${esc(m.brand.name)}</span>`
+      : `<img src="${esc(baseUrl())}/brand/email-logo.png" width="144" height="22" alt="GrowSigning" style="display:block;border:0;width:144px;height:22px;color:#1f6f43;font-size:18px;font-weight:700">`;
   return `<!doctype html><html><body style="margin:0;background:#f4f1ea;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2a22">
 <div style="max-width:560px;margin:0 auto;padding:32px 16px">
   <div style="padding:0 4px 16px">${logo}</div>

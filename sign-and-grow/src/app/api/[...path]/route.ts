@@ -19,6 +19,7 @@ import '@/server/routes-stamps';
 import '@/server/routes-chat';
 import '@/server/routes-seclog';
 import '@/server/routes-retention';
+import '@/server/routes-customfields';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

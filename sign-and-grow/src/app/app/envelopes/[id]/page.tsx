@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { api, useLoad, Status, fmtDate, toast, Leaf } from '@/components/ui';
+import { api, useLoad, Status, fmtDate, toast } from '@/components/ui';
+import { Mark } from '@/components/Brand';
 import { useMe } from '@/components/AppShell';
 import { fmtNum, fmtTrees, impactOf } from '@/lib/impact';
 import { reminderText } from '@/lib/policy';
@@ -254,7 +255,7 @@ export default function EnvelopeDetail() {
 
       {e.status === 'completed' && (
         <div className="card row" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
-          <Leaf size={26} color="#1f6f43" />
+          <Mark size={26} label="" />
           <div><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}. Completed without paper.</b> About {fmtNum(impact.sheets)} sheets, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e not used ({fmtTrees(impact.trees)} of a tree).</div>
         </div>
       )}
@@ -287,7 +288,7 @@ export default function EnvelopeDetail() {
       <div className="grid g2">
         <section className="card" aria-labelledby="sn-docs-h">
           <h2 id="sn-docs-h" style={{ marginBottom: 10 }}>Documents</h2>
-          {e.documents.length === 0 && <div className="muted small">No document has been added yet.</div>}
+          {e.documents.length === 0 && <div className="muted small">{e.purged_at ? `Its documents were purged on ${longDate(e.purged_at)}.` : 'No document has been added yet.'}</div>}
           {e.documents.map((d: any) => <div key={d.id} className="row between" style={{ padding: '5px 0' }}><span className="truncate">{d.name}</span><span className="muted small" style={{ whiteSpace: 'nowrap' }}>{d.pages} page{d.pages === 1 ? '' : 's'}</span></div>)}
           <div className="muted small" style={{ marginTop: 8 }}>
             {pages} page{pages === 1 ? '' : 's'} · {e.fields.length} field{e.fields.length === 1 ? '' : 's'} · {e.ordered ? 'signed in order' : 'everyone at once'}

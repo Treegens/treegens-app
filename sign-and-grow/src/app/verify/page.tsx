@@ -77,8 +77,18 @@ export default function Verify() {
             <h2>This file was completed with GrowSigning on {longDay(res.deleted.completed_at)}</h2>
             <p>Its fingerprint matches the signed PDF of envelope <span className="mono">{res.deleted.envelope_id}</span>, which everyone had finished on that day. So the file is unchanged since then.</p>
             {res.deleted.disputed_on && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {longDay(res.deleted.disputed_on)}, a person named on this document told us they did not sign it, or that it was not them, and a person at GrowSigning has not closed that yet. This page cannot tell you who is right.</div>}
+            {/* Purged under its account's retention rule or at its sender's request (src/server/records.ts): the record is still here. */}
+            {res.deleted.purged ? (
+              <>
+                <p>Its documents were removed on {longDay(res.deleted.deleted_at)}, under its account&apos;s retention rule or at its sender&apos;s request. The signed file is no longer kept here, so this page cannot show you who signed it. The certificate inside the file is what you have: read it with <Link href="/security/certificate">How to read a certificate</Link>.</p>
+                <p className="muted small">We keep this fingerprint, the envelope ID and the day it was completed with the record of the envelope, for as long as its account keeps that record, and for one year after the account is deleted.</p>
+              </>
+            ) : (
+              <>
             <p>Its sender has since deleted it, together with their account, on {longDay(res.deleted.deleted_at)}. We deleted what we knew about it too: the document, the names on it and its audit trail{res.deleted.disputed_on ? ', apart from the alert our team works from while the dispute is open' : ''}. So we cannot tell you anything about who signed it. The certificate inside the file is what is left: read it with <Link href="/security/certificate">How to read a GrowSigning certificate</Link>.</p>
             <p className="muted small">We keep only this fingerprint, the envelope ID and the day it was completed, until {longDay(res.deleted.kept_until)}{res.deleted.disputed_on ? ', and that it is disputed and since when, until the dispute is closed' : ''}. After that this check answers &ldquo;no match&rdquo; for this file.</p>
+              </>
+            )}
             <div className="mono muted" style={{ marginTop: 8 }}>SHA-256 {res.hash}</div>
           </div>
         )}

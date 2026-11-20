@@ -4,6 +4,6 @@
 .seclog-filters select, .seclog-filters input { width: 100%; min-height: 44px; }
 .seclog-actions { grid-column: 1 / -1; margin-bottom: 10px; }
 .seclog-actions .btn { min-height: 44px; }
-.seclog .setting-row { min-height: 44px; align-items: center; }
+.seclog .setting-row { min-height: 44px; }
 .seclog-detail { overflow-wrap: anywhere; margin-top: 2px; }
 .seclog-list > li { padding: 10px 0; }

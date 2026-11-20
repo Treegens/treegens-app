@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import Link from 'next/link';
-import { api, useLoad, Status, fmtDate, Leaf, toast } from '@/components/ui';
+import { api, useLoad, Status, fmtDate, toast } from '@/components/ui';
+import { Mark } from '@/components/Brand';
 import { useMe } from '@/components/AppShell';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 import { AllowanceCard } from '@/components/sender/UsageMeter';
@@ -116,7 +117,7 @@ export default function Home() {
       <section className="card pad0" aria-labelledby="sn-recent-h">
         <div className="row between sn-cardhead"><h2 id="sn-recent-h">Recent envelopes</h2><Link href="/app/envelopes?box=all">See all</Link></div>
         {recent && recent.envelopes.length === 0 ? (
-          <div className="empty"><Leaf size={32} color="#6fb35f" /><h3 style={{ marginTop: 10 }}>Nothing sent yet</h3>Upload a PDF, add who needs to sign and place the fields. It takes about a minute.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new" className="btn primary">Send your first envelope</Link></div></div>
+          <div className="empty"><Mark size={32} label="" /><h3 style={{ marginTop: 10 }}>Nothing sent yet</h3>Upload a PDF, add who needs to sign and place the fields. It takes about a minute.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new" className="btn primary">Send your first envelope</Link></div></div>
         ) : (
           <div className="tablewrap"><table className="t sn-list"><tbody>
             {(recent?.envelopes || []).map((e: any) => {

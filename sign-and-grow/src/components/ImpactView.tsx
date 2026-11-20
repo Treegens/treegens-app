@@ -23,7 +23,7 @@ export function Methodology() {
         <li><b>Trees</b>: one average pulpwood tree makes about {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper (Conservatree&apos;s estimate).</li>
         <li><b>Water</b>: about {IMPACT.litresWaterPerSheet} litres to make one A4 sheet.</li>
         <li><b>Carbon</b>: about {IMPACT.gramsCo2PerSheet} g CO2e per sheet over its life cycle. Couriers and printers would add more, so we leave them out.</li>
-        <li><b>Mangroves</b>: everything paid to GrowSigning, the monthly plan and top-ups alike, goes to Treegens tree planting, and every dollar plants {PRICING.treesPerUsd} mangrove trees. The total shown is what was paid, less anything refunded.</li>
+        <li><b>Mangroves</b>: everything paid to GrowSigning, the monthly plan and top-ups alike, goes to Treegens tree planting, and every dollar plants {PRICING.treesPerUsd} mangrove trees. The total shown is what was paid, less anything refunded. It counts the trees funded from that money, not signatures used: a signature that expires unused was paid for, and its trees are planted all the same.</li>
       </ul>
       <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>Running servers has a footprint too. It is far smaller than paper, but it is not zero, and we will not pretend it is.</p>
     </div>

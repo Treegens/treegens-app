@@ -1,7 +1,7 @@
 /* growsigning: the heading font.
    Lora (Cyreal, SIL Open Font License 1.1) is the face the wordmark is drawn in, so headings and logo share one voice.
    The two files are copied from @fontsource/lora into public/fonts by scripts/copy-assets.mjs on install.
-   Import this file after globals.css so the --serif below replaces the one there. Not imported anywhere yet. */
+   Imported last in src/app/layout.tsx, after globals.css, so the --serif below replaces the one there. */
 
 @font-face {
   font-family: 'Lora';
@@ -30,4 +30,18 @@
    thickening the 600 into a fake bold. */
 .serif {
   font-weight: 600;
+}
+
+/* The logo links (src/components/Brand.tsx <Logo>): a 44 px target around a drawing 20 to 26 px tall, which never
+   shrinks to make room (flex: none on the drawing). */
+.logo, .side .brand, .mobilebar-logo { min-height: 44px; display: inline-flex; align-items: center; }
+.mobilebar-logo { flex: none; text-decoration: none; }
+.side .brand { display: flex; padding: 0 10px 12px; }
+
+/* The narrowest phones (under 360 px, down to 320) have the logo, "Start free" and the menu button in one row of the
+   public header. The logo drops to 20 px tall (the brand kit's smallest is 16) and keeps its shape, and the menu button
+   keeps only its icon, so nothing is cut off at the right. Screen readers still hear "Menu" or "Close". */
+@media (max-width: 359px) {
+  .pub-head .logo svg { height: 20px; width: auto; }
+  .pub-head .pub-menu-btn { font-size: 0; gap: 0; min-width: 44px; justify-content: center; padding-left: 12px; padding-right: 12px; }
 }

@@ -45,7 +45,12 @@ async function completed(c: Client, email: string, o: { subject?: string; attach
   let e: any;
   if (o.template) e = (await c.post('/envelopes', { template_id: o.template, subject: o.subject || 'From a template', recipients: { Signer: { name: 'Tia Templ', email } } })).data.envelope;
   else {
-    const file = await upload(c, 1);
+    // A page of its own: stored files are shared by their fingerprint, and the same bytes in another test would keep the file.
+    const pdf = await PDFDocument.create();
+    pdf.addPage([612, 792]).drawText(`Lease ${email} ${Math.random()}`, { x: 72, y: 700 });
+    const form = new FormData();
+    form.append('file', new Blob([await pdf.save()], { type: 'application/pdf' }), 'Lease.pdf');
+    const file = (await c.call('POST', '/files', form)).data;
     const r = await c.post('/envelopes', {
       subject: o.subject || 'Lease for Rosa Lind', message: 'Hello Rosa Lind, please sign.',
       documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Rosa Lind', email }],
@@ -64,7 +69,7 @@ async function completed(c: Client, email: string, o: { subject?: string; attach
   let att: string | null = null;
   if (o.attach) {
     const d = await PDFDocument.create();
-    d.addPage([300, 300]).drawText('Passport of Rosa Lind', { x: 20, y: 150 });
+    d.addPage([300, 300]).drawText(`Passport of Rosa Lind ${Math.random()}`, { x: 20, y: 150 });
     const f = new FormData();
     f.append('file', new Blob([await d.save()], { type: 'application/pdf' }), 'passport.pdf');
     const up = await s.call('POST', `/sign/${tok}/upload`, f);
@@ -114,8 +119,11 @@ test('the rule: off by default, only admins change it, 30 to 9,999 days, a level
   assert.ok(log.some((l: any) => l.what === 'policy' && /Was: off/.test(l.detail)), 'the change is in the record');
   assert.ok(log.some((l: any) => l.what === 'template_period'));
   assert.equal((await member.get('/account/retention/log')).status, 403, 'the record is for admins');
+  // A name typed like a spreadsheet formula is written so that it cannot run as one.
+  rec.logLine(db.get("SELECT a.id FROM accounts a JOIN memberships m ON m.account_id=a.id JOIN users u ON u.id=m.user_id WHERE u.email='ola@ret.test'").id, null, 'keep', { who: '=HYPERLINK("http://x")' });
   const csv = await owner.call('GET', '/account/retention/log?format=csv');
   assert.match(Buffer.from(csv.data).toString(), /line,at,what,envelope_id/);
+  assert.match(Buffer.from(csv.data).toString(), /"'=HYPERLINK/);
   // The security record has the change too (seclog.ts).
   assert.ok(db.get("SELECT 1 x FROM security_events WHERE kind='retention.changed'"));
 });
@@ -321,6 +329,20 @@ test('legal hold: every way of deleting is refused and recorded, a folder hold f
   for (const w of ['hold', 'hold_lifted', 'refused']) assert.ok(log.includes(w), w);
   assert.ok(db.get("SELECT 1 x FROM security_events WHERE kind='legal_hold.placed'"));
   assert.ok(db.get("SELECT 1 x FROM security_events WHERE kind='legal_hold.lifted'"));
+  // A hold placed while a purge waits calls the purge off, with a line in the record.
+  const w = await completed(member, 'rosa18@ret.test');
+  assert.equal((await member.post(`/envelopes/${w.id}/purge`, { level: 'documents' })).status, 200);
+  assert.equal((await owner.post(`/envelopes/${w.id}/hold`, { reason: 'Before it goes' })).status, 200);
+  assert.equal(queue(w.id).asked_at, null);
+  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Purge called off'", w.id));
+  // An integration key with the "send" scope neither places nor lifts a hold, whoever made it.
+  const made = await owner.post('/api-keys', { name: 'Website' });
+  const key = new Client();
+  const call = key.call.bind(key);
+  key.call = (m: string, u: string, b?: any, h: Record<string, string> = {}) => call(m, u, b, { authorization: `Bearer ${made.data.key}`, ...h });
+  assert.equal((await key.call('DELETE', `/envelopes/${w.id}/hold`, { reason: 'Integration says so' })).status, 403);
+  assert.equal(rec.isHeld([w.id]).size, 1);
+  assert.equal((await key.put('/account/retention', { days: null })).status, 403);
 });
 
 test('legal hold: closing the account is refused with the list of holds, also on the timer and in purgeUser', async () => {

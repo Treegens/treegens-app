@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { api, Leaf } from './ui';
+import { api } from './ui';
+import { Logo } from './Brand';
 import { IN_PERSON_LIMITS } from '@/lib/phone';
 
 // The one screen of the app that a browser shows while it is locked: it was handed to someone to sign in person
@@ -31,7 +32,7 @@ export function HandedOver({ info, onUnlocked }: { info: Locked; onUnlocked: () 
   };
   return (
     <main className="authbox ho" aria-labelledby="ho-h">
-      <div className="row" style={{ justifyContent: 'center', marginBottom: 14, fontWeight: 700 }}><Leaf color="#1f6f43" /> GrowSigning</div>
+      <div className="row" style={{ justifyContent: 'center', marginBottom: 14 }}><Logo height={22} /></div>
       <div className="card">
         <h1 id="ho-h" className="serif" style={{ fontSize: 22, marginBottom: 8 }}>This device was handed to {info.signer || 'someone'} to sign</h1>
         <p className="muted">So that nobody reaches {info.name}&apos;s account by accident, it is locked in this browser. Nothing was signed out anywhere else and nothing is lost.</p>

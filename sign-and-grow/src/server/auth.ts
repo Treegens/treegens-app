@@ -67,7 +67,8 @@ export function createSession(userId: string, accountId: string, secure: boolean
 }
 
 // A browser that is used stays signed in. Each use moves the end of its session to SESSION_DAYS from now, so
-// someone who opens the app on their phone every week is never asked to sign in again, and a browser nobody uses
+// someone who opens the app on their phone every week is asked to sign in again only SESSION_MAX_DAYS after signing
+// in (12 weeks of weekly use at 90), and a browser nobody uses
 // is signed out SESSION_DAYS after its last visit. To keep reading a page from writing to the database every time,
 // the use is written down at most once every SESSION_TOUCH_MINUTES, together with what the browser calls itself:
 // Settings shows both under "Where you are signed in". The end moves at most once a day. When it does, true comes

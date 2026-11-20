@@ -70,11 +70,11 @@ export function RetentionCard({ envelopeId, r, onChanged }: { envelopeId: string
       ) : r.disputed ? (
         <p>A person named on it disputes it, so it is not purged while that dispute is open.</p>
       ) : r.asked ? (
-        <p className="warn-text"><b>{r.asked.by} asked to purge it.</b> On {goes}, {LEVEL_NAME[r.asked.level].toLowerCase()} will be removed. Until then the sender or an admin can call it off. After that it cannot be undone.</p>
+        <p className="warn-text"><b>{r.asked.by} asked to purge it.</b> On {goes}, this will be removed: {LEVEL_NAME[r.asked.level].toLowerCase()}. Until then the sender or an admin can call it off. After that it cannot be undone.</p>
       ) : r.noticed_at && r.goes_at ? (
-        <p className="warn-text"><b>The account&apos;s retention rule reaches it.</b> On {goes}, {LEVEL_NAME[level].toLowerCase()} will be removed. The sender and the admins were emailed on {longDate(r.noticed_at)}. To keep it, choose Keep it and give a reason.</p>
+        <p className="warn-text"><b>The account&apos;s retention rule reaches it.</b> On {goes}, this will be removed: {LEVEL_NAME[level].toLowerCase()}. The sender and the admins were emailed on {longDate(r.noticed_at)}. To keep it, choose Keep it and give a reason.</p>
       ) : r.due_at && r.period ? (
-        <p>Kept until {longDate(r.due_at)}: {r.period.from === 'template' ? <>the period of the template &ldquo;{r.period.template}&rdquo;, </> : 'the account\'s rule, '}{daysText(r.period.days)} after it closed{r.kept_until ? `, and kept on by ${r.kept_by} (${r.kept_reason})` : ''}. Then {LEVEL_NAME[level].toLowerCase()} is removed, after an email to the sender and the admins {RETENTION_NOTICE_DAYS} days before.</p>
+        <p>Kept until {longDate(r.due_at)}: {r.period.from === 'template' ? <>the period of the template &ldquo;{r.period.template}&rdquo;, </> : 'the account\'s rule, '}{daysText(r.period.days)} after it closed{r.kept_until ? `, and kept on by ${r.kept_by} (${r.kept_reason})` : ''}. Then this is removed: {LEVEL_NAME[level].toLowerCase()}, after an email to the sender and the admins {RETENTION_NOTICE_DAYS} days before.</p>
       ) : closed ? (
         <p>The account keeps closed envelopes without an end date. Nothing is purged unless someone asks for it.</p>
       ) : (

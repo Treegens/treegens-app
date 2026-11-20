@@ -25,7 +25,10 @@ const dayAfter = (d: string) => {
 
 // The details of a line in words a person can read: values as they are, a setting by its name with what it was and is.
 const words = (k: string) => k.replace(/_/g, ' ');
-const show = (v: any): string => (v === null || v === undefined || v === '' ? 'nothing' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : typeof v === 'object' ? JSON.stringify(v) : String(v));
+// Values the server writes as codes (wrong_password, by_an_admin) read as words.
+const show = (v: any): string => (v === null || v === undefined || v === '' ? 'nothing' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : typeof v === 'object' ? JSON.stringify(v) : String(v).replace(/_/g, ' '));
+// The server names some actors in lower case ("a login that no longer exists"), to read inside a sentence too.
+const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
 function detailText(d: Record<string, any>): string {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(d || {})) {
@@ -111,7 +114,7 @@ export function SecurityLog() {
               <div className="what">
                 <b>{r.what}</b>{r.outcome === 'failure' && <> <span className="badge declined">{t(ui, 'settings.security.failed')}</span></>}
                 <div className="muted small">
-                  {fmtDate(r.at, true)}. {r.actor_name}{r.about_name && r.about_name !== r.actor_name ? `, ${t(ui, 'settings.security.about', { name: r.about_name })}` : ''}{r.ip ? `, ${t(ui, 'settings.security.from', { ip: r.ip })}` : ''}.
+                  {fmtDate(r.at, true)}. {cap(r.actor_name)}{r.about_name && r.about_name !== r.actor_name ? `, ${t(ui, 'settings.security.about', { name: r.about_name })}` : ''}{r.ip ? `, ${t(ui, 'settings.security.from', { ip: r.ip })}` : ''}.
                 </div>
                 {Object.keys(r.details || {}).length > 0 && <div className="muted small seclog-detail">{detailText(r.details)}</div>}
                 {r.user_agent && <div className="muted small seclog-detail">{t(ui, 'settings.security.browser', { ua: r.user_agent })}</div>}
@@ -150,7 +153,7 @@ export function SecurityLog() {
         )}
         <form className="row wrap" style={{ marginTop: 8 }} onSubmit={(e) => (e.preventDefault(), act(() => api('/webhooks', { body: { url: hook, events: ['security.event'] } }).then(() => setHook('')), t(ui, 'settings.security.webhook_added')))}>
           <input type="url" required placeholder="https://siem.example.com/hooks/growsigning" value={hook} onChange={(e) => setHook(e.target.value)} aria-label={t(ui, 'settings.security.webhook_label')} style={{ flex: '1 1 240px', minHeight: 44 }} />
-          <button className="btn" disabled={busy}>{t(ui, 'settings.security.webhook_add')}</button>
+          <button className="btn" style={{ minHeight: 44 }} disabled={busy}>{t(ui, 'settings.security.webhook_add')}</button>
         </form>
         <p className="muted small">{t(ui, 'settings.security.webhook_secret')}</p>
         <label className="setting-row">

@@ -56,7 +56,9 @@
     ".next-build-chat/types/**/*.ts",
     ".next-build-chat/dev/types/**/*.ts",
     ".next-build-ds-sec-log/types/**/*.ts",
-    ".next-build-ds-sec-log/dev/types/**/*.ts"
+    ".next-build-ds-sec-log/dev/types/**/*.ts",
+    ".next-build-brand-wire/types/**/*.ts",
+    ".next-build-brand-wire/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

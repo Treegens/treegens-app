@@ -13,6 +13,8 @@ import {
   SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, DEFAULT_REMINDER_DAYS, BULK_COST_NOTE, ACCESS_CODE_TRIES, GROUP_RULE, TWO_STEP_EMAIL_RESET_DAYS,
 } from '../lib/policy.ts';
 import { replyPromise } from '../lib/support.ts';
+// When signatures expire (decided 2026-11-20), in the same words as the Plan page, /help and the pricing block.
+import { expiryRuleText, HELD_EXPIRY_TEXT } from '../lib/policy.ts';
 import { PRICING, usd, CURRENCY_NOTE } from '../lib/impact.ts';
 import { CHAT_SCREENS, CHAT_TOOLS, type ChatScreen } from '../lib/chat.ts';
 
@@ -64,6 +66,8 @@ export const HELP_TOPICS: { id: string; q: string; about: string }[] = [
 // README "What is not in it", one entry for each bullet, in its order. `lead` is how the bullet starts there.
 export const NOT_IN_IT: { lead: string; text: string }[] = [
   { lead: 'Certificate-based digital signatures.', text: 'PDFs are not signed with a PKI certificate (PAdES). These are simple electronic signatures with an audit trail, not "advanced" or "qualified" signatures under eIDAS.' },
+  { lead: 'A security monitoring service.', text: 'Settings, Security keeps a record of sign-ins and changes and sends five alerts by email. Nobody watches it, and nothing is pushed to syslog or a log platform: a security system pulls it with an admin key or takes the security.event webhook.' },
+  { lead: 'Records management beyond the retention rule.', text: 'One retention period per account and per template, then a purge: no review queue, no transfer to an archive, no BagIt export, no records officer role, and the certificate of destruction is a CSV. Holds go on one envelope or one folder. A hold is a rule of this software and does not reach the backups of the people who run the server.' },
   { lead: 'Electronic seals.', text: 'A company stamp is a picture of a stamp put on the page by a person. Nothing checks that they may use it. It is not an electronic seal, pays no stamp duty, and is not an e-stamp certificate or an e-meterai.' },
   { lead: 'Languages other than English.', text: LANGUAGE_NOTE },
   { lead: 'ID verification', text: 'No check of government ID, no knowledge-based questions, no checks by phone call. A one-time code by email or text shows that someone can read a mailbox or holds a phone, not who they are.' },
@@ -91,9 +95,9 @@ export const FAQ: Faq[] = [
   { id: 'refund', words: ['refund', 'money back', 'charged twice', 'double charge', 'overcharged'],
     answer: () => `${refundRuleText(refundDays())} Open Settings, then Plan: your latest payment is offered at the top. A charge after you cancelled, a second charge for the plan, or more than the reminder said is refunded by the software by itself. Anything outside this rule goes to a person: choose Talk to a person.` },
   { id: 'cancel', words: ['cancel', 'stop paying', 'stop billing', 'unsubscribe', 'end my plan', 'stop the plan'],
-    answer: () => 'There are three ways. In the app: Settings, then Plan, then Cancel plan (owners and admins). From your inbox: every email about a payment while a plan renews has a link that stops it, without logging in. Without logging in: Find my subscription emails every paid plan tied to an address with a stop link, and Stop billing with my card works with the last four digits of the card. The plan runs to the end of the month already paid for. Nothing is deleted and your signatures stay.' },
+    answer: () => 'There are three ways. In the app: Settings, then Plan, then Cancel plan (owners and admins). From your inbox: every email about a payment while a plan renews has a link that stops it, without logging in. Without logging in: Find my subscription emails every paid plan tied to an address with a stop link, and Stop billing with my card works with the last four digits of the card. The plan runs to the end of the month already paid for. Nothing is deleted, and the signatures you have can be used until their own dates: what is left of the month expires when it ends, top-ups keep theirs.' },
   { id: 'price', words: ['price', 'cost', 'how much', 'pricing', 'free', 'plan', 'pay', 'expensive'],
-    answer: () => `A new account gets ${sigs(PRICING.welcomeSignatures)} free to try. ${PRICING.planName} is ${usd(PRICING.monthlyUsd)} a month and adds ${sigs(PRICING.monthlySignatures)} with every payment, and extra signatures are ${usd(PRICING.topUpUsd)} each. A signature is used only when someone actually signs, and signatures never expire. Signing is always free for the people who sign. ${CURRENCY_NOTE} 100% of what customers pay goes to Treegens tree planting.` },
+    answer: () => `A new account gets ${sigs(PRICING.welcomeSignatures)} free to try. ${PRICING.planName} is ${usd(PRICING.monthlyUsd)} a month and adds ${sigs(PRICING.monthlySignatures)} with every payment, and extra signatures are ${usd(PRICING.topUpUsd)} each. A signature is used only when someone actually signs. ${expiryRuleText()} Signing is always free for the people who sign. ${CURRENCY_NOTE} 100% of what customers pay goes to Treegens tree planting.` },
   { id: 'price-change', words: ['price go up', 'price increase', 'raise the price', 'price change', 'new price'],
     answer: () => priceRuleText() },
   { id: 'find', words: ['lost', 'cannot find', "can't find", 'link stopped', 'link does not work', 'link expired', 'resend', 'signing link', 'where is my document', 'never got', 'deleted the email'],
@@ -131,11 +135,11 @@ export const FAQ: Faq[] = [
   { id: 'not-received', words: ['did not get the email', "didn't get the email", 'never got the email', 'never received', 'not received', 'recipient', 'spam folder'],
     answer: () => 'Open the envelope: it shows whether each email left our server and whether the person opened the document. You can copy their signing link and send it yourself, show it as a QR code, remind just that person, or correct their address without voiding anything.' },
   { id: 'after-cancel', words: ['documents after cancel', 'documents when i cancel', 'happens to my documents', 'lose my documents', 'export', 'download everything', 'keep my documents'],
-    answer: () => 'Cancelling or a failed payment deletes nothing and locks nothing. Every document, audit trail and receipt stays, documents that are out can still be signed, and your signatures stay yours. Settings, Your data, Export everything gives you all of it as one ZIP file, free, on any plan.' },
+    answer: () => 'Cancelling or a failed payment deletes nothing and locks nothing. Every document, audit trail and receipt stays, documents that are out can still be signed, and your signatures can be used until their own dates. Settings, Your data, Export everything gives you all of it as one ZIP file, free, on any plan.' },
   { id: 'signatures', words: ['signature used', 'what uses', 'held', 'balance', 'run out', 'top up', 'top-up'],
-    answer: () => `A signature is one person signing one envelope. Sending holds one for each signer, and voiding, declining or expiring gives back the ones not used. Always free: signing your own documents, approvers, viewers, copies, reminders, more time and corrections. ${BULK_COST_NOTE} With none left, sending pauses: it never turns into a charge.` },
+    answer: () => `A signature is one person signing one envelope. Sending holds one for each signer, and voiding, declining or expiring gives back the ones not used. ${HELD_EXPIRY_TEXT} Always free: signing your own documents, approvers, viewers, copies, reminders, more time and corrections. ${BULK_COST_NOTE} With none left, sending pauses: it never turns into a charge.` },
   { id: 'free-code', words: ['was given a code', 'free code', 'promo', 'coupon', 'voucher', 'community code'],
-    answer: () => `Some communities get ${PRICING.planName} free with a code. Enter it when you sign up, or under Settings, then Plan, where it says Have a code? With a code the ${sigs(PRICING.monthlySignatures)} of the monthly plan arrive every month and nothing is charged for the plan.` },
+    answer: () => `Some communities get ${PRICING.planName} free with a code. Enter it when you sign up, or under Settings, then Plan, where it says Have a code? With a code the ${sigs(PRICING.monthlySignatures)} of the monthly plan arrive every calendar month and nothing is charged for the plan. They belong to that month and expire when it ends, and the next month brings a fresh ${PRICING.monthlySignatures}.` },
   { id: 'code', words: ['one-time code', 'verification code', 'code did not arrive', 'access code', 'code'],
     answer: () => `A one-time code has ${SIGNER_CODE_DIGITS} digits, works for ${SIGNER_CODE_MINUTES} minutes and for ${SIGNER_CODE_TRIES} tries, and only the newest one works. A code by email goes to the same mailbox as the link, so look in the spam folder. "I do not get the code" on the same screen tells the sender. An access code is set by the sender, who tells it to you: it is never in our email, and after ${ACCESS_CODE_TRIES} wrong tries it freezes until the sender sets a new one. Never pass a code on to anyone, us included.` },
   { id: 'reminders', words: ['reminder', 'reminders', 'remind'],
@@ -189,7 +193,8 @@ ${lines(CHAT_TOOLS.map((t) => `${t.label} (${t.href}): ${t.what}`))}
 
 === PRICES ===
 - A new account gets ${sigs(PRICING.welcomeSignatures)} free, once. ${PRICING.planName} is ${usd(PRICING.monthlyUsd)} a month and adds ${sigs(PRICING.monthlySignatures)} with every payment. On ${PRICING.planName}, extra signatures are ${usd(PRICING.topUpUsd)} each. ${CURRENCY_NOTE}
-- A signature is one person signing one envelope. It is used only when someone actually signs. Sending holds one per signer; voiding, declining or expiring gives back the ones not used. Signatures never expire and roll over, also after cancelling. Running out pauses sending and never creates a charge.
+- A signature is one person signing one envelope. It is used only when someone actually signs. Sending holds one per signer; voiding, declining or expiring gives back the ones not used. ${HELD_EXPIRY_TEXT} Running out pauses sending and never creates a charge.
+- ${expiryRuleText()}
 - Always free: signing, for the people who sign; a sender signing their own documents; approvers, viewers and copies; reminders, more time and corrections.
 - ${BULK_COST_NOTE}
 
@@ -204,7 +209,7 @@ ${lines(CHAT_TOOLS.map((t) => `${t.label} (${t.href}): ${t.what}`))}
 
 === CANCELLING ===
 - One button: Settings, then Plan, then Cancel plan (owners and admins). A stop link in every email about a payment while a plan renews, working without logging in. Without logging in: Find my subscription, and Stop billing with my card.
-- The plan runs until the end of the month already paid for. Nothing is deleted or locked, signatures stay, export is free on every plan.${dormant > 0 ? `\n- A paid plan that has sent nothing for ${dormant} days is not renewed, and the owner is told.` : ''}
+- The plan runs until the end of the month already paid for. Nothing is deleted or locked, the signatures left can be used until their own dates (what is left of the month expires when it ends), export is free on every plan.${dormant > 0 ? `\n- A paid plan that has sent nothing for ${dormant} days is not renewed, and the owner is told.` : ''}
 
 === DEADLINES AND LINKS ===
 - A signing link works for as long as the document is open, however often it is opened. A sender may set a deadline. After it the document closes, and the signing page offers to ask the sender for more time. When the sender reopens it, the same link works again and nobody who signed signs again.

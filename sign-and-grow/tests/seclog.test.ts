@@ -501,3 +501,22 @@ test('security.event goes only to a webhook that asked for it by name, with ids 
   assert.ok(spec.paths['/account/security-events'].get && spec.paths['/account/security'].patch && spec.paths['/account/security-events/csv'].get);
   void cron;
 });
+
+// ---- What a stranger can type into it --------------------------------------------------------------------------
+
+test('a browser name that is a formula opens as text in the CSV, and a key from many addresses writes a limited number of lines', async () => {
+  const vic = await person('Vic Target', 'vic@seclog.example');
+  const evil = browser();
+  assert.equal((await evil.call('POST', '/auth/login', { email: vic.email, password: 'guessing here' }, { 'user-agent': '=HYPERLINK("https://evil.example","x")' })).status, 401);
+  const csv = Buffer.from((await vic.c.get('/account/security-events/csv?kind=signin.failed')).data).toString('utf8');
+  assert.ok(csv.includes(`"'=HYPERLINK(""https://evil.example"",""x"")"`), csv);
+  assert.ok(!/(^|,)"=HYPERLINK/m.test(csv));
+
+  const key = keep((await vic.c.post('/api-keys', { name: 'leaky' })).data.key);
+  const { KEY_NEW_ADDRESS_PER_DAY } = await import('../src/lib/policy.ts');
+  for (let i = 0; i < KEY_NEW_ADDRESS_PER_DAY + 5; i++) assert.equal((await withKey(key, `203.0.114.${i + 1}`).get('/me')).status, 200);
+  assert.equal(lines(vic.own, 'api_key.new_address').length, KEY_NEW_ADDRESS_PER_DAY);
+  // The addresses past the limit are not remembered, so they are written on a later day.
+  const keyId = db.get('SELECT id FROM api_keys WHERE account_id=? AND name=?', vic.own, 'leaky').id;
+  assert.equal(db.get('SELECT COUNT(*) n FROM api_key_addresses WHERE key_id=?', keyId).n, KEY_NEW_ADDRESS_PER_DAY);
+});

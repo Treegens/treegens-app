@@ -1,0 +1,55 @@
+// Keeping closed envelopes for a set time and legal holds, as part of /api/openapi.json (routes-retention.ts). Kept
+// apart so the main description stays readable; openapi.ts spreads it into its paths.
+import { PURGE_LEVELS, LEVEL_NAME, removesAt, RETENTION_MIN_DAYS, RETENTION_MAX_DAYS, RETENTION_NOTICE_DAYS, HOLD_TRUTH, HOLD_OVERRIDE, PURGED_LINK } from '../lib/retention.ts';
+
+const err = { description: 'Error', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } };
+const ok = (schema: any) => ({ 200: { description: 'OK', content: { 'application/json': { schema } } }, default: err });
+const body = (schema: any, required = true) => ({ required, content: { 'application/json': { schema } } });
+const s = { type: 'string' };
+const time = { type: 'string', format: 'date-time' };
+const idParam = { name: 'id', in: 'path', required: true, schema: s };
+const level = { type: 'string', enum: PURGE_LEVELS, description: PURGE_LEVELS.map((l) => `"${l}": ${LEVEL_NAME[l].toLowerCase()} (${removesAt(l).join(' ')})`).join(' ') };
+const reason = { type: 'object', required: ['reason'], properties: { reason: { ...s, minLength: 3, maxLength: 500 } } };
+
+const hold = { type: 'object', properties: { id: s, envelope_id: { ...s, nullable: true }, folder: { ...s, nullable: true }, set_by: s, set_at: time, reason: { ...s, description: 'Admins only.' }, matter: { ...s, nullable: true, description: 'Admins only.' }, lifted_at: { ...time, nullable: true } } };
+const facts = {
+  type: 'object', description: 'Where one envelope stands. GET /envelopes/{id} carries the same as "retention".',
+  properties: {
+    closed_at: { ...time, nullable: true, description: 'When it was completed, voided, declined or ran out of time. null while it is a draft or out.' },
+    period: { type: 'object', nullable: true, description: 'null while the account\'s rule is off.', properties: { days: { type: 'integer' }, from: { type: 'string', enum: ['account', 'template'] }, template: s } },
+    due_at: { ...time, nullable: true }, rule_level: { ...level, nullable: true },
+    noticed_at: { ...time, nullable: true, description: `When the sender and the admins were emailed. Nothing is purged sooner than ${RETENTION_NOTICE_DAYS} days after it.` },
+    goes_at: { ...time, nullable: true }, level: { ...level, nullable: true },
+    kept_until: { ...time, nullable: true }, kept_reason: { ...s, nullable: true }, kept_by: { ...s, nullable: true },
+    asked: { type: 'object', nullable: true, properties: { at: time, by: s, level } },
+    holds: { type: 'array', items: hold }, held: { type: 'boolean' }, disputed: { type: 'boolean', description: 'A dispute is open: it is not purged while it is.' },
+    purged_at: { ...time, nullable: true }, purged_level: { ...level, nullable: true }, purged_sha256: { ...s, nullable: true, description: 'The fingerprint of the signed PDF the purge removed.' },
+    may_purge: { type: 'boolean' }, may_hold: { type: 'boolean' }, stays: { type: 'array', items: s, description: 'What stays after a purge, in words.' },
+  },
+};
+
+export function retentionPaths() {
+  return {
+    '/account/retention': {
+      get: { summary: 'How long closed envelopes are kept', description: 'For everyone in the account. "holds", "queue" (what the timer announced or someone asked for, soonest first) and "folders" are there for admins only.', responses: ok({ type: 'object', properties: { policy: { type: 'object', properties: { on: { type: 'boolean' }, days: { type: 'integer', nullable: true }, level, name: { ...s, nullable: true }, code: { ...s, nullable: true } } }, templates: { type: 'array', items: { type: 'object', properties: { id: s, subject: s, days: { type: 'integer', nullable: true } } } }, stays: { type: 'array', items: s }, may_change: { type: 'boolean' }, holds: { type: 'array', items: hold } } }) },
+      put: { summary: 'Change the rule (admins)', description: `Off by default. "days" from ${RETENTION_MIN_DAYS} to ${RETENTION_MAX_DAYS}, counted from the day an envelope closed; null switches it off and calls off every purge it had announced. Left out, a value stays. "templates" gives a template its own period ({"tpl_x": 3650}, null for the account's). With "dry_run": true nothing is saved and "would_notice_now" says how many closed envelopes would get the email at once. The sender and the admins are emailed ${RETENTION_NOTICE_DAYS} days before anything is purged, and a level raised after that email applies from the next email on. Every change is in the retention record and the security record.`,
+        requestBody: body({ type: 'object', properties: { days: { type: 'integer', nullable: true, minimum: RETENTION_MIN_DAYS, maximum: RETENTION_MAX_DAYS }, level, name: { ...s, maxLength: 120 }, code: { ...s, maxLength: 80, description: 'As your records schedule writes it, for example GRS 2.1 item 050.' }, templates: { type: 'object', additionalProperties: { type: 'integer', nullable: true } }, dry_run: { type: 'boolean' } } }),
+        responses: ok({ type: 'object', properties: { would_notice_now: { type: 'integer' }, policy: { type: 'object' } } }) },
+    },
+    '/account/retention/log': { get: { summary: 'The retention record (admins)', description: 'Every change to the rule, keep, hold, lift, purge asked for or called off, email, purge and refused attempt, newest first. ?format=csv gives the whole record as a file, with the fingerprint of each signed PDF that was purged: the certificate of what went when. A line is never changed. When the account is deleted its names and words are blanked, and it is deleted a year later.', parameters: [{ name: 'format', in: 'query', schema: { type: 'string', enum: ['csv'] } }, { name: 'limit', in: 'query', schema: { type: 'integer', maximum: 1000 } }], responses: { 200: { description: 'The record as JSON, or as CSV with ?format=csv', content: { 'application/json': { schema: { type: 'object', properties: { lines: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, envelope_id: { ...s, nullable: true }, at: time, what: s, level: { ...s, nullable: true }, sha256: { ...s, nullable: true }, who: { ...s, nullable: true }, detail: { ...s, nullable: true } } } } } } }, 'text/csv': { schema: s } } }, default: err } } },
+    '/account/retention/holds': { post: { summary: 'Put a folder (or an envelope) on legal hold (admins)', description: `${HOLD_TRUTH} A folder hold covers what is in the folder now, what is put in it later, and keeps covering an envelope that leaves it. Any purge announced or asked for on what it covers is called off.`, requestBody: body({ type: 'object', required: ['reason'], properties: { folder: s, envelope_id: s, reason: { ...s, minLength: 3, maxLength: 500 }, matter: { ...s, maxLength: 120 } } }), responses: ok({ type: 'object', properties: { hold, covers: { type: 'integer' } } }) } },
+    '/account/retention/holds/{id}': { delete: { summary: 'Lift a hold (admins, with a reason)', parameters: [idParam], requestBody: body(reason), responses: ok({ type: 'object', properties: { lifted: { type: 'boolean' }, covered: { type: 'integer' } } }) } },
+    '/envelopes/{id}/hold': {
+      post: { summary: 'Put this envelope on legal hold (admins)', description: HOLD_TRUTH, parameters: [idParam], requestBody: body({ type: 'object', required: ['reason'], properties: { reason: { ...s, minLength: 3, maxLength: 500 }, matter: { ...s, maxLength: 120 } } }), responses: ok({ type: 'object', properties: { hold, covers: { type: 'integer' } } }) },
+      delete: { summary: 'Lift the hold on this envelope (admins, with a reason)', description: 'Only the hold on this envelope itself: one its folder\'s hold covers answers 409 with "code": "folder_hold" and the hold\'s id.', parameters: [idParam], requestBody: body(reason), responses: ok({ type: 'object', properties: { lifted: { type: 'boolean' } } }) },
+    },
+    '/envelopes/{id}/keep': { post: { summary: 'Keep it: one more period from today', description: 'The sender or an admin, on a closed envelope, with a reason that goes into its audit trail. Calls off a purge announced or asked for.', parameters: [idParam], requestBody: body(reason), responses: ok({ type: 'object', properties: { kept_until: { ...time, nullable: true } } }) } },
+    '/envelopes/{id}/purge': {
+      post: { summary: 'Purge now (in 14 days)', description: `The sender or an admin, on a closed envelope. It waits ${RETENTION_NOTICE_DAYS} days, the sender and the admins are emailed at once, either can call it off until then, and after that it cannot be undone. Refused with 409 while it is on legal hold ("code": "legal_hold", and the attempt is recorded) or a dispute is open ("code": "disputed"), and with 400 for a draft or one still out. After the purge its recipients' links answer 410 with "code": "purged" and the words "${PURGED_LINK}"; its download and evidence pack answer 410; /public/verify answers "deleted" with "purged" for its signed file and its envelope ID.`, parameters: [idParam], requestBody: body({ type: 'object', required: ['level'], properties: { level } }), responses: ok({ type: 'object', properties: { goes_at: time, level } }) },
+      delete: { summary: 'Call off a purge that was asked for', description: 'Within the 14 days. A purge the account\'s rule announced is not a request: keep the envelope instead (409, "code": "rule").', parameters: [idParam], responses: ok({ type: 'object', properties: { cancelled: { type: 'boolean' }, rule_due_at: { ...time, nullable: true } } }) },
+    },
+    '/envelopes/{id}/retention': { get: { summary: 'Where this envelope stands on keeping and holds', parameters: [idParam], responses: ok(facts) } },
+    '/operator/holds': { get: { summary: 'The holds that are on (people who run the server)', description: 'Answers 404 to anyone not in OPERATOR_EMAILS.', responses: ok({ type: 'object', properties: { holds: { type: 'array', items: hold } } }) } },
+    '/operator/holds/{id}/lift': { post: { summary: 'Lift a hold as the people who run the server (two of them)', description: `${HOLD_OVERRIDE} The first call asks ("waiting_for_second": true); a call by a different operator within 7 days lifts it and emails the account's admins.`, parameters: [idParam], requestBody: body(reason), responses: ok({ type: 'object', properties: { lifted: { type: 'boolean' }, waiting_for_second: { type: 'boolean' } } }) } },
+  };
+}

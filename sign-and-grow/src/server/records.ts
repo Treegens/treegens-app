@@ -137,8 +137,14 @@ function holdCovers(h: any): string[] {
 }
 
 /** An admin puts an envelope or a folder on hold. Answers the hold and how many envelopes it covers now. */
+// An integration key with the "send" scope works with envelopes, not with what keeps them: it neither places nor lifts a hold.
+const assertHoldKey = (c: Ctx) => {
+  if (c.auth?.via === 'api_key' && (c.auth as any).scope !== 'admin') throw bad('An API key with the "send" scope cannot place or lift a legal hold. An admin can, in the app or with a key of the "admin" scope.', 403);
+};
+
 export function placeHold(c: Ctx, o: { envelopeId?: string | null; folder?: string | null; reason: any; matter?: any }) {
   if (!c.admin) throw bad('Only an admin of the account can put something on legal hold. Ask an admin of your team.', 403);
+  assertHoldKey(c);
   const reason = str(o.reason, 500).trim();
   const matter = str(o.matter, 120).trim() || null;
   if (reason.length < 3) throw bad('Say why it is held, in a few words (for example the claim or the request it is kept for). The reason is kept with the hold, for the admins. Nothing was put on hold.');
@@ -180,6 +186,7 @@ function lift(h: any, by: { name: string; actor: Actor; log: string }, reason: s
 
 export function liftHold(c: Ctx, holdId: string, reasonIn: any) {
   if (!c.admin) throw bad('Only an admin of the account can lift a legal hold. Ask an admin of your team.', 403);
+  assertHoldKey(c);
   const h = get('SELECT * FROM legal_holds WHERE id=? AND account_id=?', holdId, c.account.id);
   if (!h) throw bad('Hold not found.', 404);
   if (h.lifted_at) throw bad(`This hold was lifted on ${day(h.lifted_at)}. Nothing changed.`, 409);

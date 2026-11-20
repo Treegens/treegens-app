@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
-import { api, useLoad, Leaf } from '@/components/ui';
+import { api, useLoad } from '@/components/ui';
+import { Mark } from '@/components/Brand';
 import { QrOwnPhone } from '@/components/QrOwnPhone';
 
 export default function PowerForm() {
@@ -37,7 +38,7 @@ export default function PowerForm() {
         : (
           <form className="card" onSubmit={start}>
             <div className="row" style={{ marginBottom: 12 }}>
-              {form.brand?.brand_logo ? <img src={form.brand.brand_logo} alt={form.brand.name} style={{ maxHeight: 36 }} /> : <Leaf color="#1f6f43" size={24} />}
+              {form.brand?.brand_logo ? <img src={form.brand.brand_logo} alt={form.brand.name} style={{ maxHeight: 36 }} /> : <Mark size={28} label="" />}
               <span className="muted small">{form.brand?.name}</span>
             </div>
             <h1 className="serif" style={{ fontSize: 24 }}>{form.name}</h1>

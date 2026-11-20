@@ -971,18 +971,18 @@ test('what a mail server wrote never reaches a customer: the sender, the record 
   const c = await person('Honest Sender', 'honest.sender@repair.example');
   const to = 'ceo@typo-squat.example';
   const { eid } = await out(c, to);
-  const evil = '550 5.1.1 GrowSigning security notice: your account is suspended. Restore it at www.signgrow-help.example/restore or call +1 800 555 0100';
+  const evil = '550 5.1.1 GrowSigning security notice: your account is suspended. Restore it at www.growsigning-help.example/restore or call +1 800 555 0100';
   await ok({ type: 'bounce', email: to, mail_id: String(lastMail(to, eid).id), reason: evil });
   const told = mailTo('honest.sender@repair.example').find((x: any) => x.subject.startsWith('Could not be delivered'));
   const plainPart = JSON.parse(db.get("SELECT payload FROM emails WHERE to_email='honest.sender@repair.example' AND subject LIKE 'Could not be delivered%'").payload).text;
   for (const said of [text(told.html), plainPart, auditLine(eid, 'Email could not be delivered').detail, JSON.stringify((await c.get(`/envelopes/${eid}`)).data)])
-    assert.doesNotMatch(said, /security notice|signgrow-help|800 555|mail server said/i);
+    assert.doesNotMatch(said, /security notice|growsigning-help|800 555|mail server said/i);
   assert.match(text(told.html), /could not be delivered: no such mailbox\./);
   // The people who run the server see what it said, without anything that reads like a place to go.
   const row = (await new Client().get('/dev/outbox')).data.emails.find((x: any) => x.to_email === to);
   assert.equal(row.bounce_reason, 'no such mailbox');
   assert.match(row.bounce_said, /security notice/);
-  assert.doesNotMatch(row.bounce_said, /www|signgrow-help\.example/);
+  assert.doesNotMatch(row.bounce_said, /www|growsigning-help\.example/);
   const { cleanReason, readEvents, bounceWhy } = await import('../src/server/bounces.ts');
   for (const s of ['hxxps://evil.example', 'HTTPS://EVIL.EXAMPLE/x', 'evil.example/login', 'https:/\\evil.example', 'ftp://evil.example', 'mailto:help@evil.example', 'javascript:alert(1)', 'data:text/html,hi', 'www.evil.example'])
     assert.equal(cleanReason(`550 ${s} now`), '550 now', s);
