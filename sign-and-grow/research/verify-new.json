@@ -1,0 +1,319 @@
+{
+ "verify:support": {
+  "checks": [
+   {
+    "item": "Every request has a reference, a status the customer sees, an owner (first name only), a priority by topic and a thread; internal notes never reach the customer",
+    "holds": true,
+    "evidence": "tests/out/verify-support/probe1.ts (K): after a note 'SECRET-NOTE' and a hand-over with text 'SECRET-HANDOVER-TEXT', neither string is in the link view, in GET /support/mine, or in any of the customer's emails; the link view has exactly 16 keys (no id, address, name, account). Browser run tests/out/verify-support/drive.cjs: all 11 states show reference, badge, state sentence and owner first name ('Maya is looking at this', 'Ravi still has it'). Author's 14 tests pass on the current tree.",
+    "still_broken": "What the operator is told about WHO wrote is wrong in two cases, see the separate check below."
+   },
+   {
+    "item": "What the operator is told about who wrote a request (signed in under own confirmed address, or not)",
+    "holds": false,
+    "evidence": "probe1.ts (A): POST /public/support with only 'Authorization: Bearer <send-scope API key>' and no email answers 200; the row has verified=1 and user_id set, the operator view says written='own' and first message via='app' (screen text: 'Written by someone signed in under this address, which they have confirmed', 'written while signed in'), and the acknowledgement mails the words back. probe4.ts (2): the same route with a customer's session cookie, Origin: https://evil.example and content-type text/plain answers 200 with verified=1, while POST /support/mine/x/reply with the same headers answers 403. probe2.ts (R2): a follow-up that came through the private link shows written='own' and via='form'.",
+    "still_broken": "A leaked or integration API key can file a request that the operator screen presents as written by the signed-in owner (the trust level that unlocks account talk and blocks the 'nobody wrote this' close). The file header says no API key may use these routes. The cross-site check that every signed-in route has is skipped here because the route is public, although it carries the session's identity.",
+    "suggested_fix": "In POST /public/support treat c.auth?.via === 'api_key' as not signed in (user_id null, verified false), or refuse it with the same 403 as person(). When a session cookie is present on this route, apply the router's Origin check before trusting c.user. Store how a follow-up arrived (link) and show that instead of 'signed in' and 'typed into the help form'."
+   },
+   {
+    "item": "Published response time (24 and 8 hours), the actual due time shown everywhere, honest lateness, one escalation per late ticket by the timer",
+    "holds": true,
+    "evidence": "probe1.ts (H): five requests made late, then three cron.tick() started at the same moment: late counts [2,2,1], exactly 20 new emails (per request: 1 to the customer, 1 to help@, 1 to each of 2 operators), further ticks send 0. H2: a customer adding to a late request keeps the same due time and stays late, no second escalation. H3: 'Mark as urgent' on a late request leaves the due time unchanged and causes no second escalation. Browser: form says 'Send it now and a person will have answered by Saturday 21 November, 12:47, your time'; ticket page, queue row ('Should have been answered by Friday 20 November, 13:43') and Your requests all show the stored time; late shows before the timer runs ('It is being passed to everyone') and after ('It has been passed ... and Ravi still has it'). With no support address and no operators (drive3.cjs) no time is promised on the page, form, result or ticket.",
+    "still_broken": "A two-character question ('??') stops the clock on a late request and removes the Late mark (H5). An operator's 'Open it again' sets a new due time and sends the customer nothing (H4). Rows from before this work have no due time and are never late (shown as 'No time was promised')."
+   },
+   {
+    "item": "Every answer is emailed in full",
+    "holds": true,
+    "evidence": "tests/out/verify-support/probe1b.ts: an answer with line breaks, a blank line, '<b>' and quotes arrives whole in the html part (white-space:pre-wrap, escaped as &lt;b&gt;) and in the plain text part, with the same private link as every other email of the request. Question, closing answer and 're-sent answer on close' covered by the author's tests, which pass.",
+    "still_broken": "Only when the mail server takes it. See the bug 'operator is told the customer has the answer when the mail server refused it'."
+   },
+   {
+    "item": "Private link: works without login, shows nothing but that ticket, cannot be guessed or reused for another ticket",
+    "holds": true,
+    "evidence": "Author's test (wrong key, another request's key, unknown id, the reference in place of the id: same 404). Mine: ids '%00' and \"' OR 1=1 --\" give 404 (probe1 J); an alert id gives 404; a row from before this work has no secret and opens only after an email made one (probe2 G4, F1). Key is 40 hex of HMAC-SHA256 over 'support-link:<id>'; I read every other hmac() call in src/server and none signs caller-chosen text under that prefix. Page head (drive2.cjs 6): meta referrer no-referrer, robots noindex,nofollow, no script or link from another host. The form answer carries no link (keys: due_at, priority, reference, reply_hours).",
+    "still_broken": "GET /public/support/ticket/%E0%A4%A/x answers 500 (the router's decodeURIComponent throws), and the page then says 'Nothing is wrong with your link. Check your connection and try again', which is untrue for a link mangled on the way. The link never expires while the request exists (author left this open)."
+   },
+   {
+    "item": "A reply reopens within 30 days; later it starts a new request that names the old one",
+    "holds": true,
+    "evidence": "probe2.ts (R3): closed_at set to 30 days minus 5 seconds, reply through the link reopens the same request. Browser (drive2.cjs 1): closed 31 days ago, the page says 'a reply now starts a new request', typing a reply moves the browser to the new request's own link and shows 'This continues your earlier request QBJ9E24C. The person who answers sees both.', no sideways scroll at 390.",
+    "still_broken": "A request closed before this work has no closed_at, so a reply 400 days later reopens the same request with a fresh 24 hour promise (probe2 G3). Through one old link 29 replies in a row each started a new request (58 emails to two operators), because the limit of 10 per request does not count them (probe2 R1)."
+   },
+   {
+    "item": "A ticket is never closed without a written answer (one stated exception, refused once the request is known to come from the owner of the address)",
+    "holds": false,
+    "evidence": "probe1.ts (L): eight doors are refused with 400 and the request stays open: {action:'close'}, {status:'closed'}, text of spaces, one character, answer:'', {status:'answered'}, text:[], and in the browser the closing box is required and a blank close shows the refusal. But {action:'close', text:{}} answers 200, closes the request and emails the customer 'Maya closed your request [object Object]' (L2). probe2.ts (G2): on a request from before this work that its owner wrote while signed in under their confirmed address, {action:'spam'} answers 200 and closes it without an answer.",
+    "still_broken": "Every row from before this work has verified=0, so the 'nobody at this address wrote this' close is allowed on requests the real, signed-in owner wrote, and the operator screen tells the operator they were 'not under this address as a confirmed one'. Text that is not a string is turned into '[object Object]' and counts as the written answer.",
+    "suggested_fix": "One-time backfill in db.ts: SET verified=1 where user_id names a login whose confirmed address equals the request's address. In POST /operator/support/:id refuse text that is not a string (typeof b.text === 'string')."
+   },
+   {
+    "item": "Operator routes: operators only (OPERATOR_EMAILS, confirmed address), no API key of any kind",
+    "holds": true,
+    "evidence": "Author's test covers no login (401), a stranger and an unconfirmed staff address (404), an operator's own send and admin keys (403) on five calls. Mine: the router rule /^[A-Z]+ \\/operator\\// is matched on the route, so the new GET and POST routes are covered; a customer key on GET /support/mine gives 403 (probe1 A2); a cross-site POST with a session to a signed-in route gives 403 (probe4 2); someone removed from OPERATOR_EMAILS gets 404 and owns nothing (author).",
+    "still_broken": "GET /operator/support?filter=constructor (also __proto__, toString, hasOwnProperty) answers 500 for an operator (probe4 1). Not a way in."
+   },
+   {
+    "item": "Payment alerts filed by tellOperators still show in the queue",
+    "holds": true,
+    "evidence": "probe1.ts (C) raises a real alert through billing.applyStripeEvent with tests/stripe-fake.ts: it is in the queue, alert=true, no due time, never late, cannot be answered by email, not listed by /public/support/find for the operator's address (probe2 F3, 0 emails), link 404. Browser: 'Alert' mark, only 'A note for operators' and 'A closing note' offered.",
+    "still_broken": "Two defects, both in new_bugs: an alert with no account shows the first operator's own workspace as 'the account' with a Trust button; closed alerts are deleted, and open ones marked 'this person has closed their account', when the first operator deletes their own login."
+   },
+   {
+    "item": "Honest median, only from 10 requests",
+    "holds": true,
+    "evidence": "Author's test (9 gives nothing, 10 gives 55 minutes, older than 30 days drops out, a note and taking do not count). Mine: alerts never get first_reply_at (the alert close branch does not set it); a request closed as 'not written by the owner' does not count; with nobody reachable the number is null (drive3.cjs).",
+    "still_broken": "A question counts as the first answer: ten requests each answered with the question '??' give median {minutes:0, count:10}, which the help page prints as 'of the 10 requests that got their first answer in that time, half had it within 1 minute' (probe4 4)."
+   },
+   {
+    "item": "Deleting an account removes its tickets and threads, except an unanswered one as stated",
+    "holds": true,
+    "evidence": "probe2.ts (S): after POST /me/delete I scanned every table for the person's name, address and words. Left: the one open request (forget=1, as stated), one operator note on ANOTHER customer's request that names her (free text an operator typed), and the 'account is closed' email. Closed and answered requests, their threads, the hand-over email naming her and the operator announcements were gone. Answering the kept request deleted it and its thread. probe3.ts (c): with a mail server in the loop our copies of the emails about it are gone too (copies_left: []).",
+    "still_broken": "The same code deletes or marks requests that belong to someone else's mailbox, see the bug 'a request written under another person's address'. Requests from people with no login are never deleted (author left this open)."
+   },
+   {
+    "item": "A stranger's words cannot reach someone's inbox under our name",
+    "holds": true,
+    "evidence": "probe2.ts (F1) and probe4.ts (5): for a request typed by a stranger the address receives 'We got your message', 'We are late with your request' and 'We closed request ... without an answer', and the 'links again' email; none contains a word of the message or the typed name. Line breaks typed into the message land in the stored subject of the operator email, but the real mail library flattens them: no injected Bcc header (probe1b.ts, nodemailer stream transport). Script and img tags are escaped in the operator email.",
+    "still_broken": "The stranger picks one word in the victim's email: any time zone name the server knows is printed, for example '(Zulu time)' or '(Navajo time)' (probe1 J). Harmless, but it is caller-chosen text."
+   },
+   {
+    "item": "Limits so the form and the link cannot flood operators or an inbox, without locking out a legitimate person",
+    "holds": false,
+    "evidence": "probe1.ts (B): Amy, signed in under her confirmed address, has one request on which we asked her a question. A stranger types her address into the form from 4 devices (8 an hour each): 29 requests accepted, then 429. Amy now has 32 emails from us, and every door is shut for her for 24 hours with 'We already have a lot of messages from this address': a new request while signed in (429), her answer to OUR question through the private link (429), the same through Your requests (429). Her request stays 'waiting'. probe4.ts (5): each stranger-typed request can bring the address three emails (acknowledgement, late notice, closed-without-answer note), so up to about 90 a day. probe2.ts (X): the stranger also learns how much the owner wrote today (owner wrote 12, stranger was stopped after 18).",
+    "still_broken": "The one counter (30 a day per address) mixes what anyone typed with what the proven owner writes, so it is both a flood allowance against a stranger's inbox and a switch that turns a customer's support off. The limits per request (10) and per device (8 an hour, 30 an hour, 120 an hour) hold as written.",
+    "suggested_fix": "Count requests typed by someone who is not known to own the address on their own, with a small cap (for example 3 a day and 3 open at once per address), and send one acknowledgement per address per few hours for those. Never count them against messages from the owner (signed in under the confirmed address, or through the link), and never refuse a reply to a question of ours for this reason."
+   },
+   {
+    "item": "POST /public/support/find tells nobody who has written to us",
+    "holds": false,
+    "evidence": "The answer is {ok:true} in every case and the limits apply the same way, but the time differs. tests/out/verify-support/probe3.ts runs the server against a local stand-in mail server that takes 250 ms per message: six addresses that wrote to us answered in 257 to 264 ms, six that never did in 1 ms each. sendMail() awaits the hand-over to the mail server before the route answers, and it is only called when something was found.",
+    "still_broken": "One request per address tells an outsider whether that address has written to support in the last 90 days (6 guesses an hour per device).",
+    "suggested_fix": "Answer first and send afterwards: record the email as queued and let the timer deliver it, or start sendMail without awaiting it (catching its error), so both cases take the same time."
+   },
+   {
+    "item": "POST /public/support/find cannot be used to flood an inbox",
+    "holds": true,
+    "evidence": "probe2.ts (F2): for one address from fresh devices 200, 200 after the first one, then 429, 429: three emails a day in all, whoever asks; other spellings of case hit the same limit; one device gets 6 an hour across addresses; eight bad addresses do not use up tries. One email however many requests (6 links in one). Browser: the fourth try shows 'We have already sent the links to this address a few times today'.",
+    "still_broken": "The counter lives in memory (rateLimit in util.ts), so a restart or a second process resets it. The email lists requests the address was told it would hear nothing more about (closed as 'I did not write to you' or as not theirs)."
+   },
+   {
+    "item": "The link that find sends is right",
+    "holds": true,
+    "evidence": "probe2.ts (F1): six requests under one address written with different capitals, in states open, waiting, closed as spam, disowned, and one row from before this work with no stored secret. One email to the lower-case address; each of the 6 links opens with 200 and shows the same reference as its label; the request older than 90 days is left out, as the page says; no words of any message in the email; no selling line. The author's test in tests/finish.test.ts passes and shows the link equals the one in the first email."
+   },
+   {
+    "item": "Customer's ticket page at 390x844 and desktop in the states new, taken, waiting for the customer, answered, late (before and after the timer), closed, reopened, closed as not theirs, solved, follow-up, wrong link, very long words",
+    "holds": true,
+    "evidence": "tests/out/verify-support/drive.cjs and drive2.cjs with Playwright: 24 screenshots, no sideways scroll, nothing sticking out, every button, box and link at least 44 px high at 390. State texts read back and match the state (said.json). A 260 character unbroken address and 120 W in a row wrap inside the card. Your requests under Help at 390: all four states listed and unfolded, no small targets."
+   },
+   {
+    "item": "Operator queue at 390x844 and desktop in the same states",
+    "holds": false,
+    "evidence": "drive.cjs: every state opens, marks (Late, Urgent, Alert), due times, owners, filters and the write box are right and tappable at 390, late ones lead. But a row whose writer typed a long name and address is cut off at the right edge at both sizes: the element ends at x=1176 on a 390 wide screen and x=1426 on a 1280 wide one (screenshots op-queue-all-phone.png and op-queue-all-desk.png: 'Maximiliana-Alexandrina Wolfeschleg' and '...@subdomain.subdoma' end at the card's edge). The opened request shows the name but nowhere the address.",
+    "still_broken": "The operator cannot read the full address the answer will go to. Name (120 characters) and address (254) are typed by anyone.",
+    "suggested_fix": "In support.css let the heading of a row wrap: .tk-line > span { min-width: 0 } and .tk-line b { overflow-wrap: anywhere }. Show the address in the opened request's facts as well."
+   },
+   {
+    "item": "Author's left_open items re-checked",
+    "holds": true,
+    "evidence": "'No tool to get the link sent again' is now closed by find. 'Lateness is noticed when the timer runs': the page and the queue say Late at once (computed on read), only the emails wait for the timer. 'Our stored copy of an email holds the link in clear': confirmed, emails.link and emails.html hold the working link. 'Requests from people with no account are never deleted': confirmed by reading, there is no clean-up. 'Two operators answering at the same moment both send' and 'no drafts': read in the code, not run. 'Priority can be gamed by topic': true, accepted by the author.",
+    "still_broken": "Nothing new beyond what is listed under new_bugs."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "A stranger can switch off a customer's support for the day and fill their inbox",
+    "severity": "high",
+    "where": "src/server/routes-support.ts: fromAddress() and its two uses (POST /public/support, customerReply)",
+    "detail": "Steps: Amy is signed in under her confirmed address and has a request on which an operator asked her a question. From 4 device addresses, post {email:'amy@cust.test', message:'filler filler filler filler'} to /api/public/support 8 times each. Result: 29 are accepted, Amy receives 29 acknowledgements (32 emails from us in all), and then for 24 hours Amy gets 429 'We already have a lot of messages from this address...' on a new request while signed in, on her answer to our question through the private link, and on the same through Your requests. Each of the 29 can also bring her a late notice and a closed-without-answer note. Probe: tests/out/verify-support/probe1.ts (B), probe4.ts (5). Fix: count requests from unknown writers separately with a small cap per address (per day and open at once), fold their acknowledgements into one email per few hours, and never count them against the proven owner or refuse an answer to our own question."
+   },
+   {
+    "title": "'Send me the links again' answers 250 times slower for an address that has written to us",
+    "severity": "medium",
+    "where": "src/server/routes-support.ts: route POST /public/support/find (await sendMail only when something was found)",
+    "detail": "Steps: run the server with a mail server that takes 250 ms per message (local stand-in, tests/out/verify-support/probe3.ts). Post six addresses that have a request and six that have none. Result: 257 to 264 ms against 1 ms, same body {ok:true}. So the form does tell who has written to us. Fix: answer before sending (queue the row for the timer, or do not await sendMail)."
+   },
+   {
+    "title": "An API key, or a cross-site post with a session, files a request marked as written by the signed-in owner",
+    "severity": "medium",
+    "where": "src/server/routes-support.ts: POST /public/support (known = c.user.email_verified && sameEmail); src/server/router.ts skips the Origin check for public routes",
+    "detail": "Steps: create a send-scope key, post {topic:'billing', message:'please move my plan to another card and refund the last payment'} to /api/public/support with only the Authorization header. Result: 200, verified=1, operator view written='own' ('Written by someone signed in under this address, which they have confirmed'), first message 'written while signed in', words mailed back. Second: the same route with a session cookie, Origin https://evil.example and content-type text/plain also gives 200 and verified=1, where a signed-in route gives 403. Probes: probe1.ts (A), probe4.ts (2). Fix: treat via 'api_key' as not signed in on this route (or 403), and run the Origin check whenever a session is used on it."
+   },
+   {
+    "title": "An alert with no account shows the first operator's own workspace as the account it is about, with a Trust button",
+    "severity": "medium",
+    "where": "src/server/routes-support.ts: accountFacts(); src/app/app/operator/tickets.tsx facts block",
+    "detail": "Steps: let the payment code file an alert that has no account (a paid invoice naming an unknown account). Open it as an operator. Result: the request view returns account {name: \"Maya Okafor's workspace\", via:'address'} because the alert is filed under the first address in OPERATOR_EMAILS and the code looks up the account owned by the login under the request's address. The screen reads 'Account Maya's workspace (owned by the login under this address) \u00b7 free plan \u00b7 ... Trust this account' (screenshot shots/op-alert-desk.png). An operator can trust, or misjudge, the wrong account. An alert that does have an account is labelled 'the one this was written from'. Probe: probe1.ts (C), drive2.cjs (4). Fix: for an alert use only its account_id, show no login, and word it 'the account this alert is about'."
+   },
+   {
+    "title": "A request written under another person's address is deleted with the writer's account, and that person is told they closed an account",
+    "severity": "medium",
+    "where": "src/server/routes-trust.ts purgeUser (matches by user_id, then sets forget=1); src/server/routes-support.ts FORGOTTEN text and forgetNow",
+    "detail": "Steps: Eve, signed in, writes under bea@cust.test. An operator asks Bea a question; Bea answers through the private link from her mailbox. Eve deletes her login. An operator answers. Result: the request was marked forget=1 at Eve's deletion; the answer email to Bea ends 'You closed your Sign&Grow account while this request was open. Now that it is answered we have deleted it', Bea's link gives 404 and the request with her words is gone. Had it been answered already, it would have been deleted at once. Probe: probe1.ts (E). Fix: in purgeUser, for rows matched only by user_id (the address is not the deleted login's confirmed address) just clear user_id and account_id and leave the request to the mailbox it belongs to."
+   },
+   {
+    "title": "The operator is told the customer has the answer when the mail server refused it, and nobody hears when it is given up",
+    "severity": "medium",
+    "where": "src/server/routes-support.ts: mail() ignores what sendMail returns; src/app/app/operator/tickets.tsx: 'Sent. The customer has it by email.'",
+    "detail": "Steps: a request from a mistyped address, mail server answers 550 to it, operator sends an answer. Result: 200, status 'answered', first_reply_at set (it counts in the published median), the email row is 'failed' with the server's words, nothing in the request's history says so, and the screen's message is fixed text. No listener records the outcome for help emails, so after the last retry nobody is told. For a request kept after account deletion the request is deleted while the answer has not left. Probe: probe3.ts (b, b2). Fix: use sendMail's status in the answer to the operator and in the history line, register onMailOutcome for these emails (history line and an email to the owner when given up), and delete a forgotten request only once its answer email is 'sent'."
+   },
+   {
+    "title": "A long name or address is cut off in the operator queue, and the address is shown nowhere else",
+    "severity": "medium",
+    "where": "src/app/styles/support.css (.tk-line, .tk-row); src/app/app/operator/tickets.tsx row heading",
+    "detail": "Steps: post a request with a 70 character name and a 150 character address, open /app/operator, filter All, at 390x844 and at 1280x900. Result: the bold heading does not wrap; it runs to x=1176 (phone) and x=1426 (desktop) and is clipped by the card. The opened request shows no address. Screenshots shots/op-queue-all-phone.png, shots/op-queue-all-desk.png. Fix: overflow-wrap:anywhere and min-width:0 on the heading, and print the address in the opened request."
+   },
+   {
+    "title": "Rows from before this work: treated as not written by their owner, and reopen for ever",
+    "severity": "low",
+    "where": "src/server/db.ts (no backfill for verified, closed_at); routes-support.ts forOperator written, spam check, customerReply",
+    "detail": "Steps: insert rows with exactly the columns the old code wrote (probe2.ts G). Result: a request its owner wrote while signed in under their confirmed address shows written='signed_in_other' and can be closed with {action:'spam'} (200, no answer). A request closed with the old one-click button shows the customer 'Closed with an answer' although nothing was written, and a reply 400 days later reopens it with a new 24 hour promise because closed_at is empty. Fix: backfill verified from user_id and the login's confirmed address; set closed_at for old closed rows; name their closing honestly."
+   },
+   {
+    "title": "When the first operator deletes their own login, handled alerts are deleted and open ones are marked as a customer who closed their account",
+    "severity": "low",
+    "where": "src/server/routes-trust.ts purgeUser; src/server/routes-billing.ts tellOperators files alerts under the first address",
+    "detail": "Steps: OPERATOR_EMAILS starts with zed@ops.test, two alerts are filed (email zed@ops.test), one is closed with a note, Zed deletes his login. Result: the closed alert and its note are gone from the queue; the open one has forget=1, so its screen shows 'This person has closed their account since... Your answer is emailed to them'. Probe: probe1.ts (D). Fix: leave alerts out of purgeUser (the same NOT(...) clause GET /support/mine uses), or file alerts under a fixed address that is nobody's login."
+   },
+   {
+    "title": "Closing with text that is not a string emails '[object Object]' as the answer",
+    "severity": "low",
+    "where": "src/server/routes-support.ts POST /operator/support/:id (str(b.text ?? b.answer))",
+    "detail": "Steps: as an operator post {action:'close', text:{}} to /api/operator/support/<id>. Result: 200, request closed, the customer receives 'Maya closed your request [object Object]'. Probe: probe1.ts (L, L2). Fix: require typeof text === 'string'."
+   },
+   {
+    "title": "The limit per address tells a stranger how much that address wrote to us today",
+    "severity": "low",
+    "where": "src/server/routes-support.ts POST /public/support (429 TOO_MANY from fromAddress)",
+    "detail": "Steps: the owner wrote 12 messages today; a stranger posts requests under that address until 429. Result: stopped after 18, so 30 minus 18 is what the owner wrote. Probe: probe2.ts (X). It goes away with the fix for the first bug."
+   },
+   {
+    "title": "Three 500 answers from odd input",
+    "severity": "low",
+    "where": "src/server/routes-support.ts FILTERS lookup; src/server/router.ts decodeURIComponent",
+    "detail": "GET /api/operator/support?filter=constructor (also __proto__, toString, hasOwnProperty) gives 500 'FILTERS[filter][1] is not iterable' for an operator (probe4.ts 1). GET /api/public/support/ticket/%E0%A4%A/x gives 500, and the ticket page then says nothing is wrong with the link (probe1.ts J). Fix: Object.hasOwn(FILTERS, name); catch the URIError in the router and answer 404 with the 'link does not open a request' text."
+   },
+   {
+    "title": "A question counts as the 'first answer' in the published number and stops the clock",
+    "severity": "low",
+    "where": "src/server/routes-support.ts: action 'ask' sets first_reply_at and due_at=NULL; src/app/help/tools.tsx ReplyRecord wording",
+    "detail": "Steps: ten requests, each answered with the question '??' right away. Result: GET /public/support median {minutes:0,count:10}; the help page prints 'of the 10 requests that got their first answer in that time, half had it within 1 minute'. A late request loses its Late mark the same way. Probe: probe4.ts (4), probe1.ts (H5). Fix: count only answers and closing answers as the first answer, or say 'first reply from a person' on the page; keep the lateness of a request on record when a question is sent after the due time."
+   },
+   {
+    "title": "Small wrong statements on the screens and in find",
+    "severity": "low",
+    "where": "routes-support.ts find and customerReply; src/app/help/RequestView.tsx; mail footer",
+    "detail": "The 'links again' email lists requests the address closed with 'I did not write to you' (after 'nothing more will be sent to you about it') and ones closed as not theirs (after 'We will not write to you about it again') (probe2.ts F1). Someone signed in who finds a stranger-typed request under Your requests has no 'I did not write to you', only 'This is solved'. Every help email ends 'Signed digitally, so no paper, no printer and no courier', which is about documents. Your requests writes dates as 'November 20, 2026' while every other support screen writes 'Friday 20 November'."
+   },
+   {
+    "title": "Requests from people with no login are kept for ever",
+    "severity": "low",
+    "where": "src/server/routes-support.ts supportTick (no clean-up); src/lib/policy.ts lists",
+    "detail": "Author left this open. A signer who writes once leaves name, address, message, time zone and the whole thread with no end date, and the emails table holds a working link to it for as long as our mail copies are kept. Fix: delete closed requests that belong to no login some time after the 30 days in which they can be reopened."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/server/routes-support.ts, comment on linkFor; README 'How support works'",
+    "claim": "The database only ever holds a fingerprint of the link's secret; the link is only ever in an email.",
+    "reality": "The emails table stores the working link in its link column and in the html of every email about the request (the author's own tests read it from there). Only the support_requests row holds just the fingerprint."
+   },
+   {
+    "where": "src/server/routes-support.ts, header comment",
+    "claim": "These routes are for people. No API key may use them.",
+    "reality": "POST /public/support accepts an API key and records the request as written by the signed-in owner of the key (verified=1, 'written while signed in')."
+   },
+   {
+    "where": "src/server/routes-support.ts comment on /public/support/find; help page text for the links form",
+    "claim": "The answer is the same whether or not there are any, so the form tells nobody who has written to us.",
+    "reality": "The body is the same; the time is not (about 260 ms against 1 ms with a 250 ms mail hand-over)."
+   },
+   {
+    "where": "src/app/app/operator/tickets.tsx KINDS.done",
+    "claim": "'Sent. The customer has it by email.' / 'Closed. The customer has the answer by email.'",
+    "reality": "Shown whatever the mail server said. With a refused address the email row is 'failed' and nobody is told when the retries end."
+   },
+   {
+    "where": "research/build-missing-partial.json, build:support, abuse 1",
+    "claim": "Typing a stranger's address to flood them is handled by 30 messages a day per address.",
+    "reality": "Thirty acknowledgements a day (plus late notices and closing notes, up to about 90) still reach the stranger, and the same counter locks the real owner out of support, including answering our own question."
+   },
+   {
+    "where": "src/server/routes-support.ts FORGOTTEN text",
+    "claim": "'You closed your Sign&Grow account while this request was open.'",
+    "reality": "It is also sent to a person who never had an account, when someone else wrote under their address and then deleted their own login."
+   },
+   {
+    "where": "src/app/help/tools.tsx ReplyRecord",
+    "claim": "'of the N requests that got their first answer in that time, half had it within X'",
+    "reality": "A question back to the customer counts as that first answer."
+   },
+   {
+    "where": "src/lib/support.ts standing(), default closing text",
+    "claim": "'Closed with an answer' for every closed request without a closing reason.",
+    "reality": "Requests closed with the old one-click button before this work show it too, with no written answer in them."
+   },
+   {
+    "where": "research/build-missing-partial.json, suite",
+    "claim": "npm test: 228 pass, 0 fail.",
+    "reality": "tests/support.test.ts: 14 of 14 pass now. tests/finish.test.ts: 7 of 8 pass; the failing one ('deleting a voided envelope that someone had already signed...') is not about support and looked like other people's work in progress (routes-envelopes.ts is being edited). The find test in that file passes."
+   },
+   {
+    "where": "help page and form result with no SUPPORT_EMAIL and no OPERATOR_EMAILS (drive3.cjs)",
+    "claim": "'We got your message. A person will read it and reply by email', 'One person has it', 'Every answer is emailed to you in full'.",
+    "reality": "In that set-up nobody is emailed and nobody can open the queue. No response time is promised then (that part is right), and the server log warns, but the visitor is still told a person will read it. The author's report says this wording was left as it was on purpose."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Mail server timing: I am fairly sure the find timing gap exists on any real set-up, because the route awaits the hand-over and a real hand-over takes from about 100 ms to seconds. I measured it only against a local stand-in on 127.0.0.1, not a real provider.",
+   "Refused mail: most real mail providers accept a message and bounce it later. Then the row says 'sent' and the support code never learns that an answer bounced. I could not see how src/server/bounces.ts is wired to help emails; I am unsure, leaning to 'the operator is never told'.",
+   "Header injection: line breaks typed into the form reach the stored subject of the operator email. I ran that subject through the real nodemailer library with its stream transport (no network): it flattens them and no Bcc header appears. Fairly sure this is safe as long as nodemailer is the only way mail leaves.",
+   "Device address behind a proxy: every per-device limit (8 requests an hour, 6 finds an hour, 120 link opens an hour) uses the entry of X-Forwarded-For that TRUSTED_PROXY_HOPS points at (default 1, the right-most). If the host adds more than one hop (a CDN in front of the platform's own proxy), every visitor may share one address and 8 requests an hour would be the limit for the whole world; with no proxy in front, a caller can type any address and has no per-device limit at all. I cannot see the real host's headers, so I am unsure which applies.",
+   "Limits kept in memory: find's 3 a day per address and 6 an hour per device are lost on every restart or deploy and are per process. On a host that restarts or sleeps often the real cap is higher than stated. Sure of the mechanism (rateLimit in util.ts), unsure how often the real host restarts.",
+   "Cross-site post: the session cookie is SameSite=Lax, which a browser does not send on a POST from another site, so the public form's missing Origin check is only reachable from a page on a sibling subdomain of the same registered domain. Whether such a page can exist depends on where the product is hosted, which I cannot check.",
+   "The private link depends on the server secret (APP_SECRET, or a file in DATA_DIR). If a deploy ever starts with a new secret, every link already emailed stops opening, and find would then send new ones. I cannot check how the real host keeps that secret.",
+   "While I worked, other engineers added to src/server/routes-support.ts, tickets.tsx and tools.tsx (a document code on the form with POST /public/support/about, a search box in the queue, references for alerts). I did not attack those additions. I re-ran the author's tests and all my probes on the tree as it stood at the end and every finding above reproduced."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-new-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-taken-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-waiting-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-answered-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-late-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-lateTold-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-closed-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-reopened-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-spam-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-long-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-solved-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-closed31-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-followup-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-wronglink-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-late-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/cust-long-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/your-requests-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/your-requests-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/help-form-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/find-form-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/find-result-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/nobody-sent-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/nobody-ticket-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-queue-open-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-queue-open-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-queue-all-phone.png (long name and address cut off)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-queue-all-desk.png (long name and address cut off)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-new-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-taken-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-waiting-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-answered-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-late-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-lateTold-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-closed-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-reopened-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-spam-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-long-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-alert-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-alert-desk.png (alert with no account shows the operator's own workspace and a Trust button)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/said.json and said2.json (the words each screen showed in each state)"
+  ]
+ }
+}
