@@ -947,3 +947,47 @@ test('the links sent again leave out what the address disowned or we closed as n
     assert.match(text(m.html), /Sent by the people who answer help requests at Sign&Grow\./);
   }
 });
+
+test('an API key, or a post from another site that carries a session, cannot file a request as the owner of an address', async () => {
+  const dev = await person('Dev Owner', 'dev.owner@cust.test');
+  const key = (await dev.post('/api-keys', { name: 'integration', scope: 'send' })).data.key;
+  const count = () => db.get("SELECT COUNT(*) n FROM support_requests WHERE email='dev.owner@cust.test'").n;
+  const inbox = mailTo('dev.owner@cust.test').length;
+  const keyed = await from().call('POST', '/public/support', { topic: 'billing', message: 'KEY-WORDS: please move my plan to another card.' }, { authorization: `Bearer ${key}` });
+  assert.equal(keyed.status, 403);
+  assert.match(keyed.data.error, /An API key cannot write help requests/);
+  // A page on another site, posting with the customer's session (text/plain, so the browser asks nobody first).
+  const body = { topic: 'billing', message: 'CROSS-SITE: change the email on my account to thief@evil.example' };
+  for (const origin of ['https://evil.example', 'null']) {
+    const r = await dev.call('POST', '/public/support', body, { origin, 'content-type': 'text/plain' });
+    assert.deepEqual([r.status, r.data.error], [403, 'Cross-site request blocked.'], origin);
+  }
+  assert.equal(count(), 0, 'nothing was filed');
+  assert.equal(mailTo('dev.owner@cust.test').length, inbox, 'and nothing mailed back');
+  // From our own page it works as before, and is marked as written by the signed-in owner.
+  const own = await dev.call('POST', '/public/support', body, { origin: 'http://test.local' });
+  assert.equal(own.status, 200, JSON.stringify(own.data));
+  const t = row(own.data.reference);
+  assert.deepEqual([t.verified, t.came_by], [1, 'signed_in']);
+  const v = await opView(maya, t.id);
+  assert.deepEqual([v.written, v.thread[0].via], ['own', 'app']);
+  // Without a key and without a session, anyone may still write, as anyone.
+  assert.equal((await from().post('/public/support', { email: 'dev.owner@cust.test', message: 'Typed by anyone, long enough.' })).status, 200);
+  assert.equal(row(db.get("SELECT ref FROM support_requests WHERE email='dev.owner@cust.test' ORDER BY at DESC LIMIT 1").ref).verified, 0);
+});
+
+test('a follow-up written through the private link is shown to the operator as coming through the link', async () => {
+  const t = await ask({ email: 'rex@cust.test', name: 'Rex', topic: 'sending', message: 'REX: first message here.' });
+  const id = row(t.reference).id;
+  await act(maya, id, { action: 'close', text: 'Closing answer.' });
+  const l = link('rex@cust.test', t.reference);
+  db.run('UPDATE support_requests SET closed_at=? WHERE id=?', new Date(Date.now() - 31 * 864e5).toISOString(), id);
+  const moved = await from().post(`${l.api}/reply`, { message: 'Writing again much later.' });
+  assert.ok(moved.data.moved);
+  const fresh = row(moved.data.reference);
+  assert.deepEqual([fresh.verified, fresh.came_by], [1, 'link']);
+  const v = await opView(maya, fresh.id);
+  assert.deepEqual([v.written, v.thread[0].via], ['link', 'link'], 'not "signed in" and not "typed into the form"');
+  // Known to be from the mailbox, so it cannot be closed as "nobody at this address wrote this".
+  assert.equal((await act(maya, fresh.id, { action: 'spam' })).status, 400);
+});

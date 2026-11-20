@@ -7,6 +7,8 @@ import { QrDialog } from './QrDialog';
 import { IN_PERSON_LOCK } from '@/lib/phone';
 import { BackNews, MailStopHint, TryAgainButton, deliveredLine } from './MailNews';
 import { ownLink, ownLinkFact, OwnLinkActions } from './OwnLink';
+import { GroupMembers } from './GroupMembers';
+import { actingName } from '@/lib/groups';
 
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent' };
 const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view' };
@@ -190,7 +192,9 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
         // Once they have opened it they clearly have the link, however the email fared.
         const undelivered = turn && r.status === 'sent' && r.role !== 'inperson' && !!mail && (mail.status === 'outbox' || mail.status === 'failed');
         const b = badge(r, e.status, mail);
-        const reachable = turn && !isMe && r.role !== 'inperson' && !own;
+        // A signing group nobody has taken on has no link of its own: each member's is on its card (GroupMembers.tsx).
+        const openGroup = !!r.group_name && !r.claimed_by;
+        const reachable = turn && !isMe && r.role !== 'inperson' && !own && !openGroup;
         const before = e.ordered ? e.recipients.filter((x: any) => x.routing_order < r.routing_order && x.status !== 'completed' && x.role !== 'cc') : [];
         const p = r.progress;
         return (
@@ -199,9 +203,9 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               {!!e.ordered && <span className="sn-step" aria-label={`Step ${r.routing_order}`}>{r.routing_order}</span>}
               <div className="grow">
                 <div className="sn-person-name">
-                  <b>{r.name || r.role_name || `Recipient ${i + 1}`}</b>
+                  <b>{actingName(r) || r.role_name || `Recipient ${i + 1}`}</b>
                   {isMe && <span className="muted"> (you)</span>}
-                  <span className="sn-person-email">{own ? 'No email address. You send the link.' : r.email}</span>
+                  <span className="sn-person-email">{own ? 'No email address. You send the link.' : openGroup ? 'A group: every member has their own email' : r.email}</span>
                 </div>
                 <div className="muted small">
                   {ROLE_LABEL[r.role]}
@@ -240,6 +244,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               {r.status === 'declined' && <div><dt>Declined</dt><dd>On {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</dd></div>}
             </dl>
 
+            {!!r.group_name && <GroupMembers e={e} r={r} deliveries={deliveries} onChanged={onChanged} />}
             {stale && (
               <p className="sn-hint warn">
                 <b>Not opened in {howLong(r.sent_at)}.</b> It may be in their spam folder. {r.muted ? 'Send them the link yourself:' : 'Nudge them, or send the link yourself:'}
@@ -273,7 +278,9 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                 {reachable && <button className="btn sm qr-tap" disabled={!!busy} onClick={(ev) => showQr(r, ev.currentTarget)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link for ${r.name}`}>Show QR code</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>Share on WhatsApp</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'sms')} aria-label={`Share link with ${r.name} by text message`}>Share by text message</button>}
-                <button className="btn sm" disabled={!!busy} onClick={() => onCorrect(r)} aria-label={`Correct name or email of ${r.name}`}>Correct</button>
+                {/* A group has no single name or address to correct: only its access code (members: Edit envelope). */}
+                {r.group_name ? <button className="btn sm" disabled={!!busy} onClick={() => onCorrect({ ...r, code_only: true })} aria-label={`Change the access code of ${r.group_name}`}>Access code</button>
+                  : <button className="btn sm" disabled={!!busy} onClick={() => onCorrect(r)} aria-label={`Correct name or email of ${r.name}`}>Correct</button>}
               </div>
             )}
             {/* An access code can still be changed when nothing else can: for someone who has finished, and once the

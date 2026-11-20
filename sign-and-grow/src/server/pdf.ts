@@ -167,9 +167,10 @@ async function image(ctx: Ctx, dataUrl: string | null | undefined) {
 export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null, senderTz?: string | null): string {
   switch (f.type) {
     // For a group the sender named nobody. Its name and email fields are filled in like a date of signing: with the
-    // member who acted, once that person has finished (see printedWords in envelopes.ts).
-    case 'full_name': return (r?.group_name && r.status !== 'completed' ? '' : r?.name) || '';
-    case 'email': return (r?.group_name && r.status !== 'completed' ? '' : r?.email) || '';
+    // member who acted, once that person has finished (see printedWords in envelopes.ts). So are a witness's: who
+    // witnesses can still change until they have.
+    case 'full_name': return ((r?.group_name || r?.role === 'witness') && r.status !== 'completed' ? '' : r?.name) || '';
+    case 'email': return ((r?.group_name || r?.role === 'witness') && r.status !== 'completed' ? '' : r?.email) || '';
     case 'date_signed': return r?.completed_at ? formatDate(r.completed_at, dateFormat, validZone(r.tz) || senderTz) : '';
     case 'date': return formatDateValue(f.value, dateFormat);
     default: return f.value || '';
