@@ -21,7 +21,7 @@ import { hiddenOf } from './logic.ts';
 // A company stamp on the page, printed like ink (src/server/stamps.ts). Not the large "VOIDED" mark of stamp.ts.
 import { BlendMode } from 'pdf-lib';
 import { stampPng, stampCertLines, senderStampCertLines, stampCertNote } from './stamps.ts';
-import { STAMP_OPACITY } from '../lib/stamps.ts';
+import { STAMP_OPACITY, stampTurn } from '../lib/stamps.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -240,8 +240,12 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
     if (!img) return;
     const s = Math.min(vw / img.width, vh / img.height);
     const w = img.width * s, h = img.height * s;
-    const p = m.pt(vx + (vw - w) / 2, vy + (vh + h) / 2);
-    page.drawImage(img, { x: p.x, y: p.y, width: w, height: h, rotate: m.rotate, opacity: STAMP_OPACITY, blendMode: BlendMode.Multiply });
+    // Turned about its middle by its natural tilt, clockwise as the page is looked at, as the signing screen turns
+    // it: the design keeps the size of its field, and its turned corners may reach a little past it.
+    const turn = stampTurn(f.stamp_meta), t = (turn * Math.PI) / 180, cos = Math.cos(t), sin = Math.sin(t);
+    const cx = vx + vw / 2, cy = vy + vh / 2;
+    const p = m.pt(cx - (w / 2) * cos - (h / 2) * sin, cy - (w / 2) * sin + (h / 2) * cos);
+    page.drawImage(img, { x: p.x, y: p.y, width: w, height: h, rotate: degrees(m.rotate.angle - turn), opacity: STAMP_OPACITY, blendMode: BlendMode.Multiply });
     return;
   }
   // A strike-out: the sender's line through wording printed on the page. The same shape the signing screen shows

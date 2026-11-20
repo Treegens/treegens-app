@@ -215,14 +215,14 @@ const CONSENT_WORDINGS: Record<string, Record<string, (sender: string, signs: bo
     legal: `You are about to review${signs ? ' and sign' : ''} this document on screen. An electronic signature has the same legal effect as a handwritten one.`,
     practical: `You can download or print a copy before you ${signs ? 'sign' : 'finish'}, and afterwards you can download what you ${signs ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask ${sender} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.`,
     agree: 'I agree to use electronic records and signatures.',
-  }),
-  '2026-11': (sender, signs) => ({
+  }) },
+  '2026-11': { en: (sender, signs) => ({
     legal: signs
       ? `You are about to review and sign this document on screen, with a simple electronic signature: your name or mark on the page and a record of when and from where you signed. In many countries a signature like this can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not know which kind this document is. If you are not sure, ask ${sender} or a lawyer before you sign. By continuing, you accept this electronic method as a valid way for you and the other parties to sign this document.`
       : `You are about to review this document on screen. What you do here is recorded electronically, not on paper. In many countries that can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not know which kind this document is. If you are not sure, ask ${sender} or a lawyer before you continue.`,
     practical: `You can download or print a copy before you ${signs ? 'sign' : 'finish'}, and afterwards you can download what you ${signs ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask ${sender} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.`,
     agree: 'I agree to use electronic records and signatures.',
-  }),
+  }) },
 };
 /** Whether a version is one we have shown. A screen that was open across a change of wording sends its own. */
 export const isConsentVersion = (v: unknown): v is string => typeof v === 'string' && v !== UNVERSIONED_CONSENT && Object.hasOwn(CONSENT_WORDINGS, v);
