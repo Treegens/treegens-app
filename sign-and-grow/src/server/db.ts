@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS bulk_batches (
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY, account_id TEXT, amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  account_id TEXT NOT NULL, key TEXT NOT NULL, envelope_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (account_id, key)
+);
 CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, retired_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS abuse_reports (
   id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL, account_id TEXT NOT NULL, reporter TEXT, reason TEXT NOT NULL, detail TEXT,

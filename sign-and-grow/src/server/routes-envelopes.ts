@@ -92,6 +92,13 @@ route('GET', '/inbox', (c) => {
 route('POST', '/envelopes', async (c) => {
   const b = await c.body();
   const kind = b.kind === 'template' ? 'template' : 'envelope';
+  // A retried or timed-out call with the same Idempotency-Key gets the first envelope back instead of sending twice.
+  const idem = str(c.req.headers.get('idempotency-key'), 200).trim();
+  if (idem) {
+    const done = get('SELECT envelope_id FROM idempotency_keys WHERE account_id=? AND key=?', c.account.id, idem);
+    const prior = done && loadEnvelope(done.envelope_id);
+    if (prior) return new Response(JSON.stringify({ envelope: publicEnvelope(prior) }), { headers: { 'content-type': 'application/json; charset=utf-8', 'idempotent-replay': 'true' } });
+  }
   let eid: string;
   if (b.template_id) {
     const tpl = mine(c, str(b.template_id), 'template');
@@ -100,6 +107,7 @@ route('POST', '/envelopes', async (c) => {
     eid = createEnvelope(c.account, c.user.id, kind, b);
     if (b.documents || b.recipients || b.fields) saveDraft(loadEnvelope(eid), b, c.account.id);
   }
+  if (idem) run('INSERT OR IGNORE INTO idempotency_keys (account_id, key, envelope_id, at) VALUES (?,?,?,?)', c.account.id, idem, eid, now());
   if (b.send && kind === 'envelope') await sendEnvelope(eid, c.actor);
   return { envelope: publicEnvelope(loadEnvelope(eid)) };
 });

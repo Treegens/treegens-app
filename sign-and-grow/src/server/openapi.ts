@@ -29,7 +29,7 @@ export function openapi() {
     components: {
       securitySchemes: { apiKey: { type: 'http', scheme: 'bearer', description: 'An API key from Settings, API and webhooks. Send it as "Authorization: Bearer tsk_...".' } },
       schemas: {
-        Error: { type: 'object', required: ['error'], properties: { error: str } },
+        Error: { type: 'object', required: ['error'], properties: { error: { ...str, description: 'What went wrong and what to do about it, written for people.' }, request_id: { ...str, description: 'Also sent as the X-Request-Id header. Quote it when asking for help.' } } },
         File: { type: 'object', properties: { id: str, name: str, pages: { type: 'integer' }, page_sizes: { type: 'array', items: { type: 'object', properties: { w: { type: 'number' }, h: { type: 'number' } } } } } },
         Document: { type: 'object', required: ['file_id'], properties: { id: { ...str, description: 'Your own id, used by fields to point at this document. Optional.' }, file_id: str, name: str, pages: { type: 'integer', readOnly: true } } },
         Recipient: {
@@ -77,7 +77,7 @@ export function openapi() {
       '/files': { post: { summary: 'Upload a PDF, PNG or JPEG (up to 25 MB, 500 pages)', requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } } } } }, responses: ok(ref('File')) } },
       '/envelopes': {
         get: { summary: 'List envelopes or templates', parameters: [{ name: 'kind', in: 'query', schema: { type: 'string', enum: ['envelope', 'template'] } }, { name: 'box', in: 'query', schema: { type: 'string', enum: ['all', 'drafts', 'sent', 'waiting', 'completed', 'closed'] } }, { name: 'q', in: 'query', schema: str }, { name: 'folder', in: 'query', schema: str }, { name: 'limit', in: 'query', schema: { type: 'integer', maximum: 200 } }, { name: 'offset', in: 'query', schema: { type: 'integer' } }], responses: ok({ type: 'object', properties: { envelopes: { type: 'array', items: ref('Envelope') }, folders: { type: 'array', items: str } } }) },
-        post: { summary: 'Create a draft, or create from a template; add "send": true to send it at once', requestBody: body({ allOf: [ref('EnvelopeInput'), { type: 'object', properties: { send: { type: 'boolean' }, template_id: str, recipients: { description: 'With template_id: an object from role name to {name, email}. Otherwise an array of recipients.' } } }] }), responses: ok({ type: 'object', properties: { envelope: ref('Envelope') } }) },
+        post: { summary: 'Create a draft, or create from a template; add "send": true to send it at once', parameters: [{ name: 'Idempotency-Key', in: 'header', description: 'Any unique string. Repeating a call with the same key returns the first envelope instead of creating another.', schema: str }], requestBody: body({ allOf: [ref('EnvelopeInput'), { type: 'object', properties: { send: { type: 'boolean' }, template_id: str, recipients: { description: 'With template_id: an object from role name to {name, email}. Otherwise an array of recipients.' } } }] }), responses: ok({ type: 'object', properties: { envelope: ref('Envelope') } }) },
       },
       '/envelopes/{id}': {
         parameters: [idParam],

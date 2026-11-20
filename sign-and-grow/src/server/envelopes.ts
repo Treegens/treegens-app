@@ -364,6 +364,16 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   });
   fireWebhooks(e.account_id, 'envelope.sent', e.id);
   await advance(e.id);
+  // The free allowance never ends as a surprise: a heads-up at 80% and again when it is used up.
+  if (billingEnabled() && account.plan === 'seedling') {
+    const limit = PLANS.seedling.envelopesPerMonth;
+    const used = usageThisMonth(account.id);
+    if (used === limit || used === Math.ceil(limit * 0.8))
+      await sendMail({ to: sender.email, subject: used === limit ? 'You have used this month\'s free envelopes' : `${used} of ${limit} free envelopes used this month`,
+        heading: used === limit ? 'That was your last free envelope this month' : 'You are close to this month\'s free limit',
+        lines: [`${account.name} has used ${used} of ${limit} envelopes on the free Seedling plan. The count starts again on ${usageResetsAt().slice(0, 10)}.`, 'Nothing extra is ever charged. When the limit is reached, sending simply pauses until the reset or until you choose Grove. Voided, declined and expired envelopes do not count, and signing your own documents is always free.'],
+        cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
+  }
 }
 
 type Notice = 'new' | 'reminder' | 'updated' | 'reopened' | 'expiring' | 'resent';

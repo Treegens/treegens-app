@@ -68,6 +68,8 @@ test('the free plan is a hard stop, never a bill, and only real envelopes count'
   assert.equal((await owner.get('/billing')).data.used, 0);
   for (let i = 0; i < 5; i++) assert.equal((await send(`b${i}@example.com`)).res.status, 200, `send ${i + 1} of 5`);
   assert.deepEqual([(await owner.get('/billing')).data.used, (await owner.get('/billing')).data.limit], [5, 5]);
+  const heads = mailTo('olive@example.com').map((m) => m.subject);
+  assert.ok(heads.includes('4 of 5 free envelopes used this month') && heads.includes("You have used this month's free envelopes"), 'warned at 80% and at the limit');
   const over = await send('c@example.com');
   assert.equal(over.res.status, 402);
   assert.match(over.res.data.error, /Nothing extra is ever charged/);

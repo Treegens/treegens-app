@@ -269,3 +269,17 @@ test('the published API description matches the routes that exist', async () => 
   const text = JSON.stringify(spec);
   for (const m of text.matchAll(/#\/components\/schemas\/(\w+)/g)) assert.ok((spec.components.schemas as any)[m[1]], `dangling schema ${m[1]}`);
 });
+
+test('retries are safe and every answer can be traced', async () => {
+  const file = await upload(sender, 1);
+  const body = { subject: 'Once only', send: true, documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Ida Once', email: 'ida@example.com' }], fields: [{ document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] };
+  const a = await sender.call('POST', '/envelopes', body, { 'idempotency-key': 'retry-1' });
+  const b = await sender.call('POST', '/envelopes', body, { 'idempotency-key': 'retry-1' });
+  assert.equal(a.data.envelope.id, b.data.envelope.id, 'the retry returns the first envelope');
+  assert.equal(db.all("SELECT id FROM emails WHERE to_email='ida@example.com'").length, 1, 'and nothing is sent twice');
+  const c = await sender.call('POST', '/envelopes', body, { 'idempotency-key': 'retry-2' });
+  assert.notEqual(c.data.envelope.id, a.data.envelope.id);
+  const missing = await sender.get('/envelopes/env_nope');
+  assert.equal(missing.status, 404);
+  assert.match(missing.data.request_id, /^req_/);
+});

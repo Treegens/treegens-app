@@ -1,5 +1,5 @@
 import { authenticate, type Auth } from './auth.ts';
-import { HttpError, bad, setOrigin } from './util.ts';
+import { HttpError, bad, setOrigin, id } from './util.ts';
 import type { Actor } from './envelopes.ts';
 
 export type Ctx = {
@@ -59,6 +59,8 @@ export async function handle(req: Request): Promise<Response> {
   const origin = `${proto}://${host}`;
   setOrigin(origin);
   const cookies: string[] = [];
+  // Every answer carries an id that also appears in the server log, so "it failed at 3pm" becomes findable.
+  const requestId = id('req');
   try {
     for (const r of routes) {
       if (r.method !== req.method) continue;
@@ -94,12 +96,13 @@ export async function handle(req: Request): Promise<Response> {
       const out = await r.fn(c);
       const res = out instanceof Response ? out : json(out ?? { ok: true });
       for (const ck of cookies) res.headers.append('set-cookie', ck);
+      res.headers.set('x-request-id', requestId);
       return res;
     }
-    return json({ error: 'Not found' }, 404);
+    return json({ error: 'Not found', request_id: requestId }, 404, { 'x-request-id': requestId });
   } catch (e: any) {
-    if (e instanceof HttpError) return json({ error: e.message }, e.status);
-    console.error('[api]', req.method, path, e);
-    return json({ error: 'Something went wrong on our side. Please try again.' }, 500);
+    if (e instanceof HttpError) return json({ error: e.message, request_id: requestId }, e.status, { 'x-request-id': requestId });
+    console.error('[api]', requestId, req.method, path, e);
+    return json({ error: `Something went wrong on our side. Please try again. If it keeps happening, tell us this reference: ${requestId}.`, request_id: requestId }, 500, { 'x-request-id': requestId });
   }
 }
