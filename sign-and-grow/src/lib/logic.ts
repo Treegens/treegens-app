@@ -786,10 +786,17 @@ export function dropField(list: any[], fid: string, name: (f: any) => string): {
  * the other for not ticked, or filled and empty, or two different answers. Only one of them is ever on the page, so
  * they may sit in the same place (stackedFields in src/lib/stacked.ts).
  */
-export function neverTogether(a: any, b: any): boolean {
+export function neverTogether(a: any, b: any, all?: any[]): boolean {
   const x = ruleOf(a), y = ruleOf(b);
   if (!x || !y || x.field !== y.field) return false;
   const pair = (p: Cond, q: Cond) => (x.is === p && y.is === q) || (x.is === q && y.is === p);
-  const same = fold(x.value) === fold(y.value);
-  return pair('checked', 'unchecked') || pair('filled', 'empty') || (x.is === 'equals' && y.is === 'equals' && !same) || (pair('equals', 'not_equals') && same);
+  // A number field is compared as a number, the way the rule itself is (holds in workOut): '1.000' and '1000' are
+  // one answer, and so are '5' and '5.0'. Without the field to look at, two values only count as different answers
+  // when they differ as words and as numbers.
+  const parent = all?.find((f) => f?.id === x.field);
+  const nx = readNumber(x.value)?.value, ny = readNumber(y.value)?.value;
+  const sameNumber = nx != null && ny != null && nx === ny;
+  const same = parent?.type === 'number' ? sameNumber || fold(x.value) === fold(y.value) : fold(x.value) === fold(y.value);
+  const differ = parent?.type === 'number' ? !sameNumber : !same && (parent ? true : !sameNumber);
+  return pair('checked', 'unchecked') || pair('filled', 'empty') || (x.is === 'equals' && y.is === 'equals' && differ) || (pair('equals', 'not_equals') && same);
 }

@@ -867,6 +867,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // where it came from, who put it on and when.
   ['fields', 'stamp_id', 'TEXT'],
   ['fields', 'stamp_meta', 'TEXT'],
+  // fields.calc_num: what a calculated field worked out to, written plainly (1234.5, a dot before decimals, no
+  // grouping), next to the value that shows it the way its inputs are written (1.234,50). Every later reader takes
+  // the number from here, because a shown "1.233" alone could mean 1233 (src/lib/logic.ts canonOf).
+  ['fields', 'calc_num', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

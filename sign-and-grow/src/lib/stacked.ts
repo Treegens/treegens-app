@@ -63,7 +63,7 @@ export function stackedFields(fields: F[], recipients: { id: string; name?: stri
       if (i === j || a.recipient_id !== b.recipient_id || !samePage(a, b) || !over(b, j, a, i)) continue;
       // Two fields that are never shown at the same time ("company name" when a box is ticked, "your name" when it is
       // not) may share a place: only one of them is ever on the page (src/lib/logic.ts).
-      if (neverTogether(a, b)) continue;
+      if (neverTogether(a, b, fields)) continue;
       covered += common(a, b);
     }
     if (covered / area(a) <= STACK_SHARE) continue;

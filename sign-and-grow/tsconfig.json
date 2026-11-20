@@ -56,7 +56,9 @@
     ".next-repair-qr-encrypt/types/**/*.ts",
     ".next-repair-qr-encrypt/dev/types/**/*.ts",
     ".next-build-stamp/types/**/*.ts",
-    ".next-build-stamp/dev/types/**/*.ts"
+    ".next-build-stamp/dev/types/**/*.ts",
+    ".next-repair-signin/types/**/*.ts",
+    ".next-repair-signin/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
