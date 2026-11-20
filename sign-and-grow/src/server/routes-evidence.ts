@@ -2,7 +2,7 @@ import { route } from './router.ts';
 import { get } from './db.ts';
 import { bad, str, rateLimit, parseCode, sha256 } from './util.ts';
 import { loadEnvelope } from './envelopes.ts';
-import { lookupEnvelope, disputeEnvelope, evidencePack } from './evidence.ts';
+import { lookupEnvelope, disputeEnvelope, disputeReplaced, disputesFor, evidencePack } from './evidence.ts';
 import { find } from './routes-sign.ts';
 import { memberForCode } from './groups.ts';
 import { mine } from './routes-envelopes.ts';
@@ -28,10 +28,13 @@ route('POST', '/public/check/dispute', async (c) => {
     return disputeEnvelope(e, member, b, { name: `Someone holding the email to ${member.email}`, ip: c.ip, ua: c.ua }, 'check');
   }
   if (!row) {
-    // A real email whose link was replaced since, or whose document was deleted: there is no longer a place on a
-    // document that this code speaks for, so the person is sent to someone who can look.
-    const known = get('SELECT 1 x FROM retired_tokens WHERE check_code=?', code) || get('SELECT 1 x FROM forgotten_codes WHERE code_hash=?', sha256(code));
-    throw bad(known ? 'That code is from an email we really sent, but it no longer stands for anyone on a document: the address was changed, the document was passed on, or it was deleted. So nothing can be marked here. Write to us on the help page with the topic "I am named on a document I did not sign", and a person will look.'
+    // A real email whose link was replaced since: the person it was sent to can always dispute with it, also after
+    // the sender put another address in their place (disputeReplaced in evidence.ts). The latest one, if the same
+    // code was ever retired twice.
+    const old = get('SELECT * FROM retired_tokens WHERE check_code=? ORDER BY retired_at DESC LIMIT 1', code);
+    if (old) return disputeReplaced(old, b, { name: '', ip: c.ip, ua: c.ua }, 'check');
+    // A document deleted before anyone disputed it: nothing is left to mark (an open dispute stops a deletion).
+    throw bad(get('SELECT 1 x FROM forgotten_codes WHERE code_hash=?', sha256(code)) ? 'That code is from an email we really sent, but the document it was about was deleted before anyone disputed it, so nothing is left to mark. Write to us on the help page with the topic "I am named on a document I did not sign", and a person will look.'
       : 'We do not recognise that security code. Check that you typed it exactly as it appears in the email.', 404);
   }
   const e = loadEnvelope(row.envelope_id);
@@ -49,12 +52,23 @@ route('GET', '/envelopes/:id/evidence', async (c) => {
   return new Response(zipStream(entries), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="${name.replace(/[^\w .()-]+/g, '_')}"` } });
 });
 
+// The disputes on an envelope, for whoever may open it: when, under which name, how they reached us, what they
+// wrote, and whether a person at Sign&Grow has closed it. Never the internet address or browser (disputesFor).
+route('GET', '/envelopes/:id/disputes', (c) => {
+  const e = mine(c, c.params.id, 'envelope', { removed: true });
+  return { disputes: disputesFor(e.id) };
+});
+
 // From the signing page, with the link. No access code or one-time code is asked for first: someone whose name was
 // used may never have been given the code, and saying "this was not me" opens nothing.
 route('POST', '/sign/:token/dispute', async (c) => {
-  find(c, false);
+  // A link that was replaced since (the address was changed, the document was passed on through it): the person it
+  // was sent to can still say it was not them, like with the security code of that email (disputeReplaced).
+  const old = get('SELECT * FROM retired_tokens WHERE token=?', c.params.token);
+  if (!old) find(c, false);
   rateLimit(`dispute:${c.ip}`, 10, 3600_000);
   const b = await c.body();
+  if (old) return disputeReplaced(old, b, { name: '', ip: c.ip, ua: c.ua }, 'sign');
   const { e, r, actor } = find(c, false);
   return disputeEnvelope(e, r, b, actor, 'sign');
 }, 'public');

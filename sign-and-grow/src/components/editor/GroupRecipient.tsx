@@ -8,7 +8,7 @@ import { MAX_RECIPIENTS, plural, type Ed } from './shared';
 // A recipient that is a signing group, in step 1 of the editor: any one of its members can act for it. On a draft
 // or template it only names the account's group and follows it. On an envelope that is out (a correction) its
 // members are the people it went out with, and the sender can change them here: someone added is emailed their own
-// link when the correction is saved, someone taken out loses theirs. The server sets the name and the address of
+// link when the correction is saved if the group can act (otherwise when it can), someone taken out loses theirs. The server sets the name and the address of
 // a group recipient itself and checks every rule again (src/server/groups.ts).
 
 type Member = { id?: string; name: string; email: string; sent_at?: string | null; viewed_at?: string | null };
@@ -127,7 +127,7 @@ function MembersEditor({ members, onChange, done }: { members: Member[]; onChang
         ))}
       </ol>
       {members.length < GROUP_MAX_MEMBERS && <button type="button" className="btn" onClick={() => onChange([...members, { name: '', email: '' }])}>Add a member</button>}
-      <p className="muted small" style={{ margin: '8px 0 0' }}>When you save, someone you add is emailed their own link, and someone you take out is told they no longer need to act. If you take out the person who took it on, the whole group is asked again.</p>
+      <p className="muted small" style={{ margin: '8px 0 0' }}>Someone you add is emailed their own link when you save, if nobody has taken it on and it is the group&apos;s turn. If a colleague has taken it on, they are emailed when it comes back to the group. Someone you take out is told they no longer need to act. If you take out the person who took it on, the whole group is asked again.</p>
     </fieldset>
   );
 }

@@ -8,7 +8,8 @@ type Answer = { pay: Pay | null; later?: string | null };
 
 // The sender's own payment page, offered on the last screen to someone who signs, after they pressed Finish. The
 // server decides whether there is one to show (GET /sign/:token/pay in src/server/routes-paylink.ts): it never is
-// before Finish, never in an email, and never for an account that has not earned trust. This screen names the
+// before Finish, never in an email or a certificate, never to the sender's own team, and never for an account that
+// has not earned trust or an address whose name leads into a private network. This screen names the
 // sender and prints the whole address before the button, so nobody has to trust a button they cannot read.
 export function PayLink({ base }: { base: string }) {
   const [got, setGot] = useState<Answer | null>(null);

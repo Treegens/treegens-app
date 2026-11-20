@@ -14,7 +14,7 @@ import { hmac, safeEqual } from './util.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine, mailStop, mailStopText } from './bounces.ts';
 import { correctWithCheck, assertBulkChecks, bulkChecksRefusal, assertFormChecks, textsOf } from './signercode.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
-import { memberLink, memberInbox, groupReach, assertNoGroupCheck, membersNotReminded } from './groups.ts';
+import { memberLink, memberInbox, groupReach, assertNoGroupCheck, membersNotReminded, assertTemplateGroups } from './groups.ts';
 import { assertBySenderCorrection } from './bysender.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { cookie, readCookie } from './auth.ts';
@@ -26,6 +26,7 @@ import { PRICING } from '../lib/impact.ts';
 import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
+import { reminderText } from '../lib/policy.ts';
 import { keptOnDelete } from './deleting.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner, noteCopy, copyIsTheirs, fileHeldBack, templateGoes, assertCorrectionKept, asMember, forRows, askWho } from './tplroles.ts';
@@ -232,6 +233,8 @@ route('POST', '/envelopes', async (c) => {
     const tpl = mine(c, str(b.template_id), 'template');
     // A locked template keeps its own message for whoever may not change it. The subject is the envelope's name.
     assertMessageKept(c, tpl, b.message);
+    // A person named for a group's role, and (when sending) a group that is gone, are refused before anything is made (groups.ts).
+    assertTemplateGroups(tpl, [b.recipients && !Array.isArray(b.recipients) ? b.recipients : null], !!send && kind === 'envelope');
     // "kind": "template" with a template_id is a copy of the template, held to the same rule as /clone (cloneOwner).
     eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: cloneOwner(c, tpl, kind), kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
     if (kind === 'template') noteCopy(c, eid, tpl);
@@ -603,20 +606,26 @@ route('POST', '/bulk/check', async (c) => {
   const b = await c.body();
   const tpl = mine(c, str(b.template_id), 'template');
   const rows: any[] = Array.isArray(b.rows) ? b.rows.slice(0, 500) : [];
+  // A list longer than one batch takes is refused by POST /bulk, so it is counted as it is and refused here in the
+  // same words, instead of being counted as its first 500 rows.
+  const all_ = Array.isArray(b.rows) ? b.rows.length : 0;
+  const tooMany = all_ > 500 ? { status: 400, message: 'Send up to 500 envelopes per batch.' } : null;
   const open = tpl.recipients.filter(rowFills); // a group is filled in by its members, and a witness the signer names by that signer, not by a row or a visitor
   const counted = creditsEnabled();
-  const { perRow, need, have } = counted ? batchNeeds(c, tpl, rows.length) : { perRow: 0, need: 0, have: 0 };
+  const { perRow, need, have } = counted ? batchNeeds(c, tpl, all_) : { perRow: 0, need: 0, have: 0 };
   const short = Math.max(0, need - Math.max(0, have));
   const onPlan = c.account.plan === 'grove';
   const planSignatures = onPlan ? 0 : Math.min(short, PRICING.monthlySignatures);
   const topUp = short - planSignatures;
   const reach = [...tpl.recipients.map((r: any) => r.email), ...groupReach(tpl), ...rows.flatMap((row) => open.map((r: any) => str(row?.[r.role_name || r.id]?.email).trim()))].filter(Boolean);
   // bulkChecksRefusal: a row without the mobile number its role needs, or more text messages than the account may send today.
-  const refusal = rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) || bulkChecksRefusal(tpl, rows, open) : null;
+  const refusal = tooMany || (rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) || bulkChecksRefusal(tpl, rows, open) : null);
   return {
-    counted, rows: rows.length, signers_per_row: perRow, need, have: Math.max(0, have), short, plan: c.account.plan,
+    counted, rows: all_, signers_per_row: perRow, need, have: Math.max(0, have), short, plan: c.account.plan,
     cost: counted && short > 0 ? { usd: (onPlan ? 0 : PRICING.monthlyUsd) + topUp * PRICING.topUpUsd, plan_usd: onPlan ? 0 : PRICING.monthlyUsd, plan_signatures: onPlan ? 0 : PRICING.monthlySignatures, top_up: topUp, top_up_usd: topUp * PRICING.topUpUsd } : null,
     refusal: refusal ? { status: refusal.status, message: refusal.message } : null,
+    // Whether the envelopes of this batch remind people by themselves: they take the template's setting.
+    reminder_days: tpl.reminder_days || 0, reminders: reminderText(tpl.reminder_days),
     // Addresses in this list at which an email of the account came back for good in the last weeks, each with the
     // day and why. Not a refusal: POST /bulk sends to them when it carries "send_anyway": true, and says so otherwise.
     bounced: rows.length ? bouncedBefore(c.account.id, reach).map((x) => ({ email: x.email, bounced_at: x.at, reason: x.reason, line: bouncedLine(x) })) : [],
@@ -644,6 +653,8 @@ route('POST', '/bulk', async (c) => {
   if (!rows.length) throw bad('Add at least one row of recipients.');
   if (rows.length > 500) throw bad('Send up to 500 envelopes per batch.');
   const open = tpl.recipients.filter(rowFills); // a group is filled in by its members, and a witness the signer names by that signer, not by a row or a visitor
+  // A row that names a person for a group's role, or a group that is gone: the whole batch is refused, nothing left behind (groups.ts).
+  assertTemplateGroups(tpl, rows, true, true);
   rows.forEach((row, i) => {
     for (const r of open) {
       const v = row?.[r.role_name || r.id];
@@ -786,7 +797,8 @@ route('GET', '/powerforms', (c) => ({
     // A form on a template this person may not use is not listed, like the template itself (tplroles.ts).
     .map(({ template_ref, ...p }) => ({ p, t: get('SELECT * FROM envelopes WHERE id=?', template_ref) }))
     .filter(({ t }) => !t || c.admin || mayUse(c, t))
-    .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), url: `${baseUrl()}/f/${p.slug}` })),
+    // reminders: whether the envelope each visitor starts reminds them by itself, which it takes from the template.
+    .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), url: `${baseUrl()}/f/${p.slug}`, reminders: t ? reminderText(t.reminder_days) : null })),
 }));
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();

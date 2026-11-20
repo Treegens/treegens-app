@@ -780,6 +780,14 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['envelopes', 'final_pages', 'INTEGER'],
   ['recipients', 'copy_opened_at', 'TEXT'],
   ['recipients', 'visit_noted_at', 'TEXT'],
+  // disputes.closed_at/closed_how/closed_note: a person at Sign&Grow closed it ('handled', or 'in_error' when it was
+  // filed in error); until then the envelope cannot be deleted for good (src/server/evidence.ts).
+  ['disputes', 'closed_at', 'TEXT'],
+  ['disputes', 'closed_how', 'TEXT'],
+  ['disputes', 'closed_note', 'TEXT'],
+  // envelopes.opens_noted_from: for an envelope that was already completed when "Completed copy opened" began to be
+  // written, the moment it began. Its first recorded open may not be the first, and its line says so (noteCopyOpened).
+  ['envelopes', 'opens_noted_from', 'TEXT'],
   // When the timer last looked at a payment that is still not applied, so it takes the least recently looked at first.
   ['payments', 'checked_at', 'TEXT'],
   // payments.tax_cents: the tax the provider added on top of a monthly payment (taxOf in routes-billing.ts), so the
@@ -788,6 +796,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // settled when the parts add up to it, and the customer is told once, with each part.
   ['payments', 'tax_cents', 'INTEGER'],
   ['refunds', 'hand_parts', 'TEXT'],
+  // Who each person_gen of a request was (a JSON map of gen to plain name and address, personGen in credits.ts), so a
+  // request that comes back to someone it had before (renamed to somebody else and back) is theirs again, with the
+  // signature they already paid for.
+  ['recipients', 'person_gens', 'TEXT'],
   // Goes up each time the request passes to another person (another address, or another name at the same address
   // that is not a spelling of the old one). It is part of the signature's ledger line once above zero (sigRef in
   // src/server/credits.ts), so a second person never signs on what the first one paid for. 0 keeps every line from
@@ -955,12 +967,20 @@ function migrate(d: any) {
   const hadWelcomed = d.prepare('PRAGMA table_info(users)').all().some((c: any) => c.name === 'welcomed_at');
   const hadCameBy = d.prepare('PRAGMA table_info(support_requests)').all().some((c: any) => c.name === 'came_by');
   const hadBounceSaid = d.prepare('PRAGMA table_info(emails)').all().some((c: any) => c.name === 'bounce_said');
+  const hadDisputeClose = d.prepare('PRAGMA table_info(disputes)').all().some((c: any) => c.name === 'closed_at');
+  const hadOpensFrom = d.prepare('PRAGMA table_info(envelopes)').all().some((c: any) => c.name === 'opens_noted_from');
   for (const [table, column, definition] of COLUMNS) {
     const have = d.prepare(`PRAGMA table_info(${table})`).all().some((c: any) => c.name === column);
     if (!have) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   d.exec('CREATE INDEX IF NOT EXISTS recipients_check ON recipients(check_code)');
   d.exec('CREATE INDEX IF NOT EXISTS retired_tokens_check ON retired_tokens(check_code)');
+  // A "Disputed" line once kept the disputer's browser, which the sender reads. It is not part of the line's hash, so
+  // it can go without touching the chain; the disputes row keeps it for the operators (src/server/evidence.ts).
+  if (!hadDisputeClose) d.exec("UPDATE audit SET user_agent=NULL WHERE action='Disputed' AND user_agent IS NOT NULL");
+  // Envelopes completed before "Completed copy opened" was written for each person: their people may have opened the
+  // copy already, so the first open recorded from now on is not called the first (noteCopyOpened in evidence.ts).
+  if (!hadOpensFrom) d.prepare("UPDATE envelopes SET opens_noted_from=? WHERE status='completed' AND opens_noted_from IS NULL").run(new Date().toISOString());
   // News from the mail provider names an email by the Message-ID we gave it, or only by the address it went to.
   d.exec('CREATE INDEX IF NOT EXISTS emails_message ON emails(message_id)');
   d.exec('CREATE INDEX IF NOT EXISTS emails_to ON emails(to_email COLLATE NOCASE, id)');

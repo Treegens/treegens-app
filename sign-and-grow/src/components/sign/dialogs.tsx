@@ -7,6 +7,7 @@ import { fieldName, isMulti, problemWith, type Item } from './fields';
 import { CANNOT_PRINT_HEAD, CANNOT_PRINT_THEN, shownChars } from '@/lib/scripts';
 import { formatDateValue } from '@/lib/dates';
 import { NUMBER_HINT } from '@/lib/numbers';
+import { DISPUTE_DOES, disputeSenderSees } from '@/lib/evidence';
 
 // Runs one request and keeps its error next to the form, where the person is looking.
 function useSend() {
@@ -80,7 +81,7 @@ const REASONS: [string, string, string][] = [
   ['spam', 'It is spam', 'I did not ask for this and do not know the sender.'],
   ['not-for-me', 'It is not meant for me', 'It looks genuine, but it was sent to the wrong person.'],
   // A dispute, not a report: it marks the envelope, tells the sender and goes to POST /sign/:token/dispute.
-  ['not-me', 'I did not sign this, or this was not me', 'Something was signed, approved or declined in my name that I did not do. The document is marked as disputed and nothing is deleted. The sender is told that you dispute it, not what you write below.'],
+  ['not-me', 'I did not sign this, or this was not me', 'Something was signed, approved or declined in my name that I did not do.'],
   ['other', 'Something else', ''],
 ];
 
@@ -96,7 +97,7 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
     return (
       <Dialog title="Report this request" onClose={onClose}>
         <Confirmed onClose={onClose}>
-          <b>Your dispute is on record.</b> The document is now marked as disputed, on {sender?.name || 'the sender'}&apos;s page and for anyone who checks it on our Verify page. {sender?.name || 'The sender'} and the people who run Sign&amp;Grow have been told. Nothing was deleted, and you can still download your copy. We do not decide who is right. To hear from a person, write to us on the help page with the topic &ldquo;I am named on a document I did not sign&rdquo;.
+          <b>Your dispute is on record.</b> The document is now marked as disputed, on {sender?.name || 'the sender'}&apos;s page and for anyone who checks it on our Verify page. {sender?.name || 'The sender'} has been told, with what you wrote, and so have the people who run Sign&amp;Grow. Nothing was deleted, and you can still download your copy. We do not decide who is right. To hear from a person, write to us on the help page with the topic &ldquo;I am named on a document I did not sign&rdquo;.
         </Confirmed>
       </Dialog>
     );
@@ -115,7 +116,8 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
         if (!reason) return setError('Choose what is wrong, then send your report.');
         if (await send(() => (reason === 'not-me' ? api(`${base}/dispute`, { body: { detail } }) : api(`${base}/report`, { body: { reason, detail } }).then((x: any) => setStopped(!!x?.mail_stopped))), reason === 'not-me' ? '' : 'Your report was not sent. Try again in a minute.')) setSent(true);
       }}>
-        <p className="muted">This goes to the Sign&Grow team, not to {sender?.name || 'the sender'}. A person reads every report.</p>
+        {/* A dispute is not a report: it goes to the sender too, and the screen says exactly what they get before it is sent. */}
+        <p className="muted">{reason === 'not-me' ? 'A dispute goes to the sender and to the Sign&Grow team. Read below what each of them gets.' : `This goes to the Sign&Grow team, not to ${sender?.name || 'the sender'}. A person reads every report.`}</p>
         <fieldset className="sg-choices">
           <legend>What is wrong?</legend>
           {REASONS.map(([value, label, hint], i) => (
@@ -125,7 +127,8 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
             </label>
           ))}
         </fieldset>
-        <label className="f"><span>Anything else we should know <span className="hint">(optional)</span></span><textarea dir="auto" rows={3} maxLength={2000} value={detail} onChange={(e) => setDetail(e.target.value)} /></label>
+        {reason === 'not-me' && <div className="notice" id="sg-dispute-sees"><p style={{ margin: '0 0 6px' }}>{DISPUTE_DOES}</p><p style={{ margin: 0 }}>{disputeSenderSees(sender?.name || 'The sender')}</p></div>}
+        <label className="f"><span>{reason === 'not-me' ? <>What happened, in your words <span className="hint">(optional; {sender?.name || 'the sender'} will read it)</span></> : <>Anything else we should know <span className="hint">(optional)</span></>}</span><textarea dir="auto" rows={3} maxLength={2000} value={detail} onChange={(e) => setDetail(e.target.value)} {...(reason === 'not-me' ? { 'aria-describedby': 'sg-dispute-sees' } : {})} /></label>
         <Problem>{error}</Problem>
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>

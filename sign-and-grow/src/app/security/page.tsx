@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION, LANGUAGE_NOTE } from '@/lib/policy';
-import { WHO_CAN_SEE, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER } from '@/lib/policy';
+import { WHO_CAN_SEE, WHO_CARRIES, WHO_CARRIES_TEXTS, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER } from '@/lib/policy';
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
 import { CHECK_PROVES, CHECK_LIMITS, smsProvider } from '@/lib/checks';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODES_PER_HOUR } from '@/lib/policy';
@@ -121,7 +121,7 @@ export default function Security() {
 
         {/* Every sentence of this block is kept in src/lib/policy.ts (WHO_CAN_SEE), with the code that makes it true. */}
         <Block id="who" title="Who can see your documents" lead="In one list, so nobody has to guess. A signing link is the key to its document: read the first line before you forward one.">
-          {WHO_CAN_SEE.map((w) => <Point key={w.who} title={w.who}>{w.what}</Point>)}
+          {WHO_CAN_SEE.map((w) => <Point key={w.who} title={w.who}>{w.what}{textsOn && w.who === WHO_CARRIES ? WHO_CARRIES_TEXTS : ''}</Point>)}
         </Block>
 
         <Block id="privacy" title="Privacy and AI">
@@ -164,7 +164,7 @@ export default function Security() {
             : <Point title="No single sign-on.">Accounts are protected by a password, and by our own two-step login when it is switched on. There is no SAML or other sign-in through an organization&apos;s own system.</Point>}
           <Point title="No text-message codes or security keys for signing in.">The second step of our two-step login is an authenticator app only. Codes by text message to sign in, passkeys and hardware keys are not built.</Point>
           <Point title={NO_BAA_TITLE}>{NO_BAA_TEXT} What would have to be true first: {NO_BAA_FIRST.map((x, i) => `(${i + 1}) ${x}`).join(' ')} {NO_BAA_AFTER}</Point>
-          <Point title="No payment collection.">Sign&Grow never takes money for a sender. An account that has earned trust can show a link to its own payment page after a person presses Finish, with its name and the full address, and never in an email. We do not see that payment, cannot confirm it and cannot refund it.</Point>
+          <Point title="No payment collection.">Sign&Grow never takes money for a sender. An account that has earned trust can show a link to its own payment page after a person presses Finish, with the name of whoever set it and the full address. The address is never put in an email, a certificate or an export. We do not check where that page sends people next, we do not see that payment, and we cannot confirm or refund it.</Point>
           <Point title="No security certification.">We have not been audited against a security standard, and we will not hint that we have.</Point>
           <Point title={notEncrypted.title}>{notEncrypted.text}</Point>
         </Block>

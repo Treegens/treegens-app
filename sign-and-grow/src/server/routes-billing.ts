@@ -1424,7 +1424,13 @@ function takeBack(acct: any | null, p: any, cents: number, ref: string, reason: 
 function ours(o: any, sub?: any): boolean {
   if (namedAccount(o) || sub?.metadata?.sg_account) return true;
   const price = priceOf(o) || priceOf(sub || {});
-  return !!price && !!process.env.STRIPE_PRICE_GROVE && price === process.env.STRIPE_PRICE_GROVE;
+  if (price) return !!process.env.STRIPE_PRICE_GROVE && price === process.env.STRIPE_PRICE_GROVE;
+  // No price on it: the subscription it is for is ours when one of our accounts of that customer is on it, or was
+  // paid through it before (it was started by our checkout, for our price).
+  const S = subOf(o) || sub?.id;
+  const customer = sid(o.customer) || '-';
+  return !!S && !!(get('SELECT 1 x FROM accounts WHERE stripe_subscription_id=? AND stripe_customer_id=?', S, customer)
+    || get("SELECT 1 x FROM payments WHERE subscription_id=? AND customer_id=? AND kind='plan'", S, customer));
 }
 
 // A paid invoice: the monthly payment. Each one adds the plan's signatures to the balance, or goes straight back if

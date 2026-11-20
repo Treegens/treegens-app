@@ -413,12 +413,13 @@ test('F: with the security code, a person named on a completed document disputes
     assert.doesNotMatch(line.detail, /abroad/, 'what they wrote is not in the record the sender reads');
     assert.equal(env.verifyChain(e.id).ok, true);
 
-    // The sender is told, without the words; the operators are told with them, and it is in their queue.
+    // The sender is told, with the person's own words (the owner's decision: see "Repair 3"); the operators too, and
+    // it is in their queue.
     const told = mailTo('dsender@disputes.example').filter((m: any) => m.subject === 'Disputed: Car sale');
     assert.equal(told.length, 1);
     assert.match(text(told[0].html), /Nothing was changed or deleted/);
     assert.match(text(told[0].html), /We do not decide who is right/);
-    assert.doesNotMatch(text(told[0].html), /abroad/);
+    assert.match(text(told[0].html), /word for word\. We have not checked any of it, so do not call a number or open a link in it: "I was abroad that day and never saw this\."/);
     const ops = mailTo('ops-disputes@disputes.example').filter((m: any) => m.subject === `Disputed: envelope ${e.id}`);
     assert.equal(ops.length, 1);
     assert.match(text(ops[0].html), /They wrote: I was abroad that day and never saw this\./);
@@ -658,4 +659,160 @@ test('F: a group member\'s code disputes only what that member did, and an in-pe
   assert.equal((await signAll(ip.id, 'walkin@disputes.example')).status, 200);
   assert.equal((await from().post('/public/check/dispute', { code: codeOf(ip.id, 'walkin@disputes.example') })).status, 200);
   assert.match(auditOf(ip.id).find((a: any) => a.action === 'Disputed').detail, /Someone holding the security code of Walk In <walkin@disputes\.example>, which is in our emails to the sender who hosted the signing/);
+});
+
+// ---- Repairs after the skeptic's report (research/verify-new.json, "verify:disputes") -----------------------------
+
+test('Repair 1: the person named can dispute after the sender put another address under their name, with the code of our first email', async () => {
+  const sender = await person('Mallory Sender', 'mallory@disputes.example');
+  const e = await simple(sender, 'alice@disputes.example', { recipients: [{ id: 'r', role: 'signer', name: 'Alice Real', email: 'alice@disputes.example' }] });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const alice = codeOf(e.id, 'alice@disputes.example');
+  const rid = db.get('SELECT id FROM recipients WHERE envelope_id=?', e.id).id;
+  assert.equal((await sender.post(`/envelopes/${e.id}/correct`, { recipient_id: rid, email: 'mallory-alt@disputes.example' })).status, 200);
+  // Before anything is done in that place there is nothing to dispute, and the same code keeps working for later.
+  const early = await from().post('/public/check/dispute', { code: alice });
+  assert.equal(early.status, 409, JSON.stringify(early.data));
+  assert.equal(early.data.code, 'nothing_signed');
+  assert.match(early.data.error, /come back with the same code/);
+  assert.equal((await signAll(e.id, 'mallory-alt@disputes.example')).status, 200);
+  assert.equal(db.get('SELECT status FROM envelopes WHERE id=?', e.id).status, 'completed');
+  // Whoever holds the place now disputes first: that does not use up Alice's own dispute.
+  assert.equal((await from().post(`/sign/${tokenFor(e.id, 'mallory-alt@disputes.example')}/dispute`, { detail: 'pre-empting' })).status, 200);
+  const r = await from().post('/public/check/dispute', { code: alice, detail: 'The sender signed in my name.' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.already, false);
+  const lines = auditOf(e.id).filter((a: any) => a.action === 'Disputed');
+  assert.equal(lines.length, 2);
+  assert.match(lines[1].detail, /^Someone holding the email we sent to Alice Real <alice@disputes\.example>, before the address for that place on the document was changed, said that Alice Real did not sign this, or that it was not them\./);
+  assert.equal(lines[1].actor, 'Someone holding the email sent to alice@disputes.example');
+  assert.equal(db.get('SELECT COUNT(*) n FROM disputes WHERE envelope_id=?', e.id).n, 2);
+  assert.equal((await from().get(`/public/verify/${e.id}`)).data.disputes, 2);
+  // Saying it again with the same code changes nothing.
+  assert.equal((await from().post('/public/check/dispute', { code: alice })).data.already, true);
+  assert.equal(auditOf(e.id).filter((a: any) => a.action === 'Disputed').length, 2);
+  assert.equal(env.verifyChain(e.id).ok, true);
+});
+
+test('Repair 1: after someone passed the document on through the person\'s link, both the code and the old link dispute it, once', async () => {
+  const sender = await person('Handed Sender', 'handed@disputes.example');
+  const e = await simple(sender, 'alice2@disputes.example', { recipients: [{ id: 'r', role: 'signer', name: 'Alice Two', email: 'alice2@disputes.example' }] });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const code = codeOf(e.id, 'alice2@disputes.example');
+  const tok = tokenFor(e.id, 'alice2@disputes.example');
+  const thief = from();
+  await thief.post(`/sign/${tok}/consent`);
+  assert.equal((await thief.post(`/sign/${tok}/reassign`, { name: 'Accomplice', email: 'accomplice@disputes.example', reason: 'Not mine' })).status, 200);
+  assert.equal((await signAll(e.id, 'accomplice@disputes.example')).status, 200);
+  const r = await from().post('/public/check/dispute', { code, detail: 'I never passed this on.' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(auditOf(e.id).find((a: any) => a.action === 'Disputed').detail, /Someone holding the email we sent to Alice Two <alice2@disputes\.example>, before the document was passed on to someone else through its link, said that Alice Two did not pass this document on to someone else/);
+  const byLink = await from().post(`/sign/${tok}/dispute`, {});
+  assert.equal(byLink.status, 200, 'a replaced link is not a dead end for this');
+  assert.equal(byLink.data.already, true, 'the code and the link of one email are one person');
+  // A replaced link where nothing was done in that place is told so, and a link we never made is still 404.
+  const later = await simple(sender, 'bob@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${later.id}/send`)).status, 200);
+  const old = tokenFor(later.id, 'bob@disputes.example');
+  assert.equal((await sender.post(`/envelopes/${later.id}/correct`, { recipient_id: db.get('SELECT id FROM recipients WHERE envelope_id=?', later.id).id, email: 'bob2@disputes.example' })).status, 200);
+  assert.equal((await from().post(`/sign/${old}/dispute`, {})).status, 409);
+  assert.equal((await from().post('/sign/nosuchtokenatall123/dispute', {})).status, 404);
+  // The replaced-link screen says where to go.
+  assert.match(src('src/components/sign/deadEnds.tsx'), /I did not sign this, or this was not me/);
+});
+
+test('Repair 1: a person taken off after they had signed can still dispute with their code; one taken off before anything was done cannot', async () => {
+  const sender = await person('Removing Sender', 'removing@disputes.example');
+  const { draft } = await import('./helpers.ts');
+  const e = await draft(sender, { recipients: [
+    { id: 'r1', role: 'signer', name: 'First Person', email: 'first@disputes.example', routing_order: 1 },
+    { id: 'r2', role: 'signer', name: 'Second Person', email: 'second@disputes.example', routing_order: 1 },
+    { id: 'r3', role: 'signer', name: 'Third Person', email: 'third@disputes.example', routing_order: 2 },
+  ], fields: [
+    { id: 'f1', document_id: 'd1', recipient_id: 'r1', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
+    { id: 'f2', document_id: 'd1', recipient_id: 'r2', type: 'signature', page: 0, x: 0.5, y: 0.8, w: 0.25, h: 0.06 },
+    { id: 'f3', document_id: 'd1', recipient_id: 'r3', type: 'signature', page: 1, x: 0.1, y: 0.8, w: 0.25, h: 0.06 },
+  ] });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const first = codeOf(e.id, 'first@disputes.example');
+  const third = codeOf(e.id, 'third@disputes.example');
+  assert.equal((await signAll(e.id, 'first@disputes.example')).status, 200);
+  // The sender takes the first person (who signed) and the third (who has done nothing) off.
+  const now = (await sender.get(`/envelopes/${e.id}`)).data.envelope;
+  const keep = now.recipients.filter((x: any) => x.email === 'second@disputes.example');
+  const put = await sender.call('PUT', `/envelopes/${e.id}`, { ...now, recipients: keep, fields: now.fields.filter((f: any) => keep.some((k: any) => k.id === f.recipient_id)), resign: true });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  const r = await from().post('/public/check/dispute', { code: first });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(auditOf(e.id).find((a: any) => a.action === 'Disputed').detail, /before that person was taken off the document, said that First Person did not sign this/);
+  const t = await from().post('/public/check/dispute', { code: third });
+  assert.equal(t.status, 409);
+  assert.equal(t.data.code, 'nothing_signed');
+});
+
+test('Repair 3: the sender gets the person\'s words and the time, never their internet address or browser; the operators get both', async () => {
+  process.env.OPERATOR_EMAILS = 'ops-r3@disputes.example';
+  try {
+    const sender = await person('Words Sender', 'words@disputes.example');
+    const e = await completed(sender, 'words-signer@disputes.example', { subject: 'Loan' });
+    const WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+    const disputer = Object.assign(from(), { ip: '198.51.100.77' });
+    const r = await disputer.call('POST', '/public/check/dispute', { code: codeOf(e.id, 'words-signer@disputes.example'), detail: 'He signed for me.' }, { 'user-agent': WIN });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    // The record the sender reads, on the page and in the pack: no address, no browser.
+    const view = (await sender.get(`/envelopes/${e.id}`)).data;
+    const line = view.audit.find((a: any) => a.action === 'Disputed');
+    assert.equal(line.ip, null);
+    assert.equal(db.get("SELECT user_agent u FROM audit WHERE envelope_id=? AND action='Disputed'", e.id).u, null);
+    assert.equal(env.verifyChain(e.id).ok, true);
+    const zip = unzip((await sender.get(`/envelopes/${e.id}/evidence`)).data);
+    const pl = JSON.parse(zip['audit-trail.json'].toString()).events.find((a: any) => a.action === 'Disputed');
+    assert.equal(pl.ip, null);
+    assert.equal(pl.user_agent, null);
+    assert.match(zip['disputes.txt'].toString(), /They wrote: He signed for me\./);
+    assert.match(zip['README.txt'].toString(), /disputes\.txt/);
+    for (const f of Object.values(zip)) assert.ok(!f.toString('latin1').includes('198.51.100.77'), 'nowhere in the pack');
+    // The words, on the envelope page: the disputes, without address or browser. Not for another account.
+    const listed = await sender.get(`/envelopes/${e.id}/disputes`);
+    assert.equal(listed.status, 200);
+    assert.equal(listed.data.disputes.length, 1);
+    assert.equal(listed.data.disputes[0].detail, 'He signed for me.');
+    assert.deepEqual(Object.keys(listed.data.disputes[0]).sort(), ['at', 'closed_at', 'closed_how', 'detail', 'name', 'via']);
+    assert.equal((await (await person('Other Account', 'other-r3@disputes.example')).get(`/envelopes/${e.id}/disputes`)).status, 404);
+    // The sender's email: the words and the time, and nothing of where it came from.
+    const told = text(mailTo('words@disputes.example').filter((m: any) => m.subject === 'Disputed: Loan').pop().html);
+    assert.match(told, /He signed for me\./);
+    assert.match(told, /told us on \d{4}-\d\d-\d\d \d\d:\d\d UTC/);
+    assert.ok(!told.includes('198.51.100.77') && !/Chrome|Windows/.test(told));
+    // The operators: the address and the browser, said to be theirs alone.
+    const ops = text(mailTo('ops-r3@disputes.example').pop().html);
+    assert.match(ops, /It came from internet address 198\.51\.100\.77, in Chrome on a Windows computer/);
+    assert.match(ops, /Only you see this: the sender does not\./);
+    assert.match(db.get("SELECT message FROM support_requests WHERE envelope_id=? AND topic='not-me'", e.id).message, /198\.51\.100\.77/);
+    assert.equal(db.get('SELECT ip FROM disputes WHERE envelope_id=?', e.id).ip, '198.51.100.77');
+  } finally {
+    delete process.env.OPERATOR_EMAILS;
+  }
+});
+
+test('Repair 3: every screen says, before it is sent, exactly what the sender will get, and the report line no longer says "not to the sender"', async () => {
+  const { disputeSenderSees, DISPUTE_DOES } = await import('../src/lib/evidence.ts');
+  const sees = disputeSenderSees('Demo Sender');
+  assert.match(sees, /Demo Sender will see that you dispute it, the date and time, which email or link was used \(by the name and address it was sent to\), and what you write below, word for word\./);
+  assert.match(sees, /will not see your internet address or which browser or device you use: those go only to the people who run Sign&Grow/);
+  const dialogs = src('src/components/sign/dialogs.tsx');
+  assert.match(dialogs, /reason === 'not-me' \? 'A dispute goes to the sender and to the Sign&Grow team\./);
+  assert.match(dialogs, /\{disputeSenderSees\(sender\?\.name \|\| 'The sender'\)\}/);
+  assert.match(dialogs, /\{DISPUTE_DOES\}/);
+  assert.doesNotMatch(dialogs, /The sender is told that you dispute it, not what you write below/);
+  const check = src('src/app/check/CheckForm.tsx');
+  assert.match(check, /A dispute goes to the sender and to the people who run Sign&Grow, and it does not pause anyone\\'s account\./);
+  assert.match(check, /\{disputeSenderSees\(sender \|\| 'The sender'\)\}/);
+  assert.match(check, /dispute=\{false\}/, 'a document deleted before any dispute offers no dispute');
+  assert.doesNotMatch(check, /the sender is not shown what you wrote/);
+  const help = src('src/app/help/NotMe.tsx');
+  assert.match(help, /what you wrote with the dispute, word for word\. Not the internet address or the browser you disputed from/);
+  assert.match(help, /including the internet address and the browser a dispute came from/);
+  assert.match(DISPUTE_DOES, /Nothing is changed, held or deleted/);
+  assert.match(src('src/components/sender/Disputed.tsx'), /\/envelopes\/\$\{envelope\.id\}\/disputes/);
 });

@@ -11,6 +11,7 @@ import { headerFor, readRecipients, MAX_ROWS, type BulkRow, type Role } from '@/
 import { readFieldColumns, fillableColumns } from '@/components/sender/fieldColumns';
 import { dayTime, explain, plural } from '@/components/sender/lib';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
+import { reminderText } from '@/lib/policy';
 
 export default function BulkPage() {
   return <Suspense fallback={<div className="muted" role="status">Loading…</div>}><Bulk /></Suspense>;
@@ -225,10 +226,12 @@ function BulkSend({ preset }: { preset: string }) {
 
                 {/* What the batch holds, what is there, what is missing and what that costs: before the button, for every list. */}
                 {listOk && <BatchCost check={check} failed={checkFailed} />}
+                {/* Said before every send, also here: each envelope of the batch reminds as the template says (reminderText). */}
+                {listOk && <p className="muted small" id="sn-batch-reminders">{reminderText(loaded.reminder_days)} That comes from the template, for every envelope in this batch. To change it, <Link href={`/app/templates/${tid}/edit`}>edit the template</Link> first.</p>}
 
                 <div className="sn-sendrow">
                   <label className="f"><span>Name this batch <span className="hint">(optional, only you see it)</span></span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder={loaded.subject || 'Bulk send'} /></label>
-                  <button className="btn primary" disabled={!canSend} aria-describedby={listOk ? 'sn-batch-cost' : undefined} onClick={() => setConfirming(ready)}>
+                  <button className="btn primary" disabled={!canSend} aria-describedby={listOk ? 'sn-batch-cost sn-batch-reminders' : undefined} onClick={() => setConfirming(ready)}>
                     {stuck.length > 0 && ready.length > 0 ? `Send the ${plural(ready.length, 'ready row')}` : `Send ${plural(ready.length, 'envelope')}`}
                   </button>
                 </div>

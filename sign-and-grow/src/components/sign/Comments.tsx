@@ -7,6 +7,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { api, fmtDate } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { audienceWords } from '@/lib/comments';
+import { CommentBody } from '@/components/CommentBody';
 import { COMMENT_MAX_CHARS } from '@/lib/policy';
 
 /**
@@ -104,6 +105,8 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
       {!data && !problem && <p className="muted" role="status">Loading the comments</p>}
 
       {said && <div ref={said$} tabIndex={-1} className="notice sg-confirmed" role="status">{said}</div>}
+      {/* Someone else holds this device now (signing in person one after the other): said before anything else. */}
+      {data?.away && <p className="notice warn" role="status">{data.away}</p>}
 
       {data && (
         <section aria-labelledby={`${ids}-list`} className="cm-threads">
@@ -122,7 +125,7 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
                   {t.comments.map((c: any) => (
                     <li key={c.id} className={c.by_sender ? 'from-sender' : ''}>
                       <div className="cm-meta"><b><bdi>{c.mine ? 'You' : c.name}</bdi></b>{c.by_sender && c.name !== sender.name ? <span className="muted small">, for {sender.name}</span> : null} <span className="muted small">{fmtDate(c.at, true)}</span></div>
-                      <p className="cm-body" dir="auto">{c.body}</p>
+                      <CommentBody text={c.body} />
                     </li>
                   ))}
                 </ol>
@@ -152,7 +155,6 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
 
       {error && <div className="notice err sg-problem" role="alert">{error}</div>}
 
-      {data?.away && <p className="notice warn" role="status">{data.away}</p>}
       {data && !data.may_write && !data.away && <p className="notice">Everyone has finished, so these can be read and no longer added to. They are kept with the document.</p>}
       {data && data.may_write && data.left <= 0 && <p className="notice warn">You have written as many comments on this document as one person can. To say more, email {sender.name}{sender.email ? ` at ${sender.email}` : ''}.</p>}
       {canWrite && !replyTo && (

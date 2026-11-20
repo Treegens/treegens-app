@@ -53,8 +53,10 @@
     ".next-verify-pay-round4/dev/types/**/*.ts",
     ".next-repair-mobile/types/**/*.ts",
     ".next-repair-mobile/dev/types/**/*.ts",
-    ".next-repair-logic/types/**/*.ts",
-    ".next-repair-logic/dev/types/**/*.ts"
+    ".next-repair-comments/types/**/*.ts",
+    ".next-repair-comments/dev/types/**/*.ts",
+    ".next-repair-groups/types/**/*.ts",
+    ".next-repair-groups/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

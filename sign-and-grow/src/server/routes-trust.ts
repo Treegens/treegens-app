@@ -14,7 +14,7 @@ import { unpaidDailyRecipients, PAID_TRUST_DAYS } from '../lib/policy.ts';
 import { advance, emailRefusal, hasNotPaid, dailyCap, PAUSED_MEANS } from './envelopes.ts';
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
-import { memberForCode, memberReported } from './groups.ts';
+import { memberForCode, memberReported, removedMemberCheck } from './groups.ts';
 import { forgetChosen } from './tplroles.ts';
 import { dropPayLinksOf } from './paydrop.ts';
 import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
@@ -39,6 +39,8 @@ route('POST', '/public/check', async (c) => {
   if (code.length !== 12) throw bad('Security codes are 12 letters and numbers, like ABCD-EFGH-JKLM. Check the email and try again.');
   // Each member of a group has a security code of their own in their own emails (memberForCode in groups.ts).
   const r = get('SELECT * FROM recipients WHERE check_code=?', code) || memberForCode(code);
+  // A member the sender took out of the group: genuine, and its link no longer opens the document (groups.ts).
+  if (r?.member?.removed_at) return removedMemberCheck(r);
   if (!r?.token) {
     // A code from an email we really sent, whose link has since been replaced: the sender corrected the address or
     // the role, the signer passed the document on, or the person was taken off. That email was genuine and is said

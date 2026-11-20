@@ -211,7 +211,9 @@ test('unused signatures from the latest payment are refunded on request, to the 
   const pat = await signUp('Pat Payer', 'patp@example.com');
   const pid = (await pat.get('/me')).data.account.id;
   await event('checkout.session.completed', { mode: 'subscription', client_reference_id: pid, customer: 'cus_p', subscription: 'sub_p' });
-  stripe.charges.unshift({ id: 'ch_p1', paid: true, refunded: false, amount: 900, customer: 'cus_p' });
+  // The charge names its invoice, as the provider's charges do: a refund is only ever sent to a charge found by id
+  // (billing8 has the charge found by amount alone, which is never taken).
+  stripe.charges.unshift({ id: 'ch_p1', paid: true, refunded: false, amount: 900, customer: 'cus_p', invoice: 'in_p1' });
   await event('invoice.paid', { id: 'in_p1', customer: 'cus_p', subscription: 'sub_p', amount_paid: 900, currency: 'usd' });
   assert.deepEqual((await pat.get('/billing')).data.signatures, { balance: 12, held: 0, available: 12 });
   assert.equal((await pat.get('/billing')).data.refund.amount, '$9.00');

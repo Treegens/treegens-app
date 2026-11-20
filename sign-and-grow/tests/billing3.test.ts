@@ -294,9 +294,10 @@ test('cancelling: the cases where "you will not be charged again" used to be wro
   assert.equal(stripe.sub(p.sub).status, 'canceled');
   assert.equal(stripe.invoices.in3_both_open.status, 'void');
   assert.match(mailTo(p.email).filter((m) => m.subject === 'Your Grove plan is cancelled').at(-1)!.html, /Cancelled earlier\.[\s\S]*The last payment had not gone through, so the plan ends today/);
+  // Pressed again the same day: the same cancellation is said again, with its reference (billing8), not an error.
   const r = await p.c.post('/billing/cancel');
-  assert.equal(r.status, 400);
-  assert.match(r.data.error, /nothing to cancel and nothing will be charged/);
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.data.reference, r.data.ended_now], [ref, true]);
 
   // The new month has started but its payment has not been taken yet: it is withdrawn, not left to go through.
   const q = await person('Hour');

@@ -5,6 +5,7 @@
 import { useEffect, useId, useState } from 'react';
 import { api, toast, fmtDate } from '@/components/ui';
 import { audienceWords } from '@/lib/comments';
+import { CommentBody } from '@/components/CommentBody';
 import { COMMENT_MAX_CHARS } from '@/lib/policy';
 import { fail } from './feedback';
 
@@ -17,20 +18,6 @@ function newsLine(n: any, mins: number, paused = false): string {
   if (n.not_emailed) return `Not emailed to ${n.to}: ${n.not_emailed}`;
   return paused ? `Waiting to be emailed to ${n.to}: sending is paused on this account, and it goes out by itself once the pause is lifted.`
     : `Waiting to be emailed to ${n.to}. We send at most one email every ${mins} minutes to each person, so it goes with the next one.`;
-}
-
-// Long comments are folded to a few lines, so one person's essay does not push every other conversation off the page.
-const FOLD_CHARS = 600, FOLD_LINES = 8;
-function Body({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const long = text.length > FOLD_CHARS || text.split('\n').length > FOLD_LINES;
-  if (!long) return <p className="cm-body" dir="auto">{text}</p>;
-  return (
-    <>
-      <p className={`cm-body${open ? '' : ' cm-folded'}`} dir="auto">{open ? text : `${text.split('\n').slice(0, FOLD_LINES).join('\n').slice(0, FOLD_CHARS)}...`}</p>
-      <button type="button" className="btn sm cm-more" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Show less' : `Show all ${text.length} characters`}</button>
-    </>
-  );
 }
 
 export function EnvelopeComments({ envelope }: { envelope: any }) {
@@ -122,7 +109,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
             {t.comments.map((c: any) => (
               <li key={c.id} className={c.by_sender ? 'from-sender' : ''}>
                 <div className="cm-meta"><b><bdi>{c.name}</bdi></b>{c.email ? <span className="muted small"> {c.email}</span> : null} <span className="muted small">{fmtDate(c.at, true)}</span></div>
-                <Body text={c.body} />
+                <CommentBody text={c.body} />
                 {c.by_sender && (c.news || []).map((n: any, k: number) => <p key={k} className="muted small cm-news">{newsLine(n, data.mail_minutes, data.paused)}</p>)}
               </li>
             ))}

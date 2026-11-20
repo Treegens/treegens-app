@@ -86,10 +86,14 @@ export async function lookHost(host: string): Promise<HostCheck> {
   }
 }
 
-/** What is wrong with a host that failed lookHost, in a sentence for the sender. */
+/**
+ * What is wrong with a host that failed lookHost, in a sentence for the sender. Without a host (for an email, which
+ * never carries any part of a payment link) it says "its address" instead.
+ */
 export function hostRefusal(check: HostCheck, host: string): string {
   if (check.ok) return '';
-  if (check.why === 'none') return `No site answers at "${host}" right now, so a signer could not open it. Check the address with your payment provider.`;
-  if (check.why === 'private') return `"${host}" leads to ${check.address}, which is an address inside a private network or kept for special uses, not a site on the public internet. A payment link has to lead to a public site.`;
-  return `We could not check where "${host}" leads just now. Try again in a minute.`;
+  const at = host ? `"${host}"` : 'its address';
+  if (check.why === 'none') return `No site answers at ${at} right now, so a signer could not open it. Check the address with your payment provider.`;
+  if (check.why === 'private') return `${host ? at : 'Its address'} leads to ${check.address}, which is an address inside a private network or kept for special uses, not a site on the public internet. A payment link has to lead to a public site.`;
+  return `We could not check where ${at} leads just now. Try again in a minute.`;
 }

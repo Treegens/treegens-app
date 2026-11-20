@@ -381,8 +381,9 @@ test('after someone has finished, a changed rule or formula changes what they si
   assert.match(r.data.error, /When 'Cover details' on page 1 is shown changed\. Before: Shown when 'Extra cover' is ticked\. Now: Shown when 'Extra cover' is not ticked\./);
   assert.equal(db.get("SELECT status FROM recipients WHERE email='ann@logic.example'").status, 'completed', 'nothing was saved');
   // The formula is the same: it changes what Bob is charged, and so what Ann agreed to.
-  r = await s.put(`/envelopes/${e.id}`, { fields: now.fields.map((f: any) => (f.label === 'Price' ? { ...f, formula: f.formula.replace('10', '12') } : f)) });
-  assert.equal(r.status, 409);
+  // Only the number at the end changes (a field id can hold "10" too, by chance).
+  r = await s.put(`/envelopes/${e.id}`, { fields: now.fields.map((f: any) => (f.label === 'Price' ? { ...f, formula: f.formula.replace(/\* 10$/, '* 12') } : f)) });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
   assert.match(r.data.error, /'Price' on page 1 is now worked out as 'Months' × 12, not 'Months' × 10/);
   r = await s.put(`/envelopes/${e.id}`, { fields: changed, resign: true });
   assert.equal(r.status, 200, JSON.stringify(r.data));
@@ -752,7 +753,9 @@ test('a calculated result with three decimals stays that number: on the PDF, in 
   assert.equal(progress.required_left, 0, 'the signature she gave is counted as shown, not as hidden by a total of 1233');
   // The sender saves the envelope again unchanged: the kept result keeps its number.
   const now = (await s.get(`/envelopes/${e.id}`)).data.envelope;
-  assert.equal((await s.put(`/envelopes/${e.id}`, { fields: now.fields })).status, 200);
+  assert.equal(now.fields.find((f: any) => f.label === 'Total').calc_num, '1.233', 'the API gives the number too');
+  // A number sent along for it is not taken: it is the server's, and what Bea signed stays.
+  assert.equal((await s.put(`/envelopes/${e.id}`, { fields: now.fields.map((f: any) => (f.label === 'Total' ? { ...f, calc_num: '999' } : f)) })).status, 200);
   assert.equal(fieldsOf(e.id).Total.calc_num, '1.233');
   // Ben's screen is given Bea's total with its number, and works his out the way the server stores it.
   const ben = await opened(e.id, 'ben.b@logic.example');
@@ -820,7 +823,9 @@ test('nobody finishes as signed without a picture: what is shown at Finish is wo
     said.add(`${r.status} ${r.data.error}`);
   }
   assert.deepEqual([...said], ['400 Adopt a signature before finishing.']);
-  r = await al.c.post(`/sign/${al.tok}/complete`, { values: { [al.id('Quantity')!]: '3', [al.id('Buyer signs (under 1000)')!]: '1' }, signature_png: PNG });
+  // Bi changing an unfinished answer changes nothing Al counts, so Al's screen is not sent back to look again.
+  assert.equal((await bi.c.post(`/sign/${bi.tok}/save`, { values: { [bi.id('Price')!]: '999' } })).status, 200);
+  r = await al.c.post(`/sign/${al.tok}/complete`, { values: { [al.id('Quantity')!]: '3', [al.id('Buyer signs (under 1000)')!]: '1' }, inputs: al.v.inputs, signature_png: PNG });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(db.get("SELECT signature_png FROM recipients WHERE email='al.b@logic.example'").signature_png, PNG);
 });

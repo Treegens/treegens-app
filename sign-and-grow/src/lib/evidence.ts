@@ -30,3 +30,12 @@ export const CERTIFICATE_PAGE_VERSION = '2026-11-20';
 
 /** After a deletion: what /verify still knows about a completed file, and for how long. */
 export const FINGERPRINT_KEPT_DAYS = 365;
+
+// "I did not sign this, or this was not me" (fileDispute in src/server/evidence.ts). Said on every screen before the
+// person sends it, so they know exactly what the sender will be given, and what only the operators get.
+/** What a dispute does, in one line. */
+export const DISPUTE_DOES = 'It marks the document as disputed, for its sender and for anyone who checks it on our Verify page. Nothing is changed, held or deleted, and we do not decide who is right.';
+/** What the sender is given, and what is not given to them. `sender` is their name, or "The sender". */
+export const disputeSenderSees = (sender: string) => `${sender} will see that you dispute it, the date and time, which email or link was used (by the name and address it was sent to), and what you write below, word for word. ${sender} will not see your internet address or which browser or device you use: those go only to the people who run Sign&Grow, together with your words.`;
+/** After a deletion: what is kept of a dispute that is still open, and until when. */
+export const DISPUTE_KEPT = 'When a disputed document is deleted with its sender\'s account, we keep its envelope ID, the fingerprint of its signed file, the day of the dispute and its state, with no names and no addresses, until a person at Sign&Grow has closed the dispute. The alert our team works from keeps the names and what was written until it is closed, then it is deleted like any help request.';

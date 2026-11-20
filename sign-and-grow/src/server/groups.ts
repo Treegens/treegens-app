@@ -191,7 +191,8 @@ const NO_CHECK = 'A one-time code and a text message go to one person, and a gro
 
 // Takes the document back from the member who had it, on the row alone. Used inside a correction: the correction
 // then treats the row like one whose person changed (the answers are cleared and the group is asked afresh).
-const unclaimRow = (rid: string) => run("UPDATE recipients SET claimed_by=NULL, claimed_at=NULL, name=group_name, email='' WHERE id=?", rid);
+// Whether its signature is paid for goes back to what it is for the group: a sender who had it free no longer has it.
+const unclaimRow = (rid: string) => run(`UPDATE recipients SET claimed_by=NULL, claimed_at=NULL, name=group_name, email='', free=CASE WHEN ${PAID_HERE} THEN 1 ELSE 0 END WHERE id=?`, rid);
 
 function insertMembers(rid: string, envelopeId: string, list: Member[], from = 0) {
   list.forEach((m, i) => run('INSERT INTO recipient_members (id, recipient_id, envelope_id, name, email, position) VALUES (?,?,?,?,?,?)', id('rmb'), rid, envelopeId, m.name, m.email, from + i));
@@ -283,6 +284,28 @@ export function assertGroups(e: any) {
   }
 }
 
+/**
+ * Before a template is used (POST /envelopes with "template_id", POST /bulk). A row, or the "recipients" of the call,
+ * that names a person for a role the template gives to a group is refused: the group's members get it, and the
+ * person named would never be emailed. When the call sends, a group the template names that was deleted since, or
+ * that is too small or too large now, refuses the whole call before anything is made, in words that point at the
+ * template, because no envelope is left behind to mend.
+ */
+export function assertTemplateGroups(tpl: any, fills: any[], sending: boolean, rows = false) {
+  for (const r of tpl.recipients || []) {
+    if (!r.group_name && !r.group_id) continue;
+    const name = r.group_name || r.name || 'a group';
+    const role = r.role_name || r.id;
+    const named = (f: any) => { const v = f && typeof f === 'object' ? f[role] ?? f[r.id] : null; return !!v && !!(str(v?.name, 500).trim() || str(v?.email, 500).trim()); };
+    const i = fills.findIndex(named);
+    if (i >= 0) throw bad(`${rows ? `Row ${i + 1}: t` : 'T'}he role "${role}" is the group "${name}" in this template, so its members get the document and nobody can be named for it. Leave "${role}" out, or change the template to name a person for that role. Nothing was sent.`);
+    if (!sending) continue;
+    if (r.group_missing) throw bad(`This template names the group "${name}" for "${role}", and that group no longer exists, so nothing was sent and nothing was made. Change the template: choose another group or a person for that role, then send again.`);
+    const n = (r.members || []).length;
+    if (n < GROUP_MIN_MEMBERS || n > GROUP_MAX_MEMBERS) throw bad(`This template names the group "${name}", which has ${many(n, 'member')}, and a group needs from ${GROUP_MIN_MEMBERS} to ${GROUP_MAX_MEMBERS}. Change the group under Contacts, or choose another recipient in the template. Nothing was sent.`);
+  }
+}
+
 /** Everyone an envelope's groups would email: each member counts as a person reached, like any recipient. */
 export const groupReach = (e: any): string[] => (e.recipients || []).flatMap((r: any) => (r.group_name ? (r.members || []).map((m: any) => m.email) : []));
 
@@ -322,9 +345,16 @@ export function settleGroups(envelopeId: string) {
   run('UPDATE recipients SET token=NULL, check_code=NULL WHERE envelope_id=? AND group_name IS NOT NULL AND claimed_by IS NULL', envelopeId);
   run(`UPDATE recipients SET token=(SELECT token FROM recipient_members WHERE id=recipients.claimed_by), check_code=(SELECT check_code FROM recipient_members WHERE id=recipients.claimed_by)
     WHERE envelope_id=? AND group_name IS NOT NULL AND claimed_by IS NOT NULL AND token IS NOT (SELECT token FROM recipient_members WHERE id=recipients.claimed_by)`, envelopeId);
-  run(`UPDATE recipients SET free=1 WHERE envelope_id=? AND group_name IS NOT NULL AND COALESCE(free, 0)=0
-    AND EXISTS (SELECT 1 FROM credits c WHERE c.reason='signature' AND substr(c.ref, 1, length(recipients.id) + 1) = recipients.id || '|')`, envelopeId);
+  run(`UPDATE recipients SET free=1 WHERE envelope_id=? AND group_name IS NOT NULL AND COALESCE(free, 0)=0 AND ${PAID_HERE}`, envelopeId);
 }
+
+// A signature used on this row by a member of the group it has now: the ledger line names the row, the address of
+// whoever signed and the row's person_gen (sigRef in credits.ts). Putting another group, or a person, in a group's
+// place moves person_gen on (writeContent in envelopes.ts), so what an earlier group or person paid for never makes
+// the next one's signature free.
+const PAID_HERE = `EXISTS (SELECT 1 FROM credits c WHERE c.reason='signature' AND substr(c.ref, 1, length(recipients.id) + 1) = recipients.id || '|'
+    AND CASE WHEN COALESCE(recipients.person_gen, 0) = 0 THEN instr(substr(c.ref, length(recipients.id) + 2), '|') = 0
+      ELSE substr(c.ref, -length('|' || recipients.person_gen)) = '|' || recipients.person_gen END)`;
 
 /**
  * The people to write to about a recipient who have been written to before: the recipient themselves, or, for a
@@ -357,8 +387,14 @@ export async function notifyMembers(e: any, r: any, kind: string, send: (e: any,
     // Like a person whose email came back: no reminder and no "expires soon" to a member's address that bounced.
     // It would only come back again. The sender was told which member it was and how to fix it (bouncedMember).
     if ((kind === 'reminder' || kind === 'expiring') && get("SELECT 1 x FROM emails WHERE envelope_id=? AND recipient_id=? AND to_email=? COLLATE NOCASE AND bounce_kind='hard'", e.id, r.id, m.email)) continue;
-    const how = await send(e, memberAs(r, m), kind);
+    // Someone who was never emailed this document (added by a correction, or left out before because of a mark of
+    // their own) is first sent the document itself, never a reminder or "it was changed" as their first email. After
+    // a correction, groupsCorrected sends it, with its line in the record, so "updated" leaves them out here.
+    const first = !m.sent_at && kind !== 'new' && kind !== 'again' && kind !== 'resent';
+    if (first && kind === 'updated') continue;
+    const how = await send(e, memberAs(r, m), first ? 'new' : kind);
     if (!how) continue;
+    if (first && how !== 'failed') audit(e.id, SYSTEM, how === 'outbox' ? 'Not emailed' : 'Sent to recipient', `${m.name} <${m.email}>, of ${r.group_name}, who had not been emailed the document before${how === 'outbox' ? '. No mail server is set up, so no email went out' : ''}`);
     if (!m.sent_at) run('UPDATE recipient_members SET sent_at=? WHERE id=?', now(), m.id);
     if (how === 'sent' || (how === 'outbox' && out !== 'sent') || !out) out = how;
   }
@@ -511,7 +547,9 @@ export function asMember(c: Ctx, out: { e: any; r: any; locked: boolean; gate: a
   // code_frozen_at: the group's code is frozen, or (for a member who cannot act) this member's own link is (memberWrongCode).
   const r = { ...row, name: m.name, email: m.email, token: m.token, check_code: m.check_code, muted: m.muted, member: m, group_state: state, complained_at: s.complained, reported_at: s.reported,
     code_frozen_at: row.code_frozen_at || ((state === 'taken' || state === 'copy') && frozenAlone(row, m) ? now() : null) };
-  const actor = { ...out.actor, name: `${m.name}${row.group_name ? `, for ${row.group_name}` : ''} <${m.email}>` };
+  // "member of": someone who only looks, mutes or asks has not acted for the group. "for" is kept for the one who
+  // takes it on (takeOn below), so the record and the certificate never read as if everyone who looked acted.
+  const actor = { ...out.actor, name: `${m.name}${row.group_name ? `, member of ${row.group_name}` : ''} <${m.email}>` };
   // Someone who is no longer on the document is told so at once: there is nothing behind the access code for them.
   return state === 'removed' ? { ...out, r, actor, locked: false, gate: null } : { ...out, r, actor };
 }
@@ -646,9 +684,11 @@ export function takeOn<T extends { e: any; r: any; actor: Actor }>(x: T, why = '
     throw notOpen(x.e, cur || x.r);
   }
   const others = active(x.r.id).filter((o: any) => o.id !== m.id);
-  audit(x.e.id, x.actor, 'Taken on for a group', `${m.name} <${m.email}> took this on for ${x.r.group_name}${why || `, by agreeing to ${groupDoes(x.r.role)} it`}. The links of the other members now say so: ${others.map((o: any) => `${o.name} <${o.email}>`).join(', ') || 'nobody else'}.`);
+  // From here this person acts for the group, and the record says so.
+  const actor = { ...x.actor, name: `${m.name}, for ${x.r.group_name} <${m.email}>` };
+  audit(x.e.id, actor, 'Taken on for a group', `${m.name} <${m.email}> took this on for ${x.r.group_name}${why || `, by agreeing to ${groupDoes(x.r.role)} it`}. The links of the other members now say so: ${others.map((o: any) => `${o.name} <${o.email}>`).join(', ') || 'nobody else'}.`);
   const e = loadEnvelope(x.e.id);
-  return { ...x, e, r: e.recipients.find((y: any) => y.id === x.r.id) };
+  return { ...x, e, r: e.recipients.find((y: any) => y.id === x.r.id), actor };
 }
 
 // Nobody has the document any more: the row is the group's again, with no link of its own, and nothing the person
@@ -659,7 +699,8 @@ function unclaim(r: any, alsoWaiting: boolean): boolean {
   return tx(() => {
     const done = run(`UPDATE recipients SET claimed_by=NULL, claimed_at=NULL, name=group_name, email='', token=NULL, check_code=NULL, consent_at=NULL, viewed_at=NULL, muted=0,
         sent_at=CASE WHEN status='pending' THEN NULL ELSE ? END, status=CASE WHEN status='pending' THEN 'pending' ELSE 'sent' END,
-        unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sender_name=NULL, self_name=NULL, signature_png=NULL, initials_png=NULL, ip=NULL, user_agent=NULL, seen_version=NULL, signed_before=NULL
+        unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sender_name=NULL, self_name=NULL, signature_png=NULL, initials_png=NULL, ip=NULL, user_agent=NULL, seen_version=NULL, signed_before=NULL,
+        free=CASE WHEN ${PAID_HERE} THEN 1 ELSE 0 END
       WHERE id=? AND group_name IS NOT NULL AND claimed_by IS NOT NULL AND status IN (${alsoWaiting ? "'pending'," : ''}'sent','viewed') AND (SELECT status FROM envelopes WHERE id=recipients.envelope_id)='sent'`, t, r.id).changes;
     if (done) run("UPDATE fields SET value=prefill WHERE recipient_id=? AND readonly=0 AND type!='note'", r.id);
     return !!done;
@@ -830,6 +871,17 @@ export function memberForCode(code: string): any {
   const m = get('SELECT * FROM recipient_members WHERE check_code=?', code);
   const r = m && get('SELECT * FROM recipients WHERE id=?', m.recipient_id);
   return r ? { ...r, name: m.name, email: m.email, token: m.token, check_code: m.check_code, sent_at: m.sent_at || r.sent_at, member: m } : null;
+}
+
+/**
+ * For the check page, when the code is that of a member the sender took out of the group: the email was genuine,
+ * and its link no longer opens the document, said like any other replaced link (why "removed"), with no link.
+ */
+export function removedMemberCheck(r: any): any {
+  const e = get('SELECT subject, status, sender_id, account_id FROM envelopes WHERE id=?', r.envelope_id);
+  const account = e && get('SELECT name, suspended_at FROM accounts WHERE id=?', e.account_id);
+  return { genuine: true, replaced: true, why: 'removed', replaced_at: r.member.removed_at, for_name: r.member.name, sender: e ? get('SELECT name, email FROM users WHERE id=?', e.sender_id) : null,
+    account: account?.name, paused: !!account?.suspended_at, subject: e?.subject || null, status: e?.status || null };
 }
 
 /**

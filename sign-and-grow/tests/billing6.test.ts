@@ -170,8 +170,10 @@ test('cancelling in the hour a new month starts: a lookup that fails does not tu
   assert.doesNotMatch(mail, /payment provider's page/, 'a Cancel pressed here is not put down to the provider page');
   assert.notEqual(stripe.invoices[draft].status, 'draft');
   // Pressing again, as the error said, does not say "already paid for".
+  // It answers with the same cancellation, ended today (billing8), not an error.
   const second = await p.c.post('/billing/cancel');
-  assert.equal(second.status, 400);
+  assert.equal(second.status, 200);
+  assert.deepEqual([second.data.ended_now, second.data.reference], [true, acct(p.id).cancel_ref]);
   assert.doesNotMatch(JSON.stringify(second.data), /already paid for/);
   // Charged anyway: back it goes.
   await event('invoice.paid', renewal(p, draft, unix(0) - 3600), { id: `evt6_${p.k}_dp` });
@@ -370,8 +372,9 @@ test('a refund we owe that the provider refuses three times needs a person: the 
   assert.equal((await p.c.post('/billing/cancel')).status, 200);
   stripe.sub(p.sub).status = 'canceled';
   await event('customer.subscription.deleted', { id: p.sub, customer: p.cus, status: 'canceled' }, { created: unix(0) + 2 });
-  // Charged after cancelling, and the card charge cannot be found by the software (its amount does not match).
+  // Charged after cancelling, and the provider says a clear no to the refund every time it is asked.
   const inv = 'in6_ghost';
+  stripe.fail('POST', /^refunds$/, 3, 'Your card was declined for this refund.', 400);
   await event('invoice.paid', renewal(p, inv, unix(0), {}, { amount: 901 }));
   let s = await state(p);
   assert.equal(s.refunds_pending.length, 1);

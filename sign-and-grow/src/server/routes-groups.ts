@@ -12,7 +12,9 @@ import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS } from '../lib/policy.ts';
 // Every member of the team can read and use them. Making, changing and deleting one is for admins, because a group
 // decides who can sign for "HR team" on everything the whole team sends.
 
-route('GET', '/groups', (c) => ({ groups: listGroups(c.account.id), min_members: GROUP_MIN_MEMBERS, max_members: GROUP_MAX_MEMBERS, may_change: c.admin }));
+// may_change: what the caller can really do. An API key with the "send" scope gets 403 on every change, whoever made it.
+route('GET', '/groups', (c) => ({ groups: listGroups(c.account.id), min_members: GROUP_MIN_MEMBERS, max_members: GROUP_MAX_MEMBERS,
+  may_change: !!c.admin && !(c.auth?.via === 'api_key' && c.auth?.scope !== 'admin') }));
 route('POST', '/groups', async (c) => ({ group: saveGroup(c.account.id, await c.body()) }), 'admin');
 route('PUT', '/groups/:id', async (c) => ({ group: saveGroup(c.account.id, await c.body(), c.params.id) }), 'admin');
 route('DELETE', '/groups/:id', (c) => void deleteGroup(c.account.id, c.params.id), 'admin');
@@ -26,20 +28,24 @@ route('POST', '/envelopes/:id/recipients/:rid/release', async (c) => releaseGrou
 
 const senderOf = (e: any) => get('SELECT name, email FROM users WHERE id=?', e.sender_id) || { name: 'the sender', email: '' };
 
-// Every hand-back emails the whole group, so one link cannot do it over and over to fill colleagues' inboxes.
-const HAND_BACKS_PER_DAY = 3;
+// Every hand-back emails the whole group, so one link cannot do it over and over to fill colleagues' inboxes. It is
+// counted for the member who hands it back, so one member's hand-backs never leave a colleague who took it on by
+// mistake stuck with it, and for the document as a whole, with a higher ceiling, so several members together
+// cannot flood the group either.
+const HAND_BACKS_PER_DAY = 3, HAND_BACKS_PER_DOCUMENT = 6;
 route('POST', '/sign/:token/hand-back', async (c) => {
   find(c);
   const b = await c.req.json().catch(() => ({}));
   // Looked up again after the body is in, with nothing waited for before the change: see checkedBody in routes-sign.ts.
   const { e, r, actor } = look(c);
-  const key = `handback:${r.id}`;
-  if (rateWait(key, HAND_BACKS_PER_DAY)) {
-    const s = senderOf(e);
-    throw bad(`This document has been handed back ${HAND_BACKS_PER_DAY} times today, and each time the whole group is emailed. It stays with you for now. If someone else should have it, ask ${s.name} to give it back to the group${s.email ? `: ${s.email}` : ''}. Nothing you filled in is lost.`, 429);
-  }
+  const mine = `handback:${r.claimed_by || r.id}`, all = `handback-row:${r.id}`;
+  const s = senderOf(e);
+  const ask = `If someone else should have it, ask ${s.name} to give it back to the group${s.email ? `: ${s.email}` : ''}. Nothing you filled in is lost.`;
+  if (rateWait(mine, HAND_BACKS_PER_DAY)) throw bad(`You have handed this document back ${HAND_BACKS_PER_DAY} times today, and each time the whole group is emailed. It stays with you for now. ${ask}`, 429);
+  if (rateWait(all, HAND_BACKS_PER_DOCUMENT)) throw bad(`This document has been handed back ${HAND_BACKS_PER_DOCUMENT} times today by members of the group, and each time the whole group is emailed. It stays with you for now. ${ask}`, 429);
   await handBack(e, r, b?.reason, actor);
-  rateLimit(key, Infinity, 86400_000);
+  rateLimit(mine, Infinity, 86400_000);
+  rateLimit(all, Infinity, 86400_000);
 }, 'public');
 
 // "Ask the sender to give it back to the group": for a member whose colleague has taken the document on. Only the

@@ -38,7 +38,7 @@ const GROUPS: [string, Endpoint[]][] = [
     ['POST', '/api/envelopes/:id/recipient-view', 'Get one recipient\'s signing URL, for embedded signing.'],
     ['GET', '/api/envelopes/:id/comments', 'Every question and comment thread, private ones included, with who waits for an answer. Comments are not printed on the document and are not part of what is signed.'],
     ['POST', '/api/envelopes/:id/comments', 'Answer in a thread ("thread_id"), or start one: "for" is "everyone" or the id of one person, and is never guessed. The person answered is emailed, at most once every 10 minutes. The comment.created webhook fires.'],
-    ['POST', '/api/envelopes/:id/comments/:thread/settle', 'Mark a thread as settled, or open it again with {"settled": false}.'],
+    ['POST', '/api/envelopes/:id/comments/:thread/settle', 'Mark a thread as settled, or open it again with {"settled": false}. Each person can change one thread 10 times an hour.'],
   ]],
   ['Batches', [
     ['POST', '/api/bulk', 'Send a template to up to 500 people in one call. Returns the batch id and a result for every row.'],

@@ -218,14 +218,20 @@ test('an invoice that names no subscription is matched by asking the provider wh
   assert.equal((await bal(p)).balance, kept + 9);
   assert.ok(!mailTo(p.email).some((m: any) => /^Refund/.test(m.subject)));
 
-  // When the customer really is subscribed to nothing any more, such an invoice still goes back.
+  // When the customer is subscribed to nothing any more and the invoice names neither our price, our mark nor a
+  // subscription of ours, it cannot be told from another product's: it is not counted, not refunded, nobody is
+  // emailed, and a person is told (billing8 has the rule).
   const q = await person('Gone');
   await subscribe(q);
   assert.equal((await q.c.post('/billing/cancel')).status, 200);
   Object.assign(stripe.sub(q.sub), { customer: q.cus, status: 'canceled' });
   await event('customer.subscription.deleted', { id: q.sub, customer: q.cus, status: 'canceled' });
+  const mails = mailTo(q.email).length;
   await event('invoice.paid', invoice(q, 'in5_gone2', { subscription: undefined, billing_reason: 'subscription_cycle', lines: { data: [{ period: { start: unix(0), end: unix(30) } }] } }));
-  assert.equal(stripe.refunded('ch_in5_gone2'), 900);
+  assert.equal(stripe.refunded('ch_in5_gone2'), 0);
+  assert.deepEqual([pay('in5_gone2').kind, pay('in5_gone2').account_id], ['unknown', null]);
+  assert.equal(mailTo(q.email).length, mails);
+  assert.ok(alerts().some((m) => m.includes('in5_gone2') && /could not be told apart/.test(m)));
   assert.equal(acct(q.id).plan, 'seedling');
 
   // A subscription on the same provider account that is not ours (another product, another price) is never adopted.

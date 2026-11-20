@@ -414,7 +414,7 @@ test('handing back is limited to 3 times a day, because each time the whole grou
   ok(await agree(link));
   const no = await from().post(`/sign/${link}/hand-back`, {});
   assert.equal(no.status, 429);
-  assert.match(no.data.error, /handed back 3 times today.*It stays with you for now.*ask Sender backflood/);
+  assert.match(no.data.error, /You have handed this document back 3 times today.*It stays with you for now.*ask Sender backflood/);
   assert.ok(row(e.id).claimed_by, 'and it is still Maya\'s');
 });
 
@@ -533,7 +533,8 @@ test('the not-opened alert names the group, and stays quiet once one member has 
   const sender2 = db.get('SELECT u.email FROM users u JOIN envelopes e ON e.sender_id=u.id WHERE e.id=?', second.e.id).email;
   assert.equal(mailTo(sender2).filter((m: any) => m.subject.startsWith('Not opened yet')).length, 0);
   // And the record says which member opened it.
-  assert.match(said(second.e.id, 'Viewed')[0].actor, /^Ben Ortiz, for HR team </);
+  // Someone who only looked is "member of" the group; "for" is for the one who takes it on (repair, verify:groups).
+  assert.match(said(second.e.id, 'Viewed')[0].actor, /^Ben Ortiz, member of HR team </);
 });
 
 test('one access code for the whole group: every member\'s link asks for it, and nothing about the document shows before it', async () => {
@@ -988,4 +989,248 @@ test('repair: a member of a copy group who marked our email as spam gets no comp
   await s.cron.tick();
   assert.equal(reminders(s2.ben), 0);
   assert.ok(reminders(s2.maya) >= 1, 'the others are reminded by the timer');
+});
+
+test('repair: a hand-back note goes to the sender and the record only, never into the other members\' inboxes', async () => {
+  const { c, e, maya, ben } = await setup('note');
+  await send(c, e.id);
+  ok(await agree(linkOf(e.id, maya)));
+  const lure = 'PayPal billing: your payment of $499.99 was charged today. To cancel call +1 888 555 0199 or visit http://paypal-refund.example';
+  ok(await from().post(`/sign/${linkOf(e.id, maya)}/hand-back`, { reason: lure }));
+  const back = mailTo(ben).filter((m: any) => m.subject === 'Back with HR team: Staff handbook');
+  assert.equal(back.length, 1, 'Ben is told it is with the group again');
+  assert.doesNotMatch(back[0].html, /499|888 555|paypal/i, 'without a word of the note');
+  const told = text(mailTo(senderMail(e.id)).filter((m: any) => m.subject === 'Handed back: Staff handbook')[0].html);
+  assert.match(told, /with this note for you: PayPal billing/);
+  assert.match(told, /2 members were emailed their link\. The note was not passed on to them\./);
+  assert.ok(said(e.id, 'Handed back to the group')[0].detail.includes('PayPal billing'), 'the record keeps it');
+  assert.match(read('src/components/sign/GroupNotice.tsx'), /not to the others in \{g\.name\}/);
+});
+
+test('repair: an email to the member who has it comes back: the sender is told to give it back or edit the group, never to use Correct', async () => {
+  const { c, e, maya } = await setup('holderBounce');
+  await send(c, e.id);
+  ok(await agree(linkOf(e.id, maya)));
+  ok(await c.post(`/envelopes/${e.id}/remind`, { recipient_id: row(e.id).id }));
+  await mailEvent({ type: 'bounce', email: maya, reason: '550 5.1.1 user unknown' });
+  const told = text(mailTo(senderMail(e.id)).filter((m: any) => m.subject === 'Could not be delivered: Staff handbook')[0].html);
+  assert.doesNotMatch(told, /choose Correct/);
+  assert.match(told, /Maya Lopez took this on for HR team, and no reminders go to this address now\. If the address is wrong, open the envelope and choose "Give back to the group"/);
+  // And what it says works: giving it back is accepted.
+  ok(await c.post(`/envelopes/${e.id}/recipients/${row(e.id).id}/release`, {}));
+});
+
+test('repair: a member who cannot act cannot freeze the access code of the colleague who is signing, nor use up their asks for it', async () => {
+  const { c, e, maya, ben } = await setup('freeze');
+  const cur = asBody(await fresh(c, e.id));
+  ok(await c.put(`/envelopes/${e.id}`, { ...cur, recipients: cur.recipients.map((r: any) => ({ ...r, access_code: 'harbour-77' })) }));
+  await send(c, e.id);
+  const m = from();
+  ok(await m.post(`/sign/${linkOf(e.id, maya)}/unlock`, { code: 'harbour-77' }));
+  ok(await agree(linkOf(e.id, maya), m));
+  const benLink = linkOf(e.id, ben);
+  let last: any;
+  for (let i = 0; i < 12; i++) last = await from().post(`/sign/${benLink}/unlock`, { code: `wrong-${i}` });
+  assert.equal(last.status, 423, 'Ben\'s own link is frozen');
+  assert.equal(row(e.id).code_frozen_at, null, 'the group\'s code is not');
+  assert.equal((await view(benLink)).code_frozen, true);
+  // Maya, in a new browser, still gets in with the right code.
+  const m2 = from();
+  ok(await m2.post(`/sign/${linkOf(e.id, maya)}/unlock`, { code: 'harbour-77' }));
+  assert.equal((await view(linkOf(e.id, maya), m2)).locked, false);
+  // Ben asking for the code twice does not use up Maya's asks.
+  ok(await from().post(`/sign/${benLink}/ask-code`));
+  ok(await from().post(`/sign/${benLink}/ask-code`));
+  assert.equal((await from().post(`/sign/${benLink}/ask-code`)).status, 429);
+  ok(await from().post(`/sign/${linkOf(e.id, maya)}/ask-code`));
+  // The sender was told about Ben's link alone, and a new code opens it again.
+  assert.equal(mailTo(senderMail(e.id)).filter((x: any) => x.subject === 'Access code frozen for one link: Staff handbook').length, 1);
+  ok(await c.post(`/envelopes/${e.id}/correct`, { recipient_id: row(e.id).id, access_code: 'lighthouse-88' }));
+  const b = from();
+  ok(await b.post(`/sign/${benLink}/unlock`, { code: 'lighthouse-88' }), 'a new code starts Ben\'s count again');
+});
+
+test('repair: money: the sender who signs for a group they are in signs free, like signing directly, and a different group in its place pays its own', async () => {
+  const was = process.env.STRIPE_SECRET_KEY;
+  process.env.STRIPE_SECRET_KEY = 'sk_test_groups'; // signatures are counted; nothing here calls the payment provider
+  try {
+    const credits = await import('../src/server/credits.ts');
+    const k = ++g;
+    const senderEmail = `sam.self${k}@example.com`;
+    const c = await person('Sam Sender', senderEmail);
+    const acct = db.get('SELECT m.account_id a FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email=?', senderEmail).a;
+    const used = () => db.get("SELECT COUNT(*) n FROM credits WHERE account_id=? AND reason='signature'", acct).n;
+    const directors = await makeGroup(c, [{ name: 'Sam Sender', email: senderEmail }, { name: 'Ola Other', email: `ola.${k}@x.example` }], 'Directors');
+    const e = await groupDraft(c, directors.id);
+    await send(c, e.id);
+    assert.equal(credits.reserved(acct), 1, 'one held while nobody has it');
+    const mine = linkOf(e.id, senderEmail);
+    ok(await agree(mine));
+    assert.equal(credits.reserved(acct), 0, 'the sender has it: their own signature is free, so nothing is held');
+    // Handing it back puts the hold back, and Ola signing uses one.
+    ok(await from().post(`/sign/${mine}/hand-back`, {}));
+    assert.equal(credits.reserved(acct), 1);
+    ok(await agree(mine));
+    ok(await finish(row(e.id).token));
+    assert.equal(used(), 0, 'signing your own document is free, also for a group you are in');
+
+    // A group that signed, replaced by another group: the new group's signature is its own.
+    const one = await makeGroup(c, three(`one${k}`), 'Group one');
+    const two = await makeGroup(c, three(`two${k}`), 'Group two');
+    const f = await upload(c, 1);
+    const sig = (rid: string, y: number) => ({ document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x: 0.1, y, w: 0.3, h: 0.06 });
+    const e2 = ok(await c.post('/envelopes', { subject: 'Swap', send: true, documents: [{ id: 'd', file_id: f.id }], recipients: [{ id: 'g', role: 'signer', group_id: one.id }, { id: 'p', role: 'signer', name: 'Pat Person', email: `pat.swap${k}@example.com` }], fields: [sig('g', 0.3), sig('p', 0.6)] })).envelope;
+    const first = linkOf(e2.id, one.members[0].email);
+    ok(await agree(first));
+    ok(await finish(first));
+    const before = used();
+    const cur = asBody(await fresh(c, e2.id));
+    ok(await c.put(`/envelopes/${e2.id}`, { ...cur, recipients: cur.recipients.map((r: any) => (r.group_id ? { ...r, group_id: two.id } : r)), resign: true }), 'swap the group');
+    assert.equal(row(e2.id).free, 0, 'the new group has not paid');
+    const second = linkOf(e2.id, two.members[0].email);
+    ok(await agree(second));
+    ok(await finish(second));
+    assert.equal(used(), before + 1, 'the new group\'s signature is a new one');
+  } finally {
+    if (was === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = was;
+  }
+});
+
+test('repair: hand-backs are counted per member, with a higher ceiling for the document, so one member never leaves a colleague stuck', async () => {
+  const { c, e, maya, ben } = await setup('backEach');
+  await send(c, e.id);
+  const m = linkOf(e.id, maya), b = linkOf(e.id, ben);
+  for (let i = 0; i < 3; i++) {
+    ok(await agree(m));
+    ok(await from().post(`/sign/${m}/hand-back`, {}));
+  }
+  ok(await agree(b), 'Ben takes it on by mistake');
+  ok(await from().post(`/sign/${b}/hand-back`, { reason: 'wrong person' }), 'and can still hand it back');
+  // Two members together still stop at the ceiling for the document.
+  for (let i = 0; i < 2; i++) {
+    ok(await agree(b));
+    ok(await from().post(`/sign/${b}/hand-back`, {}));
+  }
+  ok(await agree(linkOf(e.id, (await fresh(c, e.id)).recipients[0].members[2].email)));
+  const cy = row(e.id).token;
+  const no = await from().post(`/sign/${cy}/hand-back`, {});
+  assert.equal(no.status, 429);
+  assert.match(no.data.error, /handed back 6 times today by members of the group/);
+});
+
+test('repair: someone added to a group by a correction gets the document itself as their first email, never "Updated", and the record says so', async () => {
+  const { c, e, maya } = await setup('addMove');
+  await send(c, e.id);
+  const cur = await fresh(c, e.id);
+  const dee = `dee.addmove${++g}@hr.example`;
+  const body = asBody(cur);
+  body.recipients = body.recipients.map((r: any) => ({ ...r, members: [...cur.recipients[0].members.map((m: any) => ({ name: m.name, email: m.email })), { name: 'Dee Diaz', email: dee }] }));
+  body.fields = body.fields.map((f: any) => (f.type === 'signature' ? { ...f, x: f.x + 0.05 } : f));
+  ok(await c.put(`/envelopes/${e.id}`, body));
+  assert.deepEqual(subjects(dee), ['Staff handbook'], 'the invitation, not "Updated"');
+  // "Not emailed" here only because the tests run with no mail server: the line names Dee and the group either way.
+  assert.ok(trail(e.id).some((a: any) => (a.action === 'Sent to recipient' || a.action === 'Not emailed') && a.detail.startsWith(`Dee Diaz <${dee}>, added to HR team`)));
+  assert.ok(subjects(maya).includes('Updated: Staff handbook'), 'those who had it are told what changed');
+  // While a colleague has it, someone added waits, and the editor says so instead of promising an email.
+  const s2 = await setup('addWhile');
+  await send(s2.c, s2.e.id);
+  ok(await agree(linkOf(s2.e.id, s2.maya)));
+  const cur2 = await fresh(s2.c, s2.e.id);
+  const eve = `eve.addwhile${++g}@hr.example`;
+  const b2 = asBody(cur2);
+  b2.recipients = b2.recipients.map((r: any) => ({ ...r, members: [...cur2.recipients[0].members.map((m: any) => ({ name: m.name, email: m.email })), { name: 'Eve Evans', email: eve }] }));
+  ok(await s2.c.put(`/envelopes/${s2.e.id}`, b2));
+  assert.equal(subjects(eve).length, 0);
+  ok(await s2.c.post(`/envelopes/${s2.e.id}/recipients/${row(s2.e.id).id}/release`, {}));
+  assert.deepEqual(subjects(eve), ['Back with HR team: Staff handbook'], 'emailed once it is with the group again');
+  assert.match(read('src/components/editor/GroupRecipient.tsx'), /If a colleague has taken it on, they are emailed when it comes back to the group/);
+  assert.doesNotMatch(read('src/server/openapi.ts'), /someone added is emailed their own link at once/);
+});
+
+test('repair: giving it back while sending is paused says nobody was emailed, and the screen shows what the server said', async () => {
+  const { c, e, maya, ben } = await setup('pausedBack');
+  await send(c, e.id);
+  ok(await agree(linkOf(e.id, maya)));
+  const acct = db.get('SELECT account_id a FROM envelopes WHERE id=?', e.id).a;
+  db.run("UPDATE accounts SET suspended_at=?, suspended_reason='a test' WHERE id=?", new Date().toISOString(), acct);
+  try {
+    const r = ok(await c.post(`/envelopes/${e.id}/recipients/${row(e.id).id}/release`, {}));
+    assert.equal(r.emailed, 0);
+    assert.match(r.told, /^Nobody was emailed about it/);
+    assert.equal(subjects(ben).filter((x: string) => x.startsWith('Back with')).length, 0);
+  } finally {
+    db.run('UPDATE accounts SET suspended_at=NULL, suspended_reason=NULL WHERE id=?', acct);
+  }
+  const ok2 = await setup('pausedBack2');
+  await send(ok2.c, ok2.e.id);
+  ok(await agree(linkOf(ok2.e.id, ok2.maya)));
+  assert.equal(ok(await ok2.c.post(`/envelopes/${ok2.e.id}/recipients/${row(ok2.e.id).id}/release`, {})).told, '3 members were emailed their link.');
+  const page = read('src/components/sender/GroupMembers.tsx');
+  assert.match(page, /x\?\.told/);
+  assert.doesNotMatch(page, /Every member was emailed their link/);
+});
+
+test('repair: the record says "member of" for members who only looked, and "for" only for the one who acted', async () => {
+  const { c, e, maya, ben } = await setup('memberOf');
+  await send(c, e.id);
+  await view(linkOf(e.id, ben));
+  ok(await agree(linkOf(e.id, maya)));
+  ok(await finish(linkOf(e.id, maya)));
+  assert.match(said(e.id, 'Viewed').map((a: any) => a.actor).join('\n'), /^Ben Ortiz, member of HR team </m);
+  assert.equal(said(e.id, 'Taken on for a group')[0].actor, `Maya Lopez, for HR team <${maya}>`);
+  assert.ok(!trail(e.id).some((a: any) => /^Ben Ortiz, for HR team/.test(a.actor)), 'Ben never reads as acting for the group');
+});
+
+test('repair: the check page says a removed member\'s email was genuine and that they were taken off, with no link', async () => {
+  const { c, e, maya } = await setup('checkRemoved');
+  await send(c, e.id);
+  const code = db.get('SELECT check_code FROM recipient_members WHERE envelope_id=? AND email=?', e.id, maya).check_code;
+  const cur = await fresh(c, e.id);
+  const body = asBody(cur);
+  body.recipients = body.recipients.map((r: any) => ({ ...r, members: cur.recipients[0].members.filter((m: any) => m.email !== maya).map((m: any) => ({ name: m.name, email: m.email })) }));
+  ok(await c.put(`/envelopes/${e.id}`, body));
+  const checked = ok(await from().post('/public/check', { code }));
+  assert.equal(checked.genuine, true);
+  assert.equal(checked.replaced, true);
+  assert.equal(checked.why, 'removed');
+  assert.equal(checked.for_name, 'Maya Lopez');
+  assert.equal(checked.url, undefined, 'no link to a document she can no longer open');
+});
+
+test('repair: a send-scope API key is told it may not change groups', async () => {
+  const c = await person('Key Owner', `key.owner.${++g}@example.com`);
+  const key = ok(await c.post('/api-keys', { name: 'sender', scope: 'send' }));
+  const got = await from().call('GET', '/groups', undefined, { authorization: `Bearer ${key.key}` });
+  assert.equal(got.status, 200, JSON.stringify(got.data));
+  assert.equal(got.data.may_change, false);
+  assert.equal(ok(await c.get('/groups')).may_change, true, 'the admin in the app may');
+});
+
+test('repair: a template whose group is gone, or a row that names a person for the group\'s role, is refused before anything is made, pointing at the template', async () => {
+  const c = await person('Sender tplgone', `sender.tplgone.${++g}@example.com`);
+  const grp = await makeGroup(c, three('tplgone'), 'Accounts payable');
+  const f = await upload(c, 1);
+  const tpl = ok(await c.post('/envelopes', { kind: 'template', subject: 'Supplier form', documents: [{ id: 'd', file_id: f.id }],
+    recipients: [{ id: 's', role: 'signer', role_name: 'Supplier' }, { id: 'a', role: 'approver', role_name: 'Accounts', group_id: grp.id }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 's', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).envelope;
+  const k = ++g;
+  // A person named for the group's role is refused, not quietly ignored.
+  const named = await c.post('/bulk', { template_id: tpl.id, rows: [{ Supplier: { name: 'Sup', email: `sup.${k}@x.example` }, Accounts: { name: 'Eve Evil', email: `eve.${k}@x.example` } }] });
+  assert.equal(named.status, 400);
+  assert.match(named.data.error, /Row 1: the role "Accounts" is the group "Accounts payable" in this template/);
+  const use = await c.post('/envelopes', { template_id: tpl.id, send: true, recipients: { Supplier: { name: 'Sue', email: `sue.${k}@x.example` }, Accounts: { name: 'Eve', email: `eve2.${k}@x.example` } } });
+  assert.equal(use.status, 400);
+  assert.equal(mailTo(`eve.${k}@x.example`).length + mailTo(`eve2.${k}@x.example`).length, 0);
+  // The group is deleted: the whole batch is refused in words about the template, and no drafts are left behind.
+  ok(await c.call('DELETE', `/groups/${grp.id}`));
+  const drafts = () => db.get("SELECT COUNT(*) n FROM envelopes WHERE sender_id=(SELECT sender_id FROM envelopes WHERE id=?) AND kind='envelope'", tpl.id).n;
+  const before = drafts();
+  const bulk = await c.post('/bulk', { template_id: tpl.id, rows: [{ Supplier: { name: 'Sup 1', email: `sup1.${k}@x.example` } }, { Supplier: { name: 'Sup 2', email: `sup2.${k}@x.example` } }] });
+  assert.equal(bulk.status, 400);
+  assert.match(bulk.data.error, /Change the template: choose another group or a person for that role/);
+  const sent = await c.post('/envelopes', { template_id: tpl.id, send: true, recipients: { Supplier: { name: 'Sue', email: `sue3.${k}@x.example` } } });
+  assert.equal(sent.status, 400);
+  assert.match(sent.data.error, /Change the template/);
+  assert.equal(drafts(), before, 'nothing was left behind');
 });

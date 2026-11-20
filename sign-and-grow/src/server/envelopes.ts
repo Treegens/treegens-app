@@ -6,7 +6,7 @@ import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
-import { STANDING_PAYMENT } from './credits.ts';
+import { STANDING_PAYMENT, personGen } from './credits.ts';
 import { DATE_FORMATS, momentText, momentForEmail, isDaytime, validZone, REMINDER_DAY_START } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
@@ -760,7 +760,9 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       // Another person is the next person on the request: what the one before paid for or signed is not theirs, so
       // their signature is their own (sigRef in credits.ts), and the check for signatures below counts it.
       if (otherPerson || otherName) {
-        run('UPDATE recipients SET person_gen=COALESCE(person_gen,0)+1 WHERE id=?', r.id);
+        // Someone the request had before (renamed away and back) is that person again (personGen in credits.ts).
+        const pg = personGen(old, r.name, r.email);
+        run('UPDATE recipients SET person_gen=?, person_gens=? WHERE id=?', pg.gen, pg.gens, r.id);
         newPeople.push(`${r.name} in the place of ${old.name}`);
       }
       if (old.status === 'completed' && old.role === 'cc') {
@@ -1688,16 +1690,27 @@ export async function formNeedsSignatures(accountId: string, powerformId: string
 
 // Visitors who were told that what they filled in is saved and that we email them when the form can take their
 // signature are emailed once that is so: one email each, oldest first, and no more of them at a time than there are
-// signatures free (counting the ones already told who have not finished yet). Run on the timer.
+// signatures free (counting the ones told in the last day who have not finished yet: one who was told and stays away
+// does not keep the next one waiting for ever). Run on the timer. The rules of every email in the sender's name hold
+// here too: nobody who marked our email as spam, nothing while the account is paused or closing (they are told once
+// that is over) or while the form is switched off (they are told once it is on again), and nothing that reads like a
+// fake payment notice.
 export async function formVisitorsReady(): Promise<number> {
   if (!creditsEnabled()) return 0;
   let told = 0;
   const waiting = all(`SELECT r.*, e.account_id, e.subject, e.expires_at FROM recipients r JOIN envelopes e ON e.id=r.envelope_id
-    WHERE e.powerform_id IS NOT NULL AND e.status='sent' AND r.status IN ('sent','viewed') AND r.form_waits_at IS NOT NULL ORDER BY r.form_waits_at`);
+    JOIN powerforms f ON f.id=e.powerform_id JOIN accounts a ON a.id=e.account_id
+    WHERE e.powerform_id IS NOT NULL AND e.status='sent' AND r.status IN ('sent','viewed') AND r.form_waits_at IS NOT NULL
+      AND f.active=1 AND a.suspended_at IS NULL AND a.closing_at IS NULL AND r.complained_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM mail_complaints c WHERE c.account_id=e.account_id AND c.email=lower(trim(r.email)))
+    ORDER BY r.form_waits_at`);
   const room = new Map<string, number>();
+  const dayAgo = new Date(Date.now() - 864e5).toISOString();
   for (const r of waiting) {
-    if (!room.has(r.account_id)) room.set(r.account_id, available(r.account_id) - waiting.filter((x) => x.account_id === r.account_id && x.form_ready_at).length);
+    if (!room.has(r.account_id)) room.set(r.account_id, available(r.account_id) - waiting.filter((x) => x.account_id === r.account_id && x.form_ready_at && x.form_ready_at > dayAgo).length);
     if (r.form_ready_at || !r.email || (room.get(r.account_id) || 0) < 1) continue;
+    const env = loadEnvelope(r.envelope_id);
+    if (!env || mayWrite(env)) continue;
     room.set(r.account_id, (room.get(r.account_id) || 0) - 1);
     run('UPDATE recipients SET form_ready_at=? WHERE id=?', now(), r.id);
     await sendMail({ to: r.email, subject: `You can finish "${r.subject}" now`, heading: 'The form can take your signature now',
@@ -1720,7 +1733,7 @@ function takeOverCost(e: any, r: any, newEmail: string, newName: string, bySigne
   // name is being put right) needs nothing more, and stays as it is. Another person, also at the same address, is
   // the next person on the request (nextPerson), and nothing is paid for them yet.
   const same = sameSigner(r, { email: newEmail, name: newName });
-  if (paidFor(e.account_id, { ...(same ? r : nextPerson(r)), email: newEmail })) return r.free ? 1 : free;
+  if (paidFor(e.account_id, { ...(same ? r : nextPerson(r, { name: newName, email: newEmail })), email: newEmail })) return r.free ? 1 : free;
   // A witness never uses a signature, whoever is in their place, so nothing is checked for one.
   if (creditsEnabled() && ACTS(r.role) && r.role !== 'witness' && !isChargeable(r, sender) && !free) {
     const have = available(e.account_id);
@@ -1798,7 +1811,9 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
     const other = name !== r.name && !samePerson(r.name, name);
     if (other) clearAnswers(r.id);
     // Another person is the next person on the request: their signature is their own (sigRef in credits.ts).
-    run(`UPDATE recipients SET name=?, access_code=?, free=?${newCode ? `, ${fresh}` : ''}${other ? ", person_gen=COALESCE(person_gen,0)+1, consent_at=NULL, viewed_at=NULL, muted=0, unopened_alerted_at=NULL, status=CASE WHEN status='viewed' THEN 'sent' ELSE status END" : ''} WHERE id=?`, name, code, free, r.id);
+    // Someone the request had before (renamed away and back) is that person again (personGen in credits.ts).
+    const pg = personGen(r, name, r.email);
+    run(`UPDATE recipients SET name=?, access_code=?, free=?${newCode ? `, ${fresh}` : ''}${other ? ", person_gen=?, person_gens=?, consent_at=NULL, viewed_at=NULL, muted=0, unopened_alerted_at=NULL, status=CASE WHEN status='viewed' THEN 'sent' ELSE status END" : ''} WHERE id=?`, name, code, free, ...(other ? [pg.gen, pg.gens] : []), r.id);
     audit(e.id, actor, 'Recipient corrected', `${r.name} is now ${name}${code !== r.access_code ? ', access code changed' : ''}${other ? `. That is another person at the same address, so nothing that ${r.name} had agreed to, filled in or signed was kept` : ''}`);
     newerVersion(e.id, actor, name !== r.name ? `changed the name of ${r.name} to ${name}` : `changed the access code of ${r.name}`);
     // The person is asked to sign under their name, and others may see it printed. A screen that still shows the
@@ -1815,8 +1830,9 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   // request, and the wait before "not opened yet" is counted from the email that goes to the new address now.
   clearAnswers(r.id);
   // With an address we email them from now on, so a link the sender used to pass on is no longer theirs to pass.
-  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sent_at=?, status=?, free=?, link_by_sender=0, person_gen=COALESCE(person_gen,0)+1, ${fresh} WHERE id=?`,
-    name, email, code, token(), checkCode(), r.status === 'pending' ? r.sent_at : now(), r.status === 'pending' ? 'pending' : 'sent', free, r.id);
+  const pg = personGen(r, name, email);
+  run(`UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, sent_at=?, status=?, free=?, link_by_sender=0, person_gen=?, person_gens=?, ${fresh} WHERE id=?`,
+    name, email, code, token(), checkCode(), r.status === 'pending' ? r.sent_at : now(), r.status === 'pending' ? 'pending' : 'sent', free, pg.gen, pg.gens, r.id);
   noteReached(e, [email]);
   audit(e.id, actor, 'Recipient corrected', `${labelOf(r)} is now ${name} <${email}>. The link ${r.email ? `sent to ${r.email}` : 'the sender had shared'} stopped working, and anything filled in through it was cleared.`);
   newerVersion(e.id, actor, `changed ${labelOf(r)} to ${name} <${email}>`);
@@ -1923,21 +1939,30 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // told (once a day at most), and the same link works again as soon as there is a signature. The start is not
   // closed for being idle while they wait (cronTick), and they are emailed once when the form can take their
   // signature (formVisitorsReady).
-  if (e.powerform_id && creditsEnabled() && isChargeable(r, senderOf(e) || '') && !paidFor(e.account_id, r) && available(e.account_id) < 1) {
+  const formCharge = !!e.powerform_id && creditsEnabled() && isChargeable(r, senderOf(e) || '');
+  const formWaits = async () => {
     try {
       applyValues(e, r, body.values || {}, false);
     } catch {}
     run('UPDATE recipients SET form_waits_at=?, form_ready_at=NULL WHERE id=?', now(), r.id);
     await formNeedsSignatures(e.account_id, e.powerform_id, 'finish');
-    throw bad(`This form cannot take your signature at the moment. That is nothing you did: the people who run it need to add signatures first, and we have just told them. Everything you filled in is saved, and it stays saved while you wait${e.expires_at ? `, until ${momentForEmail(e.expires_at, r.tz)}` : ''}.${r.email ? ` We email you at ${r.email} once the form can take your signature.` : ''} Then open the same link and press Finish.`, 503, { code: 'form_waits' });
-  }
+    // Promised only to someone we may email (formVisitorsReady keeps the same rules).
+    const mailable = !!r.email && !r.complained_at && !get('SELECT 1 x FROM mail_complaints WHERE account_id=? AND email=lower(trim(?))', e.account_id, r.email);
+    throw bad(`This form cannot take your signature at the moment. That is nothing you did: the people who run it need to add signatures first, and we have just told them. Everything you filled in is saved, and it stays saved while you wait${e.expires_at ? `, until ${momentForEmail(e.expires_at, r.tz)}` : ''}.${mailable ? ` We email you at ${r.email} once the form can take your signature.` : ''} Then open the same link and press Finish.`, 503, { code: 'form_waits' });
+  };
+  if (formCharge && !paidFor(e.account_id, r) && available(e.account_id) < 1) await formWaits();
+  // The form's signature is taken in the same transaction that claims the Finish, and only while one is free (the
+  // check above is the quick answer; this is the one that holds): two visitors finishing at the same moment can
+  // never both take the last one, and the balance never goes below zero.
+  const FORM_FULL = new Error('form_full');
+  let formTook = false;
   const t = now();
   // Finishing is claimed by one statement that only changes a row while this recipient and the envelope are both
   // still open. e and r were read before this and may be out of date: a second Finish, a decline or a void can have
   // got in since. Whoever comes second changes no row and stops here with nothing written: no values, no audit
   // line, no webhook, no signature used, no email. Nothing is waited for between the claim and the values it
   // guards, and a value that fails its check undoes the claim with the rest.
-  tx(() => {
+  try { tx(() => {
     // The same statement refuses a Finish when the content version has moved on from the one this person was shown
     // (or, for a caller we never showed one, from the one read a moment ago), so a correction that lands between
     // the look and the claim cannot be signed unseen either.
@@ -1947,6 +1972,11 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
       const cur = get('SELECT r.status, e.status env FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.id=?', r.id);
       if (cur?.env === 'sent' && (cur.status === 'sent' || cur.status === 'viewed')) throw changedSince(e);
       throw bad(cur?.status === 'completed' ? 'You have already finished this document.' : 'This envelope is no longer open for signing.', 409, cur?.status === 'completed' ? { code: 'already_finished' } : undefined);
+    }
+    if (formCharge) {
+      formTook = grant(e.account_id, -1, 'signature', sigRef(r));
+      // None was free after all (another visitor took the last one a moment ago): nothing of this Finish stays.
+      if (formTook && available(e.account_id) < 0) throw FORM_FULL;
     }
     if (!ACTS(r.role)) return;
     // Which fields are shown is worked out once, here, from the answers as stored (settleLogic in logic.ts), and the
@@ -1958,7 +1988,11 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
       if (mine.some((f: any) => f.type === 'initials' && (f.required || f.value)) && !okImage(body.initials_png)) throw bad('Adopt your initials before finishing.');
     });
     run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(body.signature_png) ? body.signature_png : null, okImage(body.initials_png) ? body.initials_png : null, r.id);
-  });
+  }); } catch (x) {
+    if (x !== FORM_FULL) throw x;
+    formTook = false;
+    await formWaits();
+  }
   // Each stamp they put on: which, where, when and its fingerprint (stamps.ts). A stamp uses no signature.
   if (ACTS(r.role)) stampsFinished(e, r, actor);
   // Someone signing for the second time, after the sender changed the document, is recorded as exactly that.
@@ -1967,13 +2001,14 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   await witnessDone(e, r, actor);
   fireWebhooks(e.account_id, 'recipient.completed', e.id, { recipient_id: r.id });
   if (creditsEnabled() && isChargeable(r, senderOf(e) || '')) {
-    const before = e.powerform_id ? available(e.account_id) : 0;
-    // A public form uses its owner's signatures at this moment, not when it is started, so the emails at two left
+    // A public form used its owner's signature in the claim above, not when it was started, so the emails at two left
     // and at none go out from here, as they do for any other send.
-    if (grant(e.account_id, -1, 'signature', sigRef(r)) && e.powerform_id) {
+    if (!e.powerform_id) grant(e.account_id, -1, 'signature', sigRef(r));
+    else if (formTook) {
+      const after = available(e.account_id);
       const owner = senderOf(e);
       const form = get('SELECT name FROM powerforms WHERE id=?', e.powerform_id);
-      if (owner) await lowBalanceMail(get('SELECT * FROM accounts WHERE id=?', e.account_id), owner, before, before - 1, `${r.name} signed your public form "${form?.name || e.subject}"`, true).catch(() => {});
+      if (owner) await lowBalanceMail(get('SELECT * FROM accounts WHERE id=?', e.account_id), owner, after + 1, after, `${r.name} signed your public form "${form?.name || e.subject}"`, true).catch(() => {});
     }
   }
   const left = e.recipients.filter((x: any) => x.id !== r.id && x.status !== 'completed' && x.role !== 'cc');
@@ -2043,8 +2078,9 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // The new person has an address and is emailed, also when the first one's link was passed on by the sender.
   // Another person is the next person on the request, whose signature is their own (sigRef in credits.ts). The same
   // name (or a spelling of it) at the same address stays the same person, as takeOverCost decided.
-  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, reassigned_from=?, free=?, link_by_sender=0${sameSigner(r, { email, name }) ? '' : ', person_gen=COALESCE(person_gen,0)+1'} WHERE id=?`,
-    name, email, token(), checkCode(), now(), labelOf(r), free, r.id);
+  const pg = sameSigner(r, { email, name }) ? null : personGen(r, name, email);
+  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, reassigned_from=?, free=?, link_by_sender=0${pg ? ', person_gen=?, person_gens=?' : ''} WHERE id=?`,
+    name, email, token(), checkCode(), now(), labelOf(r), free, ...(pg ? [pg.gen, pg.gens] : []), r.id);
   noteReached(e, [email]);
   audit(e.id, actor, 'Reassigned', `${labelOf(r)} assigned this to ${name} <${email}>${to.reason ? `: ${str(to.reason, 300)}` : ''}${/[.!?]$/.test(str(to.reason, 300).trim()) ? '' : '.'} Nothing that ${r.name} had filled in or signed was passed on.`);
   newerVersion(e.id, actor, `passed this document on to ${name}`);

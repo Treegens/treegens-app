@@ -189,7 +189,7 @@ route('GET', '/sign/:token/pay', async (c) => {
   if (notShown(e, r) || e.pay_url !== url) return { pay: null };
   const setter = get('SELECT name, email FROM users WHERE id=?', setterOf(e)) || { name: 'The sender', email: '' };
   if (!where.ok) {
-    if (where.why !== 'later') tellNotShown(e, hostRefusal(where, host), 'link');
+    if (where.why !== 'later') tellNotShown(e, hostRefusal(where, ''), 'link');
     return { pay: null, later: where.why === 'later' ? payLater(setter.name) : null };
   }
   const link = linkOf(e)!;

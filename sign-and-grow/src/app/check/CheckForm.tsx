@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { api, fmtDate, ROLE_LABEL } from '@/components/ui';
+import { DISPUTE_DOES, disputeSenderSees } from '@/lib/evidence';
 
 type Genuine = { genuine: true; replaced?: false; sender: { name: string; email: string } | null; account?: string; paused: boolean; subject: string; status: string; sent_at: string | null; for_name: string; role: string; url: string };
 // An email we really sent whose link was replaced afterwards. It is genuine and is said to be, without a link to open.
@@ -43,7 +44,9 @@ const REPORT_REASONS: [string, string][] = [
   ['not-me', 'I did not sign this, or this was not me'],
   ['other', 'Something else'],
 ];
-function ReportEmail({ code, startOpen }: { code: string; startOpen: boolean }) {
+// `sender` is the name the sender is known by, for what a dispute shows them. `dispute: false` where nothing is left
+// to mark (a document deleted before anyone disputed it), so the choice is not offered at all.
+function ReportEmail({ code, startOpen, sender, dispute = true }: { code: string; startOpen: boolean; sender?: string | null; dispute?: boolean }) {
   const [open, setOpen] = useState(startOpen);
   const [reason, setReason] = useState('');
   const [detail, setDetail] = useState('');
@@ -68,7 +71,7 @@ function ReportEmail({ code, startOpen }: { code: string; startOpen: boolean }) 
   }
 
   if (state === 'sent' && reason === 'not-me')
-    return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Your dispute is on record.</b> The document is now marked as disputed, for its sender and for anyone who checks it on our Verify page. The sender and the people who run Sign&amp;Grow have been told; the sender is not shown what you wrote. Nothing was deleted. We do not decide who is right. To hear from a person, write to us on the <Link href="/help?topic=not-me#contact">help page</Link> with the topic &ldquo;I am named on a document I did not sign&rdquo;.</div>;
+    return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Your dispute is on record.</b> The document is now marked as disputed, for its sender and for anyone who checks it on our Verify page. {sender || 'The sender'} has been told, with what you wrote, and so have the people who run Sign&amp;Grow. Nothing was deleted. We do not decide who is right. To hear from a person, write to us on the <Link href="/help?topic=not-me#contact">help page</Link> with the topic &ldquo;I am named on a document I did not sign&rdquo;.</div>;
   if (state === 'sent')
     return <div className="notice" role="status" style={{ marginTop: 16 }}><b>Thank you. Your report is in.</b> You do not need to do anything else. If the email looks like a scam, do not sign it, do not reply to it and do not call any number it gives.</div>;
   if (!open)
@@ -79,19 +82,20 @@ function ReportEmail({ code, startOpen }: { code: string; startOpen: boolean }) 
     );
   return (
     <form onSubmit={send} noValidate style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-      <h3 style={{ fontSize: 17, margin: '0 0 6px' }}>Report this email</h3>
-      <p className="muted small" style={{ margin: '0 0 12px' }}>You do not have to open the document. The report goes to the people who run Sign&Grow, and when several people report the same sender, sending from that account is paused.</p>
+      <h3 style={{ fontSize: 17, margin: '0 0 6px' }}>{reason === 'not-me' ? 'Dispute this document' : 'Report this email'}</h3>
+      {/* A dispute is not a report: it goes to the sender as well, and it never pauses anyone's account. */}
+      <p className="muted small" style={{ margin: '0 0 12px' }}>{reason === 'not-me' ? 'You do not have to open the document. A dispute goes to the sender and to the people who run Sign&Grow, and it does not pause anyone\'s account. Read below what each of them gets.' : 'You do not have to open the document. The report goes to the people who run Sign&Grow, and when several people report the same sender, sending from that account is paused.'}</p>
       <label className="f"><span>What is wrong?</span>
         <select value={reason} onChange={(e) => (setReason(e.target.value), setError(''))} aria-invalid={!!error && !reason}>
           <option value="">Choose one</option>
-          {REPORT_REASONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          {REPORT_REASONS.filter(([value]) => dispute || value !== 'not-me').map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </label>
-      {reason === 'not-me' && <p className="small" style={{ margin: '-4px 0 12px' }}>This is for something that was signed, approved or declined in your name that you did not do, also on a completed document. It marks the document as disputed and tells its sender and the people who run Sign&amp;Grow. Nothing is deleted. The sender is told that you dispute it, not what you write below.</p>}
-      <label className="f"><span>Anything else we should know <span className="hint">(optional)</span></span><textarea rows={3} maxLength={2000} value={detail} onChange={(e) => setDetail(e.target.value)} /></label>
+      {reason === 'not-me' && <div className="small" id="check-dispute-sees" style={{ margin: '-4px 0 12px' }}><p style={{ margin: '0 0 6px' }}>This is for something that was signed, approved, declined or passed on in your name that you did not do, also on a completed document, and also when the sender changed the address after this email. {DISPUTE_DOES}</p><p style={{ margin: 0 }}>{disputeSenderSees(sender || 'The sender')}</p></div>}
+      <label className="f"><span>{reason === 'not-me' ? <>What happened, in your words <span className="hint">(optional; {sender || 'the sender'} will read it)</span></> : <>Anything else we should know <span className="hint">(optional)</span></>}</span><textarea rows={3} maxLength={2000} value={detail} onChange={(e) => setDetail(e.target.value)} {...(reason === 'not-me' ? { 'aria-describedby': 'check-dispute-sees' } : {})} /></label>
       {error && <div className="notice err" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="pub-actions-row" style={{ marginTop: 0 }}>
-        <button className="btn primary" disabled={state === 'busy'}>{state === 'busy' ? 'Sending' : 'Send report'}</button>
+        <button className="btn primary" disabled={state === 'busy'}>{state === 'busy' ? 'Sending' : reason === 'not-me' ? 'Send dispute' : 'Send report'}</button>
         <button type="button" className="btn" onClick={() => setOpen(false)}>Cancel</button>
       </div>
     </form>
@@ -188,7 +192,7 @@ export function CheckForm() {
             <button type="button" className="btn primary" onClick={again}>Check another code</button>
             <Link href="/help?topic=signing#contact" className="btn">Ask us about this email</Link>
           </div>
-          <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} />
+          <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} sender={answer.sender?.name} />
         </div>
       )}
 
@@ -206,7 +210,7 @@ export function CheckForm() {
             <button type="button" className="btn primary" onClick={again}>Check another code</button>
             <Link href="/help?topic=signing#contact" className="btn">Ask us about this email</Link>
           </div>
-          {answer.can_report !== false && <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} />}
+          {answer.can_report !== false && <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} dispute={false} />}
         </div>
       )}
 
@@ -232,7 +236,7 @@ export function CheckForm() {
             <button type="button" className="btn" onClick={again}>Check another code</button>
           </div>
           <p className="muted small" style={{ marginTop: 16 }}>The email address is the part we confirmed: the sender proved it is theirs before sending. The names are what the sender typed.</p>
-          <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} />
+          <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} sender={answer.sender?.name} />
         </div>
       )}
 

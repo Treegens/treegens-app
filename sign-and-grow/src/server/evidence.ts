@@ -2,7 +2,7 @@ import { PDFDocument } from 'pdf-lib';
 import { all, get, run, readBlob } from './db.ts';
 import { now, baseUrl, bad, str, id, isEmail, sha256, fmtCode, HttpError } from './util.ts';
 import { sendMail, type MailStatus } from './mail.ts';
-import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, type Actor } from './envelopes.ts';
+import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnvelope, type Actor } from './envelopes.ts';
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { CONSENT_VERSION, consentWording } from '../lib/policy.ts';
@@ -128,7 +128,12 @@ const onWhat = (ua?: string) => {
 export function noteCopyOpened(e: any, r: any, actor: Actor, onScreen: boolean) {
   if (e.status !== 'completed' || !r?.id) return;
   if (!run('UPDATE recipients SET copy_opened_at=? WHERE id=? AND copy_opened_at IS NULL', now(), r.id).changes) return;
-  audit(e.id, actor, 'Completed copy opened', `${r.name} ${onScreen ? 'opened the completed document on screen' : 'downloaded the completed document'} for the first time, ${onWhat(actor.ua)}.`);
+  // An envelope that was completed before these lines were written (opens_noted_from, set once in db.ts): its people
+  // may have opened the copy before, so "for the first time" would not be true. The line says what we know.
+  const since = e.opens_noted_from || get('SELECT opens_noted_from f FROM envelopes WHERE id=?', e.id)?.f;
+  const did = `${r.name} ${onScreen ? 'opened the completed document on screen' : 'downloaded the completed document'}`;
+  audit(e.id, actor, 'Completed copy opened', since ? `${did}, ${onWhat(actor.ua)}. That is the first time since we began writing this down on ${String(since).slice(0, 10)}; they may have opened it before that.`
+    : `${did} for the first time, ${onWhat(actor.ua)}.`);
 }
 
 // Visits after the first open. "Viewed" is written once, on the first open. Every later visit to the signing page
@@ -148,10 +153,12 @@ export function noteVisit(e: any, r: any, actor: Actor) {
 // or the sender signed for them. We cannot know who is right, and nothing here decides it. What it does: the
 // envelope carries a disputed mark (disputed_at) from then on, on its page and wherever /verify shows it; the record
 // has a line that says who said it, as far as we know who (the holder of the email or of the link, not a confirmed
-// person); the sender and the people who run the service are told; and nothing is changed, held or deleted. What the
-// person writes goes to the people who run the service only, because a person who says the sender signed for them
-// may not want the sender to read it. One dispute for each person on an envelope: saying it again changes nothing.
-// `via` is how they reached us: the security code of an email we sent them ('check') or their signing link ('sign').
+// person); the sender is told that it was filed, when, and the person's own words; the people who run the service
+// are told the same with the internet address and browser it came from, which go to nobody else (the owner's rule:
+// a person who says the sender signed for them is not handed over to that sender); and nothing is changed, held or
+// deleted. Each screen says this before the person sends it (disputeSenderSees in src/lib/evidence.ts). One dispute
+// for each person on an envelope: saying it again changes nothing. `via` is how they reached us: the security code
+// of an email we sent them ('check') or their signing link ('sign').
 export async function disputeEnvelope(e: any, r: any, body: any, actor: Actor, via: 'check' | 'sign') {
   if (e.kind !== 'envelope' || e.status === 'draft') throw bad('This is not a document that was sent to anyone, so there is nothing to dispute.', 404);
   if (r.role === 'cc') throw bad('You were only sent a copy of this document, so nothing on it is signed in your name. If you do not know this document, report it instead.', 409, { code: 'nothing_signed' });
@@ -159,45 +166,98 @@ export async function disputeEnvelope(e: any, r: any, body: any, actor: Actor, v
   // the sender changed the document. Before that there is nothing to dispute, and a report is what fits.
   if (r.status !== 'completed' && r.status !== 'declined' && !r.signed_before)
     throw bad(`Nothing has been signed, approved or declined in ${r.name}'s name on this document so far, so there is nothing to dispute yet. If you do not know this document or did not expect it, do not sign it and report it instead.`, 409, { code: 'nothing_signed' });
-  const detail = str(body?.detail, 2000).trim() || null;
-  const t = now();
-  if (!run('INSERT OR IGNORE INTO disputes (id, envelope_id, recipient_id, name, email, via, detail, ip, user_agent, at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    id('dsp'), e.id, r.id, r.name, r.email || null, via, detail, actor.ip || null, (actor.ua || '').slice(0, 300) || null, t).changes)
-    return { ok: true, already: true, disputed_at: get('SELECT disputed_at FROM envelopes WHERE id=?', e.id)?.disputed_at || t };
-  run('UPDATE envelopes SET disputed_at=COALESCE(disputed_at, ?) WHERE id=?', t, e.id);
   // Who said it, as far as we know: whoever held that email or that link. The emails for an in-person signing went to
   // the sender who hosted it, and the completed copy to the signer, so either can hold that code.
   const who = via === 'sign' ? `Someone using the signing link of ${labelOf(r)}`
     : r.role === 'inperson' ? `Someone holding the security code of ${labelOf(r)}, which is in our emails to the sender who hosted the signing and in the completed copy to ${r.name}`
     : `Someone holding the email we sent to ${labelOf(r)}`;
-  audit(e.id, actor, 'Disputed', `${who} said that ${r.name} did not sign this, or that it was not them. Nothing was changed or deleted: the document, the signatures and this record stay as they are.`);
+  return fileDispute(e, { key: r.id, name: r.name, email: r.email || null, did: didNot(r), visitor: !!e.powerform_id && e.form_recipient_id === r.id }, who, body, actor, via);
+}
+
+// What the person says they did not do, in the words of what was done under their name. An approver approved, a
+// decliner declined: "did not sign this" would put words in their mouth.
+const didNot = (r: any) => (r.status === 'declined' ? 'decline this' : r.role === 'approver' ? 'approve this' : r.role === 'viewer' ? 'confirm this' : r.role === 'witness' ? 'witness this' : 'sign this');
+
+// Why the link of a replaced code stopped, as it is said on the record (retired_tokens.why, retireToken in envelopes.ts).
+const REPLACED_BEFORE: Record<string, string> = {
+  address: 'the address for that place on the document was changed', role: 'what that person was asked to do was changed',
+  handed: 'the document was passed on to someone else through its link', removed: 'that person was taken off the document',
+};
+
+// The code of an email we really sent, or the link in it, after the sender changed the address, changed the role or
+// took the person off, or after someone passed the document on through that link (retired_tokens). That is the
+// case this exists for most ("the sender put their own address under my name and signed"), so the person the email
+// was sent to can always dispute with it: from any email we sent them about the document, also after the change.
+// It is about the place on the document that email was for: whatever was signed, approved or declined there since,
+// a signature of theirs that was set aside (earlier_signatures), or the hand-over itself. Each replaced code is one
+// person (`key`), so the one who holds the place now cannot use up theirs by disputing first.
+export async function disputeReplaced(old: any, body: any, actor: Actor, via: 'check' | 'sign') {
+  const eid = old.envelope_id || get('SELECT envelope_id e FROM recipients WHERE id=?', old.recipient_id)?.e;
+  const e = eid ? loadEnvelope(eid) : null;
+  if (!e || e.kind !== 'envelope' || e.status === 'draft') throw bad('That code is from an email we really sent, but the document it was about is no longer here, so nothing can be marked on it. Write to us on the help page with the topic "I am named on a document I did not sign", and a person will look.', 404);
+  // The address it was sent to: what our copy of that email says (the record keeps the name, not the address).
+  const to = get('SELECT to_email FROM emails WHERE envelope_id=? AND recipient_id=? AND at <= ? ORDER BY id DESC LIMIT 1', e.id, old.recipient_id, old.retired_at)?.to_email || null;
+  const place = e.recipients.find((x: any) => x.id === old.recipient_id);
+  const name = old.sent_to || place?.name || 'the person it was sent to';
+  const theirs = get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=?', e.id, old.recipient_id);
+  const done = old.why === 'handed' || !!theirs || (!!place && place.role !== 'cc' && (place.status === 'completed' || place.status === 'declined' || !!place.signed_before));
+  if (!done) throw bad(`Nothing has been signed, approved or declined in the place this email was for on this document so far, so there is nothing to dispute yet. This code keeps working for it: if something is done in ${name}'s name later, come back with the same code. If you do not know this document, report it instead.`, 409, { code: 'nothing_signed' });
+  const who = `Someone ${via === 'sign' ? 'using the signing link in the email' : 'holding the email'} we sent to ${to ? `${name} <${to}>` : name}, before ${REPLACED_BEFORE[old.why] || REPLACED_BEFORE.address}`;
+  const did = old.why === 'handed' ? 'pass this document on to someone else' : place ? didNot(place) : 'sign this';
+  return fileDispute(e, { key: `${old.recipient_id}#${sha256(old.token).slice(0, 12)}`, before: { id: old.recipient_id, at: old.retired_at }, name, email: to, did, visitor: false }, who, body,
+    { ...actor, name: `Someone holding the ${via === 'sign' ? 'replaced link' : 'email'} sent to ${to || name}` }, via);
+}
+
+type Disputer = { key: string; name: string; email: string | null; did: string; visitor: boolean; before?: { id: string; at: string } };
+async function fileDispute(e: any, p: Disputer, who: string, body: any, actor: Actor, via: 'check' | 'sign') {
+  const detail = str(body?.detail, 2000).trim() || null;
+  const t = now();
+  // A replaced code whose place was disputed while that code was still the live one: the same holder, already said.
+  const earlier = p.before && get('SELECT at FROM disputes WHERE envelope_id=? AND recipient_id=? AND at <= ?', e.id, p.before.id, p.before.at);
+  if (earlier || !run('INSERT OR IGNORE INTO disputes (id, envelope_id, recipient_id, name, email, via, detail, ip, user_agent, at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    id('dsp'), e.id, p.key, p.name, p.email, via, detail, actor.ip || null, (actor.ua || '').slice(0, 300) || null, t).changes)
+    return { ok: true, already: true, disputed_at: get('SELECT disputed_at FROM envelopes WHERE id=?', e.id)?.disputed_at || t };
+  run('UPDATE envelopes SET disputed_at=COALESCE(disputed_at, ?) WHERE id=?', t, e.id);
+  // The line carries no internet address and no browser: the sender reads this record, and the certificate prints
+  // it when the envelope completes later. Those two are in the disputes row, for the operators only.
+  audit(e.id, { name: actor.name }, 'Disputed', `${who}${p.before ? ',' : ''} said that ${p.name} did not ${p.did}, or that it was not them. Nothing was changed or deleted: the document, the signatures and this record stay as they are.`);
   const sender = get('SELECT name, email FROM users WHERE id=?', e.sender_id);
-  const ops = await tellOperatorsOfDispute(e, r, who, detail, sender);
-  await notifySender(e, 'always', `Disputed: ${e.subject}`, `${r.name} says they did not sign this`, [
-    `${who} told us that ${r.name} did not sign "${e.subject}", or that it was not them.`,
-    `Nothing was changed or deleted. The document, its signatures and its audit trail stay exactly as they are. From now on the envelope is marked as disputed, on its page here and for anyone who looks it up at ${baseUrl()}/verify.`,
+  await tellOperatorsOfDispute(e, p, who, detail, sender, actor);
+  // A visitor of a public form typed their own name, so in our email it is quoted as typed, never put in the subject
+  // or the heading where it would read as our words.
+  const named = p.visitor ? `the person who filled in your form as "${p.name}"` : p.name;
+  await notifySender(e, 'always', `Disputed: ${e.subject}`, p.visitor ? 'Someone disputes an entry made through your form' : `${p.name} says they did not ${p.did.replace(/ this$/, '')} this`, [
+    `${who}${p.before ? ',' : ''} told us on ${t.slice(0, 16).replace('T', ' ')} UTC that ${named} did not ${p.did.replace(/ this$/, '')} "${e.subject}", or that it was not them.`,
+    detail ? `What they wrote, word for word. We have not checked any of it, so do not call a number or open a link in it: "${detail}"` : 'They wrote nothing more.',
+    `Nothing was changed or deleted. The document, its signatures and its audit trail stay exactly as they are. From now on the envelope is marked as disputed, on its page here and for anyone who looks it up at ${baseUrl()}/verify. While the dispute is open, the envelope cannot be deleted for good.`,
     ...(e.status === 'sent' ? ['The envelope is still out for signature, and nothing about it was stopped. If you agree that it was not them, void it and send it again to the right person.'] : []),
-    `We do not decide who is right. Speak to ${r.name} directly. If it becomes a legal matter, the rules differ by country and by kind of document, so ask a lawyer where you are.`,
-    ops ? 'A person at Sign&Grow has been told as well. What was written to us with it goes to them, not to you.' : 'What was written to us with it, if anything, is not passed on to you.',
+    `We do not decide who is right. Speak to ${p.visitor ? 'them' : p.name} directly. If it becomes a legal matter, the rules differ by country and by kind of document, so ask a lawyer where you are.`,
+    'A person at Sign&Grow has been told as well.',
   ]);
   return { ok: true, already: false, disputed_at: t };
 }
 
+/** What the sender's side is given of each dispute: everything but the internet address and the browser. */
+export const disputesFor = (envelopeId: string) =>
+  all('SELECT at, name, via, detail, closed_at, closed_how FROM disputes WHERE envelope_id=? ORDER BY at', envelopeId);
+
 // The people who run the service hear of every dispute, by email and in their queue, like the alerts the payment code
-// files (tellOperators in routes-billing.ts). Answers whether anyone could be told by email.
-async function tellOperatorsOfDispute(e: any, r: any, who: string, detail: string | null, sender: any): Promise<boolean> {
+// files (tellOperators in routes-billing.ts). They alone get the internet address and browser it came from.
+async function tellOperatorsOfDispute(e: any, p: Disputer, who: string, detail: string | null, sender: any, actor: Actor): Promise<boolean> {
   const to = [...new Set([process.env.ABUSE_EMAIL || process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
   const subject = `Disputed: envelope ${e.id}`;
-  const lines = [`${who} said that ${r.name} did not sign "${e.subject}", or that it was not them.`,
+  const lines = [`${who}${p.before ? ',' : ''} said that ${p.name} did not ${p.did} "${e.subject}", or that it was not them.`,
     `Envelope ${e.id} (${e.status}) from ${sender ? `${sender.name} <${sender.email}>` : 'a sender who is gone'}, account ${e.account_id}.`,
     detail ? `They wrote: ${detail}` : 'They wrote nothing more.',
-    'The envelope is marked as disputed and the sender was told, without what they wrote. Nothing was changed or deleted. Nothing more happens by itself.'];
+    `It came from internet address ${actor.ip || 'unknown'}, ${onWhat(actor.ua)}${actor.ua ? ` (${String(actor.ua).slice(0, 300)})` : ''}. Only you see this: the sender does not.`,
+    'The envelope is marked as disputed and the sender was told, with what they wrote. Nothing was changed or deleted. While this alert is open the sender cannot delete the envelope for good; closing it here closes the dispute.'];
   run("INSERT INTO support_requests (id, email, name, topic, message, account_id, envelope_id, status, at) VALUES (?,?,?,'not-me',?,?,?,'open',?)",
-    id('sup'), to[0] || 'dispute-alert@localhost', 'Sign&Grow (automatic alert)', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), e.account_id, e.id, now());
-  for (const t of to) await sendMail({ to: t, subject, heading: subject, lines, ...(isEmail(r.email) ? { replyTo: r.email } : {}), cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } });
+    id('sup'), to[0] || 'dispute-alert@localhost', ALERT, `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), e.account_id, e.id, now());
+  for (const t of to) await sendMail({ to: t, subject, heading: subject, lines, ...(isEmail(p.email) ? { replyTo: p.email! } : {}), cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } });
   if (!to.length) console.error(`[disputes] NOBODY WAS TOLD BY EMAIL (set SUPPORT_EMAIL or OPERATOR_EMAILS). Envelope ${e.id} was disputed; it is in the operator queue.`);
   return to.length > 0;
 }
+const ALERT = 'Sign&Grow (automatic alert)';
 
 // ---- The evidence pack ----------------------------------------------------------------------------------------------
 
@@ -277,6 +337,11 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // The questions and comments in full, private ones included: the pack is for the sender's side (comments.ts).
   const said = commentsText(e);
   if (said) (add('comments.txt', said), add('comments.json', JSON.stringify({ envelope_id: e.id, not_signed: COMMENTS_NOT_SIGNED, threads: threadsOf(e, { side: 'sender' }) }, null, 2)));
+  // The disputes, with what each person wrote, word for word: what the sender is given, nothing more (disputesFor).
+  const disputes = disputesFor(e.id);
+  if (disputes.length) add('disputes.txt', [`What people named on "${e.subject}" (envelope ${e.id}) told us when they disputed it. Nobody has checked what they wrote. Their internet address and browser are kept by the people who run Sign&Grow and are not in this pack.`, '',
+    ...disputes.flatMap((d: any) => [`${String(d.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}, under the name ${d.name}, through ${d.via === 'sign' ? 'a signing link' : 'the security code of one of our emails'}.`, d.detail ? `They wrote: ${d.detail}` : 'They wrote nothing more.',
+      ...(d.closed_at ? [`Closed by a person at Sign&Grow on ${String(d.closed_at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${d.closed_how === 'in_error' ? ', as filed in error' : ''}.`] : ['Still open.']), '----', ''])].join('\r\n'));
   // Every stamp on the pages as its own picture, so its fingerprint in the audit trail can be checked (stamps.ts).
   const stamps = stampEvidence(e);
   for (const s of stamps) add(s.name, s.data);
@@ -290,7 +355,8 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     'emails/               a copy of every email we stored about this envelope, as HTML. Signing links and security codes are taken out of these copies, because they would still open the document; nothing else is changed. emails/index.csv says what became of each: whether the mail server took it, every try, and what the mail provider told us later (delivered, came back, marked as spam), with the SHA-256 of the email as stored before anything was taken out.',
     'consent.txt           the words each person agreed to before signing, in the version their audit line names.',
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
-    ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []), '',
+    ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []),
+    ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at Sign&Grow has closed it.'] : []), '',
     'What this does and does not show.', CHAIN_TRUTH, WHO_WHEN_WHERE,
     'Rules about electronic signatures differ by country and by kind of document. This pack is a record of what happened in Sign&Grow; it does not say that a signature is valid, and it is not legal advice.',
     ...(e.disputed_at ? ['', `This envelope is disputed: on ${e.disputed_at} a person named on it said they did not sign it, or that it was not them. See the "Disputed" lines in the audit trail.`] : []),

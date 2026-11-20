@@ -2,11 +2,14 @@
 // pages that promised more than the code does, a bulk send whose price showed up after the Send button, two people
 // finishing at the same moment, "filled everything in and never pressed Finish", templates nobody can find among
 // fifty, wording that has to be struck out, and money that is due at signing.
-import test, { before } from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, signUp, upload, draft, simple, signAll, tokenFor, mailTo, Client, PNG, type Server } from './helpers.ts';
 import * as policy from '../src/lib/policy.ts';
+import { resolver, specialAddress } from '../src/server/paydns.ts';
+import { payPrint } from '../src/server/paydrop.ts';
+import { checkPayUrl, PAY_SHORTENERS } from '../src/lib/paylink.ts';
 
 let s: Server;
 before(async () => {
@@ -806,6 +809,26 @@ test('a strike-out travels with a template, and needs no signer to be placed', a
 
 // ---- I. A link to the sender's own payment page, after Finish --------------------------------------------
 
+// Where the names these tests use lead. The server asks the DNS when a link is saved and when it is shown
+// (src/server/paydns.ts), and these tests never reach the network: a name of theirs is answered here, from DNS when it
+// is listed and with a public address when it is under one of their own domains. Any other name is handed to the real
+// lookup untouched, and none is asked. Put back after the file.
+const realLookup = resolver.lookup;
+const PUBLIC = '93.184.215.14';
+const DNS: Record<string, string[] | 'ENOTFOUND' | 'EAI_AGAIN'> = {};
+const ours = (h: string) => /(^|\.)(example\.(com|net|org)|stripe\.com|paypal\.me|square\.link|xn--pypal-4ve\.com)$/.test(h);
+before(() => {
+  resolver.lookup = async (host: string) => {
+    const a = DNS[host] ?? (ours(host) ? [PUBLIC] : null);
+    if (!a) return realLookup(host);
+    if (typeof a === 'string') throw Object.assign(new Error(a), { code: a });
+    return a.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
+  };
+});
+after(() => {
+  resolver.lookup = realLookup;
+});
+
 const trust = async (c: Client) => {
   const a = (await c.get('/me')).data.account;
   s.db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), a.id);
@@ -890,7 +913,8 @@ test('a payment link is offered only to an account that has earned trust, and on
   assert.deepEqual([ok.status, ok.data.pay_link.url, ok.data.pay_link.label], [200, 'https://buy.stripe.com/test_deposit', 'Pay the retainer'], 'the button stays what it was when only the address changes');
   const trail = (await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => /^Payment link/.test(a.action));
   assert.deepEqual(trail.map((a: any) => a.action), ['Payment link added', 'Payment link changed']);
-  assert.match(trail[1].detail, /^"Pay the retainer" opens https:\/\/buy\.stripe\.com\/test_deposit \(it opened https:\/\/xn--pypal-4ve\.com\/deposit before\)\. It is shown to each person who signs, after they finish, and never in an email\. Sign&Grow takes no part in the payment\.$/);
+  // The audit trail goes into the certificate, which is emailed: it names each address by a fingerprint, never itself.
+  assert.equal(trail[1].detail, `"Pay the retainer" now leads to another payment page Pia Plumber gave (address fingerprint ${payPrint('https://buy.stripe.com/test_deposit')}, before ${payPrint('https://xn--pypal-4ve.com/deposit')}). The address is on the envelope page. It is shown to each person who signs, after they finish, and never put in an email, a certificate or an export. Sign&Grow takes no part in the payment.`);
   // Somebody else's envelope is not theirs to set a link on, or to read.
   const other = await signUp('Oz Other', 'oz-other-pay@example.com', ip());
   assert.equal((await other.put(`/envelopes/${e.id}/pay-link`, { url: 'https://evil.example.net/pay' })).status, 404);
@@ -914,7 +938,7 @@ test('the link is shown after Finish, to each person who signs, with the sender\
   // The tab was closed: the same link, on another device, shows it again. The record says it was shown, once.
   assert.deepEqual(await payOf(e.id, ana), shown);
   const shownLines = (await c.get(`/envelopes/${e.id}`)).data.audit.filter((a: any) => a.action === 'Shown the payment link');
-  assert.deepEqual(shownLines.map((a: any) => a.detail), ['Ana shown was shown "Pay the deposit", which opens https://buy.stripe.com/gus_deposit.']);
+  assert.deepEqual(shownLines.map((a: any) => a.detail), [`Ana shown was shown "Pay the deposit" after finishing (address fingerprint ${payPrint('https://buy.stripe.com/gus_deposit')}).`]);
   // Bo has not finished. The approver and the copy never sign, so they are never asked to pay.
   assert.equal(await payOf(e.id, 'bo-shown@example.com'), null);
   assert.equal((await signAll(e.id, 'vi-shown@example.com')).status, 200);
@@ -980,7 +1004,7 @@ test('trust that goes away takes the link off every screen, a closed envelope as
   const off = await c.put(`/envelopes/${e.id}/pay-link`, { url: '' });
   assert.equal(off.status, 200);
   assert.equal(off.data.pay_link, null);
-  assert.ok((await c.get(`/envelopes/${e.id}`)).data.audit.some((a: any) => a.action === 'Payment link removed' && a.detail === '"Pay the retainer" to https://pay.example.com/retainer is no longer shown to anyone.'));
+  assert.ok((await c.get(`/envelopes/${e.id}`)).data.audit.some((a: any) => a.action === 'Payment link removed' && a.detail === `"Pay the retainer" (address fingerprint ${payPrint('https://pay.example.com/retainer')}) is no longer shown to anyone.`));
   // Taking a link off is always allowed, also for an account that may not add one: a paused account can clean up.
   s.db.run("UPDATE accounts SET suspended_at=?, suspended_reason='x' WHERE id=?", new Date().toISOString(), acct.id);
   const e2 = await deal(c, 'gone2');
@@ -1009,7 +1033,8 @@ test('a template\'s link goes with every envelope made from it, and only its own
   assert.equal((await member.post(`/envelopes/${env.id}/send`)).status, 200);
   assert.equal((await signAll(env.id, 'pat-parent@example.com')).status, 200);
   assert.equal((await payOf(env.id, 'pat-parent@example.com'))?.label, 'Pay the fee');
-  assert.equal((await payOf(env.id, 'pat-parent@example.com'))?.sender.name, 'Mia Tutor', 'the person who sent it is named');
+  // The page it opens is Tom's, who set it on his template, so Tom is the one named as asking (repair: it said Mia).
+  assert.equal((await payOf(env.id, 'pat-parent@example.com'))?.sender.name, 'Tom Tutor', 'the person whose payment page it is is named');
 });
 
 test('the screens show the payment link only where the rules say, and every page tells the truth about it', async () => {
@@ -1021,7 +1046,7 @@ test('the screens show the payment link only where the rules say, and every page
   assert.match(done, /\{acts && <PayLink base=\{base\} \/>\}/, 'on the last screen, for someone who signs');
   assert.equal(sign.split('<PayLink ').length, 2, 'and nowhere else on the signing page');
   const card = read('src/components/sign/PayLink.tsx');
-  assert.match(card, /api<\{ pay: Pay \| null \}>\(`\$\{base\}\/pay`\)/, 'the server decides whether there is one');
+  assert.match(card, /api<Answer>\(`\$\{base\}\/pay`\)/, 'the server decides whether there is one');
   assert.match(card, /rel="noopener noreferrer" referrerPolicy="no-referrer"/);
   assert.match(card, /<code id="sg-pay-url"[^>]*>\{pay\.url\}<\/code>/, 'the whole address, before the button');
   assert.match(card, /\{pay\.label\} on \{pay\.host\}/);
@@ -1055,4 +1080,438 @@ test('the screens show the payment link only where the rules say, and every page
   const p = (openapi() as any).paths['/envelopes/{id}/pay-link'];
   assert.ok(p.get && p.put);
   assert.match(p.put.description, /never put in an email/);
+});
+
+// ---- Repairs after the skeptic's report (research/verify-new.json, "verify:industry") ---------------------------
+
+const pdfText = async (bytes: Uint8Array) => (await import('../src/server/text.ts')).extractText(bytes);
+const flat = (t: string) => t.replace(/\s+/g, '');
+const payLines = async (c: Client, id: string) => (await c.get(`/envelopes/${id}`)).data.audit.filter((a: any) => /payment link/i.test(a.action));
+const press = (envelopeId: string, email: string, body: any = {}) => new Client().post(`/sign/${tokenFor(envelopeId, email)}/pay-opened`, body);
+async function member(owner: Client, name: string, email: string, role = 'member') {
+  assert.equal((await owner.post('/account/invites', { email, role })).status, 200);
+  const m = new Client();
+  m.ip = ip();
+  const j = await m.post('/auth/signup', { name, email, password: 'correct horse battery', invite: s.db.get('SELECT token FROM invites WHERE email=?', email).token });
+  assert.equal(j.status, 200, JSON.stringify(j.data));
+  return m;
+}
+async function template(c: Client, subject: string, recipients: any[] = [{ id: 'r', role: 'signer', role_name: 'Client' }]) {
+  const file = await upload(c, 1);
+  const r = await c.post('/envelopes', { kind: 'template', subject, documents: [{ id: 'd', file_id: file.id }], recipients,
+    fields: recipients.map((x, i) => ({ document_id: 'd', recipient_id: x.id, type: 'signature', page: 0, x: 0.1, y: 0.3 + i * 0.2, w: 0.3, h: 0.06 })) });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  return r.data.envelope;
+}
+
+test('the payment address is in no email, attached certificate, export or evidence pack: the record names it by a fingerprint', async () => {
+  const c = await signUp('Cal Carpenter', 'cal-carpenter@example.com', ip());
+  await trust(c);
+  const e = await deal(c, 'cert');
+  const old = 'https://buy.stripe.com/cal_old_link', url = 'https://buy.stripe.com/cal_cert_deposit';
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: old })).status, 200);
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  // Ana is shown it and presses it before the others finish, so every kind of line is in the certificate.
+  assert.equal((await signAll(e.id, 'ana-cert@example.com')).status, 200);
+  assert.equal((await payOf(e.id, 'ana-cert@example.com'))?.url, url);
+  assert.equal((await press(e.id, 'ana-cert@example.com', { url })).data.recorded, true);
+  assert.equal((await signAll(e.id, 'vi-cert@example.com')).status, 200);
+  // The completion writes the "Completed" emails with the signed PDF attached. Attachments are kept only with a mail
+  // server, so one is named here: a closed port on this machine, which refuses at once and is never reached.
+  const was = process.env.SMTP_URL;
+  process.env.SMTP_URL = 'smtp://127.0.0.1:9';
+  try {
+    assert.equal((await signAll(e.id, 'bo-cert@example.com')).status, 200);
+  } finally {
+    if (was === undefined) delete process.env.SMTP_URL;
+    else process.env.SMTP_URL = was;
+    delete (globalThis as any).__tsmail;
+  }
+  assert.equal((await c.get(`/envelopes/${e.id}`)).data.envelope.status, 'completed');
+
+  // Every line about it in the record, which the certificate prints, names the address by its fingerprint only.
+  const lines = await payLines(c, e.id);
+  assert.deepEqual(lines.map((a: any) => a.action), ['Payment link added', 'Payment link changed', 'Shown the payment link', 'Opened the payment link']);
+  for (const a of lines) assert.doesNotMatch(a.detail, /https?:|stripe|cal_/, a.action);
+  for (const a of lines.slice(1)) assert.match(a.detail, new RegExp(`fingerprint ${payPrint(url)}`), a.action);
+  assert.equal((await c.get(`/envelopes/${e.id}/pay-link`)).data.pay_link.fingerprint, payPrint(url), 'the envelope page shows the same fingerprint with the address');
+
+  // The attachment of each "Completed" email: to the signers, the approver, the copy and the sender.
+  const done = s.db.all("SELECT to_email, payload, html FROM emails WHERE envelope_id=? AND subject LIKE 'Completed%'", e.id);
+  assert.deepEqual(done.map((m: any) => m.to_email).sort(), ['ana-cert@example.com', 'bo-cert@example.com', 'cal-carpenter@example.com', 'kit-cert@example.com', 'vi-cert@example.com']);
+  const { readBlob } = await import('../src/server/db.ts');
+  for (const m of done) {
+    const att = JSON.parse(m.payload).attachments;
+    assert.equal(att.length, 1, `${m.to_email} got the signed PDF`);
+    const t = flat(await pdfText(readBlob(att[0].sha256)));
+    assert.match(t, /Paymentlinkadded/, 'the certificate has the lines');
+    assert.match(t, new RegExp(payPrint(url)));
+    assert.doesNotMatch(t, /stripe|cal_cert|cal_old/, `${m.to_email}: the attached certificate carries no payment address`);
+    assert.doesNotMatch(m.html, /stripe/);
+  }
+  // The copy the cc downloads, the export of the account and the evidence pack (both stored, not compressed).
+  assert.doesNotMatch(flat(await pdfText((await new Client().get(`/sign/${tokenFor(e.id, 'kit-cert@example.com')}/download`)).data)), /stripe/);
+  const zip = await c.get('/export');
+  assert.equal(zip.status, 200);
+  assert.ok(Buffer.from(zip.data).includes(payPrint(url)), 'the export has the audit trail');
+  assert.ok(!Buffer.from(zip.data).includes('buy.stripe.com'), 'and no payment address');
+  const pack = await c.get(`/envelopes/${e.id}/evidence`);
+  assert.equal(pack.status, 200);
+  assert.ok(Buffer.from(pack.data).includes(payPrint(url)) && !Buffer.from(pack.data).includes('buy.stripe.com'), 'the evidence pack names it by its fingerprint only');
+  for (const m of s.db.all('SELECT html FROM emails WHERE envelope_id=? OR to_email=?', e.id, 'cal-carpenter@example.com')) assert.ok(!m.html.includes('stripe'));
+});
+
+test('a payment link belongs to the person who set it: it goes when they leave the team, the envelope page says so, and the signer sees whose page it is', async () => {
+  const owner = await signUp('Olga Owner', 'olga-owner-pay@example.com', ip());
+  await trust(owner);
+  const max = await member(owner, 'Max Member', 'max-member-pay@example.com');
+  const lee = await member(owner, 'Lee Leaver', 'lee-leaver-pay@example.com');
+  // Max: a link to his own PayPal on an envelope he sends, and on a template of his, which Olga sends from.
+  const e8 = await deal(max, 'hand');
+  assert.equal((await max.put(`/envelopes/${e8.id}/pay-link`, { url: 'https://paypal.me/maxpersonal' })).status, 200);
+  assert.equal((await max.post(`/envelopes/${e8.id}/send`)).status, 200);
+  const maxTpl = await template(max, 'Max booking');
+  assert.equal((await max.put(`/envelopes/${maxTpl.id}/pay-link`, { url: 'https://paypal.me/maxtemplate' })).status, 200);
+  const fromMax = await owner.post('/envelopes', { template_id: maxTpl.id, recipients: { [maxTpl.recipients[0].id]: { name: 'Fay Frommax', email: 'fay-frommax@example.com' } } });
+  assert.equal(fromMax.status, 200, JSON.stringify(fromMax.data));
+  assert.equal(fromMax.data.envelope.pay_url, 'https://paypal.me/maxtemplate');
+  // Olga's template with her own link, which Max sends from: that page is hers, so it stays when he goes.
+  const olgaTpl = await template(owner, 'Olga booking');
+  assert.equal((await owner.put(`/envelopes/${olgaTpl.id}/pay-link`, { url: 'https://buy.stripe.com/olga_fee', kind: 'fee' })).status, 200);
+  const fromOlga = (await max.post('/envelopes', { template_id: olgaTpl.id, recipients: { [olgaTpl.recipients[0].id]: { name: 'Pat Payer', email: 'pat-payer@example.com' } } })).data.envelope;
+  assert.equal((await max.post(`/envelopes/${fromOlga.id}/send`)).status, 200);
+
+  const maxId = (await max.get('/me')).data.user.id;
+  assert.equal((await owner.call('DELETE', `/account/members/${maxId}`)).status, 200);
+  // His envelope, now Olga's: the signer finishes and is asked for nothing, and nobody is asked under Olga's name.
+  assert.equal((await signAll(e8.id, 'ana-hand@example.com')).status, 200);
+  assert.equal(await payOf(e8.id, 'ana-hand@example.com'), null);
+  const view = (await owner.get(`/envelopes/${e8.id}/pay-link`)).data;
+  assert.equal(view.pay_link, null);
+  assert.equal(view.gone.note, 'The payment link Max Member set was taken off: Max Member was removed from the team, and a payment link belongs to the person who set it. Nobody is shown it any more.');
+  const gone = (await payLines(owner, e8.id)).find((a: any) => a.action === 'Payment link taken off');
+  assert.ok(gone, 'the audit trail says so');
+  assert.match(gone.detail, new RegExp(`^"Pay the deposit" \\(address fingerprint ${payPrint('https://paypal.me/maxpersonal')}\\) is no longer shown to anyone\\. The payment link Max Member set`));
+  assert.doesNotMatch(gone.detail, /paypal/);
+  // His template and the envelope Olga made from it lose it too.
+  assert.equal(s.db.get('SELECT pay_url u FROM envelopes WHERE id=?', maxTpl.id).u, null);
+  assert.equal(s.db.get('SELECT pay_url u FROM envelopes WHERE id=?', fromMax.data.envelope.id).u, null);
+  // Olga's link on the envelope Max sent from her template stays, and the signer is told it is Olga who asks.
+  assert.equal((await signAll(fromOlga.id, 'pat-payer@example.com')).status, 200);
+  const p = await payOf(fromOlga.id, 'pat-payer@example.com');
+  assert.deepEqual([p?.url, p?.label, p?.sender.name], ['https://buy.stripe.com/olga_fee', 'Pay the fee', 'Olga Owner']);
+
+  // Leaving by oneself does the same.
+  const e9 = await deal(lee, 'lee');
+  assert.equal((await lee.put(`/envelopes/${e9.id}/pay-link`, { url: 'https://paypal.me/leeleaver' })).status, 200);
+  assert.equal((await lee.post(`/envelopes/${e9.id}/send`)).status, 200);
+  assert.equal((await lee.post('/account/leave', {})).status, 200);
+  assert.match((await owner.get(`/envelopes/${e9.id}/pay-link`)).data.gone.note, /^The payment link Lee Leaver set was taken off: Lee Leaver left the team, and a payment link belongs/);
+  // Even where a path forgot to take it off, nobody is asked for money for someone who left.
+  s.db.run("UPDATE envelopes SET pay_url='https://paypal.me/leeleaver', pay_kind='deposit' WHERE id=?", e9.id);
+  assert.equal((await signAll(e9.id, 'ana-lee@example.com')).status, 200);
+  assert.equal(await payOf(e9.id, 'ana-lee@example.com'), null);
+  // The envelope page and the editor print the reason.
+  assert.match(read('src/components/sender/PayLinkNote.tsx'), /\{st\.gone\.note\}/);
+  assert.match(read('src/components/editor/PayLinkChoice.tsx'), /\{st\.gone\.note\}/);
+});
+
+test('a link shortener or a forwarding page is refused and says why, and both sides read that the button opens exactly the address shown', async () => {
+  for (const u of ['https://bit.ly/3abcdEF', 'https://tinyurl.com/pay-now', 'https://t.co/abc', 'https://go.bit.ly/x', 'https://www.google.com/url?q=https://evil.example.net/pay',
+    'https://www.google.co.uk/url?q=x', 'https://l.facebook.com/l.php?u=https%3A%2F%2Fevil.example.net', 'https://nam12.safelinks.protection.outlook.com/?url=x', 'https://www.youtube.com/redirect?q=x']) {
+    const r: any = checkPayUrl(u, 'sign.example.org');
+    assert.match(r.error || '', /is a link shortener or a forwarding page: it shows one name and sends people on to another, so a signer could not see where they would pay\. Use the full address of the payment page itself/, u);
+  }
+  assert.ok(PAY_SHORTENERS.includes('bit.ly') && PAY_SHORTENERS.includes('tinyurl.com'));
+  // A payment provider's own short links lead to its own pages and stay allowed, and so does an ordinary page.
+  for (const u of ['https://square.link/u/AbC123', 'https://paypal.me/gusbuilder/50', 'https://buy.stripe.com/test_deposit', 'https://www.google.com/maps/place/x']) assert.ok(!('error' in checkPayUrl(u)), u);
+  // Through the API, nothing is saved.
+  const c = await signUp('Sid Shortener', 'sid-shortener@example.com', ip());
+  await trust(c);
+  const e = await deal(c, 'short');
+  const r = await c.put(`/envelopes/${e.id}/pay-link`, { url: 'https://bit.ly/3abcdEF' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /^"bit\.ly" is a link shortener/);
+  assert.equal(s.db.get('SELECT pay_url u FROM envelopes WHERE id=?', e.id).u, null);
+  // The length refusal no longer sends anyone to a short link.
+  assert.doesNotMatch((checkPayUrl(`https://pay.example.com/${'x'.repeat(600)}`) as any).error, /short link/);
+  // An open redirect on the payer's own site cannot be seen from here, so both sides are told what is and is not checked.
+  const pl = await import('../src/lib/paylink.ts');
+  assert.match(pl.PAY_FOR_SENDER, /The button opens exactly this address, and Sign&Grow does not check where that page sends people next, so give the address of the payment page itself, not a short link\./);
+  assert.equal(pl.payWhere('Gus'), 'The button opens exactly this address. Sign&Grow does not check where that site sends you after that: before you pay, check that the page asking for money belongs to Gus.');
+  assert.match(read('src/components/sign/PayLink.tsx'), /<p className="small" id="sg-pay-where"[^>]*>\{payWhere\(pay\.sender\.name\)\}<\/p>/);
+  assert.match(read('src/components/sender/PayLinkNote.tsx'), /The button opens exactly this address: Sign&Grow does not check where that page sends people next\./);
+});
+
+test('a host on a private network or at a special address is refused when the link is saved, and again each time it would be shown', async () => {
+  // By name: names kept for private networks, and services that answer with the address written in the name.
+  for (const u of ['https://192.168.1.1.nip.io/admin', 'https://127.0.0.1.sslip.io/', 'https://localtest.me/', 'https://app.lvh.me/', 'https://localhost.localdomain/pay', 'https://router.home.arpa/', 'https://nas.alt/', 'https://files.private/'])
+    assert.match((checkPayUrl(u) as any).error || '', /is not a site on the public internet/, u);
+  for (const u of ['https://*.example.com/', 'https://pay_page.example.com/', 'https://-pay.example.com/']) assert.match((checkPayUrl(u) as any).error || '', /is not a name a site can have/, u);
+  // Every special range, and ordinary public addresses.
+  for (const a of ['10.1.2.3', '172.16.0.1', '192.168.0.1', '127.0.0.1', '100.64.0.1', '169.254.169.254', '0.0.0.0', '224.0.0.1', '255.255.255.255', '198.18.0.1', '192.0.2.1',
+    '::1', '::', 'fe80::1', 'fc00::1', 'fd12:3456::1', 'ff02::1', '2001:db8::1', '2002:c0a8:101::1', '64:ff9b::a00:1', '::ffff:192.168.1.1', 'not an address']) assert.equal(specialAddress(a), true, a);
+  for (const a of [PUBLIC, '8.8.8.8', '172.32.0.1', '100.128.0.1', '2606:4700:4700::1111', '::ffff:8.8.8.8', '64:ff9b::808:808']) assert.equal(specialAddress(a), false, a);
+
+  // By where the name leads, when it is saved.
+  const c = await signUp('Dee Dns', 'dee-dns@example.com', ip());
+  await trust(c);
+  const e = await deal(c, 'dns');
+  Object.assign(DNS, { 'admin.example.net': ['192.168.1.1'], 'meta.example.net': ['169.254.169.254'], 'v6.example.net': ['fd00::5'], 'mixed.example.net': [PUBLIC, '10.0.0.7'],
+    'mapped.example.net': ['::ffff:127.0.0.1'], 'gone.example.net': 'ENOTFOUND', 'slow.example.net': 'EAI_AGAIN' });
+  const cases: [string, RegExp][] = [
+    ['admin.example.net', /^"admin\.example\.net" leads to 192\.168\.1\.1, which is an address inside a private network or kept for special uses, not a site on the public internet\./],
+    ['meta.example.net', /leads to 169\.254\.169\.254/], ['v6.example.net', /leads to fd00::5/], ['mixed.example.net', /leads to 10\.0\.0\.7/, ], ['mapped.example.net', /leads to ::ffff:127\.0\.0\.1/],
+    ['gone.example.net', /^No site answers at "gone\.example\.net" right now, so a signer could not open it\./], ['slow.example.net', /^We could not check where "slow\.example\.net" leads just now\. Try again in a minute\./],
+  ];
+  for (const [h, says] of cases) {
+    const r = await c.put(`/envelopes/${e.id}/pay-link`, { url: `https://${h}/pay` });
+    assert.equal(r.status, 400, h);
+    assert.match(r.data.error, says, h);
+    assert.match(r.data.error, /Nothing was saved\.$/, h);
+  }
+  assert.equal(s.db.get('SELECT pay_url u FROM envelopes WHERE id=?', e.id).u, null);
+
+  // When it would be shown: a name that led to a public site when it was saved, and leads home by now.
+  DNS['shift.example.net'] = [PUBLIC];
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: 'https://shift.example.net/deposit' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'ana-dns@example.com')).status, 200);
+  const mails = () => mailTo('dee-dns@example.com').filter((m: any) => /payment link/i.test(m.subject));
+  DNS['shift.example.net'] = ['127.0.0.1'];
+  assert.equal(await payOf(e.id, 'ana-dns@example.com'), null, 'not shown');
+  assert.equal(await payOf(e.id, 'ana-dns@example.com'), null);
+  assert.equal((await press(e.id, 'ana-dns@example.com')).data.recorded, false, 'and pressing records nothing');
+  assert.ok(!(await payLines(c, e.id)).some((a: any) => a.action === 'Shown the payment link'));
+  assert.match((await c.get(`/envelopes/${e.id}/pay-link`)).data.host_why, /^"shift\.example\.net" leads to 127\.0\.0\.1/, 'the sender sees why on the envelope page');
+  // The sender hears it once, in an email without the address or even its host.
+  assert.equal(mails().length, 1);
+  assert.equal(mails()[0].subject, 'Your payment link is not being shown: Kitchen refit dns');
+  assert.match(mails()[0].html, /Its address leads to 127\.0\.0\.1/);
+  assert.doesNotMatch(mails()[0].html, /shift\.example|\/deposit/);
+  // It leads to a public site again: shown. A later failure is news again.
+  DNS['shift.example.net'] = [PUBLIC];
+  assert.equal((await payOf(e.id, 'ana-dns@example.com'))?.url, 'https://shift.example.net/deposit');
+  DNS['shift.example.net'] = ['10.0.0.1'];
+  assert.equal(await payOf(e.id, 'ana-dns@example.com'), null);
+  assert.equal(mails().length, 2);
+  // A lookup that fails for a moment: not shown, and the signer is told to come back, without anyone being emailed.
+  DNS['shift.example.net'] = 'EAI_AGAIN';
+  const later = (await new Client().get(`/sign/${tokenFor(e.id, 'ana-dns@example.com')}/pay`)).data;
+  assert.equal(later.pay, null);
+  assert.equal(later.later, 'Dee Dns also asks for a payment after signing, on their own payment page. We could not check where that page leads just now, so it is not shown yet. Open this page again in a few minutes. You have already finished, and your signature does not depend on it.');
+  assert.equal(mails().length, 2);
+  DNS['shift.example.net'] = [PUBLIC];
+  assert.match(read('src/components/sign/PayLink.tsx'), /if \(!pay\) return got\?\.later \? <p className="notice" role="status">\{got\.later\}<\/p> : null;/);
+});
+
+test('after the link changes, the sender sees who was shown and pressed which address, and a press counts only for an address that person was shown', async () => {
+  const c = await signUp('Cy Changer', 'cy-changer@example.com', ip());
+  await trust(c);
+  const e = await deal(c, 'chg');
+  const old = 'https://buy.stripe.com/old_link', neu = 'https://pay.example.com/new_link';
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: old })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'ana-chg@example.com')).status, 200);
+  assert.equal((await payOf(e.id, 'ana-chg@example.com'))?.url, old);
+  assert.equal((await press(e.id, 'ana-chg@example.com', { url: old })).data.recorded, true);
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: neu })).status, 200);
+  const view = async () => (await c.get(`/envelopes/${e.id}/pay-link`)).data.people;
+  const ana = async () => (await view()).find((p: any) => p.name === 'Ana chg');
+  // The new address has not been shown to Ana: her times for the old one stay with the old one.
+  let a = await ana();
+  assert.deepEqual([a.shown_at, a.opened_at], [null, null]);
+  assert.equal(a.earlier.length, 1);
+  assert.deepEqual([a.earlier[0].url, a.earlier[0].fingerprint, !!a.earlier[0].shown_at, !!a.earlier[0].opened_at], [old, payPrint(old), true, true]);
+  // She comes back and is shown the new one: a new line, with its own fingerprint. She has not pressed it.
+  assert.equal((await payOf(e.id, 'ana-chg@example.com'))?.url, neu);
+  a = await ana();
+  assert.ok(a.shown_at);
+  assert.equal(a.opened_at, null);
+  assert.equal(s.db.get("SELECT pay_shown_url u FROM recipients WHERE envelope_id=? AND email='ana-chg@example.com'", e.id).u, neu, 'the row says the address she was shown last');
+  // A tab left open on the old address records nothing new; an address she was never shown records nothing; the new one does.
+  assert.equal((await press(e.id, 'ana-chg@example.com', { url: old })).data.recorded, false);
+  assert.equal((await press(e.id, 'ana-chg@example.com', { url: 'https://made-up.example.net/' })).data.recorded, false);
+  assert.equal((await press(e.id, 'ana-chg@example.com', { url: neu })).data.recorded, true);
+  assert.ok((await ana()).opened_at);
+  const shown = (await payLines(c, e.id)).filter((x: any) => x.action === 'Shown the payment link').map((x: any) => x.detail);
+  assert.deepEqual(shown, [old, neu].map((u) => `Ana chg was shown "Pay the deposit" after finishing (address fingerprint ${payPrint(u)}).`));
+  // Bo presses without ever having been shown it (a request made by hand): nothing is recorded, and his line says so.
+  assert.equal((await signAll(e.id, 'bo-chg@example.com')).status, 200);
+  assert.equal((await press(e.id, 'bo-chg@example.com')).data.recorded, false);
+  const bo = (await view()).find((p: any) => p.name === 'Bo chg');
+  assert.deepEqual([bo.shown_at, bo.opened_at, bo.earlier], [null, null, []]);
+  await payOf(e.id, 'bo-chg@example.com');
+  assert.equal((await press(e.id, 'bo-chg@example.com')).data.recorded, true);
+  // Pressed is only what the page could see: the page never says "not pressed", and a middle click counts too.
+  const note = read('src/components/sender/PayLinkNote.tsx');
+  assert.match(note, /'not recorded as pressed'/);
+  assert.doesNotMatch(note, /not pressed yet/);
+  assert.match(note, / Earlier shown \$\{x\.url\} \(fingerprint \$\{x\.fingerprint\}\)/);
+  assert.match(read('src/components/sign/PayLink.tsx'), /onClick=\{opened\} onAuxClick=\{opened\}/);
+});
+
+test('a completed envelope its sender deleted, or one that was voided, asks nobody for money and records no press', async () => {
+  const c = await signUp('Del Deleter', 'del-deleter@example.com', ip());
+  await trust(c);
+  const e = await deal(c, 'del');
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: 'https://buy.stripe.com/del_dep' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  for (const who of ['ana-del', 'bo-del', 'vi-del']) assert.equal((await signAll(e.id, `${who}@example.com`)).status, 200);
+  assert.ok(await payOf(e.id, 'ana-del@example.com'));
+  const del = await c.call('DELETE', `/envelopes/${e.id}`);
+  assert.equal(del.data.kept_for_recipients, true, 'the signers keep their copy');
+  assert.equal(await payOf(e.id, 'ana-del@example.com'), null);
+  assert.equal(await payOf(e.id, 'bo-del@example.com'), null);
+  assert.equal((await press(e.id, 'ana-del@example.com')).data.recorded, false);
+  // Voided after someone was shown it, from a tab left open: the press is not written down either.
+  const v = await deal(c, 'vd');
+  assert.equal((await c.put(`/envelopes/${v.id}/pay-link`, { url: 'https://buy.stripe.com/void_dep' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${v.id}/send`)).status, 200);
+  assert.equal((await signAll(v.id, 'ana-vd@example.com')).status, 200);
+  assert.ok(await payOf(v.id, 'ana-vd@example.com'));
+  assert.equal((await c.post(`/envelopes/${v.id}/void`, { reason: 'Deal is off' })).status, 200);
+  assert.equal((await press(v.id, 'ana-vd@example.com')).data.recorded, false);
+  assert.ok(!(await payLines(c, v.id)).some((a: any) => a.action === 'Opened the payment link'));
+});
+
+test('the sender, and anyone on the sender\'s team, is never asked to pay: not on their own envelope and not as the countersigner of a public form', async () => {
+  const gus = await signUp('Gus Selfsign', 'gus-selfsign@example.com', ip());
+  await trust(gus);
+  const cleo = await member(gus, 'Cleo Colleague', 'cleo-colleague@example.com');
+  assert.ok(cleo);
+  const e = await deal(gus, 'self', {
+    recipients: [{ id: 'a', role: 'signer', name: 'Ana self', email: 'ana-self@example.com' }, { id: 'g', role: 'signer', name: 'Gus Selfsign', email: 'gus-selfsign@example.com' },
+      { id: 'c', role: 'signer', name: 'Cleo Colleague', email: 'CLEO-colleague@example.com' }],
+    fields: ['a', 'g', 'c'].map((p, i) => ({ document_id: 'd', recipient_id: p, type: 'signature', page: 0, x: 0.1, y: 0.2 + i * 0.2, w: 0.3, h: 0.06 })),
+  });
+  assert.equal((await gus.put(`/envelopes/${e.id}/pay-link`, { url: 'https://buy.stripe.com/self_dep' })).status, 200);
+  assert.equal((await gus.post(`/envelopes/${e.id}/send`)).status, 200);
+  for (const w of ['gus-selfsign', 'cleo-colleague', 'ana-self']) assert.equal((await signAll(e.id, `${w}@example.com`)).status, 200);
+  assert.equal(await payOf(e.id, 'gus-selfsign@example.com'), null, 'not the sender');
+  assert.equal(await payOf(e.id, 'cleo-colleague@example.com'), null, 'not a colleague, whatever the capital letters');
+  assert.equal((await payOf(e.id, 'ana-self@example.com'))?.url, 'https://buy.stripe.com/self_dep', 'the client is');
+  assert.deepEqual((await payLines(gus, e.id)).filter((a: any) => a.action === 'Shown the payment link').map((a: any) => a.detail.split(' was ')[0]), ['Ana self']);
+  const people = (await gus.get(`/envelopes/${e.id}/pay-link`)).data.people;
+  assert.deepEqual(people.map((p: any) => [p.name, p.on_team]), [['Ana self', false], ['Gus Selfsign', true], ['Cleo Colleague', true]]);
+  assert.match(read('src/components/sender/PayLinkNote.tsx'), /'not asked, because they are on your team\.'/);
+
+  // A public form whose template has the owner sign for the office: the visitor is shown the link, the owner is not.
+  const tpl = await template(gus, 'Booking form', [{ id: 'v', role: 'signer', role_name: 'Client' }, { id: 'o', role: 'signer', role_name: 'Office', name: 'Gus Selfsign', email: 'gus-selfsign@example.com' }]);
+  assert.equal((await gus.put(`/envelopes/${tpl.id}/pay-link`, { url: 'https://buy.stripe.com/booking' })).status, 200);
+  assert.equal((await gus.post('/powerforms', { template_id: tpl.id, name: 'Book now' })).status, 200);
+  const slug = (await gus.get('/powerforms')).data.powerforms.find((p: any) => p.name === 'Book now').slug;
+  const vis = new Client();
+  vis.ip = ip();
+  const st = await vis.post(`/public/powerforms/${slug}/start`, { name: 'Walk In', email: 'walk-in-pay@example.com' });
+  assert.equal(st.status, 200, JSON.stringify(st.data));
+  const tok = st.data.url.split('/sign/')[1];
+  const eid = s.db.get('SELECT envelope_id FROM recipients WHERE token=?', tok).envelope_id;
+  assert.equal((await signAll(eid, 'walk-in-pay@example.com')).status, 200);
+  assert.equal((await vis.get(`/sign/${tok}/pay`)).data.pay?.url, 'https://buy.stripe.com/booking');
+  assert.equal((await signAll(eid, 'gus-selfsign@example.com')).status, 200);
+  assert.equal(await payOf(eid, 'gus-selfsign@example.com'), null);
+});
+
+test('changing only the button keeps the address, a removal has to be asked for, and the 500 characters are counted as the address is stored', async () => {
+  const c = await signUp('Kit Kinder', 'kit-kinder@example.com', ip());
+  await trust(c);
+  const e = await deal(c, 'kind');
+  const put = (b: any) => c.put(`/envelopes/${e.id}/pay-link`, b);
+  const none = await put({ kind: 'fee' });
+  assert.equal(none.status, 400, 'nothing to change the button of yet');
+  assert.match(none.data.error, /^There is no payment link on this envelope to change\. Send "url" with the address of your own payment page\. Nothing was saved\.$/);
+  assert.equal((await put({ url: 'https://buy.stripe.com/kind_dep', kind: 'deposit' })).status, 200);
+  const k = await put({ kind: 'fee' });
+  assert.equal(k.status, 200);
+  assert.deepEqual([k.data.pay_link.url, k.data.pay_link.label], ['https://buy.stripe.com/kind_dep', 'Pay the fee']);
+  assert.equal((await payLines(c, e.id)).at(-1).detail, `The button now says "Pay the fee" (it said "Pay the deposit"). The address stays the same (fingerprint ${payPrint('https://buy.stripe.com/kind_dep')}).`);
+  assert.equal(s.db.get('SELECT pay_set_by FROM envelopes WHERE id=?', e.id).pay_set_by, (await c.get('/me')).data.user.id);
+  assert.equal((await put({ url: null })).data.pay_link, null, 'null takes it off, as asked');
+  assert.equal(s.db.get('SELECT pay_url u FROM envelopes WHERE id=?', e.id).u, null);
+  // 470 Cyrillic letters are 494 typed characters and 2844 as the browser opens them: refused, with the real count.
+  const long: any = checkPayUrl(`https://pay.example.com/${'ж'.repeat(470)}`);
+  assert.match(long.error, /^Written out the way a browser opens it, that address is 2844 characters long \(a letter outside the basic Latin alphabet takes up to 6\), and the most that fits is 500\./);
+  assert.ok(!('error' in checkPayUrl(`https://pay.example.com/${'ж'.repeat(40)}`)), 'a short address in another alphabet still fits');
+});
+
+test('when an account may no longer show its links, its owner and admins are told once, without the address, and again only after one was shown', async () => {
+  const c = await signUp('Rae Refund', 'rae-refund-pay@example.com', ip());
+  const acct = (await c.get('/me')).data.account;
+  const adm = await member(c, 'Ada Admin', 'ada-admin-pay@example.com', 'admin');
+  assert.ok(adm);
+  s.db.run("INSERT INTO payments (id, account_id, amount_cents, currency, at, kind, applied_at) VALUES ('pay_rf_gi', ?, 900, 'usd', ?, 'plan', ?)", acct.id, days(40), days(40));
+  const e = await deal(c, 'refund');
+  assert.equal((await c.put(`/envelopes/${e.id}/pay-link`, { url: 'https://buy.stripe.com/rf' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'ana-refund@example.com')).status, 200);
+  assert.ok(await payOf(e.id, 'ana-refund@example.com'));
+  const told = (email: string) => mailTo(email).filter((m: any) => m.subject.startsWith('Your payment links are not being shown'));
+  // Two unused signatures are refunded from the payment that earned the trust (what routes-billing.ts writes).
+  s.db.run('UPDATE payments SET refunded_at=?, refunded_cents=200, credits_refunded=2 WHERE id=?', new Date().toISOString(), 'pay_rf_gi');
+  assert.equal(await payOf(e.id, 'ana-refund@example.com'), null);
+  for (const who of ['rae-refund-pay@example.com', 'ada-admin-pay@example.com']) {
+    assert.equal(told(who).length, 1, who);
+    assert.equal(told(who)[0].subject, `Your payment links are not being shown: ${acct.name}`);
+    assert.match(told(who)[0].html, /Someone who signed &quot;Kitchen refit refund&quot; was not shown its payment link just now|Someone who signed "Kitchen refit refund" was not shown its payment link just now/);
+    assert.match(told(who)[0].html, /at least 14 days old and was not refunded or disputed/);
+    assert.doesNotMatch(told(who)[0].html, /stripe/);
+  }
+  assert.equal(await payOf(e.id, 'ana-refund@example.com'), null);
+  assert.equal((await signAll(e.id, 'bo-refund@example.com')).status, 200);
+  assert.equal(await payOf(e.id, 'bo-refund@example.com'), null);
+  assert.equal(told('rae-refund-pay@example.com').length, 1, 'once, not for every signer');
+  // A person clears the account, a link is shown again, and the next time it stops is news again.
+  s.db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), acct.id);
+  assert.ok(await payOf(e.id, 'ana-refund@example.com'));
+  s.db.run('UPDATE accounts SET trusted_at=NULL WHERE id=?', acct.id);
+  assert.equal(await payOf(e.id, 'ana-refund@example.com'), null);
+  assert.equal(told('rae-refund-pay@example.com').length, 2);
+});
+
+test('bulk sends and public forms say whether people are reminded, and a % or _ typed into the template search is that character', async () => {
+  // An account from before reminders were on by default, and a template it made: the batch says reminders are off.
+  const old = await signUp('Old Timer', 'old-timer-gi@example.com', ip());
+  s.db.run('UPDATE accounts SET default_reminder_days=0 WHERE id=?', (await old.get('/me')).data.account.id);
+  const oldTpl = await template(old, 'Old tpl');
+  const off = (await old.post('/bulk/check', { template_id: oldTpl.id, rows: [{ Client: { name: 'C one', email: 'c-one-gi@example.com' } }] })).data;
+  assert.deepEqual([off.reminder_days, off.reminders], [0, policy.reminderText(0)]);
+  const now = await signUp('New Comer', 'new-comer-gi@example.com', ip());
+  const tpl = await template(now, 'New tpl');
+  const on = (await now.post('/bulk/check', { template_id: tpl.id, rows: [] })).data;
+  assert.deepEqual([on.reminder_days, on.reminders], [3, policy.reminderText(3)]);
+  // A list longer than a batch takes is counted as it is and refused in the words POST /bulk uses, not counted as 500.
+  const big = (await now.post('/bulk/check', { template_id: tpl.id, rows: Array.from({ length: 600 }, (_, i) => ({ Client: { name: `R ${i}`, email: `r-${i}-gi@example.com` } })) })).data;
+  assert.equal(big.rows, 600);
+  assert.deepEqual(big.refusal, { status: 400, message: 'Send up to 500 envelopes per batch.' });
+  assert.equal((await now.post('/bulk', { template_id: tpl.id, rows: Array.from({ length: 600 }, (_, i) => ({ Client: { name: `R ${i}`, email: `r-${i}-gi@example.com` } })) })).data.error, big.refusal.message);
+  const bulk = read('src/app/app/bulk/page.tsx');
+  assert.match(bulk, /\{listOk && <p className="muted small" id="sn-batch-reminders">\{reminderText\(loaded\.reminder_days\)\}/);
+  assert.match(bulk, /aria-describedby=\{listOk \? 'sn-batch-cost sn-batch-reminders' : undefined\}/);
+  // A public form: its list says what the envelope each visitor starts does.
+  assert.equal((await old.post('/powerforms', { template_id: oldTpl.id, name: 'Old form' })).status, 200);
+  assert.equal((await old.get('/powerforms')).data.powerforms[0].reminders, policy.reminderText(0));
+  assert.match(read('src/app/app/powerforms/page.tsx'), /\{p\.reminders && <div className="muted small">\{p\.reminders\} That comes from the template\.<\/div>\}/);
+
+  // Template search: % and _ are characters, not "anything".
+  const sue = await signUp('Sue Search', 'sue-search-gi@example.com', ip());
+  for (const name of ['Texas lien waiver', 'Discount 50% offer', 'Under_score plan']) await template(sue, name);
+  const search = async (q: string) => (await sue.get(`/envelopes?kind=template&q=${encodeURIComponent(q)}`)).data.envelopes.map((e: any) => e.subject);
+  assert.deepEqual(await search('%'), ['Discount 50% offer']);
+  assert.deepEqual(await search('_'), ['Under_score plan']);
+  assert.deepEqual(await search('50%'), ['Discount 50% offer']);
+  assert.deepEqual(await search('TEXAS'), ['Texas lien waiver']);
+  assert.deepEqual(await search('\\'), []);
+});
+
+test('"Who can see your documents" names the text message provider where this server sends texts, and the screens hold a long payment address', () => {
+  const carries = policy.WHO_CAN_SEE.find((w) => w.who === policy.WHO_CARRIES);
+  assert.ok(carries, 'the item is still there');
+  assert.match(policy.WHO_CARRIES_TEXTS, /the text message provider carries it too\. That is a one-time code, or a message with the signing link in it, which opens the document for whoever holds it/);
+  const page = read('src/app/security/page.tsx');
+  assert.match(page, /\{w\.what\}\{textsOn && w\.who === WHO_CARRIES \? WHO_CARRIES_TEXTS : ''\}/, 'said only where texts are on');
+  // A host of 150 characters wraps inside the button instead of pushing the signing page sideways on a phone.
+  assert.match(read('src/components/sign/PayLink.tsx'), /style=\{\{ whiteSpace: 'normal', minHeight: 44, textAlign: 'center', maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word' \}\}/);
+  assert.match(read('src/components/sender/PayLinkNote.tsx'), /<ul className="small" style=\{\{ paddingLeft: 18, overflowWrap: 'anywhere' \}\}>/);
 });

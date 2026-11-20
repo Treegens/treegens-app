@@ -96,8 +96,27 @@ export const isChargeable = (r: any, sender: Sender) =>
 // their place is a new signature, also at the same address. Lines from before person_gen have no third part, and a
 // request that never changed hands still has none, so they keep counting.
 export const sigRef = (r: any) => `${r.id}|${String(r.email || '').toLowerCase()}${Number(r.person_gen) > 0 ? `|${Number(r.person_gen)}` : ''}`;
-// The request passes to another person: the next one's signature is their own.
-export const nextPerson = (r: any) => ({ ...r, person_gen: (Number(r.person_gen) || 0) + 1 });
+// Which person on the request `name` at `email` is. recipients.person_gens remembers who each gen was (plain name and
+// address), so a request that comes back to someone it had before (renamed to somebody else and back, or corrected
+// away and back) is that person's gen again, with what they already paid for; anyone new gets the next gen. The
+// answer is the gen and the map to store with it. Gens from before the map was kept are not known, and count as
+// other people.
+const personKey = (name: any, email: any) => `${plainName(name)}|${String(email ?? '').trim().toLowerCase()}`;
+export function personGen(r: any, name: any, email: any): { gen: number; gens: string } {
+  let seen: Record<string, string> = {};
+  try {
+    seen = JSON.parse(r.person_gens || '{}') || {};
+  } catch {}
+  const cur = Number(r.person_gen) || 0;
+  if (!(String(cur) in seen)) seen[String(cur)] = personKey(r.name, r.email);
+  const want = personKey(name, email);
+  const hit = Object.keys(seen).find((g) => seen[g] === want);
+  const gen = hit != null ? Number(hit) : Math.max(cur, ...Object.keys(seen).map(Number)) + 1;
+  seen[String(gen)] = want;
+  return { gen, gens: JSON.stringify(seen) };
+}
+// The request passes to another person: the next one's signature is their own (or theirs from before, see personGen).
+export const nextPerson = (r: any, to?: { name?: any; email?: any }) => ({ ...r, person_gen: to ? personGen(r, to.name, to.email).gen : (Number(r.person_gen) || 0) + 1 });
 export const paidFor = (accountId: string, r: any) => !!get("SELECT 1 x FROM credits WHERE account_id=? AND reason='signature' AND ref=?", accountId, sigRef(r));
 
 // How many signatures an envelope still needs: its signers who have not finished, not counting the sender signing
