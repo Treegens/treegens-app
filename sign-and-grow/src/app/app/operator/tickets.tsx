@@ -20,11 +20,16 @@ const WRITTEN: Record<string, string> = {
   not_signed_in: 'Written without signing in. Anyone can type any address into the form, so give out nothing about an account. A message marked "through the link" did come from this mailbox.',
 };
 const VIA: Record<string, string> = { form: 'typed into the help form', app: 'written while signed in', link: 'through the link in our email' };
+// What became of the email to the customer, said as it is (the server answers `mail`): the mail server took it,
+// there is no mail server, or it would not take it.
+const mailSaid = (d: any, done: string, to: string) =>
+  d.mail === 'failed' ? `Saved in the request, but the mail server did not take the email to ${to}. It is tried again by itself for about a day and a half, and whoever has the request is emailed if it still does not go. Check that the address is right.`
+    : d.mail === 'outbox' ? 'Saved in the request. No mail server is set up here, so the email waits in the outbox and has not reached the customer.' : done;
 // What an operator can write, and what each one does.
 const KINDS: Record<string, { label: string; field: string; button: string; done: string }> = {
-  answer: { label: 'An answer', field: 'Your answer. It is emailed to the customer as you write it.', button: 'Send the answer', done: 'Sent. The customer has it by email.' },
-  ask: { label: 'A question to the customer', field: 'Your question. It is emailed to the customer, and the clock stops until they reply.', button: 'Send the question', done: 'Sent. The clock is stopped until they reply.' },
-  close: { label: 'A closing answer', field: 'The answer this request is closed with. It is emailed to the customer.', button: 'Send and close', done: 'Closed. The customer has the answer by email.' },
+  answer: { label: 'An answer', field: 'Your answer. It is emailed to the customer as you write it.', button: 'Send the answer', done: 'Sent. The mail server took the email with your answer.' },
+  ask: { label: 'A question to the customer', field: 'Your question. It is emailed to the customer, and the clock stops until they reply.', button: 'Send the question', done: 'Sent. The mail server took the email, and the clock is stopped until they reply.' },
+  close: { label: 'A closing answer', field: 'The answer this request is closed with. It is emailed to the customer.', button: 'Send and close', done: 'Closed. The mail server took the email with the answer.' },
   note: { label: 'A note for operators', field: 'Your note. The customer never sees it.', button: 'Save the note', done: 'Note saved.' },
 };
 
@@ -59,7 +64,7 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
     setBusy(true);
     api(`/operator/support/${id}`, { body })
       .then((d) => {
-        toast(d.deleted ? `${done} The request has now been deleted: its writer closed their account, and it was kept only until it was dealt with.` : done);
+        toast(d.deleted ? `${mailSaid(d, done, t.email)} The request has now been deleted: its writer closed their account, and it was kept only until it was dealt with.` : mailSaid(d, done, t.email), d.mail === 'failed');
         after?.();
         if (d.deleted) return changed(true);
         setT(d.request);
@@ -79,6 +84,11 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
     <div className="tk-open" id={`tk-${id}`}>
       <div className="tk-facts">
         {t.alert ? <div>The software filed this by itself. Nobody is waiting for an email about it: note what you did, and close it with a note.</div> : <div>{WRITTEN[t.written]}</div>}
+        {/* The whole address the answers go to, which the row above may not have room for. Anyone can type a long one. */}
+        {!t.alert && <div className="tk-address">From <b>{t.name || 'someone who gave no name'}</b>. Answers go to <b>{t.email}</b>.</div>}
+        {!t.alert && t.mail && (t.mail.status === 'failed' || t.mail.bounced) && (
+          <div className="notice warn">Our latest email about this request (&ldquo;{t.mail.subject}&rdquo;) {t.mail.bounced ? `came back from ${t.email}: ${t.mail.bounced}.` : `was not taken by the mail server${t.mail.error ? `: ${t.mail.error}` : ''}. ${t.mail.retrying ? 'It is tried again by itself.' : 'Nobody tries again.'}`} Check the address: if it is wrong, the customer cannot read anything we write here.</div>
+        )}
         {!t.alert && <div>{t.login ? `A login exists for this address: ${t.login.name}, ${t.login.confirmed ? 'address confirmed' : 'address not confirmed'}${t.login.closing_at ? `, being closed on ${fmtDate(t.login.closing_at)}` : ''}.` : 'No login uses this address.'}</div>}
         {a ? (
           <div>
@@ -87,7 +97,7 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
             {a.dispute_at ? ' · payments off after a card dispute' : ''} · {a.trusted_at ? `trusted since ${fmtDate(a.trusted_at)}` : 'not trusted'} · {pay ? `last payment ${money(pay.amount_cents, pay.currency)} on ${fmtDate(pay.at)} (${pay.kind === 'topup' ? 'extra signatures' : 'monthly plan'})${pay.refunded_cents ? `, ${money(pay.refunded_cents, pay.currency)} of it refunded` : ''}` : 'no payment on record'}
             {accountActions && <span style={{ marginLeft: 8 }}>{accountActions(a)}</span>}
           </div>
-        ) : !t.alert && <div className="muted">No account goes with this request.</div>}
+        ) : <div className="muted">{t.alert ? 'This alert names no account of ours. The account and payment it is about, if any, are named in its text.' : 'No account goes with this request.'}</div>}
         {t.forget && <div className="notice warn">This person has closed their account since. The request was kept so it can be answered. Your answer is emailed to them, and then the request is deleted.</div>}
         {t.follows && <div>Continues request <button type="button" className="linklike" onClick={() => openOther(t.follows.id)}>{t.follows.reference}</button>, which was closed more than 30 days before.</div>}
         {t.envelope_id && <div>About envelope <span className="mono">{t.envelope_id}</span></div>}

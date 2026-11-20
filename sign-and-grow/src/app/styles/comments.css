@@ -1,0 +1,34 @@
+/* Questions and comments: the dialog on the signing page (src/components/sign/Comments.tsx) and the card on the
+   sender's envelope page (src/components/sender/Comments.tsx). */
+.cm-h { font-size: 17px; margin: 18px 0 8px; }
+.cm-threads .cm-h:first-child { margin-top: 8px; }
+.cm-thread { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; background: var(--surface); }
+.cm-thread.settled { background: #fbfaf6; }
+.cm-thread.waiting { border-color: #e6c98f; }
+.cm-who { margin: 0 0 8px; color: var(--muted); }
+.cm-list { list-style: none; margin: 0; padding: 0; }
+.cm-list > li { padding: 8px 0; border-top: 1px solid var(--line); }
+.cm-list > li:first-child { border-top: 0; padding-top: 0; }
+.cm-list > li.from-sender { padding-left: 12px; border-left: 3px solid var(--leaf); }
+.cm-meta { font-size: 14px; overflow-wrap: anywhere; }
+.cm-body { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cm-acts { margin-top: 8px; gap: 8px; }
+.cm-reply { margin-top: 10px; }
+.cm-new { margin-top: 8px; padding-top: 4px; }
+.cm-len { margin: -6px 0 12px; }
+.cm-for { border: 0; padding: 0; margin: 0 0 14px; }
+.cm-for legend { font-weight: 600; font-size: 15px; margin-bottom: 6px; padding: 0; }
+.cm-for label.check { min-height: 44px; align-items: center; }
+.cm-for input[type='radio'] { width: 20px; height: 20px; flex: none; }
+.cm-open { margin-top: 12px; }
+.cm-open .btn { margin-left: 6px; }
+.cm-news { margin: 4px 0 0; }
+.cm-card textarea { width: 100%; }
+.cm-card .cm-acts .btn, .cm-card form .btn { min-height: 44px; }
+.cm-card select { min-height: 44px; max-width: 100%; }
+.cm-tag { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; background: #eeeae0; color: #4d5a52; margin-left: 6px; }
+.cm-tag.warn { background: var(--amber-soft); color: #6f4706; }
+@media (max-width: 600px) {
+  .cm-thread { padding: 10px 12px; }
+  .cm-acts .btn { flex: 1 1 auto; }
+}

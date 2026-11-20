@@ -41,6 +41,9 @@
 .tk-row[aria-expanded='true'] { background: #fbfaf6; }
 .tk-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
 .tk-line + .tk-line { margin-top: 3px; }
+/* A name and an address are typed by anyone, and can be one very long word: they wrap instead of running out of the card. */
+.tk-line > span { min-width: 0; }
+.tk-line b, .tk-facts > div { overflow-wrap: anywhere; }
 .tk-mark { display: inline-block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 999px; padding: 2px 8px; margin-right: 6px; vertical-align: 1px; }
 .tk-mark.late { background: var(--red); color: #fff; }
 .tk-mark.urgent { background: var(--amber-soft); color: #6f4706; }

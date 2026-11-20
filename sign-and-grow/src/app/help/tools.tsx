@@ -186,7 +186,8 @@ export function ReplyRecord() {
   if (!m) return null;
   return (
     <p className="muted small">
-      How we did in the last {m.days} days: of the {m.count} requests that got their first answer in that time, half had it within {spanText(m.minutes)}.
+      {/* A question back to the writer is a reply from a person, and it is also what stops the clock we promise, so it counts here as it does there. */}
+      How we did in the last {m.days} days: of the {m.count} requests that got their first reply from a person in that time (an answer, or a question back to the writer), half had it within {spanText(m.minutes)}.
       {m.late_now > 0 ? ` Right now ${m.late_now === 1 ? 'one request is' : `${m.late_now} requests are`} waiting longer than we promised.` : ' Right now no request is waiting longer than we promised.'}
     </p>
   );
@@ -351,7 +352,8 @@ export function YourRequests() {
                 setUnfolded((s) => (s[r.id] === open ? s : { ...s, [r.id]: open }));
               }}>
               <summary>
-                <span><span className="pub-ref">{r.reference}</span> <span className="muted small">{TOPIC_LABEL[r.topic] || r.topic} · {billDay(r.at)}</span></span>
+                {/* Dates as on every other support screen and email: "Friday 20 November, 14:00". */}
+                <span><span className="pub-ref">{r.reference}</span> <span className="muted small">{TOPIC_LABEL[r.topic] || r.topic} · sent {whenText(r.at)}</span></span>
                 <span className={`rq-sum-state${r.late ? ' late' : ''}`}>{line(r)}</span>
               </summary>
               <RequestView

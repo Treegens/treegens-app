@@ -543,6 +543,7 @@ test('another person at the same address never signs on the first person\'s sign
   full.recipients.find((r: any) => r.email === 'office7@seven.example').name = 'Bob Jones';
   const put = await p.c.put(`/envelopes/${e1}`, { ...full, resign: true });
   assert.equal(put.status, 402, JSON.stringify(put.data));
+  assert.match(put.data.error, /^This change puts Bob Jones in the place of Ann Smith, and another person signs with a signature of their own/);
   assert.equal(rcp(e1, 'office7@seven.example').name, 'Ann Smith', 'nothing was changed');
   // A spelling of the same name is the same person: asked to sign again, it is free.
   const fix = (await p.c.get(`/envelopes/${e1}`)).data.envelope;

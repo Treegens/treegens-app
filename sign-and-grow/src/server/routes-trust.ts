@@ -362,7 +362,15 @@ export function purgeUser(userId: string): any[] {
     // on which we asked them something and wait for their reply (see forgetNow in routes-support.ts), or closing an
     // account would be a way to lose a refund question. Requests are matched by address only when the address was
     // confirmed: signing up with somebody else's proves nothing.
-    const theirs = `(user_id=?${user.email_verified ? ' OR lower(email)=lower(?)' : ''})`;
+    // A request they wrote while signed in under somebody else's address is not theirs to take along: the answers go
+    // to that mailbox, and its owner may have written on it through our link. It stays with that address, with
+    // nothing left that ties it to this login (the name too, when it was the login's own), and goes like that
+    // address's other requests (supportTick in routes-support.ts).
+    run('UPDATE support_requests SET user_id=NULL, account_id=NULL, name=CASE WHEN name=? THEN NULL ELSE name END WHERE user_id=? AND lower(email)!=lower(?)', user.name, userId, user.email);
+    // The alerts the software files (routes-billing.ts, evidence.ts, filestore.ts) are kept under the address of
+    // whoever answers. They belong to the service, not to that person, and stay when an operator leaves (isAlert in
+    // routes-support.ts).
+    const theirs = `((user_id=?${user.email_verified ? ' OR lower(email)=lower(?)' : ''}) AND NOT (ref IS NULL AND user_id IS NULL AND COALESCE(name, '')='Sign&Grow (automatic alert)'))`;
     const who = user.email_verified ? [userId, user.email] : [userId];
     run(`DELETE FROM support_requests WHERE ${theirs} AND status NOT IN ('open','waiting')`, ...who);
     run(`UPDATE support_requests SET forget=1, user_id=NULL, account_id=NULL WHERE ${theirs}`, ...who);

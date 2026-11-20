@@ -16,6 +16,7 @@ import { PayLinkNote } from '@/components/sender/PayLinkNote';
 import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { ownLink } from '@/components/sender/OwnLink';
 import { Disputed } from '@/components/sender/Disputed';
+import { EnvelopeComments } from '@/components/sender/Comments';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
 const MAIL_STATUS: Record<string, string> = { sent: 'Handed to the mail server', outbox: 'Not delivered, no mail server set up', failed: 'Could not be sent', queued: 'Waiting to go out' };
@@ -264,6 +265,9 @@ export default function EnvelopeDetail() {
           <Recipients envelope={e} deliveries={deliveries} texts={data.texts || []} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} paused={paused} />
         )}
       </section>
+
+      {/* Questions and comments: the threads, who waits for an answer, answer and settle (components/sender/Comments.tsx). */}
+      {!isTpl && <EnvelopeComments envelope={e} />}
 
       {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
       <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />

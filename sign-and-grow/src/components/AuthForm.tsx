@@ -47,6 +47,9 @@ export function AuthForm({ mode }: { mode: Mode }) {
     try {
       if (mode === 'login' || mode === 'signup') {
         const r = await api(`/auth/${mode}`, { body: { ...f, invite: q?.get('invite') || undefined } });
+        // Two-step login: no session yet. The second screen asks for the code (src/server/twostep.ts), and whatever
+        // the sign-in carries (an invitation, a closing login) is done after it.
+        if (r.two_step) return window.location.assign(`/login/two-step${q?.get('next') ? `?next=${encodeURIComponent(q.get('next')!)}` : ''}`);
         // Someone who already has an account accepts a team invitation by signing in: the server does both in one
         // step. What happened on the way in is said on the first screen of the app, never swallowed.
         const notice = signInNotice(r);
@@ -67,7 +70,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         const r = await api('/auth/reset', { body: { token: q?.get('token'), password: f.password } });
         // Choosing a password for a login whose address had never been confirmed cuts off a provider that did not
         // stand behind the address. That is said here, so the next sign-in holds no surprise.
-        setDone(`Password changed.${r.disconnected?.length ? ` ${r.disconnected.join(' and ')} was disconnected from this login, because this address had not been confirmed before. Once you are signed in you can connect it again under Settings.` : ''} You can sign in now.`);
+        setDone(`Password changed.${r.disconnected?.length ? ` ${r.disconnected.join(' and ')} was disconnected from this login, because this address had not been confirmed before. Once you are signed in you can connect it again under Settings.` : ''} You can sign in now.${r.two_step ? ' After the password you are asked for the code from your authenticator app, as before: a new password does not change the second step.' : ''}`);
       }
     } catch (err: any) {
       // Someone whose login was made with Google or Microsoft has no password to get right. The server does not say

@@ -12,7 +12,7 @@ import { NUMBER_HINT } from '@/lib/numbers';
 import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
 import { CodeCheck } from '@/components/sign/CodeCheck';
-import { MenuDialog, AskDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
+import { MenuDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
@@ -27,7 +27,9 @@ import { isConnectionError, finishNotSent, saveNotSent, keepAnswers, readAnswers
 import { CANNOT_REACH, sameFieldAgain } from '@/components/sign/stuck';
 import { SIGNING_ONLINE } from '@/lib/mobile';
 import { PayLink } from '@/components/sign/PayLink';
-import { NoEmailDone, NoEmailWait, answerComesTo } from '@/components/sign/NoEmail';
+import { NoEmailDone, NoEmailWait } from '@/components/sign/NoEmail';
+// "Questions and comments": the one way to ask the sender something, and the note before Finish (Comments.tsx).
+import { CommentsDialog, OpenQuestion, useMyQuestions } from '@/components/sign/Comments';
 import { MailAgain } from '@/components/sign/MailAgain';
 // A document sent to a signing group: what this member's own link is to the group (src/server/groups.ts).
 import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText } from '@/components/sign/GroupNotice';
@@ -114,6 +116,8 @@ export default function SignPage() {
   // The name on the request as this tab last showed it: see load, where marks made under another name are dropped.
   const who = useRef<string | null>(null);
   const stageRef = useRef('loading');
+  // This person's questions that nobody has answered yet: mentioned when they press Finish, never in the way of it.
+  const questions = useMyQuestions(base, !!data?.fields && open !== 'ask');
 
   const load = useCallback(async () => {
     try {
@@ -579,7 +583,7 @@ export default function SignPage() {
   const dialogs = (
     <>
       {open === 'report' && <ReportDialog base={base} sender={sender} onClose={() => setOpen('')} />}
-      {open === 'ask' && <AskDialog base={base} sender={sender} replyTo={answerComesTo(me)} onClose={() => setOpen('')} />}
+      {open === 'ask' && <CommentsDialog base={base} sender={sender} documents={data.documents || []} onClose={() => setOpen('')} />}
       {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
       {open === 'reassign' && <ReassignDialog base={base} sender={sender} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
       {open === 'handback' && <HandBackDialog base={base} data={data} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); toast(`Handed back to ${me.group?.name}. Nothing you filled in was kept.`); load(); }} />}
@@ -772,7 +776,7 @@ export default function SignPage() {
   const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
   const menu: MenuItem[] = [
     ...(stage === 'sign' && acts ? [{ key: 'later', label: 'Finish later', hint: 'Your answers are saved. Come back with the same link.', icon: 'clock', onClick: async () => { const ok = await flush(); setOpen(''); if (ok) toast('Saved. Use the link in your email to come back and finish.'); } }] : []),
-    { key: 'ask', label: `Ask ${sender.name} a question`, hint: 'They reply by email. Asking signs nothing.', icon: 'mail', onClick: go('ask') },
+    { key: 'ask', label: 'Questions and comments', hint: `Ask ${sender.name} about the document, or read what was written. It signs nothing.`, icon: 'mail', onClick: go('ask') },
     { key: 'download', label: 'Download the document', icon: 'download', href: downloadUrl, download: true },
     { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },
     ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); changeMark(sig ? 'signature' : 'initials'); } }] : []),
@@ -1039,6 +1043,7 @@ export default function SignPage() {
         </div>
         {view === 'doc' && <ZoomControl zoom={zoom} onZoom={setZoom} />}
         <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
+        <button type="button" className="btn" aria-haspopup="dialog" onClick={go('ask')}><Icon name="mail" /> Questions and comments</button>
       </div>
 
       {view === 'doc' ? (
@@ -1072,6 +1077,7 @@ export default function SignPage() {
       {dialogs}
       {open === 'review' && (
         <ReviewDialog me={me} sender={sender} items={items} sig={sig} ini={ini} approving={me.role === 'approver'} busy={busy} error={finishError}
+          note={questions > 0 ? <OpenQuestion sender={sender.name} onShow={go('ask')} /> : null}
           usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
           onChangeSig={changeMark} onBack={() => setOpen('')} onFinish={complete}
           printCheck={() => api(`${base}/print-check`, { body: { values } })}

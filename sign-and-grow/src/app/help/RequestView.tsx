@@ -12,7 +12,7 @@ import { TOPIC_LABEL, STATUS_FOR_CUSTOMER, standing, whenText, type CustomerRequ
 const when = (iso: string) => whenText(iso);
 const offline = 'We could not reach Sign&Grow. Check your connection and try again. What you wrote is still in the box.';
 
-export function RequestView({ r, reply, solved, linked = false, head = true }: {
+export function RequestView({ r, reply, solved, head = true }: {
   r: CustomerRequest;
   head?: boolean; // false where the reference and the topic already stand right above, as in the list under Help
   reply?: (message: string) => Promise<string | void>; // answers with a sentence to show, if there is more to say than "sent"
@@ -97,7 +97,8 @@ export function RequestView({ r, reply, solved, linked = false, head = true }: {
           <div className="rq-actions">
             <button className="btn primary" disabled={!!busy}>{busy === 'reply' ? 'Sending' : 'Send'}</button>
             {solved && !closed && <button type="button" className="btn" disabled={!!busy} onClick={() => run('solved', () => solved(false), 'Marked as solved. Thank you for telling us.')}>{busy === 'solved' ? 'Saving' : 'This is solved'}</button>}
-            {solved && !closed && linked && r.held && <button type="button" className="pub-link" disabled={!!busy} onClick={() => run('not-mine', () => solved(true), 'Thank you. The request is closed and nothing more will be sent to you about it.')}>I did not write to you</button>}
+            {/* Whenever the first message came from someone we do not know: through the link, and also under "Your requests" for a request somebody else typed this address into. */}
+            {solved && !closed && r.held && <button type="button" className="pub-link" disabled={!!busy} onClick={() => run('not-mine', () => solved(true), 'Thank you. The request is closed and nothing more will be sent to you about it.')}>I did not write to you</button>}
           </div>
         </form>
       )}

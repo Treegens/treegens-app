@@ -6,6 +6,7 @@ import { api, Leaf, toast, oops } from './ui';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 import { HandedOver, type Locked } from './HandedOver';
 import { EmailProblemBanner } from './EmailProblem';
+import { TwoStepRequired } from './TwoStep';
 
 type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
@@ -86,6 +87,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   if (locked) return <HandedOver info={locked} onUnlocked={reload} />;
   if (!me) return <div className="muted center" style={{ padding: 80 }}>Loading…</div>;
+  // This account asks everyone for two-step login and this person has none: nothing of it is drawn until they have
+  // set it up (the server refuses the rest with "two_step_setup", src/server/twostep.ts).
+  if (me.two_step?.setup_required) return <MeCtx.Provider value={{ ...me, reload }}><TwoStepRequired me={me} /></MeCtx.Provider>;
   const full = /^\/app\/(envelopes|templates)\/[^/]+\/edit/.test(path);
   if (full) return <MeCtx.Provider value={{ ...me, reload }}>{children}</MeCtx.Provider>;
 

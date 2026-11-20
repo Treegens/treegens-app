@@ -205,7 +205,25 @@ export function copyLogic(src: any, fmap: Map<string, string>, eid: string, valu
  * or that is the template's own fixed wording, is refused for the row.
  */
 function fillValues(src: any, fmap: Map<string, string>, values: Record<string, any>) {
+  for (const x of planValues(src, values)) run('UPDATE fields SET value=?, prefill=? WHERE id=?', x.value, x.prefill, fmap.get(x.id));
+}
+
+/** What is wrong with a bulk send row's "fields", in words, or null. Asked for every row before anything is sent. */
+export function rowFieldProblem(src: any, values: any): string | null {
+  if (values == null) return null;
+  if (typeof values !== 'object' || Array.isArray(values)) return '"fields" must be an object of field labels and values, like {"Plan": "Gold"}.';
+  try {
+    planValues(src, values);
+    return null;
+  } catch (err: any) {
+    if (err?.status) return err.message;
+    throw err;
+  }
+}
+
+function planValues(src: any, values: Record<string, any>): { id: string; value: string | null; prefill: string | null }[] {
   const FILLABLE = ['text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown'];
+  const out: { id: string; value: string | null; prefill: string | null }[] = [];
   for (const [k, raw] of Object.entries(values)) {
     // A column names a field by its label (or id), or a group of radio buttons by the group's name.
     const group = src.fields.filter((f: any) => f.type === 'radio' && fold(f.group_name) === fold(k) && fold(k) !== '');
@@ -215,15 +233,17 @@ function fillValues(src: any, fmap: Map<string, string>, values: Record<string, 
     if (group.length && str(raw).trim() && !group.some((f: any) => fold(f.label) === fold(raw))) throw bad(`The column "${str(k, 80)}" holds "${str(raw, 80)}", which is not one of its choices: ${group.map((f: any) => f.label).filter(Boolean).join(', ')}.`);
     for (const f of hits) {
       if (!FILLABLE.includes(f.type) || f.formula) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which ${f.formula ? 'is worked out by itself' : 'only its signer fills in'}. Leave the column out.`);
-      if (f.readonly && f.value) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which holds the template's own wording and cannot be changed by a row.`);
+      // The template's own wording stays: a read-only value, or any value of a template whose wording is locked.
+      if (f.value && (f.readonly || src.tpl_locked)) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which holds the template's own wording and cannot be changed by a row.`);
       let v = str(raw, 4000).trim();
       if (f.type === 'checkbox') v = /^(1|yes|y|true|x|ticked|checked|ja|oui|si|sí)$/i.test(v) ? '1' : '';
       if (f.type === 'radio') v = group.length ? (fold(v) === fold(f.label) ? '1' : '') : v && !/^(0|no|n|false)$/i.test(v) ? '1' : '';
       if (f.type === 'dropdown' && v && !(f.options || []).includes(v)) throw bad(`The column "${str(k, 80)}" holds "${str(v, 80)}", which is not one of the choices of ${nameOf(f)}: ${(f.options || []).join(', ')}.`);
       if (f.type === 'number' && v && !readNumber(v)) throw bad(`The column "${str(k, 80)}" holds "${str(v, 80)}", which does not read as a number.`);
-      run('UPDATE fields SET value=?, prefill=? WHERE id=?', v || null, f.readonly ? null : v || null, fmap.get(f.id));
+      out.push({ id: f.id, value: v || null, prefill: f.readonly ? null : v || null });
     }
   }
+  return out;
 }
 
 /** What a correction changed in the rules and formulas, in words for the audit trail and for the people told. */

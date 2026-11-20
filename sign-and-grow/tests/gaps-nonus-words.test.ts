@@ -773,8 +773,10 @@ test('reminders, turns and questions reach the sender, who is the only one who c
   const s = new Client();
   await s.post(`/sign/${tok}/consent`, { wording: CONSENT_VERSION });
   assert.equal((await s.post(`/sign/${tok}/ask`, { message: 'Can I sign on paper instead?' })).status, 200);
-  const q = mailTo('ada.sender@example.com').filter((m: any) => /^Question about: Two in order/.test(m.subject)).at(-1)!;
-  assert.match(q.html, /Second Hand has no email address here, so this email has no reply address of theirs\. Answer them the way you sent them the link\./);
+  // A question is a private comment now (routes-comments.ts): the answer is written on the envelope page and shown on
+  // their signing page, and the email says that they are not emailed it.
+  const q = mailTo('ada.sender@example.com').filter((m: any) => /^Questions and comments: Two in order/.test(m.subject)).at(-1)!;
+  assert.match(q.html, /Second Hand has no email address here, so they are not emailed your answer\. They see it when they open their link again\./);
   // Asking to be named in another script asks the sender, in words that need no address.
   assert.equal((await s.post(`/sign/${tok}/name`, { name: 'Секонд Ханд' })).data.applied, false);
   assert.ok((await auditOf(ada, e.id)).some((a) => a.action === 'Name change asked for' && a.detail.startsWith('Second Hand, whose link the sender shares, asked')));

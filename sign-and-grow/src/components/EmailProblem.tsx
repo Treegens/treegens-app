@@ -14,6 +14,9 @@ const friendly = (e: any) => (e?.status ? e.message : 'We could not reach Sign&G
 export function EmailChangeForm({ me, onCancel }: { me: any; onCancel?: () => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // With two-step login on, the address is moved only with a current code too (src/server/twostep.ts).
+  const [code, setCode] = useState('');
+  const twoStep = !!me.user.two_step;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [sent, setSent] = useState('');
@@ -24,9 +27,10 @@ export function EmailChangeForm({ me, onCancel }: { me: any; onCancel?: () => vo
     setBusy(true);
     setError('');
     try {
-      const r = await api('/me/email', { body: { email: email.trim(), ...(pw ? { password } : {}) } });
+      const r = await api('/me/email', { body: { email: email.trim(), ...(pw ? { password } : {}), ...(twoStep ? { code } : {}) } });
       setSent(r.sent_to);
       setPassword('');
+      setCode('');
     } catch (e) {
       setError(friendly(e));
     } finally {
@@ -43,9 +47,10 @@ export function EmailChangeForm({ me, onCancel }: { me: any; onCancel?: () => vo
       <p id={`${id}-h`} className="small" style={{ margin: '8px 0' }}>Type the address you want to use from now on. We email a link there, and the change is made once you open it in this browser. Your documents, team and plan stay as they are.</p>
       <label className="f"><span>New email address</span><input type="email" autoComplete="email" inputMode="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} style={TAP} /></label>
       {pw && <label className="f"><span>Your current password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} style={TAP} /></label>}
+      {twoStep && <label className="f"><span>Code from your authenticator app</span><input inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} style={TAP} /></label>}
       {error && <p className="notice err" role="alert">{error}</p>}
       <div className="row wrap">
-        <button className="btn primary" disabled={busy || !email.trim() || (pw && !password)} style={TAP}>{busy ? 'Sending…' : 'Email me a link to confirm it'}</button>
+        <button className="btn primary" disabled={busy || !email.trim() || (pw && !password) || (twoStep && !code.trim())} style={TAP}>{busy ? 'Sending…' : 'Email me a link to confirm it'}</button>
         {onCancel && <button type="button" className="btn" onClick={onCancel} style={TAP}>Cancel</button>}
       </div>
     </form>

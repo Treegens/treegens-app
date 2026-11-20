@@ -93,6 +93,16 @@ const PERSON_ONLY: [RegExp, string][] = [
 // The one admin-level call a "send" key may make: reading the webhooks and their delivery log. The handler leaves
 // the signing secrets out for it.
 const SEND_KEY_MAY = new Set(['GET /webhooks']);
+// A part of the path that is not valid percent-encoding (a link cut short in the middle of "%E0", say) is passed on
+// as it came. No record has such an id, so the route answers as it does for any id it does not know, in its own
+// words, instead of failing with "Something went wrong on our side".
+const decodePart = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
 
 export async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -137,7 +147,7 @@ export async function handle(req: Request): Promise<Response> {
       const ip = clientIp(req);
       const ua = req.headers.get('user-agent') || '';
       const c: Ctx = {
-        req, url, q: url.searchParams, params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])),
+        req, url, q: url.searchParams, params: Object.fromEntries(r.keys.map((k, i) => [k, decodePart(m[i + 1])])),
         auth, user: auth?.user, account: auth?.account, role: auth?.role || '', admin: auth?.role === 'owner' || auth?.role === 'admin',
         actor: { name: auth ? `${auth.user.name} <${auth.user.email}>` : 'Anonymous', ip, ua }, ip, ua,
         secure: proto === 'https', origin, cookies,

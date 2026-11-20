@@ -12,6 +12,7 @@ import { DATE_FORMAT_CHOICES, formatDate, deviceZone } from '@/lib/dates';
 // The same holds for signin.ts: the names and the words only.
 import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
 import { SignedIn } from './SignedIn';
+import { TwoStepCard, TeamTwoStep } from './TwoStep';
 import { EmailAddressCard } from '@/components/EmailProblem';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
@@ -62,6 +63,7 @@ function Profile() {
         </div>
       </div>
       <SignInWays />
+      <TwoStepCard />
       <SignedIn />
       {adopt &&<AdoptSignature kind={adopt} name={me.user.name} onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
     </div>
@@ -73,7 +75,7 @@ function Profile() {
 function SignInWays() {
   const me = useMe();
   const [d, reload, failed] = useLoad(() => api('/me/signin'));
-  const [pw, setPw] = useState({ current: '', password: '' });
+  const [pw, setPw] = useState({ current: '', password: '', code: '' });
   // What the last thing done here led to. It stays on screen: some of it is a few sentences and tells what to do next.
   const [said, setSaid] = useState<{ text: string; err?: boolean; confirm?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -94,12 +96,14 @@ function SignInWays() {
   };
   const changePassword = (e: React.FormEvent) => {
     e.preventDefault();
-    api('/me/password', { body: pw }).then(() => (toast('Password changed'), setPw({ current: '', password: '' }))).catch(oops);
+    api('/me/password', { body: pw }).then(() => (toast('Password changed'), setPw({ current: '', password: '', code: '' }))).catch(oops);
   };
   const fields = (
     <div className="grid g2">
       <label className="f"><span>Current password</span><input type="password" autoComplete="current-password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /></label>
       <label className="f"><span>New password</span><input type="password" autoComplete="new-password" minLength={8} value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} /></label>
+      {/* With two-step login on, a password is changed only with a current code too (src/server/twostep.ts). */}
+      {me.user.two_step && <label className="f"><span>Code from your authenticator app</span><input inputMode="numeric" autoComplete="one-time-code" required value={pw.code} onChange={(e) => setPw({ ...pw, code: e.target.value })} /></label>}
     </div>
   );
   // Nothing is drawn until we know which of the two this is, so the card does not change shape under the reader.
@@ -272,6 +276,7 @@ function Team() {
           </tbody>
         </table></div>
       </div>
+      {admin && <TeamTwoStep />}
       <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything. Templates are shared: everyone can use them, and only the person a template belongs to or an admin can change or delete it. Everyone on the team is covered by the one plan: there is no charge per person.</p>
       {me.role !== 'owner' && members.length > 1 && (
         <div className="card row wrap" style={{ alignItems: 'center', justifyContent: 'space-between' }}>

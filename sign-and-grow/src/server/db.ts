@@ -359,6 +359,37 @@ CREATE TABLE IF NOT EXISTS two_step_log (
   what TEXT NOT NULL, by_id TEXT, by_name TEXT, account_id TEXT, account_name TEXT
 );
 CREATE INDEX IF NOT EXISTS two_step_log_user ON two_step_log(user_id, id);
+-- Click-to-agree (src/server/clickwrap.ts). clickwraps: terms of one account that a website's visitors accept with a
+-- click, with the draft being written (draft_*) and the number of the version that is live. clickwrap_versions: each
+-- published version as it was shown, terms_sha256 the fingerprint of the exact terms. clickwrap_acceptances: one row
+-- for each acceptance, sealed with the server's secret (seal). Versions and acceptances are never changed: the
+-- triggers below refuse it, whatever code asks. All of it goes with the account.
+CREATE TABLE IF NOT EXISTS clickwraps (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, created_by TEXT,
+  slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+  draft_format TEXT NOT NULL DEFAULT 'text', draft_text TEXT, draft_file_id TEXT, draft_checkbox TEXT, draft_button TEXT,
+  draft_scroll INTEGER NOT NULL DEFAULT 0, signed_only INTEGER NOT NULL DEFAULT 0, current_version INTEGER NOT NULL DEFAULT 0,
+  alerted_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clickwraps_account ON clickwraps(account_id);
+CREATE TABLE IF NOT EXISTS clickwrap_versions (
+  id TEXT PRIMARY KEY, clickwrap_id TEXT NOT NULL REFERENCES clickwraps(id) ON DELETE CASCADE, number INTEGER NOT NULL,
+  title TEXT NOT NULL, format TEXT NOT NULL, body TEXT, file_sha256 TEXT, pages INTEGER, terms_sha256 TEXT NOT NULL,
+  checkbox TEXT NOT NULL, button TEXT NOT NULL, scroll INTEGER NOT NULL DEFAULT 0, note TEXT, ask_again INTEGER NOT NULL DEFAULT 1,
+  published_by TEXT, published_at TEXT NOT NULL, UNIQUE (clickwrap_id, number)
+);
+CREATE TABLE IF NOT EXISTS clickwrap_acceptances (
+  id TEXT PRIMARY KEY, clickwrap_id TEXT NOT NULL REFERENCES clickwraps(id) ON DELETE CASCADE, account_id TEXT NOT NULL,
+  version_id TEXT NOT NULL, version INTEGER NOT NULL, terms_sha256 TEXT NOT NULL, identity TEXT NOT NULL, person_id TEXT,
+  name TEXT, email TEXT, via TEXT NOT NULL, page_url TEXT, ip TEXT, ua TEXT, given_ip TEXT, given_ua TEXT, shown_ms INTEGER,
+  scrolled INTEGER, unobscured INTEGER, recorded_by TEXT, receipt_hash TEXT, seal TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clickwrap_acceptances_account ON clickwrap_acceptances(account_id, at);
+CREATE INDEX IF NOT EXISTS clickwrap_acceptances_person ON clickwrap_acceptances(clickwrap_id, person_id);
+CREATE INDEX IF NOT EXISTS clickwrap_acceptances_email ON clickwrap_acceptances(clickwrap_id, email COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS clickwrap_acceptances_receipt ON clickwrap_acceptances(receipt_hash);
+CREATE TRIGGER IF NOT EXISTS clickwrap_acceptances_fixed BEFORE UPDATE ON clickwrap_acceptances BEGIN SELECT RAISE(ABORT, 'An acceptance is never changed.'); END;
+CREATE TRIGGER IF NOT EXISTS clickwrap_versions_fixed BEFORE UPDATE ON clickwrap_versions BEGIN SELECT RAISE(ABORT, 'A published version is never changed.'); END;
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -719,6 +750,12 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // person this one depends on, by its id. formula: the text of the formula with the fields it uses as {id}.
   ['fields', 'show_when', 'TEXT'],
   ['fields', 'formula', 'TEXT'],
+  // Click-to-agree (src/server/clickwrap.ts). accounts.clickwrap_warned / clickwrap_full: the month (YYYY-MM) for which
+  // the admins were told that acceptances reached 80 percent of the monthly limit, and the whole of it.
+  // abuse_reports.clickwrap_id: a report made from the page of an agreement instead of about an envelope.
+  ['accounts', 'clickwrap_warned', 'TEXT'],
+  ['accounts', 'clickwrap_full', 'TEXT'],
+  ['abuse_reports', 'clickwrap_id', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none
@@ -732,9 +769,25 @@ export function fillPrices(d: any = db()): number {
       ?) WHERE price_cents IS NULL`).run(Math.round(PRICING.monthlyUsd * 100)).changes);
 }
 
+// Help requests from before support_requests.came_by was kept (src/server/routes-support.ts), filled in once so the
+// screens are right about them. Before `verified` was kept every row said 0, so a request its owner wrote while
+// signed in under their own confirmed address looked like anyone's: it could be closed as "nobody at this address
+// wrote this", and the operator was told it was not the owner. A request closed with the old one-click button has
+// no closing time and no written answer: it is closed as of the time it was written (a reply long after starts a new
+// request instead of reopening it with a new promise), and says it was closed before answers were kept with it.
+export function fillOldSupport(d: any = db()): number {
+  const alert = "(ref IS NULL AND user_id IS NULL AND COALESCE(name, '')='Sign&Grow (automatic alert)')";
+  d.prepare(`UPDATE support_requests SET verified=1 WHERE came_by IS NULL AND verified=0 AND user_id IS NOT NULL
+    AND EXISTS (SELECT 1 FROM users u WHERE u.id=support_requests.user_id AND u.email_verified=1 AND lower(u.email)=lower(support_requests.email))`).run();
+  d.prepare(`UPDATE support_requests SET closed_at=COALESCE(updated_at, at), closed_how=COALESCE(closed_how, 'before') WHERE came_by IS NULL AND status='closed' AND closed_at IS NULL AND NOT ${alert}`).run();
+  return Number(d.prepare(`UPDATE support_requests SET came_by=CASE WHEN ${alert} THEN 'software' WHEN verified=1 AND follows IS NOT NULL AND user_id IS NULL THEN 'link'
+    WHEN verified=1 THEN 'signed_in' ELSE 'form' END WHERE came_by IS NULL`).run().changes);
+}
+
 function migrate(d: any) {
   const hadPrefill = d.prepare('PRAGMA table_info(fields)').all().some((c: any) => c.name === 'prefill');
   const hadWelcomed = d.prepare('PRAGMA table_info(users)').all().some((c: any) => c.name === 'welcomed_at');
+  const hadCameBy = d.prepare('PRAGMA table_info(support_requests)').all().some((c: any) => c.name === 'came_by');
   for (const [table, column, definition] of COLUMNS) {
     const have = d.prepare(`PRAGMA table_info(${table})`).all().some((c: any) => c.name === column);
     if (!have) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -760,6 +813,8 @@ function migrate(d: any) {
   // Someone who joined through an invitation (the invitation was accepted in the moment their login was made) was not.
   if (!hadWelcomed)
     d.exec('UPDATE users SET welcomed_at=created_at WHERE NOT EXISTS (SELECT 1 FROM invites i WHERE i.email=users.email AND i.accepted_at=users.created_at)');
+  // Help requests from before came_by was kept (see fillOldSupport above).
+  if (!hadCameBy) fillOldSupport(d);
   // One batch per person per Idempotency-Key, whatever else happens.
   d.exec('CREATE UNIQUE INDEX IF NOT EXISTS bulk_batches_idem ON bulk_batches(account_id, sender_id, idem_key) WHERE idem_key IS NOT NULL');
   // Every account has the monthly price it is on written down (src/server/routes-billing.ts, priceFor).

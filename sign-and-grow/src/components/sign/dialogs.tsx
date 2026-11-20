@@ -71,39 +71,7 @@ export function MenuDialog({ items, onClose }: { items: MenuItem[]; onClose: () 
   );
 }
 
-// ---- Ask the sender --------------------------------------------------------------------------
-
-export function AskDialog({ base, sender, replyTo, onClose }: { base: string; sender: any; replyTo: string; onClose: () => void }) {
-  const [message, setMessage] = useState('');
-  const [sent, setSent] = useState(false);
-  const { busy, error, setError, send } = useSend();
-  const title = `Ask ${sender.name} a question`;
-  if (sent)
-    return (
-      <Dialog title={title} onClose={onClose}>
-        <Confirmed onClose={onClose} label="Back to the document">
-          <b>Your question is on its way.</b> {sender.name} will reply to {replyTo}. You can carry on, or come back later with the same link.
-        </Confirmed>
-      </Dialog>
-    );
-  return (
-    <Dialog title={title} onClose={onClose}>
-      <form onSubmit={async (e) => {
-        e.preventDefault();
-        if (message.trim().length < 3) return setError('Type your question first, then send it.');
-        if (await send(() => api(`${base}/ask`, { body: { message } }), `You can also email ${sender.email} directly.`)) setSent(true);
-      }}>
-        <p className="muted">Nothing is signed by asking. {sender.name} gets your question by email and replies to {replyTo}.</p>
-        <label className="f"><span>Your question</span><textarea dir="auto" data-autofocus rows={4} maxLength={2000} value={message} onChange={(e) => setMessage(e.target.value)} /></label>
-        <Problem>{error}</Problem>
-        <div className="actions">
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy}>{busy ? 'Sending' : 'Send question'}</button>
-        </div>
-      </form>
-    </Dialog>
-  );
-}
+// Asking the sender a question is "Questions and comments" now (Comments.tsx): one way to ask.
 
 // ---- Report ----------------------------------------------------------------------------------
 
@@ -277,8 +245,10 @@ function FixName({ name, onRename }: { name: string; onRename: (name: string) =>
   );
 }
 
-export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename, printCheck }: {
+export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename, printCheck, note }: {
   me: any; sender: any; items: Item[]; sig: string | null; ini: string | null; usesSig: boolean; usesIni: boolean; approving?: boolean;
+  /** Said above the buttons and never in their way: a question of this person's that is not answered yet (Comments.tsx). */
+  note?: ReactNode;
   busy: boolean; error: string; onChangeSig: (kind: 'signature' | 'initials') => void; onBack: () => void; onFinish: () => void;
   onRename?: (name: string) => Promise<string | void>;
   /** Asks the server whether this person's name or answers hold a character the signed PDF cannot print. */
@@ -343,6 +313,7 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
           You can also finish as it is.
         </div>
       )}
+      {note}
       <Problem>{error}</Problem>
       <div className="actions">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>Go back</button>

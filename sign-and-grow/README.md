@@ -307,7 +307,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   stands the account it is about, read-only: plan, paused or not, last payment. Every action is kept in the
   request's history with who and when. The alerts the payment code files by itself are in the same queue: they
   have no customer, so they get a note and are closed with a note, and nobody is emailed.
-- `/help` shows the real median time to a first answer over the last 30 days, with how many requests it covers,
+- `/help` shows the real median time to a first reply from a person (an answer, or a question back to the writer,
+  which is also what stops the clock) over the last 30 days, with how many requests it covers,
   only when that is at least 10. Otherwise it shows the target only.
 - Limits: 10 messages a day on one request and 30 a day from one address (new requests and replies together),
   counted in the database, so the link and the form cannot be used to bury the people who answer or to fill a

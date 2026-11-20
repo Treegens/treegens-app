@@ -778,7 +778,8 @@ test('deleting an account removes its requests with their threads, and one still
 
   // Answering the open one sends the answer in full, says that the request is now deleted, and deletes it.
   const answered = await act(maya, oid, { action: 'answer', text: 'OPEN-ANSWER: your 9 dollars are on their way back.' });
-  assert.deepEqual(answered.data, { ok: true, deleted: true });
+  // The answer also says what the mail server did with the email (no mail server here, so it is in the outbox).
+  assert.deepEqual(answered.data, { ok: true, deleted: true, mail: 'outbox' });
   const last = mailTo('gal@cust.test').at(-1)!;
   assert.match(text(last.html), /OPEN-ANSWER: your 9 dollars are on their way back\. You closed your Sign&Grow account while this request was open\. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it\./);
   assert.equal(last.link, null, 'the email carries no link, because there is nothing left to open');
@@ -990,4 +991,225 @@ test('a follow-up written through the private link is shown to the operator as c
   assert.deepEqual([v.written, v.thread[0].via], ['link', 'link'], 'not "signed in" and not "typed into the form"');
   // Known to be from the mailbox, so it cannot be closed as "nobody at this address wrote this".
   assert.equal((await act(maya, fresh.id, { action: 'spam' })).status, 400);
+});
+
+test('an alert is shown with the account it names, never with the account of the operator it is filed under', async () => {
+  // A paid invoice that names an account we do not have: the payment code files an alert with no account.
+  await billing.applyStripeEvent({ type: 'invoice.paid', data: { object: { id: 'in_repair_c', customer: 'cus_repair_c', subscription: 'sub_repair_c', amount_paid: 900, currency: 'usd', status: 'paid', billing_reason: 'subscription_create', lines: { data: [{ price: { id: 'price_grove' }, metadata: { sg_account: 'acc_nowhere' } }] } } } });
+  const filed = db.get("SELECT * FROM support_requests WHERE message LIKE '%in_repair_c%'");
+  assert.ok(filed, 'the alert is in the queue');
+  assert.equal(filed.email, 'maya@ops.test', 'filed under the first operator address');
+  const v = await opView(maya, filed.id);
+  assert.equal(v.alert, true);
+  assert.equal(v.account, null, 'not Maya\'s own workspace');
+  assert.equal(v.login, null, 'and not her login');
+  // An alert that names an account shows that one, said to be the account the alert is about.
+  const cust = await person('Alerted Customer', 'alerted@cust.test');
+  const acc = (await cust.get('/me')).data.account.id;
+  db.run("INSERT INTO support_requests (id, email, name, topic, message, account_id, status, at) VALUES ('sup_repairalert01', 'maya@ops.test', 'Sign&Grow (automatic alert)', 'billing', 'A refund failed for this account.', ?, 'open', ?)", acc, new Date().toISOString());
+  const w = await opView(maya, 'sup_repairalert01');
+  assert.deepEqual([w.account.id, w.account.via, w.login], [acc, 'alert', null]);
+});
+
+test('deleting a login leaves a request it wrote under somebody else\'s address to that mailbox, and never tells its owner they closed an account', async () => {
+  const eve = await person('Eve Typist', 'eve.typist@cust.test');
+  // Eve writes twice under Bea's address: once giving a name, once leaving the name empty (her own name is used).
+  const r = await ask({ email: 'bea.mailbox@cust.test', name: 'Bea', topic: 'billing', message: 'EVE-WORDS: typed under the address of Bea.' }, eve);
+  const nameless = await ask({ email: 'bea.mailbox@cust.test', topic: 'other', message: 'EVE-WORDS again, with no name typed.' }, eve);
+  const t = row(r.reference);
+  assert.equal(row(nameless.reference).name, 'Eve Typist');
+  await act(maya, t.id, { action: 'ask', text: 'Did you write this, Bea?' });
+  const l = link('bea.mailbox@cust.test', r.reference);
+  assert.equal((await from().post(`${l.api}/reply`, { message: 'BEA-WORDS: yes, it is about my invoice. I never had an account.' })).status, 200);
+  assert.equal((await eve.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+  // Both stay with Bea's address, cut loose from Eve's login and account, and not marked to be forgotten.
+  assert.deepEqual({ ...db.get('SELECT forget, user_id, account_id, name FROM support_requests WHERE id=?', t.id) }, { forget: 0, user_id: null, account_id: null, name: 'Bea' });
+  assert.deepEqual({ ...db.get('SELECT forget, user_id, name FROM support_requests WHERE ref=?', nameless.reference) }, { forget: 0, user_id: null, name: null }, 'Eve\'s name went with her login');
+  // An answer reaches Bea as an ordinary answer, and her link keeps working.
+  const ans = await act(maya, t.id, { action: 'answer', text: 'Here is the answer about your invoice.' });
+  assert.equal(ans.data.request.status, 'answered');
+  const last = text(mailTo('bea.mailbox@cust.test').at(-1)!.html);
+  assert.doesNotMatch(last, /You closed your Sign&Grow account/);
+  assert.equal((await from().get(l.api)).status, 200);
+});
+
+test('when the first operator deletes their own login, the alerts filed under their address stay in the queue as they were', async () => {
+  const was = process.env.OPERATOR_EMAILS;
+  process.env.OPERATOR_EMAILS = `zed.first@ops.test, ${was}`;
+  try {
+    const zed = await person('Zed First', 'zed.first@ops.test');
+    for (const n of ['1', '2']) await billing.applyStripeEvent({ type: 'invoice.paid', data: { object: { id: `in_repair_d${n}`, customer: `cus_repair_d${n}`, subscription: `sub_repair_d${n}`, amount_paid: 900, currency: 'usd', status: 'paid', billing_reason: 'subscription_create', lines: { data: [{ price: { id: 'price_grove' }, metadata: { sg_account: `acc_nowhere_d${n}` } }] } } } });
+    const a1 = db.get("SELECT * FROM support_requests WHERE message LIKE '%in_repair_d1%'");
+    const a2 = db.get("SELECT * FROM support_requests WHERE message LIKE '%in_repair_d2%'");
+    assert.deepEqual([a1.email, a2.email], ['zed.first@ops.test', 'zed.first@ops.test']);
+    assert.equal((await act(maya, a1.id, { action: 'close', text: 'Refunded by hand.' })).status, 200);
+    assert.equal((await zed.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+    assert.deepEqual({ ...db.get('SELECT status, forget FROM support_requests WHERE id=?', a1.id) }, { status: 'closed', forget: 0 }, 'the handled alert and its note are still there');
+    assert.equal(db.get("SELECT COUNT(*) n FROM support_messages WHERE request_id=? AND body='Refunded by hand.'", a1.id).n, 1);
+    assert.deepEqual({ ...db.get('SELECT status, forget FROM support_requests WHERE id=?', a2.id) }, { status: 'open', forget: 0 }, 'the open one is not taken for a customer who closed their account');
+    assert.equal((await opView(maya, a2.id)).forget, false);
+  } finally {
+    process.env.OPERATOR_EMAILS = was;
+  }
+});
+
+// A mail server that answers as told: refuse (as for a mistyped address) or take the email. Same stand-in as above.
+const mailServer = { refuse: false };
+const standInMail = async <T>(fn: () => Promise<T>): Promise<T> => {
+  const g = globalThis as any;
+  const was = { url: process.env.SMTP_URL, transport: g.__tsmail };
+  process.env.SMTP_URL = 'smtp://stand-in.invalid';
+  g.__tsmail = { sendMail: async () => { if (mailServer.refuse) throw new Error('550 5.1.1 no such user'); return {}; } };
+  try {
+    return await fn();
+  } finally {
+    if (was.url === undefined) delete process.env.SMTP_URL;
+    else process.env.SMTP_URL = was.url;
+    g.__tsmail = was.transport;
+    mailServer.refuse = false;
+  }
+};
+
+test('when the mail server refuses an answer, the operator is told so, and is told again when it is given up', async () => {
+  const { retryMail } = await import('../src/server/mail.ts');
+  const again = (to: string) => db.run("UPDATE emails SET next_try_at=? WHERE to_email=? AND status='failed'", new Date(Date.now() - 1000).toISOString(), to);
+  await standInMail(async () => {
+    const t = await ask({ email: 'typo@cust.tset', name: 'Ty Po', topic: 'other', message: 'I mistyped my address, long enough.' });
+    const id = row(t.reference).id;
+    await act(maya, id, { action: 'take' });
+    mailServer.refuse = true;
+    const a = await act(maya, id, { action: 'answer', text: 'ANSWER that the mail server refuses.' });
+    assert.equal(a.status, 200);
+    assert.equal(a.data.mail, 'failed', 'the screen is told what the mail server said');
+    assert.ok(a.data.request.thread.some((m: any) => m.kind === 'event' && /The mail server did not take our email "An answer to your request \(\w+\)" to typo@cust\.tset\. It said: 550 5\.1\.1 no such user/.test(m.body)));
+    assert.deepEqual([a.data.request.mail.status, a.data.request.mail.retrying], ['failed', true]);
+    assert.equal(a.data.request.email, 'typo@cust.tset');
+    // Every later try fails as well, until there are no more: whoever has the request is emailed.
+    const mayaMails = mailTo('maya@ops.test').length;
+    db.run("UPDATE emails SET tries=? WHERE to_email='typo@cust.tset' AND status='failed'", 5);
+    again('typo@cust.tset');
+    await retryMail();
+    const v = await opView(maya, id);
+    assert.ok(v.thread.some((m: any) => m.kind === 'event' && /^Not delivered: our email "An answer to your request/.test(m.body)));
+    assert.equal(v.mail.retrying, false);
+    const told = mailTo('maya@ops.test').slice(mayaMails);
+    assert.equal(told.length, 1);
+    assert.equal(told[0].subject, `Not delivered: our email about request ${t.reference}`);
+    assert.match(text(told[0].html), /could not be delivered, and nobody tries again\. It said: 550 5\.1\.1 no such user/);
+
+    // A question that goes through: the screen says the mail server took it, nothing more.
+    mailServer.refuse = false;
+    const ok = await act(maya, id, { action: 'ask', text: 'Is there another address we can use?' });
+    assert.equal(ok.data.mail, 'sent');
+  });
+});
+
+test('a request kept after its writer deleted their account is deleted only once its answer has left', async () => {
+  const { retryMail } = await import('../src/server/mail.ts');
+  await standInMail(async () => {
+    const hal = await person('Hal Going', 'hal.going@cust.test');
+    const ho = await ask({ topic: 'billing', message: 'HALWORDS: please refund my last payment before I go.' }, hal);
+    assert.equal((await hal.post('/me/delete', { password: PW, now: true })).data.closed, 'now');
+    const id = row(ho.reference).id;
+    mailServer.refuse = true;
+    const a = await act(maya, id, { action: 'answer', text: 'HAL-ANSWER: your refund is on its way.' });
+    assert.equal(a.status, 200);
+    assert.equal(a.data.deleted, undefined, 'not deleted while the answer has not left');
+    assert.equal(a.data.mail, 'failed');
+    assert.ok(row(ho.reference), 'the request is still there');
+    // The next try goes through: the request goes now, as promised.
+    mailServer.refuse = false;
+    db.run("UPDATE emails SET next_try_at=? WHERE to_email='hal.going@cust.test' AND status='failed'", new Date(Date.now() - 1000).toISOString());
+    const r = await retryMail();
+    assert.ok(r.sent >= 1);
+    assert.equal(row(ho.reference), null);
+    assert.equal(db.get("SELECT status FROM emails WHERE to_email='hal.going@cust.test' AND subject LIKE 'An answer to your request%'"), null, 'and our copy of the email went with it');
+  });
+  // One whose answer is never taken is deleted by the timer after the same 30 days as an unanswered question.
+  const kept = await person('Kim Kept', 'kim.kept@cust.test');
+  const k = await ask({ topic: 'billing', message: 'KIMWORDS: refund please, I am going.' }, kept);
+  await kept.post('/me/delete', { password: PW, now: true });
+  db.run("UPDATE support_requests SET status='answered', updated_at=? WHERE ref=?", new Date(Date.now() - (SUPPORT_REOPEN_DAYS + 1) * 864e5).toISOString(), k.reference);
+  await cron.tick();
+  assert.equal(row(k.reference), null);
+});
+
+test('requests from before this work are filled in once: the owner\'s own are theirs, and a one-click close is not called an answer', async () => {
+  const olga = await person('Olga Old', 'olga.old@cust.test');
+  const me = (await olga.get('/me')).data;
+  const at = new Date(Date.now() - 400 * 864e5).toISOString();
+  // Exactly the columns the old code wrote.
+  db.run("INSERT INTO support_requests (id, ref, email, name, topic, message, user_id, account_id, status, at) VALUES ('sup_oldopen0000001', 'OLDOPEN1', 'olga.old@cust.test', 'Olga Old', 'billing', 'OLD-OPEN: please refund me', ?, ?, 'open', ?)", me.user.id, me.account.id, at);
+  db.run("INSERT INTO support_requests (id, ref, email, name, topic, message, user_id, account_id, status, at) VALUES ('sup_oldclosed00001', 'OLDCLSD1', 'olga.old@cust.test', 'Olga Old', 'other', 'OLD-CLOSED: marked as answered with one click', ?, ?, 'closed', ?)", me.user.id, me.account.id, at);
+  db.run("INSERT INTO support_requests (id, ref, email, name, topic, message, status, at) VALUES ('sup_oldanon0000001', NULL, 'anon.old@cust.test', NULL, 'cannot-log-in', 'OLD-ANON: locked out since last week', 'open', ?)", at);
+  db.run("UPDATE support_requests SET came_by=NULL WHERE id IN ('sup_oldopen0000001', 'sup_oldclosed00001', 'sup_oldanon0000001')");
+  const fresh = await ask({ email: 'not-old@cust.test', message: 'Written today, by anyone.' });
+  const filled = (db as any).fillOldSupport();
+  assert.ok(filled >= 3);
+  assert.equal(row(fresh.reference).came_by, 'form', 'a request of today is left as it is');
+  // Olga wrote it while signed in under her confirmed address: hers, and not to be closed as somebody else's.
+  assert.deepEqual({ ...db.get("SELECT verified, came_by FROM support_requests WHERE id='sup_oldopen0000001'") }, { verified: 1, came_by: 'signed_in' });
+  assert.equal((await opView(maya, 'sup_oldopen0000001')).written, 'own');
+  assert.equal((await act(maya, 'sup_oldopen0000001', { action: 'spam' })).status, 400);
+  // Nobody wrote an answer on the one closed with the old button. It is not called "closed with an answer", and it
+  // has a closing time, so a reply 400 days later starts a new request instead of opening it with a new promise.
+  const closed = (await olga.get('/support/mine')).data.requests.find((r: any) => r.reference === 'OLDCLSD1');
+  assert.deepEqual([closed.closed_how, closed.closed_at], ['before', at]);
+  const s = standing(closed, (iso) => iso);
+  assert.equal(s.title, 'Closed');
+  assert.match(s.text, /closed before every request kept its answer in writing/);
+  const rep = await olga.post('/support/mine/sup_oldclosed00001/reply', { message: 'Is anyone there?' });
+  assert.equal(rep.data.moved, true);
+  assert.equal(db.get("SELECT status FROM support_requests WHERE id='sup_oldclosed00001'").status, 'closed');
+  // Written without signing in: anyone's, as before.
+  assert.deepEqual({ ...db.get("SELECT verified, came_by FROM support_requests WHERE id='sup_oldanon0000001'") }, { verified: 0, came_by: 'form' });
+  assert.equal((await opView(maya, 'sup_oldanon0000001')).written, 'not_signed_in');
+});
+
+test('only words close a request: text that is an object, a list or a number is refused and nothing is emailed', async () => {
+  const t = await ask({ email: 'nora2@cust.test', message: 'A second request, long enough.' });
+  const id = row(t.reference).id;
+  const inbox = mailTo('nora2@cust.test').length;
+  for (const bad of [{ a: 1 }, {}, [], ['an', 'answer'], 12345, true]) {
+    for (const action of ['close', 'answer', 'ask', 'note']) {
+      const r = await act(maya, id, { action, text: bad });
+      assert.equal(r.status, 400, `${action} with ${JSON.stringify(bad)}`);
+    }
+    assert.equal((await act(maya, id, { action: 'close', answer: bad })).status, 400);
+  }
+  assert.equal(row(t.reference).status, 'open');
+  assert.equal(mailTo('nora2@cust.test').length, inbox);
+  assert.equal(db.get("SELECT COUNT(*) n FROM support_messages WHERE request_id=? AND body LIKE '%object%'", id).n, 0);
+  // Words still work.
+  assert.equal((await act(maya, id, { action: 'close', text: 'Here is the answer, in words.' })).data.request.status, 'closed');
+});
+
+test('odd input gets a plain answer, never "something went wrong on our side"', async () => {
+  for (const f of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf', 'nope']) {
+    const r = await maya.get(`/operator/support?filter=${f}`);
+    assert.deepEqual([r.status, r.data.filter], [200, 'open'], f);
+  }
+  // A link cut short in the middle of an encoded character: the same answer as any link that opens nothing.
+  for (const path of ['/public/support/ticket/%E0%A4%A/x', '/public/support/ticket/sup_x/%E0%A4%A', '/public/support/ticket/%/%']) {
+    const r = await from().get(path);
+    assert.equal(r.status, 404, path);
+    assert.match(r.data.error, /^This link does not open a request\. It may have been cut short on the way/);
+  }
+  assert.equal((await from().post('/public/support/ticket/%E0%A4%A/x/reply', { message: 'hello there' })).status, 404);
+});
+
+test('a reply after the promised time keeps the lateness on record, and the published number says a question counts', async () => {
+  const t = await ask({ email: 'late.record@cust.test', topic: 'other', message: 'Waiting for a long time now.' });
+  const id = row(t.reference).id;
+  db.run('UPDATE support_requests SET due_at=? WHERE id=?', new Date(Date.now() - 3 * 3600_000).toISOString(), id);
+  const q = await act(maya, id, { action: 'ask', text: '??' });
+  assert.deepEqual([q.data.request.status, q.data.request.late], ['waiting', false], 'the wait for us is over');
+  assert.ok(q.data.request.thread.some((m: any) => m.kind === 'event' && m.body === 'This reply came 3 hours after the time we promised'), 'and the lateness stays in the history');
+  // On time, nothing is added.
+  const ok = await ask({ email: 'on.time@cust.test', topic: 'other', message: 'A question answered in time.' });
+  const a = await act(maya, row(ok.reference).id, { action: 'answer', text: 'In time.' });
+  assert.ok(!a.data.request.thread.some((m: any) => /after the time we promised/.test(m.body)));
+  // The help page says what the number counts: a first reply from a person, a question back included.
+  const fs = await import('node:fs');
+  assert.match(fs.readFileSync(new URL('../src/app/help/tools.tsx', import.meta.url), 'utf8'), /got their first reply from a person in that time \(an answer, or a question back to the writer\)/);
 });

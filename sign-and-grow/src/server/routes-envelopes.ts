@@ -29,6 +29,7 @@ import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner } from './tplroles.ts';
 // A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
 import { witnessCorrected, rowFills } from './witness.ts';
+import { rowFieldProblem } from './logic.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -500,7 +501,10 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
         let eid: string = row.envelope_id;
         if (!eid) {
           if (!tpl || tpl.kind !== 'template') throw bad('The template was deleted before this row could be sent.');
-          eid = copyEnvelope(tpl, { accountId: b.account_id, senderId: b.sender_id, kind: 'envelope', fill: JSON.parse(row.fill), extra: { bulk_id: b.id } });
+          // A row's "fields" fill fields of the template by their label, like the sender's own prefilled values, so a
+          // rule that depends on one shows or hides from the first look (fillValues in logic.ts).
+          const fill = JSON.parse(row.fill);
+          eid = copyEnvelope(tpl, { accountId: b.account_id, senderId: b.sender_id, kind: 'envelope', fill, extra: { bulk_id: b.id, values: fill?.fields && typeof fill.fields === 'object' ? fill.fields : null } });
           set('envelope_id=?', eid);
         }
         const status = get('SELECT status FROM envelopes WHERE id=?', eid)?.status;
@@ -599,6 +603,9 @@ route('POST', '/bulk', async (c) => {
       const v = row?.[r.role_name || r.id];
       if (!v || !str(v.name).trim() || !isEmail(str(v.email).trim())) throw bad(`Row ${i + 1}: "${r.role_name || 'Recipient'}" needs a name and a valid email.`);
     }
+    // Fields a row fills ("fields": {"Plan": "Gold"}) are checked for every row before anything is sent (logic.ts).
+    const wrong = rowFieldProblem(tpl, row?.fields);
+    if (wrong) throw bad(`Row ${i + 1}: ${wrong} Nothing was sent.`);
   });
   // A role the template checks or reaches by text message needs a mobile number ("phone") in every row, and the
   // account must be allowed that many texts today. Refused for the whole batch, like everything below.

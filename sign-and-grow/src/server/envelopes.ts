@@ -666,6 +666,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
   const held: any[] = [];
   // People whose request went to another person at the same address, in words for the record.
   const swapped: string[] = [];
+  // Who takes the place of somebody else on a request (another address, or another name at the same address).
+  const newPeople: string[] = [];
   let after: any;
   tx(() => {
     assertFresh(e, body);
@@ -720,7 +722,10 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       const otherName = !otherPerson && old.name !== r.name && !samePerson(old.name, r.name);
       // Another person is the next person on the request: what the one before paid for or signed is not theirs, so
       // their signature is their own (sigRef in credits.ts), and the check for signatures below counts it.
-      if (otherPerson || otherName) run('UPDATE recipients SET person_gen=COALESCE(person_gen,0)+1 WHERE id=?', r.id);
+      if (otherPerson || otherName) {
+        run('UPDATE recipients SET person_gen=COALESCE(person_gen,0)+1 WHERE id=?', r.id);
+        newPeople.push(`${r.name} in the place of ${old.name}`);
+      }
       if (old.status === 'completed' && old.role === 'cc') {
         // Someone who only had a copy. A new address gets its own copy, and a new job means they are asked to do it.
         if (!otherPerson && r.role === 'cc') continue;
@@ -774,7 +779,7 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       // (a name, a field, a date) is never refused, whatever the balance.
       const more = needed(loadEnvelope(e.id), sender) - needed(e, sender);
       const have = available(e.account_id);
-      if (more > 0 && have < 0) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), more, have + more), 402);
+      if (more > 0 && have < 0) throw bad(`${newPeople.length ? `This change puts ${listSome(newPeople)}, and another person signs with a signature of their own, also at the same address. Nothing was saved. ` : ''}${outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), more, have + more)}`, 402);
     }
     const pages = after.documents.reduce((n: number, d: any) => n + d.pages, 0);
     run('UPDATE envelopes SET sheets=? WHERE id=?', sheetsSaved(pages, after.recipients.length), e.id);

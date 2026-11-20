@@ -288,7 +288,8 @@ test('signers can ask the sender a question; one recipient can be nudged; batche
   const tok = tokenFor(e.id, 'ada@example.com');
   assert.equal((await new Client().post(`/sign/${tok}/ask`, { message: 'Is clause 4 still right?' })).status, 200);
   const q = mailTo('jo@example.com').at(-1)!;
-  assert.match(q.subject, /^Question about:/);
+  // A question is a private comment now (routes-comments.ts), and the sender's email about it says so.
+  assert.match(q.subject, /^Questions and comments:/);
   assert.match(q.html, /clause 4/);
 
   const rid = (await full(jo, e.id)).envelope.recipients.find((r: any) => r.email === 'ben@example.com').id;

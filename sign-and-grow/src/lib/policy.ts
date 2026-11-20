@@ -106,12 +106,14 @@ export const DELETED_WITH_ACCOUNT: string[] = [
   'Your login, your profile and your saved signature.',
   'Every account you own: its envelopes, drafts and templates, the documents you uploaded, the signed PDFs, the files signers attached and every audit trail, with the names, email addresses and internet addresses in them.',
   'Its contacts, API keys, webhooks and their delivery logs, bulk send records, public forms and reports from recipients.',
+  'Its click-to-agree terms with every version, every acceptance recorded for them (with the names, email addresses, customer numbers, internet addresses, browsers and pages in them), reports about their pages, and our stored copies of the emails that sent people a copy of what they accepted.',
   'Our stored copies of the emails about those envelopes, and of the emails we sent you about your account.',
   'Help requests of yours that have been answered or closed, each with everything written back and forth on it.',
 ];
 export const KEPT_AFTER_DELETION: string[] = [
   'The record of payments, refunds and of signatures bought and used, without your name or your email address, because accounts have to be kept. If you ever paid, the payment provider has its own record of that.',
   `A help request that nobody has answered yet, or on which we asked you something and wait for your reply. It is deleted once it has been answered. The answer is emailed to you first. An unanswered question of ours is kept for ${SUPPORT_REOPEN_DAYS} more days, then deleted.`,
+  'A help request you wrote while signed in, but under somebody else\'s email address. Its answers go to that address, so it belongs to that mailbox and stays for it, without your login, your account or your name. It is deleted like the other requests of that address.',
   'Documents other people sent you, with what you did on them, such as your signature or a report you made. They belong to whoever sent them.',
   'What you sent as a member of a team you do not own. It belongs to that team and passes to its owner, and its audit trail says so. An API key you made there stays on the team\'s list as stopped, under your name.',
   'Signed PDFs your recipients downloaded or were emailed. Those are theirs. The links in our emails to them stop working.',
@@ -395,3 +397,17 @@ export const COMMENT_BURST_MINUTES = 10;
 export const COMMENT_MAIL_MINUTES = 10;
 /** What a comment is not, in the words every screen and email about comments uses. */
 export const COMMENTS_NOT_SIGNED = 'Comments are not printed on the document and are not part of what is signed. The record of the document says that a comment was written, by whom and when, never what it says.';
+
+// ---- Click-to-agree ----------------------------------------------------------------------------------
+// An acceptance of click-to-agree terms is not a signature and costs none (src/server/clickwrap.ts). So that a page
+// anyone can open cannot be used to fill our database or a mailbox, each account may record this many acceptances in
+// a calendar month (UTC), counted over all its agreements. The admins are emailed at CLICKWRAP_WARN_PERCENT and again
+// when it is reached. 0 records none.
+export const clickwrapMonthlyLimit = (env: Record<string, string | undefined> = process.env): number => {
+  const n = Number((env.CLICKWRAP_MONTHLY_LIMIT ?? '').trim() === '' ? NaN : env.CLICKWRAP_MONTHLY_LIMIT);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 1000;
+};
+export const CLICKWRAP_WARN_PERCENT = 80;
+/** Acceptances from one internet address in an hour, over every agreement, and on one agreement. */
+export const CLICKWRAP_PER_ADDRESS_HOUR = 30;
+export const CLICKWRAP_PER_ADDRESS_AGREEMENT_HOUR = 10;

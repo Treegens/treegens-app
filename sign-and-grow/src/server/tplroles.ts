@@ -13,6 +13,7 @@ import type { Ctx } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, str } from './util.ts';
 import { TPL_USES, TPL_CHANGES, LOCK_MEANS, type TplUse, type TplChange, type TplAccess } from '../lib/tplroles.ts';
+import { logicKey } from '../lib/logic.ts';
 
 export type Rule = { use: TplUse; change: TplChange; locked: boolean };
 export const ruleOf = (t: any): Rule => ({
@@ -235,7 +236,9 @@ export function assertWordingKept(c: Ctx, e: any, b: any) {
       const same = f.type === was.type && text(f.document_id) === was.document_id && text(f.recipient_id) === text(was.recipient_id) && (Number(f.page) || 0) === was.page
         && near(f.x, was.x) && near(f.y, was.y) && near(f.w, was.w) && near(f.h, was.h) && yes(f.required, true) === !!was.required && text(f.label) === text(was.label)
         && JSON.stringify(f.options || []) === JSON.stringify(was.options || []) && text(f.group_name) === text(was.group_name) && text(f.validation) === text(was.validation)
-        && (yes(f.readonly, false) === true || mark) === !!was.readonly;
+        && (yes(f.readonly, false) === true || mark) === !!was.readonly
+        // When it is shown and what it is worked out from are part of the template's wording too (src/lib/logic.ts).
+        && logicKey(f) === logicKey(was);
       if (!same) no(`${which} cannot be moved, resized or changed.`);
       // The template's own wording stays: a value left out would empty it, so it counts as a change. Once the envelope
       // is out, a field its signer may change holds their answer in value and the template's wording in prefill;

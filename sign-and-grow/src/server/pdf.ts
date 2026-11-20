@@ -250,7 +250,7 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
 
 // ---- Certificate of completion -------------------------------------------------------------
 
-class Sheet {
+export class Sheet {
   page!: PDFPage;
   y = 0;
   readonly W = 595.28;
@@ -620,6 +620,27 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   }
   if (opts.certificate) await drawCertificate(ctx, e, audit, opts.sender);
   doc.setTitle(e.subject || 'Signed document');
+  doc.setProducer('Sign&Grow');
+  doc.setCreator('Sign&Grow');
+  return doc.save();
+}
+
+// A record of our own that is not an envelope (the certificate of a click-to-agree acceptance, src/server/clickwrap.ts),
+// drawn with the same fonts, scripts and sheet as the certificate of completion. `draw` fills the sheet; `after` may
+// add pages behind it (the terms as they were shown, when they were a PDF).
+export async function sheetPdf(title: string, footer: string, draw: (s: Sheet) => void | Promise<void>, after?: (doc: PDFDocument) => Promise<void>): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  doc.registerFontkit(fontkit);
+  const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
+  const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
+  const s = new Sheet(doc, font, bold, footer);
+  s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: GREEN });
+  s.page.drawText(clean(title), { x: s.L, y: s.H - 52, size: 20, font: bold, color: rgb(1, 1, 1) });
+  s.page.drawText('Sign&Grow · e-signatures that plant trees', { x: s.L, y: s.H - 68, size: 9, font, color: rgb(0.85, 0.94, 0.88) });
+  s.y = s.H - 112;
+  await draw(s);
+  if (after) await after(doc);
+  doc.setTitle(title);
   doc.setProducer('Sign&Grow');
   doc.setCreator('Sign&Grow');
   return doc.save();

@@ -1,12 +1,12 @@
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, now, isEmail, str, rateLimit, baseUrl, shortCode, codeFrom, sha256, hmac, safeEqual, parseCode, HttpError } from './util.ts';
-import { sendMail } from './mail.ts';
+import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { loadEnvelope, helpAsked, canBeStuck } from './envelopes.ts';
 import { sameEmail } from './credits.ts';
 import { isOperator } from './routes-trust.ts';
 import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS, SUPPORT_OTHERS_PER_ADDRESS } from '../lib/policy.ts';
-import { TOPIC_LABEL, firstName, whenText, knownZone } from '../lib/support.ts';
+import { TOPIC_LABEL, firstName, whenText, knownZone, spanText } from '../lib/support.ts';
 
 // Help requests as tickets. Every request has a reference, a state the customer can see (open: waiting for us,
 // waiting: we asked them something, answered, closed), an owner, a time by which a person will have answered, and a
@@ -58,6 +58,7 @@ const hoursFor = (priority: string) => (priority === 'urgent' ? supportUrgentRep
 // is promised: a promise nobody can keep is worse than none.
 const dueFrom = (priority: string): string | null => (supportReachable() ? new Date(Date.now() + hoursFor(priority) * 3600_000).toISOString() : null);
 const isLate = (t: any) => t.status === 'open' && !!t.due_at && t.due_at < now();
+const lateBy = (t: any) => `This reply came ${spanText((Date.now() - Date.parse(t.due_at)) / 60_000)} after the time we promised`;
 // The operator who has the request. Someone who is no longer an operator has it no more: it shows as nobody's.
 const ownerOf = (t: any): any => (t.owner_id ? operators().find((o) => o.id === t.owner_id) || null : null);
 const who = (t: any) => `${t.name || 'Someone'} <${t.email}>`; // always with the address in this form, so deleting an account finds our copies
@@ -152,8 +153,12 @@ function forOperator(t: any, full = false) {
     written: cameBy(t) === 'link' ? 'link' : t.verified ? 'own' : t.user_id ? 'signed_in_other' : 'not_signed_in',
   };
   if (!full) return { ...base, replies: get("SELECT COUNT(*) n FROM support_messages WHERE request_id=? AND kind!='event'", t.id).n };
+  // Our latest email to the customer about this request, and what became of it: taken by the mail server, waiting
+  // for another try, given up, or come back later (news from the mail provider, src/server/routes-bounces.ts).
+  const last = get('SELECT subject, status, error, next_try_at, bounced_at, bounce_reason, at FROM emails WHERE envelope_id IS NULL AND lower(to_email)=lower(?) AND instr(subject, ?) > 0 ORDER BY id DESC LIMIT 1', t.email, refOf(t));
   return {
     ...base, ...accountFacts(t),
+    mail: last ? { subject: last.subject, at: last.at, status: last.status, error: last.status === 'failed' ? last.error || null : null, retrying: last.status === 'failed' && !!last.next_try_at, bounced: last.bounced_at ? last.bounce_reason || 'it came back' : null } : null,
     // Everything, oldest first: messages both ways, internal notes, and what was done with who and when. A message
     // from the customer with nobody's login behind it came through the private link, so from their mailbox.
     thread: [{ kind: 'customer', at: t.at, by: t.name || null, via: cameBy(t) === 'link' ? 'link' : t.user_id || cameBy(t) === 'signed_in' ? 'app' : 'form', body: t.message },
@@ -489,7 +494,8 @@ route('GET', '/operator/support', (c) => {
     waiting: ["status='waiting'", []],
     all: ['1=1', []],
   };
-  const filter = FILTERS[c.q.get('filter') || ''] ? c.q.get('filter')! : 'open';
+  // Only the filters above: a name such as "constructor" is a property of every object, not one of ours.
+  const filter = Object.hasOwn(FILTERS, c.q.get('filter') || '') ? c.q.get('filter')! : 'open';
   const count = (f: string) => get(`SELECT COUNT(*) n FROM support_requests WHERE ${FILTERS[f][0]}`, ...FILTERS[f][1]).n;
   // ?q= looks through every request, whatever the tab and whatever its state: the reference a customer reads out
   // (with or without the dash people add), an address, a name, or words from the first message. An alert has no
@@ -535,7 +541,11 @@ route('POST', '/operator/support/:id', async (c) => {
   if (!t) throw bad('That request is not in the queue any more. It may have been deleted with its writer\'s account.', 404);
   // The earlier shape of this call: { status: 'closed' } or { status: 'open' }.
   const action = str(b.action, 20) || (b.status === 'closed' ? 'close' : b.status === 'open' ? 'reopen' : '');
-  const text = str(b.text ?? b.answer, 5000).trim();
+  // Only words are an answer. Anything else a program sends (an object, a list, a number) is refused, so nothing
+  // like "[object Object]" is ever emailed as what a person wrote, or counts as the answer a request is closed with.
+  const raw = b.text ?? b.answer;
+  if (raw != null && typeof raw !== 'string') throw bad('Send the text as words. Nothing was changed.');
+  const text = str(raw, 5000).trim();
   const me: By = { id: c.user.id, name: c.user.name };
   const alert = isAlert(t);
   const ref = refOf(t);
@@ -552,9 +562,18 @@ route('POST', '/operator/support/:id', async (c) => {
   const owner = ownerOf(t);
   const keep = owner ? owner.id : c.user.id;
   const button = { label: 'Open my request', url: '' };
+  // What the mail server said about the email to the customer, so the screen says what happened and nothing more.
+  let mailed: MailStatus | null = null;
   const mail = async (subject: string, heading: string, lines: string[]) => {
     // Once a request is forgotten (see forgetNow) its link opens nothing, so the email carries none.
-    await sendMail({ to: t.email, subject, heading, lines, ...PLAIN, ...(t.forget && action !== 'ask' ? {} : { cta: { ...button, url: linkFor(t) } }) });
+    mailed = await sendMail({ to: t.email, subject, heading, lines, ...PLAIN, ...(t.forget && action !== 'ask' ? {} : { cta: { ...button, url: linkFor(t) } }) });
+  };
+  // A request kept after its writer deleted their account goes once it is answered, but only when the answer has
+  // left: if the mail server would not take it, the request waits for a later try (see onMailOutcome below).
+  const forgetIfSent = () => {
+    if (mailed === 'failed') return null;
+    forgetNow(t);
+    return { ok: true, deleted: true, mail: mailed };
   };
   const FORGOTTEN = `You closed your Sign&Grow account while this request was open. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it. Please do not reply to this email. If you need anything else, write to us at ${baseUrl()}/help.`;
   const first = firstName(c.user.name) || 'A person on our team';
@@ -590,6 +609,8 @@ route('POST', '/operator/support/:id', async (c) => {
     need(action === 'ask' ? 'Write the question first. It is emailed to the customer as you write it.' : 'Write the answer first. It is emailed to the customer as you write it.');
     tx(() => {
       say(t, action === 'ask' ? 'question' : 'answer', text, me);
+      // A reply ends the wait, and with it the Late mark, but the lateness stays on record in the history.
+      if (isLate(t)) say(t, 'event', lateBy(t), me);
       // Asking stops the clock: from here we wait for the customer, and a new time starts when they reply.
       run('UPDATE support_requests SET status=?, due_at=NULL, owner_id=?, first_reply_at=COALESCE(first_reply_at, ?), updated_at=? WHERE id=?', action === 'ask' ? 'waiting' : 'answered', keep, now(), now(), t.id);
     });
@@ -597,8 +618,8 @@ route('POST', '/operator/support/:id', async (c) => {
       await mail(`We have a question about your request (${ref})`, `${first} needs one thing from you`, [text, `We wait for your answer, and the time we promised is paused until we have it. ${NO_REPLY} Answer with the button below. It works without signing in.`]);
     else if (t.forget) {
       await mail(`An answer to your request (${ref})`, `${first} answered your request`, [text, FORGOTTEN]);
-      forgetNow(t);
-      return { ok: true, deleted: true };
+      const gone = forgetIfSent();
+      if (gone) return gone;
     } else await mail(`An answer to your request (${ref})`, `${first} answered your request`, [text, `${NO_REPLY} To write back, or to say that this solved it, use the button below. It works without signing in.`]);
   } else if (action === 'close') {
     notClosed();
@@ -617,17 +638,18 @@ route('POST', '/operator/support/:id', async (c) => {
     if (!given) need('Write the answer this request is closed with. It is emailed to the customer, and nobody closes a request without one.');
     tx(() => {
       if (text) say(t, 'answer', text, me);
+      if (isLate(t)) say(t, 'event', lateBy(t), me);
       say(t, 'event', text ? 'Closed with that answer' : 'Closed. The answer already given was sent again', me);
       run("UPDATE support_requests SET status='closed', closed_at=?, closed_how='answered', due_at=NULL, owner_id=?, first_reply_at=COALESCE(first_reply_at, ?), updated_at=? WHERE id=?", now(), keep, now(), now(), t.id);
     });
     const answer = text ? [text] : ['Our answer was:', given];
     if (t.forget) {
       await mail(`Your request ${ref} is closed`, `${first} closed your request`, [...answer, FORGOTTEN]);
-      forgetNow(t);
-      return { ok: true, deleted: true };
-    }
-    await mail(`Your request ${ref} is closed`, `${first} closed your request`, [...answer,
-      `Not solved after all? Use the button below and write back within ${SUPPORT_REOPEN_DAYS} days: this same request opens again. After that, what you write there starts a new request that is linked to this one. ${NO_REPLY}`]);
+      const gone = forgetIfSent();
+      if (gone) return gone;
+    } else
+      await mail(`Your request ${ref} is closed`, `${first} closed your request`, [...answer,
+        `Not solved after all? Use the button below and write back within ${SUPPORT_REOPEN_DAYS} days: this same request opens again. After that, what you write there starts a new request that is linked to this one. ${NO_REPLY}`]);
   } else if (action === 'spam') {
     noCustomer();
     notClosed();
@@ -670,7 +692,39 @@ route('POST', '/operator/support/:id', async (c) => {
       });
     }
   } else throw bad('Say what to do with the request: take, assign, answer, ask, note, close, spam, reopen or priority.');
-  return { request: forOperator(load(t.id), true) };
+  return { request: forOperator(load(t.id), true), ...(mailed ? { mail: mailed } : {}) };
+});
+
+// ---- What became of our emails to the customer -----------------------------------------------------
+//
+// An email the mail server would not take is tried again by itself (mail.ts). Whatever becomes of an email to the
+// customer about a request is written to that request's history, and when it is given up the person who has the
+// request (or else the desk) is emailed, because the customer is then waiting for an answer they never got.
+// The email is known by its subject, which names the request, and by the address it went to.
+const TO_CUSTOMER = /^(?:We got your message \(|An answer to your request \(|We have a question about your request \(|Your request |We closed request |We are late with your request \()([A-Z0-9]{8})\b/;
+function requestOfMail(m: any): any {
+  const ref = m && !m.envelope_id ? TO_CUSTOMER.exec(m.subject || '')?.[1] : null;
+  return ref ? get('SELECT * FROM support_requests WHERE (ref=? OR (ref IS NULL AND upper(substr(id, -8))=?)) AND lower(email)=lower(?)', ref, ref, m.to_email) : null;
+}
+const said = (e: any) => (e ? ` It said: ${String(e).slice(0, 200)}` : '');
+onMailOutcome('support', async (m, what) => {
+  const t = requestOfMail(m);
+  if (!t) return;
+  const sys: By = { name: 'Sign&Grow' };
+  if (what === 'delayed') return void say(t, 'event', `The mail server did not take our email "${m.subject}" to ${t.email}.${said(m.error)} It is tried again by itself for about a day and a half`, sys);
+  if (what === 'sent') {
+    say(t, 'event', `Our email "${m.subject}" reached the mail server on a later try`, sys);
+    // A request kept only until its answer had left goes now (see forgetIfSent).
+    if (t.forget && (t.status === 'answered' || t.status === 'closed')) forgetNow(t);
+    return;
+  }
+  say(t, 'event', `Not delivered: our email "${m.subject}" to ${t.email}.${said(m.error)} Nobody tries again`, sys);
+  const owner = ownerOf(t);
+  for (const to of owner ? [owner.email] : desk())
+    await sendMail({ to, subject: `Not delivered: our email about request ${refOf(t)}`, heading: `${t.name || 'The customer'} did not get our email about request ${refOf(t)}`,
+      lines: [`Our email "${m.subject}" to ${t.email} could not be delivered, and nobody tries again.${said(m.error)}`,
+        'Whatever was written is still in the request. If the address is mistyped, this person cannot be reached through the request at all: look for another way to reach them, such as another request from them or their account.'],
+      cta: { label: 'Open the request', url: `${baseUrl()}/app/operator?ticket=${t.id}` } });
 });
 
 // ---- The timer -------------------------------------------------------------------------------------
@@ -702,7 +756,8 @@ export async function supportTick(): Promise<{ late: number }> {
       cta: { label: 'Open my request', url: linkFor(t) }, ...PLAIN });
   }
   // Someone deleted their account while we were waiting for their reply to a question of ours. The request was kept
-  // so the reply would not be lost. If none has come after SUPPORT_REOPEN_DAYS, it is deleted like the rest was.
-  for (const t of all("SELECT * FROM support_requests WHERE forget=1 AND status='waiting' AND COALESCE(updated_at, at) < ?", new Date(Date.now() - SUPPORT_REOPEN_DAYS * 864e5).toISOString())) forgetNow(t);
+  // so the reply would not be lost. If none has come after SUPPORT_REOPEN_DAYS, it is deleted like the rest was. So
+  // is one whose answer the mail server never took: it was kept only until that answer had left.
+  for (const t of all("SELECT * FROM support_requests WHERE forget=1 AND status!='open' AND COALESCE(updated_at, at) < ?", new Date(Date.now() - SUPPORT_REOPEN_DAYS * 864e5).toISOString())) forgetNow(t);
   return { late };
 }
