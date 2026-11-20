@@ -6,7 +6,7 @@ import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad } from './util.ts';
 import { impactOf, fmtTrees, fmtNum, PRICING } from '../lib/impact.ts';
-import { formatDate, formatDateValue, localStamp, validZone } from '../lib/dates.ts';
+import { formatDate, formatDateValue, localStamp, validZone, zoneLabel } from '../lib/dates.ts';
 import { typesetterFor } from './pdftext.ts';
 import { isolate, hasRtl } from './bidi.ts';
 import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
@@ -406,7 +406,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
       // the pages is the calendar day there, so the certificate shows what that day rests on, next to UTC above.
       const zone = validZone(r.tz);
       if (zone) {
-        s.kv('Time zone', `${zone}, as reported by their device`);
+        s.kv('Time zone', `${zoneLabel(zone, r.completed_at || r.consent_at || undefined)}, as reported by their device`);
         if (r.viewed_at) s.kv('Viewed, their time', localStamp(r.viewed_at, zone));
         if (r.consent_at) s.kv('Consent, their time', localStamp(r.consent_at, zone));
         if (r.completed_at) s.kv('Completed, their time', localStamp(r.completed_at, zone));

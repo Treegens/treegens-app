@@ -467,6 +467,9 @@ CREATE TABLE IF NOT EXISTS chat_counts (key TEXT NOT NULL, slot TEXT NOT NULL, n
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
 // one is added here if it is missing. Only ever append to this list.
 const COLUMNS: [table: string, column: string, definition: string][] = [
+  // How far the page turns a stamp's picture when it prints it, in degrees (src/lib/stamps.ts stampTurn). 0 for a
+  // picture made with its tilt drawn in.
+  ['stamps', 'turn', 'REAL NOT NULL DEFAULT 0'],
   ['users', 'notify', 'TEXT'],
   ['users', 'locale', 'TEXT'],
   ['accounts', 'suspended_at', 'TEXT'],

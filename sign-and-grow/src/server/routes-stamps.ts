@@ -6,7 +6,7 @@ import { find, look } from './routes-sign.ts';
 import { mine } from './routes-envelopes.ts';
 import { notOpen, shownVersion, changedSince } from './envelopes.ts';
 import { accountStamps, accountStamp, publicStamp, createStamp, updateStamp, deleteStamp, saveStampImage, stampPng, pngResponse, lookOf, isSenderStamp, stampSize, type StampMeta } from './stamps.ts';
-import { STAMP_IS_TEAM, STAMP_IS_YOU, STAMPS_PER_ACCOUNT, STAMP_UPLOADS_PER_LINK_HOUR, STAMP_UPLOADS_PER_ADDRESS_HOUR } from '../lib/stamps.ts';
+import { STAMP_IS_TEAM, STAMP_IS_YOU, STAMPS_PER_ACCOUNT, STAMP_UPLOADS_PER_LINK_HOUR, STAMP_UPLOADS_PER_ADDRESS_HOUR, stampTurn } from '../lib/stamps.ts';
 
 // Stamps (src/server/stamps.ts). The account's own stamps, kept by admins under Settings and used by everyone on the
 // team; and putting a stamp on a field from a signing link, which is authorised by that link like the rest of the
@@ -93,7 +93,7 @@ route('POST', '/sign/:token/stamp', async (c) => {
     if (!s) throw bad('That stamp is not in your account any more. Someone on your team may have changed or deleted it. Choose another one.', 404);
     sha = s.image_sha;
     stampId = s.id;
-    meta = { name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, size_mm: s.size_mm, from: 'account', at: now(), by: actor.name, stamp_id: s.id };
+    meta = { name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, turn: stampTurn(s.turn), size_mm: s.size_mm, from: 'account', at: now(), by: actor.name, stamp_id: s.id };
   } else {
     // A picture from a stranger's link: images only, a size limit, and a limit on how many in an hour.
     const per = `stamp:${r.id}`, ip = `stampip:${c.ip}`;
@@ -110,7 +110,7 @@ route('POST', '/sign/:token/stamp', async (c) => {
     run('UPDATE fields SET value=?, stamp_id=?, stamp_meta=? WHERE id=? AND envelope_id=?', sha, stampId, JSON.stringify(meta), f.id, e.id);
     run('UPDATE recipients SET touched_at=? WHERE id=?', now(), r.id);
   });
-  return { field_id: f.id, value: sha, image_url: `/api/sign/${c.params.token}/stamp-image/${sha}`, size: stampSize(sha), stamp: { name: meta.name, ink: meta.ink, from: meta.from }, what_a_stamp_is: STAMP_IS_YOU };
+  return { field_id: f.id, value: sha, image_url: `/api/sign/${c.params.token}/stamp-image/${sha}`, size: stampSize(sha), turn: stampTurn(meta), stamp: { name: meta.name, ink: meta.ink, from: meta.from }, what_a_stamp_is: STAMP_IS_YOU };
 }, 'public');
 
 route('DELETE', '/sign/:token/stamp/:field', async (c) => {

@@ -3,7 +3,7 @@ import { all, get, run, tx } from './db.ts';
 import { bad, id, now, sha256, str } from './util.ts';
 import { audit, hasNotPaid, nameRefusal, type Actor } from './envelopes.ts';
 import { readPng, cleanPng, decodePng } from './png.ts';
-import { STAMP_IS, STAMP_FROM, STAMP_PNG_MAX_BYTES, STAMP_OUT_MAX_SIDE, STAMP_OUT_MIN_SIDE, STAMPS_PER_ACCOUNT, STAMP_DEFAULT_MM, STAMP_MIN_MM, STAMP_MAX_MM, STAMP_NAME_MAX } from '../lib/stamps.ts';
+import { STAMP_IS, STAMP_FROM, STAMP_PNG_MAX_BYTES, STAMP_OUT_MAX_SIDE, STAMP_OUT_MIN_SIDE, STAMPS_PER_ACCOUNT, STAMP_DEFAULT_MM, STAMP_MIN_MM, STAMP_MAX_MM, STAMP_NAME_MAX, STAMP_TURN_MAX, stampTurn } from '../lib/stamps.ts';
 import { isInk, validSeed, TILT_MAX, INK_WORD, type Ink } from '../lib/stampink.ts';
 import { whoIs } from '../lib/groups.ts';
 
@@ -103,8 +103,13 @@ export function pruneStampImages(): number {
 
 // ---- How a stamp looks ---------------------------------------------------------------------------------------
 
-export type StampLook = { ink: Ink; seed: number; tilt: number; texture: number };
-/** The settings an impression was made with, checked. They are kept with it, so it can be made again the same way. */
+export type StampLook = { ink: Ink; seed: number; tilt: number; texture: number; turn: number };
+/**
+ * The settings an impression was made with, checked. They are kept with it, so it can be made again the same way.
+ * "turn": how far the page turns the picture when it prints it, in degrees clockwise. The stamp screen leaves its
+ * natural tilt out of the picture and sends it here, so the stamp keeps the exact size of its field. Left out, the
+ * picture prints as it is (a picture with its tilt drawn in).
+ */
 export function lookOf(b: any, what: string): StampLook {
   const ink = b?.ink == null || b.ink === '' ? 'blue' : b.ink;
   if (!isInk(ink)) throw bad(`${what}: the ink "${str(ink, 30)}" is not one we have. Use one of: blue, red, purple, black, green. Nothing was saved.`);
@@ -114,7 +119,9 @@ export function lookOf(b: any, what: string): StampLook {
   if (!Number.isFinite(tilt) || Math.abs(tilt) > TILT_MAX) throw bad(`${what}: "tilt" is in degrees, from -${TILT_MAX} to ${TILT_MAX}. Nothing was saved.`);
   const texture = b?.texture == null || b.texture === '' ? 0.5 : Number(b.texture);
   if (!Number.isFinite(texture) || texture < 0 || texture > 1) throw bad(`${what}: "texture" goes from 0 (even ink) to 1 (a well-worn stamp). Nothing was saved.`);
-  return { ink, seed, tilt: Math.round(tilt * 10) / 10, texture: Math.round(texture * 100) / 100 };
+  const turn = b?.turn == null || b.turn === '' ? 0 : Number(b.turn);
+  if (!Number.isFinite(turn) || Math.abs(turn) > STAMP_TURN_MAX) throw bad(`${what}: "turn" is in degrees, from -${STAMP_TURN_MAX} to ${STAMP_TURN_MAX}. Nothing was saved.`);
+  return { ink, seed, tilt: Math.round(tilt * 10) / 10, texture: Math.round(texture * 100) / 100, turn: Math.round(turn * 10) / 10 };
 }
 
 function sizeMm(v: any, d: number, what: string): number {
@@ -133,7 +140,7 @@ export const accountStamp = (accountId: string, stampId: any) =>
 
 /** A stamp as the screens and the API show it. The picture is fetched by its own address, with the session. */
 export const publicStamp = (s: any) => ({
-  id: s.id, name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, size_mm: s.size_mm, image_sha256: s.image_sha, width: s.width, height: s.height,
+  id: s.id, name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, turn: stampTurn(s.turn), size_mm: s.size_mm, image_sha256: s.image_sha, width: s.width, height: s.height,
   image_url: `/api/stamps/${s.id}/image?v=${String(s.image_sha).slice(0, 16)}`, created_by: s.created_by, created_at: s.created_at, updated_by: s.updated_by, updated_at: s.updated_at,
 });
 
@@ -163,8 +170,8 @@ export function createStamp(account: any, user: any, b: any) {
     const img = saveStampImage(b?.image, `The picture of "${name}"`);
     const sid = id('stp');
     const t = now();
-    run('INSERT INTO stamps (id, account_id, name, image_sha, ink, seed, tilt, texture, size_mm, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      sid, account.id, name, img.sha, look.ink, look.seed, look.tilt, look.texture, size, user?.name || null, t, user?.name || null, t);
+    run('INSERT INTO stamps (id, account_id, name, image_sha, ink, seed, tilt, texture, turn, size_mm, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      sid, account.id, name, img.sha, look.ink, look.seed, look.tilt, look.texture, look.turn, size, user?.name || null, t, user?.name || null, t);
     return accountStamp(account.id, sid);
   });
 }
@@ -177,12 +184,12 @@ export function updateStamp(account: any, user: any, stampId: string, b: any) {
     const name = b?.name === undefined ? s.name : nameOf(b, account, s.id, s.name);
     const size = sizeMm(b?.size_mm, s.size_mm, `The stamp "${name}"`);
     let img = { sha: s.image_sha };
-    let look: StampLook = { ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture };
+    let look: StampLook = { ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, turn: stampTurn(s.turn) };
     if (b?.image !== undefined) {
       look = lookOf(b, `The stamp "${name}"`);
       img = saveStampImage(b.image, `The picture of "${name}"`);
     }
-    run('UPDATE stamps SET name=?, image_sha=?, ink=?, seed=?, tilt=?, texture=?, size_mm=?, updated_by=?, updated_at=? WHERE id=?', name, img.sha, look.ink, look.seed, look.tilt, look.texture, size, user?.name || null, now(), s.id);
+    run('UPDATE stamps SET name=?, image_sha=?, ink=?, seed=?, tilt=?, texture=?, turn=?, size_mm=?, updated_by=?, updated_at=? WHERE id=?', name, img.sha, look.ink, look.seed, look.tilt, look.texture, look.turn, size, user?.name || null, now(), s.id);
     // Where the old picture is already on a document, it stays: those documents are not changed.
     const kept = img.sha !== s.image_sha ? get("SELECT COUNT(DISTINCT envelope_id) n FROM fields WHERE type='stamp' AND stamp_id=? AND value=?", s.id, s.image_sha).n : 0;
     return { stamp: accountStamp(account.id, s.id), kept };
@@ -200,7 +207,7 @@ export function deleteStamp(account: any, stampId: string) {
 
 // ---- Stamp fields --------------------------------------------------------------------------------------------
 
-export type StampMeta = { name: string | null; ink: Ink; seed: number; tilt: number; texture: number; size_mm?: number | null; from: 'account' | 'upload' | 'camera' | 'sender'; at: string; by: string | null; stamp_id?: string | null };
+export type StampMeta = { name: string | null; ink: Ink; seed: number; tilt: number; texture: number; turn?: number; size_mm?: number | null; from: 'account' | 'upload' | 'camera' | 'sender'; at: string; by: string | null; stamp_id?: string | null };
 export function metaOf(f: any): StampMeta | null {
   try {
     const m = JSON.parse(f?.stamp_meta || 'null');
@@ -241,7 +248,7 @@ export function stampOnSave(f: any, old: any, rid: string | null, accountId: str
   const s = get('SELECT * FROM stamps WHERE id=? AND account_id=?', sid, accountId);
   if (!s) throw bad(`${which}, a stamp field, names the stamp "${str(sid, 60)}", which this account does not have${old?.stamp_id === sid ? ' any more: it was deleted under Settings' : ''}. Use the id of one of your stamps (GET /stamps), or leave "stamp_id" out to choose one later. Nothing was saved.`);
   if (sent && sent !== s.image_sha && !(refresh && sent === String(old?.value ?? ''))) throw bad(`${which}, a stamp field, was sent with a picture ("value") that is not the picture of the stamp "${s.name}" it names. Leave "value" out: the picture comes from "stamp_id". Nothing was saved.`);
-  const meta: StampMeta = { name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, size_mm: s.size_mm, from: 'sender', at: now(), by: by?.name || null, stamp_id: s.id };
+  const meta: StampMeta = { name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, turn: stampTurn(s.turn), size_mm: s.size_mm, from: 'sender', at: now(), by: by?.name || null, stamp_id: s.id };
   return { value: s.image_sha, stamp_id: s.id, meta: JSON.stringify(meta), readonly: 1, required: 0 };
 }
 
@@ -318,7 +325,7 @@ export function senderStampChange(e: any, o: any, f: any, where: (f: any, x: any
 /** How a stamp on someone else's part of the page is shown to a signer: its picture by the signing link, and its name. */
 export function stampSeen(token: string, f: any) {
   const m = metaOf(f);
-  return { image: `/api/sign/${token}/stamp-image/${f.value}`, stamp: { name: m?.name || null, ink: m?.ink || null, from: m?.from || null } };
+  return { image: `/api/sign/${token}/stamp-image/${f.value}`, turn: stampTurn(m), stamp: { name: m?.name || null, ink: m?.ink || null, from: m?.from || null } };
 }
 
 // ---- The evidence pack and the export ------------------------------------------------------------------------
@@ -349,13 +356,13 @@ export function stampEvidence(e: any): { name: string; data: Buffer }[] {
 export function stampExport(accountId: string): { name: string; data: Buffer }[] {
   const list = accountStamps(accountId);
   if (!list.length) return [];
-  const rows = [csvRow(['file', 'name', 'ink', 'seed', 'tilt', 'texture', 'size_mm', 'created_by', 'created_at', 'updated_at', 'sha256'])];
+  const rows = [csvRow(['file', 'name', 'ink', 'seed', 'tilt', 'texture', 'turn', 'size_mm', 'created_by', 'created_at', 'updated_at', 'sha256'])];
   const out: { name: string; data: Buffer }[] = [];
   for (const s of list) {
     const png = stampPng(s.image_sha);
     const file = `stamps/${safe(s.name)} ${s.id.slice(-6)}.png`;
     if (png) out.push({ name: file, data: png });
-    rows.push(csvRow([file, s.name, s.ink, s.seed, s.tilt, s.texture, s.size_mm, s.created_by, s.created_at, s.updated_at, s.image_sha]));
+    rows.push(csvRow([file, s.name, s.ink, s.seed, s.tilt, s.texture, stampTurn(s.turn), s.size_mm, s.created_by, s.created_at, s.updated_at, s.image_sha]));
   }
   out.push({ name: 'stamps/index.csv', data: Buffer.from('﻿' + rows.join('\r\n')) });
   return out;

@@ -809,3 +809,30 @@ test('a date field takes a real day written year-month-day, from the page and th
   const editor = fs.readFileSync('src/components/editor/StepFields.tsx', 'utf8');
   assert.match(editor, /selected\.type === 'date'\s*\? <input type="date"/);
 });
+
+test('a zone is printed with its capitals right, and a zone named after an offset is written as that offset', async () => {
+  // A device spelling is kept; one in the wrong capitals is put right; nonsense is still nothing.
+  assert.equal(validZone('Asia/Kolkata'), 'Asia/Kolkata');
+  assert.equal(validZone('Europe/Kyiv'), 'Europe/Kyiv');
+  for (const z of ['ASIA/KOLKATA', 'asia/kolkata']) assert.match(validZone(z)!, /^Asia\/(Kolkata|Calcutta)$/, z);
+  assert.equal(validZone('+05:30'), null);
+  // "Etc/GMT-14" is fourteen hours ahead of UTC: written as UTC+14:00 so nobody reads it as minus 14.
+  assert.equal(momentText('2027-03-20T16:40:00Z', 'Etc/GMT-14'), '21 March 2027 at 06:40 UTC+14:00');
+  assert.equal(localStamp('2027-03-20T16:40:00Z', 'Etc/GMT-14'), '2027-03-21 06:40 UTC+14:00');
+  assert.equal(momentText('2027-03-20T16:40:00Z', 'Etc/GMT+12'), '20 March 2027 at 04:40 UTC-12:00');
+  for (const z of ['Etc/UTC', 'GMT0']) assert.equal(momentForEmail('2027-03-20T16:40:00Z', z), '20 March 2027 at 16:40 UTC', z);
+  // Named zones read as before.
+  assert.equal(momentText('2027-03-20T16:40:00Z', 'Pacific/Auckland'), '21 March 2027 at 05:40 Pacific/Auckland time (UTC+13:00)');
+  // On the record: the zone stored and printed for a device that sends it in capitals, and an offset zone on the certificate.
+  const c = await signUp('Cap Sender', 'cap-zones@example.com', ip());
+  const e = await sendTo(c, [{ name: 'Cap Device', email: 'cap-device@example.com' }, { name: 'Off Device', email: 'off-device@example.com' }]);
+  assert.equal((await signInZone(e.id, 'cap-device@example.com', 'ASIA/KOLKATA')).status, 200);
+  assert.equal((await signInZone(e.id, 'off-device@example.com', 'Etc/GMT-14')).status, 200);
+  const tz = s.db.get("SELECT tz FROM recipients WHERE envelope_id=? AND email='cap-device@example.com'", e.id).tz;
+  assert.match(tz, /^Asia\/(Kolkata|Calcutta)$/);
+  const cert = (await extractPages((await c.get(`/envelopes/${e.id}/download`)).data)).slice(1).join(' ');
+  assert.ok(!cert.includes('ASIA/KOLKATA'), 'never in the capitals the device sent');
+  assert.ok(cert.includes(`Time zone ${tz}, as reported by their device`));
+  assert.ok(cert.includes('Time zone UTC+14:00, as reported by their device'), cert.slice(0, 3000));
+  assert.ok(!/Time zone Etc\/GMT-14/.test(cert));
+});

@@ -171,6 +171,7 @@ export function parseMessage(src: string): Node[] {
     const b: Record<string, Node[]> = {};
     for (;;) {
       space();
+      if (i >= src.length) fail(`{${name}, plural} is not closed with }`);
       if (src[i] === '}') {
         i++;
         break;

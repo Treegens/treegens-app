@@ -27,12 +27,22 @@ function written(y: number, m: number, day: number, format?: string | null): str
 export function validZone(tz: any): string | null {
   if (typeof tz !== 'string' || !tz || tz.length > 64 || !/^[A-Za-z0-9_+\-/]+$/.test(tz)) return null;
   try {
-    new Intl.DateTimeFormat('en-GB', { timeZone: tz });
-    return tz;
+    const resolved = new Intl.DateTimeFormat('en-GB', { timeZone: tz }).resolvedOptions().timeZone;
+    // Kept as the device spelled it ("Asia/Kolkata", "Europe/Kyiv"), which is what people know, unless its capitals
+    // are plainly wrong ("ASIA/KOLKATA", "asia/kolkata" from an API caller): that is printed on certificates and in
+    // emails, so it is put right, with the spelling of the clock library (which may be an older name of the zone).
+    const caps = tz.includes('/') && (!/[a-z]/.test(tz) || !/[A-Z]/.test(tz));
+    return caps ? resolved : tz;
   } catch {
     return null;
   }
 }
+
+/** A zone named after an offset ("Etc/GMT-14" is UTC+14:00, the sign reads backwards) is written as its offset. */
+const byOffset = (zone: string): boolean => /^(Etc\/|GMT|UTC|UCT|Universal|Zulu|Greenwich)/i.test(zone);
+
+/** A zone for the certificate: its name as reported, or for one named after an offset, the offset ("UTC+14:00"). */
+export const zoneLabel = (zone: string, at: string | Date = new Date()): string => (byOffset(zone) ? clockIn(at, zone)?.offset || 'UTC' : zone);
 
 /** The time zone of the device this runs on, as the signing page sends it. Empty when the device will not say. */
 export function deviceZone(): string {
@@ -97,7 +107,7 @@ export function isDateValue(value: any): boolean {
 export const DATE_PROBLEM = 'This is not a date we can read. Pick it from the calendar, or type it as year-month-day, like 2027-03-20. It is printed on the document in the format the sender chose.';
 
 /** A zone the way people read it: "UTC", or "Pacific/Auckland time (UTC+13:00)". */
-const zoneWords = (c: Clock): string => (c.zone === 'UTC' ? 'UTC' : `${c.zone.replace(/_/g, ' ')} time (${c.offset})`);
+const zoneWords = (c: Clock): string => (c.zone === 'UTC' || byOffset(c.zone) ? c.offset : `${c.zone.replace(/_/g, ' ')} time (${c.offset})`);
 
 /**
  * A deadline, or any other moment that matters, with its time and its zone: "20 March 2027 at 16:40 UTC", or with
@@ -116,14 +126,15 @@ export function momentText(iso: string | Date | null | undefined, tz?: string | 
 export function momentForEmail(iso: string | Date | null | undefined, tz?: string | null): string {
   const utc = momentText(iso);
   const zone = validZone(tz);
-  return utc && zone && zone !== 'UTC' ? `${utc}, which is ${momentText(iso, zone)}` : utc;
+  // "Etc/UTC" or "GMT0" is UTC itself: no "16:40 UTC, which is 16:40 UTC".
+  return utc && zone && zone !== 'UTC' && !(byOffset(zone) && clockIn(iso!, zone)?.offset === 'UTC') ? `${utc}, which is ${momentText(iso, zone)}` : utc;
 }
 
 /** For the certificate, next to the UTC time: "2026-11-21 05:40 UTC+13:00, Pacific/Auckland". Empty without a zone. */
 export function localStamp(iso: string | null | undefined, tz?: string | null): string {
   const zone = validZone(tz);
   const c = iso && zone ? clockIn(iso, zone) : null;
-  return c ? `${c.y}-${pad(c.m + 1)}-${pad(c.d)} ${pad(c.hh)}:${pad(c.mm)} ${c.offset}, ${c.zone}` : '';
+  return c ? `${c.y}-${pad(c.m + 1)}-${pad(c.d)} ${pad(c.hh)}:${pad(c.mm)} ${c.offset}${byOffset(c.zone) ? '' : `, ${c.zone}`}` : '';
 }
 
 /** Whether it is daytime in a zone at a moment: from 8:00 up to 20:00. A reminder that falls outside waits. */

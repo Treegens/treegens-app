@@ -31,8 +31,33 @@ export const STAMP_UPLOADS_PER_ADDRESS_HOUR = 120;
 export const STAMP_DEFAULT_MM = 40;
 export const STAMP_MIN_MM = 8;
 export const STAMP_MAX_MM = 120;
-/** Ink is never quite solid: the page shows through a little, as well as through the multiply blend. */
-export const STAMP_OPACITY = 0.9;
+/**
+ * Printed at nearly full strength: the multiply blend already lets the printed words show through, as they do under
+ * real ink, so the strongest parts of a stamp reach the full colour of stamp pad ink and the rest of its unevenness
+ * comes from the impression itself (src/lib/stampink.ts), not from a fade over all of it.
+ */
+export const STAMP_OPACITY = 0.97;
+/** The page turns a stamp by up to this many degrees each way: its natural tilt, never drawn into the picture. */
+export const STAMP_TURN_MAX = 4;
+/**
+ * How far the page turns a stamp, in degrees clockwise as it is looked at: the "turn" kept with it (a number, or the
+ * stamp_meta of a field as JSON). 0 for a stamp whose picture was made before the tilt moved onto the page: its tilt
+ * is in its picture.
+ */
+export function stampTurn(v: any): number {
+  let t: any = v;
+  if (typeof v === 'string') {
+    try {
+      t = JSON.parse(v)?.turn;
+    } catch {
+      t = 0;
+    }
+  } else if (v && typeof v === 'object') t = v.turn;
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.max(-STAMP_TURN_MAX, Math.min(STAMP_TURN_MAX, Math.round(n * 10) / 10)) : 0;
+}
+/** The same turn as a style for the picture of a stamp on a page: it turns about its middle, as in the signed PDF. */
+export const turnStyle = (turn: number): { transform?: string } => (turn ? { transform: `rotate(${turn}deg)` } : {});
 /** A stamp name, as typed under Settings. */
 export const STAMP_NAME_MAX = 60;
 
