@@ -5,15 +5,14 @@ import { api } from '@/components/ui';
 import { PLANS, type PlanId } from '@/lib/impact';
 import { FindSubscription, StopByCard, billDay } from '@/app/help/tools';
 
-// price: the monthly price this account is charged (in dollars), and next_amount the next charge as the Plan page
-// states it. Never the price for new customers: this page is where someone decides whether to stop.
-type Info = { account: string; plan: string; price: number; next_amount?: string; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null; failing?: boolean };
+// price: the monthly price this account is charged (in dollars), and next_amount (next_cents) the next charge as the
+// Plan page states it, with any tax added on top. Never the price for new customers: this page is where someone
+// decides whether to stop.
+type Info = { account: string; plan: string; price: number; next_amount?: string; next_cents?: number; renews_at: string | null; ends_at: string | null; signatures_left?: number; can_cancel?: boolean; cancel_ref?: string | null; free_with?: string | null; failing?: boolean };
 type Done = { ends_at: string; reference: string; ended_now?: boolean; why?: string };
 type View = { kind: 'loading' } | { kind: 'no-link' } | { kind: 'expired' } | { kind: 'failed'; message: string } | { kind: 'ready'; info: Info };
 
 const planName = (plan: string) => PLANS[plan as PlanId]?.name || plan;
-// Dollars as a price is written: 12, or 9.50.
-const usd = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
 const Head = ({ title, children }: { title: string; children?: ReactNode }) => (
   <header className="pub-top">
@@ -195,8 +194,8 @@ export function StopView() {
           <dt>Account</dt>
           <dd>{info.account}</dd>
           <dt>Plan</dt>
-          <dd>{planName('grove')}, US${usd(info.price)} a month{info.failing ? ' (the last payment did not go through)' : ''}</dd>
-          {info.renews_at && <><dt>Next charge</dt><dd>{info.next_amount ? `US${info.next_amount}` : `US$${usd(info.price)}`} on {billDay(info.renews_at)}</dd></>}
+          <dd>{planName('grove')}, US${info.price} a month{info.failing ? ' (the last payment did not go through)' : ''}</dd>
+          {info.renews_at && <><dt>Next charge</dt><dd>US${info.price} on {billDay(info.renews_at)}{info.next_cents && info.next_cents !== Math.round(info.price * 100) ? ' (US' + info.next_amount + ' with tax)' : ''}</dd></>}
           {typeof n === 'number' && <><dt>Signatures left</dt><dd>{n}<small>They stay yours after you stop</small></dd></>}
         </dl>
         {error && <div className="notice err" role="alert" style={{ marginBottom: 14 }}>{error}</div>}

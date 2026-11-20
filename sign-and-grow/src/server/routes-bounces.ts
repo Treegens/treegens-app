@@ -3,9 +3,11 @@ import { all, get, run, tx } from './db.ts';
 import { bad, baseUrl, HttpError, isEmail, now, rateLimit, sha256, str, token } from './util.ts';
 import { sendMail } from './mail.ts';
 import { checkPassword, hasPassword } from './auth.ts';
+import { needCode } from './twostep.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { audit, assertMayEmail, loadEnvelope, notifyRecipient, notifySender, reportAbuse, senderOf } from './envelopes.ts';
 import { find } from './routes-sign.ts';
+import { bouncedMember } from './groups.ts';
 import { welcomeMark } from './routes-trust.ts';
 import {
   mailEventsAuth, readEvents, bounceWhy, softBounceDays, forgetSoftDays, noteBounced, forgetBounced, mailStop, mailStopText, sameAddress as same, type MailEvent,
@@ -91,10 +93,12 @@ async function recipientBounce(e: any, m: any, at: string, why: { plain: string;
   audit(e.id, SYSTEM, 'Email could not be delivered', `Email to ${names(rows, m)} could not be delivered: ${why.plain}.${said} The email was "${str(m.subject, 200)}".${out && fresh.length ? ' Reminders to this address are stopped until the address is corrected or the sender chooses to try again.' : ''}`);
   // A second email that comes back from an address already marked is written down, and nobody is told twice.
   if (rows.length && !fresh.length) return;
+  // The address of one member of a signing group, which no recipient row carries: said as such (groups.ts).
+  const member = !rows.length && out ? bouncedMember(e.id, m.to_email) : null;
   if (!e.hidden_at)
-    await notifySender(e, 'problems', `Could not be delivered: ${e.subject}`, `Our email to ${firstNames(rows, m)} did not arrive`, [
+    await notifySender(e, 'problems', `Could not be delivered: ${e.subject}`, `Our email to ${member?.name || firstNames(rows, m)} did not arrive`, [
       `The email "${m.subject}" to ${m.to_email} could not be delivered: ${why.plain}.${said}`,
-      out && fresh.length ? `No reminders go to this address until you do one of two things. Open the envelope and choose Correct next to ${firstNames(rows, m)} to fix the address: a new email goes out at once. Or, if the address is right and the mailbox works again, choose "Try again" there. You can also copy their signing link from the same page and send it to them yourself.`
+      member ? member.line : out && fresh.length ? `No reminders go to this address until you do one of two things. Open the envelope and choose Correct next to ${firstNames(rows, m)} to fix the address: a new email goes out at once. Or, if the address is right and the mailbox works again, choose "Try again" there. You can also copy their signing link from the same page and send it to them yourself.`
         : e.status === 'completed' ? 'The envelope is completed, so there is nothing to send again from here. Download the signed document from the envelope page and send it to them yourself.'
         : out ? 'Open the envelope to see who is on it now. If this person should still get it, add them with the right address.'
         : 'The envelope is closed, so nothing more is sent to them about it.',
@@ -354,6 +358,8 @@ route('POST', '/me/email', async (c) => {
     rateLimit(`email-change-pw:${c.user.id}`, 10, 900_000);
     if (!checkPassword(str(b.password, 200), c.user.password_hash)) throw bad('To move your login to another address, type your current password as well. That password is not right, so nothing was changed.', 403, { code: 'password_needed' });
   }
+  // With two-step login on, the address (where a reset by email would go) is changed only with a current code too.
+  await needCode(c, b.code, 'move your login to another address');
   rateLimit(`email-change:${c.user.id}`, 5, 86400_000);
   if (get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(`There is already a Sign&Grow login with ${email}, so this one cannot move there. Nothing was changed. If that login is yours too, sign in with it instead, or close it first under Settings, Your data.`, 409);
   const t = token();

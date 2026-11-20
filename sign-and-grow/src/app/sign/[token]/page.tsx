@@ -29,9 +29,11 @@ import { SIGNING_ONLINE } from '@/lib/mobile';
 import { PayLink } from '@/components/sign/PayLink';
 import { NoEmailDone, NoEmailWait, answerComesTo } from '@/components/sign/NoEmail';
 import { MailAgain } from '@/components/sign/MailAgain';
+// A document sent to a signing group: what this member's own link is to the group (src/server/groups.ts).
+import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText } from '@/components/sign/GroupNotice';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
-type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review';
+type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback';
 const SAVE_TEXT: Record<Save, string> = { idle: 'Saves as you go', pending: 'Saving', saving: 'Saving', saved: 'Saved', error: 'Not saved yet' };
 const FLAG: Record<string, string> = { signature: 'Sign here', initials: 'Initial here', checkbox: 'Tick here', radio: 'Choose one', dropdown: 'Choose here', attachment: 'Attach here' };
 // Phones, and anything else used mainly by touch, get a sheet with a large input instead of typing into the page.
@@ -578,10 +580,22 @@ export default function SignPage() {
     <>
       {open === 'report' && <ReportDialog base={base} sender={sender} onClose={() => setOpen('')} />}
       {open === 'ask' && <AskDialog base={base} sender={sender} replyTo={answerComesTo(me)} onClose={() => setOpen('')} />}
-      {open === 'decline' && <DeclineDialog base={base} sender={sender} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
+      {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
       {open === 'reassign' && <ReassignDialog base={base} sender={sender} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
+      {open === 'handback' && <HandBackDialog base={base} data={data} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); toast(`Handed back to ${me.group?.name}. Nothing you filled in was kept.`); load(); }} />}
     </>
   );
+
+  // A colleague in the group has the document, or the sender took this person out of the group: who has it, and
+  // the one thing left to do here, which is to ask the sender (sign/GroupNotice.tsx).
+  if (groupAway(data) && stage !== 'locked')
+    return (
+      <Shell data={data} footer={report}>
+        {notice}
+        <GroupAway data={data} base={base} />
+        {dialogs}
+      </Shell>
+    );
 
   if (stage === 'locked') {
     // The sender asked for a one-time code, by email or by text message, before the document opens. Until it is
@@ -763,7 +777,9 @@ export default function SignPage() {
     { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },
     ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); changeMark(sig ? 'signature' : 'initials'); } }] : []),
     ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? 'Asked. They will be in touch by email.' : `The deadline is ${momentText(env.expires_at, deviceZone())}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(`We asked ${sender.name} for more time. They will be in touch by email.`); } }] : []),
-    ...(me.role === 'signer' || me.role === 'approver' ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
+    // The one who took on a group's document can hand it back to the group, and passes it to nobody outside it.
+    ...(me.group?.can_hand_back ? [{ key: 'handback', label: `Hand back to ${me.group.name}`, hint: 'If a colleague should do it instead. What you filled in is not kept.', icon: 'link', onClick: go('handback') }] : []),
+    ...((me.role === 'signer' || me.role === 'approver') && !me.group ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
     ...(!muted && me.role !== 'inperson' ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
     ...(me.role !== 'viewer' && me.role !== 'cc' ? [{ key: 'decline', label: declineLabel, hint: 'Closes the document for everyone.', icon: 'stop', danger: true, onClick: go('decline') }] : []),
   ];
@@ -796,6 +812,7 @@ export default function SignPage() {
             <p className="muted sg-legal">{wording.legal}</p>
             <p className="muted sg-legal">{wording.practical}</p>
           </div>
+          <GroupConsentNote data={data} />
           <label className="check sg-agree">
             <input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setFormError(''))} aria-describedby={formError ? 'sg-legal sg-agree-err' : 'sg-legal'} /> <span>{wording.agree}</span>
           </label>
@@ -807,6 +824,8 @@ export default function SignPage() {
               await api(`${base}/consent`, { body: { version: version.current, wording: wording.version, tz: deviceZone() } });
               await load();
             } catch (e: any) {
+              // A colleague in the group took it on a moment earlier: the page then says who (GroupNotice.tsx).
+              if (e?.code === 'taken') return void load();
               setFormError(`${e?.message || 'Something went wrong on our side.'} Try again in a moment.`);
             } finally {
               setBusy(false);

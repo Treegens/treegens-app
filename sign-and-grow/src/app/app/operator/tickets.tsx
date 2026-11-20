@@ -15,6 +15,7 @@ const plan = (p: string) => (p === 'seedling' ? 'free plan' : p === 'grove' ? 'm
 const money = (cents: number, currency?: string) => (cents / 100).toLocaleString('en', { style: 'currency', currency: (currency || 'usd').toUpperCase() });
 const WRITTEN: Record<string, string> = {
   own: 'Written by someone signed in under this address, which they have confirmed.',
+  link: 'Written through the private link we emailed to this address, so by someone who has its mailbox.',
   signed_in_other: 'Written by someone who was signed in, but not under this address as a confirmed one. The answer goes to this address only.',
   not_signed_in: 'Written without signing in. Anyone can type any address into the form, so give out nothing about an account. A message marked "through the link" did come from this mailbox.',
 };
@@ -116,7 +117,7 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
         )}
         {!t.alert && <button type="button" className="btn sm" disabled={busy} onClick={() => act({ action: 'priority', priority: t.priority === 'urgent' ? 'normal' : 'urgent' }, t.priority === 'urgent' ? 'Marked normal. The time already promised stays.' : 'Marked urgent.')}>{t.priority === 'urgent' ? 'Mark as not urgent' : 'Mark as urgent'}</button>}
         {closed && <button type="button" className="btn sm" disabled={busy} onClick={() => act({ action: 'reopen' }, 'Open again.')}>Open it again</button>}
-        {!t.alert && !closed && t.written !== 'own' && !t.thread.slice(1).some((m: any) => m.kind === 'customer') && (
+        {!t.alert && !closed && t.written !== 'own' && t.written !== 'link' && !t.thread.slice(1).some((m: any) => m.kind === 'customer') && (
           <button type="button" className="btn sm danger" disabled={busy} onClick={() => window.confirm('Close this without an answer? Do this only when nobody at this address can have written it, such as an advert or a scam typed into the form. The address gets one short email that says it was closed and how to open it again. The email repeats nothing of what was typed.') && act({ action: 'spam' }, 'Closed. The address was told, without the text.')}>Nobody at this address wrote this</button>
         )}
       </div>

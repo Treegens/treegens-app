@@ -26,6 +26,9 @@ export type Mail = {
   // True on an email that asks its recipient (recipientId) to do something: sign, approve, look again. A later try
   // does not deliver it once that person has finished or declined.
   untilDone?: boolean;
+  // An email about a help request (src/server/routes-support.ts). It is about no document, and it often goes to
+  // someone who only came to sign, so it ends with where it came from and nothing about signing or selling.
+  help?: boolean;
 };
 
 // What became of an email at hand-over: the mail server took it, there is no mail server (it sits in the outbox
@@ -90,7 +93,7 @@ export function renderMail(m: Mail): string {
     <div style="margin-top:8px">Did not expect this, or does it look wrong? <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">Report this email</a>. That opens our check page with this code filled in. You do not have to open the document to report it.</div>
   </div>` : ''}
   <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0">
-    ${m.envelopeId || m.links
+    ${m.help ? 'Sent by the people who answer help requests at Sign&amp;Grow.' : m.envelopeId || m.links
     // Emails about a document go to people who only came to sign. The pages promise them no marketing, so these end
     // with where the email came from and nothing that sells. Emails to an account's own people keep the full line.
     ? 'Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow.'

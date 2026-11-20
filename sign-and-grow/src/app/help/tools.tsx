@@ -156,7 +156,7 @@ export function StopByCard() {
         <button className="btn primary" disabled={a.busy}>{a.busy ? 'Stopping' : 'Stop billing'}</button>
       </div>
       <p className="muted small pub-form-hint">
-        Only the last four digits. Never type a full card number here.{' '}
+        Only the last four digits. Never type a full card number here.{!noEmail && " The email address has to be one of the account's owners or admins, the people who can stop the plan in the app."}{' '}
         <button type="button" className="linklike" onClick={() => setNoEmail(!noEmail)}>{noEmail ? 'I know the email address of the account' : 'I do not know which email address the account is under'}</button>
       </p>
       {a.error && <div className="notice err" role="alert">{a.error}</div>}
@@ -273,7 +273,8 @@ export function ContactForm() {
           // "Your requests" below shows the new one straight away for someone who is signed in.
           window.dispatchEvent(new Event('sg-support-sent'));
           return { reference: r.reference, email: f.email.trim(), due_at: r.due_at || null, reply_hours: r.reply_hours || null };
-        }, (err) => explain(err, info.email ? `You have sent several messages, and we have them all. To add something now, use the link in a confirmation email we sent you, or write to ${info.email}.` : 'You have sent several messages, and we have them all. To add something, use the link in a confirmation email we sent you.'))
+        // Stopped by the allowance for writers we do not know: the server's words say the ways that still reach us.
+        }, (err) => err?.code === 'others_limit' ? err.message : explain(err, info.email ? `You have sent several messages, and we have them all. To add something now, use the link in a confirmation email we sent you, or write to ${info.email}.` : 'You have sent several messages, and we have them all. To add something, use the link in a confirmation email we sent you.'))
       }
     >
       <div className="grid g2">

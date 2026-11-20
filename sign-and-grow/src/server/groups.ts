@@ -308,6 +308,9 @@ export function groupPeople(r: any): any[] {
 export async function notifyMembers(e: any, r: any, kind: string, send: (e: any, r: any, kind: any) => Promise<false | MailStatus>): Promise<false | MailStatus> {
   let out: false | MailStatus = false;
   for (const m of active(r.id)) {
+    // Like a person whose email came back: no reminder and no "expires soon" to a member's address that bounced.
+    // It would only come back again. The sender was told which member it was and how to fix it (bouncedMember).
+    if ((kind === 'reminder' || kind === 'expiring') && get("SELECT 1 x FROM emails WHERE envelope_id=? AND recipient_id=? AND to_email=? COLLATE NOCASE AND bounce_kind='hard'", e.id, r.id, m.email)) continue;
     const how = await send(e, memberAs(r, m), kind);
     if (!how) continue;
     if (!m.sent_at) run('UPDATE recipient_members SET sent_at=? WHERE id=?', now(), m.id);
@@ -394,8 +397,8 @@ export const memberOf = (tok: string): any => get('SELECT * FROM recipient_membe
 //   taken:   a colleague has it. This link shows who, and can ask the sender to give it back to the group.
 //   removed: the sender took this member out of the group, or put a person where the group was.
 const MAY: Record<string, string[]> = {
-  open: ['', 'doc', 'download', 'consent', 'decline', 'ask', 'request-extension', 'unlock', 'ask-code', 'mute', 'report'],
-  copy: ['', 'doc', 'download', 'ask', 'unlock', 'ask-code', 'mute', 'report'],
+  open: ['', 'doc', 'download', 'consent', 'decline', 'ask', 'comments', 'request-extension', 'unlock', 'ask-code', 'mute', 'report'],
+  copy: ['', 'doc', 'download', 'ask', 'comments', 'unlock', 'ask-code', 'mute', 'report'],
   taken: ['', 'take-over', 'unlock', 'ask-code', 'mute', 'report'],
   removed: ['', 'report'],
 };
@@ -614,6 +617,17 @@ export function memberLinks(email: string): { label: string; url: string; note: 
        AND ((e.status='sent' AND r.status IN ('sent','viewed')) OR (r.role='cc' AND r.status='completed' AND e.status IN ('sent','completed')))
      ORDER BY e.updated_at DESC, m.position LIMIT 50`, email)
     .map((x) => ({ label: x.subject, url: `${baseUrl()}/sign/${x.token}`, note: `from ${x.sender} · ${x.role === 'cc' ? `a copy for ${x.group_name}` : `waiting for ${x.group_name}: any one of you can ${groupDoes(x.role)} it`}` }));
+}
+
+/**
+ * For an email that came back (routes-bounces.ts): the member of a group on this envelope whose address it was, with
+ * the sentence that tells the sender what that means. Null when the address is no member's. The group's own row is
+ * not marked as bounced, because the other members can still be reached.
+ */
+export function bouncedMember(envelopeId: string, email: string): { name: string; line: string } | null {
+  const m = get(`SELECT m.name, r.group_name FROM recipient_members m JOIN recipients r ON r.id=m.recipient_id
+    WHERE m.envelope_id=? AND m.email=? COLLATE NOCASE AND m.removed_at IS NULL AND r.group_name IS NOT NULL ORDER BY m.position LIMIT 1`, envelopeId, email);
+  return m ? { name: m.name, line: `This address belongs to ${m.name}, a member of ${m.group_name}. The other members of ${m.group_name} were emailed separately and are not affected, and any of them can still act. No reminders go to this address. To fix it, open the envelope, choose Edit envelope, take ${m.name} out of the group and add them again with the right address: they are emailed a new link when you save. Or copy their link from the envelope page and send it to them yourself.` } : null;
 }
 
 /** The same for the list of documents sent to someone who is signed in (GET /inbox). */

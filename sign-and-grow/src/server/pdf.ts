@@ -13,7 +13,10 @@ import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
 import { strikeLines } from '../lib/strike.ts';
 import { certName, certGroup } from '../lib/groups.ts';
 import { labelOf } from '../lib/bysender.ts';
+// A witness is listed under the person they witnessed, with their statement (src/server/witness.ts).
+import { witnessOrder, witnessCertLines } from './witness.ts';
 import { drawStamp, stampFor, stampForMark } from './stamp.ts';
+import { hiddenOf } from './logic.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -583,7 +586,10 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     const o = f.recipient_id ? ctx.recipients.get(f.recipient_id) : null;
     return !opts.viewer || !o || o.id === opts.viewer || o.status === 'completed' || f.readonly ? f : { ...f, value: f.prefill ?? null };
   };
-  const fields = e.fields.map(asSeen);
+  // A field that is not shown (its "Only show when" answer was not given) prints nothing at all (src/server/logic.ts).
+  const seen = e.fields.map(asSeen);
+  const hide = hiddenOf(seen);
+  const fields = seen.filter((f: any) => !hide.has(f.id));
 
   for (const d of e.documents) {
     const pages = await flatPages(doc, d.sha256);

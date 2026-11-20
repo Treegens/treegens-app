@@ -5,6 +5,8 @@ import { supportTick } from './routes-support.ts';
 import { retryMail } from './mail.ts';
 import { retryTexts } from './sms.ts';
 import { forgetOldBounces } from './bounces.ts';
+import { twoStepTick } from './twostep.ts';
+import { flushComments } from './routes-comments.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -21,5 +23,10 @@ export async function tick() {
     // Addresses that bounced, and "try later" days, older than BOUNCE_WARN_DAYS (bounces.ts).
     bounces_forgotten: forgetOldBounces(),
     // Visitors of a public form who were told to come back once it can take their signature, emailed when it can.
-    forms_ready: await formVisitorsReady() };
+    forms_ready: await formVisitorsReady(),
+    // Resets of two-step login by email: announced once a day, and switched off when their day has come (twostep.ts).
+    two_step: await twoStepTick(),
+    // Emails about comments that waited, because one went to the same person about the same envelope minutes before,
+    // or because sending was paused (routes-comments.ts).
+    comments: await flushComments() };
 }

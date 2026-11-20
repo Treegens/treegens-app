@@ -314,6 +314,27 @@ CREATE TABLE IF NOT EXISTS template_members (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, can_change INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (template_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS template_members_user ON template_members(account_id, user_id);
+-- Questions and comments on a document while it is out (src/server/comments.ts). Not printed on the document and not
+-- part of what is signed. A thread is for everyone on the envelope (private 0), or between the sender's side and one
+-- person on it (private 1: recipient_id and party, which says which person on that row, see partyOf). Everything
+-- goes with the envelope. comment_news is who is to be emailed about which comment, and when they were.
+CREATE TABLE IF NOT EXISTS comment_threads (
+  id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE,
+  private INTEGER NOT NULL DEFAULT 1, recipient_id TEXT, party TEXT, party_name TEXT,
+  document_id TEXT, page INTEGER, x REAL, y REAL, at TEXT NOT NULL, settled_at TEXT, settled_by TEXT
+);
+CREATE INDEX IF NOT EXISTS comment_threads_env ON comment_threads(envelope_id);
+CREATE TABLE IF NOT EXISTS comments (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES comment_threads(id) ON DELETE CASCADE, envelope_id TEXT NOT NULL,
+  by_sender INTEGER NOT NULL DEFAULT 0, author TEXT NOT NULL, recipient_id TEXT, party TEXT, name TEXT NOT NULL, email TEXT,
+  body TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS comments_env ON comments(envelope_id, author);
+CREATE TABLE IF NOT EXISTS comment_news (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE,
+  comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE, audience TEXT NOT NULL, at TEXT NOT NULL, mailed_at TEXT, dropped TEXT
+);
+CREATE INDEX IF NOT EXISTS comment_news_env ON comment_news(envelope_id, audience);
 -- Two-step login (src/server/twostep.ts). two_step_pending: a sign-in that passed its first step (or typed a wrong
 -- password for a login that has two-step login: password_ok says which, and nothing outside the server ever does) and
 -- waits for the code. id is the fingerprint of a secret in an HttpOnly cookie of that browser, so only that browser
@@ -526,6 +547,11 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['support_requests', 'tz', 'TEXT'],
   // The older request this one continues: a reply that came after the time for reopening had passed.
   ['support_requests', 'follows', 'TEXT'],
+  // How the first message came in, so the people who answer are told who wrote it: 'signed_in' (signed in under
+  // the address as a confirmed one), 'link' (through the private link we emailed to it), 'form' (anyone, or someone
+  // signed in under another address), 'software' (an alert). Empty on rows from before (fillOldRequests in
+  // src/server/routes-support.ts fills them in).
+  ['support_requests', 'came_by', 'TEXT'],
   // What the latest change to an envelope was when it was not a save from the editor: a quick correction of one
   // person, a signer passing the document on or fixing their name, or sending. It finishes the sentence that starts
   // with edited_by ("passed this document on to Mary Deputy"), and is empty after an ordinary save.
@@ -671,6 +697,28 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['users', 'two_step_reset_at', 'TEXT'],
   ['users', 'two_step_reset_noticed_at', 'TEXT'],
   ['accounts', 'two_step_required_at', 'TEXT'],
+  // A witness for one signer (src/server/witness.ts, rules in src/lib/witness.ts). witness_for: the recipient they
+  // witness. named_by_signer: that signer names them on the signing page. signer_named_at: when the signer named the
+  // person who is in the place now (empty when the sender chose them), witness_names how often a name was given.
+  // witness_said_at, witness_statement and witness_saw: when the witness ticked their statement, its words exactly as
+  // ticked, and which signature it was about (the signer's completed_at then). witness_absent_at: they said "I was not
+  // there". witness_marks: "address", "device" or "network" when they witnessed with the signer's email address, browser,
+  // or internet address and browser. device_hash: a keyed fingerprint of the browser cookie a signer with a witness and
+  // the witness finished in, kept only for that comparison.
+  ['recipients', 'witness_for', 'TEXT'],
+  ['recipients', 'named_by_signer', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'signer_named_at', 'TEXT'],
+  ['recipients', 'witness_names', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'witness_said_at', 'TEXT'],
+  ['recipients', 'witness_statement', 'TEXT'],
+  ['recipients', 'witness_saw', 'TEXT'],
+  ['recipients', 'witness_absent_at', 'TEXT'],
+  ['recipients', 'witness_marks', 'TEXT'],
+  ['recipients', 'device_hash', 'TEXT'],
+  // Conditional fields and formulas (src/server/logic.ts). show_when: JSON {field, is, value}, the field of the same
+  // person this one depends on, by its id. formula: the text of the formula with the fields it uses as {id}.
+  ['fields', 'show_when', 'TEXT'],
+  ['fields', 'formula', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

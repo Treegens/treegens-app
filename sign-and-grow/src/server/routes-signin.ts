@@ -219,10 +219,12 @@ route('GET', '/auth/:provider/callback', async (c) => {
     }
   }
   // Everything a password sign-in does from here on: a closing login comes back, the invitation, the workspace.
-  Object.assign(note, await signInAs(c, u, row.invite));
   // A code only makes the plan of a new workspace free. Someone who already had a login is told it was not used.
   if (row.code) note.code_unused = true;
-  return done(c, row, note);
+  const r = await signInAs(c, u, row.invite, { next: safeNext(row.next), note, via: p.name });
+  // Two-step login is on: no session yet. The second screen asks for the code, and says what happened here after it.
+  if ('two_step' in r) return redirect('/login/two-step');
+  return done(c, row, Object.assign(note, r));
 }, 'public');
 
 // ---- Settings: ways to sign in ---------------------------------------------------------------

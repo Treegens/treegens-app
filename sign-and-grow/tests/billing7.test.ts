@@ -259,6 +259,25 @@ test('the stop page and the emails quote the price this account is charged, not 
   assert.match(lastMail(p.email, 'Your Grove plan continues')!, /The next charge is \$12\.00 on/);
 });
 
+test('a production server without a pinned provider API version says so loudly, once', async () => {
+  const p = await person('Version');
+  const was = { env: process.env.NODE_ENV, version: process.env.STRIPE_API_VERSION };
+  const said: string[] = [];
+  const err = console.error;
+  console.error = (...a: any[]) => void said.push(a.join(' '));
+  process.env.NODE_ENV = 'production';
+  delete process.env.STRIPE_API_VERSION;
+  try {
+    await p.c.post('/billing/checkout');
+    await p.c.post('/billing/checkout');
+  } finally {
+    console.error = err;
+    process.env.NODE_ENV = was.env;
+    if (was.version !== undefined) process.env.STRIPE_API_VERSION = was.version;
+  }
+  assert.equal(said.filter((s) => s.includes('STRIPE_API_VERSION IS NOT SET')).length, 1, JSON.stringify(said));
+});
+
 // ---- The Plan page --------------------------------------------------------------------------------------------
 
 test('a paused plan is told apart from a failed payment, and a free code that ended reads as a plan that ended', async () => {
@@ -315,6 +334,7 @@ test('a plain member cannot stop the team plan with the card, as they cannot in 
   c.ip = '203.0.113.241';
   const r = await c.post('/public/billing/stop-by-card', { email: 'member.seven@seven.example', last4: '4242' });
   assert.equal(r.status, 404, JSON.stringify(r.data));
+  assert.match(r.data.error, /only be stopped here with the address of one of its owners or admins/);
   assert.equal(acct(owner.id).cancel_at, null);
   assert.ok(!subjects(owner.email).some((s) => /is cancelled/.test(s)));
   // The owner can.

@@ -1,0 +1,19 @@
+/* Two-step login: the setup, the recovery codes and the second screen at sign-in (src/components/TwoStep.tsx). */
+.twostep .btn { min-height: 44px; white-space: normal; text-align: center; }
+.twostep input[type='checkbox'] { width: 22px; height: 22px; }
+.twostep .setting-row { min-height: 44px; align-items: center; }
+.ts-code { font-family: var(--mono, ui-monospace, monospace); font-size: 20px; letter-spacing: 0.12em; min-height: 48px; }
+.ts-secret { font-family: var(--mono, ui-monospace, monospace); font-size: 16px; letter-spacing: 0.04em; background: #fbfaf6; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; word-break: break-all; max-width: 100%; }
+.ts-codes { list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px; padding: 14px 16px; margin: 12px 0; background: #fbfaf6; border: 1px dashed var(--line); border-radius: 10px; font-size: 16px; }
+.ts-rules { background: #f6f3ea; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+.ts-rules ul.rules { margin: 8px 0; }
+.ts-list { list-style: none; margin: 0; padding: 0; }
+.ts-list > li { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--line); }
+.ts-list > li:first-child { border-top: 0; }
+.ts-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+@media (max-width: 480px) { .ts-codes { grid-template-columns: 1fr 1fr; padding: 12px; gap: 6px 10px; font-size: 15px; } }
+@media print {
+  body:has(.ts-codes) * { visibility: hidden; }
+  body:has(.ts-codes) .ts-codes, body:has(.ts-codes) .ts-codes * { visibility: visible; }
+  .ts-codes { position: absolute; top: 0; left: 0; border: 0; }
+}

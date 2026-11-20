@@ -33,6 +33,10 @@ export function cutEarlierAccess(userId: string): string[] {
   run('DELETE FROM identities WHERE user_id=? AND vouched=0', userId);
   run('DELETE FROM sessions WHERE user_id=?', userId);
   run('DELETE FROM api_keys WHERE user_id=?', userId);
+  // Two-step login set up before then was set up by the same nobody, and would keep the owner out with a stranger's
+  // phone. It goes as clearTwoStep() in twostep.ts clears it (written out here: auth.ts imports nothing of that file).
+  run('UPDATE users SET two_step_secret=NULL, two_step_on_at=NULL, two_step_last_step=NULL, two_step_codes=NULL, two_step_new_secret=NULL, two_step_new_at=NULL, two_step_wrong=0, two_step_wrong_known=0, two_step_paused_until=NULL, two_step_reset_at=NULL, two_step_reset_noticed_at=NULL WHERE id=?', userId);
+  for (const t of ['two_step_devices', 'two_step_pending', 'two_step_resets']) run(`DELETE FROM ${t} WHERE user_id=?`, userId);
   return gone;
 }
 

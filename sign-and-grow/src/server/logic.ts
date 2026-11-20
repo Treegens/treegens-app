@@ -1,0 +1,247 @@
+// Conditional fields and formulas on the server. The rules themselves are plain functions in src/lib/logic.ts, which
+// the signing page uses too. Here they are checked when a sender saves (a loop, a field of another person, a formula
+// that cannot be read are refused in words that name the fields), and worked out again from what is stored whenever
+// a signer saves or finishes. The server decides: a hidden field is not required and keeps no answer, and a
+// calculated field holds what the server worked out, whatever the browser sent for either.
+import { all, run } from './db.ts';
+import { bad, str } from './util.ts';
+import {
+  ruleOf, parseFormula, FormulaError, refsOf, renameRefs, workOut, loopsIn, CONDS, CONDS_FOR, NEEDS_VALUE, RULE_VALUE_MAX, ALWAYS_SHOWN,
+  readNumber, ruleWords, formulaWords, COND_WORDS, logicKey,
+} from '../lib/logic.ts';
+
+const TYPE_WORD: Record<string, string> = { checkbox: 'tick box', radio: 'radio button', dropdown: 'choice', text: 'text', number: 'number', date: 'date', attachment: 'attachment', company: 'company', title: 'job title', signature: 'signature', initials: 'initials', full_name: 'full name', email: 'email', date_signed: 'date signed' };
+/** A field as people know it: its label, or what it is and where. */
+export const nameOf = (f: any): string => (f?.label ? String(f.label) : `${TYPE_WORD[f?.type] || 'unnamed'} field on page ${Number(f?.page || 0) + 1}`);
+const fold = (s: any) => String(s ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+
+type Entry = { fid: string; f: any; rid: string | null; which: string };
+
+/**
+ * Saves the "show_when" and "formula" of every field writeContent (src/server/envelopes.ts) has just written, inside
+ * the same transaction, so a refusal saves nothing at all. A field names the one it depends on, and a formula the
+ * fields it uses, by the id the request gave that field or by its label. They are stored by the field's own id.
+ * Left out, a field has neither. Then everything is worked out again from what is stored (settleLogic).
+ */
+export function saveLogic(e: any, entries: Entry[]) {
+  const stored = new Map<string, Entry>(entries.map((x) => [x.fid, x]));
+  const given = new Map<string, Entry>();
+  for (const x of entries) if (x.f?.id != null && x.f.id !== '') given.set(String(x.f.id), x);
+  const label = (x: Entry) => `'${nameOf({ ...x.f, page: Number(x.f.page) || 0 })}'`;
+  // The people as this save wrote them, so someone added in the same request is called by their name.
+  let people: Map<string, string> | null = null;
+  const who = (rid: string | null) => (people ??= new Map(all('SELECT id, name, role_name FROM recipients WHERE envelope_id=?', e.id).map((r: any) => [r.id, r.name || r.role_name || '']))).get(rid || '') || 'someone';
+  const NO = ' Nothing was saved.';
+  // A field the request names: by the id it gave, the id it is stored under, or else by its label when exactly one
+  // field (of the kind that is allowed there) has it.
+  const find = (k: string, ok: (x: Entry) => boolean, what: string, whose: string): Entry => {
+    const hit = given.get(k) || stored.get(k);
+    if (hit) return hit;
+    const named = entries.filter((x) => fold(x.f?.label) === fold(k) && fold(k) !== '');
+    const fits = named.filter(ok);
+    if (fits.length === 1) return fits[0];
+    if (fits.length > 1) throw bad(`${whose} ${what} "${str(k, 80)}", and ${fits.length} fields have that label. Give them different labels, or name the field by its id.${NO}`);
+    throw bad(`${whose} ${what} "${str(k, 80)}", and no field on this envelope has that id or label.${named.length ? ` The field called that is not one that can be used here.` : ''}${NO}`);
+  };
+  const out = new Map<string, { rule: any; formula: string | null }>();
+  for (const x of entries) {
+    const { f, which } = x;
+    let rule: any = null, formula: string | null = null;
+    const w = f?.show_when;
+    if (w != null && w !== '' && w !== false) {
+      if (typeof w !== 'object' || Array.isArray(w)) throw bad(`${which}: "show_when" must be an object like {"field": "f1", "is": "checked"}, or null for a field that is always shown.${NO}`);
+      if (ALWAYS_SHOWN(f.type)) throw bad(`${which} is a ${f.type === 'note' ? 'note' : 'strike-out'}: the sender's own wording, which is always on the page. It cannot have "show_when".${NO}`);
+      if (w.field == null || w.field === '') throw bad(`${which}: "show_when" names no field. Say which field of the same person it depends on, in "field".${NO}`);
+      const p = find(String(w.field), (y) => y.rid === x.rid && !!CONDS_FOR[y.f?.type], 'is shown when', `${which}`);
+      if (p.fid === x.fid) throw bad(`${which} is shown when it has an answer itself, which can never happen. Choose another field.${NO}`);
+      if (p.rid !== x.rid) throw bad(`${which} belongs to ${who(x.rid)}, and the field it depends on, ${label(p)}, belongs to ${p.rid ? who(p.rid) : 'nobody'}. A field can only depend on an answer of the same person, because what someone else fills in is not known while they sign.${NO}`);
+      const allowed = CONDS_FOR[p.f.type];
+      if (!allowed) throw bad(`${which} depends on ${label(p)}, a ${TYPE_WORD[p.f.type] || p.f.type} field. A field can only depend on a tick box, a radio button, a choice, a text, a number, a date or an attachment.${NO}`);
+      if (!(CONDS as readonly string[]).includes(w.is) || !allowed.includes(w.is))
+        throw bad(`${which}: "is" is ${str(JSON.stringify(w.is ?? null), 40)}, and for ${label(p)}, a ${TYPE_WORD[p.f.type]} field, it can be ${allowed.map((c) => `"${c}" (${COND_WORDS[c](p.f.type)})`).join(', ')}.${NO}`);
+      let value: string | null = null;
+      if (NEEDS_VALUE.includes(w.is)) {
+        if (w.value == null || typeof w.value === 'object' || String(w.value).trim() === '') throw bad(`${which}: "is": "${w.is}" compares ${label(p)} with a value, and "value" is missing.${NO}`);
+        value = String(w.value).trim();
+        if (value.length > RULE_VALUE_MAX) throw bad(`${which}: the value in "show_when" is ${value.length} characters long, and the most it can be is ${RULE_VALUE_MAX}.${NO}`);
+        if (p.f.type === 'number' && !readNumber(value)) throw bad(`${which}: "${str(value, 60)}" is not a number, so ${label(p)} cannot be compared with it. Write it like 1000 or 12.5.${NO}`);
+      }
+      rule = { field: p.fid, is: w.is, ...(value != null ? { value } : {}) };
+    }
+    if (f?.formula != null && f.formula !== '') {
+      if (typeof f.formula !== 'string') throw bad(`${which}: "formula" must be text, like "{Quantity} * {Unit price}".${NO}`);
+      if (f.type !== 'number') throw bad(`${which} is a ${TYPE_WORD[f.type] || f.type} field. Only a number field can be worked out from a formula.${NO}`);
+      let ast;
+      try {
+        ast = parseFormula(f.formula);
+      } catch (err: any) {
+        if (err instanceof FormulaError) throw bad(`${which}: the formula cannot be read. ${err.message}${NO}`);
+        throw err;
+      }
+      const ids = new Map<string, string>();
+      for (const k of refsOf(ast)) {
+        const y = find(k, (z) => z.f?.type === 'number', 'is worked out from', `${which}`);
+        if (y.f?.type !== 'number') throw bad(`${which} is worked out from ${label(y)}, a ${TYPE_WORD[y.f?.type] || y.f?.type} field. A formula can only use number fields.${NO}`);
+        ids.set(k, y.fid);
+      }
+      formula = renameRefs(f.formula, (k) => ids.get(k) || k).trim();
+    }
+    out.set(x.fid, { rule, formula });
+  }
+  // Rules and formulas that go round in a circle could never be shown or worked out. Refused, naming every field.
+  const view = entries.map((x) => ({ id: x.fid, type: x.f.type, show_when: out.get(x.fid)!.rule, formula: out.get(x.fid)!.formula }));
+  const loops = loopsIn(view);
+  if (loops.length) {
+    // Each field in the loop depends on the one after it, and the last one on the first.
+    const loop = loops[0];
+    const said = loop.map((id, i) => {
+      const next = loop[(i + 1) % loop.length];
+      return `${label(stored.get(id)!)} ${out.get(id)!.rule?.field === next ? 'is shown depending on' : 'is worked out from'} ${label(stored.get(next)!)}`;
+    });
+    throw bad(`These fields depend on each other in a circle, so none of them could ever be shown or worked out: ${said.join('; ')}. Change one of the rules or formulas so the circle is broken.${NO}`, 400, { code: 'logic_loop', fields: loop });
+  }
+  for (const [fid, v] of out)
+    if (v.rule || v.formula) run('UPDATE fields SET show_when=?, formula=? WHERE id=?', v.rule ? JSON.stringify(v.rule) : null, v.formula, fid);
+  // A calculated field is never typed into, so it is never required, never read only, and holds no wording of the
+  // sender's: its value is whatever it works out to.
+  run('UPDATE fields SET required=0, readonly=0, prefill=NULL WHERE envelope_id=? AND formula IS NOT NULL', e.id);
+  settleLogic(e.id);
+}
+
+/** The rule and formula columns of a field read back, for a field as loadEnvelope gives it. */
+const fieldsOf = (envelopeId: string) => all('SELECT * FROM fields WHERE envelope_id=?', envelopeId).map((f: any) => ({ ...f, options: f.options ? JSON.parse(f.options) : [], show_when: ruleOf(f) }));
+
+/**
+ * Works out again, from what is stored, which fields are shown and what every formula comes to, for everyone who has
+ * not finished, and writes it down. A field that is not shown keeps no answer: it goes back to what the sender put
+ * there (often nothing), and a signature or a tick in it is taken away. A calculated field holds its result.
+ *
+ * What someone else fills in only counts for a formula once that person has finished; until then it counts as
+ * empty, because it can still change. Someone who has finished keeps exactly what they signed: nothing of theirs is
+ * changed here (the statement itself checks, so a save that crosses their Finish cannot either). `acting` is the
+ * person saving or finishing right now, who is worked out even though their Finish has just been claimed.
+ * Returns the fields of `acting` that are not shown, so the checks at Finish skip them.
+ */
+export function settleLogic(envelopeId: string, acting?: string | null, fields?: any[]): Set<string> {
+  const list = fields || fieldsOf(envelopeId);
+  const hiddenMine = new Set<string>();
+  if (!list.some((f: any) => f.formula || ruleOf(f))) return hiddenMine;
+  const status = new Map<string, string>(all('SELECT id, status FROM recipients WHERE envelope_id=?', envelopeId).map((r: any) => [r.id, r.status]));
+  const done = (rid: string | null) => !!rid && status.get(rid) === 'completed';
+  const owners = new Set<string>(list.filter((f: any) => f.recipient_id && (f.formula || ruleOf(f))).map((f: any) => f.recipient_id));
+  for (const R of owners) {
+    if (R !== acting && done(R)) continue;
+    const view = list.map((f: any) => (f.recipient_id && f.recipient_id !== R && !f.readonly && !done(f.recipient_id) ? { ...f, value: null } : f));
+    const o = workOut(view, { stored: (f) => f.recipient_id !== R, name: nameOf });
+    for (const f of list) {
+      if (f.recipient_id !== R) continue;
+      const hidden = o.hidden.has(f.id);
+      if (hidden && R === acting) hiddenMine.add(f.id);
+      let next = f.value ?? null;
+      if (f.formula && f.type === 'number') next = hidden ? null : o.calc.get(f.id)?.text ?? null;
+      else if (hidden && !f.readonly) next = f.prefill ?? null;
+      if ((next ?? null) === (f.value ?? null)) continue;
+      f.value = next;
+      // Never over an answer of someone who has finished, unless it is the person finishing in this very moment.
+      run(`UPDATE fields SET value=? WHERE id=?${R === acting ? '' : " AND (SELECT status FROM recipients WHERE id=?)!='completed'"}`, next, f.id, ...(R === acting ? [] : [R]));
+    }
+  }
+  return hiddenMine;
+}
+
+/** A browser's answer as applyValues stores it, for working out what is shown before anything is stored. */
+const asStored = (f: any, v: any) => {
+  const s = str(v, 4000);
+  return f.type === 'checkbox' || f.type === 'radio' || f.type === 'signature' || f.type === 'initials' ? (s ? '1' : '') : s;
+};
+
+/**
+ * The fields of recipient `r` that are not shown once `values` (a Finish or a save from their screen) is applied.
+ * Used before a Finish is claimed, so a signature field that the person's own answers hide is not asked for.
+ */
+export function hiddenAfter(e: any, r: any, values: Record<string, any>): Set<string> {
+  if (!e.fields.some((f: any) => ruleOf(f))) return new Set();
+  const view = e.fields.map((f: any) => (f.recipient_id === r.id && !f.readonly && !f.formula && values && f.id in values ? { ...f, value: asStored(f, values[f.id]) } : f));
+  const o = workOut(view, { stored: (f) => f.recipient_id !== r.id });
+  const mine = new Set<string>(view.filter((f: any) => f.recipient_id === r.id).map((f: any) => f.id));
+  return new Set([...o.hidden].filter((id) => mine.has(id)));
+}
+
+/**
+ * The fields that are not shown on pages made of these fields as they stand (the signed PDF, a copy for one person,
+ * the sender's progress counts): calculated values are taken as stored, never worked out again.
+ */
+export function hiddenOf(fields: any[]): Set<string> {
+  if (!fields.some((f: any) => ruleOf(f))) return new Set();
+  return workOut(fields, { stored: () => true }).hidden;
+}
+
+/**
+ * The same for one recipient's signing screen: other people's fields as that screen shows them (what someone who has
+ * not finished filled in is not shown yet, only what the sender put there).
+ */
+export function hiddenFor(e: any, viewerId: string): Set<string> {
+  const done = new Set<string>(e.recipients.filter((r: any) => r.status === 'completed').map((r: any) => r.id));
+  return hiddenOf(e.fields.map((f: any) => (f.recipient_id && f.recipient_id !== viewerId && !done.has(f.recipient_id) && !f.readonly ? { ...f, value: f.prefill ?? null } : f)));
+}
+
+/** Copies the rules and formulas onto the fields of a copy (templates, cloning, bulk send, public forms). */
+export function copyLogic(src: any, fmap: Map<string, string>, eid: string, values?: Record<string, any> | null) {
+  for (const f of src.fields) {
+    const w = ruleOf(f);
+    if (!w && !f.formula) continue;
+    const rule = w && fmap.has(w.field) ? { ...w, field: fmap.get(w.field) } : null;
+    const formula = f.formula ? renameRefs(f.formula, (k) => fmap.get(k) || k) : null;
+    run('UPDATE fields SET show_when=?, formula=? WHERE id=?', rule ? JSON.stringify(rule) : null, formula, fmap.get(f.id));
+  }
+  if (values) fillValues(src, fmap, values);
+  settleLogic(eid);
+}
+
+/**
+ * A bulk send row that fills fields of the template (a column named like a field): the value is the sender's, like
+ * a prefilled value, so the signer starts with it and a rule that depends on it shows or hides from the first look.
+ * `values` is keyed by the template field's id or label. A value for a field that cannot be filled by the sender,
+ * or that is the template's own fixed wording, is refused for the row.
+ */
+function fillValues(src: any, fmap: Map<string, string>, values: Record<string, any>) {
+  const FILLABLE = ['text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown'];
+  for (const [k, raw] of Object.entries(values)) {
+    // A column names a field by its label (or id), or a group of radio buttons by the group's name.
+    const group = src.fields.filter((f: any) => f.type === 'radio' && fold(f.group_name) === fold(k) && fold(k) !== '');
+    const hits = group.length ? group : src.fields.filter((f: any) => f.id === k || (fold(f.label) === fold(k) && fold(k) !== ''));
+    if (!hits.length) throw bad(`The column "${str(k, 80)}" names no field of the template. Use the label of a field the sender fills in, or leave the column out.`);
+    if (hits.length > 1 && !group.length) throw bad(`The column "${str(k, 80)}" fits ${hits.length} fields of the template. Give them different labels.`);
+    if (group.length && str(raw).trim() && !group.some((f: any) => fold(f.label) === fold(raw))) throw bad(`The column "${str(k, 80)}" holds "${str(raw, 80)}", which is not one of its choices: ${group.map((f: any) => f.label).filter(Boolean).join(', ')}.`);
+    for (const f of hits) {
+      if (!FILLABLE.includes(f.type) || f.formula) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which ${f.formula ? 'is worked out by itself' : 'only its signer fills in'}. Leave the column out.`);
+      if (f.readonly && f.value) throw bad(`The column "${str(k, 80)}" is for ${nameOf(f)}, which holds the template's own wording and cannot be changed by a row.`);
+      let v = str(raw, 4000).trim();
+      if (f.type === 'checkbox') v = /^(1|yes|y|true|x|ticked|checked|ja|oui|si|sí)$/i.test(v) ? '1' : '';
+      if (f.type === 'radio') v = group.length ? (fold(v) === fold(f.label) ? '1' : '') : v && !/^(0|no|n|false)$/i.test(v) ? '1' : '';
+      if (f.type === 'dropdown' && v && !(f.options || []).includes(v)) throw bad(`The column "${str(k, 80)}" holds "${str(v, 80)}", which is not one of the choices of ${nameOf(f)}: ${(f.options || []).join(', ')}.`);
+      if (f.type === 'number' && v && !readNumber(v)) throw bad(`The column "${str(k, 80)}" holds "${str(v, 80)}", which does not read as a number.`);
+      run('UPDATE fields SET value=?, prefill=? WHERE id=?', v || null, f.readonly ? null : v || null, fmap.get(f.id));
+    }
+  }
+}
+
+/** What a correction changed in the rules and formulas, in words for the audit trail and for the people told. */
+export function logicChanges(a: any, b: any): string[] {
+  const out: string[] = [];
+  const before = new Map<string, any>(a.fields.map((f: any) => [f.id, f]));
+  const byB = new Map<string, any>(b.fields.map((f: any) => [f.id, f]));
+  const byA = before;
+  const rule = (f: any, by: Map<string, any>) => {
+    const w = ruleOf(f);
+    return w ? ruleWords(w, by.get(w.field), nameOf(by.get(w.field))) : 'Always shown';
+  };
+  for (const f of b.fields) {
+    const o = before.get(f.id);
+    if (!o || logicKey(o) === logicKey(f)) continue;
+    const where = `'${nameOf(f)}' on page ${f.page + 1}`;
+    if (JSON.stringify(ruleOf(o)) !== JSON.stringify(ruleOf(f))) out.push(`When ${where} is shown changed. Before: ${rule(o, byA)}. Now: ${rule(f, byB)}.`);
+    if ((o.formula || '') !== (f.formula || '')) out.push(!f.formula ? `${where} is no longer worked out from a formula.` : `${where} is now worked out as ${formulaWords(f.formula, (id) => nameOf(byB.get(id)))}${o.formula ? `, not ${formulaWords(o.formula, (id) => nameOf(byA.get(id)))}` : ''}.`);
+  }
+  return out;
+}

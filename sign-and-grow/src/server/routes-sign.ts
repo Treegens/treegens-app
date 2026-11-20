@@ -3,7 +3,7 @@ import { get, run, readBlob } from './db.ts';
 import { bad, hmac, now, str, rateLimit, safeEqual, fmtCode, HttpError } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
 import { handDevice } from './handover.ts';
-import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, askSender, renameSelf, noteDeadLink, okImage } from './envelopes.ts';
+import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, renameSelf, noteDeadLink, okImage } from './envelopes.ts';
 import { fieldDisplayValue, senderZone } from './pdf.ts';
 import { validZone, clockIn, formatDateValue, momentText } from '../lib/dates.ts';
 import { storeUpload } from './routes-envelopes.ts';
@@ -22,6 +22,10 @@ import { labelOf } from '../lib/bysender.ts';
 import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup } from './groups.ts';
 // What happens around the certificate: later visits and the first look at the completed copy (evidence.ts).
 import { noteVisit, noteCopyOpened } from './evidence.ts';
+// A witness for one signer: what the page shows each of them, and what has to happen before Finish (witness.ts).
+import { witnessFacts, beforeFinish } from './witness.ts';
+// Fields of other people that their answers hide are not on this screen either (logic.ts).
+import { hiddenFor } from './logic.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -116,6 +120,8 @@ route('GET', '/sign/:token', (c) => {
   // A group's document: which group, what this member's link is to it, and who has taken it on (groupFacts in
   // groups.ts). Said only now, behind the access code, like everything else about the document.
   Object.assign(base.recipient, { group: groupFacts(e, r) });
+  // To a signer with a witness: who and how far. To a witness: whose signature, and the statement they would tick.
+  Object.assign(base.recipient, witnessFacts(e, r));
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   // A member whose colleague has the document, or who was taken out of the group, is told so and shown no more.
   if (r.member && (r.group_state === 'taken' || r.group_state === 'removed')) return { ...base, locked: false };
@@ -129,6 +135,7 @@ route('GET', '/sign/:token', (c) => {
   const byId = new Map<string, any>(e.recipients.map((x: any) => [x.id, x]));
   const signedBefore = String(r.signed_before || '').split('\n').filter(Boolean).pop() || null;
   const words = printedWords(e);
+  const hideOthers = hiddenFor(e, r.id);
   return {
     ...base,
     locked: false,
@@ -147,7 +154,7 @@ route('GET', '/sign/:token', (c) => {
     // value, and the name or address that a full name or email field prints, also for someone who only gets a copy
     // ('sender'), and a value its owner may still change ('start'). What another person filled in ('signer')
     // appears once that person has finished.
-    others: e.fields.filter((f: any) => f.recipient_id !== r.id).map((f: any) => {
+    others: e.fields.filter((f: any) => f.recipient_id !== r.id && !hideOthers.has(f.id)).map((f: any) => {
       const o = f.recipient_id ? byId.get(f.recipient_id) : null;
       const done = !f.recipient_id || o?.status === 'completed';
       return {
@@ -292,6 +299,8 @@ route('POST', '/sign/:token/complete', async (c) => {
   const body = await checkedBody(c);
   const { e, r, actor } = look(c);
   noteZone(e, r, body?.tz, actor);
+  // A witness the signer names is named first, and a witness's statement is ticked first (witness.ts).
+  beforeFinish(c, e, r);
   await completeRecipient(e, r, body, actor);
   const after = get('SELECT status, sheets FROM envelopes WHERE id=?', e.id);
   return { ok: true, envelope_status: after.status, impact: impactOf(after.sheets) };
@@ -327,11 +336,8 @@ route('POST', '/sign/:token/request-extension', async (c) => {
   await requestExtension(e, r, actor);
 }, 'public');
 
-route('POST', '/sign/:token/ask', async (c) => {
-  const { e, r, actor } = find(c);
-  rateLimit(`ask:${r.id}`, 5, 3600_000);
-  await askSender(e, r, (await c.body()).message, actor);
-}, 'public');
+// "Ask the sender a question" is a private comment now, with POST /sign/:token/ask kept as its old address
+// (routes-comments.ts): one way to ask, and the answer comes back where the question was asked.
 
 route('POST', '/sign/:token/mute', (c) => {
   const { e, r, actor } = find(c, false);

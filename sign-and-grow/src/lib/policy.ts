@@ -166,6 +166,12 @@ export const SUPPORT_MEDIAN_MIN = 10;
 /** How many messages a customer may add in 24 hours, to one request and from one address, so a link cannot be used to flood the people who answer. */
 export const SUPPORT_REPLIES_PER_REQUEST = 10;
 export const SUPPORT_REPLIES_PER_ADDRESS = 30;
+/**
+ * How many help requests may be written under one address by people who are not known to own it (not signed in
+ * under it as their confirmed address): in 24 hours, and open at once. Each one sends that address an email, so this
+ * is all a stranger can send to somebody's inbox through the form. The owner's own messages never count against it.
+ */
+export const SUPPORT_OTHERS_PER_ADDRESS = 3;
 
 // ---- What a signer agrees to before any field opens ------------------------------------------------
 // The signing screen shows these words, the server writes their version into the audit line when the signer agrees,

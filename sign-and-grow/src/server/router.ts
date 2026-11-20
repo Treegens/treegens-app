@@ -1,5 +1,6 @@
 import { authenticate, renewedCookie, type Auth } from './auth.ts';
 import { HttpError, bad, setOrigin, id } from './util.ts';
+import { twoStepGate } from './twostep.ts';
 import type { Actor } from './envelopes.ts';
 
 export type Ctx = {
@@ -84,6 +85,8 @@ const PERSON_ONLY: [RegExp, string][] = [
   [/^POST \/me\/email/, 'change the email address of a login, or say that it works again'],
   // Which browsers a person is signed in on, and signing them out, is for that person in a browser of theirs.
   [/^[A-Z]+ \/me\/sessions/, 'see or end where a person is signed in'],
+  // A second step that a key could switch off, reset or ask of a team would not be a second step (twostep.ts).
+  [/two-step/, 'see or change two-step login'],
   [/^(POST|PUT|PATCH|DELETE) \/billing\//, 'change the plan, pay or refund'],
   [/^[A-Z]+ \/operator\//, 'work the operator queue'],
 ];
@@ -123,6 +126,8 @@ export async function handle(req: Request): Promise<Response> {
           if (r.level === 'admin' && auth.scope !== 'admin' && !SEND_KEY_MAY.has(what))
             throw new HttpError(403, 'This API key has the "send" scope. It covers envelopes, templates, files, contacts, bulk sends and reports, but not account settings. An admin can create a key with the "admin" scope under Settings, API and webhooks.');
         }
+        // An account that asks everyone for two-step login opens nothing else to a person signed in without it.
+        twoStepGate(auth, `${r.method} ${r.path}`);
       }
       // Cookie sessions must come from our own pages. API keys are exempt.
       if (auth?.via === 'session' && req.method !== 'GET' && r.level !== 'public') {

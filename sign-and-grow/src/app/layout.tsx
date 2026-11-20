@@ -11,6 +11,7 @@ import './styles/qr.css';
 import './styles/signphone.css';
 import './styles/tplroles.css';
 import './styles/groups.css';
+import './styles/twostep.css';
 import type { Metadata, Viewport } from 'next';
 import { Toasts } from '@/components/ui';
 

@@ -5,7 +5,7 @@ import { sendMail } from './mail.ts';
 import { loadEnvelope, helpAsked, canBeStuck } from './envelopes.ts';
 import { sameEmail } from './credits.ts';
 import { isOperator } from './routes-trust.ts';
-import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS } from '../lib/policy.ts';
+import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS, SUPPORT_OTHERS_PER_ADDRESS } from '../lib/policy.ts';
 import { TOPIC_LABEL, firstName, whenText, knownZone } from '../lib/support.ts';
 
 // Help requests as tickets. Every request has a reference, a state the customer can see (open: waiting for us,
@@ -13,8 +13,10 @@ import { TOPIC_LABEL, firstName, whenText, knownZone } from '../lib/support.ts';
 // thread. The first message is on the request itself (support_requests.message); everything after it, and a line for
 // everything that was done, is in support_messages.
 //
-// These routes are for people. No API key may use them: the operator routes are refused for every key by the
-// router (PERSON_ONLY), and the ones for a signed-in customer are refused here (person()).
+// These routes are for people. No API key may act on them as anyone: the operator routes are refused for every key
+// by the router (PERSON_ONLY), the ones for a signed-in customer are refused here (person()), and so is the form
+// when it is sent with a key (writer()). The other public routes take no identity at all: the private link is the
+// only proof they use.
 
 // ---- Who answers -----------------------------------------------------------------------------------
 
@@ -85,9 +87,9 @@ function byLink(c: Ctx): any {
 
 const NO_REPLY = 'Please do not reply to this email: a reply does not reach your request.';
 // An email about a help request often goes to someone who only came to sign, and the pages promise those people no
-// marketing. mail.ts leaves the line that sells out of an email that carries a list of links, and an empty list is
-// one, so every email to the customer about a request ends with where it came from and nothing more.
-const PLAIN: { links: { label: string; url: string }[] } = { links: [] };
+// marketing. Marked as a help email, it ends with where it came from and nothing more: not the line that sells, and
+// not the one about signing documents, which this email is not about (mail.ts).
+const PLAIN = { links: [] as { label: string; url: string }[], help: true };
 const tzOf = (email: string): string | null => get('SELECT tz FROM users WHERE email=?', email)?.tz || null;
 const customerZone = (t: any): string | null => t.tz || tzOf(t.email);
 
@@ -130,6 +132,9 @@ function accountFacts(t: any) {
   };
 }
 
+// How the first message came in (support_requests.came_by), worked out for a row from before it was kept.
+const cameBy = (t: any): string => t.came_by || (isAlert(t) ? 'software' : t.verified ? (t.follows && !t.user_id ? 'link' : 'signed_in') : 'form');
+
 function forOperator(t: any, full = false) {
   const owner = ownerOf(t);
   const old = t.follows ? load(t.follows) : null;
@@ -138,16 +143,17 @@ function forOperator(t: any, full = false) {
     status: t.status, priority: priorityOf(t), at: t.at, updated_at: t.updated_at || t.at, due_at: t.status === 'open' ? t.due_at || null : null, late: isLate(t),
     owner: owner ? { id: owner.id, name: owner.name } : null, first_reply_at: t.first_reply_at || null, closed_at: t.closed_at || null, closed_how: t.closed_how || null,
     forget: !!t.forget, follows: old ? { id: old.id, reference: refOf(old) } : null,
-    // Whether the writer is known: signed in under their own confirmed address, signed in but writing for another
-    // or an unconfirmed address, or not signed in at all (anyone can type any address).
-    written: t.verified ? 'own' : t.user_id ? 'signed_in_other' : 'not_signed_in',
+    // Whether the writer is known: signed in under their own confirmed address, writing through the private link we
+    // emailed to the address (a follow-up of an old request), signed in but writing for another or an unconfirmed
+    // address, or not signed in at all (anyone can type any address).
+    written: cameBy(t) === 'link' ? 'link' : t.verified ? 'own' : t.user_id ? 'signed_in_other' : 'not_signed_in',
   };
   if (!full) return { ...base, replies: get("SELECT COUNT(*) n FROM support_messages WHERE request_id=? AND kind!='event'", t.id).n };
   return {
     ...base, ...accountFacts(t),
     // Everything, oldest first: messages both ways, internal notes, and what was done with who and when. A message
     // from the customer with nobody's login behind it came through the private link, so from their mailbox.
-    thread: [{ kind: 'customer', at: t.at, by: t.name || null, via: t.user_id ? 'app' : 'form', body: t.message },
+    thread: [{ kind: 'customer', at: t.at, by: t.name || null, via: cameBy(t) === 'link' ? 'link' : t.user_id || cameBy(t) === 'signed_in' ? 'app' : 'form', body: t.message },
       ...all('SELECT kind, by_id, by_name, body, at FROM support_messages WHERE request_id=? ORDER BY id', t.id).map((m) => ({ kind: m.kind, at: m.at, by: m.by_name, via: m.kind === 'customer' ? (m.by_id ? 'app' : 'link') : undefined, body: m.body }))],
   };
 }
@@ -174,23 +180,50 @@ route('GET', '/public/support', () => ({
 
 // ---- A new request ---------------------------------------------------------------------------------
 
-// How many messages an address has sent us in the last 24 hours, new requests and replies together. Counted in the
-// database, so a restart does not reset it and it holds whichever device the messages come from.
-const fromAddress = (email: string) => {
-  const since = new Date(Date.now() - 864e5).toISOString();
-  return get('SELECT COUNT(*) n FROM support_requests WHERE lower(email)=lower(?) AND at > ?', email, since).n
-    + get("SELECT COUNT(*) n FROM support_messages m JOIN support_requests s ON s.id=m.request_id WHERE lower(s.email)=lower(?) AND m.kind='customer' AND m.at > ?", email, since).n;
-};
+// Anyone can type any address into the form, so what is written under an address is counted in two parts, in the
+// database (a restart does not reset them, and they hold whichever device the messages come from).
+// What its owner writes: new requests from someone signed in under it as their confirmed address, and every message
+// added later, which only comes through the private link we emailed to it or from that same signed-in owner. A
+// stranger cannot add to this count, so a stranger can never shut the owner out.
+const NOT_ALERT = `NOT (ref IS NULL AND user_id IS NULL AND COALESCE(name, '')='${ALERT_NAME.replace(/'/g, "''")}')`;
+const since24 = () => new Date(Date.now() - 864e5).toISOString();
+const fromOwner = (email: string) =>
+  get(`SELECT COUNT(*) n FROM support_requests WHERE lower(email)=lower(?) AND verified=1 AND at > ? AND ${NOT_ALERT}`, email, since24()).n
+  + get("SELECT COUNT(*) n FROM support_messages m JOIN support_requests s ON s.id=m.request_id WHERE lower(s.email)=lower(?) AND m.kind='customer' AND m.at > ?", email, since24()).n;
+// What anyone else typed under it: each such request sends the address an email, so this small allowance is all
+// that a stranger can send to somebody's inbox through the form. It is counted over 24 hours and over the requests
+// still open whose writer is unknown (nothing came back through the link since), so it cannot be built up over days.
+const othersFull = (email: string) =>
+  get(`SELECT COUNT(*) n FROM support_requests WHERE lower(email)=lower(?) AND verified=0 AND at > ? AND ${NOT_ALERT}`, email, since24()).n >= SUPPORT_OTHERS_PER_ADDRESS
+  || get(`SELECT COUNT(*) n FROM support_requests s WHERE lower(email)=lower(?) AND verified=0 AND status!='closed' AND ${NOT_ALERT}
+      AND NOT EXISTS (SELECT 1 FROM support_messages m WHERE m.request_id=s.id AND m.kind='customer')`, email).n >= SUPPORT_OTHERS_PER_ADDRESS;
 const TOO_MANY = 'We already have a lot of messages from this address in the last 24 hours, and a person reads every one of them. To keep the queue usable for everyone, more can be added tomorrow.';
+// Said to whoever is stopped by the allowance for unknown writers. It names no number and nothing the owner wrote,
+// and it tells the owner, who may be the one stopped, the two ways that always reach us.
+const OTHERS_FULL = 'We already have several messages under this email address from people who were not signed in, and a person reads each of them. If this is your address, you can still reach us: open the link in our email to this address and add to your request there, or sign in under this address (once it is confirmed) and write again. If you lost our email, ask for the links again further down this page.';
 
-function openRequest(r: { email: string; name: string | null; topic: string; message: string; envelope_id?: string | null; user_id?: string | null; account_id?: string | null; verified: boolean; tz?: string | null; follows?: string | null }): any {
+function openRequest(r: { email: string; name: string | null; topic: string; message: string; envelope_id?: string | null; user_id?: string | null; account_id?: string | null; verified: boolean; tz?: string | null; follows?: string | null; came_by: 'signed_in' | 'link' | 'form' }): any {
   const sid = id('sup');
   // The reference is read out on the phone and typed into emails, so it is made of characters nobody can misread,
   // and it is kept with the request, so the queue, the emails and "Your requests" show the very same one.
   const priority = SUPPORT_URGENT_TOPICS.includes(r.topic) ? 'urgent' : 'normal';
-  run('INSERT INTO support_requests (id, ref, email, name, topic, message, envelope_id, user_id, account_id, at, updated_at, priority, due_at, verified, tz, follows) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    sid, shortCode(), r.email, r.name, r.topic, r.message, r.envelope_id ?? null, r.user_id ?? null, r.account_id ?? null, now(), now(), priority, dueFrom(priority), r.verified, r.tz ?? null, r.follows ?? null);
+  run('INSERT INTO support_requests (id, ref, email, name, topic, message, envelope_id, user_id, account_id, at, updated_at, priority, due_at, verified, tz, follows, came_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    sid, shortCode(), r.email, r.name, r.topic, r.message, r.envelope_id ?? null, r.user_id ?? null, r.account_id ?? null, now(), now(), priority, dueFrom(priority), r.verified, r.tz ?? null, r.follows ?? null, r.came_by);
   return load(sid);
+}
+
+// Who is writing on the form. It takes the identity of whoever is signed in, and the router does not check where a
+// public route was posted from. So a key, which is not a person, is refused, and a session counts only when the post
+// comes from our own pages: a page on another site must not file a request as the signed-in owner of an address.
+function writer(c: Ctx) {
+  if (c.auth?.via === 'api_key') throw new HttpError(403, 'An API key cannot write help requests. They are for people: send it from the help page, or without the key.');
+  if (c.auth?.via !== 'session') return;
+  const o = c.req.headers.get('origin');
+  let host = '';
+  try {
+    host = o ? new URL(o).host : new URL(c.origin).host;
+  } catch {}
+  if (host !== new URL(c.origin).host) throw new HttpError(403, 'Cross-site request blocked.');
 }
 
 // Tells the people who answer. The customer is named as "Name <address>" so that deleting an account finds this copy.
@@ -249,20 +282,22 @@ route('POST', '/public/support/about', async (c) => {
 // Open to everyone: signers, free users, former customers, and people who cannot log in.
 route('POST', '/public/support', async (c) => {
   rateLimit(`support:${c.ip}`, 8, 3600_000);
+  writer(c);
   const b = await c.body();
   const email = str(b.email || c.user?.email, 254).trim();
   const message = str(b.message, 5000).trim();
   if (!isEmail(email)) throw bad('Enter an email address we can reply to.');
   if (message.length < 10) throw bad('Tell us a little more so we can help on the first reply.');
-  // Every request sends an email to the address typed. The limit per address keeps the form from filling a
-  // stranger's inbox, whichever device the requests come from.
-  if (fromAddress(email) >= SUPPORT_REPLIES_PER_ADDRESS) throw bad(TOO_MANY, 429);
   const topic = SUPPORT_TOPICS.includes(b.topic) ? b.topic : 'other';
   const known = !!c.user?.email_verified && sameEmail(email, c.user.email);
+  // Every request sends an email to the address typed. The owner of the address has a limit of their own that
+  // nobody else can use up; everyone else shares a small one, so the form cannot fill a stranger's inbox, whichever
+  // device the requests come from.
+  if (known ? fromOwner(email) >= SUPPORT_REPLIES_PER_ADDRESS : othersFull(email)) throw known ? bad(TOO_MANY, 429) : new HttpError(429, OTHERS_FULL, { code: 'others_limit' });
   // Which document it is about: the security code the help link of a signing page or a signing email carries, or
   // else an envelope id. The request keeps the envelope's id either way, so the people who answer see it.
   const coded = aboutCode(b.code);
-  const t = openRequest({ email, name: str(b.name || c.user?.name, 120) || null, topic, message, envelope_id: coded?.e.id || str(b.envelope_id, 60) || null, user_id: c.user?.id ?? null, account_id: c.account?.id ?? null, verified: known, tz: knownZone(b.tz) || (known ? c.user.tz : null) });
+  const t = openRequest({ email, name: str(b.name || c.user?.name, 120) || null, topic, message, envelope_id: coded?.e.id || str(b.envelope_id, 60) || null, user_id: c.user?.id ?? null, account_id: c.account?.id ?? null, verified: known, tz: knownZone(b.tz) || (known ? c.user.tz : null), came_by: known ? 'signed_in' : 'form' });
   await announce(t);
   await acknowledge(t);
   // A problem with signing that names a document the writer is a recipient of also goes to its sender, who can
@@ -286,16 +321,25 @@ route('POST', '/public/support', async (c) => {
 async function customerReply(t: any, text: any, userId: string | null) {
   const message = str(text, 5000).trim();
   if (message.length < 2) throw bad('Write your message first.');
-  // The link, and a signed-in session, could otherwise be used to bury the people who answer.
-  const today = get("SELECT COUNT(*) n FROM support_messages WHERE request_id=? AND kind='customer' AND at > ?", t.id, new Date(Date.now() - 864e5).toISOString()).n;
-  if (today >= SUPPORT_REPLIES_PER_REQUEST) throw bad(`You have added ${SUPPORT_REPLIES_PER_REQUEST} messages to this request in the last 24 hours, and we have them all. A person reads everything you sent. You can add more tomorrow.`, 429);
-  if (fromAddress(t.email) >= SUPPORT_REPLIES_PER_ADDRESS) throw bad(TOO_MANY, 429);
   const by: By = { id: userId, name: t.name || 'The customer' };
+  const tooOld = t.status === 'closed' && t.closed_at && Date.parse(t.closed_at) + SUPPORT_REOPEN_DAYS * 864e5 < Date.now();
+  // Writing again on a request closed long ago starts one follow-up, not one for every message: while that one is
+  // open, what is written on the old link is added to it.
+  const next = tooOld ? get("SELECT * FROM support_requests WHERE follows=? AND status!='closed' ORDER BY at DESC LIMIT 1", t.id) : null;
+  if (next) return { fresh: (await customerReply(next, message, userId)).fresh, moved: true };
+  // The link, and a signed-in session, could otherwise be used to bury the people who answer. These count only what
+  // the owner of the address wrote, so nobody else can use them up. The answer to a question of ours is always
+  // taken: we are waiting for it, and the clock does not run again without it.
+  if (t.status !== 'waiting') {
+    const today = get("SELECT COUNT(*) n FROM support_messages WHERE request_id=? AND kind='customer' AND at > ?", t.id, since24()).n;
+    if (today >= SUPPORT_REPLIES_PER_REQUEST) throw bad(`You have added ${SUPPORT_REPLIES_PER_REQUEST} messages to this request in the last 24 hours, and we have them all. A person reads everything you sent. You can add more tomorrow.`, 429);
+    if (fromOwner(t.email) >= SUPPORT_REPLIES_PER_ADDRESS) throw bad(TOO_MANY, 429);
+  }
 
-  if (t.status === 'closed' && t.closed_at && Date.parse(t.closed_at) + SUPPORT_REOPEN_DAYS * 864e5 < Date.now()) {
+  if (tooOld) {
     // Whoever writes here holds the link from the mailbox or is signed in under the confirmed address, so the new
     // request is known to be theirs.
-    const fresh = openRequest({ email: t.email, name: t.name, topic: t.topic, message, envelope_id: t.envelope_id, user_id: userId, account_id: userId ? t.account_id : null, verified: true, tz: t.tz, follows: t.id });
+    const fresh = openRequest({ email: t.email, name: t.name, topic: t.topic, message, envelope_id: t.envelope_id, user_id: userId, account_id: userId ? t.account_id : null, verified: true, tz: t.tz, follows: t.id, came_by: userId ? 'signed_in' : 'link' });
     say(fresh, 'event', `Opened as a follow-up to request ${refOf(t)}, which was closed more than ${SUPPORT_REOPEN_DAYS} days before`, by);
     say(t, 'event', `The customer wrote again after ${SUPPORT_REOPEN_DAYS} days. That opened request ${refOf(fresh)}`, by);
     await announce(fresh, [`This continues request ${refOf(t)}, which was closed on ${t.closed_at.slice(0, 10)}.`]);
@@ -346,20 +390,27 @@ function customerCloses(t: any, notMine: boolean, userId: string | null) {
 
 // The private link from our emails. It works without a login, because the people who need help most are locked out.
 // "I lost the email with the link." The links to an address's requests are sent again, to that address only. The
-// answer is the same whether or not there are any, so the form tells nobody who has written to us. The link of a
-// request never changes, so nothing an earlier email carries stops working.
+// link of a request never changes, so nothing an earlier email carries stops working. Left out: a request the
+// person at the address said they did not write, and one we closed as not written by them. We told them that we
+// would not write to them about those again.
+async function sendLinksAgain(email: string) {
+  const since = new Date(Date.now() - 90 * 864e5).toISOString();
+  const found = all("SELECT * FROM support_requests WHERE lower(email)=? AND at > ? AND COALESCE(closed_how, '') NOT IN ('disowned','spam') ORDER BY at DESC LIMIT 20", email, since).filter((t) => !isAlert(t));
+  if (!found.length) return;
+  await sendMail({ to: email, subject: `Your requests to Sign&Grow: ${found.length === 1 ? 'the link' : 'the links'} again`, heading: found.length === 1 ? 'Here is the link to your request' : 'Here are the links to your requests',
+    lines: ['Someone, we hope you, asked on our help page for the links to the requests written from this address. Each link opens one request without signing in: there you read everything written so far and reply.',
+      'If you did not ask for this, you can ignore it: nothing was changed, and only this inbox received the links.', NO_REPLY],
+    links: found.map((t) => ({ label: `Request ${refOf(t)}`, url: linkFor(t), note: `${TOPIC_LABEL[t.topic] || 'Help request'}, written ${t.at.slice(0, 10)}, ${t.status === 'open' ? 'waiting for our answer' : t.status === 'waiting' ? 'waiting for your answer' : t.status}` })), help: true });
+}
+// The answer is the same whether or not there are any, and it goes back before anything is looked up or sent, so it
+// also takes the same time: handing an email to the mail server takes long enough to be timed, and the form must
+// not tell anyone who has written to us. The email follows a moment later.
 route('POST', '/public/support/find', async (c) => {
   const email = str((await c.body()).email, 254).trim().toLowerCase();
   if (!isEmail(email)) throw bad('Enter the email address you wrote to us from.');
   rateLimit(`support-find:${c.ip}`, 6, 3600_000);
   rateLimit(`support-find:${email}`, 3, 864e5);
-  const since = new Date(Date.now() - 90 * 864e5).toISOString();
-  const found = all('SELECT * FROM support_requests WHERE lower(email)=? AND at > ? ORDER BY at DESC LIMIT 20', email, since).filter((t) => !isAlert(t));
-  if (found.length)
-    await sendMail({ to: email, subject: `Your requests to Sign&Grow: ${found.length === 1 ? 'the link' : 'the links'} again`, heading: found.length === 1 ? 'Here is the link to your request' : 'Here are the links to your requests',
-      lines: ['Someone, we hope you, asked on our help page for the links to the requests written from this address. Each link opens one request without signing in: there you read everything written so far and reply.',
-        'If you did not ask for this, you can ignore it: nothing was changed, and only this inbox received the links.', NO_REPLY],
-      links: found.map((t) => ({ label: `Request ${refOf(t)}`, url: linkFor(t), note: `${TOPIC_LABEL[t.topic] || 'Help request'}, written ${t.at.slice(0, 10)}, ${t.status === 'open' ? 'waiting for our answer' : t.status === 'waiting' ? 'waiting for your answer' : t.status}` })) });
+  setImmediate(() => void sendLinksAgain(email).catch((e) => console.error('[support] could not send the links again', e?.message)));
   return { ok: true };
 }, 'public');
 

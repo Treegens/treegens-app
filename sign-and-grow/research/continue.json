@@ -1475,5 +1475,202 @@
    "Stuck 6, handled: a member is removed and invited back. They are no longer chosen, and the refusal tells them to ask to be added."
   ],
   "settings": []
+ },
+ "gaps:disputes-evidence": {
+  "found": "Nothing of this task existed when I started. There was no tests/gaps-disputes-evidence.test.ts, no table, column, route or setting for it, and none of the false-promise copy had been changed: /verify still said \"Authentic and unchanged\", /security still said \"Every step is recorded\" and \"who signed, when, from where\", and the home page still said \"Every envelope gets a certificate\". tests/out/map-disputes held the mapping engineer's probes (its PDFs show the voided-copy hole), not work towards this task. So I built A to H from scratch. While I worked, the workflow's own checkpoint commits (5a4adb3, 7b6e229) picked up most of my files. I made no commits myself.",
+  "done": [
+   {
+    "item": "A. False promises about /verify and /security",
+    "status": "done",
+    "how": "New src/lib/evidence.ts holds the words the pages, the evidence pack and the README all quote: MATCH_MEANS, NO_MATCH_CAUSES, CHAIN_TRUTH and WHO_WHEN_WHERE. On /verify the badge now reads \"Unchanged since signing finished\" and says the check does not show who was behind each signature. \"No match\" lists its five causes: changed, saved again by a viewer, printed or scanned, deleted more than a year ago, never completed here. On /security: \"Every step is recorded\" became a list of what is recorded and what is not (built after D). The chain point now says exactly what verifyChain stops: there is no key and the chain sits in the same database, so whoever can write to that database can recompute it; the chain head printed in everyone's copy is what would show such a rewrite; the stored browser string is outside the hash. The certificate point now says it exists for completed envelopes only and explains names, UTC times and IP addresses. Home page: \"Every completed envelope gets a certificate\". README updated the same way, and tests/e2e.mjs follows the new badge.",
+    "test": "Tests A1 and A2 in tests/gaps-disputes-evidence.test.ts. A2 shows the chain text is literally true: editing the browser string keeps the chain intact, a careless edit breaks it, and a full recompute passes.",
+    "left_open": "The certificate still prints \"the history cannot be edited without breaking the chain\" (drawCertificate in src/server/pdf.ts, around line 396). My brief forbade changing what the certificate prints, so the certificate engineer must reword it. The consent wording in src/lib/policy.ts still says \"each step you take in a tamper-evident audit trail\"; that belongs to the consent engineer."
+   },
+   {
+    "item": "B. Keep the fingerprint after an account is deleted (priority 11)",
+    "status": "done",
+    "how": "New table forgotten_files (file_sha256, envelope_id, completed_at, at), nothing else. keepFingerprint() in src/server/evidence.ts is called from forgetEnvelopes in routes-trust.ts, so it runs whenever a completed envelope is deleted for good. Rows are purged after a year next to forgotten_codes (forgetOldFingerprints). A line was added to KEPT_AFTER_DELETION in policy.ts, and Settings, /help, /security and /security/processing all print that list. POST /public/verify now answers match:false with deleted {envelope_id, completed_at, deleted_at, kept_until}, or deleted:null. /verify shows \"Completed here, deleted since\", says that no names are held any more, and says until when the fingerprint is kept.",
+    "test": "Tests B1 and B2: names, title and address are never kept; the year-long purge; drafts and voided envelopes leave nothing behind.",
+    "left_open": "After the deletion, the signer's dead link and Find my documents still say nothing about it. Recipients are not warned before a sender's account goes. One year is what the brief set, by analogy with forgotten_codes."
+   },
+   {
+    "item": "C. Public lookup by envelope ID, and the fingerprint in every completion email (priorities 20 and 19)",
+    "status": "done",
+    "how": "New file src/server/routes-evidence.ts with GET /api/public/verify/:id. lookupEnvelope gives status (completed, sent, voided, declined, expired, or deleted), dates, the closing date, pages {documents, signed_file} (the signed file's count is worked out once and kept in envelopes.final_pages), signers, signed, approvers, sha256 and disputed_at/disputes. It never gives a name, an address, the title, the sender, the account or the void reason. Drafts and templates answer 404, something that is not an ID answers 400 with what an ID looks like, and there are 60 lookups an hour per connection. On /verify, src/app/verify/ById.tsx opens /verify?id= already looked up, with \"Choose the file to compare\" beside it; the file is hashed in the browser with crypto.subtle, falling back to the server. completeEnvelope now puts the SHA-256 and the envelope ID in every completion email, the sender's included (fingerprintLines).",
+    "test": "Tests C1 to C3: what is revealed and never revealed, voided and sent envelopes, 400 and 404, after deletion, the 429 limit, the fingerprint in the signer's and the sender's emails, and the screen wiring. Checked in a browser at 390x844 and 1280x900: no sideways scroll, and the keyboard reaches the file picker.",
+    "left_open": "An ID misread by OCR (l and I) is not matched loosely; the page says capitals count. The pages carry no \"check at <site>/verify\" line or QR code, because I left the per-page stamp in pdf.ts alone. When the signed PDF cannot be built at completion and the timer builds it later, no email carries the fingerprint."
+   },
+   {
+    "item": "D. Audit lines after signing (priorities 16 and 17)",
+    "status": "done",
+    "how": "In the live audit trail (the certificate is sealed before these happen): \"Completed copy sent\" for each person and for the sender, only when the mail server took the email, saying whether the PDF was attached. \"Completed copy not emailed\" when no mail server is set up; a failed hand-off is already written by the existing listener. \"Completed copy opened\" the first time each person opens or downloads it, with IP, the user_agent kept on the line, and the browser in words (deviceName from src/lib/phone.ts). The once-only rule is a single UPDATE on recipients.copy_opened_at, so two requests at once still write one line. \"Opened again\" for later visits, at most once in 24 hours per person, counted from the first open (recipients.visit_noted_at). The hooks are noteCopyMailed in completeEnvelope, noteVisit and noteCopyOpened in routes-sign.ts.",
+    "test": "Tests D1 to D3: outbox against a stubbed SMTP (restored afterwards), first-open-only with IP, browser string and \"in Safari on an iPhone\", the sender's download not counted, nothing before completion, the daily limit, visits after signing, and the chain still intact.",
+    "left_open": "An email link scanner that runs JavaScript could cause a \"Viewed\" or \"Opened again\" line, as it already could for \"Viewed\". Visits by members of an open group are not written, because they share one row. The sender's own downloads are not recorded. How a signature was made (typed, drawn or uploaded) is still not recorded."
+   },
+   {
+    "item": "E. The sender's copy of a voided, declined or expired envelope (priority 3)",
+    "status": "done",
+    "how": "GET /envelopes/:id/download now builds closed envelopes with senderNotice(e): the signer's notice reason, then a sender's-copy line and the lookup ID. New src/server/stamp.ts draws two lines large across every page, diagonally, see-through, rotation-aware (\"VOIDED / NOT A SIGNED DOCUMENT\", \"DECLINED\", \"EXPIRED\"). renderEnvelopePdf draws it whenever a notice is given, on attachment pages too. withNotice draws it on earlier copies (\"SIGNED BEFORE A CHANGE / NOT THE CURRENT DOCUMENT\"). So the signer's closed copies carry it as well. The small foot line is kept.",
+    "test": "Tests E1 and E2 read the PDF text: the notice page, the mark on every page, the signer's copy, declined and expired, and that completed copies carry no mark. Rendered through pdf.js on portrait, landscape and a page stored turned by 90 degrees (tests/out/gaps-disputes-evidence/stamp-*.png).",
+    "left_open": "A copy downloaded while the envelope is still out (status sent) still shows the signatures collected so far with no mark. That is outside the brief, but it is the same kind of hole. The mark is a drawn layer that someone with a PDF editor can remove; /verify and the lookup still say voided."
+   },
+   {
+    "item": "F. \"I did not sign this, or this was not me\", and the help topic (priorities 12 and 6)",
+    "status": "done",
+    "how": "disputeEnvelope in evidence.ts is reached from POST /api/public/check/dispute (the security code) and POST /api/sign/:token/dispute (the link; no access code or one-time code is asked first). It is allowed only where something was signed, approved or declined in that person's name, completed documents included; otherwise 409 nothing_signed with \"report it instead\". What it does: inserts one row per person and envelope in the new disputes table, sets envelopes.disputed_at, and writes an audit line that names who said it as far as we know (\"Someone holding the email we sent to...\", \"Someone using the signing link of...\", with honest wording for in-person signers). It emails the sender without what was written and with \"we do not decide\" and \"ask a lawyer\". It emails ABUSE_EMAIL or SUPPORT_EMAIL plus OPERATOR_EMAILS with the words and files an automatic alert in the operator queue (topic not-me). It changes and deletes nothing, and a repeat answers already:true. A group member who did not act is told which colleague did. The new choice appears in the signing page's Report dialog and in /check's report form. The mark shows on the envelope page (src/components/sender/Disputed.tsx), on /verify by file and by ID, and is counted in the lookup. The new help topic 'not-me', \"I am named on a document I did not sign\" (SUPPORT_TOPICS and TOPIC_LABEL), is never forwarded, because only 'signing' is. The /help answer in src/app/help/NotMe.tsx says exactly what is given out to whom: anyone with the ID, anyone with the file, the holder of the email or link, the sender and admins, and the operators. It says plainly that there is no written procedure for court orders yet.",
+    "test": "Tests F1 to F4: by code on a completed envelope (record, sender email without the words, operator email with them, queue row, /verify and lookup show it, no repeat); by link behind an access code; nothing_signed for a pending signer and for a cc; 404, 400 and 429; the screens wired; a help request on topic not-me not passed to the sender; a group member; an in-person signer. Checked in a browser on the signing page dialog and the envelope page.",
+    "left_open": "There is no way for an operator to clear a dispute made in error, or for the person to withdraw one; the mark stays for the envelope's life. An open envelope is not held when someone disputes it. The disputer gets no ticket reference; they are pointed to the help form instead. A code whose link was replaced is sent to the help form."
+   },
+   {
+    "item": "G. Download evidence pack (priority 21)",
+    "status": "done",
+    "how": "GET /api/envelopes/:id/evidence, with the same access as the download (mine with removed:true); 400 for a draft. evidencePack() reuses zipStream and safeName from zip.ts. The pack holds signed.pdf (the stored bytes), certificate.pdf (the trailing pages after the documents and attachments, or a note if the count does not add up), or document-not-completed.pdf / document-so-far.pdf. audit-trail.txt and audit-trail.json carry prev_hash, hash, user_agent, the recipients, the chain as checked now, and how each hash is computed. emails/*.html has every stored email, with signing links and every security code of the envelope taken out because they would still open the document. emails/index.csv gives what became of each and the SHA-256 of the email as stored. consent.txt has the wording per consent line, by the version the line names, via consentWording. README.txt says what each file is, plus CHAIN_TRUTH, WHO_WHEN_WHERE and the line \"does not say that a signature is valid\". A \"Download evidence pack\" button sits on the envelope page.",
+    "test": "Tests G1 and G2: the chain recomputed from the JSON alone, no token or code in the email copies, every email's stored hash listed, the consent wording, the README, the voided pack with its marked copy, the draft 400, 404 for another account, 401 with no login, and the button. Downloaded through the browser and unpacked by hand.",
+    "left_open": "One-time sign-in codes inside stored emails are left in; they expired 10 minutes after sending. The pack is a snapshot and is not sealed itself. It has no rate limit beyond needing a login."
+   },
+   {
+    "item": "H. Public page \"How to read a Sign&Grow certificate\" (priority 18)",
+    "status": "done",
+    "how": "New page /security/certificate, printable, written from drawCertificate and renderEnvelopePdf as they are today. Every printed line gets \"Comes from / Shows / Does not show\", including the page stamps, \"Signed via Sign&Grow\" and the closed-copy mark. It quotes CHAIN_TRUTH and WHO_WHEN_WHERE, says it is not a sworn statement or legal advice and that rules differ by country and kind of document, and carries CERTIFICATE_PAGE_VERSION 2026-11-20. It is linked from /security, /verify and the help answer.",
+    "test": "Test H1 pulls every label drawCertificate prints out of pdf.ts and fails if the page does not explain it. That is on purpose: the page must be revised when the certificate changes. Checked in a browser at 390x844.",
+    "left_open": "The certificate is being rewritten by another engineer. This page and CERTIFICATE_PAGE_VERSION in src/lib/evidence.ts MUST be revised then. Test H1 will force it for new labels, not for changed meanings."
+   },
+   {
+    "item": "I. \"How do you know this address?\" per recipient at send time (priority 23)",
+    "status": "not_done",
+    "how": "Not started. It needs a field in the editor's recipient step (src/components/editor/StepAdd.tsx and StepReview.tsx, which the groups engineer is changing right now), three recipient columns (known_how, known_how_by, known_how_at), reading them in writeContent, and an audit line at send in sendEnvelope, both in the busy envelopes.ts. I judged a half-built version worse than none.",
+    "left_open": "The whole item."
+   }
+  ],
+  "files_changed": [
+   "src/lib/evidence.ts (new)",
+   "src/server/evidence.ts (new)",
+   "src/server/routes-evidence.ts (new; imported in tests/helpers.ts boot() and src/app/api/[...path]/route.ts)",
+   "src/server/stamp.ts (new)",
+   "src/app/verify/ById.tsx (new)",
+   "src/app/help/NotMe.tsx (new)",
+   "src/app/security/certificate/page.tsx (new)",
+   "src/components/sender/Disputed.tsx (new)",
+   "tests/gaps-disputes-evidence.test.ts (new, 19 tests)",
+   "src/app/verify/page.tsx",
+   "src/app/security/page.tsx",
+   "src/app/page.tsx",
+   "src/app/help/page.tsx",
+   "src/app/check/CheckForm.tsx",
+   "src/components/sign/dialogs.tsx",
+   "src/app/app/envelopes/[id]/page.tsx",
+   "src/app/developers/page.tsx",
+   "src/app/styles/public.css",
+   "src/server/db.ts (forgotten_files, disputes; envelopes.disputed_at, final_pages; recipients.copy_opened_at, visit_noted_at)",
+   "src/server/envelopes.ts (completeEnvelope: fingerprint line and copy hand-off record; one import)",
+   "src/server/pdf.ts (two drawStamp calls and an import; certificate untouched)",
+   "src/server/routes-sign.ts",
+   "src/server/routes-envelopes.ts",
+   "src/server/routes-account.ts",
+   "src/server/routes-trust.ts",
+   "src/server/openapi.ts",
+   "src/lib/policy.ts (KEPT_AFTER_DELETION line, SUPPORT_TOPICS)",
+   "src/lib/support.ts",
+   "tests/helpers.ts",
+   "src/app/api/[...path]/route.ts",
+   "tests/e2e.mjs (badge text)",
+   "README.md",
+   ".env.example",
+   "tests/out/gaps-disputes-evidence/ (probes and screenshots)"
+  ],
+  "suite": "npm test: 553 tests, 549 pass, 4 fail, none of them mine. (1) gaps-nonus-words 'every price on a public page is written as US$' flags app/billing/stop/StopView.tsx. (2) and (3) groups.test.ts:371 (a member's saved answer comes back empty) and groups.test.ts:542 (400 'Field 1 ... is for the recipient ... who is not on this envelope'): the groups work in progress. (4) trust.test.ts:384 'Signer corrected their name' is missing: the name-fix rule by others, and it already failed in my first full run. The first run also had signerux 'thumb-sized links' failing on sign.css, which now passes. tests/gaps-disputes-evidence.test.ts: 19 of 19 pass. npx tsc --noEmit: no errors in any file I touched. The only errors are in src/server/witness.ts, another engineer's new file, which imports noteReached, newerVersion and clearAnswers that envelopes.ts does not export.",
+  "abuse_and_stuck": [
+   "Lookup by ID, abuse: guessing IDs is pointless (96 random bits) and limited to 60 an hour per connection (tested). Fishing for names or a title gets nothing, since none are ever returned (tested). Pairing a real ID with a forged paper copy is answered by the page count and fingerprint, and the page says an ID is not a seal.",
+   "Lookup by ID, stuck: an ID copied with its surrounding text (\"Envelope ID: ... \u00b7\") is cleaned on the screen. Something that is not an ID gets a 400 that explains what an ID looks like (tested). An OCR misread of l and I is not fixed (left open).",
+   "Fingerprint after deletion, abuse: only the hash, the id and the day are kept (tested), and an exact file is needed. Stuck: a file saved again within the year still gets no match, and the cause list says why; after a year the file is no match like any other (tested).",
+   "Audit lines, abuse: reloading cannot flood the trail, because visits are written once a day and the copy-opened line once only (tested). A link scanner may still leave a line (left open). Stuck: no line ever claims an email arrived; it says 'Whether it arrived is not known at this point' (tested).",
+   "Closed copy, abuse: the signer's and the sender's copies of a voided envelope are both marked on every page (tested). Removing the mark with a PDF editor is still caught by /verify and the lookup. A copy downloaded while the envelope is still out is not marked (left open).",
+   "Dispute, abuse: spamming is limited to one dispute per person per envelope (tested) and 10 an hour per connection (tested). A false dispute from someone who has the email is recorded as 'Someone holding the email', and nothing is deleted. The dispute detail is escaped in the emails, and the sender never sees it (tested). A mistaken mark cannot be cleared (left open).",
+   "Dispute, stuck: someone with nothing yet signed in their name is told to report instead (tested). A cc recipient is told they only got a copy (tested). A group member who did not act is told which colleague did (tested). A replaced code is sent to the help form. In-person wording does not misdescribe whose inbox held the code (tested).",
+   "Evidence pack, abuse: email copies carry no live signing link or security code (tested). Other accounts get 404 and no login gets 401 (tested). Stuck: a damaged stored PDF is named in README.txt instead of breaking the ZIP; a draft gets a 400 that says why (tested).",
+   "Help topic not-me: never passed to the sender (tested), and the answer is honest that there is no court-order procedure yet."
+  ],
+  "settings": [
+   "No new settings. ABUSE_EMAIL (falling back to SUPPORT_EMAIL) and OPERATOR_EMAILS now also receive disputes; the README config table and .env.example say so. With neither set, the dispute is still filed in the operator queue and the server logs a loud line."
+  ],
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour others will notice:\n- Completed envelopes now get audit lines after \"Envelope completed\": \"Completed copy sent\" or \"Completed copy not emailed\" for each person and for the sender, \"Completed copy opened\", \"Opened again\" and \"Disputed\". Tests that assume the trail ends at completion would need to allow for them; none in the current suite do.\n- Every completion email now carries a fingerprint line.\n- Closed-copy PDFs (sender's, signer's, earlier copies) are marked large across every page.\n- POST /public/verify: a non-match now carries `deleted` (null or an object), and a match carries envelope.disputed_at.\n- New help topic 'not-me' in SUPPORT_TOPICS.\n- Dispute alerts are support_requests rows named 'Sign&Grow (automatic alert)', topic 'not-me', with envelope_id set.\n- On desktop the new buttons are 41 px tall, like every `.btn` there; on a phone they are 44 px.\n\nFor the certificate engineer:\n- drawCertificate still prints \"the history cannot be edited without breaking the chain\". It should say what CHAIN_TRUTH says.\n- /security/certificate and CERTIFICATE_PAGE_VERSION must be revised in the same change; test H1 fails on any new label.\n- The identity line still says \"Link sent by email\" for someone the trail lists as \"Not emailed\". The certificate page states this.\n\nFor the consent engineer: the consent wording's \"each step you take ... tamper-evident\" overclaims (see the /security list of what is and is not recorded).\n\nTo confirm with the owner: whether a dispute mark should be clearable by an operator. Today it is permanent, by the brief's \"never deletes anything\".\n\nOut of scope, seen and not fixed:\n- Copies downloaded while an envelope is still out show the signatures collected so far with no mark.\n- The README intro still says signature disputes were not researched.\n- src/server/witness.ts does not typecheck yet (someone else's work in progress).\n\nAll new copy still says \"Sign&Grow\" for the rename pass."
+ },
+ "build:qr": {
+  "found": "The previous engineer had built almost all of the brief, and it was in good shape. Already there: the encoder src/lib/qr.ts (byte mode, level M, versions 1 to 40, all eight masks scored by the four penalty rules, matrix and SVG output with a 4-module quiet zone, no imports); src/lib/qrlink.ts (refuses anything that is not an http(s) link, links with a user name in front of the host, and links over 300 characters; notes for localhost and private-network addresses; all the words); src/components/QrCode.tsx, src/components/QrOwnPhone.tsx (a code on a public form open on a big screen), src/components/sender/QrDialog.tsx (with the warning, the access-code line, and the code taken off the screen after 120 s); the printable sheet page src/app/app/powerforms/[id]/qr/page.tsx (it also saves a PNG) and src/app/styles/qr.css; \"Show QR code\" right after \"Copy link\" in Recipients.tsx; a \"QR code\" link on the PowerForms list; a `url` on GET /powerforms built from APP_URL, described in openapi.ts; the landing, help and security copy; README \"What is in it\" updated and QR removed from \"What is not in it\". tests/qr.test.ts held 22 tests and all passed. What was missing: (1) no proof from an outside decoder anywhere on disk (no /tmp/qrcheck, no probe script; the test comment only claimed jsQR, OpenCV and Nayuki had been run), and (2) the screenshot script tests/out/build-qr/shots.cjs had been written but never run, so nobody had looked at the screens. At the checkpoint none of the listed suite failures were QR tests.",
+  "done": [
+   {
+    "item": "1. QR generator of our own in src/lib/qr.ts, proven with an outside decoder",
+    "status": "done",
+    "how": "Kept the existing encoder: I found no bug in it. I redid the outside check that was missing, in a scratch folder outside the project (nothing added to package.json). I rendered 343 codes to pixels: every version 1 to 40 (full, least and middle fill), every link length from 1 to 300, odd characters (UTF-8, right-to-left scripts, emoji, script tags, control characters), real-looking signing and form links, and every mask on 8 versions. jsQR read all 343 byte for byte. OpenCV read 278 correctly, could not find 65 (large versions), and read none wrongly. python-qrcode drew exactly the same matrix for all 343 at the same mask. Nayuki's reference encoder, choosing its own mask, drew exactly our matrix for all 279 codes where we picked the mask, so mask scoring and choice match the reference. segno differs on codes with filler bytes only: in byte mode the end mark always lands on a byte boundary, and segno 1.6.6 then adds one extra zero byte. That is segno's quirk; python-qrcode and Nayuki agree with us. I also confirmed that the suite's fixed examples (8 named matrices, 40 per-version hashes) are among the verified codes.",
+    "test": "tests/qr.test.ts tests 1-12: tables of the standard, fixed parts for every version and mask, format and version bits, a reader written separately that checks every version byte for byte (including Reed-Solomon), fixed matrices, the four penalty rules and the mask choice, what is refused, and the SVG (margin, nothing of the text in it). All pass."
+   },
+   {
+    "item": "2a. PowerForms: a printable sheet per form",
+    "status": "done",
+    "how": "Existed. I checked it in a real browser at desktop and phone size: no sideways scroll, 44 px buttons on a phone, name of the form, code, one line on scanning, link written out. The A4 PDF is one page with nothing for the owner on it. I found and fixed a print bug: on paper wider than the 900 px phone layout (landscape, A3), the hidden menu's 232 px grid column stayed, so the sheet was squeezed into it with the code spilling out. Fixed in qr.css: .shell display block and .main max-width none, only while printing this page. Checked after the fix: A4 and A3 landscape are each one page, centred, code 95 mm.",
+    "test": "qr.test.ts 'each place a link is handed over in person offers a code': CSS checks for the two print rules, which fail without the fix. Also checked in the browser (tests/out/build-qr/print.cjs, sheet-landscape.pdf)."
+   },
+   {
+    "item": "2b. Envelope page: Show QR code next to Copy link",
+    "status": "done",
+    "how": "Existed. Checked in the browser by keyboard: the dialog opens with focus on Close, Tab stays inside it, the code leaves the page at 120 s, and 'Show the code again' brings it back. Fixed one problem: the button is switched off while the link is fetched, so focus was lost and after Escape or Close it landed on the page body (measured: null). Now Recipients remembers the button that opened the dialog (showQr(r, ev.currentTarget), passed as opener={qrFrom}), and QrDialog puts focus back on it once the dialog has gone. Measured after the fix, on desktop and phone, after Escape and after Close: focus is on 'Show a QR code with the signing link for Ada Sponsor'.",
+    "test": "qr.test.ts: patterns for showQr(r, from), opener={qrFrom}, the done() handler used by Close and by the Dialog's Escape, and no onClose path that skips it. Verified in the browser (facts in tests/out/build-qr/facts.json)."
+   },
+   {
+    "item": "2c. Anywhere else a link is handed over in person",
+    "status": "done",
+    "how": "Existed: a public form open on a tablet offers 'Fill it in on your own phone instead'. It is hidden on phone-sized screens and when the address only works on this computer. It is 44 px with a touch screen, and it does not submit the form. During my run another engineer added recipients with no email address ('own link', OwnLink.tsx) and reuses QrDialog for them, also after they have signed, to hand them their copy. My words would then have told the sender the person will 'read and sign there' and that whoever scans it can 'sign it as' them, which is not true once they have finished. personScanLine and personCodeWarning now take an optional third argument `finished`. QrDialog passes r.status === 'completed', and the words then say the person can read the document and download a copy (checked against the sign page, which offers the download).",
+    "test": "qr.test.ts 'the dialog and the sheet say...': exact finished wording, no 'sign it' or 'approve it' for any role when finished, no em dash and no legal promises; and 'each place...': const finished = r.status === 'completed' is passed to both lines."
+   },
+   {
+    "item": "Every code as the browser draws it scans",
+    "status": "done",
+    "how": "I decoded the browser's own pixels with jsQR: dialog screenshots (desktop and phone, with and without an access code), the sheet, the tablet form, the saved PNG, and the printed A4 PDF rendered at 150 dpi. Each holds exactly the right link: Ada's token for Ada, Dee's for Dee, the form address for the sheet.",
+    "test": "Scratch check outside the suite. The suite keeps the matching unit test (the code on screen is the fixed example the decoders read)."
+   },
+   {
+    "item": "3. The sheet and the dialog say the code is the link and who may see it",
+    "status": "done",
+    "how": "Existed and verified on screen: the dialog says that whoever scans it, or a photo of it, can open the document as that person and to show it only to them. The sheet page tells the owner the code is the form's link, that each signer uses a signature where signatures are counted, and that pausing or deleting the form stops the code. On paper it tells the reader to check the address shown. A paused form gets a warning before printing.",
+    "test": "qr.test.ts test 16 (exact words) and 18 (a paused or deleted form's code opens 'This form is not available.')."
+   },
+   {
+    "item": "4. Landing page and README say what is true",
+    "status": "done",
+    "how": "Existed and verified: the landing page says to print the QR code the app makes for a form; QR is gone from 'What is not in it' and listed under 'What is in it'; help and security describe it. No new setting, so .env.example and the config table are unchanged. I did not add a row to 'What the bad reviews taught us': research/complaints.json has no complaint that a QR code answers, and a row would invent one.",
+    "test": "qr.test.ts test 22 'the public pages and the README say what is now true about QR codes'."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/QrDialog.tsx (opener prop and focus return; finished wording)",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/Recipients.tsx (small: useRef import, qrFrom ref, showQr(r, from), onClick passes ev.currentTarget, opener={qrFrom})",
+   "/home/user/treegens-app/sign-and-grow/src/lib/qrlink.ts (personScanLine and personCodeWarning take an optional `finished`)",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/qr.css (print: .shell display block, .main max-width none)",
+   "/home/user/treegens-app/sign-and-grow/tests/qr.test.ts (two patterns updated for the new lines, and for the other engineer's `own` case; new checks for focus return, print layout and finished wording)",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (removed only the two lines my build added; another session has since reset the include list)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/build-qr/ (scratch: shots.cjs fixed to run here, print.cjs, probe.cjs, screenshots, facts.json, sheet.pdf, sheet-landscape.pdf)"
+  ],
+  "suite": "tests/qr.test.ts: 22 of 22 pass, alone and inside the full run. Final npm test: 533 of 539 pass. The 6 failures are not QR and do not touch my files: tests/billing2.test.ts:94 and tests/billing3.test.ts:162 and :283 (the payment owner's work); tests/gaps-nonus-words.test.ts:176, a price wording on app/billing/stop/StopView.tsx; tests/signerux.test.ts:653, a canvas aria-label pattern in the signing PDF view; tests/trust.test.ts:365, no 'Signer corrected their name' audit line. The earlier openapi failure for POST /envelopes/:id/restore was fixed by someone else between my two runs. npx tsc --noEmit -p . : exit 0, no errors.",
+  "abuse_and_stuck": [
+   "Abuse: a link built to break out of the picture (script tags, quotes, </svg>). Handled: the SVG holds only module positions. Tested: 'nothing of the text is written into the picture'.",
+   "Abuse: a code for javascript:, data:, file:, sms: or mailto: links, or for a link with a user name in front of the host that shows one address and opens another. Handled: refused in plain words. Tested in qr.test.ts test 13.",
+   "Abuse: a very long text to stall the page. Handled: refused at 300 characters before any encoding, and the encoder refuses past 2331 bytes. Tested at 100,000 characters.",
+   "Abuse: a stranger, or a key holder from another account, gets a link to draw a code from. Handled: recipient-view answers 404 or 401. Tested in test 19.",
+   "Abuse: a forged x-forwarded-host puts another address on a printed sheet. Handled: the form url comes from APP_URL only. Tested in test 18.",
+   "Abuse: a bystander photographs a personal code. Handled in part: the warning, and the code leaves the screen after 2 minutes. Correcting the address replaces the link (old code answers 410), and voiding stops signing. Tested in test 19. Left open: the link itself works until then.",
+   "Stuck: the link points at localhost or a private network, so a phone cannot open it. Handled: a note on the dialog and the sheet, and the form's own-phone button is hidden for localhost. Tested in test 15.",
+   "Stuck: the signer is asked for an access code or one-time code after scanning. Handled: the dialog says so without printing the code. Tested in test 16.",
+   "Stuck: a paused form's sheet is printed. Handled: a warning before printing, and scanning shows 'This form is not available.' Tested in tests 16 and 18.",
+   "Stuck: the camera does not read it, or the code disappeared after 2 minutes. Handled: the trouble line says what to try, and 'Show the code again' brings it back. Tested in test 16 and in the browser.",
+   "Stuck: a keyboard user closes the dialog and loses their place. Fixed: focus returns to the button. Tested in test 21 and in the browser.",
+   "Stuck: printing on landscape or A3 squeezed the sheet into a narrow column. Fixed. Tested in test 21 and in the browser (PDFs).",
+   "Stuck: a person who has finished is handed a code for their copy, and the words said they would sign. Fixed. Tested in test 16."
+  ],
+  "needs_from_billing": "Nothing.",
+  "notes_for_integrator": "Behaviour changes: QrDialog takes a new optional `opener` ref and returns focus to it on close. The owner of OwnLink.tsx and Recipients.tsx (own-link recipients) already calls showQr(r, el) and works with it. QrDialog now reads r.status: for 'completed' the dialog says the person can read the document and download a copy, not sign. personScanLine and personCodeWarning in src/lib/qrlink.ts take an optional third argument `finished`. Promises in copy: none added beyond what the code keeps. Left open: a photographed personal code works for as long as its link does (until Correct replaces it or the envelope is voided); a sticker stuck over a printed sheet can only be caught by the reader comparing the written link; there is no server test for a finished own-link person's code, because that route belongs to the own-link engineer; on a desktop with a mouse the QR buttons are the app's normal 33.5 to 41 px (44 px applies on touch and narrow screens). For anyone looking at screens: the Next 16 dev server refuses its reload socket (403) for any host but localhost, and this machine's outbound proxy intercepts Chromium WebSockets to any non-localhost name. Together with constant rebuilds from other people's edits, dev pages here either never start or reload forever. I looked at the screens with a production build in my own folder (.next-build-qr-prod, since deleted) behind a small forwarding proxy, with Chromium on --no-proxy-server; the recipe is in tests/out/build-qr/shots.cjs. Also seen and out of scope: the six failing tests listed under suite.",
+  "settings": [
+   "None added. APP_URL (already existing) is what printed and shown codes hold."
+  ]
  }
 }

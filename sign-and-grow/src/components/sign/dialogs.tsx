@@ -168,7 +168,8 @@ export function ReportDialog({ base, sender, onClose }: { base: string; sender: 
 
 // ---- Decline and pass on ---------------------------------------------------------------------
 
-export function DeclineDialog({ base, sender, title = 'Decline to sign', onClose, onDone }: { base: string; sender: any; title?: string; onClose: () => void; onDone: () => void }) {
+// `note`: said before anything else, such as that one member of a signing group declines for the whole group.
+export function DeclineDialog({ base, sender, title = 'Decline to sign', note, onClose, onDone }: { base: string; sender: any; title?: string; note?: string; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
   const { busy, error, setError, send } = useSend();
   return (
@@ -178,6 +179,7 @@ export function DeclineDialog({ base, sender, title = 'Decline to sign', onClose
         if (!reason.trim()) return setError(`Add a short reason so ${sender.name} knows what to change, then choose Decline.`);
         if (await send(() => api(`${base}/decline`, { body: { reason } }), 'Nothing was declined. Try again, or close this and carry on.')) onDone();
       }}>
+        {note && <div className="notice warn" role="note">{note}</div>}
         <p className="muted">Declining closes the document for everyone. {sender.name} is told why. If you only have a question, ask it instead and nothing is closed.</p>
         <label className="f"><span>Your reason</span><textarea dir="auto" data-autofocus rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
         <Problem>{error}</Problem>

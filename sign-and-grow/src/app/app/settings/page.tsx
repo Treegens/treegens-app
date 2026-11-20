@@ -515,7 +515,7 @@ function Billing() {
       )}
 
       {b.price_change && (
-        <div className="notice warn" role="status"><b>The price of your plan changes on {b.price_change.from_day || utcDate(b.price_change.from)}.</b> It stays {b.price_change.now} a month until then. The first renewal on or after that day is {b.price_change.next}. Every owner and admin was told by email on {fmtDate(b.price_change.told_at)}. Nothing else changes, and you can cancel at any time before then and keep your signatures.</div>
+        <div className="notice warn" role="status"><b>The price of your plan changes on {b.price_change.from_day || utcDate(b.price_change.from)}.</b> It stays {b.price_change.now} a month until then. The first renewal on or after that day is {b.price_change.next}. Every owner and admin the account had then was told by email on {fmtDate(b.price_change.told_at)}. Nothing else changes, and you can cancel at any time before then and keep your signatures.</div>
       )}
       {b.refunds_pending?.map((r: any) => (
         <div className="notice" role="status" key={r.payment_id + r.since}>

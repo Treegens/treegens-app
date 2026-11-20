@@ -202,6 +202,33 @@ test('cancelling in the hour a new month starts: a lookup that fails does not tu
   assert.equal(await bal(r), before + 9);
 });
 
+test('a Cancel the provider did not confirm, then paying the open payment on purpose: that payment stays', async () => {
+  const setUp = async (p: Person) => {
+    await subscribe(p);
+    const open = `in6_${p.k}_open`;
+    stripe.invoices[open] = { id: open, customer: p.cus, subscription: p.sub, status: 'open', amount_due: 900, amount_remaining: 900, currency: 'usd', hosted_invoice_url: `https://pay.example/${open}` };
+    Object.assign(stripe.sub(p.sub), { status: 'past_due', latest_invoice: open, customer: p.cus });
+    await event('customer.subscription.updated', { id: p.sub, customer: p.cus, status: 'past_due', current_period_end: unix(30), metadata: { sg_account: p.id } }, { created: unix(0) });
+    stripe.fail('DELETE', /^subscriptions\//, 1);
+    stripe.fail('GET', /^subscriptions\//, 1);
+    assert.equal((await p.c.post('/billing/cancel')).status, 502);
+    return open;
+  };
+  // Left alone, the card is tried again and goes through: it is sent back, because they had said stop.
+  const p = await person('Stopper');
+  const open = await setUp(p);
+  await event('invoice.paid', renewal(p, open, unix(-2)));
+  assert.equal(stripe.refunded(`ch_${open}`), 900);
+  // Pressing "Pay the open payment" afterwards is a choice to pay: that payment is kept and buys the month.
+  const q = await person('Changed');
+  const qo = await setUp(q);
+  assert.equal((await q.c.post('/billing/pay-open')).status, 200);
+  const had = await bal(q);
+  await event('invoice.paid', renewal(q, qo, unix(-2)));
+  assert.equal(stripe.refunded(`ch_${qo}`), 0);
+  assert.equal(await bal(q), had + 9);
+});
+
 test('a subscription draft that the provider will not delete is told never to go ahead by itself', async () => {
   const p = await person('Draft');
   await subscribe(p);

@@ -682,7 +682,9 @@ test('the signing screens keep what they promise in markup: new tab, labels, rea
   assert.match(dead, /state === 'sent' && result !== 'sent'/);
   // Stand-alone secondary links are 44 px tall on a phone.
   const css = read('app/styles/sign.css');
-  assert.match(css, /\.sg-foot-links \.sg-link, \.sg-review \.sg-link, \.sg-more \{ display: inline-flex; align-items: center; min-height: 44px; \}/);
+  // (Other links may join the rule; these three must stay in it.)
+  const thumb = /\n\s*([^{}\n]*)\{ display: inline-flex; align-items: center; min-height: 44px; \}/.exec(css)?.[1] || '';
+  for (const sel of ['.sg-foot-links .sg-link', '.sg-review .sg-link', '.sg-more']) assert.ok(thumb.split(',').map((s) => s.trim()).includes(sel), sel);
   // The scan warning is shown on reopening (it reads the stored flag) and once more at Review.
   assert.match(read('components/editor/StepAdd.tsx'), /scanWarning\(d\) && <p className="notice warn small"/);
   assert.match(read('components/editor/StepReview.tsx'), /docs\.filter\(\(d\) => scanWarning\(d\)\)\.map/);
@@ -1063,4 +1065,36 @@ test('a frozen access code on a closed envelope can be replaced, so the signer r
   assert.match(fresh.html, /You asked for a fresh link/);
   assert.match(fresh.html, /View completed document/);
   assert.doesNotMatch(fresh.html, /Review and sign/);
+});
+
+test('the tab keeps the name of the document when the framework writes the site title back into the head', () => {
+  // A stand-in for the page's document and its MutationObserver: `fire` is what the browser does when the head changes.
+  let fire = () => {};
+  let watching = false;
+  class Watch {
+    constructor(fn: () => void) {
+      fire = () => watching && fn();
+    }
+    observe() {
+      watching = true;
+    }
+    disconnect() {
+      watching = false;
+    }
+  }
+  const doc = { title: 'Sign&Grow · e-signatures that plant trees', head: {} };
+  const stop = keepTitle('Lease for 12 Elm Street', doc, Watch);
+  assert.equal(doc.title, 'Lease for 12 Elm Street · Sign&Grow');
+  // A re-render (a reload of the code on a dev server, a route change) puts the site's own title back.
+  doc.title = 'Sign&Grow · e-signatures that plant trees';
+  fire();
+  assert.equal(doc.title, 'Lease for 12 Elm Street · Sign&Grow');
+  // Once the screen no longer shows the document, nothing is held on to.
+  stop();
+  doc.title = 'Sign&Grow';
+  fire();
+  assert.equal(doc.title, 'Sign&Grow');
+  // No subject: the title is left alone and nothing is watched.
+  keepTitle('', doc, Watch);
+  assert.equal(watching, false);
 });

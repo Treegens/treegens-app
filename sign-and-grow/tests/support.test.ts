@@ -10,7 +10,7 @@ import { boot, Client, signUp, mailTo, type Server } from './helpers.ts';
 // Only here so the payment code can raise one of its own alerts without reaching the network. It stands in for
 // api.stripe.com and passes every other call on.
 import './stripe-fake.ts';
-import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, supportWarning, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS } from '../src/lib/policy.ts';
+import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, supportWarning, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS, SUPPORT_OTHERS_PER_ADDRESS } from '../src/lib/policy.ts';
 import { whenText, standing, replyPromise, spanText, firstName } from '../src/lib/support.ts';
 
 let db: Server['db'];
@@ -706,22 +706,35 @@ test('the link cannot be used to flood the people who answer: a limit for each r
   assert.equal((await from().post(`${l.api}/reply`, { message: 'The next day.' })).status, 200);
   assert.equal((await from().post(`${l.api}/reply`, { message: '' })).status, 400);
 
-  // Across requests: one address cannot be used for more than 30 messages a day, new requests and replies
-  // together, whichever device they come from. That also keeps the form from filling a stranger's inbox.
+  // Across requests typed by people who are not signed in under the address: a small allowance for each address,
+  // whichever device they come from, so the form cannot fill a stranger's inbox. (Changed on purpose: this used to
+  // be 30 a day shared with the owner of the address, which let a stranger shut the owner out. See the tests about
+  // strangers further down.)
   let made = 0;
   for (;;) {
     const r = await from().post('/public/support', { email: 'Bomb@cust.test', message: 'Another request to the same address.' });
     if (r.status !== 200) {
-      assert.equal(r.status, 429);
-      assert.match(r.data.error, /We already have a lot of messages from this address in the last 24 hours/);
+      assert.deepEqual([r.status, r.data.code], [429, 'others_limit']);
+      assert.match(r.data.error, /If this is your address, you can still reach us: open the link in our email to this address/);
       break;
     }
-    assert.ok(++made <= SUPPORT_REPLIES_PER_ADDRESS, 'the limit holds');
+    assert.ok(++made <= SUPPORT_OTHERS_PER_ADDRESS, 'the limit holds');
   }
-  assert.equal(made, SUPPORT_REPLIES_PER_ADDRESS);
-  assert.equal(mailTo('Bomb@cust.test').length, SUPPORT_REPLIES_PER_ADDRESS, 'and no more acknowledgements than that reach the address');
+  assert.equal(made, SUPPORT_OTHERS_PER_ADDRESS);
+  assert.equal(mailTo('Bomb@cust.test').length, SUPPORT_OTHERS_PER_ADDRESS, 'and no more acknowledgements than that reach the address');
+  // Whoever holds our email is the owner, and is never stopped by what others typed.
   const any = db.get("SELECT ref FROM support_requests WHERE email='Bomb@cust.test' LIMIT 1").ref;
-  assert.equal((await from().post(`${link('Bomb@cust.test', any).api}/reply`, { message: 'A reply instead.' })).status, 429);
+  assert.equal((await from().post(`${link('Bomb@cust.test', any).api}/reply`, { message: 'A reply instead.' })).status, 200);
+  // The owner has a limit of their own: 30 messages a day from the address, new requests and replies together.
+  const busy = await person('Busy Owner', 'busy@cust.test');
+  for (let i = 0; i < SUPPORT_REPLIES_PER_ADDRESS; i++) {
+    busy.ip = ip();
+    assert.equal((await busy.post('/public/support', { message: `My own request number ${i + 1}, signed in.` })).status, 200);
+  }
+  busy.ip = ip();
+  const stop = await busy.post('/public/support', { message: 'One more of my own.' });
+  assert.equal(stop.status, 429);
+  assert.match(stop.data.error, /We already have a lot of messages from this address in the last 24 hours/);
   // One device hammering the form is stopped long before that.
   const one = from();
   let ok = 0;
@@ -782,4 +795,155 @@ test('deleting an account removes its requests with their threads, and one still
   assert.equal(db.get("SELECT COUNT(*) n FROM support_messages WHERE body LIKE 'OPEN-%' OR body LIKE 'WAITING-%'").n, 0);
   assert.equal(firstName('  Maya   Okafor '), 'Maya');
   assert.ok(hoursFromNow(1) > new Date().toISOString());
+});
+
+// ---- What a skeptic proved broken, and what stops it now -----------------------------------------------------
+// Each test below reproduces a finding of the review in research/verify-new.json ("verify:support") and fails
+// without its fix. The probes that found them are in tests/out/verify-support/.
+
+test('a stranger who types somebody\'s address can neither fill their inbox nor shut them out of support', async () => {
+  const amy = await person('Amy Real', 'amy.real@cust.test');
+  const mine = await ask({ topic: 'charged-wrongly', message: 'AMY: I was charged twice, please help.' }, amy);
+  const amyRow = row(mine.reference);
+  await act(maya, amyRow.id, { action: 'ask', text: 'Which card was it?' });
+  const l = link('amy.real@cust.test', mine.reference);
+  const inbox = mailTo('amy.real@cust.test').length;
+  // A stranger, from five devices, eight tries each, with nothing but Amy's address.
+  let made = 0;
+  const refused: any[] = [];
+  for (let d = 0; d < 5; d++) {
+    const dev = from();
+    for (let i = 0; i < 8; i++) {
+      const r = await dev.post('/public/support', { email: 'amy.real@cust.test', message: 'filler filler filler filler' });
+      if (r.status === 200) made++;
+      else refused.push(r);
+    }
+  }
+  assert.equal(made, SUPPORT_OTHERS_PER_ADDRESS);
+  assert.ok(refused.every((r) => r.status === 429 && r.data.code === 'others_limit'), JSON.stringify(refused[0]?.data));
+  assert.equal(mailTo('amy.real@cust.test').length - inbox, SUPPORT_OTHERS_PER_ADDRESS, 'one acknowledgement for each, and nothing more reaches her');
+  // The refusal names no number, so it does not count for the stranger what was written under the address.
+  assert.doesNotMatch(refused[0].data.error, /\d/);
+  // Amy is not shut out by any of it: her answer to our question through the link, a reply while signed in, and a
+  // new request while signed in all reach us.
+  assert.equal((await from().post(`${l.api}/reply`, { message: 'It was the card ending 4242.' })).status, 200);
+  assert.equal(row(mine.reference).status, 'open');
+  assert.equal((await amy.post(`/support/mine/${amyRow.id}/reply`, { message: 'And it happened on the 3rd.' })).status, 200);
+  assert.equal((await amy.post('/public/support', { topic: 'cannot-log-in', message: 'AMY: this is really me and I need help now.' })).status, 200);
+
+  // The allowance also counts what is still open from unknown writers, so it cannot be built up over days. Once a
+  // person on our side has closed those, there is room again.
+  db.run("UPDATE support_requests SET at=? WHERE email='amy.real@cust.test' AND verified=0", new Date(Date.now() - 2 * 864e5).toISOString());
+  assert.equal((await from().post('/public/support', { email: 'amy.real@cust.test', message: 'filler filler filler filler' })).data.code, 'others_limit');
+  for (const t of db.all("SELECT id FROM support_requests WHERE email='amy.real@cust.test' AND verified=0")) assert.equal((await act(maya, t.id, { action: 'spam' })).status, 200);
+  assert.equal((await from().post('/public/support', { email: 'amy.real@cust.test', message: 'Not signed in this time, but it is me.' })).status, 200);
+});
+
+test('what the owner of an address wrote today is never told to a stranger by the limit', async () => {
+  // Quinn writes a lot while signed in: six requests and six replies.
+  const own = await person('Quiet Owner', 'quinn@cust.test');
+  for (let i = 0; i < 6; i++) {
+    own.ip = ip();
+    assert.equal((await own.post('/public/support', { topic: 'other', message: `My own request number ${i}.` })).status, 200);
+  }
+  const first = db.get("SELECT id FROM support_requests WHERE email='quinn@cust.test' ORDER BY at LIMIT 1").id;
+  for (let i = 0; i < 6; i++) assert.equal((await own.post(`/support/mine/${first}/reply`, { message: `More, number ${i}.` })).status, 200);
+  // A stranger is stopped after exactly the same number of tries as at an address nobody ever wrote from.
+  const tries = async (email: string) => {
+    let ok = 0;
+    for (let i = 0; i < 10; i++) if ((await from().post('/public/support', { email, message: 'probing probing probing' })).status === 200) ok++;
+    return ok;
+  };
+  assert.equal(await tries('quinn@cust.test'), SUPPORT_OTHERS_PER_ADDRESS);
+  assert.equal(await tries('nobody-ever@cust.test'), SUPPORT_OTHERS_PER_ADDRESS);
+});
+
+test('the answer to a question of ours is always taken, and replies to a request closed long ago go to one follow-up', async () => {
+  const t = await ask({ email: 'tara@cust.test', name: 'Tara', message: 'TARA: my document is not where it should be.' });
+  const id = row(t.reference).id;
+  await act(maya, id, { action: 'answer', text: 'Try the Completed tab.' });
+  const l = link('tara@cust.test', t.reference);
+  for (let i = 0; i < SUPPORT_REPLIES_PER_REQUEST; i++) assert.equal((await from().post(`${l.api}/reply`, { message: `Still lost, try ${i}.` })).status, 200);
+  assert.equal((await from().post(`${l.api}/reply`, { message: 'One more.' })).status, 429);
+  // We ask her something. Her answer is taken although she used up today's messages: we wait for it.
+  await act(maya, id, { action: 'ask', text: 'What is the title of the document?' });
+  const answer = await from().post(`${l.api}/reply`, { message: 'It is called Lease 2026.' });
+  assert.equal(answer.status, 200, JSON.stringify(answer.data));
+  assert.equal(row(t.reference).status, 'open');
+  assert.equal((await from().post(`${l.api}/reply`, { message: 'And another thing.' })).status, 429, 'after that, the limit for the day holds again');
+
+  // Closed more than 30 days ago: the first reply starts a follow-up, and the next ones are added to it instead of
+  // each starting another (each new one would email everyone who answers).
+  await act(maya, id, { action: 'close', text: 'Found it for you.' });
+  db.run('UPDATE support_requests SET closed_at=? WHERE id=?', new Date(Date.now() - (SUPPORT_REOPEN_DAYS + 1) * 864e5).toISOString(), id);
+  db.run("UPDATE support_messages SET at=? WHERE request_id=? AND kind='customer'", new Date(Date.now() - 2 * 864e5).toISOString(), id);
+  const ops = mailTo('maya@ops.test').length + mailTo('ravi@ops.test').length;
+  const a = await from().post(`${l.api}/reply`, { message: 'Lost again, sorry.' });
+  const b = await from().post(`${l.api}/reply`, { message: 'Still lost.' });
+  const c = await from().post(`${l.api}/reply`, { message: 'Hello?' });
+  assert.ok(a.data.moved && b.data.moved && c.data.moved);
+  assert.equal(new Set([a.data.reference, b.data.reference, c.data.reference]).size, 1, 'one follow-up');
+  assert.equal(db.get('SELECT COUNT(*) n FROM support_requests WHERE follows=?', id).n, 1);
+  assert.equal(db.get("SELECT COUNT(*) n FROM support_messages m JOIN support_requests s ON s.id=m.request_id WHERE s.follows=? AND m.kind='customer'", id).n, 2);
+  assert.equal(mailTo('maya@ops.test').length + mailTo('ravi@ops.test').length - ops, 2, 'the people who answer were told once, about the follow-up');
+});
+
+// A mail server that takes its time, as real ones do (a few hundred milliseconds a message). It stands in for the
+// mail library's transport inside mail.ts, so nothing leaves this machine, and everything is put back afterwards.
+const slowMail = async <T>(ms: number, fn: () => Promise<T>): Promise<T> => {
+  const g = globalThis as any;
+  const was = { url: process.env.SMTP_URL, transport: g.__tsmail };
+  process.env.SMTP_URL = 'smtp://stand-in.invalid';
+  g.__tsmail = { sendMail: () => new Promise((r) => setTimeout(() => r({}), ms)) };
+  try {
+    return await fn();
+  } finally {
+    if (was.url === undefined) delete process.env.SMTP_URL;
+    else process.env.SMTP_URL = was.url;
+    g.__tsmail = was.transport;
+  }
+};
+const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+
+test('"send me the links again" answers as fast for an address that wrote to us as for one that never did', async () => {
+  for (let i = 0; i < 3; i++) await ask({ email: `wrote${i}@cust.test`, message: 'I wrote to you, long enough.' });
+  await slowMail(250, async () => {
+    const time = async (email: string) => {
+      const t0 = performance.now();
+      const r = await from().post('/public/support/find', { email });
+      assert.deepEqual([r.status, r.data], [200, { ok: true }]);
+      return performance.now() - t0;
+    };
+    const wrote: number[] = [];
+    const never: number[] = [];
+    for (let i = 0; i < 3; i++) (wrote.push(await time(`wrote${i}@cust.test`)), never.push(await time(`never${i}@cust.test`)));
+    // Before, an address that had written answered only once the mail server had taken the email: 250 ms or more.
+    assert.ok(Math.max(...wrote) < 150, `answered in ${wrote.map(Math.round)} ms, not after the mail server`);
+    assert.ok(Math.max(...never) < 150);
+    await settle();
+  });
+  // The email still goes, a moment later, and only to the addresses that wrote.
+  for (let i = 0; i < 3; i++) assert.equal(db.get("SELECT status FROM emails WHERE to_email=? AND subject LIKE 'Your requests to%'", `wrote${i}@cust.test`)?.status, 'sent');
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE 'never_@cust.test'").n, 0);
+});
+
+test('the links sent again leave out what the address disowned or we closed as not theirs, and help emails say nothing about signing', async () => {
+  const keep = await ask({ email: 'fay@cust.test', topic: 'billing', message: 'FAY-ONE: billing words here.' });
+  const disown = await ask({ email: 'fay@cust.test', topic: 'other', message: 'Another one, which she did not write.' });
+  const spam = await ask({ email: 'fay@cust.test', topic: 'other', message: 'Win a prize, call 555 0100 now.' });
+  const dl = link('fay@cust.test', disown.reference);
+  assert.equal((await from().post(`${dl.api}/solved`, { not_mine: true })).data.request.closed_how, 'disowned');
+  assert.equal((await act(maya, row(spam.reference).id, { action: 'spam' })).status, 200);
+  const before = db.get('SELECT MAX(id) m FROM emails').m;
+  assert.equal((await from().post('/public/support/find', { email: 'fay@cust.test' })).status, 200);
+  await settle(50);
+  const sent = db.all('SELECT subject, html FROM emails WHERE id > ?', before);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].subject, /the link again$/, 'one request left to send');
+  assert.ok(sent[0].html.includes(keep.reference) && !sent[0].html.includes(disown.reference) && !sent[0].html.includes(spam.reference));
+  // Every email about a help request ends with where it came from, and not with a line about signing documents.
+  for (const m of mailTo('fay@cust.test')) {
+    assert.doesNotMatch(text(m.html), /Signed digitally|every dollar plants/, m.subject);
+    assert.match(text(m.html), /Sent by the people who answer help requests at Sign&Grow\./);
+  }
 });

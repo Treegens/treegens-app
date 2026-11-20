@@ -9,6 +9,8 @@ import { CONSENT_VERSION, consentWording } from '../lib/policy.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
 import { deviceName } from '../lib/phone.ts';
+import { commentsText, threadsOf } from './comments.ts';
+import { COMMENTS_NOT_SIGNED } from '../lib/policy.ts';
 
 const SYSTEM: Actor = { name: 'System' };
 
@@ -270,6 +272,10 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     }) : ['Nobody has agreed yet.']),
   ].join('\r\n'));
 
+  // The questions and comments in full, private ones included: the pack is for the sender's side (comments.ts).
+  const said = commentsText(e);
+  if (said) (add('comments.txt', said), add('comments.json', JSON.stringify({ envelope_id: e.id, not_signed: COMMENTS_NOT_SIGNED, threads: threadsOf(e, { side: 'sender' }) }, null, 2)));
+
   add('README.txt', [
     `Sign&Grow evidence pack for envelope ${e.id}, "${e.subject}".`, `Made on ${now()} by ${madeBy}. It shows the envelope as it stood at that moment.`, '',
     ...(pdfName === 'signed.pdf' ? [`signed.pdf            the signed document exactly as stored when everyone had finished, with its certificate of completion. SHA-256 ${e.final_sha256}. Anyone can check a copy at ${baseUrl()}/verify, or look the envelope up there by its ID.`] : pdfName ? [`${pdfName.padEnd(22)}the document as it stands, ${e.status === 'sent' ? 'while it is still out for signature' : 'marked as not completed on every page'}. It is not a signed document and has no certificate.`] : []),
@@ -277,7 +283,8 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     'audit-trail.txt       every line of the audit trail, to read: time in UTC, who, internet address, what, and each line\'s hash.',
     `audit-trail.json      the same lines with prev_hash and hash, the browser string stored with each line, the people on the envelope, and the chain as checked now. ${HASH_HOW}`,
     'emails/               a copy of every email we stored about this envelope, as HTML. Signing links and security codes are taken out of these copies, because they would still open the document; nothing else is changed. emails/index.csv says what became of each: whether the mail server took it, every try, and what the mail provider told us later (delivered, came back, marked as spam), with the SHA-256 of the email as stored before anything was taken out.',
-    'consent.txt           the words each person agreed to before signing, in the version their audit line names.', '',
+    'consent.txt           the words each person agreed to before signing, in the version their audit line names.',
+    ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []), '',
     'What this does and does not show.', CHAIN_TRUTH, WHO_WHEN_WHERE,
     'Rules about electronic signatures differ by country and by kind of document. This pack is a record of what happened in Sign&Grow; it does not say that a signature is valid, and it is not legal advice.',
     ...(e.disputed_at ? ['', `This envelope is disputed: on ${e.disputed_at} a person named on it said they did not sign it, or that it was not them. See the "Disputed" lines in the audit trail.`] : []),

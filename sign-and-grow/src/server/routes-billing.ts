@@ -948,7 +948,12 @@ route('POST', '/billing/pay-open', async (c) => {
   if (typeof inv === 'string') inv = await stripe('GET', `invoices/${inv}`).catch(() => { throw down(); });
   // A payment the provider has given up on (some dunning settings mark it "uncollectible" instead of leaving it open)
   // can still be paid on its page.
-  if ((inv?.status === 'open' || inv?.status === 'uncollectible') && inv.hosted_invoice_url) return { url: inv.hosted_invoice_url, amount: money(Number(inv.amount_remaining ?? inv.amount_due ?? 0), inv.currency) };
+  if ((inv?.status === 'open' || inv?.status === 'uncollectible') && inv.hosted_invoice_url) {
+    // Paying it on purpose is a choice to pay it: a Cancel pressed earlier that the provider never confirmed does
+    // not send this payment back.
+    run('DELETE FROM stripe_events WHERE id=?', `${stopKey(a.id)}${inv.id}`);
+    return { url: inv.hosted_invoice_url, amount: money(Number(inv.amount_remaining ?? inv.amount_due ?? 0), inv.currency) };
+  }
   // Nothing is open any more: it was paid in the meantime, or withdrawn. The plan is read back so the page shows
   // what is true now instead of offering the same button again.
   const wasFailing = ['past_due', 'unpaid', 'incomplete'].includes(a.subscription_status);
@@ -1056,7 +1061,7 @@ route('GET', '/public/billing/stop', (c) => {
   // free_with is set when the plan costs nothing through a code: there is nothing to stop.
   return {
     // The price this account is charged, never the price for new customers: this is where someone decides to stop.
-    account: a.name, plan: a.plan, price: chargePrice(a) / 100, next_amount: money(nextCents(a)), free_with: a.promo_code || null, failing,
+    account: a.name, plan: a.plan, price: chargePrice(a) / 100, next_amount: money(nextCents(a)), next_cents: nextCents(a), free_with: a.promo_code || null, failing,
     can_cancel: renewing(a) || failing,
     renews_at: a.plan === 'grove' && renewing(a) && !failing ? a.renews_at : null, ends_at: a.promo_code || failing || !hasSub(a) ? null : a.cancel_at, cancel_ref: a.cancel_ref || null, signatures_left: Math.max(0, available(a.id)),
   };
@@ -1146,7 +1151,9 @@ route('POST', '/public/billing/stop-by-card', async (c) => {
     // Without the email address the match has to be unambiguous before anything is stopped.
     if (rows.length > 1) throw bad('More than one plan matches those details. Add the account email address, or use the contact form and a person will sort it out.', 409);
   }
-  if (!rows.length) throw bad('Those details do not match a paid plan. Check them against your card statement (a charge from the last few minutes may not show up yet), or use the contact form and a person will help.', 404);
+  if (!rows.length) throw bad(isEmail(email)
+    ? 'Those details do not match a paid plan that this address can stop. Check the last four digits against your card statement. A plan can only be stopped here with the address of one of its owners or admins, as in the app. Or use the contact form and a person will help.'
+    : 'Those details do not match a paid plan. Check them against your card statement (a charge from the last few minutes may not show up yet), or use the contact form and a person will help.', 404);
   // Every plan that is paid with that card under that address is stopped, and each one is named.
   const stopped: any[] = [];
   for (const a of rows) stopped.push({ account: isEmail(email) ? a.name : undefined, ...(await serial(a.id, () => cancelPlan(a, 'by the card holder, without logging in'))) });

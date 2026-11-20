@@ -17,6 +17,7 @@ import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from
 import { memberForCode } from './groups.ts';
 import { forgetChosen } from './tplroles.ts';
 import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
+import { commentsText } from './comments.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -162,6 +163,9 @@ route('GET', '/export', (c) => {
         files++;
         yield { name: `audit/${base}.json`, data: Buffer.from(JSON.stringify({ envelope: { id: e.id, subject: e.subject, status: e.status, sent_at: e.sent_at, completed_at: e.completed_at }, recipients: people, events: auditTrail(e.id) }, null, 2)) };
       }
+      // The questions and comments in full, private ones included: this export is the sender's side (comments.ts).
+      const said = files < ZIP_MAX_FILES - 3 ? commentsText(e) : '';
+      if (said) (files++, yield { name: `comments/${base}.txt`, data: Buffer.from(said) });
       index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256, file]));
     }
     yield { name: 'envelopes.csv', data: Buffer.from('﻿' + index.join('\r\n')) };
@@ -169,6 +173,7 @@ route('GET', '/export', (c) => {
       `Sign&Grow export for ${c.account.name}, made ${now()}.`, '',
       'signed/        completed documents, each with its certificate of completion',
       'audit/         the full audit trail of every envelope, as JSON',
+      'comments/      the questions and comments on an envelope, in full, where anyone wrote any. They are not part of what was signed.',
       'envelopes.csv  one row per envelope',
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
       ...(skipped ? ['', `${skipped} signed document(s) did not fit in one ZIP file. Export again with fewer envelopes selected to get them.`] : []),

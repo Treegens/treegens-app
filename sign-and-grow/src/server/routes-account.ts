@@ -20,8 +20,9 @@ import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed }
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 import { forgottenFile } from './evidence.ts';
+import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe } from './twostep.ts';
 
-const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
+export const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), two_step: twoStepOn(u), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
 
 // `via` names the provider when the login was made by signing in with Google or Microsoft and the provider did not
@@ -129,15 +130,29 @@ route('POST', '/auth/login', async (c) => {
   rateLimit(`login:${c.ip}`, 30, 900_000);
   rateLimit(`login:${email}`, 10, 900_000);
   const u = get('SELECT * FROM users WHERE email=?', email);
-  if (!u || !checkPassword(str(b.password, 200), u.password_hash)) throw bad('That email and password do not match.', 401);
-  return { user: publicUser(u), ...(await signInAs(c, u, b.invite)) };
+  if (!u || !checkPassword(str(b.password, 200), u.password_hash)) {
+    // A login with two-step login answers a wrong password as it answers the right one, with the second screen, so
+    // a password cannot be found out by trying it here (twostep.ts).
+    const held = holdWrongPassword(c, u, b.invite);
+    if (held) return held;
+    throw bad('That email and password do not match.', 401);
+  }
+  const r = await signInAs(c, u, b.invite);
+  // Held for the second step: nothing about the login goes back yet, not even that the password was right.
+  return 'two_step' in r ? r : { user: publicUser(u), ...r };
 }, 'public');
 
 // Everything that happens once we know who is signing in, whichever way they showed it (their password, Google or
 // Microsoft): a login that is being closed comes back, an invitation carried along is accepted, the workspace used
 // last opens, and someone who belongs to no account any more gets one of their own. Sets the session cookie and
 // returns what happened, so the first screen can say it.
-export async function signInAs(c: Ctx, u: any, inviteToken?: any) {
+// `o.passed`: the second step was done (POST /auth/two-step). Otherwise a login with two-step login gets no session
+// here: the sign-in waits for the code, with `o.next` and `o.note` (what a provider sign-in did) kept for afterwards.
+export async function signInAs(c: Ctx, u: any, inviteToken?: any, o: { passed?: boolean; next?: string | null; note?: any; via?: string } = {}) {
+  if (!o.passed) {
+    const held = await holdForSecondStep(c, u, { invite: inviteToken, next: o.next, note: o.note, via: o.via });
+    if (held) return held;
+  }
   // Signing in during the grace period after closing an account brings it straight back.
   const restored = !!u.closing_at;
   if (restored) {
@@ -250,7 +265,8 @@ route('POST', '/auth/reset', async (c) => {
     run('DELETE FROM sessions WHERE user_id=?', r.user_id);
     return cut;
   });
-  return { ok: true, disconnected: [...new Set(disconnected)].map((p) => (isProviderId(p) ? PROVIDER_NAMES[p] : p)) };
+  // two_step: the next sign-in asks for the code as well, because a reset by email is not a second step (twostep.ts).
+  return { ok: true, disconnected: [...new Set(disconnected)].map((p) => (isProviderId(p) ? PROVIDER_NAMES[p] : p)), two_step: twoStepOn(get('SELECT two_step_on_at, two_step_secret FROM users WHERE id=?', r.user_id)) };
 }, 'public');
 
 route('POST', '/auth/switch', async (c) => {
@@ -291,6 +307,9 @@ route('GET', '/me', (c) => {
     // Set when an email to this login came back for good ({ address, since, reason }), so every page can say so
     // until the address is changed or the person says it works again. null otherwise. See routes-bounces.ts.
     email_problem: emailProblem(c.user),
+    // Two-step login: whether it is on, and whether this account asks for it while it is not (setup_required: the app
+    // shows the screen that sets it up and nothing else). See twostep.ts.
+    two_step: twoStepMe(c),
   };
 }, 'public');
 
@@ -315,6 +334,7 @@ route('POST', '/me/password', async (c) => {
   // a link sent to their address (POST /me/signin/password-link), which shows the mailbox is theirs.
   if (!hasPassword(c.user)) throw bad(`This login has no password yet. Under Settings, Profile, Ways to sign in, choose "Email me a link to set a password". The link goes to ${c.user.email}.`);
   if (!checkPassword(str(b.current, 200), c.user.password_hash)) throw bad('Your current password is not right.');
+  await needCode(c, b.code, 'change your password');
   if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
   run('UPDATE users SET password_hash=? WHERE id=?', hashPassword(str(b.password, 200)), c.user.id);
   run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '');

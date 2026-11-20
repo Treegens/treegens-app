@@ -27,6 +27,8 @@ import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner } from './tplroles.ts';
+// A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
+import { witnessCorrected, rowFills } from './witness.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -402,6 +404,8 @@ route('POST', '/envelopes/:id/correct', async (c) => {
   assertBySenderCorrection(e, str(b.recipient_id), b);
   // With their check too ("verify", "phone", "text_link"): correctWithCheck does all of the call or none of it.
   await correctWithCheck(e, str(b.recipient_id), b, c.actor);
+  // A witness who is now another person starts clean, and is asked at once if their signer has signed (witness.ts).
+  await witnessCorrected(e.id, str(b.recipient_id), e.recipients.find((r: any) => r.id === str(b.recipient_id)));
 });
 
 route('POST', '/envelopes/:id/clone', async (c) => {
@@ -549,7 +553,7 @@ route('POST', '/bulk/check', async (c) => {
   const b = await c.body();
   const tpl = mine(c, str(b.template_id), 'template');
   const rows: any[] = Array.isArray(b.rows) ? b.rows.slice(0, 500) : [];
-  const open = tpl.recipients.filter((r: any) => !r.email && !r.group_name); // a group is filled in by its members, not by a row or a visitor
+  const open = tpl.recipients.filter(rowFills); // a group is filled in by its members, and a witness the signer names by that signer, not by a row or a visitor
   const counted = creditsEnabled();
   const { perRow, need, have } = counted ? batchNeeds(c, tpl, rows.length) : { perRow: 0, need: 0, have: 0 };
   const short = Math.max(0, need - Math.max(0, have));
@@ -589,7 +593,7 @@ route('POST', '/bulk', async (c) => {
   const rows: any[] = Array.isArray(b.rows) ? b.rows : [];
   if (!rows.length) throw bad('Add at least one row of recipients.');
   if (rows.length > 500) throw bad('Send up to 500 envelopes per batch.');
-  const open = tpl.recipients.filter((r: any) => !r.email && !r.group_name); // a group is filled in by its members, not by a row or a visitor
+  const open = tpl.recipients.filter(rowFills); // a group is filled in by its members, and a witness the signer names by that signer, not by a row or a visitor
   rows.forEach((row, i) => {
     for (const r of open) {
       const v = row?.[r.role_name || r.id];
@@ -686,7 +690,7 @@ route('POST', '/bulk/:id/void', async (c) => {
 function powerformTemplate(templateId: string) {
   const tpl = loadEnvelope(templateId);
   if (!tpl || tpl.kind !== 'template') throw bad('Template not found.', 404);
-  const open = tpl.recipients.filter((r: any) => !r.email && !r.group_name); // a group is filled in by its members, not by a row or a visitor
+  const open = tpl.recipients.filter(rowFills); // a group is filled in by its members, and a witness the signer names by that signer, not by a row or a visitor
   if (open.length !== 1 || !['signer', 'approver'].includes(open[0].role)) throw bad('A PowerForm needs a template with exactly one open signer role. Give every other recipient a name and email in the template.');
   return { tpl, open: open[0] };
 }

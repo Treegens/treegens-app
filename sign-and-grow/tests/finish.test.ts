@@ -350,6 +350,9 @@ test('someone who lost every email about their help request gets its link again,
   const before = db.get('SELECT MAX(id) m FROM emails').m;
   const found = await visitor().post('/public/support/find', { email: ' lost.mail@HELP.example ' });
   assert.deepEqual([found.status, found.data], [200, { ok: true }]);
+  // The answer goes back first and the email follows a moment later, so the answer takes the same time whether or
+  // not anything was found (tests/support.test.ts times it).
+  await new Promise((r) => setTimeout(r, 50));
   const again = db.all('SELECT to_email, subject, html FROM emails WHERE id > ?', before);
   assert.equal(again.length, 1);
   assert.match(again[0].subject, /^Your requests to Sign&Grow: the link again$/);
@@ -362,6 +365,7 @@ test('someone who lost every email about their help request gets its link again,
   const sofar = db.get('SELECT MAX(id) m FROM emails').m;
   const nobody = await visitor().post('/public/support/find', { email: 'never.wrote@help.example' });
   assert.deepEqual([nobody.status, nobody.data], [200, { ok: true }]);
+  await new Promise((r) => setTimeout(r, 50));
   assert.equal(db.get('SELECT COUNT(*) n FROM emails WHERE id > ?', sofar).n, 0);
   assert.equal((await visitor().post('/public/support/find', { email: 'not an address' })).status, 400);
 

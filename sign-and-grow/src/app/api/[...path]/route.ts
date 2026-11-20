@@ -11,6 +11,9 @@ import '@/server/routes-support';
 import '@/server/routes-paylink';
 import '@/server/routes-templates';
 import '@/server/routes-evidence';
+import '@/server/routes-witness';
+import '@/server/routes-comments';
+import '@/server/routes-twostep';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 
