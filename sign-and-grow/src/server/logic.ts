@@ -41,6 +41,9 @@ export function saveLogic(e: any, entries: Entry[]) {
     const fits = named.filter(ok);
     if (fits.length === 1) return fits[0];
     if (fits.length > 1) throw bad(`${whose} ${what} "${str(k, 80)}", and ${fits.length} fields have that label. Give them different labels, or name the field by its id.${NO}`);
+    // A field that was on the envelope and is not in this request: it is named as people know it, not by its id.
+    const gone = e.fields?.find?.((f: any) => f.id === k);
+    if (gone) throw bad(`${whose} ${what} '${nameOf(gone)}', and that field is no longer on the envelope. Choose another field, or take the rule out.${NO}`);
     throw bad(`${whose} ${what} "${str(k, 80)}", and no field on this envelope has that id or label.${named.length ? ` The field called that is not one that can be used here.` : ''}${NO}`);
   };
   const out = new Map<string, { rule: any; formula: string | null }>();

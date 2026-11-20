@@ -62,13 +62,13 @@ export const PAPER_KINDS: PaperKind[] = [
   },
   {
     id: 'witness', a: 'a document that needs a witness or a notary',
-    why: 'A witness usually has to be physically present when the document is signed, and so does a notary. Adding the witness as a second signer records their signature, not that they were in the room.',
+    why: 'A witness usually has to be physically present when the document is signed, and so does a notary. Sign&Grow can add a witness who states that they were there, and it cannot check that they were. It has no notary step.',
     words: ['executed as a deed', 'signed as a deed', 'in the presence of a witness', 'notary public', 'notarised', 'notarized', 'notariell*', 'ante notario', 'devant notaire'],
   },
 ];
 
 /** What every warning ends with: what the product is, that rules differ, and that nothing is blocked. */
-export const PAPER_TAIL = 'Sign&Grow makes simple electronic signatures and has no witness or notary step. The rules differ by country and by kind of document, so check before you rely on this one. This is a reminder only: nothing is blocked, and you can send it as it is.';
+export const PAPER_TAIL = 'Sign&Grow makes simple electronic signatures and has no notary step. It can add a witness who states that they saw the signature, and it cannot check that they were there. The rules differ by country and by kind of document, so check before you rely on this one. This is a reminder only: nothing is blocked, and you can send it as it is.';
 
 export type PaperWarning = {
   /** Which kind of document the word points to: will, trust, attorney, land, employment or witness. */
@@ -209,7 +209,7 @@ export const COUNTRY_NOTES: CountryNote[] = [
   },
   {
     id: 'uk', place: 'United Kingdom', checked: CHECKED,
-    text: 'The law says an electronic signature can be put before a court as evidence. A deed is different: it needs a witness who is physically present when it is signed, and Sign&Grow has no witness step. Sign a deed that needs a witness on paper, or with a tool that records the witness. Do not use Sign&Grow for a will or a lasting power of attorney. HM Land Registry has rules of its own that have changed more than once, so read its current guide before sending it anything.',
+    text: 'The law says an electronic signature can be put before a court as evidence. A deed is different: it needs a witness who is physically present when it is signed. Sign&Grow can add a witness who states that they saw the signature, and it cannot check that they were there, so whether a deed witnessed here is accepted depends on whoever it is for: check that first, or sign it on paper. Do not use Sign&Grow for a will or a lasting power of attorney. HM Land Registry has rules of its own that have changed more than once, so read its current guide before sending it anything.',
     sources: [
       { label: 'Electronic Communications Act 2000, section 7', url: 'https://www.legislation.gov.uk/ukpga/2000/7/section/7', official: true },
       { label: 'HM Land Registry, practice guide 8: execution of deeds', url: 'https://www.gov.uk/government/publications/execution-of-deeds/practice-guide-8-execution-of-deeds', official: true },

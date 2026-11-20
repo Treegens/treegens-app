@@ -922,8 +922,8 @@ test('"send me the links again" answers as fast for an address that wrote to us 
     assert.ok(Math.max(...wrote) < 150, `answered in ${wrote.map(Math.round)} ms, not after the mail server`);
     assert.ok(Math.max(...never) < 150);
     // Wait (while the stand-in is still in place) until the mail server has had every one of them.
-    const pending = () => db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE 'wrote_@cust.test' AND subject LIKE 'Your requests to%' AND status='queued'").n;
-    for (let i = 0; i < 50 && pending(); i++) await settle(100);
+    const taken = () => db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE 'wrote_@cust.test' AND subject LIKE 'Your requests to%' AND status='sent'").n;
+    for (let i = 0; i < 50 && taken() < 3; i++) await settle(100);
   });
   // The email still goes, a moment later, and only to the addresses that wrote.
   for (let i = 0; i < 3; i++) assert.equal(db.get("SELECT status FROM emails WHERE to_email=? AND subject LIKE 'Your requests to%'", `wrote${i}@cust.test`)?.status, 'sent');
@@ -1083,7 +1083,7 @@ test('when the mail server refuses an answer, the operator is told so, and is to
     const a = await act(maya, id, { action: 'answer', text: 'ANSWER that the mail server refuses.' });
     assert.equal(a.status, 200);
     assert.equal(a.data.mail, 'failed', 'the screen is told what the mail server said');
-    assert.ok(a.data.request.thread.some((m: any) => m.kind === 'event' && /The mail server did not take our email "An answer to your request \(\w+\)" to typo@cust\.tset\. It said: 550 5\.1\.1 no such user/.test(m.body)));
+    assert.ok(a.data.request.thread.some((m: any) => m.kind === 'event' && /^Not delivered yet: the mail server did not take our email "An answer to your request \(\w+\)" to typo@cust\.tset\. It said: 550 5\.1\.1 no such user\. It is tried again/.test(m.body)));
     assert.deepEqual([a.data.request.mail.status, a.data.request.mail.retrying], ['failed', true]);
     assert.equal(a.data.request.email, 'typo@cust.tset');
     // Every later try fails as well, until there are no more: whoever has the request is emailed.
@@ -1097,7 +1097,7 @@ test('when the mail server refuses an answer, the operator is told so, and is to
     const told = mailTo('maya@ops.test').slice(mayaMails);
     assert.equal(told.length, 1);
     assert.equal(told[0].subject, `Not delivered: our email about request ${t.reference}`);
-    assert.match(text(told[0].html), /could not be delivered, and nobody tries again\. It said: 550 5\.1\.1 no such user/);
+    assert.match(text(told[0].html), /could not be delivered, and nobody tries again\. It said: 550 5\.1\.1 no such user\./);
 
     // A question that goes through: the screen says the mail server took it, nothing more.
     mailServer.refuse = false;
@@ -1297,4 +1297,19 @@ test('the queue lets a long name and address wrap, and prints the whole address 
   const old = new Date(Date.now() - 400 * 864e5).toISOString();
   assert.match(whenText(old, 'UTC'), new RegExp(`^\\w+day \\d{1,2} \\w+ ${new Date(old).getUTCFullYear()}, \\d\\d:\\d\\d`));
   assert.match(whenText(hoursFromNow(30), 'UTC'), /^\w+day \d{1,2} \w+, \d\d:\d\d/);
+});
+
+test('a confirmation that never arrives is noted on the request, without one more email to the desk for every made-up address', async () => {
+  const { retryMail } = await import('../src/server/mail.ts');
+  await standInMail(async () => {
+    mailServer.refuse = true;
+    const t = await ask({ email: 'made.up@nowhere.tset', message: 'Typed with an address that does not exist.' });
+    const desk = mailTo('maya@ops.test').length + mailTo('ravi@ops.test').length;
+    db.run("UPDATE emails SET tries=5, next_try_at=? WHERE to_email='made.up@nowhere.tset' AND status='failed'", new Date(Date.now() - 1000).toISOString());
+    await retryMail();
+    const v = await opView(maya, row(t.reference).id);
+    assert.ok(v.thread.some((m: any) => /^Not delivered: our email "We got your message/.test(m.body)));
+    assert.deepEqual([v.mail.status, v.mail.retrying], ['failed', false], 'the opened request shows it');
+    assert.equal(mailTo('maya@ops.test').length + mailTo('ravi@ops.test').length, desk, 'nobody was emailed about it');
+  });
 });

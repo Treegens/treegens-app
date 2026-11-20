@@ -421,7 +421,8 @@ test('every country note is dated, hedged and rests on a source the research nam
   const text = (id: string) => COUNTRY_NOTES.find((n) => n.id === id)!.text;
   assert.match(text('eu'), /Sign&Grow makes the first/);
   assert.match(text('de'), /qualified electronic signature, which Sign&Grow does not provide/);
-  assert.match(text('uk'), /Sign&Grow has no witness step/);
+  // Since the witness role (tests/witness.test.ts): what it records, and that it cannot check the witness was there.
+  assert.match(text('uk'), /Sign&Grow can add a witness who states that they saw the signature, and it cannot check that they were there/);
   assert.match(text('in'), /not an Aadhaar eSign and not a digital signature certificate/);
   assert.match(text('in'), /signing here does not pay stamp duty/);
   assert.match(text('za-ke'), /Sign&Grow is not such a provider/);

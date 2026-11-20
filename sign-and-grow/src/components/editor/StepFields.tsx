@@ -9,7 +9,7 @@ import { MAX_FIELDS, MIN_H, MIN_W, PREFILL, SIGNS, TLABEL, TYPES, clamp, makeFie
 import { SENDER_MARK } from './shared';
 import { strikeClass, STRIKE_HELP } from '@/lib/strike';
 import { WordingField } from '../templates/WhoCanUse';
-import { FieldLogic } from './FieldLogic';
+import { FieldLogic, withoutField } from './FieldLogic';
 import { WitnessBlockButton } from './WitnessChoice';
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
@@ -46,7 +46,14 @@ export function StepFields({ ed }: { ed: Ed }) {
   const selected = list.find((f) => f.id === sel);
   const selLocked = !!selected && isLockedField(selected);
   const patchField = (fid: string, p: any, key = Object.keys(p).join()) => setFields((l) => l.map((f) => (f.id === fid ? { ...f, ...p } : f)), { tag: `prop:${fid}:${key}` });
-  const remove = (fid: string) => (setFields((l) => l.filter((f) => f.id !== fid)), setSel(null), setSheet(false));
+  // Fields that depended on the deleted one are put right in the same step, and the sender is told (withoutField).
+  const remove = (fid: string) => {
+    const r = withoutField(fields.current(), fid);
+    setFields(() => r.list);
+    if (r.said.length) toast(r.said.join(' '));
+    setSel(null);
+    setSheet(false);
+  };
   const full = () => (fields.current().length >= MAX_FIELDS ? (toast('An envelope can hold up to 2,000 fields. Remove one to add another.', true), true) : false);
 
   // After a field is added from the keyboard or found automatically, bring it into view.
@@ -468,11 +475,12 @@ export function StepFields({ ed }: { ed: Ed }) {
                     </select>
                   </label>
                 )}
-                {!SENDER_MARK(selected.type) && !['date_signed', 'full_name', 'email'].includes(selected.type) && (
+                {/* A calculated field is never typed into: not required, no prefilled value (FieldLogic.tsx). */}
+                {!SENDER_MARK(selected.type) && !['date_signed', 'full_name', 'email'].includes(selected.type) && selected.formula == null && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
                 {!SENDER_MARK(selected.type) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
-                {PREFILL.includes(selected.type) && (
+                {PREFILL.includes(selected.type) && selected.formula == null && (
                   <>
                     <label className="f"><span>{selected.type === 'note' ? 'Text' : 'Prefilled value'}</span><textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>
                     {selected.type !== 'note' && <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.readonly} onChange={(e) => patchField(selected.id, { readonly: e.target.checked })} /> Read only</label>}

@@ -23,7 +23,7 @@ function WithCode({ label, danger, onSubmit, onCancel }: { label: string; danger
       setError('');
       onSubmit(code).catch((x: any) => setError(x?.message || 'Something went wrong. Nothing was changed.')).finally(() => setBusy(false));
     }}>
-      <CodeField id={`ts-${label.replace(/\W+/g, '-').toLowerCase()}`} value={code} onChange={setCode} label="Code from your authenticator app, or a recovery code" autoFocus />
+      <CodeField id={`ts-${label.replace(/\W+/g, '-').toLowerCase()}`} value={code} onChange={setCode} label="Code from your authenticator app, or a recovery code" either autoFocus />
       {error && <div className="notice err" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="ts-actions"><button className={`btn ${danger ? 'danger' : 'primary'}`} disabled={busy || !code.trim()}>{label}</button><button type="button" className="btn" onClick={onCancel}>Cancel</button></div>
     </form>
@@ -154,7 +154,7 @@ export function TeamTwoStep() {
         <Modal title={asking ? 'Ask everyone for two-step login' : 'Stop asking everyone'} onClose={() => setAsking(null)}>
           <form className="twostep" onSubmit={(e) => { e.preventDefault(); act(() => api('/account/two-step', { body: { required: asking, code } })); }}>
             <p>{asking ? `${without.length ? `${without.length === 1 ? 'One person does' : `${without.length} people do`} not have it yet. We email them now. The next time they open ${me.account.name}, they are asked to set it up, and until then nothing else in it opens for them. Their other workspaces are not affected, and API keys keep working.` : 'Everyone has it already.'}` : `Members can then switch two-step login off for themselves.`}</p>
-            <CodeField id="ts-team" value={code} onChange={setCode} label="Your code from your authenticator app, or a recovery code" autoFocus />
+            <CodeField id="ts-team" value={code} onChange={setCode} label="Your code from your authenticator app, or a recovery code" either autoFocus />
             {error && <div className="notice err" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
             <div className="actions"><button type="button" className="btn" onClick={() => setAsking(null)}>Cancel</button><button className="btn primary" disabled={busy || !code.trim()}>{asking ? 'Ask everyone' : 'Stop asking'}</button></div>
           </form>
@@ -166,7 +166,7 @@ export function TeamTwoStep() {
             <p>For someone who lost their phone and their recovery codes. Their second step is switched off at once: whoever knows their password can then sign in with it alone, until they set it up again.</p>
             <p><b>Only do this when you know it is {reset.name} asking</b>, for example on a call or in person. A message from their email address is not enough, because someone who has got into their mailbox can write that too.</p>
             <p className="muted small">{reset.name} is emailed at once, and their record says that you did it.</p>
-            {d.you_on && <CodeField id="ts-reset" value={code} onChange={setCode} label="Your code from your authenticator app, or a recovery code" autoFocus />}
+            {d.you_on && <CodeField id="ts-reset" value={code} onChange={setCode} label="Your code from your authenticator app, or a recovery code" either autoFocus />}
             {error && <div className="notice err" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
             <div className="actions"><button type="button" className="btn" onClick={() => setReset(null)}>Cancel</button><button className="btn danger" disabled={busy || (d.you_on && !code.trim())}>Reset it</button></div>
           </form>

@@ -1,4 +1,4 @@
-// The growsigning logo, drawn inline from the path data in src/lib/brandMark.ts. No hooks, no files to fetch and no
+// The growsigner logo, drawn inline from the path data in src/lib/brandMark.ts. No hooks, no files to fetch and no
 // imports from src/server, so it renders the same in client and server components and in the first paint.
 // Not used anywhere yet: the rename pass wires it in (brand/README.md, "Wiring it in").
 import type { CSSProperties } from 'react';
@@ -18,7 +18,7 @@ type Common = {
 const named = (label: string) => (label ? { role: 'img' as const, 'aria-label': label } : { 'aria-hidden': true as const });
 
 /** The leaf alone, `size` px square (the leaf fills the middle 7/8). Under 24 px it switches to the drawing with the nib opened wider, as on the app icon, so the hole and slit still show. */
-export function Mark({ size = 24, tone = 'light', label = 'growsigning', className, style }: Common & { size?: number }) {
+export function Mark({ size = 24, tone = 'light', label = 'growsigner', className, style }: Common & { size?: number }) {
   const m = size < 24 ? MARK_SMALL : MARK;
   return (
     <svg viewBox={m.viewBox} width={size} height={size} {...named(label)} focusable="false" className={className} style={{ flex: 'none', ...style }}>
@@ -35,7 +35,7 @@ export function Mark({ size = 24, tone = 'light', label = 'growsigning', classNa
 }
 
 /** The horizontal logo, `height` px tall from the top of the leaf to its point. 16 px is the smallest it should go. */
-export function Logo({ height = 22, tone = 'light', label = 'growsigning', className, style }: Common & { height?: number }) {
+export function Logo({ height = 22, tone = 'light', label = 'growsigner', className, style }: Common & { height?: number }) {
   const width = Math.round(((height * LOGO.width) / LOGO.height) * 100) / 100;
   const t = tone === 'mono' ? null : TONES[tone];
   return (
@@ -45,13 +45,13 @@ export function Logo({ height = 22, tone = 'light', label = 'growsigning', class
           <path fill={t.lit} d={LOGO.mark.lit} />
           <path fill={t.shade} d={LOGO.mark.shade} />
           <path fill={t.grow} d={LOGO.grow} />
-          <path fill={t.signing} d={LOGO.signing} />
+          <path fill={t.signer} d={LOGO.signer} />
         </>
       ) : (
         <g fill="currentColor">
           <path d={LOGO.mark.mono} />
           <path d={LOGO.grow} />
-          <path d={LOGO.signing} />
+          <path d={LOGO.signer} />
         </g>
       )}
     </svg>
@@ -59,8 +59,8 @@ export function Logo({ height = 22, tone = 'light', label = 'growsigning', class
 }
 
 /**
- * "sent with growsigning", for the signing page header beside the sender's own logo: their brand leads, ours follows
- * quietly. The words sit on the logo's baseline. Screen readers hear "sent with growsigning".
+ * "sent with growsigner", for the signing page header beside the sender's own logo: their brand leads, ours follows
+ * quietly. The words sit on the logo's baseline. Screen readers hear "sent with growsigner".
  */
 export function SentWith({ height = 18, tone = 'light', className, style }: Omit<Common, 'label'> & { height?: number }) {
   // Lowering the logo by the depth under its baseline puts the word's baseline on the line of text.

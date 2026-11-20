@@ -11,14 +11,16 @@ import { TWO_STEP_API_KEYS, TWO_STEP_LOST, TWO_STEP_RECOVERY_CODES, TWO_STEP_TRI
 const group = (s: string) => s.replace(/(.{4})(?=.)/g, '$1 ');
 
 // The box a code is typed into. Six digits from the app, or a recovery code: the server tells them apart.
-export function CodeField({ value, onChange, label = 'Code from your authenticator app', recovery = false, autoFocus = false, id }: { value: string; onChange: (v: string) => void; label?: string; recovery?: boolean; autoFocus?: boolean; id?: string }) {
+// `either`: the box also takes a recovery code, so a phone shows its full keyboard.
+export function CodeField({ value, onChange, label = 'Code from your authenticator app', recovery = false, either = false, autoFocus = false, id }: { value: string; onChange: (v: string) => void; label?: string; recovery?: boolean; either?: boolean; autoFocus?: boolean; id?: string }) {
+  const letters = recovery || either;
   return (
     <label className="f" htmlFor={id}>
       <span>{label}</span>
       <input id={id} value={value} onChange={(e) => onChange(e.target.value)} required autoFocus={autoFocus} className="ts-code"
-        inputMode={recovery ? 'text' : 'numeric'} autoComplete="one-time-code" autoCapitalize="off" spellCheck={false}
-        maxLength={recovery ? 14 : 8} pattern={recovery ? undefined : '[0-9 ]*'} aria-describedby={id ? `${id}-hint` : undefined} />
-      {id && <span id={`${id}-hint`} className="hint">{recovery ? 'Ten letters and digits, as printed. Capitals, spaces and the dash do not matter.' : 'The 6 digits your app shows for Sign&Grow. A new one comes every 30 seconds: type the newest.'}</span>}
+        inputMode={letters ? 'text' : 'numeric'} autoComplete="one-time-code" autoCapitalize="off" spellCheck={false}
+        maxLength={letters ? 14 : 8} pattern={letters ? undefined : '[0-9 ]*'} aria-describedby={id ? `${id}-hint` : undefined} />
+      {id && <span id={`${id}-hint`} className="hint">{recovery ? 'Ten letters and digits, as printed. Capitals, spaces and the dash do not matter.' : either ? 'The 6 digits your app shows for Sign&Grow now, or one of your recovery codes as printed.' : 'The 6 digits your app shows for Sign&Grow. A new one comes every 30 seconds: type the newest.'}</span>}
     </label>
   );
 }
@@ -133,7 +135,7 @@ export function SetUpTwoStep({ hasPassword, moving = false, onDone, onCancel }: 
     <form className="twostep" onSubmit={start}>
       {!moving && <LostPhoneRules />}
       {moving
-        ? <CodeField id="ts-move" value={code} onChange={setCode} label="Code from the app you use now (or a recovery code)" recovery={false} autoFocus />
+        ? <CodeField id="ts-move" value={code} onChange={setCode} label="Code from the app you use now, or a recovery code" either autoFocus />
         : hasPassword
           ? <label className="f"><span>Your password</span><input type="password" autoComplete="current-password" required value={pw} onChange={(e) => setPw(e.target.value)} autoFocus /><span className="hint">So that nobody who finds this browser signed in can put their own phone in front of your login.</span></label>
           : <p className="small muted">Your login has no password, so this works within 15 minutes of signing in. If you are told to sign in again, sign out and back in with Google or Microsoft, and come straight back.</p>}

@@ -39,7 +39,7 @@ export function SignatureKind() {
   return (
     <>
       <QA id="enough" q="Is this signature enough for my document?">
-        <p>Sign&Grow makes a <b>simple electronic signature</b>: the signer&apos;s name or mark on the page, and a record of who was sent the link, when they agreed and signed, and from which internet address. It does not check anyone&apos;s identity document, and it has no witness and no notary step.</p>
+        <p>Sign&Grow makes a <b>simple electronic signature</b>: the signer&apos;s name or mark on the page, and a record of who was sent the link, when they agreed and signed, and from which internet address. It does not check anyone&apos;s identity document, and it has no notary step. A witness can be added for a person who signs: they state that they saw the signature being made, and Sign&Grow cannot check that they were there (<a href="#witness">how a witness works</a>).</p>
         <p>Whether that is enough depends on the country and on the kind of document. Nobody here is a lawyer and this page is not legal advice. As a rough map, the European Union describes three levels:</p>
         <ul className="pub-list">
           <li><b>Simple.</b> What Sign&Grow makes. In many countries it can be used for agreements that need no special form.</li>

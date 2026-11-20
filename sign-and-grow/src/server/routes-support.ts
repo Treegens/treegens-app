@@ -712,12 +712,12 @@ function requestOfMail(m: any): any {
   const ref = m && !m.envelope_id ? TO_CUSTOMER.exec(m.subject || '')?.[1] : null;
   return ref ? get('SELECT * FROM support_requests WHERE (ref=? OR (ref IS NULL AND upper(substr(id, -8))=?)) AND lower(email)=lower(?)', ref, ref, m.to_email) : null;
 }
-const said = (e: any) => (e ? ` It said: ${String(e).slice(0, 200)}` : '');
+const said = (e: any) => (e ? ` It said: ${String(e).slice(0, 200).replace(/[\s.]+$/, '')}.` : '');
 onMailOutcome('support', async (m, what) => {
   const t = requestOfMail(m);
   if (!t) return;
   const sys: By = { name: 'Sign&Grow' };
-  if (what === 'delayed') return void say(t, 'event', `The mail server did not take our email "${m.subject}" to ${t.email}.${said(m.error)} It is tried again by itself for about a day and a half`, sys);
+  if (what === 'delayed') return void say(t, 'event', `Not delivered yet: the mail server did not take our email "${m.subject}" to ${t.email}.${said(m.error)} It is tried again by itself for about a day and a half`, sys);
   if (what === 'sent') {
     say(t, 'event', `Our email "${m.subject}" reached the mail server on a later try`, sys);
     // A request kept only until its answer had left goes now (see forgetIfSent).
@@ -725,6 +725,10 @@ onMailOutcome('support', async (m, what) => {
     return;
   }
   say(t, 'event', `Not delivered: our email "${m.subject}" to ${t.email}.${said(m.error)} Nobody tries again`, sys);
+  // A person on our side is emailed only when what did not arrive was something a person wrote: an answer, a
+  // question or a closing answer. A confirmation or a late notice to an address someone made up is in the history
+  // and on the opened request, and must not become one more email to the desk for every address a stranger types.
+  if (!/^(An answer to your request|We have a question about your request|Your request \S+ is closed)/.test(m.subject || '')) return;
   const owner = ownerOf(t);
   for (const to of owner ? [owner.email] : desk())
     await sendMail({ to, subject: `Not delivered: our email about request ${refOf(t)}`, heading: `${t.name || 'The customer'} did not get our email about request ${refOf(t)}`,

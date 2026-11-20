@@ -137,6 +137,13 @@ test('rules chain from the top: a field is shown only when the one it depends on
   assert.equal(ruleWords({ field: 'b', is: 'checked' }, fields[10], 'Yes'), "Shown when 'Yes' is chosen");
   assert.equal(ruleWords({ field: 'qty', is: 'more_than', value: '100' }, fields[6], 'Quantity'), "Shown when 'Quantity' is more than 100");
   assert.equal(formulaWords('{q} * {p} / 2', (id) => ({ q: 'Quantity', p: 'Unit price' } as any)[id]), "'Quantity' × 'Unit price' ÷ 2");
+  const nm = (id: string) => id.toUpperCase();
+  assert.equal(formulaWords('(({a} + {b})) * {c}', nm), "('A' + 'B') × 'C'", 'brackets only where they change something');
+  assert.equal(formulaWords('{a} - ({b} - {c})', nm), "'A' - ('B' - 'C')");
+  assert.equal(formulaWords('{a} - {b} - {c}', nm), "'A' - 'B' - 'C'");
+  assert.equal(formulaWords('round(sum({a}, {b}) / 3, 2)', nm), "sum('A', 'B') ÷ 3, rounded to 2 decimals");
+  assert.equal(formulaWords('sum({a}, {b})', nm), "the sum of 'A', 'B'");
+  assert.equal(formulaWords('{a} *', nm), "'A' ×", 'a formula still being typed is shown as it is');
 });
 
 test('a calculated field that is hidden counts as empty, rules can depend on a calculated field, and loops are found', () => {
@@ -564,7 +571,7 @@ test('the signing page shows, hides and works out live, with other people\'s ans
   assert.equal(t.readonly, 1, 'nobody types in a calculated field');
   assert.equal(t.required, 0);
   assert.equal(t.value, '30,00', "the sender's fee counts; someone else's unfinished answer does not");
-  assert.match(t.calc_note, /^Worked out for you from round\('Quantity' × 'Unit price' \+ 'Fee' \+ 'Their extra', 2\)\. With Quantity 2, Unit price 12,5, Fee 5, Their extra 0, that comes to 30,00\. Empty fields count as 0\.$/);
+  assert.match(t.calc_note, /^Worked out for you from 'Quantity' × 'Unit price' \+ 'Fee' \+ 'Their extra', rounded to 2 decimals\. With Quantity 2, Unit price 12,5, Fee 5, Their extra 0, that comes to 30,00\. Empty fields count as 0\.$/);
   live = liveLogic(mine, others, { co: '1', q: '' });
   assert.ok(live.fields.some((f: any) => f.id === 'name'));
   assert.equal(live.fields.find((f: any) => f.id === 't').value, '5,00');
@@ -591,4 +598,72 @@ test('a bulk list: a column named like a field fills it for that row, and nothin
   assert.deepEqual(cols.byRow.get(reading.rows[0].row), { Plan: 'Gold', Seats: '3', Billing: 'Yearly' });
   assert.equal(cols.byRow.get(reading.rows[1].row), undefined, 'empty cells fill nothing');
   assert.deepEqual(readFieldColumns('Ada,ada@x.example,Gold', fields, false).names, [], 'without a header row no column can name a field');
+});
+
+// ---- Abuse, and honest people who would otherwise get stuck ---------------------------------------------------
+
+test('a phone number hidden in a formula is read by the filter for fake payment notices, like any other words the signer sees', async () => {
+  const s = await person('Fay Formula', 'fay@logic.example');
+  const file = await upload(s, 1);
+  const make = (formula: string) => s.post('/envelopes', {
+    subject: 'Your PayPal invoice', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', name: 'Vic Victim', email: 'vic.f@logic.example' }],
+    fields: [
+      { id: 'q', document_id: 'd', recipient_id: 'r', type: 'number', label: 'Refund of $499.00', page: 0, x: 0.1, y: 0.1, w: 0.2, h: 0.03 },
+      { id: 't', document_id: 'd', recipient_id: 'r', type: 'number', label: 'Total', formula, page: 0, x: 0.1, y: 0.2, w: 0.2, h: 0.03 },
+      { id: 's', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.6, w: 0.3, h: 0.06 },
+    ],
+  });
+  const plain = (await make('{q} * 2')).data.envelope;
+  assert.equal((await s.post(`/envelopes/${plain.id}/send`)).status, 200, 'brand and money alone are not a lure');
+  const lure = (await make('{q} + 18885550142')).data.envelope;
+  const r = await s.post(`/envelopes/${lure.id}/send`);
+  assert.equal(r.status, 422, JSON.stringify(r.data));
+});
+
+test('deleting a field others depend on puts them right in the same step, and the server names a missing field as people know it', async () => {
+  const { dropField } = await import('../src/lib/logic.ts');
+  const withoutField = (l: any[], id: string) => dropField(l, id, (f: any) => f.label);
+  {
+    const list = [
+      { id: 'box', type: 'checkbox', label: 'Has a co-signer' },
+      { id: 'name', type: 'text', label: 'Co-signer name', show_when: { field: 'box', is: 'checked' } },
+      { id: 'q', type: 'number', label: 'Quantity' },
+      { id: 't', type: 'number', label: 'Total', formula: '{q} * 2 + {q}' },
+    ];
+    let r = withoutField(list, 'box');
+    assert.equal(r.list.find((f: any) => f.id === 'name').show_when, null);
+    assert.equal(r.said.join(' '), 'Has a co-signer was deleted. Co-signer name depended on it and is now always shown. Undo brings it back.');
+    r = withoutField(list, 'q');
+    assert.equal(r.list.find((f: any) => f.id === 't').formula, '0 * 2 + 0');
+    assert.match(r.said.join(' '), /The formula of Total used it and counts 0 in its place now/);
+    assert.deepEqual(withoutField(list, 'name').said, [], 'nothing depended on it, nothing to say');
+  }
+  const s = await person('Gus Gone', 'gus@logic.example');
+  const e = await quote(s, 'ada9@logic.example');
+  const got = (await s.get(`/envelopes/${e.id}`)).data.envelope;
+  const r = await s.put(`/envelopes/${e.id}`, { fields: got.fields.filter((f: any) => f.label !== 'Has a co-signer') });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /Field \d+ \("Co-signer name"\) is shown when 'Has a co-signer', and that field is no longer on the envelope\. Choose another field, or take the rule out\. Nothing was saved\./);
+});
+
+test('the review step says when every signature of a person depends on an answer', () => {
+  const said = logicWarnings([
+    { id: 'box', type: 'checkbox', recipient_id: 'r', label: 'Company' },
+    { id: 's', type: 'signature', recipient_id: 'r', show_when: { field: 'box', is: 'checked' } },
+  ] as any, [{ id: 'r', name: 'Ada', role: 'signer' }], false, (f: any) => f.label || f.type).join(' ');
+  assert.match(said, /Every signature and initials field of Ada is shown only after a certain answer\. With other answers Ada finishes without signing anywhere on the page/);
+});
+
+test('two fields that are never shown at the same time may share a place on the page', async () => {
+  const { stackedFields } = await import('../src/lib/stacked.ts');
+  const box = { id: 'box', type: 'checkbox', recipient_id: 'r', document_id: 'd', page: 0, x: 0.1, y: 0.1, w: 0.03, h: 0.02 };
+  const at = { recipient_id: 'r', document_id: 'd', page: 0, x: 0.3, y: 0.3, w: 0.3, h: 0.03, type: 'text' };
+  const people = [{ id: 'r', name: 'Ada' }], docs = [{ id: 'd', name: 'Doc' }];
+  const both = (a: any, b: any) => stackedFields([box, { ...at, id: 'a', show_when: a }, { ...at, id: 'b', show_when: b }] as any, people, docs);
+  assert.deepEqual(both({ field: 'box', is: 'checked' }, { field: 'box', is: 'unchecked' }), [], 'ticked and not ticked');
+  assert.deepEqual(both({ field: 'p', is: 'equals', value: 'Gold' }, { field: 'p', is: 'equals', value: 'silver' }), []);
+  assert.deepEqual(both({ field: 'p', is: 'equals', value: 'Gold' }, { field: 'p', is: 'not_equals', value: 'gold' }), []);
+  assert.equal(both({ field: 'box', is: 'checked' }, { field: 'box', is: 'checked' }).length, 1, 'both can be shown at once: refused as before');
+  assert.equal(both({ field: 'box', is: 'checked' }, null).length, 1);
+  assert.equal(both({ field: 'p', is: 'equals', value: 'Gold' }, { field: 'q', is: 'equals', value: 'Silver' }).length, 1, 'different fields can both be answered');
 });

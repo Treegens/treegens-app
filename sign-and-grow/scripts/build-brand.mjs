@@ -1,4 +1,4 @@
-// Builds the growsigning logo kit.
+// Builds the growsigner logo kit.
 //
 //   node scripts/build-brand.mjs            Rebuilds every export from the SVG files in brand/: the PNG icons, favicon.ico,
 //                                           the email logos and the social preview in public/brand/, and brand/guide.png
@@ -23,15 +23,15 @@ const at = (...p) => path.join(root, ...p);
 export const COLORS = {
   forest: '#1f6f43', // lit half of the mark, "grow"
   deep: '#134a2c', // shaded half of the mark, the icon tile, dark backgrounds
-  ink: '#17241c', // "signing", text
+  ink: '#17241c', // "signer", text
   paper: '#f6f3ec', // the page
   lightLeaf: '#9ed88f', // the mark and "grow" on dark backgrounds
   leaf: '#6fb35f', // illustration only, never text
   yellow: '#ffd24a', // the main button only, with ink text
 };
 const TONES = {
-  light: { lit: COLORS.forest, shade: COLORS.deep, grow: COLORS.forest, signing: COLORS.ink },
-  dark: { lit: COLORS.paper, shade: COLORS.lightLeaf, grow: COLORS.lightLeaf, signing: COLORS.paper },
+  light: { lit: COLORS.forest, shade: COLORS.deep, grow: COLORS.forest, signer: COLORS.ink },
+  dark: { lit: COLORS.paper, shade: COLORS.lightLeaf, grow: COLORS.lightLeaf, signer: COLORS.paper },
 };
 
 // ---- The mark --------------------------------------------------------------------------------
@@ -164,11 +164,14 @@ function font(file) {
 }
 const LORA_600 = 'lora-latin-600-normal.woff2';
 const LORA_500_ITALIC = 'lora-latin-500-italic.woff2';
-// The designer's two tightenings on top of Lora's own kerning, in thousandths of an em.
-const EXTRA_KERN = { ro: -6, ws: -10 };
+// Tightenings on top of Lora's own kerning, in thousandths of an em. r and o, and w and s, are the concept designer's
+// and carry over unchanged (the letters around them are the same in "growsigner"). e and r is new with "signer":
+// Lora sets it 7 to 8 units looser than its neighbours n-e, i-g and s-i (white area between the letters over the
+// x-height), and at 200 px it shows as a gap before the last letter.
+const EXTRA_KERN = { ro: -6, ws: -10, er: -8 };
 
 // Sets `text` with its left side bearing at x0 (so the ink starts at x0) and the baseline at y. Returns one path per
-// group of letters (`groups` are lengths, e.g. [4, 7] for grow + signing), plus the ink box.
+// group of letters (`groups` are lengths, e.g. [4, 6] for grow + signer), plus the ink box.
 export function setText(file, text, size, x0, y, groups = [text.length], kern = EXTRA_KERN) {
   const f = font(file), s = size / f.unitsPerEm, run = f.layout(text);
   let pen = 0;
@@ -204,25 +207,29 @@ export function setText(file, text, size, x0, y, groups = [text.length], kern = 
 // the i, the word's ink starting 9.24 units after the square. Every file's viewBox is the ink and nothing else, so
 // a logo set 22 px tall is 22 px of logo; the clear space is kept by whoever places it (see brand/README.md).
 
+// The word, and where it splits into its two colours: "grow" and "signer".
+const WORD = 'growsigner';
+const SPLIT = [4, 6];
+
 export function buildMasters() {
   const markBox = 48, size = 44, baseline = 32.8;
-  const word = setText(LORA_600, 'growsigning', size, markBox + 9.24, baseline, [4, 7]);
+  const word = setText(LORA_600, WORD, size, markBox + 9.24, baseline, SPLIT);
   const mark = markPaths(0, 0, markBox);
-  const logo = { w: word.box.maxX, h: markBox, baseline, mark, grow: word.ds[0], signing: word.ds[1] };
+  const logo = { w: word.box.maxX, h: markBox, baseline, mark, grow: word.ds[0], signer: word.ds[1] };
 
   // Stacked: the same word under a mark twice the size, centred on the word's ink.
   const sBox = 96, sGap = 14;
-  const sWord = setText(LORA_600, 'growsigning', size, 0, 0, [4, 7]);
+  const sWord = setText(LORA_600, WORD, size, 0, 0, SPLIT);
   const wordW = sWord.box.maxX - sWord.box.minX;
   const sBase = sBox + sGap - sWord.box.minY; // minY is the top of the dots, negative
-  const sw = setText(LORA_600, 'growsigning', size, 0, sBase, [4, 7]);
-  const stacked = { w: wordW, h: sw.box.maxY, mark: markPaths((wordW - sBox) / 2, 0, sBox), grow: sw.ds[0], signing: sw.ds[1] };
+  const sw = setText(LORA_600, WORD, size, 0, sBase, SPLIT);
+  const stacked = { w: wordW, h: sw.box.maxY, mark: markPaths((wordW - sBox) / 2, 0, sBox), grow: sw.ds[0], signer: sw.ds[1] };
 
   // The stamp: a ruled box with the mark, "Signed with" in Lora Medium Italic and the wordmark, all one colour.
   const H = 40, rule = 1.6, rad = 9, padL = 11, mBox = 22, gap1 = 8, tSize = 17, wSize = 18, base = 26.4, padR = 13;
   const sMark = markPaths(padL, (H - mBox) / 2, mBox);
   const signed = setText(LORA_500_ITALIC, 'Signed with', tSize, padL + mBox + gap1, base, undefined, {});
-  const sWord2 = setText(LORA_600, 'growsigning', wSize, signed.box.maxX + wSize * 0.3, base);
+  const sWord2 = setText(LORA_600, WORD, wSize, signed.box.maxX + wSize * 0.3, base);
   const W = sWord2.box.maxX + padR;
   const ring = roundRect(0, 0, W, H, rad, false) + roundRect(rule, rule, W - 2 * rule, H - 2 * rule, rad - rule, true);
   const stamp = { w: W, h: H, d: ring + sMark.mono + signed.ds[0] + sWord2.ds[0] };
@@ -277,25 +284,25 @@ export function writeMasters() {
   const m = buildMasters();
   const out = (f, s) => fs.writeFileSync(at('brand', f), s);
   const twoTone = (p, t) => [pathEl(t.lit, p.lit), pathEl(t.shade, p.shade)].join('\n');
-  const word = (l, t) => [pathEl(t.grow, l.grow), pathEl(t.signing, l.signing)].join('\n');
+  const word = (l, t) => [pathEl(t.grow, l.grow), pathEl(t.signer, l.signer)].join('\n');
 
-  out('mark.svg', svg(64, 64, 'growsigning', 'The mark: a leaf that is also the nib of a fountain pen. Lit half, then shaded half.', twoTone(m.mark, TONES.light)));
-  out('mark-mono.svg', svg(64, 64, 'growsigning', 'The mark in one colour. It takes the CSS colour of its parent when inlined; as an image it is black.', pathEl('currentColor', m.mark.mono)));
-  out('mark-small.svg', svg(64, 64, 'growsigning', 'The mark for 16 to 23 px: the same leaf with the hole and slit opened wider, as on the app icon.', twoTone(m.markSmall, TONES.light)));
-  out('logo.svg', svg(m.logo.w, m.logo.h, 'growsigning', `For light backgrounds. ${LORA_NOTE}`, twoTone(m.logo.mark, TONES.light) + '\n' + word(m.logo, TONES.light)));
-  out('logo-dark.svg', svg(m.logo.w, m.logo.h, 'growsigning', `For dark backgrounds such as ${COLORS.deep}. ${LORA_NOTE}`, twoTone(m.logo.mark, TONES.dark) + '\n' + word(m.logo, TONES.dark)));
-  out('logo-mono.svg', svg(m.logo.w, m.logo.h, 'growsigning', `One colour (currentColor). ${LORA_NOTE}`, pathEl('currentColor', m.logo.mark.mono + m.logo.grow + m.logo.signing)));
-  out('logo-stacked.svg', svg(m.stacked.w, m.stacked.h, 'growsigning', `Mark above the word, for square spaces. For light backgrounds. ${LORA_NOTE}`, twoTone(m.stacked.mark, TONES.light) + '\n' + word(m.stacked, TONES.light)));
-  out('icon.svg', svg(64, 64, 'growsigning', 'The app icon. The nib is opened a little wider than in mark.svg so it still shows at 16 px.',
+  out('mark.svg', svg(64, 64, WORD, 'The mark: a leaf that is also the nib of a fountain pen. Lit half, then shaded half.', twoTone(m.mark, TONES.light)));
+  out('mark-mono.svg', svg(64, 64, WORD, 'The mark in one colour. It takes the CSS colour of its parent when inlined; as an image it is black.', pathEl('currentColor', m.mark.mono)));
+  out('mark-small.svg', svg(64, 64, WORD, 'The mark for 16 to 23 px: the same leaf with the hole and slit opened wider, as on the app icon.', twoTone(m.markSmall, TONES.light)));
+  out('logo.svg', svg(m.logo.w, m.logo.h, WORD, `For light backgrounds. ${LORA_NOTE}`, twoTone(m.logo.mark, TONES.light) + '\n' + word(m.logo, TONES.light)));
+  out('logo-dark.svg', svg(m.logo.w, m.logo.h, WORD, `For dark backgrounds such as ${COLORS.deep}. ${LORA_NOTE}`, twoTone(m.logo.mark, TONES.dark) + '\n' + word(m.logo, TONES.dark)));
+  out('logo-mono.svg', svg(m.logo.w, m.logo.h, WORD, `One colour (currentColor). ${LORA_NOTE}`, pathEl('currentColor', m.logo.mark.mono + m.logo.grow + m.logo.signer)));
+  out('logo-stacked.svg', svg(m.stacked.w, m.stacked.h, WORD, `Mark above the word, for square spaces. For light backgrounds. ${LORA_NOTE}`, twoTone(m.stacked.mark, TONES.light) + '\n' + word(m.stacked, TONES.light)));
+  out('icon.svg', svg(64, 64, WORD, 'The app icon. The nib is opened a little wider than in mark.svg so it still shows at 16 px.',
     `  <rect width="64" height="64" rx="14" fill="${COLORS.deep}"/>\n` + twoTone(m.icon, TONES.dark)));
-  out('stamp.svg', svg(m.stamp.w, m.stamp.h, 'Signed with growsigning', `For the certificate and the foot of signed copies. One colour (currentColor). ${LORA_NOTE}`, pathEl('currentColor', m.stamp.d)));
+  out('stamp.svg', svg(m.stamp.w, m.stamp.h, `Signed with ${WORD}`, `For the certificate and the foot of signed copies. One colour (currentColor). ${LORA_NOTE}`, pathEl('currentColor', m.stamp.d)));
   writeBrandMarkTs(m);
   console.log('[build-brand] SVG files and src/lib/brandMark.ts written');
 }
 
 function writeBrandMarkTs(m) {
   const q = (s) => JSON.stringify(compact(s));
-  const ts = `// The growsigning logo as path data, so it can be drawn without loading a file: inline in the browser (see
+  const ts = `// The growsigner logo as path data, so it can be drawn without loading a file: inline in the browser (see
 // src/components/Brand.tsx) and into a PDF with pdf-lib (page.drawSvgPath). Written by scripts/build-brand.mjs --masters
 // from the same drawing as brand/*.svg. Do not edit by hand: change the drawing there and run it again.
 //
@@ -304,7 +311,7 @@ function writeBrandMarkTs(m) {
 //
 //   import { rgb } from 'pdf-lib';
 //   const s = 18 / LOGO.height; // 18 pt tall
-//   const parts = [[LOGO.mark.lit, 'lit'], [LOGO.mark.shade, 'shade'], [LOGO.grow, 'grow'], [LOGO.signing, 'signing']] as const;
+//   const parts = [[LOGO.mark.lit, 'lit'], [LOGO.mark.shade, 'shade'], [LOGO.grow, 'grow'], [LOGO.signer, 'signer']] as const;
 //   for (const [d, part] of parts) page.drawSvgPath(d, { x, y: top, scale: s, color: rgb(...rgb01(TONES.dark[part])) });
 //
 // Every path fills correctly under the nonzero rule (pdf-lib's) and under evenodd.
@@ -316,8 +323,8 @@ export const rgb01 = (hex: string): [number, number, number] => [1, 3, 5].map((i
 
 /** Which colour each part takes on a light background (paper or white) and on a dark one (deep green or ink). */
 export const TONES = {
-  light: { lit: COLORS.forest, shade: COLORS.deep, grow: COLORS.forest, signing: COLORS.ink },
-  dark: { lit: COLORS.paper, shade: COLORS.lightLeaf, grow: COLORS.lightLeaf, signing: COLORS.paper },
+  light: { lit: COLORS.forest, shade: COLORS.deep, grow: COLORS.forest, signer: COLORS.ink },
+  dark: { lit: COLORS.paper, shade: COLORS.lightLeaf, grow: COLORS.lightLeaf, signer: COLORS.paper },
 } as const;
 
 /** The mark alone, on the 64 unit icon grid (the leaf fills the middle 56). \`lit\` and \`shade\` are the two halves; \`mono\` is the whole leaf with the nib cut out. */
@@ -340,7 +347,7 @@ export const MARK_SMALL = {
   mono: ${q(m.markSmall.mono)},
 } as const;
 
-/** The horizontal logo: mark, then the word. "grow" and "signing" are separate so they can take two colours. */
+/** The horizontal logo: mark, then the word. "grow" and "signer" are separate so they can take two colours. */
 export const LOGO = {
   viewBox: ${JSON.stringify(vb(m.logo.w, m.logo.h))},
   width: ${num(m.logo.w)},
@@ -349,10 +356,10 @@ export const LOGO = {
   baseline: ${num(m.logo.baseline)},
   mark: { lit: ${q(m.logo.mark.lit)}, shade: ${q(m.logo.mark.shade)}, mono: ${q(m.logo.mark.mono)} },
   grow: ${q(m.logo.grow)},
-  signing: ${q(m.logo.signing)},
+  signer: ${q(m.logo.signer)},
 } as const;
 
-/** "Signed with growsigning" in a ruled box, one colour, for the certificate and the foot of signed copies. */
+/** "Signed with growsigner" in a ruled box, one colour, for the certificate and the foot of signed copies. */
 export const STAMP = {
   viewBox: ${JSON.stringify(vb(m.stamp.w, m.stamp.h))},
   width: ${num(m.stamp.w)},

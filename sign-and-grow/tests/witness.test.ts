@@ -601,3 +601,67 @@ test('the API describes the role, its two settings and the three routes, and the
   const { listRoutes } = await import('../src/server/router.ts');
   for (const p of ['/sign/:token/witness', '/sign/:token/witness-statement', '/sign/:token/not-present']) assert.ok(listRoutes().some((r) => r.method === 'POST' && r.path === p));
 });
+
+// ---- 4 and 7. Honest everywhere it is offered, and the help entry ------------------------------------------------
+
+test('every place a witness is offered says what is recorded and that it cannot be checked, and nothing promises it holds', async () => {
+  const lib = await import('../src/lib/witness.ts');
+  assert.match(lib.WITNESS_RECORDS, /records what the witness states.*It cannot check that they were in the room\. Whether a document witnessed this way is accepted depends on the law that applies to it.*For a deed, check that first\./);
+  assert.match(lib.WHO_MAY_WITNESS, /an adult who is not a party to this document/);
+  assert.match(lib.WHO_MAY_WITNESS, /physically with the person who signs, in the same room, and watch them sign/);
+  assert.match(lib.WHO_MAY_WITNESS, /The rules differ by country and by kind of document/);
+  // Editor, signing page, envelope page, certificate, help: each says it, from the one text.
+  assert.match(read('src/components/editor/WitnessChoice.tsx'), /<p>\{WHO_MAY_WITNESS\}<\/p>\s*<p>\{WITNESS_RECORDS\}<\/p>/);
+  const sign = read('src/components/sign/Witness.tsx');
+  assert.ok((sign.match(/\{WITNESS_RECORDS\}/g) || []).length >= 4, 'on the witness\'s screens and the signer\'s');
+  assert.match(sign, /\{WHO_MAY_WITNESS\}/);
+  assert.match(read('src/server/witness.ts'), /out\.push\(\['Note', WITNESS_CERT_NOTE\]\)/);
+  assert.match(lib.WITNESS_CERT_NOTE, /cannot check that they were physically present/);
+  const help = read('src/app/help/witness.tsx');
+  assert.match(help, /\{WITNESS_RECORDS\}/);
+  assert.match(help, /<a href=\{WITNESS_SOURCE\}/);
+  assert.match(help, /Written in \{WITNESS_CHECKED\}/);
+  assert.match(lib.WITNESS_CHECKED, /^(January|February|March|April|May|June|July|August|September|October|November|December) 20\d\d$/);
+  assert.ok(read('research/gaps.json').includes(lib.WITNESS_SOURCE), 'the official source is one the research cites');
+  assert.match(read('src/app/help/page.tsx'), /<WitnessHelp \/>/);
+  // No sentence suggests that a witnessed document holds, and nowhere still says there is no witness step.
+  const promises = /same legal effect|as valid as|legally binding|legally valid|is valid|are valid|will hold up|guarantee|equal to a handwritten|meets the (law|requirement)/i;
+  const files = ['src/lib/witness.ts', 'src/server/witness.ts', 'src/server/routes-witness.ts', 'src/components/sign/Witness.tsx', 'src/components/editor/WitnessChoice.tsx', 'src/components/sender/WitnessFacts.tsx', 'src/app/help/witness.tsx', 'src/app/styles/witness.css', 'tests/witness.test.ts'];
+  for (const f of files) {
+    const body = read(f);
+    assert.doesNotMatch(body.replace(/const promises = .*$/m, ''), promises, f);
+    assert.ok(!body.includes(String.fromCharCode(0x2014)), `no em dash in ${f}`);
+  }
+  for (const f of ['src/app/help/outside.tsx', 'src/lib/paperwork.ts', 'src/app/help/page.tsx', 'src/app/security/page.tsx', 'src/app/page.tsx', 'src/app/developers/page.tsx', 'README.md'])
+    assert.doesNotMatch(read(f), /no witness( and no notary)? step|has no witness|no witness or notary/i, f);
+  // The words a witness and a signer see in emails and on the server say the same.
+  const { statementText } = lib;
+  assert.equal(statementText('Ann Lee', '20 November 2026'), 'I was physically present and saw Ann Lee sign this document on 20 November 2026.');
+});
+
+test('the screens: a witness of their own on the signing page, the choice in the editor, the facts on the envelope page, 44 px to tap', () => {
+  const page = read('src/app/sign/[token]/page.tsx');
+  assert.match(page, /if \(witnessFirst\(data, stage\)\)/);
+  assert.match(page, /<WitnessFirst data=\{data\} base=\{base\} onDone=\{load\} \/>/);
+  assert.match(page, /<WitnessName me=\{me\} base=\{base\} onNamed=\{load\} \/>/, 'naming is on the review screen');
+  assert.match(page, /<WitnessAfter me=\{me\} base=\{base\} onNamed=\{load\} \/>/);
+  assert.match(page, /me\.role !== 'witness' \? \[\{ key: 'decline'/, 'no Decline for a witness');
+  assert.match(page, /key: 'absent', label: 'I was not there'/);
+  const first = read('src/components/sign/Witness.tsx');
+  assert.match(first, /<blockquote className="wt-statement"/);
+  assert.match(first, /<span>This is true\. I make this statement as my own\.<\/span>/);
+  assert.match(first, /aria-describedby=\{`\$\{ids\}-st \$\{ids\}-rec`\}/, 'the tick is tied to the statement for a screen reader');
+  assert.match(first, />I was not there<\/button>/);
+  assert.match(first, /<span>Witness&rsquo;s email address<\/span><input type="email"/);
+  const editor = read('src/components/editor/StepAdd.tsx');
+  assert.match(editor, /<WitnessChoice r=\{r\} rcps=\{rcps\} isTpl=\{isTpl\} onChange=\{\(p\) => ed\.patchRcp\(r\.id, p\)\} \/>/);
+  assert.match(editor, /\{!signerNames\(r\) && <>/);
+  assert.match(read('src/components/editor/StepFields.tsx'), /<WitnessBlockButton ed=\{ed\}/);
+  assert.match(read('src/components/Editor.tsx'), /witness_for: r\.witness_for \|\| null, named_by_signer: !!r\.named_by_signer/);
+  assert.match(read('src/components/sender/Recipients.tsx'), /\{r\.role === 'witness' && <WitnessFact r=\{r\} e=\{e\} \/>\}/);
+  const css = read('src/app/styles/witness.css');
+  for (const sel of ['.ed-witness select', '.ed-witness label.check', '.ed-witness-block .btn', '.wt-tick', '.wt-actions .btn', '.wt-form input, .wt-form textarea']) assert.match(css, new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[^}]*min-height: 44px`), sel);
+  assert.match(read('src/app/layout.tsx'), /import '\.\/styles\/witness\.css';/);
+  const ui = read('src/components/ui.tsx');
+  assert.match(ui, /witness: 'Witnesses a signature'/);
+});

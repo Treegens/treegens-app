@@ -978,7 +978,8 @@ function fakeNotice(e: any, account: any, sender: any, extra: any[] = []): strin
   const posing = [sender?.name, account?.name].find((name) => posesAs(name));
   if (posing) return nameRefusal([posing]);
   const shared =e.recipients.filter((r: any) => r.email && e.recipients.some((x: any) => x.id !== r.id && sameEmail(x.email, r.email)));
-  const lure = lureIn([e.subject, e.message, ...e.recipients.map((r: any) => r.note), ...e.documents.map((d: any) => d.name), ...(e.fields || []).flatMap((f: any) => [senderText(f), f.label]),
+  // A formula is shown to the signer in words, numbers and all, so it is read too (src/lib/logic.ts).
+  const lure = lureIn([e.subject, e.message, ...e.recipients.map((r: any) => r.note), ...e.documents.map((d: any) => d.name), ...(e.fields || []).flatMap((f: any) => [senderText(f), f.label, f.formula]),
     ...shared.map((r: any) => r.name), sender?.name, account?.name, ...extra,
     // The name of a group is printed in every member's email, and a member's name on the other members' screens.
     ...groupWords(e)]);

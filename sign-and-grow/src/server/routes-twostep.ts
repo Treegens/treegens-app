@@ -121,7 +121,13 @@ const LOG_TEXT: Record<LogWhat, string> = {
   email_reset_done: 'Switched off by the reset by email.',
   devices_forgotten: 'Every remembered device was withdrawn.',
 };
-const logText = (l: any) => (l.what === 'reset_by_admin' ? `Switched off by ${l.by_name || 'an admin'}, an admin of ${l.account_name || 'a team'}.` : LOG_TEXT[l.what as LogWhat] || l.what);
+// Who reset it: the name as it was, and the address while that login exists. The record keeps no address, so it does
+// not outlive the admin's own login.
+const byWhom = (l: any) => {
+  const who = l.by_id ? get('SELECT email FROM users WHERE id=?', l.by_id) : null;
+  return `${l.by_name || 'an admin'}${who ? ` (${who.email})` : ''}`;
+};
+const logText = (l: any) => (l.what === 'reset_by_admin' ? `Switched off by ${byWhom(l)}, an admin of ${l.account_name || 'a team'}.` : LOG_TEXT[l.what as LogWhat] || l.what);
 const deviceHandle = (d: any) => sha256(`two-step-device:${d.id}`).slice(0, 16);
 const devicesOf = (userId: string): any[] => all('SELECT * FROM two_step_devices WHERE user_id=? AND expires_at > ? ORDER BY last_used_at DESC', userId, now());
 
@@ -234,7 +240,7 @@ route('POST', '/me/two-step/reset/stop', async (c) => ({ ok: true, stopped: awai
 // ---- Teams ----------------------------------------------------------------------------------------------------
 
 route('GET', '/account/two-step', (c) => {
-  const last = new Map(all("SELECT user_id, at, by_name FROM two_step_log WHERE account_id=? AND what='reset_by_admin' ORDER BY id", c.account.id).map((l) => [l.user_id, { at: l.at, by: l.by_name }]));
+  const last = new Map(all("SELECT user_id, at, by_id, by_name FROM two_step_log WHERE account_id=? AND what='reset_by_admin' ORDER BY id", c.account.id).map((l) => [l.user_id, { at: l.at, by: byWhom(l) }]));
   const members = all('SELECT u.id, u.name, u.email, u.two_step_on_at, u.two_step_secret, m.role FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? ORDER BY m.created_at', c.account.id).map((m) => {
     const on = twoStepOn(m);
     return { id: m.id, name: m.name, email: m.email, role: m.role, on, can_reset: on && m.id !== c.user.id && m.role !== 'owner', last_reset: last.get(m.id) || null };
@@ -278,7 +284,7 @@ route('POST', '/account/members/:id/two-step/reset', async (c) => {
   await needCode(c, b.code, `reset the second step of ${m.name}`);
   tx(() => {
     clearTwoStep(m.id);
-    logStep(m.id, 'reset_by_admin', { id: c.user.id, name: `${c.user.name} (${c.user.email})` }, c.account);
+    logStep(m.id, 'reset_by_admin', { id: c.user.id, name: c.user.name }, c.account);
   });
   await sendMail({ to: m.email, subject: `${c.user.name} switched off two-step login of your Sign&Grow login`, heading: 'Your second step was reset',
     lines: [`${c.user.name} (${c.user.email}), an admin of ${c.account.name}, switched off two-step login of your Sign&Grow login just now. Your password alone signs in now, and your recovery codes and remembered devices were removed.`,

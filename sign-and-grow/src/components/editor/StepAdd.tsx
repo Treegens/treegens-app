@@ -12,8 +12,9 @@ import { LIMITS, PAPER_HINT, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
 import { LockedLine, WhoCanUse } from '../templates/WhoCanUse';
 import { GroupRow, AddGroup, useGroups, isGroupRow } from './GroupRecipient';
+import { WitnessChoice, signerNames } from './WitnessChoice';
 
-const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy' };
+const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy', witness: 'Witnessed' };
 
 // Step 1: the documents, who gets them, and the message that goes with them.
 export function StepAdd({ ed }: { ed: Ed }) {
@@ -126,6 +127,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
                 <div className="row wrap">
                   {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
                   {isTpl && <input placeholder="Role, e.g. Client" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
+                  {/* No name or address of the sender's for a witness the signer names (WitnessChoice.tsx, below). */}
+                  {!signerNames(r) && <>
                   <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
                   {/* No address for someone whose link the sender sends themselves (SendMyself.tsx, below). */}
                   {!(r.link_by_sender && !isTpl) && <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" style={{ flex: '1 1 170px' }}
@@ -133,6 +136,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                       const c = contacts.find((x) => x.email.toLowerCase() === e.target.value.toLowerCase());
                       ed.patchRcp(r.id, { email: e.target.value, ...(c && !r.name ? { name: c.name } : {}) });
                     }} />}
+                  </>}
                   <select value={r.role} aria-label="Role" style={{ flex: '0 1 170px' }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { role: e.target.value })}>
                     {Object.entries(ROLE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                   </select>
@@ -140,6 +144,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                   {!wording && <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${who(r)}`}>✕</button>}
                 </div>
                 <SendMyself r={r} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
+                <WitnessChoice r={r} rcps={rcps} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
                 {more === r.id && (
                   <div className="grid g2" style={{ marginTop: 10 }}>
                     <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">(at least 4 characters, share it with them yourself)</span></span><input value={r.access_code || ''} maxLength={50} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>

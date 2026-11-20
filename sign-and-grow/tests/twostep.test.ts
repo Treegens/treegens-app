@@ -176,6 +176,11 @@ test('after the password a second screen asks for the code, and a wrong password
     assert.deepEqual((await x.c.get('/auth/two-step')).data.waiting, true);
   }
   assert.deepEqual(right.r.data, wrong.r.data, 'the password step says nothing about the password');
+  const look = async (c: Client) => {
+    const { expires_at, ...rest } = (await c.get('/auth/two-step')).data;
+    return rest;
+  };
+  assert.deepEqual(await look(right.c), await look(wrong.c), 'nor does the second screen');
   // A login without two-step login, and an address nobody has, still say so at once.
   assert.equal((await password('nobody.here@example.com')).r.status, 401);
   // After a code: the same answer for a wrong code after the right password and for any code after a wrong one.
@@ -185,7 +190,7 @@ test('after the password a second screen asks for the code, and a wrong password
   assert.equal(b.status, 401);
   assert.equal(a.data.error, 'That did not work: the code is not right, or the password you typed before it was not. We do not say which, so that nobody can find out a password by trying it here. 3 more tries, then the second step of this login pauses for 15 minutes. Type the newest code from your app, or start again with your password.'.replace('3 more', `${TWO_STEP_TRIES - 1} more`));
   assert.equal(b.data.error, a.data.error.replace(`${TWO_STEP_TRIES - 1} more`, `${TWO_STEP_TRIES - 2} more`), 'both count towards one pause, so the count says nothing either');
-  assert.equal(signedIn(b.c ?? wrong.c), false);
+  assert.equal(signedIn(wrong.c), false);
   // A typo costs a try, not the password: the right password's sign-in still waits, and the right code finishes it.
   usedStep.delete(secret);
   const ok = await right.c.post('/auth/two-step', { code: code(secret) });
@@ -283,11 +288,10 @@ test('"Remember this device" skips the second step in that browser, for that log
   assert.equal((await password(email)).r.data.two_step, true);
   // The cookie belongs to this login: under another login's name it opens nothing.
   const other = await person('Otto Other');
-  const o2 = await switchOn(other.c);
+  await switchOn(other.c);
   const thief = browser();
   thief.cookies[`sg_device_${crypto.createHash('sha256').update(`device:${other.id}`).digest('hex').slice(0, 12)}`] = b.cookies[name];
   assert.equal((await password(other.email, PW, thief)).r.data.two_step, true);
-  void o2;
   // Listed under Settings, and withdrawn from there.
   const list = (await c.get('/me/two-step')).data.devices;
   assert.equal(list.length, 1);
@@ -402,7 +406,7 @@ test('an owner or admin resets a member\'s second step: the member is emailed at
     db.run('INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', acc, p.id, role, new Date().toISOString());
     assert.equal((await p.c.post('/auth/switch', { account_id: acc })).status, 200);
   }
-  const m = await switchOn(member.c);
+  await switchOn(member.c);
   // Not a member's to do, and not an API key's.
   assert.equal((await member.c.post(`/account/members/${admin.id}/two-step/reset`, {})).status, 403);
   const key = (await owner.c.post('/api-keys', { name: 'admin key', scope: 'admin' })).data.key;
@@ -427,11 +431,17 @@ test('an owner or admin resets a member\'s second step: the member is emailed at
   const log = (await member.c.get('/me/two-step')).data.log;
   assert.match(log[0].text, new RegExp(`Switched off by Olive Owner \\(${owner.email.replace(/\./g, '\\.')}\\), an admin of Olive Owner's workspace\\.`));
   assert.equal((await owner.c.get('/account/two-step')).data.members.find((x: any) => x.id === member.id).last_reset.by, `Olive Owner (${owner.email})`);
+  // Stored is the name and the login it belongs to, never the address: that is looked up while the login exists.
+  assert.deepEqual({ ...db.get("SELECT by_id, by_name FROM two_step_log WHERE user_id=? AND what='reset_by_admin'", member.id) }, { by_id: owner.id, by_name: 'Olive Owner' });
   // The member signs in with the password alone, and the old app and codes are gone.
   const back = await password(member.email);
   assert.equal(back.r.data.user?.email, member.email);
   assert.equal(db.get('SELECT two_step_codes k FROM users WHERE id=?', member.id).k, null);
-  void m;
+  // Nobody resets someone of another team: that person is not on this one.
+  const stranger = await person('Sol Stranger');
+  await switchOn(stranger.c);
+  assert.equal((await owner.c.post(`/account/members/${stranger.id}/two-step/reset`, { code: code(ownerStep.secret) })).status, 404);
+  assert.ok(db.get('SELECT two_step_secret s FROM users WHERE id=?', stranger.id).s);
 });
 
 test('the only owner resets by email: it takes effect after the wait, is emailed every day, and signing in stops it', async () => {
@@ -603,7 +613,7 @@ test('signing in with Google goes through the second step too, and what it did i
   const { c, email } = await person('Gwen Google');
   const { secret } = await switchOn(c);
   const b = browser();
-  // The address is a gmail one? No: example.com is not run by Google, so connect it under Settings first.
+  // Google is connected to this login already (as under Settings, Ways to sign in).
   const sub = `g-${email}`;
   db.run('INSERT INTO identities (id, provider, subject, user_id, email, vouched, created_at) VALUES (?,?,?,?,?,1,?)', `idn_${n}`, 'google', sub, db.get('SELECT id FROM users WHERE email=?', email).id, email, new Date().toISOString());
   const back = await withGoogle(b, email, sub);
@@ -655,4 +665,41 @@ test('no route gives a session before the second step is done', async () => {
     assert.equal((await b.post('/auth/two-step', { code: '999999' })).status, 401);
     assert.equal(signedIn(b), false);
   }
+});
+
+test('a login without a password sets it up within minutes of signing in, so a browser left signed in is not enough', async () => {
+  const b = browser();
+  const email = `gina.${n}@gmail.com`;
+  const sub = `g-${email}`;
+  const back = await withGoogle(b, email, sub);
+  assert.equal(back.status, 302);
+  assert.ok(signedIn(b), 'a new login, made with Google, and no password');
+  const s = await b.post('/me/two-step/setup', {});
+  assert.equal(s.status, 200, 'just signed in: allowed');
+  db.run('UPDATE sessions SET created_at=? WHERE user_id=(SELECT id FROM users WHERE email=?)', new Date(realNow() - 20 * 60_000).toISOString(), email);
+  const late = await b.post('/me/two-step/setup', {});
+  assert.equal(late.status, 403);
+  assert.equal(late.data.code, 'sign_in_again');
+  assert.match(late.data.error, /sign out and sign in again first \(with Google or Microsoft\)/);
+  // After a fresh sign-in it works, and from then on Google is followed by the code.
+  const again = browser();
+  await withGoogle(again, email, sub);
+  const s2 = await again.post('/me/two-step/setup', {});
+  assert.equal(s2.status, 200);
+  assert.equal((await again.post('/me/two-step/confirm', { code: code(s2.data.secret) })).status, 200);
+  const third = browser();
+  assert.equal((await withGoogle(third, email, sub)).location, 'http://test.local/login/two-step');
+  assert.equal(signedIn(third), false);
+});
+
+test('the README, /security and /help say what two-step login does, and no page says it does not exist', async () => {
+  const fs = await import('node:fs');
+  const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  const readme = read('README.md');
+  const notIn = readme.slice(readme.indexOf('## What is not in it'), readme.indexOf('## Scripts and fonts'));
+  assert.doesNotMatch(notIn, /two-factor login of our own|a second step is then whatever/);
+  assert.match(readme, /### Two-step login/);
+  for (const f of ['src/app/security/page.tsx', 'src/app/help/page.tsx', 'src/app/page.tsx', 'src/app/developers/page.tsx']) assert.doesNotMatch(read(f), /No two-step login|two-factor login of our own|We add none of our own/, f);
+  assert.match(read('src/app/security/page.tsx'), /Two-step login with an authenticator app/);
+  assert.match(read('src/app/help/page.tsx'), /Lost the phone with your authenticator app/);
 });

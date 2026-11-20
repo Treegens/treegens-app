@@ -32,6 +32,7 @@ import { NoEmailDone, NoEmailWait } from '@/components/sign/NoEmail';
 // "Questions and comments": the one way to ask the sender something, and the note before Finish (Comments.tsx).
 import { CommentsDialog, OpenQuestion, useMyQuestions } from '@/components/sign/Comments';
 import { MailAgain } from '@/components/sign/MailAgain';
+import { witnessFirst, WitnessFirst, WitnessNotice, WitnessName, WitnessAfter } from '@/components/sign/Witness';
 // A document sent to a signing group: what this member's own link is to the group (src/server/groups.ts).
 import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText } from '@/components/sign/GroupNotice';
 
@@ -222,7 +223,8 @@ export default function SignPage() {
   const otherFields: any[] = useMemo(() => data?.others || [], [data?.others]);
   const logic = useLiveLogic(ownFields, otherFields, values, setValues);
   const fields: any[] = logic.fields;
-  const acts = me?.role === 'signer' || me?.role === 'inperson';
+  // A witness signs too, in a block of their own, after a statement of their own (sign/Witness.tsx).
+  const acts = me?.role === 'signer' || me?.role === 'inperson' || me?.role === 'witness';
   const closed = !!env && (env.status === 'voided' || env.status === 'declined' || env.status === 'expired' || me.status === 'declined');
   const iAmDone = !!finished || me?.status === 'completed';
   // A closed or not-yet-ready document says so straight away, before anyone is asked for an access code.
@@ -742,6 +744,8 @@ export default function SignPage() {
             </div>
           </StateCard>
           {/* The sender's own payment page, when they set one and may: only after Finish (src/components/sign/PayLink.tsx). */}
+          {/* A signer with a witness: what became of them, and another one after "I was not there" (sign/Witness.tsx). */}
+          <WitnessAfter me={me} base={base} onNamed={load} />
           {acts && <PayLink base={base} />}
           {env.next_person && (
             <StateCard tone="wait" title="Is this a shared device?">
@@ -755,6 +759,17 @@ export default function SignPage() {
       </Shell>
     );
   }
+
+  // A witness's own first screen: their statement, or "I was not there". Also while they wait for the signer, and
+  // after they said they were not there (sign/Witness.tsx).
+  if (witnessFirst(data, stage))
+    return (
+      <Shell data={data} footer={report} helpInNewTab>
+        {notice}
+        <WitnessFirst data={data} base={base} onDone={load} />
+        {dialogs}
+      </Shell>
+    );
 
   if (stage === 'pending')
     return (
@@ -791,13 +806,15 @@ export default function SignPage() {
     ...(me.group?.can_hand_back ? [{ key: 'handback', label: `Hand back to ${me.group.name}`, hint: 'If a colleague should do it instead. What you filled in is not kept.', icon: 'link', onClick: go('handback') }] : []),
     ...((me.role === 'signer' || me.role === 'approver') && !me.group ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
     ...(!muted && me.role !== 'inperson' ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
-    ...(me.role !== 'viewer' && me.role !== 'cc' ? [{ key: 'decline', label: declineLabel, hint: 'Closes the document for everyone.', icon: 'stop', danger: true, onClick: go('decline') }] : []),
+    // A witness does not close the document for the people who sign it: "I was not there" is theirs (sign/Witness.tsx).
+    ...(me.role === 'witness' ? [{ key: 'absent', label: 'I was not there', hint: `Signs nothing, and tells ${me.witness_of?.name || 'the signer'} and ${sender.name}.`, icon: 'stop', onClick: async () => { setOpen(''); try { await api(`${base}/not-present`, { body: {} }); toast(`Done. We told ${me.witness_of?.name || 'the signer'} and ${sender.name}.`); load(); } catch (e: any) { toast(e?.message || 'Something went wrong on our side. Try again in a moment.', true); } } }] : []),
+    ...(me.role !== 'viewer' && me.role !== 'cc' && me.role !== 'witness' ? [{ key: 'decline', label: declineLabel, hint: 'Closes the document for everyone.', icon: 'stop', danger: true, onClick: go('decline') }] : []),
   ];
   const other = <button type="button" className="btn sm sg-other" aria-haspopup="dialog" onClick={go('menu')}>Other actions</button>;
   const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} />;
 
   if (stage === 'consent') {
-    const ask = me.role === 'approver' ? 'You have been asked to approve' : me.role === 'viewer' ? 'You have been asked to read' : 'You have been asked to sign';
+    const ask = me.role === 'approver' ? 'You have been asked to approve' : me.role === 'viewer' ? 'You have been asked to read' : me.role === 'witness' ? 'You have been asked to sign as a witness' : 'You have been asked to sign';
     const wording = consentWording(sender.name, acts);
     return (
       <Shell data={data} bar={other} footer={report} helpInNewTab>
@@ -1034,6 +1051,7 @@ export default function SignPage() {
         </div>
       )}
       {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now. {SIGNING_ONLINE}</div>}
+      <WitnessNotice me={me} />{/* who witnesses, or what the witness confirmed (sign/Witness.tsx) */}
       <p className="sg-guide" id="sg-guide">
         {!acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
           : hasNext ? <>Choose <b>Next</b> and we take you to each place that needs you, one at a time.</>
@@ -1085,7 +1103,7 @@ export default function SignPage() {
       {dialogs}
       {open === 'review' && (
         <ReviewDialog me={me} sender={sender} items={items} sig={sig} ini={ini} approving={me.role === 'approver'} busy={busy} error={finishError}
-          note={questions > 0 ? <OpenQuestion sender={sender.name} onShow={go('ask')} /> : null}
+          note={<>{questions > 0 ? <OpenQuestion sender={sender.name} onShow={go('ask')} /> : null}<WitnessName me={me} base={base} onNamed={load} /></>}
           usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
           onChangeSig={changeMark} onBack={() => setOpen('')} onFinish={complete}
           printCheck={() => api(`${base}/print-check`, { body: { values } })}

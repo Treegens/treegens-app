@@ -785,7 +785,8 @@ test('the screens: a member\'s page says who has it and before declining that it
   assert.match(groupTakeOn('HR team', 'signer'), /you take this on for HR team/);
   const rec = read('src/components/sender/Recipients.tsx');
   assert.match(rec, /\{!!r\.group_name && <GroupMembers /);
-  assert.match(rec, /const reachable = turn && !isMe && r\.role !== 'inperson' && !own && !openGroup;/, 'no link of "the group" is offered while nobody has it');
+  // No link of "the group" is offered while nobody has it: copy, QR code, WhatsApp and text message are left out.
+  assert.match(rec, /\{!openGroup && <>\n(\s*\{reachable && <button[^\n]*\n){4}\s*<\/>\}/);
   const card = read('src/components/sender/GroupMembers.tsx');
   assert.match(card, /member_id: m\.id/);
   assert.match(card, /\/recipients\/\$\{r\.id\}\/release/);

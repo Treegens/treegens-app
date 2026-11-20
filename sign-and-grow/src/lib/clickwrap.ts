@@ -26,6 +26,9 @@ export const IDENTITY_LABEL: Record<Identity, string> = {
 };
 export const VIA_LABEL: Record<Via, string> = { hosted: 'Our page for these terms', embed: 'Shown inside a frame on another website', api: 'Recorded by the website through the API' };
 
+/** The state of terms on the team's screens: not published, taking acceptances, closed by the team, or stopped for a reason the team is told. */
+export const STATE_LABEL: Record<string, string> = { draft: 'Draft', live: 'Taking acceptances', closed: 'Closed', stopped: 'Not taking acceptances' };
+
 /** What an acceptance is not, said on the team's screens and in the README. */
 export const NOT_A_SIGNATURE = 'An acceptance is not a signature and uses none of your signatures. There is a monthly limit on acceptances per account instead.';
 

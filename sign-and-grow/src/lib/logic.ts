@@ -405,9 +405,37 @@ export function evaluate(ast: Ast, input: (id: string) => { text?: string | null
   return { value: fixed != null ? roundTo(v, fixed) : v, text: formatNumber(v, how, fixed), error: null, empty: false, ambiguous, numbers };
 }
 
-/** A formula in words for the screen: field names as they are labelled, × and ÷ for * and /. */
+/**
+ * A formula in words for the screen: field names as they are labelled, × and ÷ for * and /, brackets only where they
+ * change something, and a round() around the whole of it said as "rounded to 2 decimals".
+ */
 export function formulaWords(src: any, name: (id: string) => string): string {
-  return renameRefs(src, name).replace(/\{([^{}]*)\}/g, "'$1'").replace(/\*/g, '×').replace(/\//g, '÷').replace(/\s+/g, ' ').trim();
+  let ast: Ast;
+  try {
+    ast = parseFormula(src);
+  } catch {
+    // Not readable yet (the editor shows it while it is being typed): the text with the names put in.
+    return renameRefs(src, name).replace(/\{([^{}]*)\}/g, "'$1'").replace(/\*/g, '×').replace(/\//g, '÷').replace(/\s+/g, ' ').trim();
+  }
+  const PREC = { '+': 1, '-': 1, '*': 2, '/': 2 } as const;
+  const SIGN = { '+': '+', '-': '-', '*': '×', '/': '÷' } as const;
+  const w = (a: Ast, outer = 0, right = false): string => {
+    switch (a.k) {
+      case 'num': return a.text;
+      case 'ref': return `'${name(a.id)}'`;
+      case 'neg': return `-${a.a.k === 'bin' ? `(${w(a.a)})` : w(a.a, 3)}`;
+      case 'sum': return `sum(${a.args.map((x) => w(x)).join(', ')})`;
+      case 'round': return `round(${w(a.a)}, ${a.n})`;
+      case 'bin': {
+        const p = PREC[a.op];
+        const s = `${w(a.a, p)} ${SIGN[a.op]} ${w(a.b, p, true)}`;
+        return p < outer || (right && p === outer) ? `(${s})` : s;
+      }
+    }
+  };
+  if (ast.k === 'round') return `${ast.a.k === 'sum' ? `the sum of ${ast.a.args.map((x) => w(x)).join(', ')}` : w(ast.a)}, rounded to ${ast.n} decimal${ast.n === 1 ? '' : 's'}`;
+  if (ast.k === 'sum') return `the sum of ${ast.args.map((x) => w(x)).join(', ')}`;
+  return w(ast);
 }
 
 // ---- Working out a whole set of fields --------------------------------------------------------------------------
@@ -622,6 +650,11 @@ export function logicWarnings(fields: F[], recipients: R[], ordered: boolean, na
       out.push(`'${name(f)}' for ${who(f.recipient_id)} will never be shown: ${why}. Change the rule under "Only show when", or remove it.`);
     }
   }
+  // Someone whose every signature field has a rule may finish without signing anywhere, when their answers hide them.
+  for (const r of recipients) {
+    const sigs = fields.filter((f) => f.recipient_id === r.id && (f.type === 'signature' || f.type === 'initials'));
+    if (SIGNS(r) && sigs.length && sigs.every((f) => ruleOf(f))) out.push(`Every signature and initials field of ${who(r.id)} is shown only after a certain answer. With other answers ${who(r.id)} finishes without signing anywhere on the page. Leave at least one of them always shown.`);
+  }
   for (const f of fields) {
     if (!f.formula || f.type !== 'number') continue;
     const owner = person(f.recipient_id);
@@ -641,4 +674,34 @@ export function logicWarnings(fields: F[], recipients: R[], ordered: boolean, na
     }
   }
   return out;
+}
+
+/**
+ * Deleting a field others depend on, in the editor. A field that was shown only after its answer is now always
+ * shown, and a formula that used it counts 0 in its place. Both are said, so the sender knows, and the editor makes
+ * it one step that Undo brings back.
+ */
+export function dropField(list: any[], fid: string, name: (f: any) => string): { list: any[]; said: string[] } {
+  const gone = list.find((f) => f.id === fid);
+  const said: string[] = [];
+  const next = list.filter((f) => f.id !== fid).map((f) => {
+    let g = f;
+    if (ruleOf(f)?.field === fid) (g = { ...g, show_when: null }), said.push(`${name(f)} depended on it and is now always shown.`);
+    if (typeof f.formula === 'string' && f.formula.includes(`{${fid}}`)) (g = { ...g, formula: f.formula.split(`{${fid}}`).join('0') }), said.push(`The formula of ${name(f)} used it and counts 0 in its place now.`);
+    return g;
+  });
+  return { list: next, said: said.length ? [`${name(gone)} was deleted.`, ...said, 'Undo brings it back.'] : [] };
+}
+
+/**
+ * Two fields whose rules can never both be true at once: they depend on the same field, and one asks for ticked and
+ * the other for not ticked, or filled and empty, or two different answers. Only one of them is ever on the page, so
+ * they may sit in the same place (stackedFields in src/lib/stacked.ts).
+ */
+export function neverTogether(a: any, b: any): boolean {
+  const x = ruleOf(a), y = ruleOf(b);
+  if (!x || !y || x.field !== y.field) return false;
+  const pair = (p: Cond, q: Cond) => (x.is === p && y.is === q) || (x.is === q && y.is === p);
+  const same = fold(x.value) === fold(y.value);
+  return pair('checked', 'unchecked') || pair('filled', 'empty') || (x.is === 'equals' && y.is === 'equals' && !same) || (pair('equals', 'not_equals') && same);
 }

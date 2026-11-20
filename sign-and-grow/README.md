@@ -60,6 +60,7 @@ What the test files cover:
 | `tests/gaps-disputes-evidence.test.ts` | What happens around the certificate when a signature is disputed: what `/verify` and `/security` may claim (and what the hash chain really stops, checked against the code), the fingerprint kept for a year after an account is deleted, the public lookup by envelope ID (what it says and never says, its limit), the fingerprint in every completion email, the record of the completed copy (handed to the mail server, first opened, later visits once a day), the closed copy marked large across every page, "I did not sign this" from the check page and the signing link, the help topic that never reaches the sender, the evidence pack (the chain recomputed from it, no live links in its emails) and the page that explains each line of the certificate. |
 | `tests/comments.test.ts` | Questions and comments: private to the sender unless everyone is chosen, nobody reading a private thread they are not in (by its id, after a hand-over, on the device of someone who signs in person), the old "ask" being a private comment, one email to the sender at most every 10 minutes with the comments in it, an answer emailed to the person answered and nobody else, the rules of every email in the sender's name (a fake payment notice refused, held while paused), who is never emailed and why, the count before Finish and who may settle, nothing of the words on the signed PDF or in the audit trail, the export and evidence pack, read-only after completion, gone with the envelope, the limits, and the API with its webhook. |
 | `tests/templates.test.ts` | Who can use and change each template, and the lock on its wording: every route that lists, reads, uses, sends in bulk, copies, publishes as a public form, changes or deletes a template, for the owner of the account, an admin, the template's owner, a chosen member and another member, each by browser and by API key; the lock through the editor's whole save and through the plain API (what can be filled in, everything else refused with who to ask, nothing saved), once out too, unlocking and deleting the template; copies of templates and of locked envelopes; bulk sends and public forms; leaving and being removed; a database from before this. |
+| `tests/witness.test.ts` | A witness for one signer: tied to one person who signs and every way that cannot work, asked straight after that signer whatever the order and holding nobody up, no signature held or used, the block and what prints when, the signer naming the witness before Finish (themselves, a party, a pause, the cap, the daily count), the statement as the witness's own words and a stale one refused, no decline and no hand-over for a witness, "I was not there" and naming the person who was, the certificate (the witness under the signer, the statement, its time, the note), the marks for the same address, the same browser and the same internet address and browser, reminders, the not-opened alert, Find my documents, the completed copy, declining, passing on, corrections, signing again, templates, bulk sends, public forms and the API description. |
 | `tests/logic.test.ts` | Conditional fields and formulas: the formula reader (order of operations, brackets, sum and round, what it refuses in words, nothing run as code), numbers as people write them and the result written the same way, empty inputs, dividing by 0, numbers too big or too small, rules that chain and loops (refused when saved, naming the fields), what the review step warns about, a browser that lies about a hidden required field or a calculated value, a signature field that an answer hides, the signed PDF, someone else's answer counting once they have finished and a signed result never changing, sign-again after a rule or a formula changes (predicted the same way in the editor), templates, copies, public forms, bulk send rows that fill a field, and the lock on a template's wording. |
 
 ## What the bad reviews taught us
@@ -109,6 +110,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | "Deleted" does not mean deleted. | When an account is deleted, at once or after the 30 days, its envelopes go with their audit trails, our stored copies of their emails, the files signers attached, replaced links, reports, webhook logs and batch records, and the files come off the disk. What stays is listed on `/security`, `/help` and in Settings from one list (`KEPT_AFTER_DELETION` in `src/lib/policy.ts`): payments, refunds and the signature ledger without names, a help request that is still open until it is answered, and what belongs to other people. |
 | The signing screen says an electronic signature equals a handwritten one, and where I live it does not. | The text every signer agrees to says what this is: a simple electronic signature, usable in many countries for agreements that need no special form, with rules that differ by country and by kind of document, and it tells the signer to ask the sender or a lawyer when unsure. It no longer says that such a signature equals a handwritten one, on the consent screen or under "Adopt and sign". The signer also accepts the electronic method as the way the parties sign. The wording has a version, the audit trail records which version each person agreed to, and `/help` prints the words. Research: `research/gaps-partial.json`, "map:nonus". |
 | Nothing warned me that this kind of document cannot be signed electronically in my country. | A check before sending reads the subject, the document names and the text of the documents for words that usually mean a will, a trust deed, a power of attorney, a sale of land or a long lease, a fixed-term employment contract or a notice of termination, or a deed that needs a witness or a notary (one list, `src/lib/paperwork.ts`, in English, German, Spanish, Portuguese and French). The review step of the editor names the word and where it stands, the API answers sending with the same list as `warnings`, and the audit trail records it. It warns and never blocks. `/help` has one section with the documents not to sign here and short notes by country, each with the month it was looked at and its source, and says that none of it is legal advice. A sender whose clock is set to India or Indonesia is told that signing does not pay stamp duty. |
+| A deed needs a witness who was in the room, and the e-signature tool had nowhere to put one: a witness added as a second signer used a paid signature and recorded nothing about being there. | A recipient can be a witness for one person who signs. They are asked straight after that person has signed, whatever the signing order says, never use a signature, and fill in a block the sender places next to that signature (signature, name, address, occupation, date). The sender names the witness, or the signer does on their review screen, next to one paragraph on who may witness. The witness's first screen is their own statement, "I was physically present and saw Ann Lee sign this document on 20 November 2026", to tick before they can sign, or "I was not there", which tells the signer and the sender and lets the signer name the person who was. The certificate lists the witness under the signer with the statement and its time, and marks a witness at the signer's email address or on the signer's device, which the sender is told about. Every screen and the help page say that Sign&Grow records what the witness states, cannot check that they were in the room, and that whether a document witnessed this way is accepted depends on the law that applies: for a deed, check first. Rules and words in `src/lib/witness.ts`, the server side in `src/server/witness.ts`. Research: `research/gaps.json`, "map:nonus". |
 | The price said $9 and I could not tell in which dollars. | Every price on a public page is written as US$, with one line: prices and payments are in US dollars, and a bank may add a fee for converting. |
 | I cannot find out where my documents are stored or who else handles them. | `/security` has a block "Where your data is", filled from settings (`OPERATOR_NAME`, `DATA_REGION`, `DATA_HOST`, `DATA_BACKUPS` and the provider settings): where the server is, who else handles data, in which country and what for. A provider is listed only when its switch is on, and whatever the operator has not stated is printed as "has not said ... Ask them." instead of being left out. `/security/processing` is a plain data processing summary to save as a PDF, and says that a signed agreement is between the customer and whoever runs the server. |
 | My signer cannot open the page where they are, and nobody says what to do. | Every email that asks someone to sign ends with one line: reply and ask the sender for the document as a PDF. `/help` tells the sender what to do then, and that a signature collected that way is outside the certificate. No claim is made about any country, because none was tested. |
@@ -133,6 +135,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | My phone photo of a paper page came out sideways in the signed PDF, and the fields were off. | A phone camera writes a note into a JPEG that says which way up it is. The server reads it (`src/server/exif.ts`, no library), puts the picture on a page that suits it the way the note says, and sets the note to "upright", so the page is the same way up in the editor, on the signing page and in the signed PDF, and a field is where it was placed. The test draws the signed PDF with pdf.js and checks the corners for all eight values of the note. |
 | I photographed five pages and got five documents, each of them huge. | When several pictures are chosen at once the editor asks whether they are one document, shows them in the order chosen with a way to change it, and joins them into one PDF, a page for each (up to 50). A picture larger than a page needs is made smaller in the browser before it is uploaded (2,000 pixels on the long side). |
 | My phone keeps asking me to sign in. | A browser stays signed in for 30 days after it was last used, not after it signed in, so a phone used once a month is not asked again. Signing in on another device signs nothing out. Settings, Profile lists every browser that is signed in, with the device, the browser and the last use, and has "Sign out everywhere else". |
+| A client of mine was locked out, and was told only their admin could help. | Two-step login (an authenticator app, `src/server/twostep.ts`) comes with ten recovery codes, shown once. Without phone and codes, an owner or admin of the team switches it off under Settings, Team: the person is emailed at once, and their record says who did it. An owner, whom nobody else may reset, resets it by email: it takes effect after three days, with an email every day, and a sign-in with a code stops it. The screen where it is switched on, the sign-in screen and `/help` say all of this before anyone is stuck. |
 | I handed my tablet to a client to sign, and my whole account was a tap away. | Opening the signing page of someone who signs in person locks the host's account in that browser until the host types their password, and the signer's last screen asks them to hand the device back. Five wrong passwords sign that browser out. What the lock does not cover (the rest of the device, a password the browser offers to fill in, a Google or Microsoft session) is said next to "Host signing now" and on `/security`. |
 | On my phone I never hear that someone signed. | The page after sending has one switch, "Email me each time someone signs". It sets the same preference as Settings, Notifications. |
 | Fields in the editor are too small to grab with a finger. | On a touch screen every field answers a tap over at least 44 by 44 pixels (a tick box is drawn about 9 pixels wide at phone width), so does the resize corner, and every button of the editor on a phone is at least 44 pixels tall. |
@@ -165,6 +168,13 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 - Recipients who sign, approve, only view, get a copy, or sign in person on your device. Signing in person needs an
   internet connection from opening the document to pressing Finish: there is no offline mode.
 - Signing order (sequential, parallel or mixed) or everyone at once.
+- A witness for one person who signs (the role `witness` with `witness_for`): asked straight after that person has
+  signed, whatever the order, and holding nobody up; never charged; a block the editor places next to the signature
+  (signature, name, address, occupation, date). The sender names the witness or leaves it to the signer
+  (`named_by_signer`), who names them on the review screen before Finish. The witness first ticks their own statement
+  that they were physically present and saw the signature, or says "I was not there", and the signer can then name
+  the person who was. The certificate lists the witness under the signer with the statement, and marks a witness at
+  the signer's address or on the signer's device. Sign&Grow records what the witness states and cannot check it.
 - "I will send the link myself": a recipient with a name and no email address, for someone who lives in WhatsApp or
   text messages. We never email that person (no invitation, reminder or copy). The envelope page shows their link
   with copy, QR code and share buttons, also after they finished, because the same link opens the completed
@@ -372,8 +382,10 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   same time whether or not the address has written to us. The email follows a moment later, without the requests
   the address said it did not write or that we closed as not theirs.
 - When the mail server will not take an email to the customer, the operator's screen says so, the request's
-  history says so, and the email is tried again by itself. If it is given up, whoever has the request (or else
-  `SUPPORT_EMAIL` or the operators) is emailed. The opened request shows the whole address the answers go to.
+  history says so, and the email is tried again by itself. If an email with an answer, a question or a closing
+  answer is given up, whoever has the request (or else `SUPPORT_EMAIL` or the operators) is emailed; any other
+  email that is given up is noted in the history and on the opened request. The opened request shows the whole
+  address the answers go to.
 - Deleting an account deletes its requests with their threads. One that is still waiting for an answer, or for
   the customer's reply to a question of ours, is kept until it is answered (the answer is emailed, then the request
   is deleted once the mail server has taken that email) or, for an unanswered question, for 30 more days. A
@@ -493,8 +505,9 @@ e-signature product, not all of it. Not built:
   through it (`NO_BAA_TEXT` in `src/lib/policy.ts`).
 - Word or Google Docs upload (export to PDF first).
 - Contract lifecycle management, AI contract analysis, clickwrap, document generation.
-- Single sign-on for a whole organization (SAML, or making a team sign in one way), two-factor login of our own,
-  native mobile apps. Signing in with Google or Microsoft is in; a second step is then whatever that account has.
+- Single sign-on for a whole organization (SAML, or making a team sign in one way), native mobile apps. Signing in
+  with Google or Microsoft is in, and so is two-step login with an authenticator app (see "Two-step login"). Codes by
+  text message, passkeys and security keys for signing in are not.
 - Signing without a connection. Opening the document and Finish need one; a connection that drops in between is
   fine, and Finish goes again by itself when it is back.
 - Ready-made integrations (Salesforce, Google Drive and so on). The API and webhooks are the way in for now.
@@ -740,6 +753,36 @@ What is checked on every sign-in: the `state` works once, for ten minutes, and o
 the signature against the provider's published keys (kept for an hour, read once more when a token names a key we
 have not seen), issuer (for Microsoft the organization named in the token itself, and `MICROSOFT_TENANT` when it
 names one), audience, expiry and the nonce of this sign-in.
+
+### Two-step login
+
+Nothing to configure. Anyone can switch it on under Settings, Profile: the standard time-based codes (RFC 6238: 6
+digits, 30 seconds, SHA-1) that every authenticator app makes, written out with `node:crypto` in
+`src/server/twostep.ts`, which also holds the rules. The routes are in `src/server/routes-twostep.ts`, the numbers in
+`src/lib/policy.ts` (`TWO_STEP_*`).
+
+- Switching it on asks for the password (or a sign-in within 15 minutes, for a login without one), shows the secret
+  as a QR code, as text and as an `otpauth://` link, and counts only after a right code. Then ten recovery codes are
+  shown once; only their fingerprints are kept, and each works once. Every other browser is signed out.
+- Every sign-in ends in `signInAs` (`src/server/routes-account.ts`): the password, Google or Microsoft, and the sign-in
+  after a password reset by email. With two-step login on it gives no session, only a waiting sign-in tied to that
+  browser by an HttpOnly cookie for 10 minutes; `POST /auth/two-step` with a right code finishes it.
+- A wrong password for a login with two-step login gets the same second screen as the right one, and after the code
+  both get the same answer ("the code is not right, or the password before it was not"), so a password cannot be
+  found out by trying it there. Five wrong codes in a row pause that login's second step for 15 minutes and email
+  its owner, saying whether the right password came first. A code works once (the step of the last code used is
+  kept).
+- "Remember this device" skips the second step in that browser for that login for 30 days, through a cookie of its
+  own; Settings lists those devices and withdraws them.
+- Losing the phone: a recovery code; else an owner or admin of the team resets it (`POST
+  /account/members/{id}/two-step/reset`, emailed and logged); an owner resets it by email, which takes effect 3 days
+  after the emailed link was opened, with an email every day from the timer (`POST /api/cron`) and stopped by a
+  sign-in with a code or under Settings.
+- An owner can require it for a team: a member without it can then only set it up, switch workspace or leave in that
+  account (403 with `"code": "two_step_setup"`), and the app shows only the setup.
+- Changing the password, the email address or the second step itself asks for a current code. API keys are not
+  affected, and no key can see or change two-step login.
+- The secret is kept in the database as it is, because the server has to read it to check a code.
 
 ### Encrypting stored files
 

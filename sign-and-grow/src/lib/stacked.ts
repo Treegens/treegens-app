@@ -3,6 +3,7 @@
 // and by the server when it sends or corrects (assertSendable in src/server/envelopes.ts). Plain data in, words out,
 // so the editor, the server and the tests use the same rule.
 import { overlap } from './autoplace.ts';
+import { neverTogether } from './logic.ts';
 
 /** How much of the smaller field the other one may cover before one of them cannot be tapped. */
 export const STACK_SHARE = 0.6;
@@ -26,6 +27,9 @@ export function stackedFields(fields: F[], recipients: { id: string; name?: stri
       if (a.recipient_id !== b.recipient_id || a.document_id !== b.document_id || Number(a.page) !== Number(b.page)) continue;
       if (!tapped(a) && !tapped(b)) continue;
       if (overlap(a, b) <= STACK_SHARE) continue;
+      // Two fields that are never shown at the same time ("company name" when a box is ticked, "your name" when it is
+      // not) may share a place: only one of them is ever on the page (src/lib/logic.ts).
+      if (neverTogether(a, b)) continue;
       const key = `${a.recipient_id}|${a.document_id}|${a.page}`;
       if (seen.has(key)) continue;
       seen.add(key);

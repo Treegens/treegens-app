@@ -12,6 +12,7 @@ import { publicFacts, abuseFacts, supportFacts } from './facts';
 import { replyPromise } from '@/lib/support';
 import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests, ReplyRecord, FindRequests } from './tools';
 import { ConsentWords, SignatureKind } from './outside';
+import { WitnessHelp } from './witness';
 import { SigningOnPhone } from './phone';
 import { NotMeAnswer } from './NotMe';
 import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
@@ -260,6 +261,9 @@ export default function Help() {
               ? <p className="muted small">Text messages are not charged to you. To keep them from being misused, one account can send {smsDaily} in 24 hours, every code and every reminder counted, and an account under the daily limit on emails can text as many phone numbers a day as people it can email. A text that could not be delivered shows on the envelope, and you are told when we stop trying.</p>
               : <p className="muted small">The software can also send a one-time code by text message and text the signing link. The operator of this server has not switched text messages on, so they are not offered here.</p>}
           </QA>
+
+          {/* A witness for one signer, what it records and what it cannot check, with its dated source (help/witness.tsx). */}
+          <WitnessHelp />
 
           <QA id="reminders" q="Are people reminded by themselves?">
             <p>On an account made today, yes. It starts with a reminder every {DEFAULT_REMINDER_DAYS} days: {reminderText(DEFAULT_REMINDER_DAYS).replace(/^Automatic reminders are on: /, '')}</p>

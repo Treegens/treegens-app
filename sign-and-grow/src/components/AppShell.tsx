@@ -107,6 +107,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link href="/app" className="brand"><Leaf color="#9ed88f" size={22} /> Sign&Grow</Link>
           <Link href="/app/envelopes/new" className="btn" style={{ margin: '0 4px 10px', background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>New envelope</Link>
           {NAV.map(([href, label]) => <Link key={href} href={href} className={`nav${on(href) ? ' on' : ''}`}>{label}</Link>)}
+          {/* Click-to-agree terms speak for the team's website, so only its owner and admins manage them. */}
+          {(me.role === 'owner' || me.role === 'admin') && <Link href="/app/agreements" className={`nav${on('/app/agreements') ? ' on' : ''}`}>Click-to-agree</Link>}
           <Link href="/help" className="nav">Help</Link>
           {me.support_email && <a href={`mailto:${me.support_email}`} className="nav" style={{ fontSize: 12.5, paddingTop: 2 }} title={`Write to ${me.support_email}`}><span className="truncate">{me.support_email}</span></a>}
           {me.operator && <Link href="/app/operator" className={`nav${on('/app/operator') ? ' on' : ''}`}>Review queue</Link>}

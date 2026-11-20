@@ -7,11 +7,12 @@ import { QrDialog } from './QrDialog';
 import { IN_PERSON_LOCK } from '@/lib/phone';
 import { BackNews, MailStopHint, TryAgainButton, deliveredLine } from './MailNews';
 import { ownLink, ownLinkFact, OwnLinkActions } from './OwnLink';
+import { WitnessFact, witnessWait } from './WitnessFacts';
 import { GroupMembers } from './GroupMembers';
 import { actingName } from '@/lib/groups';
 
-export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent' };
-const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view' };
+export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent', witness: 'Witnessed' };
+const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view', witness: 'witness a signature on' };
 
 // A failed email is tried again by the timer: tries so far, when the latest was, and when the next is due. A failed
 // one with no next try is final: nobody tries again.
@@ -194,7 +195,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
         const b = badge(r, e.status, mail);
         // A signing group nobody has taken on has no link of its own: each member's is on its card (GroupMembers.tsx).
         const openGroup = !!r.group_name && !r.claimed_by;
-        const reachable = turn && !isMe && r.role !== 'inperson' && !own && !openGroup;
+        const reachable = turn && !isMe && r.role !== 'inperson' && !own;
         const before = e.ordered ? e.recipients.filter((x: any) => x.routing_order < r.routing_order && x.status !== 'completed' && x.role !== 'cc') : [];
         const p = r.progress;
         return (
@@ -226,7 +227,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
 
             <dl className="sn-facts">
               {r.status === 'pending' && e.status !== 'draft' && (
-                <div><dt>Email</dt><dd>{own ? ownLinkFact(r, out, before.map((x: any) => x.name)) : out ? <>Not sent yet. {before.length ? `It goes out once ${before.map((x: any) => x.name).join(' and ')} ${before.length === 1 ? 'has' : 'have'} finished.` : 'It goes out when their turn comes.'}</> : 'Never sent. The envelope closed before their turn.'}</dd></div>
+                <div><dt>Email</dt><dd>{own ? ownLinkFact(r, out, before.map((x: any) => x.name)) : r.role === 'witness' ? witnessWait(r, e) : out ? <>Not sent yet. {before.length ? `It goes out once ${before.map((x: any) => x.name).join(' and ')} ${before.length === 1 ? 'has' : 'have'} finished.` : 'It goes out when their turn comes.'}</> : 'Never sent. The envelope closed before their turn.'}</dd></div>
               )}
               {r.status !== 'pending' && <div><dt>Email</dt><dd>{own ? ownLinkFact(r, out, []) : <EmailFact d={mail} role={r.role} />}</dd></div>}
               {/* The latest text message to this person, when there was one: what really became of it. */}
@@ -241,6 +242,8 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                 </div>
               )}
               {r.status === 'completed' && r.role !== 'cc' && <div><dt>{DONE[r.role]}</dt><dd>On {dayTime(r.completed_at)}.</dd></div>}
+              {/* A witness: whose signature, their statement, "not there", and what a challenge would look at (WitnessFacts.tsx). */}
+              {r.role === 'witness' && <WitnessFact r={r} e={e} />}
               {r.status === 'declined' && <div><dt>Declined</dt><dd>On {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</dd></div>}
             </dl>
 
@@ -274,10 +277,13 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                 {turn && (isMe || r.role === 'inperson') && <button className="btn sm primary" disabled={!!busy} onClick={() => signNow(r)}>{r.role === 'inperson' ? 'Host signing now' : `${r.role === 'approver' ? 'Review' : r.role === 'viewer' ? 'View' : 'Sign'} now`}</button>}
                 {reachable && r.bounced_at && !r.complained_at && <TryAgainButton envelopeId={e.id} r={r} disabled={!!busy || paused} onDone={onChanged} />}
                 {reachable && !r.muted && !stopped && <button className="btn sm" disabled={!!busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out. You can still copy the link and send it yourself.' : undefined} onClick={() => nudge(r)} aria-label={`Nudge ${r.name} with a reminder email`}>{busy === `nudge:${r.id}` ? 'Sending…' : 'Nudge'}</button>}
+                {/* A group nobody has taken on has no link of its own: each member's is on its card (GroupMembers.tsx). */}
+                {!openGroup && <>
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => copy(r)} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>}
                 {reachable && <button className="btn sm qr-tap" disabled={!!busy} onClick={(ev) => showQr(r, ev.currentTarget)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link for ${r.name}`}>Show QR code</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>Share on WhatsApp</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'sms')} aria-label={`Share link with ${r.name} by text message`}>Share by text message</button>}
+                </>}
                 {/* A group has no single name or address to correct: only its access code (members: Edit envelope). */}
                 {r.group_name ? <button className="btn sm sn-group-btn" disabled={!!busy} onClick={() => onCorrect({ ...r, code_only: true })} aria-label={`Change the access code of ${r.group_name}`}>Access code</button>
                   : <button className="btn sm" disabled={!!busy} onClick={() => onCorrect(r)} aria-label={`Correct name or email of ${r.name}`}>Correct</button>}

@@ -1,4 +1,5 @@
 'use client';
+import { useEffect } from 'react';
 import { toast } from '../ui';
 import { makeField, who, type Ed } from './shared';
 import { WITNESSED_ROLES, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_BLOCK } from '@/lib/witness';
@@ -10,10 +11,18 @@ import { WITNESSED_ROLES, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_BLOCK } from
 /** The people a witness can be there for: someone who signs on their own or in person, by name, not a group. */
 const witnessable = (rcps: any[], r: any) => rcps.filter((x) => x.id !== r.id && WITNESSED_ROLES.includes(x.role) && !x.group_id);
 
+/** A witness the signer names, who has no name yet: the sender types neither a name nor an address for them. */
+export const signerNames = (r: any): boolean => r.role === 'witness' && !!r.named_by_signer && !String(r.email || '').trim();
+
 export function WitnessChoice({ r, rcps, isTpl, onChange }: { r: any; rcps: any[]; isTpl: boolean; onChange: (p: any) => void }) {
-  if (r.role !== 'witness') return null;
-  const people = witnessable(rcps, r);
+  const people = r.role === 'witness' ? witnessable(rcps, r) : [];
   const target = rcps.find((x) => x.id === r.witness_for);
+  // With one person who signs, that is whom the witness is for. With more, the sender chooses.
+  const only = people.length === 1 && !target ? people[0].id : '';
+  useEffect(() => {
+    if (only) onChange({ witness_for: only });
+  }, [only]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (r.role !== 'witness') return null;
   const id = `ed-wit-${r.id}`;
   return (
     <div className="ed-witness">
