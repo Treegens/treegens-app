@@ -64,13 +64,15 @@ export function PublicNav() {
 }
 
 export function PublicFooter() {
+  // The address people can write to, printed on every public page when one is set (SUPPORT_EMAIL).
+  const [support] = useLoad(() => api('/public/support'));
   return (
     <footer className="foot pub-foot">
       <div className="wrap pub-foot-grid">
         <div className="pub-foot-brand">
           <Link href="/" className="logo"><Leaf color="#1f6f43" size={20} /> Sign&Grow</Link>
           <p>100% of what you pay goes to Treegens tree planting.</p>
-          <p>Stuck? <Link href="/help#contact">Write to us</Link>. A person replies, and you do not need to log in.</p>
+          <p>Stuck? <Link href="/help#contact">Write to us</Link>{support?.email ? <> or email <a href={`mailto:${support.email}`}>{support.email}</a></> : null}. A person replies, and you do not need to log in.</p>
         </div>
         <nav aria-label="Product">
           <h2>Product</h2>

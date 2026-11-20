@@ -183,7 +183,7 @@ export function Editor({ id }: { id: string }) {
         try {
           const f = await uploadFile(file, (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
           setUploads((u) => u.filter((x) => x.key !== key));
-          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan }]);
+          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages }]);
           setEnv((e: any) => (e.subject ? e : { ...e, subject: e.kind === 'template' ? f.name : `Please sign: ${f.name}` }));
           dirty();
         } catch (e: any) {
@@ -208,7 +208,7 @@ export function Editor({ id }: { id: string }) {
     try {
       toast('Uploading the new file…');
       const f = await uploadFile(file, () => {});
-      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan } : x)));
+      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages } : x)));
       fields.set((l) => l.map((x) => (x.document_id === did && x.page >= f.pages ? { ...x, page: f.pages - 1 } : x)), { record: false });
       dirty();
       toast('File replaced. Your fields are where you left them. Check they still line up.');
@@ -457,6 +457,8 @@ export function Editor({ id }: { id: string }) {
           ))}
         </nav>
         <span className="muted small hide-sm" role="status">{status}</span>
+        {/* Help opens beside the editor, so nothing that is being worked on is left behind. */}
+        <a className="btn sm ghost" href="/help?topic=sending#sending" target="_blank" rel="noreferrer" aria-label="Help (opens in a new tab)"><span className="ed-only-sm" aria-hidden="true">?</span><span className="hide-sm">Help</span></a>
         {step < 3 ? <button type="button" className="btn primary" onClick={() => go(step + 1)}>Next</button>
           : <button type="button" className="btn primary hide-sm" disabled={submitOff} onClick={submit}>{isTpl ? 'Save template' : correcting ? 'Save changes' : 'Send'}</button>}
       </div>

@@ -56,6 +56,14 @@ export default function Home() {
         </div>
       </div>
 
+      {/* A workspace that is paid for, or that more than one person works in, should never hang on one mailbox. */}
+      {me.role !== 'member' && me.admins < 2 && (me.members > 1 || me.account.plan !== 'seedling') && (
+        <div className="notice warn row between wrap" role="note">
+          <span><b>This workspace depends on one person.</b> If you lose access to {me.user.email}, nobody else can manage the team, the plan or the documents. Add a second admin, who can do all three. Only you, as the owner, can hand the whole account to someone else, so do that on the Team tab before you move on.</span>
+          <Link href="/app/settings?tab=team" className="btn sm">Add a second admin</Link>
+        </div>
+      )}
+
       {(todo.length > 0 || others.length > 0) && (
         <div className={`grid${todo.length > 0 && others.length > 0 ? ' g2' : ''} sn-waits`}>
           {todo.length > 0 && (

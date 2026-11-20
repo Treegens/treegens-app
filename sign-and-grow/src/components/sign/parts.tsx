@@ -119,8 +119,11 @@ export function Impact({ impact }: { impact: any }) {
         <b>Signed without paper</b>
         <p>
           About <b>{fmtNum(impact.sheets)} sheets of paper</b>, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e were not used.
-          That is {fmtTrees(impact.trees)} of a tree. Everything paid to Sign&Grow goes to planting more. <a href="/impact">How we count</a>
+          That is {fmtTrees(impact.trees)} of a tree.
         </p>
+        {/* Opens in a new tab: the page it leads to is for everyone, with buttons to sign up, and someone who has
+            just signed is not carried off to it. Nothing here asks a signer to buy or join anything. */}
+        <a className="sg-more" href="/impact" target="_blank" rel="noreferrer">How we count<span className="sg-vh"> (opens in a new tab)</span></a>
       </div>
     </div>
   );

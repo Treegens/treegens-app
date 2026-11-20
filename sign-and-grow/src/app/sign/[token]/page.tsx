@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api, toast, fmtDate } from '@/components/ui';
 import { PdfDoc } from '@/components/PdfDoc';
-import { AdoptSignature } from '@/components/SignaturePad';
+import { AdoptSignature, type SavedMark } from '@/components/SignaturePad';
 import { formatDate } from '@/lib/dates';
 import { fmtNum } from '@/lib/impact';
 import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
@@ -12,6 +12,8 @@ import { MenuDialog, AskDialog, ReportDialog, DeclineDialog, ReassignDialog, Sig
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
+import { pageTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
+import { pageBoxes } from '@/components/sign/pdfText';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review';
@@ -30,7 +32,16 @@ export default function SignPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [sig, setSig] = useState<string | null>(null);
   const [ini, setIni] = useState<string | null>(null);
-  const [adopt, setAdopt] = useState<{ kind: 'signature' | 'initials'; field?: string } | null>(null);
+  const [adopt, setAdopt] = useState<{ kind: 'signature' | 'initials'; field?: string; saved?: SavedMark | null } | null>(null);
+  // Which of the two marks was made or confirmed in this tab. One that only comes from storage (saved with this
+  // document on another device, or kept on the signer's account) is shown in the adopt dialog and confirmed there
+  // before a tap puts it on the page.
+  const [seen, setSeen] = useState({ signature: false, initials: false });
+  const [account, setAccount] = useState<Marks>({ signature: null, initials: null });
+  // Where the printed lines of the page with the next field sit, so the "Sign here" pointer keeps off them.
+  const [printed, setPrinted] = useState<{ key: string; boxes: Box[]; w: number; h: number } | null>(null);
+  const [pdfReady, setPdfReady] = useState(0);
+  const pdfs = useRef<Record<string, any>>({});
   const [open, setOpen] = useState<Open>('');
   const [signedField, setSignedField] = useState<string | null>(null);
   const [sheet, setSheet] = useState<string | null>(null);
@@ -47,6 +58,7 @@ export default function SignPage() {
   const [muted, setMuted] = useState(false);
   const [muteNote, setMuteNote] = useState<'' | 'done' | 'failed'>('');
   const [moreTime, setMoreTime] = useState<'' | 'busy' | 'asked'>('');
+  const [wantCopy, setWantCopy] = useState(false);
   // Set when the sender changed the document while this page was open: the page has loaded the new version and
   // asks the person to look again before they finish.
   const [changedOpen, setChangedOpen] = useState(false);
@@ -59,6 +71,10 @@ export default function SignPage() {
   valuesRef.current = values;
   const kept = useRef<{ sig: string | null; ini: string | null }>({ sig: null, ini: null });
   kept.current = { sig, ini };
+  const seenRef = useRef(seen);
+  seenRef.current = seen;
+  // The signature and initials the server holds for this person, so autosave sends them only when they changed.
+  const savedMarks = useRef<{ sig: string | null; ini: string | null }>({ sig: null, ini: null });
   const lastSaved = useRef('');
   const canSave = useRef(false);
   const rejected = useRef(0);
@@ -73,19 +89,20 @@ export default function SignPage() {
       version.current = d.version ?? null;
       setMuted((m) => m || !!d.recipient?.muted);
       if (d.fields) {
-        const server: Record<string, string> = Object.fromEntries(d.fields.map((f: any) => [f.id, f.value || '']));
-        const before = JSON.stringify(server);
+        // Marks made or confirmed in this tab come first: the ones on screen, or after a reload the tab's own
+        // store. Otherwise the ones saved with the document on another device are used, so what was signed there
+        // stays signed here. Opening the document never saves anything back: see restoreMarks.
         const stored = readKept(token);
-        const s = kept.current.sig || d.recipient.signature_png || stored.sig;
-        const i = kept.current.ini || d.recipient.initials_png || stored.ini;
-        // A field saved as signed is no use without the signature itself. Ask again instead of guessing.
-        for (const f of d.fields) if ((f.type === 'signature' && !s) || (f.type === 'initials' && !i)) server[f.id] = '';
-        setSig(s);
-        setIni(i);
+        const start = restoreMarks(d.fields, d.recipient, { sig: (seenRef.current.signature && kept.current.sig) || stored.sig, ini: (seenRef.current.initials && kept.current.ini) || stored.ini });
+        const server = start.values;
+        setSig(start.sig);
+        setIni(start.ini);
+        setSeen(start.seen);
+        savedMarks.current = start.saved;
         const unsaved = !!lastSaved.current && JSON.stringify(valuesRef.current) !== lastSaved.current;
         // Answers not saved yet are kept, but only for fields that still exist: the sender may have taken one away.
         setValues((prev) => (unsaved ? { ...server, ...Object.fromEntries(Object.entries(prev).filter(([id]) => id in server)) } : server));
-        lastSaved.current = before;
+        lastSaved.current = start.baseline;
       }
     } catch (e: any) {
       const status = e?.status || 0;
@@ -97,16 +114,23 @@ export default function SignPage() {
     load();
   }, [load]);
 
-  // Someone who is signed in gets the signature saved on their own account offered. Never in person: that device belongs to the host.
+  // Someone who is signed in gets the signature saved on their own account offered, as a choice in the adopt dialog
+  // that they have to confirm. It is never put on the page by itself, and it is only offered when the account has
+  // this person's name as well as their address: two people can share an address. Never in person: that device
+  // belongs to the host. See accountMarks and tapOnMark.
   useEffect(() => {
-    if (!data?.recipient || data.recipient.role === 'inperson' || !data.fields) return;
-    api('/me').then((m) => {
-      if (m.user?.email?.toLowerCase() === data.recipient.email.toLowerCase()) {
-        setSig((s) => s || m.user.signature_png || null);
-        setIni((s) => s || m.user.initials_png || null);
-      }
-    }).catch(() => {});
-  }, [data?.recipient?.email, data?.recipient?.role, !!data?.fields]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!data?.recipient || data.recipient.role === 'inperson' || !data.fields) return setAccount({ signature: null, initials: null });
+    let on = true;
+    api('/me').then((m) => on && setAccount(accountMarks(m.user, data.recipient))).catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [data?.recipient?.email, data?.recipient?.name, data?.recipient?.role, !!data?.fields]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The browser tab names the document, so it can be found again among other tabs.
+  useEffect(() => {
+    if (data?.envelope?.subject) document.title = pageTitle(data.envelope.subject);
+  }, [data?.envelope?.subject]);
 
   useEffect(() => {
     try {
@@ -152,7 +176,9 @@ export default function SignPage() {
   const closed = !!env && (env.status === 'voided' || env.status === 'declined' || env.status === 'expired' || me.status === 'declined');
   const iAmDone = !!finished || me?.status === 'completed';
   // A closed or not-yet-ready document says so straight away, before anyone is asked for an access code.
-  const stage = handedTo ? 'handed' : !data ? (problem ? 'problem' : 'loading') : closed ? 'closed' : me.status === 'pending' ? 'pending' : data.locked ? 'locked' : iAmDone ? 'done' : !me.consented ? 'consent' : 'sign';
+  // `wantCopy`: someone who signed a document that was closed later asks for their copy, and it is behind an access
+  // code that this browser has not been given (or no longer remembers). Then the code is asked for after all.
+  const stage = handedTo ? 'handed' : !data ? (problem ? 'problem' : 'loading') : closed && !(wantCopy && data.locked) ? 'closed' : me.status === 'pending' ? 'pending' : data.locked ? 'locked' : iAmDone ? 'done' : !me.consented ? 'consent' : 'sign';
   canSave.current = stage === 'sign' && acts && fields.length > 0;
 
   // When the screen changes, start reading from its heading rather than from wherever focus was left.
@@ -189,8 +215,15 @@ export default function SignPage() {
   const flush = useCallback(async (leaving = false): Promise<boolean> => {
     if (!canSave.current) return true;
     const json = JSON.stringify(valuesRef.current);
-    if (json === lastSaved.current) return true;
-    const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ values: valuesRef.current, version: version.current }), credentials: 'same-origin' as const };
+    // The adopted signature and initials are saved with the answers, so another device or tab gets them back. They
+    // are sent when they changed, not with every keystroke. From a closing page they only go along when the whole
+    // request stays small: a request the browser finishes on its own has a size limit, and one that is too big
+    // would lose the answers with it.
+    let body = saveBody(valuesRef.current, version.current, kept.current, savedMarks.current);
+    if (leaving && JSON.stringify(body).length > 60_000) body = saveBody(valuesRef.current, version.current, savedMarks.current, savedMarks.current);
+    const marks = { sig: body.signature_png, ini: body.initials_png };
+    if (json === lastSaved.current && !marks.sig && !marks.ini) return true;
+    const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' as const };
     if (leaving) {
       // The page is going away: hand the request to the browser and do not wait for an answer.
       try {
@@ -209,6 +242,7 @@ export default function SignPage() {
       const res = await fetch(`/api${base}/save`, request);
       if (!res.ok) throw Object.assign(new Error(), { status: res.status, code: (await res.json().catch(() => ({}))).code });
       lastSaved.current = json;
+      savedMarks.current = { sig: marks.sig || savedMarks.current.sig, ini: marks.ini || savedMarks.current.ini };
       rejected.current = 0;
       setSave(JSON.stringify(valuesRef.current) === json ? 'saved' : 'pending');
       return true;
@@ -236,11 +270,13 @@ export default function SignPage() {
 
   const valuesJson = JSON.stringify(values);
   useEffect(() => {
-    if (stage !== 'sign' || !canSave.current || valuesJson === lastSaved.current) return;
+    // A new signature or new initials count as a change to save, also when no field changed with them.
+    const newMarks = (!!sig && sig !== savedMarks.current.sig) || (!!ini && ini !== savedMarks.current.ini);
+    if (stage !== 'sign' || !canSave.current || (valuesJson === lastSaved.current && !newMarks)) return;
     setSave((s) => (s === 'error' ? s : 'pending'));
     const t = setTimeout(() => flush(), 1500);
     return () => clearTimeout(t);
-  }, [valuesJson, stage, flush]);
+  }, [valuesJson, sig, ini, stage, flush]);
   useEffect(() => {
     if (save !== 'error') return;
     const t = setInterval(() => flush(), 8000);
@@ -257,13 +293,35 @@ export default function SignPage() {
     };
   }, [flush]);
 
-  // The adopted signature lives in this tab until the document is finished, so a reload does not lose it.
+  // The adopted signature lives in this tab until the document is finished, so a reload does not lose it. Only a
+  // mark made or confirmed here is kept that way: one that came from storage still has to be confirmed after a reload.
   useEffect(() => {
-    if (stage === 'sign' && acts) writeKept(token, sig, ini);
-  }, [sig, ini, stage, acts, token]);
+    if (stage === 'sign' && acts) writeKept(token, seen.signature ? sig : null, seen.initials ? ini : null);
+  }, [sig, ini, seen, stage, acts, token]);
+
+  // The "Sign here" pointer must not sit on the words of the page. They are read from the document that is already
+  // drawn (nothing is downloaded again), for the page that holds the next field, together with the size of that
+  // page on this screen. Where the pointer then goes is decided by placeFlag, further down.
+  const flagKey = nextField && view === 'doc' && stage === 'sign' ? `${nextField.document_id}:${nextField.page}:${nextField.id}` : '';
+  useEffect(() => {
+    if (!flagKey || !nextField) return;
+    let live = true;
+    const read = () => {
+      const pdf = pdfs.current[nextField.document_id];
+      const el = document.getElementById(`f-${nextField.id}`)?.closest('.pdfpage');
+      if (!pdf || !el) return;
+      pageBoxes(pdf, nextField.page).then((boxes) => live && setPrinted({ key: flagKey, boxes, w: el.clientWidth, h: el.clientHeight })).catch(() => {});
+    };
+    read();
+    window.addEventListener('resize', read);
+    return () => {
+      live = false;
+      window.removeEventListener('resize', read);
+    };
+  }, [flagKey, pdfReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Moving around ------------------------------------------------------------------------------
-  const usesSheet = (f: any) => touch && view === 'doc' && (TYPED.includes(f.type) || f.type === 'dropdown');
+  const usesSheet =(f: any) => touch && view === 'doc' && (TYPED.includes(f.type) || f.type === 'dropdown');
 
   function goTo(f: any) {
     const el = document.getElementById(`${view === 'text' ? 't' : 'f'}-${f.id}`);
@@ -301,8 +359,15 @@ export default function SignPage() {
   function clickSig(f: any) {
     const kind = f.type as 'signature' | 'initials';
     if (filled(f)) return setSignedField(f.id);
-    if (kind === 'signature' ? sig : ini) set(f.id, '1');
-    else setAdopt({ kind, field: f.id });
+    // A mark made or confirmed in this tab goes straight on. A stored one is shown in the dialog first.
+    const tap = tapOnMark({ current: kind === 'signature' ? sig : ini, seen: seen[kind], account: account[kind] });
+    if (tap.apply) set(f.id, '1');
+    else setAdopt({ kind, field: f.id, saved: tap.offer });
+  }
+  /** "Change my signature": make a new one, with the one on the person's own account offered when it is another. */
+  function changeMark(kind: 'signature' | 'initials') {
+    const current = kind === 'signature' ? sig : ini;
+    setAdopt({ kind, saved: tapOnMark({ current: seen[kind] ? null : current, seen: false, account: account[kind] === current ? null : account[kind] }).offer });
   }
 
   async function attach(f: any, file?: File) {
@@ -457,7 +522,11 @@ export default function SignPage() {
           } catch (err: any) {
             // The server says what happened in full: a wrong code and how many tries are left, a short wait after
             // several wrong tries from this device, or a code that is frozen now (the screen above, after a reload).
-            setFormError(err?.message || 'Something went wrong on our side.');
+            // The one answer that names neither a time nor a person is the general limit on how often a link may
+            // be tried from one connection, which is counted over ten minutes. Said here with both.
+            const vague = err?.status === 429 && !/minute/i.test(err?.message || '');
+            setFormError(vague ? `This link was tried too often in a short time, so we are not taking codes from this connection for now. Wait 10 minutes, then try again. If you do not have the code, ask ${sender.name} for it: ${sender.email}. Nothing you filled in is lost.`
+              : err?.message || `Something went wrong on our side. Try again in a minute. If it keeps happening, ask ${sender.name} for help: ${sender.email}.`);
             if (err?.status === 423) await load();
           } finally {
             setBusy(false);
@@ -497,6 +566,18 @@ export default function SignPage() {
               ) : (
                 <button type="button" className="btn primary lg" disabled={moreTime === 'busy'} onClick={askForTime}>{moreTime === 'busy' ? 'Asking' : `Ask ${sender.name} for more time`}</button>
               ))}
+            </>
+          )}
+          {/* What someone signed stays theirs to download, also after the document was closed. The copy says on its
+              first page that it was not completed by everyone, and why. */}
+          {me.status === 'completed' && me.role !== 'cc' && (
+            <>
+              <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this before it was closed, and you can still download a copy of that. Its first page says that the document was not completed by everyone, so nobody takes it for a finished agreement.</p>
+              <div className="row wrap sg-actions">
+                {data.locked
+                  ? <button type="button" className="btn lg" onClick={() => setWantCopy(true)}><Icon name="lock" /> Enter your access code to download it</button>
+                  : <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download what you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'}</a>}
+              </div>
             </>
           )}
           <Sender env={env} brand={data.brand} lead={expired ? 'Or contact' : 'Questions? Contact'} />
@@ -553,7 +634,7 @@ export default function SignPage() {
     { key: 'ask', label: `Ask ${sender.name} a question`, hint: 'They reply by email. Asking signs nothing.', icon: 'mail', onClick: go('ask') },
     { key: 'download', label: 'Download the document', icon: 'download', href: downloadUrl, download: true },
     { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },
-    ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); setAdopt({ kind: sig ? 'signature' : 'initials' }); } }] : []),
+    ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); changeMark(sig ? 'signature' : 'initials'); } }] : []),
     ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? 'Asked. They will be in touch by email.' : `The deadline is ${fmtDate(env.expires_at)}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(`We asked ${sender.name} for more time. They will be in touch by email.`); } }] : []),
     ...(me.role === 'signer' || me.role === 'approver' ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
     ...(!muted && me.role !== 'inperson' ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
@@ -583,7 +664,7 @@ export default function SignPage() {
           <h2>Electronic records and signatures</h2>
           <p className="muted sg-legal">
             You are about to review{acts ? ' and sign' : ''} this document on screen. An electronic signature has the same legal effect as a handwritten one.
-            You can download or print a copy at any time, decline, or ask {sender.name} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.
+            You can download or print a copy before you {acts ? 'sign' : 'finish'}, and afterwards you can download what you {acts ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask {sender.name} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.
           </p>
           <label className="check sg-agree">
             <input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setFormError(''))} aria-describedby={formError ? 'sg-agree-err' : undefined} /> <span>I agree to use electronic records and signatures.</span>
@@ -657,15 +738,25 @@ export default function SignPage() {
     }
     if (AUTO.includes(f.type)) return <div key={f.id} {...common} title="Added for you"><span className="sg-val">{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : dateText}</span></div>;
     if (f.readonly) return <div key={f.id} {...common}><span className="sg-val">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}</span></div>;
-    if (f.type === 'checkbox') {
-      const flip = () => set(f.id, value ? '' : '1');
-      return <div key={f.id} {...common} role="checkbox" aria-checked={!!value} aria-label={`${name}${need}`} tabIndex={0} onClick={flip} onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && (e.preventDefault(), flip())}>{value && <Icon name="check" />}</div>;
-    }
-    if (f.type === 'radio')
+    // Tick boxes and radio buttons are the browser's own controls, drawn in the place the page gives them. So the
+    // keyboard works as everywhere else (Space ticks, the arrow keys move through a group of radio buttons) and a
+    // screen reader says what they are, whether they are on, and which group a radio button belongs to.
+    if (f.type === 'checkbox')
       return (
-        <div key={f.id} {...common} style={{ ...pos(f), borderRadius: '50%' }} role="radio" aria-checked={!!value} aria-label={`${f.label || 'Option'}${f.group_name ? `, ${f.group_name}` : ''}`} tabIndex={0}
-          onClick={() => pickRadio(f)} onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && (e.preventDefault(), pickRadio(f))}>{value && <span className="sg-dot" />}</div>
+        <label key={f.id} {...common}>
+          <input type="checkbox" className="sg-vh" checked={!!value} aria-label={`${name}${need}`} aria-required={!!f.required} onChange={(e) => set(f.id, e.target.checked ? '1' : '')} />
+          {value && <Icon name="check" />}
+        </label>
       );
+    if (f.type === 'radio') {
+      const group = fields.filter((x) => x.type === 'radio' && !x.readonly && groupKey(x) === groupKey(f));
+      return (
+        <label key={f.id} {...common} style={{ ...pos(f), borderRadius: '50%' }}>
+          <input type="radio" className="sg-vh" name={`f-${groupKey(f)}`} checked={!!value} aria-label={f.label || `Option ${group.indexOf(f) + 1} of ${group.length}`} onChange={() => pickRadio(f)} />
+          {value && <span className="sg-dot" />}
+        </label>
+      );
+    }
     if (f.type === 'attachment')
       return (
         <label key={f.id} {...common}>
@@ -698,10 +789,33 @@ export default function SignPage() {
     );
   };
 
-  // The pointer sits above the field unless that would cover the top of the page or something another person filled in.
-  const flagBelow = !!nextField && (nextField.y < 0.07 || [...data.others, ...fields].some((g: any) =>
-    g.id !== nextField.id && g.document_id === nextField.document_id && g.page === nextField.page
-    && g.y + g.h > nextField.y - 0.07 && g.y < nextField.y && g.x < nextField.x + 0.3 && g.x + g.w > nextField.x));
+  // The pointer goes above the field, or else below it or beside it: wherever it covers none of the page's own words
+  // and no other field (see placeFlag). Until the words of the page have been read, and on a scan, which has none to
+  // read, only the other fields count.
+  const flagSide: FlagSide = !nextField ? 'above' : (() => {
+    const p = printed?.key === flagKey ? printed : null;
+    const others = [...data.others, ...fields].filter((g: any) => g.id !== nextField.id && g.document_id === nextField.document_id && g.page === nextField.page);
+    return placeFlag(nextField, p ? { w: 104 / p.w, h: 27 / p.h } : { w: 0.3, h: 0.045 }, p ? { x: 10 / p.w, y: 8 / p.h } : { x: 0.025, y: 0.012 }, [...(p?.boxes || []), ...others]);
+  })();
+  const flagAt = (f: any) => (flagSide === 'right' ? { left: `${(f.x + f.w) * 100}%`, top: `${(f.y + f.h / 2) * 100}%` }
+    : flagSide === 'left' ? { left: `${f.x * 100}%`, top: `${(f.y + f.h / 2) * 100}%` }
+    : { left: `min(${f.x * 100}%, calc(100% - 8.5em))`, top: `${(f.y + (flagSide === 'below' ? f.h : 0)) * 100}%` });
+
+  // This person's fields on one page. Radio buttons that belong together are wrapped as one group with its name, so
+  // a screen reader announces the group. The wrapper takes no room: every field places itself on the page.
+  const pageFields = (docId: string, page: number) => {
+    const here = fields.filter((f) => f.document_id === docId && f.page === page);
+    const grouped = (f: any) => f.type === 'radio' && !f.readonly;
+    return (
+      <>
+        {here.filter((f) => !grouped(f)).map(docField)}
+        {[...new Set(here.filter(grouped).map(groupKey))].map((key) => {
+          const members = here.filter((f) => grouped(f) && groupKey(f) === key);
+          return <div key={key} role="radiogroup" aria-label={members[0].group_name || 'Choose one'} aria-required={members.some((m) => m.required)}>{members.map(docField)}</div>;
+        })}
+      </>
+    );
+  };
 
   const overlay = (docId: string) => (page: number) => (
     <>
@@ -712,10 +826,9 @@ export default function SignPage() {
           {f.image ? <img src={f.image} alt="Signature of another signer" /> : isBox(f) ? (f.value === '1' ? '✓' : '') : f.value}
         </div>
       ))}
-      {fields.filter((f) => f.document_id === docId && f.page === page).map(docField)}
+      {pageFields(docId, page)}
       {nextField && nextField.document_id === docId && nextField.page === page && !sheet && (
-        <span className={`sg-flag${flagBelow ? ' below' : ''}`} aria-hidden="true"
-          style={{ left: `min(${nextField.x * 100}%, calc(100% - 8.5em))`, top: `${(nextField.y + (flagBelow ? nextField.h : 0)) * 100}%` }}>
+        <span className={`sg-flag ${flagSide}`} aria-hidden="true" style={flagAt(nextField)}>
           {FLAG[nextField.type] || 'Fill in here'}
         </span>
       )}
@@ -750,6 +863,8 @@ export default function SignPage() {
           : hasNext ? <>Choose <b>Next</b> and we take you to each place that needs you, one at a time.</>
           : <>Everything needed is filled in. Choose <b>Finish</b> to check it and send.</>}
       </p>
+      {/* Said once, before the pages, to someone who cannot see them: the Document view shows each page as a picture. */}
+      {view === 'doc' && <p className="sg-vh">The pages below are shown as pictures, with your fields placed on them. To have the whole document read as text, with the same fields as an ordinary form, choose Text view, the next button.</p>}
       <div className="sg-tools">
         <div className="sg-seg" role="group" aria-label="How to read the document">
           <button type="button" aria-pressed={view === 'doc'} onClick={() => chooseView('doc')}>Document</button>
@@ -763,7 +878,7 @@ export default function SignPage() {
           {data.documents.map((d: any) => (
             <div key={d.id}>
               {data.documents.length > 1 && <h2 className="sg-docname">{d.name}</h2>}
-              <PdfDoc url={`/api${base}/doc/${d.id}`} overlay={overlay(d.id)} />
+              <PdfDoc url={`/api${base}/doc/${d.id}`} overlay={overlay(d.id)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }} />
             </div>
           ))}
         </div>
@@ -780,24 +895,30 @@ export default function SignPage() {
       {signed && (
         <SignedFieldDialog kind={signed.type} image={(signed.type === 'signature' ? sig : ini) || ''} onClose={() => setSignedField(null)}
           onClear={() => { set(signed.id, ''); setSignedField(null); }}
-          onChange={() => { setSignedField(null); setAdopt({ kind: signed.type }); }} />
+          onChange={() => { setSignedField(null); changeMark(signed.type); }} />
       )}
       {menuDialog}
       {dialogs}
       {open === 'review' && (
         <ReviewDialog me={me} sender={sender} items={items} sig={sig} ini={ini} approving={me.role === 'approver'} busy={busy} error={finishError}
           usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
-          onChangeSig={(kind) => setAdopt({ kind })} onBack={() => setOpen('')} onFinish={complete}
+          onChangeSig={changeMark} onBack={() => setOpen('')} onFinish={complete}
           onRename={async (name) => {
-            await api(`${base}/name`, { body: { name } });
-            setData((d: any) => (d ? { ...d, recipient: { ...d.recipient, name } } : d));
+            // A name that reads like a different person's is not changed: the sender is asked instead, and the
+            // answer says so in words. Those words are handed back to be shown under the name.
+            const r = await api(`${base}/name`, { body: { name } });
+            if (r?.applied === false) return String(r.message || 'We did not change it, and asked the sender instead.');
+            setData((d: any) => (d ? { ...d, recipient: { ...d.recipient, name: r?.name || name } } : d));
+            return '';
           }} />
       )}
       {adopt && (
-        <AdoptSignature kind={adopt.kind} name={me.name} onClose={() => setAdopt(null)}
+        <AdoptSignature kind={adopt.kind} name={me.name} saved={adopt.saved} onClose={() => setAdopt(null)}
           onDone={(png) => {
             if (adopt.kind === 'signature') setSig(png);
             else setIni(png);
+            // Made, or looked at and confirmed, in this tab: from here on a tap puts it on a field directly.
+            setSeen((s) => ({ ...s, [adopt.kind]: true }));
             if (adopt.field) set(adopt.field, '1');
             setAdopt(null);
           }} />

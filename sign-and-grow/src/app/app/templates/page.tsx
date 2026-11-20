@@ -64,7 +64,7 @@ export default function Templates() {
   return (
     <div className="sn">
       <div className="pagehead">
-        <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds. Shared with your whole team.</div></div>
+        <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds. Everyone on your team can use every template. Only the person it belongs to or an admin can change or delete it.</div></div>
         <Link href="/app/envelopes/new?kind=template" className="btn primary">New template</Link>
       </div>
       <div className="card pad0">
@@ -91,8 +91,8 @@ export default function Templates() {
                       <div className="sn-only-sm sn-inlineactions">
                         <button className="btn sm primary" onClick={() => start(t)} aria-label={`Use ${name}`}>Use</button>
                         {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
-                        <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>
-                        <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>
+                        {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
+                        {t.may_change !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
                       </div>
                     </td>
                     <td className="small hide-sm">{roles}</td>
@@ -101,8 +101,8 @@ export default function Templates() {
                     <td className="sn-rowactions hide-sm">
                       <button className="btn sm primary" onClick={() => start(t)} aria-label={`Use ${name}`}>Use</button>
                       {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
-                      <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>
-                      <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>
+                      {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
+                      {t.may_change !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
                     </td>
                   </tr>
                 );

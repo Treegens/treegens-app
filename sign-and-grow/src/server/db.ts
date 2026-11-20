@@ -273,10 +273,44 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['retired_tokens', 'envelope_id', 'TEXT'],
   ['retired_tokens', 'sent_to', 'TEXT'],
   ['retired_tokens', 'why', 'TEXT'],
+  // When this person was given the welcome signatures, at sign-up or with the workspace made for them when they
+  // signed in without one. A person gets them once, however many workspaces are made for them.
+  ['users', 'welcomed_at', 'TEXT'],
+  // The workspace this person used last. Signing in opens it.
+  ['users', 'last_account_id', 'TEXT'],
+  // The closing date the "one week left" email was sent for, so it goes out once for each time an account is closed.
+  ['users', 'closing_reminded', 'TEXT'],
+  // Set when the sender deleted a completed envelope. It is gone from the sender's lists, search, export and
+  // reports, and every recipient keeps their link and their copy. It is removed for good with the account.
+  ['envelopes', 'hidden_at', 'TEXT'],
+  // The reference a help request was answered with: eight characters nobody can misread.
+  ['support_requests', 'ref', 'TEXT'],
+  // 1 on a request that was still open when its writer's account was deleted. It goes once it has been answered.
+  ['support_requests', 'forget', 'INTEGER NOT NULL DEFAULT 0'],
+  // "Fix my name": the name the sender wrote for this person, kept when the signer changes how it is written, and
+  // the name the signer changed it to. A fix is checked against what the sender wrote, not against an earlier fix.
+  // When name is no longer self_name, the sender has changed it since and that is the sender's wording again.
+  ['recipients', 'sender_name', 'TEXT'],
+  ['recipients', 'self_name', 'TEXT'],
+  // When the sender was told that somebody opened this replaced link. Said once for each link.
+  ['retired_tokens', 'alerted_at', 'TEXT'],
+  // The pages of an uploaded file that are pictures with no text (a scan, a photo), as a JSON list counted from 1.
+  // Empty or missing means every page has text. Kept with the file, so the warning is there whenever it is listed.
+  ['files', 'scan_pages', 'TEXT'],
+  // An email the mail server would not take is tried again by the timer. payload holds what is needed to send it
+  // again besides the html (who it is from, the plain text, which stored files are attached). tries counts the
+  // attempts, tried_at is the latest one, next_try_at is when the timer tries again (empty: no more tries), and
+  // expires_at is when a link or code in it stops working, after which it is never sent again.
+  ['emails', 'payload', 'TEXT'],
+  ['emails', 'tries', 'INTEGER NOT NULL DEFAULT 0'],
+  ['emails', 'tried_at', 'TEXT'],
+  ['emails', 'next_try_at', 'TEXT'],
+  ['emails', 'expires_at', 'TEXT'],
 ];
 
 function migrate(d: any) {
   const hadPrefill = d.prepare('PRAGMA table_info(fields)').all().some((c: any) => c.name === 'prefill');
+  const hadWelcomed = d.prepare('PRAGMA table_info(users)').all().some((c: any) => c.name === 'welcomed_at');
   for (const [table, column, definition] of COLUMNS) {
     const have = d.prepare(`PRAGMA table_info(${table})`).all().some((c: any) => c.name === column);
     if (!have) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -289,6 +323,10 @@ function migrate(d: any) {
   if (!hadPrefill)
     d.exec(`UPDATE fields SET prefill=value WHERE value IS NOT NULL AND readonly=0 AND type IN ('text','number','date','company','title','checkbox','radio','dropdown')
       AND envelope_id IN (SELECT id FROM envelopes WHERE status='draft')`);
+  // Everyone who signed up on their own before welcomed_at existed was given the welcome signatures at sign-up.
+  // Someone who joined through an invitation (the invitation was accepted in the moment their login was made) was not.
+  if (!hadWelcomed)
+    d.exec('UPDATE users SET welcomed_at=created_at WHERE NOT EXISTS (SELECT 1 FROM invites i WHERE i.email=users.email AND i.accepted_at=users.created_at)');
   // One batch per person per Idempotency-Key, whatever else happens.
   d.exec('CREATE UNIQUE INDEX IF NOT EXISTS bulk_batches_idem ON bulk_batches(account_id, sender_id, idem_key) WHERE idem_key IS NOT NULL');
   // idempotency_keys used to be keyed by account alone and kept rows whose envelope had been deleted. The new shape

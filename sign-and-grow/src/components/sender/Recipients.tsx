@@ -7,7 +7,9 @@ import { dayTime, howLong, neverOpened } from './lib';
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent' };
 const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view' };
 
-export type Delivery = { to_email: string; recipient_id?: string | null; subject: string; status: 'sent' | 'outbox' | 'failed' | 'queued' | string; error?: string | null; at: string };
+// A failed email is tried again by the timer: tries so far, when the latest was, and when the next is due. A failed
+// one with no next try is final: nobody tries again.
+export type Delivery = { to_email: string; recipient_id?: string | null; subject: string; status: 'sent' | 'outbox' | 'failed' | 'queued' | string; error?: string | null; at: string; tries?: number; tried_at?: string | null; next_try_at?: string | null };
 
 /** The most recent email we tried to send to this address about this envelope. The list comes newest first. */
 // Prefer the email recorded for this exact person; two people can share one address.
@@ -24,7 +26,7 @@ function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: stri
   if (!open) return { s: 'pending', label: r.status === 'viewed' ? 'Opened, did not finish' : 'Did not open' };
   if (r.status === 'viewed') return { s: 'viewed', label: 'Opened' };
   if (r.role === 'inperson') return { s: 'sent', label: 'Ready to sign in person' };
-  if (mail?.status === 'failed') return { s: 'declined', label: 'Email failed' };
+  if (mail?.status === 'failed') return mail.next_try_at ? { s: 'expired', label: 'Email delayed' } : { s: 'declined', label: 'Email failed' };
   if (mail?.status === 'outbox') return { s: 'expired', label: 'Email not delivered' };
   if (neverOpened(r)) return { s: 'expired', label: 'Not opened' };
   return { s: 'sent', label: 'Sent' };
@@ -34,10 +36,13 @@ function EmailFact({ d, role }: { d: Delivery | null; role: string }) {
   if (role === 'inperson') return <>No email goes to them. They sign on your device when you are together.</>;
   if (!d) return <>No email has gone to this address yet.</>;
   const subject = <span className="muted"> &ldquo;{d.subject}&rdquo;</span>;
-  if (d.status === 'sent') return <>Handed to the mail server on {dayTime(d.at)}.{subject}</>;
+  const tries = d.tries && d.tries > 1 ? `, on try ${d.tries}` : '';
+  if (d.status === 'sent') return <>Handed to the mail server on {dayTime(d.tried_at || d.at)}{tries}.{subject}</>;
   if (d.status === 'outbox') return <><b className="sn-bad">Not delivered:</b> this server has no mail server set up.{subject}</>;
-  if (d.status === 'failed') return <><b className="sn-bad">Could not be sent</b> on {dayTime(d.at)}{d.error ? <>: {d.error}</> : null}.{subject}</>;
-  return <>Waiting to go out since {dayTime(d.at)}.{subject}</>;
+  // Not sent yet, and still being tried: say when the next try is. Or final: say that nobody tries again.
+  if (d.status === 'failed' && d.next_try_at) return <><b className="sn-bad">Not sent yet.</b> The mail server would not take it on {dayTime(d.tried_at || d.at)}{d.error ? <>: {d.error}</> : null}. We try again around {dayTime(d.next_try_at)}, and you do not have to do anything for that.{subject}</>;
+  if (d.status === 'failed') return <><b className="sn-bad">Could not be sent</b>{d.tries && d.tries > 1 ? <> after {d.tries} tries, the last on {dayTime(d.tried_at || d.at)}</> : <> on {dayTime(d.tried_at || d.at)}</>}{d.error ? <>: {d.error}</> : null}. We have stopped trying.{subject}</>;
+  return <>Waiting to go out since {dayTime(d.at)}. If it has not left within a quarter of an hour, we try again.{subject}</>;
 }
 
 // One card per person: what really happened to their email, when they opened it, when they finished,
@@ -97,7 +102,9 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
     try {
       const { reminded } = await api(`/envelopes/${e.id}/remind`, { body: { recipient_id: r.id } });
       if (reminded) toast(`Reminder emailed to ${r.name}.`);
-      else toast(`No reminder went out. ${r.name} turned reminders off, so share the link another way.`, true);
+      else if (r.muted) toast(`No reminder went out. ${r.name} turned reminders off, so share the link another way.`, true);
+      // Not counted as sent: the mail server would not take it. It is tried again by itself, and the card says so.
+      else toast(`The reminder to ${r.name} could not be sent just now. We keep trying, and their card below shows how it goes. You can also send them the link yourself.`, true);
       onChanged();
     } catch (err) {
       fail(err);
@@ -177,7 +184,8 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
             )}
             {!stale && undelivered && (
               <p className="sn-hint warn">
-                {mail!.status === 'failed' ? <>The email did not go out. Check the address with <b>Correct</b>, or send them the link yourself.</> : <>No email reached them. Send them the link yourself.</>}
+                {mail!.status === 'failed' && mail!.next_try_at ? <>The email has not gone out yet. We keep trying. If the address is wrong, fix it with <b>Correct</b>, or send them the link yourself in the meantime.</>
+                  : mail!.status === 'failed' ? <>The email did not go out and we have stopped trying. Check the address with <b>Correct</b>, or send them the link yourself.</> : <>No email reached them. Send them the link yourself.</>}
               </p>
             )}
             {reachable && r.muted && !stale ? <p className="sn-hint">They asked for no more reminder emails. You can still send them the link yourself.</p> : null}

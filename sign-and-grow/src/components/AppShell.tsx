@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { api, Leaf, toast, oops } from './ui';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 
-type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; admins: number; operator: boolean; support_email: string | null; reload: () => void };
+type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
 
@@ -26,6 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<any>(null);
   const [impact, setImpact] = useState<any>(null);
   const [open, setOpen] = useState(false);
+  const [notice, setNotice] = useState('');
   const path = usePathname();
   const router = useRouter();
 
@@ -46,6 +47,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (sessionStorage.getItem('sg_restored')) {
         sessionStorage.removeItem('sg_restored');
         toast('Welcome back. Your account is no longer scheduled to be deleted.');
+      }
+      // Anything else the sign-in did: joined a team from an invitation, could not join it, or was given a workspace.
+      // It is a few sentences, so it stays on screen until it is dismissed.
+      const said = sessionStorage.getItem('sg_notice');
+      if (said) {
+        sessionStorage.removeItem('sg_notice');
+        setNotice(said);
       }
     } catch {
       /* storage can be unavailable */
@@ -69,6 +77,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link href="/app/envelopes/new" className="btn" style={{ margin: '0 4px 10px', background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>New envelope</Link>
           {NAV.map(([href, label]) => <Link key={href} href={href} className={`nav${on(href) ? ' on' : ''}`}>{label}</Link>)}
           <Link href="/help" className="nav">Help</Link>
+          {me.support_email && <a href={`mailto:${me.support_email}`} className="nav" style={{ fontSize: 12.5, paddingTop: 2 }} title={`Write to ${me.support_email}`}><span className="truncate">{me.support_email}</span></a>}
           {me.operator && <Link href="/app/operator" className={`nav${on('/app/operator') ? ' on' : ''}`}>Review queue</Link>}
           {me.outbox && <a className="nav" href="/dev/outbox" target="_blank">Dev outbox ↗</a>}
           <button className="btn sm ghost" style={{ color: '#fff', display: open ? 'block' : 'none', marginTop: 8 }} onClick={() => setOpen(false)}>Close menu</button>
@@ -94,6 +103,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="banner paused" role="alert">
               <span><b>Sending is paused on this account.</b> Reason: {String(me.account.paused).replace(/[.\s]+$/, '')}. A person reviews every pause. Until then nothing new goes out: no new envelopes, no new or changed recipients, no reminders and no reopening. You can still open, download and export everything, and people who already have a document can still sign it.</span>
               <Link href="/help" className="btn sm">Contact us</Link>
+            </div>
+          )}
+          {notice && (
+            <div className={`notice${/did not join/.test(notice) ? ' warn' : ''} row between wrap`} style={{ marginBottom: 16 }} role="status">
+              <span>{notice}</span>
+              <button className="btn sm" onClick={() => setNotice('')}>OK</button>
             </div>
           )}
           {!me.user.email_verified && (

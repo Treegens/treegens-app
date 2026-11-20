@@ -221,18 +221,23 @@ export function SignedFieldDialog({ kind, image, onChange, onClear, onClose }: {
 // ---- Review before finishing -----------------------------------------------------------------
 
 // A signer whose name was typed wrong by the sender can put it right themselves. It is logged and the sender is told.
-function FixName({ name, onRename }: { name: string; onRename: (name: string) => Promise<void> }) {
+// A name that reads like a different person's is not changed: the sender is asked instead, and onRename hands back
+// the words that say so. They stay on screen in place of the form.
+function FixName({ name, onRename }: { name: string; onRename: (name: string) => Promise<string | void> }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(name);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
+  const [asked, setAsked] = useState('');
   const id = useId();
+  if (asked) return <div className="notice warn sg-problem" role="status">{asked}</div>;
   if (!open) return <button type="button" className="sg-link" onClick={() => setOpen(true)}>Not spelled right? Fix my name</button>;
   const save = async () => {
     setBusy(true);
     setProblem('');
     try {
-      await onRename(value.trim());
+      const notChanged = await onRename(value.trim());
+      if (notChanged) setAsked(notChanged);
       setOpen(false);
     } catch (e: any) {
       setProblem(e?.message || 'That did not save. Please try again.');
@@ -249,7 +254,7 @@ function FixName({ name, onRename }: { name: string; onRename: (name: string) =>
         <button type="button" className="btn sm ghost" onClick={() => setOpen(false)}>Cancel</button>
       </div>
       {problem && <p className="sg-problem" role="alert">{problem}</p>}
-      <p className="muted small" style={{ margin: '6px 0 0' }}>The sender is told about the change and it is recorded in the audit trail.</p>
+      <p className="muted small" style={{ margin: '6px 0 0' }}>This is for fixing how your name is spelled. The sender is told about the change and it is recorded in the audit trail. A different name is not changed here: the sender is asked instead.</p>
     </div>
   );
 }
@@ -257,7 +262,7 @@ function FixName({ name, onRename }: { name: string; onRename: (name: string) =>
 export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename }: {
   me: any; sender: any; items: Item[]; sig: string | null; ini: string | null; usesSig: boolean; usesIni: boolean; approving?: boolean;
   busy: boolean; error: string; onChangeSig: (kind: 'signature' | 'initials') => void; onBack: () => void; onFinish: () => void;
-  onRename?: (name: string) => Promise<void>;
+  onRename?: (name: string) => Promise<string | void>;
 }) {
   const filled = items.filter((i) => i.done).length;
   const optionalEmpty = items.filter((i) => !i.done && !i.required).length;

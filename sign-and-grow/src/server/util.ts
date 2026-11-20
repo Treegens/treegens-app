@@ -23,6 +23,8 @@ export const now = () => new Date().toISOString();
 // clicking anything. No look-alike characters (0/O, 1/I/L).
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const checkCode = () => Array.from(crypto.randomBytes(12), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+// A shorter code from the same alphabet, for a reference a person reads out or types back, such as a help request.
+export const shortCode = (length = 8) => Array.from(crypto.randomBytes(length), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
 export const fmtCode = (c: string) => c.replace(/(.{4})(?=.)/g, '$1-');
 export const parseCode = (s: any) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 export const isEmail = (s: any): s is string => typeof s === 'string' && s.length < 255 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);

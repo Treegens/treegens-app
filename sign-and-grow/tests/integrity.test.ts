@@ -459,7 +459,9 @@ test('someone who takes over a request inherits none of the first person\'s answ
 
 test('a save from an older copy is refused with who saved and when, and nothing of theirs is lost', async () => {
   const ann = await signUp('Ann Admin', 'ann@example.com', nextIp());
-  await ann.post('/account/invites', { email: 'bob@example.com', role: 'member' });
+  // Bob is an admin too: a plain member can use a colleague's template but not change it (tests/lifecycle.test.ts),
+  // so two people saving the same template are its owner and an admin, or two admins.
+  await ann.post('/account/invites', { email: 'bob@example.com', role: 'admin' });
   const bob = new Client();
   bob.ip = nextIp();
   assert.equal((await bob.post('/auth/signup', { name: 'Bob Member', email: 'bob@example.com', password: 'correct horse battery', invite: db.get("SELECT token FROM invites WHERE email='bob@example.com'").token })).status, 200);

@@ -397,7 +397,7 @@ test('small things that stop people getting stuck', async () => {
   let last: any;
   for (let i = 0; i < 3; i++) last = await ben.post(`/sign/${bt}/unlock`, { code: 'nope' });
   assert.match(last.data.error, /jo@example\.com/);
-  assert.equal(mailTo('jo@example.com').filter((m) => m.subject.startsWith('Could not open:')).length, 1);
+  assert.equal(mailTo('jo@example.com').filter((m) => m.subject === 'Could not open: Stuck test').length, 1);
 
   // Nobody opened it for two days: the sender is told once, with ways around email.
   db.run("UPDATE recipients SET sent_at=?, status='sent' WHERE envelope_id=? AND email='ben@example.com'", new Date(Date.now() - 3 * 864e5).toISOString(), e.id);

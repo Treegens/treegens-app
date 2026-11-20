@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ROLE_LABEL, Status, fmtDate } from '../ui';
 import { useMe } from '../AppShell';
 import { DATE_FORMATS, formatDate } from '@/lib/dates';
+import { scanWarning } from '@/lib/scans';
 import { Lock } from './parts';
 import { LIMITS, fmtSize } from './upload';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
@@ -73,11 +74,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
               </>
             )}
           </div>
-          {d.is_scan && (
-            <p className="notice warn small" style={{ margin: '6px 0 0' }}>
-              This looks like a scan: it is a picture of the pages with no real text. People who use a screen reader will not be able to have it read to them, it cannot be found by searching, and Find fields for me has nothing to work with. If you have the original file, export a PDF from that and use Replace file.
-            </p>
-          )}
+          {/* The server keeps which pages are pictures with the file, so this is also said when a draft is opened again. */}
+          {scanWarning(d) && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{scanWarning(d)}</p>}
           </div>
         ))}
         {docs.length >= MAX_DOCS && <p className="muted small" style={{ margin: '10px 0 0' }}>An envelope can hold up to {MAX_DOCS} documents. Remove one to add another.</p>}

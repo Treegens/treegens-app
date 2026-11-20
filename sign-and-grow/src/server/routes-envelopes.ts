@@ -2,7 +2,7 @@ import { route, json, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
 import { bad, id, token, now, str, rateLimit, isEmail, baseUrl, sha256, HttpError } from './util.ts';
 import { inspectPdf, imageToPdf } from './pdf.ts';
-import { extractText } from './text.ts';
+import { extractPages, textOf } from './text.ts';
 import { sendMail } from './mail.ts';
 import { creditsEnabled, available, isChargeable } from './credits.ts';
 import {
@@ -12,6 +12,7 @@ import {
 } from './envelopes.ts';
 import { hmac, safeEqual } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
+import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS } from '../lib/policy.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
@@ -32,10 +33,16 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   const fid = id('fil');
   const name = str(file.name, 200).replace(/\.(pdf|png|jpe?g)$/i, '') || 'Document';
   // Text is kept for the sender's own search. Files uploaded by signers are not indexed.
-  const text = isPdf && accountId ? await extractText(bytes) : '';
-  run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text) VALUES (?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), text || null);
-  // A PDF with no text at all is almost always a scan: it cannot be searched, and screen readers cannot read it.
-  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, is_scan: isPdf && !!accountId && !text.trim() };
+  const read = isPdf && accountId ? await extractPages(bytes) : [];
+  const text = textOf(read);
+  // A page with no text is almost always a picture of a page, a scan or a photo: it cannot be searched, and a screen
+  // reader cannot read it. A PNG or JPEG is always one. In a PDF every page is looked at, so a scanned page among
+  // typed ones is found and named. A PDF nothing could be read from counts as a scan altogether. The answer is kept
+  // with the file (scan_pages, counted from 1), so it is said again wherever the file is listed, not only here.
+  // Files that signers attach are not looked at.
+  const scanPages = !accountId ? [] : !isPdf || !read.some((p) => p.trim()) ? Array.from({ length: info.pages }, (_, i) => i + 1) : read.flatMap((p, i) => (p.trim() ? [] : [i + 1]));
+  run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages) VALUES (?,?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), text || null, scanPages.length ? JSON.stringify(scanPages) : null);
+  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, is_scan: scanPages.length > 0, scan_pages: scanPages };
 }
 
 route('POST', '/files', (c) => storeUpload(c, c.account.id));
@@ -52,7 +59,17 @@ function mine(c: Ctx, envelopeId: string, kind?: string) {
   if (!e || e.account_id !== c.account.id || (kind && e.kind !== kind)) throw bad('Envelope not found.', 404);
   // Members see what they sent. Admins see the whole account. Templates are shared with the team.
   if (e.kind === 'envelope' && !c.admin && e.sender_id !== c.user.id) throw bad('Envelope not found.', 404);
+  // A completed envelope its sender deleted is gone for the sender. Only its recipients still have it.
+  if (e.hidden_at) throw bad('Envelope not found.', 404);
   return e;
+}
+
+// Everyone on the team can use every template: read it, copy it, send from it. Changing or deleting one is for
+// the person it belongs to and for admins, so no member can wipe or rewrite what the whole team sends from.
+function assertMayChange(c: Ctx, e: any) {
+  if (e.kind !== 'template' || c.admin || e.sender_id === c.user.id) return;
+  const owner = get('SELECT name FROM users WHERE id=?', e.sender_id)?.name || 'a colleague';
+  throw bad(`This template belongs to ${owner}. You can use it and copy it, but only ${owner} or an admin of your team can change or delete it. To make your own version, copy it and change the copy.`, 403);
 }
 
 // The Idempotency-Key a call came with, or '' when it sent none. The key is kept with a hash of the body, so a
@@ -67,9 +84,12 @@ const bodyHash = (b: any) => sha256(JSON.stringify(b));
 route('GET', '/envelopes', (c) => {
   const kind = c.q.get('kind') === 'template' ? 'template' : 'envelope';
   const box = c.q.get('box') || 'all';
-  const where = ['e.account_id=?', 'e.kind=?'];
+  // hidden_at: a completed envelope its sender deleted. It is in nobody's list on the sending side.
+  const where = ['e.account_id=?', 'e.kind=?', 'e.hidden_at IS NULL'];
   const p: any[] = [c.account.id, kind];
-  if (kind === 'envelope' && !c.admin) (where.push('e.sender_id=?'), p.push(c.user.id));
+  // Members see what they sent, and the folders of what they sent. Templates and their folders are the team's.
+  const own = kind === 'envelope' && !c.admin;
+  if (own) (where.push('e.sender_id=?'), p.push(c.user.id));
   const boxes: Record<string, string> = { drafts: "e.status='draft'", sent: "e.status!='draft'", waiting: "e.status='sent'", completed: "e.status='completed'", closed: "e.status IN ('voided','declined','expired')" };
   if (kind === 'envelope' && boxes[box]) where.push(boxes[box]);
   if (c.q.get('folder')) (where.push('e.folder=?'), p.push(c.q.get('folder')));
@@ -82,7 +102,7 @@ route('GET', '/envelopes', (c) => {
     p.push(`%${q}%`, q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
   const limit = Math.min(200, Number(c.q.get('limit')) || 100);
-  const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, u.name sender
+  const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, e.sender_id, u.name sender
     FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE ${where.join(' AND ')} ORDER BY e.updated_at DESC LIMIT ? OFFSET ?`, ...p, limit, Number(c.q.get('offset')) || 0);
   for (const e of rows) {
     e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
@@ -90,9 +110,12 @@ route('GET', '/envelopes', (c) => {
     e.email_failed = all("SELECT m.status FROM emails m WHERE m.envelope_id=? AND m.id IN (SELECT MAX(id) FROM emails WHERE envelope_id=? GROUP BY COALESCE(recipient_id, to_email))", e.id, e.id).some((m) => m.status === 'failed');
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
   }
-  const folders = all("SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND folder IS NOT NULL AND folder != ''", c.account.id, kind).map((r) => r.folder);
+  // Only the folders of what this person can see: a folder name such as "Layoffs 2026" says something by itself.
+  const folders = all(`SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND hidden_at IS NULL AND folder IS NOT NULL AND folder != ''${own ? ' AND sender_id=?' : ''}`, ...(own ? [c.account.id, kind, c.user.id] : [c.account.id, kind])).map((r) => r.folder);
   // Admins can narrow the list to one person's envelopes.
-  const senders = c.admin ? all('SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? ORDER BY u.name', c.account.id, kind) : [];
+  const senders = c.admin ? all('SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? AND e.hidden_at IS NULL ORDER BY u.name', c.account.id, kind) : [];
+  // On a template, may_change says whether this person may change or delete it (their own, or they are an admin).
+  if (kind === 'template') for (const e of rows) e.may_change = c.admin || e.sender_id === c.user.id;
   return { envelopes: rows, folders, senders };
 });
 
@@ -159,12 +182,22 @@ route('POST', '/envelopes', async (c) => {
 route('GET', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
   // Whether each email actually left, so "I never got it" can be answered without guessing.
-  const deliveries = all('SELECT to_email, recipient_id, subject, status, error, at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
+  // An email the mail server would not take is tried again by the timer: tries, when the latest one was, and when the
+  // next one is due (empty once it left, or when nobody tries any more).
+  const deliveries = all('SELECT to_email, recipient_id, subject, status, error, at, tries, tried_at, next_try_at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
   // How far each signer has got, so the sender can help someone who is stuck without being able to sign for them.
+  // Counted the way the signer's own screen counts: a group of radio buttons is one thing to do, not one for each
+  // button, so sender and signer see the same "N of M".
   const env = publicEnvelope(e);
   for (const r of env.recipients) {
-    const theirs = e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !['date_signed', 'full_name', 'email'].includes(f.type));
-    r.progress = { fields: theirs.length, filled: theirs.filter((f: any) => f.value).length, required_left: theirs.filter((f: any) => f.required && !f.value).length };
+    const things = new Map<string, { filled: boolean; required: boolean }>();
+    for (const f of e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !['date_signed', 'full_name', 'email'].includes(f.type))) {
+      const key = f.type === 'radio' ? `group:${f.group_name || f.id}` : f.id;
+      const it = things.get(key) || { filled: false, required: false };
+      things.set(key, { filled: it.filled || !!f.value, required: it.required || !!f.required });
+    }
+    const list = [...things.values()];
+    r.progress = { fields: list.length, filled: list.filter((x) => x.filled).length, required_left: list.filter((x) => x.required && !x.filled).length };
   }
   return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries };
 });
@@ -178,6 +211,7 @@ route('GET', '/envelopes/:id', (c) => {
 route('PUT', '/envelopes/:id', async (c) => {
   const b = await c.body();
   const e = mine(c, c.params.id);
+  assertMayChange(c, e);
   // A body that carries the edit_version its sender loaded is refused with 409 when someone has saved since, so a
   // save from an older copy never wipes a colleague's work. A body without it is saved as it always was.
   if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, b, c.account.id, c.actor);
@@ -192,15 +226,33 @@ route('POST', '/envelopes/:id/extend', async (c) => {
 
 route('PATCH', '/envelopes/:id', async (c) => {
   const e = mine(c, c.params.id);
+  assertMayChange(c, e);
   const b = await c.body();
   if ('folder' in b) run('UPDATE envelopes SET folder=? WHERE id=?', str(b.folder, 80).trim() || null, e.id);
 });
 
+// Deleting removes a draft, a template or a closed envelope for good, with its audit trail, our copies of its
+// emails and the files signers attached. A completed envelope is different, because it is not only the sender's:
+// everyone on it was promised their copy for as long as the sender keeps the account. So deleting one takes it out
+// of the sender's lists, search, export and reports, and every recipient's link, download and "sent to me" list
+// keep working. It is removed for good when the account is.
 route('DELETE', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
+  assertMayChange(c, e);
   if (e.status === 'sent') throw bad('Void this envelope before deleting it.');
   if (e.kind === 'template' && get('SELECT 1 x FROM powerforms WHERE template_id=?', e.id)) throw bad('A PowerForm still uses this template. Delete the PowerForm first.');
-  run('DELETE FROM envelopes WHERE id=?', e.id);
+  if (e.kind === 'envelope' && e.status === 'completed') {
+    run('UPDATE envelopes SET hidden_at=? WHERE id=?', now(), e.id);
+    audit(e.id, c.actor, 'Removed from the sender\'s lists', 'The sender deleted this envelope from their account. Everyone on it keeps their link and their copy.');
+    return { ok: true, kept_for_recipients: true };
+  }
+  const shas = tx(() => {
+    const s = forgetEnvelopes([e.id]);
+    run('DELETE FROM envelopes WHERE id=?', e.id);
+    return s;
+  });
+  // The uploaded documents stay: they are files of the account and other envelopes may use them.
+  removeUnusedBlobs(shas);
 });
 
 route('POST', '/envelopes/:id/send', async (c) => {
@@ -260,10 +312,12 @@ route('GET', '/envelopes/:id/download', async (c) => {
 
 // ---- Bulk send -----------------------------------------------------------------------------
 
+// Like envelopes: members see the batches they sent, admins see every batch in the account. A completed envelope
+// its sender deleted is not counted.
 route('GET', '/bulk', (c) => ({
   batches: all(`SELECT b.id, b.name, b.total, b.created_at, t.subject template,
-      (SELECT COUNT(*) FROM envelopes e WHERE e.bulk_id=b.id) created, (SELECT COUNT(*) FROM envelopes e WHERE e.bulk_id=b.id AND e.status='completed') completed
-    FROM bulk_batches b LEFT JOIN envelopes t ON t.id=b.template_id WHERE b.account_id=? ORDER BY b.created_at DESC LIMIT 50`, c.account.id),
+      (SELECT COUNT(*) FROM envelopes e WHERE e.bulk_id=b.id AND e.hidden_at IS NULL) created, (SELECT COUNT(*) FROM envelopes e WHERE e.bulk_id=b.id AND e.status='completed' AND e.hidden_at IS NULL) completed
+    FROM bulk_batches b LEFT JOIN envelopes t ON t.id=b.template_id WHERE b.account_id=?${c.admin ? '' : ' AND b.sender_id=?'} ORDER BY b.created_at DESC LIMIT 50`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id])),
 }));
 
 // Batches that a request in this process is sending right now. A repeat of the call never sends alongside it: it is
@@ -371,7 +425,7 @@ function batch(c: Ctx, bulkId: string) {
 }
 route('GET', '/bulk/:id', (c) => {
   const { idem_key: _k, request_hash: _h, ...b } = batch(c, c.params.id);
-  const envelopes = all('SELECT id, status, subject, sent_at, completed_at FROM envelopes WHERE bulk_id=? ORDER BY created_at', b.id);
+  const envelopes = all('SELECT id, status, subject, sent_at, completed_at FROM envelopes WHERE bulk_id=? AND hidden_at IS NULL ORDER BY created_at', b.id);
   for (const e of envelopes) e.recipients = all('SELECT name, email, role, status, viewed_at, completed_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
   // The record row by row: which rows went out, which could not and why, and which have not been tried yet. The row
   // itself (names and emails as submitted) is shown until it is sent. After that its envelope has them.

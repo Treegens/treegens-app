@@ -111,6 +111,11 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 .sg-flag::after { content: ''; position: absolute; left: 12px; top: 100%; border: 6px solid transparent; border-top-color: #ffd24a; }
 .sg-flag.below { transform: translateY(8px); }
 .sg-flag.below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: #ffd24a; }
+/* Beside the field, when above and below would cover words of the page or another field. */
+.sg-flag.right { transform: translate(10px, -50%); }
+.sg-flag.right::after { left: auto; right: 100%; top: 50%; margin-top: -6px; border-top-color: transparent; border-right-color: #ffd24a; }
+.sg-flag.left { transform: translate(calc(-100% - 10px), -50%); }
+.sg-flag.left::after { left: 100%; top: 50%; margin-top: -6px; border-top-color: transparent; border-left-color: #ffd24a; }
 
 /* ---- Text view -------------------------------------------------------------------------------- */
 .sg-text { font-size: 18px; line-height: 1.7; padding: 24px 28px; max-width: 760px; margin: 0 auto; overflow-wrap: anywhere; }
@@ -239,3 +244,12 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 /* Fixing the spelling of your own name, inside the review dialog */
 .sg-link { border: 0; background: none; padding: 6px 0; font: inherit; font-size: 14px; color: var(--green); text-decoration: underline; cursor: pointer; min-height: 32px; }
 .sg-fixname input { flex: 1 1 180px; min-height: 44px; }
+.sg-more { display: inline-block; margin-top: 4px; color: var(--green); font-weight: 600; }
+
+/* Secondary controls that stand on their own are as easy to hit with a thumb as the buttons: 44 px tall on a phone.
+   A link in the middle of a sentence keeps the height of its line. */
+@media (max-width: 600px), (pointer: coarse) {
+  .sg-foot-links .sg-link, .sg-review .sg-link, .sg-more { display: inline-flex; align-items: center; min-height: 44px; }
+  .sg-who dd a { display: inline-flex; align-items: center; min-height: 44px; }
+  .sg-who > div { align-items: center; }
+}

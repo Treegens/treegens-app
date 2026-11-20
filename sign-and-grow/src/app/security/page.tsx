@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
+import { CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 
 export const metadata = { title: 'Security and trust', description: 'What Sign&Grow does to protect signers, senders and documents, in plain words. And what it does not do.' };
 
@@ -51,7 +52,7 @@ export default function Security() {
           <Point title="Your link does not wear out.">It works for as long as the document is open, however many times you open it. There is no limit on clicks. If a deadline passes, the sender can reopen the document and the same link works again.</Point>
           <Point title="You can check that an email is real.">Signing requests, reminders and completion emails carry a security code. Type it in at <Link href="/check">Check an email</Link> and we tell you which address sent it and under what name. You can report the email there too, without opening the document.</Point>
           <Point title="You always know who is asking.">Each request names the sender and their email address, and a reply goes straight to that person.</Point>
-          <Point title="You get your copy, also later.">Everyone on a document gets the completed PDF. <Link href="/help#find-documents">Find my documents</Link> sends the link again to the same inbox at any time.</Point>
+          <Point title="You get your copy, also later.">Everyone on a document gets the completed PDF. <Link href="/help#find-documents">Find my documents</Link> sends the link again to the same inbox, for as long as the sender keeps their account. A sender who deletes a completed document only takes it out of their own lists: your link and your copy stay.</Point>
           <Point title="Extra protection when the sender wants it.">A sender can put an access code of at least {abuse.codeMin} characters on a document. They give it to you themselves. It is never in our email. After {abuse.codeTries} wrong tries the code is frozen, so it cannot be guessed, until the sender sets a new one.</Point>
         </Block>
 
@@ -74,8 +75,11 @@ export default function Security() {
         <Block id="your-documents" title="Your documents stay yours">
           <Point title="Export everything, free, at any time.">One ZIP file with every signed PDF, every audit trail and a list of all envelopes. It is free on every plan and keeps working after you cancel.</Point>
           <Point title="Stopping payment never costs you your documents.">Cancelling, a failed payment or moving to the free plan deletes nothing and locks nothing. A paused account can still open, download and export everything.</Point>
-          <Point title={`Closing an account can be undone for ${closeGraceDays} days.`}>Nothing is deleted during that time, and signing in again brings the account straight back. After that it is removed for good.</Point>
-          <Point title="A team does not lose documents when someone leaves.">Their envelopes pass to the team, and the owner can hand the account to someone else.</Point>
+          <Point title={`Closing an account can be undone for ${closeGraceDays} days.`}>Nothing is deleted during that time, and signing in again brings the account straight back. While it is closing nothing new starts in it: nothing is sent, nobody joins, and its API keys are off. {CLOSING_REMINDER_DAYS} days before the end the owner is emailed the date, how to keep the account and how to export everything first.</Point>
+          <Point title="Deleted means deleted.">When an account is deleted, at once or after the {closeGraceDays} days, this goes for good. {DELETED_WITH_ACCOUNT.join(' ')}</Point>
+          <Point title="What stays after a deletion, and why.">{KEPT_AFTER_DELETION.join(' ')}</Point>
+          <Point title="A team does not lose documents when someone leaves.">What they sent (envelopes, drafts, templates and bulk sends) passes to a member an admin chooses, each envelope&apos;s audit trail says who handed it to whom, and the owner can hand the account to someone else. The person who was removed keeps their login and gets a workspace of their own.</Point>
+          <Point title="Templates are shared, not up for grabs.">Everyone on a team can use every template. Only the person it belongs to and the admins can change or delete it. Members see their own envelopes, folders and bulk sends, and admins see all of them.</Point>
           <Point title="Only the right people can open a document.">The people it was sent to, the person who sent it, and the admins of the sender&apos;s account. A recipient cannot open it before their turn, or after it has been voided, declined or left to expire. On a public form, typing someone else&apos;s email address never opens their document: an unfinished one is only given back to the browser that started it.</Point>
         </Block>
 

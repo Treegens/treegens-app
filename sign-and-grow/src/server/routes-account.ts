@@ -4,11 +4,11 @@ import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqua
 import { hashPassword, checkPassword, createSession, cookie, SESSION_COOKIE } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
-import { billingEnabled, verifyChain, notifyPrefs } from './envelopes.ts';
-import { grant, creditSummary, findFreeCode } from './credits.ts';
+import { billingEnabled, verifyChain, notifyPrefs, closingText } from './envelopes.ts';
+import { grant, creditSummary, findFreeCode, sameEmail } from './credits.ts';
 import { tick } from './cron.ts';
 import { redeemCode } from './routes-billing.ts';
-import { trustInfo, keysOf, keyList, tellTeamsAboutKeys } from './routes-trust.ts';
+import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 
 const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
@@ -22,6 +22,33 @@ async function sendVerification(u: any) {
   });
 }
 
+// A workspace of one's own: made at sign-up, and for someone who signs in and belongs to no account any more
+// (removed from their only team), so a login is never a dead end. The welcome signatures go to a person once,
+// however many workspaces are made for them.
+function ownWorkspace(userId: string, name: string, t = now()): string {
+  const accountId = id('acc');
+  run('INSERT INTO accounts (id, name, created_at) VALUES (?,?,?)', accountId, `${name.split(' ')[0]}'s workspace`, t);
+  run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'owner',?)", accountId, userId, t);
+  if (run('UPDATE users SET welcomed_at=? WHERE id=? AND welcomed_at IS NULL', t, userId).changes) grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
+  return accountId;
+}
+
+// An invitation that this address may use right now. The same rule whichever way the person joins: signing up from
+// the invitation, signing in from it, or accepting it while signed in.
+function openInvite(tokenText: string, email: string): any {
+  const inv = tokenText ? get('SELECT i.*, a.name account_name, a.closing_at FROM invites i JOIN accounts a ON a.id=i.account_id WHERE i.token=? AND i.accepted_at IS NULL', tokenText) : null;
+  if (!inv || !sameEmail(inv.email, email)) throw bad(`This invitation cannot be used with ${email}. It was sent to another address, it was used already, or it was cancelled. Ask the person who invited you to send a new one.`);
+  // Whoever joined an account that is being closed would lose everything they sent when it is deleted.
+  if (inv.closing_at) throw bad(closingText({ name: inv.account_name, closing_at: inv.closing_at }, 'Nobody can join it now'), 403);
+  return inv;
+}
+// Makes the person a member. Call inside tx().
+function join(inv: any, userId: string, t = now()) {
+  run('INSERT OR IGNORE INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', inv.account_id, userId, inv.role, t);
+  run('UPDATE invites SET accepted_at=? WHERE id=?', t, inv.id);
+  run('UPDATE users SET last_account_id=? WHERE id=?', inv.account_id, userId);
+}
+
 // ---- Auth ----------------------------------------------------------------------------------
 
 route('POST', '/auth/signup', async (c) => {
@@ -33,9 +60,8 @@ route('POST', '/auth/signup', async (c) => {
   if (!name) throw bad('Tell us your name.');
   if (!isEmail(email)) throw bad('Enter a valid email address.');
   if (password.length < 8) throw bad('Use a password of at least 8 characters.');
-  if (get('SELECT id FROM users WHERE email=?', email)) throw bad('An account with this email already exists. Sign in instead.', 409);
-  const invite = b.invite ? get('SELECT * FROM invites WHERE token=? AND accepted_at IS NULL', str(b.invite)) : null;
-  if (b.invite && (!invite || invite.email.toLowerCase() !== email)) throw bad('This invitation is not valid for that email address.');
+  if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a Sign&Grow login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
+  const invite = b.invite ? openInvite(str(b.invite), email) : null;
   // A code that makes the plan free is checked before anything is created, so a typo is said out loud instead of
   // quietly giving an ordinary account. It only applies to a new workspace, not to joining someone else's team.
   const typedCode = str(b.code, 80).trim();
@@ -45,15 +71,11 @@ route('POST', '/auth/signup', async (c) => {
   const t = now();
   tx(() => {
     run('INSERT INTO users (id, email, name, password_hash, email_verified, verify_token, created_at) VALUES (?,?,?,?,?,?,?)', uid, email, name, hashPassword(password), invite ? 1 : 0, token(), t);
-    if (invite) {
-      run('INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', invite.account_id, uid, invite.role, t);
-      run('UPDATE invites SET accepted_at=? WHERE id=?', t, invite.id);
-    } else {
-      accountId = id('acc');
-      run('INSERT INTO accounts (id, name, created_at) VALUES (?,?,?)', accountId, `${name.split(' ')[0]}'s workspace`, t);
-      run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'owner',?)", accountId, uid, t);
-      // A few free signatures to try the product with. Once per account.
-      grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
+    if (invite) join(invite, uid, t);
+    else {
+      // With a few free signatures to try the product with. Once per person.
+      accountId = ownWorkspace(uid, name, t);
+      run('UPDATE users SET last_account_id=? WHERE id=?', accountId, uid);
     }
   });
   // A free-plan code entered at sign-up takes effect straight away, and is confirmed by email like one entered later.
@@ -71,8 +93,6 @@ route('POST', '/auth/login', async (c) => {
   rateLimit(`login:${email}`, 10, 900_000);
   const u = get('SELECT * FROM users WHERE email=?', email);
   if (!u || !checkPassword(str(b.password, 200), u.password_hash)) throw bad('That email and password do not match.', 401);
-  const m = get('SELECT account_id FROM memberships WHERE user_id=? ORDER BY created_at LIMIT 1', u.id);
-  if (!m) throw bad('This user no longer belongs to any account.', 403);
   // Signing in during the grace period after closing an account brings it straight back.
   const restored = !!u.closing_at;
   if (restored) {
@@ -81,8 +101,29 @@ route('POST', '/auth/login', async (c) => {
     // Their API keys work again from here. The admins of their teams were told the keys went off, so they hear this too.
     await tellTeamsAboutKeys(u, keysOf(u.id), 'back');
   }
-  c.cookies.push(createSession(u.id, m.account_id, c.secure));
-  return { user: publicUser(u), restored };
+  // Someone who already has a login accepts a team invitation by signing in from it. An invitation that cannot be
+  // used never stops the sign-in: the person is in, and is told why they did not join.
+  let joined: any = null;
+  let inviteError = '';
+  if (b.invite) {
+    try {
+      joined = openInvite(str(b.invite), u.email);
+      tx(() => join(joined, u.id));
+    } catch (e) {
+      if (!(e instanceof HttpError)) throw e;
+      joined = null;
+      inviteError = e.message;
+    }
+  }
+  // Opens the team just joined, else the workspace this person used last, else their oldest. Someone who belongs to
+  // no account any more (an admin removed them from their only team) gets an empty workspace of their own, as at
+  // sign-up, so they can still sign in, read their inbox and be invited again.
+  const mine: string[] = all('SELECT account_id FROM memberships WHERE user_id=? ORDER BY created_at', u.id).map((m) => m.account_id);
+  const fresh = !mine.length;
+  const accountId = joined?.account_id || (mine.includes(u.last_account_id) ? u.last_account_id : mine[0]) || tx(() => ownWorkspace(u.id, u.name));
+  if (accountId !== u.last_account_id) run('UPDATE users SET last_account_id=? WHERE id=?', accountId, u.id);
+  c.cookies.push(createSession(u.id, accountId, c.secure));
+  return { user: publicUser(u), restored, fresh, joined: joined?.account_name || null, invite_error: inviteError || null };
 }, 'public');
 
 route('POST', '/auth/logout', (c) => {
@@ -112,7 +153,8 @@ route('POST', '/auth/forgot', async (c) => {
   if (u) {
     const t = token();
     run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)', sha256(t), u.id, new Date(Date.now() + 3600_000).toISOString());
-    await sendMail({ to: u.email, subject: 'Reset your Sign&Grow password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url: `${baseUrl()}/reset?token=${t}` } });
+    // expiresAt: if the mail server will not take this now, it is tried again, but never once the link in it has run out.
+    await sendMail({ to: u.email, subject: 'Reset your Sign&Grow password', heading: 'Reset your password', lines: ['This link works for one hour. If you did not ask for it, ignore this email.'], cta: { label: 'Choose a new password', url: `${baseUrl()}/reset?token=${t}` }, expiresAt: new Date(Date.now() + 3600_000).toISOString() });
   }
   return { ok: true }; // same answer either way, so emails cannot be probed
 }, 'public');
@@ -132,6 +174,8 @@ route('POST', '/auth/switch', async (c) => {
   const accountId = str((await c.body()).account_id);
   if (!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', accountId, c.user.id)) throw bad('You are not a member of that account.', 403);
   if (c.auth?.sessionId) run('UPDATE sessions SET account_id=? WHERE id=?', accountId, c.auth.sessionId);
+  // Remembered, so the next sign-in opens this workspace and not the oldest one.
+  run('UPDATE users SET last_account_id=? WHERE id=?', accountId, c.user.id);
   return { ok: true };
 });
 
@@ -152,6 +196,7 @@ route('GET', '/me', (c) => {
     role: c.role,
     account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
+    members: get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n,
     ...trustInfo(c),
     accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', c.user.id),
     billing: { enabled: billingEnabled(), signatures: billingEnabled() ? creditSummary(a.id) : null },
@@ -202,23 +247,28 @@ route('POST', '/account/invites', async (c) => {
   const email = str(b.email, 254).trim().toLowerCase();
   const role = b.role === 'admin' ? 'admin' : 'member';
   if (!isEmail(email)) throw bad('Enter a valid email address.');
+  // Nobody is invited into an account that is about to be deleted.
+  if (c.account.closing_at) throw bad(closingText(c.account, 'Nobody can be invited to it now'), 403);
   if (get('SELECT 1 x FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND u.email=?', c.account.id, email)) throw bad('That person is already on the team.');
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
   const t = token();
   run('INSERT INTO invites (id, token, account_id, email, role, created_at) VALUES (?,?,?,?,?,?)', id('inv'), t, c.account.id, email, role, now());
-  await sendMail({ to: email, subject: `${c.user.name} invited you to ${c.account.name} on Sign&Grow`, heading: `Join ${c.account.name}`, lines: [`${c.user.name} invited you to send and sign documents together. Every subscription plants trees.`], cta: { label: 'Accept invitation', url: `${baseUrl()}/signup?invite=${t}&email=${encodeURIComponent(email)}` } });
+  // Someone who already has a login joins by signing in. Everyone else makes a login first. The email goes to the
+  // invited address only, so it tells the person inviting nothing about who has an account.
+  const known = !!get('SELECT 1 x FROM users WHERE email=?', email);
+  await sendMail({ to: email, subject: `${c.user.name} invited you to ${c.account.name} on Sign&Grow`, heading: `Join ${c.account.name}`,
+    lines: [`${c.user.name} invited you to send and sign documents together. Every subscription plants trees.`, ...(known ? ['You already have a Sign&Grow login with this address. Sign in with it and you are on the team. Anything you already have on Sign&Grow stays as it is.'] : [])],
+    cta: { label: known ? 'Sign in to accept' : 'Accept invitation', url: `${baseUrl()}/${known ? 'login' : 'signup'}?invite=${t}&email=${encodeURIComponent(email)}` } });
   return { ok: true };
 }, 'admin');
 
 route('POST', '/invites/accept', async (c) => {
-  const inv = get('SELECT * FROM invites WHERE token=? AND accepted_at IS NULL', str((await c.body()).token));
-  if (!inv || inv.email.toLowerCase() !== c.user.email.toLowerCase()) throw bad('This invitation is not valid for your account.');
+  const inv = openInvite(str((await c.body()).token), c.user.email);
   tx(() => {
-    run('INSERT OR IGNORE INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', inv.account_id, c.user.id, inv.role, now());
-    run('UPDATE invites SET accepted_at=? WHERE id=?', now(), inv.id);
+    join(inv, c.user.id);
     if (c.auth?.sessionId) run('UPDATE sessions SET account_id=? WHERE id=?', inv.account_id, c.auth.sessionId);
   });
-  return { ok: true };
+  return { ok: true, joined: inv.account_name };
 });
 
 route('DELETE', '/account/invites/:id', (c) => {
@@ -237,18 +287,27 @@ route('DELETE', '/account/members/:id', async (c) => {
   const m = get('SELECT m.role, u.name, u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id=?', c.account.id, c.params.id);
   if (!m) throw bad('Member not found.', 404);
   if (m.role === 'owner') throw bad('The owner cannot be removed. Make someone else the owner first.');
-  // Their envelopes and templates stay with the team: they pass to a chosen successor, or to whoever removed them.
+  // Nobody removes themselves: whoever leaves must not be the one who keeps their envelopes, and with them the
+  // signed copies that arrive later. Another admin does it, and chooses who takes over.
+  if (c.params.id === c.user.id) throw bad(`You cannot remove yourself from ${c.account.name}. To leave, ask the owner or another admin to remove you on the Team tab: they choose who takes over your envelopes, templates and bulk sends, and nothing you sent is lost. To give up your whole login instead, use Settings, Your data.`);
+  // Their envelopes, templates and bulk sends stay with the team: they pass to a chosen successor, or to whoever
+  // removed them. The successor is someone who stays. A name we do not know is refused, never quietly replaced.
   const to = c.q.get('to');
-  const successor = to && get('SELECT user_id FROM memberships WHERE account_id=? AND user_id=? AND user_id!=?', c.account.id, to, c.params.id) ? to : c.user.id;
+  if (to && (to === c.params.id || !get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)))
+    throw bad(`Choose another member of ${c.account.name} to take over what ${m.name} sent. The person named in "to" is not on the team. Nothing was changed.`);
+  const successor = to || c.user.id;
   const keys = all('SELECT id, name, prefix, scope, last_used_at FROM api_keys WHERE account_id=? AND user_id=? AND stopped_at IS NULL', c.account.id, c.params.id);
   const admins = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin') AND m.user_id!=?", c.account.id, c.params.id);
-  run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', successor, c.account.id, c.params.id);
-  run('DELETE FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
-  run('DELETE FROM sessions WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
   // Their API keys stop with them, and whatever used those keys breaks. Nobody should learn that from a failing
   // integration. The keys stay listed as stopped, and the answer, the admins and the person removed are all told
   // which ones they were.
-  run('UPDATE api_keys SET stopped_at=? WHERE account_id=? AND user_id=? AND stopped_at IS NULL', now(), c.account.id, c.params.id);
+  const handed = tx(() => {
+    const n = handOver(c.account.id, { id: c.params.id, name: m.name, email: m.email }, successor, c.actor, `${m.name} was removed from the team`);
+    run('DELETE FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
+    run('DELETE FROM sessions WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
+    run('UPDATE api_keys SET stopped_at=? WHERE account_id=? AND user_id=? AND stopped_at IS NULL', now(), c.account.id, c.params.id);
+    return n;
+  });
   if (keys.length) {
     const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
     const list = keyList(keys);
@@ -259,7 +318,7 @@ route('DELETE', '/account/members/:id', async (c) => {
     await sendMail({ to: m.email, subject: `Your API keys for ${c.account.name} stopped working`, heading: `${n} of yours stopped working`,
       lines: [`${c.user.name} removed you from ${c.account.name} on Sign&Grow. The API keys you created there stopped working at that moment:`, list, `If something still uses one of them, it now gets an error. Ask an admin of ${c.account.name} for a new key.`] });
   }
-  return { ok: true, keys_stopped: keys };
+  return { ok: true, keys_stopped: keys, handed_over: handed, handed_to: successor };
 }, 'admin');
 
 // Hand the account to someone else, so it never depends on one person's mailbox.
@@ -364,12 +423,14 @@ route('DELETE', '/webhooks/:id', (c) => {
 // ---- Reports and impact --------------------------------------------------------------------
 
 route('GET', '/reports/summary', (c) => {
-  const scope = c.admin ? '' : ' AND sender_id=?';
+  // A completed envelope its sender deleted is counted nowhere here, so these numbers match the lists they link to.
+  // The paper it saved was saved all the same, so GET /impact and the public totals still count it.
+  const scope = `${c.admin ? '' : ' AND sender_id=?'} AND hidden_at IS NULL`;
   const p = c.admin ? [c.account.id] : [c.account.id, c.user.id];
   const byStatus = Object.fromEntries(all(`SELECT status, COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope'${scope} GROUP BY status`, ...p).map((r) => [r.status, r.n]));
   const done = get(`SELECT COUNT(*) n, AVG((julianday(completed_at) - julianday(sent_at)) * 24) hours, COALESCE(SUM(sheets),0) sheets FROM envelopes WHERE account_id=? AND kind='envelope' AND status='completed'${scope}`, ...p);
   const months = all(`SELECT substr(sent_at,1,7) month, COUNT(*) sent, SUM(status='completed') completed FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at IS NOT NULL${scope} GROUP BY 1 ORDER BY 1 DESC LIMIT 12`, ...p).reverse();
-  const senders = c.admin ? all("SELECT u.name, COUNT(*) sent, SUM(e.status='completed') completed FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL GROUP BY u.id ORDER BY sent DESC LIMIT 20", c.account.id) : [];
+  const senders = c.admin ? all("SELECT u.name, COUNT(*) sent, SUM(e.status='completed') completed FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL GROUP BY u.id ORDER BY sent DESC LIMIT 20", c.account.id) : [];
   const sent = Object.entries(byStatus).reduce((n, [k, v]) => n + (k === 'draft' ? 0 : (v as number)), 0);
   return { byStatus, sent, completed: done.n, avgHours: done.hours, completionRate: sent ? done.n / sent : null, months, senders, impact: impactOf(done.sheets) };
 });

@@ -428,11 +428,20 @@ async function flatPages(doc: PDFDocument, sha256: string): Promise<PDFPage[]> {
 }
 
 // Builds the signed PDF: every document with field values stamped in, signer attachments, then the certificate.
-export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any; viewer?: string }): Promise<Uint8Array> {
+// `notice` is for a copy of an envelope that was never completed (voided, declined or out of time), made for someone
+// who had signed it: the copy opens with a page that says so and why, and every page carries the words too.
+export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any; viewer?: string; notice?: { title: string; lines: string[] } }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
+  if (opts.notice) {
+    const s = new Sheet(doc, font, bold, `Sign&Grow · Not completed · Envelope ${e.id}`);
+    s.page.drawRectangle({ x: 0, y: s.H - 92, width: s.W, height: 92, color: rgb(0.66, 0.2, 0.16) });
+    s.page.drawText(clean(opts.notice.title), { x: s.L, y: s.H - 56, size: 20, font: bold, color: rgb(1, 1, 1) });
+    s.y = s.H - 120;
+    for (const line of opts.notice.lines) s.text(line, { size: 11, gap: 8 });
+  }
   const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format };
   // A copy made for one recipient (`viewer`) while others are still at work shows the pages as that recipient's
   // screen does: everything the sender wrote, what people who have finished filled in, and what the viewer has
@@ -454,7 +463,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     for (const page of pages) {
       const m = mapper(page);
       const p = m.pt(12, 13);
-      page.drawText(`Sign&Grow Envelope ID: ${e.id}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
+      page.drawText(`Sign&Grow Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
     }
   }
   for (const f of fields.filter((f: any) => f.type === 'attachment' && f.value)) {

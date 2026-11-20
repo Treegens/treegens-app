@@ -196,6 +196,8 @@ export function ContactForm() {
       onSubmit={(e) =>
         a.run(e, async () => {
           const r = await api('/public/support', { body: { name: f.name.trim(), email: f.email.trim(), topic, message: f.message.trim(), envelope_id: envelope || undefined } });
+          // "Your requests" below shows the new one straight away for someone who is signed in.
+          window.dispatchEvent(new Event('sg-support-sent'));
           return { reference: r.reference, email: f.email.trim() };
         }, (err) => explain(err, info.email ? `You have sent several messages in the last hour, and we have them. To add something now, write to ${info.email}.` : 'You have sent several messages in the last hour, and we have them. To add something, reply to the confirmation email we sent you.'))
       }
@@ -220,5 +222,36 @@ export function ContactForm() {
       </div>
       {direct}
     </form>
+  );
+}
+
+// For someone who is signed in: what they asked and whether a person has answered, so "did my message arrive?"
+// never needs a second message. Nobody else sees anything here. Requests written from an address that was never
+// confirmed are not listed, because typing an address proves nothing.
+export function YourRequests() {
+  const [list, setList] = useState<{ id: string; reference: string; topic: string; message: string; status: string; at: string }[] | null>(null);
+  useEffect(() => {
+    const load = () => api('/me').then((d) => (d?.user ? api('/support/mine').then((r) => setList(r.requests || [])) : setList(null))).catch(() => {});
+    load();
+    window.addEventListener('sg-support-sent', load);
+    return () => window.removeEventListener('sg-support-sent', load);
+  }, []);
+  if (!list?.length) return null;
+  return (
+    <section className="card" aria-labelledby="your-requests-h" style={{ marginTop: 16 }}>
+      <h3 id="your-requests-h">Your requests</h3>
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>What you sent us while signed in, or from your confirmed address. A request stays open until a person has answered it by email.</p>
+      <ul role="list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        {list.map((r) => (
+          <li key={r.id} style={{ borderTop: '1px solid var(--line)', padding: '10px 0' }}>
+            <div className="row between wrap">
+              <span><span className="pub-ref">{r.reference}</span> <span className="muted small">{TOPIC_LABEL[r.topic] || r.topic} · {billDay(r.at)}</span></span>
+              <b className="small">{r.status === 'open' ? 'Open: waiting for a person to answer' : 'Answered by email'}</b>
+            </div>
+            <div className="muted small" style={{ marginTop: 4, overflowWrap: 'anywhere' }}>{r.message.length > 160 ? `${r.message.slice(0, 160)}…` : r.message}</div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

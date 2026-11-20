@@ -1,10 +1,10 @@
-import { refundRuleText } from '@/lib/policy';
+import { refundRuleText, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { PRICING } from '@/lib/impact';
 import { publicFacts, abuseFacts } from './facts';
-import { FindDocuments, FindSubscription, StopByCard, ContactForm } from './tools';
+import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests } from './tools';
 
 export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in and without a chatbot. Find your documents, stop a subscription, or write to a person.' };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
@@ -47,7 +47,7 @@ export default function Help() {
 
           <QA id="find-documents" q="I cannot find the email, or my link stopped working">
             <p>Signing links do not wear out. One link works for as long as the document is open, however many times you open it.</p>
-            <p>If the email is lost or the link shows an error, enter the address the document was sent to. We email you a link to every document that is waiting for you and every one you have completed.</p>
+            <p>If the email is lost or the link shows an error, enter the address the document was sent to. We email you a link to every document that is waiting for you, every one you have signed (also while others have not finished) and every completed one. If more than one person uses the address, each link says who it is for. One email holds 50 documents: if there are more, it says how many and how to get the rest.</p>
             <div className="pub-tool">
               <h4>Find my documents</h4>
               <FindDocuments />
@@ -82,7 +82,7 @@ export default function Help() {
           <QA id="copy" q="How do I get a copy later?">
             <p>When everyone has finished, each person gets a completion email. It links to the signed document, and the PDF is attached when it is small enough to send.</p>
             <p>Lost that email? Use <a href="#find-documents">Find my documents</a>. It sends the link to the same address again, also months later.</p>
-            <p>The link works for as long as the sender keeps their Sign&Grow account. To be safe, download the PDF and keep it. Anyone can confirm it is unchanged at <Link href="/verify">Verify a document</Link>.</p>
+            <p>The link works for as long as the sender keeps their Sign&Grow account. A sender who deletes a completed document only removes it from their own lists: your link and your copy stay. To be safe, download the PDF and keep it. Anyone can confirm it is unchanged at <Link href="/verify">Verify a document</Link>.</p>
           </QA>
 
           <QA id="while-signing" q="What else can I do on the signing page?">
@@ -165,7 +165,11 @@ export default function Help() {
             <p>Closing is separate from cancelling. If you only want to stop paying, cancel the plan and keep your documents.</p>
             <p>To close: Settings, then Your data, then <b>Close my account</b>. Any subscription stops at once.</p>
             <p><b>You have {closeGraceDays} days to undo it.</b> Nothing is deleted during that time. Changed your mind, or closed it by mistake? Sign in again and the account comes straight back.</p>
-            <p>After {closeGraceDays} days the account, its documents and its audit trails are removed for good. Export first if you want copies. You can also choose to delete everything immediately.</p>
+            <p>While it is closing, nothing new starts in it: nothing can be sent, nobody can be invited or join, and its API keys are switched off. People who already have a document can still sign it. {CLOSING_REMINDER_DAYS} days before the end we email you the date, how to keep the account and how to take a copy of everything first.</p>
+            <p>After {closeGraceDays} days it is removed for good. Export first if you want copies. You can also choose to delete everything immediately. <b>What is deleted:</b></p>
+            <ul className="pub-list">{DELETED_WITH_ACCOUNT.map((x) => <li key={x}>{x}</li>)}</ul>
+            <p><b>What is kept:</b></p>
+            <ul className="pub-list">{KEPT_AFTER_DELETION.map((x) => <li key={x}>{x}</li>)}</ul>
           </QA>
 
           <QA id="fix-after-sending" q="I sent a document with a mistake">
@@ -198,7 +202,8 @@ export default function Help() {
           <QA id="locked-out" q="I cannot log in">
             <p><b>Forgot the password?</b> <Link href="/forgot">Reset it here</Link>. The link we email works for one hour.</p>
             <p><b>No longer have that mailbox?</b> You can still <a href="#stop-by-card">stop the billing with your card</a>. Then <a href="#contact" data-topic="cannot-log-in">write to us</a> and a person will help with the account.</p>
-            <p><b>On a team?</b> An owner or admin can remove someone who has left, and that person&apos;s envelopes pass to the team. The owner can hand the whole account to someone else under Settings, then Team.</p>
+            <p><b>On a team?</b> An owner or admin can remove someone who has left. What that person sent (envelopes, drafts, templates and bulk sends) passes to a member the admin chooses, and each envelope&apos;s audit trail says so. The owner can hand the whole account to someone else under Settings, then Team.</p>
+            <p><b>Were you removed from a team?</b> Your login still works. Sign in and you get an empty workspace of your own, with your inbox of documents sent to you. A team can invite you again at any time: sign in from the invitation and you are on it.</p>
           </QA>
 
           <QA id="unknown-charge" q="I see a charge I do not recognise">
@@ -214,6 +219,7 @@ export default function Help() {
             <p className="muted">This form works whether or not you have an account, and whether or not you can log in. You get a reference straight away, and a person replies by email.</p>
           </div>
           <ContactForm />
+          <YourRequests />
         </section>
       </main>
       <PublicFooter />

@@ -2,14 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx, readBlob, dataDir } from './db.ts';
-import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, HttpError } from './util.ts';
+import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, shortCode, HttpError } from './util.ts';
 import { checkPassword } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { auditTrail, emailMyLinks, resendFromRetired } from './envelopes.ts';
 import { loadEnvelope, reportAbuse } from './envelopes.ts';
+import { audit, helpAsked, type Actor } from './envelopes.ts';
+import { stopBillingFor } from './routes-billing.ts';
 import { sameEmail } from './credits.ts';
 import { unpaidDailyRecipients } from '../lib/policy.ts';
-import { CLOSE_GRACE_DAYS } from '../lib/policy.ts';
+import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
@@ -31,9 +33,11 @@ route('POST', '/public/support', async (c) => {
   if (message.length < 10) throw bad('Tell us a little more so we can help on the first reply.');
   const topic = SUPPORT_TOPICS.includes(b.topic) ? b.topic : 'other';
   const sid = id('sup');
-  run('INSERT INTO support_requests (id, email, name, topic, message, envelope_id, user_id, account_id, at) VALUES (?,?,?,?,?,?,?,?,?)',
-    sid, email, str(b.name || c.user?.name, 120) || null, topic, message, str(b.envelope_id, 60) || null, c.user?.id ?? null, c.account?.id ?? null, now());
-  const ref = sid.slice(-8).toUpperCase();
+  // The reference is read out on the phone and typed into emails, so it is made of characters nobody can misread,
+  // and it is kept with the request, so the queue and "Your requests" show the very same one.
+  const ref = shortCode();
+  run('INSERT INTO support_requests (id, ref, email, name, topic, message, envelope_id, user_id, account_id, at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    sid, ref, email, str(b.name || c.user?.name, 120) || null, topic, message, str(b.envelope_id, 60) || null, c.user?.id ?? null, c.account?.id ?? null, now());
   if (process.env.SUPPORT_EMAIL)
     await sendMail({ to: process.env.SUPPORT_EMAIL, replyTo: email, subject: `[${topic}] ${message.slice(0, 60)}`, heading: `Help request ${ref}`,
       lines: [`From ${str(b.name || c.user?.name, 120) || 'someone'} <${email}>${c.account ? `, account ${c.account.name} (${c.account.plan})` : ', not logged in'}.`, ...(b.envelope_id ? [`About envelope ${str(b.envelope_id, 60)}.`] : []), message],
@@ -44,13 +48,19 @@ route('POST', '/public/support', async (c) => {
   const known = !!c.user?.email_verified && sameEmail(email, c.user.email);
   await sendMail({ to: email, subject: `We got your message (${ref})`, heading: 'A person will reply to you',
     lines: [`Your reference is ${ref}. Reply to this email if you want to add anything.`, ...(known ? ['What you sent us:', message] : ['If you did not write to us, someone typed your address into our help form by mistake. You can ignore this email.'])] });
+  // A problem with signing that names an envelope the writer is a recipient of also goes to its sender, who can
+  // usually fix it at once. The answer is the same whether or not the envelope and the address matched, so the form
+  // cannot be used to find out who is on a document.
+  const about = topic === 'signing' && b.envelope_id ? loadEnvelope(str(b.envelope_id, 60)) : null;
+  const who = about?.recipients.find((r: any) => r.email && sameEmail(r.email, email));
+  if (who) await helpAsked(about, who, known ? message : null, { name: 'Sign&Grow help form', ip: c.ip, ua: c.ua });
   return { reference: ref };
 }, 'public');
 
 // What you asked and whether it has been answered, for people who are logged in. Requests filed while signed in as
 // this user, and requests filed from this user's address once the address is confirmed. Signing up with somebody
 // else's address proves nothing, so an unconfirmed address never matches.
-route('GET', '/support/mine', (c) => ({ requests: all(`SELECT id, topic, message, status, at FROM support_requests WHERE user_id=?${c.user.email_verified ? ' OR email=?' : ''} ORDER BY at DESC LIMIT 30`, ...(c.user.email_verified ? [c.user.id, c.user.email] : [c.user.id])).map((r) => ({ ...r, reference: r.id.slice(-8).toUpperCase() })) }));
+route('GET', '/support/mine', (c) => ({ requests: all(`SELECT id, ref, topic, message, status, at FROM support_requests WHERE user_id=?${c.user.email_verified ? ' OR email=?' : ''} ORDER BY at DESC LIMIT 30`, ...(c.user.email_verified ? [c.user.id, c.user.email] : [c.user.id])).map(({ ref, ...r }) => ({ ...r, reference: ref || r.id.slice(-8).toUpperCase() })) })); // a request from before references were kept has the one it was answered with then
 
 // ---- Is this email real? -------------------------------------------------------------------
 
@@ -100,12 +110,18 @@ route('POST', '/public/check/report', async (c) => {
 
 // ---- Lost or replaced links ----------------------------------------------------------------
 
-// Answers are deliberately the same whether or not anything was found, so nobody can probe who signs what.
+// "Email me the current link", asked from a link that was replaced. The answer is honest: "sent" is only true when
+// an email really went to whoever holds the document now, and "result" says what happened otherwise ('delayed',
+// 'waiting', 'removed', 'closed', 'unknown': see resendFromRetired). Only someone who was sent the replaced link
+// can ask, because it is as unguessable as a live one, and they learn nothing their own emails did not tell them.
 route('POST', '/public/links/resend', async (c) => {
   rateLimit(`resend:${c.ip}`, 10, 3600_000);
-  await resendFromRetired(str((await c.body()).token, 100));
-  return { ok: true };
+  const result = await resendFromRetired(str((await c.body()).token, 100));
+  return { ok: true, sent: result === 'sent', result };
 }, 'public');
+
+// Here the answer is deliberately the same whether or not anything was found: an email address can be guessed, so
+// nobody may learn from this form who signs what. The page says "if any documents were sent to that address".
 
 route('POST', '/public/links/find', async (c) => {
   rateLimit(`links:${c.ip}`, 10, 3600_000);
@@ -126,7 +142,8 @@ route('GET', '/export', (c) => {
   const only = (c.q.get('ids') || '').split(',').filter(Boolean);
   const bulk = c.q.get('bulk');
   const scope = c.admin ? '' : ' AND sender_id=?';
-  const rows = all(`SELECT * FROM envelopes WHERE account_id=? AND kind='envelope' AND status!='draft'${scope} ORDER BY sent_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
+  // A completed envelope its sender deleted is not in the sender's export either: only its recipients still have it.
+  const rows = all(`SELECT * FROM envelopes WHERE account_id=? AND kind='envelope' AND status!='draft' AND hidden_at IS NULL${scope} ORDER BY sent_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
     .filter((e) => (!only.length || only.includes(e.id)) && (!bulk || e.bulk_id === bulk));
   if (!rows.length) throw bad('There is nothing to export yet.');
 
@@ -163,11 +180,56 @@ route('GET', '/export', (c) => {
   return new Response(zipStream(entries()), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="sign-and-grow-export-${now().slice(0, 10)}.zip"` } });
 });
 
-function removeUnusedBlobs(shas: string[]) {
+// A stored file is taken off the disk once nothing points at it any more: no uploaded file, no signed PDF, and no
+// email that is still waiting to be sent with it attached.
+export function removeUnusedBlobs(shas: string[]) {
   for (const sha of new Set(shas.filter(Boolean))) {
-    if (get('SELECT 1 x FROM files WHERE sha256=?', sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha)) continue;
+    if (get('SELECT 1 x FROM files WHERE sha256=?', sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)) continue;
     fs.rmSync(path.join(dataDir(), 'blobs', sha), { force: true });
   }
+}
+
+// What is kept about an envelope beside its own rows: the audit trail (names, email addresses, internet addresses),
+// the stored copy of every email about it, replaced links, and the files signers attached. None of that hangs on
+// the envelope in the database, so deleting the envelope alone leaves it all behind. Call this inside tx(), before
+// the envelopes themselves are deleted, and give the answer to removeUnusedBlobs() once they are gone.
+// When one envelope is deleted and its account stays (`account` is false), two things are left alone on purpose.
+// An email about it that is still waiting for the mail server, such as the notice that it was voided, is still
+// delivered, and the timer removes its copy afterwards. And reports from its recipients stay with the account:
+// they count towards pausing a sender, and deleting what was reported must not make them go away.
+export function forgetEnvelopes(ids: string[], account = false): string[] {
+  const shas: string[] = [];
+  for (const eid of ids) {
+    // A file a signer attached belongs to no account. It is found through the field it was attached to, now or in
+    // a signature that was set aside.
+    const attached: string[] = [...all("SELECT value v FROM fields WHERE envelope_id=? AND type='attachment' AND value IS NOT NULL", eid).map((f) => f.v),
+      ...all('SELECT answers FROM earlier_signatures WHERE envelope_id=?', eid).flatMap((s) => (JSON.parse(s.answers || '[]') as any[]).filter((a) => a.type === 'attachment').map((a) => a.value))];
+    for (const fid of attached) {
+      const f = get('SELECT sha256 FROM files WHERE id=? AND account_id IS NULL', fid);
+      if (f) (shas.push(f.sha256), run('DELETE FROM files WHERE id=?', fid));
+    }
+    shas.push(get('SELECT final_sha256 s FROM envelopes WHERE id=?', eid)?.s);
+    run('DELETE FROM audit WHERE envelope_id=?', eid);
+    run(`DELETE FROM emails WHERE envelope_id=?${account ? '' : ` AND ${NOT_WAITING}`}`, eid);
+    run('DELETE FROM retired_tokens WHERE envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?)', eid, eid);
+    if (account) run('DELETE FROM abuse_reports WHERE envelope_id=?', eid);
+  }
+  return shas;
+}
+// An email that is not waiting to be handed to the mail server: it left, it sits in the outbox, or nobody tries again.
+const NOT_WAITING = "status!='queued' AND NOT (status='failed' AND next_try_at IS NOT NULL)";
+
+// Everything one person sent in an account passes to another member: envelopes, drafts, templates and bulk sends,
+// so the new holder can open, remind and void each batch as well. Every envelope's own record says who handed it to
+// whom and why. A retry key on a batch belonged to the person who left and is dropped. Call inside tx(). Answers
+// how many envelopes moved.
+export function handOver(accountId: string, from: { id: string; name: string; email: string }, toId: string, actor: Actor, why: string): number {
+  const to = get('SELECT name, email FROM users WHERE id=?', toId);
+  const moved = all('SELECT id FROM envelopes WHERE account_id=? AND sender_id=?', accountId, from.id);
+  for (const e of moved) audit(e.id, actor, 'Handed over', `From ${from.name} <${from.email}> to ${to.name} <${to.email}>: ${why}`);
+  run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
+  run('UPDATE bulk_batches SET sender_id=?, idem_key=NULL WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
+  return moved.length;
 }
 
 // The API keys a person made that still work, each with the account it works for. "team" marks an account the
@@ -221,21 +283,56 @@ export { CLOSE_GRACE_DAYS };
 
 // Removes a user and every account they own, for good. Answers with the API keys this stopped in teams the person
 // only belonged to, so the caller can tell those teams (tellTeamsAboutKeys).
+//
+// What goes: the login, and for every account the person owns alone the account itself with its envelopes,
+// templates, contacts, keys and webhooks (the database removes those with the account), and everything that does
+// not hang on the account in the database: uploaded and signed files, files signers attached, audit trails, stored
+// copies of emails, replaced links, reports, webhook logs and batch records. What stays is what the accounts need:
+// payments, refunds and the signature ledger, with the plan history emptied of its wording (it names people) and
+// the link to the receipt removed. A help request that is still open stays until a person has answered it.
 export function purgeUser(userId: string): any[] {
+  const user = get('SELECT id, name, email, email_verified FROM users WHERE id=?', userId);
+  if (!user) return [];
   const owned = all("SELECT a.id FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role='owner'", userId);
   const stopped = keysOf(userId).filter((k) => k.team);
   const shas: string[] = [];
   tx(() => {
     for (const a of owned) {
-      shas.push(...all('SELECT sha256 s FROM files WHERE account_id=?', a.id).map((r) => r.s), ...all('SELECT final_sha256 s FROM envelopes WHERE account_id=?', a.id).map((r) => r.s));
+      // An account other people are in is not deleted over their heads. Closing is refused while others use an
+      // account, and nobody can join one that is closing, so this is a last line of defence: the account passes to
+      // its longest-standing admin, or else member, and what the person who left sent in it goes to them below.
+      const heir = get("SELECT user_id FROM memberships WHERE account_id=? AND user_id!=? ORDER BY role='admin' DESC, created_at LIMIT 1", a.id, userId);
+      if (heir) {
+        run("UPDATE memberships SET role=CASE WHEN user_id=? THEN 'owner' ELSE 'member' END WHERE account_id=? AND user_id IN (?,?)", heir.user_id, a.id, heir.user_id, userId);
+        run('UPDATE accounts SET closing_at=NULL WHERE id=?', a.id);
+        continue;
+      }
+      shas.push(...all('SELECT sha256 s FROM files WHERE account_id=?', a.id).map((r) => r.s), ...forgetEnvelopes(all('SELECT id FROM envelopes WHERE account_id=?', a.id).map((r) => r.id), true));
+      run('DELETE FROM abuse_reports WHERE account_id=?', a.id);
       run('DELETE FROM files WHERE account_id=?', a.id);
+      run('DELETE FROM webhook_deliveries WHERE webhook_id IN (SELECT id FROM webhooks WHERE account_id=?)', a.id);
+      run('DELETE FROM bulk_batches WHERE account_id=?', a.id);
+      run("UPDATE billing_log SET detail='' WHERE account_id=?", a.id);
+      run('UPDATE payments SET receipt_url=NULL WHERE account_id=?', a.id);
       run('DELETE FROM accounts WHERE id=?', a.id);
     }
-    // In teams they only belonged to, their envelopes pass to the owner so nothing is stranded.
+    // In teams they only belonged to, what they sent passes to the owner so nothing is stranded.
     for (const m of all('SELECT account_id FROM memberships WHERE user_id=?', userId)) {
       const owner = get("SELECT user_id FROM memberships WHERE account_id=? AND role='owner'", m.account_id);
-      if (owner) run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', owner.user_id, m.account_id, userId);
+      if (owner) handOver(m.account_id, user, owner.user_id, { name: 'System' }, `${user.name} closed their login`);
     }
+    // What they wrote to the help form goes too. A request nobody has answered yet stays until it is answered (see
+    // POST /operator/support/:id), or closing an account would be a way to lose a refund question. Requests are
+    // matched by address only when the address was confirmed: signing up with somebody else's proves nothing.
+    const theirs = `(user_id=?${user.email_verified ? ' OR lower(email)=lower(?)' : ''})`;
+    const who = user.email_verified ? [userId, user.email] : [userId];
+    run(`DELETE FROM support_requests WHERE ${theirs} AND status!='open'`, ...who);
+    run(`UPDATE support_requests SET forget=1, user_id=NULL, account_id=NULL WHERE ${theirs}`, ...who);
+    // Our stored copies of emails that belong to no envelope and went to the person (sign-up, receipts, reminders,
+    // notices) or name them as "Name <address>" (a help request passed on to the people who answer). Emails about
+    // a document somebody else sent them are part of that sender's record and stay with it.
+    run("DELETE FROM emails WHERE envelope_id IS NULL AND (lower(to_email)=lower(?) OR instr(lower(html), '&lt;' || lower(?) || '&gt;') > 0)", user.email, user.email);
+    run('DELETE FROM password_resets WHERE user_id=?', userId);
     // A key they made in a team is on that team's list, not theirs to take along. It stops for good and stays
     // listed as stopped, with the maker's name, so an admin can see what happened to whatever used it. The keys of
     // the accounts deleted above went with those accounts.
@@ -246,10 +343,40 @@ export function purgeUser(userId: string): any[] {
   return stopped;
 }
 
+// How long a file a signer uploaded but never attached to anything is kept.
+const LOOSE_UPLOAD_DAYS = 30;
+const CLOSED_SUBJECT = 'Your Sign&Grow account is closed';
+
 // Run from the timer: accounts whose grace period has passed are removed, and teams hear which keys stopped.
+// A week before that, the person is told the day, how to keep the account and how to take a copy of everything
+// first, so the deletion never comes as a surprise. Once for each time an account is closed.
 export async function purgeClosedAccounts(): Promise<number> {
+  const soon = new Date(Date.now() + CLOSING_REMINDER_DAYS * 864e5).toISOString();
+  for (const u of all('SELECT id, name, email, closing_at FROM users WHERE closing_at IS NOT NULL AND closing_at > ? AND closing_at <= ? AND (closing_reminded IS NULL OR closing_reminded != closing_at)', now(), soon)) {
+    run('UPDATE users SET closing_reminded=? WHERE id=?', u.closing_at, u.id);
+    const day = u.closing_at.slice(0, 10);
+    const left = Math.max(1, Math.ceil((Date.parse(u.closing_at) - Date.now()) / 864e5));
+    const owns = get("SELECT COUNT(*) n FROM memberships WHERE user_id=? AND role='owner'", u.id).n;
+    await sendMail({ to: u.email, subject: `Your Sign&Grow account will be deleted on ${day}`, heading: `${left === 1 ? 'One day' : `${left} days`} left: your account is deleted on ${day}`,
+      lines: [`Hi ${u.name}, you closed your Sign&Grow account. On ${day} ${owns ? 'it is deleted for good, with its envelopes, signed documents and audit trails' : 'your login is deleted for good'}. After that day nobody can bring it back, and that includes us.`,
+        'To keep the account: sign in before that day. That is all it takes. Everything is there again at once, and nothing is deleted.',
+        `To take a copy of everything first: sign in, go to Settings, then Your data, and choose Export everything. You get one ZIP file with every signed PDF, every audit trail and a list of all envelopes. Signing in keeps the account, so close it again afterwards if you still want it gone. That starts a new ${CLOSE_GRACE_DAYS} days.`,
+        'If you do nothing, the account is deleted on that day and you will not hear from us again.'],
+      cta: { label: 'Sign in to keep my account', url: `${baseUrl()}/login` } });
+  }
   const due = all('SELECT id, name FROM users WHERE closing_at IS NOT NULL AND closing_at < ?', now());
   for (const u of due) await tellTeamsAboutKeys(u, purgeUser(u.id), 'stopped');
+  // The email that says an account was deleted is the last thing kept under that address. Its stored copy goes as
+  // soon as the mail server has taken it.
+  run("DELETE FROM emails WHERE subject=? AND status='sent' AND envelope_id IS NULL", CLOSED_SUBJECT);
+  // So does the copy of an email about an envelope that was deleted while that email was still waiting to be sent.
+  run(`DELETE FROM emails WHERE envelope_id IS NOT NULL AND ${NOT_WAITING} AND envelope_id NOT IN (SELECT id FROM envelopes)`);
+  // A file a signer uploaded and never attached to a field belongs to no envelope and no account, so nothing else
+  // would ever remove it.
+  const loose = all(`SELECT id, sha256 FROM files WHERE account_id IS NULL AND created_at < ? AND id NOT IN (SELECT value FROM fields WHERE type='attachment' AND value IS NOT NULL)`, new Date(Date.now() - LOOSE_UPLOAD_DAYS * 864e5).toISOString())
+    .filter((f) => !get('SELECT 1 x FROM earlier_signatures WHERE instr(answers, ?) > 0', f.id));
+  for (const f of loose) run('DELETE FROM files WHERE id=?', f.id);
+  removeUnusedBlobs(loose.map((f) => f.sha256));
   return due.length;
 }
 
@@ -261,20 +388,29 @@ route('POST', '/me/delete', async (c) => {
   const owned = all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role='owner'", c.user.id);
   for (const a of owned)
     if (get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n > 1) throw bad(`You own "${a.name}" and other people still use it. Make one of them the owner first (Settings, Team), then close your account.`);
-  // Stop any billing before anything else, so a closed account can never be charged.
-  for (const a of owned) {
-    if (a.stripe_subscription_id && process.env.STRIPE_SECRET_KEY && a.plan === 'grove') {
-      const res = await fetch(`https://api.stripe.com/v1/subscriptions/${a.stripe_subscription_id}`, { method: 'DELETE', headers: { authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` } }).catch(() => null);
-      if (!res || !res.ok) throw bad('We could not stop your subscription with the payment provider just now, so nothing was closed. Try again in a minute, or cancel the plan first.', 502);
-      run("UPDATE accounts SET plan='seedling', subscription_status='canceled', cancel_at=NULL, renews_at=NULL WHERE id=?", a.id);
-    }
-  }
+  // Stop any billing before anything else, so a closed account can never be charged. Whatever state the plan is in,
+  // it is ended on our side at once. When the payment provider does not confirm straight away, the end is queued and
+  // tried again by the timer, and a payment that slips through in the meantime is refunded by the software.
+  let confirmed = true;
+  for (const a of owned) if (!(await stopBillingFor(a))) confirmed = false;
+  // Deleting on the spot would take away the account a late payment is matched to and refunded through. So that
+  // waits until the provider has confirmed. Closing with the usual days in between does not have to wait.
+  if (b.now && !confirmed) throw bad(`The payment provider did not confirm just now that your subscription has ended, so nothing was deleted. Your plan is cancelled on our side and we keep trying until the provider confirms it. Try again in a few minutes. You can also close the account without deleting it at once: it is then deleted after ${CLOSE_GRACE_DAYS} days, and a payment taken in the meantime is refunded by the software.`, 502);
   // Their API keys go off with the login, at once. Read now, while the rows still say whose they are.
   const keys = keysOf(c.user.id);
+  // Said in both emails, because "everything is deleted" is only true of what was theirs alone.
+  const teams = all("SELECT a.name FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=? AND m.role!='owner'", c.user.id).map((a) => `"${a.name}"`).join(' and ');
+  const kept = ['What we keep, because accounts have to be kept: the record of payments, refunds and of signatures bought and used, without your name or your email address. If you ever paid, the payment provider has its own record of that.',
+    'A question you sent through the help form that nobody has answered yet is kept until it has been answered, and deleted then.',
+    'Documents other people sent you to sign belong to them, so those are not affected.'];
   if (b.now) {
     await tellTeamsAboutKeys(c.user, purgeUser(c.user.id), 'stopped');
-    await sendMail({ to: c.user.email, subject: 'Your Sign&Grow account is closed', heading: 'Account closed and deleted', lines: ['Your account and everything in it has been deleted, and any subscription has been stopped. You will not be charged again.',
-      ...ownKeyLines(keys, keys.length === 1 ? 'This API key of yours no longer works:' : 'These API keys of yours no longer work:'), 'Documents other people sent you to sign belong to them, so those are not affected.'] });
+    await sendMail({ to: c.user.email, subject: CLOSED_SUBJECT, heading: 'Account closed and deleted',
+      lines: [owned.length ? `Your login has been deleted, and with it ${owned.map((a) => `"${a.name}"`).join(' and ')} and everything in it: envelopes, drafts and templates, uploaded and signed documents, files signers attached, audit trails, contacts, API keys, webhooks and our copies of the emails about them. Any subscription has been stopped. You will not be charged again.` : 'Your login has been deleted.',
+        ...(teams ? [`What you sent as a member of ${teams} was not deleted. It belongs to that team and has passed to its owner.`] : []),
+        ...ownKeyLines(keys, keys.length === 1 ? 'This API key of yours no longer works:' : 'These API keys of yours no longer work:'), ...kept] });
+    // Its stored copy is not kept either once the mail server has taken it (see purgeClosedAccounts for the rest).
+    run("DELETE FROM emails WHERE subject=? AND status='sent' AND envelope_id IS NULL AND lower(to_email)=lower(?)", CLOSED_SUBJECT, c.user.email);
     return { closed: 'now' };
   }
   const when = new Date(Date.now() + CLOSE_GRACE_DAYS * 864e5).toISOString();
@@ -283,9 +419,12 @@ route('POST', '/me/delete', async (c) => {
   run('DELETE FROM sessions WHERE user_id=?', c.user.id);
   await tellTeamsAboutKeys(c.user, keys, 'off', when);
   await sendMail({ to: c.user.email, subject: 'Your Sign&Grow account is closing', heading: `Your account will be deleted on ${when.slice(0, 10)}`,
-    lines: ['Any subscription has been stopped and you will not be charged again.', `Until ${when.slice(0, 10)} nothing is deleted. Changed your mind, or closed it by mistake? Just sign in again and the account comes straight back.`,
+    lines: [confirmed ? 'Any subscription has been stopped and you will not be charged again.' : 'Your subscription is cancelled on our side. The payment provider did not confirm it straight away, so we keep trying until it does. If a payment is taken in the meantime, the software refunds it by itself.',
+      `Until ${when.slice(0, 10)} nothing is deleted. Changed your mind, or closed it by mistake? Just sign in again and the account comes straight back.`,
       ...ownKeyLines(keys, `${keys.length === 1 ? 'This API key of yours is' : 'These API keys of yours are'} switched off from now. Signing in again before ${when.slice(0, 10)} switches ${keys.length === 1 ? 'it' : 'them'} back on:`),
-      'After that date the account, its documents and its audit trails are removed for good. Export anything you want to keep before then.'],
+      owned.length ? `After that date your login and ${owned.map((a) => `"${a.name}"`).join(' and ')} are removed for good, with everything in it: envelopes, signed documents, files signers attached, audit trails and our copies of the emails about them. To take a copy first, sign in, export everything under Settings, Your data, and close the account again.` : 'After that date your login is removed for good.',
+      ...(teams ? [`What you sent as a member of ${teams} is not deleted. It belongs to that team and passes to its owner on that date.`] : []),
+      ...kept, `We remind you by email ${CLOSING_REMINDER_DAYS} days before that date.`],
     cta: { label: 'Sign in to keep my account', url: `${baseUrl()}/login` } });
   return { closed: 'scheduled', deletes_at: when };
 });
@@ -315,7 +454,10 @@ route('GET', '/operator/queue', (c) => {
 });
 route('POST', '/operator/support/:id', async (c) => {
   operator(c);
-  run('UPDATE support_requests SET status=? WHERE id=?', (await c.body()).status === 'open' ? 'open' : 'closed', c.params.id);
+  const status = (await c.body()).status === 'open' ? 'open' : 'closed';
+  // A request whose writer has deleted their account since was only kept so that it could be answered.
+  if (status === 'closed' && run('DELETE FROM support_requests WHERE id=? AND forget=1', c.params.id).changes) return { ok: true, deleted: true };
+  run('UPDATE support_requests SET status=? WHERE id=?', status, c.params.id);
 });
 route('POST', '/operator/reports/:id', async (c) => {
   operator(c);

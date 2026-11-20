@@ -45,7 +45,7 @@ export default function PowerForm() {
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{busy ? 'Preparing your document…' : 'Continue to sign'}</button>
           </form>
         )}
-      <p className="muted small center" style={{ marginTop: 14 }}>Powered by Sign&Grow, where every dollar plants mangrove trees.</p>
+      <p className="muted small center" style={{ marginTop: 14 }}>Powered by Sign&Grow, where every dollar plants mangrove trees. <a href="/help?topic=signing#contact">Something not working? Get help</a></p>
     </div>
   );
 }

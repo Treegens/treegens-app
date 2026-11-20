@@ -9,6 +9,7 @@ import { impactOf } from '../lib/impact.ts';
 import { rateWait } from './util.ts';
 import { wrongAccessCode, requestAccessCode } from './envelopes.ts';
 import { senderText, shownVersion, changedSince } from './envelopes.ts';
+import { noteReplacedLink, notCompletedNotice } from './envelopes.ts';
 import { ACCESS_CODE_TRIES } from '../lib/policy.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
@@ -39,7 +40,11 @@ function look(c: Ctx, needUnlocked = true) {
   const r = get('SELECT * FROM recipients WHERE token=?', c.params.token);
   if (!r) {
     // 410 tells the page this link was replaced, so it can offer to send the current one instead of a dead end.
-    if (get('SELECT 1 x FROM retired_tokens WHERE token=?', c.params.token)) throw new HttpError(410, 'This link was replaced by a newer one.');
+    if (get('SELECT 1 x FROM retired_tokens WHERE token=?', c.params.token)) {
+      // The sender hears once that this replaced link was opened: it usually means someone is using the wrong email.
+      void noteReplacedLink(c.params.token, { name: 'Someone with a replaced link', ip: c.ip, ua: c.ua }).catch(() => {});
+      throw new HttpError(410, 'This link was replaced by a newer one.');
+    }
     throw bad('We do not recognise this link. It may have been copied incompletely.', 404);
   }
   const e = loadEnvelope(r.envelope_id);
@@ -49,9 +54,11 @@ function look(c: Ctx, needUnlocked = true) {
   return { e, r: e.recipients.find((x: any) => x.id === r.id), locked, actor };
 }
 
-// Documents are only readable while it is the recipient's turn or after they finished, never once the envelope is closed.
+const CLOSED = ['voided', 'expired', 'declined'];
+// Documents are only readable while it is the recipient's turn or after they finished, never once the envelope is
+// closed. The one exception is the download of someone who had signed: see GET /sign/:token/download.
 function assertViewable(e: any, r: any) {
-  if (['voided', 'expired', 'declined'].includes(e.status)) throw bad('This envelope is closed.', 403);
+  if (CLOSED.includes(e.status)) throw bad('This envelope is closed.', 403);
   if (r.status === 'pending') throw bad('It is not your turn yet.', 403);
 }
 
@@ -64,9 +71,11 @@ route('GET', '/sign/:token', (c) => {
     envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets) },
     recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted },
   };
+  // Someone ran into the deadline. The sender is told before anything else is decided here, so an access code that
+  // was not typed yet does not keep the news from them: the screen says "expired" before it asks for a code.
+  if (e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${String(e.expires_at).slice(0, 10)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
   // A frozen code is said straight away, so nobody types the right code into a form that can no longer accept it.
   if (locked) return { ...base, locked: true, code_frozen: !!r.code_frozen_at };
-  if (e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${String(e.expires_at).slice(0, 10)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   if (e.status === 'sent' && r.status === 'sent') markViewed(e, r, actor);
   // The server keeps which content version this screen was given. The screen sends the number back with every save
@@ -207,7 +216,9 @@ route('POST', '/sign/:token/name', async (c) => {
   const body = await checkedBody(c);
   const { e, r, actor } = look(c);
   rateLimit(`name:${r.id}`, 5, 3600_000);
-  await renameSelf(e, r, body.name, actor);
+  // The answer says whether the name was changed ("applied"). A name that reads like a different person's is not:
+  // it goes to the sender as a question, and "message" says so in words for the signer.
+  return renameSelf(e, r, body.name, actor);
 }, 'public');
 
 // Ran out of time: ask the sender for more instead of starting over.
@@ -237,8 +248,12 @@ route('POST', '/sign/:token/report', async (c) => {
 
 route('GET', '/sign/:token/download', async (c) => {
   const { e, r } = find(c);
-  assertViewable(e, r);
+  // Someone who has signed, approved or confirmed can always get a copy of what they put their name to, also after
+  // the envelope was voided, declined or ran out of time. That copy opens with a page saying it was not completed
+  // by everyone and why. Everyone else is held to the usual rule: nothing once the envelope is closed.
+  const keeps = CLOSED.includes(e.status) && r.status === 'completed' && r.role !== 'cc';
+  if (!keeps) assertViewable(e, r);
   const done = finalPdf(e);
   // Until everyone has finished, the copy a recipient downloads is made for them: it shows what their screen shows.
-  return pdfResponse(done || (await buildPdf(e, false, r.id)), e.subject || 'document', c.q.get('inline') === '1');
+  return pdfResponse(done || (await buildPdf(e, false, r.id, keeps ? notCompletedNotice(e, r) : undefined)), e.subject || 'document', c.q.get('inline') === '1');
 }, 'public');

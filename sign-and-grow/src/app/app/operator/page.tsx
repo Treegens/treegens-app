@@ -87,11 +87,12 @@ export default function Operator() {
         {q.support.length === 0 && <div className="empty" style={{ padding: 24 }}>Nobody is waiting.</div>}
         {q.support.map((s: any) => (
           <div key={s.id} className="queue-item">
-            <div className="row between wrap"><b>{s.name || 'Someone'} · {s.email}</b><span className="muted small">{s.topic} · {fmtDate(s.at, true)} · ref {s.id.slice(-8).toUpperCase()}</span></div>
+            <div className="row between wrap"><b>{s.name || 'Someone'} · {s.email}</b><span className="muted small">{s.topic} · {fmtDate(s.at, true)} · ref {s.ref || s.id.slice(-8).toUpperCase()}</span></div>
+            {!!s.forget && <div className="muted small">This person has deleted their account since. The request was kept so it can be answered, and it is deleted when you mark it as answered.</div>}
             {about(s)}
             <pre>{s.message}</pre>
             <div className="row wrap">
-              <a className="btn sm primary" href={`mailto:${s.email}?subject=${encodeURIComponent(`Re: your Sign&Grow request ${s.id.slice(-8).toUpperCase()}`)}`}>Reply by email</a>
+              <a className="btn sm primary" href={`mailto:${s.email}?subject=${encodeURIComponent(`Re: your Sign&Grow request ${s.ref || s.id.slice(-8).toUpperCase()}`)}`}>Reply by email</a>
               <button className="btn sm" onClick={() => act(api(`/operator/support/${s.id}`, { body: { status: 'closed' } }), 'Closed')}>Mark as answered</button>
               {s.about_account && trustButton(s.about_account, s.account_name, s.account_trusted_at)}
               {s.envelope_id && <span className="muted small mono">{s.envelope_id}</span>}

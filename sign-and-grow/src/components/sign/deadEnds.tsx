@@ -5,21 +5,34 @@ import { Shell, StateCard } from './parts';
 
 // Links that cannot be opened. None of these is a dead end: each one offers the way forward itself.
 
-function Done({ children }: { children: React.ReactNode }) {
+function Done({ children, warn }: { children: React.ReactNode; warn?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => ref.current?.focus(), []);
-  return <div ref={ref} tabIndex={-1} className="notice sg-confirmed" role="status">{children}</div>;
+  return <div ref={ref} tabIndex={-1} className={`notice sg-confirmed${warn ? ' warn' : ''}`} role="status">{children}</div>;
 }
+
+// What "Email me the current link" really did, in words. Only 'sent' says sent. The others say plainly that no
+// email is coming, or not yet, and what to do. None of them tells the holder of an old link more than the emails
+// they were sent did: no names, no addresses, and not which of the ways of closing a document it was.
+const NOT_SENT: Record<string, [string, string]> = {
+  delayed: ['Not sent yet.', 'We could not hand the email to the mail server just now. We keep trying for about a day, and it goes to the address this document is assigned to now. If nothing has arrived by tomorrow, reply to the email this link came in and ask the sender to send it again.'],
+  waiting: ['Nothing was sent, because it is not this person\'s turn yet.', 'Others sign first. The current link is emailed to the address this document is assigned to as soon as it is their turn. There is nothing to do until then.'],
+  removed: ['There is no current link to send.', 'The person this link was for is no longer on the document: the sender changed it after this link was made. There is nothing more for you to do. If you think you should still sign, reply to the email this link came in and ask the sender.'],
+  closed: ['There is no current link to send.', 'This document is no longer open for signing: it was cancelled, declined or ran out of time. There is nothing more for you to do. If you think that is a mistake, reply to the email this link came in and ask the sender.'],
+  unknown: ['We found no current link for this one.', 'Open the link from the newest email about this document. If you cannot find it, use the Help link below: Find my documents sends every document for your address again.'],
+};
 
 /** 410: the sender corrected the document or it was passed on, so a newer link exists. */
 export function ReplacedLink({ token }: { token: string }) {
   const [state, setState] = useState<'' | 'busy' | 'sent'>('');
+  const [result, setResult] = useState('');
   const [error, setError] = useState('');
   async function resend() {
     setState('busy');
     setError('');
     try {
-      await api('/public/links/resend', { body: { token } });
+      const r = await api('/public/links/resend', { body: { token } });
+      setResult(r?.sent ? 'sent' : NOT_SENT[r?.result] ? r.result : 'unknown');
       setState('sent');
     } catch (e: any) {
       setError(`${e?.message || 'Something went wrong on our side.'} If it keeps happening, use the Help link below and a person will sort it out.`);
@@ -30,7 +43,9 @@ export function ReplacedLink({ token }: { token: string }) {
     <Shell>
       <StateCard tone="link" title="This link was replaced by a newer one">
         <p>The document was updated or passed to someone else after this link was made, so this one no longer opens it. Nothing is lost.</p>
-        {state === 'sent' ? (
+        {state === 'sent' && result !== 'sent' ? (
+          <Done warn><b>{NOT_SENT[result][0]}</b> {NOT_SENT[result][1]}</Done>
+        ) : state === 'sent' ? (
           <Done>
             <b>Sent.</b> The current link is on its way to the email address this document is assigned to now. It can take a minute, and it is worth checking the spam folder. If the document was passed to someone else, they have it and there is nothing more for you to do.
           </Done>

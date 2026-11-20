@@ -16,7 +16,7 @@ const GROUPS: [string, Endpoint[]][] = [
     ['GET', '/api/envelopes/:id', 'One envelope with its documents, recipients and fields, the audit trail, the email delivery log and how far each signer has got.'],
     ['PUT', '/api/envelopes/:id', 'Replace a draft. On an envelope that is already out, the same call corrects it in place.', true],
     ['PATCH', '/api/envelopes/:id', 'Move to a folder.'],
-    ['DELETE', '/api/envelopes/:id', 'Delete a draft, a template or a closed envelope.'],
+    ['DELETE', '/api/envelopes/:id', 'Delete a draft, a template or a closed envelope for good. A completed envelope is taken out of your lists, search, export and reports, and its recipients keep their link and their copy.'],
     ['POST', '/api/envelopes/:id/send', 'Send a draft.'],
     ['POST', '/api/envelopes/:id/clone', 'Copy as a new draft or template.'],
     ['GET', '/api/envelopes/:id/download', 'The signed PDF with its certificate, or a preview while signing is in progress.'],

@@ -55,6 +55,9 @@ export default function EnvelopeDetail() {
   const e = data.envelope;
   const deliveries: Delivery[] = data.deliveries || [];
   const isTpl = e.kind === 'template';
+  // Everyone on the team can use a template. Changing or deleting it is for the person it belongs to and for admins.
+  const mayChange = !isTpl || me.role !== 'member' || e.sender_id === me.user.id;
+  const done = e.status === 'completed';
   const impact = impactOf(e.sheets);
   const pages = e.documents.reduce((n: number, d: any) => n + d.pages, 0);
   const out = e.status === 'sent';
@@ -102,15 +105,15 @@ export default function EnvelopeDetail() {
           <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>
           {!isTpl && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
           {out && <button className="btn danger" onClick={() => setDialog('void')}>Void</button>}
-          {!out && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
+          {!out && mayChange && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
         </div>
       </div>
 
       {e.status === 'draft' && (
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
-            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{isTpl ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : 'Nobody has received anything. Pick up where you left off.'}</p></div>
-            <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>
+            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To make your own version, use it and save that as a template.'}</p></div>
+            {mayChange && <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>}
           </div>
         </section>
       )}
@@ -120,7 +123,7 @@ export default function EnvelopeDetail() {
           <div className="sn-now-main">
             <div>
               <p className="sn-now-line">{waiting ? <>Waiting on <b>{waiting.label}</b>{waiting.since ? ` for ${howLong(waiting.since)}` : ''}.</> : 'Sent. Nobody is holding it up right now.'}</p>
-              {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} did not go out. See below to fix the address or share the link yourself.</p>}
+              {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} {bounced.some((r: any) => lastEmailTo(deliveries, r.email, r.id)?.next_try_at) ? 'has not gone out yet, and we keep trying' : 'did not go out'}. See below to fix the address or share the link yourself.</p>}
               {unopened.length > 0 && <p className="sn-now-sub warn">{joinNames(unopened.map((r: any) => r.name))} {unopened.length === 1 ? 'has' : 'have'} not opened it yet. See below for ways to reach them.</p>}
               {allMuted && <p className="sn-now-sub">They turned reminder emails off, so reach them with their link instead. It is below.</p>}
               <p className={`sn-now-sub${closingSoon(e.expires_at) ? ' warn' : ''}`}>{e.expires_at ? `${deadlineLine(e.expires_at)}.` : 'No closing date.'}{closingSoon(e.expires_at) ? ' Give more time if they need it.' : ''}</p>
@@ -220,7 +223,8 @@ export default function EnvelopeDetail() {
                   <li key={i}>
                     <div><b className="small">{d.subject}</b></div>
                     <div className="muted small">To {d.to_email} · {dayTime(d.at)}</div>
-                    <div className={`small${d.status === 'failed' || d.status === 'outbox' ? ' sn-bad' : ''}`}>{MAIL_STATUS[d.status] || d.status}{d.status === 'failed' && d.error ? `: ${d.error}` : ''}</div>
+                    {/* A refused email is tried again by the timer: say whether a next try is coming or nobody tries any more. */}
+                    <div className={`small${d.status === 'failed' || d.status === 'outbox' ? ' sn-bad' : ''}`}>{d.status === 'failed' && d.next_try_at ? 'Not sent yet' : MAIL_STATUS[d.status] || d.status}{d.status === 'failed' && d.error ? `: ${d.error}` : ''}{d.status === 'failed' ? (d.next_try_at ? `. We try again around ${dayTime(d.next_try_at)}.` : '. We have stopped trying.') : ''}</div>
                   </li>
                 ))}
               </ul>
@@ -256,14 +260,18 @@ export default function EnvelopeDetail() {
         </VoidDialog>
       )}
       {dialog === 'delete' && (
-        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this envelope'} confirmLabel="Delete for good" onClose={() => setDialog('')}
+        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this envelope'} confirmLabel={done ? 'Delete from my account' : 'Delete for good'} onClose={() => setDialog('')}
           onConfirm={async () => {
             await api(`/envelopes/${e.id}`, { method: 'DELETE' });
-            toast('Deleted.');
+            toast(done ? 'Deleted from your account. Everyone who was on it keeps their copy.' : 'Deleted.');
             router.push(isTpl ? '/app/templates' : '/app/envelopes');
           }}>
-          <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>
-          {e.status === 'completed' && <p className="muted">Download the signed PDF first if you want to keep a copy. The links in the emails people received will stop working too.</p>}
+          {done ? (
+            <>
+              <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back, so download the signed PDF first if you want to keep a copy.</p>
+              <p className="muted">It is a completed document, so it is not only yours. Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>
+            </>
+          ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>}
         </ConfirmDialog>
       )}
       {fix && <CorrectDialog envelopeId={e.id} recipient={fix} onClose={() => setFix(null)} onDone={() => (setFix(null), reload())} />}

@@ -5,6 +5,8 @@ import { api, useLoad, fmtDate, oops, toast, Modal, Leaf } from '@/components/ui
 import { useMe } from '@/components/AppShell';
 import { AdoptSignature } from '@/components/SignaturePad';
 import { PRICING, mangrovesFor } from '@/lib/impact';
+// Plain constants only: the rest of policy.ts reads the environment and is for the server.
+import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -68,7 +70,7 @@ function Profile() {
 
 const NOTIFY: [string, string, string][] = [
   ['completed', 'When everyone has finished', 'One email with the signed document. Most people only need this one.'],
-  ['problems', 'When something needs you', 'Someone declined, passed it on, or the deadline is close or has passed.'],
+  ['problems', 'When something needs you', 'Someone declined, an email to a signer could not be delivered, a request sits unopened, a link could not be opened, or the deadline is close or has passed. A few things reach you whatever you choose here, because only you can act on them: a signer passed the document on, changed how their name is written, or asked for more time or for an access code.'],
   ['signed', 'Each time someone signs', 'One email per person as they finish. Off by default to keep your inbox quiet.'],
   ['viewed', 'Each time someone opens it', 'Useful when you want to know it arrived. Off by default.'],
 ];
@@ -140,7 +142,7 @@ function Team() {
     <div className="stack">
       {admin && members.length > 0 && adminCount < 2 && (
         <div className="notice warn">
-          <b>This account depends on one person.</b> If you lose access to {me.user.email}, nobody else can manage it. Invite a second admin below so the account is never stuck behind one mailbox.
+          <b>This account depends on one person.</b> If you lose access to {me.user.email}, nobody else can manage it. Invite a second admin below: an admin can manage the team, the plan and every document. Only the owner can hand the whole account to someone else (Make owner, below), so do that before you move on.
         </div>
       )}
       {admin && (
@@ -173,11 +175,13 @@ function Team() {
           </tbody>
         </table></div>
       </div>
-      <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything, and templates are shared. Everyone on the team is covered by the one plan: there is no charge per person.</p>
+      <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything. Templates are shared: everyone can use them, and only the person a template belongs to or an admin can change or delete it. Everyone on the team is covered by the one plan: there is no charge per person.</p>
+      {me.role !== 'owner' && <p className="muted small">Want to leave this team? Ask the owner or an admin to remove you here. They choose who takes over what you sent, and you keep your own login.</p>}
 
       {remove && (
         <Modal title={`Remove ${remove.name}`} onClose={() => setRemove(null)}>
-          <p>They lose access to this account straight away. Nothing they sent is lost: their envelopes, drafts and templates pass to the person you choose, and anything still out for signature carries on.</p>
+          <p>They lose access to this account straight away. Nothing they sent is lost: their envelopes, drafts, templates and bulk sends pass to the person you choose, and anything still out for signature carries on. Each envelope&apos;s audit trail says who handed it to whom.</p>
+          <p className="muted small">{remove.name} keeps their own login. The next time they sign in they get a workspace of their own, and you can invite them back at any time.</p>
           {theirKeys.length > 0 && (
             <div className="notice warn" style={{ marginBottom: 12 }}>
               <b>{theirKeys.length === 1 ? 'This API key stops' : `These ${theirKeys.length} API keys stop`} working the moment you remove {remove.name}:</b>
@@ -639,12 +643,16 @@ function YourData() {
           <>
             <ul className="rules">
               <li>Any subscription stops at once. You will not be charged again.</li>
-              <li><b>Nothing is deleted for 30 days.</b> If you change your mind, or closed it by mistake, sign in again and the account comes straight back.</li>
-              <li>After 30 days the account{owned.length ? `, its ${owned.reduce((n, a) => n + a.envelopes, 0)} envelope(s)` : ''} and its audit trails are removed for good. Export first if you want copies.</li>
-              {inFlight > 0 && <li>{inFlight} envelope(s) are still out for signature. People can keep signing during the 30 days.</li>}
+              <li><b>Nothing is deleted for {CLOSE_GRACE_DAYS} days.</b> If you change your mind, or closed it by mistake, sign in again and the account comes straight back. We email you {CLOSING_REMINDER_DAYS} days before the end with the date and how to keep it.</li>
+              <li>While it is closing, nothing new starts in it: nothing can be sent, nobody can be invited or join, and public forms take no new signatures.</li>
+              <li>After {CLOSE_GRACE_DAYS} days {owned.length ? `the account and its ${owned.reduce((n, a) => n + a.envelopes, 0)} envelope(s) are` : 'your login is'} removed for good. Export first if you want copies. The lists below say exactly what goes and what stays.</li>
+              {inFlight > 0 && <li>{inFlight} envelope(s) are still out for signature. People can keep signing during the {CLOSE_GRACE_DAYS} days.</li>}
               {keys.length > 0 && <li><b>{keys.length === 1 ? 'Your API key stops' : `Your ${keys.length} API keys stop`} working at once:</b> {keys.map((k) => `"${k.name}" in ${k.account}`).join(', ')}. Whatever uses {keys.length === 1 ? 'it' : 'them'} starts failing straight away, and {keys.length === 1 ? 'it works' : 'they work'} again only if you sign in within the 30 days.{keys.some((k) => k.team) ? ' The admins of a team a key belongs to are told by email.' : ''}</li>}
-              <li>Documents other people sent you belong to them and are not affected.</li>
             </ul>
+            <div className="grid g2" style={{ margin: '14px 0' }}>
+              <div><b>Deleted for good</b><ul className="rules small" style={{ marginTop: 6 }}>{DELETED_WITH_ACCOUNT.map((x) => <li key={x}>{x}</li>)}</ul></div>
+              <div><b>Kept</b><ul className="rules small" style={{ marginTop: 6 }}>{KEPT_AFTER_DELETION.map((x) => <li key={x}>{x}</li>)}</ul></div>
+            </div>
             <button className="btn danger" onClick={() => setOpen(true)}>Close my account</button>
           </>
         )}
@@ -654,7 +662,7 @@ function YourData() {
         <Modal title="Close your account" onClose={() => setOpen(false)}>
           <p>Enter your password to confirm it is you, {me.user.name.split(' ')[0]}.</p>
           <label className="f"><span>Password</span><input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus /></label>
-          <label className="check" style={{ marginBottom: 8 }}><input type="checkbox" checked={now} onChange={(e) => setNow(e.target.checked)} /> Delete everything right now instead of keeping it for 30 days. This cannot be undone.</label>
+          <label className="check" style={{ marginBottom: 8 }}><input type="checkbox" checked={now} onChange={(e) => setNow(e.target.checked)} /> Delete everything right now instead of keeping it for {CLOSE_GRACE_DAYS} days. This cannot be undone, and nobody can bring it back, us included.</label>
           <div className="actions">
             <button className="btn" onClick={() => setOpen(false)}>Keep my account</button>
             <button className="btn primary" style={{ background: 'var(--red)', borderColor: 'var(--red)' }} disabled={busy || !pw} onClick={close}>{now ? 'Delete now' : 'Close account'}</button>

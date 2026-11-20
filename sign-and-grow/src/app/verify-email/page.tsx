@@ -15,6 +15,7 @@ export default function VerifyEmail() {
         <p className="muted" style={{ margin: '10px 0 16px' }}>{state === 'ok' ? 'Documents sent to this address will now show up in your inbox.' : state === 'wait' ? '' : state}</p>
         <Link href="/app" className="btn primary">Go to Sign&Grow</Link>
       </div>
+      <p className="muted small center" style={{ marginTop: 14 }}>{state !== 'wait' && state !== 'ok' ? 'You can ask for a new confirmation email from the banner at the top of the app. ' : ''}<Link href="/help#contact">Need a hand? Get help</Link></p>
     </div>
   );
 }

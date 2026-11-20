@@ -7,8 +7,10 @@ const INK = '#10243a';
 // The server stores signatures up to 700,000 characters. Stay well inside that.
 const MAX_CHARS = 600_000;
 type Point = { x: number; y: number };
-type Tab = 'type' | 'draw' | 'upload';
-const TABS: [Tab, string][] = [['type', 'Type'], ['draw', 'Draw'], ['upload', 'Upload']];
+type Tab = 'saved' | 'type' | 'draw' | 'upload';
+const MAKE: [Tab, string][] = [['type', 'Type'], ['draw', 'Draw'], ['upload', 'Upload']];
+/** A signature that was not made in this tab: saved with this document on another device, or kept on the person's account. */
+export type SavedMark = { image: string; from: 'document' | 'account' };
 
 // Trim transparent margins so the signature fills its field.
 function trim(src: HTMLCanvasElement): string | null {
@@ -84,10 +86,13 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Point[]) {
   ctx.stroke();
 }
 
-export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signature' | 'initials'; name: string; onDone: (png: string) => void; onClose: () => void }) {
+// `saved` is a stored signature the person may want to use again. It is never put on the page by itself: it is
+// shown here first, as the first choice, and only used when the person confirms it with the button.
+export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: 'signature' | 'initials'; name: string; saved?: SavedMark | null; onDone: (png: string) => void; onClose: () => void }) {
   const initials = name.split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 4).toUpperCase();
   const word = kind === 'signature' ? 'signature' : 'initials';
-  const [tab, setTab] = useState<Tab>('type');
+  const TABS: [Tab, string][] = saved ? [['saved', 'Saved'], ...MAKE] : MAKE;
+  const [tab, setTab] = useState<Tab>(saved ? 'saved' : 'type');
   const [text, setText] = useState(kind === 'signature' ? name : initials);
   const [font, setFont] = useState(STYLES[0]);
   const [error, setError] = useState('');
@@ -195,7 +200,8 @@ export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signatu
   async function adopt() {
     setError('');
     let image: string | null = null;
-    if (tab === 'type') {
+    if (tab === 'saved') image = saved?.image || null;
+    else if (tab === 'type') {
       if (!text.trim()) return setError(kind === 'signature' ? 'Type your name first.' : 'Type your initials first.');
       await document.fonts?.load(`110px '${font}'`, text).catch(() => {});
       image = typed(text.trim(), font);
@@ -207,6 +213,7 @@ export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signatu
       if (!photo) return setError('Choose a picture first.');
       image = photo;
     }
+    if (!image) return setError(`Choose Type, Draw or Upload to make your ${word}.`);
     onDone(image);
   }
 
@@ -229,8 +236,8 @@ export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signatu
   }
 
   function tabKey(e: React.KeyboardEvent) {
-    const i = TABS.findIndex(([t]) => t === tab);
-    const next = e.key === 'ArrowRight' ? (i + 1) % 3 : e.key === 'ArrowLeft' ? (i + 2) % 3 : e.key === 'Home' ? 0 : e.key === 'End' ? 2 : -1;
+    const i = TABS.findIndex(([t]) => t === tab), n = TABS.length;
+    const next = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i + n - 1) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1;
     if (next < 0) return;
     e.preventDefault();
     setTab(TABS[next][0]);
@@ -246,6 +253,17 @@ export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signatu
         ))}
       </div>
       <div role="tabpanel" id={`${ids}-panel`} aria-labelledby={`${ids}-${tab}`}>
+        {tab === 'saved' && saved && (
+          <div>
+            <div className="sg-sigpreview"><img src={saved.image} alt={`Your saved ${word}`} /></div>
+            <p className="muted small">
+              {saved.from === 'account'
+                ? `This is the ${word} saved on your Sign&Grow account. Nothing is on the document yet.`
+                : `This is the ${word} you chose for this document earlier, on another device or in another tab.`}
+              {' '}Use {kind === 'signature' ? 'it only if it is' : 'them only if they are'} yours and you want {kind === 'signature' ? 'it' : 'them'} here. Otherwise make a new one with Type, Draw or Upload.
+            </p>
+          </div>
+        )}
         {tab === 'type' && (
           <div className="stack">
             <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input value={text} onChange={(e) => setText(e.target.value)} maxLength={60} autoComplete="off" /></label>
@@ -286,11 +304,11 @@ export function AdoptSignature({ kind, name, onDone, onClose }: { kind: 'signatu
       </div>
       {error && <div className="notice err sg-problem" role="alert">{error}</div>}
       <p className="muted small sg-siglegal">
-        By choosing Adopt and sign, I agree that this mark is the electronic representation of my {word} and is as valid as one made with pen on paper.
+        By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}, I agree that this mark is the electronic representation of my {word} and is as valid as one made with pen on paper.
       </p>
       <div className="actions">
         <button type="button" className="btn" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn primary" onClick={adopt}>Adopt and sign</button>
+        <button type="button" className="btn primary" onClick={adopt}>{tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}</button>
       </div>
     </Dialog>
   );

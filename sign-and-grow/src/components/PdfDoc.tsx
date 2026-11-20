@@ -49,7 +49,8 @@ function Page({ pdf, index, width, children, onClick }: { pdf: any; index: numbe
 
   return (
     <div ref={box} className="pdfpage" data-page={index} style={{ width, height, ['--pw' as any]: `${width}px` }} onClick={onClick}>
-      <canvas ref={canvas} />
+      {/* A drawn page is a picture to a screen reader, and says so: which page it is, and that it is one. */}
+      <canvas ref={canvas} role="img" aria-label={`Page ${index + 1} of ${pdf.numPages}, shown as a picture`} />
       <div className="overlay">{children}</div>
       <span className="pageno">{index + 1}</span>
     </div>

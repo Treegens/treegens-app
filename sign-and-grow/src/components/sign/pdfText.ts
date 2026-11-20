@@ -87,6 +87,21 @@ export function textNear(page: PageText | undefined, f: { x: number; y: number; 
   return best.length > 120 ? `${best.slice(0, 117)}...` : best;
 }
 
+/**
+ * Where the printed lines of one page sit, as boxes in fractions of the page (0 to 1 from the top left). `pdf` is a
+ * pdf.js document that is already loaded (the one the page is drawn from), so nothing is downloaded twice. Used to
+ * keep the "Sign here" pointer off the words of the document. A scanned page has no lines.
+ */
+export async function pageBoxes(pdf: any, index: number): Promise<{ x: number; y: number; w: number; h: number }[]> {
+  const page = await pdf.getPage(index + 1);
+  const vp = page.getViewport({ scale: 1 });
+  return linesOf((await page.getTextContent()).items).map((l) => {
+    const [x0, y0] = vp.convertToViewportPoint(l.x0, l.y);
+    const [x1, y1] = vp.convertToViewportPoint(l.x1, l.y + l.h);
+    return { x: Math.min(x0, x1) / vp.width, y: Math.min(y0, y1) / vp.height, w: Math.abs(x1 - x0) / vp.width, h: (Math.abs(y1 - y0) * 1.25) / vp.height };
+  });
+}
+
 const cache = new Map<string, Promise<PageText[]>>();
 
 /** The text of every page, in reading order. A page with no text (a scan, say) has no blocks. */

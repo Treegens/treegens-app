@@ -1,6 +1,7 @@
 'use client';
 
-export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean };
+// is_scan and scan_pages: the pages that are pictures with no text, counted from 1. See src/lib/scans.ts.
+export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[] };
 
 export const MAX_BYTES = 25_000_000;
 export const LIMITS = 'PDF, PNG or JPEG. Up to 25 MB and 500 pages each.';

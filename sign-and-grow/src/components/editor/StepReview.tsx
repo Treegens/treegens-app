@@ -4,6 +4,7 @@ import { ROLE_LABEL, Leaf, fmtDate, api, useLoad, oops } from '../ui';
 import { useMe } from '../AppShell';
 import { fmtNum, sheetsSaved, impactOf, fmtTrees, PRICING, mangrovesFor } from '@/lib/impact';
 import { formatDate } from '@/lib/dates';
+import { scanWarning } from '@/lib/scans';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
 
@@ -124,6 +125,10 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {problems.length > 0 && <div className="notice warn"><b>Almost there.</b><ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
       {!isTpl && !closed && rcps.length > 0 && <SignatureCost rcps={rcps} correcting={correcting} />}
       {!isTpl && <SharedInbox rcps={rcps} />}
+      {/* Said once more before it goes out: a document that is a picture cannot be read out to someone who needs that. */}
+      {docs.filter((d) => scanWarning(d)).map((d) => (
+        <div key={d.id} className="notice warn"><b>{d.name || 'A document'}:</b> {scanWarning(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the documents</button></div>
+      ))}
 
       <div className="card">
         <h2>{env.subject || '(no subject)'}</h2>
